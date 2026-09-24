@@ -1763,7 +1763,36 @@ fn plan_scans_name_the_index_of_each_disjunct() {
     );
     // A kindless query has no index plan.
     assert_eq!(
-        plan(&Query::new(QueryScope::kindless_all_descendants(None)), &none),
+        plan(
+            &Query::new(QueryScope::kindless_all_descendants(None)),
+            &none
+        ),
         None
     );
+}
+
+/// An explicit order on an equality field stops production merging automatic indexes
+/// (query-limits/components#equalities-99-and-order needs a composite); without the order
+/// the same equalities merge (index-selection/automatic-and-merge#two-equalities-merge).
+#[test]
+fn an_order_on_an_equality_field_disables_the_merge() {
+    let equalities = || {
+        tasks().with_filter(FilterExpr::And(vec![
+            field("a", FieldOp::Equal, Value::Integer(1)),
+            field("b", FieldOp::Equal, Value::Integer(1)),
+        ]))
+    };
+    let none = IndexSet::default();
+    assert!(matches!(
+        decide(&equalities(), &none, standard()),
+        IndexDecision::MergeIndexes { .. }
+    ));
+    let ordered = equalities().with_order(OrderClause {
+        field: fp("a"),
+        direction: Direction::Ascending,
+    });
+    assert!(matches!(
+        decide(&ordered, &none, standard()),
+        IndexDecision::MissingRequired { .. }
+    ));
 }

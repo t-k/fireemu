@@ -9,6 +9,31 @@ use fireemu_core_types::ids::IdSyntaxError;
 
 use crate::decode::{parse_parent, DecodeError, Parent};
 
+/// Production's refusal of a `runQuery` without a query (REST and gRPC alike: the transcoder
+/// forwards an absent oneof as absent). FS-QUERY-INDEX request-shape/rest#body-empty.
+pub const RUN_QUERY_WITHOUT_QUERY: &str = "only structured queries are supported";
+/// Production's refusal of a `runAggregationQuery` without an aggregation query
+/// (request-shape/rest#aggregation-without-query).
+pub const AGGREGATION_WITHOUT_QUERY: &str = "Only structured aggregation queries are supported.";
+/// Production's refusal of a `partitionQuery` without a query
+/// (partition-query/refusals#structured-query-missing).
+pub const PARTITION_WITHOUT_QUERY: &str = "Query is required.";
+
+/// The query of an aggregation: production aggregates an absent one as the empty query, every
+/// document under the parent (request-shape/rest#aggregation-without-structured-query).
+#[must_use]
+pub fn aggregation_structured_query(
+    aggregation: &fireemu_proto_firestore::google::firestore::v1::StructuredAggregationQuery,
+) -> std::borrow::Cow<'_, fireemu_proto_firestore::google::firestore::v1::StructuredQuery> {
+    use fireemu_proto_firestore::google::firestore::v1::structured_aggregation_query::QueryType;
+    match &aggregation.query_type {
+        Some(QueryType::StructuredQuery(query)) => std::borrow::Cow::Borrowed(query),
+        None => std::borrow::Cow::Owned(
+            fireemu_proto_firestore::google::firestore::v1::StructuredQuery::default(),
+        ),
+    }
+}
+
 /// The text production uses for an empty or absent property path.
 pub const EMPTY_PROPERTY_PATH: &str = "Invalid empty property path string.";
 
@@ -72,7 +97,7 @@ pub fn collection_id_error(id: &str, error: &IdSyntaxError) -> DecodeError {
 #[must_use]
 pub fn reference_is_not_a_document(name: &str) -> String {
     format!(
-        "Document parent name {name:?} lacks \"/\" at index {}.",
+        "Document parent name \"{name}\" lacks \"/\" at index {}.",
         name.len()
     )
 }

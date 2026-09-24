@@ -331,6 +331,15 @@ pub struct Cursor {
     pub before: bool,
 }
 
+/// Which refusals canonicalization applies.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Refusals {
+    /// Every refusal production makes (the strict profile).
+    Production,
+    /// Only those the official emulator makes too.
+    Emulator,
+}
+
 /// Canonical query.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Query {
@@ -406,11 +415,6 @@ pub enum QueryError {
         /// Zero-based position in the effective order-by.
         position: usize,
     },
-    /// A cursor document reference names a document the query does not select.
-    CursorReferenceScope {
-        /// Zero-based position in the effective order-by.
-        position: usize,
-    },
     /// More than one of `!=`, `not-in`, `IS_NOT_NAN` and `IS_NOT_NULL` in one query.
     MultipleNegations,
     /// The effective ordering names a field after `__name__`, which is unique, so the
@@ -420,9 +424,9 @@ pub enum QueryError {
     NameFilterValue,
     /// A key equality with other inequalities requires a key inequality too (Standard).
     KeyEqualityWithOtherInequalities,
-    /// `FindNearest` must use a stored field rather than the document name.
-    FindNearestVectorField,
-    /// `FindNearest` query vector is empty, too large, or contains NaN.
+    /// `FindNearest` query vector is empty.
+    FindNearestQueryVectorEmpty,
+    /// `FindNearest` query vector is too large or contains a non-finite component.
     FindNearestQueryVector,
     /// `FindNearest` limit must be between one and 1000.
     FindNearestLimit,
@@ -455,7 +459,7 @@ impl fmt::Display for QueryError {
             }
             Self::CursorReferenceNotDocument { name } => write!(
                 f,
-                "Document parent name {name:?} lacks \"/\" at index {}.",
+                "Document parent name \"{name}\" lacks \"/\" at index {}.",
                 name.len()
             ),
             Self::EmptyComposite => {
@@ -468,12 +472,6 @@ impl fmt::Display for QueryError {
             Self::CursorNameValue { .. } => {
                 f.write_str("Cursor __key__ value is not a document reference.")
             }
-            Self::CursorReferenceScope { position } => {
-                write!(
-                    f,
-                    "cursor value at position {position} orders by __key__ and must be a Key the query selects"
-                )
-            }
             Self::MultipleNotIn | Self::MultipleNegations => f.write_str(
                 "Only a single 'NOT_EQUAL', 'NOT_IN', 'IS_NOT_NAN', or 'IS_NOT_NULL' filter allowed per query.",
             ),
@@ -484,10 +482,12 @@ impl fmt::Display for QueryError {
             Self::KeyEqualityWithOtherInequalities => f.write_str(
                 "Equality on key is not allowed if there are other inequality fields and key does not appear in inequalities.",
             ),
-            Self::FindNearestVectorField => {
-                f.write_str("findNearest vector field must be a stored field")
-            }
-            Self::FindNearestQueryVector => f.write_str("Cannot have a zero length vector."),
+            // Production's text for an empty vector (FS-QUERY-INDEX
+            // vector/validation#query-vector-empty); the other cases are unrecorded.
+            Self::FindNearestQueryVectorEmpty => f.write_str("Cannot have a zero length vector."),
+            Self::FindNearestQueryVector => f.write_str(
+                "findNearest query vector must contain between 1 and 2048 finite dimensions",
+            ),
             Self::FindNearestLimit => f.write_str(
                 "FindNearest.limit must be a positive integer of no more than 1000",
             ),
@@ -559,22 +559,19 @@ impl Query {
         Ok(())
     }
 
-    /// Validates cursor values against the effective order-by the way production Firestore
-    /// documents them. Call on a canonicalized query: the arity rule in
-    /// [`Self::canonicalize`] runs first, so nothing here looks past the order-by.
+    /// Validates the `__name__` values of cursors as production does. Call on a canonicalized
+    /// query: the arity rule in [`Self::canonicalize`] runs first, so nothing here looks past
+    /// the order-by.
     ///
-    /// Reference, `google.firestore.v1.StructuredQuery`: a `Cursor` carries "the values
-    /// that represent a position, in the order they appear in the order by clause of a
-    /// query", and the `start_at` example positions a `SELECT * FROM k` query with
-    /// `START BEFORE (2, /k/123)`, which is "right before `a = 1 AND b > 2 AND __name__ >
-    /// /k/123`". The value standing in a `__name__` position is therefore a document
-    /// reference, and it names a document of the collection the query selects. A value of
-    /// another type, or a reference to a document outside the query, positions nothing.
+    /// A value in a `__name__` position must be a document reference (FS-QUERY-INDEX
+    /// cursors/names#name-string-value), and a reference to a collection is refused
+    /// (`name-collection-reference`). Production positions by any document of the database,
+    /// inside the query's scope or not (`name-foreign-collection`,
+    /// `name-subcollection-document`, `name-reference-absent-document`).
     ///
-    /// These are production refusals, so the strict profile applies them and the
-    /// `emulator` profile does not; `spec/compatibility/contract.json` forbids the
-    /// `emulator` profile from adding a rejection. Production has not been observed for
-    /// these two shapes, so the rule rests on the reference above.
+    /// These are production refusals, so the strict profile applies them and the `emulator`
+    /// profile does not; `spec/compatibility/contract.json` forbids the `emulator` profile
+    /// from adding a rejection.
     pub fn check_production_cursor_constraints(&self) -> Result<(), QueryError> {
         let order = self.effective_order_by();
         for cursor in [&self.start_at, &self.end_at].into_iter().flatten() {
@@ -590,9 +587,14 @@ impl Query {
                     return Err(QueryError::CursorNameValue { position });
                 };
                 // Production positions by any document of the database, inside the query's
-                // scope or not (observed 2026-09-24); a reference to a collection is refused.
+                // scope or not (observed 2026-09-24); a reference to a collection is refused
+                // in its words. Another malformed reference positions nothing.
                 if DocumentPath::from_resource_name(name).is_none() {
-                    return Err(QueryError::CursorReferenceNotDocument { name: name.clone() });
+                    return Err(if names_a_collection(name) {
+                        QueryError::CursorReferenceNotDocument { name: name.clone() }
+                    } else {
+                        QueryError::CursorNameValue { position }
+                    });
                 }
             }
         }
@@ -656,18 +658,34 @@ impl Query {
     }
 
     /// Canonicalizes the filter tree: validates operator/value shapes, flattens nested
-    /// `and`/`or`, collapses single-child composites and sorts children. Idempotent.
+    /// `and`/`or`, collapses single-child composites and sorts children, with every refusal
+    /// production makes (the strict profile). Idempotent.
     pub fn canonicalize(&self) -> Result<Self, QueryError> {
+        self.canonicalize_with(Refusals::Production)
+    }
+
+    /// [`Self::canonicalize`] without the refusals only production makes: the `emulator`
+    /// profile may add no rejection the official emulator does not make
+    /// (`spec/compatibility/contract.json`, profiles.emulator). Those are the kindless
+    /// constraints, a duplicate order field, an empty `or`, array membership and unary
+    /// filters on `__name__`, and a cursor longer than the explicit order (the official
+    /// emulator counts the implied order too).
+    pub fn canonicalize_emulator(&self) -> Result<Self, QueryError> {
+        self.canonicalize_with(Refusals::Emulator)
+    }
+
+    fn canonicalize_with(&self, refusals: Refusals) -> Result<Self, QueryError> {
+        let production = refusals == Refusals::Production;
         let filter = match &self.filter {
             None => None,
-            Some(f) => match canonicalize_filter(f)? {
+            Some(f) => match canonicalize_filter(f, production)? {
                 // An empty composite constrains nothing: the query runs unfiltered, which
                 // is what the official emulator does with it.
                 FilterExpr::And(children) if children.is_empty() => None,
                 c => {
                     check_negation_rules(&c)?;
                     check_not_in_rules(&c)?;
-                    check_name_filters(&c)?;
+                    check_name_filters(&c, production)?;
                     Some(c)
                 }
             },
@@ -679,12 +697,15 @@ impl Query {
         if let Some(find_nearest) = &q.find_nearest {
             validate_find_nearest(find_nearest)?;
         }
-        q.check_kindless_constraints()?;
-        for (i, clause) in q.order_by.iter().enumerate() {
-            if q.order_by[..i].iter().any(|o| o.field == clause.field) {
-                return Err(QueryError::DuplicateOrderField {
-                    field: clause.field.clone(),
-                });
+        if production {
+            q.check_kindless_constraints()?;
+            let mut seen = BTreeSet::new();
+            for clause in &q.order_by {
+                if !seen.insert(&clause.field) {
+                    return Err(QueryError::DuplicateOrderField {
+                        field: clause.field.clone(),
+                    });
+                }
             }
         }
         let order = q.effective_order_by();
@@ -697,8 +718,13 @@ impl Query {
             }
         }
         // Production positions a cursor against the explicit order-by only: neither the
-        // implicit `__name__` tiebreak nor an inequality's implied order takes a value.
-        let arity = q.order_by.len();
+        // implicit `__name__` tiebreak nor an inequality's implied order takes a value. The
+        // official emulator counts the implied order as well.
+        let arity = if production {
+            q.order_by.len()
+        } else {
+            order.len()
+        };
         for cursor in [&q.start_at, &q.end_at].into_iter().flatten() {
             if cursor.values.len() > arity {
                 return Err(QueryError::CursorArityMismatch {
@@ -745,8 +771,9 @@ impl Query {
     pub fn effective_order_by(&self) -> Vec<OrderClause> {
         let mut out = self.order_by.clone();
         let last_direction = out.last().map_or(Direction::Ascending, |o| o.direction);
+        let explicit: BTreeSet<FieldPath> = out.iter().map(|o| o.field.clone()).collect();
         for field in self.inequality_fields() {
-            if !field.is_document_name() && !out.iter().any(|o| o.field == field) {
+            if !field.is_document_name() && !explicit.contains(&field) {
                 out.push(OrderClause {
                     field,
                     direction: last_direction,
@@ -788,10 +815,9 @@ impl Query {
     /// the component total. Each violation carries production's refusal text.
     pub fn check_standard_limits(&self) -> Result<(), Vec<QueryLimitViolation>> {
         let mut limits = LimitCheck::default();
+        // Production reports a value count first; the checks after it still run, so a limit
+        // the official emulator refuses is never hidden behind one it only observes.
         self.check_value_counts(&mut limits);
-        if !limits.violations.is_empty() {
-            return Err(limits.violations);
-        }
         let disjunctions = self.dnf_disjunction_count();
         let maximum_disjunctions = LimitCheck::maximum("FS-QUERY-LIMIT-DNF-DISJUNCTIONS");
         limits.check(
@@ -1030,6 +1056,15 @@ fn check_negation_rules(f: &FilterExpr) -> Result<(), QueryError> {
     Ok(())
 }
 
+/// Whether a resource name is well formed but names a collection: an odd number of
+/// non-empty segments after `.../documents/`.
+fn names_a_collection(name: &str) -> bool {
+    name.split_once("/documents/").is_some_and(|(_, relative)| {
+        let segments: Vec<&str> = relative.split('/').collect();
+        segments.len() % 2 == 1 && segments.iter().all(|segment| !segment.is_empty())
+    })
+}
+
 /// A filter on `__name__` compares document references and nothing else (an `in` /
 /// `not-in` list holds references only).
 /// The first filtered field that is not `__name__`, in filter order.
@@ -1044,14 +1079,14 @@ fn first_non_name_field(f: &FilterExpr) -> Option<FieldPath> {
     }
 }
 
-fn check_name_filters(f: &FilterExpr) -> Result<(), QueryError> {
+fn check_name_filters(f: &FilterExpr, production: bool) -> Result<(), QueryError> {
     match f {
         FilterExpr::Field {
             field,
             op: FieldOp::ArrayContains | FieldOp::ArrayContainsAny,
             ..
-        } if field.is_document_name() => Err(QueryError::NameReserved),
-        FilterExpr::Unary { field, .. } if field.is_document_name() => {
+        } if production && field.is_document_name() => Err(QueryError::NameReserved),
+        FilterExpr::Unary { field, .. } if production && field.is_document_name() => {
             Err(QueryError::NameFilterValue)
         }
         FilterExpr::Field { field, value, .. } if field.is_document_name() => {
@@ -1067,17 +1102,19 @@ fn check_name_filters(f: &FilterExpr) -> Result<(), QueryError> {
             }
         }
         FilterExpr::Field { .. } | FilterExpr::Unary { .. } => Ok(()),
-        FilterExpr::And(children) | FilterExpr::Or(children) => {
-            children.iter().try_for_each(check_name_filters)
-        }
+        FilterExpr::And(children) | FilterExpr::Or(children) => children
+            .iter()
+            .try_for_each(|child| check_name_filters(child, production)),
     }
 }
 
 fn validate_find_nearest(find_nearest: &FindNearest) -> Result<(), QueryError> {
     // A `__name__` vector field is not refused here: no vector index can serve it, so the
     // index check answers production's missing-vector-index text.
-    if find_nearest.query_vector.is_empty()
-        || find_nearest.query_vector.len() > 2048
+    if find_nearest.query_vector.is_empty() {
+        return Err(QueryError::FindNearestQueryVectorEmpty);
+    }
+    if find_nearest.query_vector.len() > 2048
         || find_nearest
             .query_vector
             .iter()
@@ -1104,7 +1141,7 @@ fn validate_find_nearest(find_nearest: &FindNearest) -> Result<(), QueryError> {
     Ok(())
 }
 
-fn canonicalize_filter(f: &FilterExpr) -> Result<FilterExpr, QueryError> {
+fn canonicalize_filter(f: &FilterExpr, production: bool) -> Result<FilterExpr, QueryError> {
     match f {
         FilterExpr::Field { field, op, value } => {
             if op.takes_array() {
@@ -1124,8 +1161,8 @@ fn canonicalize_filter(f: &FilterExpr) -> Result<FilterExpr, QueryError> {
             Ok(f.clone())
         }
         FilterExpr::Unary { .. } => Ok(f.clone()),
-        FilterExpr::And(children) => canonicalize_composite(children, true),
-        FilterExpr::Or(children) => canonicalize_composite(children, false),
+        FilterExpr::And(children) => canonicalize_composite(children, true, production),
+        FilterExpr::Or(children) => canonicalize_composite(children, false, production),
     }
 }
 
@@ -1165,14 +1202,18 @@ fn canonical_filter_cmp(a: &FilterExpr, b: &FilterExpr) -> core::cmp::Ordering {
     })
 }
 
-fn canonicalize_composite(children: &[FilterExpr], is_and: bool) -> Result<FilterExpr, QueryError> {
+fn canonicalize_composite(
+    children: &[FilterExpr],
+    is_and: bool,
+    production: bool,
+) -> Result<FilterExpr, QueryError> {
     // Production refuses an empty `or` (an empty `and` constrains nothing and is served).
-    if !is_and && children.is_empty() {
+    if production && !is_and && children.is_empty() {
         return Err(QueryError::EmptyComposite);
     }
     let mut flat: Vec<FilterExpr> = Vec::new();
     for child in children {
-        let c = canonicalize_filter(child)?;
+        let c = canonicalize_filter(child, production)?;
         match (&c, is_and) {
             (FilterExpr::And(inner), true) | (FilterExpr::Or(inner), false) => {
                 flat.extend(inner.iter().cloned());

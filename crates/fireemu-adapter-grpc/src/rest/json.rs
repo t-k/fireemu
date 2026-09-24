@@ -1100,23 +1100,28 @@ fn field_operator(value: Option<&Value>) -> Result<i32, JsonError> {
     operator.ok_or_else(|| JsonError("unknown field filter operator".into()))
 }
 
+/// An enum given by number passes through as it does on the wire; the query decoder refuses an
+/// unknown one in production's words, for REST and gRPC alike.
+fn enum_number(number: &serde_json::Number, what: &str) -> Result<i32, JsonError> {
+    number
+        .as_i64()
+        .and_then(|number| i32::try_from(number).ok())
+        .ok_or_else(|| JsonError(format!("{what} must be a string or enum number")))
+}
+
 fn unary_operator(value: Option<&Value>) -> Result<i32, JsonError> {
     use sq::unary_filter::Operator as O;
     // An absent operator is the proto default; the query decoder refuses it as production does.
     let Some(value) = value else {
         return Ok(O::Unspecified as i32);
     };
-    let operator = match value {
-        Value::String(name) => O::from_str_name(name),
-        Value::Number(number) => number
-            .as_i64()
-            .and_then(|number| i32::try_from(number).ok())
-            .and_then(|number| O::try_from(number).ok()),
-        _ => return err("unaryFilter.op must be a string or enum number"),
-    };
-    operator
-        .map(|operator| operator as i32)
-        .ok_or_else(|| JsonError("unknown unary filter operator".into()))
+    match value {
+        Value::String(name) => O::from_str_name(name)
+            .map(|operator| operator as i32)
+            .ok_or_else(|| JsonError("unknown unary filter operator".into())),
+        Value::Number(number) => enum_number(number, "unaryFilter.op"),
+        _ => err("unaryFilter.op must be a string or enum number"),
+    }
 }
 
 fn filter_from_json(v: &Value) -> Result<sq::Filter, JsonError> {
@@ -1126,22 +1131,14 @@ fn filter_from_json(v: &Value) -> Result<sq::Filter, JsonError> {
         }
         let op = match c.get("op") {
             Some(Value::String(name)) => sq::composite_filter::Operator::from_str_name(name)
-                .ok_or_else(|| JsonError("unknown composite filter operator".into()))?,
-            Some(Value::Number(number)) => {
-                let number = number
-                    .as_i64()
-                    .and_then(|number| i32::try_from(number).ok())
-                    .ok_or_else(|| {
-                        JsonError("compositeFilter.op must be a string or enum number".into())
-                    })?;
-                sq::composite_filter::Operator::try_from(number)
-                    .map_err(|_| JsonError("unknown composite filter operator".into()))?
-            }
+                .ok_or_else(|| JsonError("unknown composite filter operator".into()))?
+                as i32,
+            Some(Value::Number(number)) => enum_number(number, "compositeFilter.op")?,
             Some(_) => return err("compositeFilter.op must be a string or enum number"),
-            None => sq::composite_filter::Operator::Unspecified,
+            None => sq::composite_filter::Operator::Unspecified as i32,
         };
         sq::filter::FilterType::CompositeFilter(sq::CompositeFilter {
-            op: op as i32,
+            op,
             filters: match c.get("filters") {
                 None | Some(Value::Null) => Vec::new(),
                 Some(filters) => filters
@@ -1260,18 +1257,10 @@ fn find_nearest_from_json(raw: &Value) -> Result<pb::structured_query::FindNeare
     let query_vector = raw.get("queryVector").map(value_from_json).transpose()?;
     let distance_measure = match raw.get("distanceMeasure") {
         Some(Value::String(name)) => sq::find_nearest::DistanceMeasure::from_str_name(name)
-            .ok_or_else(|| JsonError("unknown distance measure".into()))?,
-        Some(Value::Number(number)) => {
-            let number = number
-                .as_i64()
-                .and_then(|number| i32::try_from(number).ok())
-                .ok_or_else(|| {
-                    JsonError("findNearest.distanceMeasure must be a string or enum number".into())
-                })?;
-            sq::find_nearest::DistanceMeasure::try_from(number)
-                .map_err(|_| JsonError("unknown distance measure".into()))?
-        }
-        None => sq::find_nearest::DistanceMeasure::Unspecified,
+            .ok_or_else(|| JsonError("unknown distance measure".into()))?
+            as i32,
+        Some(Value::Number(number)) => enum_number(number, "findNearest.distanceMeasure")?,
+        None => sq::find_nearest::DistanceMeasure::Unspecified as i32,
         Some(_) => return err("findNearest.distanceMeasure must be a string or enum number"),
     };
     let limit = int32(raw.get("limit"), "findNearest.limit")?;

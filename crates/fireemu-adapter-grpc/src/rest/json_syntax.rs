@@ -309,10 +309,11 @@ impl Parser<'_> {
     }
 
     fn hex4(&self, at: usize) -> Option<u32> {
-        let digits = self.body.get(at..at + 4)?;
-        digits.iter().try_fold(0u32, |code, byte| {
-            char::from(*byte).to_digit(16).map(|d| (code << 4) | d)
-        })
+        let digits = std::str::from_utf8(self.body.get(at..at + 4)?).ok()?;
+        match fireemu_core_types::codec::hex_decode(digits)?.as_slice() {
+            [high, low] => Some((u32::from(*high) << 8) | u32::from(*low)),
+            _ => None,
+        }
     }
 
     /// The code point of the `\uXXXX` escape (a surrogate pair included) at `at`, and how many

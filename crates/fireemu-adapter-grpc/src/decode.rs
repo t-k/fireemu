@@ -483,9 +483,15 @@ fn check_name_references(filter: &FilterExpr, parent: &Parent) -> Result<(), Dec
     let check = |name: &str| -> Result<(), DecodeError> {
         check_reference_database(name, &database)?;
         if DocumentPath::from_resource_name(name).is_none() {
-            return Err(DecodeError::Refused(
-                crate::query_messages::reference_is_not_a_document(name),
-            ));
+            // The name parsed as a parent tells a collection (odd segment count) apart from
+            // the other malformed names, each in its own words; the database root itself is
+            // no document either.
+            return Err(match crate::query_messages::parse_query_parent(name) {
+                Err(error) => error,
+                Ok(_) => {
+                    DecodeError::Refused(crate::query_messages::reference_is_not_a_document(name))
+                }
+            });
         }
         Ok(())
     };

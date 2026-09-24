@@ -8570,3 +8570,75 @@ async fn batch_write_item_shapes_answer_identically_on_rest_and_grpc() {
     }
     handle.abort();
 }
+
+/// A count capped at zero answers without reading (FS-QUERY-INDEX
+/// aggregation/options#count-up-to-zero), but only once the database exists and the rules let
+/// the caller read the query; an Explain still runs and reports its metrics.
+#[test]
+fn a_count_capped_at_zero_is_authorized_before_it_answers() {
+    let backend = history_budget_backend(u64::MAX, u64::MAX);
+    let request =
+        |database: &str, explain: Option<pb::ExplainOptions>| pb::RunAggregationQueryRequest {
+            parent: format!("projects/demo-app/databases/{database}/documents"),
+            query_type: Some(
+                pb::run_aggregation_query_request::QueryType::StructuredAggregationQuery(
+                    pb::StructuredAggregationQuery {
+                        query_type: Some(
+                            pb::structured_aggregation_query::QueryType::StructuredQuery(
+                                pb::StructuredQuery {
+                                    from: vec![sq::CollectionSelector {
+                                        collection_id: "c".to_owned(),
+                                        all_descendants: false,
+                                    }],
+                                    ..Default::default()
+                                },
+                            ),
+                        ),
+                        aggregations: vec![pb::structured_aggregation_query::Aggregation {
+                            alias: "c".to_owned(),
+                            operator: Some(
+                                pb::structured_aggregation_query::aggregation::Operator::Count(
+                                    pb::structured_aggregation_query::aggregation::Count {
+                                        up_to: Some(0),
+                                    },
+                                ),
+                            ),
+                        }],
+                    },
+                ),
+            ),
+            explain_options: explain,
+            ..Default::default()
+        };
+    let owner = backend
+        .run_aggregation_query(
+            &request("(default)", None),
+            &fireemu_adapter_grpc::rules::allow_all_reads,
+        )
+        .unwrap();
+    assert_eq!(
+        owner.read_time,
+        Some(prost_types::Timestamp {
+            seconds: -1,
+            nanos: 999_999_000
+        })
+    );
+    let denied = backend
+        .run_aggregation_query(&request("(default)", None), &deny_read)
+        .unwrap_err();
+    assert_eq!(denied.code(), tonic::Code::PermissionDenied);
+    let missing = backend
+        .run_aggregation_query(
+            &request("never-created", None),
+            &fireemu_adapter_grpc::rules::allow_all_reads,
+        )
+        .unwrap_err();
+    assert_eq!(missing.code(), tonic::Code::NotFound);
+    let explained = backend
+        .run_aggregation_query(
+            &request("(default)", Some(pb::ExplainOptions { analyze: true })),
+            &fireemu_adapter_grpc::rules::allow_all_reads,
+        )
+        .unwrap();
+    assert!(explained.explain_metrics.is_some());
+}

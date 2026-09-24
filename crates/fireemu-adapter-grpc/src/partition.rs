@@ -66,10 +66,12 @@ pub const ANCESTOR_QUERY: &str = "Ancestor queries are not supported.";
 /// at all (a kindless query, or one without an explicit order), or `Ok(true)` to split it.
 pub fn check_query(query: &Query) -> Result<bool, &'static str> {
     let refusal = match &query.scope {
-        QueryScope::KindlessAllDescendants { .. } | QueryScope::KindlessChildren { .. } => {
-            return Ok(false);
+        QueryScope::KindlessAllDescendants { .. } => return Ok(false),
+        // Without `allDescendants`, as for a collection (partition-query/refusals
+        // #not-collection-group).
+        QueryScope::Collection { .. } | QueryScope::KindlessChildren { .. } => {
+            Some("Query must select all descendant collections.")
         }
-        QueryScope::Collection { .. } => Some("Query must select all descendant collections."),
         QueryScope::CollectionGroup { .. } => None,
     }
     .or_else(|| {
@@ -138,6 +140,17 @@ mod tests {
             previous = cursors;
         }
         assert_eq!(partition_cursors(&group, 8), partition_cursors(&group, 8));
+    }
+
+    #[test]
+    fn only_a_query_over_all_descendants_is_split() {
+        let children = Query::new(QueryScope::kindless_children(None));
+        assert_eq!(
+            check_query(&children),
+            Err("Query must select all descendant collections.")
+        );
+        let kindless = Query::new(QueryScope::kindless_all_descendants(None));
+        assert_eq!(check_query(&kindless), Ok(false));
     }
 
     #[test]

@@ -44,7 +44,17 @@ const execFileAsync = promisify(execFile);
 const FIXTURE = join(CONFORMANCE_DIR, "fs-config-lifecycle-production.json");
 /** Normalized managed-export captures (production's and fireemu's) for the interop programs. */
 const EXPORTS = join(CONFORMANCE_DIR, "fs-config-lifecycle-exports.json");
-const LOCAL_CONFIG = join(CONFORMANCE_DIR, "fs-config-lifecycle.fireemu.json");
+/**
+ * fireemu's configuration for one project's run: facts production holds about that project's
+ * (default), such as when it was created, are configuration, not behavior.
+ */
+const localConfig = (project) =>
+  join(
+    CONFORMANCE_DIR,
+    project === BISECT_PROJECT
+      ? "fs-config-lifecycle-bisect.fireemu.json"
+      : "fs-config-lifecycle.fireemu.json",
+  );
 const RUN_DIR = join(CONFORMANCE_DIR, ".runs", "fs-config-lifecycle");
 const TASK_ID = "FS-CONFIG-LIFECYCLE-SANDBOX";
 const sha256 = (text) => createHash("sha256").update(text).digest("hex");
@@ -457,7 +467,7 @@ async function runLocalProject(programs, project) {
     [
       "exec",
       "--config",
-      LOCAL_CONFIG,
+      localConfig(project),
       "--project",
       project,
       "--only",

@@ -16654,7 +16654,7 @@ fn strict_the_action_page_applies_an_email_change_like_the_api() {
 }
 
 /// Strict: a verification applied from the action page finds its account by the address, as
-/// `accounts:update` does (production answers EMAIL_NOT_FOUND once the account has another);
+/// `accounts:update` does (production answers `EMAIL_NOT_FOUND` once the account has another);
 /// the emulator profile verifies the code's account, as the official handler does.
 #[test]
 fn strict_the_action_page_verifies_by_address_like_the_api() {

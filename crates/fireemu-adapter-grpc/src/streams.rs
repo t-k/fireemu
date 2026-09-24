@@ -183,29 +183,10 @@ pub async fn write_stream(
                 break;
             }
         };
-        let after_handshake = state.parent.is_some();
-        match handle_write_request(&ctx, &mut state, &req) {
-            Ok(response) => {
-                if tx.send(Ok(response)).await.is_err() {
-                    break;
-                }
-            }
-            Err(error) => {
-                // Firestore accepts this exact terminal frame shape after the handshake when
-                // the client immediately half-closes. Defer its malformed-write error until
-                // we know whether the frame terminates the stream; any following frame keeps
-                // the error.
-                let terminal_empty_write = after_handshake
-                    && req.database.is_empty()
-                    && req.stream_id.is_empty()
-                    && req.writes.as_slice() == [pb::Write::default()]
-                    && error.code() == tonic::Code::InvalidArgument;
-                if terminal_empty_write && inbound.next().await.is_none() {
-                    break;
-                }
-                let _ = tx.send(Err(error)).await;
-                break;
-            }
+        let outcome = handle_write_request(&ctx, &mut state, &req);
+        let stop = outcome.is_err();
+        if tx.send(outcome).await.is_err() || stop {
+            break;
         }
     }
 }

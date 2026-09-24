@@ -12,7 +12,9 @@
 // else -- documents, field values, result order, write results, error messages -- is kept
 // as the side produced it.
 
-import { readFile, writeFile } from "node:fs/promises";
+import { open, readFile, rename, unlink, writeFile } from "node:fs/promises";
+import { randomUUID } from "node:crypto";
+import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { credentialMetadata, selectCredential } from "./credentials.mjs";
 import { normalizeRecordedResponse } from "./production-normalization.mjs";
@@ -715,6 +717,7 @@ function isTransactionTooBigRefusal(status, body) {
 
 async function writeManagedRecoveryJournal(status, extra = {}) {
   if (!MANAGED_CLEAR_JOURNAL) throw new Error("managed recovery journal is required");
+  const recovery = managedClearState?.recoveryJournal;
   const entry = {
     schemaVersion: 1,
     mode: "recover-legacy",
@@ -722,9 +725,92 @@ async function writeManagedRecoveryJournal(status, extra = {}) {
     project: PROJECT,
     database: "(default)",
     names: LEGACY_SHRINK_NAMES,
+    ...(recovery ? { deletedNames: recovery.deletedNames } : {}),
+    ...(recovery ? { verifiedAbsentNames: recovery.verifiedAbsentNames } : {}),
+    ...(recovery?.deleteIntent ? { deleteIntent: recovery.deleteIntent } : {}),
     ...extra,
   };
-  await writeFile(MANAGED_CLEAR_JOURNAL, `${JSON.stringify(entry)}\n`, { mode: 0o600 });
+  await writePrivateJsonDurably(MANAGED_CLEAR_JOURNAL, entry);
+}
+
+export async function writePrivateJsonDurably(
+  path,
+  value,
+  {
+    writeTemp = (handle, contents) => handle.writeFile(contents),
+    syncFile = (handle) => handle.sync(),
+    renameTemp = (temporary, target) => rename(temporary, target),
+    syncDirectory = (handle) => handle.sync(),
+  } = {},
+) {
+  const parent = dirname(path);
+  const temporary = join(parent, `.${randomUUID()}.journal-tmp`);
+  let renamed = false;
+  let fileHandle;
+  try {
+    fileHandle = await open(temporary, "wx", 0o600);
+    await writeTemp(fileHandle, `${JSON.stringify(value)}\n`);
+    await syncFile(fileHandle);
+    await fileHandle.close();
+    fileHandle = null;
+    await renameTemp(temporary, path);
+    renamed = true;
+    const directoryHandle = await open(parent, "r");
+    try {
+      await syncDirectory(directoryHandle);
+    } finally {
+      await directoryHandle.close();
+    }
+  } catch (error) {
+    throw new Error("could not durably persist private journal", { cause: error });
+  } finally {
+    if (fileHandle) await fileHandle.close().catch(() => {});
+    if (!renamed) await unlink(temporary).catch(() => {});
+  }
+}
+
+export async function sendDeleteAfterWriteAhead(persistIntent, sendDelete) {
+  await persistIntent();
+  return sendDelete();
+}
+
+async function readManagedRecoveryJournal() {
+  let journal;
+  try {
+    journal = JSON.parse(await readFile(MANAGED_CLEAR_JOURNAL, "utf8"));
+  } catch (error) {
+    if (error?.code === "ENOENT") {
+      return { deletedNames: [], verifiedAbsentNames: [], deleteIntent: null };
+    }
+    throw new Error("legacy recovery journal is unreadable", { cause: error });
+  }
+  const deletedNames = journal?.deletedNames ?? [];
+  const verifiedAbsentNames = journal?.verifiedAbsentNames ?? [];
+  const deleteIntent = journal?.deleteIntent ?? null;
+  if (
+    journal?.schemaVersion !== 1 ||
+    journal.mode !== "recover-legacy" ||
+    journal.project !== PROJECT ||
+    journal.database !== "(default)" ||
+    JSON.stringify(journal.names) !== JSON.stringify(LEGACY_SHRINK_NAMES) ||
+    !Array.isArray(deletedNames) ||
+    deletedNames.some((name) => !LEGACY_SHRINK_NAMES.includes(name)) ||
+    new Set(deletedNames).size !== deletedNames.length ||
+    !Array.isArray(verifiedAbsentNames) ||
+    verifiedAbsentNames.some((name) => !LEGACY_SHRINK_NAMES.includes(name)) ||
+    new Set(verifiedAbsentNames).size !== verifiedAbsentNames.length ||
+    verifiedAbsentNames.some((name) => deletedNames.includes(name)) ||
+    (deleteIntent !== null &&
+      (deleteIntent.action !== "commit-delete" ||
+        !LEGACY_SHRINK_NAMES.includes(deleteIntent.name) ||
+        typeof deleteIntent.updateTime !== "string" ||
+        !deleteIntent.updateTime ||
+        !Array.isArray(deleteIntent.priorDeletedNames) ||
+        JSON.stringify(deleteIntent.priorDeletedNames) !== JSON.stringify(deletedNames)))
+  ) {
+    throw new Error("legacy recovery journal does not match the frozen deletion scope");
+  }
+  return { deletedNames, verifiedAbsentNames, deleteIntent };
 }
 
 async function preflightLegacyRecoveryScope(base) {
@@ -797,26 +883,72 @@ async function preflightLegacyRecoveryScope(base) {
 async function recoverLegacyManagedClear() {
   const base = `${SCHEME}://${HOST}/v1/projects/${PROJECT}/databases/(default)/documents`;
   managedClearBlocked = true;
+  managedClearState.recoveryJournal = await readManagedRecoveryJournal();
   await writeManagedRecoveryJournal("starting");
   await preflightLegacyRecoveryScope(base);
+  const { deletedNames, deleteIntent } = managedClearState.recoveryJournal;
+  if (deletedNames.some((name) => managedClearState.preflightUpdateTimes.has(name))) {
+    throw new Error("legacy recovery found a previously deleted name present again");
+  }
+  if (
+    managedClearState.recoveryJournal.verifiedAbsentNames.some((name) =>
+      managedClearState.preflightUpdateTimes.has(name),
+    )
+  ) {
+    throw new Error("legacy recovery found a previously verified-absent name present again");
+  }
+  if (deleteIntent && !managedClearState.preflightUpdateTimes.has(deleteIntent.name)) {
+    managedClearState.recoveryJournal.deletedNames.push(deleteIntent.name);
+    managedClearState.recoveryJournal.verifiedAbsentNames =
+      managedClearState.recoveryJournal.verifiedAbsentNames.filter(
+        (name) => name !== deleteIntent.name,
+      );
+    managedClearState.recoveryJournal.deleteIntent = null;
+    await writeManagedRecoveryJournal("deleting");
+  }
+  const pendingAcknowledgedName =
+    deleteIntent && !managedClearState.preflightUpdateTimes.has(deleteIntent.name)
+      ? deleteIntent.name
+      : null;
+  managedClearState.recoveryJournal.verifiedAbsentNames = [
+    ...new Set([
+      ...managedClearState.recoveryJournal.verifiedAbsentNames,
+      ...LEGACY_SHRINK_NAMES.filter(
+        (name) =>
+          !managedClearState.preflightUpdateTimes.has(name) &&
+          !managedClearState.recoveryJournal.deletedNames.includes(name) &&
+          name !== pendingAcknowledgedName,
+      ),
+    ]),
+  ];
   await writeManagedRecoveryJournal("preflight-complete", {
     presentNames: [...managedClearState.preflightUpdateTimes.keys()],
     absentNames: LEGACY_SHRINK_NAMES.filter(
       (name) => !managedClearState.preflightUpdateTimes.has(name),
     ),
+    verifiedAbsentNames: managedClearState.recoveryJournal.verifiedAbsentNames,
   });
-  const deletedNames = [];
   for (const name of LEGACY_SHRINK_NAMES) {
     if (!managedClearState.preflightUpdateTimes.has(name)) continue;
     const updateTime = await shrinkBoundaryDocument(name);
-    const deleted = await managedShrinkRequest("exact legacy document delete", `${base}:commit`, {
-      method: "POST",
-      headers: authorized({ "content-type": "application/json" }),
-      body: JSON.stringify({
-        writes: [{ delete: name, currentDocument: { updateTime } }],
-      }),
-      signal: timeoutSignal(),
-    });
+    managedClearState.recoveryJournal.deleteIntent = {
+      action: "commit-delete",
+      name,
+      priorDeletedNames: [...managedClearState.recoveryJournal.deletedNames],
+      updateTime,
+    };
+    const deleted = await sendDeleteAfterWriteAhead(
+      () => writeManagedRecoveryJournal("deleting"),
+      () =>
+        managedShrinkRequest("exact legacy document delete", `${base}:commit`, {
+          method: "POST",
+          headers: authorized({ "content-type": "application/json" }),
+          body: JSON.stringify({
+            writes: [{ delete: name, currentDocument: { updateTime } }],
+          }),
+          signal: timeoutSignal(),
+        }),
+    );
     if (!deleted.ok) {
       const body = await deleted.text();
       throw new Error(`legacy recovery exact delete ${deleted.status} ${body}`);
@@ -833,26 +965,25 @@ async function recoverLegacyManagedClear() {
     ) {
       throw new Error("legacy recovery exact delete acknowledgement is uncertain");
     }
-    if (!Object.hasOwn(acknowledgement.writeResults[0], "updateTime")) {
-      const readback = await managedShrinkRequest(
-        "legacy recovery exact delete absence",
-        `${base}:batchGet`,
-        {
-          method: "POST",
-          headers: authorized({ "content-type": "application/json" }),
-          body: JSON.stringify({ documents: [name] }),
-          signal: timeoutSignal(),
-        },
-      );
-      if (!readback.ok || !validateManagedClearReadback([name], await readback.json())) {
-        throw new Error("legacy recovery exact delete typed absence was not proved");
-      }
+    const readback = await managedShrinkRequest(
+      "legacy recovery exact delete absence",
+      `${base}:batchGet`,
+      {
+        method: "POST",
+        headers: authorized({ "content-type": "application/json" }),
+        body: JSON.stringify({ documents: [name] }),
+        signal: timeoutSignal(),
+      },
+    );
+    if (!readback.ok || !validateManagedClearReadback([name], await readback.json())) {
+      throw new Error("legacy recovery exact delete typed absence was not proved");
     }
-    deletedNames.push(name);
-    await writeManagedRecoveryJournal("deleting", { deletedNames });
+    managedClearState.recoveryJournal.deletedNames.push(name);
+    managedClearState.recoveryJournal.deleteIntent = null;
+    await writeManagedRecoveryJournal("deleting");
   }
   await verifyManagedShrinkScopeAbsent(base);
-  await writeManagedRecoveryJournal("complete", { deletedNames });
+  await writeManagedRecoveryJournal("complete");
   managedClearBlocked = false;
 }
 

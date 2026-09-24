@@ -1,15 +1,18 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
+import { legacyManagedClearNames } from "./firestore-probe/session.mjs";
 
 import {
   MAX_STREAM_FRAMES,
   assertMatchingSandboxCorpus,
   comparisonExitCode,
+  findLegacyRecoveryResume,
   localTarget,
+  prepareLegacyRecoveryRun,
   legacyRecoveryEnvironment,
   prepareSandboxCorpus,
   productionRestEnvironment,
@@ -394,6 +397,247 @@ test("failed legacy recovery keeps its single cost reservation and exclusive loc
     assert.ok((await stat(join(directory, "fs-data-write-exclusive.lock"))).isDirectory());
   } finally {
     await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("legacy recovery selects one incomplete exact-scope journal from its ledger provenance", async () => {
+  const privateDir = await mkdtemp(join(tmpdir(), "fireemu-recovery-resume-"));
+  const runDir = await mkdtemp(join(privateDir, "fs-data-write-legacy-recovery-"));
+  const names = legacyManagedClearNames();
+  const corpusDigest = createHash("sha256")
+    .update(JSON.stringify({ mode: "recover-legacy", names }))
+    .digest("hex");
+  try {
+    await writeFile(
+      join(privateDir, "sandbox-ledger.jsonl"),
+      `${[
+        {
+          taskId: "FS-DATA-WRITE-SANDBOX",
+          outcome: "reserved",
+          gitSha: "a".repeat(40),
+          corpusDigest,
+          runDir,
+        },
+        {
+          taskId: "FS-DATA-WRITE-SANDBOX",
+          outcome: "reserved",
+          gitSha: "b".repeat(40),
+          corpusDigest,
+          runDir,
+        },
+      ]
+        .map((row) => JSON.stringify(row))
+        .join("\n")}\n`,
+    );
+    await writeFile(
+      join(runDir, "journal.json"),
+      JSON.stringify({
+        schemaVersion: 1,
+        mode: "recover-legacy",
+        status: "deleting",
+        project: "fireemu-oracle-sbx",
+        database: "(default)",
+        names,
+        deletedNames: [names[0]],
+        deleteIntent: {
+          action: "commit-delete",
+          name: names[1],
+          priorDeletedNames: [names[0]],
+          updateTime: "test-cas-version",
+        },
+      }),
+      { mode: 0o600 },
+    );
+
+    await writeFile(join(runDir, "meta.json"), "prior receipt marker");
+    const prepared = await prepareLegacyRecoveryRun(privateDir, corpusDigest, names);
+    assert.equal(prepared.runDir, runDir);
+    assert.equal(prepared.journal, join(runDir, "journal.json"));
+    assert.notEqual(prepared.meta, join(runDir, "meta.json"));
+    assert.deepEqual(prepared.resume, { runDir, sourceGitSha: "b".repeat(40) });
+    assert.equal(await readFile(join(runDir, "meta.json"), "utf8"), "prior receipt marker");
+  } finally {
+    await rm(privateDir, { recursive: true, force: true });
+  }
+});
+
+test("legacy recovery rejects a provenance-matched journal for the wrong frozen names", async () => {
+  const privateDir = await mkdtemp(join(tmpdir(), "fireemu-recovery-resume-invalid-"));
+  const runDir = await mkdtemp(join(privateDir, "fs-data-write-legacy-recovery-"));
+  const names = legacyManagedClearNames();
+  const corpusDigest = createHash("sha256")
+    .update(JSON.stringify({ mode: "recover-legacy", names }))
+    .digest("hex");
+  try {
+    await writeFile(
+      join(privateDir, "sandbox-ledger.jsonl"),
+      `${JSON.stringify({
+        taskId: "FS-DATA-WRITE-SANDBOX",
+        outcome: "reserved",
+        gitSha: "a".repeat(40),
+        corpusDigest,
+        runDir,
+      })}\n`,
+    );
+    await writeFile(
+      join(runDir, "journal.json"),
+      JSON.stringify({
+        schemaVersion: 1,
+        mode: "recover-legacy",
+        status: "deleting",
+        project: "fireemu-oracle-sbx",
+        database: "(default)",
+        names: names.slice(1),
+        deletedNames: [],
+      }),
+      { mode: 0o600 },
+    );
+
+    await assert.rejects(
+      findLegacyRecoveryResume(privateDir, corpusDigest, names),
+      /does not match its frozen private scope/,
+    );
+  } finally {
+    await rm(privateDir, { recursive: true, force: true });
+  }
+});
+
+test("legacy recovery selects and allocates its run only while holding the exclusive lock", async () => {
+  const privateDir = await mkdtemp(join(tmpdir(), "fireemu-recovery-lock-selection-"));
+  const lockPath = join(privateDir, "fs-data-write-exclusive.lock");
+  const names = legacyManagedClearNames();
+  const corpusDigest = createHash("sha256")
+    .update(JSON.stringify({ mode: "recover-legacy", names }))
+    .digest("hex");
+  const reservation = {
+    gitSha: "a".repeat(40),
+    corpusDigest,
+    runDir: join(privateDir, "fs-data-write-legacy-recovery-placeholder"),
+  };
+  try {
+    await mkdir(lockPath, { mode: 0o700 });
+    let selected = false;
+    await assert.rejects(
+      withLegacyRecoveryReservation(
+        privateDir,
+        async () => {
+          selected = true;
+          return reservation;
+        },
+        async () => undefined,
+      ),
+    );
+    assert.equal(selected, false);
+    await rm(lockPath, { recursive: true });
+
+    let prepared;
+    await withLegacyRecoveryReservation(
+      privateDir,
+      async () => {
+        assert.ok((await stat(lockPath)).isDirectory());
+        prepared = await prepareLegacyRecoveryRun(privateDir, corpusDigest, names);
+        return { ...reservation, runDir: prepared.runDir };
+      },
+      async (selectedReservation) => {
+        assert.ok((await stat(lockPath)).isDirectory());
+        assert.equal(selectedReservation.runDir, prepared.runDir);
+        const rows = (await readFile(join(privateDir, "sandbox-ledger.jsonl"), "utf8"))
+          .trim()
+          .split("\n")
+          .map((line) => JSON.parse(line));
+        assert.equal(rows.at(-1).runDir, prepared.runDir);
+      },
+    );
+    await assert.rejects(stat(lockPath), /ENOENT/);
+  } finally {
+    await rm(privateDir, { recursive: true, force: true });
+  }
+});
+
+test("legacy recovery ignores completed and mismatched journals before selecting one pending path", async () => {
+  const privateDir = await mkdtemp(join(tmpdir(), "fireemu-recovery-resume-"));
+  const names = legacyManagedClearNames();
+  const corpusDigest = createHash("sha256")
+    .update(JSON.stringify({ mode: "recover-legacy", names }))
+    .digest("hex");
+  const makeRun = async (status) => {
+    const runDir = await mkdtemp(join(privateDir, "fs-data-write-legacy-recovery-"));
+    await writeFile(
+      join(runDir, "journal.json"),
+      JSON.stringify({
+        schemaVersion: 1,
+        mode: "recover-legacy",
+        status,
+        project: "fireemu-oracle-sbx",
+        database: "(default)",
+        names,
+        deletedNames: [],
+      }),
+      { mode: 0o600 },
+    );
+    return runDir;
+  };
+  try {
+    const completeDir = await makeRun("complete");
+    const mismatchedDir = await makeRun("deleting");
+    const pendingDir = await makeRun("preflight-complete");
+    const rows = [
+      {
+        taskId: "FS-DATA-WRITE-SANDBOX",
+        outcome: "reserved",
+        gitSha: "a".repeat(40),
+        corpusDigest,
+        runDir: completeDir,
+      },
+      {
+        taskId: "FS-DATA-WRITE-SANDBOX",
+        outcome: "reserved",
+        gitSha: "b".repeat(40),
+        corpusDigest: "f".repeat(64),
+        runDir: mismatchedDir,
+      },
+      {
+        taskId: "FS-DATA-WRITE-SANDBOX",
+        outcome: "reserved",
+        gitSha: "c".repeat(40),
+        corpusDigest,
+        runDir: pendingDir,
+      },
+      {
+        taskId: "OTHER",
+        outcome: "reserved",
+        gitSha: "d".repeat(40),
+        corpusDigest,
+        runDir: await makeRun("deleting"),
+      },
+    ];
+    await writeFile(
+      join(privateDir, "sandbox-ledger.jsonl"),
+      `${rows.map((row) => JSON.stringify(row)).join("\n")}\n`,
+    );
+
+    assert.deepEqual(await findLegacyRecoveryResume(privateDir, corpusDigest, names), {
+      runDir: pendingDir,
+      sourceGitSha: "c".repeat(40),
+    });
+
+    const ambiguousDir = await makeRun("deleting");
+    await writeFile(
+      join(privateDir, "sandbox-ledger.jsonl"),
+      `${rows.map((row) => JSON.stringify(row)).join("\n")}\n${JSON.stringify({
+        taskId: "FS-DATA-WRITE-SANDBOX",
+        outcome: "reserved",
+        gitSha: "e".repeat(40),
+        corpusDigest,
+        runDir: ambiguousDir,
+      })}\n`,
+    );
+    await assert.rejects(
+      findLegacyRecoveryResume(privateDir, corpusDigest, names),
+      /multiple incomplete legacy recovery journals/,
+    );
+  } finally {
+    await rm(privateDir, { recursive: true, force: true });
   }
 });
 

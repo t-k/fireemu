@@ -298,7 +298,15 @@
       "recipeIds": ["writes/write-stream-terminal/half-close"],
       "boundaryStatus": "NOT_APPLICABLE",
       "comparisonNormalizationApproval": "Owner directive 2026-09-24 FS-DATA-WRITE addendum 3 section 2: comparison-only exclusion of volatile GFE content-disposition and x-debug-tracking-id trailers; raw evidence, status, code, message, and document state remain strict.",
-      "status": "PENDING_REVIEW"
+      "status": "VERIFIED",
+      "evidence": {
+        "productionRecordings": [
+          "ba880dc6feb56588256298deba48c9cbfd53de115e2f9381968867a28279d56f",
+          "ba880dc6feb56588256298deba48c9cbfd53de115e2f9381968867a28279d56f"
+        ],
+        "finalArtifactSha256": "f73f33dde5cc70e02629b7bda25ad893c722b868aca417b42a5357d2efd50a7b",
+        "comparisonPath": "spec/compatibility/broad-runs/fs-stream-half-close-542b868b7-saved-comparison.json"
+      }
     },
     {
       "conditionId": "FS-DATA-WRITE/write-stream-empty-write-response",

@@ -165,6 +165,7 @@ test("VERIFIED requires a resolved production boundary classification", () => {
 test("verified conditions are bound to their saved comparisons", async () => {
   const closure = JSON.parse(readFileSync(closurePath, "utf8"));
   const fixture = JSON.parse(readFileSync(fixturePath, "utf8"));
+  const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
   const { corpus } = await prepareSandboxCorpus();
   const digestProgram = (program) => ({
     steps: Object.fromEntries(
@@ -204,7 +205,13 @@ test("verified conditions are bound to their saved comparisons", async () => {
     const comparison = JSON.parse(readFileSync(comparisonPath, "utf8"));
     assert.equal(comparison.conditionId, condition.conditionId);
     assert.deepEqual(new Set(comparison.recipeIds), new Set(condition.recipeIds));
-    assert.deepEqual(comparison.productionRecordingDigests, fixture.evidence.recordingDigests);
+    const streamComparison = comparison.comparisonMode === "sandbox-stream-comparator";
+    assert.deepEqual(
+      comparison.productionRecordingDigests,
+      streamComparison
+        ? fixture.evidence.streamRecordingDigests
+        : fixture.evidence.recordingDigests,
+    );
     assert.deepEqual(
       condition.evidence.productionRecordings,
       comparison.productionRecordingDigests,
@@ -212,6 +219,46 @@ test("verified conditions are bound to their saved comparisons", async () => {
     assert.equal(condition.evidence.finalArtifactSha256, comparison.artifactSha256);
     assert.equal(comparison.result.comparableRecipes, condition.recipeIds.length);
     assert.equal(comparison.result.mismatchedRecipes, 0);
+    if (streamComparison) {
+      assert.match(comparison.artifactSourceCommit, /^[0-9a-f]{40}$/);
+      assert.ok(
+        condition.evidence.comparisonPath.includes(comparison.artifactSourceCommit.slice(0, 9)),
+      );
+      assert.equal(
+        comparison.localConfigSha256,
+        createHash("sha256")
+          .update(readFileSync(new URL("../fs-data-write-sandbox.fireemu.json", import.meta.url)))
+          .digest("hex"),
+      );
+      assert.deepEqual(
+        new Set(Object.keys(comparison.productionStreams)),
+        new Set(condition.recipeIds),
+      );
+      assert.deepEqual(new Set(Object.keys(comparison.localStreams)), new Set(condition.recipeIds));
+      for (const recipeId of condition.recipeIds) {
+        assert.deepEqual(comparison.productionStreams[recipeId], fixture.streams[recipeId]);
+        const recipe = corpus.streamRecipes.find(({ id }) => id === recipeId);
+        assert.ok(recipe);
+        const recipeDigest = createHash("sha256").update(JSON.stringify(recipe)).digest("hex");
+        assert.equal(recipeDigest, manifest.streams[recipeId]);
+        assert.equal(comparison.recipeSha256, recipeDigest);
+      }
+      assert.deepEqual(
+        compareSandboxArtifact(
+          { programs: {}, streams: comparison.productionStreams },
+          {},
+          comparison.localStreams,
+          {
+            restPrograms: [],
+            streamRecipes: corpus.streamRecipes.filter(({ id }) =>
+              condition.recipeIds.includes(id),
+            ),
+          },
+        ),
+        [],
+      );
+      continue;
+    }
     assert.deepEqual(
       new Set(Object.keys(comparison.productionPrograms)),
       new Set(condition.recipeIds),
@@ -350,8 +397,11 @@ test("an unrecorded empty-write response cannot inherit the known trailer mismat
   assert.ok(selected.pendingStreamIds.includes(responseId));
   assert.equal(response.status, "PENDING_RECORDING");
   assert.deepEqual(response.recipeIds, [responseId]);
-  assert.equal(halfClose.status, "PENDING_REVIEW");
-  assert.match(halfClose.comparisonNormalizationApproval, /2026-09-24.*addendum 3.*comparison-only/);
+  assert.equal(halfClose.status, "VERIFIED");
+  assert.match(
+    halfClose.comparisonNormalizationApproval,
+    /2026-09-24.*addendum 3.*comparison-only/,
+  );
   assert.ok(!halfClose.recipeIds.includes(responseId));
 });
 

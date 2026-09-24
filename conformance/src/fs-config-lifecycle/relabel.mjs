@@ -27,5 +27,15 @@ export function relabel(row) {
   );
 }
 
-/** Whether two rows are equal once each side's id symbols are renamed consistently. */
-export const sameModuloIdNames = (a, b) => sameRecording(relabel(a), relabel(b));
+const LISTINGS = ["indexes", "databases", "operations", "fields"];
+
+/** Whether a row answers a listing: the only rows whose order follows server-drawn ids. */
+export const isListing = (row) =>
+  LISTINGS.some((key) => Array.isArray(row?.body?.[key]) && row.body[key].length > 1);
+
+/**
+ * Whether two listing rows are equal once each side's id symbols are renamed consistently.
+ * Any other row must match as recorded.
+ */
+export const sameModuloIdNames = (a, b) =>
+  isListing(a) && isListing(b) && sameRecording(relabel(a), relabel(b));

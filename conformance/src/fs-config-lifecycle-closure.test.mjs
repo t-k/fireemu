@@ -141,6 +141,12 @@ test("FS-CONFIG-LIFECYCLE closure inventory cannot silently omit a declared cond
       );
     } else if (label === "FS-CONFIG-LIFECYCLE/final-artifact-regression") {
       assert.deepEqual(condition.evidence.fsConfig, comparison.summary, label);
+      // Every row that passes only modulo id numbering is named, so the rule stays visible.
+      assert.deepEqual(
+        rows.filter(({ status }) => status === "MATCH_RELABELED").map(({ row }) => row),
+        condition.evidence.relabeledRows ?? [],
+        `${label}: relabeled rows are listed`,
+      );
       const everyDocumented = new Set(
         closure.conditions.flatMap(({ evidence }) =>
           (evidence?.documentedDivergences ?? []).map(({ row }) => row),

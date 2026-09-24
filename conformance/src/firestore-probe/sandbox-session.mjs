@@ -147,6 +147,53 @@ export function assertV3ProductionCleanupAllowed({ host, exactDeltaV3 = false })
     );
   }
 }
+
+export function isExactDeltaV3ProductionScope({
+  mode,
+  lockHeld,
+  project,
+  maxRequests,
+  deltaJournal,
+  managedClearJournal,
+  names,
+}) {
+  if (
+    mode === true &&
+    lockHeld === true &&
+    project === "fireemu-oracle-sbx" &&
+    Number.isSafeInteger(maxRequests) &&
+    maxRequests >= 1 &&
+    maxRequests <= 430 &&
+    typeof deltaJournal === "string" &&
+    deltaJournal.length > 0 &&
+    managedClearJournal === deltaJournal
+  ) {
+    try {
+      if (!Array.isArray(names) || names.length !== 6) return false;
+      managedClearScope(names, project, "(default)");
+      const runIds = new Set(
+        names.map(
+          (name) =>
+            name.match(/\/del(?:rest|commit|batchwrite)(?:12112|12113)([a-f0-9]{32})c*\//)?.[1],
+        ),
+      );
+      const [runId] = runIds;
+      const expectedNames = ["rest", "commit", "batchwrite"].flatMap((route) =>
+        [12_112, 12_113].map((length) => {
+          const rawCollection = `del${route}${length}${runId}`;
+          return `${SANDBOX_DOCUMENTS}${rawCollection.padEnd(998, "c")}/d`;
+        }),
+      );
+      return (
+        runIds.size === 1 &&
+        JSON.stringify(names.toSorted()) === JSON.stringify(expectedNames.toSorted())
+      );
+    } catch {
+      return false;
+    }
+  }
+  return false;
+}
 let requestCount = 0;
 const requestBudget = MAX_REQUESTS === undefined ? null : createRequestBudget(Number(MAX_REQUESTS));
 let managedClearBlocked = false;
@@ -1574,12 +1621,12 @@ async function resolveDeltaPendingMutation() {
         ? "batch-write"
         : null;
   const expectedMethod =
-    pending.stepId === "seed" ? "PATCH" : route === "rest" ? "DELETE" : route ? "POST" : null;
+    pending.stepId === "seed" ? "POST" : route === "rest" ? "DELETE" : route ? "POST" : null;
   const expectedPath =
-    pending.stepId === "seed" || route === "rest"
-      ? `/v1/${name}`
-      : route === "commit"
-        ? `/v1/projects/${PROJECT}/databases/(default)/documents:commit`
+    pending.stepId === "seed" || route === "commit"
+      ? `/v1/projects/${PROJECT}/databases/(default)/documents:commit`
+      : route === "rest"
+        ? `/v1/${name}`
         : route === "batch-write"
           ? `/v1/projects/${PROJECT}/databases/(default)/documents:batchWrite`
           : null;
@@ -1599,13 +1646,22 @@ async function resolveDeltaPendingMutation() {
   const expectedBody =
     pending.stepId === "seed"
       ? JSON.stringify({
-          a: {
-            arrayValue: {
-              values: Array.from({ length: expectedLength }, (_, index) => ({
-                integerValue: String(index),
-              })),
+          writes: [
+            {
+              update: {
+                name,
+                fields: {
+                  a: {
+                    arrayValue: {
+                      values: Array.from({ length: expectedLength }, (_, index) => ({
+                        integerValue: String(index),
+                      })),
+                    },
+                  },
+                },
+              },
             },
-          },
+          ],
         })
       : route === "rest"
         ? ""
@@ -2168,17 +2224,15 @@ async function main() {
       return null;
     }
   })();
-  const deltaScope =
-    DELTA_V3_MODE &&
-    DELTA_LOCK_HELD &&
-    PROJECT === "fireemu-oracle-sbx" &&
-    MANAGED_CLEAR_JOURNAL === undefined &&
-    typeof process.env.FIRESTORE_PROBE_DELTA_JOURNAL === "string" &&
-    process.env.FIRESTORE_PROBE_DELTA_JOURNAL.length > 0 &&
-    Number.isSafeInteger(Number(MAX_REQUESTS)) &&
-    Number(MAX_REQUESTS) >= 1 &&
-    Number(MAX_REQUESTS) <= 430 &&
-    managedShrinkScope(deltaNames, PROJECT, "(default)") === "delta-v3";
+  const deltaScope = isExactDeltaV3ProductionScope({
+    mode: DELTA_V3_MODE,
+    lockHeld: DELTA_LOCK_HELD,
+    project: PROJECT,
+    maxRequests: Number(MAX_REQUESTS),
+    deltaJournal: process.env.FIRESTORE_PROBE_DELTA_JOURNAL,
+    managedClearJournal: MANAGED_CLEAR_JOURNAL,
+    names: deltaNames,
+  });
   assertV3ProductionCleanupAllowed({ host: HOST, exactDeltaV3: deltaScope });
   if (RECOVERY_MODE !== undefined) {
     if (!["recover-legacy", "recover-v3", "recover-delta-v3"].includes(RECOVERY_MODE)) {

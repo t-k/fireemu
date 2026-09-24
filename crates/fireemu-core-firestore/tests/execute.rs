@@ -807,3 +807,115 @@ fn not_in_with_a_null_candidate_matches_nothing() {
     ));
     assert!(ids(&s, &with_null).is_empty());
 }
+
+fn put_vector(state: &mut FirestoreState, id: &str, vector: Vec<f64>, second: i64) {
+    state
+        .commit(
+            &[Write {
+                op: WriteOp::Set {
+                    path: path(&format!("items/{id}")),
+                    fields: [
+                        ("embedding".to_owned(), Value::Vector(vector)),
+                        ("n".to_owned(), Value::Integer(second)),
+                    ]
+                    .into_iter()
+                    .collect(),
+                    update_mask: None,
+                },
+                precondition: None,
+                transforms: vec![],
+            }],
+            None,
+            LogicalInstant::from_unix_seconds(3_000 + second),
+        )
+        .unwrap();
+}
+
+/// A cosine search that meets a zero vector is refused (FS-QUERY-INDEX
+/// vector/measures#cosine, whose seed holds a zero vector); the other measures rank it.
+#[test]
+fn a_cosine_search_over_a_zero_vector_is_refused() {
+    let mut state = vector_state();
+    put_vector(&mut state, "zero", vec![0.0, 0.0], 1);
+    let error = state
+        .run_query(
+            &nearest(DistanceMeasure::Cosine, 3).canonicalize().unwrap(),
+            None,
+        )
+        .unwrap_err();
+    assert_eq!(
+        error,
+        fireemu_core_firestore::store::FirestoreError::FailedPrecondition(
+            "Cannot compute cosine distance against a vector with a magnitude of zero.".to_owned()
+        )
+    );
+    assert!(state
+        .run_query(
+            &nearest(DistanceMeasure::Euclidean, 4)
+                .canonicalize()
+                .unwrap(),
+            None
+        )
+        .is_ok());
+}
+
+/// Candidates at the same distance come back in document-name order (FS-QUERY-INDEX
+/// vector/measures#euclidean, whose seed holds equidistant vectors), whatever order they were
+/// written in.
+#[test]
+fn nearest_ties_are_broken_by_document_name() {
+    let mut state = FirestoreState::new();
+    for (second, id) in ["d", "b", "c", "a"].into_iter().enumerate() {
+        put_vector(
+            &mut state,
+            id,
+            vec![0.0, 1.0],
+            i64::try_from(second).unwrap(),
+        );
+    }
+    let ids: Vec<String> = state
+        .run_query(
+            &nearest(DistanceMeasure::Euclidean, 4)
+                .canonicalize()
+                .unwrap(),
+            None,
+        )
+        .unwrap()
+        .into_iter()
+        .map(|document| document.path.document_id().as_str().to_owned())
+        .collect();
+    assert_eq!(ids, ["a", "b", "c", "d"]);
+}
+
+/// An aggregation over a nearest-neighbour query aggregates its results (FS-QUERY-INDEX
+/// vector/with-query-clauses#count-over-nearest and #sum-over-nearest).
+#[test]
+fn aggregations_run_over_the_nearest_results() {
+    let mut state = FirestoreState::new();
+    for (second, (id, vector)) in [
+        ("a", vec![1.0, 0.0]),
+        ("b", vec![0.9, 0.1]),
+        ("c", vec![-1.0, 0.0]),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        put_vector(&mut state, id, vector, i64::try_from(second).unwrap() + 1);
+    }
+    let query = nearest(DistanceMeasure::Euclidean, 2)
+        .canonicalize()
+        .unwrap();
+    assert_eq!(
+        state
+            .run_aggregation(
+                &query,
+                &[
+                    Aggregation::Count { up_to: None },
+                    Aggregation::Sum(fp("n"))
+                ],
+                None
+            )
+            .unwrap(),
+        vec![Value::Integer(2), Value::Integer(3)]
+    );
+}

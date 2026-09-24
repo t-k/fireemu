@@ -381,10 +381,9 @@ async fn standard_query_limit_violation_is_invalid_argument() {
         .await
         .unwrap_err();
     assert_eq!(status.code(), tonic::Code::InvalidArgument);
-    assert!(
-        status.message().contains("FS-QUERY-LIMIT-NOT-IN-VALUES"),
-        "{}",
-        status.message()
+    assert_eq!(
+        status.message(),
+        "'NOT_IN' supports up to 10 comparison values."
     );
     handle.abort();
 }
@@ -573,7 +572,10 @@ fn the_limit_switch_turns_a_refusal_into_an_observation() {
     };
     let rejection = strict.validate_query(&query).unwrap_err();
     assert_eq!(rejection.to_status().code(), tonic::Code::InvalidArgument);
-    assert!(rejection.to_string().contains("NOT-IN"), "{rejection}");
+    assert_eq!(
+        rejection.to_string(),
+        "'NOT_IN' supports up to 10 comparison values."
+    );
 
     let firebase = Gateway {
         enforce_limits: false,
@@ -693,11 +695,12 @@ mod cursor_validation {
     }
 
     #[test]
-    fn the_strict_profile_refuses_a_cursor_reference_outside_the_collection() {
-        let rejection = gateway(IndexValidationPolicy::Production)
+    fn the_strict_profile_accepts_a_cursor_reference_outside_the_collection() {
+        // Production positions by a document of another collection (FS-QUERY-INDEX
+        // cursors/names#name-foreign-collection, recorded 2026-09-24).
+        gateway(IndexValidationPolicy::Production)
             .validate_query(&foreign())
-            .unwrap_err();
-        assert_eq!(rejection.to_status().code(), tonic::Code::InvalidArgument);
+            .expect("a reference to any document of the database is a position");
     }
 
     #[test]

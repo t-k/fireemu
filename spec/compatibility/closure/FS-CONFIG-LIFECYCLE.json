@@ -1,0 +1,257 @@
+{
+  "schemaVersion": 1,
+  "parent": "FS-CONFIG-LIFECYCLE",
+  "parentStatus": "WAITING_ORACLE",
+  "oracleTrack": "disposable-sandbox",
+  "closureReview": {
+    "decision": "PENDING",
+    "reviewer": null
+  },
+  "scopeDecisions": [
+    {
+      "id": "C1",
+      "decision": "Managed-infrastructure surfaces stay out of scope: backups, backupSchedules, restore, clone and point-in-time recovery (enabling it, its seven-day version retention and the read_time window it widens). No emulator user drives them; they are operated with gcloud or Terraform against production. Only the values databases.get reports for them (pointInTimeRecoveryEnablement, versionRetentionPeriod, earliestVersionTime) are compared. fireemu refuses these methods, and a databases.patch that enables point-in-time recovery, with a documented refusal instead of pretending to serve them.",
+      "decidedBy": "owner (t-k)",
+      "decidedOn": "2026-09-24",
+      "supersedes": "2026-09-18 FS-CONFIG-LIFECYCLE exclusion, except for the parts C2 brings back"
+    },
+    {
+      "id": "C2",
+      "decision": "Named Native database create, delete and patch, and managed exportDocuments and importDocuments over gs:// URIs, are in scope as REST long-running operations with production's request validation, operation shapes and post-state. fireemu writes and reads managed exports in the emulated Cloud Storage bucket, and a production export must import into fireemu and a fireemu export into production.",
+      "decidedBy": "owner (t-k)",
+      "decidedOn": "2026-09-24"
+    },
+    {
+      "id": "C3",
+      "decision": "Values only production can give meaning to follow what production answers: the locations catalog (locations.list and locations.get), freeTier (true only for the project's free-tier database), locationId as created, and the refusal of an unknown location, a customer-managed encryption key and resource tags.",
+      "decidedBy": "owner (t-k)",
+      "decidedOn": "2026-09-24"
+    },
+    {
+      "id": "C4",
+      "decision": "bulkDeleteDocuments, changeStreams and userCreds follow what a Standard edition production database answers: production serves bulkDeleteDocuments, so fireemu implements it; production refuses changeStreams and userCreds on Standard ('This operation requires an Enterprise database.'), so fireemu refuses them the same way.",
+      "decidedBy": "owner (t-k)",
+      "decidedOn": "2026-09-24"
+    },
+    {
+      "id": "C5",
+      "decision": "The comparison runs against the strict profile. The emulator profile keeps the official emulator's behavior (any database materializes on first touch) and is not closure evidence.",
+      "decidedBy": "agent under the 2026-09-18 delegation",
+      "decidedOn": "2026-09-24"
+    },
+    {
+      "id": "C6",
+      "decision": "Production runs touch only named databases the run creates in fireemu-oracle-query (prefix cfg), plus a per-run Cloud Storage bucket; (default) belongs to FS-QUERY-INDEX and is only read. A request that production rejects before it reaches any resource (a foreign project, an invalid id) may name other resources.",
+      "decidedBy": "agent under the 2026-09-18 delegation",
+      "decidedOn": "2026-09-24"
+    },
+    {
+      "id": "C7",
+      "decision": "The Admin API is observed over REST v1 in full; representative cases are also observed over gRPC google.firestore.admin.v1 (database create, get, list and delete; index create and get; export and import; operation get), because the Node FirestoreAdminClient, which the documented scheduled-export sample uses, speaks gRPC by default.",
+      "decidedBy": "owner (t-k)",
+      "decidedOn": "2026-09-24"
+    },
+    {
+      "id": "C8",
+      "decision": "Time-to-live is observed as configuration (the ttlConfig state transitions, removal, the list filter) and as the behavior before deletion (an expired document stays readable). Production deletes expired documents 'typically within 24 hours' with no guarantee, so the deletion instant is not a contract; fireemu keeps deleting on its virtual-clock sweep.",
+      "decidedBy": "owner (t-k)",
+      "decidedOn": "2026-09-24"
+    },
+    {
+      "id": "C9",
+      "decision": "Creating and deleting (default), and a project with no (default), cannot be observed in fireemu-oracle-query, whose (default) belongs to FS-QUERY-INDEX, and no new project can be created. They are observed in fireemu-fs-bisect-0924a when it is cleaned up, after the FS-DATA-WRITE bisection there has finished and before the project is deleted.",
+      "decidedBy": "owner (t-k)",
+      "decidedOn": "2026-09-24"
+    },
+    {
+      "id": "C10",
+      "decision": "Production long-running operations progress on their own schedule (an index takes minutes to build, an index operation stays PROCESSING after the index is READY, a deleted index keeps serving queries for a while, an exemption takes minutes to apply). Recordings compare the first response, every state the recording polls through after normalizing how many polls saw it, and the settled end state. fireemu must answer the same shapes and pass through the same states; how long it stays in each is not compared.",
+      "decidedBy": "agent under the 2026-09-18 delegation",
+      "decidedOn": "2026-09-24"
+    }
+  ],
+  "conditions": [
+    {
+      "conditionId": "FS-CONFIG-LIFECYCLE/database-projection",
+      "source": "docs/compatibility/fs-config-lifecycle-classification.md#database-resource-fields",
+      "recipeIds": [
+        "fs-config/database/projection"
+      ],
+      "status": "PENDING_CORPUS",
+      "note": "databases.get and databases.list for (default) (read only) and for named databases: every field and value, freeTier, locationId as created, showDeleted."
+    },
+    {
+      "conditionId": "FS-CONFIG-LIFECYCLE/database-create",
+      "source": "docs/compatibility/fs-config-lifecycle-classification.md#data-plane-contract-methods",
+      "recipeIds": [
+        "fs-config/database/create"
+      ],
+      "status": "PENDING_CORPUS",
+      "note": "The create operation shape and every accepted variant (location, concurrency mode, delete protection, Datastore mode, Enterprise edition) and refusal (id syntax and length, missing location or type, unknown location or edition, duplicate id, id reuse after delete, customer-managed key, tags)."
+    },
+    {
+      "conditionId": "FS-CONFIG-LIFECYCLE/database-delete",
+      "source": "docs/compatibility/fs-config-lifecycle-classification.md#data-plane-contract-methods",
+      "recipeIds": [
+        "fs-config/database/delete"
+      ],
+      "status": "PENDING_CORPUS",
+      "note": "The delete operation shape, delete protection, etag, missing database, and what get, list, showDeleted and the data plane answer afterwards."
+    },
+    {
+      "conditionId": "FS-CONFIG-LIFECYCLE/database-patch",
+      "source": "docs/compatibility/fs-config-lifecycle-classification.md#data-plane-contract-methods",
+      "recipeIds": [
+        "fs-config/database/patch"
+      ],
+      "status": "PENDING_CORPUS",
+      "note": "deleteProtectionState and concurrencyMode updates, an absent mask, immutable fields."
+    },
+    {
+      "conditionId": "FS-CONFIG-LIFECYCLE/database-mode-gating",
+      "source": "docs/compatibility/fs-config-lifecycle-classification.md#data-plane-contract-methods",
+      "recipeIds": [
+        "fs-config/database/mode-gating"
+      ],
+      "status": "PENDING_CORPUS",
+      "note": "The data plane of a Datastore-mode and of an Enterprise-edition database, and changeStreams and userCreds on a Standard database (C4)."
+    },
+    {
+      "conditionId": "FS-CONFIG-LIFECYCLE/default-database-lifecycle",
+      "source": "docs/compatibility/fs-config-lifecycle-classification.md#data-plane-contract-methods",
+      "recipeIds": [
+        "fs-config/default-database"
+      ],
+      "status": "PENDING_CORPUS",
+      "note": "C9: creating and deleting (default) and a project without it, observed in fireemu-fs-bisect-0924a."
+    },
+    {
+      "conditionId": "FS-CONFIG-LIFECYCLE/project-boundary",
+      "source": "docs/compatibility/ip-fs-production-compatibility.md#feature-group-status",
+      "recipeIds": [
+        "fs-config/project-boundary"
+      ],
+      "status": "PENDING_CORPUS",
+      "note": "Admin and data-plane requests naming a project the credential cannot use, and a database the project does not have."
+    },
+    {
+      "conditionId": "FS-CONFIG-LIFECYCLE/locations",
+      "source": "docs/compatibility/fs-config-lifecycle-classification.md#managed-infrastructure-methods",
+      "recipeIds": [
+        "fs-config/locations"
+      ],
+      "status": "PENDING_CORPUS",
+      "note": "C3: locations.list and locations.get, including an unknown location."
+    },
+    {
+      "conditionId": "FS-CONFIG-LIFECYCLE/index-lifecycle",
+      "source": "docs/compatibility/fs-config-lifecycle-classification.md#data-plane-contract-methods",
+      "recipeIds": [
+        "fs-config/index/lifecycle"
+      ],
+      "status": "PENDING_CORPUS",
+      "note": "collectionGroups.indexes create, get, list (one group and every group), delete; duplicate and invalid definitions; the index operation's states."
+    },
+    {
+      "conditionId": "FS-CONFIG-LIFECYCLE/index-query-effect",
+      "source": "docs/compatibility/fs-config-lifecycle-classification.md#data-plane-contract-methods",
+      "recipeIds": [
+        "fs-config/index/query-effect"
+      ],
+      "status": "PENDING_CORPUS",
+      "note": "A query needing the index before it exists, while it builds, once it is READY, and after it is deleted."
+    },
+    {
+      "conditionId": "FS-CONFIG-LIFECYCLE/field-index-config",
+      "source": "docs/compatibility/fs-config-lifecycle-classification.md#data-plane-contract-methods",
+      "recipeIds": [
+        "fs-config/field/index-config"
+      ],
+      "status": "PENDING_CORPUS",
+      "note": "collectionGroups.fields get (a field, the wildcard default), list and its required filter, patch of indexConfig (FS-CONFIG-RT-004), masks, and the exemption's effect on a query."
+    },
+    {
+      "conditionId": "FS-CONFIG-LIFECYCLE/ttl-config",
+      "source": "docs/compatibility/fs-config-lifecycle-classification.md#data-plane-contract-methods",
+      "recipeIds": [
+        "fs-config/field/ttl"
+      ],
+      "status": "PENDING_CORPUS",
+      "note": "C8: the ttlConfig policy states, removal, the ttlConfig list filter, and an expired document before deletion."
+    },
+    {
+      "conditionId": "FS-CONFIG-LIFECYCLE/operations",
+      "source": "docs/compatibility/fs-config-lifecycle-classification.md#managed-infrastructure-methods",
+      "recipeIds": [
+        "fs-config/operations"
+      ],
+      "status": "PENDING_CORPUS",
+      "note": "operations get, list, list filter, cancel of a running and of a finished operation, delete, a missing operation; each operation kind's metadata."
+    },
+    {
+      "conditionId": "FS-CONFIG-LIFECYCLE/export",
+      "source": "docs/compatibility/fs-config-lifecycle-classification.md#managed-infrastructure-methods",
+      "recipeIds": [
+        "fs-config/export"
+      ],
+      "status": "PENDING_CORPUS",
+      "note": "exportDocuments: the operation, collectionIds and namespaceIds, validation (missing prefix, scheme, missing bucket, missing database), the written object layout."
+    },
+    {
+      "conditionId": "FS-CONFIG-LIFECYCLE/import",
+      "source": "docs/compatibility/fs-config-lifecycle-classification.md#managed-infrastructure-methods",
+      "recipeIds": [
+        "fs-config/import"
+      ],
+      "status": "PENDING_CORPUS",
+      "note": "importDocuments: the operation, collectionIds against filtered and unfiltered exports, validation (missing prefix, absent export), the imported documents."
+    },
+    {
+      "conditionId": "FS-CONFIG-LIFECYCLE/export-format-interop",
+      "source": "docs/compatibility/fs-config-lifecycle-classification.md#local-safety-extensions",
+      "recipeIds": [
+        "fs-config/export/interop"
+      ],
+      "status": "PENDING_CORPUS",
+      "note": "A production export imports into fireemu, and a fireemu export imports into production, for an unfiltered and a collection-filtered export, with every value type."
+    },
+    {
+      "conditionId": "FS-CONFIG-LIFECYCLE/bulk-delete",
+      "source": "docs/compatibility/fs-config-lifecycle-classification.md#managed-infrastructure-methods",
+      "recipeIds": [
+        "fs-config/bulk-delete"
+      ],
+      "status": "PENDING_CORPUS",
+      "note": "bulkDeleteDocuments: the empty-filter refusal, collectionIds, the operation, the post-state."
+    },
+    {
+      "conditionId": "FS-CONFIG-LIFECYCLE/grpc-admin-transport",
+      "source": "docs/compatibility/ip-fs-production-compatibility.md#feature-group-status",
+      "recipeIds": [
+        "fs-config/grpc"
+      ],
+      "status": "PENDING_CORPUS",
+      "note": "C7: representative Admin cases over gRPC google.firestore.admin.v1."
+    },
+    {
+      "conditionId": "FS-CONFIG-LIFECYCLE/final-artifact-regression",
+      "source": "docs/compatibility/ip-fs-production-compatibility.md#feature-group-status",
+      "recipeIds": [
+        "fs-config",
+        "fs-config-lifecycle/local-evidence",
+        "cargo:fireemu-adapter-grpc+fireemu"
+      ],
+      "status": "PENDING_CORPUS",
+      "note": "The whole corpus against one retained artifact, plus the local multi-partition import, named-database export and projection evidence the parent row already cites."
+    },
+    {
+      "conditionId": "FS-CONFIG-LIFECYCLE/closure-review",
+      "source": "docs/compatibility/ip-fs-production-compatibility.md#feature-group-status",
+      "recipeIds": [
+        "FS-CONFIG-LIFECYCLE",
+        "fs-config"
+      ],
+      "status": "PENDING_CORPUS"
+    }
+  ]
+}

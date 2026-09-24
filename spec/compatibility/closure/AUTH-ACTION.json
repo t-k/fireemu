@@ -6,60 +6,60 @@
   "scopeDecisions": [
     {
       "id": "E1",
-      "decision": "Closure is defined by these behavioral acceptance conditions, observed through the REST surface (Identity Toolkit and Secure Token) on the disposable Identity Platform sandbox, as for AUTH-ACCOUNT and AUTH-CREDENTIAL. Every action code is generated through the Admin accounts:sendOobCode with returnOobLink, which returns the code and mails nothing; the client accounts:sendOobCode is observed only for a PASSWORD_RESET of an address that has no account. Mail delivery, templates, sender, localization and the mail a client request would send are not observed (as AUTH-ACCOUNT scope decision A5, the client and Admin SDK paths belong to AUTH-CONFIG-SDK).",
-      "decidedBy": "proposed; awaiting owner decision",
+      "decision": "Closure is defined by these behavioral acceptance conditions, observed through the REST surface (Identity Toolkit and Secure Token) on the disposable Identity Platform sandbox, as for AUTH-ACCOUNT and AUTH-CREDENTIAL. Every action code is generated through the Admin accounts:sendOobCode with returnOobLink, which returns the code and mails nothing; the client accounts:sendOobCode is observed only for a PASSWORD_RESET of an address that has no account. Mail delivery itself (templates, sender, localization, the message a client request would send) is not emulated by any parent: local development does not need it (owner, 2026-09-24). Client and Admin SDK paths belong to AUTH-CONFIG-SDK, as AUTH-ACCOUNT scope decision A5.",
+      "decidedBy": "owner (t-k)",
       "decidedOn": "2026-09-24",
       "movedTo": "AUTH-CONFIG-SDK"
     },
     {
       "id": "E2",
       "decision": "An action link is compared by its query parameters (mode, oobCode as the answer's own code, apiKey by presence, continueUrl, lang and any other). Where its handler lives is not compared: production links to the project's hosted action page and fireemu to its own /emulator/action handler, as the official emulator does, because a local link must reach the emulator. The hosted page's browser flow is out of scope.",
-      "decidedBy": "proposed; awaiting owner decision",
+      "decidedBy": "owner (t-k)",
       "decidedOn": "2026-09-24"
     },
     {
       "id": "E3",
       "decision": "Action codes are opaque credentials: their value and length are not compared. Production codes are 54-character base64url strings; fireemu's are its own identifiers.",
-      "decidedBy": "proposed; awaiting owner decision",
+      "decidedBy": "owner (t-k)",
       "decidedOn": "2026-09-24"
     },
     {
       "id": "E4",
       "decision": "Tenant-scoped action codes and links belong to AUTH-TENANT-BLOCKING, as AUTH-ACCOUNT scope decision A8; blocking functions (beforeSendEmail, beforeSignIn on an email-link sign-in) belong there too.",
-      "decidedBy": "proposed; awaiting owner decision",
+      "decidedBy": "owner (t-k)",
       "decidedOn": "2026-09-24",
       "movedTo": "AUTH-TENANT-BLOCKING"
     },
     {
       "id": "E5",
       "decision": "Mobile link settings (iOSBundleId, androidPackageName, androidInstallApp, androidMinimumVersion, dynamicLinkDomain, linkDomain) belong to AUTH-CONFIG-SDK; this parent observes continueUrl and canHandleCodeInApp.",
-      "decidedBy": "proposed; awaiting owner decision",
+      "decidedBy": "owner (t-k)",
       "decidedOn": "2026-09-24",
       "movedTo": "AUTH-CONFIG-SDK"
     },
     {
       "id": "E6",
       "decision": "Email-link sign-in is observed with signIn.email.passwordRequired switched off for the email-link programs only; the harness restores and reads it back after each program and checks the whole sign-in baseline at the start and end of a recording. The configured authorized domains of the sandbox (its two Firebase Hosting domains, without localhost) are required in production and given to fireemu through the same Admin config.",
-      "decidedBy": "proposed; awaiting owner decision",
+      "decidedBy": "owner (t-k)",
       "decidedOn": "2026-09-24"
     },
     {
       "id": "E7",
       "decision": "Any HTTP 429 or quota refusal in this corpus is classified INDETERMINATE; quotas belong to AUTH-CONFIG-SDK, as AUTH-ACCOUNT scope decision A7.",
-      "decidedBy": "proposed; awaiting owner decision",
+      "decidedBy": "owner (t-k)",
       "decidedOn": "2026-09-24",
       "movedTo": "AUTH-CONFIG-SDK"
     },
     {
       "id": "E8",
       "decision": "The ID-token claims and refresh of an email-link session are required conditions here (AUTH-CREDENTIAL scope decision C7); token refusals after a password reset or an email change are counted here.",
-      "decidedBy": "proposed; awaiting owner decision",
+      "decidedBy": "owner (t-k)",
       "decidedOn": "2026-09-24"
     },
     {
       "id": "E9",
       "decision": "The final-artifact regression re-runs the AUTH-ACCOUNT and AUTH-CREDENTIAL corpora and inherits their one documented divergence: AUTH-ACCOUNT scope decision A12, the gson parser message text for malformed customAttributes JSON.",
-      "decidedBy": "proposed; awaiting owner decision",
+      "decidedBy": "owner (t-k)",
       "decidedOn": "2026-09-24"
     }
   ],

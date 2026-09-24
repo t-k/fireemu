@@ -2,9 +2,11 @@
 //! Extensible Service Proxy's transcoder runs over a request body), and its refusal texts.
 //!
 //! It is more lenient than RFC 8259: object keys may be bare words (`{structuredQuery: {}}`,
-//! `{nullValue: 0}`, but not a reserved word alone), strings may be single-quoted (and `\'`
-//! escapes a quote), a comma may trail the last member of an object or array, and control
-//! characters may appear raw in a string. An unknown escape is refused. Its refusals name what it expected and quote up to 20 bytes either side of where it
+//! `{nullValue: 0}`, but not a reserved word alone), strings may be single-quoted, a comma may
+//! trail the last member of an object or array, control characters may appear raw in a string,
+//! `\v` is a vertical tab and any other escaped character stands for itself. These follow the
+//! legacy parser whose refusal texts production answers with; the leniencies themselves are
+//! unrecorded (follow-ups). Its refusals name what it expected and quote up to 20 bytes either side of where it
 //! stopped, with a caret under that byte. It reads a body in two passes: the first stops without
 //! an error where it would need more input (an unknown character, or a token that runs to the
 //! end), and the second, "finishing", pass resumes from there and quotes only from that point
@@ -144,7 +146,10 @@ impl Parser<'_> {
         match self.next_token() {
             Token::Unknown => Err(self.unknown("Expected a value.")),
             Token::BeginObject | Token::BeginArray if depth >= MAX_DEPTH => Err(SyntaxError {
-                message: format!("Message too deep. Max recursion depth reached for key '{key}'"),
+                message: format!(
+                    "Message too deep. Max recursion depth reached for key '{}'",
+                    super::transcode::echo(&key)
+                ),
                 position: None,
             }),
             Token::BeginObject => {
@@ -292,13 +297,14 @@ impl Parser<'_> {
                 continue;
             }
             out.push(match escaped {
-                b'"' | b'\'' | b'\\' | b'/' => escaped,
                 b'b' => 0x08,
                 b'f' => 0x0c,
                 b'n' => b'\n',
                 b'r' => b'\r',
                 b't' => b'\t',
-                _ => return Err(self.fail("Invalid escape sequence.", i)),
+                b'v' => 0x0b,
+                // Any other escaped character stands for itself (`\q` is `q`).
+                other => other,
             });
             i += 2;
         }
@@ -461,6 +467,7 @@ mod tests {
             .unwrap(),
             json!({"structuredQuery": {"limit": 3}, "nullValue": "it's", "trueish": 1, "$k_1": "a\tb"})
         );
+        assert_eq!(parse(br#"["c\q", "\v"]"#).unwrap(), json!(["cq", "\u{b}"]));
         assert_eq!(
             parse(br#"["\u00e9\ud83d\ude00\n", -0, -12, 18446744073709551615, 1e2, 1.5]"#).unwrap(),
             json!([
@@ -516,7 +523,6 @@ mod tests {
                 "{true: 1}",
                 "Expected an object key or }.\n{true: 1}\n     ^",
             ),
-            ("[\"c\\q\"]", "Invalid escape sequence.\n[\"c\\q\"]\n   ^"),
             (
                 "{\"a\" 1}",
                 "Expected : between key:value pair.\n{\"a\" 1}\n     ^",
@@ -580,6 +586,10 @@ mod tests {
             refusal(&deep),
             "Invalid JSON payload received. Message too deep. Max recursion depth reached for key ''"
         );
+        // The key a depth refusal names is echoed only in part.
+        let key = "k".repeat(1 << 20);
+        let body = format!("{}{{\"{key}\": [1]}}", "[".repeat(MAX_DEPTH - 1));
+        assert!(refusal(&body).len() < 2048, "{}", refusal(&body).len());
         assert!(parse(&[b'[', b'"', 0xff, b'"', b']']).is_err());
         assert!(parse(&[b'[', b'"', 0xff, b'"', b',', b']']).is_err());
     }

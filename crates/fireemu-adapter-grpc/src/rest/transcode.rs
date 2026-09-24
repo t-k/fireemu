@@ -587,9 +587,11 @@ pub fn check_body(method: &str, body: &Value) -> Result<Value, Status> {
     }
 }
 
-/// The most violations one refusal lists. Production joins every violation it finds with a
-/// newline (firestore-production-matrix programs 10 and 11 list two); past this many the walk
-/// stops, so a body of many bad items costs what a body with a few does.
+/// The most violations one refusal lists. Production's transcoder keeps going after a
+/// violation (firestore-production-matrix programs 10 and 11 add a second line, for the
+/// URL-bound database name, after a oneof conflict in the body); whether it lists several
+/// violations of one body is unrecorded (follow-ups). Past this many the walk stops, so a
+/// body of many bad items costs what a body with a few does.
 const MAX_VIOLATIONS: usize = 16;
 /// The most bytes of a value, key or path one violation echoes; a longer one ends in `...`.
 /// Every recorded refusal echoes a short value.
@@ -616,7 +618,7 @@ impl core::fmt::Write for Bounded {
 }
 
 /// `value` as the refusal echoes it: its display, cut at [`MAX_ECHO`] bytes.
-fn echo(value: &dyn core::fmt::Display) -> String {
+pub(crate) fn echo(value: &dyn core::fmt::Display) -> String {
     let mut out = Bounded(String::new());
     let _ = write!(out, "{value}");
     out.0

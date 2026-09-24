@@ -50,8 +50,12 @@ if (!Number.isInteger(MANAGED_POLL_MS) || MANAGED_POLL_MS < 1 || MANAGED_POLL_MS
   throw new Error("invalid managed-clear polling interval");
 }
 const RECORD_PROJECT = process.env.FIRESTORE_PROBE_RECORD_PROJECT ?? PROJECT;
+const DELETE_RUN_MARKER = "DELETE_RUN_ID";
+let deleteRunId = DELETE_RUN_MARKER;
 const SHRINK_CHUNK_SIZE = 1024;
-const SHRINK_REQUEST_CAPS = { legacy: 180, v3: 160 };
+// Twelve frozen targets need at most 152 transforms and about 194 other managed requests
+// under the seven-clear worst case; retain headroom while staying below the 1000 REST cap.
+const SHRINK_REQUEST_CAPS = { legacy: 180, v3: 400 };
 const SANDBOX_DOCUMENTS = "projects/fireemu-oracle-sbx/databases/(default)/documents/";
 const LEGACY_SHRINK_SPECS = [
   ["barrayname100012116n31", 998, 1, 12_116],
@@ -68,6 +72,14 @@ const V3_SHRINK_SPECS = [
   ["g2000b", 1400, 599, 7_185],
   ["g1000a", 998, 1, 12_123],
   ["g1000b", 998, 1, 12_124],
+  ...["rest", "commit", "batch-write"].flatMap((route) =>
+    [12_112, 12_113].map((length) => [
+      `del${route.replaceAll("-", "")}${length}${DELETE_RUN_MARKER}`,
+      998 - (32 - DELETE_RUN_MARKER.length),
+      1,
+      length,
+    ]),
+  ),
 ];
 const frozenResourceNames = (specs) =>
   specs.map(
@@ -87,6 +99,16 @@ const FROZEN_ARRAY_LENGTHS = new Map(
     ],
   ),
 );
+
+function canonicalRunName(name) {
+  return typeof name === "string" && deleteRunId !== DELETE_RUN_MARKER
+    ? name.replaceAll(deleteRunId, DELETE_RUN_MARKER)
+    : name;
+}
+
+function canonicalCollectionId(name) {
+  return name.split("/documents/")[1].split("/")[0].replaceAll(deleteRunId, DELETE_RUN_MARKER);
+}
 
 export function createShrinkRequestCounter(limit) {
   if (!Number.isSafeInteger(limit) || limit <= 0) {
@@ -140,15 +162,25 @@ export function managedShrinkScope(names, project, database) {
   if (project !== "fireemu-oracle-sbx" || database !== "(default)" || !Array.isArray(names)) {
     throw new Error("array shrink requires the fixed sandbox database");
   }
-  if (
-    names.length !== 6 ||
-    names.some((name) => typeof name !== "string") ||
-    new Set(names).size !== 6
-  ) {
-    throw new Error("array shrink requires six distinct frozen documents");
+  if (names.some((name) => typeof name !== "string") || new Set(names).size !== names.length) {
+    throw new Error("array shrink requires distinct frozen documents");
   }
-  if (LEGACY_SHRINK_NAMES.every((name) => names.includes(name))) return "legacy";
-  if (V3_SHRINK_NAMES.every((name) => names.includes(name))) return "v3";
+  const canonicalNames = names.map(canonicalRunName);
+  if (
+    LEGACY_SHRINK_NAMES.length === canonicalNames.length &&
+    LEGACY_SHRINK_NAMES.every((name) => canonicalNames.includes(name))
+  )
+    return "legacy";
+  if (
+    canonicalNames.length === 6 &&
+    V3_SHRINK_NAMES.slice(0, 6).every((name) => canonicalNames.includes(name))
+  )
+    return "v3";
+  if (
+    V3_SHRINK_NAMES.length === canonicalNames.length &&
+    V3_SHRINK_NAMES.every((name) => canonicalNames.includes(name))
+  )
+    return "v3";
   throw new Error("array shrink names do not match the frozen legacy or corpus-v3 scope");
 }
 
@@ -289,9 +321,17 @@ function trackedFetch(input, init) {
   return fetch(input, init);
 }
 
-const url = (path) => `${SCHEME}://${HOST}${path.replaceAll("PROJECT", PROJECT)}`;
+const replaceRunMarker = (value) => value.replaceAll(DELETE_RUN_MARKER, deleteRunId);
+const url = (path) => `${SCHEME}://${HOST}${replaceRunMarker(path.replaceAll("PROJECT", PROJECT))}`;
 const substituteProject = (value) =>
-  JSON.parse(JSON.stringify(value ?? null).replaceAll("PROJECT", PROJECT));
+  JSON.parse(replaceRunMarker(JSON.stringify(value ?? null).replaceAll("PROJECT", PROJECT)));
+const normalizeProbeResponse = (value, options) =>
+  JSON.parse(
+    JSON.stringify(normalizeRecordedResponse(value, options)).replaceAll(
+      deleteRunId,
+      "<delete-run>",
+    ),
+  );
 const authorized = (headers = {}) => ({ ...headers, authorization: `Bearer ${TOKEN}` });
 const timeoutSignal = () => AbortSignal.timeout(REQUEST_TIMEOUT_MS);
 
@@ -332,7 +372,14 @@ async function clearThroughPublicApi(database, verifyManagedScope) {
       return;
     }
     if (collectionIds.length === 0) {
-      if (shrinkScopeActive && verifyManagedScope) await verifyManagedShrinkScopeAbsent(base);
+      if (shrinkScopeActive && verifyManagedScope) {
+        await verifyManagedShrinkScopeAbsent(base);
+        if (managedClearState.shrinkScope === "v3") {
+          await writeV3CleanupJournal("complete", {
+            verifiedAbsentNames: [...managedClearState.names],
+          });
+        }
+      }
       managedClearBlocked = false;
       return;
     }
@@ -351,7 +398,14 @@ async function clearThroughPublicApi(database, verifyManagedScope) {
           managedClearState.shrinkScope !== "v3" || !LEGACY_SHRINK_COLLECTIONS.has(collectionId),
       );
       if (cleanableCollectionIds.length === 0) {
-        if (verifyManagedScope) await verifyManagedShrinkScopeAbsent(base);
+        if (verifyManagedScope) {
+          await verifyManagedShrinkScopeAbsent(base);
+          if (managedClearState.shrinkScope === "v3") {
+            await writeV3CleanupJournal("complete", {
+              verifiedAbsentNames: [...managedClearState.names],
+            });
+          }
+        }
         managedClearBlocked = false;
         return;
       }
@@ -427,7 +481,7 @@ async function auditLegacyDebris(base) {
     }
     if (found) {
       const collectionId = name.split("/documents/")[1].split("/")[0];
-      const expectedLength = FROZEN_ARRAY_LENGTHS.get(collectionId);
+      const expectedLength = FROZEN_ARRAY_LENGTHS.get(canonicalCollectionId(name));
       validateLegacyDebrisDocument(row.found, name, expectedLength);
       const relative = name.slice(name.indexOf("/documents/") + "/documents/".length);
       const childCollections = await listCollectionIds(base, relative, managedFetch);
@@ -542,8 +596,20 @@ async function deleteCollection(base, parentPath, collectionId) {
       body: JSON.stringify({ writes }),
       signal: timeoutSignal(),
     };
+    const scopedUpdateTime =
+      scopedName && candidate === scopedName
+        ? managedClearState.preflightUpdateTimes.get(candidate)
+        : undefined;
     const commit = commitRequest
-      ? await commitRequest("delete attempt", `${base}:commit`, commitInit)
+      ? managedClearState.shrinkScope === "v3"
+        ? await sendV3CleanupDelete(
+            "delete attempt",
+            candidate,
+            scopedUpdateTime,
+            `${base}:commit`,
+            commitInit,
+          )
+        : await commitRequest("delete attempt", `${base}:commit`, commitInit)
       : await trackedFetch(`${base}:commit`, commitInit);
     if (!commit.ok) {
       const body = await commit.text();
@@ -560,15 +626,29 @@ async function deleteCollection(base, parentPath, collectionId) {
       ) {
         if (managedClearState?.names.includes(candidate)) {
           managedClearBlocked = true;
+          if (managedClearState.shrinkScope === "v3") {
+            managedClearState.cleanupDeleteIntent = null;
+            await writeV3CleanupJournal("shrinking", { lastRefusedName: candidate });
+          }
           const retryUpdateTime = await shrinkBoundaryDocument(candidate);
-          const retry = await managedShrinkRequest("delete retry", `${base}:commit`, {
+          const retryInit = {
             method: "POST",
             headers: authorized({ "content-type": "application/json" }),
             body: JSON.stringify({
               writes: [{ delete: candidate, currentDocument: { updateTime: retryUpdateTime } }],
             }),
             signal: timeoutSignal(),
-          });
+          };
+          const retry =
+            managedClearState.shrinkScope === "v3"
+              ? await sendV3CleanupDelete(
+                  "delete retry",
+                  candidate,
+                  retryUpdateTime,
+                  `${base}:commit`,
+                  retryInit,
+                )
+              : await managedShrinkRequest("delete retry", `${base}:commit`, retryInit);
           if (!retry.ok) {
             const retryBody = await retry.text();
             throw new Error(`clear: shrunk document delete ${retry.status} ${retryBody}`);
@@ -582,6 +662,11 @@ async function deleteCollection(base, parentPath, collectionId) {
     }
     if (scopedName && candidate === scopedName) {
       await verifyShrunkDocumentAbsent(base, candidate);
+      if (managedClearState.shrinkScope === "v3") {
+        managedClearState.cleanupDeletedNames.push(candidate);
+        managedClearState.cleanupDeleteIntent = null;
+        await writeV3CleanupJournal("deleting");
+      }
     }
   }
   return managedFailures;
@@ -621,7 +706,7 @@ async function preflightManagedShrinkScope() {
     );
     if (!response.ok) throw new Error(`array shrink global preflight read ${response.status}`);
     const collectionId = name.split("/documents/")[1].split("/")[0];
-    const expectedLength = FROZEN_ARRAY_LENGTHS.get(collectionId);
+    const expectedLength = FROZEN_ARRAY_LENGTHS.get(canonicalCollectionId(name));
     const document = await response.json();
     validateShrinkBoundaryState(document, name, expectedLength, { allowEmptyOmitted: true });
     managedClearState.preflightUpdateTimes.set(name, document.updateTime);
@@ -641,7 +726,7 @@ async function shrinkBoundaryDocument(name) {
     throw new Error("array shrink target changed after global preflight");
   }
   const collectionId = name.split("/documents/")[1].split("/")[0];
-  const expectedLength = FROZEN_ARRAY_LENGTHS.get(collectionId);
+  const expectedLength = FROZEN_ARRAY_LENGTHS.get(canonicalCollectionId(name));
   let values = validateCurrentShrinkState(document, name, expectedLength);
   let updateTime = document.updateTime;
   while (values.length > 0) {
@@ -713,6 +798,60 @@ function isTransactionTooBigRefusal(status, body) {
   } catch {
     return false;
   }
+}
+
+async function validateDeleteAcknowledgement(response) {
+  let acknowledgement;
+  try {
+    acknowledgement = await response.json();
+  } catch (error) {
+    throw new Error("managed cleanup delete acknowledgement is not JSON", { cause: error });
+  }
+  const results = acknowledgement?.writeResults;
+  if (
+    !Array.isArray(results) ||
+    results.length !== 1 ||
+    !results[0] ||
+    typeof results[0] !== "object" ||
+    Array.isArray(results[0]) ||
+    (Object.hasOwn(results[0], "updateTime") &&
+      (typeof results[0].updateTime !== "string" || !results[0].updateTime))
+  ) {
+    throw new Error("managed cleanup delete acknowledgement is uncertain");
+  }
+}
+
+async function writeV3CleanupJournal(status, extra = {}) {
+  if (!MANAGED_CLEAR_JOURNAL || managedClearState?.shrinkScope !== "v3") {
+    throw new Error("corpus-v3 cleanup journal is unavailable");
+  }
+  await writePrivateJsonDurably(MANAGED_CLEAR_JOURNAL, {
+    schemaVersion: 1,
+    mode: "cleanup-corpus-v3",
+    status,
+    project: PROJECT,
+    database: "(default)",
+    names: managedClearState.names,
+    deletedNames: [...managedClearState.cleanupDeletedNames],
+    deleteIntent: managedClearState.cleanupDeleteIntent,
+    ...extra,
+  });
+}
+
+async function sendV3CleanupDelete(action, name, updateTime, input, init) {
+  if (!managedClearState || managedClearState.shrinkScope !== "v3") {
+    throw new Error("corpus-v3 cleanup delete escaped its frozen scope");
+  }
+  managedClearState.cleanupDeleteIntent = {
+    action,
+    name,
+    updateTime,
+    priorDeletedNames: [...managedClearState.cleanupDeletedNames],
+  };
+  await writeV3CleanupJournal("deleting");
+  const response = await managedShrinkRequest(action, input, init);
+  if (response.ok) await validateDeleteAcknowledgement(response.clone());
+  return response;
 }
 
 async function writeManagedRecoveryJournal(status, extra = {}) {
@@ -1278,7 +1417,7 @@ async function step(spec, raw) {
       recorded: {
         status: response.status,
         code: error.status ?? String(error.code ?? ""),
-        message: normalizeRecordedResponse(String(error.message ?? "").slice(0, 400), {
+        message: normalizeProbeResponse(String(error.message ?? "").slice(0, 400), {
           project: PROJECT,
           recordProject: RECORD_PROJECT,
           scope: "error",
@@ -1291,7 +1430,7 @@ async function step(spec, raw) {
     recorded: {
       status: response.status,
       code: "OK",
-      body: normalizeRecordedResponse(body, {
+      body: normalizeProbeResponse(body, {
         project: PROJECT,
         recordProject: RECORD_PROJECT,
         scope:
@@ -1321,21 +1460,38 @@ async function main() {
     );
   }
   const programs = JSON.parse(await readFile(IN, "utf8"));
+  const fixedLocalRunId = process.env.FIRESTORE_PROBE_DELETE_RUN_ID;
+  deleteRunId =
+    /^127\.0\.0\.1:\d+$/.test(HOST) && /^[a-f0-9]{32}$/.test(fixedLocalRunId ?? "")
+      ? fixedLocalRunId
+      : randomUUID().replaceAll("-", "");
   if (PRODUCTION && (MANAGED_CLEAR_NAMES || MANAGED_CLEAR_JOURNAL)) {
     if (!MANAGED_CLEAR_NAMES || !MANAGED_CLEAR_JOURNAL) {
       throw new Error("managed clear requires both frozen names and a private journal");
     }
-    const names = JSON.parse(MANAGED_CLEAR_NAMES);
-    if (names.length !== 6) throw new Error("managed clear requires six frozen boundary names");
+    const names = JSON.parse(MANAGED_CLEAR_NAMES).map(replaceRunMarker);
+    const shrinkScope = managedShrinkScope(names, PROJECT, "(default)");
+    if (
+      names.length !== V3_SHRINK_NAMES.length &&
+      !(
+        /^127\.0\.0\.1:\d+$/.test(HOST) &&
+        ["legacy", "v3"].includes(shrinkScope) &&
+        names.length === 6
+      )
+    ) {
+      throw new Error("managed clear requires the exact frozen corpus-v3 names");
+    }
     managedClearScope(names, PROJECT, "(default)");
     managedClearState = {
       names,
-      shrinkScope: managedShrinkScope(names, PROJECT, "(default)"),
+      shrinkScope,
       preflightUpdateTimes: new Map(),
       shrinkRequestCounter: createShrinkRequestCounter(
         SHRINK_REQUEST_CAPS[managedShrinkScope(names, PROJECT, "(default)")],
       ),
       legacyDebrisAudited: false,
+      cleanupDeletedNames: [],
+      cleanupDeleteIntent: null,
     };
     try {
       const previous = JSON.parse(await readFile(MANAGED_CLEAR_JOURNAL, "utf8"));

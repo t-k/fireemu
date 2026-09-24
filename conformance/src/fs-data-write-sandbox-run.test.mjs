@@ -152,8 +152,8 @@ test("saved production comparison selects only identical program recipes and rep
 
 test("the runnable sandbox corpus combines bounded REST and live gRPC recipes", async () => {
   const { corpus, restRequestCount, liveStreamCount } = await prepareSandboxCorpus();
-  assert.equal(corpus.restPrograms.length, 68);
-  assert.equal(restRequestCount, 237);
+  assert.equal(corpus.restPrograms.length, 74);
+  assert.equal(restRequestCount, 267);
   assert.equal(liveStreamCount, 7);
   assert.equal(MAX_STREAM_FRAMES, 9);
   assert.equal(
@@ -194,7 +194,7 @@ test("production REST session fixes project, endpoint, managed scope and all-att
   assert.equal(env.FIRESTORE_PROBE_TIMEOUT_MS, "180000");
   assert.equal(env.FIRESTORE_PROBE_MANAGED_CLEAR_JOURNAL, "/tmp/managed-clear.json");
   assert.deepEqual(JSON.parse(env.FIRESTORE_PROBE_MANAGED_CLEAR_NAMES), managedNames);
-  assert.equal(managedNames.length, 6);
+  assert.equal(managedNames.length, 12);
   assert.throws(() => sandboxManagedClearNames({ ...corpus, restPrograms: [] }), /last/);
 });
 

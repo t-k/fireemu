@@ -212,6 +212,55 @@ def test_next_recording_includes_observed_adjacent_default_name_pairs() -> None:
         assert f"writes/limits/empty-document-name/{length}" in programs
 
 
+def test_near_limit_delete_pairs_cover_each_rest_route_with_fresh_state_reads() -> None:
+    programs = {
+        program["id"]: program
+        for program in _module().build_programs()
+        if program["id"].startswith("writes/limits/near-limit-delete-refusal/")
+    }
+    assert set(programs) == {
+        f"writes/limits/near-limit-delete-refusal/{route}/{count}"
+        for route in ("rest", "commit", "batch-write")
+        for count in (12_112, 12_113)
+    }
+    groups = set()
+    for program_id, program in programs.items():
+        route = program_id.split("/")[-2]
+        count = int(program_id.split("/")[-1])
+        seed, before, delete, after, group = program["steps"]
+        assert seed["id"] == "seed"
+        assert seed["method"] == "POST" and seed["path"].endswith(":commit")
+        write = seed["body"]["writes"][0]["update"]
+        name = write["name"]
+        assert (
+            len(
+                name.replace("DELETE_RUN_ID", "a" * 32).split("/documents/")[1].encode()
+            )
+            == 1000
+        )
+        assert len(write["fields"]["a"]["arrayValue"]["values"]) == count
+        assert "DELETE_RUN_ID" in name
+        collection_id = name.split("/documents/")[1].split("/")[0]
+        assert "explore" not in collection_id.lower()
+        groups.add(collection_id)
+        assert before == {"id": "before-delete", "method": "GET", "path": f"/v1/{name}"}
+        if route == "rest":
+            assert delete == {"id": "delete", "method": "DELETE", "path": f"/v1/{name}"}
+        elif route == "commit":
+            assert delete["id"] == "delete" and delete["path"].endswith(":commit")
+            assert delete["body"] == {"writes": [{"delete": name}]}
+        else:
+            assert delete["id"] == "delete" and delete["path"].endswith(":batchWrite")
+            assert delete["body"] == {"writes": [{"delete": name}]}
+        assert after == {"id": "after-delete", "method": "GET", "path": f"/v1/{name}"}
+        assert group["id"] == "group-after-delete" and group["method"] == "POST"
+        assert group["path"].endswith(":runQuery")
+        assert group["body"]["structuredQuery"]["from"] == [
+            {"collectionId": collection_id, "allDescendants": True}
+        ]
+    assert len(groups) == 6
+
+
 def test_additional_field_path_boundaries_are_unbiased_and_have_readbacks() -> None:
     programs = {program["id"]: program for program in _module().build_programs()}
     for length in (1499, 1500):

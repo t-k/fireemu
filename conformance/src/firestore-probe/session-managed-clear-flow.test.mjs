@@ -18,12 +18,23 @@ const v3Specs = [
   ["g1000a", 998, 1],
   ["g1000b", 998, 1],
 ];
+const deleteSpecs = [
+  ...["rest", "commit", "batch-write"].flatMap((route) =>
+    [12_112, 12_113].map((length) => [
+      `del${route.replaceAll("-", "")}${length}DELETE_RUN_ID`,
+      979,
+      1,
+    ]),
+  ),
+];
 const resourceNames = (specs) =>
   specs.map(
     ([tag, collectionLength, documentLength]) =>
       `${prefix}${tag.padEnd(collectionLength, "c")}/${"d".repeat(documentLength)}`,
   );
 const names = resourceNames(v3Specs);
+const allV3Names = [...names, ...resourceNames(deleteSpecs)];
+const defaultDeleteRunId = "a".repeat(32);
 const legacyNames = resourceNames([
   ["barrayname100012116n31", 998, 1],
   ["barrayname100012121n32", 998, 1],
@@ -135,7 +146,9 @@ async function observeCollector({
   scopeNames = names,
   extraNames = [],
   visibleNames = [scopeNames[0]],
-  arrayLength = [19_999, 20_000, 7_184, 7_185, 12_123, 12_124],
+  arrayLength = [
+    19_999, 20_000, 7_184, 7_185, 12_123, 12_124, 12_112, 12_113, 12_112, 12_113, 12_112, 12_113,
+  ],
   suffixStarts = [],
   initialState,
   programCount = 1,
@@ -145,7 +158,12 @@ async function observeCollector({
   recoveryOnly = false,
   deleteAckShape = "production",
   deleteReadbackMode,
+  deleteRunId = defaultDeleteRunId,
 } = {}) {
+  const runtimeName = (name) => name.replaceAll("DELETE_RUN_ID", deleteRunId);
+  scopeNames = scopeNames.map(runtimeName);
+  extraNames = extraNames.map(runtimeName);
+  visibleNames = visibleNames.map(runtimeName);
   const directory = await mkdtemp(join(tmpdir(), "fireemu-array-shrink-"));
   const input = join(directory, "programs.json");
   const output = join(directory, "results.json");
@@ -200,9 +218,15 @@ async function observeCollector({
       request.on("end", () => resolve(value));
     });
     requests.push({ method: request.method, pathname, body });
-    if (recoveryOnly && pathname.endsWith("/documents:commit")) {
+    if (pathname.endsWith("/documents:commit")) {
       const writes = JSON.parse(body).writes;
-      if (writes.some((write) => write.delete)) {
+      if (
+        writes.some((write) => write.delete) &&
+        (recoveryOnly ||
+          writes.some(
+            (write) => scopeNames.includes(write.delete) && !legacyNames.includes(write.delete),
+          ))
+      ) {
         journalAtDeleteRequests.push(JSON.parse(await readFile(journal, "utf8")));
       }
     }
@@ -458,6 +482,7 @@ async function observeCollector({
         FIRESTORE_PROBE_TOKEN: "test-only",
         FIRESTORE_PROBE_MAX_REQUESTS: "1000",
         FIRESTORE_PROBE_MANAGED_CLEAR_NAMES: JSON.stringify(scopeNames),
+        FIRESTORE_PROBE_DELETE_RUN_ID: deleteRunId,
         FIRESTORE_PROBE_MANAGED_CLEAR_JOURNAL: journal,
         FIRESTORE_PROBE_MANAGED_POLL_MS: "1",
         ...(recoveryOnly ? { FIRESTORE_PROBE_RECOVERY_MODE: "recover-legacy" } : {}),
@@ -973,6 +998,56 @@ test("collector completes bounded shrink and exact cleanup for all six frozen co
   } finally {
     await rm(result.directory, { recursive: true, force: true });
   }
+});
+
+test("two corpus-v3 recordings write each twelve-name cleanup intent before deleting", async () => {
+  const runtimeScopes = [];
+  for (const runId of ["a".repeat(32), "b".repeat(32)]) {
+    const result = await observeCollector({
+      scopeNames: allV3Names,
+      visibleNames: allV3Names,
+      arrayLength: [
+        19_999, 20_000, 7_184, 7_185, 12_123, 12_124, 12_112, 12_113, 12_112, 12_113, 12_112,
+        12_113,
+      ],
+      deleteRunId: runId,
+    });
+    try {
+      assert.equal(result.failure, undefined);
+      const newNames = allV3Names.slice(6).map((name) => name.replaceAll("DELETE_RUN_ID", runId));
+      const intents = result.journalAtDeleteRequests.filter((entry) =>
+        newNames.includes(entry.deleteIntent?.name),
+      );
+      assert.equal(intents.length, 12);
+      assert.ok(
+        intents.every(
+          (entry) =>
+            entry.schemaVersion === 1 &&
+            entry.mode === "cleanup-corpus-v3" &&
+            entry.status === "deleting" &&
+            ["delete attempt", "delete retry"].includes(entry.deleteIntent.action) &&
+            typeof entry.deleteIntent.updateTime === "string",
+        ),
+      );
+      assert.ok(JSON.parse(await readFile(result.meta, "utf8")).requestCount <= 1000);
+      for (const name of newNames) assert.equal(result.snapshot.get(name).deleted, true);
+      const finalJournal = JSON.parse(await readFile(result.journal, "utf8"));
+      assert.equal(finalJournal.status, "complete");
+      assert.deepEqual(
+        finalJournal.verifiedAbsentNames,
+        allV3Names.map((name) => name.replaceAll("DELETE_RUN_ID", runId)),
+      );
+      runtimeScopes.push(
+        new Set(newNames.map((name) => name.split("/documents/")[1].split("/")[0])),
+      );
+    } finally {
+      await rm(result.directory, { recursive: true, force: true });
+    }
+  }
+  assert.equal(
+    [...runtimeScopes[0]].some((collection) => runtimeScopes[1].has(collection)),
+    false,
+  );
 });
 
 test("68 empty programs avoid repeated shrink preflight requests and stay within the cap", async () => {

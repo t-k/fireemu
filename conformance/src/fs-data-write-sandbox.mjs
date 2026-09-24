@@ -6,6 +6,9 @@ const SANDBOX_DOCUMENTS = "/v1/projects/fireemu-oracle-sbx/databases/(default)/d
 const RECORDED_PROJECT = "demo-firestore-probe";
 const MAX_REST_REQUESTS = 400;
 const MAX_BODY_BYTES = 16_777_217;
+const DELETE_RUN_MARKER = "DELETE_RUN_ID";
+const DELETE_RUN_MARKER_VALUE = "a".repeat(32);
+const DELETE_BOUNDARY_PREFIX = "writes/limits/near-limit-delete-refusal/";
 const RESOURCE_NAME = /projects\/([^/]+)\/databases\/([^/?]+)/g;
 const VOLATILE_STREAM_TRAILERS = new Set(["x-debug-tracking-id"]);
 
@@ -59,6 +62,75 @@ function assertSandboxReferences(value) {
   }
 }
 
+function validateDeleteBoundaryProgram(program) {
+  const match =
+    /^writes\/limits\/near-limit-delete-refusal\/(rest|commit|batch-write)\/(12112|12113)$/.exec(
+      program.id,
+    );
+  if (!match) throw new Error("unsupported sandbox method");
+  const [, route, countText] = match;
+  const count = Number(countText);
+  const [seed, before, deletion, after, group] = program.steps;
+  const documentName = seed?.body?.writes?.[0]?.update?.name;
+  const documentsPrefix = "projects/fireemu-oracle-sbx/databases/(default)/documents/";
+  const normalizedName =
+    typeof documentName === "string"
+      ? documentName.replaceAll(DELETE_RUN_MARKER, DELETE_RUN_MARKER_VALUE)
+      : "";
+  const relativeName = normalizedName.startsWith(documentsPrefix)
+    ? normalizedName.slice(documentsPrefix.length)
+    : "";
+  const [normalizedCollectionId, documentId, ...extra] = relativeName.split("/");
+  const collectionId = documentName?.split("/documents/")[1]?.split("/")[0];
+  const values = seed?.body?.writes?.[0]?.update?.fields?.a?.arrayValue?.values;
+  const expectedCollectionPrefix = `del${route.replaceAll("-", "")}${countText}${DELETE_RUN_MARKER}`;
+  if (
+    program.steps.length !== 5 ||
+    program.area !== "writes" ||
+    !relativeName ||
+    Buffer.byteLength(relativeName) !== 1000 ||
+    extra.length !== 0 ||
+    documentId !== "d" ||
+    !normalizedCollectionId.startsWith(
+      expectedCollectionPrefix.replace(DELETE_RUN_MARKER, DELETE_RUN_MARKER_VALUE),
+    ) ||
+    !/^[A-Za-z0-9_]+$/.test(normalizedCollectionId) ||
+    seed?.id !== "seed" ||
+    seed.method !== "POST" ||
+    seed.path !== `${SANDBOX_DOCUMENTS}:commit` ||
+    !Array.isArray(values) ||
+    values.length !== count ||
+    values.some((value, index) => value?.integerValue !== String(index)) ||
+    before?.id !== "before-delete" ||
+    before.method !== "GET" ||
+    before.path !== `/v1/${documentName}` ||
+    deletion?.id !== "delete" ||
+    deletion.method !== (route === "rest" ? "DELETE" : "POST") ||
+    deletion.path !==
+      (route === "rest"
+        ? `/v1/${documentName}`
+        : `${SANDBOX_DOCUMENTS}:${route === "commit" ? "commit" : "batchWrite"}`) ||
+    (route !== "rest" &&
+      JSON.stringify(deletion.body) !== JSON.stringify({ writes: [{ delete: documentName }] })) ||
+    after?.id !== "after-delete" ||
+    after.method !== "GET" ||
+    after.path !== `/v1/${documentName}` ||
+    group?.id !== "group-after-delete" ||
+    group.method !== "POST" ||
+    group.path !== `${SANDBOX_DOCUMENTS}:runQuery` ||
+    JSON.stringify(group.body) !==
+      JSON.stringify({
+        structuredQuery: {
+          from: [{ collectionId, allDescendants: true }],
+          select: { fields: [{ fieldPath: "__name__" }] },
+          limit: 2,
+        },
+      })
+  ) {
+    throw new Error("invalid near-limit DELETE boundary recipe");
+  }
+}
+
 /** Refuse any corpus that could address another Firestore project or escape its budget. */
 export function validateSandboxCorpus(corpus) {
   if (corpus?.schemaVersion !== 1 || !Array.isArray(corpus.restPrograms)) {
@@ -74,6 +146,8 @@ export function validateSandboxCorpus(corpus) {
     if (!Array.isArray(program.steps) || program.steps.length === 0) {
       throw new Error("empty sandbox program");
     }
+    const isDeleteBoundary = program.id.startsWith(DELETE_BOUNDARY_PREFIX);
+    if (isDeleteBoundary) validateDeleteBoundaryProgram(program);
     const stepIds = new Set();
     for (const step of program.steps) {
       requestCount += 1;
@@ -81,7 +155,11 @@ export function validateSandboxCorpus(corpus) {
         throw new Error("duplicate or missing sandbox step ID");
       }
       stepIds.add(step.id);
-      if (!["GET", "POST", "PATCH"].includes(step.method)) {
+      if (
+        !["GET", "POST", "PATCH"].includes(step.method) &&
+        !(isDeleteBoundary && program.id.endsWith("/rest/12112") && step.method === "DELETE") &&
+        !(isDeleteBoundary && program.id.endsWith("/rest/12113") && step.method === "DELETE")
+      ) {
         throw new Error("unsupported sandbox method");
       }
       const webchannel = step.webchannelBodyBytes !== undefined;

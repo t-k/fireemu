@@ -405,8 +405,21 @@ export function sandboxManagedClearNames(corpus) {
     throw new Error("the managed-clear boundary program must be last");
   }
   const writes = program.steps.filter((step) => step.id.startsWith("write-"));
-  const names = writes.map((step) => step.body?.writes?.[0]?.update?.name);
-  if (writes.length !== 6 || program.steps.length !== 12) {
+  const boundaryNames = writes.map((step) => step.body?.writes?.[0]?.update?.name);
+  const deletionNames = corpus.restPrograms
+    .filter((candidate) => candidate.id.startsWith("writes/limits/near-limit-delete-refusal/"))
+    .map(
+      (candidate) =>
+        candidate.steps.find((step) => step.id === "seed")?.body?.writes?.[0]?.update?.name,
+    );
+  const names = [...boundaryNames, ...deletionNames];
+  if (
+    writes.length !== 6 ||
+    program.steps.length !== 12 ||
+    deletionNames.length !== 6 ||
+    deletionNames.some((name) => typeof name !== "string") ||
+    new Set(names).size !== 12
+  ) {
     throw new Error("six paired boundary observations are required");
   }
   managedClearScope(names, SANDBOX_PROJECT, "(default)");
@@ -430,7 +443,7 @@ export function productionRestEnvironment({ input, output, meta, token, managedN
   ) {
     throw new Error("production REST session inputs are required");
   }
-  if (!Array.isArray(managedNames) || managedNames.length !== 6) {
+  if (!Array.isArray(managedNames) || managedNames.length !== 12) {
     throw new Error("production managed-clear names are required");
   }
   managedClearScope(managedNames, SANDBOX_PROJECT, "(default)");

@@ -53,10 +53,12 @@ export async function runLocalCheck({ root, run: runCommand = run }) {
   const configSha256 = await sha256(join(root, config));
   const runtimeInputs = Object.fromEntries(
     await Promise.all(
-      ["Cargo.toml", "Cargo.lock", runner].map(async (path) => [
-        path,
-        await sha256(join(root, path)),
-      ]),
+      [
+        "Cargo.toml",
+        "Cargo.lock",
+        runner,
+        "conformance/src/firestore-probe/sandbox-session.mjs",
+      ].map(async (path) => [path, await sha256(join(root, path))]),
     ),
   );
   const commandVersions = {

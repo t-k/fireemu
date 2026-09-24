@@ -9,11 +9,15 @@ import { runLocalCheck } from "./fs-data-write-local-check.mjs";
 
 async function createSourceRoot() {
   const root = await mkdtemp(join(tmpdir(), "fs-local-binding-"));
-  await mkdir(join(root, "conformance/src"), { recursive: true });
+  await mkdir(join(root, "conformance/src/firestore-probe"), { recursive: true });
   await mkdir(join(root, "target/debug"), { recursive: true });
   await mkdir(join(root, "conformance/.runs/fs-data-write-local-run"), { recursive: true });
   await writeFile(join(root, "conformance/fs-data-write-sandbox.fireemu.json"), "{}\n");
   await writeFile(join(root, "conformance/src/fs-data-write-sandbox-run.mjs"), "// runner\n");
+  await writeFile(
+    join(root, "conformance/src/firestore-probe/sandbox-session.mjs"),
+    "// session\n",
+  );
   await writeFile(join(root, "Cargo.toml"), "[workspace]\n");
   await writeFile(join(root, "Cargo.lock"), "version = 4\n");
   await writeFile(join(root, "target/debug/fireemu"), "binary bytes\n");
@@ -86,6 +90,10 @@ test("persists source, executable, config, and runtime bindings before preservin
       configSha256: binding.configSha256,
     });
     assert.equal(binding.runtimeInputs["conformance/src/fs-data-write-sandbox-run.mjs"].length, 64);
+    assert.equal(
+      binding.runtimeInputs["conformance/src/firestore-probe/sandbox-session.mjs"].length,
+      64,
+    );
     assert.ok(binding.commandVersions.node);
   } finally {
     await rm(root, { recursive: true, force: true });

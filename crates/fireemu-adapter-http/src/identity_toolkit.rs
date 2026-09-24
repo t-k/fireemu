@@ -10106,18 +10106,18 @@ fn reset_password(
     if entry.request_type != OobRequestType::PasswordReset {
         return error(400, "INVALID_OOB_CODE");
     }
-    // Strict: the code names an address, and production resets the account that owns it
-    // now (sandbox recording 2026-09-24, password-reset#reset-e-after-email-change).
-    let uid = if strict {
-        match store.user_by_email(&entry.email) {
-            Some(u) => u.local_id.clone(),
-            None => return error(400, "USER_NOT_FOUND"),
-        }
-    } else {
-        let Some(uid) = entry.uid.clone() else {
+    // The code names an address, and the account that owns it now is reset: production does
+    // so (sandbox recordings 2026-09-24, password-reset#reset-e-after-email-change and
+    // auth-action/address-reuse), and so does the official emulator's `resetPassword`. Nobody
+    // owning it is production's USER_NOT_FOUND, or the official INVALID_OOB_CODE, which spends
+    // the code as the official handler does.
+    let uid = match store.user_by_email(&entry.email) {
+        Some(u) => u.local_id.clone(),
+        None if strict => return error(400, "USER_NOT_FOUND"),
+        None => {
+            let _ = store.consume_oob_code(code, None, at);
             return error(400, "INVALID_OOB_CODE");
-        };
-        uid
+        }
     };
     if let Err(e) = store.validate_password_for(
         fireemu_core_auth::password_policy::Operation::Reset,
@@ -10198,13 +10198,19 @@ fn apply_oob_code(
     let Some(owner) = entry.uid.clone() else {
         return error(400, "INVALID_OOB_CODE");
     };
-    // Strict: a verification finds its account by the address it names (production answers
-    // EMAIL_NOT_FOUND once the account has another), and a disabled account is refused
-    // (sandbox recording 2026-09-24).
-    let uid = if strict && entry.request_type == OobRequestType::VerifyEmail {
+    // A verification finds its account by the address it names, as production does (it
+    // answers EMAIL_NOT_FOUND once nobody owns it; sandbox recordings 2026-09-24,
+    // verify-email and auth-action/address-reuse) and as the official emulator's
+    // `setAccountInfo` does (INVALID_OOB_CODE, spending the code). Strict also refuses a
+    // disabled account (sandbox recording 2026-09-24).
+    let uid = if entry.request_type == OobRequestType::VerifyEmail {
         match store.user_by_email(&entry.email) {
             Some(u) => u.local_id.clone(),
-            None => return error(400, "EMAIL_NOT_FOUND"),
+            None if strict => return error(400, "EMAIL_NOT_FOUND"),
+            None => {
+                let _ = store.consume_oob_code(code, None, at);
+                return error(400, "INVALID_OOB_CODE");
+            }
         }
     } else {
         owner

@@ -141,7 +141,7 @@
         "default"
       ],
       "status": "PENDING_REVIEW",
-      "note": "Password reset codes: inspection without use, weak and empty passwords, missing, unknown and truncated codes, use and reuse, a newer code retiring an older one, sign-in with the old and new password, tokens issued before the reset, the account after the reset, and codes issued before an Admin or client password change, an email change, a disable (and re-enable) and a deletion; a verification code offered as a reset code.",
+      "note": "Password reset codes: inspection without use, weak and empty passwords, missing, unknown and truncated codes, use and reuse, a newer code retiring an older one, sign-in with the old and new password, tokens issued before the reset, the account after the reset, and codes issued before an Admin or client password change, an email change, a disable (and re-enable) and a deletion; a verification code offered as a reset code. A code whose address another account took after it was issued acts on that account, in production as in both fireemu profiles (auth-action/address-reuse, follow-up directive S1).",
       "evidence": {
         "productionRecordings": [
           {
@@ -172,7 +172,7 @@
         "default"
       ],
       "status": "PENDING_REVIEW",
-      "note": "Email verification codes: inspection, apply and reapply, tokens and refresh after verification, unknown and truncated codes, an already verified address, codes issued before an email change, a disable (the refusal keeps the code) and a deletion, and a reset code applied as a verification. Whether a newer verification code retires an older one is unobserved: production refuses a second verification link for an address within minutes (TOO_MANY_ATTEMPTS_TRY_LATER), so the corpus gives each link an address of its own, and fireemu keeps every verification code. That refusal is a known production behavior fireemu does not implement (scope decision E10), not a matched one.",
+      "note": "Email verification codes: inspection, apply and reapply, tokens and refresh after verification, unknown and truncated codes, an already verified address, codes issued before an email change, a disable (the refusal keeps the code) and a deletion, and a reset code applied as a verification. Whether a newer verification code retires an older one is unobserved: production refuses a second verification link for an address within minutes (TOO_MANY_ATTEMPTS_TRY_LATER), so the corpus gives each link an address of its own, and fireemu keeps every verification code. That refusal is a known production behavior fireemu does not implement (scope decision E10), not a matched one. A code whose address another account took after it was issued acts on that account, in production as in both fireemu profiles (auth-action/address-reuse, follow-up directive S1).",
       "evidence": {
         "productionRecordings": [
           {

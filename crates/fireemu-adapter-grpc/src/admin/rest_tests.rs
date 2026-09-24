@@ -442,10 +442,20 @@ fn an_index_is_creating_then_ready_and_queries_follow_its_state() {
         .admin()
         .indexes()
         .set_build_duration(std::time::Duration::from_secs(3600));
-    call(&state, "POST", "/v1/projects/p/databases?databaseId=idxdb", native());
+    call(
+        &state,
+        "POST",
+        "/v1/projects/p/databases?databaseId=idxdb",
+        native(),
+    );
     let docs = "/v1/projects/p/databases/idxdb/documents";
     for (id, b) in [("x", 2), ("y", 3)] {
-        call(&state, "POST", &format!("{docs}/items?documentId={id}"), json!({"fields": {"a": {"integerValue": "1"}, "b": {"integerValue": b.to_string()}}}));
+        call(
+            &state,
+            "POST",
+            &format!("{docs}/items?documentId={id}"),
+            json!({"fields": {"a": {"integerValue": "1"}, "b": {"integerValue": b.to_string()}}}),
+        );
     }
     let query = json!({"structuredQuery": {
         "from": [{"collectionId": "items"}],
@@ -465,20 +475,36 @@ fn an_index_is_creating_then_ready_and_queries_follow_its_state() {
     let (_, created) = call(&state, "GET", &format!("/v1/{name}"), Value::Null);
     assert_eq!(created["state"], "CREATING");
     assert_eq!(created["density"], "SPARSE_ALL");
-    assert_eq!(created["fields"][2], json!({"fieldPath": "__name__", "order": "DESCENDING"}));
+    assert_eq!(
+        created["fields"][2],
+        json!({"fieldPath": "__name__", "order": "DESCENDING"})
+    );
     let (status, building) = call(&state, "POST", &format!("{docs}:runQuery"), query.clone());
     assert_eq!(status, 400);
-    let message = building[0]["error"]["message"].as_str().unwrap_or_else(|| building["error"]["message"].as_str().unwrap());
-    assert!(message.contains("That index is currently building"), "{message}");
+    let message = building[0]["error"]["message"]
+        .as_str()
+        .unwrap_or_else(|| building["error"]["message"].as_str().unwrap());
+    assert!(
+        message.contains("That index is currently building"),
+        "{message}"
+    );
     let (status, duplicate) = call(&state, "POST", group, index.clone());
     assert_eq!(status, 409, "{duplicate}");
     let id = name.rsplit('/').next().unwrap();
-    assert_eq!(duplicate["error"]["message"], format!("index already exists with index ID = {id}"));
+    assert_eq!(
+        duplicate["error"]["message"],
+        format!("index already exists with index ID = {id}")
+    );
 
     advance(&clock, 3600);
     let (_, ready) = call(&state, "GET", &format!("/v1/{name}"), Value::Null);
     assert_eq!(ready["state"], "READY");
-    let (_, done) = call(&state, "GET", &format!("/v1/{}", operation["name"].as_str().unwrap()), Value::Null);
+    let (_, done) = call(
+        &state,
+        "GET",
+        &format!("/v1/{}", operation["name"].as_str().unwrap()),
+        Value::Null,
+    );
     assert_eq!(done["done"], json!(true));
     let (status, answer) = call(&state, "POST", &format!("{docs}:runQuery"), query.clone());
     assert_eq!(status, 200, "{answer}");
@@ -497,7 +523,12 @@ fn an_index_is_creating_then_ready_and_queries_follow_its_state() {
 #[test]
 fn an_index_definition_is_refused_as_production_refuses_it() {
     let (state, _clock) = state();
-    call(&state, "POST", "/v1/projects/p/databases?databaseId=idxdb", native());
+    call(
+        &state,
+        "POST",
+        "/v1/projects/p/databases?databaseId=idxdb",
+        native(),
+    );
     let group = "/v1/projects/p/databases/idxdb/collectionGroups/items/indexes";
     let cases = [
         (json!({"fields": [{"fieldPath": "a", "order": "ASCENDING"}, {"fieldPath": "b", "order": "ASCENDING"}]}), "query_scope must be specified."),
@@ -506,8 +537,245 @@ fn an_index_definition_is_refused_as_production_refuses_it() {
     ];
     for (body, message) in cases {
         let (status, answer) = call(&state, "POST", group, body);
-        assert_eq!((status, answer["error"]["message"].as_str()), (400, Some(message)));
+        assert_eq!(
+            (status, answer["error"]["message"].as_str()),
+            (400, Some(message))
+        );
     }
-    let (status, _) = call(&state, "GET", "/v1/projects/p/databases/nonexist-cfg/collectionGroups/-/indexes", Value::Null);
+    let (status, _) = call(
+        &state,
+        "GET",
+        "/v1/projects/p/databases/nonexist-cfg/collectionGroups/-/indexes",
+        Value::Null,
+    );
     assert_eq!(status, 404);
+}
+
+/// Keeps what an export wrote and hands it back to an import, the way a bucket would.
+#[derive(Default)]
+struct MemoryStorage {
+    exports: Mutex<Vec<crate::admin::managed::ExportJob>>,
+}
+
+impl crate::admin::managed::ManagedStorage for MemoryStorage {
+    fn bucket_exists(&self, _project: &str, bucket: &str) -> bool {
+        bucket == "run-bucket"
+    }
+
+    fn export(
+        &self,
+        job: &crate::admin::managed::ExportJob,
+    ) -> Result<crate::admin::managed::ExportOutcome, String> {
+        self.exports.lock().unwrap().push(job.clone());
+        Ok(crate::admin::managed::ExportOutcome {
+            documents: job.documents.len() as u64,
+            bytes: 100,
+        })
+    }
+
+    fn import(
+        &self,
+        job: &crate::admin::managed::ImportJob,
+    ) -> Result<crate::admin::managed::ImportOutcome, crate::admin::managed::ImportRefusal> {
+        let exports = self.exports.lock().unwrap();
+        let Some(export) = exports.iter().find(|e| e.prefix == job.prefix) else {
+            return Err(crate::admin::managed::ImportRefusal::MissingMetadata(
+                format!(
+                    "/{}/{}/{}.overall_export_metadata",
+                    job.bucket,
+                    job.prefix,
+                    job.prefix.rsplit('/').next().unwrap()
+                ),
+            ));
+        };
+        if !job.collection_ids.is_empty() && export.collection_ids.is_empty() {
+            return Err(crate::admin::managed::ImportRefusal::KindsUnavailable);
+        }
+        Ok(crate::admin::managed::ImportOutcome {
+            documents: export
+                .documents
+                .iter()
+                .map(|d| crate::admin::managed::ImportedDocument {
+                    document: d.clone(),
+                    project: export.project.clone(),
+                    database: export.database.clone(),
+                })
+                .collect(),
+            bytes: 100,
+        })
+    }
+}
+
+/// Two databases, a document in the first with a reference into it, and managed storage.
+fn exporting_state() -> RestState {
+    let (state, _clock) = state();
+    state
+        .local
+        .admin()
+        .set_managed_storage(Arc::new(MemoryStorage::default()));
+    for db in ["srcdb", "dstdb"] {
+        call(
+            &state,
+            "POST",
+            &format!("/v1/projects/p/databases?databaseId={db}"),
+            native(),
+        );
+    }
+    call(
+        &state,
+        "POST",
+        "/v1/projects/p/databases/srcdb/documents/items?documentId=a",
+        json!({"fields": {"r": {"referenceValue": "projects/p/databases/srcdb/documents/other/c"}}}),
+    );
+    state
+}
+
+#[test]
+fn export_answers_production_operations() {
+    let state = exporting_state();
+    let export = "/v1/projects/p/databases/srcdb:exportDocuments";
+    let refusals = [
+        (json!({}), 400, "Missing required field: output_uri_prefix"),
+        (json!({"outputUriPrefix": "http://x/y"}), 400, "Google Cloud Storage resource path must be in format: gs://<bucket-name> or: gs://<bucket-name>/<object-name>"),
+        (json!({"outputUriPrefix": "gs://missing/x"}), 404, "Google Cloud Storage bucket does not exist: missing"),
+    ];
+    for (body, status, message) in refusals {
+        let (got, answer) = call(&state, "POST", export, body);
+        assert_eq!(
+            (got, answer["error"]["message"].as_str()),
+            (status, Some(message))
+        );
+    }
+    let (status, operation) = call(
+        &state,
+        "POST",
+        export,
+        json!({"outputUriPrefix": "gs://run-bucket/x/all"}),
+    );
+    assert_eq!(status, 200, "{operation}");
+    assert!(operation.get("done").is_none());
+    assert_eq!(operation["metadata"]["operationState"], "PROCESSING");
+    assert_eq!(
+        operation["metadata"]["outputUriPrefix"],
+        "gs://run-bucket/x/all"
+    );
+    let (_, done) = call(
+        &state,
+        "GET",
+        &format!("/v1/{}", operation["name"].as_str().unwrap()),
+        Value::Null,
+    );
+    assert_eq!(done["done"], json!(true));
+    assert_eq!(
+        done["metadata"]["progressDocuments"],
+        json!({"completedWork": "1"})
+    );
+    assert_eq!(done["response"]["outputUriPrefix"], "gs://run-bucket/x/all");
+}
+
+#[test]
+fn import_answers_production_operations_and_moves_references_to_the_target() {
+    let state = exporting_state();
+    let (status, _) = call(
+        &state,
+        "POST",
+        "/v1/projects/p/databases/srcdb:exportDocuments",
+        json!({"outputUriPrefix": "gs://run-bucket/x/all"}),
+    );
+    assert_eq!(status, 200);
+    let import = "/v1/projects/p/databases/dstdb:importDocuments";
+    let (status, answer) = call(
+        &state,
+        "POST",
+        import,
+        json!({"inputUriPrefix": "gs://run-bucket/x/all", "collectionIds": ["other"]}),
+    );
+    assert_eq!(
+        (status, answer["error"]["message"].as_str()),
+        (
+            400,
+            Some("The requested kinds/namespaces are not available")
+        )
+    );
+    let (status, answer) = call(
+        &state,
+        "POST",
+        import,
+        json!({"inputUriPrefix": "gs://run-bucket/x/none"}),
+    );
+    assert_eq!(status, 404, "{answer}");
+    let (status, operation) = call(
+        &state,
+        "POST",
+        import,
+        json!({"inputUriPrefix": "gs://run-bucket/x/all"}),
+    );
+    assert_eq!(status, 200, "{operation}");
+    let (_, done) = call(
+        &state,
+        "GET",
+        &format!("/v1/{}", operation["name"].as_str().unwrap()),
+        Value::Null,
+    );
+    assert_eq!(
+        done["metadata"]["progressDocuments"],
+        json!({"estimatedWork": "1", "completedWork": "1"})
+    );
+    assert_eq!(
+        done["response"],
+        json!({"@type": "type.googleapis.com/google.protobuf.Empty"})
+    );
+    let (_, imported) = call(
+        &state,
+        "GET",
+        "/v1/projects/p/databases/dstdb/documents/items/a",
+        Value::Null,
+    );
+    assert_eq!(
+        imported["fields"]["r"]["referenceValue"],
+        "projects/p/databases/dstdb/documents/other/c"
+    );
+}
+
+#[test]
+fn bulk_delete_refuses_an_empty_filter_and_deletes_the_named_collection_groups() {
+    let (state, _clock) = state();
+    call(
+        &state,
+        "POST",
+        "/v1/projects/p/databases?databaseId=bulkdb",
+        native(),
+    );
+    let docs = "/v1/projects/p/databases/bulkdb/documents";
+    call(
+        &state,
+        "POST",
+        &format!("{docs}/items?documentId=a"),
+        json!({"fields": {}}),
+    );
+    call(
+        &state,
+        "POST",
+        &format!("{docs}/other?documentId=c"),
+        json!({"fields": {}}),
+    );
+    let bulk = "/v1/projects/p/databases/bulkdb:bulkDeleteDocuments";
+    let (status, answer) = call(&state, "POST", bulk, json!({}));
+    assert_eq!(
+        (status, answer["error"]["message"].as_str()),
+        (
+            400,
+            Some("Empty entity filter. To delete all entities, Use database deletion instead.")
+        )
+    );
+    let (status, operation) = call(&state, "POST", bulk, json!({"collectionIds": ["other"]}));
+    assert_eq!(status, 200, "{operation}");
+    assert!(operation["metadata"]["snapshotTime"]
+        .as_str()
+        .unwrap()
+        .ends_with(":00Z"));
+    let (status, _) = call(&state, "GET", &format!("{docs}/other/c"), Value::Null);
+    assert_eq!(status, 404);
+    let (status, _) = call(&state, "GET", &format!("{docs}/items/a"), Value::Null);
+    assert_eq!(status, 200);
 }

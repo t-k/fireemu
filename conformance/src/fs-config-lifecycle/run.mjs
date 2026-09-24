@@ -389,6 +389,22 @@ async function rebuildFixture(runDir) {
   console.log(JSON.stringify({ programs: programs.length, nondeterministic }, null, 2));
 }
 
+/**
+ * fireemu's Storage emulator, like the official one, has no bucket resource: a bucket exists
+ * once it holds an object (see crates/fireemu/src/managed_storage.rs). Production's run bucket
+ * is created by the harness; locally, one marker object at the bucket root stands in for that
+ * create. It lies outside every program's object prefix, and the run's bucket cleanup deletes it.
+ */
+async function markLocalBucket(ctx) {
+  const url = `${ctx.target.storageOrigin}/upload/storage/v1/b/${ctx.bucket}/o?uploadType=media&name=.fireemu-bucket`;
+  const response = await fetch(url, {
+    method: "POST",
+    headers: { authorization: "Bearer owner", "content-type": "application/octet-stream" },
+    body: "",
+  });
+  if (!response.ok) throw new Error(`local bucket marker: HTTP ${response.status}`);
+}
+
 async function sessionLocal() {
   const programs = JSON.parse(await readFile(process.env.FS_CONFIG_IN, "utf8"));
   const host = process.env.FIRESTORE_EMULATOR_HOST;
@@ -410,6 +426,7 @@ async function sessionLocal() {
       grpcPort: Number(url.port),
     },
   });
+  if (usesBucket(programs)) await markLocalBucket(ctx);
   // fireemu's long-running work finishes in seconds, so polls and delays are scaled down.
   const out = await runCorpus(programs, ctx, {
     ...ceilings(programs),

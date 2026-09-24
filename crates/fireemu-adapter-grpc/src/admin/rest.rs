@@ -273,7 +273,12 @@ pub(crate) fn route(state: &RestState, req: &RestRequest) -> Option<RestResponse
     let segments: Vec<&str> = resource.split('/').collect();
     let project = *segments.first()?;
     let admin = match (segments.get(1).copied(), segments.len(), action) {
-        (Some("locations" | "databases"), 2 | 3, None) => true,
+        (Some("locations" | "databases"), 2 | 3, None)
+        | (
+            Some("databases"),
+            3,
+            Some("exportDocuments" | "importDocuments" | "bulkDeleteDocuments"),
+        ) => true,
         (Some("databases"), 4 | 5, None) => {
             matches!(segments[3], "operations" | "changeStreams" | "userCreds")
         }
@@ -337,6 +342,18 @@ pub(crate) fn route(state: &RestState, req: &RestRequest) -> Option<RestResponse
                 super::index_rest::route(state, project, database, group, method, rest, &req.body)
             }
             Err(response) => response,
+        },
+        (
+            "POST",
+            [_, "databases", database],
+            Some(action @ ("exportDocuments" | "importDocuments" | "bulkDeleteDocuments")),
+        ) => match live_native(state, project, database) {
+            Err(response) => response,
+            Ok(()) => match action {
+                "exportDocuments" => super::managed::export(state, project, database, &req.body),
+                "importDocuments" => super::managed::import(state, project, database, &req.body),
+                _ => super::managed::bulk_delete(state, project, database, &req.body),
+            },
         },
         (_, [_, "databases", database, "changeStreams" | "userCreds", ..], None) => {
             enterprise_only(state, project, database)

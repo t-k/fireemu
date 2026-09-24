@@ -183,7 +183,7 @@ impl DatabaseHandle {
     }
 
     /// Reads under this database's own lock; `None` once detached or poisoned.
-    fn read<T>(&self, f: impl FnOnce(&FirestoreState) -> T) -> Option<T> {
+    pub(crate) fn read<T>(&self, f: impl FnOnce(&FirestoreState) -> T) -> Option<T> {
         self.read_status(|state| Ok(f(state))).ok()
     }
 

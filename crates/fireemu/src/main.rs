@@ -45,6 +45,7 @@ mod functions;
 mod hub;
 mod import_export;
 mod init;
+mod managed_storage;
 mod resources;
 mod session_rsa_cache;
 mod sessions;

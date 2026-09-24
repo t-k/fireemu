@@ -7,6 +7,7 @@ pub mod catalog;
 pub mod index_rest;
 pub mod indexes;
 pub mod locations;
+pub mod managed;
 pub mod operations;
 pub mod rest;
 #[cfg(test)]

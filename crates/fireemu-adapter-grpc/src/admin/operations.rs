@@ -28,6 +28,8 @@ pub enum OperationKind {
     DeleteDatabase,
     /// `collectionGroups.indexes.create`: its answer follows the index it builds.
     CreateIndex,
+    /// Export, import or bulk delete: finished by the time it is first polled.
+    Managed,
 }
 
 /// One recorded operation.
@@ -103,7 +105,8 @@ impl OperationStore {
             // match total.
             OperationKind::CreateDatabase
             | OperationKind::UpdateDatabase
-            | OperationKind::CreateIndex => {
+            | OperationKind::CreateIndex
+            | OperationKind::Managed => {
                 let id = opaque_id(
                     seed.as_bytes(),
                     if kind == OperationKind::CreateDatabase {
@@ -173,6 +176,29 @@ impl OperationStore {
             format!("{project}/{database}/reserved/{ordinal}").as_bytes(),
             88,
         )
+    }
+
+    /// Records an operation whose first answer and later answer its caller rendered.
+    pub fn record_views(
+        &self,
+        project: &str,
+        database: &str,
+        id: &str,
+        initial: Value,
+        current: Value,
+    ) {
+        self.push(
+            project,
+            database,
+            StoredOperation {
+                id: id.to_owned(),
+                alias: None,
+                kind: OperationKind::Managed,
+                initial,
+                current,
+                index: None,
+            },
+        );
     }
 
     /// Records the operation that builds index `index`.

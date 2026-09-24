@@ -10,6 +10,7 @@ import re
 import stat
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 RUNTIME_COMMIT = "c1d24250a62d23b38bcfed6da51f1ba4ed5798bb"
@@ -24,6 +25,13 @@ ARTIFACT_SHA = "4f049d0c5bfce865319d8bdbc662c0d0ea3f9568c21497f507b6bcbaed695fa9
 MANIFEST_SHA = "dce277b011ec825bd92515431f07a05cac791dbaebe8896bfef1ee9e9bbd2bea"
 RECEIPT_SHA = "6dd039ad0474b37a32629a3ec2d27681b8a4926860a66488d5709c4776fb0bce"
 PRODUCTION_SHA = "12956fbe82acefc106093eb2cd913ede9092f74aa98bd29f39e795492754b3f3"
+SAVED_RESULT_REL = Path(
+    "spec/compatibility/broad-runs/fs-write-txn-567565bdd-saved-result.json"
+)
+SAVED_RESULT_SHA = "22a45a9bf2e441f9ed7c675093f7bc8a130bbf58778c01c146b982ddb1131a3f"
+SAVED_AUTHORITY_PATH = Path(
+    "tools/compat-broad/fs-write-txn-recompare-v2/saved_authority.py"
+)
 BUILD_COMMAND = ["cargo", "build", "--locked", "-p", "fireemu", "--message-format=json"]
 RUNTIME_INPUT_COUNT = 434
 COMMIT_RE = re.compile(r"^[0-9a-f]{40}$")
@@ -37,6 +45,21 @@ BOUND_RUNTIME_SOURCES = (
     Path("tools/compat-broad/fs-write-txn/stream_shadow.py"),
     Path("tools/sdk-smoke/package-lock.json"),
 )
+LOCAL_OUTER_SHA256 = {
+    "execution/inputs.json": "bc9f579bddbe19fa612e6dd613e24ed6fc758f6cd5d83a1f8c734db9037d054e",
+    "execution/gate/state.json": "d3500fa9da0608857faf72be239165e3fdf57953a43061100604e5afab53388d",
+    "execution/receipt.json": "cc9f60e4130db9b508dd6b6b23275dcf73d96cd0d87e36b18d61b3182b076445",
+    "execution/credential-preparation/binding.json": "28b8c1fbe93850b9b77d0a184289ae2c999d2e676601397e09b6fd8f07194c7e",
+    "execution/credential-preparation/refresh-charge.json": "826bc7a5acde2718c07b3f0ec69ae40fab76fc5eb990fc075126ae81ceb822a9",
+    "execution/credential-preparation/refresh-receipt.json": "fa26768bcfb7031c888844fd6b7cd74cbc72cadbc928756dcdbc125ea7b7141f",
+    "execution/credential-preparation/tokeninfo-charge.json": "4c8c21672ee40dfd5dd6e6b0435cd4bdd0f364d6c83bf995cae1251faf93a81f",
+    "execution/credential-preparation/tokeninfo-receipt.json": "ba88870ffb79d88caefe23dcf75d800f41a0b621fca278c1f926ed90eccab5d0",
+    "execution/credential-preparation/complete.json": "acbf6ec734f012defe6bc663ccab9de797ff44e98e0230e4dae21433af5644b1",
+    "ledger/state.json": "12454748d4cd585fa2eed48293cd82c110d43cc3b10a738ebc4a035816266ce8",
+    "config.json": "96f3bacf5f05aa6cfcb589351c1be213b815b998e08bf7881022fe0fb66b9c4b",
+    "instance.json": "031d849c3708819a9dce1818267cef3dce55835c55cbb3d0cb3c7077d30bba4f",
+    "child-identity.json": "4cde02db5013b8181490f803385ee6c38f23a48a9bc3146d99f09223c55e9693",
+}
 
 
 def require(condition: bool, label: str) -> None:
@@ -46,6 +69,22 @@ def require(condition: bool, label: str) -> None:
 
 def sha(value: bytes) -> str:
     return hashlib.sha256(value).hexdigest()
+
+
+def require_classifications(v1: str, v2: str) -> None:
+    require(v1 == "SEMANTIC_MISMATCH", "V1 classification differs")
+    require(v2 == "EXPECTED_NONDETERMINISM", "V2 classification differs")
+
+
+def require_saved_classifications(original: str, old_pair: str, new_pair: str) -> None:
+    require(
+        original == old_pair == "SEMANTIC_MISMATCH",
+        "saved original classification differs",
+    )
+    require(
+        new_pair == "EXPECTED_NONDETERMINISM",
+        "saved repaired classification differs",
+    )
 
 
 def regular(path: Path) -> None:
@@ -92,9 +131,11 @@ def authority_sources(root: Path, authority_commit: str) -> dict[str, str]:
     require(v2_paths, "reviewed V2 source closure is empty")
     paths = [
         Path(__file__).resolve().relative_to(root),
+        SAVED_AUTHORITY_PATH,
         V1_PATH,
         *(path.relative_to(root) for path in v2_paths),
         *BOUND_RUNTIME_SOURCES,
+        SAVED_RESULT_REL,
     ]
     result = {}
     for path in paths:
@@ -287,6 +328,327 @@ def validate_local_receipt(
         )
 
 
+def validate_local_acquisition(
+    root: Path,
+    input_root: Path,
+    receipt: dict,
+    snapshots: dict[Path, bytes],
+) -> str:
+    run_dir = input_root / RECEIPT_REL.parent
+    outer_hashes: dict[str, str] = {}
+
+    def load(relative: str) -> dict:
+        raw = read(run_dir / relative, LOCAL_OUTER_SHA256[relative], snapshots)
+        outer_hashes[relative] = sha(raw)
+        value = json.loads(raw)
+        require(isinstance(value, dict), "local acquisition record shape differs")
+        return value
+
+    inputs = load("execution/inputs.json")
+    gate = load("execution/gate/state.json")
+    execution_receipt = load("execution/receipt.json")
+    ledger = load("ledger/state.json")
+    config = load("config.json")
+    instance = load("instance.json")
+    child = load("child-identity.json")
+    journal = {
+        name.removesuffix(".json"): load(f"execution/credential-preparation/{name}")
+        for name in (
+            "binding.json",
+            "refresh-charge.json",
+            "refresh-receipt.json",
+            "tokeninfo-charge.json",
+            "tokeninfo-receipt.json",
+            "complete.json",
+        )
+    }
+
+    sys.path[:0] = [
+        str(root / "tools/compat-broad"),
+        str(root / "tools/compat-broad/fs-write-txn"),
+    ]
+    import credential_prep
+    import stream_bridge
+    from broad_contract import digest
+
+    require(
+        Path(credential_prep.__file__).resolve()
+        == root / "tools/compat-broad/fs-write-txn/credential_prep.py",
+        "unexpected acquisition validator",
+    )
+    plan = inputs.get("plan")
+    permission = inputs.get("permission")
+    claim = inputs.get("claim")
+    envelope = inputs.get("envelope")
+    ticket = inputs.get("ticket")
+    require(
+        isinstance(plan, dict)
+        and isinstance(permission, dict)
+        and isinstance(claim, dict)
+        and isinstance(envelope, dict)
+        and isinstance(ticket, dict),
+        "local execution inputs are incomplete",
+    )
+    require(
+        gate == receipt.get("gate") == execution_receipt.get("gate"),
+        "local execution gate differs",
+    )
+    require(
+        plan == gate.get("plan")
+        and gate.get("planDigest") == digest(plan)
+        and plan.get("permissionDigest") == digest(permission),
+        "local execution permission or plan differs",
+    )
+    require(
+        inputs.get("plan") == receipt["gate"]["plan"]
+        and ticket.get("ledgerPath") == str(run_dir / "ledger"),
+        "local inputs are not bound to this saved run",
+    )
+    require(
+        ledger.get("identity") == ticket.get("ledgerIdentity"),
+        "local ledger identity differs",
+    )
+    reservation_id = ticket.get("reservation")
+    reservations = ledger.get("reservations")
+    require(
+        isinstance(reservations, dict)
+        and len(reservations) == 1
+        and reservation_id in reservations,
+        "local reservation is missing or ambiguous",
+    )
+    row = reservations[reservation_id]
+    require(
+        row.get("state") == "released" and row.get("finalGateDigest") == digest(gate),
+        "local reservation is not released against the final gate",
+    )
+    require(
+        row.get("claim") == claim
+        and row.get("claimDigest") == digest(claim) == ticket.get("claimDigest"),
+        "local claim binding differs",
+    )
+    require(
+        row.get("envelopeDigest") == digest(envelope) == ticket.get("envelopeDigest"),
+        "local envelope binding differs",
+    )
+    envelopes = ledger.get("envelopes")
+    require(
+        isinstance(envelopes, dict)
+        and envelopes.get(row["envelopeDigest"], {}).get("envelope") == envelope,
+        "local ledger envelope differs",
+    )
+    binding = journal["binding"]
+    proof = receipt.get("credentialPreparation")
+    require(
+        isinstance(proof, dict)
+        and proof.get("attempts") == 2
+        and proof.get("journalDigest") == digest(journal),
+        "local credential journal seal differs",
+    )
+    require(
+        binding.get("observerSha256") == stream_bridge.source_digest()
+        and binding.get("contractDigest") == digest(credential_prep.contract()),
+        "local credential preparation source differs",
+    )
+    require(
+        journal["complete"].get("verified") is True,
+        "local credential preparation is incomplete",
+    )
+    for ordinal, slot in enumerate(("refresh", "tokeninfo"), 1):
+        charge = journal[f"{slot}-charge"]
+        response = journal[f"{slot}-receipt"]
+        require(
+            charge.get("ordinal") == ordinal
+            and charge.get("slot") == slot
+            and charge.get("bindingDigest") == digest(binding),
+            "local credential charge differs",
+        )
+        require(
+            response.get("chargeDigest") == digest(charge)
+            and response.get("verified") is True
+            and response.get("workerReaped") is True,
+            "local credential receipt differs",
+        )
+    outer = receipt.get("outerAccounting")
+    require(isinstance(outer, dict), "local outer accounting is missing")
+    require(
+        outer.get("requests") == gate.get("total") + 2 == 33
+        and outer.get("costMicrousd") == gate.get("costMicrousd") + 200 == 1303300,
+        "local outer accounting differs",
+    )
+    started, finished = outer.get("reservationStartedAt"), outer.get("finishedAt")
+    require(
+        started
+        == proof.get("reservationStartedAt")
+        == binding.get("reservationStartedAt")
+        and type(started) in (int, float)
+        and type(finished) in (int, float)
+        and 0 < finished - started < credential_prep.OUTER_SECONDS,
+        "local reservation time window differs",
+    )
+    require(
+        started < finished < permission.get("expiresAt"),
+        "local permission window differs",
+    )
+    require(
+        binding.get("ticketDigest") == digest(ticket)
+        and binding.get("claimDigest") == digest(claim)
+        and binding.get("permissionDigest") == digest(permission)
+        and binding.get("planDigest") == digest(plan),
+        "local credential admission binding differs",
+    )
+    require(
+        envelope.get("permissionDigest") == digest(permission)
+        and envelope.get("issuedAt") <= started < finished < envelope.get("expiresAt"),
+        "local envelope permission window differs",
+    )
+    require(
+        instance.get("nonce") == plan.get("nonce")
+        and instance.get("project") == plan.get("projectId")
+        and instance.get("profile") == config.get("profile")
+        and child.get("parentPid") == instance.get("parentPid")
+        and child.get("childPid") == instance.get("childPid")
+        and child.get("nonce") == instance.get("nonce"),
+        "local process identity differs",
+    )
+    require(
+        isinstance(config, dict)
+        and isinstance(instance, dict)
+        and isinstance(child, dict)
+        and receipt.get("configurationUnchanged") is True,
+        "local cleanup metadata is incomplete",
+    )
+    return sha(json.dumps(outer_hashes, sort_keys=True, separators=(",", ":")).encode())
+
+
+def validate_saved_production_authority(root: Path, input_root: Path) -> str:
+    source_dir = root / V2_DIR
+    script = source_dir / "saved_authority.py"
+    worktree_base = input_root / ".worktree"
+    frozen_path = worktree_base / "stream-credential-preparation"
+    repaired_path = worktree_base / "stream-repair-shadow"
+    sdk_source = (
+        input_root
+        / ".worktree/compatibility-inventory/tools/sdk-smoke/node_modules"
+        / "@google-cloud/firestore"
+    )
+    for path in (frozen_path, repaired_path):
+        require(not os.path.lexists(path), "historical authority worktree path exists")
+    registered = subprocess.check_output(
+        ["git", "-C", str(input_root), "worktree", "list", "--porcelain"], text=True
+    )
+    require(
+        all(str(path) not in registered for path in (frozen_path, repaired_path)),
+        "historical authority worktree path is already registered",
+    )
+    package_json = sdk_source / "package.json"
+    client_source = sdk_source / "build/src/v1/firestore_client.js"
+    require(
+        json.loads(package_json.read_text()).get("version") == "8.7.1"
+        and sha(client_source.read_bytes())
+        == "ab6947259f63e324aaa87ab6934fd538b5defce75a19f40a8896728223c23dc7",
+        "historical pricing SDK source differs",
+    )
+    created: list[Path] = []
+    aliases: list[Path] = []
+
+    def run_git(*args: str) -> None:
+        subprocess.run(
+            ["git", "-C", str(input_root), *args],
+            text=True,
+            capture_output=True,
+            check=True,
+        )
+
+    try:
+        for path, commit in (
+            (frozen_path, "dee737c14e68eb4f546b7ca4c827871fc48a2503"),
+            (repaired_path, "567565bdd654cab00dbb84101edcc7bdc628e230"),
+        ):
+            run_git("worktree", "add", "--detach", str(path), commit)
+            created.append(path)
+            alias = path / "tools/sdk-smoke/node_modules/@google-cloud/firestore"
+            require(not os.path.lexists(alias), "historical SDK alias path exists")
+            alias.parent.mkdir(parents=True, exist_ok=True)
+            alias.symlink_to(sdk_source, target_is_directory=True)
+            aliases.append(alias)
+        with tempfile.TemporaryDirectory(prefix="c1-saved-authority-") as temp:
+            output = Path(temp) / "proof.json"
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(script),
+                    "--root",
+                    str(input_root),
+                    "--output",
+                    str(output),
+                ],
+                cwd=root,
+                text=True,
+                capture_output=True,
+                timeout=180,
+                check=False,
+                env=os.environ.copy(),
+            )
+            require(
+                result.returncode == 0 and output.is_file(),
+                "saved production authority refused",
+            )
+            proof = json.loads(output.read_bytes())
+        require(
+            proof.get("kind") == "stream-saved-authority-v2"
+            and proof.get("acquisitionValidated") is True
+            and proof.get("promotionReady") is False,
+            "saved production acquisition is not validated",
+        )
+        require_saved_classifications(
+            proof.get("originalComparison", {}).get("classification"),
+            proof.get("oldPair", {}).get("classification"),
+            proof.get("newPair", {}).get("classification"),
+        )
+        bound = proof.get("bindings")
+        require(
+            isinstance(bound, dict) and bound,
+            "saved production proof bindings are missing",
+        )
+        production_suffix = "/docs.local/logs/2026-09-17/stream-production-preflight/execution-dee737c14/receipt.json"
+        require(
+            any(
+                path.endswith(production_suffix) and value == PRODUCTION_SHA
+                for path, value in bound.items()
+            ),
+            "saved production receipt is not bound by its acquisition authority",
+        )
+        return sha(json.dumps(proof, sort_keys=True, separators=(",", ":")).encode())
+    finally:
+        for alias in reversed(aliases):
+            require(
+                alias.is_symlink() and alias.resolve() == sdk_source.resolve(),
+                "historical SDK alias identity changed",
+            )
+            alias.unlink()
+            for parent in (alias.parent, alias.parent.parent):
+                try:
+                    parent.rmdir()
+                except OSError:
+                    pass
+        for path in reversed(created):
+            require(
+                not subprocess.check_output(
+                    [
+                        "git",
+                        "-C",
+                        str(path),
+                        "status",
+                        "--porcelain",
+                        "--untracked-files=all",
+                    ],
+                    text=True,
+                ).strip(),
+                "historical source worktree is dirty",
+            )
+            run_git("worktree", "remove", str(path))
+
+
 def compare(
     root: Path, production: dict, local: dict, artifact_sha: str, node: str
 ) -> dict:
@@ -416,13 +778,19 @@ def run(args: argparse.Namespace) -> dict:
     manifest_bytes = read(manifest_path, MANIFEST_SHA, snapshots)
     receipt_bytes = read(receipt_path, RECEIPT_SHA, snapshots)
     production_bytes = read(production_path, PRODUCTION_SHA, snapshots)
+    saved_result_bytes = read(root / SAVED_RESULT_REL, SAVED_RESULT_SHA, snapshots)
     artifact_sha = sha(artifact_bytes)
     manifest = json.loads(manifest_bytes)
     local = json.loads(receipt_bytes)
     production = json.loads(production_bytes)
+    saved_result = json.loads(saved_result_bytes)
     closure_before = authority_sources(root, args.authority_commit)
     manifest_binding = validate_manifest(manifest, root, artifact_sha)
     validate_local_receipt(root, inputs, local, artifact_sha)
+    local_outer_proof_digest = validate_local_acquisition(
+        root, inputs, local, snapshots
+    )
+    saved_production_proof_digest = validate_saved_production_authority(root, inputs)
     require(
         local.get("ownedArtifact", {}).get("executionCommit") == RUNTIME_COMMIT,
         "local execution commit differs",
@@ -449,8 +817,22 @@ def run(args: argparse.Namespace) -> dict:
         len(production.get("collection", {}).get("recoveryObservations", [])) == 10,
         "saved production recovery count differs",
     )
+    require(
+        saved_result.get("kind") == "fs-write-transaction-saved-comparison-v2"
+        and saved_result.get("acquisitionValidated") is True
+        and saved_result.get("originalClassification") == "SEMANTIC_MISMATCH"
+        and saved_result.get("preFixClassificationWithV2") == "SEMANTIC_MISMATCH"
+        and saved_result.get("repairedClassification") == "EXPECTED_NONDETERMINISM"
+        and saved_result.get("campaignId") == "FS-WRITE-TXN-PRECEDENCE-01"
+        and saved_result.get("privateEvidenceSha256", {}).get(
+            "originalProductionReceipt"
+        )
+        == PRODUCTION_SHA,
+        "published saved comparison does not corroborate the historical proof",
+    )
     node = local["gate"]["plan"]["nodeRuntime"]["path"]
     result = compare(root, production, local, artifact_sha, node)
+    require_classifications(result["v1Classification"], result["v2Classification"])
     for path, expected in (
         (artifact_path, ARTIFACT_SHA),
         (manifest_path, MANIFEST_SHA),
@@ -487,6 +869,9 @@ def run(args: argparse.Namespace) -> dict:
             "manifestSha256": sha(manifest_bytes),
             "localReceiptSha256": sha(receipt_bytes),
             "productionReceiptSha256": sha(production_bytes),
+            "productionSavedAuthorityKind": "stream-saved-authority-v2",
+            "productionSavedAuthorityDigest": saved_production_proof_digest,
+            "localOuterProofDigest": local_outer_proof_digest,
             "runtimeSourceCommit": RUNTIME_COMMIT,
             "runtimeInputCount": manifest_binding["runtimeInputCount"],
             "runtimeInputsDigest": manifest_binding["runtimeInputsDigest"],

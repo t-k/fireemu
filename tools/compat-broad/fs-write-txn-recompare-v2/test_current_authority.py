@@ -13,32 +13,51 @@ import pytest
 
 HERE = Path(__file__).resolve().parent
 AUTHORITY = HERE / "current_authority.py"
-ROOT = Path(os.environ.get("FIREEMU_WRITE_CURRENT_ROOT", "/Users/tk/work/firebase-emulator"))
-RUNTIME = Path(os.environ.get("FIREEMU_WRITE_CURRENT_RUNTIME_SOURCE", ""))
+REPOSITORY_ROOT = HERE.parents[2].parents[1]
+ROOT = Path(
+    os.environ.get("FIREEMU_WRITE_CURRENT_ROOT", str(REPOSITORY_ROOT))
+).resolve()
+RUNTIME = (
+    Path(os.environ["FIREEMU_WRITE_CURRENT_RUNTIME_SOURCE"]).resolve()
+    if "FIREEMU_WRITE_CURRENT_RUNTIME_SOURCE" in os.environ
+    else None
+)
 ARTIFACT = Path(
     os.environ.get(
         "FIREEMU_WRITE_CURRENT_ARTIFACT",
-        "/Users/tk/work/firebase-emulator/docs.local/runs/saved-runtime-20260922-approved/projection-e896/fireemu",
+        str(
+            REPOSITORY_ROOT
+            / "docs.local/runs/saved-runtime-20260922-approved/projection-e896/fireemu"
+        ),
     )
-)
+).resolve()
 MANIFEST = Path(
     os.environ.get(
         "FIREEMU_WRITE_CURRENT_MANIFEST",
-        "/Users/tk/work/firebase-emulator/docs.local/runs/saved-runtime-20260922-approved/build/build-local.json",
+        str(
+            REPOSITORY_ROOT
+            / "docs.local/runs/saved-runtime-20260922-approved/build/build-local.json"
+        ),
     )
-)
+).resolve()
 RECEIPT = Path(
     os.environ.get(
         "FIREEMU_WRITE_CURRENT_RECEIPT",
-        "/Users/tk/work/firebase-emulator/docs.local/runs/write-txn-e896-2a1e95a98-retry01/receipt.json",
+        str(
+            REPOSITORY_ROOT
+            / "docs.local/runs/write-txn-e896-2a1e95a98-retry01/receipt.json"
+        ),
     )
-)
+).resolve()
 PRODUCTION = Path(
     os.environ.get(
         "FIREEMU_WRITE_CURRENT_PRODUCTION",
-        "/Users/tk/work/firebase-emulator/docs.local/logs/2026-09-17/stream-production-preflight/execution-dee737c14/receipt.json",
+        str(
+            REPOSITORY_ROOT
+            / "docs.local/logs/2026-09-17/stream-production-preflight/execution-dee737c14/receipt.json"
+        ),
     )
-)
+).resolve()
 PRIVATE = os.environ.get("FIREEMU_WRITE_CURRENT_PRIVATE_TESTS") == "1"
 
 
@@ -74,7 +93,7 @@ def run_private(tmp_path: Path, *extra: str) -> subprocess.CompletedProcess[str]
             "--root",
             str(ROOT),
             "--runtime-source",
-            str(RUNTIME),
+            str(RUNTIME or ROOT),
             "--artifact",
             str(ARTIFACT),
             "--build-manifest",
@@ -125,7 +144,9 @@ def test_read_snapshot_refuses_mutation(tmp_path: Path) -> None:
 def test_projection_metrics_identical_projections_have_no_differences() -> None:
     authority = __import__("current_authority")
     projection = [{"events": [{"type": "status", "value": {"code": 5}}]}]
-    assert authority.v1_projection_metrics({"differences": {"production": projection, "local": projection}}) == {
+    assert authority.v1_projection_metrics(
+        {"differences": {"production": projection, "local": projection}}
+    ) == {
         "v1ComparedSlotCount": 1,
         "v1DifferingSlotCount": 0,
         "v1DifferenceLeafCount": 0,
@@ -186,10 +207,14 @@ def test_missing_configured_root_refuses_without_output(tmp_path: Path) -> None:
     result = run_authority(tmp_path)
     assert result.returncode == 2
     assert not (tmp_path / "out.json").exists()
-    assert result.stderr.strip() == "Current write authority refused (FileNotFoundError)."
+    assert (
+        result.stderr.strip() == "Current write authority refused (FileNotFoundError)."
+    )
 
 
-@pytest.mark.skipif(not PRIVATE, reason="private saved receipt and clean runtime are not enabled")
+@pytest.mark.skipif(
+    not PRIVATE, reason="private saved receipt and clean runtime are not enabled"
+)
 def test_private_current_receipt_is_sanitized_and_bounded(tmp_path: Path) -> None:
     result = run_private(tmp_path)
     assert result.returncode == 0, result.stderr
@@ -212,7 +237,9 @@ def test_private_current_receipt_is_sanitized_and_bounded(tmp_path: Path) -> Non
     assert stat.S_IMODE((tmp_path / "out.json").stat().st_mode) == 0o600
 
 
-@pytest.mark.skipif(not PRIVATE, reason="private saved receipt and clean runtime are not enabled")
+@pytest.mark.skipif(
+    not PRIVATE, reason="private saved receipt and clean runtime are not enabled"
+)
 def test_private_preexisting_output_refuses_without_replacement(tmp_path: Path) -> None:
     output = tmp_path / "out.json"
     output.write_text("sentinel\n")
@@ -222,25 +249,35 @@ def test_private_preexisting_output_refuses_without_replacement(tmp_path: Path) 
     assert output.read_text() == "sentinel\n"
 
 
-@pytest.mark.skipif(not PRIVATE, reason="private saved receipt and clean runtime are not enabled")
+@pytest.mark.skipif(
+    not PRIVATE, reason="private saved receipt and clean runtime are not enabled"
+)
 @pytest.mark.parametrize("flag", ["artifact", "build-manifest"])
-def test_private_artifact_and_manifest_mutations_refuse(tmp_path: Path, flag: str) -> None:
+def test_private_artifact_and_manifest_mutations_refuse(
+    tmp_path: Path, flag: str
+) -> None:
     mutated = tmp_path / flag
     mutated.write_bytes(b"mutated")
     result = run_private(tmp_path, f"--{flag}", str(mutated))
     assert_refused(result, tmp_path / "out.json")
 
 
-@pytest.mark.skipif(not PRIVATE, reason="private saved receipt and clean runtime are not enabled")
+@pytest.mark.skipif(
+    not PRIVATE, reason="private saved receipt and clean runtime are not enabled"
+)
 @pytest.mark.parametrize("flag", ["receipt", "production"])
-def test_private_receipt_and_production_mutations_refuse(tmp_path: Path, flag: str) -> None:
+def test_private_receipt_and_production_mutations_refuse(
+    tmp_path: Path, flag: str
+) -> None:
     mutated = tmp_path / flag
     mutated.write_bytes(b"mutated")
     result = run_private(tmp_path, f"--{flag}", str(mutated))
     assert_refused(result, tmp_path / "out.json")
 
 
-@pytest.mark.skipif(not PRIVATE, reason="private saved receipt and clean runtime are not enabled")
+@pytest.mark.skipif(
+    not PRIVATE, reason="private saved receipt and clean runtime are not enabled"
+)
 def test_private_symlink_alias_refuses(tmp_path: Path) -> None:
     alias = tmp_path / "receipt-alias"
     alias.symlink_to(RECEIPT)

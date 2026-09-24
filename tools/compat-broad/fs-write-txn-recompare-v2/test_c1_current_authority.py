@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import importlib.util
 import json
 import os
 import stat
@@ -14,10 +15,9 @@ import pytest
 HERE = Path(__file__).resolve().parent
 AUTHORITY = HERE / "c1_current_authority.py"
 WORKTREE_ROOT = HERE.parents[2]
+REPOSITORY_ROOT = WORKTREE_ROOT.parents[1]
 INPUT_ROOT = Path(
-    os.environ.get(
-        "FIREEMU_C1_AUTHORITY_INPUT_ROOT", "/Users/tk/work/firebase-emulator"
-    )
+    os.environ.get("FIREEMU_C1_AUTHORITY_INPUT_ROOT", str(REPOSITORY_ROOT))
 )
 AUTHORITY_COMMIT = os.environ.get("FIREEMU_C1_AUTHORITY_COMMIT", "")
 PRIVATE = os.environ.get("FIREEMU_C1_AUTHORITY_PRIVATE_TESTS") == "1"
@@ -47,6 +47,29 @@ def run_authority(
     )
 
 
+def test_verdict_gate_requires_the_exact_saved_pair_classifications() -> None:
+    spec = importlib.util.spec_from_file_location("c1_current_authority", AUTHORITY)
+    assert spec is not None and spec.loader is not None
+    authority = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(authority)
+    authority.require_classifications("SEMANTIC_MISMATCH", "EXPECTED_NONDETERMINISM")
+    with pytest.raises(ValueError, match="V1 classification differs"):
+        authority.require_classifications("MATCH", "EXPECTED_NONDETERMINISM")
+    with pytest.raises(ValueError, match="V2 classification differs"):
+        authority.require_classifications("SEMANTIC_MISMATCH", "MATCH")
+    authority.require_saved_classifications(
+        "SEMANTIC_MISMATCH", "SEMANTIC_MISMATCH", "EXPECTED_NONDETERMINISM"
+    )
+    with pytest.raises(ValueError, match="saved original classification differs"):
+        authority.require_saved_classifications(
+            "MATCH", "SEMANTIC_MISMATCH", "EXPECTED_NONDETERMINISM"
+        )
+    with pytest.raises(ValueError, match="saved repaired classification differs"):
+        authority.require_saved_classifications(
+            "SEMANTIC_MISMATCH", "SEMANTIC_MISMATCH", "MATCH"
+        )
+
+
 def test_missing_roots_refuse_without_output(tmp_path: Path) -> None:
     result = run_authority(tmp_path, tmp_path, tmp_path / "out.json")
     assert result.returncode == 2
@@ -68,6 +91,12 @@ def test_private_saved_pair_is_bound_and_comparison_is_preserved(
     assert summary["classification"] == "EXPECTED_NONDETERMINISM"
     assert summary["v1Classification"] == "SEMANTIC_MISMATCH"
     assert summary["productionExecuted"] is False
+    assert (
+        summary["bindings"]["productionSavedAuthorityKind"]
+        == "stream-saved-authority-v2"
+    )
+    assert summary["bindings"]["productionSavedAuthorityDigest"]
+    assert summary["bindings"]["localOuterProofDigest"]
     assert summary["rowCounts"] == {
         "observations": 15,
         "recoveryObservations": 10,

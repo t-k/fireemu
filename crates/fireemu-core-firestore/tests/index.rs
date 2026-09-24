@@ -382,12 +382,14 @@ fn exploratory_default_array_transaction_size_pairs() {
     let indexes = IndexSet::default();
 
     // Exploratory sandbox pair: 500-byte relative name, entry-count refusal.
+    assert!(matches!(
+        indexes.document_index_usage(&path(500), &fields(20_000)),
+        Err(fireemu_core_firestore::store::FirestoreError::InvalidArgument(message))
+            if message.starts_with("too many index entries for entity /")
+    ));
     assert!(indexes
         .document_index_usage(&path(500), &fields(19_999))
         .is_ok());
-    assert!(indexes
-        .document_index_usage(&path(500), &fields(20_000))
-        .is_err());
 
     // Exploratory sandbox pairs: transaction-size refusals.
     assert!(indexes

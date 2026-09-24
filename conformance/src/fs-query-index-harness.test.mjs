@@ -464,6 +464,21 @@ test("run-window instants are numbered per step; requested instants keep a progr
     anchors,
   );
   assert.deepEqual(later.body, [{ readTime: "<t1>" }]);
+  // The same instant spelled with a different number of fraction digits is the same symbol: a
+  // shifted request trims trailing zeros, the server answers with six digits.
+  const spelled = normalizeStep(
+    {
+      transport: "rest",
+      request: { readTime: "2026-09-24T00:00:07.12345Z" },
+      response: {
+        status: 200,
+        text: '[{"readTime":"2026-09-24T00:00:07.123450Z"},{"readTime":"2026-09-24T00:00:08.100Z"},{"readTime":"2026-09-24T00:00:08.1Z"}]',
+      },
+    },
+    ctx,
+    anchors,
+  );
+  assert.deepEqual(spelled.body, [{ readTime: "<r2>" }, { readTime: "<t1>" }, { readTime: "<t1>" }]);
   // Symbols are numbered in sorted key order, whatever order the server sent the keys in.
   const a = normalizeRestResponse(
     200,

@@ -521,10 +521,22 @@ export function normalizeIndexLink(text, ctx) {
  */
 export const stepSymbols = (anchors = new Map()) => ({ anchors, local: new Map() });
 
+/**
+ * The instant an RFC 3339 text names, as nanoseconds since the epoch, so spellings that differ
+ * only in fraction digits (`.1Z`, `.100Z`) share one symbol.
+ */
+function instantKey(text) {
+  const match = /^(.*T\d\d:\d\d:\d\d)(?:\.(\d{1,9}))?Z$/.exec(text);
+  if (!match) return text;
+  const seconds = BigInt(Date.parse(`${match[1]}Z`) / 1000);
+  return String(seconds * NANOS_PER_SECOND + BigInt((match[2] ?? "").padEnd(9, "0")));
+}
+
 function instantSymbol(text, symbols) {
-  if (symbols.anchors.has(text)) return symbols.anchors.get(text);
-  if (!symbols.local.has(text)) symbols.local.set(text, `<t${symbols.local.size + 1}>`);
-  return symbols.local.get(text);
+  const key = instantKey(text);
+  if (symbols.anchors.has(key)) return symbols.anchors.get(key);
+  if (!symbols.local.has(key)) symbols.local.set(key, `<t${symbols.local.size + 1}>`);
+  return symbols.local.get(key);
 }
 
 const EMBEDDED_INSTANT = /\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(\.\d+)?Z/g;
@@ -546,8 +558,8 @@ function normalizeString(text, ctx, symbols) {
  */
 export function registerRequestInstants(value, ctx, symbols) {
   if (typeof value === "string") {
-    if (inRunWindow(value, ctx) && !symbols.anchors.has(value))
-      symbols.anchors.set(value, `<r${symbols.anchors.size + 1}>`);
+    if (inRunWindow(value, ctx) && !symbols.anchors.has(instantKey(value)))
+      symbols.anchors.set(instantKey(value), `<r${symbols.anchors.size + 1}>`);
   } else if (Array.isArray(value)) value.forEach((v) => registerRequestInstants(v, ctx, symbols));
   else if (value && typeof value === "object") {
     for (const key of Object.keys(value).toSorted())

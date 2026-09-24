@@ -1,0 +1,204 @@
+{
+  "schemaVersion": 1,
+  "parent": "AUTH-ACTION",
+  "parentStatus": "IMPLEMENTING",
+  "oracleTrack": "disposable-sandbox",
+  "scopeDecisions": [
+    {
+      "id": "E1",
+      "decision": "Closure is defined by these behavioral acceptance conditions, observed through the REST surface (Identity Toolkit and Secure Token) on the disposable Identity Platform sandbox, as for AUTH-ACCOUNT and AUTH-CREDENTIAL. Every action code is generated through the Admin accounts:sendOobCode with returnOobLink, which returns the code and mails nothing; the client accounts:sendOobCode is observed only for a PASSWORD_RESET of an address that has no account. Mail delivery, templates, sender, localization and the mail a client request would send are not observed (as AUTH-ACCOUNT scope decision A5, the client and Admin SDK paths belong to AUTH-CONFIG-SDK).",
+      "decidedBy": "proposed; awaiting owner decision",
+      "decidedOn": "2026-09-24",
+      "movedTo": "AUTH-CONFIG-SDK"
+    },
+    {
+      "id": "E2",
+      "decision": "An action link is compared by its query parameters (mode, oobCode as the answer's own code, apiKey by presence, continueUrl, lang and any other). Where its handler lives is not compared: production links to the project's hosted action page and fireemu to its own /emulator/action handler, as the official emulator does, because a local link must reach the emulator. The hosted page's browser flow is out of scope.",
+      "decidedBy": "proposed; awaiting owner decision",
+      "decidedOn": "2026-09-24"
+    },
+    {
+      "id": "E3",
+      "decision": "Action codes are opaque credentials: their value and length are not compared. Production codes are 54-character base64url strings; fireemu's are its own identifiers.",
+      "decidedBy": "proposed; awaiting owner decision",
+      "decidedOn": "2026-09-24"
+    },
+    {
+      "id": "E4",
+      "decision": "Tenant-scoped action codes and links belong to AUTH-TENANT-BLOCKING, as AUTH-ACCOUNT scope decision A8; blocking functions (beforeSendEmail, beforeSignIn on an email-link sign-in) belong there too.",
+      "decidedBy": "proposed; awaiting owner decision",
+      "decidedOn": "2026-09-24",
+      "movedTo": "AUTH-TENANT-BLOCKING"
+    },
+    {
+      "id": "E5",
+      "decision": "Mobile link settings (iOSBundleId, androidPackageName, androidInstallApp, androidMinimumVersion, dynamicLinkDomain, linkDomain) belong to AUTH-CONFIG-SDK; this parent observes continueUrl and canHandleCodeInApp.",
+      "decidedBy": "proposed; awaiting owner decision",
+      "decidedOn": "2026-09-24",
+      "movedTo": "AUTH-CONFIG-SDK"
+    },
+    {
+      "id": "E6",
+      "decision": "Email-link sign-in is observed with signIn.email.passwordRequired switched off for the email-link programs only; the harness restores and reads it back after each program and checks the whole sign-in baseline at the start and end of a recording. The configured authorized domains of the sandbox (its two Firebase Hosting domains, without localhost) are required in production and given to fireemu through the same Admin config.",
+      "decidedBy": "proposed; awaiting owner decision",
+      "decidedOn": "2026-09-24"
+    },
+    {
+      "id": "E7",
+      "decision": "Any HTTP 429 or quota refusal in this corpus is classified INDETERMINATE; quotas belong to AUTH-CONFIG-SDK, as AUTH-ACCOUNT scope decision A7.",
+      "decidedBy": "proposed; awaiting owner decision",
+      "decidedOn": "2026-09-24",
+      "movedTo": "AUTH-CONFIG-SDK"
+    },
+    {
+      "id": "E8",
+      "decision": "The ID-token claims and refresh of an email-link session are required conditions here (AUTH-CREDENTIAL scope decision C7); token refusals after a password reset or an email change are counted here.",
+      "decidedBy": "proposed; awaiting owner decision",
+      "decidedOn": "2026-09-24"
+    },
+    {
+      "id": "E9",
+      "decision": "The final-artifact regression re-runs the AUTH-ACCOUNT and AUTH-CREDENTIAL corpora and inherits their one documented divergence: AUTH-ACCOUNT scope decision A12, the gson parser message text for malformed customAttributes JSON.",
+      "decidedBy": "proposed; awaiting owner decision",
+      "decidedOn": "2026-09-24"
+    }
+  ],
+  "conditions": [
+    {
+      "conditionId": "AUTH-ACTION/admin-link-generation",
+      "source": "docs/compatibility/ip-fs-production-compatibility.md#feature-group-status",
+      "recipeIds": [
+        "auth-action/generate/admin"
+      ],
+      "configProjections": [
+        "default"
+      ],
+      "status": "PENDING_CORPUS",
+      "note": "Admin sendOobCode with returnOobLink for every request type: answer members, link parameters, continueUrl on authorized, unauthorized, malformed and empty values, canHandleCodeInApp, unknown, disabled and mixed-case addresses, missing and unknown request types, missing and invalid addresses, the new address of an email change (missing, taken, the same, invalid), email-link generation while password sign-in is required, and codes selected by an ID token instead of an address."
+    },
+    {
+      "conditionId": "AUTH-ACTION/client-send-boundary",
+      "source": "docs/compatibility/ip-fs-production-compatibility.md#feature-group-status",
+      "recipeIds": [
+        "auth-action/generate/client"
+      ],
+      "configProjections": [
+        "default"
+      ],
+      "status": "PENDING_CORPUS",
+      "note": "The client sendOobCode for an address that has no account (improved email privacy on): the plain request, returnOobLink on the client route, continueUrl checks and a missing API key."
+    },
+    {
+      "conditionId": "AUTH-ACTION/password-reset",
+      "source": "docs/compatibility/ip-fs-production-compatibility.md#feature-group-status",
+      "recipeIds": [
+        "auth-action/password-reset"
+      ],
+      "configProjections": [
+        "default"
+      ],
+      "status": "PENDING_CORPUS",
+      "note": "Password reset codes: inspection without use, weak and empty passwords, missing, unknown and truncated codes, use and reuse, a newer code retiring an older one, sign-in with the old and new password, tokens issued before the reset, the account after the reset, and codes issued before an Admin or client password change, an email change, a disable (and re-enable) and a deletion; a verification code offered as a reset code."
+    },
+    {
+      "conditionId": "AUTH-ACTION/verify-email",
+      "source": "docs/compatibility/ip-fs-production-compatibility.md#feature-group-status",
+      "recipeIds": [
+        "auth-action/verify-email"
+      ],
+      "configProjections": [
+        "default"
+      ],
+      "status": "PENDING_CORPUS",
+      "note": "Email verification codes: inspection, apply and reapply, a newer code and the older one, tokens and refresh after verification, unknown and truncated codes, an already verified address, codes issued before an email change, a disable and a deletion, and a reset code applied as a verification."
+    },
+    {
+      "conditionId": "AUTH-ACTION/verify-and-change-email",
+      "source": "docs/compatibility/ip-fs-production-compatibility.md#feature-group-status",
+      "recipeIds": [
+        "auth-action/change-email"
+      ],
+      "configProjections": [
+        "default"
+      ],
+      "status": "PENDING_CORPUS",
+      "note": "VERIFY_AND_CHANGE_EMAIL codes: inspection, a newer code and the older one, apply and reapply, sign-in by the old and new addresses, tokens and refresh issued before the change, the new address taken before use, the account's address changed, disabled or deleted before use, a change code offered as a reset code, and a verification code of the old address applied after the change."
+    },
+    {
+      "conditionId": "AUTH-ACTION/email-link-sign-in",
+      "source": "docs/compatibility/ip-fs-production-compatibility.md#feature-group-status",
+      "recipeIds": [
+        "auth-action/email-link/sign-in"
+      ],
+      "configProjections": [
+        "default"
+      ],
+      "status": "PENDING_CORPUS",
+      "note": "Email-link sign-in: generation (continueUrl and canHandleCodeInApp), inspection, a mismatched, missing or mixed-case address, missing and unknown codes, a new and an existing account, reuse, a newer link and the older one, disabled and deleted accounts, linking the address to an anonymous session, to a session whose address differs, and an address another account owns, codes of the other types on the email-link route and the email-link code on the other routes, and a password reset of an account that only ever signed in by link."
+    },
+    {
+      "conditionId": "AUTH-ACTION/email-link-session-claims",
+      "source": "docs/compatibility/ip-fs-production-compatibility.md#feature-group-status",
+      "recipeIds": [
+        "auth-action/email-link/session"
+      ],
+      "configProjections": [
+        "default"
+      ],
+      "status": "PENDING_CORPUS",
+      "note": "The ID token of an email-link sign-in (new account, existing password account, anonymous session linked by link): header and claims including firebase.sign_in_provider and identities, the refresh of that session, a lookup, and a session cookie made from it (AUTH-CREDENTIAL scope decision C7)."
+    },
+    {
+      "conditionId": "AUTH-ACTION/legacy-token-actions",
+      "source": "docs/compatibility/ip-fs-production-compatibility.md#feature-group-status",
+      "recipeIds": [
+        "auth-action/legacy-token"
+      ],
+      "configProjections": [
+        "default"
+      ],
+      "status": "PENDING_CORPUS",
+      "note": "Legacy ID tokens (a password sign-in without returnSecureToken) selecting a VERIFY_EMAIL or VERIFY_AND_CHANGE_EMAIL code and linking an email-link address; AUTH-CREDENTIAL left these inferred."
+    },
+    {
+      "conditionId": "AUTH-ACTION/code-ownership",
+      "source": "docs/compatibility/ip-fs-production-compatibility.md#feature-group-status",
+      "recipeIds": [
+        "auth-action/ownership"
+      ],
+      "configProjections": [
+        "default"
+      ],
+      "status": "PENDING_CORPUS",
+      "note": "Whose code it is: a verification or change code of one account applied with another account's ID token or a garbage token, and a reset code checked and used while naming another account's address."
+    },
+    {
+      "conditionId": "AUTH-ACTION/final-artifact-regression",
+      "source": "docs/compatibility/ip-fs-production-compatibility.md#feature-group-status",
+      "recipeIds": [
+        "auth-action",
+        "auth-credential",
+        "auth-account",
+        "cargo:fireemu-core-auth+fireemu-adapter-http+fireemu"
+      ],
+      "configProjections": [
+        "default"
+      ],
+      "status": "PENDING_CORPUS",
+      "note": "Every AUTH-ACTION, AUTH-CREDENTIAL and AUTH-ACCOUNT row compared on one final artifact, with the Rust workspace tests of that source."
+    },
+    {
+      "conditionId": "AUTH-ACTION/closure-review",
+      "source": "docs/compatibility/ip-fs-production-compatibility.md#feature-group-status",
+      "recipeIds": [
+        "AUTH-ACTION",
+        "auth-action"
+      ],
+      "configProjections": [
+        "default"
+      ],
+      "status": "PENDING_CORPUS",
+      "note": "Independent clean-context closure and security review of the final artifact and evidence."
+    }
+  ]
+}

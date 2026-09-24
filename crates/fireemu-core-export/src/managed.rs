@@ -202,7 +202,6 @@ fn partition_metadata(
     start_micros: u64,
     end_micros: u64,
     documents: &[&ExportDocument],
-    output: &[u8],
 ) -> Vec<u8> {
     let mut w = Writer::new();
     w.write_message(1, |h| {
@@ -223,21 +222,11 @@ fn partition_metadata(
                 observed.write(schema);
             }
         });
-        o.write_varint(5, u64::from(checksum(output)));
+        // Production's partition checksum is a digest fireemu cannot reproduce; production
+        // verifies only a nonzero one on import (2026-09-24) and writes 0 for an empty output.
+        o.write_varint(5, 0);
     });
     w.finish()
-}
-
-/// A digest of the output file the partition names. Production's own value is not
-/// reproducible; this one is deterministic and zero for an empty output, as production's is.
-fn checksum(output: &[u8]) -> u32 {
-    if output.is_empty() {
-        return 0;
-    }
-    let mut digest = fireemu_core_types::hash::Sha256::new();
-    digest.update(output);
-    let bytes = digest.finalize();
-    u32::from_be_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]) & 0x7fff_ffff
 }
 
 fn overall_entry(partition: &Partition, documents: u64, bytes: u64) -> Vec<u8> {
@@ -313,7 +302,6 @@ pub fn write_managed_export(
                 start_micros,
                 end_micros,
                 &selected,
-                &output,
             ),
         ));
         files.push((format!("{}/{output_name}", partition.directory()), output));
@@ -518,6 +506,23 @@ mod tests {
         assert_eq!(overall[0].partition, Partition::Kind("items".into()));
         let entities = read_managed_output(&export.files[2].1).unwrap();
         assert_eq!(entities[0].database, "(default)");
+    }
+
+    #[test]
+    fn a_partition_carries_a_zero_checksum_which_production_does_not_verify() {
+        // Production (2026-09-24) imports an export whose partition checksum (2.5) is 0 or
+        // absent and refuses one whose nonzero value does not match its own digest.
+        let documents = vec![document(&[("items", "a")], &[("i", Value::Integer(1))])];
+        let export = write_managed_export("all", "d", &[], &[], (1, 2), &documents).unwrap();
+        let metadata = &export
+            .files
+            .iter()
+            .find(|(n, _)| n.ends_with(".export_metadata"))
+            .unwrap()
+            .1;
+        // Field 2 (the output), then within it field 5 as the varint 0: tag 0x28, value 0x00.
+        let tail = &metadata[metadata.len() - 2..];
+        assert_eq!(tail, [0x28, 0x00]);
     }
 
     #[test]

@@ -469,7 +469,7 @@ async fn rest_call(
     let body = if bytes.is_empty() {
         serde_json::Value::Object(serde_json::Map::new())
     } else {
-        match serde_json::from_slice(&bytes) {
+        match crate::rest::transcode::parse_body(&bytes) {
             Ok(v) => v,
             Err(e) => {
                 // Production's transcoder refuses in its own words, inside the result array

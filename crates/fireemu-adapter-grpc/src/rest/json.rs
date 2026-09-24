@@ -1085,18 +1085,17 @@ fn field_reference(v: Option<&Value>) -> Result<Option<sq::FieldReference>, Json
 
 fn field_operator(value: Option<&Value>) -> Result<i32, JsonError> {
     use sq::field_filter::Operator as O;
-    let value = value.ok_or_else(|| JsonError("fieldFilter.op is required".into()))?;
+    // An absent operator is the proto default. An unknown enum number passes through as it
+    // does on the wire: the query decoder refuses both as production does.
+    let Some(value) = value else {
+        return Ok(O::Unspecified as i32);
+    };
     let operator = match value {
-        Value::String(name) => O::from_str_name(name),
-        Value::Number(number) => number
-            .as_i64()
-            .and_then(|number| i32::try_from(number).ok())
-            .and_then(|number| O::try_from(number).ok()),
+        Value::String(name) => O::from_str_name(name).map(|operator| operator as i32),
+        Value::Number(number) => number.as_i64().and_then(|number| i32::try_from(number).ok()),
         _ => return err("fieldFilter.op must be a string or enum number"),
     };
-    operator
-        .map(|operator| operator as i32)
-        .ok_or_else(|| JsonError("unknown field filter operator".into()))
+    operator.ok_or_else(|| JsonError("unknown field filter operator".into()))
 }
 
 fn unary_operator(value: Option<&Value>) -> Result<i32, JsonError> {

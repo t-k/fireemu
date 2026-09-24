@@ -1095,6 +1095,8 @@ fn firebase_policy_index_merge_stops_at_ordering_arrays_and_inequalities() {
         ),
         IndexDecision::MissingRequired { .. }
     ));
+    // An array-contains joins the merge through its automatic contains index (FS-QUERY-INDEX
+    // index-selection/automatic-and-merge#equality-and-array-contains-merge).
     assert!(matches!(
         decide(
             &tasks().with_filter(FilterExpr::And(vec![
@@ -1108,7 +1110,7 @@ fn firebase_policy_index_merge_stops_at_ordering_arrays_and_inequalities() {
             &IndexSet::default(),
             standard(),
         ),
-        IndexDecision::MissingRequired { .. }
+        IndexDecision::MergeIndexes { .. }
     ));
     assert!(matches!(
         decide(
@@ -1258,7 +1260,9 @@ fn collection_group_scope_is_not_ignored() {
 }
 
 #[test]
-fn collection_group_index_does_not_serve_collection_query() {
+fn collection_group_index_serves_a_collection_query() {
+    // Production serves a collection query from a collection-group composite (FS-QUERY-INDEX
+    // index-selection/scopes-and-exemptions#group-scope-composite-for-collection).
     let q = tasks().with_filter(FilterExpr::And(vec![
         field("done", FieldOp::Equal, Value::Boolean(false)),
         field("owner", FieldOp::Equal, Value::String("u".to_owned())),
@@ -1274,7 +1278,7 @@ fn collection_group_index_does_not_serve_collection_query() {
 
     assert!(matches!(
         decide(&q, &group, standard()),
-        IndexDecision::MissingRequired { .. }
+        IndexDecision::UseIndex { .. }
     ));
 }
 
@@ -1288,7 +1292,11 @@ fn array_mode_is_not_ignored() {
         ),
         field("owner", FieldOp::Equal, Value::String("u".to_owned())),
     ]));
+    // Without the automatic single-field indexes (which production would merge), only a
+    // composite serves, and only one whose array field is CONTAINS.
+    let tasks_id = CollectionId::try_new("tasks").unwrap();
     let mut asc = IndexSet::default();
+    asc.set_default_single_field_indexes(&tasks_id, vec![]);
     asc.add_composite(composite(&[
         ("owner", IndexFieldMode::Ascending),
         ("tags", IndexFieldMode::Ascending),
@@ -1298,6 +1306,7 @@ fn array_mode_is_not_ignored() {
         IndexDecision::MissingRequired { .. }
     ));
     let mut contains = IndexSet::default();
+    contains.set_default_single_field_indexes(&tasks_id, vec![]);
     contains.add_composite(composite(&[
         ("owner", IndexFieldMode::Ascending),
         ("tags", IndexFieldMode::Contains),

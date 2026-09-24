@@ -4811,7 +4811,7 @@ impl LocalBackend {
         execution: Option<QueryExecutionContext>,
         selection: Option<Arc<QuerySelection>>,
     ) -> Result<AuthorizedQueryPage, Status> {
-        let parent = parse_parent(&req.parent).map_err(status)?;
+        let parent = crate::query_messages::parse_query_parent(&req.parent).map_err(status)?;
         self.fault(parent.project.as_str(), "firestore.read")?;
         let Some(pb::run_query_request::QueryType::StructuredQuery(sq)) = &req.query_type else {
             return Err(Status::invalid_argument(
@@ -5006,7 +5006,7 @@ impl LocalBackend {
         req: &pb::RunAggregationQueryRequest,
         guard: ReadGuard<'_>,
     ) -> Result<(pb::RunAggregationQueryResponse, QueryStats), Status> {
-        let parent = parse_parent(&req.parent).map_err(status)?;
+        let parent = crate::query_messages::parse_query_parent(&req.parent).map_err(status)?;
         self.fault(parent.project.as_str(), "firestore.read")?;
         let Some(pb::run_aggregation_query_request::QueryType::StructuredAggregationQuery(saq)) =
             &req.query_type

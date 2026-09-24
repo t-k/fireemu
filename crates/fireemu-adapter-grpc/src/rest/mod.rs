@@ -1525,6 +1525,11 @@ impl RestState {
             ));
         };
         let aggregation = aggregation_query_from_json(saq).map_err(|e| bad(&e))?;
+        if let Some(pb::structured_aggregation_query::QueryType::StructuredQuery(query)) =
+            &aggregation.query_type
+        {
+            crate::query_messages::check_find_nearest_request(query)?;
+        }
         let explain_options =
             explain_options_from_json(body.get("explainOptions")).map_err(|e| bad(&e))?;
         // Production aggregates an absent query as the empty one: every document under the

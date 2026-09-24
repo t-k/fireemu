@@ -26,6 +26,17 @@
           "7c794af67119e745072ceae3d742bd463df28c0aa804998c2155b1333b1625d9",
           "7c794af67119e745072ceae3d742bd463df28c0aa804998c2155b1333b1625d9"
         ],
+        "finalArtifactSha256": "242248dd5d1119c1ef72724efda21f19caf1411b344a884106ff4258e5cfb15e",
+        "comparisonPath": "spec/compatibility/broad-runs/fs-batch-malformed-middle-8a0f205-current-comparison.json",
+        "comparisonSha256": "b53a0b912cd4275c3b913f47d1e5180765ca9a26f09b9d8901bc562cf77aeb6a",
+        "sourceCommit": "8a0f20599bab98bb094a74e00d6b2df9f6cd60e8",
+        "sourceBindingSha256": "73b823461ad2933db06acd5fd9d5bf6f933ba4fb713e63042ab27a21b5d3f15a"
+      },
+      "historicalEvidence": {
+        "productionRecordings": [
+          "7c794af67119e745072ceae3d742bd463df28c0aa804998c2155b1333b1625d9",
+          "7c794af67119e745072ceae3d742bd463df28c0aa804998c2155b1333b1625d9"
+        ],
         "finalArtifactSha256": "d6db62596e71c152883dc5b83bf8dc48b79b703777d49bab10874c1fae6dfc6d",
         "comparisonPath": "spec/compatibility/broad-runs/fs-batch-malformed-middle-3d7ceabb8-saved-comparison.json"
       }

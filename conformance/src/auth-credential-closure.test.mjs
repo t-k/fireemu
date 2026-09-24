@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { test } from "node:test";
@@ -60,6 +61,35 @@ const load = () => JSON.parse(readFileSync(closurePath, "utf8"));
 const readJson = (path) =>
   JSON.parse(readFileSync(fileURLToPath(new URL(`../../${path}`, import.meta.url)), "utf8"));
 
+// A comparison is evidence only for the committed fixture it names and only when it covers every
+// recorded row of that fixture: a re-recorded fixture or a dropped row breaks the binding.
+const FIXTURES = {
+  "auth-credential-comparison-v1": "conformance/auth-credential-production.json",
+  "auth-account-comparison-v1": "conformance/auth-account-production.json",
+};
+
+function assertBoundToFixture(comparison, label) {
+  const fixturePath = FIXTURES[comparison.kind];
+  assert.ok(fixturePath, `${label}: unknown comparison kind ${comparison.kind}`);
+  const text = readFileSync(
+    fileURLToPath(new URL(`../../${fixturePath}`, import.meta.url)),
+    "utf8",
+  );
+  assert.equal(
+    comparison.fixtureSha256,
+    createHash("sha256").update(text).digest("hex"),
+    `${label}: the comparison was made against the committed ${fixturePath}`,
+  );
+  const recorded = Object.entries(JSON.parse(text).programs).flatMap(([program, { steps }]) =>
+    Object.keys(steps).map((step) => `${program}#${step}`),
+  );
+  assert.deepEqual(
+    comparison.rows.map(({ row }) => row).toSorted(),
+    recorded.toSorted(),
+    `${label}: the comparison covers exactly the recorded rows of ${fixturePath}`,
+  );
+}
+
 test("AUTH-CREDENTIAL closure inventory cannot silently omit a declared condition", () => {
   const closure = load();
   assert.equal(closure.parent, "AUTH-CREDENTIAL");
@@ -87,6 +117,7 @@ test("AUTH-CREDENTIAL closure inventory cannot silently omit a declared conditio
     assert.ok(comparisons.length > 0, `${label}: names its comparisons`);
     for (const comparison of comparisons) {
       assert.equal(comparison.artifactSha256, condition.evidence.finalArtifactSha256, label);
+      assertBoundToFixture(comparison, label);
     }
     const covered = (row) => {
       const programId = row.split("#")[0];

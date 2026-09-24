@@ -6976,7 +6976,10 @@ fn sign_in_with_custom_token(
     }
     store.record_sign_in(&uid, at);
     if legacy_tokens && wants_legacy_token(store, body) {
-        let id_token = legacy_sign_in_token(store, &uid, at, "custom", Some(&extra));
+        let id_token = match legacy_sign_in_token(store, &uid, at, "custom", Some(&extra)) {
+            Ok(token) => token,
+            Err(r) => return r,
+        };
         return JsonResponse {
             status: 200,
             body: json!({
@@ -7048,26 +7051,21 @@ fn wants_legacy_token(store: &AuthStore, body: &Value) -> bool {
 /// A legacy Identity Toolkit token for `uid`, in the unsigned internal form the response
 /// signer replaces. It opens no refresh session.
 fn legacy_sign_in_token(
-    store: &AuthStore,
+    store: &mut AuthStore,
     uid: &LocalId,
     at: LogicalInstant,
     sign_in_provider: &str,
     developer_claims: Option<&CustomClaims>,
-) -> String {
-    let user = store.user(uid);
-    let email = user.and_then(|u| u.email.as_deref().map(|email| (email, u.email_verified)));
+) -> Result<String, JsonResponse> {
     let iat = i64::try_from(at.as_nanos().div_euclid(1_000_000_000)).unwrap_or(i64::MAX);
-    let payload = fireemu_core_auth::jwt::legacy_token_payload(
-        store.project_id(),
-        iat,
-        &fireemu_core_auth::jwt::LegacyToken {
-            uid: uid.as_str(),
-            sign_in_provider,
-            email,
-            extra_claims: developer_claims.map(CustomClaims::entries_map),
-        },
-    );
-    fireemu_core_auth::jwt::encode_payload_shaped(&payload, None, HeaderShape::Untyped)
+    let payload = store
+        .legacy_token_payload(uid, iat, sign_in_provider, developer_claims)
+        .map_err(|e| auth_error(&e))?;
+    Ok(fireemu_core_auth::jwt::encode_payload_shaped(
+        &payload,
+        None,
+        HeaderShape::Untyped,
+    ))
 }
 
 fn password_policy_notification(code: ViolationCode, policy: &PasswordPolicy) -> Value {
@@ -7149,10 +7147,14 @@ fn sign_in_with_password(
         ));
     }
     if legacy_tokens && wants_legacy_token(store, body) && mfa_info(store, &uid, true).is_empty() {
+        let id_token = match legacy_sign_in_token(store, &uid, at, "password", None) {
+            Ok(token) => token,
+            Err(r) => return r,
+        };
         let mut response = json!({
             "localId": uid.as_str(),
             "email": store.user(&uid).and_then(|u| u.email.clone()),
-            "idToken": legacy_sign_in_token(store, &uid, at, "password", None),
+            "idToken": id_token,
         });
         for (key, value) in extra {
             response[key] = value;

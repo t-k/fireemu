@@ -1606,6 +1606,42 @@ fn custom_token_empty_and_numeric_uid_answers() {
     }
 }
 
+/// The emulator profile never issues legacy tokens, so it keeps refusing a token that claims
+/// the legacy issuer (closure review S3).
+#[test]
+fn the_emulator_profile_refuses_a_forged_legacy_token() {
+    let s = state();
+    let (status, account) = post(
+        &s,
+        &format!("{V1}/accounts:signUp"),
+        &json!({"email": "forged-legacy@example.com", "password": "hunter22"}),
+    );
+    assert_eq!(status, 200, "{account}");
+    let now = 1_788_004_860;
+    let forged = fireemu_core_auth::jwt::encode_payload_shaped(
+        &json!({
+            "iss": "https://identitytoolkit.google.com/",
+            "aud": "demo-app",
+            "iat": now,
+            "exp": now + 1_209_600,
+            "user_id": account["localId"],
+            "sign_in_provider": "password",
+        })
+        .to_string(),
+        None,
+        fireemu_core_auth::jwt::HeaderShape::Untyped,
+    );
+    let (status, refused) = post(
+        &s,
+        &format!("{V1}/accounts:lookup"),
+        &json!({"idToken": forged}),
+    );
+    assert_eq!(
+        (status, refused["error"]["message"].clone()),
+        (400, json!("INVALID_ID_TOKEN"))
+    );
+}
+
 #[test]
 fn anonymous_id_tokens_carry_a_top_level_provider_id() {
     let s = strict_state();

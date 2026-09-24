@@ -42,6 +42,7 @@ fn legacy_payloads_carry_the_provider_at_the_top_level_and_no_session_claims() {
             sign_in_provider: "password",
             email: Some(("a@example.com", false)),
             extra_claims: None,
+            session_epoch: None,
         },
     );
     assert_eq!(
@@ -58,6 +59,7 @@ fn legacy_payloads_carry_the_provider_at_the_top_level_and_no_session_claims() {
             sign_in_provider: "custom",
             email: None,
             extra_claims: Some(&claims),
+            session_epoch: None,
         },
     );
     assert_eq!(
@@ -73,6 +75,7 @@ fn legacy_payloads_carry_the_provider_at_the_top_level_and_no_session_claims() {
             sign_in_provider: "custom",
             email: None,
             extra_claims: Some(&empty),
+            session_epoch: None,
         },
     );
     assert!(!without.contains("extra_claims"), "{without}");
@@ -87,10 +90,33 @@ fn legacy(project: &str, issuer: &str, uid: &str, iat: i64) -> String {
             sign_in_provider: "password",
             email: None,
             extra_claims: None,
+            session_epoch: None,
         },
     )
     .replace(LEGACY_TOKEN_ISSUER, issuer);
     encode_payload_shaped(&payload, None, HeaderShape::Untyped)
+}
+
+/// Only a store that issued a legacy token honours one, so the emulator profile, which never
+/// issues them, keeps refusing a forged one (closure review S3).
+#[test]
+fn a_store_honours_legacy_tokens_only_once_it_issued_one() {
+    let mut s = store();
+    let uid = s
+        .create_user(NewUser::email("e@example.com"), at(T0))
+        .unwrap();
+    let token = legacy("demo-app", LEGACY_TOKEN_ISSUER, uid.as_str(), T0);
+    assert!(matches!(
+        verify_legacy_token(&token, &s, at(T0), 0),
+        Err(JwtError::WrongIssuer { .. })
+    ));
+    let payload = s.legacy_token_payload(&uid, T0, "password", None).unwrap();
+    assert!(
+        payload.contains(r#""iss":"https://identitytoolkit.google.com/""#),
+        "{payload}"
+    );
+    assert!(payload.contains(r#""email":"e@example.com""#), "{payload}");
+    assert!(verify_legacy_token(&token, &s, at(T0), 0).is_ok());
 }
 
 #[test]
@@ -99,6 +125,7 @@ fn legacy_tokens_verify_their_issuer_audience_lifetime_account_and_revocation() 
     let uid = s
         .create_user(NewUser::email("a@example.com"), at(T0))
         .unwrap();
+    s.legacy_token_payload(&uid, T0, "password", None).unwrap();
     let token = legacy("demo-app", LEGACY_TOKEN_ISSUER, uid.as_str(), T0);
     let verified = verify_legacy_token(&token, &s, at(T0), 0).unwrap().0;
     assert_eq!(verified.uid, uid.as_str());

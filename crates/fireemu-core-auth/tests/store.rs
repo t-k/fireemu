@@ -1188,3 +1188,27 @@ fn long_lived_codes_make_room_at_the_cap_only_past_the_observed_lower_bound() {
     assert!(s.oob_code(&fresh).is_some());
     assert_eq!(s.oob_codes().len(), MAX_OUTSTANDING_CODES);
 }
+
+#[test]
+fn below_the_cap_no_long_lived_code_is_evicted() {
+    let mut s = store();
+    s.set_production_oob_lifetimes(true);
+    let old = s
+        .create_oob_code(
+            OobRequestType::VerifyEmail,
+            "a@example.com",
+            None,
+            None,
+            t0(),
+        )
+        .unwrap();
+    s.create_oob_code(
+        OobRequestType::VerifyEmail,
+        "b@example.com",
+        None,
+        None,
+        t(fireemu_core_auth::store::OBSERVED_LONG_OOB_CODE_SECONDS + 100),
+    )
+    .unwrap();
+    assert!(s.oob_code(&old).is_some());
+}

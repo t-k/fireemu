@@ -10386,8 +10386,12 @@ fn emulator_action(
             OobRequestType::VerifyEmail,
             continue_url,
             at,
-            ("verify your email", "Try verifying your email again."),
-            |email| json!({"success": "The email has been successfully verified.", "email": email}),
+            ApplyPage {
+                strict: !stateless_refresh_tokens,
+                what: "verify your email",
+                retry: "Try verifying your email again.",
+                success: |email| json!({"success": "The email has been successfully verified.", "email": email}),
+            },
         ),
         Some("verifyAndChangeEmail") => action_apply(
             store,
@@ -10395,8 +10399,12 @@ fn emulator_action(
             OobRequestType::VerifyAndChangeEmail,
             continue_url,
             at,
-            ("change your email", "Try changing your email again."),
-            |email| json!({"success": "The email has been successfully changed.", "newEmail": email}),
+            ApplyPage {
+                strict: !stateless_refresh_tokens,
+                what: "change your email",
+                retry: "Try changing your email again.",
+                success: |email| json!({"success": "The email has been successfully changed.", "newEmail": email}),
+            },
         ),
         Some("signIn") => {
             if live_oob_code(store, code, at)
@@ -10480,6 +10488,15 @@ fn action_reset_password(
     }
 }
 
+/// How the action page applies one kind of code: under which profile's rules, and the words
+/// of its refusal and of its success answer.
+struct ApplyPage<'a, F: FnOnce(&Value) -> Value> {
+    strict: bool,
+    what: &'a str,
+    retry: &'a str,
+    success: F,
+}
+
 /// `mode=verifyEmail` and `mode=verifyAndChangeEmail`: `applyActionCode`, with
 /// `INVALID_OOB_CODE` mapped to the official wording and every other API error passed
 /// through unchanged, as the official handler does.
@@ -10489,17 +10506,24 @@ fn action_apply(
     expected: OobRequestType,
     continue_url: Option<&str>,
     at: LogicalInstant,
-    (what, retry): (&str, &str),
-    success: impl FnOnce(&Value) -> Value,
+    page: ApplyPage<'_, impl FnOnce(&Value) -> Value>,
 ) -> JsonResponse {
+    let ApplyPage {
+        strict,
+        what,
+        retry,
+        success,
+    } = page;
     if live_oob_code(store, code, at)
         .ok()
         .is_none_or(|entry| entry.request_type != expected)
     {
         return action_expired(what, retry);
     }
-    // The emulator's own action page keeps its answers in either profile.
-    let response = apply_oob_code(store, code, at, false);
+    // The page applies the code as `accounts:update` does, so strict follows the same
+    // production rules on both routes (sessions revoked, `initialEmail` recorded, the replaced
+    // address's verification codes void); only the page's own wording differs.
+    let response = apply_oob_code(store, code, at, strict);
     if response.status != 200 {
         return if response.body["error"]["message"].as_str() == Some("INVALID_OOB_CODE") {
             action_expired(what, retry)

@@ -1325,6 +1325,24 @@ impl CredentialNotice {
     }
 }
 
+/// A source of unpredictable bytes for bearer credentials: it fills the buffer and answers
+/// whether it could. The daemon installs the operating system CSPRNG
+/// (`fireemu-adapter-support::entropy`); the core itself never touches the operating system.
+pub type CredentialEntropy = fn(&mut [u8]) -> bool;
+
+static CREDENTIAL_ENTROPY: std::sync::OnceLock<CredentialEntropy> = std::sync::OnceLock::new();
+
+/// Installs the process-wide credential entropy, once; answers whether this call installed it.
+///
+/// Action codes, verification sessions, phone proofs, MFA sessions and pending credentials,
+/// refresh tokens and TOTP secrets then draw from it instead of the seeded stream, which a
+/// client could otherwise invert from one value it was given (the seeded stream's output
+/// function is a bijection). Their shapes do not change. Identifiers that are not secrets
+/// (account and factor ids, salts) keep the seeded stream, so a seed still reproduces them.
+pub fn install_credential_entropy(source: CredentialEntropy) -> bool {
+    CREDENTIAL_ENTROPY.set(source).is_ok()
+}
+
 /// Email action codes expire after an hour of virtual time.
 pub const OOB_CODE_TTL_SECONDS: i64 = 3_600;
 /// Under production lifetimes, a verification, email-change or sign-in code outlives the hour
@@ -1656,11 +1674,29 @@ impl AuthStore {
         self.local_id_for_email.remove(&email);
     }
 
+    /// 64 bits for a bearer credential: the installed credential entropy, or the seeded stream
+    /// when none is installed (unit tests and embedded stores). A source that is installed but
+    /// fails stops the request rather than falling back to a predictable value.
+    fn secret_u64(&mut self) -> u64 {
+        match CREDENTIAL_ENTROPY.get() {
+            Some(source) => {
+                let mut bytes = [0_u8; 8];
+                assert!(
+                    source(&mut bytes),
+                    "the operating system random number generator is unavailable"
+                );
+                u64::from_be_bytes(bytes)
+            }
+            None => self.rng.next_u64(),
+        }
+    }
+
+    /// A bearer credential of the shape `{prefix}{16 hex digits}{4 decimal digits}`.
     fn next_id(&mut self, prefix: &str) -> String {
         self.counter += 1;
         format!(
             "{prefix}{:016x}{:04}",
-            self.rng.next_u64(),
+            self.secret_u64(),
             self.counter % 10_000
         )
     }
@@ -1702,7 +1738,7 @@ impl AuthStore {
     fn random_secret(&mut self) -> TotpSecret {
         let mut bytes = Vec::with_capacity(20);
         for _ in 0..3 {
-            bytes.extend_from_slice(&self.rng.next_u64().to_be_bytes());
+            bytes.extend_from_slice(&self.secret_u64().to_be_bytes());
         }
         bytes.truncate(20);
         TotpSecret::new(bytes)
@@ -3234,7 +3270,7 @@ impl AuthStore {
         }
         let session_info = self.next_id("sms-");
         // A test number always takes its configured code (sandbox recording 2026-09-23).
-        let random = self.rng.next_u64() % 1_000_000;
+        let random = self.secret_u64() % 1_000_000;
         let code = self
             .sign_in
             .test_phone_numbers
@@ -3265,7 +3301,7 @@ impl AuthStore {
         if self.temporary_proofs.len() >= MAX_OUTSTANDING_CODES {
             return Err(AuthError::TooManyOutstandingCodes);
         }
-        let proof = format!("{}{:016x}", self.next_id("proof-"), self.rng.next_u64());
+        let proof = format!("{}{:016x}", self.next_id("proof-"), self.secret_u64());
         self.temporary_proofs
             .insert(proof.clone(), (phone.to_owned(), now));
         Ok(proof)

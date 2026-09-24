@@ -215,6 +215,14 @@ export function sandboxManagedClearNames(corpus) {
   return names;
 }
 
+export async function withSandboxExclusiveLock(privateDir, work) {
+  const lockPath = join(privateDir, "fs-data-write-exclusive.lock");
+  await mkdir(lockPath, { mode: 0o700 });
+  const result = await work();
+  await rmdir(lockPath);
+  return result;
+}
+
 export function productionRestEnvironment({ input, output, meta, token, managedNames, journal }) {
   if (
     ![input, output, meta, token, journal].every(
@@ -389,12 +397,8 @@ async function recordProduction() {
   const restIn = join(generatedDir, "rest-programs.json");
   await writeFile(corpusIn, JSON.stringify(corpus));
   await writeFile(restIn, JSON.stringify(corpus.restPrograms));
-  // The lock spans both recordings and any managed-delete LRO. A failed/nonterminal
-  // operation deliberately retains it for reviewed recovery before another writer runs.
-  const lockPath = join(privateDir, "fs-data-write-exclusive.lock");
-  await mkdir(lockPath, { mode: 0o700 });
-  let releaseLock = false;
-  try {
+  // The lock spans both recordings and any managed-delete LRO. Failed work retains it.
+  await withSandboxExclusiveLock(privateDir, async () => {
     const first = await productionRecording({
       corpusIn,
       restIn,
@@ -451,10 +455,7 @@ async function recordProduction() {
     process.stdout.write(
       `${JSON.stringify({ output, firstRunDir: first.runDir, secondRunDir: second.runDir, requestCount: first.requestCount + second.requestCount, corpusDigest })}\n`,
     );
-    releaseLock = true;
-  } finally {
-    if (releaseLock) await rmdir(lockPath);
-  }
+  });
 }
 
 async function localChild() {

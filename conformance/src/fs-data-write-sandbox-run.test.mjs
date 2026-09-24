@@ -1,5 +1,8 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
+import { mkdtemp, rm, stat } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { test } from "node:test";
 
 import {
@@ -12,6 +15,7 @@ import {
   remainingSandboxBudget,
   selectComparableSandboxRecipes,
   sessionRequestCount,
+  withSandboxExclusiveLock,
   sandboxLedgerEntry,
   sandboxLedgerPath,
   sandboxManagedClearNames,
@@ -219,6 +223,41 @@ test("private append-only ledger names project, database, bounded requests and c
   assert.equal(entry.estimatedUsd, 0.5);
   assert.equal(entry.taskId, "FS-DATA-WRITE-SANDBOX");
   assert.ok(Number.isFinite(Date.parse(entry.ts)));
+});
+
+test("exclusive sandbox lock rejects competitors and remains after failed work", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "fireemu-sandbox-lock-"));
+  const lock = join(directory, "fs-data-write-exclusive.lock");
+  try {
+    await assert.rejects(
+      withSandboxExclusiveLock(directory, async () => {
+        assert.ok((await stat(lock)).isDirectory());
+        await assert.rejects(
+          withSandboxExclusiveLock(directory, async () => {}),
+          /EEXIST/,
+        );
+        throw new Error("recording failed");
+      }),
+      /recording failed/,
+    );
+    assert.ok((await stat(lock)).isDirectory());
+    await assert.rejects(
+      withSandboxExclusiveLock(directory, async () => {}),
+      /EEXIST/,
+    );
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("exclusive sandbox lock is released after successful work", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "fireemu-sandbox-lock-"));
+  try {
+    assert.equal(await withSandboxExclusiveLock(directory, async () => "recorded"), "recorded");
+    await assert.rejects(stat(join(directory, "fs-data-write-exclusive.lock")), /ENOENT/);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
 });
 
 test("local child cannot target a remote host", () => {

@@ -662,6 +662,10 @@
             {
               "behaviour": "runQuery, runAggregationQuery and executePipeline answer an error inside a one-element JSON array, as production does, and request bodies are read with production's JSON grammar (bare keys, single quotes, trailing commas) with its refusal texts, in both profiles; production's transcoder check of query bodies (schema, enum and wrapper forms, field violations), and the Standard :executePipeline route are strict-profile refusals only, because the emulator profile may add no rejection; under the emulator profile a body that production's grammar refuses but standard JSON admits (nesting past its depth of 100) is read as standard JSON, and a read_time before database creation is refused in both profiles, as fireemu refused it before",
               "precision": "exact-for-local-semantics"
+            },
+            {
+              "behaviour": "listDocuments and listCollectionIds follow production as recorded on 2026-09-24 (FS-DATA-WRITE-LIST) in both profiles: at most 300 documents a page, ordered page tokens that continue after the recorded order values, tokens bound to the listing but not the snapshot, production's refusal texts, repeated REST parameters taking the last value and loose booleans. Strict-profile refusals only, because the emulator profile may add no rejection: an unknown REST query parameter, proto-name parameters and the transcoder's timestamp check, the transcoder check of a listCollectionIds body, and show_missing without a collection id over gRPC",
+              "precision": "exact-for-local-semantics"
             }
           ],
           "productionOnly": [],

@@ -5251,12 +5251,58 @@ impl LocalBackend {
                 "cannot specify an order when show_missing is true",
             ));
         }
-        if req.show_missing && req.collection_id.is_empty() {
+        // Without a collection id production refuses `show_missing`; the emulator profile, which
+        // may add no rejection, lists without the missing documents instead.
+        if req.show_missing && req.collection_id.is_empty() && self.gateway.production_refusals() {
             return Err(Status::invalid_argument(
                 "collection id must be set when show_missing is true",
             ));
         }
+        let show_missing = req.show_missing && !req.collection_id.is_empty();
         check_list_mask(req.mask.as_ref())?;
+        // Page tokens carry the resource name of the last document of the previous page, the
+        // order values it had when the page was issued (an ordered listing continues after
+        // those, as production's does), and the identity of the listing they continue:
+        // parent, collection, result-shaping options and session generation. The snapshot is
+        // not part of it: production continues a token issued at a read time without one,
+        // and the other way round (read-time#paged-at-write-1-next-without-read-time).
+        let identity = format!(
+            "{}|{}|{}|{}|{}|{}|{}",
+            req.parent,
+            req.collection_id,
+            req.mask
+                .as_ref()
+                .map(|m| m.field_paths.join(","))
+                .unwrap_or_default(),
+            req.order_by,
+            show_missing,
+            self.epoch(),
+            self.database_generation(&parent),
+        );
+        let after_cursor = list_page_cursor(&req.page_token, &identity)?;
+        let after = after_cursor.as_ref().map(|cursor| cursor.name.clone());
+        // The order values the previous page ended on, when the token carries them.
+        let token_values = after_cursor
+            .as_ref()
+            .and_then(|cursor| cursor.values.clone());
+        let after_path = after
+            .as_deref()
+            .map(decode_document_name)
+            .transpose()
+            .map_err(status)?;
+        if after_path.as_ref().is_some_and(|path| {
+            path.project() != &parent.project
+                || path.database() != &parent.database
+                || path.parent_document().as_ref() != parent.document.as_ref()
+                || (!req.collection_id.is_empty()
+                    && path.collection_id().as_str() != req.collection_id)
+        }) {
+            return Err(Status::invalid_argument(LIST_TOKEN_FOREIGN));
+        }
+        let mask = decode_mask(req.mask.as_ref()).map_err(status)?;
+        // Faults apply to requests that validated, before anything (a read time) can create
+        // the database.
+        self.fault(parent.project.as_str(), "firestore.read")?;
         let now = self.write_time();
         let (txn, read_at) = match &req.consistency_selector {
             Some(pb::list_documents_request::ConsistencySelector::ReadTime(ts)) => (
@@ -5277,44 +5323,6 @@ impl LocalBackend {
             }
             None => SnapshotSelector::Latest,
         };
-        // Page tokens carry the resource name of the last document of the previous page, the
-        // order values it had when the page was issued (an ordered listing continues after
-        // those, as production's does), and the identity of the listing they continue:
-        // parent, collection, result-shaping options and session generation. The snapshot is
-        // not part of it: production continues a token issued at a read time without one,
-        // and the other way round (read-time#paged-at-write-1-next-without-read-time).
-        let identity = format!(
-            "{}|{}|{}|{}|{}|{}|{}",
-            req.parent,
-            req.collection_id,
-            req.mask
-                .as_ref()
-                .map(|m| m.field_paths.join(","))
-                .unwrap_or_default(),
-            req.order_by,
-            req.show_missing,
-            self.epoch(),
-            self.database_generation(&parent),
-        );
-        let after_cursor = list_page_cursor(&req.page_token, &identity)?;
-        let after = after_cursor.as_ref().map(|cursor| cursor.name.clone());
-        let after_path = after
-            .as_deref()
-            .map(decode_document_name)
-            .transpose()
-            .map_err(status)?;
-        if after_path.as_ref().is_some_and(|path| {
-            path.project() != &parent.project
-                || path.database() != &parent.database
-                || path.parent_document().as_ref() != parent.document.as_ref()
-                || (!req.collection_id.is_empty()
-                    && path.collection_id().as_str() != req.collection_id)
-        }) {
-            return Err(Status::invalid_argument(LIST_TOKEN_FOREIGN));
-        }
-        let mask = decode_mask(req.mask.as_ref()).map_err(status)?;
-        // Faults apply to requests that validated.
-        self.fault(parent.project.as_str(), "firestore.read")?;
         let accepted = self.accepted_query(&parent, &list_query(req)?)?;
         let ordered = !accepted.query.order_by.is_empty();
         // Without a collection id the listing is every document directly below the parent,
@@ -5350,7 +5358,7 @@ impl LocalBackend {
             )?;
             // Inside a transaction the scan is recorded like a query, so a concurrent
             // change to the collection aborts the commit.
-            let mut documents = if bounded_name_page && req.show_missing {
+            let mut documents = if bounded_name_page && show_missing {
                 access
                     .db()
                     .list_documents_with_missing_page_at(
@@ -5379,7 +5387,7 @@ impl LocalBackend {
                 let mut page_query = accepted.query.clone();
                 page_query.limit = Some(u32::try_from(scan_size).unwrap_or(u32::MAX));
                 // After the values the page ended on, as the token recorded them.
-                let cursor = match after_cursor.as_ref().and_then(|c| c.values.clone()) {
+                let cursor = match token_values.clone() {
                     Some(values) => Some(fireemu_core_firestore::query::Cursor {
                         values,
                         before: false,
@@ -5410,7 +5418,7 @@ impl LocalBackend {
                         encode_document(document)
                     })
                     .collect::<Vec<_>>();
-                if req.show_missing {
+                if show_missing {
                     let mut missing = Vec::new();
                     let mut continued_missing_suffix = false;
                     if !cursor_matches_document {
@@ -5451,8 +5459,17 @@ impl LocalBackend {
             } else {
                 let mut docs = match (&txn, ordered) {
                     (Some(_), _) => {
+                        // Inside a transaction too, a page continues after the recorded
+                        // values; the whole query stays the observed read set.
+                        let mut executed = accepted.query.clone();
+                        if let Some(values) = token_values.clone() {
+                            executed.start_at = Some(fireemu_core_firestore::query::Cursor {
+                                values,
+                                before: false,
+                            });
+                        }
                         access
-                            .run_query_with_stats(&accepted.query, &accepted.query, false)?
+                            .run_query_with_stats(&executed, &accepted.query, false)?
                             .0
                     }
                     (None, true) => access
@@ -5481,7 +5498,7 @@ impl LocalBackend {
                         encode_document(d)
                     })
                     .collect();
-                if req.show_missing {
+                if show_missing {
                     // A path that holds no document but has descendants is listed by name
                     // alone, as the backend lists it. Under an explicit order the missing
                     // parents (which have no fields to order on) follow the ordered documents.
@@ -5500,7 +5517,7 @@ impl LocalBackend {
                 }
                 documents
             };
-            if !bounded_name_page && !bounded_ordered_page {
+            if !bounded_name_page && !bounded_ordered_page && token_values.is_none() {
                 if let Some(after) = &after {
                     if ordered {
                         // The page continues after the named document at its position in the
@@ -5893,6 +5910,8 @@ const LIST_TOKEN_MALFORMED: &str = "invalid page token";
 /// Production's refusal of a page token issued for another listing (another collection,
 /// order, mask or `show_missing`).
 const LIST_TOKEN_FOREIGN: &str = "Invalid page token.";
+/// The most bytes of order values a `ListDocuments` page token carries.
+const MAX_TOKEN_CURSOR_BYTES: usize = 1536;
 /// The most documents a `ListDocuments` page holds (large#page-size-1000).
 pub const MAX_LIST_PAGE_SIZE: usize = 300;
 
@@ -5910,15 +5929,19 @@ fn list_page_token(
 ) -> String {
     use crate::rest::json::base64_encode;
     use prost::Message as _;
-    let values = values.map_or_else(String::new, |values| {
-        base64_encode(
-            &pb::Cursor {
+    // Values past the bound are left out, so a token stays small whatever the listing is
+    // ordered on (production cuts its index entries at 1500 bytes); such a page continues
+    // after its last document's current values, as fireemu's tokens did before.
+    let values = values
+        .map(|values| {
+            pb::Cursor {
                 values: values.iter().map(encode_value).collect(),
                 before: false,
             }
-            .encode_to_vec(),
-        )
-    });
+            .encode_to_vec()
+        })
+        .filter(|bytes| bytes.len() <= MAX_TOKEN_CURSOR_BYTES)
+        .map_or_else(String::new, |bytes| base64_encode(&bytes));
     base64_encode(
         format!(
             "{}\n{}\n{values}",
@@ -6221,6 +6244,52 @@ mod lock_tests {
             .next_page_token;
         assert!(!request.page_token.is_empty());
         request
+    }
+
+    /// A listDocuments at a read time that a fault fails leaves an absent database absent: the
+    /// fault comes before the read time is resolved (FS-DATA-WRITE-LIST review).
+    #[test]
+    fn list_documents_fault_at_a_read_time_does_not_create_database() {
+        use fireemu_core_session::fault::{FaultMatch, FaultPlan, FaultRegistry, FaultRule};
+
+        let backend = backend();
+        assert!(backend.snapshot_databases().is_empty());
+        let registry = Arc::new(FaultRegistry::new());
+        registry.default_state().lock().unwrap().install(FaultPlan {
+            seed: 1,
+            rules: vec![FaultRule {
+                matches: FaultMatch {
+                    operation: "firestore.read".into(),
+                    nth: None,
+                    function: None,
+                    event_type: None,
+                },
+                action: fireemu_core_session::fault::FaultAction::ReturnError {
+                    code: "UNAVAILABLE".into(),
+                },
+            }],
+        });
+        backend.set_faults(registry);
+        let error = backend
+            .list_documents(
+                &pb::ListDocumentsRequest {
+                    parent: "projects/demo-app/databases/rtdb/documents".to_owned(),
+                    collection_id: "c".to_owned(),
+                    consistency_selector: Some(
+                        pb::list_documents_request::ConsistencySelector::ReadTime(
+                            prost_types::Timestamp {
+                                seconds: 1_788_004_860,
+                                nanos: 0,
+                            },
+                        ),
+                    ),
+                    ..Default::default()
+                },
+                &crate::rules::allow_all_reads,
+            )
+            .unwrap_err();
+        assert_eq!(error.code(), tonic::Code::Unavailable);
+        assert!(backend.snapshot_databases().is_empty());
     }
 
     #[test]

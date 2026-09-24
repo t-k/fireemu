@@ -84,6 +84,11 @@ const ACCESS_CASES = [
     `getAfter(${DB}/fsr-acc-partner/p1).data.owner == request.auth.uid`,
   ],
   [
+    "write-get-after-partner-in-transaction",
+    "create",
+    `getAfter(${DB}/fsr-acc-partner/p5).data.owner == request.auth.uid`,
+  ],
+  [
     "write-get-before-partner",
     "create",
     `get(${DB}/fsr-acc-partner/p2).data.owner == request.auth.uid`,
@@ -435,7 +440,10 @@ export const PROGRAMS = [
       },
       commit("commit-after-batch-get-transaction", "a", [
         {
-          update: { name: "{docs}/fsr-acc/write-get-after-partner", fields: {} },
+          update: {
+            name: "{docs}/fsr-acc/write-get-after-partner-in-transaction",
+            fields: {},
+          },
           currentDocument: { exists: false },
         },
         {

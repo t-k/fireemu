@@ -34,6 +34,17 @@ pub enum OperationKind {
     Field,
 }
 
+impl OperationKind {
+    /// Whether the operation creates, updates or deletes the database itself.
+    #[must_use]
+    pub const fn is_database_operation(self) -> bool {
+        matches!(
+            self,
+            Self::CreateDatabase | Self::UpdateDatabase | Self::DeleteDatabase
+        )
+    }
+}
+
 /// One recorded operation.
 #[derive(Debug, Clone, PartialEq)]
 pub struct StoredOperation {
@@ -384,6 +395,39 @@ fn ok(body: Value) -> RestResponse {
     RestResponse { status: 200, body }
 }
 
+fn is_done(operation: &Value) -> bool {
+    operation.get("done") == Some(&Value::Bool(true))
+}
+
+/// The `filter` of `operations.list`: `done=true` or `done=false` (`None` when there is
+/// none). A bare term is what production refuses as a global comparison.
+fn parse_filter(params: &BTreeMap<String, Vec<String>>) -> Result<Option<bool>, RestResponse> {
+    let Some(filter) = params.get("filter").and_then(|v| v.last()) else {
+        return Ok(None);
+    };
+    let filter = filter.trim();
+    if filter.is_empty() {
+        return Ok(None);
+    }
+    let refuse = |why: &str| {
+        super::rest::error(
+            tonic::Code::InvalidArgument,
+            &format!("Error evaluating filter: {why}"),
+            None,
+        )
+    };
+    let Some((field, value)) = filter.split_once('=') else {
+        return Err(refuse(&format!(
+            "Filtering does not support GLOBAL comparator {filter}."
+        )));
+    };
+    match (field.trim(), value.trim()) {
+        ("done", "true") => Ok(Some(true)),
+        ("done", "false") => Ok(Some(false)),
+        _ => Err(refuse(&format!("Unsupported filter {filter}."))),
+    }
+}
+
 /// `operations.list`, `operations.get`, `operations.delete` and `operations.cancel`.
 pub(crate) fn route(
     state: &RestState,
@@ -392,7 +436,7 @@ pub(crate) fn route(
     method: &str,
     rest: &[&str],
     action: Option<&str>,
-    _params: &BTreeMap<String, Vec<String>>,
+    params: &BTreeMap<String, Vec<String>>,
 ) -> RestResponse {
     let store = state.local.admin().operations();
     let field_operation = |id: &str| {
@@ -401,9 +445,16 @@ pub(crate) fn route(
     };
     match (method, rest, action) {
         ("GET", [], None) => {
+            let filter = match parse_filter(params) {
+                Ok(filter) => filter,
+                Err(response) => return response,
+            };
+            // Production lists a database's document and index work, not the operations
+            // that created, updated or deleted the database itself.
             let mut operations: Vec<Value> = store
                 .list(project, database)
                 .iter()
+                .filter(|op| !op.kind.is_database_operation())
                 .map(|op| current(state, project, database, op))
                 .collect();
             let prefix = format!("projects/{project}/databases/{database}/operations/");
@@ -415,6 +466,7 @@ pub(crate) fn route(
                     .filter(|op| op.name.starts_with(&prefix))
                     .map(|op| crate::rest::admin_fields::operation_json(&op)),
             );
+            operations.retain(|op| filter.is_none_or(|done| is_done(op) == done));
             if operations.is_empty() {
                 ok(json!({}))
             } else {
@@ -434,14 +486,35 @@ pub(crate) fn route(
             },
         },
         ("DELETE", [id], None) => {
-            if store.remove(project, database, id) || field_operation(id).is_some() {
+            let running = match store.get(project, database, id) {
+                Some(op) => !is_done(&current(state, project, database, &op)),
+                None => field_operation(id)
+                    .is_some_and(|op| !is_done(&crate::rest::admin_fields::operation_json(&op))),
+            };
+            if running {
+                super::rest::error(
+                    tonic::Code::FailedPrecondition,
+                    "Precondition check failed.",
+                    None,
+                )
+            } else if store.remove(project, database, id) || field_operation(id).is_some() {
                 ok(json!({}))
             } else {
                 super::rest::error(tonic::Code::NotFound, "Operation does not exist", None)
             }
         }
         ("POST", [id], Some("cancel")) => {
-            if store.get(project, database, id).is_some() || field_operation(id).is_some() {
+            if store
+                .get(project, database, id)
+                .is_some_and(|op| op.kind == OperationKind::CreateIndex)
+            {
+                // Running or finished, production refuses to cancel an index build.
+                super::rest::error(
+                    tonic::Code::InvalidArgument,
+                    "CancelOperation is not supported for operation type BUILD_INDEX.",
+                    None,
+                )
+            } else if store.get(project, database, id).is_some() || field_operation(id).is_some() {
                 // Every operation this runtime records has already finished.
                 super::rest::error(
                     tonic::Code::FailedPrecondition,

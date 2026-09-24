@@ -67,23 +67,41 @@ struct Daemon {
 
 impl Daemon {
     fn start(profile: &str) -> Self {
-        let dir = scratch(profile);
+        Self::start_with(profile, profile, "")
+    }
+
+    /// A daemon whose `firestore` configuration carries `firestore_extra` (`"key": value, `
+    /// pairs) besides the edition and the API mode.
+    fn start_with(name: &str, profile: &str, firestore_extra: &str) -> Self {
+        let (mut command, hub_port) = Self::command(name, profile, firestore_extra);
+        let mut child = command
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
+        Self::ready(child.stdout.take().unwrap(), child, hub_port)
+    }
+
+    /// The `fireemu up` command of a daemon, and the Hub port it will listen on.
+    fn command(name: &str, profile: &str, firestore_extra: &str) -> (Command, u16) {
+        let dir = scratch(name);
         let config = dir.join("fireemu.json");
         std::fs::write(
             &config,
             format!(
-                r#"{{"schemaVersion": 1, "profile": "{profile}", "firestore": {{"edition": "standard", "apiMode": "native"}}}}"#
+                r#"{{"schemaVersion": 1, "profile": "{profile}", "firestore": {{{firestore_extra}"edition": "standard", "apiMode": "native"}}}}"#
             ),
         )
         .unwrap();
         let hub_port = free_port();
-        let mut child = Command::new(env!("CARGO_BIN_EXE_fireemu"))
+        let mut command = Command::new(env!("CARGO_BIN_EXE_fireemu"));
+        command
             .args([
                 "up",
                 "--config",
                 config.to_str().unwrap(),
                 "--project",
-                &format!("demo-profile-{profile}"),
+                &format!("demo-profile-{name}"),
                 "--firestore-port",
                 "0",
                 "--http-port",
@@ -97,15 +115,14 @@ impl Daemon {
                 "--hub-port",
             ])
             .arg(hub_port.to_string())
-            .stdin(Stdio::null())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()
-            .unwrap();
+            .stdin(Stdio::null());
+        (command, hub_port)
+    }
+
+    fn ready(stdout: std::process::ChildStdout, child: Child, hub_port: u16) -> Self {
         // The banner's control-API line is printed once every listener is bound; the pipe
         // keeps being drained afterwards so the daemon never hits a broken pipe mid-run, and
         // every line it ever prints stays readable, whatever order the banner puts them in.
-        let stdout = child.stdout.take().unwrap();
         let banner = Arc::new(Mutex::new(String::new()));
         let collected = Arc::clone(&banner);
         let (tx, rx) = std::sync::mpsc::channel::<()>();
@@ -239,4 +256,69 @@ fn the_capabilities_command_reports_the_profile_it_would_run_under() {
         .unwrap();
     let manifest: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
     assert_eq!(manifest["profile"], "strict");
+}
+
+/// `firestore.databaseCreateTime` stands in for a production database's age: a read time
+/// inside the retention hour but before the daemon started is served, one past the hour is
+/// too old, and a creation time after the clock start is refused at start-up
+/// (FS-QUERY-INDEX read-time/snapshots).
+#[test]
+fn a_configured_database_creation_time_bounds_read_times() {
+    let rfc3339 = |seconds_ago: u64| {
+        let at = std::time::SystemTime::now() - Duration::from_secs(seconds_ago);
+        let seconds = at.duration_since(std::time::UNIX_EPOCH).unwrap().as_secs();
+        let days = seconds / 86_400;
+        // Civil date from days since the epoch (Howard Hinnant's algorithm).
+        let z = i64::try_from(days).unwrap() + 719_468;
+        let era = z.div_euclid(146_097);
+        let doe = z - era * 146_097;
+        let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146_096) / 365;
+        let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+        let mp = (5 * doy + 2) / 153;
+        let day = doy - (153 * mp + 2) / 5 + 1;
+        let month = if mp < 10 { mp + 3 } else { mp - 9 };
+        let year = yoe + era * 400 + i64::from(month <= 2);
+        let rest = seconds % 86_400;
+        format!(
+            "{year:04}-{month:02}-{day:02}T{:02}:{:02}:{:02}Z",
+            rest / 3600,
+            rest / 60 % 60,
+            rest % 60
+        )
+    };
+    let daemon = Daemon::start_with(
+        "created",
+        "strict",
+        r#""databaseCreateTime": "2020-01-01T00:00:00Z", "#,
+    );
+    let port = daemon.firestore_port();
+    let query = |read_time: &str| {
+        http(
+            port,
+            "POST",
+            "/v1/projects/demo-profile-created/databases/(default)/documents:runQuery",
+            Some(&format!(
+                r#"{{"structuredQuery": {{"from": [{{"collectionId": "notes"}}]}}, "readTime": "{read_time}"}}"#
+            )),
+        )
+    };
+    let (status, body) = query(&rfc3339(3540));
+    assert_eq!(status, 200, "{body}");
+    let (status, body) = query(&rfc3339(3660));
+    assert_eq!(status, 400, "{body}");
+    assert!(body.contains("The requested 'read_time' is too old."), "{body}");
+    daemon.stop();
+
+    let (mut command, _) = Daemon::command(
+        "created-later",
+        "strict",
+        r#""databaseCreateTime": "2999-01-01T00:00:00Z", "#,
+    );
+    let output = command.output().unwrap();
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("firestore.databaseCreateTime 2999-01-01T00:00:00Z is after the clock start"),
+        "{stderr}"
+    );
 }

@@ -1043,11 +1043,14 @@ mod tests {
     #[test]
     fn document_bodies_take_only_document_keys() {
         for key in DOCUMENT_KEYS {
-            assert!(check_document_keys(&json!({ *key: null }), "document").is_ok(), "{key}");
+            assert!(
+                check_document_keys(&json!({ *key: null }), "document").is_ok(),
+                "{key}"
+            );
         }
         assert!(check_document_keys(&json!("not an object"), "document").is_ok());
-        let status = check_document_keys(&json!({"a": 1, "fields": {}, "b": 2}), "document")
-            .unwrap_err();
+        let status =
+            check_document_keys(&json!({"a": 1, "fields": {}, "b": 2}), "document").unwrap_err();
         assert_eq!(
             status.message(),
             "Invalid JSON payload received. Unknown name \"a\" at 'document': Cannot find field.\n\

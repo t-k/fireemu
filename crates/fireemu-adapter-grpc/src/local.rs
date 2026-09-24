@@ -1395,6 +1395,47 @@ mod tests {
     }
 
     #[test]
+    fn a_configured_creation_time_bounds_read_times_instead_of_the_start() {
+        use fireemu_core_types::time::LogicalInstant;
+        let now = LogicalInstant::from_unix_seconds(1_788_004_860);
+        let at = |seconds_before: i64| prost_types::Timestamp {
+            seconds: 1_788_004_860 - seconds_before,
+            nanos: 0,
+        };
+        let started = admission_backend();
+        assert_eq!(started.created_at(), now);
+        assert_eq!(
+            started
+                .read_time_selector(&at(60), now, now)
+                .unwrap_err()
+                .message(),
+            "The requested 'read_time' cannot be before database creation time."
+        );
+        let created = LogicalInstant::from_unix_seconds(1_788_004_860 - 7200);
+        let backend = admission_backend().with_created_at(created);
+        assert_eq!(backend.created_at(), created);
+        assert_eq!(
+            backend.read_time_selector(&at(3540), now, now).unwrap(),
+            LogicalInstant::from_unix_seconds(1_788_004_860 - 3540)
+        );
+        let too_old = backend.read_time_selector(&at(3660), now, now).unwrap_err();
+        assert_eq!(
+            (too_old.code(), too_old.message()),
+            (
+                tonic::Code::FailedPrecondition,
+                "The requested 'read_time' is too old."
+            )
+        );
+        assert_eq!(
+            backend
+                .read_time_selector(&at(7201), now, now)
+                .unwrap_err()
+                .message(),
+            "The requested 'read_time' cannot be before database creation time."
+        );
+    }
+
+    #[test]
     fn a_database_nothing_created_is_refused_and_is_not_materialized_by_the_refusal() {
         let backend = admission_backend();
         let error = backend
@@ -1549,6 +1590,17 @@ impl LocalBackend {
             change_admission: Mutex::new(None),
             barrier: Arc::new(AdmissionBarrier::new()),
         }
+    }
+
+    /// When the databases came into being, instead of the clock at construction: the
+    /// `createTime` they report and the instant before which a `read_time` is refused.
+    #[must_use]
+    pub const fn with_created_at(
+        mut self,
+        created_at: fireemu_core_types::time::LogicalInstant,
+    ) -> Self {
+        self.created_at = created_at;
+        self
     }
 
     /// How long a commit outside a transaction waits for the locks an active read-write

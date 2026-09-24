@@ -8883,13 +8883,12 @@ fn create_session_cookie(
     }
 }
 
-/// The official emulator's `Number(validDuration) || two weeks`, in whole seconds: zero and a
-/// value that is not a number mean the maximum, and a fraction is truncated as the emulator's
-/// signer truncates the resulting expiry.
+/// The official emulator's `Number(validDuration) || two weeks`, in whole seconds: zero, blank
+/// text and a value that is not a number mean the maximum, and a fraction is truncated as the
+/// emulator's signer truncates the resulting expiry.
 fn emulator_valid_duration(value: &Value) -> i64 {
     let number = match value {
         Value::Number(n) => n.as_f64(),
-        Value::String(text) if text.trim().is_empty() => Some(0.0),
         Value::String(text) => text.trim().parse::<f64>().ok(),
         Value::Bool(flag) => Some(if *flag { 1.0 } else { 0.0 }),
         _ => None,

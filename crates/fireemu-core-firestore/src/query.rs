@@ -332,12 +332,36 @@ pub struct Query {
 /// Structural validation errors found while canonicalizing.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum QueryError {
-    /// `in` / `array-contains-any` / `not-in` needs a non-empty array value.
+    /// `in` / `array-contains-any` / `not-in` needs an array value.
     ArrayValueRequired {
         /// Field.
         field: FieldPath,
         /// Operator.
         op: FieldOp,
+    },
+    /// `in` / `array-contains-any` / `not-in` needs a non-empty array value.
+    NonEmptyArrayRequired {
+        /// Operator.
+        op: FieldOp,
+    },
+    /// The same field appears twice in the explicit order-by.
+    DuplicateOrderField {
+        /// Field.
+        field: FieldPath,
+    },
+    /// An array-membership filter on `__name__`.
+    NameReserved,
+    /// A kindless query filters on a field other than `__name__`.
+    KindRequiredForFilter {
+        /// Field.
+        field: FieldPath,
+    },
+    /// A kindless query orders by anything but `__name__` ascending.
+    KindRequiredForOrder,
+    /// A cursor document reference names a collection, not a document.
+    CursorReferenceNotDocument {
+        /// The reference.
+        name: String,
     },
     /// An empty `and` / `or`.
     EmptyComposite,
@@ -345,7 +369,7 @@ pub enum QueryError {
     MultipleNotIn,
     /// `not-in` combined with `in`, `array-contains-any` or `or`.
     NotInWithDisjunction,
-    /// Cursor arity does not match the effective order-by.
+    /// A cursor has more values than the explicit order-by has fields.
     CursorArityMismatch {
         /// Cursor values.
         cursor: usize,
@@ -388,29 +412,36 @@ pub enum QueryError {
 impl fmt::Display for QueryError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::ArrayValueRequired { field, op } => {
-                write!(
-                    f,
-                    "{} requires a non-empty array value on {field}",
-                    op.name()
-                )
+            Self::ArrayValueRequired { op, .. } => {
+                write!(f, "'{}' requires an ArrayValue.", op.name())
             }
-            Self::EmptyComposite => f.write_str("composite filter has no children"),
-            Self::MultipleNotIn => f.write_str("a query can have at most one not-in filter"),
-            Self::NotInWithDisjunction => {
-                f.write_str("not-in cannot be combined with in, array-contains-any or or")
+            Self::NonEmptyArrayRequired { op } => {
+                write!(f, "'{}' requires an non-empty ArrayValue.", op.name())
             }
-            Self::CursorArityMismatch { cursor, order_by } => {
-                write!(
-                    f,
-                    "cursor has {cursor} values but the order-by has {order_by} fields"
-                )
+            Self::DuplicateOrderField { field } => {
+                write!(f, "order by clause cannot contain duplicate fields {field}")
             }
-            Self::CursorNameValue { position } => {
-                write!(
-                    f,
-                    "cursor value at position {position} orders by __key__ and must be a Key"
-                )
+            Self::NameReserved => f.write_str("the name __key__ is reserved"),
+            Self::KindRequiredForFilter { field } => {
+                write!(f, "kind is required for filter: {field}")
+            }
+            Self::KindRequiredForOrder => {
+                f.write_str("kind is required for all orders except __key__ ascending")
+            }
+            Self::CursorReferenceNotDocument { name } => write!(
+                f,
+                "Document parent name {name:?} lacks \"/\" at index {}.",
+                name.len()
+            ),
+            Self::EmptyComposite => {
+                f.write_str("Composite filter must have at least one sub-filter.")
+            }
+            Self::NotInWithDisjunction => f.write_str(
+                "'NOT_IN' cannot be used in the same query with 'IN', 'ARRAY_CONTAINS_ANY' or 'OR'.",
+            ),
+            Self::CursorArityMismatch { .. } => f.write_str("Cursor has too many values."),
+            Self::CursorNameValue { .. } => {
+                f.write_str("Cursor __key__ value is not a document reference.")
             }
             Self::CursorReferenceScope { position } => {
                 write!(
@@ -418,7 +449,7 @@ impl fmt::Display for QueryError {
                     "cursor value at position {position} orders by __key__ and must be a Key the query selects"
                 )
             }
-            Self::MultipleNegations => f.write_str(
+            Self::MultipleNotIn | Self::MultipleNegations => f.write_str(
                 "Only a single 'NOT_EQUAL', 'NOT_IN', 'IS_NOT_NAN', or 'IS_NOT_NULL' filter allowed per query.",
             ),
             Self::OrderAfterDocumentName => {
@@ -463,6 +494,8 @@ pub struct QueryLimitViolation {
     pub maximum: u64,
     /// Human-readable detail.
     pub detail: String,
+    /// The text production refuses the query with.
+    pub message: String,
 }
 
 /// Component count breakdown (`FS-QUERY-LIMIT-COMPONENTS`).
@@ -535,17 +568,31 @@ impl Query {
                 let Value::Reference(name) = value else {
                     return Err(QueryError::CursorNameValue { position });
                 };
-                let path = DocumentPath::from_resource_name(name)
-                    .ok_or(QueryError::CursorNameValue { position })?;
-                // `contains` compares path pairs only; the scope's parent, when it has one,
-                // also pins the project and database the cursor may name.
-                let same_database = self.scope.parent().is_none_or(|parent| {
-                    path.project() == parent.project() && path.database() == parent.database()
-                });
-                if !same_database || !self.scope.contains(&path) {
-                    return Err(QueryError::CursorReferenceScope { position });
+                // Production positions by any document of the database, inside the query's
+                // scope or not (observed 2026-09-24); a reference to a collection is refused.
+                if DocumentPath::from_resource_name(name).is_none() {
+                    return Err(QueryError::CursorReferenceNotDocument { name: name.clone() });
                 }
             }
+        }
+        Ok(())
+    }
+
+    /// A kindless query (the all-descendants scan without a collection id) may filter and
+    /// order only by `__name__`, ascending.
+    fn check_kindless_constraints(&self) -> Result<(), QueryError> {
+        if !self.scope.is_kindless() {
+            return Ok(());
+        }
+        if let Some(field) = self.filter.as_ref().and_then(first_non_name_field) {
+            return Err(QueryError::KindRequiredForFilter { field });
+        }
+        if self
+            .order_by
+            .iter()
+            .any(|o| !o.field.is_document_name() || o.direction != Direction::Ascending)
+        {
+            return Err(QueryError::KindRequiredForOrder);
         }
         Ok(())
     }
@@ -597,8 +644,8 @@ impl Query {
                 // is what the official emulator does with it.
                 FilterExpr::And(children) if children.is_empty() => None,
                 c => {
-                    check_not_in_rules(&c)?;
                     check_negation_rules(&c)?;
+                    check_not_in_rules(&c)?;
                     check_name_filters(&c)?;
                     Some(c)
                 }
@@ -611,6 +658,14 @@ impl Query {
         if let Some(find_nearest) = &q.find_nearest {
             validate_find_nearest(find_nearest)?;
         }
+        q.check_kindless_constraints()?;
+        for (i, clause) in q.order_by.iter().enumerate() {
+            if q.order_by[..i].iter().any(|o| o.field == clause.field) {
+                return Err(QueryError::DuplicateOrderField {
+                    field: clause.field.clone(),
+                });
+            }
+        }
         let order = q.effective_order_by();
         // `__name__` is unique, so a clause after it could never decide anything; the
         // backend refuses such an ordering rather than silently ignoring the clause. It
@@ -620,7 +675,9 @@ impl Query {
                 return Err(QueryError::OrderAfterDocumentName);
             }
         }
-        let arity = order.len();
+        // Production positions a cursor against the explicit order-by only: neither the
+        // implicit `__name__` tiebreak nor an inequality's implied order takes a value.
+        let arity = q.order_by.len();
         for cursor in [&q.start_at, &q.end_at].into_iter().flatten() {
             if cursor.values.len() > arity {
                 return Err(QueryError::CursorArityMismatch {
@@ -704,106 +761,187 @@ impl Query {
         }
     }
 
-    /// Checks the Standard query limits from `firestore-standard-query-2026-08-25`.
+    /// Checks the Standard query limits from `firestore-standard-query-2026-08-25`, in the
+    /// order production checks them: the values of one `in` / `array-contains-any` / `not-in`
+    /// filter, the disjunction count, array membership per disjunction, inequality fields and
+    /// the component total. Each violation carries production's refusal text.
     pub fn check_standard_limits(&self) -> Result<(), Vec<QueryLimitViolation>> {
-        let catalog = &FIRESTORE_STANDARD_QUERY_2026_08_25;
-        let max = |id: &str| match catalog.find(id).map(|l| l.maximum) {
-            Some(LimitMaximum::Fixed(v)) => v,
-            _ => u64::MAX,
-        };
-        let mut violations = Vec::new();
-        let mut check = |id: &'static str, current: u64, detail: String| {
-            let maximum = max(id);
-            if current > maximum {
-                violations.push(QueryLimitViolation {
-                    limit_id: id,
-                    current,
-                    maximum,
-                    detail,
-                });
-            }
-        };
-
+        let mut limits = LimitCheck::default();
+        self.check_value_counts(&mut limits);
+        if !limits.violations.is_empty() {
+            return Err(limits.violations);
+        }
         let disjunctions = self.dnf_disjunction_count();
-        check(
+        let maximum_disjunctions = LimitCheck::maximum("FS-QUERY-LIMIT-DNF-DISJUNCTIONS");
+        limits.check(
             "FS-QUERY-LIMIT-DNF-DISJUNCTIONS",
             disjunctions,
             format!("{disjunctions} disjunctions after DNF expansion"),
+            format!(
+                "Too many disjunctions after normalization. Result had {disjunctions} disjunctions which is more than the maximum of {maximum_disjunctions}"
+            ),
         );
-        if disjunctions > max("FS-QUERY-LIMIT-DNF-DISJUNCTIONS") {
+        if disjunctions > maximum_disjunctions {
             // Never materialize an unbounded expansion; the count alone rejects the query.
-            return Err(violations);
+            return Err(limits.violations);
         }
-
-        let mut has_not_in = false;
-        let mut has_neq = false;
-        for disjunction in self.dnf() {
-            let mut array_contains = 0u64;
-            let mut array_contains_any = 0u64;
-            for atom in &disjunction {
-                if let FilterExpr::Field { field, op, value } = atom {
-                    match op {
-                        FieldOp::ArrayContains => array_contains += 1,
-                        FieldOp::ArrayContainsAny => array_contains_any += 1,
-                        FieldOp::NotIn => {
-                            has_not_in = true;
-                            let n = match value {
-                                Value::Array(items) => items.len() as u64,
-                                _ => 0,
-                            };
-                            check(
-                                "FS-QUERY-LIMIT-NOT-IN-VALUES",
-                                n,
-                                format!("not-in on {field} has {n} values"),
-                            );
-                        }
-                        FieldOp::NotEqual => has_neq = true,
-                        _ => {}
-                    }
-                }
-            }
-            // Each disjunction may hold one array membership filter of either kind.
-            check(
-                "FS-QUERY-LIMIT-ARRAY-CONTAINS-PER-DISJUNCTION",
-                array_contains.max(array_contains_any),
-                format!(
-                    "{array_contains} array-contains and {array_contains_any} array-contains-any filters in one disjunction"
-                ),
-            );
-            let combination = u64::from(array_contains > 0 && array_contains_any > 0);
-            check(
-                "FS-QUERY-LIMIT-ARRAY-CONTAINS-COMBINATION",
-                combination,
-                "array-contains combined with array-contains-any in one disjunction".to_owned(),
-            );
-        }
-        check(
-            "FS-QUERY-LIMIT-NOT-IN-NEQ-COMBINATION",
-            u64::from(has_not_in && has_neq),
-            "not-in combined with != in one compound query".to_owned(),
-        );
-
-        let inequality = self.inequality_fields().len() as u64;
-        check(
+        self.check_disjunction_membership(&mut limits);
+        let fields = self.inequality_fields();
+        let inequality = fields.len() as u64;
+        let listed: Vec<String> = fields.iter().map(ToString::to_string).collect();
+        let maximum_inequality = LimitCheck::maximum("FS-QUERY-LIMIT-INEQUALITY-FIELDS");
+        limits.check(
             "FS-QUERY-LIMIT-INEQUALITY-FIELDS",
             inequality,
             format!("{inequality} distinct range / inequality fields"),
+            format!(
+                "The query contains {inequality} distinct inequality fields: [{}]. A query may not have more than {maximum_inequality} distinct inequality fields.",
+                listed.join(", ")
+            ),
         );
-
         let components = self.component_count();
-        check(
+        let maximum_components = LimitCheck::maximum("FS-QUERY-LIMIT-COMPONENTS");
+        limits.check(
             "FS-QUERY-LIMIT-COMPONENTS",
             components.total,
             format!(
                 "{} filters + {} orders + {} parent path",
                 components.filters, components.orders, components.parent_path
             ),
+            format!(
+                "The query may not have more than {maximum_components} filters + sort orders + ancestor total. Currently there are {} filters, {} sort orders, and {} ancestor filter.",
+                components.filters,
+                components.orders,
+                if components.parent_path == 0 { "no" } else { "one" }
+            ),
         );
-
-        if violations.is_empty() {
+        if limits.violations.is_empty() {
             Ok(())
         } else {
-            Err(violations)
+            Err(limits.violations)
+        }
+    }
+
+    /// The value count of each `in` / `array-contains-any` (30) and `not-in` (10) filter.
+    fn check_value_counts(&self, limits: &mut LimitCheck) {
+        let Some(filter) = &self.filter else {
+            return;
+        };
+        let mut atoms = Vec::new();
+        collect_atoms(filter, &mut atoms);
+        for (field, op, values) in atoms {
+            let (id, name) = match op {
+                FieldOp::In => ("FS-QUERY-LIMIT-DNF-DISJUNCTIONS", "IN"),
+                FieldOp::ArrayContainsAny => {
+                    ("FS-QUERY-LIMIT-DNF-DISJUNCTIONS", "ARRAY_CONTAINS_ANY")
+                }
+                FieldOp::NotIn => ("FS-QUERY-LIMIT-NOT-IN-VALUES", "NOT_IN"),
+                _ => continue,
+            };
+            let maximum = LimitCheck::maximum(id);
+            limits.check(
+                id,
+                values,
+                format!("{name} on {field} has {values} values"),
+                format!("'{name}' supports up to {maximum} comparison values."),
+            );
+        }
+    }
+
+    /// One array membership filter per disjunction, and no `not-in` beside `!=`.
+    fn check_disjunction_membership(&self, limits: &mut LimitCheck) {
+        let mut has_not_in = false;
+        let mut has_neq = false;
+        for disjunction in self.dnf() {
+            let mut array_contains = 0u64;
+            let mut array_contains_any = 0u64;
+            for atom in &disjunction {
+                if let FilterExpr::Field { op, .. } = atom {
+                    match op {
+                        FieldOp::ArrayContains => array_contains += 1,
+                        FieldOp::ArrayContainsAny => array_contains_any += 1,
+                        FieldOp::NotIn => has_not_in = true,
+                        FieldOp::NotEqual => has_neq = true,
+                        _ => {}
+                    }
+                }
+            }
+            // Each disjunction may hold one array membership filter of either kind.
+            limits.check(
+                "FS-QUERY-LIMIT-ARRAY-CONTAINS-PER-DISJUNCTION",
+                array_contains.max(array_contains_any),
+                format!(
+                    "{array_contains} array-contains and {array_contains_any} array-contains-any filters in one disjunction"
+                ),
+                ARRAY_CONTAINS_LIMIT.to_owned(),
+            );
+            limits.check(
+                "FS-QUERY-LIMIT-ARRAY-CONTAINS-COMBINATION",
+                u64::from(array_contains > 0 && array_contains_any > 0),
+                "array-contains combined with array-contains-any in one disjunction".to_owned(),
+                ARRAY_CONTAINS_LIMIT.to_owned(),
+            );
+        }
+        limits.check(
+            "FS-QUERY-LIMIT-NOT-IN-NEQ-COMBINATION",
+            u64::from(has_not_in && has_neq),
+            "not-in combined with != in one compound query".to_owned(),
+            "Only a single 'NOT_EQUAL', 'NOT_IN', 'IS_NOT_NAN', or 'IS_NOT_NULL' filter allowed per query."
+                .to_owned(),
+        );
+    }
+}
+
+/// Production's refusal of a second array membership filter in one disjunction.
+const ARRAY_CONTAINS_LIMIT: &str =
+    "A maximum of 1 'ARRAY_CONTAINS' filter is allowed per disjunction.";
+
+/// The Standard limit catalog and the violations found so far.
+#[derive(Default)]
+struct LimitCheck {
+    violations: Vec<QueryLimitViolation>,
+}
+
+impl LimitCheck {
+    fn maximum(id: &str) -> u64 {
+        match FIRESTORE_STANDARD_QUERY_2026_08_25
+            .find(id)
+            .map(|l| l.maximum)
+        {
+            Some(LimitMaximum::Fixed(v)) => v,
+            _ => u64::MAX,
+        }
+    }
+
+    fn check(&mut self, id: &'static str, current: u64, detail: String, message: String) {
+        let maximum = Self::maximum(id);
+        if current > maximum {
+            self.violations.push(QueryLimitViolation {
+                limit_id: id,
+                current,
+                maximum,
+                detail,
+                message,
+            });
+        }
+    }
+}
+
+/// Every field filter of a filter tree with the number of values it compares against.
+fn collect_atoms<'a>(f: &'a FilterExpr, out: &mut Vec<(&'a FieldPath, FieldOp, u64)>) {
+    match f {
+        FilterExpr::Field { field, op, value } => {
+            let values = match value {
+                Value::Array(items) => items.len() as u64,
+                _ => 1,
+            };
+            out.push((field, *op, values));
+        }
+        FilterExpr::Unary { .. } => {}
+        FilterExpr::And(children) | FilterExpr::Or(children) => {
+            for child in children {
+                collect_atoms(child, out);
+            }
         }
     }
 }
@@ -873,8 +1011,28 @@ fn check_negation_rules(f: &FilterExpr) -> Result<(), QueryError> {
 
 /// A filter on `__name__` compares document references and nothing else (an `in` /
 /// `not-in` list holds references only).
+/// The first filtered field that is not `__name__`, in filter order.
+fn first_non_name_field(f: &FilterExpr) -> Option<FieldPath> {
+    match f {
+        FilterExpr::Field { field, .. } | FilterExpr::Unary { field, .. } => {
+            (!field.is_document_name()).then(|| field.clone())
+        }
+        FilterExpr::And(children) | FilterExpr::Or(children) => {
+            children.iter().find_map(first_non_name_field)
+        }
+    }
+}
+
 fn check_name_filters(f: &FilterExpr) -> Result<(), QueryError> {
     match f {
+        FilterExpr::Field {
+            field,
+            op: FieldOp::ArrayContains | FieldOp::ArrayContainsAny,
+            ..
+        } if field.is_document_name() => Err(QueryError::NameReserved),
+        FilterExpr::Unary { field, .. } if field.is_document_name() => {
+            Err(QueryError::NameFilterValue)
+        }
         FilterExpr::Field { field, value, .. } if field.is_document_name() => {
             let ok = match value {
                 Value::Reference(_) => true,
@@ -932,6 +1090,9 @@ fn canonicalize_filter(f: &FilterExpr) -> Result<FilterExpr, QueryError> {
             if op.takes_array() {
                 match value {
                     Value::Array(items) if !items.is_empty() => {}
+                    Value::Array(_) => {
+                        return Err(QueryError::NonEmptyArrayRequired { op: *op });
+                    }
                     _ => {
                         return Err(QueryError::ArrayValueRequired {
                             field: field.clone(),
@@ -985,6 +1146,10 @@ fn canonical_filter_cmp(a: &FilterExpr, b: &FilterExpr) -> core::cmp::Ordering {
 }
 
 fn canonicalize_composite(children: &[FilterExpr], is_and: bool) -> Result<FilterExpr, QueryError> {
+    // Production refuses an empty `or` (an empty `and` constrains nothing and is served).
+    if !is_and && children.is_empty() {
+        return Err(QueryError::EmptyComposite);
+    }
     let mut flat: Vec<FilterExpr> = Vec::new();
     for child in children {
         let c = canonicalize_filter(child)?;

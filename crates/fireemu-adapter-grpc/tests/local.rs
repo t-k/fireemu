@@ -2917,7 +2917,12 @@ async fn aggregation_index_validation_rejects_unindexed_fields_before_transactio
         .await
         .unwrap_err();
     assert_eq!(error.code(), tonic::Code::FailedPrecondition);
-    assert!(error.message().contains("amount Ascending"), "{error}");
+    assert!(
+        error.message().starts_with(
+            "The query requires a COLLECTION_ASC index for collection orders and field amount."
+        ),
+        "{error}"
+    );
 
     let transaction = client
         .begin_transaction(pb::BeginTransactionRequest {

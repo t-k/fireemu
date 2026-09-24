@@ -2597,9 +2597,10 @@ async fn a_missing_index_removes_only_its_own_target_and_the_stream_keeps_listen
     };
     assert_eq!(cause.code, tonic::Code::FailedPrecondition as i32);
     assert!(
-        cause.message.contains("The query requires an index.")
-            && cause.message.contains("firestore.indexes.json")
-            && cause.message.contains("updatedAt"),
+        // Production's wording: the console link encodes the index to create.
+        cause.message.starts_with(
+            "The query requires an index. You can create it here: https://console.firebase.google.com/v1/r/project/demo-app/firestore/indexes?create_composite="
+        ),
         "the actionable diagnostic survives the target removal: {}",
         cause.message
     );

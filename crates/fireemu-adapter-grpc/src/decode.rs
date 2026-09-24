@@ -46,6 +46,8 @@ pub enum DecodeError {
     EmptyWriteOperation,
     /// A wire feature this gateway does not model (fail closed).
     Unsupported(String),
+    /// An argument refused with production's own text (`crate::query_messages`).
+    Refused(String),
 }
 
 impl DecodeError {
@@ -73,7 +75,8 @@ impl fmt::Display for DecodeError {
             Self::InvalidFieldPath(m) => write!(f, "invalid field path: {m}"),
             Self::InvalidDocumentName(m)
             | Self::InvalidStoredFieldName(m)
-            | Self::InvalidPropertyPath(m) => f.write_str(m),
+            | Self::InvalidPropertyPath(m)
+            | Self::Refused(m) => f.write_str(m),
             Self::InvalidValue(m) => write!(f, "invalid value: {m}"),
             Self::InvalidQuery(m) => write!(f, "invalid query: {m}"),
             Self::EmptyWriteOperation => write!(f, "empty write operation"),
@@ -187,8 +190,17 @@ pub fn parse_parent(parent: &str) -> Result<Parent, DecodeError> {
 }
 
 fn field_path(reference: Option<&sq::FieldReference>) -> Result<FieldPath, DecodeError> {
-    let r = reference.ok_or_else(|| DecodeError::InvalidQuery("missing field reference".into()))?;
-    FieldPath::parse(&r.field_path).map_err(|e| DecodeError::InvalidFieldPath(e.to_string()))
+    let Some(r) = reference else {
+        return Err(DecodeError::Refused(
+            crate::query_messages::EMPTY_PROPERTY_PATH.into(),
+        ));
+    };
+    property_path(&r.field_path)
+}
+
+/// A property path of a query, refused in production's words.
+fn property_path(path: &str) -> Result<FieldPath, DecodeError> {
+    FieldPath::parse(path).map_err(|e| crate::query_messages::property_path_error(path, &e))
 }
 
 /// Decodes a protobuf value.
@@ -304,7 +316,7 @@ fn field_op(op: i32) -> Result<FieldOp, DecodeError> {
     use sq::field_filter::Operator as O;
     Ok(
         match O::try_from(op)
-            .map_err(|_| DecodeError::InvalidQuery(format!("unknown field operator {op}")))?
+            .map_err(|_| DecodeError::Refused("Unknown FieldFilter operator.".into()))?
         {
             O::LessThan => FieldOp::LessThan,
             O::LessThanOrEqual => FieldOp::LessThanOrEqual,
@@ -317,9 +329,7 @@ fn field_op(op: i32) -> Result<FieldOp, DecodeError> {
             O::ArrayContainsAny => FieldOp::ArrayContainsAny,
             O::NotIn => FieldOp::NotIn,
             O::Unspecified => {
-                return Err(DecodeError::InvalidQuery(
-                    "unspecified field operator".into(),
-                ))
+                return Err(DecodeError::Refused("Unknown FieldFilter operator.".into()))
             }
         },
     )
@@ -328,40 +338,33 @@ fn field_op(op: i32) -> Result<FieldOp, DecodeError> {
 fn decode_filter(filter: &sq::Filter) -> Result<FilterExpr, DecodeError> {
     use sq::filter::FilterType as F;
     match &filter.filter_type {
-        None => Err(DecodeError::InvalidQuery(
-            "filter without filter_type".into(),
-        )),
-        Some(F::FieldFilter(f)) => {
-            Ok(FilterExpr::Field {
-                field: field_path(f.field.as_ref())?,
-                op: field_op(f.op)?,
-                value: decode_value(f.value.as_ref().ok_or_else(|| {
-                    DecodeError::InvalidQuery("field filter without value".into())
-                })?)?,
-            })
-        }
+        None => Err(DecodeError::Refused("Unknown Filter type.".into())),
+        Some(F::FieldFilter(f)) => Ok(FilterExpr::Field {
+            field: field_path(f.field.as_ref())?,
+            op: field_op(f.op)?,
+            value: decode_value(f.value.as_ref().ok_or_else(|| {
+                DecodeError::Refused("Cannot convert firestore.v1.Value with type unset.".into())
+            })?)?,
+        }),
         Some(F::UnaryFilter(u)) => {
             use sq::unary_filter::Operator as O;
             let field = match &u.operand_type {
-                Some(sq::unary_filter::OperandType::Field(f)) => FieldPath::parse(&f.field_path)
-                    .map_err(|e| DecodeError::InvalidFieldPath(e.to_string()))?,
+                Some(sq::unary_filter::OperandType::Field(f)) => property_path(&f.field_path)?,
                 None => {
-                    return Err(DecodeError::InvalidQuery(
-                        "unary filter without operand".into(),
+                    return Err(DecodeError::Refused(
+                        "Unsupported UnaryFilter operand type (non-FIELD).".into(),
                     ))
                 }
             };
-            let op = match O::try_from(u.op).map_err(|_| {
-                DecodeError::InvalidQuery(format!("unknown unary operator {}", u.op))
-            })? {
+            let op = match O::try_from(u.op)
+                .map_err(|_| DecodeError::Refused("Unknown UnaryFilter operator.".into()))?
+            {
                 O::IsNan => UnaryOp::IsNan,
                 O::IsNull => UnaryOp::IsNull,
                 O::IsNotNan => UnaryOp::IsNotNan,
                 O::IsNotNull => UnaryOp::IsNotNull,
                 O::Unspecified => {
-                    return Err(DecodeError::InvalidQuery(
-                        "unspecified unary operator".into(),
-                    ))
+                    return Err(DecodeError::Refused("Unknown UnaryFilter operator.".into()))
                 }
             };
             Ok(FilterExpr::Unary { field, op })
@@ -373,13 +376,11 @@ fn decode_filter(filter: &sq::Filter) -> Result<FilterExpr, DecodeError> {
                 .iter()
                 .map(decode_filter)
                 .collect::<Result<Vec<_>, _>>()?;
-            match O::try_from(c.op).map_err(|_| {
-                DecodeError::InvalidQuery(format!("unknown composite operator {}", c.op))
-            })? {
+            match O::try_from(c.op).unwrap_or(O::Unspecified) {
                 O::And => Ok(FilterExpr::And(children)),
                 O::Or => Ok(FilterExpr::Or(children)),
-                O::Unspecified => Err(DecodeError::InvalidQuery(
-                    "unspecified composite operator".into(),
+                O::Unspecified => Err(DecodeError::Refused(
+                    "Unsupported CompositeFilter operator.".into(),
                 )),
             }
         }
@@ -440,7 +441,7 @@ fn check_reference_database(name: &str, database: &str) -> Result<(), DecodeErro
         return Ok(());
     }
     let other = echoable_database(name);
-    Err(DecodeError::InvalidQuery(format!(
+    Err(DecodeError::Refused(format!(
         "The request was for database '{database}' but was attempting to access database '{other}'"
     )))
 }
@@ -464,7 +465,11 @@ fn check_cursor_name_references(query: &Query, parent: &Parent) -> Result<(), De
                 continue;
             }
             if let Value::Reference(name) = value {
-                check_reference_database(name, &database)?;
+                check_reference_database(name, &database).map_err(|_| {
+                    DecodeError::Refused(
+                        "The cursor key is in a different database than the query".into(),
+                    )
+                })?;
             }
         }
     }
@@ -568,7 +573,7 @@ pub fn decode_structured_query(
             }
         }
         _ => {
-            return Err(DecodeError::InvalidQuery(
+            return Err(DecodeError::Refused(
                 "StructuredQuery.from cannot have more than one collection selector.".into(),
             ))
         }
@@ -579,7 +584,7 @@ pub fn decode_structured_query(
         QueryScope::kindless_all_descendants(parent.document.clone())
     } else {
         let collection_id = CollectionId::try_new(from.collection_id.as_str())
-            .map_err(|e| DecodeError::InvalidQuery(format!("collection id: {e}")))?;
+            .map_err(|e| crate::query_messages::collection_id_error(&from.collection_id, &e))?;
         if from.all_descendants {
             // Under a parent document the group is every collection with that id below it.
             QueryScope::collection_group_under(parent.document.clone(), collection_id)
@@ -617,21 +622,18 @@ pub fn decode_structured_query(
         q.end_at = Some(decode_cursor(c)?);
     }
     q.offset = u32::try_from(query.offset)
-        .map_err(|_| DecodeError::InvalidQuery("negative offset".into()))?;
+        .map_err(|_| DecodeError::Refused("offset is negative".into()))?;
     q.limit = match query.limit {
         None => None,
         Some(l) => {
-            Some(u32::try_from(l).map_err(|_| DecodeError::InvalidQuery("negative limit".into()))?)
+            Some(u32::try_from(l).map_err(|_| DecodeError::Refused("limit is negative".into()))?)
         }
     };
     if let Some(p) = &query.select {
         q.projection = Some(
             p.fields
                 .iter()
-                .map(|f| {
-                    FieldPath::parse(&f.field_path)
-                        .map_err(|e| DecodeError::InvalidFieldPath(e.to_string()))
-                })
+                .map(|f| property_path(&f.field_path))
                 .collect::<Result<Vec<_>, _>>()?,
         );
     }
@@ -726,12 +728,7 @@ mod tests {
             "projects/demo-app/databases/other/documents/cur/c3",
         ] {
             let message = foreign_cursor_error(&name_ordered(false, Some(cursor(name)), None));
-            assert!(
-                message.contains(
-                    "The request was for database 'projects/demo-app/databases/(default)'"
-                ),
-                "{message}"
-            );
+            assert_eq!(message, FOREIGN_CURSOR);
         }
     }
 
@@ -742,10 +739,7 @@ mod tests {
             "projects/demo-app/databases/other/documents/scope/s1/cur/c3",
         ] {
             let message = foreign_cursor_error(&name_ordered(true, Some(cursor(name)), None));
-            assert!(
-                message.contains("but was attempting to access database"),
-                "{message}"
-            );
+            assert_eq!(message, FOREIGN_CURSOR);
         }
     }
 
@@ -812,13 +806,17 @@ mod tests {
         }
     }
 
-    /// The same hostile reference on both paths that echo it: a `__name__` filter value and
-    /// a cursor value in a `__name__` position.
-    fn both_paths(reference: &str) -> [pb::StructuredQuery; 2] {
-        [
-            name_filtered(reference),
-            name_ordered(false, Some(cursor(reference)), None),
-        ]
+    /// Production's constant refusal of a cursor key outside the request's database; only a
+    /// `__name__` filter value echoes the database it reached for.
+    const FOREIGN_CURSOR: &str = "The cursor key is in a different database than the query";
+
+    /// The paths that echo a hostile reference: a `__name__` filter value. A cursor value in
+    /// a `__name__` position is refused with [`FOREIGN_CURSOR`], which echoes nothing.
+    fn both_paths(reference: &str) -> [pb::StructuredQuery; 1] {
+        let cursor_message =
+            foreign_cursor_error(&name_ordered(false, Some(cursor(reference)), None));
+        assert_eq!(cursor_message, FOREIGN_CURSOR);
+        [name_filtered(reference)]
     }
 
     #[test]

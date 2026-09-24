@@ -4,7 +4,7 @@ use core::fmt;
 
 use fireemu_core_firestore::index::{
     decide, validate_aggregation_query as validate_aggregation_index_query, IndexDecision,
-    IndexSet, IndexValidationPolicy, PlanningContext,
+    IndexDefinition, IndexSet, IndexValidationPolicy, PlanningContext,
 };
 use fireemu_core_firestore::query::{Query, QueryLimitViolation};
 use fireemu_core_firestore::store::{normalize_aggregation_query, Aggregation};
@@ -27,6 +27,10 @@ pub enum Rejection {
         fragment: String,
         /// Human-readable description.
         description: String,
+        /// The index the query needs.
+        requirement: IndexDefinition,
+        /// Whether the query has inequality filters on more than one field.
+        multiple_inequalities: bool,
     },
     /// The validator cannot model the query; fail closed.
     Unsupported(String),
@@ -40,22 +44,12 @@ impl Rejection {
         let mut status = match self {
             Self::Decode(e) => tonic::Status::new(e.grpc_code(), e.to_string()),
             Self::InvalidQuery(m) => tonic::Status::invalid_argument(m.clone()),
-            Self::QueryLimits(v) => {
-                let lines: Vec<String> = v.iter().map(|x| format!("{}: {} ({} > {})", x.limit_id, x.detail, x.current, x.maximum)).collect();
-                let message = format!("query limit violation: {}", lines.join("; "));
-                // A second array-contains clause is INVALID_ARGUMENT with production's own
-                // wording (conformance/firestore-production-matrix.json,
-                // errors/rest-shapes#two-array-contains); the official emulator answers
-                // FAILED_PRECONDITION. Every other limit is INVALID_ARGUMENT.
-                if v.iter().all(|x| x.limit_id == "FS-QUERY-LIMIT-ARRAY-CONTAINS-PER-DISJUNCTION") {
-                    tonic::Status::invalid_argument(
-                        "A maximum of 1 'ARRAY_CONTAINS' filter is allowed per disjunction.",
-                    )
-                } else {
-                    tonic::Status::invalid_argument(message)
-                }
-            }
-            Self::MissingIndex { fragment, description } => tonic::Status::failed_precondition(format!(
+            // Production refuses with the first limit it checks, in its own words
+            // (FS-QUERY-INDEX query-limits, recorded 2026-09-24).
+            Self::QueryLimits(v) => tonic::Status::invalid_argument(
+                v.first().map_or_else(String::new, |x| x.message.clone()),
+            ),
+            Self::MissingIndex { fragment, description, .. } => tonic::Status::failed_precondition(format!(
                 "The query requires an index. {description}\nAdd to firestore.indexes.json:\n{fragment}"
             )),
             Self::Unsupported(m) => tonic::Status::unimplemented(m.clone()),
@@ -68,6 +62,43 @@ impl Rejection {
             Self::Unsupported(_) => "FS_GW_UNSUPPORTED",
         };
         if let Ok(v) = code.parse() {
+            status.metadata_mut().insert("fireemu-reason", v);
+        }
+        status
+    }
+}
+
+/// `projects/<p>/databases/<d>` of a query parent.
+#[must_use]
+pub fn database_name(parent: &crate::decode::Parent) -> String {
+    format!(
+        "projects/{}/databases/{}",
+        parent.project.as_str(),
+        parent.database.as_str()
+    )
+}
+
+impl Rejection {
+    /// The status for a rejection of a query on `database` (`projects/<p>/databases/<d>`).
+    /// A missing index is refused in production's words, with the console link that names
+    /// the database; every other rejection is [`Rejection::to_status`].
+    #[must_use]
+    pub fn to_status_in(&self, database: &str) -> tonic::Status {
+        let Self::MissingIndex {
+            requirement,
+            multiple_inequalities,
+            ..
+        } = self
+        else {
+            return self.to_status();
+        };
+        let mut status =
+            tonic::Status::failed_precondition(crate::index_messages::missing_index_message(
+                database,
+                requirement,
+                *multiple_inequalities,
+            ));
+        if let Ok(v) = "FS_GW_MISSING_INDEX".parse() {
             status.metadata_mut().insert("fireemu-reason", v);
         }
         status
@@ -241,6 +272,8 @@ impl Gateway {
                 return Err(Rejection::MissingIndex {
                     fragment: requirement.indexes_json_fragment(),
                     description: decision.to_string(),
+                    requirement: requirement.clone(),
+                    multiple_inequalities: canonical.inequality_fields().len() > 1,
                 });
             }
             IndexDecision::Unsupported { feature } => {

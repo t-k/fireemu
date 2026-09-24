@@ -190,7 +190,8 @@ export const PROGRAMS = [
     ruleset: "main",
     seed: OPEN,
     // Every row has its own instant; REST and gRPC alternate across neighbouring seconds so each
-    // side of the 300 s allowance ITK uses is observed on both transports.
+    // side of Firestore's allowance (between 11 and 60 s in the first recording) and of the
+    // 300 s Identity Toolkit allows is observed on both transports.
     steps: [
       [-60, "rest"],
       [-59, "grpc"],

@@ -13,7 +13,7 @@
 // as the side produced it.
 
 import { open, readFile, rename, unlink, writeFile } from "node:fs/promises";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { credentialMetadata, selectCredential } from "./credentials.mjs";
@@ -32,7 +32,8 @@ const OUT = process.env.FIRESTORE_PROBE_OUT;
 const META_OUT = process.env.FIRESTORE_PROBE_META_OUT;
 const MAX_REQUESTS = process.env.FIRESTORE_PROBE_MAX_REQUESTS;
 const REQUEST_TIMEOUT_MS = Number(process.env.FIRESTORE_PROBE_TIMEOUT_MS ?? 20_000);
-const MANAGED_CLEAR_JOURNAL = process.env.FIRESTORE_PROBE_MANAGED_CLEAR_JOURNAL;
+const MANAGED_CLEAR_JOURNAL =
+  process.env.FIRESTORE_PROBE_DELTA_JOURNAL ?? process.env.FIRESTORE_PROBE_MANAGED_CLEAR_JOURNAL;
 const MANAGED_CLEAR_NAMES = process.env.FIRESTORE_PROBE_MANAGED_CLEAR_NAMES;
 // Production target: `https`, an OAuth bearer token instead of the emulator's `owner`, no
 // emulator wipe route (documents are deleted through the public API instead), and the real
@@ -43,6 +44,8 @@ const TOKEN = process.env.FIRESTORE_PROBE_TOKEN ?? "owner";
 const USER_TOKEN = process.env.FIRESTORE_PROBE_USER_TOKEN;
 const PRODUCTION = process.env.FIRESTORE_PROBE_TARGET === "production";
 const RECOVERY_MODE = process.env.FIRESTORE_PROBE_RECOVERY_MODE;
+const DELTA_V3_MODE = process.env.FIRESTORE_PROBE_DELTA_V3 === "1";
+const DELTA_LOCK_HELD = process.env.FIRESTORE_PROBE_DELTA_LOCK_HELD === "1";
 const CORPUS_DIGEST = process.env.FIRESTORE_PROBE_CORPUS_DIGEST;
 const SOURCE_GIT_SHA = process.env.FIRESTORE_PROBE_SOURCE_GIT_SHA;
 const MANAGED_POLL_MS = /^127\.0\.0\.1:\d+$/.test(HOST ?? "")
@@ -53,11 +56,12 @@ if (!Number.isInteger(MANAGED_POLL_MS) || MANAGED_POLL_MS < 1 || MANAGED_POLL_MS
 }
 const RECORD_PROJECT = process.env.FIRESTORE_PROBE_RECORD_PROJECT ?? PROJECT;
 const DELETE_RUN_MARKER = "DELETE_RUN_ID";
+const DELTA_STREAM_ID = "writes/write-stream-terminal/response-before-half-close";
 let deleteRunId = DELETE_RUN_MARKER;
 const SHRINK_CHUNK_SIZE = 1024;
 // Twelve frozen targets need at most 152 transforms and about 194 other managed requests
 // under the seven-clear worst case; retain headroom while staying below the 1000 REST cap.
-const SHRINK_REQUEST_CAPS = { legacy: 180, v3: 400 };
+const SHRINK_REQUEST_CAPS = { legacy: 180, v3: 400, "delta-v3": 400 };
 const SANDBOX_DOCUMENTS = "projects/fireemu-oracle-sbx/databases/(default)/documents/";
 const LEGACY_SHRINK_SPECS = [
   ["barrayname100012116n31", 998, 1, 12_116],
@@ -112,11 +116,17 @@ function canonicalCollectionId(name) {
   return name.split("/documents/")[1].split("/")[0].replaceAll(deleteRunId, DELETE_RUN_MARKER);
 }
 
-export function createShrinkRequestCounter(limit) {
-  if (!Number.isSafeInteger(limit) || limit <= 0) {
+export function createShrinkRequestCounter(limit, initial = 0) {
+  if (
+    !Number.isSafeInteger(limit) ||
+    limit <= 0 ||
+    !Number.isSafeInteger(initial) ||
+    initial < 0 ||
+    initial > limit
+  ) {
     throw new Error("array shrink request limit must be a positive safe integer");
   }
-  let requests = 0;
+  let requests = initial;
   return {
     claim() {
       if (requests >= limit)
@@ -186,6 +196,11 @@ export function managedShrinkScope(names, project, database) {
     V3_SHRINK_NAMES.slice(0, 6).every((name) => canonicalNames.includes(name))
   )
     return "v3";
+  if (
+    canonicalNames.length === 6 &&
+    V3_SHRINK_NAMES.slice(6).every((name) => canonicalNames.includes(name))
+  )
+    return "delta-v3";
   if (
     V3_SHRINK_NAMES.length === canonicalNames.length &&
     V3_SHRINK_NAMES.every((name) => canonicalNames.includes(name))
@@ -327,8 +342,35 @@ export function validateManagedClearOperation(state, project) {
 }
 
 function trackedFetch(input, init) {
-  requestCount = requestBudget === null ? requestCount + 1 : requestBudget.claim();
-  return fetch(input, init);
+  return (async () => {
+    if (managedClearState?.shrinkScope === "delta-v3") {
+      if (requestCount >= 430)
+        throw new Error("delta-v3 HTTP request cap reached before network send");
+      const requestMethod = String(init?.method ?? "GET").toUpperCase();
+      if (
+        managedClearState.pendingMutation &&
+        (managedClearState.pendingMutation.url !== String(input) ||
+          managedClearState.pendingMutation.method !== requestMethod)
+      ) {
+        throw new Error("delta-v3 has an unresolved write-ahead mutation; stop and recover");
+      }
+      if (requestBudget !== null) requestBudget.claim();
+      requestCount += 1;
+      await writeDeltaCleanupJournal("request-reserved");
+      const response = await fetch(input, { ...init, redirect: "error" });
+      if (managedClearState.pendingMutation) {
+        managedClearState.lastMutation = {
+          ...managedClearState.pendingMutation,
+          httpStatus: response.status,
+        };
+        managedClearState.pendingMutation = null;
+        await writeDeltaCleanupJournal("mutation-response-observed");
+      }
+      return response;
+    }
+    requestCount = requestBudget === null ? requestCount + 1 : requestBudget.claim();
+    return fetch(input, init);
+  })();
 }
 
 const replaceRunMarker = (value) => value.replaceAll(DELETE_RUN_MARKER, deleteRunId);
@@ -369,6 +411,10 @@ async function clear(database = "(default)", verifyManagedScope = false) {
 async function clearThroughPublicApi(database, verifyManagedScope) {
   const base = `${SCHEME}://${HOST}/v1/projects/${PROJECT}/databases/${database}/documents`;
   const shrinkScopeActive = managedClearState !== null && database === "(default)";
+  if (managedClearState?.shrinkScope === "delta-v3") {
+    await clearDeltaV3Exact(base, verifyManagedScope);
+    return;
+  }
   if (shrinkScopeActive) {
     managedClearBlocked = true;
     managedClearState.preflightDone = false;
@@ -490,7 +536,6 @@ async function auditLegacyDebris(base) {
       throw new Error("legacy debris changed during its read-only scope audit");
     }
     if (found) {
-      const collectionId = name.split("/documents/")[1].split("/")[0];
       const expectedLength = FROZEN_ARRAY_LENGTHS.get(canonicalCollectionId(name));
       validateLegacyDebrisDocument(row.found, name, expectedLength);
       const relative = name.slice(name.indexOf("/documents/") + "/documents/".length);
@@ -715,7 +760,6 @@ async function preflightManagedShrinkScope() {
       },
     );
     if (!response.ok) throw new Error(`array shrink global preflight read ${response.status}`);
-    const collectionId = name.split("/documents/")[1].split("/")[0];
     const expectedLength = FROZEN_ARRAY_LENGTHS.get(canonicalCollectionId(name));
     const document = await response.json();
     validateShrinkBoundaryState(document, name, expectedLength, { allowEmptyOmitted: true });
@@ -735,7 +779,6 @@ async function shrinkBoundaryDocument(name) {
   if (!preflightUpdateTime || document.updateTime !== preflightUpdateTime) {
     throw new Error("array shrink target changed after global preflight");
   }
-  const collectionId = name.split("/documents/")[1].split("/")[0];
   const expectedLength = FROZEN_ARRAY_LENGTHS.get(canonicalCollectionId(name));
   let values = validateCurrentShrinkState(document, name, expectedLength);
   let updateTime = document.updateTime;
@@ -849,6 +892,120 @@ async function writeV3CleanupJournal(status, extra = {}) {
     deleteIntent: managedClearState.cleanupDeleteIntent,
     ...extra,
   });
+}
+
+async function writeDeltaCleanupJournal(status, extra = {}) {
+  if (!MANAGED_CLEAR_JOURNAL || managedClearState?.shrinkScope !== "delta-v3") return;
+  await writePrivateJsonDurably(MANAGED_CLEAR_JOURNAL, {
+    schemaVersion: 1,
+    mode: "cleanup-delta-v3",
+    status,
+    project: PROJECT,
+    database: "(default)",
+    runId: deleteRunId,
+    corpusDigest: CORPUS_DIGEST,
+    sourceGitSha: SOURCE_GIT_SHA,
+    writerExclusivity: "task-lock-held; run-specific six collection groups have no external writer",
+    names: managedClearState.names,
+    httpRequestCount: requestCount,
+    managedRequestCount: managedClearState.shrinkRequestCounter.current(),
+    bulkDeleteIntent: managedClearState.bulkDeleteIntent ?? null,
+    bulkDeleteOperation: managedClearState.bulkDeleteOperation ?? null,
+    pendingMutation: managedClearState.pendingMutation ?? null,
+    lastMutation: managedClearState.lastMutation ?? null,
+    ...extra,
+  });
+}
+
+async function clearDeltaV3Exact(base, verifyManagedScope) {
+  if (!managedClearState || managedClearState.shrinkScope !== "delta-v3") {
+    throw new Error("delta-v3 cleanup escaped its exact six-name scope");
+  }
+  managedClearBlocked = true;
+  managedClearState.preflightDone = false;
+  await preflightManagedShrinkScope();
+  managedClearState.preflightDone = true;
+  for (const name of managedClearState.names) {
+    const relative = name.slice(name.indexOf("/documents/") + "/documents/".length);
+    const children = await listCollectionIds(base, relative, (input, init) =>
+      managedShrinkRequest("delta-v3 child-collection preflight", input, init),
+    );
+    if (children === null || children.length !== 0) {
+      throw new Error("delta-v3 found an absent/changed target or unexpected child collection");
+    }
+  }
+  const collectionIds = managedClearScope(managedClearState.names, PROJECT, "(default)");
+  const presentNames = [...managedClearState.preflightUpdateTimes.keys()];
+  const presentCollections = collectionIds.filter((collectionId) =>
+    presentNames.some((name) => name.split("/documents/")[1].split("/")[0] === collectionId),
+  );
+  if (presentCollections.length > 0) {
+    if (managedClearState.bulkDeleteIntent || managedClearState.bulkDeleteOperation) {
+      throw new Error("delta-v3 cleanup has an unresolved prior bulk-delete operation");
+    }
+    managedClearState.bulkDeleteIntent = {
+      collectionIds: presentCollections,
+      names: presentNames,
+      updateTimes: Object.fromEntries(managedClearState.preflightUpdateTimes),
+    };
+    await writeDeltaCleanupJournal("bulk-delete-intent");
+    const api = `${SCHEME}://${HOST}/v1/projects/${PROJECT}/databases/(default)`;
+    const started = await managedShrinkRequest(
+      "delta-v3 bulk-delete start",
+      `${api}:bulkDeleteDocuments`,
+      {
+        method: "POST",
+        headers: authorized({ "content-type": "application/json" }),
+        body: JSON.stringify({ collectionIds: presentCollections, namespaceIds: [""] }),
+        signal: timeoutSignal(),
+      },
+    );
+    if (!started.ok) throw new Error(`delta-v3 bulk-delete start ${started.status}`);
+    const operation = (await started.json()).name;
+    const operationPrefix = `projects/${PROJECT}/databases/(default)/operations/`;
+    if (
+      typeof operation !== "string" ||
+      !operation.startsWith(operationPrefix) ||
+      !/^[A-Za-z0-9_-]+$/.test(operation.slice(operationPrefix.length))
+    ) {
+      throw new Error("delta-v3 bulk-delete operation escaped the fixed sandbox");
+    }
+    managedClearState.bulkDeleteOperation = operation;
+    await writeDeltaCleanupJournal("bulk-delete-active");
+    await pollDeltaV3BulkDelete();
+  }
+  if (verifyManagedScope) {
+    await verifyManagedShrinkScopeAbsent(base);
+    await writeDeltaCleanupJournal("complete");
+  }
+  managedClearBlocked = false;
+}
+
+async function pollDeltaV3BulkDelete() {
+  if (!managedClearState?.bulkDeleteOperation) {
+    throw new Error("delta-v3 recovery cannot resume without a durable bulk-delete operation");
+  }
+  const api = `${SCHEME}://${HOST}/v1`;
+  const pollLimit = Math.min(100, 400 - managedClearState.shrinkRequestCounter.current());
+  for (let attempt = 0; attempt < pollLimit; attempt += 1) {
+    const response = await managedShrinkRequest(
+      "delta-v3 bulk-delete poll",
+      `${api}/${managedClearState.bulkDeleteOperation}`,
+      { headers: authorized(), signal: timeoutSignal() },
+    );
+    if (!response.ok) throw new Error(`delta-v3 bulk-delete poll ${response.status}`);
+    const state = await response.json();
+    if (state.done === true) {
+      validateManagedClearOperation(state, PROJECT);
+      managedClearState.bulkDeleteOperation = null;
+      managedClearState.bulkDeleteIntent = null;
+      await writeDeltaCleanupJournal("bulk-delete-done");
+      return;
+    }
+  }
+  throw new Error(
+    "delta-v3 bulk-delete remains nonterminal; preserve its journal and block new sends",
+  );
 }
 
 async function sendV3CleanupDelete(action, name, updateTime, input, init) {
@@ -1276,6 +1433,97 @@ async function runV3RecoveryOnly() {
   }
 }
 
+async function runDeltaV3RecoveryOnly() {
+  if (
+    !DELTA_V3_MODE ||
+    !DELTA_LOCK_HELD ||
+    !PRODUCTION ||
+    PROJECT !== "fireemu-oracle-sbx" ||
+    !HOST ||
+    !META_OUT ||
+    !MANAGED_CLEAR_JOURNAL
+  ) {
+    throw new Error("delta-v3 recovery requires the fixed sandbox target and private journal");
+  }
+  let journal;
+  try {
+    journal = JSON.parse(await readFile(MANAGED_CLEAR_JOURNAL, "utf8"));
+  } catch (error) {
+    throw new Error("delta-v3 recovery journal is unreadable", { cause: error });
+  }
+  const staticNames = JSON.parse(MANAGED_CLEAR_NAMES ?? "null");
+  if (
+    !/^[a-f0-9]{32}$/.test(journal?.runId ?? "") ||
+    journal.runId !== process.env.FIRESTORE_PROBE_DELETE_RUN_ID
+  ) {
+    throw new Error("delta-v3 recovery run ID does not match its invocation");
+  }
+  deleteRunId = journal.runId;
+  if (
+    journal?.schemaVersion !== 1 ||
+    journal.mode !== "cleanup-delta-v3" ||
+    journal.project !== PROJECT ||
+    journal.database !== "(default)" ||
+    journal.status === "complete" ||
+    !/^[a-f0-9]{64}$/.test(journal.corpusDigest ?? "") ||
+    journal.corpusDigest !== CORPUS_DIGEST ||
+    !/^[a-f0-9]{40}$/.test(journal.sourceGitSha ?? "") ||
+    journal.sourceGitSha !== SOURCE_GIT_SHA ||
+    journal.writerExclusivity !==
+      "task-lock-held; run-specific six collection groups have no external writer" ||
+    !Array.isArray(staticNames) ||
+    JSON.stringify(staticNames.map((name) => name.replaceAll(DELETE_RUN_MARKER, journal.runId))) !==
+      JSON.stringify(journal.names) ||
+    managedShrinkScope(journal.names, PROJECT, "(default)") !== "delta-v3" ||
+    !Number.isSafeInteger(journal.httpRequestCount) ||
+    journal.httpRequestCount < 0 ||
+    journal.httpRequestCount >= 430 ||
+    !Number.isSafeInteger(journal.managedRequestCount) ||
+    journal.managedRequestCount < 0 ||
+    journal.managedRequestCount > 400
+  ) {
+    throw new Error("delta-v3 recovery journal escaped its source-bound six-name scope");
+  }
+  if (journal.bulkDeleteIntent && !journal.bulkDeleteOperation) {
+    throw new Error(
+      "delta-v3 bulk-delete send is uncertain; preserve its blocker and do not resend",
+    );
+  }
+  if (
+    journal.bulkDeleteOperation &&
+    !new RegExp(`^projects/${PROJECT}/databases/\\(default\\)/operations/[A-Za-z0-9_-]+$`).test(
+      journal.bulkDeleteOperation,
+    )
+  ) {
+    throw new Error("delta-v3 recovery operation escaped the fixed sandbox");
+  }
+  const remainingHttp = 430 - journal.httpRequestCount;
+  if (!requestBudget || Number(MAX_REQUESTS) !== remainingHttp) {
+    throw new Error("delta-v3 recovery must use the journal's remaining HTTP reservation");
+  }
+  deleteRunId = journal.runId;
+  requestCount = journal.httpRequestCount;
+  managedClearState = {
+    names: journal.names,
+    shrinkScope: "delta-v3",
+    recoveryOnly: true,
+    preflightUpdateTimes: new Map(),
+    shrinkRequestCounter: createShrinkRequestCounter(400, journal.managedRequestCount),
+    legacyDebrisAudited: true,
+    cleanupDeletedNames: [],
+    cleanupDeleteIntent: null,
+    bulkDeleteIntent: journal.bulkDeleteIntent ?? null,
+    bulkDeleteOperation: journal.bulkDeleteOperation ?? null,
+    pendingMutation: journal.pendingMutation ?? null,
+    lastMutation: journal.lastMutation ?? null,
+  };
+  const base = `${SCHEME}://${HOST}/v1/projects/${PROJECT}/databases/(default)/documents`;
+  managedClearBlocked = true;
+  if (managedClearState.bulkDeleteOperation) await pollDeltaV3BulkDelete();
+  await clearDeltaV3Exact(base, true);
+  if (META_OUT) await writeFile(META_OUT, `${JSON.stringify({ requestCount })}\n`, { mode: 0o600 });
+}
+
 function urlForDocument(name) {
   const prefix = `projects/${PROJECT}/databases/(default)/documents/`;
   if (!name.startsWith(prefix)) throw new Error("array shrink document escaped the sandbox");
@@ -1319,7 +1567,7 @@ async function verifyManagedShrinkScopeAbsent(base) {
       throw new Error("array shrink scope collection group remains populated");
     }
   }
-  if (managedClearState.recoveryOnly) {
+  if (managedClearState.recoveryOnly || managedClearState.shrinkScope === "delta-v3") {
     for (const name of managedClearState.names) {
       const relative = name.slice(name.indexOf("/documents/") + "/documents/".length);
       const children = await listCollectionIds(base, relative, (input, init) =>
@@ -1432,6 +1680,9 @@ async function managedClear(database, names) {
 
 async function seed(documents) {
   for (const document of documents ?? []) {
+    const input = url(document.path);
+    const name = replaceRunMarker(document.path.replace(/^\/v1\//, ""));
+    await writeDeltaMutationIntent(name, "PATCH", "seed", input, JSON.stringify(document.fields));
     const response = await trackedFetch(url(document.path), {
       method: "PATCH",
       headers: authorized({ "content-type": "application/json" }),
@@ -1442,6 +1693,26 @@ async function seed(documents) {
       throw new Error(`seed ${document.path}: ${response.status} ${await response.text()}`);
     }
   }
+}
+
+async function writeDeltaMutationIntent(name, method, stepId, input, body) {
+  if (managedClearState?.shrinkScope !== "delta-v3") return;
+  if (!managedClearState.names.includes(name)) {
+    throw new Error("delta-v3 mutation target is outside the frozen six-name scope");
+  }
+  if (managedClearState.pendingMutation) {
+    throw new Error("delta-v3 previous mutation is unresolved; stop and recover");
+  }
+  managedClearState.pendingMutation = {
+    name,
+    method,
+    stepId,
+    url: String(input),
+    bodySha256: createHash("sha256")
+      .update(body ?? "")
+      .digest("hex"),
+  };
+  await writeDeltaCleanupJournal("write-ahead-mutation");
 }
 
 /** `a.b.0` into a recorded value; `undefined` when the path does not resolve. */
@@ -1511,7 +1782,26 @@ async function step(spec, raw) {
   init.signal = AbortSignal.timeout(REQUEST_TIMEOUT_MS);
   let response;
   try {
-    response = await trackedFetch(url(resolvePath(spec.path, raw)), init);
+    const resolvedPath = resolvePath(spec.path, raw);
+    const input = url(resolvedPath);
+    if (new Set(["POST", "PATCH", "DELETE"]).has(spec.method.toUpperCase())) {
+      let target;
+      const write = init.body ? JSON.parse(init.body)?.writes?.[0] : null;
+      target = write?.update?.name ?? write?.delete ?? write?.transform?.document;
+      if (!target && resolvedPath.includes("/documents/")) {
+        target = resolvedPath.replace(/^\/v1\//, "").split(/[?#]/, 1)[0];
+      }
+      if (target) {
+        await writeDeltaMutationIntent(
+          replaceRunMarker(target),
+          spec.method.toUpperCase(),
+          spec.id,
+          input,
+          init.body ?? "",
+        );
+      }
+    }
+    response = await trackedFetch(input, init);
   } catch (error) {
     if (error?.name === "TimeoutError" || error?.name === "AbortError") {
       return {
@@ -1575,6 +1865,62 @@ function deleteBoundaryLength(program) {
   return match ? Number(match[1]) : null;
 }
 
+function validateDeltaV3Corpus(programs, names) {
+  const expectedIds = new Set(
+    ["rest", "commit", "batch-write"].flatMap((route) =>
+      [12112, 12113].map((count) => `writes/limits/near-limit-delete-refusal/${route}/${count}`),
+    ),
+  );
+  if (
+    !DELTA_V3_MODE ||
+    programs?.schemaVersion !== 1 ||
+    programs.sourceCorpusSha256 !== CORPUS_DIGEST ||
+    !Array.isArray(programs.restPrograms) ||
+    !Array.isArray(programs.streamRecipes) ||
+    programs.restPrograms.length !== 6 ||
+    new Set(programs.restPrograms.map((program) => program.id)).size !== 6 ||
+    JSON.stringify(programs.restPrograms.map((program) => program.id).toSorted()) !==
+      JSON.stringify([...expectedIds].toSorted()) ||
+    programs.restRequestCount !== 30 ||
+    programs.streamRecipes.length !== 1 ||
+    programs.streamRecipes[0]?.id !== DELTA_STREAM_ID ||
+    programs.streamRecipes[0]?.transport !== "grpc" ||
+    programs.streamRecipes[0]?.maxFrames !== 2
+  ) {
+    throw new Error("delta-v3 input differs from the source-bound six-recipe packet");
+  }
+  const seededNames = [];
+  for (const program of programs.restPrograms) {
+    if (
+      JSON.stringify(program.steps.map((recipeStep) => recipeStep.id)) !==
+      JSON.stringify(["seed", "before-delete", "delete", "after-delete", "group-after-delete"])
+    ) {
+      throw new Error("delta-v3 recipe step order is not the frozen delete proof sequence");
+    }
+    const write = program.steps[0].body?.writes?.[0]?.update;
+    const name = replaceRunMarker(write?.name ?? "");
+    if (!name || !names.includes(name))
+      throw new Error("delta-v3 seed escaped its frozen six names");
+    if (
+      program.steps[0].method !== "POST" ||
+      !program.steps[0].path.endsWith("/documents:commit")
+    ) {
+      throw new Error("delta-v3 seed route changed");
+    }
+    const before = replaceRunMarker(program.steps[1].path.replace(/^\/v1\//, ""));
+    if (program.steps[1].method !== "GET" || before !== name) {
+      throw new Error("delta-v3 immediate typed pre-delete read is not exact");
+    }
+    seededNames.push(name);
+  }
+  if (
+    new Set(seededNames).size !== 6 ||
+    JSON.stringify(seededNames.toSorted()) !== JSON.stringify(names.toSorted())
+  ) {
+    throw new Error("delta-v3 corpus does not own exactly the six frozen document names");
+  }
+}
+
 function provesDeleteTargetExists(program, stepSpec, document, recorded) {
   const expectedLength = deleteBoundaryLength(program);
   const expectedName = replaceRunMarker(
@@ -1606,13 +1952,22 @@ function provesDeleteOutcome(program, steps, raw) {
   if (
     !deletion ||
     deletion.status < 200 ||
-    deletion.status >= 500 ||
+    (deletion.status >= 300 && deletion.status < 400) ||
     afterDelete?.status !== 200 ||
     afterDelete.code !== "OK" ||
     group?.status !== 200 ||
     group.code !== "OK"
   )
     return false;
+  if (deletion.status >= 200 && deletion.status < 300) {
+    if (deletion.code !== "OK") return false;
+  } else if (
+    deletion.status !== 400 ||
+    deletion.code !== "INVALID_ARGUMENT" ||
+    deletion.message !== "Transaction too big. Decrease transaction size."
+  ) {
+    return false;
+  }
   const afterRaw = raw.get("after-delete");
   const groupRaw = raw.get("group-after-delete");
   const count = deleteBoundaryLength(program);
@@ -1643,16 +1998,51 @@ function provesDeleteOutcome(program, steps, raw) {
   );
 }
 
+function deleteBoundaryProof(program, steps, raw, blocked) {
+  const count = deleteBoundaryLength(program);
+  if (count === null) return null;
+  const beforeSpec = program.steps.find((candidate) => candidate.id === "before-delete");
+  const name = replaceRunMarker(
+    beforeSpec.path.replaceAll("PROJECT", PROJECT).replace(/^\/v1\//, ""),
+  );
+  const targetExists =
+    !blocked &&
+    provesDeleteTargetExists(program, beforeSpec, raw.get("before-delete"), steps["before-delete"]);
+  const outcomeProven = targetExists && provesDeleteOutcome(program, steps, raw);
+  const after = raw.get("after-delete");
+  const group = raw.get("group-after-delete");
+  const accepted =
+    steps.delete?.status >= 200 && steps.delete.status < 300 && steps.delete.code === "OK";
+  const refused =
+    steps.delete?.status === 400 &&
+    steps.delete.code === "INVALID_ARGUMENT" &&
+    steps.delete.message === "Transaction too big. Decrease transaction size.";
+  return {
+    documentCount: count,
+    deleteTargetExists: targetExists,
+    deleteOutcomeProven: outcomeProven,
+    outcome: accepted ? "accepted" : refused ? "refused" : "unknown",
+    postDeleteAbsent:
+      accepted && Array.isArray(after) && after.length === 1 && after[0]?.missing === name,
+    groupEmpty: accepted && Array.isArray(group) && group.length === 0,
+    postDeletePresent:
+      refused && Array.isArray(after) && after.length === 1 && after[0]?.found?.name === name,
+    groupContainsTarget:
+      refused && Array.isArray(group) && group.length === 1 && group[0]?.document?.name === name,
+  };
+}
+
 async function main() {
   assertV3ProductionCleanupAllowed({ host: HOST });
   if (RECOVERY_MODE !== undefined) {
-    if (!["recover-legacy", "recover-v3"].includes(RECOVERY_MODE)) {
+    if (!["recover-legacy", "recover-v3", "recover-delta-v3"].includes(RECOVERY_MODE)) {
       throw new Error("unsupported Firestore probe recovery mode");
     }
     if (!PRODUCTION || PROJECT !== "fireemu-oracle-sbx" || !HOST || !TOKEN) {
       throw new Error("legacy recovery requires the fixed sandbox production target");
     }
     if (RECOVERY_MODE === "recover-v3") await runV3RecoveryOnly();
+    else if (RECOVERY_MODE === "recover-delta-v3") await runDeltaV3RecoveryOnly();
     else await runLegacyRecoveryOnly();
     return;
   }
@@ -1661,7 +2051,8 @@ async function main() {
       "FIRESTORE_PROBE_HOST, FIRESTORE_PROBE_IN and FIRESTORE_PROBE_OUT are required",
     );
   }
-  const programs = JSON.parse(await readFile(IN, "utf8"));
+  const corpusInput = JSON.parse(await readFile(IN, "utf8"));
+  const programs = Array.isArray(corpusInput) ? corpusInput : corpusInput.restPrograms;
   const fixedLocalRunId = process.env.FIRESTORE_PROBE_DELETE_RUN_ID;
   deleteRunId =
     /^[a-f0-9]{32}$/.test(fixedLocalRunId ?? "") && (/^127\.0\.0\.1:\d+$/.test(HOST) || PRODUCTION)
@@ -1673,16 +2064,31 @@ async function main() {
     }
     const names = JSON.parse(MANAGED_CLEAR_NAMES).map(replaceRunMarker);
     const shrinkScope = managedShrinkScope(names, PROJECT, "(default)");
+    if (shrinkScope === "delta-v3") {
+      if (
+        !DELTA_V3_MODE ||
+        !DELTA_LOCK_HELD ||
+        !process.env.FIRESTORE_PROBE_DELTA_JOURNAL ||
+        process.env.FIRESTORE_PROBE_MANAGED_CLEAR_JOURNAL ||
+        Number(MAX_REQUESTS) !== 430
+      ) {
+        throw new Error("delta-v3 requires its separate journal and exact 430-request cap");
+      }
+    } else if (DELTA_V3_MODE) {
+      throw new Error("delta-v3 mode cannot use the historical six- or full-v3-name scope");
+    }
     if (
       names.length !== V3_SHRINK_NAMES.length &&
       !(
         /^127\.0\.0\.1:\d+$/.test(HOST) &&
         ["legacy", "v3"].includes(shrinkScope) &&
         names.length === 6
-      )
+      ) &&
+      shrinkScope !== "delta-v3"
     ) {
       throw new Error("managed clear requires the exact frozen corpus-v3 names");
     }
+    if (shrinkScope === "delta-v3") validateDeltaV3Corpus(corpusInput, names);
     managedClearScope(names, PROJECT, "(default)");
     managedClearState = {
       names,
@@ -1694,9 +2100,18 @@ async function main() {
       legacyDebrisAudited: false,
       cleanupDeletedNames: [],
       cleanupDeleteIntent: null,
+      bulkDeleteIntent: null,
+      bulkDeleteOperation: null,
+      pendingMutation: null,
+      lastMutation: null,
     };
     try {
       const previous = JSON.parse(await readFile(MANAGED_CLEAR_JOURNAL, "utf8"));
+      if (shrinkScope === "delta-v3") {
+        throw new Error(
+          "delta-v3 attempt journal already exists; recover it without starting a new recording",
+        );
+      }
       if (previous.status !== "complete") {
         throw new Error("managed clear operation requires recovery before a new recording");
       }
@@ -1712,12 +2127,14 @@ async function main() {
       throw new Error("production managed cleanup provenance is incomplete");
     }
     if (shrinkScope === "v3") await writeV3CleanupJournal("prepared");
+    if (shrinkScope === "delta-v3") await writeDeltaCleanupJournal("prepared");
   }
   const results = {};
   const touchedDatabases = new Set(["(default)"]);
   try {
+    if (managedClearState?.shrinkScope === "delta-v3") await clear();
     for (const program of programs) {
-      await clear();
+      if (managedClearState?.shrinkScope !== "delta-v3") await clear();
       for (const database of program.databases ?? []) {
         touchedDatabases.add(database);
         await clear(database);
@@ -1787,6 +2204,9 @@ async function main() {
                 !candidateDeleteBlocked && provesDeleteOutcome(program, steps, raw)
                   ? "complete"
                   : "indeterminate",
+              ...(DELTA_V3_MODE
+                ? { deleteProof: deleteBoundaryProof(program, steps, raw, candidateDeleteBlocked) }
+                : {}),
             }),
       };
     }

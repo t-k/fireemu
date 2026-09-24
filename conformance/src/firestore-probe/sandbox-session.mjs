@@ -347,10 +347,12 @@ function trackedFetch(input, init) {
       if (requestCount >= 430)
         throw new Error("delta-v3 HTTP request cap reached before network send");
       const requestMethod = String(init?.method ?? "GET").toUpperCase();
+      const isPendingResolutionRead = matchesPendingMutationResolutionRead(input, init);
       if (
         managedClearState.pendingMutation &&
         (managedClearState.pendingMutation.url !== String(input) ||
-          managedClearState.pendingMutation.method !== requestMethod)
+          managedClearState.pendingMutation.method !== requestMethod) &&
+        !isPendingResolutionRead
       ) {
         throw new Error("delta-v3 has an unresolved write-ahead mutation; stop and recover");
       }
@@ -358,7 +360,7 @@ function trackedFetch(input, init) {
       requestCount += 1;
       await writeDeltaCleanupJournal("request-reserved");
       const response = await fetch(input, { ...init, redirect: "error" });
-      if (managedClearState.pendingMutation) {
+      if (managedClearState.pendingMutation && !isPendingResolutionRead) {
         managedClearState.lastMutation = {
           ...managedClearState.pendingMutation,
           httpStatus: response.status,
@@ -371,6 +373,33 @@ function trackedFetch(input, init) {
     requestCount = requestBudget === null ? requestCount + 1 : requestBudget.claim();
     return fetch(input, init);
   })();
+}
+
+function matchesPendingMutationResolutionRead(input, init) {
+  const name = managedClearState?.pendingMutationResolutionName;
+  if (!name) return false;
+  const method = String(init?.method ?? "GET").toUpperCase();
+  if (method === "GET" && String(input) === urlForDocument(name)) return true;
+  if (method !== "POST") return false;
+  const api = `${SCHEME}://${HOST}/v1/projects/${PROJECT}/databases/(default)`;
+  if (String(input) !== `${api}/documents:runQuery`) return false;
+  let body;
+  try {
+    body = JSON.parse(init?.body ?? "null");
+  } catch {
+    return false;
+  }
+  const collectionId = name.split("/documents/")[1].split("/")[0];
+  return (
+    JSON.stringify(body) ===
+    JSON.stringify({
+      structuredQuery: {
+        from: [{ collectionId, allDescendants: true }],
+        select: { fields: [{ fieldPath: "__name__" }] },
+        limit: 2,
+      },
+    })
+  );
 }
 
 const replaceRunMarker = (value) => value.replaceAll(DELETE_RUN_MARKER, deleteRunId);
@@ -1519,9 +1548,108 @@ async function runDeltaV3RecoveryOnly() {
   };
   const base = `${SCHEME}://${HOST}/v1/projects/${PROJECT}/databases/(default)/documents`;
   managedClearBlocked = true;
+  await resolveDeltaPendingMutation();
   if (managedClearState.bulkDeleteOperation) await pollDeltaV3BulkDelete();
   await clearDeltaV3Exact(base, true);
   if (META_OUT) await writeFile(META_OUT, `${JSON.stringify({ requestCount })}\n`, { mode: 0o600 });
+}
+
+async function resolveDeltaPendingMutation() {
+  const pending = managedClearState?.pendingMutation;
+  if (!pending) return;
+  const name = pending.name;
+  if (
+    !managedClearState.names.includes(name) ||
+    !["seed", "delete"].includes(pending.stepId) ||
+    !/^[a-f0-9]{64}$/.test(pending.bodySha256 ?? "")
+  ) {
+    throw new Error("delta-v3 pending mutation is outside its exact journaled target");
+  }
+  const collectionId = name.split("/documents/")[1].split("/")[0];
+  const route = collectionId.startsWith("delrest")
+    ? "rest"
+    : collectionId.startsWith("delcommit")
+      ? "commit"
+      : collectionId.startsWith("delbatchwrite")
+        ? "batch-write"
+        : null;
+  const expectedMethod =
+    pending.stepId === "seed" ? "PATCH" : route === "rest" ? "DELETE" : route ? "POST" : null;
+  const expectedPath =
+    pending.stepId === "seed" || route === "rest"
+      ? `/v1/${name}`
+      : route === "commit"
+        ? `/v1/projects/${PROJECT}/databases/(default)/documents:commit`
+        : route === "batch-write"
+          ? `/v1/projects/${PROJECT}/databases/(default)/documents:batchWrite`
+          : null;
+  let actualPath;
+  try {
+    actualPath = new URL(pending.url).pathname;
+  } catch {
+    actualPath = null;
+  }
+  if (!expectedMethod || pending.method !== expectedMethod || actualPath !== expectedPath) {
+    throw new Error(
+      "delta-v3 pending mutation does not match its frozen seed or route-specific DELETE",
+    );
+  }
+  const expectedLength = FROZEN_ARRAY_LENGTHS.get(canonicalCollectionId(name));
+  if (!expectedLength) throw new Error("delta-v3 pending target has no frozen generated length");
+  const expectedBody =
+    pending.stepId === "seed"
+      ? JSON.stringify({
+          a: {
+            arrayValue: {
+              values: Array.from({ length: expectedLength }, (_, index) => ({
+                integerValue: String(index),
+              })),
+            },
+          },
+        })
+      : route === "rest"
+        ? ""
+        : JSON.stringify({ writes: [{ delete: name }] });
+  if (createHash("sha256").update(expectedBody).digest("hex") !== pending.bodySha256) {
+    throw new Error("delta-v3 pending mutation body differs from its frozen seed or DELETE recipe");
+  }
+  managedClearState.pendingMutationResolutionName = name;
+  let found;
+  try {
+    const response = await managedShrinkRequest(
+      "pending mutation typed recovery read",
+      urlForDocument(name),
+      {
+        headers: authorized(),
+        signal: timeoutSignal(),
+      },
+    );
+    if (response.status === 404) {
+      found = null;
+    } else if (response.ok) {
+      const document = await response.json();
+      validateShrinkBoundaryState(document, name, expectedLength);
+      found = document;
+    } else {
+      throw new Error(`delta-v3 pending mutation read ${response.status}`);
+    }
+    const api = `${SCHEME}://${HOST}/v1/projects/${PROJECT}/databases/(default)`;
+    const members = await managedGroupNames(api, collectionId, (label, input, init) =>
+      managedShrinkRequest(label, input, init),
+    );
+    if (found ? members.length !== 1 || members[0] !== name : members.length !== 0) {
+      throw new Error("delta-v3 pending mutation typed and collection-group reads disagree");
+    }
+  } finally {
+    managedClearState.pendingMutationResolutionName = null;
+  }
+  managedClearState.pendingMutation = null;
+  managedClearState.lastMutation = {
+    ...pending,
+    recoveredOutcome: found ? "target-present" : "target-absent",
+    responseObserved: false,
+  };
+  await writeDeltaCleanupJournal("pending-mutation-resolved");
 }
 
 function urlForDocument(name) {

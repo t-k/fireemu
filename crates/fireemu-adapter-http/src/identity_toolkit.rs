@@ -6840,12 +6840,12 @@ fn sign_in_with_custom_token(
     // Production's rules apply with configured signers and in the strict profile; the
     // emulator profile keeps the official emulator's leniency (sandbox recording 2026-09-24).
     let production_rules = trust.is_some() || reject_expired;
+    // An empty token is a malformed one to production and a missing one to the emulator.
     let token = match str_field(body, "token") {
-        None => return error(400, "MISSING_CUSTOM_TOKEN"),
         Some("") if production_rules => {
             return error(400, custom_token::INVALID_ASSERTION_FORMAT);
         }
-        Some("") => return error(400, "MISSING_CUSTOM_TOKEN"),
+        None | Some("") => return error(400, "MISSING_CUSTOM_TOKEN"),
         Some(token) => token,
     };
     // With configured signers only a token they signed is accepted, as in production; without

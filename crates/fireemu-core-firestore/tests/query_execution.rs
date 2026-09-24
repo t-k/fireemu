@@ -199,6 +199,12 @@ fn reference_run(corpus: &[Document], query: &Query) -> Vec<Document> {
             QueryScope::KindlessAllDescendants { parent } => parent.as_ref().is_none_or(|p| {
                 doc.path.pairs().len() > parent_len && doc.path.pairs()[..parent_len] == *p.pairs()
             }),
+            QueryScope::KindlessChildren { parent } => {
+                doc.path.pairs().len() == parent_len + 1
+                    && parent
+                        .as_ref()
+                        .is_none_or(|p| doc.path.pairs()[..parent_len] == *p.pairs())
+            }
         };
         if !in_scope {
             continue;
@@ -403,10 +409,12 @@ impl Gen {
     }
 
     fn query(&mut self, corpus: &[Document]) -> Query {
-        let scope = match self.below(4) {
+        let scope = match self.below(6) {
             0 => QueryScope::collection(Some(path("items/d01")), collection("sub")),
             1 => QueryScope::collection_group(collection("sub")),
             2 => QueryScope::collection(None, collection("other")),
+            3 => QueryScope::kindless_children(None),
+            4 => QueryScope::kindless_children(Some(path("items/d01"))),
             _ => QueryScope::collection(None, collection("items")),
         };
         let mut q = Query::new(scope);

@@ -1580,26 +1580,36 @@ async fn kindless_all_descendants_query_is_scoped_to_its_parent() {
         .iter()
         .all(|document| document.fields.is_empty()));
 
-    // An empty collection id without `allDescendants` is the same scan of everything under
-    // the parent: production and the official emulator both serve it.
-    let everything = collect_docs(
-        &mut client,
-        pb::RunQueryRequest {
-            parent: DOCS.to_owned(),
-            query_type: Some(pb::run_query_request::QueryType::StructuredQuery(
-                pb::StructuredQuery {
-                    from: vec![sq::CollectionSelector {
-                        collection_id: String::new(),
-                        all_descendants: false,
-                    }],
-                    ..Default::default()
-                },
-            )),
-            ..Default::default()
-        },
-    )
-    .await;
-    assert_eq!(everything.len(), 4, "{everything:?}");
+    // An empty collection id without `allDescendants` selects the parent's direct children
+    // in any collection (production, FS-QUERY-INDEX
+    // collection-group/scopes#kindless-without-descendants).
+    let children = |parent: String| pb::RunQueryRequest {
+        parent,
+        query_type: Some(pb::run_query_request::QueryType::StructuredQuery(
+            pb::StructuredQuery {
+                from: vec![sq::CollectionSelector {
+                    collection_id: String::new(),
+                    all_descendants: false,
+                }],
+                ..Default::default()
+            },
+        )),
+        ..Default::default()
+    };
+    let names = |documents: Vec<pb::Document>| {
+        documents
+            .into_iter()
+            .map(|document| document.name)
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(
+        names(collect_docs(&mut client, children(DOCS.to_owned())).await),
+        vec![format!("{DOCS}/roots/target")]
+    );
+    assert_eq!(
+        names(collect_docs(&mut client, children(format!("{DOCS}/roots/target"))).await),
+        vec![format!("{DOCS}/roots/target/children/a")]
+    );
     handle.abort();
 }
 

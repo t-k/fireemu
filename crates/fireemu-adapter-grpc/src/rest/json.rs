@@ -1092,7 +1092,9 @@ fn field_operator(value: Option<&Value>) -> Result<i32, JsonError> {
     };
     let operator = match value {
         Value::String(name) => O::from_str_name(name).map(|operator| operator as i32),
-        Value::Number(number) => number.as_i64().and_then(|number| i32::try_from(number).ok()),
+        Value::Number(number) => number
+            .as_i64()
+            .and_then(|number| i32::try_from(number).ok()),
         _ => return err("fieldFilter.op must be a string or enum number"),
     };
     operator.ok_or_else(|| JsonError("unknown field filter operator".into()))

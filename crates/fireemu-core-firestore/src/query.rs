@@ -33,6 +33,12 @@ pub enum QueryScope {
         /// Parent document; `None` for the whole database.
         parent: Option<DocumentPath>,
     },
+    /// Every direct child document of a parent, regardless of collection name: an empty
+    /// collection id without `allDescendants`.
+    KindlessChildren {
+        /// Parent document; `None` for the root.
+        parent: Option<DocumentPath>,
+    },
 }
 
 impl QueryScope {
@@ -72,13 +78,20 @@ impl QueryScope {
         Self::KindlessAllDescendants { parent }
     }
 
+    /// The kindless query of the direct children of `parent` (root when `None`).
+    #[must_use]
+    pub const fn kindless_children(parent: Option<DocumentPath>) -> Self {
+        Self::KindlessChildren { parent }
+    }
+
     /// Parent document, when the query is scoped below one.
     #[must_use]
     pub const fn parent(&self) -> Option<&DocumentPath> {
         match self {
             Self::Collection { parent, .. }
             | Self::CollectionGroup { parent, .. }
-            | Self::KindlessAllDescendants { parent } => parent.as_ref(),
+            | Self::KindlessAllDescendants { parent }
+            | Self::KindlessChildren { parent } => parent.as_ref(),
         }
     }
 
@@ -88,20 +101,26 @@ impl QueryScope {
         match self {
             Self::Collection { collection_id, .. }
             | Self::CollectionGroup { collection_id, .. } => Some(collection_id),
-            Self::KindlessAllDescendants { .. } => None,
+            Self::KindlessAllDescendants { .. } | Self::KindlessChildren { .. } => None,
         }
     }
 
     /// Whether descendants, rather than one direct collection, are selected.
     #[must_use]
     pub const fn all_descendants(&self) -> bool {
-        !matches!(self, Self::Collection { .. })
+        matches!(
+            self,
+            Self::CollectionGroup { .. } | Self::KindlessAllDescendants { .. }
+        )
     }
 
     /// Whether collection names are ignored.
     #[must_use]
     pub const fn is_kindless(&self) -> bool {
-        matches!(self, Self::KindlessAllDescendants { .. })
+        matches!(
+            self,
+            Self::KindlessAllDescendants { .. } | Self::KindlessChildren { .. }
+        )
     }
 
     /// Whether a document at `path` belongs to the range this scope selects. Only the
@@ -134,6 +153,12 @@ impl QueryScope {
             Self::KindlessAllDescendants { parent } => parent.as_ref().is_none_or(|prefix| {
                 path.pairs().len() > parent_len && path.pairs()[..parent_len] == *prefix.pairs()
             }),
+            Self::KindlessChildren { parent } => {
+                path.pairs().len() == parent_len + 1
+                    && parent
+                        .as_ref()
+                        .is_none_or(|prefix| path.pairs()[..parent_len] == *prefix.pairs())
+            }
         }
     }
 }

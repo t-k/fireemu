@@ -83,9 +83,16 @@ def descriptor():
     return campaign.descriptor()
 
 
-def permission_bindings(plan, source_commit, artifact_digest, inputs, baseline=None):
+def permission_bindings(
+    plan, source_commit, artifact_digest, inputs, baseline=None, *, project_number=None
+):
     return campaign.permission_bindings(
-        plan, source_commit, artifact_digest, inputs, baseline
+        plan,
+        source_commit,
+        artifact_digest,
+        inputs,
+        baseline,
+        project_number=project_number,
     )
 
 
@@ -106,6 +113,10 @@ def abort_generation(inputs):
 
 
 def validate_o7_admission(**bindings):
+    permission = bindings.get("permission")
+    campaign.validate_project_number(
+        permission.get("projectNumber") if isinstance(permission, dict) else None
+    )
     return o8_admission.validate_o7_admission(descriptor(), **bindings)
 
 
@@ -278,8 +289,14 @@ def _validate_owner_window(permission) -> None:
 def _approve(
     permission, plan, source_commit, artifact_digest, inputs, baseline=None
 ) -> None:
+    project_number = campaign.validate_project_number(permission.get("projectNumber"))
     required = permission_bindings(
-        plan, source_commit, artifact_digest, inputs, baseline
+        plan,
+        source_commit,
+        artifact_digest,
+        inputs,
+        baseline,
+        project_number=project_number,
     )
     if digest({key: permission.get(key) for key in required}) != digest(required):
         raise ValueError("typed owner permission binding differs")

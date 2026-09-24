@@ -1,12 +1,12 @@
 {
   "accounting": {
+    "dataRequests": 258,
     "documentDeletes": 34,
     "documentReads": 204,
     "documentWrites": 34,
-    "dataRequests": 258,
-    "managementRequests": 7,
     "httpRequests": 265,
-    "uploadedBytes": 31457280
+    "managementRequests": 7,
+    "uploadedBytes": 34603008
   },
   "boundSources": [
     "tools/compat-broad/fs-request-bytes-boundary/request_bytes_compiler.py",
@@ -28,21 +28,21 @@
     "expectedWrites": 34,
     "maxAccounts": 1,
     "maxConcurrency": 1,
+    "maxDataRequests": 258,
     "maxDeletes": 51,
     "maxDistinctResources": 51,
     "maxDocuments": 51,
     "maxDurationSeconds": 1150,
-    "observationWindowSeconds": 600,
-    "maxDataRequests": 258,
-    "maxManagementRequests": 7,
     "maxHttpRequests": 265,
     "maxInFlightRequests": 1,
+    "maxManagementRequests": 7,
     "maxPeakLiveDocuments": 17,
     "maxReads": 204,
-    "maxRequestBytes": 10485761,
+    "maxRequestBytes": 11534337,
     "maxResponseBytes": 2097152,
     "maxRuns": 1,
     "maxWrites": 51,
+    "observationWindowSeconds": 600,
     "perRequestTimeoutSeconds": 60.0,
     "recoveryWindow": {
       "authority": "read-only unless the same run holds a conditional-creation proof and a matching version-bound ownership read",
@@ -61,14 +61,12 @@
       "gateWallCapSeconds": 1200,
       "intervalSeconds": 0.25,
       "observationCommitSlots": 3,
-      "managementObservationSeconds": 53.0,
-      "managementRecoverySeconds": 39.75,
       "observationSeconds": 512.25,
       "observationSmallSlots": 102,
       "recoverySeconds": 497.25,
       "recoverySlots": 153,
       "smallRequestSeconds": 3.0,
-      "totalSeconds": 1102.25
+      "totalSeconds": 1009.5
     },
     "smallRequestTimeoutSeconds": 2.5
   },
@@ -79,7 +77,7 @@
     "hardCostCeilingUsd": 0.5,
     "maximumCostUsd": 0.000224,
     "networkCostUsd": 0.0,
-    "networkNote": "About 30 MiB is uploaded across the three Commits and under 1 MiB is returned. Ingress is not billed and the returned volume is negligible, so the network component of this campaign is zero to the published precision.",
+    "networkNote": "About 33 MiB is uploaded across the three Commits and under 1 MiB is returned. Ingress is not billed and the returned volume is negligible, so the network component of this campaign is zero to the published precision.",
     "unitPricesUsd": {
       "documentDelete": 2e-07,
       "documentRead": 6e-07,
@@ -88,17 +86,17 @@
   },
   "maximumUsage": {
     "basis": "every probe accepted, which is the outcome the campaign exists to detect",
+    "dataRequests": 258,
     "distinctResources": 51,
     "documentDeletes": 51,
     "documentReads": 204,
     "documentWrites": 51,
-    "dataRequests": 258,
-    "managementRequests": 7,
     "httpRequests": 265,
+    "managementRequests": 7,
     "peakLiveDocuments": 17,
-    "uploadedBytes": 31457280
+    "uploadedBytes": 34603008
   },
-  "note": "The local shadow remains a data-only 258-request reference. Production adds seven separately charged management calls: one tokeninfo attestation, three preflight metadata reads and three post-cleanup metadata reads, for a maximum of 265 total requests. The maxima cover every probe being accepted; accounting is the forecast and binds nothing. The Gate reserves 13 seconds for each management slot, 3.0 seconds for small data slots and 60 seconds for boundary Commits. The 600-second observation and 550-second recovery windows include the management reservations. If cleanup cannot complete or a management baseline drifts, ownership is retained and the run fails closed.",
+  "note": "The local shadow is data-only; production adds seven separately charged management requests. Request-count, document, cost and execution windows remain independently bounded. The strict REST Commit body ceiling is scoped to the 11 MiB adjacent-pair campaign; the general catalog maximum remains 10 MiB.",
   "schema": "fs-request-bytes-budget-v1",
   "transportDeadline": {
     "consequenceIfMissed": "The receipt is incomplete, the Commit is uncertain, and the run holds no conditional-creation proof. The version-bound delete is then a zero-wire skip by design, so cleanup detects the residue as `cleanup-not-absent` but cannot remove it: up to 17 documents stay in the project pending manual owner action.",
@@ -106,12 +104,12 @@
     "derivation": {
       "assumedSustainedBitsPerSecond": 5000000,
       "connectionSetupSeconds": 1.5,
-      "derivedRequirementSeconds": 26.8,
+      "derivedRequirementSeconds": 28.455,
       "marginNote": "The published ceiling is that requirement with roughly a 2x margin.",
       "responseReadSeconds": 0.5,
       "serverProcessingSeconds": 8.0,
-      "uploadBits": 83886088,
-      "uploadSeconds": 16.8
+      "uploadBits": 92274696,
+      "uploadSeconds": 18.455
     },
     "detection": "Detected, never silent. The absence proofs are only recorded on a typed NOT_FOUND, so an unremovable residue fails the run rather than passing it.",
     "enforcedBy": [
@@ -121,6 +119,6 @@
     "nonUploadReserveSeconds": 10.0,
     "ownerAction": "Run from a link that sustains the rate above. If a probe times out or cleanup cannot complete, the owner removes the residue under the recorded owned scope; ownership remains retained and fail-closed, and the campaign never retries a Commit to compensate.",
     "perRequestSeconds": 60.0,
-    "slowestUsableUpstreamBitsPerSecond": 1677722
+    "slowestUsableUpstreamBitsPerSecond": 1845494
   }
 }

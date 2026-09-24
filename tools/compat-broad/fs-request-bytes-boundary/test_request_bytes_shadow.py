@@ -32,7 +32,7 @@ REFUSAL_400 = {
     "httpStatus": 400,
     "errorCode": 400,
     "errorStatus": "INVALID_ARGUMENT",
-    "message": "Request payload size exceeds the limit: 10485760 bytes.",
+    "message": "Request payload size exceeds the limit: 11534336 bytes.",
     "classification": "expected",
 }
 
@@ -49,6 +49,7 @@ BASELINE = {
     "resourceAbsence": True,
     "failures": [],
     "overRefusal": REFUSAL_400,
+    "localJournal": {"captureComplete": True},
 }
 
 
@@ -67,9 +68,10 @@ def test_the_baseline_names_the_enforcement_source() -> None:
     assert "strict profile" in verdict["localEnforcement"]
 
 
-def test_agreement_with_the_documented_shape_is_not_confirmation_of_it() -> None:
+def test_local_shadow_summary_names_the_saved_rest_evidence_scope() -> None:
     verdict = classify_local_result(dict(BASELINE))
-    assert "not confirmation of it" in verdict["summary"]
+    assert "saved production comparison" in verdict["summary"]
+    assert "concrete REST recipes" in verdict["summary"]
 
 
 def test_a_legacy_413_is_now_reported_as_a_lost_shape() -> None:
@@ -416,6 +418,13 @@ def test_gates_fail_when_the_source_binding_broke() -> None:
     verdict = classify_local_result(dict(BASELINE))
     gates = shadow_gates(dict(BASELINE), verdict, source_bound=False)
     assert gates["stateValidation"] is False
+
+
+def test_gates_fail_closed_when_local_journal_is_incomplete() -> None:
+    result = {**BASELINE, "localJournal": {"captureComplete": False}}
+    verdict = classify_local_result(result)
+    gates = shadow_gates(result, verdict, source_bound=True)
+    assert gates == {"recordingComplete": False, "stateValidation": False}
 
 
 def test_gates_fail_on_a_shadow_failure() -> None:

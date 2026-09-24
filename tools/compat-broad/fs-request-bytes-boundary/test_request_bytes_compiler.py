@@ -6,13 +6,16 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).parent))
 from request_bytes_compiler import (
+    CATALOG_MAXIMUM,
     DOCUMENT_COUNT,
     DOCUMENT_SAFETY_MARGIN,
     REQUEST_TARGETS,
     compact_utf8,
     compile_request_bytes_plan,
+    compile_request_bytes_sentinel_plan,
     document_size_bytes,
     validate_request_bytes_plan,
+    validate_request_bytes_sentinel_plan,
 )
 
 NONCE = "a" * 32
@@ -20,6 +23,7 @@ NONCE = "a" * 32
 
 def test_three_independent_canonical_sizes_and_json_parity() -> None:
     plan = compile_request_bytes_plan("demo", "(default)", NONCE)
+    assert plan["catalogMaximum"] == CATALOG_MAXIMUM == 10_485_760
     assert [probe["bodyBytes"] for probe in plan["probes"]] == list(REQUEST_TARGETS)
     for probe, target in zip(plan["probes"], REQUEST_TARGETS):
         assert len(compact_utf8(probe["body"])) == target
@@ -229,6 +233,7 @@ def test_frozen_plan_does_not_duplicate_whole_probe_state_for_every_read():
     [
         ("schemaVersion", 2),
         ("catalogId", "FS-UNRELATED"),
+        ("catalogMaximum", 11_534_336),
         ("protocol", "gRPC"),
         ("metric", "proven backend bytes"),
         ("ownershipRequirements", []),
@@ -246,6 +251,14 @@ def test_validator_rejects_document_size_manifest_tamper():
     plan["documents"][plan["ownedResources"][0]]["logicalBytes"] = 1
     with pytest.raises(ValueError, match="manifest"):
         validate_request_bytes_plan(plan)
+
+
+def test_sentinel_keeps_the_general_catalog_maximum():
+    plan = compile_request_bytes_sentinel_plan("demo", "(default)", NONCE)
+    assert plan["catalogMaximum"] == CATALOG_MAXIMUM == 10_485_760
+    plan["catalogMaximum"] = 11_534_336
+    with pytest.raises(ValueError, match="metric contract"):
+        validate_request_bytes_sentinel_plan(plan)
 
 
 def _refresh_probe_field_snapshots(plan, probe):

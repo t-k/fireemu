@@ -361,6 +361,32 @@ def test_three_probe_run_completes_with_typed_over_refusal(
     assert result["completed"] is True
     assert result["cleanupComplete"] is True
     assert result["resourceAbsence"] is True
+    assert result["localJournal"]["captureComplete"] is True
+    assert result["localJournal"]["rowCount"] == len(value["executionSchedule"])
+    assert result["localJournal"]["sidecarCount"] == result["requestCount"]
+    journal_rows = [
+        json.loads(path.read_text())
+        for path in sorted((tmp_path / "run").glob("row-*.json"))
+    ]
+    skipped = [row for row in journal_rows if row["status"] == "skipped"]
+    assert result["localJournal"]["skippedCount"] == 17
+    assert result["localJournal"]["skippedSummary"] == [
+        {
+            "probe": "over",
+            "kind": "cleanup-version-bound-delete",
+            "reason": "creation-and-current-version-not-proven",
+            "count": 17,
+        }
+    ]
+    assert all(
+        row["kind"] == "cleanup-version-bound-delete" and row["probe"] == "over"
+        for row in skipped
+    )
+    assert all(
+        row["status"] != "skipped"
+        for row in journal_rows
+        if row["kind"] in ("conditional-create-commit", "probe-readback")
+    )
     refusal_raw = json.dumps(
         {"error": {"code": over_status, "status": "INVALID_ARGUMENT"}},
         separators=(",", ":"),
@@ -883,7 +909,7 @@ def test_the_refusal_message_is_recorded_and_bound_to_the_response_digest(tmp_pa
     _sys.path.insert(0, "tools/compat-broad/fs-request-bytes-boundary")
     from request_bytes_run_fixture import run_collector
 
-    message = "Request payload size exceeds the limit: 10485760 bytes."
+    message = "Request payload size exceeds the limit: 11534336 bytes."
     result = run_collector(
         tmp_path / "run",
         over={
@@ -920,7 +946,7 @@ def test_the_refusal_message_is_recorded_and_bound_to_the_response_digest(tmp_pa
     [
         pytest.param(
             "normal",
-            "Request payload size exceeds the limit: 10485760 bytes.",
+            "Request payload size exceeds the limit: 11534336 bytes.",
             id="normal",
         ),
         pytest.param("ascii", "x" * (128 * 1024), id="128-kib-ascii"),

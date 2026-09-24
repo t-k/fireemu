@@ -1026,16 +1026,40 @@ def collect_local(
                 and all("responseBodyFile" in row for row in actual_rows)
             )
         else:
+            actual_rows = [row for row in rows + recovery if row["status"] != "skipped"]
+            skipped_rows = [
+                row for row in rows + recovery if row["status"] == "skipped"
+            ]
+            permitted_skips = all(
+                row["kind"] == "cleanup-version-bound-delete"
+                and row["probe"] == "over"
+                and row.get("skipped") == "creation-and-current-version-not-proven"
+                for row in skipped_rows
+            )
             capture_complete = (
                 capture_rows_complete
-                and len(journal_sidecars) == expected_slots
-                and all("responseBodyFile" in row for row in rows + recovery)
+                and permitted_skips
+                and len(actual_rows) == dispatches
+                and len(journal_sidecars) == dispatches
+                and all("responseBodyFile" in row for row in actual_rows)
             )
+        skip_counts: dict[tuple[str, str, str], int] = {}
+        for row in rows + recovery:
+            if row["status"] != "skipped":
+                continue
+            category = (row["probe"], row["kind"], row["skipped"])
+            skip_counts[category] = skip_counts.get(category, 0) + 1
+        skipped_summary = [
+            {"probe": probe, "kind": kind, "reason": reason, "count": count}
+            for (probe, kind, reason), count in sorted(skip_counts.items())
+        ]
         local_journal = {
             "schemaVersion": 1,
             "planDigest": plan_digest,
             "rowCount": len(journal_rows),
             "sidecarCount": len(journal_sidecars),
+            "skippedCount": sum(skip_counts.values()),
+            "skippedSummary": skipped_summary,
             "rowEntries": journal_rows,
             "sidecarEntries": journal_sidecars,
             "requestBindings": request_bindings,

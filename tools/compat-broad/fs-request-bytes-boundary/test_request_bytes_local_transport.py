@@ -12,6 +12,7 @@ sys.path.insert(0, "tools/compat-broad")
 
 from request_bytes_compiler import (
     RAW_16MIB_OVER_BYTES,
+    compact_utf8,
     compile_request_bytes_plan,
     compile_request_bytes_sentinel_plan,
 )
@@ -224,14 +225,20 @@ def test_sentinel_rejects_neighboring_resource_and_non_loopback(origin):
     assert Handler.requests == []
 
 
-def test_legacy_commit_sizes_remain_admitted_with_the_extended_cap(origin):
+def test_strict_commit_boundary_sizes_are_admitted_with_the_extended_cap(origin):
     plan = compile_request_bytes_plan(
         "local-project", "(default)", "0123456789abcdef0123456789abcdef"
     )
-    commit = next(
+    commits = [
         row for row in plan["observation"] if row["kind"] == "conditional-create-commit"
-    )
-    result = request(origin, commit, request_byte_limit=MAX_SENTINEL_REQUEST_BYTES)
-    assert result["requestBytes"] == 10_485_759
-    assert MAX_REQUEST_BYTES == 10_485_761
-    assert Handler.requests[-1] == ("POST", commit["path"])
+    ]
+    assert [len(compact_utf8(commit["body"])) for commit in commits] == [
+        11_534_335,
+        11_534_336,
+        11_534_337,
+    ]
+    assert MAX_REQUEST_BYTES == 11_534_337
+    for commit in commits:
+        result = request(origin, commit, request_byte_limit=MAX_REQUEST_BYTES)
+        assert result["requestBytes"] == len(compact_utf8(commit["body"]))
+        assert Handler.requests[-1] == ("POST", commit["path"])

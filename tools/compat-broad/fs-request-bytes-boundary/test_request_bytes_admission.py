@@ -136,6 +136,13 @@ def test_the_descriptor_is_complete_and_published_budget_bound():
     assert len(descriptor.approval_fields) == 17
     assert descriptor.binds_campaign_id is True
     assert descriptor.budget == campaign.budget_document()["budget"]
+    assert descriptor.budget["maxRequestBytes"] == 11_534_337
+    assert (
+        descriptor.budget["maxRequestBytes"]
+        == request_bytes_remote_transport.MAX_REQUEST_BYTES
+    )
+    assert descriptor.budget["maxHttpRequests"] == 265
+    assert descriptor.budget["maxDataRequests"] == 258
     assert campaign.ledger_budget() == {
         "requests": 265,
         "accounts": 1,
@@ -153,6 +160,81 @@ def test_the_descriptor_is_complete_and_published_budget_bound():
     # it moved with them. It is not the Gate's wall, which stays under the
     # under the Gate's 1200 cap.
     assert descriptor.window_seconds == 1700
+
+
+def test_the_descriptor_targets_the_disposable_firestore_oracle():
+    assert campaign.PROJECT == "fireemu-oracle-sbx"
+    assert not hasattr(campaign, "NUMBER")
+    descriptor = campaign.descriptor()
+    assert descriptor.plan_compiler(NONCE)["project"] == "fireemu-oracle-sbx"
+
+
+def test_o7_rejects_an_unbound_project_number_before_shared_admission(monkeypatch):
+    def unexpected_shared_admission(*args, **kwargs):
+        raise AssertionError("O7 must reject the missing project number first")
+
+    monkeypatch.setattr(
+        admission.o8_admission,
+        "validate_o7_admission",
+        unexpected_shared_admission,
+    )
+    for permission in (
+        {},
+        {"projectNumber": None},
+        {"projectNumber": 1},
+        {"projectNumber": "<project-number>"},
+    ):
+        with pytest.raises(ValueError, match="project number"):
+            admission.validate_o7_admission(permission=permission)
+
+
+def test_the_descriptor_rejects_a_historical_ten_mib_shadow_receipt():
+    historical = json.loads(
+        (
+            ROOT / "spec/compatibility/broad-runs/fs-request-bytes-local-shadow.json"
+        ).read_text()
+    )
+    assert [row["requestBytes"] for row in historical["probeOutcomes"]] == [
+        10_485_759,
+        10_485_760,
+        10_485_761,
+    ]
+    from request_bytes_shadow import observation_source_digest
+
+    current_source = observation_source_digest()
+    historical["sourceDigestBefore"] = current_source
+    historical["sourceDigestAfter"] = current_source
+    with pytest.raises(ValueError, match="current 11 MiB boundary"):
+        campaign.validate_shadow_record(historical)
+    published = campaign.shadow_record()
+    assert published["sourceDigestBefore"] == current_source
+    assert published["sourceDigestAfter"] == current_source
+    assert len(published["runtime"]["sourceCommit"]) == 40
+    assert [row["requestBytes"] for row in published["probeOutcomes"]] == [
+        11_534_335,
+        11_534_336,
+        11_534_337,
+    ]
+
+
+@pytest.mark.parametrize(
+    "mutate",
+    [
+        lambda record: record["probeOutcomes"][1].update(requestBytes=11_534_335),
+        lambda record: record["probeOutcomes"][1].update(httpStatus=400),
+        lambda record: record["probeOutcomes"][2].update(errorStatus="OUT_OF_RANGE"),
+        lambda record: record["probeOutcomes"][2].update(
+            responseBody='{"error":{"code":400,"message":"wrong","status":"INVALID_ARGUMENT"}}'
+        ),
+        lambda record: record["observation"]["localJournal"].update(skippedCount=16),
+        lambda record: record.update(sourceDigestAfter="0" * 64),
+    ],
+)
+def test_shadow_binding_rejects_stale_or_mutated_boundary_observations(mutate):
+    current = copy.deepcopy(campaign.shadow_record())
+    mutate(current)
+    with pytest.raises(ValueError):
+        campaign.validate_shadow_record(current)
 
 
 def test_the_transport_deadline_is_the_published_one_and_the_enforced_one():
@@ -219,7 +301,14 @@ def frozen_checkout(tmp_path):
 
 def owner_permission(plan, commit, artifact_digest, inputs, baseline):
     return {
-        **campaign.permission_bindings(plan, commit, artifact_digest, inputs, baseline),
+        **campaign.permission_bindings(
+            plan,
+            commit,
+            artifact_digest,
+            inputs,
+            baseline,
+            project_number="1" * 12,
+        ),
         "ownerIdentity": "offline-fixture-not-permission",
         "permissionReference": "offline-fixture",
         "recoveryOwner": "offline-recovery",
@@ -390,7 +479,9 @@ def test_frozen_inputs_bind_the_plan_permission_and_source_snapshot(tmp_path):
         "batch_wire.py",
     }
     for path in campaign.TRANSPORT_CLOSURE_SOURCES:
-        assert generation["sourceDigests"][Path(path).name] == inputs["sourceInputs"][path]
+        assert (
+            generation["sourceDigests"][Path(path).name] == inputs["sourceInputs"][path]
+        )
 
 
 @pytest.mark.parametrize("path", campaign.TRANSPORT_CLOSURE_SOURCES)
@@ -399,9 +490,7 @@ def test_transport_source_mutation_is_outside_frozen_generation(tmp_path, path):
     source = built.source / path
     source.write_bytes(source.read_bytes() + b"\n# mutation")
     with pytest.raises(ValueError):
-        admission._provenance(
-            built.source, built.commit, built.inputs["sourceInputs"]
-        )
+        admission._provenance(built.source, built.commit, built.inputs["sourceInputs"])
 
 
 def test_noncurrent_source_map_cannot_downgrade_generation_closure(tmp_path):
@@ -466,6 +555,8 @@ def test_retained_historical_generation_uses_allowlisted_metadata():
         {"perRequestTimeoutSeconds": 12.0},
         {"ownedResourceCount": 50},
         {"planDigest": "0" * 64},
+        {"projectNumber": None},
+        {"projectNumber": "<project-number>"},
     ],
     ids=[
         "placeholder-owner",
@@ -476,6 +567,8 @@ def test_retained_historical_generation_uses_allowlisted_metadata():
         "wrong-deadline",
         "wrong-resource-count",
         "wrong-plan-digest",
+        "missing-project-number",
+        "placeholder-project-number",
     ],
 )
 def test_a_permission_that_does_not_bind_the_campaign_is_refused(tmp_path, damage):

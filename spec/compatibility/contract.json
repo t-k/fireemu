@@ -587,6 +587,10 @@
             {
               "behaviour": "A PartitionQuery page token names the snapshot version it was issued at and carries a fingerprint of the request and that version, in both profiles, so a token edited to read another version is refused as foreign. fireemu before FS-QUERY-INDEX did not bind the version; this is the one refusal the emulator profile adds, a local integrity bound on a token only fireemu issues",
               "precision": "strictly-safer"
+            },
+            {
+              "behaviour": "The Firestore Admin API (REST v1 and gRPC google.firestore.admin.v1 with google.longrunning.Operations) is served in both profiles with production's shapes, recorded on 2026-09-24 (FS-CONFIG-LIFECYCLE): named database create, get, list, patch and delete; composite indexes; single-field index and TTL configuration; managed exportDocuments, importDocuments and bulkDeleteDocuments over the emulated Cloud Storage; operations, locations. The official emulator serves none of it, so no existing request is newly refused, but after its use: deleting (default) or a declared database answers the data plane NOT_FOUND, a Datastore-mode or Enterprise database created through it is refused by the Native data plane, a deleted database id cannot be reused for 300 seconds (firestore.deletedDatabaseIdCooldownSeconds), and the managed-infrastructure methods (backups, backup schedules, restore, clone, point-in-time recovery) answer 501 instead of 404. A managed export's partition checksum is written as 0 and not verified on import (owner decision C13). Under the strict profile only, projects.unknownProjects = refuse answers any other project with production's 403 (C11)",
+              "precision": "explicit-extension"
             }
           ],
           "productionOnly": [

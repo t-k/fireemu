@@ -731,16 +731,20 @@ impl FunctionsSourceScanBudget {
 
 #[derive(Debug)]
 struct FunctionsSourceSnapshot {
-    path: Option<PathBuf>,
+    cleanup_root: Option<PathBuf>,
+    source_path: PathBuf,
 }
 
 impl FunctionsSourceSnapshot {
-    fn new(path: PathBuf) -> Self {
-        Self { path: Some(path) }
+    fn new(cleanup_root: PathBuf, source_path: PathBuf) -> Self {
+        Self {
+            cleanup_root: Some(cleanup_root),
+            source_path,
+        }
     }
 
     fn into_path(mut self) -> PathBuf {
-        self.path
+        self.cleanup_root
             .take()
             .expect("a snapshot path is transferred once")
     }
@@ -750,7 +754,7 @@ impl std::ops::Deref for FunctionsSourceSnapshot {
     type Target = Path;
 
     fn deref(&self) -> &Self::Target {
-        self.path.as_deref().expect("a live snapshot owns its path")
+        &self.source_path
     }
 }
 
@@ -762,7 +766,7 @@ impl AsRef<Path> for FunctionsSourceSnapshot {
 
 impl Drop for FunctionsSourceSnapshot {
     fn drop(&mut self) {
-        if let Some(path) = self.path.take() {
+        if let Some(path) = self.cleanup_root.take() {
             let _ = std::fs::remove_dir_all(path);
         }
     }
@@ -788,10 +792,12 @@ fn snapshot_functions_source_with_charge(
     cancelled: &AtomicBool,
 ) -> Result<FunctionsSourceSnapshot, String> {
     static NEXT_SNAPSHOT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let source_root = std::fs::canonicalize(root)
+        .map_err(|error| format!("snapshot {}: {error}", root.display()))?;
     // Deployment/watch ignores do not define the runtime generation. Validate every
     // copied input, including local dotenv and secret files, under the same I/O budget.
     let before =
-        functions_source_stamp_with_charge(root, &[], charge, cancelled)?.content_signature;
+        functions_source_stamp_with_charge(&source_root, &[], charge, cancelled)?.content_signature;
     let sequence = NEXT_SNAPSHOT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     let destination = std::env::temp_dir().join(format!(
         "fireemu-functions-{}-{sequence}",
@@ -799,30 +805,47 @@ fn snapshot_functions_source_with_charge(
     ));
     std::fs::create_dir(&destination)
         .map_err(|e| format!("snapshot {}: {e}", destination.display()))?;
-    let snapshot = FunctionsSourceSnapshot::new(destination.clone());
+    let dependencies: Vec<_> = source_root
+        .ancestors()
+        .enumerate()
+        .filter_map(|(level, ancestor)| {
+            let path = ancestor.join("node_modules");
+            path.is_dir().then_some((level, path))
+        })
+        .collect();
+    let mut source_path = destination.clone();
+    if let Some((outermost_level, _)) = dependencies.last() {
+        for _ in 0..*outermost_level {
+            source_path.push("source");
+        }
+    }
+    let snapshot = FunctionsSourceSnapshot::new(destination.clone(), source_path.clone());
     secure_snapshot_directory(&destination)?;
     charge(1, 0)?;
+    std::fs::create_dir_all(&source_path)
+        .map_err(|error| format!("snapshot {}: {error}", source_path.display()))?;
     FunctionsSourceTraversal {
-        root,
+        root: &source_root,
         ignores,
         entry_budget: FunctionsSourceEntryBudget::default(),
         charge,
         cancelled,
     }
-    .copy_directory(root, &destination, 0)
+    .copy_directory(&source_root, &source_path, 0)
     .and_then(|()| {
-        let dependencies = root
-            .ancestors()
-            .map(|ancestor| ancestor.join("node_modules"))
-            .find(|candidate| candidate.is_dir());
-        if let Some(dependencies) = dependencies {
-            link_dependency_directory(&dependencies, &destination.join("node_modules"))?;
+        for (level, dependencies) in dependencies {
+            let ancestor = source_path
+                .ancestors()
+                .nth(level)
+                .expect("the snapshot mirrors each dependency ancestor");
+            link_dependency_directory(&dependencies, &ancestor.join("node_modules"))?;
         }
         Ok(())
     })?;
     let copied =
-        functions_source_stamp_with_charge(&destination, &[], charge, cancelled)?.content_signature;
-    let after = functions_source_stamp_with_charge(root, &[], charge, cancelled)?.content_signature;
+        functions_source_stamp_with_charge(&source_path, &[], charge, cancelled)?.content_signature;
+    let after =
+        functions_source_stamp_with_charge(&source_root, &[], charge, cancelled)?.content_signature;
     if before != copied || before != after {
         return Err(
             "Functions runtime inputs changed while capturing a reload snapshot".to_owned(),
@@ -5847,6 +5870,55 @@ mod tests {
         assert!(!snapshot_path.exists());
         assert!(root.join("node_modules/pkg/index.js").is_file());
         std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn reload_snapshot_resolves_local_and_hoisted_dependencies() {
+        let workspace = std::env::temp_dir().join(format!(
+            "fireemu-functions-hoisted-test-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&workspace);
+        let source = workspace.join("functions");
+        std::fs::create_dir_all(source.join("node_modules/local-pkg")).unwrap();
+        std::fs::create_dir_all(workspace.join("node_modules/hoisted-pkg")).unwrap();
+        std::fs::write(source.join("index.js"), "module.exports = 1;").unwrap();
+        std::fs::write(
+            source.join("node_modules/local-pkg/index.js"),
+            "module.exports = 'local';",
+        )
+        .unwrap();
+        std::fs::write(
+            workspace.join("node_modules/hoisted-pkg/index.js"),
+            "module.exports = 'hoisted';",
+        )
+        .unwrap();
+
+        let snapshot = snapshot_functions_source(&source, &[]).unwrap();
+        let script = "const {createRequire} = require('node:module'); const path = require('node:path'); const fromSource = createRequire(path.join(process.argv[1], 'index.js')); console.log(fromSource('local-pkg') + ':' + fromSource('hoisted-pkg'));";
+        let output = std::process::Command::new("node")
+            .args(["-e", script])
+            .arg(snapshot.as_ref())
+            .output()
+            .expect("Node is required to verify Functions module resolution");
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert_eq!(
+            String::from_utf8_lossy(&output.stdout).trim(),
+            "local:hoisted"
+        );
+
+        let snapshot_path = snapshot.to_path_buf();
+        drop(snapshot);
+        assert!(!snapshot_path.exists());
+        assert!(source.join("node_modules/local-pkg/index.js").is_file());
+        assert!(workspace
+            .join("node_modules/hoisted-pkg/index.js")
+            .is_file());
+        std::fs::remove_dir_all(workspace).unwrap();
     }
 
     #[cfg(unix)]

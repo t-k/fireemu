@@ -1076,16 +1076,17 @@ const PROGRAMS_RAW = [
     defaultDatabase: true,
     databases: [],
     steps: [
-      // Every recording starts from the same state, which production-only steps make and the
-      // next rows check: a (default) created in this run, with no document and no index.
-      // fireemu's (default) starts that way too (it is created when the daemon starts).
-      { id: "prepare-delete", method: "DELETE", path: "v1/{project}/databases/(default)", onlyOn: "production" },
+      // Every recording starts from the same state, which the preparation steps make and the
+      // next rows check: a (default) created in this run, with no document and no index. Both
+      // sides run them, so ids are numbered alike, but they are not compared: what they find
+      // is what the previous run left.
+      { id: "prepare-delete", method: "DELETE", path: "v1/{project}/databases/(default)", compare: false },
       {
         ...pollPath("prepare-absent", "v1/{project}/databases/(default)", "notFound", {
           max: 20,
           intervalMs: 5_000,
         }),
-        onlyOn: "production",
+        compare: false,
       },
       {
         ...pollPath("prepare-create", "v1/{project}/databases", "httpOk", {
@@ -1095,7 +1096,7 @@ const PROGRAMS_RAW = [
           body: NATIVE,
           query: { databaseId: "(default)" },
         }),
-        onlyOn: "production",
+        compare: false,
       },
       get("get-before", "v1/{project}/databases/(default)"),
       get("indexes-before", "v1/{project}/databases/(default)/collectionGroups/-/indexes"),
@@ -1118,13 +1119,18 @@ const PROGRAMS_RAW = [
         max: 20,
         intervalMs: 5_000,
       }),
-      get("document-without-default", "v1/{project}/databases/(default)/documents/c/d"),
-      {
-        id: "query-without-default",
+      // A deleted (default) keeps serving its data for a while (C10): read until it stops.
+      // The seeded document reads back while it serves and NOT_FOUND once it stops.
+      pollPath("document-without-default", "v1/{project}/databases/(default)/documents/items/a", "notFound", {
+        max: 40,
+        intervalMs: 15_000,
+      }),
+      pollPath("query-without-default", "v1/{project}/databases/(default)/documents:runQuery", "httpError", {
+        max: 40,
+        intervalMs: 15_000,
         method: "POST",
-        path: "v1/{project}/databases/(default)/documents:runQuery",
         body: query("(default)"),
-      },
+      }),
       get("list-without-default", "v1/{project}/databases", { filterDatabases: true }),
       get("indexes-without-default", "v1/{project}/databases/(default)/collectionGroups/-/indexes"),
       pollPath("recreate", "v1/{project}/databases", "httpOk", {

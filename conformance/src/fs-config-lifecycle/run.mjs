@@ -552,7 +552,10 @@ async function check() {
       saved !== undefined &&
       (saved.corpusDigest !== programDigest(program, captures) || saved.harnessDigest !== harness);
     for (const step of program.steps) {
-      if (step.onlyOn === "production" || step.capture || step.upload) continue;
+      // A preparation step (compare: false) runs on both sides, so ids are numbered alike, but
+      // what it finds is what the previous run left, not behavior.
+      if (step.onlyOn === "production" || step.compare === false || step.capture || step.upload)
+        continue;
       if (program.local || step.reproduce) {
         // A local-only row: fireemu's export must reproduce the capture production accepted.
         if (!step.reproduce) continue;

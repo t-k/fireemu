@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
@@ -107,7 +108,44 @@ test("FS-QUERY-INDEX closure inventory cannot silently omit a declared condition
         (r) => r === "fs-query-index" || program === r || program.startsWith(`${r}/`),
       );
     };
+    // The comparison is bound to the committed fixture, covers every corpus step exactly once,
+    // and its figures and recordings are the ones this condition claims.
+    const fixtureText = readFileSync(
+      fileURLToPath(new URL("../fs-query-index-production.json", import.meta.url)),
+      "utf8",
+    );
+    assert.equal(
+      comparison.fixtureSha256,
+      createHash("sha256").update(fixtureText).digest("hex"),
+      `${label}: the comparison was made against the committed fixture`,
+    );
+    const steps = PROGRAMS.flatMap((program) =>
+      program.steps.map((step) => `${program.id}#${step.id}`),
+    );
+    assert.deepEqual(
+      comparison.rows.map(({ row }) => row).toSorted(),
+      steps.toSorted(),
+      `${label}: the comparison covers every corpus step once`,
+    );
+    if (comparison.rangeTotals) {
+      assert.equal(comparison.rangeTotals.production, comparison.rangeTotals.fireemu, label);
+    }
     const rows = comparison.rows.filter(({ row }) => covered(row));
+    const counted = {};
+    for (const { status } of rows) counted[status] = (counted[status] ?? 0) + 1;
+    assert.deepEqual(
+      condition.evidence.rows,
+      counted,
+      `${label}: its figures are the comparison's`,
+    );
+    const fixture = JSON.parse(fixtureText);
+    for (const program of new Set(rows.map(({ row }) => row.split("#")[0]))) {
+      const { recordedAt, gitSha } = fixture.programs[program];
+      assert.ok(
+        runs.some((run) => run.recordedAt === recordedAt && run.gitSha === gitSha),
+        `${label}: the recording of ${program} (${recordedAt}) is named`,
+      );
+    }
     // A row may differ only as an owner-decided, documented divergence of this condition.
     const divergences = condition.evidence.documentedDivergences ?? [];
     for (const divergence of divergences) {

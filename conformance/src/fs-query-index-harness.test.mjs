@@ -859,22 +859,19 @@ test("approved divergences remove only what their decision names", async () => {
       {
         explainMetrics: {
           executionStats: {
-            debugStats: {
-              documents_scanned: docs,
-              index_entries_scanned: entries,
-            },
+            debugStats: { documents_scanned: docs, index_entries_scanned: entries },
           },
-          planSummary: {
-            indexesUsed: members.map((properties) => ({ properties })),
-          },
+          planSummary: { indexesUsed: members.map((properties) => ({ properties })) },
         },
       },
     ],
   });
+  // Members in another order, and the walk's entry count that follows from it.
   assert.equal(
     approvedDivergence(merge, explain(["(b)", "(a)"], "5"), explain(["(a)", "(b)"], "6")),
     "S4",
   );
+  // Another member, another document count, or the same order with another entry count.
   assert.equal(
     approvedDivergence(merge, explain(["(b)", "(a)"], "5"), explain(["(a)", "(c)"], "5")),
     undefined,
@@ -883,31 +880,100 @@ test("approved divergences remove only what their decision names", async () => {
     approvedDivergence(merge, explain(["(b)", "(a)"], "5"), explain(["(a)", "(b)"], "5", "2")),
     undefined,
   );
+  assert.equal(
+    approvedDivergence(merge, explain(["(b)", "(a)"], "5"), explain(["(b)", "(a)"], "6")),
+    undefined,
+  );
+  const docs = "projects/demo-fs-query-index/databases/(default)/documents";
   const partition = "fs-query-index/partition-query/large-group#count-2";
   const cursors = (...keys) => ({
     status: 200,
-    body: {
-      partitions: keys.map((key) => ({ values: [{ referenceValue: key }] })),
-    },
+    body: { partitions: keys.map((key) => ({ values: [{ referenceValue: key }] })) },
   });
-  assert.equal(approvedDivergence(partition, cursors("a", "b"), cursors("c", "d")), "S5");
-  assert.equal(approvedDivergence(partition, cursors("a", "b"), cursors("c")), undefined);
+  const sample = (parent, id) => `${docs}/qroot/r${parent}/qp/d${String(id).padStart(5, "0")}`;
   assert.equal(
-    approvedDivergence(partition, cursors("a", "b"), {
+    approvedDivergence(
+      partition,
+      cursors(sample(1, 550), sample(1, 892)),
+      cursors(sample(0, 855), sample(2, 17)),
+    ),
+    "S5",
+  );
+  // Fewer cursors, a cursor carrying before, or one in another group or database is not.
+  assert.equal(
+    approvedDivergence(partition, cursors(sample(1, 550), sample(1, 892)), cursors(sample(0, 855))),
+    undefined,
+  );
+  assert.equal(
+    approvedDivergence(partition, cursors(sample(1, 550), sample(1, 892)), {
       status: 200,
       body: {
         partitions: [
-          { before: true, values: [{ referenceValue: "c" }] },
-          { values: [{ referenceValue: "d" }] },
+          { before: true, values: [{ referenceValue: sample(0, 855) }] },
+          { values: [{ referenceValue: sample(0, 900) }] },
         ],
       },
     }),
     undefined,
   );
-  const everything = "fs-query-index/partition-query/large-group#count-64";
-  assert.equal(approvedDivergence(everything, cursors("a", "b"), cursors("c", "d", "e")), "S5");
   assert.equal(
-    approvedDivergence(everything, cursors("a"), cursors(...Array.from({ length: 64 }, String))),
+    approvedDivergence(
+      partition,
+      cursors(sample(1, 550), sample(1, 892)),
+      cursors(sample(0, 855), `${docs}/qroot/r0/other/d00001`),
+    ),
     undefined,
   );
+  const everything = "fs-query-index/partition-query/large-group#count-64";
+  const many = (count) => cursors(...Array.from({ length: count }, (_, i) => sample(i % 3, i)));
+  assert.equal(approvedDivergence(everything, many(14), many(20)), "S5");
+  // Fewer than the largest count answered in full, as many as requested, or no cursor at all.
+  assert.equal(approvedDivergence(everything, many(14), many(7)), undefined);
+  assert.equal(approvedDivergence(everything, many(14), many(64)), undefined);
+  assert.equal(approvedDivergence(everything, many(14), { status: 200, body: {} }), undefined);
+});
+
+test("partition cursors must nest and ranges must add up across rows", async () => {
+  const { crossRowChecks, RANGE_ROWS } = await import("./fs-query-index/divergences.mjs");
+  const docs = "projects/demo-fs-query-index/databases/(default)/documents";
+  const key = (id) => `${docs}/qroot/r0/qp/d${String(id).padStart(5, "0")}`;
+  const cursors = (...ids) => ({
+    status: 200,
+    body: { partitions: ids.map((id) => ({ values: [{ referenceValue: key(id) }] })) },
+  });
+  const count = (n) => ({
+    status: 200,
+    body: [{ result: { aggregateFields: { c: { integerValue: String(n) } } } }],
+  });
+  const counted = (step, ids) => ({
+    row: `fs-query-index/partition-query/large-group#${step}`,
+    status: "DIVERGENCE_APPROVED",
+    production: cursors(1),
+    fireemu: cursors(...ids),
+  });
+  const ranges = (production, fireemu) =>
+    RANGE_ROWS.map((row, i) => ({
+      row,
+      status: "DIVERGENCE_APPROVED",
+      production: count(production[i]),
+      fireemu: count(fireemu[i]),
+    }));
+  const good = [
+    counted("count-1", [5]),
+    counted("count-2", [5, 9]),
+    counted("count-3", [2, 5, 9]),
+    counted("count-8", [1, 2, 3, 4, 5, 6, 7, 9]),
+    counted("count-64", [1, 2, 3, 4, 5, 6, 7, 8, 9]),
+  ];
+  let checked = crossRowChecks([...good, ...ranges([850, 114, 218, 818], [285, 417, 78, 1220])]);
+  assert.deepEqual([...checked.demote], []);
+  assert.deepEqual(checked.rangeTotals, { production: "2000", fireemu: "2000" });
+  // Ranges that do not add up are demoted.
+  checked = crossRowChecks([...good, ...ranges([850, 114, 218, 818], [285, 417, 78, 1219])]);
+  assert.deepEqual([...checked.demote].toSorted(), RANGE_ROWS.toSorted());
+  // Cursors out of key order, or a count that drops a cursor of a smaller one, are demoted.
+  for (const broken of [[counted("count-2", [9, 5])], [counted("count-2", [5, 7])]]) {
+    const rows = good.map((row) => broken.find((b) => b.row === row.row) ?? row);
+    assert.equal(crossRowChecks(rows).demote.size, 5);
+  }
 });

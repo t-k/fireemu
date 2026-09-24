@@ -28,7 +28,7 @@ import { promisify } from "node:util";
 import { CONFORMANCE_DIR, REPO_ROOT } from "../config.mjs";
 import { resolveFireemuBinary } from "../evidence.mjs";
 import { PROGRAMS } from "./corpus.mjs";
-import { approvedDivergence, RANGE_ROWS, rangeTotal } from "./divergences.mjs";
+import { approvedDivergence, crossRowChecks } from "./divergences.mjs";
 import { scanFixture } from "./fixture-scan.mjs";
 import {
   DATABASE,
@@ -645,19 +645,13 @@ async function check() {
       });
     }
   }
-  // The range reconstruction counts may differ with the cursors, but they must still add up
-  // to the whole group on both sides.
-  const ranges = rows.filter((r) => RANGE_ROWS.includes(r.row));
-  if (
-    ranges.length === RANGE_ROWS.length &&
-    ranges.some((r) => r.status === "DIVERGENCE_APPROVED") &&
-    rangeTotal(ranges.map((r) => r.production)) !== rangeTotal(ranges.map((r) => r.fireemu))
-  ) {
-    for (const range of ranges) {
-      if (range.status === "DIVERGENCE_APPROVED") {
-        range.status = "MISMATCH";
-        delete range.decision;
-      }
+  // What S5 still requires across rows: the ranges add up on both sides, and fireemu's
+  // partition cursors are in key order and nest from one count to the next.
+  const { demote, rangeTotals } = crossRowChecks(rows);
+  for (const row of rows) {
+    if (demote.has(row.row) && row.status === "DIVERGENCE_APPROVED") {
+      row.status = "MISMATCH";
+      delete row.decision;
     }
   }
   const known = new Set(PROGRAMS.map((p) => p.id));
@@ -667,7 +661,7 @@ async function check() {
   const artifactSha256 = sha256(await readFile(local.binary));
   await writeFile(
     join(RUN_DIR, "comparison.json"),
-    `${JSON.stringify({ artifact: local.binary, artifactSha256, summary, orphans, failures: local.failures, rows }, null, 2)}\n`,
+    `${JSON.stringify({ artifact: local.binary, artifactSha256, summary, rangeTotals, orphans, failures: local.failures, rows }, null, 2)}\n`,
   );
   const passing = new Set(["MATCH", "MATCH_NONDETERMINISTIC", "DIVERGENCE_APPROVED"]);
   for (const row of rows.filter((r) => !passing.has(r.status))) {
@@ -716,6 +710,7 @@ async function exportComparison(out) {
     artifactSha256: comparison.artifactSha256,
     fixtureSha256,
     summary: comparison.summary,
+    rangeTotals: comparison.rangeTotals,
     rows: comparison.rows.map(({ row, status, decision, production, fireemu }) =>
       status === "MISMATCH" || status === "DIVERGENCE_APPROVED"
         ? {

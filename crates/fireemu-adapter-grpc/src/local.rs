@@ -1844,7 +1844,7 @@ impl LocalBackend {
     /// Drops one database (`databases.delete`): its documents are gone, its streams observe
     /// the wipe, and a later request is refused unless something creates it again.
     pub fn delete_database(&self, project: &str, database: &str) {
-        let _exclusive = self.barrier.exclusive();
+        let _exclusive = self.barrier.pause();
         let key = (project.to_owned(), database.to_owned());
         let removed = match self.databases.lock() {
             Ok(mut dbs) => dbs.remove(&key).map(DatabaseHandle),
@@ -2585,13 +2585,13 @@ impl LocalBackend {
         self.admin.indexes().overlay(
             parent.project.as_str(),
             parent.database.as_str(),
-            self.now(),
+            self.admin_now(),
             &mut set,
         );
         self.admin.fields().overlay(
             parent.project.as_str(),
             parent.database.as_str(),
-            self.now(),
+            self.admin_now(),
             &mut set,
             false,
         );
@@ -2607,7 +2607,7 @@ impl LocalBackend {
                 parent.project.as_str(),
                 parent.database.as_str(),
                 requirement,
-                self.now(),
+                self.admin_now(),
             ) {
                 let mut refused =
                     Status::failed_precondition(crate::index_messages::building_index_message(
@@ -3497,6 +3497,12 @@ impl LocalBackend {
             .lock()
             .map(|c| c.now())
             .unwrap_or(fireemu_core_types::time::LogicalInstant::UNIX_EPOCH)
+    }
+
+    /// The instant the Admin API stamps a change with, and measures its pending states against:
+    /// the clock documents are written at, so an unpinned daemon follows the wall clock.
+    pub fn admin_now(&self) -> fireemu_core_types::time::LogicalInstant {
+        self.write_time()
     }
 
     /// Timestamp supplied to one Firestore write attempt.

@@ -860,3 +860,59 @@ fn a_malformed_index_id_is_refused_and_a_finished_build_reports_its_documents() 
     );
     assert_ne!(done["metadata"]["startTime"], done["metadata"]["endTime"]);
 }
+
+#[test]
+fn an_unpinned_backend_stamps_admin_changes_with_the_wall_clock() {
+    // Production stamps a patch after the create; an unpinned daemon writes documents at the
+    // wall clock and must stamp Admin changes the same way, not at a clock nothing advances.
+    let (state, _clock) = state();
+    let state = RestState {
+        local: Arc::new(
+            LocalBackend::new(
+                (*state.gateway).clone(),
+                Arc::new(Mutex::new(VirtualClock::new(LogicalInstant::from_nanos(0)))),
+                7,
+            )
+            .with_wall_clock_write_time(),
+        ),
+        ..state
+    };
+    let (status, created) = call(
+        &state,
+        "POST",
+        "/v1/projects/p/databases?databaseId=wall",
+        native(),
+    );
+    assert_eq!(status, 200, "{created}");
+    std::thread::sleep(std::time::Duration::from_millis(5));
+    let (status, patched) = call(
+        &state,
+        "PATCH",
+        "/v1/projects/p/databases/wall?updateMask=deleteProtectionState",
+        json!({"deleteProtectionState": "DELETE_PROTECTION_ENABLED"}),
+    );
+    assert_eq!(status, 200, "{patched}");
+    let created_at = created["response"]["createTime"].as_str().unwrap();
+    let updated_at = patched["response"]["updateTime"].as_str().unwrap();
+    assert!(!created_at.starts_with("1970"), "{created_at}");
+    assert!(updated_at > created_at, "{created_at} then {updated_at}");
+}
+
+#[test]
+fn deleting_a_database_resets_no_request_in_flight_elsewhere() {
+    // A delete detaches one database; a request on another database that verified its
+    // credentials before the delete must still be admitted (it is not a session reset).
+    let (state, _clock) = state();
+    let (status, _) = call(
+        &state,
+        "POST",
+        "/v1/projects/p/databases?databaseId=gone",
+        native(),
+    );
+    assert_eq!(status, 200);
+    let barrier = state.local.barrier();
+    let seen = barrier.epoch();
+    let (status, deleted) = call(&state, "DELETE", "/v1/projects/p/databases/gone", json!({}));
+    assert_eq!(status, 200, "{deleted}");
+    assert!(barrier.admit_since(seen).is_ok());
+}

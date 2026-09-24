@@ -233,7 +233,7 @@ pub(crate) fn route(
     body: &Value,
 ) -> RestResponse {
     let registry = state.local.admin().indexes();
-    let now = state.local.now();
+    let now = state.local.admin_now();
     match (method, rest) {
         ("POST", []) => {
             let definition = match parse_index(group, body) {

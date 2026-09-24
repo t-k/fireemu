@@ -356,7 +356,7 @@ fn current(state: &RestState, project: &str, database: &str, op: &StoredOperatio
                 database,
                 &name,
                 &index,
-                registry.state(&index, state.local.now()),
+                registry.state(&index, state.local.admin_now()),
                 (documents, end),
             )
         }

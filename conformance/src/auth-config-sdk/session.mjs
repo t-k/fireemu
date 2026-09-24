@@ -110,6 +110,41 @@ export function configDrift(a, b, path = "") {
 }
 
 /**
+ * Whether a config value read back shows everything written: each written member has the
+ * written value, and members the server adds (a default minimum length, output-only members)
+ * are allowed. An unset value must read back unset. The whole configuration is compared exactly
+ * after each program anyway.
+ */
+export function configCovers(actual, wanted) {
+  const want = settledForm(wanted);
+  const have = settledForm(actual);
+  const empty = (v) =>
+    v === undefined || (v && typeof v === "object" && !Array.isArray(v) && !Object.keys(v).length);
+  if (empty(want)) return empty(have);
+  if (Array.isArray(want)) {
+    return (
+      Array.isArray(have) &&
+      have.length === want.length &&
+      want.every((item, i) => configCovers(have[i], item))
+    );
+  }
+  if (typeof want === "object") {
+    return (
+      have !== null &&
+      typeof have === "object" &&
+      !Array.isArray(have) &&
+      Object.entries(want).every(([key, value]) =>
+        // A written empty object (a oneof choice such as `allowByDefault: {}`) must be there.
+        value && typeof value === "object" && !Object.keys(value).length
+          ? key in have
+          : configCovers(have[key], value),
+      )
+    );
+  }
+  return sameRecording(have, want);
+}
+
+/**
  * Whether a config value read back is the value wanted. At the compared path itself an empty
  * object also counts as unset (a cleared member may read back as `{}`).
  */
@@ -270,7 +305,7 @@ export function createSession(
     const paths = Object.keys(wanted);
     for (let attempt = 0; attempt < settleAttempts; attempt += 1) {
       const now = await readConfig(paths, { cleanup });
-      if (paths.every((path) => configEquals(now[path], wanted[path]))) return now;
+      if (paths.every((path) => configCovers(now[path], wanted[path]))) return now;
       if (ctx.target.kind === "production") await sleep(settleDelayMs);
     }
     const now = await readConfig(paths, { cleanup }).catch(() => "unreadable");

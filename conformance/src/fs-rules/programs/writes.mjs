@@ -58,6 +58,9 @@ const RESOURCE_CASES = [
   ["get-method", "get", "request.method == 'get'"],
   ["get-resource-id", "get", "resource.id == 'get-resource-id'"],
   ["get-name-type", "get", "resource.__name__ is path"],
+  ["get-request-resource-null", "get", `${R} == null`],
+  ["get-request-resource-absent", "get", "!('resource' in request)"],
+  ["delete-request-resource-in", "delete", "'resource' in request"],
 ];
 
 const ACCESS_CASES = [
@@ -167,6 +170,9 @@ export const PROGRAMS = [
         "get-method",
         "get-resource-id",
         "get-name-type",
+        "get-request-resource-null",
+        "get-request-resource-absent",
+        "delete-request-resource-in",
       ].map((name) => [`fsr-res/${name}`, { a: integer(1) }]),
     ),
     steps: [
@@ -287,6 +293,9 @@ export const PROGRAMS = [
       get("get-method", "a", "fsr-res/get-method"),
       get("get-resource-id", "a", "fsr-res/get-resource-id"),
       get("get-name-type", "a", "fsr-res/get-name-type"),
+      get("get-request-resource-null", "a", "fsr-res/get-request-resource-null"),
+      get("get-request-resource-absent", "a", "fsr-res/get-request-resource-absent"),
+      commit("delete-request-resource-in", "a", [remove("fsr-res/delete-request-resource-in")]),
       get("get-resource-grpc", "a", "fsr-res/get-resource", { transport: "grpc" }),
       commit(
         "update-merged-grpc",
@@ -404,6 +413,51 @@ export const PROGRAMS = [
       { id: "begin-denied", as: "a", rpc: "beginTransaction", body: {} },
       commit("commit-denied-write", "a", [update("fsr-acc-src/other", { n: integer(1) })]),
       { id: "begin-unauthenticated", as: "none", rpc: "beginTransaction", body: {} },
+      // Which ways of opening a transaction an end user may use.
+      {
+        id: "begin-read-only",
+        as: "a",
+        rpc: "beginTransaction",
+        body: { options: { readOnly: {} } },
+      },
+      {
+        id: "begin-read-write",
+        as: "a",
+        rpc: "beginTransaction",
+        body: { options: { readWrite: {} } },
+      },
+      { id: "begin-grpc", as: "a", rpc: "beginTransaction", transport: "grpc", body: {} },
+      {
+        id: "batch-get-new-transaction",
+        as: "a",
+        rpc: "batchGet",
+        body: { documents: ["{docs}/fsr-acc/get-present"], newTransaction: { readWrite: {} } },
+      },
+      commit("commit-after-batch-get-transaction", "a", [
+        {
+          update: { name: "{docs}/fsr-acc/write-get-after-partner", fields: {} },
+          currentDocument: { exists: false },
+        },
+        {
+          update: { name: "{docs}/fsr-acc-partner/p5", fields: { owner: string("UID(a)") } },
+          currentDocument: { exists: false },
+        },
+      ]),
+      {
+        id: "run-query-new-read-only-transaction",
+        as: "a",
+        rpc: "runQuery",
+        body: {
+          structuredQuery: { from: [{ collectionId: "fsr-open" }] },
+          newTransaction: { readOnly: {} },
+        },
+      },
+      {
+        id: "batch-get-new-read-only-transaction",
+        as: "none",
+        rpc: "batchGet",
+        body: { documents: ["{docs}/fsr-open/d"], newTransaction: { readOnly: {} } },
+      },
     ],
   },
   {
@@ -414,6 +468,7 @@ export const PROGRAMS = [
       ["fsr-at/x", { owner: string("UID(a)"), n: integer(1) }],
       ["fsr-at/y", { owner: string("UID(b)"), n: integer(1) }],
       ["fsr-at/z", { owner: string("UID(a)"), n: integer(1) }],
+      ["fsr-norule/present", { n: integer(1) }],
     ]),
     steps: [
       commit("commit-one-denied", "a", [
@@ -478,6 +533,58 @@ export const PROGRAMS = [
         },
       },
       get("final-post-state", "a", "fsr-at/z"),
+      {
+        id: "batch-write-all-allowed",
+        as: "a",
+        rpc: "batchWrite",
+        body: {
+          writes: [
+            update("fsr-at/x", { owner: string("UID(a)"), n: integer(11) }),
+            update("fsr-at/z", { owner: string("UID(a)"), n: integer(11) }),
+          ],
+        },
+      },
+      {
+        id: "batch-write-precondition-and-allowed",
+        as: "a",
+        rpc: "batchWrite",
+        body: {
+          writes: [
+            {
+              ...update("fsr-at/x", { owner: string("UID(a)"), n: integer(12) }),
+              currentDocument: { exists: false },
+            },
+            update("fsr-at/z", { owner: string("UID(a)"), n: integer(12) }),
+          ],
+        },
+      },
+      get("batch-write-precondition-post-state", "a", "fsr-at/z"),
+      // Which comes first, the precondition or Rules: no rule matches `fsr-norule`.
+      commit("precondition-exists-on-missing-denied", "a", [
+        {
+          ...update("fsr-norule/missing", { n: integer(1) }),
+          currentDocument: { exists: true },
+        },
+      ]),
+      commit("precondition-absent-on-existing-denied", "a", [
+        {
+          ...update("fsr-norule/present", { n: integer(1) }),
+          currentDocument: { exists: false },
+        },
+      ]),
+      {
+        id: "precondition-update-time-denied",
+        as: "a",
+        rpc: "commit",
+        body: {
+          writes: [
+            {
+              ...update("fsr-norule/present", { n: integer(2) }),
+              currentDocument: { updateTime: "2020-01-01T00:00:00Z" },
+            },
+          ],
+        },
+      },
       get("masked-get", "a", "fsr-at/x", { params: { "mask.fieldPaths": "n" } }),
     ],
   },
@@ -488,6 +595,12 @@ for (const program of PROGRAMS) {
   for (const step of program.steps) {
     if (step.id === "commit-get-after" || step.id === "transaction-one-denied") {
       step.body = { ...step.body, transaction: { $from: "begin", path: "transaction" } };
+    }
+    if (step.id === "commit-after-batch-get-transaction") {
+      step.body = {
+        ...step.body,
+        transaction: { $from: "batch-get-new-transaction", path: "0.transaction" },
+      };
     }
     if (step.id === "commit-denied-write") {
       step.body = { ...step.body, transaction: { $from: "begin-denied", path: "transaction" } };

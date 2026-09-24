@@ -175,13 +175,23 @@ struct CatalogState {
 }
 
 /// The per-backend database catalog.
-#[derive(Debug)]
 pub struct AdminCatalog {
     state: Mutex<CatalogState>,
     operations: super::operations::OperationStore,
     indexes: super::indexes::IndexRegistry,
+    managed_storage: std::sync::OnceLock<super::managed::SharedManagedStorage>,
     /// When the backend's configured databases came into being.
     created_at: LogicalInstant,
+}
+
+impl std::fmt::Debug for AdminCatalog {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("AdminCatalog")
+            .field("state", &self.state)
+            .field("indexes", &self.indexes)
+            .field("managed_storage", &self.managed_storage.get().is_some())
+            .finish_non_exhaustive()
+    }
 }
 
 fn next_uid(seed: &mut u64) -> String {
@@ -218,6 +228,7 @@ impl AdminCatalog {
             }),
             operations: super::operations::OperationStore::default(),
             indexes: super::indexes::IndexRegistry::default(),
+            managed_storage: std::sync::OnceLock::new(),
             created_at,
         }
     }
@@ -454,6 +465,17 @@ impl AdminCatalog {
         drop(state);
         self.indexes.forget(|project, _| owned(project));
         self.operations.reset(owned);
+    }
+
+    /// Connects managed export and import to the daemon's Cloud Storage. Set once, at start.
+    pub fn set_managed_storage(&self, storage: super::managed::SharedManagedStorage) {
+        let _ = self.managed_storage.set(storage);
+    }
+
+    /// The daemon's Cloud Storage, when it serves one.
+    #[must_use]
+    pub fn managed_storage(&self) -> Option<&super::managed::SharedManagedStorage> {
+        self.managed_storage.get()
     }
 
     /// The Admin-created composite indexes of every database.

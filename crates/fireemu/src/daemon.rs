@@ -620,6 +620,13 @@ fn assemble_adapters(bound: BoundStartup) -> Result<ServiceAssembly, String> {
         storage_admin_capability.clone(),
         control_token.clone(),
     )?;
+    // Managed export and import (the Firestore Admin API) write to and read from this
+    // Storage emulator.
+    backend
+        .admin()
+        .set_managed_storage(Arc::new(crate::managed_storage::StorageBridge::new(
+            storage.clone(),
+        )));
     if let Some(runtime) = &functions_runtime {
         runtime.set_faults(faults.for_project(runtime.project()));
         if let Some(gate) = &app_check_gate {

@@ -2456,20 +2456,7 @@ impl LocalBackend {
         transaction: Option<&TransactionId>,
         now: fireemu_core_types::time::LogicalInstant,
     ) -> Result<CommitResult, Status> {
-        let indexes = self.indexes.read().map_err(|_| lock_poisoned())?;
-        let key = (
-            Some(parent.project.as_str().to_owned()),
-            parent.database.as_str().to_owned(),
-        );
-        let shared = (None, parent.database.as_str().to_owned());
-        db.set_index_catalog(
-            indexes
-                .get(&key)
-                .or_else(|| indexes.get(&shared))
-                .cloned()
-                .unwrap_or_default(),
-        );
-        drop(indexes);
+        db.set_index_catalog(self.planning_indexes(parent)?);
         let actor = Self::take_commit_actor();
         let sink = self
             .change_admission
@@ -2577,6 +2564,58 @@ impl LocalBackend {
         })
     }
 
+    /// The catalog a query or write of `parent`'s database is planned against: the configured
+    /// indexes (project-specific, else shared) plus every Admin-created index that is `READY`.
+    fn planning_indexes(
+        &self,
+        parent: &Parent,
+    ) -> Result<fireemu_core_firestore::index::IndexSet, Status> {
+        let mut set = {
+            let indexes = self.indexes.read().map_err(|_| lock_poisoned())?;
+            indexes
+                .get(&(
+                    Some(parent.project.as_str().to_owned()),
+                    parent.database.as_str().to_owned(),
+                ))
+                .or_else(|| indexes.get(&(None, parent.database.as_str().to_owned())))
+                .cloned()
+                .unwrap_or_default()
+        };
+        self.admin.indexes().overlay(
+            parent.project.as_str(),
+            parent.database.as_str(),
+            self.now(),
+            &mut set,
+        );
+        Ok(set)
+    }
+
+    /// A query refusal in production's words: a missing index that an Admin create is still
+    /// building is "currently building", every other one is the ordinary refusal.
+    fn index_rejection(&self, parent: &Parent, rejection: &crate::gateway::Rejection) -> Status {
+        let database = crate::gateway::database_name(parent);
+        if let crate::gateway::Rejection::MissingIndex { requirement, .. } = rejection {
+            if let Some(index) = self.admin.indexes().building(
+                parent.project.as_str(),
+                parent.database.as_str(),
+                requirement,
+                self.now(),
+            ) {
+                let mut refused =
+                    Status::failed_precondition(crate::index_messages::building_index_message(
+                        &database,
+                        &index.id,
+                        requirement,
+                    ));
+                if let Ok(v) = "FS_GW_MISSING_INDEX".parse() {
+                    refused.metadata_mut().insert("fireemu-reason", v);
+                }
+                return refused;
+            }
+        }
+        rejection.to_status_in(&database)
+    }
+
     /// Decodes and validates a structured query through the strict gateway.
     pub fn accepted_query(
         &self,
@@ -2584,20 +2623,10 @@ impl LocalBackend {
         sq: &pb::StructuredQuery,
     ) -> Result<AcceptedQuery, Status> {
         let query = decode_structured_query(parent, sq).map_err(status)?;
-        let indexes = self.indexes.read().map_err(|_| lock_poisoned())?;
-        let empty = fireemu_core_firestore::index::IndexSet::default();
-        let project_key = (
-            Some(parent.project.as_str().to_owned()),
-            parent.database.as_str().to_owned(),
-        );
-        let shared_key = (None, parent.database.as_str().to_owned());
-        let database_indexes = indexes
-            .get(&project_key)
-            .or_else(|| indexes.get(&shared_key))
-            .unwrap_or(&empty);
+        let database_indexes = self.planning_indexes(parent)?;
         self.gateway
-            .validate_query_with_indexes(&query, database_indexes)
-            .map_err(|rejection| rejection.to_status_in(&crate::gateway::database_name(parent)))
+            .validate_query_with_indexes(&query, &database_indexes)
+            .map_err(|rejection| self.index_rejection(parent, &rejection))
     }
 
     /// Decodes and validates a structured aggregation query through the strict gateway.
@@ -2608,20 +2637,10 @@ impl LocalBackend {
         aggregations: &[Aggregation],
     ) -> Result<AcceptedQuery, Status> {
         let query = decode_structured_query(parent, sq).map_err(status)?;
-        let indexes = self.indexes.read().map_err(|_| lock_poisoned())?;
-        let empty = fireemu_core_firestore::index::IndexSet::default();
-        let project_key = (
-            Some(parent.project.as_str().to_owned()),
-            parent.database.as_str().to_owned(),
-        );
-        let shared_key = (None, parent.database.as_str().to_owned());
-        let database_indexes = indexes
-            .get(&project_key)
-            .or_else(|| indexes.get(&shared_key))
-            .unwrap_or(&empty);
+        let database_indexes = self.planning_indexes(parent)?;
         self.gateway
-            .validate_aggregation_query_with_indexes(&query, aggregations, database_indexes)
-            .map_err(|rejection| rejection.to_status_in(&crate::gateway::database_name(parent)))
+            .validate_aggregation_query_with_indexes(&query, aggregations, &database_indexes)
+            .map_err(|rejection| self.index_rejection(parent, &rejection))
     }
 
     /// Atomically replaces the index catalog used by subsequent query plans.

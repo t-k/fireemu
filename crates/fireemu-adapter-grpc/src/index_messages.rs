@@ -79,11 +79,21 @@ fn project_of(database: &str) -> &str {
         .unwrap_or_default()
 }
 
+/// The console page of a database's indexes: production names a named database in the link
+/// (`/firestore/databases/<d>/indexes`) and leaves `(default)` out (`/firestore/indexes`).
 fn console(database: &str) -> String {
-    format!(
-        "https://console.firebase.google.com/v1/r/project/{}/firestore/indexes",
-        project_of(database)
-    )
+    let id = database.rsplit('/').next().unwrap_or_default();
+    if id == fireemu_core_types::ids::DatabaseId::DEFAULT || !database.contains("/databases/") {
+        format!(
+            "https://console.firebase.google.com/v1/r/project/{}/firestore/indexes",
+            project_of(database)
+        )
+    } else {
+        format!(
+            "https://console.firebase.google.com/v1/r/project/{}/firestore/databases/{id}/indexes",
+            project_of(database)
+        )
+    }
 }
 
 /// The one field of a requirement a single-field index would serve: one ordered or
@@ -199,6 +209,31 @@ pub fn missing_index_message(
     message
 }
 
+/// Production's refusal of a query whose index an Admin create is still building: the console
+/// link carries the index itself, its server-assigned id and the implied `__name__` included.
+#[must_use]
+pub fn building_index_message(
+    database: &str,
+    index_id: &str,
+    requirement: &IndexDefinition,
+) -> String {
+    let group = requirement.collection_group.as_str();
+    let index = AdminIndex {
+        name: format!("{database}/collectionGroups/{group}/indexes/{index_id}"),
+        query_scope: scope_number(requirement.query_scope),
+        fields: requirement
+            .fields
+            .iter()
+            .map(|field| admin_field(field.path.canonical(), field.mode))
+            .collect(),
+    };
+    format!(
+        "The query requires an index. That index is currently building and cannot be used yet. See its status here: {}?create_composite={}",
+        console(database),
+        blob(&index)
+    )
+}
+
 /// What production answers a plan-only Explain of a query that needs a missing index.
 pub const PLAN_ONLY_MISSING_INDEX: &str = "no matching index found.";
 
@@ -227,6 +262,37 @@ pub fn for_explain(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_named_database_is_named_in_the_console_link_and_a_building_index_is_named_by_id() {
+        // Recorded against production on 2026-09-24 (FS-CONFIG-LIFECYCLE exploration).
+        let database = "projects/fireemu-oracle-query/databases/cfgx0924k";
+        let requirement = IndexDefinition {
+            collection_group: fireemu_core_types::ids::CollectionId::try_new("items").unwrap(),
+            query_scope: IndexQueryScope::Collection,
+            fields: vec![
+                fireemu_core_firestore::index::IndexField {
+                    path: fireemu_core_firestore::field_path::FieldPath::parse("a").unwrap(),
+                    mode: IndexFieldMode::Ascending,
+                },
+                fireemu_core_firestore::index::IndexField {
+                    path: fireemu_core_firestore::field_path::FieldPath::parse("b").unwrap(),
+                    mode: IndexFieldMode::Descending,
+                },
+                fireemu_core_firestore::index::IndexField {
+                    path: fireemu_core_firestore::field_path::FieldPath::document_name(),
+                    mode: IndexFieldMode::Descending,
+                },
+            ],
+        };
+        assert_eq!(
+            building_index_message(database, "CICAgOjXh4EK", &requirement),
+            "The query requires an index. That index is currently building and cannot be used yet. See its status here: https://console.firebase.google.com/v1/r/project/fireemu-oracle-query/firestore/databases/cfgx0924k/indexes?create_composite=Cl1wcm9qZWN0cy9maXJlZW11LW9yYWNsZS1xdWVyeS9kYXRhYmFzZXMvY2ZneDA5MjRrL2NvbGxlY3Rpb25Hcm91cHMvaXRlbXMvaW5kZXhlcy9DSUNBZ09qWGg0RUsQARoFCgFhEAEaBQoBYhACGgwKCF9fbmFtZV9fEAI"
+        );
+        assert!(missing_index_message(database, &requirement, false).starts_with(
+            "The query requires an index. You can create it here: https://console.firebase.google.com/v1/r/project/fireemu-oracle-query/firestore/databases/cfgx0924k/indexes?create_composite="
+        ));
+    }
     use fireemu_core_firestore::field_path::FieldPath;
     use fireemu_core_firestore::index::IndexField;
     use fireemu_core_types::ids::CollectionId;

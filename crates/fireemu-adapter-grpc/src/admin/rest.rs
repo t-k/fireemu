@@ -277,6 +277,9 @@ pub(crate) fn route(state: &RestState, req: &RestRequest) -> Option<RestResponse
         (Some("databases"), 4 | 5, None) => {
             matches!(segments[3], "operations" | "changeStreams" | "userCreds")
         }
+        (Some("databases"), 6 | 7, None) => {
+            segments[3] == "collectionGroups" && segments[5] == "indexes"
+        }
         (Some("databases"), 5, Some("cancel")) => segments[3] == "operations",
         _ => false,
     };
@@ -325,6 +328,16 @@ pub(crate) fn route(state: &RestState, req: &RestRequest) -> Option<RestResponse
         ("DELETE", [_, "databases", database], None) => {
             delete_database(state, project, database, &params)
         }
+        (
+            method,
+            [_, "databases", database, "collectionGroups", group, "indexes", rest @ ..],
+            None,
+        ) => match live_native(state, project, database) {
+            Ok(()) => {
+                super::index_rest::route(state, project, database, group, method, rest, &req.body)
+            }
+            Err(response) => response,
+        },
         (_, [_, "databases", database, "changeStreams" | "userCreds", ..], None) => {
             enterprise_only(state, project, database)
         }
@@ -715,6 +728,7 @@ fn delete_database(
     match admin.delete(project, database, unprompted, now) {
         Ok(tombstone) => {
             state.local.delete_database(project, database);
+            admin.indexes().forget(|p, d| p == project && d == database);
             let resource = database_json(&tombstone.record, now, Some(tombstone.delete_time));
             let operation = operations::record(
                 state,
@@ -736,6 +750,19 @@ fn base64_ok(text: &str) -> bool {
         && text
             .chars()
             .all(|c| c.is_ascii_alphanumeric() || matches!(c, '+' | '/' | '=' | '-' | '_'))
+}
+
+/// Whether the Admin surface of a database's indexes, fields and documents is served: it must
+/// exist and be a Standard Native database.
+fn live_native(state: &RestState, project: &str, database: &str) -> Result<(), RestResponse> {
+    match state.local.admin().get(
+        project,
+        database,
+        exists_unprompted(state, project, database),
+    ) {
+        None => Err(missing_database(project, database)),
+        Some(_) => Ok(()),
+    }
 }
 
 fn enterprise_only(state: &RestState, project: &str, database: &str) -> RestResponse {

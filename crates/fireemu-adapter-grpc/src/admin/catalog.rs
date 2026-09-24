@@ -179,6 +179,7 @@ struct CatalogState {
 pub struct AdminCatalog {
     state: Mutex<CatalogState>,
     operations: super::operations::OperationStore,
+    indexes: super::indexes::IndexRegistry,
     /// When the backend's configured databases came into being.
     created_at: LogicalInstant,
 }
@@ -216,6 +217,7 @@ impl AdminCatalog {
                 ..CatalogState::default()
             }),
             operations: super::operations::OperationStore::default(),
+            indexes: super::indexes::IndexRegistry::default(),
             created_at,
         }
     }
@@ -450,7 +452,14 @@ impl AdminCatalog {
         state.live.retain(|(project, _), _| !owned(project));
         state.deleted.retain(|d| !owned(&d.record.project));
         drop(state);
+        self.indexes.forget(|project, _| owned(project));
         self.operations.reset(owned);
+    }
+
+    /// The Admin-created composite indexes of every database.
+    #[must_use]
+    pub const fn indexes(&self) -> &super::indexes::IndexRegistry {
+        &self.indexes
     }
 
     /// The Admin operations of every database.

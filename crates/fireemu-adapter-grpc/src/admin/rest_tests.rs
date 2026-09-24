@@ -433,3 +433,81 @@ fn enterprise_only_collections_and_locations_answer_like_production() {
     );
     assert_eq!(listed, json!({}));
 }
+
+#[test]
+fn an_index_is_creating_then_ready_and_queries_follow_its_state() {
+    let (state, clock) = state();
+    state
+        .local
+        .admin()
+        .indexes()
+        .set_build_duration(std::time::Duration::from_secs(3600));
+    call(&state, "POST", "/v1/projects/p/databases?databaseId=idxdb", native());
+    let docs = "/v1/projects/p/databases/idxdb/documents";
+    for (id, b) in [("x", 2), ("y", 3)] {
+        call(&state, "POST", &format!("{docs}/items?documentId={id}"), json!({"fields": {"a": {"integerValue": "1"}, "b": {"integerValue": b.to_string()}}}));
+    }
+    let query = json!({"structuredQuery": {
+        "from": [{"collectionId": "items"}],
+        "where": {"fieldFilter": {"field": {"fieldPath": "a"}, "op": "EQUAL", "value": {"integerValue": "1"}}},
+        "orderBy": [{"field": {"fieldPath": "b"}, "direction": "DESCENDING"}]
+    }});
+    let (status, before) = call(&state, "POST", &format!("{docs}:runQuery"), query.clone());
+    assert_eq!(status, 400, "{before}");
+    let index = json!({"queryScope": "COLLECTION", "fields": [
+        {"fieldPath": "a", "order": "ASCENDING"}, {"fieldPath": "b", "order": "DESCENDING"}]});
+    let group = "/v1/projects/p/databases/idxdb/collectionGroups/items/indexes";
+    let (status, operation) = call(&state, "POST", group, index.clone());
+    assert_eq!(status, 200, "{operation}");
+    assert!(operation.get("done").is_none());
+    assert_eq!(operation["metadata"]["state"], "INITIALIZING");
+    let name = operation["metadata"]["index"].as_str().unwrap().to_owned();
+    let (_, created) = call(&state, "GET", &format!("/v1/{name}"), Value::Null);
+    assert_eq!(created["state"], "CREATING");
+    assert_eq!(created["density"], "SPARSE_ALL");
+    assert_eq!(created["fields"][2], json!({"fieldPath": "__name__", "order": "DESCENDING"}));
+    let (status, building) = call(&state, "POST", &format!("{docs}:runQuery"), query.clone());
+    assert_eq!(status, 400);
+    let message = building[0]["error"]["message"].as_str().unwrap_or_else(|| building["error"]["message"].as_str().unwrap());
+    assert!(message.contains("That index is currently building"), "{message}");
+    let (status, duplicate) = call(&state, "POST", group, index.clone());
+    assert_eq!(status, 409, "{duplicate}");
+    let id = name.rsplit('/').next().unwrap();
+    assert_eq!(duplicate["error"]["message"], format!("index already exists with index ID = {id}"));
+
+    advance(&clock, 3600);
+    let (_, ready) = call(&state, "GET", &format!("/v1/{name}"), Value::Null);
+    assert_eq!(ready["state"], "READY");
+    let (_, done) = call(&state, "GET", &format!("/v1/{}", operation["name"].as_str().unwrap()), Value::Null);
+    assert_eq!(done["done"], json!(true));
+    let (status, answer) = call(&state, "POST", &format!("{docs}:runQuery"), query.clone());
+    assert_eq!(status, 200, "{answer}");
+    assert_eq!(answer.as_array().unwrap().len(), 2);
+
+    let (status, deleted) = call(&state, "DELETE", &format!("/v1/{name}"), Value::Null);
+    assert_eq!((status, deleted), (200, json!({})));
+    let (status, _) = call(&state, "GET", &format!("/v1/{name}"), Value::Null);
+    assert_eq!(status, 404);
+    let (status, again) = call(&state, "DELETE", &format!("/v1/{name}"), Value::Null);
+    assert_eq!((status, again), (200, json!({})));
+    let (status, _) = call(&state, "POST", &format!("{docs}:runQuery"), query);
+    assert_eq!(status, 400, "a deleted index no longer serves");
+}
+
+#[test]
+fn an_index_definition_is_refused_as_production_refuses_it() {
+    let (state, _clock) = state();
+    call(&state, "POST", "/v1/projects/p/databases?databaseId=idxdb", native());
+    let group = "/v1/projects/p/databases/idxdb/collectionGroups/items/indexes";
+    let cases = [
+        (json!({"fields": [{"fieldPath": "a", "order": "ASCENDING"}, {"fieldPath": "b", "order": "ASCENDING"}]}), "query_scope must be specified."),
+        (json!({"queryScope": "COLLECTION", "fields": [{"fieldPath": "a", "order": "ASCENDING"}]}), "this index is not necessary, configure using single field index controls"),
+        (json!({"queryScope": "COLLECTION", "fields": [{"fieldPath": "a", "order": "ASCENDING", "arrayConfig": "CONTAINS"}, {"fieldPath": "b", "order": "ASCENDING"}]}), "Invalid value at 'index.fields[0]' (oneof), oneof field 'value_mode' is already set. Cannot set 'arrayConfig'"),
+    ];
+    for (body, message) in cases {
+        let (status, answer) = call(&state, "POST", group, body);
+        assert_eq!((status, answer["error"]["message"].as_str()), (400, Some(message)));
+    }
+    let (status, _) = call(&state, "GET", "/v1/projects/p/databases/nonexist-cfg/collectionGroups/-/indexes", Value::Null);
+    assert_eq!(status, 404);
+}

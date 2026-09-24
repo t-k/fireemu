@@ -207,6 +207,10 @@ fn credential_states(gate: &AppCheckGate) -> Vec<(&'static str, Option<String>)>
 }
 
 // ------------------------------------------------------------------------------------------
+/// A Security Rules denial answers with production's text (FS-RULES scope decision R6); an App
+/// Check denial has its own.
+const RULES_DENIAL: &str = fireemu_adapter_grpc::rules::PERMISSION_DENIED_MESSAGE;
+
 // Harness: a real gRPC server with Security Rules and an App Check policy, plus REST.
 // ------------------------------------------------------------------------------------------
 
@@ -429,7 +433,7 @@ async fn enforced_unary_firestore_rejects_a_valid_auth_user_without_app_check_be
         Some("APP_CHECK_REQUIRED")
     );
     assert!(
-        !denied.message().contains("Security Rules"),
+        !denied.message().contains(RULES_DENIAL),
         "the denial is App Check's, not the ruleset's: {}",
         denied.message()
     );
@@ -594,7 +598,7 @@ async fn the_firestore_grpc_matrix_holds_for_every_mode_and_credential_state() {
                 // write. That is exactly the point: App Check admitted it.
                 let status = outcome.expect_err("the ruleset still judges the request");
                 assert!(
-                    status.message().contains("Security Rules"),
+                    status.message().contains(RULES_DENIAL),
                     "{mode}/{name} must be judged by the rules, not by App Check: {}",
                     status.message()
                 );
@@ -625,13 +629,13 @@ async fn the_firestore_rest_matrix_holds_for_every_mode_and_credential_state() {
                 assert_eq!(status, 403, "{mode}/{name}: {body}");
                 assert_eq!(body["error"]["status"], "PERMISSION_DENIED");
                 assert!(
-                    !body.to_string().contains("Security Rules"),
+                    !body.to_string().contains(RULES_DENIAL),
                     "{mode}/{name} is an App Check denial: {body}"
                 );
             } else {
                 assert_eq!(status, 403, "{mode}/{name}: {body}");
                 assert!(
-                    body.to_string().contains("Security Rules"),
+                    body.to_string().contains(RULES_DENIAL),
                     "{mode}/{name} must be judged by the rules: {body}"
                 );
             }
@@ -706,7 +710,7 @@ async fn firestore_metadata_refuses_duplicate_folded_empty_and_oversized_app_che
         .await
         .expect_err("the ruleset refuses an unauthenticated write");
     assert!(
-        admitted.message().contains("Security Rules"),
+        admitted.message().contains(RULES_DENIAL),
         "{}",
         admitted.message()
     );
@@ -735,7 +739,7 @@ async fn firestore_rest_refuses_duplicate_folded_empty_and_oversized_app_check_f
         );
         assert_eq!(status, 403, "{name}: {body}");
         assert!(
-            !body.to_string().contains("Security Rules"),
+            !body.to_string().contains(RULES_DENIAL),
             "{name} is an App Check denial: {body}"
         );
     }
@@ -1180,7 +1184,7 @@ async fn an_enforced_webchannel_handshake_without_app_check_never_opens_a_channe
         !parsed["error"]["message"]
             .as_str()
             .unwrap_or_default()
-            .contains("Security Rules"),
+            .contains(RULES_DENIAL),
         "an App Check denial is not a rules denial: {body}"
     );
 

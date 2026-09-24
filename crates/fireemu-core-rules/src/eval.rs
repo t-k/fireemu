@@ -3640,7 +3640,7 @@ impl<'a> Evaluator<'a> {
         Ok(doc)
     }
 
-    /// `get()` / `exists()` / `getAfter()` with the evaluated path argument.
+    /// `get()` / `exists()` / `getAfter()` / `existsAfter()` with the evaluated path argument.
     fn document_call(&mut self, name: &str, args: &[RulesValue]) -> Result<RulesValue, EvalError> {
         let [a] = args else {
             return Err(soft(format!("{name}() takes one path")));
@@ -3655,9 +3655,9 @@ impl<'a> Evaluator<'a> {
                 )))
             }
         };
-        let doc = self.read_document(path, name == "getAfter")?;
+        let doc = self.read_document(path, matches!(name, "getAfter" | "existsAfter"))?;
         Ok(match (name, doc) {
-            ("exists", d) => RulesValue::Bool(d.is_some()),
+            ("exists" | "existsAfter", d) => RulesValue::Bool(d.is_some()),
             (_, Some(d)) => d,
             (_, None) => return Err(soft(format!("{name}() of a missing document"))),
         })
@@ -4594,7 +4594,7 @@ impl<'a> Evaluator<'a> {
                     );
                 }
                 match name.as_str() {
-                    "get" | "exists" | "getAfter" => {
+                    "get" | "exists" | "getAfter" | "existsAfter" => {
                         let values = args
                             .iter()
                             .map(|a| self.eval(a))

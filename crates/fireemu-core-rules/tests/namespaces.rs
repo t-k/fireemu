@@ -364,3 +364,56 @@ fn array_contains_any_proves_only_what_every_candidate_satisfies() {
     assert!(allow("'a' in resource.data.tags", &one));
     assert!(allow("resource.data.tags.hasAny(['a'])", &one));
 }
+
+#[test]
+fn exists_after_reads_presence_in_the_state_after_the_write() {
+    let kept = "databases/(default)/documents/pairs/kept";
+    let removed = "databases/(default)/documents/pairs/removed";
+    let added = "databases/(default)/documents/pairs/added";
+    let access = Access {
+        before: BTreeMap::from([
+            (kept.to_owned(), doc(&[("v", RulesValue::Int(1))])),
+            (removed.to_owned(), doc(&[("v", RulesValue::Int(1))])),
+        ]),
+        after: Some(BTreeMap::from([
+            (kept.to_owned(), doc(&[("v", RulesValue::Int(1))])),
+            (added.to_owned(), doc(&[("v", RulesValue::Int(1))])),
+        ])),
+    };
+    let c = ctx(&[]);
+    let eval = |cond: &str, access: &Access| {
+        evaluate_request_with(&parse_ruleset(&rules(cond)).unwrap(), &c, Some(access)).decision
+    };
+    let p = |id: &str| format!("/databases/$(database)/documents/pairs/{id}");
+    for cond in [
+        format!("existsAfter({})", p("kept")),
+        format!("existsAfter({}) && !exists({})", p("added"), p("added")),
+        format!("!existsAfter({}) && exists({})", p("removed"), p("removed")),
+        format!("!existsAfter({})", p("never")),
+    ] {
+        assert!(matches!(eval(&cond, &access), Decision::Allow), "{cond}");
+    }
+    // existsAfter and getAfter of one path are one post-state access: ten paths, both calls
+    // on each, stay within the single-request budget of ten.
+    let ten: BTreeMap<String, RulesValue> = (0..10)
+        .map(|i| {
+            (
+                format!("databases/(default)/documents/pairs/m{i}"),
+                doc(&[("v", RulesValue::Int(1))]),
+            )
+        })
+        .collect();
+    let full = Access {
+        before: BTreeMap::new(),
+        after: Some(ten),
+    };
+    let both: Vec<String> = (0..10)
+        .map(|i| {
+            format!(
+                "existsAfter({0}) && getAfter({0}).data.v == 1",
+                p(&format!("m{i}"))
+            )
+        })
+        .collect();
+    assert!(matches!(eval(&both.join(" && "), &full), Decision::Allow));
+}

@@ -44,7 +44,7 @@ use fireemu_core_firestore::query::{Direction, FieldOp, FilterExpr, Query, Unary
 use fireemu_core_firestore::store::{CommitVersion, Document, FirestoreState, Write, WriteOp};
 use fireemu_core_firestore::value::Value;
 use fireemu_core_rules::ast::Ruleset;
-use fireemu_core_rules::coverage::{CoverageEntry, RequestTrace, RulesDiagnostics};
+use fireemu_core_rules::coverage::{Coverage, CoverageEntry, RequestTrace, RulesDiagnostics};
 use fireemu_core_rules::eval::{
     evaluate_request_traced_owned, try_compare, Decision, DenyReason, DocumentAccess, Method,
     RequestContext, RulesService, ABSTRACT_PREFIX, ABSTRACT_SEGMENT,
@@ -370,6 +370,10 @@ pub struct RulesEnforcer {
     /// How a caller's ID token is verified: the compatibility profile decides
     /// (`firebase` admits the official emulators' mock tokens, `strict` does not).
     acceptance: TokenAcceptance,
+    /// Whether a client request is refused while its database has no ruleset: production
+    /// refuses every client request without a `cloud.firestore` release (the `strict`
+    /// profile); the official emulator allows everything (the `emulator` profile).
+    refuse_without_ruleset: bool,
 }
 
 impl RulesEnforcer {
@@ -387,6 +391,35 @@ impl RulesEnforcer {
             clock,
             registry: None,
             acceptance: TokenAcceptance::default(),
+            refuse_without_ruleset: false,
+        }
+    }
+
+    /// Sets whether a client request is refused while its database has no ruleset.
+    #[must_use]
+    pub const fn with_refusal_without_ruleset(mut self, refuse: bool) -> Self {
+        self.refuse_without_ruleset = refuse;
+        self
+    }
+
+    /// The answer to a client request against a database without a ruleset.
+    fn without_ruleset(
+        &self,
+        diagnostics: &Mutex<RulesDiagnostics>,
+        principal: &Principal,
+        method: Method,
+        path: String,
+    ) -> Result<(), Status> {
+        if self.refuse_without_ruleset {
+            Err(denied(
+                diagnostics,
+                principal,
+                method,
+                path,
+                "no ruleset is loaded for this database".to_owned(),
+            ))
+        } else {
+            Ok(())
         }
     }
 
@@ -583,7 +616,7 @@ impl RulesEnforcer {
             .snapshot()
             .map_err(Status::internal)?;
         let Some(ruleset) = &rules.ruleset else {
-            return Ok(());
+            return self.without_ruleset(&rules.diagnostics, principal, method, path.relative());
         };
         let now = self.now()?;
         evaluate_with(
@@ -638,7 +671,11 @@ impl RulesEnforcer {
             .snapshot()
             .map_err(Status::internal)?;
         let Some(ruleset) = &rules.ruleset else {
-            return Ok(());
+            let path = items
+                .first()
+                .map(|(path, _)| path.relative())
+                .unwrap_or_default();
+            return self.without_ruleset(&rules.diagnostics, principal, Method::Get, path);
         };
         let now = self.now()?;
         let reader = AggregateReader {
@@ -660,10 +697,13 @@ impl RulesEnforcer {
             )?;
             let accessed = reader.seen.borrow().len() as u64;
             if items.len() > 1 && accessed > multi_total {
-                return Err(Status::permission_denied(format!(
-                    "get on {} denied by Security Rules: RULES-DOC-ACCESS-MULTI-TOTAL: {accessed} exceeds {multi_total}",
-                    path.relative()
-                )));
+                return Err(denied(
+                    &rules.diagnostics,
+                    principal,
+                    Method::Get,
+                    path.relative(),
+                    format!("RULES-DOC-ACCESS-MULTI-TOTAL: {accessed} exceeds {multi_total}"),
+                ));
             }
         }
         Ok(())
@@ -690,7 +730,12 @@ impl RulesEnforcer {
             .snapshot()
             .map_err(Status::internal)?;
         let Some(ruleset) = &rules.ruleset else {
-            return Ok(());
+            return self.without_ruleset(
+                &rules.diagnostics,
+                principal,
+                Method::List,
+                "a query".to_owned(),
+            );
         };
         let now = self.now()?;
         let reader = AggregateReader {
@@ -699,39 +744,15 @@ impl RulesEnforcer {
         };
         let single_max = single_max();
         if let Some(candidates) = exact_name_candidates(parent, query) {
-            for candidate in candidates {
-                let segments = rules_document_segments(&candidate);
-                let resource = access.get(&segments);
-                let ctx = RequestContext {
-                    service: RulesService::Firestore,
-                    method: Method::List,
-                    path: rules_path(&candidate),
-                    auth: match principal {
-                        Principal::User(auth) => Some(auth.clone()),
-                        _ => None,
-                    },
-                    resource,
-                    request_resource: None,
-                    time_unix_nanos: now.as_nanos(),
-                    abstract_path: false,
-                    request_query: Some(query_value(query)),
-                };
-                let resource_absent = ctx.resource.is_none();
-                let (report, _) = evaluate_request_traced_owned(ruleset, ctx, Some(&reader));
-                if !matches!(report.decision, Decision::Allow)
-                    || (resource_absent && report.absent_resource_used)
-                {
-                    return Err(Status::permission_denied("query denied by Security Rules"));
-                }
-                let accessed = reader.seen.borrow().len() as u64;
-                if accessed > single_max {
-                    return Err(Status::permission_denied(format!(
-                        "list on {} denied by Security Rules: RULES-DOC-ACCESS-SINGLE: {accessed} exceeds {single_max}",
-                        candidate.relative()
-                    )));
-                }
-            }
-            return Ok(());
+            return authorize_exact_names(
+                ruleset,
+                &rules.diagnostics,
+                principal,
+                query,
+                &candidates,
+                &reader,
+                now,
+            );
         }
         for placeholder in placeholder_paths(parent, query)? {
             for disjunction in query.dnf() {
@@ -759,10 +780,13 @@ impl RulesEnforcer {
                 )?;
                 let accessed = reader.seen.borrow().len() as u64;
                 if accessed > single_max {
-                    return Err(Status::permission_denied(format!(
-                        "list on {} denied by Security Rules: RULES-DOC-ACCESS-SINGLE: {accessed} exceeds {single_max}",
-                        placeholder.relative()
-                    )));
+                    return Err(denied(
+                        &rules.diagnostics,
+                        principal,
+                        Method::List,
+                        placeholder.relative(),
+                        format!("RULES-DOC-ACCESS-SINGLE: {accessed} exceeds {single_max}"),
+                    ));
                 }
             }
         }
@@ -789,7 +813,11 @@ impl RulesEnforcer {
             .snapshot()
             .map_err(Status::internal)?;
         let Some(ruleset) = &rules.ruleset else {
-            return Ok(());
+            let path = writes
+                .first()
+                .map(|write| write.op.path().relative())
+                .unwrap_or_default();
+            return self.without_ruleset(&rules.diagnostics, principal, Method::Update, path);
         };
         let at = db.next_commit_time(now);
         // The state after the whole commit, for `getAfter()`.
@@ -854,11 +882,13 @@ impl RulesEnforcer {
             )?;
             let accessed = reader.seen.borrow().len() as u64;
             if writes.len() > 1 && accessed > multi_total {
-                return Err(Status::permission_denied(format!(
-                    "{} on {} denied by Security Rules: RULES-DOC-ACCESS-MULTI-TOTAL: {accessed} exceeds {multi_total}",
-                    method_name(method),
-                    path.relative()
-                )));
+                return Err(denied(
+                    &rules.diagnostics,
+                    principal,
+                    method,
+                    path.relative(),
+                    format!("RULES-DOC-ACCESS-MULTI-TOTAL: {accessed} exceeds {multi_total}"),
+                ));
             }
             if !matches!(write.op, WriteOp::Verify { .. }) {
                 staged.insert(path.clone(), preview);
@@ -866,6 +896,67 @@ impl RulesEnforcer {
         }
         Ok(())
     }
+}
+
+/// A query whose every disjunct is `__name__ ==` a document: each named document is decided
+/// as a `list` against what is stored, with one `get()` / `exists()` budget.
+#[allow(clippy::too_many_arguments)]
+fn authorize_exact_names(
+    ruleset: &Ruleset,
+    diagnostics: &Mutex<RulesDiagnostics>,
+    principal: &Principal,
+    query: &Query,
+    candidates: &[DocumentPath],
+    reader: &AggregateReader<'_>,
+    now: LogicalInstant,
+) -> Result<(), Status> {
+    let single_max = single_max();
+    for candidate in candidates {
+        let segments = rules_document_segments(candidate);
+        let resource = reader.inner.get(&segments);
+        let ctx = RequestContext {
+            service: RulesService::Firestore,
+            method: Method::List,
+            path: rules_path(candidate),
+            auth: match principal {
+                Principal::User(auth) => Some(auth.clone()),
+                _ => None,
+            },
+            resource,
+            request_resource: None,
+            time_unix_nanos: now.as_nanos(),
+            abstract_path: false,
+            request_query: Some(query_value(query)),
+        };
+        let resource_absent = ctx.resource.is_none();
+        let (report, _) = evaluate_request_traced_owned(ruleset, ctx, Some(reader));
+        if !matches!(report.decision, Decision::Allow)
+            || (resource_absent && report.absent_resource_used)
+        {
+            let reason = match &report.decision {
+                Decision::Deny(reason) => deny_text(reason),
+                Decision::Allow => "the rule read the resource of a missing document".into(),
+            };
+            return Err(denied(
+                diagnostics,
+                principal,
+                Method::List,
+                candidate.relative(),
+                reason,
+            ));
+        }
+        let accessed = reader.seen.borrow().len() as u64;
+        if accessed > single_max {
+            return Err(denied(
+                diagnostics,
+                principal,
+                Method::List,
+                candidate.relative(),
+                format!("RULES-DOC-ACCESS-SINGLE: {accessed} exceeds {single_max}"),
+            ));
+        }
+    }
+    Ok(())
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -947,8 +1038,41 @@ fn decide(
     }
     match denial {
         None => Ok(()),
-        Some(message) => Err(Status::permission_denied(message)),
+        Some(_) => Err(Status::permission_denied(PERMISSION_DENIED_MESSAGE)),
     }
+}
+
+/// What production answers for every Security Rules denial, in both profiles (FS-RULES scope
+/// decision R6). The reason fireemu found stays in the ruleset's request traces.
+pub const PERMISSION_DENIED_MESSAGE: &str = "Missing or insufficient permissions.";
+
+/// A denial decided outside the evaluator (a budget across items, an exact-name query): traced
+/// with its reason like an evaluated one, answered with production's text.
+fn denied(
+    diagnostics: &Mutex<RulesDiagnostics>,
+    principal: &Principal,
+    method: Method,
+    path: String,
+    reason: String,
+) -> Status {
+    if let Ok(mut sink) = diagnostics.lock() {
+        if sink.request_traces_enabled() {
+            let uid = match principal {
+                Principal::User(auth) => Some(auth.uid.clone()),
+                _ => None,
+            };
+            sink.push(&Coverage::default(), move |sequence| RequestTrace {
+                sequence,
+                method: method_name(method),
+                path,
+                allowed: false,
+                reason,
+                uid,
+                expressions: Vec::new(),
+            });
+        }
+    }
+    Status::permission_denied(PERMISSION_DENIED_MESSAGE)
 }
 
 /// A write guard over an optional enforcer.

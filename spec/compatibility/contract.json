@@ -941,7 +941,7 @@
           },
           "officialLimitations": [
             "the official compiler's static type checker rejects three of the 680 recorded language claims while it compiles the file, where fireemu raises on them at evaluation; the request decision is the same in both and each row is pinned in conformance/rules-matrix.json",
-            "the official emulator answers a denial with a per-allow trace of its own evaluation; that text is a diagnostic rather than an API contract, so fireemu answers with its own message and publishes the same information through :ruleCoverage and the request-trace control route"
+            "the official emulator answers a denial with a per-allow trace of its own evaluation; that text is a diagnostic rather than an API contract, so fireemu answers with production's message and publishes the same information through :ruleCoverage and the request-trace control route"
           ],
           "fireemuOnly": [
             {
@@ -951,6 +951,10 @@
             {
               "behaviour": "static rules linting beyond what the official compiler reports, and runtime expression budgets",
               "precision": "exact-for-local-semantics"
+            },
+            {
+              "behaviour": "both profiles answer every Security Rules denial with production's PERMISSION_DENIED text \"Missing or insufficient permissions.\" (observed on the FS-RULES sandbox, 2026-09-24) instead of the official emulator's per-allow trace; the reason stays in the request-trace control route",
+              "precision": "documented-divergence"
             }
           ],
           "productionOnly": [],

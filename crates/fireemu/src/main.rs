@@ -2387,6 +2387,9 @@ fn service_admission(
 fn print_rules_status(cfg: &RuntimeConfig, loaded: bool) {
     match (cfg.rules_enforced, loaded) {
         (false, _) => println!("  rules: disabled by config (every request is allowed)"),
+        (true, false) if cfg.refuse_without_ruleset => println!(
+            "  rules: none loaded; every client request is refused, as production refuses it without a release (PUT /v1/rules or rules.source)"
+        ),
         (true, false) => println!(
             "  rules: none loaded; every request is allowed (PUT /v1/rules or rules.source)"
         ),

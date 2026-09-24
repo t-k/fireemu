@@ -259,6 +259,24 @@ struct Harness {
     handle: tokio::task::JoinHandle<()>,
 }
 
+/// Turns on the request traces of the ruleset in force, where denials keep their reason.
+fn trace_denials(h: &Harness) {
+    let active = h.rules.snapshot().unwrap();
+    active.diagnostics.lock().unwrap().enable_request_traces();
+}
+
+/// The reason of the newest traced denial: production's text carries none.
+fn latest_denial(h: &Harness) -> String {
+    let active = h.rules.snapshot().unwrap();
+    let diagnostics = active.diagnostics.lock().unwrap();
+    diagnostics
+        .requests()
+        .into_iter()
+        .find(|trace| !trace.allowed)
+        .map(|trace| trace.reason.clone())
+        .unwrap_or_default()
+}
+
 async fn start() -> Harness {
     start_with(TokenAcceptance::Verified).await
 }
@@ -272,6 +290,16 @@ async fn start_with_indexes(indexes: IndexSet) -> Harness {
 }
 
 async fn start_with_config(acceptance: TokenAcceptance, indexes: IndexSet) -> Harness {
+    start_with_options(acceptance, indexes, false).await
+}
+
+/// `refuse_without_ruleset`: the strict profile's answer to a client request while no ruleset
+/// is loaded (production refuses every client request without a `cloud.firestore` release).
+async fn start_with_options(
+    acceptance: TokenAcceptance,
+    indexes: IndexSet,
+    refuse_without_ruleset: bool,
+) -> Harness {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     let gateway = Gateway {
@@ -295,7 +323,8 @@ async fn start_with_config(acceptance: TokenAcceptance, indexes: IndexSet) -> Ha
     let enforcer = Arc::new(
         RulesEnforcer::new(rules.clone(), auth.clone(), clock)
             .with_token_acceptance(acceptance)
-            .with_registry(registry.clone()),
+            .with_registry(registry.clone())
+            .with_refusal_without_ruleset(refuse_without_ruleset),
     );
     let svc =
         FirestoreServer::new(GatewayService::local(gateway, backend.clone()).with_rules(enforcer));
@@ -890,7 +919,7 @@ async fn document_name_in_authorizes_each_real_candidate_as_a_list() {
         .await
         .unwrap_err();
     assert_eq!(missing.code(), tonic::Code::PermissionDenied);
-    assert_eq!(missing.message(), "query denied by Security Rules");
+    assert_eq!(missing.message(), "Missing or insufficient permissions.");
 
     let denied = h
         .client
@@ -1790,6 +1819,7 @@ service cloud.firestore {
 }",
         )
         .unwrap();
+    trace_denials(&h);
     let writes = |n: usize| {
         (0..n)
             .map(|i| set_write(&format!("items/{i}"), &[("v", s("1"))]))
@@ -1807,10 +1837,11 @@ service cloud.firestore {
         .await
         .unwrap_err();
     assert_eq!(err.code(), tonic::Code::PermissionDenied);
+    assert_eq!(err.message(), "Missing or insufficient permissions.");
     assert!(
-        err.message().contains("RULES-DOC-ACCESS-MULTI-TOTAL"),
+        latest_denial(&h).contains("RULES-DOC-ACCESS-MULTI-TOTAL"),
         "{}",
-        err.message()
+        latest_denial(&h)
     );
     h.handle.abort();
 }
@@ -1890,6 +1921,7 @@ service cloud.firestore {
 }",
         )
         .unwrap();
+    trace_denials(&h);
     let batch = |n: usize| pb::BatchGetDocumentsRequest {
         database: DB.to_owned(),
         documents: (0..n).map(|i| format!("{DOCS}/items/{i}")).collect(),
@@ -1913,7 +1945,8 @@ service cloud.firestore {
         .await
         .unwrap_err();
     assert_eq!(err.code(), tonic::Code::PermissionDenied);
-    assert!(err.message().contains("RULES-DOC-ACCESS-MULTI-TOTAL"));
+    assert_eq!(err.message(), "Missing or insufficient permissions.");
+    assert!(latest_denial(&h).contains("RULES-DOC-ACCESS-MULTI-TOTAL"));
     h.handle.abort();
 }
 
@@ -2690,13 +2723,19 @@ service cloud.firestore {
 }",
     )
     .unwrap();
+    trace_denials(&h);
     let err = h
         .client
         .get_document(with_bearer(get("posts/p1"), &alice_token))
         .await
         .unwrap_err();
     assert_eq!(err.code(), tonic::Code::PermissionDenied);
-    assert!(err.message().contains("getAfter()"), "{}", err.message());
+    assert_eq!(err.message(), "Missing or insufficient permissions.");
+    assert!(
+        latest_denial(&h).contains("getAfter()"),
+        "{}",
+        latest_denial(&h)
+    );
     h.handle.abort();
 }
 
@@ -3128,5 +3167,97 @@ async fn the_emulator_profile_keeps_the_project_binding_and_the_signature_it_can
         .commit(with_bearer(profile_write(&uid), &token))
         .await
         .is_ok());
+    h.handle.abort();
+}
+
+/// What each client request answers while no ruleset is loaded, for one harness: `None` when
+/// it was allowed (a missing document is allowed too), else the code and message.
+async fn outcomes_without_ruleset(
+    h: &mut Harness,
+    token: &str,
+) -> Vec<Option<(tonic::Code, String)>> {
+    let refusal = |e: tonic::Status| {
+        (e.code() != tonic::Code::NotFound).then(|| (e.code(), e.message().to_owned()))
+    };
+    let mut out = Vec::new();
+    out.push(
+        h.client
+            .get_document(with_bearer(get("profiles/p1"), token))
+            .await
+            .err()
+            .and_then(refusal),
+    );
+    out.push(
+        h.client
+            .commit(with_bearer(
+                commit(vec![set_write("profiles/p2", &[("name", s("P"))])]),
+                token,
+            ))
+            .await
+            .err()
+            .and_then(refusal),
+    );
+    let query = pb::RunQueryRequest {
+        parent: DOCS.to_owned(),
+        query_type: Some(pb::run_query_request::QueryType::StructuredQuery(
+            pb::StructuredQuery {
+                from: vec![sq::CollectionSelector {
+                    collection_id: "profiles".into(),
+                    all_descendants: false,
+                }],
+                ..Default::default()
+            },
+        )),
+        ..Default::default()
+    };
+    let listed = match h.client.run_query(with_bearer(query, token)).await {
+        Ok(stream) => {
+            let mut stream = stream.into_inner();
+            let mut result = None;
+            while let Some(item) = stream.next().await {
+                if let Err(e) = item {
+                    result = refusal(e);
+                }
+            }
+            result
+        }
+        Err(e) => refusal(e),
+    };
+    out.push(listed);
+    out
+}
+
+#[tokio::test]
+async fn strict_refuses_every_client_request_while_no_ruleset_is_loaded() {
+    let mut h = start_with_options(TokenAcceptance::Verified, IndexSet::default(), true).await;
+    let (_alice, alice_token) = h.user("alice@example.com");
+    h.rules.clear().unwrap();
+    for outcome in outcomes_without_ruleset(&mut h, &alice_token).await {
+        assert_eq!(
+            outcome,
+            Some((
+                tonic::Code::PermissionDenied,
+                "Missing or insufficient permissions.".to_owned()
+            )),
+            "production refuses a client request without a release"
+        );
+    }
+    // Unauthenticated callers too, and the owner still passes.
+    let err = h.client.get_document(get("profiles/p1")).await.unwrap_err();
+    assert_eq!(err.code(), tonic::Code::PermissionDenied);
+    for outcome in outcomes_without_ruleset(&mut h, "owner").await {
+        assert_eq!(outcome, None);
+    }
+    h.handle.abort();
+}
+
+#[tokio::test]
+async fn the_emulator_profile_still_allows_everything_while_no_ruleset_is_loaded() {
+    let mut h = start_with_options(TokenAcceptance::Verified, IndexSet::default(), false).await;
+    let (_alice, alice_token) = h.user("alice@example.com");
+    h.rules.clear().unwrap();
+    for outcome in outcomes_without_ruleset(&mut h, &alice_token).await {
+        assert_eq!(outcome, None);
+    }
     h.handle.abort();
 }

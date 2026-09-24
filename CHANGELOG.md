@@ -29,6 +29,14 @@ Behavior below was measured against a real Identity Platform project on 2026-09-
 - Strict profile: MFA enrollment answers `OPERATION_NOT_ALLOWED : TOTP based MFA not enabled.` when TOTP is off, and its refusals carry the v2 API's shape (a status name and no `errors` list). The emulator profile keeps the official emulator's answers.
 - Both profiles: linking a phone number answers with a session whose `sign_in_provider` is `phone`, as production does and as the official emulator does.
 
+### Security Rules (FS-RULES)
+
+Behavior below was measured against a real Firestore database with end-user ID tokens on 2026-09-24 (FS-RULES).
+
+- Added, both profiles: `existsAfter()` answers whether a document exists once the request's writes are applied. It shares `getAfter()`'s access budget for a path.
+- Changed, both profiles: a Security Rules denial answers with production's `PERMISSION_DENIED` and the message `Missing or insufficient permissions.`, on REST and gRPC, unlike the official emulator's evaluation trace. The reason fireemu found stays in the ruleset's request traces (`GET /v1/sessions/{session}/rules/requests` on the control API).
+- Changed, strict profile: while a database has no ruleset, every client request is refused, because production refuses every client request when there is no `cloud.firestore` release. The emulator profile still allows everything until rules are loaded, as the official emulator does. The startup banner says which profile applies.
+
 ## [0.7.1] - 2026-09-10
 
 ### Fixed

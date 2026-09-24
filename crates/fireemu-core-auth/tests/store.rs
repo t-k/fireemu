@@ -885,3 +885,207 @@ fn temporary_proofs_do_not_cross_namespaces_on_restore() {
     assert!(!other.check_temporary_proof(&proof, "+16505550101", t(1)));
     assert!(source.check_temporary_proof(&proof, "+16505550101", t(1)));
 }
+
+// ---- AUTH-ACTION (sandbox recording 2026-09-24) -------------------------------------------
+
+use fireemu_core_auth::store::{OobRequestType, SignInConfig};
+
+#[test]
+fn sign_in_config_validity_covers_authorized_domains_and_test_numbers() {
+    let mut config = SignInConfig::default();
+    assert!(config.is_valid());
+    config.authorized_domains = Some(vec!["demo-app.web.app".to_owned()]);
+    assert!(config.is_valid());
+    config.authorized_domains = Some(vec!["demo-app.web.app".to_owned(), String::new()]);
+    assert!(!config.is_valid());
+    config.authorized_domains = Some(Vec::new());
+    assert!(config.is_valid());
+    let numbers = |n: u64| {
+        (0..n)
+            .map(|i| (format!("+1650555{:04}", 101 + i), "123456".to_owned()))
+            .collect()
+    };
+    config.test_phone_numbers = numbers(SignInConfig::MAX_TEST_PHONE_NUMBERS as u64);
+    assert!(config.is_valid());
+    config.test_phone_numbers = numbers(SignInConfig::MAX_TEST_PHONE_NUMBERS as u64 + 1);
+    assert!(!config.is_valid());
+}
+
+#[test]
+fn authorized_domains_default_to_a_new_projects_and_follow_the_config() {
+    let mut s = store();
+    assert_eq!(
+        s.authorized_domains(),
+        ["localhost", "demo-app.firebaseapp.com", "demo-app.web.app"]
+    );
+    let mut config = s.sign_in_config().clone();
+    config.authorized_domains = Some(vec!["demo-app.web.app".to_owned()]);
+    s.set_sign_in_config(config).unwrap();
+    assert_eq!(s.authorized_domains(), ["demo-app.web.app"]);
+}
+
+fn codes(s: &AuthStore) -> Vec<(OobRequestType, String)> {
+    s.oob_codes()
+        .iter()
+        .map(|c| (c.request_type, c.email.clone()))
+        .collect()
+}
+
+#[test]
+fn retiring_codes_removes_only_that_kind_for_that_address() {
+    let mut s = store();
+    for (kind, email) in [
+        (OobRequestType::PasswordReset, "a@example.com"),
+        (OobRequestType::PasswordReset, "a@example.com"),
+        (OobRequestType::PasswordReset, "b@example.com"),
+        (OobRequestType::VerifyEmail, "a@example.com"),
+    ] {
+        s.create_oob_code(kind, email, None, None, t0()).unwrap();
+    }
+    s.retire_oob_codes(OobRequestType::PasswordReset, "A@Example.com");
+    assert_eq!(
+        codes(&s),
+        [
+            (OobRequestType::PasswordReset, "b@example.com".to_owned()),
+            (OobRequestType::VerifyEmail, "a@example.com".to_owned()),
+        ]
+    );
+    s.retire_oob_codes(OobRequestType::EmailSignIn, "b@example.com");
+    assert_eq!(codes(&s).len(), 2);
+}
+
+#[test]
+fn voiding_a_deleted_accounts_codes_takes_its_own_and_its_addresses() {
+    let mut s = store();
+    let owner = s
+        .create_user_with_id(NewUser::email("a@example.com"), Some("owner"), t0())
+        .unwrap();
+    let other = s
+        .create_user_with_id(NewUser::email("b@example.com"), Some("other"), t0())
+        .unwrap();
+    s.create_oob_code(
+        OobRequestType::PasswordReset,
+        "a@example.com",
+        Some(owner.clone()),
+        None,
+        t0(),
+    )
+    .unwrap();
+    // A code of the account whose address has since changed, and a link for its address.
+    s.create_oob_code(
+        OobRequestType::VerifyEmail,
+        "old@example.com",
+        Some(owner.clone()),
+        None,
+        t0(),
+    )
+    .unwrap();
+    s.create_oob_code(
+        OobRequestType::EmailSignIn,
+        "a@example.com",
+        None,
+        None,
+        t0(),
+    )
+    .unwrap();
+    s.create_oob_code(
+        OobRequestType::PasswordReset,
+        "b@example.com",
+        Some(other),
+        None,
+        t0(),
+    )
+    .unwrap();
+    s.void_oob_codes_of(&owner, Some("A@example.com"));
+    assert_eq!(
+        codes(&s),
+        [(OobRequestType::PasswordReset, "b@example.com".to_owned())]
+    );
+    let lone = s
+        .create_oob_code(
+            OobRequestType::EmailSignIn,
+            "c@example.com",
+            None,
+            None,
+            t0(),
+        )
+        .unwrap();
+    s.void_oob_codes_of(&owner, None);
+    assert!(s.oob_code(&lone).is_some());
+}
+
+#[test]
+fn production_lifetimes_keep_long_codes_and_refuse_an_expired_reset() {
+    for production in [false, true] {
+        let mut s = store();
+        s.set_production_oob_lifetimes(production);
+        let reset = s
+            .create_oob_code(
+                OobRequestType::PasswordReset,
+                "a@example.com",
+                None,
+                None,
+                t0(),
+            )
+            .unwrap();
+        let verify = s
+            .create_oob_code(
+                OobRequestType::VerifyEmail,
+                "a@example.com",
+                None,
+                None,
+                t0(),
+            )
+            .unwrap();
+        let expired = |s: &AuthStore, code: &str, at| {
+            let entry = s.oob_code(code).unwrap().clone();
+            s.oob_code_expired(&entry, at)
+        };
+        assert!(!expired(&s, &reset, t(3_600)));
+        assert!(expired(&s, &reset, t(3_601)));
+        assert_eq!(expired(&s, &verify, t(3_601)), !production);
+        if production {
+            assert!(!expired(&s, &verify, t(259_200)));
+            assert!(expired(&s, &verify, t(259_201)));
+        }
+        // An expired reset code is kept a day under production lifetimes, to be refused as
+        // expired; the local policy sweeps it at once.
+        s.sweep_transient_credentials(t(3_601));
+        assert_eq!(s.oob_code(&reset).is_some(), production);
+        s.sweep_transient_credentials(t(3_600 + 86_400));
+        assert_eq!(s.oob_code(&reset).is_some(), production);
+        s.sweep_transient_credentials(t(3_600 + 86_401));
+        assert!(s.oob_code(&reset).is_none());
+        assert_eq!(s.oob_code(&verify).is_some(), production);
+    }
+    let mut s = store();
+    s.set_production_oob_lifetimes(true);
+    let reset = s
+        .create_oob_code(
+            OobRequestType::PasswordReset,
+            "a@example.com",
+            None,
+            None,
+            t0(),
+        )
+        .unwrap();
+    assert_eq!(
+        s.consume_oob_code(&reset, None, t(3_601)),
+        Err(AuthError::ExpiredOobCode)
+    );
+    assert!(s.oob_code(&reset).is_none());
+    let mut s = store();
+    let reset = s
+        .create_oob_code(
+            OobRequestType::PasswordReset,
+            "a@example.com",
+            None,
+            None,
+            t0(),
+        )
+        .unwrap();
+    assert_eq!(
+        s.consume_oob_code(&reset, None, t(3_601)),
+        Err(AuthError::InvalidOobCode)
+    );
+}

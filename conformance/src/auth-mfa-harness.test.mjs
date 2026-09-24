@@ -330,7 +330,7 @@ test("the only action code is an email-link sign-in the Admin route returns", ()
 
 test("the committed corpus is valid and within the request cap", () => {
   const requests = validateMfaCorpus(PROGRAMS);
-  assert.ok(requests > 200 && requests < 400, String(requests));
+  assert.ok(requests > 200 && requests < 450, String(requests));
   assert.equal(PROGRAMS[0].config, undefined, "the first program runs with MFA off");
   for (const program of PROGRAMS.slice(1))
     assert.ok(program.config?.mfa, `${program.id} declares its mfa config`);
@@ -355,7 +355,15 @@ test("the corpus validator refuses what the guard cannot see coming", () => {
         { ...base, steps: [step({ waitSeconds: 5 })] },
         { id: "q", steps: [] },
       ],
-      /last program/,
+      /must wait too/,
+    ],
+    [
+      [
+        { ...base, steps: [step({ waitSeconds: 5 })] },
+        { id: "q", steps: [step({ id: "a" })] },
+        { id: "r", steps: [step({ waitSeconds: 5 })] },
+      ],
+      /must wait too/,
     ],
     [
       [

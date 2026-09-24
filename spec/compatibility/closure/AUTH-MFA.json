@@ -48,6 +48,12 @@
       "decision": "How rows are compared: TOTP codes are computed by the harness from the secret the enrollment start returned (RFC 6238) at the target's own clock, and a code-sensitive block first moves to the middle of a 30-second step; the TOTP window is exercised with adjacentIntervals 5 at both edges (the config program records which other values production accepts). Secrets, session infos, pending credentials, codes and refresh tokens are never recorded. Second factors are named per program by first appearance and shape; factor instants by their fraction precision; an enrollment deadline by its distance from the send time, rounded to ten seconds. Production may notify an account's @example.com address of a new or withdrawn second factor; nothing is delivered (null MX) and delivery is out of scope, as under AUTH-ACTION E1 and M3. Aged rows wait three seconds past their age and the achieved ages, like the clock skew estimated from each enrollment deadline, are kept with the private recordings; the window rows are not sent while the skew exceeds two seconds.",
       "decidedBy": "agent (recorded, not an owner decision)",
       "decidedOn": "2026-09-25"
+    },
+    {
+      "id": "M8",
+      "decision": "The first recording (2026-09-24) found a TOTP pending credential already refused at 300 seconds (TOTP_CHALLENGE_TIMEOUT, its same-account control accepted) and an enrollment start refused with a token 1800 seconds old (CREDENTIAL_TOO_OLD_LOGIN_AGAIN). One more small program brackets them: a TOTP pending credential at 60, 120, 180, 240 and 290 seconds, an SMS pending credential at 150 and 300 seconds, and an enrollment start with a token 240 and 330 seconds old, each with a same-account control, recorded twice in the same task.",
+      "decidedBy": "owner (t-k)",
+      "decidedOn": "2026-09-25"
     }
   ],
   "conditions": [
@@ -177,25 +183,27 @@
       "conditionId": "AUTH-MFA/pending-credential-lifetime",
       "source": "docs/compatibility/auth-mfa-next-campaign-preparation.md",
       "recipeIds": [
-        "auth-mfa/lifetime"
+        "auth-mfa/lifetime",
+        "auth-mfa/lifetime-short"
       ],
       "configProjections": [
         "default"
       ],
       "status": "PENDING_CORPUS",
-      "note": "A pending credential offered at 300, 450, 600 and 1800 seconds, each followed at once by a same-account control with a credential acquired then (owner decision M4)."
+      "note": "A TOTP pending credential offered at 300, 450, 600 and 1800 seconds (owner decision M4) and, since production refused it already at 300, at 60, 120, 180, 240 and 290 seconds (M8); an SMS pending credential whose code is sent at 150 and 300 seconds (M8). Each is followed at once by a same-account control with a credential acquired then."
     },
     {
       "conditionId": "AUTH-MFA/enrollment-session-lifetime",
       "source": "docs/compatibility/auth-mfa-next-campaign-preparation.md",
       "recipeIds": [
-        "auth-mfa/lifetime"
+        "auth-mfa/lifetime",
+        "auth-mfa/lifetime-short"
       ],
       "configProjections": [
         "default"
       ],
       "status": "PENDING_CORPUS",
-      "note": "A TOTP enrollment session finalized at 300, 450, 600, 870, 930 and 1800 seconds (either side of the 900 seconds its deadline announces) and an SMS enrollment session at 300, 450, 600 and 1800 seconds, each with the token of a sign-in made just before (so only the session is old) and followed by a same-account control with a session started then; and whether an enrollment start needs a recent sign-in (a token 1800 seconds old, then a new one)."
+      "note": "A TOTP enrollment session finalized at 300, 450, 600, 870, 930 and 1800 seconds (either side of the 900 seconds its deadline announces) and an SMS enrollment session at 300, 450, 600 and 1800 seconds, each with the token of a sign-in made just before (so only the session is old) and followed by a same-account control with a session started then; and whether an enrollment start needs a recent sign-in (a token 1800 seconds old, then a new one). The recent sign-in an enrollment start needs is bracketed with tokens 240 and 330 seconds old (M8)."
     },
     {
       "conditionId": "AUTH-MFA/final-artifact-regression",

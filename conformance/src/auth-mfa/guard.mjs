@@ -209,7 +209,13 @@ const CONFIG_PATH = "admin/v2/projects/{project}/config";
 export function validateMfaCorpus(programs) {
   let requests = 0;
   const programIds = new Set();
+  // Programs that wait come last: every program after the first waiting one waits too.
+  const waits = (program) => program.steps.some((step) => step.waitSeconds || step.age);
+  const firstWaiting = programs.findIndex(waits);
+  const waitingAllowed = (index) => firstWaiting >= 0 && index >= firstWaiting;
   programs.forEach((program, index) => {
+    if (firstWaiting >= 0 && index > firstWaiting && !waits(program))
+      throw new Error(`${program.id}: a program after a waiting one must wait too`);
     if (programIds.has(program.id)) throw new Error(`duplicate program ${program.id}`);
     programIds.add(program.id);
     for (const [path, value] of Object.entries(program.config ?? {})) {
@@ -233,12 +239,12 @@ export function validateMfaCorpus(programs) {
         throw new Error(`${program.id}#${step.id}: path must be relative`);
       if (!["itk", "securetoken", undefined].includes(step.api))
         throw new Error(`${step.id}: unknown api`);
-      if (step.waitSeconds && index !== programs.length - 1)
-        throw new Error(`${program.id}#${step.id}: only the last program may wait`);
+      if (step.waitSeconds && !waitingAllowed(index))
+        throw new Error(`${program.id}#${step.id}: only the last programs may wait`);
       if (step.waitUntil) throw new Error(`${step.id}: waits are relative (waitSeconds, age)`);
       if (step.age) {
-        if (index !== programs.length - 1)
-          throw new Error(`${program.id}#${step.id}: only the last program may wait`);
+        if (!waitingAllowed(index))
+          throw new Error(`${program.id}#${step.id}: only the last programs may wait`);
         if (!stepIds.has(step.age.from) || step.age.from === step.id)
           throw new Error(`${step.id}: an age counts from an earlier step`);
         if (!(step.age.seconds > 0 && step.age.seconds <= 1800))

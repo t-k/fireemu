@@ -178,12 +178,14 @@ impl Kind {
     }
 }
 
-/// `name` when it is a resource name of `kind`: the right collections, and ids that are
-/// non-empty and carry nothing a REST path would read as structure. Production refuses a
-/// malformed name with `INVALID_ARGUMENT`; the wording here is fireemu's (not observed).
+/// The REST path of `name` when it is a resource name of `kind`: the right collections, and
+/// ids that are non-empty and hold no `/` or control character. Each id is then passed to the
+/// REST core as REST would receive it URL-encoded, so REST's own validation answers it and
+/// an id may carry what a URL-encoded REST id may. Production refuses a malformed name with
+/// `INVALID_ARGUMENT`; the wording here is fireemu's (not observed).
 // Every tonic handler returns a Status; boxing it here would only unbox it again.
 #[allow(clippy::result_large_err)]
-fn resource(name: &str, kind: Kind) -> Result<&str, Status> {
+fn resource(name: &str, kind: Kind) -> Result<String, Status> {
     let segments: Vec<&str> = name.split('/').collect();
     let shape = kind.shape();
     let fits = segments.len() == shape.len()
@@ -192,20 +194,37 @@ fn resource(name: &str, kind: Kind) -> Result<&str, Status> {
             .zip(shape)
             .all(|(segment, want)| match want {
                 Some(literal) => segment == literal,
-                None => {
-                    !segment.is_empty()
-                        && !segment.contains(['%', '?', '#', ':', '\\'])
-                        && !segment.chars().any(char::is_control)
-                }
+                None => !segment.is_empty() && !segment.chars().any(char::is_control),
             });
-    if fits {
-        Ok(name)
-    } else {
-        Err(Status::invalid_argument(format!(
+    if !fits {
+        return Err(Status::invalid_argument(format!(
             "{name:?} is not a valid {} name.",
             kind.noun()
-        )))
+        )));
     }
+    Ok(segments
+        .iter()
+        .map(|segment| routing_safe(segment))
+        .collect::<Vec<_>>()
+        .join("/"))
+}
+
+/// An id with the characters that would change a REST route (a query, a fragment, a custom
+/// method, an escape) percent-encoded; the REST core decodes them back.
+fn routing_safe(segment: &str) -> String {
+    let mut out = String::new();
+    for c in segment.chars() {
+        match c {
+            '%' | '?' | '#' | ':' | '\\' | ' ' => {
+                let mut bytes = [0_u8; 4];
+                for byte in c.encode_utf8(&mut bytes).bytes() {
+                    let _ = write!(out, "%{byte:02X}");
+                }
+            }
+            other => out.push(other),
+        }
+    }
+    out
 }
 
 /// A field-mask path as REST spells it (`delete_protection_state` -> `deleteProtectionState`).
@@ -665,7 +684,7 @@ type R<T> = Result<Response<T>, Status>;
 #[tonic::async_trait]
 impl admin::firestore_admin_server::FirestoreAdmin for AdminGrpc {
     async fn create_index(&self, request: Request<admin::CreateIndexRequest>) -> R<lro::Operation> {
-        let parent = resource(&request.get_ref().parent, Kind::CollectionGroup)?.to_owned();
+        let parent = resource(&request.get_ref().parent, Kind::CollectionGroup)?;
         let body = request
             .get_ref()
             .index
@@ -682,7 +701,7 @@ impl admin::firestore_admin_server::FirestoreAdmin for AdminGrpc {
         request: Request<admin::ListIndexesRequest>,
     ) -> R<admin::ListIndexesResponse> {
         let r = request.get_ref();
-        let parent = resource(&r.parent, Kind::CollectionGroup)?.to_owned();
+        let parent = resource(&r.parent, Kind::CollectionGroup)?;
         let query = encode_query(&[("filter", &r.filter), ("pageToken", &r.page_token)]);
         let path = format!("{parent}/indexes");
         let answer = self
@@ -699,18 +718,18 @@ impl admin::firestore_admin_server::FirestoreAdmin for AdminGrpc {
         }))
     }
     async fn get_index(&self, request: Request<admin::GetIndexRequest>) -> R<admin::Index> {
-        let name = resource(&request.get_ref().name, Kind::Index)?.to_owned();
+        let name = resource(&request.get_ref().name, Kind::Index)?;
         let answer = self.call(&request, "GET", &name, "", Value::Null).await?;
         Ok(Response::new(index(&answer)))
     }
     async fn delete_index(&self, request: Request<admin::DeleteIndexRequest>) -> R<()> {
-        let name = resource(&request.get_ref().name, Kind::Index)?.to_owned();
+        let name = resource(&request.get_ref().name, Kind::Index)?;
         self.call(&request, "DELETE", &name, "", Value::Null)
             .await?;
         Ok(Response::new(()))
     }
     async fn get_field(&self, request: Request<admin::GetFieldRequest>) -> R<admin::Field> {
-        let name = resource(&request.get_ref().name, Kind::Field)?.to_owned();
+        let name = resource(&request.get_ref().name, Kind::Field)?;
         let answer = self.call(&request, "GET", &name, "", Value::Null).await?;
         Ok(Response::new(field(&answer)))
     }
@@ -719,7 +738,7 @@ impl admin::firestore_admin_server::FirestoreAdmin for AdminGrpc {
         let Some(patch) = &r.field else {
             return Err(Status::invalid_argument("field is required."));
         };
-        let name = resource(&patch.name, Kind::Field)?.to_owned();
+        let name = resource(&patch.name, Kind::Field)?;
         let query = encode_query(&[("updateMask", &update_mask(r.update_mask.as_ref()))]);
         let body = field_body(patch);
         let answer = self.call(&request, "PATCH", &name, &query, body).await?;
@@ -730,7 +749,7 @@ impl admin::firestore_admin_server::FirestoreAdmin for AdminGrpc {
         request: Request<admin::ListFieldsRequest>,
     ) -> R<admin::ListFieldsResponse> {
         let r = request.get_ref();
-        let parent = resource(&r.parent, Kind::CollectionGroup)?.to_owned();
+        let parent = resource(&r.parent, Kind::CollectionGroup)?;
         let query = encode_query(&[("filter", &r.filter), ("pageToken", &r.page_token)]);
         let path = format!("{parent}/fields");
         let answer = self
@@ -809,7 +828,7 @@ impl admin::firestore_admin_server::FirestoreAdmin for AdminGrpc {
         &self,
         request: Request<admin::GetDatabaseRequest>,
     ) -> R<admin::Database> {
-        let name = resource(&request.get_ref().name, Kind::Database)?.to_owned();
+        let name = resource(&request.get_ref().name, Kind::Database)?;
         let answer = self.call(&request, "GET", &name, "", Value::Null).await?;
         Ok(Response::new(database(&answer)))
     }
@@ -845,7 +864,7 @@ impl admin::firestore_admin_server::FirestoreAdmin for AdminGrpc {
         let Some(patch) = &r.database else {
             return Err(Status::invalid_argument("database is required."));
         };
-        let name = resource(&patch.name, Kind::Database)?.to_owned();
+        let name = resource(&patch.name, Kind::Database)?;
         let query = encode_query(&[("updateMask", &update_mask(r.update_mask.as_ref()))]);
         let body = database_body(patch);
         let answer = self.call(&request, "PATCH", &name, &query, body).await?;
@@ -857,7 +876,7 @@ impl admin::firestore_admin_server::FirestoreAdmin for AdminGrpc {
     ) -> R<lro::Operation> {
         let r = request.get_ref();
         let query = encode_query(&[("etag", &r.etag)]);
-        let name = resource(&r.name, Kind::Database)?.to_owned();
+        let name = resource(&r.name, Kind::Database)?;
         let answer = self
             .call(&request, "DELETE", &name, &query, Value::Null)
             .await?;
@@ -867,46 +886,46 @@ impl admin::firestore_admin_server::FirestoreAdmin for AdminGrpc {
         &self,
         request: Request<admin::CreateUserCredsRequest>,
     ) -> R<admin::UserCreds> {
-        let name = resource(&request.get_ref().parent, Kind::Database)?.to_owned();
+        let name = resource(&request.get_ref().parent, Kind::Database)?;
         Err(self.user_creds_refusal(&request, &name).await)
     }
     async fn get_user_creds(
         &self,
         request: Request<admin::GetUserCredsRequest>,
     ) -> R<admin::UserCreds> {
-        let name = resource(&request.get_ref().name, Kind::UserCreds)?.to_owned();
+        let name = resource(&request.get_ref().name, Kind::UserCreds)?;
         Err(self.user_creds_refusal(&request, &name).await)
     }
     async fn list_user_creds(
         &self,
         request: Request<admin::ListUserCredsRequest>,
     ) -> R<admin::ListUserCredsResponse> {
-        let name = resource(&request.get_ref().parent, Kind::Database)?.to_owned();
+        let name = resource(&request.get_ref().parent, Kind::Database)?;
         Err(self.user_creds_refusal(&request, &name).await)
     }
     async fn enable_user_creds(
         &self,
         request: Request<admin::EnableUserCredsRequest>,
     ) -> R<admin::UserCreds> {
-        let name = resource(&request.get_ref().name, Kind::UserCreds)?.to_owned();
+        let name = resource(&request.get_ref().name, Kind::UserCreds)?;
         Err(self.user_creds_refusal(&request, &name).await)
     }
     async fn disable_user_creds(
         &self,
         request: Request<admin::DisableUserCredsRequest>,
     ) -> R<admin::UserCreds> {
-        let name = resource(&request.get_ref().name, Kind::UserCreds)?.to_owned();
+        let name = resource(&request.get_ref().name, Kind::UserCreds)?;
         Err(self.user_creds_refusal(&request, &name).await)
     }
     async fn reset_user_password(
         &self,
         request: Request<admin::ResetUserPasswordRequest>,
     ) -> R<admin::UserCreds> {
-        let name = resource(&request.get_ref().name, Kind::UserCreds)?.to_owned();
+        let name = resource(&request.get_ref().name, Kind::UserCreds)?;
         Err(self.user_creds_refusal(&request, &name).await)
     }
     async fn delete_user_creds(&self, request: Request<admin::DeleteUserCredsRequest>) -> R<()> {
-        let name = resource(&request.get_ref().name, Kind::UserCreds)?.to_owned();
+        let name = resource(&request.get_ref().name, Kind::UserCreds)?;
         Err(self.user_creds_refusal(&request, &name).await)
     }
     async fn get_backup(&self, _r: Request<admin::GetBackupRequest>) -> R<admin::Backup> {
@@ -970,7 +989,7 @@ impl lro::operations_server::Operations for AdminGrpc {
     ) -> R<lro::ListOperationsResponse> {
         let r = request.get_ref();
         // The collection is the database's (`/v1/{name=projects/*/databases/*}/operations`).
-        let database = resource(&r.name, Kind::Database)?.to_owned();
+        let database = resource(&r.name, Kind::Database)?;
         let query = encode_query(&[("filter", &r.filter), ("pageToken", &r.page_token)]);
         let path = format!("{database}/operations");
         let answer = self
@@ -988,18 +1007,18 @@ impl lro::operations_server::Operations for AdminGrpc {
         }))
     }
     async fn get_operation(&self, request: Request<lro::GetOperationRequest>) -> R<lro::Operation> {
-        let name = resource(&request.get_ref().name, Kind::Operation)?.to_owned();
+        let name = resource(&request.get_ref().name, Kind::Operation)?;
         let answer = self.call(&request, "GET", &name, "", Value::Null).await?;
         Ok(Response::new(operation(&answer)))
     }
     async fn delete_operation(&self, request: Request<lro::DeleteOperationRequest>) -> R<()> {
-        let name = resource(&request.get_ref().name, Kind::Operation)?.to_owned();
+        let name = resource(&request.get_ref().name, Kind::Operation)?;
         self.call(&request, "DELETE", &name, "", Value::Null)
             .await?;
         Ok(Response::new(()))
     }
     async fn cancel_operation(&self, request: Request<lro::CancelOperationRequest>) -> R<()> {
-        let name = resource(&request.get_ref().name, Kind::Operation)?.to_owned();
+        let name = resource(&request.get_ref().name, Kind::Operation)?;
         let path = format!("{name}:cancel");
         self.call(&request, "POST", &path, "", json!({})).await?;
         Ok(Response::new(()))

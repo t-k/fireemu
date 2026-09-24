@@ -345,10 +345,21 @@ async fn a_resource_name_of_another_kind_is_refused_before_it_is_routed() {
         .await
         .unwrap_err();
     assert_eq!(refused.code(), Code::InvalidArgument);
-    for name in [
-        "projects/p/databases/grpcdb%2Fx",
-        "projects/p/databases/",
-        "projects/p/databases/grpcdb:bulkDeleteDocuments",
+    let refused = service
+        .get_database(owner(admin::GetDatabaseRequest {
+            name: "projects/p/databases/".to_owned(),
+        }))
+        .await
+        .unwrap_err();
+    assert_eq!(refused.code(), Code::InvalidArgument, "an empty id");
+    // An id carrying routing characters is the id REST receives URL-encoded, never another
+    // route: it answers what REST answers for that id.
+    for (name, encoded) in [
+        ("projects/p/databases/grpcdb%2Fx", "grpcdb%252Fx"),
+        (
+            "projects/p/databases/grpcdb:bulkDeleteDocuments",
+            "grpcdb%3AbulkDeleteDocuments",
+        ),
     ] {
         let refused = service
             .get_database(owner(admin::GetDatabaseRequest {
@@ -356,7 +367,14 @@ async fn a_resource_name_of_another_kind_is_refused_before_it_is_routed() {
             }))
             .await
             .unwrap_err();
-        assert_eq!(refused.code(), Code::InvalidArgument, "{name}");
+        let (status, over_rest) = rest(
+            &state,
+            "GET",
+            &format!("/v1/projects/p/databases/{encoded}"),
+            Value::Null,
+        );
+        assert_eq!(refused.message(), over_rest["error"]["message"], "{name}");
+        assert_eq!((status, refused.code()), (404, Code::NotFound), "{name}");
     }
     // The database is untouched.
     assert_eq!(
@@ -430,4 +448,27 @@ async fn a_create_with_a_key_or_tags_is_refused_over_grpc_as_over_rest_with_its_
         .await
         .unwrap_err();
     assert_eq!(refused.message(), tagged["error"]["message"]);
+}
+
+#[tokio::test]
+async fn a_field_name_with_special_characters_is_answered_over_grpc_as_over_rest() {
+    // Review 2026-09-25: gRPC refused ids REST serves once URL-encoded.
+    let state = state();
+    let service = AdminGrpc::new(Arc::clone(&state));
+    let field = "`a:b%c?d#e`";
+    let name = format!("{DB}/collectionGroups/items/fields/{field}");
+    let (status, over_rest) = rest(
+        &state,
+        "GET",
+        &format!("/v1/{DB}/collectionGroups/items/fields/%60a%3Ab%25c%3Fd%23e%60"),
+        Value::Null,
+    );
+    assert_eq!(status, 200, "{over_rest}");
+    let read = service
+        .get_field(owner(admin::GetFieldRequest { name: name.clone() }))
+        .await
+        .unwrap()
+        .into_inner();
+    assert_eq!(read.name, over_rest["name"]);
+    assert_eq!(read.name, name);
 }

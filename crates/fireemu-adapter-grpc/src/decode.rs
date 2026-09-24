@@ -593,10 +593,15 @@ pub fn decode_structured_query(
             ))
         }
     };
-    // An empty collection id selects every document under the parent whatever the
-    // `allDescendants` flag says: production serves it, and so does the official emulator.
+    // An empty collection id selects documents of any collection: every one under the parent
+    // with `allDescendants`, the parent's direct children without it (production, FS-QUERY-INDEX
+    // collection-group/scopes#kindless-without-descendants).
     let scope = if from.collection_id.is_empty() {
-        QueryScope::kindless_all_descendants(parent.document.clone())
+        if from.all_descendants {
+            QueryScope::kindless_all_descendants(parent.document.clone())
+        } else {
+            QueryScope::kindless_children(parent.document.clone())
+        }
     } else {
         let collection_id = CollectionId::try_new(from.collection_id.as_str())
             .map_err(|e| crate::query_messages::collection_id_error(&from.collection_id, &e))?;

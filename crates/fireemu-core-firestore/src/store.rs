@@ -1242,7 +1242,9 @@ fn query_retained_bytes(query: &Query) -> u64 {
             parent,
             collection_id,
         } => (parent.as_ref(), Some(collection_id.as_str())),
-        QueryScope::KindlessAllDescendants { parent } => (parent.as_ref(), None),
+        QueryScope::KindlessAllDescendants { parent } | QueryScope::KindlessChildren { parent } => {
+            (parent.as_ref(), None)
+        }
     };
     if let Some(parent) = parent {
         total = total.saturating_add(document_path_retained_bytes(parent));
@@ -1564,7 +1566,8 @@ impl FirestoreState {
                     Box::new(paths.iter().map(AsRef::as_ref))
                 }
             }
-            QueryScope::KindlessAllDescendants { parent } => {
+            QueryScope::KindlessAllDescendants { parent }
+            | QueryScope::KindlessChildren { parent } => {
                 if version.is_some() {
                     if let Some(parent) = parent {
                         Box::new(
@@ -1647,7 +1650,8 @@ impl FirestoreState {
                     Box::new(paths.iter().rev().map(AsRef::as_ref))
                 }
             }
-            QueryScope::KindlessAllDescendants { parent } => {
+            QueryScope::KindlessAllDescendants { parent }
+            | QueryScope::KindlessChildren { parent } => {
                 if version.is_some() {
                     if let Some(parent) = parent {
                         let (lower, upper) = descendant_bounds(parent);
@@ -1729,7 +1733,8 @@ impl FirestoreState {
                     Box::new(paths)
                 }
             }
-            QueryScope::KindlessAllDescendants { parent } => {
+            QueryScope::KindlessAllDescendants { parent }
+            | QueryScope::KindlessChildren { parent } => {
                 if version.is_some() {
                     if let Some(parent) = parent {
                         Box::new(
@@ -1822,7 +1827,8 @@ impl FirestoreState {
                         .map(AsRef::as_ref),
                 )
             }
-            QueryScope::KindlessAllDescendants { parent } => {
+            QueryScope::KindlessAllDescendants { parent }
+            | QueryScope::KindlessChildren { parent } => {
                 if let Some(parent) = parent {
                     if !is_strict_descendant(before, parent) {
                         return Box::new(core::iter::empty());

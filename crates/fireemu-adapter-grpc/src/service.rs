@@ -304,7 +304,8 @@ impl GatewayService {
     }
 
     fn validate_run_query(&self, req: &pb::RunQueryRequest) -> Result<Vec<String>, Status> {
-        let parent = crate::query_messages::parse_query_parent(&req.parent).map_err(|e| Rejection::Decode(e).to_status())?;
+        let parent = crate::query_messages::parse_query_parent(&req.parent)
+            .map_err(|e| Rejection::Decode(e).to_status())?;
         let Some(pb::run_query_request::QueryType::StructuredQuery(sq)) = &req.query_type else {
             return Err(Status::invalid_argument(
                 "RunQuery requires a structured_query",
@@ -330,7 +331,8 @@ impl GatewayService {
         &self,
         req: &pb::RunAggregationQueryRequest,
     ) -> Result<Vec<String>, Status> {
-        let parent = crate::query_messages::parse_query_parent(&req.parent).map_err(|e| Rejection::Decode(e).to_status())?;
+        let parent = crate::query_messages::parse_query_parent(&req.parent)
+            .map_err(|e| Rejection::Decode(e).to_status())?;
         let Some(pb::run_aggregation_query_request::QueryType::StructuredAggregationQuery(
             aggregation,
         )) = &req.query_type

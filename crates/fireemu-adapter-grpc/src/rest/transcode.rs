@@ -705,7 +705,8 @@ fn check_scalar(kind: Kind, value: &Value) -> Option<Value> {
         // A name must be known; a number passes whatever it is, as on the wire.
         Kind::Enum(schema) => match value {
             Value::Number(number) if number.as_i64().is_some() => Some(
-                enum_name(schema, value).map_or_else(|| value.clone(), |name| Value::String(name.to_owned())),
+                enum_name(schema, value)
+                    .map_or_else(|| value.clone(), |name| Value::String(name.to_owned())),
             ),
             _ => enum_name(schema, value).map(|name| Value::String(name.to_owned())),
         },

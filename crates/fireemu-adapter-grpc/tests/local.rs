@@ -6717,11 +6717,28 @@ async fn scoped_resets_and_partition_tokens_respect_project_ownership() {
         }],
         ..Default::default()
     };
+    // Names the partition sampler picks, so the group splits and pages carry tokens.
+    let names: Vec<String> = {
+        let project = fireemu_core_types::ids::ProjectId::try_new("demo-a").unwrap();
+        let database = fireemu_core_types::ids::DatabaseId::try_new("(default)").unwrap();
+        (0..)
+            .map(|n| format!("owners/o{n}/items/i{n}"))
+            .filter(|relative| {
+                fireemu_adapter_grpc::partition::is_sample(
+                    &fireemu_core_firestore::path::DocumentPath::parse(
+                        &project, &database, relative,
+                    )
+                    .unwrap(),
+                )
+            })
+            .take(4)
+            .collect()
+    };
     for project in ["demo-a", "demo-b"] {
-        for n in 0..4 {
+        for name in &names {
             backend
                 .commit_with(
-                    &write(project, &format!("owners/o{n}/items/i{n}")),
+                    &write(project, name),
                     &fireemu_adapter_grpc::rules::allow_all,
                 )
                 .unwrap();
@@ -6749,6 +6766,12 @@ async fn scoped_resets_and_partition_tokens_respect_project_ownership() {
                     collection_id: "items".to_owned(),
                     all_descendants: true,
                 }],
+                order_by: vec![sq::Order {
+                    field: Some(sq::FieldReference {
+                        field_path: "__name__".to_owned(),
+                    }),
+                    direction: sq::Direction::Ascending as i32,
+                }],
                 ..Default::default()
             },
         )),
@@ -6774,10 +6797,10 @@ async fn scoped_resets_and_partition_tokens_respect_project_ownership() {
     backend.reset_scope(&Scope::Project("demo-b".to_owned()));
     assert_eq!(count("demo-b"), 0);
     // A project reset bumps only that database's generation: the token is refused.
-    for n in 0..4 {
+    for name in &names {
         backend
             .commit_with(
-                &write("demo-b", &format!("owners/o{n}/items/i{n}")),
+                &write("demo-b", name),
                 &fireemu_adapter_grpc::rules::allow_all,
             )
             .unwrap();

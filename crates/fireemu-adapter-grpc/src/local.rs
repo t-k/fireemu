@@ -3277,9 +3277,10 @@ impl LocalBackend {
         })
     }
 
-    /// `PartitionQuery`: cursor points that split a collection-group query (ordered by
-    /// `__name__`, without filters, other orderings, limits or cursors) into up to
-    /// `partition_count + 1` ranges of similar size, paged by `page_size` / `page_token`.
+    /// `PartitionQuery`: up to `partition_count` cursor points that split a collection-group
+    /// query (ordered by `__name__`, without filters, other orderings, limits or cursors) at
+    /// sampled keys as production does (see [`crate::partition`]), paged by `page_size` /
+    /// `page_token`.
     /// The cuts are computed at one version (the `read_time` selector's, else the version
     /// current at the first page) that the page token carries, so later pages see the same
     /// partitioning whatever was written in between; the token is bound to the query.
@@ -3290,9 +3291,7 @@ impl LocalBackend {
     ) -> Result<pb::PartitionQueryResponse, Status> {
         let parent = parse_parent(&req.parent).map_err(status)?;
         if parent.document.is_some() {
-            return Err(Status::invalid_argument(
-                "PartitionQuery parent must be the database (projects/{p}/databases/{d}/documents)",
-            ));
+            return Err(Status::invalid_argument(crate::partition::ANCESTOR_QUERY));
         }
         let Some(pb::partition_query_request::QueryType::StructuredQuery(sq)) = &req.query_type
         else {
@@ -3301,26 +3300,30 @@ impl LocalBackend {
             ));
         };
         self.fault(parent.project.as_str(), "firestore.read")?;
+        if req.partition_count <= 0 {
+            return Err(Status::invalid_argument(
+                crate::partition::COUNT_NOT_POSITIVE,
+            ));
+        }
+        if req.page_size < 0 {
+            return Err(Status::invalid_argument(
+                crate::partition::PAGE_SIZE_NEGATIVE,
+            ));
+        }
         let query = self.accepted_query(&parent, sq)?.query;
         if query.find_nearest.is_some() {
             return Err(Status::unimplemented(
                 "PartitionQuery does not support findNearest",
             ));
         }
+        // Production answers a kindless query, or one without an explicit order, with no
+        // partition at all.
+        let split = crate::partition::check_query(&query).map_err(Status::invalid_argument)?;
         let name_ascending_only = query.order_by.iter().all(|o| {
             o.field.is_document_name()
                 && o.direction == fireemu_core_firestore::query::Direction::Ascending
         });
-        if !matches!(
-            query.scope,
-            fireemu_core_firestore::query::QueryScope::CollectionGroup { .. }
-        ) || query.filter.is_some()
-            || !name_ascending_only
-            || query.limit.is_some()
-            || query.offset != 0
-            || query.start_at.is_some()
-            || query.end_at.is_some()
-        {
+        if split && (query.filter.is_some() || !name_ascending_only) {
             return Err(Status::invalid_argument(
                 "PartitionQuery requires a collection group query ordered by __name__ only (no filters, order bys, limits, offsets or cursors)",
             ));
@@ -3328,16 +3331,11 @@ impl LocalBackend {
         let partition_count = usize::try_from(req.partition_count)
             .ok()
             .filter(|n| *n > 0)
-            .ok_or_else(|| Status::invalid_argument("partition_count must be positive"))?;
+            .ok_or_else(|| Status::invalid_argument(crate::partition::COUNT_NOT_POSITIVE))?;
         let collection_id = query
             .scope
             .collection_id()
-            .expect("collection-group checked above")
-            .as_str()
-            .to_owned();
-        if req.page_size < 0 {
-            return Err(Status::invalid_argument("page_size must not be negative"));
-        }
+            .map_or_else(String::new, |id| id.as_str().to_owned());
         let read_time = req.consistency_selector.as_ref().map(
             |pb::partition_query_request::ConsistencySelector::ReadTime(t)| {
                 crate::encode::decode_instant(t)
@@ -3370,16 +3368,16 @@ impl LocalBackend {
                     .parse::<u64>()
                     .ok()
                     .zip(f.parse::<u64>().ok())
-                    .zip(i.parse::<usize>().ok())
-                    .filter(|((_, f), _)| *f == fingerprint)
-                    .map(|((v, _), i)| (v, i)),
+                    .zip(i.parse::<usize>().ok()),
                 _ => None,
             };
-            let (v, i) = parsed.ok_or_else(|| {
-                Status::invalid_argument(
-                    "invalid page_token (not issued for this query, count and read time, or the session was reset)",
-                )
-            })?;
+            // Production: a token it cannot read, and one issued for another request (another
+            // query, count or read time, or before a reset), in its own words.
+            let ((v, f), i) = parsed
+                .ok_or_else(|| Status::invalid_argument(crate::partition::TOKEN_UNREADABLE))?;
+            if f != fingerprint {
+                return Err(Status::invalid_argument(crate::partition::TOKEN_FOREIGN));
+            }
             (Some(CommitVersion::from_value(v)), i)
         };
         let (paths, version): (Vec<DocumentPath>, CommitVersion) = self.read_db(&parent, |db| {
@@ -3391,13 +3389,14 @@ impl LocalBackend {
             if version > db.current_version() {
                 return Err(Status::invalid_argument("invalid page_token"));
             }
+            if !split {
+                return Ok((Vec::new(), version));
+            }
+            let (group, _) = db
+                .run_query_paths_with_stats(&query, Some(version))
+                .map_err(|error| status_from_error(&error))?;
             Ok((
-                db.collection_group_partition_paths_at(
-                    query.scope.parent(),
-                    &collection_id,
-                    version,
-                    partition_count,
-                ),
+                crate::partition::partition_cursors(&group, partition_count),
                 version,
             ))
         })?;
@@ -3407,7 +3406,7 @@ impl LocalBackend {
                 values: vec![pb::Value {
                     value_type: Some(pb::value::ValueType::ReferenceValue(path.resource_name())),
                 }],
-                before: true,
+                before: false,
             })
             .collect();
         if start > cursors.len() {

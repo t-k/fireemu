@@ -1883,7 +1883,11 @@ fn rest_requests_are_authorized_like_grpc() {
         None,
     );
     assert_eq!(status, 403, "{err}");
-    assert_eq!(err["error"]["status"], "PERMISSION_DENIED");
+    // Production's body for every Security Rules denial (FS-RULES scope decision R6).
+    assert_eq!(
+        err,
+        json!({"error": {"code": 403, "message": "Missing or insufficient permissions.", "status": "PERMISSION_DENIED"}})
+    );
     let (status, _) = call_as(
         &s,
         "PATCH",
@@ -1900,7 +1904,7 @@ fn rest_requests_are_authorized_like_grpc() {
         Some("Bearer not-a-token"),
     );
     assert_eq!(status, 401, "{err}");
-    let (status, _) = call_as(
+    let (status, err) = call_as(
         &s,
         "POST",
         &format!("{DOCS}:runQuery"),
@@ -1908,6 +1912,10 @@ fn rest_requests_are_authorized_like_grpc() {
         None,
     );
     assert_eq!(status, 403);
+    assert_eq!(
+        err["error"]["message"],
+        "Missing or insufficient permissions."
+    );
 }
 
 #[test]

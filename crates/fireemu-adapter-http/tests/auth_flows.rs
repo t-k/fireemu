@@ -8397,13 +8397,12 @@ fn routed_project_config_uses_selected_store_and_publishes_only_successful_write
     }
 }
 
-/// ITKM-5. Email enumeration protection hides an unknown address from an anonymous caller.
-/// An Admin link generator is already authenticated and reads every account, so the silent
-/// 200 only costs it the link it asked for: it gets `EMAIL_NOT_FOUND`, as it does with the
-/// protection off. Production's answer for this pair is unobserved; this is the documented
-/// Admin SDK contract (`generatePasswordResetLink` rejects an unknown address).
+/// ITKM-5. Email enumeration protection hides an unknown address from every caller, the Admin
+/// link generator included: production answers its request with 200 and no code (sandbox
+/// recording 2026-09-24, `auth-action/generate/admin#reset-link-unknown`), as the official
+/// emulator does.
 #[test]
-fn improved_email_privacy_still_reports_an_unknown_address_to_an_admin_link_generator() {
+fn improved_email_privacy_hides_an_unknown_address_from_an_admin_link_generator() {
     let s = state();
     let enabled = handle_with(
         &s,
@@ -8424,13 +8423,19 @@ fn improved_email_privacy_still_reports_an_unknown_address_to_an_admin_link_gene
     assert_eq!(hidden["email"], "nobody@example.com");
     assert!(hidden.get("oobLink").is_none(), "{hidden}");
 
-    let (status, refused) = admin(
+    let (status, hidden) = admin(
         &s,
         &format!("{V1}/projects/demo-app/accounts:sendOobCode"),
         &json!({"requestType": "PASSWORD_RESET", "email": "nobody@example.com", "returnOobLink": true}),
     );
-    assert_eq!(status, 400, "{refused}");
-    assert_eq!(refused["error"]["message"], "EMAIL_NOT_FOUND");
+    assert_eq!(status, 200, "{hidden}");
+    assert_eq!(
+        hidden,
+        json!({"kind": "identitytoolkit#GetOobConfirmationCodeResponse", "email": "nobody@example.com"})
+    );
+    assert!(get(&s, &format!("{EMU}/oobCodes")).1["oobCodes"]
+        .as_array()
+        .is_some_and(Vec::is_empty));
 
     // A known address still yields the link.
     sign_up(&s, "known@example.com");

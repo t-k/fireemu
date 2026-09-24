@@ -22,6 +22,31 @@
   "command": "pnpm -C conformance fs-data-write:check",
   "comparisonCommand": "node conformance/src/fs-data-write-sandbox-run.mjs compare-local conformance/.runs/fs-data-write-local-DbrwFE",
   "localExecutableSha256": "242248dd5d1119c1ef72724efda21f19caf1411b344a884106ff4258e5cfb15e",
+  "localRunBinding": {
+    "sourceHead": "8a0f20599bab98bb094a74e00d6b2df9f6cd60e8",
+    "executablePath": "target/debug/fireemu",
+    "executableSha256": "242248dd5d1119c1ef72724efda21f19caf1411b344a884106ff4258e5cfb15e",
+    "executableSha256After": "242248dd5d1119c1ef72724efda21f19caf1411b344a884106ff4258e5cfb15e",
+    "config": "conformance/fs-data-write-sandbox.fireemu.json",
+    "configSha256": "0f15f02dbfef3f0ee5cd6302684e8bb547b8c49dea5a825deeb57b2938545f0b",
+    "runtimeInputs": {
+      "Cargo.toml": "ae1c67986785f5d1184e3f6b0fc5aa3894d9d0bb8154e7be436df943ff1d7b41",
+      "Cargo.lock": "73190978b490482697e92912754dd372bebf1c491256d67f692e5a4be2085450",
+      "conformance/src/fs-data-write-sandbox-run.mjs": "da799bfd05616b19b45bff1b827c38967657bd73e3895635e92142cd4cce73e8",
+      "conformance/src/firestore-probe/sandbox-session.mjs": "b7e0fea3c3b97db3621602456a2651c356a7199f7dd033da5311006c955231fb"
+    },
+    "commandVersions": {
+      "cargo": "cargo 1.94.0 (85eff7c80 2026-01-15)",
+      "node": "v24.14.0",
+      "rustc": "rustc 1.94.0 (4a4ef493e 2026-03-02)"
+    }
+  },
+  "localRunBindingSha256": "73b823461ad2933db06acd5fd9d5bf6f933ba4fb713e63042ab27a21b5d3f15a",
+  "localSelectedResultsSha256": "fbbd93c12ccab2f9beaa45c1e9d3a5e6b6862525e5b0302b5f86c8402f89f3a8",
+  "comparisonRuntimeInput": {
+    "path": "conformance/src/fs-data-write-sandbox.mjs",
+    "sha256": "43525e5d81abb6c73203be0c56a05ab5c6f48532999a377800c42616312b696d"
+  },
   "localConfigSha256": "0f15f02dbfef3f0ee5cd6302684e8bb547b8c49dea5a825deeb57b2938545f0b",
   "localIndexConfigSha256": "62d5387f860555c8a966d115ea95c2619c907c498b75e4c2e7a465503b452ec7",
   "localRuntimeInputs": {

@@ -4,7 +4,10 @@
 //!
 //! A bucket exists for an export when it is one of the project's default buckets or already
 //! holds an object: the Storage emulator, like the official one, has no bucket resource of its
-//! own, and creating one is the Storage parent's concern, not this one's.
+//! own, and creating one is the Storage parent's concern, not this one's. Because nothing ties
+//! an emulated bucket to a project, the first project whose export or import uses a bucket owns
+//! it here, and another project's default bucket is never usable: one project's export cannot
+//! write into, nor its import read from, a bucket another project uses.
 
 use std::sync::Arc;
 
@@ -25,12 +28,54 @@ use fireemu_core_types::determinism::Clock;
 /// The most output bytes one managed import reads.
 const MAX_IMPORT_OUTPUT_BYTES: u64 = 1 << 30;
 
+/// The most documents one managed import decodes and holds before writing them.
+const MAX_IMPORT_DOCUMENTS: usize = 1_000_000;
+
+/// The project a default bucket (`<project>.appspot.com`, `<project>.firebasestorage.app`)
+/// belongs to.
+fn default_bucket_project(bucket: &str) -> Option<&str> {
+    bucket
+        .strip_suffix(".appspot.com")
+        .or_else(|| bucket.strip_suffix(".firebasestorage.app"))
+}
+
+/// Which project uses each bucket for managed exports and imports.
+#[derive(Default)]
+struct BucketOwners(std::sync::Mutex<std::collections::BTreeMap<String, String>>);
+
+impl BucketOwners {
+    /// Whether `project` may use `bucket`, which then belongs to it if no project used it yet.
+    fn claim(&self, project: &str, bucket: &str) -> bool {
+        if let Some(owner) = default_bucket_project(bucket) {
+            return owner == project;
+        }
+        let mut owners = self
+            .0
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        owners
+            .entry(bucket.to_owned())
+            .or_insert_with(|| project.to_owned())
+            == project
+    }
+}
+
+/// An output file name a partition metadata may name: a file in the partition's directory.
+fn output_name_is_local(name: &str) -> bool {
+    !name.is_empty()
+        && !name.contains(['/', '\\'])
+        && name != "."
+        && name != ".."
+        && !name.chars().any(char::is_control)
+}
+
 /// What one import has read: each output object at most once, within a byte budget, so a
 /// crafted metadata cannot make it decode the same object again and again.
 #[derive(Default)]
 struct ImportBudget {
     outputs: std::collections::BTreeSet<String>,
     bytes: u64,
+    documents: usize,
 }
 
 impl ImportBudget {
@@ -42,6 +87,17 @@ impl ImportBudget {
                 "{path} is named by more than one partition"
             )))
         }
+    }
+
+    /// Counts one more decoded document.
+    fn decoded(&mut self) -> Result<(), ImportRefusal> {
+        self.documents += 1;
+        if self.documents > MAX_IMPORT_DOCUMENTS {
+            return Err(ImportRefusal::Malformed(format!(
+                "the export holds more than the {MAX_IMPORT_DOCUMENTS} documents one import reads"
+            )));
+        }
+        Ok(())
     }
 
     fn read(&mut self, bytes: usize) -> Result<(), ImportRefusal> {
@@ -60,13 +116,17 @@ impl ImportBudget {
 /// [`ManagedStorage`] over a Storage emulator.
 pub struct StorageBridge {
     storage: Arc<StorageState>,
+    owners: BucketOwners,
 }
 
 impl StorageBridge {
     /// A bridge over `storage`.
     #[must_use]
     pub fn new(storage: Arc<StorageState>) -> Self {
-        Self { storage }
+        Self {
+            storage,
+            owners: BucketOwners::default(),
+        }
     }
 
     fn now(&self) -> fireemu_core_types::time::LogicalInstant {
@@ -101,9 +161,9 @@ fn export_name(prefix: &str) -> &str {
 
 impl ManagedStorage for StorageBridge {
     fn bucket_exists(&self, project: &str, bucket: &str) -> bool {
-        if bucket == format!("{project}.appspot.com")
-            || bucket == format!("{project}.firebasestorage.app")
-        {
+        // Another project's bucket answers as a missing one: production's words for a bucket
+        // of another project were not observed.
+        if default_bucket_project(bucket) == Some(project) {
             return true;
         }
         let Ok(name) = BucketName::try_new(bucket) else {
@@ -112,6 +172,7 @@ impl ManagedStorage for StorageBridge {
         self.storage
             .store()
             .is_ok_and(|store| store.buckets().contains(&name))
+            && self.owners.claim(project, bucket)
     }
 
     fn export(&self, job: &ExportJob) -> Result<ExportOutcome, String> {
@@ -162,7 +223,12 @@ impl ManagedStorage for StorageBridge {
     fn import(&self, job: &ImportJob) -> Result<ImportOutcome, ImportRefusal> {
         let name = export_name(&job.prefix);
         let overall_name = join(&job.prefix, &format!("{name}.overall_export_metadata"));
-        let Some(overall) = self.read(&job.bucket, &overall_name) else {
+        // A bucket another project uses is not readable to this one: it answers as absent.
+        let readable = self.owners.claim(&job.project, &job.bucket);
+        let Some(overall) = readable
+            .then(|| self.read(&job.bucket, &overall_name))
+            .flatten()
+        else {
             return Err(ImportRefusal::MissingMetadata(format!(
                 "/{}/{overall_name}",
                 job.bucket
@@ -199,6 +265,12 @@ impl ManagedStorage for StorageBridge {
             for output in read_partition_outputs(&metadata)
                 .map_err(|e| ImportRefusal::Malformed(e.to_string()))?
             {
+                if !output_name_is_local(&output) {
+                    return Err(ImportRefusal::Malformed(format!(
+                        "{} names the output {output:?} outside its directory",
+                        entry.metadata_file
+                    )));
+                }
                 let path = join(&job.prefix, &join(directory, &output));
                 budget.admit(&path)?;
                 let content = self
@@ -216,6 +288,7 @@ impl ManagedStorage for StorageBridge {
                         project: entity.document.project,
                         database: entity.database,
                     });
+                    budget.decoded()?;
                 }
             }
             bytes = bytes.saturating_add(entry.bytes);
@@ -229,6 +302,28 @@ mod tests {
     use super::*;
 
     #[test]
+    fn a_bucket_belongs_to_the_first_project_that_uses_it() {
+        let owners = BucketOwners::default();
+        assert!(owners.claim("a", "shared"));
+        assert!(owners.claim("a", "shared"));
+        assert!(!owners.claim("b", "shared"), "another project's bucket");
+        assert!(owners.claim("b", "b.appspot.com"));
+        assert!(
+            !owners.claim("a", "b.appspot.com"),
+            "another project's default bucket"
+        );
+        assert!(!owners.claim("a", "b.firebasestorage.app"));
+    }
+
+    #[test]
+    fn an_output_name_stays_in_its_partition_directory() {
+        assert!(output_name_is_local("output-0"));
+        for name in ["", ".", "..", "../x", "x/y", "/abs", "a\\b", "a\nb"] {
+            assert!(!output_name_is_local(name), "{name:?}");
+        }
+    }
+
+    #[test]
     fn an_import_reads_each_output_once_and_within_its_budget() {
         let mut budget = ImportBudget::default();
         assert!(budget.admit("x/all/output-0").is_ok());
@@ -237,6 +332,9 @@ mod tests {
             Err(ImportRefusal::Malformed(_))
         ));
         assert!(budget.read(1024).is_ok());
+        budget.documents = MAX_IMPORT_DOCUMENTS - 1;
+        assert!(budget.decoded().is_ok());
+        assert!(budget.decoded().is_err());
         let too_much = usize::try_from(MAX_IMPORT_OUTPUT_BYTES).unwrap();
         assert!(matches!(
             budget.read(too_much),

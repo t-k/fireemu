@@ -1330,6 +1330,17 @@ fn admin_guard(
 /// the request (sandbox recording 2026-09-24, auth-credential/refresh/refusals#invalid-api-key).
 fn invalid_api_key(service: &str) -> JsonResponse {
     const MESSAGE: &str = "API key not valid. Please pass a valid API key.";
+    let mut response = invalid_api_key_without_errors(service);
+    // Identity Toolkit adds its `errors` list; Secure Token does not (2026-09-24).
+    if service == "identitytoolkit.googleapis.com" {
+        response.body["error"]["errors"] =
+            json!([{"message": MESSAGE, "domain": "global", "reason": "badRequest"}]);
+    }
+    response
+}
+
+fn invalid_api_key_without_errors(service: &str) -> JsonResponse {
+    const MESSAGE: &str = "API key not valid. Please pass a valid API key.";
     JsonResponse {
         status: 400,
         body: json!({"error": {
@@ -1349,6 +1360,34 @@ fn invalid_api_key(service: &str) -> JsonResponse {
                     "message": MESSAGE,
                 },
             ],
+        }}),
+    }
+}
+
+/// Production's refusal of an API key where session management needs a credential.
+fn session_management_credentials_missing() -> JsonResponse {
+    JsonResponse {
+        status: 401,
+        body: json!({"error": {
+            "code": 401,
+            "message": "API keys are not supported by this API. Expected OAuth2 access token or other authentication credentials that assert a principal. See https://cloud.google.com/docs/authentication",
+            "errors": [{
+                "message": "Login Required.",
+                "domain": "global",
+                "reason": "required",
+                "location": "Authorization",
+                "locationType": "header",
+            }],
+            "status": "UNAUTHENTICATED",
+            "details": [{
+                "@type": "type.googleapis.com/google.rpc.ErrorInfo",
+                "reason": "CREDENTIALS_MISSING",
+                "domain": "googleapis.com",
+                "metadata": {
+                    "method": "google.cloud.identitytoolkit.v1.SessionManagementService.CreateSessionCookie",
+                    "service": "identitytoolkit.googleapis.com",
+                },
+            }],
         }}),
     }
 }
@@ -3248,6 +3287,18 @@ fn caller_identity_check(
         routes::Resolution::NotFound => return Ok(()),
     };
     match class {
+        // Session management refuses an API key in place of a credential with its own shape
+        // (sandbox recording 2026-09-24, session-cookie/sessions#client-api-key).
+        routes::RouteClass::Admin
+            if api_key
+                && matches!(
+                    resolution,
+                    routes::Resolution::Matched { route, .. }
+                        if route.handler == routes::Handler::AdminCreateSessionCookie
+                ) =>
+        {
+            Err(session_management_credentials_missing())
+        }
         routes::RouteClass::Admin => admin_request_guard(headers, "", api_key),
         routes::RouteClass::EndUser
             if state.client_api_key == ClientApiKeyPolicy::Required && !api_key =>
@@ -6786,20 +6837,28 @@ fn sign_in_with_custom_token(
     trust: Option<&CustomTokenTrust>,
     legacy_tokens: bool,
 ) -> JsonResponse {
-    let Some(token) = str_field(body, "token").filter(|t| !t.is_empty()) else {
-        return error(400, "MISSING_CUSTOM_TOKEN");
+    // Production's rules apply with configured signers and in the strict profile; the
+    // emulator profile keeps the official emulator's leniency (sandbox recording 2026-09-24).
+    let production_rules = trust.is_some() || reject_expired;
+    let token = match str_field(body, "token") {
+        None => return error(400, "MISSING_CUSTOM_TOKEN"),
+        Some("") if production_rules => {
+            return error(400, custom_token::INVALID_ASSERTION_FORMAT);
+        }
+        Some("") => return error(400, "MISSING_CUSTOM_TOKEN"),
+        Some(token) => token,
     };
     // With configured signers only a token they signed is accepted, as in production; without
     // them, like the official emulator, a strict JSON object is accepted as a fake custom token
     // beside the unsigned JWT the Admin SDK mints.
-    let payload = if let Some(trust) = trust {
+    let (payload, jwt) = if let Some(trust) = trust {
         match trust.verify(token, store.project_id()) {
-            Ok(claims) => claims,
+            Ok(claims) => (claims, true),
             Err(refusal) => return error(400, refusal.message()),
         }
     } else if token.trim_start().starts_with('{') {
         match fireemu_core_types::json::parse(token) {
-            Ok(v) => v,
+            Ok(v) => (v, false),
             Err(_) => {
                 return error(
                     400,
@@ -6809,13 +6868,26 @@ fn sign_in_with_custom_token(
         }
     } else {
         let Ok(decoded) = fireemu_core_auth::jwt::decode_unsigned(token) else {
-            return error(400, "INVALID_CUSTOM_TOKEN : Invalid assertion format");
+            return error(
+                400,
+                if production_rules {
+                    custom_token::INVALID_ASSERTION_FORMAT
+                } else {
+                    "INVALID_CUSTOM_TOKEN : Invalid assertion format"
+                },
+            );
         };
-        if decoded.payload.get("aud").and_then(JsonValue::as_str) != Some(CUSTOM_TOKEN_AUDIENCE) {
+        if !production_rules
+            && decoded.payload.get("aud").and_then(JsonValue::as_str) != Some(CUSTOM_TOKEN_AUDIENCE)
+        {
             return error(400, "INVALID_CUSTOM_TOKEN : wrong audience");
         }
-        decoded.payload
+        (decoded.payload, true)
     };
+    let now_secs = i64::try_from(at.as_nanos().div_euclid(1_000_000_000)).unwrap_or(i64::MAX);
+    if production_rules && jwt && !custom_token_claims_hold(&payload, now_secs) {
+        return error(400, "INVALID_CUSTOM_TOKEN");
+    }
     if let Some(tenant_id) = payload.get("tenant_id") {
         let Some(tenant_id) = tenant_id.as_str() else {
             return error(400, "INVALID_CUSTOM_TOKEN : tenant_id must be a string");
@@ -6824,56 +6896,63 @@ fn sign_in_with_custom_token(
             return error(400, "TENANT_ID_MISMATCH");
         }
     }
-    let uid = payload
-        .get("uid")
-        .or_else(|| payload.get("user_id"))
-        .and_then(|v| match v {
-            JsonValue::String(s) => Some(s.clone()),
-            JsonValue::Int(i) => Some(i.to_string()),
-            _ => None,
-        })
-        .filter(|s| !s.is_empty());
+    let uid = match payload.get("uid").or_else(|| payload.get("user_id")) {
+        Some(JsonValue::String(s)) => Some(s.clone()),
+        Some(JsonValue::Int(i)) => Some(i.to_string()),
+        _ => None,
+    };
     let Some(uid) = uid else {
         return error(400, "MISSING_IDENTIFIER");
     };
-    // Custom-token uids keep the Admin SDK's 128-character bound; the wider Admin create
-    // bound was observed only for accounts:create.
+    // Production bounds the uid to 1..=128 characters (sandbox recording 2026-09-24).
+    if production_rules && (uid.is_empty() || uid.chars().count() > 128) {
+        return error(
+            400,
+            "INVALID_IDENTIFIER : Invalid user ID length. Expect to have length between 1 and 128.",
+        );
+    }
+    if uid.is_empty() {
+        return error(400, "MISSING_IDENTIFIER");
+    }
     if uid.chars().count() > 128 {
         return auth_error(&AuthError::InvalidLocalId);
     }
     let uid = uid.as_str();
-    let now_secs = i64::try_from(at.as_nanos().div_euclid(1_000_000_000)).unwrap_or(i64::MAX);
-    // Past the expiry allowance production refuses the token as invalid (sandbox recording
-    // 2026-09-24, auth-credential/expiry/one-hour#custom-token-expired-later).
-    if reject_expired
-        && payload
-            .get("exp")
-            .and_then(JsonValue::as_i64)
-            .is_some_and(|exp| {
-                now_secs
-                    >= exp.saturating_add(
-                        fireemu_core_auth::jwt::IDENTITY_TOOLKIT_EXPIRY_LEEWAY_SECONDS,
-                    )
-            })
-    {
-        return error(400, "INVALID_CUSTOM_TOKEN");
-    }
     let mut extra = CustomClaims::default();
     if let Some(claims) = payload.get("claims") {
         let JsonValue::Object(claims) = claims else {
-            return error(400, "INVALID_CUSTOM_TOKEN : claims must be an object");
+            return error(
+                400,
+                if production_rules {
+                    "INVALID_CLAIMS"
+                } else {
+                    "INVALID_CUSTOM_TOKEN : claims must be an object"
+                },
+            );
         };
         for (k, v) in claims {
             let Some(cv) = claims_from_json(v) else {
                 return error(400, "INVALID_CUSTOM_TOKEN : unsupported claim value");
             };
             if let Err(e) = extra.insert(k, cv) {
-                return error(400, &format!("INVALID_CUSTOM_TOKEN : {e}"));
+                return error(
+                    400,
+                    &if production_rules {
+                        format!("FORBIDDEN_CLAIM : {k}")
+                    } else {
+                        format!("INVALID_CUSTOM_TOKEN : {e}")
+                    },
+                );
             }
         }
     }
-    if let Err(e) = extra.check_size() {
-        return error(400, &format!("INVALID_CUSTOM_TOKEN : {e}"));
+    // Production accepted developer claims past the 1000-byte account-claim limit (sandbox
+    // recording 2026-09-24, custom-token/sign-in#claims-over-limit); the official emulator's
+    // bound stays in the emulator profile.
+    if !production_rules {
+        if let Err(e) = extra.check_size() {
+            return error(400, &format!("INVALID_CUSTOM_TOKEN : {e}"));
+        }
     }
     let (uid, is_new) = if let Some(u) = store.user_by_id(uid) {
         (u.local_id.clone(), false)
@@ -6884,17 +6963,17 @@ fn sign_in_with_custom_token(
             provider: fireemu_core_auth::store::Provider::Custom,
         };
         match store.create_user_with_id_as(AuthPrincipal::EndUser, new_user, Some(uid), at) {
-            Ok(id) => {
-                if let Some(user) = store.user_mut(&id) {
-                    user.custom_auth = true;
-                }
-                (id, true)
-            }
+            Ok(id) => (id, true),
             Err(e) => return auth_error(&e),
         }
     };
     if store.user(&uid).is_some_and(|u| u.disabled) {
         return error(400, "USER_DISABLED");
+    }
+    // Any custom-token sign-in marks the account (sandbox recording 2026-09-24,
+    // id-token/methods#admin-lookup-after-custom-sign-in).
+    if let Some(user) = store.user_mut(&uid) {
+        user.custom_auth = true;
     }
     store.record_sign_in(&uid, at);
     if legacy_tokens && wants_legacy_token(store, body) {
@@ -6926,6 +7005,26 @@ fn sign_in_with_custom_token(
         }
         Err(r) => r,
     }
+}
+
+/// The claims production requires of a custom token (sandbox recording 2026-09-24): its
+/// audience, `iss` equal to `sub`, an `iat` and an `exp` at most an hour apart, an `iat` no more
+/// than the skew allowance ahead, and an `exp` no more than the allowance behind.
+fn custom_token_claims_hold(payload: &JsonValue, now_secs: i64) -> bool {
+    let leeway = fireemu_core_auth::jwt::IDENTITY_TOOLKIT_EXPIRY_LEEWAY_SECONDS;
+    let text = |name: &str| payload.get(name).and_then(JsonValue::as_str);
+    let (Some(iat), Some(exp)) = (
+        payload.get("iat").and_then(JsonValue::as_i64),
+        payload.get("exp").and_then(JsonValue::as_i64),
+    ) else {
+        return false;
+    };
+    text("aud") == Some(CUSTOM_TOKEN_AUDIENCE)
+        && text("iss").is_some()
+        && text("iss") == text("sub")
+        && exp.saturating_sub(iat) <= 3600
+        && iat <= now_secs.saturating_add(leeway)
+        && now_secs < exp.saturating_add(leeway)
 }
 
 /// Production's custom-token answer names the account only inside the token (sandbox
@@ -8634,21 +8733,29 @@ const SESSION_COOKIE_MAX_SECONDS: i64 = 14 * 24 * 60 * 60;
 /// the official emulator's cookies are (the Admin SDK's `verifySessionCookie` accepts only
 /// `alg: none` while it points at an emulator).
 fn create_session_cookie(store: &AuthStore, body: &Value, at: LogicalInstant) -> JsonResponse {
+    // `validDuration` is an int64 decoded with the request; an omitted one is the maximum and
+    // any other value, zero included, must lie within the bounds (sandbox recording 2026-09-24).
+    let valid_duration = match body.get("validDuration") {
+        None | Some(Value::Null) => SESSION_COOKIE_MAX_SECONDS,
+        Some(value) => {
+            let decoded = match value {
+                Value::String(text) => text.parse::<i64>().ok(),
+                Value::Number(n) => n.as_i64(),
+                _ => None,
+            };
+            let Some(decoded) = decoded else {
+                return proto_field_error(
+                    "valid_duration",
+                    &format!("Invalid value at 'valid_duration' (TYPE_INT64), {value}"),
+                );
+            };
+            decoded
+        }
+    };
     let token = match body.get("idToken") {
         None | Some(Value::Null) => return error(400, "MISSING_ID_TOKEN"),
         Some(Value::String(t)) => t.as_str(),
         Some(_) => return error(400, "INVALID_ID_TOKEN"),
-    };
-    let valid_duration = match body.get("validDuration") {
-        None | Some(Value::Null) => SESSION_COOKIE_MAX_SECONDS,
-        Some(Value::String(s)) => s.parse::<i64>().unwrap_or(0),
-        Some(Value::Number(n)) => n.as_i64().unwrap_or(0),
-        Some(_) => 0,
-    };
-    let valid_duration = if valid_duration == 0 {
-        SESSION_COOKIE_MAX_SECONDS
-    } else {
-        valid_duration
     };
     if !(SESSION_COOKIE_MIN_SECONDS..=SESSION_COOKIE_MAX_SECONDS).contains(&valid_duration) {
         return error(400, "INVALID_DURATION");
@@ -8660,6 +8767,8 @@ fn create_session_cookie(store: &AuthStore, body: &Value, at: LogicalInstant) ->
         fireemu_core_auth::jwt::IDENTITY_TOOLKIT_EXPIRY_LEEWAY_SECONDS,
     ) {
         Ok(v) => v,
+        // A deleted account's token names nobody (sandbox recording 2026-09-24).
+        Err(JwtError::UnknownUser) => return error(400, "USER_NOT_FOUND"),
         Err(e) => return jwt_error(&e),
     };
     let Ok(mut payload) = serde_json::from_str::<Value>(&decoded.payload_json) else {

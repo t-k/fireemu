@@ -5204,10 +5204,10 @@
       }
     },
     "fs-config/field/ttl/policy": {
-      "corpusDigest": "7131cd95b1886fced676cbeac869bc9e1ed82df18d1cc38e016c5fbc12132a8d",
+      "corpusDigest": "801af2371ae9e54fcca7946d08d42c9db48adf094840ba395453783c68e79db3",
       "harnessDigest": "7a43226c56a081005d196db53d325df8c0beca6255fd90acc79f411931311ddb",
-      "recordedAt": "2026-09-24T08:26:12.514Z",
-      "gitSha": "556b0fadea4931969e0b6e5efa80ebcc40ed753d",
+      "recordedAt": "2026-09-24T09:17:20.017Z",
+      "gitSha": "f9f86461ade51f266f20b28f6bf45b28888b5a40",
       "steps": {
         "create-database": {
           "status": 200,
@@ -5814,11 +5814,6 @@
               "name": "projects/demo-fs-config/databases/<db:a>/collectionGroups/items/fields/ttl_at"
             }
           }
-        },
-        "second-field-operation": {
-          "status": -1,
-          "unresolved": "step second-field recorded nothing at name",
-          "dependencyTransient": true
         }
       }
     },

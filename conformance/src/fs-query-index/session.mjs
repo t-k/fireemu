@@ -14,10 +14,8 @@ import {
   guardGrpcRequest,
   guardRestRequest,
   isTransient,
-  normalizeGrpcResponse,
-  normalizeRestResponse,
+  normalizeStep,
   PRODUCTION_GRPC,
-  registerRequestInstants,
   resolveValue,
 } from "./harness.mjs";
 
@@ -88,12 +86,17 @@ export function createSession(
     }
   }
 
-  async function sendRest(step, raw, { harness = false, symbols = new Map() } = {}) {
+  async function sendRest(step, raw, { harness = false, anchors = new Map() } = {}) {
     const request = buildRestRequest(step, ctx, raw);
     guardRestRequest(request, ctx, { harness });
-    if (!harness && step.rawBody === undefined && step.body !== undefined)
-      registerRequestInstants(JSON.parse(request.init.body), ctx, symbols);
     claim(harness);
+    const sent = {
+      transport: "rest",
+      // Only parsed bodies can carry chained instants; raw bodies are fixed text.
+      ...(step.rawBody === undefined && request.init.body !== undefined
+        ? { request: JSON.parse(request.init.body) }
+        : {}),
+    };
     let response;
     try {
       response = await fetch(request.url, {
@@ -101,10 +104,11 @@ export function createSession(
         signal: AbortSignal.timeout(timeoutMs),
       });
     } catch (error) {
-      return {
-        recorded: { status: 0, transportError: error?.cause?.code ?? error?.name ?? "error" },
-        json: null,
+      const failed = {
+        ...sent,
+        response: { transportError: error?.cause?.code ?? error?.name ?? "error" },
       };
+      return { recorded: normalizeStep(failed, ctx, anchors), json: null, raw: failed };
     }
     const text = await response.text();
     let json = null;
@@ -113,13 +117,14 @@ export function createSession(
     } catch {
       /* recorded as non-JSON */
     }
-    return { recorded: normalizeRestResponse(response.status, text, ctx, symbols), json };
+    const received = { ...sent, response: { status: response.status, text } };
+    return { recorded: normalizeStep(received, ctx, anchors), json, raw: received };
   }
 
-  function sendGrpc(step, raw, symbols) {
+  function sendGrpc(step, raw, anchors) {
     const built = buildGrpcRequest(step, ctx, raw);
     guardGrpcRequest(built, ctx);
-    registerRequestInstants(resolveValue(step.body ?? {}, ctx, raw), ctx, symbols);
+    const sent = { transport: "grpc", request: resolveValue(step.body ?? {}, ctx, raw) };
     claim(false);
     const requestType = protos.google.firestore.v1[`${built.method}Request`];
     const responseType = protos.google.firestore.v1[`${built.method}Response`];
@@ -141,19 +146,20 @@ export function createSession(
     return new Promise((resolve) => {
       const messages = [];
       const finish = (error, trailers) => {
-        const recorded = normalizeGrpcResponse(
-          {
-            messages,
+        const received = {
+          ...sent,
+          response: {
+            // Through JSON, as saved: Buffers become {type, data} and Longs are strings.
+            messages: JSON.parse(JSON.stringify(messages)),
             code: error ? error.code : 0,
             details: error ? error.details : "",
             errorDetails: error ? statusDetails(protos, error.metadata ?? trailers) : [],
           },
-          ctx,
-          symbols,
-        );
+        };
         resolve({
-          recorded,
+          recorded: normalizeStep(received, ctx, anchors),
           json: messages.length === 1 && !built.stream ? messages[0] : messages,
+          raw: received,
         });
       };
       if (built.stream) {
@@ -255,8 +261,9 @@ export function createSession(
   async function runProgram(program) {
     const raw = new Map();
     const steps = {};
-    // Run-window instants are numbered per program (see normalizeValue).
-    const symbols = new Map();
+    const sent = {};
+    // Instants a request carried keep one symbol across the program (see stepSymbols).
+    const anchors = new Map();
     await wipe();
     let failure;
     try {
@@ -266,8 +273,8 @@ export function createSession(
         try {
           outcome =
             (step.transport ?? "rest") === "grpc"
-              ? await sendGrpc(step, raw, symbols)
-              : await sendRest(step, raw, { symbols });
+              ? await sendGrpc(step, raw, anchors)
+              : await sendRest(step, raw, { anchors });
         } catch (error) {
           if (error.fatal || !/recorded nothing at/.test(String(error.message))) throw error;
           // An earlier step did not return what this one needs: record that, keep going.
@@ -283,6 +290,7 @@ export function createSession(
         }
         raw.set(step.id, outcome.json);
         steps[step.id] = outcome.recorded;
+        if (outcome.raw) sent[step.id] = outcome.raw;
         log(
           `${program.id}#${step.id} ${outcome.recorded.status ?? `grpc ${outcome.recorded.code}`}`,
         );
@@ -293,7 +301,7 @@ export function createSession(
     // Cleanup always runs.
     await wipe();
     if (failure) throw failure;
-    return { steps };
+    return { steps, raw: sent };
   }
 
   return {
@@ -326,5 +334,10 @@ export async function runCorpus(programs, ctx, options = {}) {
   } finally {
     await session.close();
   }
-  return { results, failures, ...session.counts() };
+  return {
+    context: { run: ctx.run, startedMs: ctx.startedMs },
+    results,
+    failures,
+    ...session.counts(),
+  };
 }

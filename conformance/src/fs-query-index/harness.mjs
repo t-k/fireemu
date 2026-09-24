@@ -68,6 +68,7 @@ export function createContext({ run, target, startedMs = Date.now() }) {
   }
   return {
     run: String(run),
+    startedMs,
     project: SANDBOX_PROJECT,
     target,
     // Read-time steps ask for up to about an hour before the run, so the window starts two hours
@@ -513,13 +514,17 @@ export function normalizeIndexLink(text, ctx) {
 }
 
 /**
- * A run-window instant becomes a symbol numbered by first appearance within its program
- * (`<t1>`, `<t2>`, ...), so equal instants stay equal (a read time echoing the requested commit
- * time) while their values, which differ between runs, are hidden.
+ * The symbols of one step's run-window instants. An instant a request of the program carried
+ * (a chained or shifted read time) keeps its program-wide anchor `<r1>`, `<r2>`, ... so an answer
+ * echoing it shows that; every other instant is numbered by first appearance within the step
+ * (`<t1>`, `<t2>`, ...), so one differing step never renumbers the rest of the program.
  */
+export const stepSymbols = (anchors = new Map()) => ({ anchors, local: new Map() });
+
 function instantSymbol(text, symbols) {
-  if (!symbols.has(text)) symbols.set(text, `<t${symbols.size + 1}>`);
-  return symbols.get(text);
+  if (symbols.anchors.has(text)) return symbols.anchors.get(text);
+  if (!symbols.local.has(text)) symbols.local.set(text, `<t${symbols.local.size + 1}>`);
+  return symbols.local.get(text);
 }
 
 const EMBEDDED_INSTANT = /\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(\.\d+)?Z/g;
@@ -541,7 +546,8 @@ function normalizeString(text, ctx, symbols) {
  */
 export function registerRequestInstants(value, ctx, symbols) {
   if (typeof value === "string") {
-    if (inRunWindow(value, ctx)) instantSymbol(value, symbols);
+    if (inRunWindow(value, ctx) && !symbols.anchors.has(value))
+      symbols.anchors.set(value, `<r${symbols.anchors.size + 1}>`);
   } else if (Array.isArray(value)) value.forEach((v) => registerRequestInstants(v, ctx, symbols));
   else if (value && typeof value === "object") {
     for (const key of Object.keys(value).toSorted())
@@ -553,7 +559,7 @@ export function registerRequestInstants(value, ctx, symbols) {
  * Normalizes one decoded answer. Object keys are visited in sorted order, because production
  * map key order is not deterministic and symbols are numbered by first appearance.
  */
-export function normalizeValue(value, key, ctx, symbols = new Map()) {
+export function normalizeValue(value, key, ctx, symbols = stepSymbols()) {
   if (OPAQUE_KEYS.has(key) && typeof value === "string" && value !== "")
     return OPAQUE_KEYS.get(key);
   if (key === "executionDuration" && typeof value === "string") {
@@ -575,7 +581,7 @@ export function normalizeValue(value, key, ctx, symbols = new Map()) {
 }
 
 /** The recorded form of one REST answer. */
-export function normalizeRestResponse(status, text, ctx, symbols = new Map()) {
+export function normalizeRestResponse(status, text, ctx, symbols = stepSymbols()) {
   let body;
   try {
     body = JSON.parse(text);
@@ -654,7 +660,7 @@ export function decodeStatusDetail({ typeUrl, bytes }) {
 export function normalizeGrpcResponse(
   { messages, code, details, errorDetails },
   ctx,
-  symbols = new Map(),
+  symbols = stepSymbols(),
 ) {
   return {
     transport: "grpc",
@@ -685,6 +691,21 @@ function canonical(value) {
 }
 
 export const sameRecording = (a, b) => isDeepStrictEqual(canonical(a), canonical(b));
+
+/**
+ * The recorded row of one step from what was sent and received: `raw.request` is the resolved
+ * request body (REST JSON text or the gRPC body before conversion), `raw.response` the REST
+ * `{status, text}` or the gRPC `{messages, code, details, errorDetails}`. Pure, so a saved raw
+ * recording can be normalized again after the harness changes.
+ */
+export function normalizeStep(raw, ctx, anchors) {
+  const symbols = stepSymbols(anchors);
+  if (raw.request !== undefined) registerRequestInstants(raw.request, ctx, symbols);
+  if (raw.response.transportError !== undefined)
+    return { status: 0, transportError: raw.response.transportError };
+  if (raw.transport === "grpc") return normalizeGrpcResponse(raw.response, ctx, symbols);
+  return normalizeRestResponse(raw.response.status, raw.response.text, ctx, symbols);
+}
 
 /** Row keys (`program#step`) whose two production recordings differ. */
 export function diffRecordings(first, second) {

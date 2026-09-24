@@ -36,6 +36,7 @@ import {
   createContext,
   diffRecordings,
   isTransient,
+  normalizeStep,
   sameRecording,
   validateCorpus,
 } from "./harness.mjs";
@@ -437,11 +438,40 @@ export function estimatedUsd(programs, recordings) {
   return Math.ceil(perRecording * Math.max(recordings, 1) * 10_000) / 10_000;
 }
 
+/**
+ * Normalizes a saved raw recording again with the current harness. The raw request and
+ * response of every step were saved privately, so a normalization change never needs a new
+ * production observation. Steps without a raw answer (an unresolved dependency) keep their row.
+ */
+export function renormalize(recording, programs) {
+  const ctx = createContext({
+    run: recording.context.run,
+    startedMs: recording.context.startedMs,
+    target: {
+      kind: "production",
+      token: "renormalize",
+      quotaProject: SANDBOX_PROJECT,
+      projectNumber: process.env.FIREEMU_SANDBOX_PROJECT_NUMBER,
+    },
+  });
+  const results = {};
+  for (const program of programs) {
+    const saved = recording.results[program.id];
+    if (!saved) continue;
+    const anchors = new Map();
+    const steps = {};
+    for (const step of program.steps) {
+      const raw = saved.raw?.[step.id];
+      steps[step.id] = raw ? normalizeStep(raw, ctx, anchors) : saved.steps[step.id];
+    }
+    results[program.id] = { steps };
+  }
+  return { ...recording, results };
+}
+
 /** Retries the fixture from a saved run directory; sends nothing to production. */
 async function rebuildFixture(runDir) {
   const meta = JSON.parse(await readFile(join(runDir, "meta.json"), "utf8"));
-  if (meta.harness !== (await harnessDigest()))
-    throw new Error("harness changed since the recording");
   const recordings = await Promise.all(
     [1, 2].map(async (n) =>
       JSON.parse(await readFile(join(runDir, `recording-${n}.json`), "utf8")),
@@ -452,13 +482,22 @@ async function rebuildFixture(runDir) {
   if (changed.length || programs.length !== meta.programs.length) {
     throw new Error(`corpus changed since the recording: ${changed.map((p) => p.id).join(", ")}`);
   }
+  const harness = await harnessDigest();
+  const rebuilt =
+    meta.harness === harness ? recordings : recordings.map((r) => renormalize(r, programs));
   const nondeterministic = await writeFixture({
     programs,
-    recordings,
-    meta,
+    recordings: rebuilt,
+    meta: { ...meta, harness },
     secrets: await privateValues(),
   });
-  console.log(JSON.stringify({ programs: programs.length, nondeterministic }, null, 2));
+  console.log(
+    JSON.stringify(
+      { programs: programs.length, renormalized: meta.harness !== harness, nondeterministic },
+      null,
+      2,
+    ),
+  );
 }
 
 async function sessionLocal() {

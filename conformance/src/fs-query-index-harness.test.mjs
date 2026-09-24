@@ -6,7 +6,6 @@ import { scanFixture } from "./fs-query-index/fixture-scan.mjs";
 import {
   RECORDED_PROJECT,
   decodeStatusDetail,
-  registerRequestInstants,
   shiftInstant,
   SANDBOX_PROJECT,
   buildGrpcRequest,
@@ -18,12 +17,19 @@ import {
   normalizeGrpcResponse,
   normalizeIndexLink,
   normalizeRestResponse,
+  normalizeStep,
   projectGrpcMessage,
   resolveValue,
   toGrpcMessage,
   validateCorpus,
 } from "./fs-query-index/harness.mjs";
-import { classify, estimatedUsd, indexKey, selectPrograms } from "./fs-query-index/run.mjs";
+import {
+  classify,
+  estimatedUsd,
+  indexKey,
+  renormalize,
+  selectPrograms,
+} from "./fs-query-index/run.mjs";
 
 const started = Date.parse("2026-09-24T00:00:00Z");
 const production = () =>
@@ -429,18 +435,35 @@ test("negative zero survives request serialization and the recorded form", () =>
   assert.equal(normalizeRestResponse(200, '{"doubleValue":0}', ctx).body.doubleValue, 0);
 });
 
-test("run-window instants become per-program symbols that keep equality", () => {
+test("run-window instants are numbered per step; requested instants keep a program anchor", () => {
   const ctx = production();
-  const symbols = new Map();
-  const write = normalizeRestResponse(200, '{"commitTime":"2026-09-24T00:00:05Z"}', ctx, symbols);
-  const echoed = normalizeRestResponse(
-    200,
-    '[{"readTime":"2026-09-24T00:00:05Z"},{"readTime":"2026-09-24T00:00:09Z"}]',
+  const anchors = new Map();
+  const write = normalizeStep(
+    { transport: "rest", response: { status: 200, text: '{"commitTime":"2026-09-24T00:00:05Z"}' } },
     ctx,
-    symbols,
+    anchors,
   );
   assert.equal(write.body.commitTime, "<t1>");
-  assert.deepEqual(echoed.body, [{ readTime: "<t1>" }, { readTime: "<t2>" }]);
+  const echoed = normalizeStep(
+    {
+      transport: "rest",
+      request: { readTime: "2026-09-24T00:00:05Z" },
+      response: {
+        status: 200,
+        text: '[{"readTime":"2026-09-24T00:00:05Z"},{"readTime":"2026-09-24T00:00:09Z"}]',
+      },
+    },
+    ctx,
+    anchors,
+  );
+  assert.deepEqual(echoed.body, [{ readTime: "<r1>" }, { readTime: "<t1>" }]);
+  // A later step numbers its own instants from 1 again, whatever came before.
+  const later = normalizeStep(
+    { transport: "rest", response: { status: 200, text: '[{"readTime":"2026-09-24T00:00:11Z"}]' } },
+    ctx,
+    anchors,
+  );
+  assert.deepEqual(later.body, [{ readTime: "<t1>" }]);
   // Symbols are numbered in sorted key order, whatever order the server sent the keys in.
   const a = normalizeRestResponse(
     200,
@@ -609,15 +632,21 @@ test("the cost estimate stays under the per-task budget", () => {
 
 test("answers echoing a requested read time share its symbol; embedded times are masked", () => {
   const ctx = production();
-  const symbols = new Map();
-  registerRequestInstants({ readTime: "2026-09-23T23:00:00.000001Z" }, ctx, symbols);
-  const answer = normalizeRestResponse(
-    400,
-    JSON.stringify({ error: { message: "read at 2026-09-23T23:00:00.000001Z is too old" } }),
+  const answer = normalizeStep(
+    {
+      transport: "rest",
+      request: { readTime: "2026-09-23T23:00:00.000001Z" },
+      response: {
+        status: 400,
+        text: JSON.stringify({
+          error: { message: "read at 2026-09-23T23:00:00.000001Z is too old" },
+        }),
+      },
+    },
     ctx,
-    symbols,
+    new Map(),
   );
-  assert.equal(answer.body.error.message, "read at <t1> is too old");
+  assert.equal(answer.body.error.message, "read at <r1> is too old");
   const withNumber = createContext({
     run: "1",
     startedMs: started,
@@ -664,4 +693,37 @@ test("guards refuse transforms of other databases and transactions", () => {
       ),
     /transaction/,
   );
+});
+
+test("a saved raw recording normalizes again to the same rows", () => {
+  const program = {
+    id: "fs-query-index/x/y",
+    steps: [
+      { id: "w", rpc: "commit" },
+      { id: "q", rpc: "runQuery" },
+      { id: "u", rpc: "runQuery" },
+    ],
+  };
+  const raw = {
+    w: {
+      transport: "rest",
+      response: { status: 200, text: '{"commitTime":"2026-09-24T00:00:05Z"}' },
+    },
+    q: {
+      transport: "rest",
+      request: { readTime: "2026-09-24T00:00:05Z" },
+      response: { status: 200, text: '[{"readTime":"2026-09-24T00:00:05Z"}]' },
+    },
+  };
+  const unresolved = { status: -1, unresolved: "step x recorded nothing at y" };
+  const recording = {
+    context: { run: "7", startedMs: started },
+    results: { [program.id]: { steps: { u: unresolved }, raw } },
+  };
+  const again = renormalize(recording, [program]).results[program.id].steps;
+  assert.deepEqual(again, {
+    w: { status: 200, body: { commitTime: "<t1>" } },
+    q: { status: 200, body: [{ readTime: "<r1>" }] },
+    u: unresolved,
+  });
 });

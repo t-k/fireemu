@@ -2323,6 +2323,54 @@ fn random_secret() -> Result<String, String> {
         .map_err(|e| format!("cannot draw the control token: {e}"))
 }
 
+/// Installs the operating system CSPRNG as the Auth stores' credential entropy, so a daemon
+/// run with a fixed seed still issues unpredictable action codes, verification sessions,
+/// refresh tokens and TOTP secrets. The daemon refuses to start without one.
+fn install_auth_credential_entropy() -> Result<(), String> {
+    fireemu_adapter_support::entropy::fill(&mut [0_u8; 8])
+        .map_err(|e| format!("cannot draw Auth credentials: {e}"))?;
+    fireemu_core_auth::store::install_credential_entropy(|dest| {
+        fireemu_adapter_support::entropy::fill(dest).is_ok()
+    });
+    Ok(())
+}
+
+#[cfg(test)]
+mod credential_entropy_tests {
+    use fireemu_core_auth::mfa::TotpPolicy;
+    use fireemu_core_auth::store::{AuthStore, OobRequestType};
+    use fireemu_core_types::determinism::SplitMix64;
+    use fireemu_core_types::time::LogicalInstant;
+
+    /// Two daemons with the same seed issue different action codes once the OS CSPRNG is
+    /// installed, and the codes keep their shape.
+    #[test]
+    fn a_seeded_daemon_issues_unpredictable_action_codes() {
+        super::install_auth_credential_entropy().unwrap();
+        let code = || {
+            AuthStore::new(
+                "demo-app",
+                SplitMix64::new(0x2A ^ 0xA0),
+                TotpPolicy::default(),
+            )
+            .create_oob_code(
+                OobRequestType::PasswordReset,
+                "a@example.com",
+                None,
+                None,
+                LogicalInstant::from_unix_seconds(1_788_004_860),
+            )
+            .unwrap()
+        };
+        let (first, second) = (code(), code());
+        assert_ne!(first, second);
+        for code in [first, second] {
+            assert_eq!(code.len(), "oob-".len() + 16 + 4, "{code}");
+            assert!(code.ends_with("0001"), "{code}");
+        }
+    }
+}
+
 /// An unpredictable 128-bit daemon-local incarnation from the operating system CSPRNG.
 fn random_u128() -> Result<u128, String> {
     fireemu_adapter_support::entropy::u128_value()

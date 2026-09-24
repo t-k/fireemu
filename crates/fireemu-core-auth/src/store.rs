@@ -1327,12 +1327,32 @@ impl CredentialNotice {
     }
 }
 
+/// A source of unpredictable bytes for bearer credentials: it fills the buffer and answers
+/// whether it could. The daemon installs the operating system CSPRNG
+/// (`fireemu-adapter-support::entropy`); the core itself never touches the operating system.
+pub type CredentialEntropy = fn(&mut [u8]) -> bool;
+
+static CREDENTIAL_ENTROPY: std::sync::OnceLock<CredentialEntropy> = std::sync::OnceLock::new();
+
+/// Installs the process-wide credential entropy, once; answers whether this call installed it.
+///
+/// Action codes, verification sessions, phone proofs, MFA sessions and pending credentials,
+/// refresh tokens and TOTP secrets then draw from it instead of the seeded stream, which a
+/// client could otherwise invert from one value it was given (the seeded stream's output
+/// function is a bijection). Their shapes do not change. Identifiers that are not secrets
+/// (account and factor ids, salts) keep the seeded stream, so a seed still reproduces them.
+pub fn install_credential_entropy(source: CredentialEntropy) -> bool {
+    CREDENTIAL_ENTROPY.set(source).is_ok()
+}
+
 /// Email action codes expire after an hour of virtual time.
 pub const OOB_CODE_TTL_SECONDS: i64 = 3_600;
 /// Under production lifetimes, a verification, email-change or sign-in code outlives the hour
-/// a password reset code has: production answered all three after an hour (sandbox recording
-/// 2026-09-24, auth-action/expiry). Their full lifetime is unobserved; three days is inferred.
-pub const LONG_OOB_CODE_TTL_SECONDS: i64 = 259_200;
+/// a password reset code has: production answered all three this long after their generation
+/// (sandbox recording 2026-09-24, auth-action/expiry). Their lifetime is unobserved and no
+/// Google document states one (searched 2026-09-25), so such a code is never refused as
+/// expired (owner decision 2026-09-25): refusing earlier could refuse what production accepts.
+pub const OBSERVED_LONG_OOB_CODE_SECONDS: i64 = 3_900;
 /// Under production lifetimes an expired code is kept this long after its lifetime, so it is
 /// refused as expired rather than as unknown.
 pub const EXPIRED_OOB_CODE_RETENTION_SECONDS: i64 = 86_400;
@@ -1657,11 +1677,29 @@ impl AuthStore {
         self.local_id_for_email.remove(&email);
     }
 
+    /// 64 bits for a bearer credential: the installed credential entropy, or the seeded stream
+    /// when none is installed (unit tests and embedded stores). A source that is installed but
+    /// fails stops the request rather than falling back to a predictable value.
+    fn secret_u64(&mut self) -> u64 {
+        match CREDENTIAL_ENTROPY.get() {
+            Some(source) => {
+                let mut bytes = [0_u8; 8];
+                assert!(
+                    source(&mut bytes),
+                    "the operating system random number generator is unavailable"
+                );
+                u64::from_be_bytes(bytes)
+            }
+            None => self.rng.next_u64(),
+        }
+    }
+
+    /// A bearer credential of the shape `{prefix}{16 hex digits}{4 decimal digits}`.
     fn next_id(&mut self, prefix: &str) -> String {
         self.counter += 1;
         format!(
             "{prefix}{:016x}{:04}",
-            self.rng.next_u64(),
+            self.secret_u64(),
             self.counter % 10_000
         )
     }
@@ -1703,7 +1741,7 @@ impl AuthStore {
     fn random_secret(&mut self) -> TotpSecret {
         let mut bytes = Vec::with_capacity(20);
         for _ in 0..3 {
-            bytes.extend_from_slice(&self.rng.next_u64().to_be_bytes());
+            bytes.extend_from_slice(&self.secret_u64().to_be_bytes());
         }
         bytes.truncate(20);
         TotpSecret::new(bytes)
@@ -3087,12 +3125,25 @@ impl AuthStore {
         if self.oob_codes.len() >= MAX_OUTSTANDING_CODES {
             let production = self.production_oob_lifetimes;
             Arc::make_mut(&mut self.oob_codes).retain(|_, code| {
-                !Self::expired(
-                    code.created_at,
-                    Self::oob_ttl(production, code.request_type),
-                    now,
-                )
+                Self::oob_ttl(production, code.request_type)
+                    .is_none_or(|ttl| !Self::expired(code.created_at, ttl, now))
             });
+        }
+        // A code without a lifetime never leaves by age, so at the cap the oldest one that
+        // production was not seen to answer (older than the observed lower bound) makes room.
+        if self.oob_codes.len() >= MAX_OUTSTANDING_CODES && self.production_oob_lifetimes {
+            let oldest = self
+                .oob_codes
+                .values()
+                .filter(|code| {
+                    Self::oob_ttl(true, code.request_type).is_none()
+                        && Self::expired(code.created_at, OBSERVED_LONG_OOB_CODE_SECONDS, now)
+                })
+                .min_by_key(|code| (code.created_at, code.sequence))
+                .map(|code| code.code.clone());
+            if let Some(oldest) = oldest {
+                Arc::make_mut(&mut self.oob_codes).remove(&oldest);
+            }
         }
         if self.oob_codes.len() >= MAX_OUTSTANDING_CODES {
             return Err(AuthError::TooManyOutstandingCodes);
@@ -3139,39 +3190,33 @@ impl AuthStore {
         self.production_oob_lifetimes = production;
     }
 
-    const fn oob_ttl(production: bool, request_type: OobRequestType) -> i64 {
+    /// A code's lifetime in seconds; `None` when it has none (production lifetimes, every kind
+    /// but a password reset: see [`OBSERVED_LONG_OOB_CODE_SECONDS`]).
+    const fn oob_ttl(production: bool, request_type: OobRequestType) -> Option<i64> {
         match request_type {
-            OobRequestType::PasswordReset => OOB_CODE_TTL_SECONDS,
-            _ if production => LONG_OOB_CODE_TTL_SECONDS,
-            _ => OOB_CODE_TTL_SECONDS,
+            OobRequestType::PasswordReset => Some(OOB_CODE_TTL_SECONDS),
+            _ if production => None,
+            _ => Some(OOB_CODE_TTL_SECONDS),
         }
     }
 
-    const fn oob_retention(production: bool, request_type: OobRequestType) -> i64 {
-        let ttl = Self::oob_ttl(production, request_type);
-        if production {
-            ttl + EXPIRED_OOB_CODE_RETENTION_SECONDS
-        } else {
-            ttl
+    const fn oob_retention(production: bool, request_type: OobRequestType) -> Option<i64> {
+        match Self::oob_ttl(production, request_type) {
+            Some(ttl) if production => Some(ttl + EXPIRED_OOB_CODE_RETENTION_SECONDS),
+            ttl => ttl,
         }
     }
 
     fn oob_code_swept(production: bool, code: &OobCode, now: LogicalInstant) -> bool {
-        Self::expired(
-            code.created_at,
-            Self::oob_retention(production, code.request_type),
-            now,
-        )
+        Self::oob_retention(production, code.request_type)
+            .is_some_and(|retention| Self::expired(code.created_at, retention, now))
     }
 
     /// Whether an outstanding code is past its lifetime at `now`.
     #[must_use]
     pub fn oob_code_expired(&self, code: &OobCode, now: LogicalInstant) -> bool {
-        Self::expired(
-            code.created_at,
-            Self::oob_ttl(self.production_oob_lifetimes, code.request_type),
-            now,
-        )
+        Self::oob_ttl(self.production_oob_lifetimes, code.request_type)
+            .is_some_and(|ttl| Self::expired(code.created_at, ttl, now))
     }
 
     /// Outstanding email action codes, oldest first.
@@ -3239,7 +3284,7 @@ impl AuthStore {
         }
         let session_info = self.next_id("sms-");
         // A test number always takes its configured code (sandbox recording 2026-09-23).
-        let random = self.rng.next_u64() % 1_000_000;
+        let random = self.secret_u64() % 1_000_000;
         let code = self
             .sign_in
             .test_phone_numbers
@@ -3270,7 +3315,7 @@ impl AuthStore {
         if self.temporary_proofs.len() >= MAX_OUTSTANDING_CODES {
             return Err(AuthError::TooManyOutstandingCodes);
         }
-        let proof = format!("{}{:016x}", self.next_id("proof-"), self.rng.next_u64());
+        let proof = format!("{}{:016x}", self.next_id("proof-"), self.secret_u64());
         self.temporary_proofs
             .insert(proof.clone(), (phone.to_owned(), now));
         Ok(proof)

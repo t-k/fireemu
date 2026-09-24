@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
   "parent": "AUTH-ACTION",
-  "parentStatus": "COMPAT_VERIFIED",
+  "parentStatus": "PENDING_CLOSURE_REVIEW",
   "oracleTrack": "disposable-sandbox",
   "scopeDecisions": [
     {
@@ -61,6 +61,12 @@
       "decision": "The final-artifact regression re-runs the AUTH-ACCOUNT and AUTH-CREDENTIAL corpora and inherits their one documented divergence: AUTH-ACCOUNT scope decision A12, the gson parser message text for malformed customAttributes JSON.",
       "decidedBy": "owner (t-k)",
       "decidedOn": "2026-09-24"
+    },
+    {
+      "id": "E10",
+      "decision": "A known production refusal fireemu does not implement: production refuses a second VERIFY_EMAIL link for the same address within minutes with 400 TOO_MANY_ATTEMPTS_TRY_LATER (recording 2026-09-24), while fireemu issues it. The refusal's time window cannot be observed under production's own rate limits, so it is neither implemented nor claimed as matched; it is not an E7 quota classification either, because it is a refusal of a request the corpus deliberately avoids (each verification link has an address of its own). Tracked in the unobserved-edges issue.",
+      "decidedBy": "owner (t-k)",
+      "decidedOn": "2026-09-25"
     }
   ],
   "conditions": [
@@ -73,7 +79,7 @@
       "configProjections": [
         "default"
       ],
-      "status": "VERIFIED",
+      "status": "PENDING_REVIEW",
       "note": "Admin sendOobCode with returnOobLink for every request type: answer members, link parameters, continueUrl on authorized, unauthorized, malformed and empty values, canHandleCodeInApp, unknown, disabled and mixed-case addresses, missing and unknown request types, missing and invalid addresses, the new address of an email change (missing, taken, the same, invalid), email-link generation while password sign-in is required, and codes selected by an ID token instead of an address. The Admin email-change generator reads only the address (MISSING_EMAIL for an ID token alone), so the inspection row after it records only that dependency.",
       "evidence": {
         "productionRecordings": [
@@ -128,12 +134,13 @@
       "conditionId": "AUTH-ACTION/password-reset",
       "source": "docs/compatibility/ip-fs-production-compatibility.md#feature-group-status",
       "recipeIds": [
-        "auth-action/password-reset"
+        "auth-action/password-reset",
+        "auth-action/address-reuse"
       ],
       "configProjections": [
         "default"
       ],
-      "status": "VERIFIED",
+      "status": "PENDING_REVIEW",
       "note": "Password reset codes: inspection without use, weak and empty passwords, missing, unknown and truncated codes, use and reuse, a newer code retiring an older one, sign-in with the old and new password, tokens issued before the reset, the account after the reset, and codes issued before an Admin or client password change, an email change, a disable (and re-enable) and a deletion; a verification code offered as a reset code.",
       "evidence": {
         "productionRecordings": [
@@ -158,13 +165,14 @@
       "conditionId": "AUTH-ACTION/verify-email",
       "source": "docs/compatibility/ip-fs-production-compatibility.md#feature-group-status",
       "recipeIds": [
-        "auth-action/verify-email"
+        "auth-action/verify-email",
+        "auth-action/address-reuse"
       ],
       "configProjections": [
         "default"
       ],
-      "status": "VERIFIED",
-      "note": "Email verification codes: inspection, apply and reapply, tokens and refresh after verification, unknown and truncated codes, an already verified address, codes issued before an email change, a disable (the refusal keeps the code) and a deletion, and a reset code applied as a verification. Whether a newer verification code retires an older one is unobserved: production refuses a second verification link for an address within minutes (TOO_MANY_ATTEMPTS_TRY_LATER), so the corpus gives each link an address of its own, and fireemu keeps every verification code.",
+      "status": "PENDING_REVIEW",
+      "note": "Email verification codes: inspection, apply and reapply, tokens and refresh after verification, unknown and truncated codes, an already verified address, codes issued before an email change, a disable (the refusal keeps the code) and a deletion, and a reset code applied as a verification. Whether a newer verification code retires an older one is unobserved: production refuses a second verification link for an address within minutes (TOO_MANY_ATTEMPTS_TRY_LATER), so the corpus gives each link an address of its own, and fireemu keeps every verification code. That refusal is a known production behavior fireemu does not implement (scope decision E10), not a matched one.",
       "evidence": {
         "productionRecordings": [
           {
@@ -193,7 +201,7 @@
       "configProjections": [
         "default"
       ],
-      "status": "VERIFIED",
+      "status": "PENDING_REVIEW",
       "note": "VERIFY_AND_CHANGE_EMAIL codes: inspection, a newer code and the older one, apply and reapply, sign-in by the old and new addresses, tokens and refresh issued before the change, the new address taken before use, the account's address changed, disabled or deleted before use, a change code offered as a reset code, and a verification code of the old address applied after the change.",
       "evidence": {
         "productionRecordings": [
@@ -343,8 +351,8 @@
       "configProjections": [
         "default"
       ],
-      "status": "VERIFIED",
-      "note": "A PASSWORD_RESET code about ten seconds before and after its one-hour lifetime (inspection, use, a second account's code, and a new code afterwards; production answers EXPIRED_OOB_CODE); VERIFY_EMAIL, VERIFY_AND_CHANGE_EMAIL and EMAIL_SIGNIN codes inspected and used after the same hour. Their full lifetime is unobserved (owner decision 2026-09-24): the recording shows them live at about 3,610 s, the exploration at 3,900 s. fireemu's strict profile infers three days for them and keeps an expired code a day to refuse it as expired; both values are inferences. Exploration before the recording (not evidence): docs.local/runs/auth-action-explore-20260924/lifetime-*.jsonl.",
+      "status": "PENDING_REVIEW",
+      "note": "A PASSWORD_RESET code about ten seconds before and after its one-hour lifetime (inspection, use, a second account's code, and a new code afterwards; production answers EXPIRED_OOB_CODE); VERIFY_EMAIL, VERIFY_AND_CHANGE_EMAIL and EMAIL_SIGNIN codes inspected and used after the same hour. Their full lifetime is unobserved (owner decision 2026-09-24): the recording shows them live at about 3,610 s, the exploration at 3,900 s. No Google document states their lifetime (searched 2026-09-25: the Admin email-action-link, email-link sign-in and GetOobCodeResponse references), so fireemu's strict profile never refuses them as expired (owner decision 2026-09-25); at the per-project cap of outstanding codes the oldest of them older than 3,900 s makes room. An expired PASSWORD_RESET code is kept a day to be refused as expired (an inference). Exploration before the recording (not evidence): docs.local/runs/auth-action-explore-20260924/lifetime-*.jsonl.",
       "evidence": {
         "productionRecordings": [
           {
@@ -376,7 +384,7 @@
       "configProjections": [
         "default"
       ],
-      "status": "VERIFIED",
+      "status": "PENDING_REVIEW",
       "note": "Every AUTH-ACTION, AUTH-CREDENTIAL and AUTH-ACCOUNT row compared on one final artifact, with the Rust workspace tests of that source.",
       "evidence": {
         "productionRecordings": [
@@ -469,7 +477,7 @@
       "configProjections": [
         "default"
       ],
-      "status": "VERIFIED",
+      "status": "PENDING_REVIEW",
       "note": "Independent clean-context closure and security review of the final artifact and evidence.",
       "evidence": {
         "productionRecordings": [
@@ -504,6 +512,7 @@
     "reviewedCommit": "b50c3f529",
     "finalArtifactSha256": "06bbbf6f1b9d05c353e1836f9bb191299903ae4dacef133e1b268b047533d3a6",
     "report": "docs.local/reviews/2026-09-24-auth-action-confirmation-review.md (private; the earlier reviews are -closure-review.md and -security-review.md)",
-    "followUps": "Non-blocking and tracked privately (docs.local/issues/open/auth-action-unobserved-edges.md): code lifetimes beyond one hour, VERIFY_EMAIL supersession (unobservable under production's per-address limit), sessions after an email link removes a password, a client sign-in link for a disabled account, a link sign-in of a disabled account, and a closure-test count of rows whose dependency returned nothing."
+    "followUps": "Non-blocking and tracked privately (docs.local/issues/open/auth-action-unobserved-edges.md): code lifetimes beyond one hour, VERIFY_EMAIL supersession (unobservable under production's per-address limit), sessions after an email link removes a password, a client sign-in link for a disabled account, a link sign-in of a disabled account, and a closure-test count of rows whose dependency returned nothing.",
+    "followUp": "The promotion review of 2026-09-25 kept the promotion conditionally; the follow-up directive (docs.local, 2026-09-25) reopens the conditions it touches until its fixes are rebound and a confirmation review approves them."
   }
 }

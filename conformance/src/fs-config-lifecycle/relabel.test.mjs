@@ -25,3 +25,8 @@ test("relabeling never merges two resources or changes what differs", () => {
   const state = { body: { indexes: [index("<index1>", "a"), { ...index("<index2>", "b"), state: "CREATING" }] } };
   assert.ok(!sameModuloIdNames(two, state));
 });
+
+test("only a listing is compared modulo id numbering", () => {
+  const single = (id) => ({ status: 200, body: index(id, "a") });
+  assert.ok(!sameModuloIdNames(single("<index1>"), single("<index2>")));
+});

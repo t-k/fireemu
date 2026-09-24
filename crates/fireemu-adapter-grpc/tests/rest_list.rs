@@ -623,3 +623,38 @@ fn show_missing_inside_a_transaction_lists_missing_documents_by_name() {
         json!({"name": "projects/demo-app/databases/(default)/documents/lst/d3a"})
     );
 }
+
+/// A token whose order values were forged (here one value where the order has two, the name
+/// left out) is not refused: tokens are fireemu's own and a forged value only moves the cursor
+/// within the same listing, here past every document. Pins today's behaviour (FS-DATA-WRITE-LIST
+/// review, round 4).
+#[test]
+fn a_token_with_forged_order_values_moves_the_cursor_within_its_listing() {
+    use fireemu_adapter_grpc::rest::json::{base64_decode, base64_encode};
+    use fireemu_proto_firestore::google::firestore::v1 as pb;
+    use prost::Message as _;
+    let (s, _) = seeded(true);
+    let (_, first) = list(&s, "orderBy=a&pageSize=1");
+    let token = first["nextPageToken"].as_str().unwrap();
+    let decoded = String::from_utf8(base64_decode(token).unwrap()).unwrap();
+    let (head, _) = decoded.rsplit_once('\n').unwrap();
+    let values = pb::Cursor {
+        values: vec![pb::Value {
+            value_type: Some(pb::value::ValueType::IntegerValue(100)),
+        }],
+        before: false,
+    }
+    .encode_to_vec();
+    let forged = base64_encode(format!("{head}\n{}", base64_encode(&values)).as_bytes());
+    let (status, body) = list(
+        &s,
+        &format!(
+            "orderBy=a&pageSize=1&pageToken={}",
+            forged
+                .replace('+', "%2B")
+                .replace('/', "%2F")
+                .replace('=', "%3D")
+        ),
+    );
+    assert_eq!((status, &body), (200, &json!({})));
+}

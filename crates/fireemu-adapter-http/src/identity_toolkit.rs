@@ -1219,9 +1219,8 @@ fn verify_session_with_error(
     let (v, decoded) =
         match fireemu_core_auth::jwt::verify_id_token_decoded_with_leeway(token, store, at, leeway)
         {
-            Err(fireemu_core_auth::jwt::JwtError::WrongIssuer { actual, .. })
-                if actual == fireemu_core_auth::jwt::LEGACY_TOKEN_ISSUER =>
-            {
+            // A token of another issuer may be a legacy token; that verifier checks the issuer.
+            Err(fireemu_core_auth::jwt::JwtError::WrongIssuer { .. }) => {
                 fireemu_core_auth::jwt::verify_legacy_token(token, store, at, leeway)
             }
             verified => verified,

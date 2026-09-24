@@ -10,11 +10,16 @@ Each release is a Git tag; the binaries and the npm packages are built from that
 
 ### Added
 
+- The Firestore Admin API is served in both profiles, over REST v1 and gRPC (`google.firestore.admin.v1`, `google.longrunning.Operations`), following production as recorded on 2026-09-24 (FS-CONFIG-LIFECYCLE): named database create, get, list, patch and delete; composite indexes (index-file indexes are listed as deployed ones); single-field index and TTL configuration; managed `exportDocuments`, `importDocuments` and `bulkDeleteDocuments` over the emulated Cloud Storage (a managed export imports into production and a production export into fireemu); operations; locations. Backups, backup schedules, restore, clone and point-in-time recovery answer 501.
+- `projects.unknownProjects` (`serve` by default, or `refuse`): under the strict profile, `refuse` answers a request naming any project other than the daemon's with production's 403 PERMISSION_DENIED (CONSUMER_INVALID).
+- `firestore.deletedDatabaseIdCooldownSeconds` shortens how long a deleted database id cannot be reused (production's 300 seconds by default).
 - `firestore.databaseCreateTime` sets the creation time the daemon's databases report and the instant before which a `read_time` is refused (strict profile). It defaults to the daemon's start.
 - Firestore Explain reports the index each query disjunct scans and production's billing (index and document entries, read operations, minimum query cost) for queries, aggregations and nearest-neighbour searches, in both profiles.
 - REST routes `{database}/documents:executePipeline` under the strict profile, answering production's Standard-edition refusal.
 
 ### Changed
+
+- After an Admin API call, as in production: deleting `(default)` or a declared database makes the data plane answer NOT_FOUND for it, its id cannot be reused for 300 seconds, a database created in Datastore mode or the Enterprise edition is refused by the Native data plane, and the managed-infrastructure routes answer 501 instead of 404. A managed export's partition checksum is written as 0, which production imports without verifying, and fireemu does not verify it either.
 
 These follow production Firestore as recorded on 2026-09-24 (FS-QUERY-INDEX). Unless marked strict, they apply under the `emulator` profile too, where they change results or shapes but add no rejection.
 

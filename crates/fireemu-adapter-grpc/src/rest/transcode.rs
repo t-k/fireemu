@@ -487,6 +487,42 @@ fn request_schema(method: &str) -> Option<&'static Schema> {
     }
 }
 
+/// The JSON names of `google.firestore.v1.Document`.
+const DOCUMENT_KEYS: &[&str] = &[
+    "name",
+    "fields",
+    "createTime",
+    "create_time",
+    "updateTime",
+    "update_time",
+];
+
+/// Refuses a `Document` body (mapped at `at`) with a key the message does not have, as
+/// production's transcoder does (FS-QUERY-INDEX request-shape/rest#parent-is-collection). The
+/// values are left to the document decoder.
+pub fn check_document_keys(body: &Value, at: &str) -> Result<(), Status> {
+    let Value::Object(object) = body else {
+        return Ok(());
+    };
+    let errors: Vec<(String, String)> = object
+        .keys()
+        .filter(|key| !DOCUMENT_KEYS.contains(&key.as_str()))
+        .map(|key| {
+            (
+                at.to_owned(),
+                format!(
+                    "Invalid JSON payload received. Unknown name \"{key}\" at '{at}': Cannot find field."
+                ),
+            )
+        })
+        .collect();
+    if errors.is_empty() {
+        Ok(())
+    } else {
+        Err(crate::production_status::bad_request(&errors))
+    }
+}
+
 /// Checks and normalizes the body of a REST custom `method`. Bodies of methods this module has
 /// no schema for are returned unchanged.
 pub fn check_body(method: &str, body: &Value) -> Result<Value, Status> {
@@ -1001,6 +1037,21 @@ mod tests {
         assert_eq!(
             syntax_error_message(b"not json", &error),
             "Invalid JSON payload received. Unexpected token.\nnot json\n^"
+        );
+    }
+
+    #[test]
+    fn document_bodies_take_only_document_keys() {
+        for key in DOCUMENT_KEYS {
+            assert!(check_document_keys(&json!({ *key: null }), "document").is_ok(), "{key}");
+        }
+        assert!(check_document_keys(&json!("not an object"), "document").is_ok());
+        let status = check_document_keys(&json!({"a": 1, "fields": {}, "b": 2}), "document")
+            .unwrap_err();
+        assert_eq!(
+            status.message(),
+            "Invalid JSON payload received. Unknown name \"a\" at 'document': Cannot find field.\n\
+             Invalid JSON payload received. Unknown name \"b\" at 'document': Cannot find field."
         );
     }
 }

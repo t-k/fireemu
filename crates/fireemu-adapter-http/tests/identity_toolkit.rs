@@ -18,7 +18,7 @@ use fireemu_core_auth::totp::{totp_at, TotpParams};
 use fireemu_core_functions::manifest::BlockingAuthEvent;
 use fireemu_core_session::clock::VirtualClock;
 use fireemu_core_session::tenancy::Tenancy;
-use fireemu_core_types::determinism::SplitMix64;
+use fireemu_core_types::determinism::{Clock as _, SplitMix64};
 use fireemu_core_types::time::{LogicalDuration, LogicalInstant};
 use serde_json::{json, Value};
 
@@ -2403,7 +2403,7 @@ fn totp_enrollment_and_second_factor_sign_in_on_the_virtual_clock() {
     );
     assert_eq!(status, 200, "{start}");
     let info = &start["totpSessionInfo"];
-    assert_eq!(info["hashingAlgorithm"], "HMAC_SHA1");
+    assert_eq!(info["hashingAlgorithm"], "SHA1");
     assert_eq!(info["periodSec"], 30);
     assert_eq!(info["verificationCodeLength"], 6);
     let secret = base32::decode(info["sharedSecretKey"].as_str().unwrap()).unwrap();
@@ -2592,7 +2592,8 @@ fn expired_enrollment_session_and_disabled_user() {
         .as_str()
         .unwrap()
         .to_owned();
-    let late = advance(&s, 301);
+    // Production's lifetime is 900 s.
+    let late = advance(&s, 901);
     let code = totp_at(
         &secret,
         &TotpParams {
@@ -17081,4 +17082,269 @@ fn phone_code(s: &AuthState) -> String {
         .expect("a code was sent")
         .code
         .clone()
+}
+
+// ---- AUTH-MFA strict: TOTP enrollment (sandbox recording 2026-09-24, auth-mfa/totp/enroll) ----
+
+const MFA_ON: &str = r#"{"state": "ENABLED", "enabledProviders": ["PHONE_SMS"], "providerConfigs": [{"state": "ENABLED", "totpProviderConfig": {"adjacentIntervals": 5}}]}"#;
+
+fn strict_mfa_state() -> AuthState {
+    let s = strict_state();
+    set_project_mfa(&s, &serde_json::from_str(MFA_ON).unwrap());
+    s
+}
+
+fn start_totp(s: &AuthState, token: &str) -> Value {
+    let (status, body) = post(
+        s,
+        &format!("{V2}/accounts/mfaEnrollment:start"),
+        &json!({"idToken": token, "totpEnrollmentInfo": {}}),
+    );
+    assert_eq!(status, 200, "{body}");
+    body
+}
+
+/// The code of an enrollment start's secret at the store's clock, `offset` steps away.
+fn totp_code_of(s: &AuthState, started: &Value, offset: i64) -> String {
+    let secret = base32::decode(
+        started["totpSessionInfo"]["sharedSecretKey"]
+            .as_str()
+            .unwrap(),
+    )
+    .unwrap();
+    let now = s.clock.lock().unwrap().now();
+    let at = now
+        .checked_add(LogicalDuration::from_seconds(30 * offset))
+        .unwrap();
+    let params = TotpParams {
+        period_seconds: 30,
+        digits: 6,
+    };
+    format!("{:06}", totp_at(&secret, &params, at))
+}
+
+fn finalize_totp(
+    s: &AuthState,
+    token: &str,
+    started: &Value,
+    code: &str,
+    name: Option<&str>,
+) -> (u16, Value) {
+    let mut body = json!({"idToken": token, "totpVerificationInfo": {"sessionInfo": started["totpSessionInfo"]["sessionInfo"], "verificationCode": code}});
+    if let Some(name) = name {
+        body["displayName"] = json!(name);
+    }
+    post(s, &format!("{V2}/accounts/mfaEnrollment:finalize"), &body)
+}
+
+fn v2_refusal(body: &Value) -> (&str, bool) {
+    (
+        body["error"]["message"].as_str().unwrap_or_default(),
+        body["error"].get("errors").is_none() && body["error"]["status"] == "INVALID_ARGUMENT",
+    )
+}
+
+#[test]
+fn strict_totp_enrollment_answers_as_production() {
+    let s = strict_mfa_state();
+    // Production's clock has a fraction; microsecond precision shows as six digits.
+    s.clock
+        .lock()
+        .unwrap()
+        .advance(LogicalDuration::from_nanos(123_456_789))
+        .unwrap();
+    let token = verified_session(&s, "enroll@example.com");
+    let (status, body) = post(
+        &s,
+        &format!("{V2}/accounts/mfaEnrollment:start"),
+        &json!({"idToken": token}),
+    );
+    assert_eq!(
+        (status, v2_refusal(&body)),
+        (400, ("Request contains an invalid argument.", true))
+    );
+    let (status, body) = post(
+        &s,
+        &format!("{V2}/accounts/mfaEnrollment:start"),
+        &json!({"idToken": token, "totpEnrollmentInfo": {}, "phoneEnrollmentInfo": {"phoneNumber": "+16505550101"}}),
+    );
+    assert_eq!(status, 400);
+    assert_eq!(
+        body["error"]["message"],
+        "Invalid value (oneof), oneof field 'enrollment_info' is already set. Cannot set 'phoneEnrollmentInfo'"
+    );
+    assert_eq!(
+        body["error"]["details"][0]["@type"],
+        "type.googleapis.com/google.rpc.BadRequest"
+    );
+    let started = start_totp(&s, &token);
+    let info = &started["totpSessionInfo"];
+    assert_eq!(info["hashingAlgorithm"], "SHA1");
+    let deadline = info["finalizeEnrollmentTime"].as_str().unwrap();
+    let fraction = deadline.rsplit('.').next().unwrap().trim_end_matches('Z');
+    assert_eq!(fraction.len(), 6, "{deadline}");
+    let now = s.clock.lock().unwrap().now();
+    let expected = now.checked_add(LogicalDuration::from_seconds(900)).unwrap();
+    assert_eq!(
+        &deadline[..19],
+        &LogicalInstant::to_rfc3339(expected).unwrap()[..19]
+    );
+}
+
+#[test]
+fn strict_totp_enrollment_finalize_answers_as_production() {
+    let s = strict_mfa_state();
+    s.clock
+        .lock()
+        .unwrap()
+        .advance(LogicalDuration::from_nanos(123_456_789))
+        .unwrap();
+    let token = verified_session(&s, "finalize@example.com");
+    let started = start_totp(&s, &token);
+    // The session first, then the display name, then the code.
+    let (status, body) = post(
+        &s,
+        &format!("{V2}/accounts/mfaEnrollment:finalize"),
+        &json!({"idToken": token, "totpVerificationInfo": {"verificationCode": "123456"}}),
+    );
+    assert_eq!(
+        (status, v2_refusal(&body)),
+        (400, ("INVALID_SESSION_INFO", true))
+    );
+    let good = totp_code_of(&s, &started, 0);
+    let (status, body) = finalize_totp(&s, &token, &started, &good, None);
+    assert_eq!(
+        (status, v2_refusal(&body)),
+        (
+            400,
+            ("MISSING_DISPLAY_NAME : display name cannot be empty", true)
+        )
+    );
+    let (status, body) = finalize_totp(&s, &token, &started, &good, Some("Authenticator"));
+    assert_eq!(status, 200, "{body}");
+    assert_eq!(body["totpAuthInfo"], json!({}));
+    let mut members: Vec<&str> = body
+        .as_object()
+        .unwrap()
+        .keys()
+        .map(String::as_str)
+        .collect();
+    members.sort_unstable();
+    assert_eq!(members, ["idToken", "refreshToken", "totpAuthInfo"]);
+    // A refused display name is not an attempt (production accepted the code after it and
+    // two wrong ones); the finalized session offered again is complete.
+    let again = totp_code_of(&s, &started, 1);
+    let fresh = body["idToken"].as_str().unwrap().to_owned();
+    let (status, body) = finalize_totp(&s, &fresh, &started, &again, Some("A"));
+    assert_eq!(
+        (status, v2_refusal(&body)),
+        (
+            400,
+            (
+                "MFA_ENROLLMENT_ALREADY_COMPLETE : This MFA enrollment has already been completed.",
+                true
+            )
+        )
+    );
+    let (_, user) = post(
+        &s,
+        &format!("{V1}/accounts:lookup"),
+        &json!({"idToken": token}),
+    );
+    let factor = &user["users"][0]["mfaInfo"][0];
+    assert_eq!(factor["displayName"], "Authenticator");
+    let enrolled = factor["enrolledAt"].as_str().unwrap();
+    assert_eq!(
+        enrolled
+            .rsplit('.')
+            .next()
+            .unwrap()
+            .trim_end_matches('Z')
+            .len(),
+        6,
+        "{enrolled}"
+    );
+    assert_eq!(factor["mfaEnrollmentId"].as_str().unwrap().len(), 36);
+    let (status, body) = post(
+        &s,
+        &format!("{V2}/accounts/mfaEnrollment:start"),
+        &json!({"idToken": token, "totpEnrollmentInfo": {}}),
+    );
+    assert_eq!(
+        (status, v2_refusal(&body)),
+        (400, ("SECOND_FACTOR_LIMIT_EXCEEDED : Too many TOTP based second factors enrolled for this account.", true))
+    );
+}
+
+#[test]
+fn strict_an_enrollment_session_used_three_times_must_be_restarted() {
+    let s = strict_mfa_state();
+    let token = verified_session(&s, "attempts@example.com");
+    let started = start_totp(&s, &token);
+    for _ in 0..2 {
+        let (status, body) = finalize_totp(&s, &token, &started, "000000", Some("A"));
+        assert_eq!(
+            (status, v2_refusal(&body)),
+            (400, ("INVALID_CODE", true)),
+            "{body}"
+        );
+    }
+    let (status, body) = finalize_totp(
+        &s,
+        &token,
+        &started,
+        &totp_code_of(&s, &started, 0),
+        Some("A"),
+    );
+    assert_eq!(status, 200, "{body}");
+    let (status, body) = finalize_totp(
+        &s,
+        &token,
+        &started,
+        &totp_code_of(&s, &started, 1),
+        Some("A"),
+    );
+    assert_eq!(
+        (status, v2_refusal(&body)),
+        (
+            400,
+            ("TOO_MANY_ENROLLMENT_ATTEMPTS : restart enrollment", true)
+        )
+    );
+}
+
+#[test]
+fn strict_a_phone_start_beyond_five_factors_is_refused() {
+    let s = strict_mfa_state();
+    let token = verified_session(&s, "limit@example.com");
+    let (_, user) = post(
+        &s,
+        &format!("{V1}/accounts:lookup"),
+        &json!({"idToken": token}),
+    );
+    let enrollments: Vec<Value> = (1..=5)
+        .map(|n| json!({"phoneInfo": format!("+1650555010{n}"), "displayName": format!("Phone {n}")}))
+        .collect();
+    let (status, _) = admin(
+        &s,
+        "POST",
+        &format!("{ADMIN}/accounts:update"),
+        &json!({"localId": user["users"][0]["localId"], "mfa": {"enrollments": enrollments}}),
+    );
+    assert_eq!(status, 200);
+    let (status, body) = post(
+        &s,
+        &format!("{V2}/accounts/mfaEnrollment:start"),
+        &json!({"idToken": token, "phoneEnrollmentInfo": {"phoneNumber": "+16505550106"}}),
+    );
+    assert_eq!(
+        (status, v2_refusal(&body)),
+        (
+            400,
+            (
+                "SECOND_FACTOR_LIMIT_EXCEEDED : Too many second factors enrolled for this account.",
+                true
+            )
+        )
+    );
 }

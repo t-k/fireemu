@@ -1874,7 +1874,14 @@ impl AuthStore {
         self.temporary_proofs
             .retain(|_, (_, issued)| !Self::expired(*issued, TEMPORARY_PROOF_TTL_SECONDS, now));
         let sign_in_ttl = LogicalDuration::from_seconds(PENDING_SIGN_IN_TTL_SECONDS);
-        let enrollment_grace = self.policy.enrollment_session_ttl;
+        // Production still answers SESSION_EXPIRED twice the lifetime later (sandbox recording
+        // 2026-09-24, auth-mfa/lifetime at 1805 s), so its expired sessions stay a day; the
+        // per-user budget bounds them.
+        let enrollment_grace = if self.production_mfa {
+            LogicalDuration::from_seconds(86_400)
+        } else {
+            self.policy.enrollment_session_ttl
+        };
         let candidates: Vec<LocalId> = self.pending_user_ids.iter().cloned().collect();
         for uid in candidates {
             let mut remains_pending = false;
@@ -3737,11 +3744,23 @@ impl AuthStore {
         display_name: Option<String>,
         now: LogicalInstant,
     ) -> Result<EnrolledFactor, MfaError> {
+        self.enroll_phone_factor_by(uid, phone, display_name, now, false)
+    }
+
+    fn enroll_phone_factor_by(
+        &mut self,
+        uid: &LocalId,
+        phone: &str,
+        display_name: Option<String>,
+        now: LogicalInstant,
+        by_admin: bool,
+    ) -> Result<EnrolledFactor, MfaError> {
+        let now = self.factor_time(now, by_admin);
         AuthStore::validate_phone_number(phone).map_err(|_| MfaError::InvalidCode)?;
         // Before the enrollment id is drawn: a refused request must not advance the random
         // stream or touch the account.
         crate::mfa::validate_factor_display_name(display_name.as_deref())?;
-        let enrollment_id = self.random_id28();
+        let enrollment_id = self.new_enrollment_id();
         let user = self
             .users
             .get_mut(uid)
@@ -3822,7 +3841,7 @@ impl AuthStore {
             user.mfa.phone_factors_mut().clear();
         }
         for (phone, display_name) in factors {
-            self.enroll_phone_factor(uid, &phone, display_name, now)?;
+            self.enroll_phone_factor_by(uid, &phone, display_name, now, true)?;
         }
         self.activate_email_owner(uid);
         Ok(())
@@ -4560,14 +4579,24 @@ impl AuthStore {
             .get_mut(uid)
             .map(Arc::make_mut)
             .ok_or(MfaError::UserNotFound)?;
-        user.mfa
-            .pending_enrollments_mut()
-            .insert(session_id, PendingEnrollment { secret, expires_at });
+        user.mfa.pending_enrollments_mut().insert(
+            session_id,
+            PendingEnrollment {
+                secret,
+                expires_at,
+                attempts: 0,
+                completed: false,
+            },
+        );
         self.pending_user_ids.insert(uid.clone());
         Ok(material)
     }
 
     /// Finalizes enrollment with a code generated from the proposed secret.
+    ///
+    /// Under production's rules the session counts its attempts
+    /// ([`crate::mfa::MAX_ENROLLMENT_ATTEMPTS`]) and stays after it succeeds, so offering it
+    /// again is refused as complete; under the official emulator's it is gone.
     pub fn finalize_totp_enrollment(
         &mut self,
         uid: &LocalId,
@@ -4575,9 +4604,22 @@ impl AuthStore {
         code: u32,
         now: LogicalInstant,
     ) -> Result<EnrolledFactor, MfaError> {
+        self.finalize_totp_enrollment_named(uid, session_id, code, None, now)
+    }
+
+    /// [`Self::finalize_totp_enrollment`] with the factor's display name.
+    pub fn finalize_totp_enrollment_named(
+        &mut self,
+        uid: &LocalId,
+        session_id: &str,
+        code: u32,
+        display_name: Option<String>,
+        now: LogicalInstant,
+    ) -> Result<EnrolledFactor, MfaError> {
         let policy = self.policy;
         let window = self.totp_window();
-        let enrollment_id = self.random_id28();
+        let production = self.production_mfa;
+        let enrollment_id = self.new_enrollment_id();
         let user = self
             .users
             .get_mut(uid)
@@ -4590,11 +4632,26 @@ impl AuthStore {
             .cloned()
             .ok_or(MfaError::EnrollmentSessionUnknown)?;
         if now > pending.expires_at {
-            user.mfa.pending_enrollments_mut().remove(session_id);
-            if user.mfa.pending_count() == 0 {
-                self.pending_user_ids.remove(uid);
+            // Production keeps an expired session (the sweep reaps it much later) so that it
+            // keeps answering SESSION_EXPIRED; the official emulator's rules drop it here.
+            if !production {
+                user.mfa.pending_enrollments_mut().remove(session_id);
+                if user.mfa.pending_count() == 0 {
+                    self.pending_user_ids.remove(uid);
+                }
             }
             return Err(MfaError::EnrollmentSessionExpired);
+        }
+        if production {
+            if pending.attempts >= crate::mfa::MAX_ENROLLMENT_ATTEMPTS {
+                return Err(MfaError::TooManyEnrollmentAttempts);
+            }
+            if pending.completed {
+                return Err(MfaError::EnrollmentAlreadyComplete);
+            }
+            if let Some(entry) = user.mfa.pending_enrollments_mut().get_mut(session_id) {
+                entry.attempts = entry.attempts.saturating_add(1);
+            }
         }
         // Disabled while the enrollment was pending: refused before the code is matched, so
         // the pending enrollment survives a later re-enablement. Same class as the sign-in
@@ -4606,24 +4663,81 @@ impl AuthStore {
             CodeMatch::Accepted { step } => step,
             CodeMatch::Replayed | CodeMatch::NoMatch => return Err(MfaError::InvalidCode),
         };
-        user.mfa.pending_enrollments_mut().remove(session_id);
-        if user.mfa.pending_count() == 0 {
-            self.pending_user_ids.remove(uid);
+        if production {
+            if let Some(entry) = user.mfa.pending_enrollments_mut().get_mut(session_id) {
+                entry.completed = true;
+            }
+        } else {
+            user.mfa.pending_enrollments_mut().remove(session_id);
+            if user.mfa.pending_count() == 0 {
+                self.pending_user_ids.remove(uid);
+            }
         }
+        let enrolled_at = if production {
+            LogicalInstant::from_nanos(now.as_nanos().div_euclid(1_000) * 1_000)
+        } else {
+            now
+        };
         let factor = TotpFactor {
             mfa_enrollment_id: enrollment_id.clone(),
-            display_name: None,
+            display_name: display_name.clone(),
             secret: pending.secret,
-            enrolled_at: now,
+            enrolled_at,
             last_accepted_step: Some(step),
         };
         user.mfa.totp_factors_mut().push(factor);
         self.activate_email_owner(uid);
         Ok(EnrolledFactor {
             mfa_enrollment_id: enrollment_id,
-            display_name: None,
-            enrolled_at: now,
+            display_name,
+            enrolled_at,
         })
+    }
+
+    /// Whether `session_id` names an enrollment session of `uid` (expired or not).
+    #[must_use]
+    pub fn has_enrollment_session(&self, uid: &LocalId, session_id: &str) -> bool {
+        self.users
+            .get(uid)
+            .is_some_and(|user| user.mfa.has_enrollment_session(session_id))
+    }
+
+    /// A factor's enrollment time at the precision production keeps (sandbox recording
+    /// 2026-09-24, auth-mfa): microseconds when the user enrolls it, milliseconds when the
+    /// Admin API writes it. Unchanged under the official emulator's rules.
+    fn factor_time(&self, now: LogicalInstant, by_admin: bool) -> LogicalInstant {
+        if !self.production_mfa {
+            return now;
+        }
+        let unit: i128 = if by_admin { 1_000_000 } else { 1_000 };
+        LogicalInstant::from_nanos(now.as_nanos().div_euclid(unit) * unit)
+    }
+
+    /// A new factor's enrollment id: a version-4 UUID under production's rules (production
+    /// issues them, sandbox recording 2026-09-24), else the 28-character id of the official
+    /// shape. It names a factor and is not a secret, so it follows the seeded stream.
+    fn new_enrollment_id(&mut self) -> String {
+        if !self.production_mfa {
+            return self.random_id28();
+        }
+        let mut bytes = [0_u8; 16];
+        bytes[..8].copy_from_slice(&self.rng.next_u64().to_be_bytes());
+        bytes[8..].copy_from_slice(&self.rng.next_u64().to_be_bytes());
+        bytes[6] = (bytes[6] & 0x0f) | 0x40;
+        bytes[8] = (bytes[8] & 0x3f) | 0x80;
+        let hex = bytes.iter().fold(String::with_capacity(32), |mut out, b| {
+            use core::fmt::Write as _;
+            let _ = write!(out, "{b:02x}");
+            out
+        });
+        format!(
+            "{}-{}-{}-{}-{}",
+            &hex[..8],
+            &hex[8..12],
+            &hex[12..16],
+            &hex[16..20],
+            &hex[20..]
+        )
     }
 
     /// Starts the second-factor step of a sign-in.

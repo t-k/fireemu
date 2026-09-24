@@ -276,7 +276,7 @@ fn finalize_totp_enrollment(
     post(
         s,
         &format!("{V2}/accounts/mfaEnrollment:finalize"),
-        &json!({"idToken": id_token, "totpVerificationInfo": {
+        &json!({"idToken": id_token, "displayName": "Authenticator", "totpVerificationInfo": {
             "sessionInfo": session, "verificationCode": code}}),
     )
 }
@@ -663,15 +663,27 @@ fn an_expired_totp_enrollment_is_session_expired_in_grace_and_unknown_after_it()
         advance_to(&s, ttl + 1);
         let refused = finalize_totp_enrollment(&s, &id_token, &first, &first_secret);
         assert_refused(&refused, "SESSION_EXPIRED", "in grace");
-        // The refusal reaped it: the same session is now unknown.
+        // The official emulator's rules reap it on that refusal; production's keep answering
+        // SESSION_EXPIRED (sandbox recording 2026-09-24, still at 1805 s).
         let refused = finalize_totp_enrollment(&s, &id_token, &first, &first_secret);
-        assert_refused(&refused, "INVALID_SESSION_INFO", "after reap");
+        let again = if strict {
+            "SESSION_EXPIRED"
+        } else {
+            "INVALID_SESSION_INFO"
+        };
+        assert_refused(&refused, again, "after reap");
 
-        // An untouched session is reaped by the sweep once the grace window has passed.
+        // An untouched session is reaped by the sweep once the grace window has passed:
+        // one lifetime under the official emulator's rules, a day under production's.
         let (second, second_secret) = start_totp_enrollment(&s, &id_token);
         advance_to(&s, ttl + 1 + 2 * ttl + 1);
         let refused = finalize_totp_enrollment(&s, &id_token, &second, &second_secret);
-        assert_refused(&refused, "INVALID_SESSION_INFO", "past grace");
+        let past = if strict {
+            "SESSION_EXPIRED"
+        } else {
+            "INVALID_SESSION_INFO"
+        };
+        assert_refused(&refused, past, "past grace");
         assert!(s
             .store
             .lock()

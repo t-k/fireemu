@@ -4714,3 +4714,60 @@ fn rest_execute_pipeline_on_standard_is_refused_like_production() {
         );
     }
 }
+
+/// Production's REST templates for the query methods need a document below `documents`
+/// (`documents/*/**`), so `documents/qn:runQuery` is a create in collection `qn:runQuery`, whose
+/// body is a `Document` (FS-QUERY-INDEX request-shape/rest#parent-is-collection).
+#[test]
+fn rest_query_method_on_a_root_collection_routes_as_a_create_document() {
+    let s = state(None);
+    let expected = |method: &str| {
+        json!({
+            "error": {
+                "code": 400,
+                "message": format!("Invalid JSON payload received. Unknown name \"{method}\" at 'document': Cannot find field."),
+                "status": "INVALID_ARGUMENT",
+                "details": [{
+                    "@type": "type.googleapis.com/google.rpc.BadRequest",
+                    "fieldViolations": [{
+                        "field": "document",
+                        "description": format!("Invalid JSON payload received. Unknown name \"{method}\" at 'document': Cannot find field."),
+                    }],
+                }],
+            }
+        })
+    };
+    for (method, key) in [
+        ("runQuery", "structuredQuery"),
+        ("runAggregationQuery", "structuredAggregationQuery"),
+        ("partitionQuery", "structuredQuery"),
+    ] {
+        let (status, body) = call(
+            &s,
+            "POST",
+            &format!("{DOCS}/qn:{method}"),
+            json!({ key: {"from": [{"collectionId": "qn"}]} }),
+        );
+        assert_eq!((status, &body), (400, &expected(key)), "{method}");
+    }
+    // A create with only document keys goes through: the collection id carries the colon.
+    let (status, body) = call(
+        &s,
+        "POST",
+        &format!("{DOCS}/qn:runQuery?documentId=d"),
+        json!({"fields": {"v": {"integerValue": "1"}}}),
+    );
+    assert_eq!(status, 200, "{body}");
+    assert_eq!(
+        body["name"],
+        "projects/demo-app/databases/(default)/documents/qn:runQuery/d"
+    );
+    // Below a document the method is the query method itself.
+    let (status, body) = call(
+        &s,
+        "POST",
+        &format!("{DOCS}/qn/d:runQuery"),
+        json!({"structuredQuery": {"from": [{"collectionId": "sub"}]}}),
+    );
+    assert_eq!(status, 200, "{body}");
+}

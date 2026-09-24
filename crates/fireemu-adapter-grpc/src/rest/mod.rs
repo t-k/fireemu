@@ -808,6 +808,12 @@ impl RestState {
             }
         }
         let (raw_resource, action) = match req.path.rsplit_once(':') {
+            // The query methods' templates need a document below `documents`; with one
+            // segment there, production's front end matches the create template instead, with
+            // the method in the collection id (FS-QUERY-INDEX parent-is-collection).
+            Some((r, a)) if QUERY_METHODS.contains(&a) && names_a_root_collection(r) => {
+                (req.path.as_str(), None)
+            }
             Some((r, a)) if CUSTOM_METHODS.contains(&a) => (r, Some(a)),
             // A colon in the last segment is routing syntax (a document ID carries it
             // percent-encoded), so an unknown method is a route that does not exist -- never
@@ -1020,6 +1026,7 @@ impl RestState {
         let document_id = first(params, "documentId").unwrap_or("");
         let document_resource =
             (!document_id.is_empty()).then(|| format!("{parent}/{collection_id}/{document_id}"));
+        transcode::check_document_keys(body, "document")?;
         let req = pb::CreateDocumentRequest {
             parent: parent.to_owned(),
             collection_id: collection_id.to_owned(),
@@ -1675,6 +1682,18 @@ fn observed_create_collection_slash_error(
     Status::invalid_argument(format!(
         "Collection id \"{collection}\" is invalid because it contains \"/\"."
     ))
+}
+
+/// Custom methods whose REST templates are `{parent=projects/*/databases/*/documents}:method`
+/// and `{parent=projects/*/databases/*/documents/*/**}:method`.
+const QUERY_METHODS: &[&str] = &["runQuery", "runAggregationQuery", "partitionQuery"];
+
+/// Whether a raw REST resource is `/v1/projects/*/databases/*/documents/<one segment>`.
+fn names_a_root_collection(raw_resource: &str) -> bool {
+    matches!(
+        raw_resource.split('/').collect::<Vec<_>>().as_slice(),
+        ["", "v1", "projects", _, "databases", _, "documents", collection] if !collection.is_empty()
+    )
 }
 
 /// Custom methods of the REST surface (`resource:method`).

@@ -44,11 +44,15 @@ export function createSession(
     timeoutMs = 60_000,
     maxRequests = Infinity,
     maxHarnessRequests = Infinity,
+    maxCleanupRequests = Infinity,
     log = () => {},
   } = {},
 ) {
   let requests = 0;
   let harnessRequests = 0;
+  // Wipes and the config restore draw on their own reserve, so a run that used up its harness
+  // budget can still delete its accounts and switch email links back off.
+  let cleanupRequests = 0;
 
   async function refreshCredential() {
     try {
@@ -58,8 +62,13 @@ export function createSession(
     }
   }
 
-  const charge = (harness) => {
-    if (harness) {
+  const charge = (harness, cleanup = false) => {
+    if (cleanup) {
+      if (cleanupRequests >= maxCleanupRequests) {
+        throw fatal(`cleanup request ceiling ${maxCleanupRequests} reached`);
+      }
+      cleanupRequests += 1;
+    } else if (harness) {
       if (harnessRequests >= maxHarnessRequests) {
         throw fatal(`harness request ceiling ${maxHarnessRequests} reached`);
       }
@@ -70,15 +79,17 @@ export function createSession(
     }
   };
 
-  async function send(step, raw, { harness = false } = {}) {
+  async function send(step, raw, { harness = false, cleanup = false } = {}) {
     if (ctx.target.kind === "production" && step.auth === "admin") await refreshCredential();
     const request = buildRequest(step, ctx, raw);
-    guardActionRequest(request, ctx, { harness });
-    charge(harness);
+    guardActionRequest(request, ctx, { harness: harness || cleanup });
+    charge(harness, cleanup);
     let response;
     try {
+      // A redirect would lead to a URL the guard never saw.
       response = await fetch(request.url, {
         ...request.init,
+        redirect: "error",
         signal: AbortSignal.timeout(timeoutMs),
       });
     } catch (error) {
@@ -97,11 +108,11 @@ export function createSession(
     return { recorded: normalizeActionResponse(response.status, text, ctx), json };
   }
 
-  async function admin(method, path, { body, query } = {}) {
+  async function admin(method, path, { body, query, cleanup = false } = {}) {
     const { recorded, json } = await send(
       { id: "harness", method, path, auth: "admin", body, query },
       new Map(),
-      { harness: true },
+      { harness: true, cleanup },
     );
     if (recorded.status !== 200) {
       throw fatal(
@@ -117,11 +128,13 @@ export function createSession(
       for (let round = 0; round < 20; round += 1) {
         const page = await admin("GET", "v1/projects/{project}/accounts:batchGet", {
           query: { maxResults: 1000 },
+          cleanup: true,
         });
         const ids = (page.users ?? []).map((u) => u.localId);
         if (ids.length === 0) return;
         await admin("POST", "v1/projects/{project}/accounts:batchDelete", {
           body: { localIds: ids, force: true },
+          cleanup: true,
         });
       }
     } catch (error) {
@@ -130,21 +143,22 @@ export function createSession(
     throw fatal("wipe: accounts remain after 20 rounds");
   }
 
-  async function readConfig(mask) {
-    const config = await admin("GET", "admin/v2/projects/{project}/config");
+  async function readConfig(mask, { cleanup = false } = {}) {
+    const config = await admin("GET", "admin/v2/projects/{project}/config", { cleanup });
     return Object.fromEntries(mask.map((path) => [path, pick(config, path)]));
   }
 
   /** Patches the masked paths and waits until a read-back shows them; a timeout is fatal. */
-  async function writeConfig(mask, values) {
+  async function writeConfig(mask, values, { cleanup = false } = {}) {
     const body = {};
     for (const path of mask) assign(body, path, values[path]);
     await admin("PATCH", "admin/v2/projects/{project}/config", {
       body,
       query: { updateMask: mask.join(",") },
+      cleanup,
     });
     for (let attempt = 0; attempt < 30; attempt += 1) {
-      const now = await readConfig(mask);
+      const now = await readConfig(mask, { cleanup });
       if (mask.every((path) => configMatches(now[path], values[path]))) return now;
       if (ctx.target.kind === "production") await sleep(2000);
     }
@@ -206,6 +220,18 @@ export function createSession(
         };
       }
       const { recorded, json } = outcome;
+      // An Admin request for a link that answers 200 without one may have mailed the code
+      // instead; nothing after it is sent. Only an address without an account (production
+      // answers as if it mailed, and has nobody to mail) is expected to come back without one.
+      if (
+        step.path === "v1/projects/{project}/accounts:sendOobCode" &&
+        recorded.status === 200 &&
+        typeof json?.oobLink !== "string" &&
+        !step.noLinkExpected
+      ) {
+        steps[step.id] = recorded;
+        throw fatal(`${program.id}#${step.id}: HTTP 200 without the link it asked for`);
+      }
       raw.set(step.id, json);
       if (step.relations) {
         recorded.relations = Object.fromEntries(
@@ -257,10 +283,10 @@ export function createSession(
     }
     if (mask.length) {
       try {
-        const restored = await writeConfig(mask, baseline);
+        const restored = await writeConfig(mask, baseline, { cleanup: true });
         projection = { ...projection, restored: normalizeConfig(restored, ctx) };
       } catch (error) {
-        const now = await readConfig(mask).catch(() => "unreadable");
+        const now = await readConfig(mask, { cleanup: true }).catch(() => "unreadable");
         log(`SANDBOX CONFIG CHANGED by ${program.id}: ${JSON.stringify(now)}`);
         throw error.fatal ? error : fatal(String(error.message ?? error));
       }
@@ -270,7 +296,12 @@ export function createSession(
     return { steps, ...(projection ? { config: projection } : {}) };
   }
 
-  return { runProgram, wipe, readConfig, counts: () => ({ requests, harnessRequests }) };
+  return {
+    runProgram,
+    wipe,
+    readConfig,
+    counts: () => ({ requests, harnessRequests: harnessRequests + cleanupRequests }),
+  };
 }
 
 /** Runs every program; a program that throws is recorded as a harness failure, not a row. */

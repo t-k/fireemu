@@ -200,7 +200,12 @@ fn show_missing_reads_booleans_as_the_front_end_does() {
     for value in ["true", "True", "yes", "1", "t"] {
         let (status, body) = list(&s, &format!("showMissing={value}"));
         assert_eq!(status, 200, "{value}: {body}");
-        assert_eq!(ids(&body).len(), 6, "{value}");
+        assert_eq!(ids(&body), ["d1", "d2", "d3", "d4", "d5", "m"], "{value}");
+        // The missing document is listed by name alone.
+        assert_eq!(
+            body["documents"][5],
+            json!({"name": "projects/demo-app/databases/(default)/documents/lst/m"})
+        );
     }
     for value in ["false", "no", "0", "F"] {
         let (status, body) = list(&s, &format!("showMissing={value}"));
@@ -374,4 +379,152 @@ fn list_collection_ids_answers_as_production_does() {
         message(&body),
         "Document parent name \"projects/demo-app/databases/(default)/documents/lst\" lacks \"/\" at index 51."
     );
+}
+
+/// A token stays small whatever the listing is ordered on: order values past the bound are
+/// left out and the page continues after its last document's current values (FS-DATA-WRITE-LIST
+/// review).
+#[test]
+fn an_ordered_token_stays_small_for_a_large_order_value() {
+    let s = state(true);
+    let big = "x".repeat(200_000);
+    for (id, value) in [
+        ("a", format!("{big}1")),
+        ("b", format!("{big}2")),
+        ("c", format!("{big}3")),
+    ] {
+        let (status, body) = call(
+            &s,
+            "PATCH",
+            &format!("{DOCS}/big/{id}"),
+            json!({"fields": {"s": {"stringValue": value}}}),
+        );
+        assert_eq!(
+            status,
+            200,
+            "{}",
+            &body.to_string()[..200.min(body.to_string().len())]
+        );
+    }
+    let (status, first) = call(
+        &s,
+        "GET",
+        &format!("{DOCS}/big?orderBy=s&pageSize=1&mask.fieldPaths=__name__"),
+        Value::Null,
+    );
+    assert_eq!(status, 200);
+    let token = first["nextPageToken"].as_str().unwrap().to_owned();
+    assert!(token.len() < 4096, "{} bytes", token.len());
+    let (status, next) = call(
+        &s,
+        "GET",
+        &format!("{DOCS}/big?orderBy=s&pageSize=1&mask.fieldPaths=__name__&pageToken={token}"),
+        Value::Null,
+    );
+    assert_eq!(status, 200, "{next}");
+    assert!(next["documents"][0]["name"]
+        .as_str()
+        .unwrap()
+        .ends_with("/big/b"));
+}
+
+/// The emulator profile reads list parameters as fireemu did before where production's front
+/// end would refuse: proto names are ignored and a read time is read by fireemu's own parser.
+#[test]
+fn the_emulator_profile_adds_no_list_parameter_refusal() {
+    let (strict, time) = seeded(true);
+    let (emulator, emulator_time) = seeded(false);
+    let (status, body) = list(&strict, "page_size=abc");
+    assert_eq!(status, 400, "{body}");
+    let (status, body) = list(&emulator, "page_size=abc");
+    assert_eq!(status, 200, "{body}");
+    assert_eq!(ids(&body).len(), 5);
+    let lower = |time: &str| time.replace('Z', "z");
+    let (status, body) = list(&strict, &format!("readTime={}", lower(&time)));
+    assert_eq!(status, 400, "{body}");
+    let (status, body) = list(&emulator, &format!("readTime={}", lower(&emulator_time)));
+    assert_eq!(status, 200, "{body}");
+    // A request field with no local effect is bound, not refused, under strict.
+    let (status, body) = list(&strict, "requestOptions.requestTags=t");
+    assert_eq!(status, 200, "{body}");
+}
+
+/// Inside a transaction an ordered page also continues after the values the token recorded.
+#[test]
+fn an_ordered_page_in_a_transaction_continues_after_the_recorded_values() {
+    let (s, _) = seeded(true);
+    let (_, first) = list(&s, "orderBy=a%20desc&pageSize=2");
+    let token = first["nextPageToken"].as_str().unwrap().to_owned();
+    let (status, body) = call(
+        &s,
+        "PATCH",
+        &format!("{DOCS}/lst/d4"),
+        json!({"fields": {"a": {"integerValue": "0"}}}),
+    );
+    assert_eq!(status, 200, "{body}");
+    let (status, begun) = call(
+        &s,
+        "POST",
+        &format!("{DOCS}:beginTransaction"),
+        json!({"options": {"readOnly": {}}}),
+    );
+    assert_eq!(status, 200, "{begun}");
+    let transaction = begun["transaction"].as_str().unwrap();
+    let (status, next) = list(
+        &s,
+        &format!(
+            "orderBy=a%20desc&pageSize=2&pageToken={token}&transaction={}",
+            transaction
+                .replace('+', "%2B")
+                .replace('/', "%2F")
+                .replace('=', "%3D")
+        ),
+    );
+    assert_eq!(status, 200, "{next}");
+    assert_eq!(ids(&next), ["d3", "d2"]);
+}
+
+/// Each proto-name parameter binds under strict and is ignored under the emulator profile.
+#[test]
+fn proto_name_parameters_bind_under_strict_only() {
+    let (strict, time) = seeded(true);
+    let (emulator, _) = seeded(false);
+    for s in [&strict, &emulator] {
+        let (status, body) = call(
+            s,
+            "PATCH",
+            &format!("{DOCS}/lst/m/sub/x"),
+            json!({"fields": {}}),
+        );
+        assert_eq!(status, 200, "{body}");
+    }
+    let all = ["d1", "d2", "d3", "d4", "d5"];
+    let (status, body) = list(&strict, "page_token=garbage");
+    assert_eq!((status, message(&body)), (400, "invalid page token"));
+    let (status, body) = list(&emulator, "page_token=garbage");
+    assert_eq!((status, ids(&body)), (200, all.map(String::from).to_vec()));
+    let (_, body) = list(&strict, "order_by=a%20desc");
+    assert_eq!(ids(&body), ["d5", "d4", "d3", "d2", "d1"]);
+    let (_, body) = list(&emulator, "order_by=a%20desc");
+    assert_eq!(ids(&body), all);
+    let (status, body) = list(&strict, "mask.field_paths=__name__");
+    assert_eq!(status, 200, "{body}");
+    assert_eq!(ids(&body), all);
+    assert!(body["documents"][0].get("fields").is_none(), "{body}");
+    let (_, body) = list(&emulator, "mask.field_paths=__name__");
+    assert!(body["documents"][0].get("fields").is_some(), "{body}");
+    let (_, body) = list(&strict, "show_missing=true");
+    assert_eq!(ids(&body), ["d1", "d2", "d3", "d4", "d5", "m"]);
+    let (_, body) = list(&emulator, "show_missing=true");
+    assert_eq!(ids(&body), all);
+    let (status, body) = list(&strict, "read_time=yesterday");
+    assert_eq!(status, 400);
+    assert!(
+        message(&body).starts_with("Invalid value at 'read_time'"),
+        "{body}"
+    );
+    let (status, body) = list(&strict, &format!("read_time={time}"));
+    assert_eq!((status, ids(&body)), (200, all.map(String::from).to_vec()));
+    let (status, body) = list(&emulator, "read_time=yesterday");
+    assert_eq!((status, ids(&body)), (200, all.map(String::from).to_vec()));
 }

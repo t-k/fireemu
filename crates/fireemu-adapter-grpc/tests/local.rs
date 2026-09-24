@@ -9077,3 +9077,38 @@ async fn grpc_cosine_search_over_a_zero_vector_differs_between_the_profiles() {
         handle.abort();
     }
 }
+
+/// Under the emulator profile, `show_missing` without a collection id is not refused: the
+/// listing is answered without missing documents (production refuses it; strict above).
+#[tokio::test]
+async fn grpc_list_without_a_collection_id_ignores_show_missing_under_the_emulator_profile() {
+    let (mut client, _, handle) =
+        start_with_write_time_and_policy(false, IndexValidationPolicy::Emulator).await;
+    client
+        .commit(pb::CommitRequest {
+            database: DB.to_owned(),
+            writes: ["p/d/sub/s1", "p/d/gone/g1/deeper/x"]
+                .iter()
+                .map(|path| update_write(path, &[("v", i(1))]))
+                .collect(),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    let listed = client
+        .list_documents(pb::ListDocumentsRequest {
+            parent: format!("{DOCS}/p/d"),
+            show_missing: true,
+            ..Default::default()
+        })
+        .await
+        .unwrap()
+        .into_inner();
+    let names: Vec<&str> = listed
+        .documents
+        .iter()
+        .map(|d| d.name.rsplit_once("/p/d/").unwrap().1)
+        .collect();
+    assert_eq!(names, ["sub/s1"]);
+    handle.abort();
+}

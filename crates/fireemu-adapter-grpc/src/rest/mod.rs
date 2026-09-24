@@ -418,14 +418,27 @@ fn bind_list_parameters(
     let mut show_missing = None;
     for (name, values) in params {
         let Some(last) = values.last() else { continue };
-        match name.as_str() {
-            "pageSize" | "page_size" => page_size = Some(last.as_str()),
-            "pageToken" | "page_token" => bound.page_token.clone_from(last),
-            "orderBy" | "order_by" => bound.order_by.clone_from(last),
-            "mask.fieldPaths" | "mask.field_paths" => bound.mask.extend(values.iter().cloned()),
-            "showMissing" | "show_missing" => show_missing = Some(last.as_str()),
+        // Production binds the proto names too; the emulator profile ignores them as fireemu
+        // did before, so a bad value under such a name adds no rejection there.
+        let name = match name.as_str() {
+            "page_size" if production_refusals => "pageSize",
+            "page_token" if production_refusals => "pageToken",
+            "order_by" if production_refusals => "orderBy",
+            "mask.field_paths" if production_refusals => "mask.fieldPaths",
+            "show_missing" if production_refusals => "showMissing",
+            "read_time" if production_refusals => "readTime",
+            name => name,
+        };
+        match name {
+            "pageSize" => page_size = Some(last.as_str()),
+            "pageToken" => bound.page_token.clone_from(last),
+            "orderBy" => bound.order_by.clone_from(last),
+            "mask.fieldPaths" => bound.mask.extend(values.iter().cloned()),
+            "showMissing" => show_missing = Some(last.as_str()),
             "transaction" => bound.transaction = Some(last.clone()),
-            "readTime" | "read_time" => bound.read_time = Some(last.clone()),
+            "readTime" => bound.read_time = Some(last.clone()),
+            // A field of the request with no local effect (tags are for production's logs).
+            "requestOptions.requestTags" | "request_options.request_tags" => {}
             other if SYSTEM_PARAMETERS.contains(&other) => {}
             // Production refuses a name that binds to nothing; the emulator profile, which may
             // add no rejection, ignores it as fireemu did before.
@@ -450,7 +463,9 @@ fn bind_list_parameters(
         bound.show_missing = parameter_bool(value)
             .ok_or_else(|| parameter_refusal("show_missing", "TYPE_BOOL", value))?;
     }
-    if let Some(value) = &bound.read_time {
+    // The transcoder's timestamp check is production's (strict); the emulator profile reads the
+    // value as fireemu did before (it accepts a lower-case `z`, for one).
+    if let Some(value) = bound.read_time.as_ref().filter(|_| production_refusals) {
         if let Some(problem) = transcode::timestamp_problem(value) {
             return Err(crate::production_status::bad_request(&[(
                 "read_time".to_owned(),

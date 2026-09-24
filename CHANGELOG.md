@@ -36,13 +36,13 @@ These follow production Firestore as recorded on 2026-09-24 (FS-QUERY-INDEX). Un
 
 - listDocuments and listCollectionIds follow production as recorded on 2026-09-24 (FS-DATA-WRITE-LIST), in both profiles unless marked strict:
   - a page holds at most 300 documents;
-  - an ordered listing continues after the order values its last document had when the page was issued;
+  - an ordered listing continues after the order values its last document had when the page was issued (also inside a transaction); order values over 1.5 KiB are left out of the token, which then continues after the document's current values;
   - a listDocuments page token is bound to its collection, order, mask and `showMissing` but not to its read time or transaction, and a listCollectionIds token is a cursor of collection ids that another parent or read time continues;
   - page-token and page-size refusals use production's texts;
   - an empty listCollectionIds answer leaves `collectionIds` out;
   - a collection given as a parent is refused as a document parent name;
-  - gRPC ListDocuments without a collection id lists every document directly below the parent, and refuses `show_missing`.
-- REST listDocuments binds its query parameters by JSON or proto name (`page_size`, `order_by`, `mask.field_paths`, `show_missing`, `read_time`), takes the last value of a repeated one, reads `showMissing` as the front end reads booleans (`1`, `yes`, `True`), and refuses a value in the transcoder's words with a `BadRequest` detail. Strict only: an unknown query parameter is refused as production refuses it; the emulator profile ignores it.
+  - gRPC ListDocuments without a collection id lists every document directly below the parent. Strict only: it refuses `show_missing` there; the emulator profile lists without missing documents.
+- REST listDocuments takes the last value of a repeated query parameter (a repeated one was refused before), reads `showMissing` as the front end reads booleans (`1`, `yes`, `True`), and refuses a bad `pageSize` or `showMissing` in the transcoder's words with a `BadRequest` detail. Strict only, as production: the proto names (`page_size`, `order_by`, `mask.field_paths`, `show_missing`, `read_time`) bind like the JSON names, an unknown query parameter is refused, and `readTime` goes through the transcoder's timestamp check; the emulator profile ignores the proto names and unknown parameters and reads `readTime` with fireemu's own parser, as before.
 - Strict only: a REST listCollectionIds body goes through production's transcoder check. A timestamp with more than nine fractional digits is refused as out of range.
 
 ### Fixed

@@ -12,7 +12,9 @@
 // else -- documents, field values, result order, write results, error messages -- is kept
 // as the side produced it.
 
-import { readFile, writeFile } from "node:fs/promises";
+import { open, readFile, rename, unlink, writeFile } from "node:fs/promises";
+import { randomUUID } from "node:crypto";
+import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { credentialMetadata, selectCredential } from "./credentials.mjs";
 import { normalizeRecordedResponse } from "./production-normalization.mjs";
@@ -728,7 +730,48 @@ async function writeManagedRecoveryJournal(status, extra = {}) {
     ...(recovery?.deleteIntent ? { deleteIntent: recovery.deleteIntent } : {}),
     ...extra,
   };
-  await writeFile(MANAGED_CLEAR_JOURNAL, `${JSON.stringify(entry)}\n`, { mode: 0o600 });
+  await writePrivateJsonDurably(MANAGED_CLEAR_JOURNAL, entry);
+}
+
+export async function writePrivateJsonDurably(
+  path,
+  value,
+  {
+    writeTemp = (handle, contents) => handle.writeFile(contents),
+    syncFile = (handle) => handle.sync(),
+    renameTemp = (temporary, target) => rename(temporary, target),
+    syncDirectory = (handle) => handle.sync(),
+  } = {},
+) {
+  const parent = dirname(path);
+  const temporary = join(parent, `.${randomUUID()}.journal-tmp`);
+  let renamed = false;
+  let fileHandle;
+  try {
+    fileHandle = await open(temporary, "wx", 0o600);
+    await writeTemp(fileHandle, `${JSON.stringify(value)}\n`);
+    await syncFile(fileHandle);
+    await fileHandle.close();
+    fileHandle = null;
+    await renameTemp(temporary, path);
+    renamed = true;
+    const directoryHandle = await open(parent, "r");
+    try {
+      await syncDirectory(directoryHandle);
+    } finally {
+      await directoryHandle.close();
+    }
+  } catch (error) {
+    throw new Error("could not durably persist private journal", { cause: error });
+  } finally {
+    if (fileHandle) await fileHandle.close().catch(() => {});
+    if (!renamed) await unlink(temporary).catch(() => {});
+  }
+}
+
+export async function sendDeleteAfterWriteAhead(persistIntent, sendDelete) {
+  await persistIntent();
+  return sendDelete();
 }
 
 async function readManagedRecoveryJournal() {
@@ -894,15 +937,18 @@ async function recoverLegacyManagedClear() {
       priorDeletedNames: [...managedClearState.recoveryJournal.deletedNames],
       updateTime,
     };
-    await writeManagedRecoveryJournal("deleting");
-    const deleted = await managedShrinkRequest("exact legacy document delete", `${base}:commit`, {
-      method: "POST",
-      headers: authorized({ "content-type": "application/json" }),
-      body: JSON.stringify({
-        writes: [{ delete: name, currentDocument: { updateTime } }],
-      }),
-      signal: timeoutSignal(),
-    });
+    const deleted = await sendDeleteAfterWriteAhead(
+      () => writeManagedRecoveryJournal("deleting"),
+      () =>
+        managedShrinkRequest("exact legacy document delete", `${base}:commit`, {
+          method: "POST",
+          headers: authorized({ "content-type": "application/json" }),
+          body: JSON.stringify({
+            writes: [{ delete: name, currentDocument: { updateTime } }],
+          }),
+          signal: timeoutSignal(),
+        }),
+    );
     if (!deleted.ok) {
       const body = await deleted.text();
       throw new Error(`legacy recovery exact delete ${deleted.status} ${body}`);

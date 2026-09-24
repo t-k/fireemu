@@ -5,6 +5,7 @@ import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
+import { sendDeleteAfterWriteAhead, writePrivateJsonDurably } from "./session.mjs";
 import { promisify } from "node:util";
 
 const execFileAsync = promisify(execFile);
@@ -31,6 +32,101 @@ const legacyNames = resourceNames([
   ["barrayname20007183n47", 1400, 599],
   ["barrayname20007184n49", 1400, 599],
 ]);
+
+test("durable journal replacement syncs the file before the parent directory", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "fireemu-durable-journal-"));
+  const journal = join(directory, "journal.json");
+  const syncOrder = [];
+  try {
+    await writePrivateJsonDurably(
+      journal,
+      { status: "deleting", names: legacyNames },
+      {
+        syncFile: async (handle) => {
+          syncOrder.push("file");
+          await handle.sync();
+        },
+        syncDirectory: async (handle) => {
+          syncOrder.push("directory");
+          await handle.sync();
+        },
+      },
+    );
+    assert.deepEqual(JSON.parse(await readFile(journal, "utf8")), {
+      status: "deleting",
+      names: legacyNames,
+    });
+    assert.deepEqual(syncOrder, ["file", "directory"]);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("legacy recovery does not send DELETE when write-ahead journal flush fails", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "fireemu-durable-journal-failure-"));
+  const journal = join(directory, "journal.json");
+  const oldEntry = JSON.stringify({ status: "preflight-complete", deletedNames: [] });
+  const sends = [];
+  try {
+    await writeFile(journal, oldEntry, { mode: 0o600 });
+    await assert.rejects(
+      sendDeleteAfterWriteAhead(
+        () =>
+          writePrivateJsonDurably(
+            journal,
+            { status: "deleting", deletedNames: [], deleteIntent: legacyNames[0] },
+            { syncFile: async () => Promise.reject(new Error("injected file sync failure")) },
+          ),
+        async () => sends.push("DELETE"),
+      ),
+      /durably persist private journal/,
+    );
+    assert.deepEqual(sends, []);
+    assert.equal(await readFile(journal, "utf8"), oldEntry);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("legacy recovery fails closed at every journal durability boundary", async () => {
+  for (const failurePoint of ["write", "file-sync", "rename", "directory-sync"]) {
+    const directory = await mkdtemp(join(tmpdir(), "fireemu-journal-durability-boundary-"));
+    const journal = join(directory, "journal.json");
+    const oldEntry = JSON.stringify({ status: "preflight-complete", deletedNames: [] });
+    const sends = [];
+    const fail = async () => {
+      throw new Error(`injected ${failurePoint} failure`);
+    };
+    const operations = {
+      ...(failurePoint === "write" ? { writeTemp: fail } : {}),
+      ...(failurePoint === "file-sync" ? { syncFile: fail } : {}),
+      ...(failurePoint === "rename" ? { renameTemp: fail } : {}),
+      ...(failurePoint === "directory-sync" ? { syncDirectory: fail } : {}),
+    };
+    try {
+      await writeFile(journal, oldEntry, { mode: 0o600 });
+      await assert.rejects(
+        sendDeleteAfterWriteAhead(
+          () =>
+            writePrivateJsonDurably(
+              journal,
+              { status: "deleting", deletedNames: [], deleteIntent: legacyNames[0] },
+              operations,
+            ),
+          async () => sends.push("DELETE"),
+        ),
+        /durably persist private journal/,
+        failurePoint,
+      );
+      assert.deepEqual(sends, [], failurePoint);
+      if (failurePoint !== "directory-sync") {
+        assert.equal(await readFile(journal, "utf8"), oldEntry, failurePoint);
+      }
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  }
+});
 
 async function observeCollector({
   failureMode,

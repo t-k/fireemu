@@ -3358,7 +3358,14 @@ impl LocalBackend {
                 (h ^ u64::from(b)).wrapping_mul(0x0100_0000_01b3)
             })
         };
-        // The page token: `<version>:<fingerprint>:<index>`.
+        // The fingerprint covers the version too, so a token cannot be edited to read an
+        // older snapshot than the one it was issued for.
+        let bound = |version: u64| {
+            version.to_be_bytes().iter().fold(fingerprint, |h, b| {
+                (h ^ u64::from(*b)).wrapping_mul(0x0100_0000_01b3)
+            })
+        };
+        // The page token: `<version>:<fingerprint of the request and version>:<index>`.
         let (token_version, start) = if req.page_token.is_empty() {
             (None, 0usize)
         } else {
@@ -3375,7 +3382,7 @@ impl LocalBackend {
             // query, count or read time, or before a reset), in its own words.
             let ((v, f), i) = parsed
                 .ok_or_else(|| Status::invalid_argument(crate::partition::TOKEN_UNREADABLE))?;
-            if f != fingerprint {
+            if f != bound(v) {
                 return Err(Status::invalid_argument(crate::partition::TOKEN_FOREIGN));
             }
             (Some(CommitVersion::from_value(v)), i)
@@ -3387,7 +3394,7 @@ impl LocalBackend {
                 (None, None) => db.current_version(),
             };
             if version > db.current_version() {
-                return Err(Status::invalid_argument("invalid page_token"));
+                return Err(Status::invalid_argument(crate::partition::TOKEN_FOREIGN));
             }
             if !split {
                 return Ok((Vec::new(), version));
@@ -3420,7 +3427,7 @@ impl LocalBackend {
         Ok(pb::PartitionQueryResponse {
             partitions: cursors[start..end].to_vec(),
             next_page_token: if end < cursors.len() {
-                format!("{}:{fingerprint}:{end}", version.value())
+                format!("{}:{}:{end}", version.value(), bound(version.value()))
             } else {
                 String::new()
             },

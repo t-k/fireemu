@@ -2752,3 +2752,52 @@ async fn the_streaming_surfaces_refuse_a_database_that_was_never_created() {
 
     handle.abort();
 }
+
+/// A partition page token carries the snapshot version it was issued for; an edited version
+/// is a token issued for another request (safety review note).
+#[tokio::test]
+async fn an_edited_partition_token_version_is_refused() {
+    let (mut client, handle) = start(false).await;
+    let samples = sampled_names(4, |i| format!("owners/e{i}/edits/x{i}"));
+    let writes: Vec<pb::Write> = samples
+        .iter()
+        .map(|name| set_write(name, &[("v", s("x"))]))
+        .collect();
+    client
+        .commit(pb::CommitRequest {
+            database: DB.to_owned(),
+            writes,
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    let first = client
+        .partition_query(partition_request("edits", 4, 1, ""))
+        .await
+        .unwrap()
+        .into_inner();
+    let mut parts: Vec<String> = first
+        .next_page_token
+        .split(':')
+        .map(str::to_owned)
+        .collect();
+    assert_eq!(parts.len(), 3);
+    parts[0] = parts[0]
+        .parse::<u64>()
+        .unwrap()
+        .saturating_sub(1)
+        .to_string();
+    let refused = client
+        .partition_query(partition_request("edits", 4, 1, &parts.join(":")))
+        .await
+        .unwrap_err();
+    assert_eq!(
+        (refused.code(), refused.message()),
+        (tonic::Code::InvalidArgument, "Invalid page token.")
+    );
+    assert!(client
+        .partition_query(partition_request("edits", 4, 1, &first.next_page_token))
+        .await
+        .is_ok());
+    handle.abort();
+}

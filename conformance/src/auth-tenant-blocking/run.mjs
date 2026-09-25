@@ -433,7 +433,7 @@ function ledgerEntries(ledgerText) {
         throw new Error("sandbox ledger row has no recognized state");
       if (typeof row.taskId !== "string" || !row.taskId) {
         const old = `${row.project}|${row.ts}|${row.outcome}`;
-        if (!legacyTaskless.has(old) || row.event === "started")
+        if (row.taskId !== undefined || !legacyTaskless.has(old) || row.event === "started")
           throw new Error("sandbox ledger row needs a task ID");
       }
       return row;

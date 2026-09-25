@@ -11,6 +11,13 @@ const DELETE_RUN_MARKER_VALUE = "a".repeat(32);
 const DELETE_BOUNDARY_PREFIX = "writes/limits/near-limit-delete-refusal/";
 const RESOURCE_NAME = /projects\/([^/]+)\/databases\/([^/?]+)/g;
 const VOLATILE_STREAM_TRAILERS = new Set(["x-debug-tracking-id"]);
+const DELTA_V3_DRIFT = new Set(
+  ["rest", "batch-write"].flatMap((route) =>
+    ["delete", "after-delete", "group-after-delete"].map(
+      (step) => `writes/limits/near-limit-delete-refusal/${route}/12112#${step}`,
+    ),
+  ),
+);
 
 const sha256 = (value) => createHash("sha256").update(value).digest("hex");
 
@@ -248,26 +255,35 @@ export function compareSandboxArtifact(production, localPrograms, localStreams, 
     ...Object.keys(expectedPrograms),
     ...Object.keys(localPrograms ?? {}),
   ])) {
-    const expectedSteps = expectedPrograms[programId]?.steps ?? {};
     const actualSteps = localPrograms?.[programId]?.steps ?? {};
-    for (const stepId of new Set([...Object.keys(expectedSteps), ...Object.keys(actualSteps)])) {
-      const expected = expectedSteps[stepId];
-      const actual = actualSteps[stepId];
-      const decision = (step) =>
-        step?.code === "OK"
-          ? {
-              status: step.status,
-              code: step.code,
-              body: comparableBody(step.body, programId, stepId),
-            }
-          : { status: step?.status, code: step?.code, message: step?.message };
-      if (
-        JSON.stringify(canonical(decision(expected))) !==
-        JSON.stringify(canonical(decision(actual)))
-      ) {
-        differences.push(`${programId}#${stepId}`);
+    const expected = expectedPrograms[programId];
+    const alternatives = expected?.alternatives ?? [expected];
+    const candidateDifferences = alternatives.map((alternative) => {
+      const expectedSteps = alternative?.steps ?? {};
+      const mismatches = [];
+      for (const stepId of new Set([...Object.keys(expectedSteps), ...Object.keys(actualSteps)])) {
+        const decision = (step) =>
+          step?.code === "OK"
+            ? {
+                status: step.status,
+                code: step.code,
+                body: comparableBody(step.body, programId, stepId),
+              }
+            : { status: step?.status, code: step?.code, message: step?.message };
+        if (
+          JSON.stringify(canonical(decision(expectedSteps[stepId]))) !==
+          JSON.stringify(canonical(decision(actualSteps[stepId])))
+        ) {
+          mismatches.push(`${programId}#${stepId}`);
+        }
       }
-    }
+      return mismatches;
+    });
+    differences.push(
+      ...candidateDifferences.reduce((best, current) =>
+        current.length < best.length ? current : best,
+      ),
+    );
   }
   const expectedStreams = production?.streams ?? {};
   for (const recipeId of new Set([
@@ -295,6 +311,7 @@ export function freezeSandboxFixture({
   harnessRevision,
   sdkVersions,
   credentialToken,
+  mode,
 }) {
   validateSandboxCorpus(corpus);
   if (typeof credentialToken !== "string" || credentialToken.length === 0) {
@@ -304,25 +321,33 @@ export function freezeSandboxFixture({
     throw new Error("recorded response contains a credential token");
   }
   const differences = compareRecordings(first, second);
-  if (differences.length > 0)
+  if (
+    differences.length > 0 &&
+    (mode !== "delta-v3" || differences.some((id) => !DELTA_V3_DRIFT.has(id)))
+  )
     throw new Error(`nondeterministic production rows: ${differences.join(", ")}`);
+  const nondeterministicPrograms = [
+    ...new Set(differences.map((id) => id.split("#", 1)[0])),
+  ].toSorted();
   for (const program of corpus.restPrograms) {
-    const recordedSteps = first[program.id]?.steps;
-    if (!recordedSteps || program.steps.some((step) => !recordedSteps[step.id])) {
-      throw new Error(`incomplete sandbox recording: ${program.id}`);
-    }
-    for (const step of program.steps) {
-      const result = recordedSteps[step.id];
-      if (
-        !Number.isInteger(result.status) ||
-        result.status < 200 ||
-        result.status > 599 ||
-        typeof result.code !== "string" ||
-        !result.code ||
-        ["no-response", "probe-error", "non-json"].includes(result.code) ||
-        (result.status < 300 && (result.code !== "OK" || !Object.hasOwn(result, "body")))
-      ) {
-        throw new Error(`failed observation: ${program.id}#${step.id}`);
+    for (const recording of [first, second]) {
+      const recordedSteps = recording[program.id]?.steps;
+      if (!recordedSteps || program.steps.some((step) => !recordedSteps[step.id])) {
+        throw new Error(`incomplete sandbox recording: ${program.id}`);
+      }
+      for (const step of program.steps) {
+        const result = recordedSteps[step.id];
+        if (
+          !Number.isInteger(result.status) ||
+          result.status < 200 ||
+          result.status > 599 ||
+          typeof result.code !== "string" ||
+          !result.code ||
+          ["no-response", "probe-error", "non-json"].includes(result.code) ||
+          (result.status < 300 && (result.code !== "OK" || !Object.hasOwn(result, "body")))
+        ) {
+          throw new Error(`failed observation: ${program.id}#${step.id}`);
+        }
       }
     }
   }
@@ -357,7 +382,7 @@ export function freezeSandboxFixture({
   if (!/^[0-9a-f]{40}$/.test(harnessRevision) || !sdkVersions || typeof sdkVersions !== "object") {
     throw new Error("harness revision and SDK versions are required");
   }
-  if (JSON.stringify({ first, firstStream }).includes("fireemu-oracle-sbx")) {
+  if (JSON.stringify({ first, second, firstStream, secondStream }).includes("fireemu-oracle-sbx")) {
     throw new Error("production project identity was not normalized");
   }
   return {
@@ -380,8 +405,16 @@ export function freezeSandboxFixture({
               sha256(JSON.stringify(canonical(firstStream))),
               sha256(JSON.stringify(canonical(secondStream))),
             ],
+      nondeterministicPrograms,
     },
-    programs: first,
+    programs: Object.fromEntries(
+      Object.entries(first).map(([id, program]) => [
+        id,
+        nondeterministicPrograms.includes(id)
+          ? { nondeterministic: true, alternatives: [program, second[id]] }
+          : program,
+      ]),
+    ),
     streams: firstStream ?? {},
   };
 }

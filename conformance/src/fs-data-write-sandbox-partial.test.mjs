@@ -7,6 +7,7 @@ import { join } from "node:path";
 import { test } from "node:test";
 import { promisify } from "node:util";
 
+import { compareSandboxArtifact, freezeSandboxFixture } from "./fs-data-write-sandbox.mjs";
 import {
   managedShrinkScope,
   productionScopeFromEnvironment,
@@ -30,6 +31,69 @@ const DELTA_IDS = ["rest", "commit", "batch-write"].flatMap((route) =>
   [12112, 12113].map((count) => `writes/limits/near-limit-delete-refusal/${route}/${count}`),
 );
 const DELTA_STREAM_ID = "writes/write-stream-terminal/response-before-half-close";
+
+test("delta-v3 freezes only the two observed whole-program delete alternatives", async () => {
+  const { corpus, fixture, manifest } = await savedInputs();
+  const selected = selectDeltaV3Recipes(corpus, fixture, manifest);
+  const recordingCorpus = deltaV3RecordingCorpus(selected);
+  const result = (status = 404) =>
+    status === 200
+      ? { status, code: "OK", body: {} }
+      : { status, code: "NOT_FOUND", message: "missing" };
+  const first = Object.fromEntries(
+    recordingCorpus.restPrograms.map((program) => [
+      program.id,
+      { steps: Object.fromEntries(program.steps.map((step) => [step.id, result()])) },
+    ]),
+  );
+  const second = structuredClone(first);
+  const changingIds = ["rest", "batch-write"].map(
+    (route) => `writes/limits/near-limit-delete-refusal/${route}/12112`,
+  );
+  for (const id of changingIds) {
+    for (const stepId of ["delete", "after-delete", "group-after-delete"]) {
+      second[id].steps[stepId] = result(200);
+    }
+  }
+  const stream = {
+    [DELTA_STREAM_ID]: { status: { code: 0 }, events: [{ type: "end" }] },
+  };
+  const options = {
+    corpus: recordingCorpus,
+    first,
+    second,
+    firstStream: stream,
+    secondStream: stream,
+    recordedAt: ["2026-09-25T10:07:02Z", "2026-09-25T10:09:08Z"],
+    harnessRevision: "a".repeat(40),
+    sdkVersions: { firebaseAdmin: "14.3.0" },
+    credentialToken: "private-test-token",
+  };
+  assert.throws(() => freezeSandboxFixture(options), /nondeterministic production rows/);
+  const frozen = freezeSandboxFixture({ ...options, mode: "delta-v3" });
+  assert.deepEqual(frozen.evidence.nondeterministicPrograms, changingIds.toSorted());
+  assert.deepEqual(compareSandboxArtifact(frozen, first, stream, recordingCorpus), []);
+  assert.deepEqual(compareSandboxArtifact(frozen, second, stream, recordingCorpus), []);
+  const hybrid = structuredClone(first);
+  hybrid[changingIds[0]].steps.delete = result(200);
+  assert.deepEqual(compareSandboxArtifact(frozen, hybrid, stream, recordingCorpus), [
+    `${changingIds[0]}#delete`,
+  ]);
+  const outside = structuredClone(second);
+  outside["writes/limits/near-limit-delete-refusal/commit/12112"].steps.delete = result(200);
+  assert.throws(
+    () => freezeSandboxFixture({ ...options, second: outside, mode: "delta-v3" }),
+    /nondeterministic production rows/,
+  );
+  const unnormalized = structuredClone(second);
+  unnormalized[changingIds[0]].steps.delete.body = {
+    name: "projects/fireemu-oracle-sbx/databases/(default)/documents/c/d",
+  };
+  assert.throws(
+    () => freezeSandboxFixture({ ...options, second: unnormalized, mode: "delta-v3" }),
+    /not normalized/,
+  );
+});
 
 async function savedInputs() {
   const { corpus } = await prepareSandboxCorpus();

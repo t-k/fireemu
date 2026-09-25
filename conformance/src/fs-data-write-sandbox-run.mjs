@@ -2047,10 +2047,10 @@ export async function recordDeltaV3Production(admissionArgs) {
     };
     const output = join(generatedDir, "delta-v3-recordings.json");
     await writeFile(output, `${JSON.stringify(summary, null, 2)}\n`, { mode: 0o600 });
-    // Freeze the rows as a supplement only when both recordings are complete and identical;
-    // otherwise the private summary above is the only record and the route stays pending.
+    // Freeze only the two approved DELETE bands as whole-program alternatives when they differ.
     try {
       const frozen = freezeSandboxFixture({
+        mode: "delta-v3",
         corpus: recordingCorpus,
         first: recordings[0].rest,
         second: recordings[1].rest,

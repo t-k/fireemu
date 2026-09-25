@@ -13,13 +13,13 @@
 //!
 //! - the JSON API dialect is a privileged surface: Security Rules never run on it,
 //!   whatever credential is presented;
-//! - the JSON API registers object update (PATCH) and copy only on the short `/b/...`
-//!   spelling; the `/storage/v1/...` spelling of those falls through to the 501 catch-all;
 //! - an unknown GET with a bucket-shaped path serves object bytes (the XML-ish
 //!   `/{bucket}/{object}` route) and answers `No such object: ...` otherwise;
 //! - the Firebase dialect answers plain-text statuses where the official emulator's
 //!   express `sendStatus` does, and the exact `Permission denied. No READ|WRITE|LIST
 //!   permission.` rules-denial envelopes.
+//!
+//! Production also registers PATCH and copy routes on the `/storage/v1/...` spelling.
 //!
 //! Object names are percent-decoded exactly once from the URL segment and never
 //! interpreted as paths. Only loopback origins reach either surface.
@@ -1817,7 +1817,10 @@ enum GcsSpelling {
     /// `/b/{bucket}/o/{name}` — the only spelling the official emulator registers for
     /// PATCH and copy.
     Short,
-    /// `/storage/v1/b/{bucket}/o/{name}` — GET and DELETE only upstream.
+    /// `/storage/v1/b/{bucket}/o/{name}` — the production JSON API spelling.
+    /// <https://cloud.google.com/storage/docs/json_api/v1/objects/patch>
+    /// <https://cloud.google.com/storage/docs/json_api/v1/objects/copy>
+    /// <https://cloud.google.com/storage/docs/json_api/v1/objects/rewrite>
     StorageV1,
     /// `/download/storage/v1/b/{bucket}/o/{name}` — GET only.
     Download,
@@ -1844,7 +1847,7 @@ enum Route {
         name: String,
         spelling: GcsSpelling,
     },
-    /// `POST /b/{b}/o/{n}/(copyTo|rewriteTo)/b/{db}/o/{dn}` (short spelling only).
+    /// `POST /[storage/v1/]b/{b}/o/{n}/(copyTo|rewriteTo)/b/{db}/o/{dn}`.
     GcsCopy {
         bucket: String,
         name: String,
@@ -1901,7 +1904,7 @@ fn route(method: &str, path: &str) -> Result<Route, String> {
             name: d(n)?,
             spelling: GcsSpelling::Short,
         }),
-        ("GET" | "DELETE", ["storage", "v1", "b", b, "o", n]) => Ok(Route::GcsObject {
+        ("GET" | "PATCH" | "DELETE", ["storage", "v1", "b", b, "o", n]) => Ok(Route::GcsObject {
             bucket: d(b)?,
             name: d(n)?,
             spelling: GcsSpelling::StorageV1,
@@ -1915,17 +1918,17 @@ fn route(method: &str, path: &str) -> Result<Route, String> {
             bucket: d(b)?,
             name: d(n)?,
         }),
-        ("POST", ["b", b, "o", n, verb, "b", db, "o", dn])
-            if *verb == "copyTo" || *verb == "rewriteTo" =>
-        {
-            Ok(Route::GcsCopy {
-                bucket: d(b)?,
-                name: d(n)?,
-                rewrite: *verb == "rewriteTo",
-                dst_bucket: d(db)?,
-                dst_name: d(dn)?,
-            })
-        }
+        (
+            "POST",
+            ["b", b, "o", n, verb, "b", db, "o", dn]
+            | ["storage", "v1", "b", b, "o", n, verb, "b", db, "o", dn],
+        ) if *verb == "copyTo" || *verb == "rewriteTo" => Ok(Route::GcsCopy {
+            bucket: d(b)?,
+            name: d(n)?,
+            rewrite: *verb == "rewriteTo",
+            dst_bucket: d(db)?,
+            dst_name: d(dn)?,
+        }),
         ("POST" | "PUT", ["upload", "storage", "v1", "b", b, "o"]) => {
             Ok(Route::GcsUpload { bucket: d(b)? })
         }
@@ -2521,7 +2524,7 @@ pub fn handle(state: &StorageState, req: StorageRequest) -> StorageResponse {
         ),
         Route::GcsAcl { bucket, name } => gcs_acl(state, &bucket, &name, &req, &host),
         Route::GcsUpload { bucket } => gcs_upload(state, &bucket, req, &params, &host, &admitted),
-        Route::FormUpload { bucket } => form_upload(state, &bucket, &req),
+        Route::FormUpload { bucket } => form_upload(state, &bucket, req),
         Route::XmlStyle { bucket, name } => xml_style_get(state, &bucket, &name, &req, &params),
         Route::NotImplemented => Ok(plain_status(501)),
     };
@@ -2626,7 +2629,12 @@ fn fb_get(
     if media {
         let bytes = store.shared_bytes(&meta);
         drop(store);
-        Ok(send_file_bytes(bytes, &meta, req))
+        Ok(send_file_bytes(
+            bytes,
+            &meta,
+            req,
+            state.token_acceptance == TokenAcceptance::Verified,
+        ))
     } else {
         Ok(StorageResponse::json(200, &firebase_json(&meta)))
     }
@@ -2645,6 +2653,7 @@ fn send_file_bytes(
     shared: Arc<Vec<u8>>,
     meta: &ObjectMetadata,
     req: &StorageRequest,
+    strict_range: bool,
 ) -> StorageResponse {
     let bytes = bytes::Bytes::from_owner(SharedBlob(shared));
     let filename = meta
@@ -2685,9 +2694,14 @@ fn send_file_bytes(
         ),
     ];
     let len = bytes.len() as u64;
-    // An unsatisfiable or malformed range is ignored (the official emulator's `req.range`
-    // answers -1 and the handler falls through to the whole object).
-    if let Some((start, end)) = parse_range(req.header("range"), len) {
+    // https://cloud.google.com/storage/docs/json_api/v1/status-codes
+    // https://www.rfc-editor.org/rfc/rfc9110.html#section-14.4
+    // Emulator mode preserves the official emulator's whole-object fallback.
+    let range = parse_range(req.header("range"), len);
+    if strict_range && matches!(&range, ParsedRange::Unsatisfiable) {
+        return StorageResponse::empty(416).with_header("content-range", format!("bytes */{len}"));
+    }
+    if let ParsedRange::Satisfiable(start, end) = range {
         headers.push((
             "content-range".to_owned(),
             format!("bytes {start}-{}/{len}", end - 1),
@@ -2712,36 +2726,58 @@ fn send_file_bytes(
     }
 }
 
-/// One satisfiable byte range of a `Range: bytes=...` header; anything else is ignored.
-fn parse_range(header: Option<&str>, len: u64) -> Option<(u64, u64)> {
-    let spec = header?.trim().strip_prefix("bytes=")?;
+/// Classification of a single requested byte range.
+enum ParsedRange {
+    Ignored,
+    Unsatisfiable,
+    Satisfiable(u64, u64),
+}
+
+fn parse_range(header: Option<&str>, len: u64) -> ParsedRange {
+    let Some(spec) = header.and_then(|value| value.trim().strip_prefix("bytes=")) else {
+        return ParsedRange::Ignored;
+    };
     if spec.contains(',') {
-        return None;
+        return ParsedRange::Ignored;
     }
-    let (first, last) = spec.split_once('-')?;
+    let Some((first, last)) = spec.split_once('-') else {
+        return ParsedRange::Ignored;
+    };
     let (first, last) = (first.trim(), last.trim());
     if first.is_empty() {
         // Suffix range: the final N bytes.
-        let suffix = last.parse::<u64>().ok()?;
-        if suffix == 0 || len == 0 {
-            return None;
+        let Ok(suffix) = last.parse::<u64>() else {
+            return ParsedRange::Ignored;
+        };
+        if suffix == 0 {
+            return ParsedRange::Unsatisfiable;
         }
-        return Some((len.saturating_sub(suffix), len));
+        // RFC 9110 section 14.1.1 calls a nonzero suffix satisfiable even for an empty
+        // representation. Serving its empty body as 200 avoids an invalid 206 Content-Range.
+        // https://www.rfc-editor.org/rfc/rfc9110.html#section-14.1.1
+        if len == 0 {
+            return ParsedRange::Ignored;
+        }
+        return ParsedRange::Satisfiable(len.saturating_sub(suffix), len);
     }
-    let start = first.parse::<u64>().ok()?;
+    let Ok(start) = first.parse::<u64>() else {
+        return ParsedRange::Ignored;
+    };
     let end = if last.is_empty() {
         len
     } else {
-        let e = last.parse::<u64>().ok()?;
+        let Ok(e) = last.parse::<u64>() else {
+            return ParsedRange::Ignored;
+        };
         if e < start {
-            return None;
+            return ParsedRange::Ignored;
         }
         e.saturating_add(1).min(len)
     };
     if start >= len {
-        return None;
+        return ParsedRange::Unsatisfiable;
     }
-    Some((start, end))
+    ParsedRange::Satisfiable(start, end)
 }
 
 fn fb_patch(
@@ -3232,6 +3268,27 @@ fn gcs_list(
     params: &BTreeMap<String, String>,
     host: &str,
 ) -> Outcome {
+    // These production filters change the answer and cannot be silently ignored in strict
+    // mode. This store has no archived generations, so `versions=true` has the same result
+    // as `versions=false`. Explicit `false` is the default for includeTrailingDelimiter.
+    // https://cloud.google.com/storage/docs/json_api/v1/objects/list
+    if state.token_acceptance == TokenAcceptance::Verified {
+        let unsupported = ["matchGlob", "startOffset", "endOffset"]
+            .into_iter()
+            .find(|name| params.contains_key(*name))
+            .or_else(|| {
+                ["includeTrailingDelimiter"]
+                    .into_iter()
+                    .find(|name| params.get(*name).is_some_and(|value| value != "false"))
+            });
+        if let Some(name) = unsupported {
+            return Err(gcs_json_error(
+                400,
+                &format!("unsupported JSON API list parameter: {name}"),
+                "invalid",
+            ));
+        }
+    }
     let b = bucket_name(bucket)?;
     let prefix = params.get("prefix").cloned().unwrap_or_default();
     let delimiter = params.get("delimiter").cloned().unwrap_or_default();
@@ -3294,12 +3351,17 @@ fn gcs_object(
             if media {
                 let bytes = store.shared_bytes(&meta);
                 drop(store);
-                Ok(send_file_bytes(bytes, &meta, req))
+                Ok(send_file_bytes(
+                    bytes,
+                    &meta,
+                    req,
+                    state.token_acceptance == TokenAcceptance::Verified,
+                ))
             } else {
                 Ok(StorageResponse::json(200, &gcs_json(&meta, host)))
             }
         }
-        "PATCH" if spelling == GcsSpelling::Short => {
+        "PATCH" if spelling != GcsSpelling::Download => {
             let body: Value = if req.body.is_empty() {
                 Value::Object(Map::new())
             } else {
@@ -3328,7 +3390,7 @@ fn gcs_object(
             store.delete(&b, &n, pre).map_err(gcs_core_err)?;
             Ok(StorageResponse::empty(204))
         }
-        // PATCH on the /storage/v1 spelling falls into the official catch-all.
+        // The download spelling remains a media-only route.
         _ => Ok(plain_status(501)),
     }
 }
@@ -3798,7 +3860,7 @@ fn parse_content_range(cr: &str) -> Option<ContentRange> {
 /// The XML-ish `POST /{bucket}` form-data upload: a `key` field names the object, a file
 /// part carries the bytes, and header-named fields set the metadata. Rules never run (the
 /// gcloud router is the privileged dialect) and the answer is a bare 204.
-fn form_upload(state: &StorageState, bucket: &str, req: &StorageRequest) -> Outcome {
+fn form_upload(state: &StorageState, bucket: &str, mut req: StorageRequest) -> Outcome {
     let content_type = req.header("content-type").unwrap_or("");
     if !content_type.starts_with("multipart/form-data") {
         return Ok(html_text(400, "Content-Type must be multipart/form-data"));
@@ -3866,9 +3928,11 @@ fn form_upload(state: &StorageState, bucket: &str, req: &StorageRequest) -> Outc
         header_safe(&format!("metadata key {k:?}"), k).map_err(|e| html_text(400, &e))?;
         header_safe(&format!("metadata.{k}"), v).map_err(|e| html_text(400, &e))?;
     }
-    // The digests are computed before the store lock is taken: hashing a near-limit body is
-    // the expensive part of this route and it holds nothing back for every other bucket.
-    let prepared = PreparedObject::new(req.body[data].to_vec());
+    // Reuse the request allocation for the file part and hash it before taking the store
+    // lock, as the JSON API multipart route does.
+    req.body.copy_within(data.clone(), 0);
+    req.body.truncate(data.len());
+    let prepared = PreparedObject::new(req.body);
     let mut store = state.store()?;
     store
         .put_prepared(&b, &n, prepared, meta, Precondition::default(), now)
@@ -3895,7 +3959,12 @@ fn xml_style_get(
     };
     let bytes = store.shared_bytes(&meta);
     drop(store);
-    Ok(send_file_bytes(bytes, &meta, req))
+    Ok(send_file_bytes(
+        bytes,
+        &meta,
+        req,
+        state.token_acceptance == TokenAcceptance::Verified,
+    ))
 }
 
 #[cfg(test)]

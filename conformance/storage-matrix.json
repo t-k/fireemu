@@ -6,8 +6,8 @@
   },
   "project": "demo-storage-probe",
   "summary": {
-    "parity": 193,
-    "documented-divergence": 26,
+    "parity": 190,
+    "documented-divergence": 29,
     "debt": 0
   },
   "programs": [
@@ -3502,14 +3502,47 @@
         },
         {
           "id": "patch-storage-v1-spelling",
-          "status": "parity",
-          "value": {
+          "status": "documented-divergence",
+          "oracle": {
             "body": "Not Implemented",
             "headers": {
               "content-type": "text/plain; charset=utf-8"
             },
             "status": 501
-          }
+          },
+          "fireemu": {
+            "body": {
+              "bucket": "demo-storage-probe.appspot.com",
+              "cacheControl": "no-store",
+              "contentEncoding": "identity",
+              "contentLanguage": "de",
+              "contentType": "text/markdown",
+              "crc32c": "zegzwA==",
+              "etag": "<etag>",
+              "generation": "<generation>",
+              "id": "demo-storage-probe.appspot.com/open/gcsu/doc.txt/<generation>",
+              "kind": "storage#object",
+              "md5Hash": "mgm039qC4+Zl4xCS0cPsjQ==",
+              "mediaLink": "http://<host>/download/storage/v1/b/demo-storage-probe.appspot.com/o/open%2Fgcsu%2Fdoc.txt?generation=<generation>&alt=media",
+              "metadata": {
+                "b": "2"
+              },
+              "metageneration": "4",
+              "name": "open/gcsu/doc.txt",
+              "selfLink": "http://<host>/storage/v1/b/demo-storage-probe.appspot.com/o/open%2Fgcsu%2Fdoc.txt",
+              "size": "3",
+              "storageClass": "STANDARD",
+              "timeCreated": "<timestamp>",
+              "timeStorageClassUpdated": "<timestamp>",
+              "updated": "<timestamp>"
+            },
+            "headers": {
+              "content-type": "application/json; charset=utf-8"
+            },
+            "status": 200
+          },
+          "documents": "spec/compatibility/contract.json ST-CLAIM-OBJECTS; CHANGELOG.md [Unreleased]",
+          "reason": "The official emulator answers 501 on the /storage/v1 PATCH spelling. Cloud Storage documents this production route, so fireemu applies the metadata patch in both profiles."
         },
         {
           "id": "put-update",
@@ -4190,14 +4223,47 @@
         },
         {
           "id": "copy-storage-v1-spelling",
-          "status": "parity",
-          "value": {
+          "status": "documented-divergence",
+          "oracle": {
             "body": "Not Implemented",
             "headers": {
               "content-type": "text/plain; charset=utf-8"
             },
             "status": 501
-          }
+          },
+          "fireemu": {
+            "body": {
+              "bucket": "demo-storage-probe.appspot.com",
+              "cacheControl": "max-age=3",
+              "contentDisposition": "inline",
+              "contentType": "text/plain",
+              "crc32c": "wYbcfA==",
+              "etag": "<etag>",
+              "generation": "<generation>",
+              "id": "demo-storage-probe.appspot.com/open/copy/long.txt/<generation>",
+              "kind": "storage#object",
+              "md5Hash": "Vv4LFAmlZi1wz+3EVV1HcQ==",
+              "mediaLink": "http://<host>/download/storage/v1/b/demo-storage-probe.appspot.com/o/open%2Fcopy%2Flong.txt?generation=<generation>&alt=media",
+              "metadata": {
+                "firebaseStorageDownloadTokens": "src-token",
+                "k": "v"
+              },
+              "metageneration": "1",
+              "name": "open/copy/long.txt",
+              "selfLink": "http://<host>/storage/v1/b/demo-storage-probe.appspot.com/o/open%2Fcopy%2Flong.txt",
+              "size": "7",
+              "storageClass": "STANDARD",
+              "timeCreated": "<timestamp>",
+              "timeStorageClassUpdated": "<timestamp>",
+              "updated": "<timestamp>"
+            },
+            "headers": {
+              "content-type": "application/json; charset=utf-8"
+            },
+            "status": 200
+          },
+          "documents": "spec/compatibility/contract.json ST-CLAIM-OBJECTS; CHANGELOG.md [Unreleased]",
+          "reason": "The official emulator answers 501 on the /storage/v1 copyTo spelling. Cloud Storage documents this production route, so fireemu performs the copy in both profiles."
         },
         {
           "id": "copy-onto-itself",
@@ -4296,11 +4362,11 @@
                 "errors": [
                   {
                     "domain": "global",
-                    "message": "ifGenerationMatch 0 but the current generation is 59",
+                    "message": "ifGenerationMatch 0 but the current generation is 60",
                     "reason": "conditionNotMet"
                   }
                 ],
-                "message": "ifGenerationMatch 0 but the current generation is 59"
+                "message": "ifGenerationMatch 0 but the current generation is 60"
               }
             },
             "headers": {
@@ -4342,14 +4408,35 @@
         },
         {
           "id": "patch-if-metageneration-mismatch",
-          "status": "parity",
-          "value": {
+          "status": "documented-divergence",
+          "oracle": {
             "body": "Not Implemented",
             "headers": {
               "content-type": "text/plain; charset=utf-8"
             },
             "status": 501
-          }
+          },
+          "fireemu": {
+            "body": {
+              "error": {
+                "code": 412,
+                "errors": [
+                  {
+                    "domain": "global",
+                    "message": "ifMetagenerationMatch 999 but the current metageneration is 1",
+                    "reason": "conditionNotMet"
+                  }
+                ],
+                "message": "ifMetagenerationMatch 999 but the current metageneration is 1"
+              }
+            },
+            "headers": {
+              "content-type": "application/json; charset=utf-8"
+            },
+            "status": 412
+          },
+          "documents": "spec/compatibility/contract.json ST-CLAIM-OBJECTS; CHANGELOG.md [Unreleased]",
+          "reason": "The official emulator answers 501 before checking a precondition on /storage/v1 PATCH. Cloud Storage documents the route, and fireemu checks the supplied metageneration before applying the patch."
         },
         {
           "id": "get-if-generation-not-match-current",
@@ -4402,11 +4489,11 @@
                 "errors": [
                   {
                     "domain": "global",
-                    "message": "ifGenerationMatch 1 but the current generation is 60",
+                    "message": "ifGenerationMatch 1 but the current generation is 61",
                     "reason": "conditionNotMet"
                   }
                 ],
-                "message": "ifGenerationMatch 1 but the current generation is 60"
+                "message": "ifGenerationMatch 1 but the current generation is 61"
               }
             },
             "headers": {

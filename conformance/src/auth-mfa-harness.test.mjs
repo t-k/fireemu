@@ -649,3 +649,21 @@ test("quota-free sends each account one wrong code and mints no token", async ()
     );
   }
 });
+
+test("a quota-limited row passes only through its matching re-observation", async () => {
+  const { REOBSERVED, reobservedStatus } = await import("./auth-mfa/run.mjs");
+  assert.deepEqual(REOBSERVED, {
+    "auth-mfa/totp/sign-in#replayed-enrollment-code": "auth-mfa/totp/quota-free#replayed-enrollment-code",
+    "auth-mfa/totp/sign-in#older-unused-code": "auth-mfa/totp/quota-free#older-unused-code",
+  });
+  const statuses = new Map([
+    ["auth-mfa/totp/quota-free#replayed-enrollment-code", "MATCH"],
+    ["auth-mfa/totp/quota-free#older-unused-code", "MISMATCH"],
+  ]);
+  const row = (name, status) => reobservedStatus({ row: name, status }, statuses);
+  assert.equal(row("auth-mfa/totp/sign-in#replayed-enrollment-code", "INDETERMINATE"), "REOBSERVED_MATCH");
+  assert.equal(row("auth-mfa/totp/sign-in#older-unused-code", "INDETERMINATE"), "INDETERMINATE");
+  // A determinate row keeps its own status; other indeterminate rows are not rescued.
+  assert.equal(row("auth-mfa/totp/sign-in#replayed-enrollment-code", "MISMATCH"), "MISMATCH");
+  assert.equal(row("auth-mfa/sms#x", "INDETERMINATE"), "INDETERMINATE");
+});

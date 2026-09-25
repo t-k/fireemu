@@ -699,6 +699,23 @@ export function timingAlternatives(programId, stepId, saved) {
   return known;
 }
 
+/**
+ * Rows production answered with its per-account TOTP attempt quota (QUOTA_EXCEEDED) and the
+ * rows that repeat them below the quota (owner decision M10, auth-mfa/totp/quota-free).
+ */
+export const REOBSERVED = {
+  "auth-mfa/totp/sign-in#replayed-enrollment-code":
+    "auth-mfa/totp/quota-free#replayed-enrollment-code",
+  "auth-mfa/totp/sign-in#older-unused-code": "auth-mfa/totp/quota-free#older-unused-code",
+};
+
+/** An indeterminate row of [`REOBSERVED`] passes only when its re-observation matched. */
+export function reobservedStatus({ row, status }, statuses) {
+  const again = REOBSERVED[row];
+  if (status !== "INDETERMINATE" || again === undefined) return status;
+  return statuses.get(again) === "MATCH" ? "REOBSERVED_MATCH" : status;
+}
+
 export function classify({ stale, production, alternative, fireemu, timing = [] }) {
   if (stale) return "STALE_FIXTURE";
   if (production === undefined) return "MISSING_FIXTURE";
@@ -746,6 +763,8 @@ async function check() {
       });
     }
   }
+  const statuses = new Map(rows.map((r) => [r.row, r.status]));
+  for (const row of rows) row.status = reobservedStatus(row, statuses);
   const known = new Set(PROGRAMS.map((p) => p.id));
   const orphans = Object.keys(fixture.programs).filter((id) => !known.has(id));
   const summary = {};
@@ -755,7 +774,12 @@ async function check() {
     join(RUN_DIR, "comparison.json"),
     `${JSON.stringify({ artifact: local.binary, artifactSha256, summary, orphans, failures: local.failures, rows }, null, 2)}\n`,
   );
-  const passing = new Set(["MATCH", "MATCH_NONDETERMINISTIC", "MATCH_TIMING_DEPENDENT"]);
+  const passing = new Set([
+    "MATCH",
+    "MATCH_NONDETERMINISTIC",
+    "MATCH_TIMING_DEPENDENT",
+    "REOBSERVED_MATCH",
+  ]);
   for (const row of rows.filter((r) => !passing.has(r.status))) {
     console.log(`\n${row.status} ${row.row}`);
     console.log(`  production ${String(JSON.stringify(row.production)).slice(0, 600)}`);

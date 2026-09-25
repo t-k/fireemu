@@ -256,3 +256,4 @@ parity: 2 &middot; documented-divergence: 7
 | `triggers` | `no-event-on-missing-delete` | parity |
 | `triggers` | `metadata-update-on-token-creation` | documented-divergence |
 | `triggers` | `json-api-resumable-finalize` | documented-divergence |
+

@@ -54,7 +54,7 @@
   "digests": {
     ".github/workflows/quint.yml": "3322397d1feaaea0a163de7b8a289a33d071650d51f4674c4a4556df6b45e972",
     "crates/fireemu-core-rules/src/ast.rs": "41ab1cedc91aca9e5e0ac72b139101243e3a8041da2fd179c46186f186a1a4d3",
-    "crates/fireemu-core-rules/src/eval.rs": "020afdf695fa74aa5d242700c14d63dd8e81e3e9871871f7687e2328a4097250",
+    "crates/fireemu-core-rules/src/eval.rs": "23d9fcd52a4340ef1176369cfbf04b70b33dc1c82862e29a28b3ad57a77b9e04",
     "crates/fireemu-core-rules/src/parse.rs": "acad9e662374515ad06da52f8a331e6b7be59c3d1ef266b48239a061b748bb71",
     "crates/fireemu-core-rules/tests/eval.rs": "32d68790e4b126b898c87c03f3bb794bab397f239145a8e6f09b0fc3e48e0b82",
     "rust-toolchain.toml": "689fafb1dd9b80ee9a2a9b5e2bbb31e8f7ea4adad403717777689b35d4f861b2",

@@ -501,7 +501,7 @@
     },
     {
       "id": "INV-RULES-001",
-      "statement": "A request that exceeds the expression, document access or call depth budget never reaches allow.",
+      "statement": "A request that exceeds the expression budget never reaches allow, whatever else holds. A document access or call depth budget overrun never reaches allow by itself; another allow statement that holds still allows, as production answers (FS-RULES 2026-09-24).",
       "criticality": "critical",
       "owner": "core-rules",
       "status": "planned",
@@ -552,7 +552,7 @@
     },
     {
       "id": "INV-RULES-004",
-      "statement": "Regular expression step-budget exhaustion is distinct from an ordinary non-match and never reaches allow by itself, including when matches() is negated; another allow statement that holds still allows, as production and the official emulator answer (FS-RULES 2026-09-24).",
+      "statement": "Regular expression step-budget exhaustion is distinct from an ordinary non-match and never reaches allow by itself, including when matches() is negated; another allow statement that holds still allows, as production and the official emulator answer (FS-RULES 2026-09-24), until a request has exhausted it in four matches, after which the request stops.",
       "criticality": "critical",
       "owner": "core-rules",
       "status": "implemented",
@@ -562,7 +562,8 @@
         "mutation": [
           "M-RULES-015",
           "M-FORMAL-RULES-REGEX-001",
-          "M-FORMAL-RULES-REGEX-002"
+          "M-FORMAL-RULES-REGEX-002",
+          "M-FORMAL-RULES-REGEX-003"
         ],
         "integration": [
           "crates/fireemu-core-rules/tests/eval.rs",

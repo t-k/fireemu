@@ -3630,7 +3630,7 @@ async fn end_users_may_not_batch_write() {
 }
 
 /// A query may make 20 distinct document reads in its rule, as many as a multi-document
-/// request; the 21st is refused (the official emulator, and production allows 11).
+/// request; the 21st is refused, as production and the official emulator answer (FS-RULES).
 #[tokio::test]
 async fn a_query_rule_may_read_twenty_documents() {
     let mut h = start().await;

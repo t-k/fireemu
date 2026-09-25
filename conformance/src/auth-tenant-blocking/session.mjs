@@ -257,14 +257,27 @@ export function createSession(
     // Harness-named tenants that existed before the program started: never owned, never deleted
     // (coordinator's reading of TB2, 2026-09-25: another run's leftover stops the run).
     preexisting: new Set(),
+    // Whether the start-of-program list succeeded, and the display names this program actually
+    // sent a create for (and how many creates it sent without one). A tenant is recovered as a
+    // lost create only under both conditions (confirmation review NM-1).
+    startChecked: false,
+    sentNames: new Set(),
+    sentNameless: 0,
   });
   let tenantsCreated = 0;
   let tenantsDeleted = 0;
 
   /** Remembers an owned tenant's test numbers from an accepted create or PATCH answer. */
   function notePhones(registries, id, answer) {
-    if (id && answer && typeof answer.testPhoneNumbers === "object")
+    // An accepted answer without test numbers leaves the tenant none (confirmation SF-B).
+    if (id && answer && typeof answer === "object")
       registries.phones.set(id, new Set(Object.keys(answer.testPhoneNumbers ?? {})));
+  }
+
+  /** Notes the display name (or its absence) of a tenant create about to be sent. */
+  function noteCreate(registries, body) {
+    if (typeof body?.displayName === "string") registries.sentNames.add(body.displayName);
+    else registries.sentNameless += 1;
   }
 
   /** A harness call; any answer but `accept` is fatal. The registries decide which tenants it may name. */
@@ -399,6 +412,7 @@ export function createSession(
   async function createTenants(program, registries, labels) {
     for (const [label, spec] of Object.entries(program.tenants ?? {})) {
       const body = resolveTenants(spec, labels, new Map());
+      noteCreate(registries, body);
       // Its own registries: the program's would name the new tenant by order before its label.
       const { status, json } = await admin("POST", "v2/projects/{project}/tenants", {
         body,
@@ -437,14 +451,23 @@ export function createSession(
       }
       const left = await listTenants({ cleanup: true, registries });
       const mine = left.filter(({ id }) => !registries.preexisting.has(id));
-      const lost = mine.filter(
-        ({ id, displayName }) =>
-          requested.has(displayName) && !registries.tenants.owned().includes(id),
-      );
+      const owned = (id) => registries.tenants.owned().includes(id);
+      // Only after a successful start check, and only a name this program sent a create for,
+      // can a harness-named tenant be this program's lost create rather than a leftover.
+      const lost = registries.startChecked
+        ? mine.filter(
+            ({ id, displayName }) =>
+              requested.has(displayName) && registries.sentNames.has(displayName) && !owned(id),
+          )
+        : [];
       const remaining = mine.filter(
-        ({ id, displayName }) =>
-          registries.tenants.owned().includes(id) || isHarnessDisplayName(displayName),
+        ({ id, displayName }) => owned(id) || isHarnessDisplayName(displayName),
       );
+      // A nameless create whose answer was lost cannot be told from another tenant: report it
+      // and stop, never delete it (confirmation SF-A).
+      const nameless = mine.filter(({ id, displayName }) => !displayName && !owned(id));
+      if (registries.sentNameless > 0 && nameless.length)
+        throw fatal(`${program.id}: ${nameless.length} nameless tenant(s) remain; check by hand`);
       if (remaining.length === 0) return;
       if (lost.length === 0)
         throw fatal(`${program.id}: tenants remain after cleanup: ${remaining.length}`);
@@ -487,6 +510,8 @@ export function createSession(
           query: materialize(resolveTenants(step.query, labels, raw), raw, tokens),
         };
         if (sent.length) codes.set(step.id, sent[0]);
+        if (step.method === "POST" && step.path.endsWith("/tenants"))
+          noteCreate(registries, concrete.body);
         outcome = await send(concrete, raw, registries);
         collectSecrets(outcome.json, seenSecrets);
       } catch (error) {
@@ -514,14 +539,25 @@ export function createSession(
       }
       if (recorded.status === 200 && step.method === "PATCH" && /\/tenants\/[^/]+$/.test(step.path))
         notePhones(registries, tenantIdOf(json?.name), json);
-      if (Array.isArray(json?.tenants)) {
+      if (Array.isArray(json?.tenants) && registries.startChecked) {
         const requested = requestedDisplayNames(program);
         for (const tenant of json.tenants) {
           const id = tenantIdOf(tenant.name);
-          if (requested.has(tenant.displayName) && !registries.preexisting.has(id))
+          if (
+            requested.has(tenant.displayName) &&
+            registries.sentNames.has(tenant.displayName) &&
+            !registries.preexisting.has(id)
+          )
             registries.tenants.own(id);
         }
       }
+      // A step's own deletion counts toward the ledger's deleted tenants (confirmation SF-D).
+      if (
+        recorded.status === 200 &&
+        step.method === "DELETE" &&
+        /\/tenants\/[^/]+$/.test(step.path)
+      )
+        tenantsDeleted += 1;
       raw.set(step.id, json);
       const relations = {};
       for (const [name, { kind, left, right }] of Object.entries(step.relations ?? {})) {
@@ -566,6 +602,7 @@ export function createSession(
           throw fatal(
             `${program.id}: ${present.length} tenant(s) of a harness display name exist before it starts; not touched`,
           );
+        registries.startChecked = true;
       }
       await createTenants(program, registries, labels);
       if (mask.length) {

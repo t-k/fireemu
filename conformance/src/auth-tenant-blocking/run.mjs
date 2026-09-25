@@ -882,10 +882,14 @@ async function restoreSandbox() {
     // A tenant without a display name may be the management program's nameless create or
     // another lane's: it is reported, never deleted (pre-send review MF-4).
     nameless = after.filter(({ displayName }) => !displayName).length;
+    // Stop before multi-tenancy goes off: once it is off a nameless tenant no longer lists
+    // (confirmation SF-C). The switches stay for the hand check.
+    if (nameless)
+      throw new Error(
+        `${nameless} tenants without a display name remain; multi-tenancy left on for a hand check`,
+      );
     await session.writeConfig(switches, PROJECT_SWITCH_BASELINE, { cleanup: true });
     await prepareProject(ctx, { apply: false });
-    if (nameless)
-      throw new Error(`${nameless} tenants without a display name remain; check by hand`);
     outcome = "restored-by-hand";
   } catch (caught) {
     error = String(caught?.message ?? caught);

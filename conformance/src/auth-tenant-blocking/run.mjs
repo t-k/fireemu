@@ -401,10 +401,9 @@ function ledgerEntries(ledgerText) {
       try {
         return JSON.parse(line);
       } catch {
-        return undefined;
+        throw new Error("malformed sandbox ledger JSON");
       }
-    })
-    .filter(Boolean);
+    });
 }
 
 /**
@@ -446,6 +445,51 @@ export function otherLaneOnSandbox(ledgerText, now = Date.now(), ignoredTaskIds 
   return recent ? `${recent.taskId} wrote a line at ${recent.ts}` : undefined;
 }
 
+/** The reviewed upper bound for one campaign, including its control and cleanup work. */
+const RUN_RESERVATION_USD = SUITE === "blocking" ? 5 : 1;
+const TASK_BUDGET_USD = 10;
+
+/** Local, read-only admission shared by the campaign preflight and the production runner. */
+export function assertLedgerAdmission(ledgerText, now = Date.now()) {
+  const rows = ledgerEntries(ledgerText);
+  if (rows.some((row) => row.project === SANDBOX_PROJECT && !Number.isFinite(Date.parse(row.ts))))
+    throw new Error("sandbox ledger has an invalid timestamp");
+  const aborted = recentAbort(ledgerText, now);
+  if (aborted)
+    throw new Error(
+      aborted.event === "started"
+        ? `the last run started at ${aborted.ts} and has not finished or been restored`
+        : `the last run aborted at ${aborted.ts}; wait an hour before retrying`,
+    );
+  const busy = otherLaneOnSandbox(ledgerText, now);
+  if (busy) throw new Error(`another lane is on the sandbox: ${busy}`);
+  let priorUsd = 0;
+  for (const row of rows) {
+    if (row.project !== SANDBOX_PROJECT || row.taskId !== TASK_ID) continue;
+    if (row.outcome === "restored-by-hand" || row.outcome === "restore-failed") continue;
+    if (row.outcome === undefined && row.maxEstimatedUsd === undefined) continue;
+    const estimates = [row.estimatedUsd, row.maxEstimatedUsd].filter(
+      (value) => value !== undefined,
+    );
+    if (
+      estimates.length === 0 ||
+      estimates.some((value) => typeof value !== "number" || !Number.isFinite(value) || value < 0)
+    )
+      throw new Error("sandbox ledger has an unknown cost for this task");
+    priorUsd += Math.max(...estimates);
+  }
+  if (priorUsd + RUN_RESERVATION_USD > TASK_BUDGET_USD)
+    throw new Error("the reviewed campaign would exceed this task's US$10 budget");
+}
+
+async function admitLocal() {
+  const ledger = process.env.FIREEMU_SANDBOX_LEDGER;
+  if (!ledger || !existsSync(ledger)) throw new Error("the shared sandbox ledger is required");
+  assertLedgerAdmission(await readFile(ledger, "utf8"));
+  validateTenantCorpus(selectedPrograms());
+  console.log("local ledger, task budget, and corpus admission passed without external requests");
+}
+
 async function recordProduction() {
   const ledger = process.env.FIREEMU_SANDBOX_LEDGER;
   const privateRoot = process.env.FIREEMU_AUTH_TENANT_PRIVATE_DIR;
@@ -454,15 +498,7 @@ async function recordProduction() {
   }
   await assertCleanTree();
   const ledgerText = existsSync(ledger) ? await readFile(ledger, "utf8") : "";
-  const aborted = recentAbort(ledgerText);
-  if (aborted)
-    throw new Error(
-      aborted.event === "started"
-        ? `the last run started at ${aborted.ts} and has not finished or been restored`
-        : `the last run aborted at ${aborted.ts}; wait an hour before retrying`,
-    );
-  const busy = otherLaneOnSandbox(ledgerText);
-  if (busy) throw new Error(`another lane is on the sandbox: ${busy}`);
+  assertLedgerAdmission(ledgerText);
   const programs = selectedPrograms();
   const corpusRequests = validateTenantCorpus(programs);
   const meta = {
@@ -1061,6 +1097,7 @@ export { tenantIdOf };
 
 const mode = process.argv[2];
 if (mode === "record-production") await recordProduction();
+else if (mode === "admit-local") await admitLocal();
 else if (mode === "rebuild-fixture") await rebuildFixture(process.argv[3]);
 else if (mode === "check") await check();
 else if (mode === "export-comparison") await exportComparison(process.argv[3]);
@@ -1072,7 +1109,7 @@ else if (mode === "local") {
   console.log(JSON.stringify({ requests: local.requests, failures: local.failures }, null, 2));
 } else if (mode !== undefined) {
   console.error(
-    "usage: run.mjs record-production|restore-sandbox|rebuild-fixture|check|export-comparison|local",
+    "usage: run.mjs admit-local|record-production|restore-sandbox|rebuild-fixture|check|export-comparison|local",
   );
   process.exitCode = 2;
 }

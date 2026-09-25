@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -11,6 +12,124 @@ import {
   restoreSandbox,
   TASK_ID,
 } from "./auth-tenant-blocking/run.mjs";
+
+async function admitLocal(rows, suite = "tenant") {
+  const dir = await mkdtemp(join(tmpdir(), "atb-admission-"));
+  try {
+    const ledger = join(dir, "ledger.jsonl");
+    await writeFile(
+      ledger,
+      rows.map((row) => (typeof row === "string" ? row : JSON.stringify(row))).join("\n") + "\n",
+    );
+    return spawnSync(
+      process.execPath,
+      [join(import.meta.dirname, "auth-tenant-blocking/run.mjs"), "admit-local"],
+      {
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          AUTH_TENANT_SUITE: suite,
+          FIREEMU_SANDBOX_LEDGER: ledger,
+          FIREEMU_AUTH_SANDBOX_WEB_CONFIG: "",
+          FIREEMU_AUTH_TENANT_PRIVATE_DIR: "",
+        },
+      },
+    );
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+}
+
+test("local admission accepts a clean ledger without credentials for both suites", async () => {
+  for (const suite of ["tenant", "blocking"]) {
+    const result = await admitLocal([], suite);
+    assert.equal(result.status, 0, `${suite}: ${result.stderr}`);
+  }
+});
+
+test("local admission refuses own hold and recent abort before IAM", async () => {
+  const now = Date.now();
+  const row = (age, fields) => ({
+    ts: new Date(now - age).toISOString(),
+    project: "fireemu-oracle-idp",
+    taskId: "AUTH-TENANT-SANDBOX",
+    ...fields,
+  });
+  for (const rows of [
+    [row(2 * 3_600_000, { event: "started" })],
+    [row(59 * 60_000, { outcome: "aborted-fatal", estimatedUsd: 0 })],
+  ]) {
+    const result = await admitLocal(rows);
+    assert.notEqual(result.status, 0);
+    assert.match(result.stderr, /last run/);
+  }
+  assert.equal(
+    (await admitLocal([row(61 * 60_000, { outcome: "aborted-fatal", estimatedUsd: 0 })])).status,
+    0,
+  );
+});
+
+test("local admission refuses another lane's open or recent task including IAM hold", async () => {
+  const now = Date.now();
+  const row = (age, taskId, fields) => ({
+    ts: new Date(now - age).toISOString(),
+    project: "fireemu-oracle-idp",
+    taskId,
+    ...fields,
+  });
+  for (const rows of [
+    [row(2 * 3_600_000, "AUTH-MFA-SANDBOX", { event: "started" })],
+    [row(29 * 60_000, "AUTH-MFA-SANDBOX", { outcome: "recorded", estimatedUsd: 0 })],
+    [row(2 * 3_600_000, "AUTH-TENANT-SANDBOX-IAM", { event: "started" })],
+  ]) {
+    const result = await admitLocal(rows);
+    assert.notEqual(result.status, 0);
+    assert.match(result.stderr, /another lane/);
+  }
+  assert.equal(
+    (
+      await admitLocal([
+        row(31 * 60_000, "AUTH-MFA-SANDBOX", { outcome: "recorded", estimatedUsd: 0 }),
+      ])
+    ).status,
+    0,
+  );
+});
+
+test("local admission fails closed on malformed rows and unknown task cost", async () => {
+  const now = new Date(Date.now() - 2 * 3_600_000).toISOString();
+  for (const rows of [
+    ["{broken-json"],
+    [
+      {
+        ts: now,
+        project: "fireemu-oracle-idp",
+        taskId: "AUTH-TENANT-SANDBOX",
+        outcome: "recorded",
+      },
+    ],
+  ]) {
+    const result = await admitLocal(rows);
+    assert.notEqual(result.status, 0);
+  }
+});
+
+test("local admission reserves the reviewed run cost within each task's US$10 budget", async () => {
+  const ts = new Date(Date.now() - 2 * 3_600_000).toISOString();
+  for (const [suite, prior, accepted] of [
+    ["tenant", 9, true],
+    ["tenant", 9.01, false],
+    ["blocking", 5, true],
+    ["blocking", 5.01, false],
+  ]) {
+    const taskId = suite === "tenant" ? "AUTH-TENANT-SANDBOX" : "AUTH-BLOCKING-SANDBOX";
+    const result = await admitLocal(
+      [{ ts, project: "fireemu-oracle-idp", taskId, outcome: "recorded", estimatedUsd: prior }],
+      suite,
+    );
+    assert.equal(result.status === 0, accepted, `${suite} prior=${prior}: ${result.stderr}`);
+  }
+});
 
 test("an unfinished run of this suite blocks another recording at any age", () => {
   const now = Date.now();

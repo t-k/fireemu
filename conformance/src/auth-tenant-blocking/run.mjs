@@ -46,7 +46,9 @@ import { configMatches, createSession as createAccountSession } from "../auth-ac
 import { SIGNER_ACCOUNTS, harnessRequest } from "../auth-credential/harness.mjs";
 import { customTokenClaims } from "../auth-credential/tokens.mjs";
 import { MFA_CONFIGS } from "../auth-mfa/guard.mjs";
-import { PROGRAMS } from "./corpus.mjs";
+import { BLOCKING_PROGRAMS } from "./blocking-corpus.mjs";
+import { PROGRAMS as TENANT_PROGRAMS } from "./corpus.mjs";
+import { createDeployer } from "./deploy.mjs";
 import { guardTenantRequest, isHarnessDisplayName, validateTenantCorpus } from "./guard.mjs";
 import { assertNoOpaqueValue } from "./harness.mjs";
 import { createSession, runCorpus, tenantIdOf } from "./session.mjs";
@@ -57,7 +59,18 @@ const RUN_DIR = join(CONFORMANCE_DIR, ".runs", "auth-tenant-blocking");
 const LOCAL_PORT = 32298;
 /** The synthetic project number fireemu is configured with. */
 const LOCAL_PROJECT_NUMBER = "123456789012";
-export const TASK_ID = "AUTH-TENANT-SANDBOX";
+/**
+ * The suite a run records: the tenant programs (owner decision TB2) or the blocking programs,
+ * which run while the blocking fixture is deployed (TB1). Each suite is its own observation
+ * task with its own budget and ledger lines.
+ */
+export const SUITE = process.env.AUTH_TENANT_SUITE === "blocking" ? "blocking" : "tenant";
+export const TASK_ID = SUITE === "blocking" ? "AUTH-BLOCKING-SANDBOX" : "AUTH-TENANT-SANDBOX";
+const PROGRAMS = SUITE === "blocking" ? BLOCKING_PROGRAMS : TENANT_PROGRAMS;
+/** Every program of both suites: one fixture holds them all. */
+const ALL_PROGRAMS = [...TENANT_PROGRAMS, ...BLOCKING_PROGRAMS];
+/** The blocking fixture's source, served locally by fireemu and deployed to production. */
+const FIXTURE_SOURCE = join(CONFORMANCE_DIR, "src", "auth-tenant-blocking", "function");
 const sha256 = (text) => createHash("sha256").update(text).digest("hex");
 
 /**
@@ -333,7 +346,7 @@ async function writeFixture({ programs, recordings, meta, secrets }) {
     : { version: 1, recordedAgainst: {}, programs: {} };
   fixture.recordedAgainst = {
     target:
-      "production Identity Toolkit (v1, v2 tenant management) and Secure Token REST, Identity Platform sandbox, with multi-tenancy switched on per program and the program's own tenants created and deleted (owner decision TB2); phones are configured test numbers only (no SMS is sent, M3) and addresses @example.com (E1)",
+      "production Identity Toolkit (v1, v2 tenant management) and Secure Token REST, Identity Platform sandbox, with multi-tenancy switched on per program and the program's own tenants created and deleted (owner decision TB2); phones are configured test numbers only (no SMS is sent, M3) and addresses @example.com (E1); the blocking programs (atb/blocking/*) run while the blocking-function fixture is deployed and registered (TB1) and compare the decoded events it echoes (TB5)",
     project: RECORDED_PROJECT,
     note: "Two recordings per program. Tenants are named per program: <tenant:label:shape> for a tenant the harness created, <tenant:N:shape> for one a step created, where shape is the display-name prefix and the length of the random suffix, or `other`. TOTP secrets, session infos, pending credentials and refresh tokens are placeholders; codes are never recorded. Tokens are recorded as their decoded header shape and claims, with times relative to the token's own iat. Generated ids, run-window times, the project id, its number and the API key are placeholders. `second` holds the other recording of rows that differed.",
     baselineConfig: BASELINE_CONFIG,
@@ -469,7 +482,29 @@ async function recordProduction() {
   let outcome = "recorded";
   let error;
   let switchesAfter;
+  let fixture;
+  let deployer;
   try {
+    if (SUITE === "blocking") {
+      // The fixture is deployed once for both recordings and always removed below (TB1).
+      deployer = createDeployer({
+        project: SANDBOX_PROJECT,
+        number: web.projectNumber,
+        token: async () => {
+          const token = await adminToken();
+          tokens.push(token);
+          return token;
+        },
+        log: (line) => console.log(line),
+      });
+      fixture = { deployed: false };
+      await deployer.preflight();
+      await deployer.deploy(FIXTURE_SOURCE, join(runDir, "function-build"));
+      fixture.deployed = true;
+      fixture.registered = await deployer.verifyRegistered();
+      fixture.invokers = await deployer.invokers();
+      console.log(`fixture registered: ${JSON.stringify(fixture)}`);
+    }
     for (const offset of [0, 1]) {
       const { secrets: seen, ...recording } = await recordOnce(
         programs,
@@ -494,6 +529,18 @@ async function recordProduction() {
     secrets.push(...(caught.secrets ?? []));
     switchesAfter = await readSwitches(web, tokens);
     console.error(`switches after the stop: ${JSON.stringify(switchesAfter)}`);
+  }
+  if (deployer) {
+    // Removal runs on every path, a signal and a failed deployment included.
+    try {
+      fixture.removed = await deployer.remove(join(runDir, "function-build"));
+    } catch (caught) {
+      fixture.removed = false;
+      outcome = "aborted-fatal";
+      error = `${error ? `${error}; ` : ""}fixture removal: ${caught.message ?? caught}`;
+      console.error(`FIXTURE NOT REMOVED: ${caught.message ?? caught}`);
+    }
+    fixture.requests = deployer.requests();
   }
   await writeFile(
     join(runDir, "meta.json"),
@@ -547,6 +594,7 @@ async function recordProduction() {
         tenantsCreated,
         tenantsDeleted,
         switched,
+        ...(fixture ? { fixture } : {}),
         ...(error ? { error } : {}),
         ...(switchesAfter ? { switchesAfter } : {}),
       })}\n`,
@@ -567,7 +615,7 @@ async function rebuildFixture(runDir) {
       JSON.parse(await readFile(join(runDir, `recording-${n}.json`), "utf8")),
     ),
   );
-  const programs = PROGRAMS.filter((p) => meta.programs.includes(p.id));
+  const programs = ALL_PROGRAMS.filter((p) => meta.programs.includes(p.id));
   const changed = programs.filter((p) => meta.corpusDigests?.[p.id] !== programDigest(p));
   if (changed.length || programs.length !== meta.programs.length) {
     throw new Error(`corpus changed since the recording: ${changed.map((p) => p.id).join(", ")}`);
@@ -661,6 +709,7 @@ async function runLocalSession(programs) {
     }),
   );
   await writeFile(inPath, JSON.stringify(programs));
+  const functions = programs.some((program) => program.functions);
   const binary = resolveFireemuBinary();
   const child = spawn(
     binary,
@@ -671,7 +720,10 @@ async function runLocalSession(programs) {
       "--project",
       SANDBOX_PROJECT,
       "--only",
-      "auth",
+      functions ? "auth,functions" : "auth",
+      ...(functions
+        ? ["--functions", FIXTURE_SOURCE, "--functions-port", String(LOCAL_PORT + 1)]
+        : []),
       "--http-port",
       String(LOCAL_PORT),
       "--firestore-port",
@@ -745,7 +797,7 @@ async function check() {
       });
     }
   }
-  const known = new Set(PROGRAMS.map((p) => p.id));
+  const known = new Set(ALL_PROGRAMS.map((p) => p.id));
   const orphans = Object.keys(fixture.programs).filter((id) => !known.has(id));
   const summary = {};
   for (const { status } of rows) summary[status] = (summary[status] ?? 0) + 1;

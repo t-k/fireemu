@@ -27,7 +27,7 @@ def _auth(path, body, kind, resource, *, token=None):
     }
     if kind == "auth-refresh":
         provenance["token"] = token or "owned-refresh-token"
-    return {
+    operation = {
         "service": "auth",
         "path": path,
         "method": "POST",
@@ -41,6 +41,11 @@ def _auth(path, body, kind, resource, *, token=None):
         "resource": resource,
         "provenance": provenance,
     }
+    # The shared Gate lets recovery delete only an account whose creating observation it
+    # knows as a sign-up (`kind`, 6c95efcc0).
+    if kind == "auth-sign-up":
+        operation["kind"] = "sign-up"
+    return operation
 
 
 def _list(parent, case, *, page_token=None):

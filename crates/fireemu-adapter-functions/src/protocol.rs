@@ -78,24 +78,28 @@ pub async fn write_frame<W: tokio::io::AsyncWrite + Unpin>(
 
 #[cfg(test)]
 mod tests {
-    use std::io::ErrorKind;
+    use std::io::{Cursor, ErrorKind};
 
     use tokio::io::BufReader;
 
     use super::{encode_frame, read_frame};
 
     #[tokio::test]
-    async fn length_prefix_rejects_excess_digits_before_reading_the_payload() {
-        let mut reader = BufReader::new(&b"999999999999999999999999\n{}"[..]);
+    async fn length_prefix_rejects_excess_digits_without_reading_the_line() {
+        let mut reader = BufReader::with_capacity(1, Cursor::new(vec![b'9'; 1024 * 1024]));
         let error = read_frame(&mut reader).await.unwrap_err();
         assert_eq!(error.kind(), ErrorKind::InvalidData);
+        assert!(reader.get_ref().position() <= 9);
     }
 
     #[tokio::test]
-    async fn length_prefix_rejects_non_decimal_input() {
-        let mut reader = BufReader::new(&b"1x\n{}"[..]);
+    async fn length_prefix_rejects_non_decimal_input_without_reading_the_line() {
+        let mut input = vec![b'9'; 1024 * 1024];
+        input[1] = b'x';
+        let mut reader = BufReader::with_capacity(1, Cursor::new(input));
         let error = read_frame(&mut reader).await.unwrap_err();
         assert_eq!(error.kind(), ErrorKind::InvalidData);
+        assert!(reader.get_ref().position() <= 2);
     }
 
     #[tokio::test]

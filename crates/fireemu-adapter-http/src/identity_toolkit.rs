@@ -2796,15 +2796,13 @@ fn handle_with_policy(
             Ok(store) => store,
             // Production answers a client policy read of an unknown tenant with the v2 API's
             // INVALID_TENANT_ID (sandbox recording 2026-09-25).
-            Err(response)
-                if response.body["error"]["message"] == "TENANT_NOT_FOUND"
-                    && matches!(
-                        resolution,
-                        routes::Resolution::Matched { route, .. }
-                            if route.handler == routes::Handler::PasswordPolicy
-                    ) =>
-            {
-                return config_proto::refusal("INVALID_TENANT_ID");
+            Err(response) if response.body["error"]["message"] == "TENANT_NOT_FOUND" => {
+                return match resolution {
+                    routes::Resolution::Matched { route, .. } => {
+                        unknown_tenant_refusal(route.handler, response)
+                    }
+                    _ => response,
+                };
             }
             Err(response) => return response,
         }
@@ -3038,12 +3036,7 @@ fn handle_with_policy(
         return tenant_management(state, route.handler, project, tenant, query, body);
     }
     if tenant.is_some() && store.tenant_id() != tenant {
-        // Production answers a client policy read of an unknown tenant with the v2 API's
-        // INVALID_TENANT_ID (sandbox recording 2026-09-25).
-        if route.handler == routes::Handler::PasswordPolicy {
-            return config_proto::refusal("INVALID_TENANT_ID");
-        }
-        return error(404, "TENANT_NOT_FOUND");
+        return unknown_tenant_refusal(route.handler, error(404, "TENANT_NOT_FOUND"));
     }
     if route.handler == routes::Handler::SignInWithIdp
         && state.idp_continuations == IdpContinuationPolicy::Disabled
@@ -3694,14 +3687,9 @@ fn apply_project_config_fields(
                     &["client", "permissions", "disabledUserDeletion"],
                 )?);
             }
-            field
-                if field == "passwordPolicyConfig"
-                    || field.starts_with("passwordPolicyConfig.")
-                    || project_config::stored_member_field(field)
-                    || SIGN_IN_PROVIDER_FIELDS.contains(&field)
-                    || valid_blocking_config_field(field)
-                    || valid_quota_field(field) => {}
-            _ => return Err(error(400, "INVALID_ARGUMENT")),
+            // The caller refused every field it does not model; the policy, quota, sign-in,
+            // blocking and stored members are applied on their own.
+            _ => {}
         }
     }
     Ok(())
@@ -5079,11 +5067,10 @@ fn project_config_management(
     if let Err(response) = validate_project_config_payload(body) {
         return response;
     }
+    // A writable path fireemu does not model (valid_project_config_field names the policy and
+    // blocking paths it models) is refused.
     if fields.iter().any(|field| {
-        (field.starts_with("passwordPolicyConfig") && !valid_password_policy_field(field))
-            || (!valid_project_config_field(field)
-                && !valid_blocking_config_field(field)
-                && !project_config::stored_member_field(field))
+        !valid_project_config_field(field) && !project_config::stored_member_field(field)
     }) {
         return error(400, "INVALID_ARGUMENT");
     }
@@ -6621,13 +6608,27 @@ fn tenant_management(
     }
 }
 
+/// The refusal of a request for a tenant the emulator does not serve: production answers a
+/// client policy read with the v2 API's `INVALID_TENANT_ID` (sandbox recording 2026-09-25,
+/// AUTH-CONFIG-SDK config/read); other routes keep `refusal`.
+fn unknown_tenant_refusal(handler: routes::Handler, refusal: JsonResponse) -> JsonResponse {
+    if handler == routes::Handler::PasswordPolicy {
+        config_proto::refusal("INVALID_TENANT_ID")
+    } else {
+        refusal
+    }
+}
+
 fn tenant_policy_denial_with_metadata(
     handler: routes::Handler,
     metadata: Option<&fireemu_core_auth::store::TenantMetadata>,
     body: &Value,
 ) -> Option<JsonResponse> {
     let Some(metadata) = metadata else {
-        return Some(error(400, "TENANT_NOT_FOUND"));
+        return Some(unknown_tenant_refusal(
+            handler,
+            error(400, "TENANT_NOT_FOUND"),
+        ));
     };
     let authenticates = matches!(
         handler,

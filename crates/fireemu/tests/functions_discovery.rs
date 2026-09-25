@@ -163,6 +163,16 @@ fn scratch(name: &str) -> PathBuf {
     dir
 }
 
+#[cfg(unix)]
+struct ScratchGuard(PathBuf);
+
+#[cfg(unix)]
+impl Drop for ScratchGuard {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
 struct ChildGuard(Option<Child>);
 
 impl ChildGuard {
@@ -620,6 +630,77 @@ fn inspect_functions_opens_the_requested_port_and_serialises_all_handler_kinds()
         return;
     }
     unreachable!("the final failed attempt asserts");
+}
+
+#[cfg(unix)]
+#[test]
+#[ignore = "requires tools/sdk-smoke dependencies; CI runs this test after npm ci"]
+fn fixed_inspector_port_reloads_on_the_same_port() {
+    let dir = scratch("fixed-inspector-reload");
+    let _cleanup = ScratchGuard(dir.clone());
+    std::fs::write(dir.join("package.json"), r#"{"main":"index.js"}"#).unwrap();
+    std::os::unix::fs::symlink(
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tools/sdk-smoke/node_modules"),
+        dir.join("node_modules"),
+    )
+    .unwrap();
+    let index = dir.join("index.js");
+    let handler = |value: &str| {
+        format!(
+            "const {{ onRequest }} = require('firebase-functions/v2/https');\nexports.http = onRequest((_req, res) => res.send('{value}'));\n"
+        )
+    };
+    std::fs::write(&index, handler("before")).unwrap();
+    let probe = r"
+const fs = require('node:fs');
+void (async () => {
+  const url = `http://${process.env.FIREEMU_FUNCTIONS_HOST}/${process.env.GOOGLE_CLOUD_PROJECT}/us-central1/http`;
+  const before = await fetch(url).then((response) => response.text());
+  fs.writeFileSync(process.argv[1], process.argv[2]);
+  let after = before;
+  for (let attempt = 0; attempt < 100; attempt++) {
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    try { after = await fetch(url).then((response) => response.text()); } catch {}
+    if (after === 'after') break;
+  }
+  const inspector = await fetch(`http://127.0.0.1:${process.argv[3]}/json/list`).then((response) => response.ok);
+  console.log(JSON.stringify({ before, after, inspector }));
+})().catch((error) => { console.error(error); process.exitCode = 1; });
+";
+    let inspector_port = free_port();
+    let out = exec_command_with_inspector_port(
+        &dir,
+        &[
+            "node",
+            "-e",
+            probe,
+            index.to_str().unwrap(),
+            &handler("after"),
+            &inspector_port.to_string(),
+        ],
+        inspector_port,
+        0,
+    );
+    let error = stderr(&out);
+    assert!(
+        out.status.success(),
+        "stdout:\n{}\nstderr:\n{error}",
+        String::from_utf8_lossy(&out.stdout)
+    );
+    assert!(
+        String::from_utf8_lossy(&out.stdout)
+            .contains(r#"{"before":"before","after":"after","inspector":true}"#),
+        "stdout:\n{}\nstderr:\n{error}",
+        String::from_utf8_lossy(&out.stdout)
+    );
+    assert!(
+        !error.contains("hot reload disabled for fixed inspector port"),
+        "{error}"
+    );
+    assert!(!error.contains("requested debugger port"), "{error}");
+    assert!(!error.contains("reload failed"), "{error}");
+    std::net::TcpListener::bind(("127.0.0.1", inspector_port))
+        .unwrap_or_else(|cause| panic!("inspector port remained open: {cause}"));
 }
 
 #[test]

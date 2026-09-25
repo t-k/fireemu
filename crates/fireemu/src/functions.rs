@@ -1198,6 +1198,98 @@ async fn changed_source_stamp(
     Some(stable_stamp)
 }
 
+async fn wait_for_fixed_inspector_port_release(port: u16, timeout: Duration) -> Result<(), String> {
+    let deadline = tokio::time::Instant::now() + timeout;
+    loop {
+        match std::net::TcpListener::bind(("127.0.0.1", port)) {
+            Ok(listener) => {
+                drop(listener);
+                return Ok(());
+            }
+            Err(cause) if tokio::time::Instant::now() >= deadline => {
+                return Err(format!(
+                    "fixed inspector port {port} did not become available after stopping the previous runner: {cause}"
+                ));
+            }
+            Err(_) => tokio::time::sleep(Duration::from_millis(25)).await,
+        }
+    }
+}
+
+async fn prepare_fixed_inspector_reload(
+    runtime: &FunctionsRuntime,
+    codebase: &str,
+    port: u16,
+) -> Result<(), String> {
+    let (_, previous) = runtime
+        .current_runners()
+        .into_iter()
+        .find(|(name, _)| name == codebase)
+        .ok_or_else(|| format!("Functions codebase {codebase:?} is no longer available"))?;
+    // A fixed inspector port cannot be bound by both generations at once.
+    previous.kill_now();
+    wait_for_fixed_inspector_port_release(port, Duration::from_secs(3)).await
+}
+
+fn report_reload_install(
+    result: Result<u64, String>,
+    fixed_inspector: bool,
+    codebase: &str,
+    stable_stamp: FunctionsSourceStamp,
+    observed_stamp: &mut Option<FunctionsSourceStamp>,
+    last_start_error: &mut bool,
+) {
+    match result {
+        Ok(generation) => {
+            *observed_stamp = Some(stable_stamp);
+            *last_start_error = false;
+            eprintln!("note: functions[{codebase}]: reloaded generation {generation}");
+        }
+        Err(reason) if fixed_inspector => {
+            *observed_stamp = Some(stable_stamp);
+            warn_reload_once(
+                last_start_error,
+                codebase,
+                "install after stopping the previous runner",
+                &reason,
+            );
+        }
+        Err(reason) => eprintln!("warning: functions[{codebase}]: reload rejected: {reason}"),
+    }
+}
+
+async fn snapshot_consistent_reload_source(
+    root: &Path,
+    codebase: &FunctionsCodebase,
+    scan_budget: &FunctionsSourceScanBudget,
+    stable: u64,
+    retry_delay: &mut Duration,
+    last_snapshot_error: &mut bool,
+) -> Option<FunctionsSourceSnapshot> {
+    let snapshot = match scan_budget.snapshot(root, &codebase.ignore).await {
+        Ok(snapshot) => {
+            *last_snapshot_error = false;
+            snapshot
+        }
+        Err(reason) => {
+            *retry_delay = source_scan_retry_delay(*retry_delay, Some(&reason));
+            warn_reload_once(last_snapshot_error, &codebase.codebase, "snapshot", &reason);
+            return None;
+        }
+    };
+    let (snapshot_stamp, current_stamp) = tokio::join!(
+        scan_budget.scan(&snapshot, &codebase.ignore),
+        scan_budget.scan(root, &codebase.ignore),
+    );
+    if snapshot_stamp.as_ref().map(|stamp| stamp.content_signature) != Ok(stable)
+        || current_stamp.as_ref().map(|stamp| stamp.content_signature) != Ok(stable)
+    {
+        discard_reload_snapshot(snapshot, &codebase.codebase).await;
+        return None;
+    }
+    Some(snapshot)
+}
+
 async fn supervise_codebase_reloads(
     weak_runtime: std::sync::Weak<FunctionsRuntime>,
     cfg: RuntimeConfig,
@@ -1212,6 +1304,7 @@ async fn supervise_codebase_reloads(
     let mut observed_stamp = initial_stamp.as_ref().ok().copied();
     let mut last_scan_error = false;
     let mut last_snapshot_error = false;
+    let mut last_start_error = false;
     let mut retry_delay = source_scan_retry_delay(
         Duration::from_millis(750),
         initial_stamp.as_ref().err().map(String::as_str),
@@ -1237,37 +1330,27 @@ async fn supervise_codebase_reloads(
             continue;
         };
         let stable = stable_stamp.content_signature;
-        let snapshot = match resources
-            .scan_budget
-            .snapshot(&root, &codebase.ignore)
-            .await
-        {
-            Ok(snapshot) => {
-                last_snapshot_error = false;
-                snapshot
-            }
-            Err(reason) => {
-                retry_delay = source_scan_retry_delay(retry_delay, Some(&reason));
-                warn_reload_once(
-                    &mut last_snapshot_error,
-                    &codebase.codebase,
-                    "snapshot",
-                    &reason,
-                );
+        let Some(snapshot) = snapshot_consistent_reload_source(
+            &root,
+            &codebase,
+            &resources.scan_budget,
+            stable,
+            &mut retry_delay,
+            &mut last_snapshot_error,
+        )
+        .await
+        else {
+            continue;
+        };
+        if let Some(port) = cfg.functions_inspect_port {
+            if let Err(reason) =
+                prepare_fixed_inspector_reload(&runtime, &codebase.codebase, port).await
+            {
+                warn_reload_once(&mut last_start_error, &codebase.codebase, "start", &reason);
+                discard_reload_snapshot(snapshot, &codebase.codebase).await;
                 continue;
             }
-        };
-        let (snapshot_stamp, current_stamp) = tokio::join!(
-            resources.scan_budget.scan(&snapshot, &codebase.ignore),
-            resources.scan_budget.scan(&root, &codebase.ignore),
-        );
-        if snapshot_stamp.as_ref().map(|stamp| stamp.content_signature) != Ok(stable)
-            || current_stamp.as_ref().map(|stamp| stamp.content_signature) != Ok(stable)
-        {
-            discard_reload_snapshot(snapshot, &codebase.codebase).await;
-            continue;
         }
-        observed_stamp = Some(stable_stamp);
         let mut staged = codebase.clone();
         staged.source = snapshot.to_string_lossy().into_owned();
         match start_codebase(
@@ -1282,22 +1365,29 @@ async fn supervise_codebase_reloads(
         {
             Ok(mut spec) => {
                 spec.cleanup_dir = Some(snapshot.into_path());
-                match runtime.reload_codebase(spec) {
-                    Ok(generation) => eprintln!(
-                        "note: functions[{}]: reloaded generation {generation}",
-                        codebase.codebase
-                    ),
-                    Err(reason) => eprintln!(
-                        "warning: functions[{}]: reload rejected: {reason}",
-                        codebase.codebase
-                    ),
-                }
+                report_reload_install(
+                    runtime.reload_codebase(spec),
+                    cfg.functions_inspect_port.is_some(),
+                    &codebase.codebase,
+                    stable_stamp,
+                    &mut observed_stamp,
+                    &mut last_start_error,
+                );
             }
             Err(reason) => {
-                eprintln!(
-                            "warning: functions[{}]: reload failed; keeping the last-known-good generation: {reason}",
-                            codebase.codebase
-                        );
+                if cfg.functions_inspect_port.is_some() {
+                    warn_reload_once(
+                        &mut last_start_error,
+                        &codebase.codebase,
+                        "start after stopping the previous runner",
+                        &reason,
+                    );
+                } else {
+                    eprintln!(
+                        "warning: functions[{}]: reload failed; keeping the last-known-good generation: {reason}",
+                        codebase.codebase
+                    );
+                }
                 discard_reload_snapshot(snapshot, &codebase.codebase).await;
             }
         }
@@ -4549,11 +4639,12 @@ mod tests {
         node_engine_matches, owned_pubsub_topic, package_node_engine, parse_node_version,
         provision_function_pubsub_resources, select_node_installation, snapshot_functions_source,
         source_scan_pacing_delay, source_scan_retry_delay, stream_source_chunks, update_watch_hash,
-        validate_functions_codebase_budget, warn_reload_once, BlockingAuthBridge,
-        FunctionsSourceByteBudget, FunctionsSourceEntryBudget, FunctionsSourceFileVersion,
-        FunctionsSourceScanBudget, FunctionsSourceSnapshot, FunctionsSourceStamp,
-        FunctionsSourceTraversal, NodeInstallation, PubSubBridge, BLOCKING_AUTH_DEADLINE,
-        MAX_BLOCKING_AUTH_RESPONSE_BYTES, MAX_FUNCTIONS_SOURCE_BYTES, MAX_FUNCTIONS_SOURCE_ENTRIES,
+        validate_functions_codebase_budget, wait_for_fixed_inspector_port_release,
+        warn_reload_once, BlockingAuthBridge, FunctionsSourceByteBudget,
+        FunctionsSourceEntryBudget, FunctionsSourceFileVersion, FunctionsSourceScanBudget,
+        FunctionsSourceSnapshot, FunctionsSourceStamp, FunctionsSourceTraversal, NodeInstallation,
+        PubSubBridge, BLOCKING_AUTH_DEADLINE, MAX_BLOCKING_AUTH_RESPONSE_BYTES,
+        MAX_FUNCTIONS_SOURCE_BYTES, MAX_FUNCTIONS_SOURCE_ENTRIES,
         MAX_FUNCTIONS_SOURCE_WATCH_BYTES_PER_SECOND, MAX_FUNCTIONS_SOURCE_WATCH_FILES_PER_SECOND,
         SOURCE_IO_BUFFER_BYTES,
     };
@@ -4573,6 +4664,22 @@ mod tests {
     };
     use fireemu_core_session::clock::VirtualClock;
     use serde_json::json;
+
+    #[tokio::test]
+    async fn fixed_inspector_port_wait_reports_a_port_still_in_use() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let error = wait_for_fixed_inspector_port_release(port, Duration::from_millis(50))
+            .await
+            .unwrap_err();
+        assert!(error.contains(&format!("fixed inspector port {port}")));
+        assert!(error.contains("did not become available"));
+
+        drop(listener);
+        wait_for_fixed_inspector_port_release(port, Duration::from_millis(50))
+            .await
+            .unwrap();
+    }
 
     #[test]
     fn source_streaming_bounds_each_read_and_charges_bytes_before_a_late_error() {

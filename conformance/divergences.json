@@ -703,7 +703,7 @@
     },
     "storage-probe/fb-list#paged": {
       "documents": "README.md, \"Storage\"; capability manifest ST-OBJ-1 (crates/fireemu/src/capabilities.json); spec/compatibility/contract.json",
-      "reason": "The Firebase list API counts items and folded prefixes together toward maxResults and limits a page to 1000 entries. fireemu therefore places each prefix on only one page. The official emulator pages items alone and repeats every folded prefix on every page.",
+      "reason": "The Firebase list API counts items and folded prefixes together toward maxResults and limits a page to 1000 entries. fireemu places each prefix on only one page, an inference from paging the combined ordered entries rather than an explicit statement in the reference. The official emulator pages items alone and repeats every folded prefix on every page.",
       "authority": {
         "kind": "production-spec",
         "sourceUrls": [
@@ -722,7 +722,7 @@
     },
     "storage-probe/gcs-update-list-delete#list-paged": {
       "documents": "README.md, \"Storage\"; capability manifest ST-OBJ-1 (crates/fireemu/src/capabilities.json); spec/compatibility/contract.json",
-      "reason": "The Cloud Storage JSON API counts items and folded prefixes together toward maxResults. fireemu places each prefix on only one page; the official emulator pages items alone and repeats every folded prefix.",
+      "reason": "The Cloud Storage JSON API counts items and folded prefixes together toward maxResults. fireemu places each prefix on only one page, an inference from paging the combined ordered entries rather than an explicit statement in the reference; the official emulator pages items alone and repeats every folded prefix.",
       "authority": {
         "kind": "production-spec",
         "sourceUrls": [

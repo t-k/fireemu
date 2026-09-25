@@ -135,11 +135,30 @@ async fn start_with_runtime_options(
     respawnable: bool,
     configure: impl FnOnce(&mut fireemu_core_functions::manifest::FunctionManifest),
 ) -> (Arc<FunctionsRuntime>, Arc<Mutex<VirtualClock>>) {
+    start_with_runtime_options_and_env(
+        overlap,
+        catch_up,
+        max_running,
+        respawnable,
+        Vec::new(),
+        configure,
+    )
+    .await
+}
+
+async fn start_with_runtime_options_and_env(
+    overlap: fireemu_adapter_functions::runtime::OverlapPolicy,
+    catch_up: fireemu_adapter_functions::runtime::CatchUpPolicy,
+    max_running: usize,
+    respawnable: bool,
+    env: Vec<(String, String)>,
+    configure: impl FnOnce(&mut fireemu_core_functions::manifest::FunctionManifest),
+) -> (Arc<FunctionsRuntime>, Arc<Mutex<VirtualClock>>) {
     let script = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fake_runner.py");
     let spec = SpawnSpec {
         command: vec!["python3".to_owned(), script.to_owned()],
         cwd: None,
-        env: Vec::new(),
+        env,
         hello_timeout: RUNNER_HELLO_TIMEOUT,
     };
     let runner = Runner::spawn_spec(&spec).await.unwrap();
@@ -179,6 +198,117 @@ async fn wait_for_runner(runtime: &FunctionsRuntime) {
         );
         tokio::time::sleep(Duration::from_millis(50)).await;
     }
+}
+
+#[tokio::test]
+async fn rapid_resets_share_one_in_flight_runner_spawn() {
+    let dir = std::env::temp_dir().join(format!("fireemu-reset-spawn-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let probe = dir.join("starts");
+    let (runtime, _clock) = start_with_runtime_options_and_env(
+        fireemu_adapter_functions::runtime::OverlapPolicy::Allow,
+        fireemu_adapter_functions::runtime::CatchUpPolicy::All,
+        4,
+        true,
+        vec![
+            (
+                "FIREEMU_FAKE_START_PROBE".to_owned(),
+                probe.display().to_string(),
+            ),
+            ("FIREEMU_FAKE_HELLO_DELAY_MS".to_owned(), "1500".to_owned()),
+        ],
+        |_| {},
+    )
+    .await;
+    runtime.reset();
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(2);
+    loop {
+        let starts = std::fs::read_to_string(&probe).unwrap();
+        if starts.lines().count() >= 2 {
+            break;
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "the first replacement did not start"
+        );
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    runtime.reset();
+    runtime.reset();
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    assert_eq!(std::fs::read_to_string(&probe).unwrap().lines().count(), 2);
+    wait_for_runner(&runtime).await;
+    let target = runtime
+        .http_target("demo-app", "us-central1", "echo")
+        .unwrap();
+    assert_eq!(
+        runtime
+            .invoke_http(&target, "GET", "/echo", &[], &[])
+            .await
+            .unwrap()
+            .status,
+        200
+    );
+    runtime.shutdown().await;
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[tokio::test]
+async fn reset_joins_an_in_flight_blocking_auth_runner_spawn() {
+    let dir = std::env::temp_dir().join(format!("fireemu-auth-reset-spawn-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let probe = dir.join("starts");
+    let (runtime, _clock) = start_with_runtime_options_and_env(
+        fireemu_adapter_functions::runtime::OverlapPolicy::Allow,
+        fireemu_adapter_functions::runtime::CatchUpPolicy::All,
+        4,
+        true,
+        vec![
+            (
+                "FIREEMU_FAKE_START_PROBE".to_owned(),
+                probe.display().to_string(),
+            ),
+            ("FIREEMU_FAKE_HELLO_DELAY_MS".to_owned(), "1500".to_owned()),
+        ],
+        |manifest| {
+            manifest.functions.extend(
+                parse_manifest(&json!({"functions": [{
+                    "name": "beforeCreate",
+                    "generation": 2,
+                    "trigger": {"type": "blockingAuth", "eventType": "beforeCreate"}
+                }]}))
+                .unwrap()
+                .functions,
+            );
+        },
+    )
+    .await;
+    let (target, admission) = runtime
+        .try_admit_blocking_auth(BlockingAuthEvent::BeforeCreate)
+        .unwrap()
+        .unwrap();
+    drop(admission);
+    assert!(runtime.restart_runner_after_blocking_failure(&target));
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(2);
+    loop {
+        let starts = std::fs::read_to_string(&probe).unwrap();
+        if starts.lines().count() >= 2 {
+            break;
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "the Blocking Auth replacement did not start"
+        );
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    runtime.reset();
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    assert_eq!(std::fs::read_to_string(&probe).unwrap().lines().count(), 2);
+    wait_for_runner(&runtime).await;
+    runtime.shutdown().await;
+    std::fs::remove_dir_all(&dir).unwrap();
 }
 
 async fn wait_for_ok_since(

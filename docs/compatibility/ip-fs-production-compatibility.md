@@ -139,6 +139,14 @@ No target feature is moved to class B merely because it is unimplemented, unobse
 | FS-CONFIG-LIFECYCLE | Default/named Native databases, project boundary, indexes/exemptions, TTL, import/export, backup/PITR and management-operation contract | Database projection v2 and configuration preservation evidence; API surfaces enumerated; the importer preflights every official managed-export partition, rejects corrupt or duplicate output references and bounds partition enumeration before publishing state; the local named-database export extension preserves default, named and cross-database reference values and rejects malformed database identities before import | `WAITING_ORACLE` | Multi-partition import is local format and atomicity evidence. The named-database extension is local safety evidence only. The [management-surface classification](fs-config-lifecycle-classification.md) and the credential-free [management campaign preparation](fs-config-lifecycle-campaign-preparation.md) exist; representative management behavior still requires production comparison. |
 | AUTH-FS-CROSS | Auth tokens, claims, tenant and revocation observed through Firestore Rules, transactions, listeners and SDK state changes | Local principal/project/tenant and SDK state invariants | `WAITING_ORACLE` | Cross-product production scenarios and final-artifact comparisons remain. |
 
+## Cloud Functions HTTP parent status
+
+The owner added `FUNCTIONS-HTTP` to the production-compatibility parents on 2026-09-25. Its proposed [closure inventory](../../spec/compatibility/closure/FUNCTIONS-HTTP.json) is pending coordinator review; it has no production recording or final-artifact comparison.
+
+| Feature group | Required conditions | Current evidence | Parent state | Remaining completion work |
+| --- | --- | --- | --- | --- |
+| FUNCTIONS-HTTP | 2nd gen HTTP and callable request and response behavior, errors, Auth context, timeout and streaming in one Node.js region | Local emulator conformance and runtime tests exist under `FN-CLAIM-HTTP`; these are not production comparisons for this parent. | `IMPLEMENTING` | Freeze the 19 closure conditions, prepare and review the sandbox deployment, record the same corpus twice in production, repair mismatches on the lane 1 reviewed base, compare one final artifact and obtain independent closure approval. |
+
 ## Existing evidence boundaries
 
 - First46 retains its original 35 matches/11 mismatches and corrected 46/46 saved-reference comparison.

@@ -1,0 +1,222 @@
+{
+  "schemaVersion": 1,
+  "parent": "FUNCTIONS-HTTP",
+  "parentStatus": "IMPLEMENTING",
+  "oracleTrack": "disposable-sandbox",
+  "oracle": {
+    "project": "fireemu-oracle-query",
+    "region": "us-central1",
+    "generation": 2
+  },
+  "closureReview": {
+    "decision": "PENDING"
+  },
+  "scopeDecisions": [
+    {
+      "id": "H1",
+      "decision": "Observe Node.js 2nd gen onRequest and onCall exports from the same pinned firebase-functions fixture in production and fireemu, in us-central1.",
+      "rationale": "This is the parent named in the owner directive; one source and one region keep runtime differences attributable to the service under test.",
+      "status": "PROPOSED"
+    },
+    {
+      "id": "H2",
+      "decision": "Event triggers, scheduled functions, task queues, Blocking Auth, 1st gen, cold-start latency, scaling and billing are outside FUNCTIONS-HTTP.",
+      "rationale": "These have separate parents or are explicitly excluded by the owner directive.",
+      "status": "PROPOSED"
+    },
+    {
+      "id": "H3",
+      "decision": "App Check validation, enforcement and request.app are outside FUNCTIONS-HTTP; no App Check token is sent in this corpus.",
+      "rationale": "The existing APPCHECK-FUNCTIONS claim owns token policy and enforcement; this parent isolates HTTP and callable transport behavior.",
+      "status": "PROPOSED"
+    },
+    {
+      "id": "H4",
+      "decision": "Valid and expired Firebase Auth ID tokens must be issued for fireemu-oracle-query itself; do not initialize Auth, create users or grant signing privileges until the coordinator reviews a concrete setup and any required owner decision is recorded.",
+      "rationale": "A different project's token would test cross-project refusal rather than the required authenticated request context; sandbox Auth setup may change project configuration.",
+      "status": "PROPOSED"
+    },
+    {
+      "id": "H5",
+      "decision": "Keep one HTTP and one callable function invokable without caller credentials for the bounded corpus; record the exact invoker access settings and read them back in the pre-send review.",
+      "rationale": "The corpus must separate public transport behavior from Firebase Auth ID token handling.",
+      "status": "PROPOSED"
+    },
+    {
+      "id": "H6",
+      "decision": "Compare deterministic request and response fields, status and ordered stream chunks; retain raw volatile proxy headers and execution IDs privately and normalize their values only after both recordings expose the variation.",
+      "rationale": "Proxy IDs and timestamps can change between recordings, while header presence and handler-visible meaning remain observable.",
+      "status": "PROPOSED"
+    }
+  ],
+  "conditions": [
+    {
+      "conditionId": "FUNCTIONS-HTTP/http-method-path-query",
+      "source": "https://firebase.google.com/docs/functions/http-events",
+      "recipeIds": ["functions-http/http/request-shape"],
+      "cases": ["GET", "POST", "HEAD", "nested-path", "repeated-query-key", "encoded-query"],
+      "status": "PENDING_CORPUS"
+    },
+    {
+      "conditionId": "FUNCTIONS-HTTP/http-request-headers",
+      "source": "spec/compatibility/contract.json#FN-CLAIM-HTTP",
+      "recipeIds": ["functions-http/http/request-headers"],
+      "cases": [
+        "custom-request-header",
+        "x-forwarded-for",
+        "x-forwarded-proto",
+        "function-execution-id-presence"
+      ],
+      "status": "PENDING_CORPUS"
+    },
+    {
+      "conditionId": "FUNCTIONS-HTTP/http-request-bodies",
+      "source": "https://firebase.google.com/docs/functions/http-events",
+      "recipeIds": ["functions-http/http/request-bodies"],
+      "cases": ["json", "raw-text", "form-urlencoded", "empty", "malformed-json"],
+      "status": "PENDING_CORPUS"
+    },
+    {
+      "conditionId": "FUNCTIONS-HTTP/http-response-status-headers",
+      "source": "https://firebase.google.com/docs/functions/http-events",
+      "recipeIds": ["functions-http/http/response-shape"],
+      "cases": ["custom-status", "custom-header", "content-type", "no-content"],
+      "status": "PENDING_CORPUS"
+    },
+    {
+      "conditionId": "FUNCTIONS-HTTP/http-large-response",
+      "source": "spec/compatibility/contract.json#FN-CLAIM-HTTP",
+      "recipeIds": ["functions-http/http/large-response"],
+      "cases": ["one-mib-response-length-and-sha256"],
+      "status": "PENDING_CORPUS"
+    },
+    {
+      "conditionId": "FUNCTIONS-HTTP/http-streaming",
+      "source": "spec/compatibility/contract.json#FN-CLAIM-HTTP",
+      "recipeIds": ["functions-http/http/streaming"],
+      "cases": ["ordered-chunks-before-completion", "completed-stream", "client-disconnect"],
+      "status": "PENDING_CORPUS"
+    },
+    {
+      "conditionId": "FUNCTIONS-HTTP/http-cors-preflight",
+      "source": "spec/compatibility/contract.json#FN-CLAIM-HTTP",
+      "recipeIds": ["functions-http/http/cors"],
+      "cases": ["options-preflight", "cross-origin-post"],
+      "status": "PENDING_CORPUS"
+    },
+    {
+      "conditionId": "FUNCTIONS-HTTP/http-throw",
+      "source": "spec/compatibility/contract.json#FN-CLAIM-HTTP",
+      "recipeIds": ["functions-http/http/failures"],
+      "cases": ["synchronous-throw", "rejected-promise"],
+      "status": "PENDING_CORPUS"
+    },
+    {
+      "conditionId": "FUNCTIONS-HTTP/http-timeout",
+      "source": "spec/compatibility/contract.json#FN-CLAIM-HTTP",
+      "recipeIds": ["functions-http/http/failures"],
+      "cases": ["handler-exceeds-one-second-timeout"],
+      "status": "PENDING_CORPUS"
+    },
+    {
+      "conditionId": "FUNCTIONS-HTTP/http-no-response",
+      "source": "spec/compatibility/contract.json#FN-CLAIM-HTTP",
+      "recipeIds": ["functions-http/http/failures"],
+      "cases": ["handler-returns-without-sending-response"],
+      "status": "PENDING_CORPUS"
+    },
+    {
+      "conditionId": "FUNCTIONS-HTTP/callable-success-envelope",
+      "source": "https://firebase.google.com/docs/functions/callable-reference",
+      "recipeIds": ["functions-http/callable/success"],
+      "cases": ["object-result", "scalar-result", "null-result", "data-envelope"],
+      "status": "PENDING_CORPUS"
+    },
+    {
+      "conditionId": "FUNCTIONS-HTTP/callable-https-errors",
+      "source": "https://firebase.google.com/docs/functions/callable-reference",
+      "recipeIds": ["functions-http/callable/https-errors"],
+      "cases": [
+        "ok",
+        "cancelled",
+        "unknown",
+        "invalid-argument",
+        "deadline-exceeded",
+        "not-found",
+        "already-exists",
+        "permission-denied",
+        "resource-exhausted",
+        "failed-precondition",
+        "aborted",
+        "out-of-range",
+        "unimplemented",
+        "internal",
+        "unavailable",
+        "data-loss",
+        "unauthenticated",
+        "details",
+        "unhandled-error"
+      ],
+      "status": "PENDING_CORPUS"
+    },
+    {
+      "conditionId": "FUNCTIONS-HTTP/callable-malformed-requests",
+      "source": "https://firebase.google.com/docs/functions/callable-reference",
+      "recipeIds": ["functions-http/callable/malformed"],
+      "cases": [
+        "wrong-method",
+        "wrong-content-type",
+        "missing-data",
+        "extra-field",
+        "malformed-json"
+      ],
+      "status": "PENDING_CORPUS"
+    },
+    {
+      "conditionId": "FUNCTIONS-HTTP/callable-auth-context",
+      "source": "https://firebase.google.com/docs/reference/functions/2nd-gen/node/firebase-functions.https.callablerequest",
+      "recipeIds": ["functions-http/callable/auth-context"],
+      "cases": ["no-authorization", "valid-project-id-token", "uid-and-claims"],
+      "status": "PENDING_CORPUS"
+    },
+    {
+      "conditionId": "FUNCTIONS-HTTP/callable-auth-refusal",
+      "source": "https://firebase.google.com/docs/functions/callable-reference",
+      "recipeIds": ["functions-http/callable/auth-refusal"],
+      "cases": ["malformed-bearer", "invalid-signature", "expired-id-token"],
+      "status": "PENDING_CORPUS"
+    },
+    {
+      "conditionId": "FUNCTIONS-HTTP/callable-streaming",
+      "source": "https://firebase.google.com/docs/functions/callable",
+      "recipeIds": ["functions-http/callable/streaming"],
+      "cases": ["send-chunk-order", "final-result", "client-disconnect"],
+      "status": "PENDING_CORPUS"
+    },
+    {
+      "conditionId": "FUNCTIONS-HTTP/public-invocation",
+      "source": "https://firebase.google.com/docs/functions/http-events",
+      "recipeIds": ["functions-http/deployment/public-invocation"],
+      "cases": ["http-without-cloud-run-credentials", "callable-without-cloud-run-credentials"],
+      "status": "PENDING_CORPUS"
+    },
+    {
+      "conditionId": "FUNCTIONS-HTTP/final-artifact-regression",
+      "source": "spec/compatibility/closure/FUNCTIONS-HTTP.json",
+      "recipeIds": ["functions-http/"],
+      "cases": [
+        "two-production-recordings",
+        "same-source-final-artifact-comparison",
+        "workspace-regression"
+      ],
+      "status": "PENDING_CORPUS"
+    },
+    {
+      "conditionId": "FUNCTIONS-HTTP/closure-review",
+      "source": "spec/compatibility/closure/FUNCTIONS-HTTP.json",
+      "recipeIds": ["functions-http/"],
+      "cases": ["independent-coordinator-approval"],
+      "status": "PENDING_REVIEW"
+    }
+  ]
+}

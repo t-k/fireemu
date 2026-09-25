@@ -17486,3 +17486,45 @@ fn client_configuration_reads_as_production() {
         "{params}"
     );
 }
+
+/// Production takes any sign-up quota it can parse and reports it normalized: a zero quota
+/// left out, a missing start as the epoch and a missing duration as zero (sandbox recording
+/// 2026-09-25, AUTH-CONFIG-SDK quota).
+#[test]
+fn sign_up_quotas_are_taken_and_reported_as_production_normalizes_them() {
+    const CONFIG: &str = "/identitytoolkit.googleapis.com/admin/v2/projects/demo-app/config?updateMask=quota.signUpQuotaConfig";
+    let s = strict_state();
+    for (written, reported) in [
+        (
+            json!({"quota": "-1", "startTime": "2030-01-01T00:00:00Z", "quotaDuration": "3600s"}),
+            json!({"quota": "-1", "startTime": "2030-01-01T00:00:00Z", "quotaDuration": "3600s"}),
+        ),
+        (
+            json!({"quota": "0", "startTime": "2030-01-01T00:00:00Z", "quotaDuration": "3600s"}),
+            json!({"startTime": "2030-01-01T00:00:00Z", "quotaDuration": "3600s"}),
+        ),
+        (
+            json!({"quota": "200", "quotaDuration": "3600s"}),
+            json!({"quota": "200", "startTime": "1970-01-01T00:00:00Z", "quotaDuration": "3600s"}),
+        ),
+        (
+            json!({"quota": "200", "startTime": "2030-01-01T00:00:00Z"}),
+            json!({"quota": "200", "startTime": "2030-01-01T00:00:00Z", "quotaDuration": "0s"}),
+        ),
+        (
+            json!({"quota": "200", "startTime": "2030-01-01T00:00:00Z", "quotaDuration": "0s"}),
+            json!({"quota": "200", "startTime": "2030-01-01T00:00:00Z", "quotaDuration": "0s"}),
+        ),
+    ] {
+        let (status, answer) = admin(
+            &s,
+            "PATCH",
+            CONFIG,
+            &json!({"quota": {"signUpQuotaConfig": written}}),
+        );
+        assert_eq!(status, 200, "{written}: {answer}");
+        assert_eq!(answer["quota"]["signUpQuotaConfig"], reported, "{written}");
+    }
+    let (status, cleared) = admin(&s, "PATCH", CONFIG, &json!({}));
+    assert_eq!((status, &cleared["quota"]), (200, &json!({})));
+}

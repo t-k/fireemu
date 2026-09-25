@@ -77,8 +77,9 @@ test("stage 3 approval accepts only one authoritative decision block", () => {
   );
 });
 
-test("stage 3 retry admission requires a recovered first attempt, quiet project and 30-minute gap", () => {
+test("stage 3 third attempt requires two recovered attempts, quiet project and 30-minute gap", () => {
   const firstRunDir = "/private/functions-http-first";
+  const secondRunDir = "/private/functions-http-second";
   const lines = [
     {
       ts: "2026-09-25T09:00:00Z",
@@ -149,15 +150,67 @@ test("stage 3 retry admission requires a recovered first attempt, quiet project 
       recoveryRequests: 5,
       runDir: firstRunDir,
     },
+    {
+      ts: "2026-09-25T10:20:00Z",
+      project: "fireemu-oracle-query",
+      taskId: "FUNCTIONS-HTTP-SANDBOX",
+      stage: 3,
+      event: "started",
+      gitSha: "fa536544c99009ab733fe3b1bc324a5afa6c361f",
+      corpusDigest: "836c138ba213546428e700e7ecb51644089bb5b0cdc91946eb9904a648106bea",
+      runDir: secondRunDir,
+      attempt: 2,
+      reservationLedgerTs: "2026-09-25T13:05:04.913Z",
+    },
+    {
+      ts: "2026-09-25T10:20:19Z",
+      project: "fireemu-oracle-query",
+      taskId: "FUNCTIONS-HTTP-SANDBOX",
+      stage: 3,
+      event: "change",
+      action: "service-identity-generation-possible",
+    },
+    {
+      ts: "2026-09-25T10:20:20Z",
+      project: "fireemu-oracle-query",
+      taskId: "FUNCTIONS-HTTP-SANDBOX",
+      stage: 3,
+      event: "needs-recovery",
+      gitSha: "fa536544c99009ab733fe3b1bc324a5afa6c361f",
+      corpusDigest: "836c138ba213546428e700e7ecb51644089bb5b0cdc91946eb9904a648106bea",
+      runDir: secondRunDir,
+      attempt: 2,
+      requests: { invocation: 0, cliDeploy: 1 },
+    },
+    {
+      ts: "2026-09-25T10:50:00Z",
+      project: "fireemu-oracle-query",
+      taskId: "FUNCTIONS-HTTP-SANDBOX",
+      stage: 3,
+      event: "finished",
+      gitSha: "fa536544c99009ab733fe3b1bc324a5afa6c361f",
+      corpusDigest: "836c138ba213546428e700e7ecb51644089bb5b0cdc91946eb9904a648106bea",
+      outcome: "recovered-no-observation",
+      recoveryReadbackSha256: "1a1354889e8a29129a9f9039cc63230a99419d9a59c34916fb93af7bc0722cb8",
+      recoveryRequests: 5,
+      runDir: secondRunDir,
+      attempt: 2,
+    },
   ];
-  assert.doesNotThrow(() => assertAdmission(lines, "2026-09-25T10:21:00Z", firstRunDir));
-  assert.throws(() => assertAdmission(lines, "2026-09-25T10:19:59Z", firstRunDir), /30 minutes/);
+  assert.doesNotThrow(() =>
+    assertAdmission(lines, "2026-09-25T11:21:00Z", firstRunDir, secondRunDir),
+  );
+  assert.throws(
+    () => assertAdmission(lines, "2026-09-25T11:19:59Z", firstRunDir, secondRunDir),
+    /30 minutes/,
+  );
   assert.throws(
     () =>
       assertAdmission(
-        lines.filter((line) => line.event !== "finished" || line.stage !== 3),
-        "2026-09-25T10:21:00Z",
+        lines.filter((line) => line.event !== "finished" || line.runDir !== secondRunDir),
+        "2026-09-25T11:21:00Z",
         firstRunDir,
+        secondRunDir,
       ),
     /recovered/,
   );
@@ -165,8 +218,9 @@ test("stage 3 retry admission requires a recovered first attempt, quiet project 
     () =>
       assertAdmission(
         lines.filter((line) => line.taskId !== "FUNCTIONS-HTTP-SANDBOX"),
-        "2026-09-25T10:00:00Z",
+        "2026-09-25T11:21:00Z",
         firstRunDir,
+        secondRunDir,
       ),
     /stage 2/,
   );
@@ -177,8 +231,9 @@ test("stage 3 retry admission requires a recovered first attempt, quiet project 
           ...lines,
           { ts: "2026-09-25T09:20:00Z", project: "fireemu-oracle-query", event: "started" },
         ],
-        "2026-09-25T10:21:00Z",
+        "2026-09-25T11:21:00Z",
         firstRunDir,
+        secondRunDir,
       ),
     /active/,
   );
@@ -195,10 +250,17 @@ test("stage 3 retry admission requires a recovered first attempt, quiet project 
             event: "started",
           },
         ],
-        "2026-09-25T10:21:00Z",
+        "2026-09-25T11:21:00Z",
         firstRunDir,
+        secondRunDir,
       ),
     /stage 3 attempt/,
+  );
+  const invalidReadback = structuredClone(lines);
+  invalidReadback.at(-1).recoveryReadbackSha256 = "0".repeat(64);
+  assert.throws(
+    () => assertAdmission(invalidReadback, "2026-09-25T11:21:00Z", firstRunDir, secondRunDir),
+    /recovery evidence/,
   );
 });
 
@@ -474,11 +536,11 @@ test("retry reads the exact private absence result before production requests", 
   }
 });
 
-test("retry reuses the stage 3 reservation within the task budget", () => {
+test("third attempt reuses the stage 3 reservation within the task budget", () => {
   assert.deepEqual(retryAccounting({ cliDeploy: 16, invocation: 136 }), {
     estimatedUsd: 8.95,
-    priorAttemptResidualAllowanceUsd: 0.02,
-    cumulativeEstimatedUsd: 8.97,
+    priorAttemptResidualAllowanceUsd: 0.04,
+    cumulativeEstimatedUsd: 8.99,
   });
   assert.throws(() => retryAccounting({ cliDeploy: 17, invocation: 136 }), /stage 3 budget/);
 });

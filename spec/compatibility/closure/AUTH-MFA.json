@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
   "parent": "AUTH-MFA",
-  "parentStatus": "PENDING_CLOSURE_REVIEW",
+  "parentStatus": "COMPAT_VERIFIED",
   "oracleTrack": "disposable-sandbox",
   "scopeDecisions": [
     {
@@ -647,7 +647,7 @@
       "configProjections": [
         "default"
       ],
-      "status": "PENDING_REVIEW",
+      "status": "VERIFIED",
       "note": "An independent closure review and a separate safety review of the final artifact.",
       "evidence": {
         "productionRecordings": [
@@ -691,12 +691,12 @@
     }
   ],
   "closureReview": {
-    "decision": "PENDING",
+    "decision": "APPROVED",
     "decidedOn": "2026-09-25",
-    "reviewer": "independent clean-context closure review of artifact 7fe1a3e5 (APPROVE WITH CHANGES) and its confirmation review of the fixes on artifact 9988fdbe (APPROVE), after the pre-send reviews of every recorded program, a separate safety review and its confirmation",
-    "reviewedCommit": "bce2c0bdb",
-    "finalArtifactSha256": "9988fdbe13b84459fd756ff4c6beee6b316d665be939ba5c293a614a8c101fda",
-    "report": "docs.local/reviews/2026-09-25-auth-mfa-closure-confirmation.md (private; earlier: 2026-09-25-auth-mfa-closure-review.md, -safety-review.md, -safety-confirmation.md, -presend-review.md, -lifetime-short-presend-review.md, -quota-free-presend-review.md)",
-    "followUps": "The coordinator's promotion review (docs.local/instructions/2026-09-25-auth-mfa-promotion-review.md, private) kept the promotion conditionally and sent the follow-up directive (2026-09-25-auth-mfa-follow-up-directive.md): strict with auth.totp failing open, the SMS pending lifetime to observe, and four smaller items. The closure is re-approved after the fixes, the observation, a rebind and a confirmation review. Earlier follow-ups stay tracked privately in docs.local/issues/open/auth-mfa-unobserved-edges.md."
+    "reviewer": "clean-context confirmation review of the coordinator's follow-up directive on artifact 86172226 (APPROVE WITH CHANGES, no Must Fix; its four Should Fix items fixed without source changes in d300036be), after the coordinator's independent promotion review (promotion kept, conditionally), the independent closure review and its confirmation, the pre-send reviews of every recorded program, and the safety review and its confirmation",
+    "reviewedCommit": "cd7b4e3a6",
+    "finalArtifactSha256": "86172226d07d1f6e850a58934c24c650b05eda345361ab4058aaea174f921356",
+    "report": "docs.local/reviews/2026-09-25-auth-mfa-follow-up-confirmation.md (private; earlier: docs.local/instructions/2026-09-25-auth-mfa-promotion-review.md, 2026-09-25-auth-mfa-follow-up-directive.md, docs.local/reviews/2026-09-25-auth-mfa-closure-review.md, -closure-confirmation.md, -safety-review.md, -safety-confirmation.md and the pre-send reviews)",
+    "followUps": "Non-blocking and tracked privately (docs.local/issues/open/auth-mfa-unobserved-edges.md, mfa-pending-credential-survives-token-revocation.md): the per-account TOTP attempt quota, the unobserved gaps inside the measured brackets (TOTP pending, recent sign-in, SMS start), the SMS finalize after an accepted start, the phone enrollment session's lifetime past about 1803 seconds, a finalized TOTP session offered again before three attempts, fireemu's own per-user and per-account bounds, Admin entries with both phoneInfo and totpInfo, pending credentials after token revocation, and tenant second factors (AUTH-TENANT-BLOCKING). The follow-up directive's source changes were not run through cargo-mutants; their boundaries are pinned by tests on both sides."
   }
 }

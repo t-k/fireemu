@@ -18285,3 +18285,47 @@ fn strict_an_unknown_enrollment_session_is_refused_before_the_display_name() {
         "{body}"
     );
 }
+
+/// A deleted account's pending credential answers `USER_NOT_FOUND` for the hour a pending
+/// credential lives and is unknown after it; the sweep drops only the expired ones (mutation
+/// follow-up, docs.local/mutation/auth-mfa/20260925).
+#[test]
+fn strict_a_deleted_accounts_pending_credential_is_known_for_its_hour() {
+    let refusal = |s: &AuthState, pending: &Value| {
+        let (status, body) = totp_sign_in(s, pending, &json!("any-factor"), "123456");
+        assert_eq!(status, 400, "{body}");
+        v2_refusal(&body).0.to_owned()
+    };
+    let delete = |s: &AuthState, pending: &Value| {
+        let (status, body) = admin(
+            s,
+            "POST",
+            &format!("{ADMIN}/accounts:delete"),
+            &json!({"localId": pending["localId"]}),
+        );
+        assert_eq!(status, 200, "{body}");
+    };
+    // One orphan, past its hour: swept.
+    let s = strict_phone_account("orphan@example.com");
+    let pending = pending_of(&s, "orphan@example.com");
+    delete(&s, &pending);
+    advance(&s, 3_600);
+    assert_eq!(refusal(&s, &pending), "USER_NOT_FOUND");
+    advance(&s, 1);
+    assert_eq!(refusal(&s, &pending), "INVALID_PENDING_TOKEN");
+    // Two orphans half an hour apart: when the first is swept the second stays.
+    let s = strict_phone_account("first-orphan@example.com");
+    create(
+        &s,
+        &json!({"email": "second-orphan@example.com", "password": "password123", "emailVerified": true,
+            "mfaInfo": [{"phoneInfo": "+16505550101"}]}),
+    );
+    let first = pending_of(&s, "first-orphan@example.com");
+    delete(&s, &first);
+    advance(&s, 1_800);
+    let second = pending_of(&s, "second-orphan@example.com");
+    delete(&s, &second);
+    advance(&s, 1_801);
+    assert_eq!(refusal(&s, &first), "INVALID_PENDING_TOKEN");
+    assert_eq!(refusal(&s, &second), "USER_NOT_FOUND");
+}

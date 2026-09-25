@@ -114,8 +114,9 @@ for(const fault of ['throw','callback','error-event','close','finish','destroyed
   });
 }
 test('earlier outstanding write keeps its original deadline despite later writes and drains',async()=>{
-  const f=setup({waitMs:35});f.writer.write('A');await delay(20);f.writer.write('B');f.stream.ack(1);f.stream.emit('drain');
-  await delay(25);assert.equal(f.failures.length,1);assert.equal(await f.writer.finish(),false);
+  const f=setup({waitMs:350});f.writer.write('A');await delay(120);f.writer.write('B');
+  assert.equal(f.stream.calls.length,2);f.stream.ack(1);f.stream.emit('drain');
+  await delay(245);assert.equal(f.failures.length,1);assert.equal(await f.writer.finish(),false);
 });
 test('late callback cannot beat a delayed timer and report delivery',async()=>{
   const f=setup({waitMs:15});let err;f.writer.write('x',e=>err=e);

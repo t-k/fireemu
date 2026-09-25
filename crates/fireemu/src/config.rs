@@ -3720,6 +3720,34 @@ mod tests {
                 "{message}"
             );
         }
+        // At most ten E.164 numbers: a leading zero, letters or a single digit are refused.
+        let numbers = |count: usize| {
+            (0..count)
+                .map(|n| (format!("+1650555{n:04}"), json!("123456")))
+                .collect::<serde_json::Map<_, _>>()
+        };
+        assert!(with_profile(
+            json!({"auth": {"signIn": {"phoneNumber": {"testPhoneNumbers": numbers(10)}}}})
+        )
+        .is_ok());
+        assert_eq!(
+            with_profile(
+                json!({"auth": {"signIn": {"phoneNumber": {"testPhoneNumbers": numbers(11)}}}})
+            )
+            .map(|_| ()),
+            Err(ConfigError(
+                "auth.signIn.phoneNumber.testPhoneNumbers holds at most ten numbers".to_owned()
+            ))
+        );
+        for number in ["+01234567", "+1650555abcd", "+1"] {
+            assert_eq!(
+                with_profile(json!({"auth": {"signIn": {"phoneNumber": {"testPhoneNumbers": {number: "1"}}}}})).map(|_| ()),
+                Err(ConfigError(format!(
+                    "auth.signIn.phoneNumber.testPhoneNumbers: {number} is not an E.164 number"
+                ))),
+                "{number}"
+            );
+        }
         // A code is taken as production's Admin config takes it: any text (AUTH-CONFIG-SDK
         // sandbox recording 2026-09-25 took "12345" and "abc").
         let cfg = with_profile(

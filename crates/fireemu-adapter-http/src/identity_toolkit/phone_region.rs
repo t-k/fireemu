@@ -198,6 +198,8 @@ mod tests {
         assert_eq!(region_of("+447700900000"), None);
         assert_eq!(region_of("16505550101"), None);
         assert_eq!(region_of("+1650"), None);
+        assert_eq!(region_of("+1650555abcd"), None);
+        assert_eq!(region_of("+"), None);
     }
 
     #[test]
@@ -238,6 +240,11 @@ mod tests {
         assert!(policy_refuses(
             &json!({"allowlistOnly": {"allowedRegions": ["JP"]}}),
             "+14165550100"
+        ));
+        // Only a +1 number has a second candidate.
+        assert!(policy_refuses(
+            &json!({"allowlistOnly": {"allowedRegions": ["US"]}}),
+            "+819012345678"
         ));
     }
 }

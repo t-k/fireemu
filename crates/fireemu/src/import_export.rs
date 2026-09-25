@@ -4119,6 +4119,43 @@ mod tests {
     use fireemu_core_auth::store::{ProjectAuthConfig, TenantMetadata};
     use fireemu_core_export::auth::{AuthConfig, AuthSettingsNamespace, AuthSettingsRecord};
     use fireemu_core_types::time::{days_from_civil, LogicalInstant};
+
+    /// A password policy survives an export and import in each enforcement state, the
+    /// unspecified one included (AUTH-CONFIG-SDK: production stores an unspecified state).
+    #[test]
+    fn password_policies_round_trip_through_the_sidecar() {
+        use fireemu_core_auth::password_policy::{
+            default_allowed_non_alphanumeric, EnforcementState, PasswordPolicy,
+        };
+        let path = std::path::Path::new("policy.json");
+        for state in [
+            EnforcementState::Off,
+            EnforcementState::Unspecified,
+            EnforcementState::Enforce,
+        ] {
+            let policy = PasswordPolicy::try_new(
+                state,
+                true,
+                10,
+                Some(20),
+                true,
+                false,
+                true,
+                false,
+                default_allowed_non_alphanumeric(),
+            )
+            .unwrap();
+            let record = super::exported_password_policy(&policy);
+            let imported = super::imported_password_policy(&record, path).unwrap();
+            assert_eq!(imported.enforcement_state, state);
+            assert_eq!(imported.min_length, 10);
+            assert_eq!(imported.max_length, Some(20));
+            assert!(imported.force_upgrade_on_signin && imported.require_uppercase);
+        }
+        let mut record = super::exported_password_policy(&PasswordPolicy::default());
+        record.enforcement_state = "SOMETIMES".to_owned();
+        assert!(super::imported_password_policy(&record, path).is_err());
+    }
     #[cfg(unix)]
     use fireemu_export_publication::PublicationStage;
 

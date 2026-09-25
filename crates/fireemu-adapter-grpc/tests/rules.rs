@@ -3760,7 +3760,94 @@ service cloud.firestore {{
                 result
             }
         };
-        assert_eq!(outcome.is_ok(), allowed, "{collection}: {outcome:?}");
+        let expected = if allowed {
+            Ok(())
+        } else {
+            Err(tonic::Code::PermissionDenied)
+        };
+        assert_eq!(outcome, expected, "{collection}");
+    }
+    h.handle.abort();
+}
+
+/// `request.query` for the query shapes the exploratory probes did not reach (not observed in
+/// production): a collection-group query under a parent document, a query without a collection
+/// id over every descendant (`kind` empty), and a query by `__name__`, which is authorized name
+/// by name.
+#[tokio::test]
+async fn request_query_values_for_group_kindless_and_named_queries() {
+    let mut h = start().await;
+    let (_alice, alice_token) = h.user("alice@example.com");
+    h.rules
+        .replace_source(
+            "rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    match /{path=**}/grp/{id} { allow list: if request.query.allDescendants == true && request.query.kind == 'grp' && request.query.parent == /databases/$(database)/documents/p/x; }
+    match /named/{id} { allow list: if request.query.size() == 9 && request.query.kind == 'named' && request.query.parent == null && request.query.allDescendants == false; }
+    match /{document=**} { allow list: if request.query.kind == '' && request.query.allDescendants == true && request.query.parent == null; }
+  }
+}",
+        )
+        .unwrap();
+    let query = |parent: String, collection: &str, all_descendants: bool, name: Option<&str>| {
+        pb::RunQueryRequest {
+            parent,
+            query_type: Some(pb::run_query_request::QueryType::StructuredQuery(
+                pb::StructuredQuery {
+                    from: vec![sq::CollectionSelector {
+                        collection_id: collection.into(),
+                        all_descendants,
+                    }],
+                    r#where: name.map(|name| sq::Filter {
+                        filter_type: Some(sq::filter::FilterType::FieldFilter(sq::FieldFilter {
+                            field: Some(sq::FieldReference {
+                                field_path: "__name__".into(),
+                            }),
+                            op: sq::field_filter::Operator::Equal as i32,
+                            value: Some(pb::Value {
+                                value_type: Some(pb::value::ValueType::ReferenceValue(format!(
+                                    "{DOCS}/{name}"
+                                ))),
+                            }),
+                        })),
+                    }),
+                    order_by: if collection.is_empty() {
+                        vec![sq::Order {
+                            field: Some(sq::FieldReference {
+                                field_path: "__name__".into(),
+                            }),
+                            direction: sq::Direction::Ascending as i32,
+                        }]
+                    } else {
+                        Vec::new()
+                    },
+                    ..Default::default()
+                },
+            )),
+            ..Default::default()
+        }
+    };
+    for (name, request) in [
+        (
+            "group under a document",
+            query(format!("{DOCS}/p/x"), "grp", true, None),
+        ),
+        ("kindless", query(DOCS.to_owned(), "", true, None)),
+        (
+            "by name",
+            query(DOCS.to_owned(), "named", false, Some("named/a")),
+        ),
+    ] {
+        let mut stream = h
+            .client
+            .run_query(with_bearer(request, &alice_token))
+            .await
+            .unwrap_or_else(|e| panic!("{name}: {e}"))
+            .into_inner();
+        while let Some(item) = stream.next().await {
+            item.unwrap_or_else(|e| panic!("{name}: {e}"));
+        }
     }
     h.handle.abort();
 }

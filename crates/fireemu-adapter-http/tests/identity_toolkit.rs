@@ -11030,6 +11030,47 @@ fn patch_sign_in(s: &AuthState, mask: &str, body: &Value) -> (u16, Value) {
     )
 }
 
+/// A password sign-in of an address that several imported accounts share reaches the earliest
+/// of them, and the others' passwords are wrong (sandbox recording 2026-09-25,
+/// auth-config-sdk/duplicate-email).
+#[test]
+fn a_password_sign_in_of_a_duplicate_address_reaches_its_earliest_owner() {
+    let s = state();
+    let (status, config) = patch_sign_in(
+        &s,
+        "signIn.allowDuplicateEmails",
+        &json!({"signIn": {"allowDuplicateEmails": true}}),
+    );
+    assert_eq!(status, 200, "{config}");
+    let (status, imported) = admin(
+        &s,
+        "POST",
+        &format!("{ADMIN}/accounts:batchCreate"),
+        &json!({"users": [
+            {"localId": "dup-a", "email": "dup@example.com", "rawPassword": "password-a"},
+            {"localId": "dup-b", "email": "dup@example.com", "rawPassword": "password-b"},
+        ]}),
+    );
+    assert_eq!(status, 200, "{imported}");
+    assert!(imported.get("error").is_none(), "{imported}");
+    let sign_in = |password: &str| {
+        post(
+            &s,
+            &format!("{V1}/accounts:signInWithPassword"),
+            &json!({"email": "dup@example.com", "password": password, "returnSecureToken": true}),
+        )
+    };
+    let (status, first) = sign_in("password-a");
+    assert_eq!(status, 200, "{first}");
+    assert_eq!(first["localId"], "dup-a");
+    // A wrong password, named as it is without improved email privacy.
+    let (status, second) = sign_in("password-b");
+    assert_eq!(
+        (status, second["error"]["message"].as_str()),
+        (400, Some("INVALID_PASSWORD"))
+    );
+}
+
 /// Linking a phone number to a signed-in account answers with a session whose provider is the
 /// phone sign-in (sandbox recording 2026-09-24,
 /// id-token/without-return-secure-token#phone-link-with-legacy-token).
@@ -11514,8 +11555,11 @@ fn an_empty_imported_hash_never_matches() {
     }
 }
 
-/// Disabled project providers refuse their client flows with `OPERATION_NOT_ALLOWED`, and
-/// `passwordRequired` turns email-link sign-in off.
+/// Disabled project providers refuse their client flows with production's codes (sandbox
+/// recording 2026-09-25, as the official emulator names them): a password sign-in is
+/// `PASSWORD_LOGIN_DISABLED`, an anonymous sign-up `ADMIN_ONLY_OPERATION`, the rest
+/// `OPERATION_NOT_ALLOWED`; a password reset email is still sent. `passwordRequired` turns
+/// email-link sign-in off.
 #[test]
 fn project_sign_in_providers_gate_client_flows() {
     let s = state();
@@ -11525,25 +11569,37 @@ fn project_sign_in_providers_gate_client_flows() {
         &json!({"signIn": {"email": {"enabled": false}, "anonymous": {"enabled": false}, "phoneNumber": {"enabled": false}}}),
     );
     assert_eq!(status, 200, "{body}");
-    for (route, body) in [
+    for (route, body, code) in [
         (
             "signUp",
             json!({"email": "off@example.com", "password": "password1"}),
+            "OPERATION_NOT_ALLOWED",
         ),
-        ("signUp", json!({"returnSecureToken": true})),
+        (
+            "signUp",
+            json!({"returnSecureToken": true}),
+            "ADMIN_ONLY_OPERATION",
+        ),
         (
             "signInWithPassword",
             json!({"email": "off@example.com", "password": "password1"}),
+            "PASSWORD_LOGIN_DISABLED",
+        ),
+        (
+            "resetPassword",
+            json!({"oobCode": "missing-code", "newPassword": "password2"}),
+            "PASSWORD_LOGIN_DISABLED",
         ),
         (
             "sendVerificationCode",
             json!({"phoneNumber": "+16505550101", "recaptchaToken": "x"}),
+            "OPERATION_NOT_ALLOWED",
         ),
     ] {
         let (status, refused) = post(&s, &format!("{V1}/accounts:{route}"), &body);
         assert_eq!(
             (status, refused["error"]["message"].as_str()),
-            (400, Some("OPERATION_NOT_ALLOWED")),
+            (400, Some(code)),
             "{route}"
         );
     }
@@ -11557,6 +11613,12 @@ fn project_sign_in_providers_gate_client_flows() {
         &json!({"email": "admin@example.com", "password": "password1"}),
     );
     assert_eq!(status, 200);
+    let (status, sent) = post(
+        &s,
+        &format!("{V1}/accounts:sendOobCode"),
+        &json!({"requestType": "PASSWORD_RESET", "email": "admin@example.com"}),
+    );
+    assert_eq!(status, 200, "{sent}");
 
     let s = state();
     let (status, body) = patch_sign_in(

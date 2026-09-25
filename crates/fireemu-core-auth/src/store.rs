@@ -4228,14 +4228,12 @@ impl AuthStore {
         owners
     }
 
-    /// The account a password sign-in with `email` reaches: the active owner when it holds a
-    /// password, else the earliest owner that does (an imported duplicate without a password
-    /// does not hide the password account, sandbox recording 2026-09-23).
+    /// The account a password sign-in with `email` reaches: the earliest owner that holds a
+    /// password, else the active owner. An imported duplicate without a password does not
+    /// hide the password account (sandbox recording 2026-09-23), and of two imported password
+    /// accounts the earlier one is reached (sandbox recording 2026-09-25).
     fn password_owner_by_email(&self, email: &str) -> Option<&UserRecord> {
         let active = self.user_by_email(email)?;
-        if active.password.is_some() {
-            return Some(active);
-        }
         Some(
             self.users_by_email(email)
                 .into_iter()

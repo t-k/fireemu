@@ -4173,6 +4173,28 @@ fn project_provider_denial(
     {
         return Some(error(400, "OPERATION_NOT_ALLOWED"));
     }
+    // Production names these refusals as the official emulator does, and sends a password
+    // reset email while the provider is off (sandbox recording 2026-09-25).
+    if !config.email_enabled
+        && matches!(
+            handler,
+            routes::Handler::SignInWithPassword | routes::Handler::ResetPassword
+        )
+    {
+        return Some(error(400, "PASSWORD_LOGIN_DISABLED"));
+    }
+    let anonymous_sign_up = handler == routes::Handler::SignUp
+        && str_field(body, "email").is_none()
+        && str_field(body, "password").is_none()
+        && body.get("idToken").is_none_or(Value::is_null);
+    if anonymous_sign_up && !config.anonymous_enabled {
+        return Some(error(400, "ADMIN_ONLY_OPERATION"));
+    }
+    if handler == routes::Handler::SendOobCode
+        && body.get("requestType").and_then(Value::as_str) == Some("PASSWORD_RESET")
+    {
+        return None;
+    }
     let metadata = fireemu_core_auth::store::TenantMetadata {
         allow_password_signup: config.email_enabled,
         enable_email_link_signin: config.email_enabled && !config.password_required,

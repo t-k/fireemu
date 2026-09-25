@@ -94,25 +94,29 @@ export function isFixtureArtifact(name) {
   return PACKAGE_IDS.has(packageId) || NAMES.some((fn) => sourcePrefix === fn.toLowerCase());
 }
 
-/** Whether a registered trigger's URI names a fixture function. */
-export function isFixtureTrigger(trigger) {
+/** Whether an event names this project's fixture function or its read-back Cloud Run service. */
+export function isFixtureTrigger(event, trigger, deployedUri) {
+  const name = FIXTURE_FUNCTIONS[event];
+  if (!name) return false;
   let uri;
   try {
     uri = new URL(trigger?.functionUri);
   } catch {
     return false;
   }
+  if (uri.protocol !== "https:" || uri.username || uri.password || uri.search || uri.hash)
+    return false;
   if (uri.hostname.endsWith(".cloudfunctions.net"))
-    return NAMES.some((fn) => uri.pathname === `/${fn}`);
+    return (
+      uri.hostname === `${REGION}-fireemu-oracle-idp.cloudfunctions.net` &&
+      uri.pathname === `/${name}`
+    );
   if (!uri.hostname.endsWith(".run.app")) return false;
-  const service = uri.hostname.split(".")[0];
-  const parts = service.split("-");
-  return (
-    parts.length === 3 &&
-    /^[a-z0-9]+$/.test(parts[1]) &&
-    /^[a-z]{2}$/.test(parts[2]) &&
-    NAMES.some((fn) => parts[0] === fn.toLowerCase())
-  );
+  try {
+    return uri.href === new URL(deployedUri).href;
+  } catch {
+    return false;
+  }
 }
 
 /** A failed CLI call without its output: the exit and at most one short line (SF-5). */
@@ -205,11 +209,15 @@ export function createDeployer({
     return missing;
   }
 
-  async function listFunctions() {
+  async function listFunctionResources() {
     const { status, json } = await call("GET", `${functionsUrl}?pageSize=100`);
     if (status !== 200) throw new Error(`functions list: HTTP ${status}`);
     if (json?.nextPageToken) throw new Error("functions list: more than one page");
-    return (json?.functions ?? []).map((fn) => fn.name.split("/").at(-1));
+    return json?.functions ?? [];
+  }
+
+  async function listFunctions() {
+    return (await listFunctionResources()).map((fn) => fn.name.split("/").at(-1));
   }
 
   async function blockingConfig() {
@@ -327,20 +335,19 @@ export function createDeployer({
    */
   async function verifyRegistered() {
     const triggers = (await blockingConfig()).triggers ?? {};
-    for (const [event, fn] of Object.entries(FIXTURE_FUNCTIONS)) {
-      const uri = triggers[event]?.functionUri;
-      if (typeof uri !== "string" || !uri.toLowerCase().includes(fn.toLowerCase()))
-        throw new Error(`trigger ${event} is not registered to ${fn}`);
-    }
-    const existing = await listFunctions();
+    const resources = await listFunctionResources();
+    const existing = resources.map((resource) => resource.name.split("/").at(-1));
     const missing = NAMES.filter((fn) => !existing.includes(fn));
     if (missing.length) throw new Error(`functions missing after deploy: ${missing.join(", ")}`);
     const extra = existing.filter((fn) => !NAMES.includes(fn));
     if (extra.length) throw new Error(`unexpected functions after deploy: ${extra.join(", ")}`);
+    for (const [event, fn] of Object.entries(FIXTURE_FUNCTIONS)) {
+      const deployedUri = resources.find((resource) => resource.name.endsWith(`/functions/${fn}`))
+        ?.serviceConfig?.uri;
+      if (!isFixtureTrigger(event, triggers[event], deployedUri))
+        throw new Error(`trigger ${event} is not registered to ${fn}`);
+    }
     for (const event of Object.keys(FIXTURE_FUNCTIONS)) {
-      const host = new URL(triggers[event].functionUri).hostname;
-      if (!host.endsWith(".run.app") && !host.endsWith(".cloudfunctions.net"))
-        throw new Error(`trigger ${event} names an unexpected host`);
       await fetchImpl(triggers[event].functionUri, {
         method: "POST",
         redirect: "error",
@@ -418,6 +425,14 @@ export function createDeployer({
         return undefined;
       }
     };
+    const functionUris = new Map();
+    await step("function URI read", async () => {
+      for (const resource of await listFunctionResources()) {
+        const name = resource.name.split("/").at(-1);
+        if (NAMES.includes(name) && typeof resource.serviceConfig?.uri === "string")
+          functionUris.set(name, resource.serviceConfig.uri);
+      }
+    });
     await step("functions:delete", async () => {
       const present = (await listFunctions()).filter((fn) => NAMES.includes(fn));
       if (present.length === 0) return;
@@ -446,7 +461,8 @@ export function createDeployer({
     await step("blocking config", async () => {
       const current = await blockingConfig();
       const foreign = Object.entries(current.triggers ?? {}).filter(
-        ([, t]) => !isFixtureTrigger(t),
+        ([event, trigger]) =>
+          !isFixtureTrigger(event, trigger, functionUris.get(FIXTURE_FUNCTIONS[event])),
       );
       // Only the fixture's triggers are taken out; another trigger stops the run untouched.
       if (foreign.length)

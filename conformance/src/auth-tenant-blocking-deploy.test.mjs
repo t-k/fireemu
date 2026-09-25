@@ -53,7 +53,10 @@ function fakeCloud({
       });
     if (hostname === "cloudfunctions.googleapis.com")
       return json(200, {
-        functions: state.functions.map((name) => ({ name: `x/functions/${name}` })),
+        functions: state.functions.map((name) => ({
+          name: `x/functions/${name}`,
+          serviceConfig: { uri: fn(name).functionUri },
+        })),
       });
     if (pathname.endsWith("/config")) {
       if (method === "PATCH") state.blocking = JSON.parse(init.body).blockingFunctions;
@@ -199,6 +202,49 @@ test("a trigger of another function stops the removal untouched (MF-1)", async (
   assert.deepEqual(state.blocking.triggers.beforeCreate, fn("someoneElse"));
 });
 
+test("a same-named trigger in another project is neither verified nor removed", async () => {
+  const { deployer, state, calls } = fakeCloud();
+  const dir = await buildDir();
+  await deployer.preflight();
+  await deployer.deploy(source, dir);
+  const foreign = {
+    functionUri: "https://us-central1-other-project.cloudfunctions.net/atbBeforeCreate",
+  };
+  state.blocking.triggers.beforeCreate = foreign;
+  await assert.rejects(deployer.verifyRegistered(), /beforeCreate/);
+  assert.ok(
+    !calls.some((call) => call.startsWith("POST us-central1-other-project.cloudfunctions.net")),
+  );
+  await assert.rejects(deployer.remove(dir), /another function/);
+  assert.deepEqual(state.blocking.triggers.beforeCreate, foreign);
+  assert.ok(!calls.some((call) => call.startsWith("PATCH identitytoolkit.googleapis.com")));
+});
+
+test("a same-named Run service in another project is not removed", async () => {
+  const { deployer, state, calls } = fakeCloud();
+  const dir = await buildDir();
+  await deployer.preflight();
+  await deployer.deploy(source, dir);
+  const foreign = { functionUri: "https://atbbeforecreate-def456-uc.a.run.app" };
+  state.blocking.triggers.beforeCreate = foreign;
+  await assert.rejects(deployer.verifyRegistered(), /beforeCreate/);
+  assert.ok(!calls.some((call) => call.startsWith("POST atbbeforecreate-def456-uc.a.run.app")));
+  await assert.rejects(deployer.remove(dir), /another function/);
+  assert.deepEqual(state.blocking.triggers.beforeCreate, foreign);
+  assert.ok(!calls.some((call) => call.startsWith("PATCH identitytoolkit.googleapis.com")));
+});
+
+test("a restore cannot claim a Run trigger without its live fixture service", async () => {
+  const trigger = fn("atbBeforeCreate");
+  const { deployer, state, calls } = fakeCloud({
+    blocking: { triggers: { beforeCreate: trigger } },
+  });
+  deployer.adoptLeftovers();
+  await assert.rejects(deployer.remove(await buildDir()), /another function/);
+  assert.deepEqual(state.blocking.triggers.beforeCreate, trigger);
+  assert.ok(!calls.some((call) => call.startsWith("PATCH identitytoolkit.googleapis.com")));
+});
+
 test("fixture artifacts are recognised by function name only", () => {
   assert.ok(isFixtureArtifact("fireemu--oracle--idp__us--central1__atb_before_create"));
   assert.ok(isFixtureArtifact("fireemu--oracle--idp__us--central1__atb_before_send_sms/cache"));
@@ -207,9 +253,29 @@ test("fixture artifacts are recognised by function name only", () => {
   assert.ok(!isFixtureArtifact("fireemu--oracle--idp__us--central1__atb_before_create_other"));
   assert.ok(!isFixtureArtifact("other--project__us--central1__atb_before_create"));
   assert.ok(!isFixtureArtifact("atbBeforeSignInOther/function-source.zip"));
-  assert.ok(isFixtureTrigger(fn("atbBeforeCreate")));
-  assert.ok(!isFixtureTrigger(fn("hello")));
-  assert.ok(!isFixtureTrigger(fn("atbBeforeCreateOther")));
+  assert.ok(
+    isFixtureTrigger("beforeCreate", fn("atbBeforeCreate"), fn("atbBeforeCreate").functionUri),
+  );
+  assert.ok(!isFixtureTrigger("beforeCreate", fn("hello"), fn("atbBeforeCreate").functionUri));
+  assert.ok(
+    !isFixtureTrigger(
+      "beforeCreate",
+      fn("atbBeforeCreateOther"),
+      fn("atbBeforeCreate").functionUri,
+    ),
+  );
+  assert.ok(
+    !isFixtureTrigger(
+      "beforeCreate",
+      { functionUri: "https://us-central1-other-project.cloudfunctions.net/atbBeforeCreate" },
+      fn("atbBeforeCreate").functionUri,
+    ),
+  );
+  assert.ok(
+    isFixtureTrigger("beforeCreate", {
+      functionUri: "https://us-central1-fireemu-oracle-idp.cloudfunctions.net/atbBeforeCreate",
+    }),
+  );
 });
 
 test("the blocking corpus is valid", () => {

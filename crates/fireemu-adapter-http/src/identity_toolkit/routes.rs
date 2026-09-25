@@ -211,6 +211,7 @@ pub(crate) enum Handler {
     CreateAuthUri,
     Projects,
     RecaptchaParams,
+    RecaptchaConfig,
     PasswordPolicy,
     MfaEnrollmentStart,
     MfaEnrollmentFinalize,
@@ -268,6 +269,7 @@ impl Handler {
         Self::CreateAuthUri,
         Self::Projects,
         Self::RecaptchaParams,
+        Self::RecaptchaConfig,
         Self::PasswordPolicy,
         Self::MfaEnrollmentStart,
         Self::MfaEnrollmentFinalize,
@@ -650,6 +652,12 @@ pub(crate) const ROUTES: &[Route] = &[
         "/identitytoolkit.googleapis.com/v2/passwordPolicy",
         "passwordPolicy",
         Handler::PasswordPolicy,
+    ),
+    end_user(
+        "GET",
+        "/identitytoolkit.googleapis.com/v2/recaptchaConfig",
+        "recaptchaConfig",
+        Handler::RecaptchaConfig,
     ),
     end_user(
         "POST",

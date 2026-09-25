@@ -1708,6 +1708,9 @@ fn exported_password_policy(policy: &PasswordPolicy) -> PasswordPolicyRecord {
     PasswordPolicyRecord {
         enforcement_state: match policy.enforcement_state {
             EnforcementState::Off => "OFF".to_owned(),
+            EnforcementState::Unspecified => {
+                "PASSWORD_POLICY_ENFORCEMENT_STATE_UNSPECIFIED".to_owned()
+            }
             EnforcementState::Enforce => "ENFORCE".to_owned(),
         },
         force_upgrade_on_signin: policy.force_upgrade_on_signin,
@@ -1733,6 +1736,7 @@ fn imported_password_policy(
 ) -> Result<PasswordPolicy, ArtifactError> {
     let state = match record.enforcement_state.as_str() {
         "OFF" => EnforcementState::Off,
+        "PASSWORD_POLICY_ENFORCEMENT_STATE_UNSPECIFIED" => EnforcementState::Unspecified,
         "ENFORCE" => EnforcementState::Enforce,
         _ => {
             return Err(ArtifactError::new(

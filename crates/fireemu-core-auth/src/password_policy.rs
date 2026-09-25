@@ -13,6 +13,9 @@ pub enum EnforcementState {
     Off,
     /// New passwords are checked against the configured constraints.
     Enforce,
+    /// Written without a state (production's `PASSWORD_POLICY_ENFORCEMENT_STATE_UNSPECIFIED`,
+    /// which it stores and reports as no state); checks nothing, as `Off`.
+    Unspecified,
 }
 
 /// Operation whose password is being checked.
@@ -102,6 +105,10 @@ pub struct PasswordPolicy {
     /// (sandbox reads 2026-09-23 and 2026-09-25), while applying the same checks as an unset
     /// policy here.
     pub configured: bool,
+    /// Whether the minimum was written. Production reports only the options that were written
+    /// (a policy with a maximum only has no minimum in its projections) while checking the
+    /// minimum of 6 all the same.
+    pub min_length_written: bool,
 }
 
 impl Default for PasswordPolicy {
@@ -117,6 +124,7 @@ impl Default for PasswordPolicy {
             require_non_alphanumeric: false,
             allowed_non_alphanumeric: default_allowed_non_alphanumeric(),
             configured: false,
+            min_length_written: false,
         }
     }
 }
@@ -168,6 +176,7 @@ impl PasswordPolicy {
             require_non_alphanumeric,
             allowed_non_alphanumeric,
             configured: true,
+            min_length_written: true,
         })
     }
 

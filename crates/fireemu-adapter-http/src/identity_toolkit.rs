@@ -10074,8 +10074,14 @@ fn oob_link(
     request_type: OobRequestType,
     code: &str,
     body: &Value,
-    tenant: Option<&str>,
+    store: &AuthStore,
 ) -> String {
+    let tenant = store.tenant_id();
+    // The link names the project's default locale, as production's does (sandbox recording
+    // 2026-09-25, auth-config-sdk/other-fields#reset-under-locale).
+    let lang = percent_encode(&project_config::default_locale(
+        store.stored_config_members(),
+    ));
     let host = headers.host.as_deref().unwrap_or("127.0.0.1:9099");
     let mode = match request_type {
         OobRequestType::PasswordReset => "resetPassword",
@@ -10084,7 +10090,7 @@ fn oob_link(
         OobRequestType::VerifyAndChangeEmail => "verifyAndChangeEmail",
     };
     let mut link = format!(
-        "http://{host}/emulator/action?mode={mode}&lang=en&oobCode={code}&apiKey=fake-api-key"
+        "http://{host}/emulator/action?mode={mode}&lang={lang}&oobCode={code}&apiKey=fake-api-key"
     );
     if let Some(url) = str_field(body, "continueUrl") {
         link.push_str("&continueUrl=");
@@ -10299,20 +10305,14 @@ fn send_oob_code(
         json!({"kind": "identitytoolkit#GetOobConfirmationCodeResponse", "email": email});
     if return_oob_link {
         response["oobCode"] = json!(code);
-        response["oobLink"] = json!(oob_link(
-            headers,
-            request_type,
-            &code,
-            body,
-            store.tenant_id()
-        ));
+        response["oobLink"] = json!(oob_link(headers, request_type, &code, body, store));
     } else {
         // The mail that is not sent: the official emulator prints the link instead.
         store.push_credential_notice(CredentialNotice::EmailAction {
             request_type,
             email: email.clone(),
             new_email: store.oob_code(&code).and_then(|c| c.new_email.clone()),
-            link: oob_link(headers, request_type, &code, body, store.tenant_id()),
+            link: oob_link(headers, request_type, &code, body, store),
         });
     }
     JsonResponse {
@@ -10728,13 +10728,7 @@ fn action_reset_password(
     };
     let template = format!(
         "{}&newPassword=NEW_PASSWORD_HERE",
-        oob_link(
-            headers,
-            entry.request_type,
-            code,
-            &Value::Null,
-            store.tenant_id()
-        )
+        oob_link(headers, entry.request_type, code, &Value::Null, store)
     );
     let Some(new_password) = new_password else {
         return action_response(
@@ -12064,7 +12058,7 @@ fn emulator_route(
                     json!({
                         "email": c.email,
                         "oobCode": c.code,
-                        "oobLink": oob_link(headers, c.request_type, &c.code, &Value::Null, store.tenant_id()),
+                        "oobLink": oob_link(headers, c.request_type, &c.code, &Value::Null, store),
                         "requestType": c.request_type.as_str(),
                     })
                 })

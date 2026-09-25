@@ -676,3 +676,9 @@ test("a quota-limited row passes only through its matching re-observation", asyn
   assert.equal(row(original, "MISMATCH", invalid), "MISMATCH");
   assert.equal(row("auth-mfa/sms#x", "INDETERMINATE", invalid), "INDETERMINATE");
 });
+
+test("the local session's pinned clock starts at the current second with non-zero microseconds", async () => {
+  const { pinnedClockStart } = await import("./auth-mfa/run.mjs");
+  assert.equal(pinnedClockStart(Date.parse("2026-09-25T08:30:12.987Z")), "2026-09-25T08:30:12.123456789Z");
+  assert.match(pinnedClockStart(), /^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.123456789Z$/);
+});

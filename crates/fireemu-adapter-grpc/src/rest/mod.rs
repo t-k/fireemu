@@ -448,6 +448,21 @@ impl RestState {
         Ok(Caller { principal, epoch })
     }
 
+    /// The caller of a data-plane request, with a credential refusal in the shape REST
+    /// answers it (see `front_end_refusal`).
+    fn request_principal(
+        &self,
+        req: &RestRequest,
+        path: &str,
+        action: Option<&str>,
+    ) -> Result<Caller, Status> {
+        self.principal(
+            req.authorization.as_deref(),
+            crate::service::project_of_resource(path),
+        )
+        .map_err(|status| front_end_refusal(status, &req.method, action))
+    }
+
     fn write_guard<'a>(&'a self, caller: &'a Caller) -> rules::BoxedWriteGuard<'a> {
         let inner = rules::write_guard(self.rules.as_ref(), &caller.principal);
         let barrier = self.local.barrier();
@@ -880,10 +895,7 @@ impl RestState {
         // App Check, once the route and the target project are resolved and before the
         // Firebase Auth credential, Security Rules and every mutation (spec 7.4).
         self.admit_app_check(req, path, action)?;
-        let principal = self.principal(
-            req.authorization.as_deref(),
-            crate::service::project_of_resource(path),
-        )?;
+        let principal = self.request_principal(req, path, action)?;
         if let Some(action) = action {
             if req.method != "POST" {
                 return Ok(not_found_text());
@@ -1760,6 +1772,43 @@ const CUSTOM_METHODS: &[&str] = &[
     "partitionQuery",
     "executePipeline",
 ];
+
+/// The gRPC method a REST route transcodes to, as production's front end names it in the
+/// `ErrorInfo` of a refused credential. A document read is `GetOrListDocuments` (recorded);
+/// the others are the methods of the Firestore service.
+fn transcoded_method(http_method: &str, action: Option<&str>) -> Option<&'static str> {
+    Some(match (http_method, action) {
+        ("GET", None) => "GetOrListDocuments",
+        ("POST", None) => "CreateDocument",
+        ("PATCH", None) => "UpdateDocument",
+        ("DELETE", None) => "DeleteDocument",
+        ("POST", Some("commit")) => "Commit",
+        ("POST", Some("batchWrite")) => "BatchWrite",
+        ("POST", Some("batchGet")) => "BatchGetDocuments",
+        ("POST", Some("beginTransaction")) => "BeginTransaction",
+        ("POST", Some("rollback")) => "Rollback",
+        ("POST", Some("runQuery")) => "RunQuery",
+        ("POST", Some("runAggregationQuery")) => "RunAggregationQuery",
+        ("POST", Some("listCollectionIds")) => "ListCollectionIds",
+        ("POST", Some("partitionQuery")) => "PartitionQuery",
+        ("POST", Some("executePipeline")) => "ExecutePipeline",
+        _ => return None,
+    })
+}
+
+/// A credential refusal as REST carries it: the front end's OAuth refusal gains the
+/// `ErrorInfo` production attaches; every other refusal is unchanged.
+fn front_end_refusal(status: Status, http_method: &str, action: Option<&str>) -> Status {
+    match transcoded_method(http_method, action) {
+        Some(method)
+            if status.code() == Code::Unauthenticated
+                && status.message() == rules::INVALID_CREDENTIALS_MESSAGE =>
+        {
+            crate::production_status::credentials_missing(status.message(), method)
+        }
+        _ => status,
+    }
+}
 
 fn database_of(resource: &str) -> Result<String, Status> {
     resource

@@ -29,15 +29,14 @@ parity / documented-divergence / debt classification as the fixtures (annotation
 from `divergences.json`, keyed `storage-probe/<program>#<step>`), and `check` replays
 fireemu alone against the recorded matrix.
 
-The **Pub/Sub probe** (`src/pubsub-probe/`) is the Cloud Pub/Sub sibling: 9 programs run
+The **Pub/Sub probe** (`src/pubsub-probe/`) is the Cloud Pub/Sub sibling: 12 programs run
 identically through the real `@google-cloud/pubsub` client against the official Pub/Sub
 emulator (the `pubsub-emulator-0.8.35` firebase-tools downloads) and against fireemu — topic
 and subscription lifecycle and validation, publish / pull / ack with attributes, a
 subscription filter, ordering keys, nack redelivery, seek-to-time and the publish error
 codes. Observations are normalized so they never depend on server-assigned message ids or
-wall-clock timing. `record` folds the two runs into `pubsub-matrix.json` (22 parity, 1
-documented divergence: seek replays acknowledged messages that the official emulator drops
-unless `retainAckedMessages` is set), and `check` replays fireemu alone against it.
+wall-clock timing. `record` folds the two runs into `pubsub-matrix.json` (30 parity, 4
+documented divergences), and `check` replays fireemu alone against it.
 
 `check` needs `cargo build -p fireemu` first (or `FIREEMU_BIN=/path/to/fireemu`).
 `CONFORMANCE_VERBOSE=1` streams both supervisors' output.

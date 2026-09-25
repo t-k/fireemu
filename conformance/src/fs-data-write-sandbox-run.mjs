@@ -824,6 +824,15 @@ export function deltaV3RecoveryEnvironment({
   };
 }
 
+export function deltaV3RecoveryOutcome(status, cancelBulkDelete) {
+  if (cancelBulkDelete) {
+    if (status === "bulk-delete-cancelled" || status === "bulk-delete-done") return status;
+    throw new Error("delta-v3 cancel run did not leave its operation terminal");
+  }
+  if (status === "complete") return "recovered";
+  throw new Error("delta-v3 recovery did not verify exact typed absence and group emptiness");
+}
+
 export async function findV3RecoveryResume(privateDir, expectedNames) {
   if (
     typeof privateDir !== "string" ||
@@ -1161,10 +1170,10 @@ async function recoverDeltaV3({ cancelBulkDelete = false } = {}) {
         1_200_000,
       );
       const recovered = JSON.parse(await readFile(resume.journalPath, "utf8"));
-      if (recovered.status !== "complete" || recovered.mode !== "cleanup-delta-v3") {
+      if (recovered.mode !== "cleanup-delta-v3") {
         throw new Error("delta-v3 recovery did not verify exact typed absence and group emptiness");
       }
-      outcome = "recovered";
+      outcome = deltaV3RecoveryOutcome(recovered.status, cancelBulkDelete);
     } finally {
       try {
         const cumulativeCount = sessionRequestCount(JSON.parse(await readFile(meta, "utf8")));

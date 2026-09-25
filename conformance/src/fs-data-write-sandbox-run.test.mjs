@@ -18,6 +18,7 @@ import {
   legacyRecoveryEnvironment,
   v3RecoveryEnvironment,
   deltaV3RecoveryEnvironment,
+  deltaV3RecoveryOutcome,
   prepareSandboxCorpus,
   productionRestEnvironment,
   remainingSandboxBudget,
@@ -530,6 +531,18 @@ test("delta-v3 recovery resumes only its reserved six-name journal with the rema
       cancelBulkDelete: true,
     });
     assert.equal(cancelling.FIRESTORE_PROBE_DELTA_V3_CANCEL_BULK_DELETE, "1");
+    // A cancel run ends once the operation is terminal; only a plain run completes cleanup.
+    assert.equal(deltaV3RecoveryOutcome("complete", false), "recovered");
+    assert.equal(deltaV3RecoveryOutcome("bulk-delete-cancelled", true), "bulk-delete-cancelled");
+    assert.equal(deltaV3RecoveryOutcome("bulk-delete-done", true), "bulk-delete-done");
+    for (const [status, cancel] of [
+      ["bulk-delete-cancelled", false],
+      ["complete", true],
+      ["bulk-delete-cancel-intent", true],
+      ["request-reserved", false],
+    ]) {
+      assert.throws(() => deltaV3RecoveryOutcome(status, cancel), /did not/, `${status} ${cancel}`);
+    }
     assert.throws(
       () =>
         deltaV3RecoveryEnvironment({

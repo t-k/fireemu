@@ -1080,6 +1080,7 @@ async function writeDeltaCleanupJournal(status, extra = {}) {
     managedRequestCount: managedClearState.shrinkRequestCounter.current(),
     bulkDeleteIntent: managedClearState.bulkDeleteIntent ?? null,
     bulkDeleteOperation: managedClearState.bulkDeleteOperation ?? null,
+    bulkDeleteCancelIntent: managedClearState.bulkDeleteCancelIntent ?? null,
     bulkDeleteCancelled: managedClearState.bulkDeleteCancelled ?? null,
     pendingMutation: managedClearState.pendingMutation ?? null,
     lastMutation: managedClearState.lastMutation ?? null,
@@ -1152,63 +1153,82 @@ async function deleteDeltaV3Document(base, name) {
   await writeDeltaCleanupJournal("cleanup-deleted");
 }
 
+// A cancel run stops within this many polls, well inside the parent's 20-minute child
+// timeout, and never starts the shrink-then-delete cleanup itself.
+const DELTA_V3_CANCEL_POLL_LIMIT = 12;
+
+async function readDeltaV3Operation() {
+  const response = await managedShrinkRequest(
+    "delta-v3 bulk-delete poll",
+    `${SCHEME}://${HOST}/v1/${managedClearState.bulkDeleteOperation}`,
+    { headers: authorized(), signal: timeoutSignal() },
+  );
+  if (!response.ok) throw new Error(`delta-v3 bulk-delete poll ${response.status}`);
+  return response.json();
+}
+
+// Records a terminal operation; returns false while it is still running.
+async function settleDeltaV3Operation(state) {
+  if (state.done !== true) return false;
+  const operation = managedClearState.bulkDeleteOperation;
+  if (managedClearState.bulkDeleteCancelIntent === operation && state.error) {
+    // google.rpc.Code CANCELLED after this task's own journaled cancel: the operation
+    // stopped, and a later cleanup deletes what remains.
+    if (state.error.code !== 1 || state.name !== operation) {
+      throw new Error("cancelled delta-v3 bulk delete ended in an unexpected state");
+    }
+    managedClearState.bulkDeleteCancelled = operation;
+  } else {
+    validateManagedClearOperation(state, PROJECT);
+  }
+  managedClearState.bulkDeleteOperation = null;
+  managedClearState.bulkDeleteIntent = null;
+  managedClearState.bulkDeleteCancelIntent = null;
+  await writeDeltaCleanupJournal(
+    managedClearState.bulkDeleteCancelled ? "bulk-delete-cancelled" : "bulk-delete-done",
+  );
+  return true;
+}
+
 async function cancelDeltaV3BulkDelete() {
   const operation = managedClearState?.bulkDeleteOperation;
   if (!operation)
     throw new Error("delta-v3 recovery has no journaled bulk-delete operation to cancel");
-  // Write-ahead: a cancel is idempotent, so a crash after this row only repeats it.
-  managedClearState.bulkDeleteCancelIntent = operation;
-  await writeDeltaCleanupJournal("bulk-delete-cancel-intent", {
-    bulkDeleteCancelIntent: operation,
-  });
-  const response = await managedShrinkRequest(
-    "delta-v3 bulk-delete cancel",
-    `${SCHEME}://${HOST}/v1/${operation}:cancel`,
-    {
-      method: "POST",
-      headers: authorized({ "content-type": "application/json" }),
-      body: "{}",
-      signal: timeoutSignal(),
-    },
-  );
-  if (!response.ok) throw new Error(`delta-v3 bulk-delete cancel ${response.status}`);
+  // A journaled intent means the cancel may already have been sent: never send it again.
+  if (managedClearState.bulkDeleteCancelIntent !== operation) {
+    // Read first: an operation that already ended is recorded, not cancelled.
+    if (await settleDeltaV3Operation(await readDeltaV3Operation())) return;
+    managedClearState.bulkDeleteCancelIntent = operation;
+    await writeDeltaCleanupJournal("bulk-delete-cancel-intent");
+    const response = await managedShrinkRequest(
+      "delta-v3 bulk-delete cancel",
+      `${SCHEME}://${HOST}/v1/${operation}:cancel`,
+      {
+        method: "POST",
+        headers: authorized({ "content-type": "application/json" }),
+        body: "{}",
+        signal: timeoutSignal(),
+      },
+    );
+    if (!response.ok) throw new Error(`delta-v3 bulk-delete cancel ${response.status}`);
+  }
+  await pollDeltaV3BulkDelete(DELTA_V3_CANCEL_POLL_LIMIT);
 }
 
-async function pollDeltaV3BulkDelete() {
+async function pollDeltaV3BulkDelete(limit = 100) {
   if (!managedClearState?.bulkDeleteOperation) {
     throw new Error("delta-v3 recovery cannot resume without a durable bulk-delete operation");
   }
-  const api = `${SCHEME}://${HOST}/v1`;
-  const pollLimit = Math.min(100, 400 - managedClearState.shrinkRequestCounter.current());
+  const pollLimit = Math.min(limit, 400 - managedClearState.shrinkRequestCounter.current());
   for (let attempt = 0; attempt < pollLimit; attempt += 1) {
     // A production bulk delete runs for minutes; poll at the managed interval (60 s).
     await new Promise((wake) => setTimeout(wake, MANAGED_POLL_MS));
-    const response = await managedShrinkRequest(
-      "delta-v3 bulk-delete poll",
-      `${api}/${managedClearState.bulkDeleteOperation}`,
-      { headers: authorized(), signal: timeoutSignal() },
+    if (await settleDeltaV3Operation(await readDeltaV3Operation())) return;
+  }
+  if (managedClearState.bulkDeleteCancelIntent === managedClearState.bulkDeleteOperation) {
+    throw new Error(
+      "delta-v3 bulk delete is still cancelling; the journal keeps the operation and the sent cancel",
     );
-    if (!response.ok) throw new Error(`delta-v3 bulk-delete poll ${response.status}`);
-    const state = await response.json();
-    if (state.done === true) {
-      const operation = managedClearState.bulkDeleteOperation;
-      if (managedClearState.bulkDeleteCancelIntent === operation && state.error) {
-        // google.rpc.Code CANCELLED: the operation stopped; the cleanup deletes what remains.
-        if (state.error.code !== 1 || state.name !== operation) {
-          throw new Error("cancelled delta-v3 bulk delete ended in an unexpected state");
-        }
-        managedClearState.bulkDeleteCancelled = operation;
-      } else {
-        validateManagedClearOperation(state, PROJECT);
-      }
-      managedClearState.bulkDeleteOperation = null;
-      managedClearState.bulkDeleteIntent = null;
-      managedClearState.bulkDeleteCancelIntent = null;
-      await writeDeltaCleanupJournal(
-        managedClearState.bulkDeleteCancelled ? "bulk-delete-cancelled" : "bulk-delete-done",
-      );
-      return;
-    }
   }
   throw new Error(
     "delta-v3 bulk-delete remains nonterminal; preserve its journal and block new sends",
@@ -1721,18 +1741,40 @@ async function runDeltaV3RecoveryOnly() {
     cleanupDeleteIntent: null,
     bulkDeleteIntent: journal.bulkDeleteIntent ?? null,
     bulkDeleteOperation: journal.bulkDeleteOperation ?? null,
-    bulkDeleteCancelled: null,
-    bulkDeleteCancelIntent: null,
+    bulkDeleteCancelled: journal.bulkDeleteCancelled ?? null,
+    bulkDeleteCancelIntent: journal.bulkDeleteCancelIntent ?? null,
     pendingMutation: journal.pendingMutation ?? null,
     lastMutation: journal.lastMutation ?? null,
   };
+  if (
+    managedClearState.bulkDeleteCancelIntent !== null &&
+    managedClearState.bulkDeleteCancelIntent !== managedClearState.bulkDeleteOperation
+  ) {
+    throw new Error("delta-v3 cancel intent names an operation other than the journaled one");
+  }
+  if (
+    managedClearState.bulkDeleteCancelled !== null &&
+    !new RegExp(`^projects/${PROJECT}/databases/\\(default\\)/operations/[A-Za-z0-9_-]+$`).test(
+      managedClearState.bulkDeleteCancelled,
+    )
+  ) {
+    throw new Error("delta-v3 cancelled operation escaped the fixed sandbox");
+  }
   if (DELTA_V3_CANCEL_BULK_DELETE && !managedClearState.bulkDeleteOperation) {
     throw new Error("delta-v3 recovery has no journaled bulk-delete operation to cancel");
   }
   const base = `${SCHEME}://${HOST}/v1/projects/${PROJECT}/databases/(default)/documents`;
   managedClearBlocked = true;
   await resolveDeltaPendingMutation();
-  if (DELTA_V3_CANCEL_BULK_DELETE) await cancelDeltaV3BulkDelete();
+  if (DELTA_V3_CANCEL_BULK_DELETE) {
+    // The cleanup runs as a separate recovery with its own full child timeout, so a
+    // slow cancel can never strand a half-shrunk document.
+    await cancelDeltaV3BulkDelete();
+    if (META_OUT) {
+      await writeFile(META_OUT, `${JSON.stringify({ requestCount })}\n`, { mode: 0o600 });
+    }
+    return;
+  }
   if (managedClearState.bulkDeleteOperation) await pollDeltaV3BulkDelete();
   await clearDeltaV3Exact(base, true);
   if (META_OUT) await writeFile(META_OUT, `${JSON.stringify({ requestCount })}\n`, { mode: 0o600 });

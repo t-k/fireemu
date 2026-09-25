@@ -35,6 +35,18 @@ const statuses = new Set([
   "PENDING_REVIEW",
 ]);
 
+// The comparison statuses that match production (conformance/src/auth-mfa/run.mjs `classify`):
+// the same answer; one of the two recordings' answers where they differed; for the phone control
+// starts of auth-mfa/lifetime, an answer production recorded for such a row (it depends on the
+// second the sign-in and the enrollment fell in); and a quota-limited row whose re-observation
+// matched with fireemu giving the re-observed answer on the row itself (scope decision M10).
+const MATCHING = new Set([
+  "MATCH",
+  "MATCH_NONDETERMINISTIC",
+  "MATCH_TIMING_DEPENDENT",
+  "REOBSERVED_MATCH",
+]);
+
 const load = () => JSON.parse(readFileSync(closurePath, "utf8"));
 const readJson = (path) =>
   JSON.parse(readFileSync(fileURLToPath(new URL(`../../${path}`, import.meta.url)), "utf8"));
@@ -145,7 +157,7 @@ test("AUTH-MFA closure inventory cannot silently omit a declared condition", () 
     }
     const documented = new Set(divergences.map(({ row }) => row));
     const off = rows
-      .filter(({ status, row }) => status !== "MATCH" && !documented.has(row))
+      .filter(({ status, row }) => !MATCHING.has(status) && !documented.has(row))
       .map(({ row }) => row);
     if (label === "AUTH-MFA/closure-review") {
       assert.equal(closure.closureReview?.decision, "APPROVED", label);
@@ -182,7 +194,7 @@ test("AUTH-MFA closure inventory cannot silently omit a declared condition", () 
 test("scope decisions are recorded, not implied", () => {
   const closure = load();
   const decided = new Set(closure.scopeDecisions.map(({ id }) => id));
-  for (const id of ["M1", "M2", "M3", "M4", "M5", "M6", "M7", "M8"]) {
+  for (const id of ["M1", "M2", "M3", "M4", "M5", "M6", "M7", "M8", "M9", "M10", "M11"]) {
     assert.ok(decided.has(id), `scope decision ${id} must be recorded`);
   }
   for (const decision of closure.scopeDecisions) {

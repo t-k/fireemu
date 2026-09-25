@@ -1,9 +1,9 @@
 {
   "kind": "auth-mfa-comparison-v1",
-  "artifactSha256": "9988fdbe13b84459fd756ff4c6beee6b316d665be939ba5c293a614a8c101fda",
-  "fixtureSha256": "729c47ce045364e2a995b2f7e6a3f35beb1a6b20e99cb7c78a3e662d01f81919",
+  "artifactSha256": "86172226d07d1f6e850a58934c24c650b05eda345361ab4058aaea174f921356",
+  "fixtureSha256": "fbfe5dcb4f3af72c849a48dc28d3829d6205e74833439589f98b03cbf1163155",
   "summary": {
-    "MATCH": 411,
+    "MATCH": 441,
     "MATCH_NONDETERMINISTIC": 5,
     "REOBSERVED_MATCH": 2,
     "MATCH_TIMING_DEPENDENT": 1
@@ -1255,6 +1255,126 @@
     },
     {
       "row": "auth-mfa/lifetime-short#control-start-r330",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/lifetime-sms#create-m450",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/lifetime-sms#sign-in-m450",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/lifetime-sms#start-m450",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/lifetime-sms#finalize-m450",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/lifetime-sms#create-m600",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/lifetime-sms#sign-in-m600",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/lifetime-sms#start-m600",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/lifetime-sms#finalize-m600",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/lifetime-sms#create-m1800",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/lifetime-sms#sign-in-m1800",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/lifetime-sms#start-m1800",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/lifetime-sms#finalize-m1800",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/lifetime-sms#pending-m1800",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/lifetime-sms#pending-m600",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/lifetime-sms#pending-m450",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/lifetime-sms#sms-start-aged-m450",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/lifetime-sms#aged-pending-m450",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/lifetime-sms#control-pending-m450",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/lifetime-sms#control-start-m450",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/lifetime-sms#control-finalize-m450",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/lifetime-sms#sms-start-aged-m600",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/lifetime-sms#aged-pending-m600",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/lifetime-sms#control-pending-m600",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/lifetime-sms#control-start-m600",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/lifetime-sms#control-finalize-m600",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/lifetime-sms#sms-start-aged-m1800",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/lifetime-sms#aged-pending-m1800",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/lifetime-sms#control-pending-m1800",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/lifetime-sms#control-start-m1800",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/lifetime-sms#control-finalize-m1800",
       "status": "MATCH"
     },
     {

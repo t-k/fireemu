@@ -12,7 +12,9 @@ use fireemu_core_session::clock::VirtualClock;
 use fireemu_core_types::edition::{FirestoreApiMode, FirestoreEdition};
 use fireemu_core_types::time::LogicalInstant;
 use fireemu_proto_firestore::google::firestore::v1 as pb;
+use fireemu_proto_firestore::google::firestore::v1::firestore_client::FirestoreClient;
 use fireemu_proto_firestore::google::firestore::v1::firestore_server::FirestoreServer;
+use tokio_stream::wrappers::ReceiverStream;
 
 const DOCS: &str = "projects/demo-app/databases/(default)/documents";
 
@@ -102,4 +104,36 @@ async fn strict_errors_arrive_as_headers_then_trailers() {
         }
         server.abort();
     }
+}
+
+/// An empty write receives its error while the client keeps the stream open for the answer.
+#[tokio::test]
+async fn an_empty_write_with_an_open_sender_returns_an_error_over_grpc() {
+    let (channel, server) = client(true).await;
+    let mut client = FirestoreClient::new(channel);
+    let (tx, rx) = tokio::sync::mpsc::channel(4);
+    let mut responses = client
+        .write(ReceiverStream::new(rx))
+        .await
+        .unwrap()
+        .into_inner();
+    tx.send(pb::WriteRequest {
+        database: "projects/demo-app/databases/(default)".to_owned(),
+        ..Default::default()
+    })
+    .await
+    .unwrap();
+    let handshake = responses.message().await.unwrap().unwrap();
+    tx.send(pb::WriteRequest {
+        stream_token: handshake.stream_token,
+        writes: vec![pb::Write::default()],
+        ..Default::default()
+    })
+    .await
+    .unwrap();
+    let error = responses.message().await.unwrap_err();
+    assert_eq!(error.code(), tonic::Code::InvalidArgument);
+    assert_eq!(error.message(), "empty write operation");
+    drop(tx);
+    server.abort();
 }

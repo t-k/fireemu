@@ -17993,6 +17993,156 @@ fn strict_tenant_management_requires_allow_tenants() {
     assert_eq!(list().0, 400);
 }
 
+/// A tenant read keeps the project gate until its response is complete, so a disabling config
+/// PATCH cannot finish while that read is waiting for the tenant store.
+#[test]
+fn strict_tenant_reads_serialize_with_disabling_config_patch() {
+    use std::sync::mpsc::{channel, RecvTimeoutError};
+    use std::time::{Duration, Instant};
+
+    let s = Arc::new(with_registry(strict_state()));
+    enable_tenants(&s);
+    let tenants = format!("{V2}/projects/demo-app/tenants");
+    let (status, created) = admin(
+        &s,
+        "POST",
+        &tenants,
+        &json!({"displayName": "atb-read-gate"}),
+    );
+    assert_eq!(status, 200, "{created}");
+    let tenant = created["name"]
+        .as_str()
+        .unwrap()
+        .rsplit('/')
+        .next()
+        .unwrap();
+    let registry = s.registry.as_ref().unwrap();
+    let tenant_store = registry.tenant_store("demo-app", tenant).unwrap();
+    let gate = registry.operation_gate("demo-app", None).unwrap();
+
+    for path in [&tenants, &format!("{tenants}/{tenant}")] {
+        let held_store = tenant_store.lock().unwrap();
+        std::thread::scope(|scope| {
+            let (started_tx, started_rx) = channel();
+            let (patch_tx, patch_rx) = channel();
+            let state = &s;
+            let reader = scope.spawn(move || {
+                started_tx.send(()).unwrap();
+                admin(state, "GET", path, &Value::Null)
+            });
+            started_rx.recv().unwrap();
+            let deadline = Instant::now() + Duration::from_secs(2);
+            let entered_gate = loop {
+                match gate.try_lock() {
+                    Ok(guard) => drop(guard),
+                    Err(std::sync::TryLockError::WouldBlock) => break true,
+                    Err(std::sync::TryLockError::Poisoned(_)) => panic!("project gate poisoned"),
+                }
+                if Instant::now() >= deadline {
+                    break false;
+                }
+                std::thread::yield_now();
+            };
+            if !entered_gate {
+                drop(held_store);
+                reader.join().unwrap();
+                panic!("tenant read {path} did not enter the project gate");
+            }
+            let patcher = scope.spawn(move || {
+                let result = admin(
+                    state,
+                    "PATCH",
+                    &format!("{PROJECT_CONFIG}?updateMask=multiTenant.allowTenants"),
+                    &json!({"multiTenant": {"allowTenants": false}}),
+                );
+                patch_tx.send(result).unwrap();
+            });
+            assert_eq!(
+                patch_rx.recv_timeout(Duration::from_millis(50)),
+                Err(RecvTimeoutError::Timeout),
+                "config PATCH completed before the tenant read"
+            );
+            drop(held_store);
+            let (read_status, read) = reader.join().unwrap();
+            assert_eq!(read_status, 200, "{read}");
+            patcher.join().unwrap();
+            let (patch_status, config_response) = patch_rx.recv().unwrap();
+            assert_eq!(patch_status, 200, "{config_response}");
+        });
+        let (status, refused) = admin(&s, "GET", path, &Value::Null);
+        assert_eq!(
+            status,
+            if path == &tenants { 400 } else { 404 },
+            "{refused}"
+        );
+        enable_tenants(&s);
+    }
+}
+
+/// A tenant read waits only for its own project's gate, while an unregistered routed read can
+/// reuse the routed gate without locking it twice.
+#[test]
+fn tenant_reads_use_their_own_project_gate() {
+    use std::sync::mpsc::channel;
+    use std::time::Duration;
+
+    let s = Arc::new(with_registry(strict_state()));
+    let registry = s.registry.as_ref().unwrap();
+    assert!(registry.register(
+        "worker-alpha",
+        AuthStore::new("worker-alpha", SplitMix64::new(6), TotpPolicy::default()),
+    ));
+    let (status, response) = admin(
+        &s,
+        "PATCH",
+        "/identitytoolkit.googleapis.com/admin/v2/projects/worker-alpha/config?updateMask=multiTenant.allowTenants",
+        &json!({"multiTenant": {"allowTenants": true}}),
+    );
+    assert_eq!(status, 200, "{response}");
+    let collection = format!("{V2}/projects/worker-alpha/tenants");
+    let (status, created) = admin(
+        &s,
+        "POST",
+        &collection,
+        &json!({"displayName": "atb-other-project"}),
+    );
+    assert_eq!(status, 200, "{created}");
+    let item = format!("{V2}/{}", created["name"].as_str().unwrap());
+    let demo_gate = registry.operation_gate("demo-app", None).unwrap();
+    let held_demo = demo_gate.lock().unwrap();
+    std::thread::scope(|scope| {
+        let (result_tx, result_rx) = channel();
+        let state = &s;
+        let collection = &collection;
+        let item = &item;
+        let reader = scope.spawn(move || {
+            result_tx
+                .send((
+                    admin(state, "GET", collection, &Value::Null),
+                    admin(state, "GET", item, &Value::Null),
+                ))
+                .unwrap();
+        });
+        let result = result_rx.recv_timeout(Duration::from_secs(2));
+        drop(held_demo);
+        reader.join().unwrap();
+        let (list, get) = result.expect("worker-alpha reads waited for demo-app's gate");
+        assert_eq!(list.0, 200, "{}", list.1);
+        assert_eq!(get.0, 200, "{}", get.1);
+    });
+
+    let mut routed = with_registry(state());
+    routed.allow_routed_projects = true;
+    let (status, listed) = admin(
+        &routed,
+        "GET",
+        &format!("{V2}/projects/unregistered/tenants"),
+        &Value::Null,
+    );
+    assert_eq!(status, 200, "{listed}");
+    assert_eq!(listed["tenants"], json!([]));
+}
+
 /// Turning tenant management off hides an existing tenant from client Auth without deleting its
 /// users; turning it on again restores access to that namespace.
 #[test]

@@ -2798,6 +2798,35 @@ fn handle_with_policy(
         },
         None => None,
     };
+    // Tenant reads use the route's project to take the parent gate before selecting and locking
+    // a tenant store. An unregistered routed namespace already holds this same gate above.
+    let tenant_read_gate = match resolution {
+        routes::Resolution::Matched {
+            route,
+            project: Some(project),
+            ..
+        } if matches!(
+            route.handler,
+            routes::Handler::TenantList | routes::Handler::TenantGet
+        ) && routed_operation.is_none() =>
+        {
+            match state.registry.as_ref() {
+                Some(registry) => match registry.operation_gate(project, None) {
+                    Some(gate) => Some(gate),
+                    None => return error(500, "INTERNAL"),
+                },
+                None => None,
+            }
+        }
+        _ => None,
+    };
+    let _tenant_read_operation = match tenant_read_gate.as_ref() {
+        Some(gate) => match gate.lock() {
+            Ok(operation) => Some(operation),
+            Err(_) => return error(500, "INTERNAL"),
+        },
+        None => None,
+    };
     let mut pending_routed_project = None;
     let store_arc = if let Some(project) = routed_project {
         let Some(registry) = state.registry.as_ref() else {
@@ -2879,7 +2908,8 @@ fn handle_with_policy(
     // when no registry exists instead of introducing a store/gate deadlock. The adapter-wide
     // gate is reacquired by the blocking commit boundary after the callback returns. End-user
     // requests without a blocking hook still use the adapter-wide gate, which is also used by
-    // the single-store config route.
+    // the single-store config route. Tenant list/get take the parent gate before store selection;
+    // tenant writes acquire that gate inside the registry's guarded methods.
     let operation_gate = if emulator_clear {
         let gate = match state.registry.as_ref() {
             Some(registry) => registry
@@ -3091,7 +3121,17 @@ fn handle_with_policy(
         // project's configuration. Release the request's selected store before that registry
         // operation so initialization never attempts to reacquire the same non-reentrant lock.
         drop(store);
-        drop(routed_operation);
+        // Reads keep an existing routed gate through response construction. Writes release it
+        // because the registry's guarded mutation acquires the project gate itself.
+        let _routed_read_operation = if matches!(
+            route.handler,
+            routes::Handler::TenantList | routes::Handler::TenantGet
+        ) {
+            routed_operation
+        } else {
+            drop(routed_operation);
+            None
+        };
         return tenant_management(state, route.handler, project, tenant, query, body);
     }
     if tenant.is_some() && store.tenant_id() != tenant {

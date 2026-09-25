@@ -194,7 +194,7 @@ test("AUTH-MFA closure inventory cannot silently omit a declared condition", () 
 test("scope decisions are recorded, not implied", () => {
   const closure = load();
   const decided = new Set(closure.scopeDecisions.map(({ id }) => id));
-  for (const id of ["M1", "M2", "M3", "M4", "M5", "M6", "M7", "M8", "M9", "M10", "M10a", "M10b", "M11", "M12"]) {
+  for (const id of ["M1", "M2", "M3", "M4", "M5", "M6", "M7", "M8", "M9", "M10", "M10a", "M10b", "M11", "M12", "M13"]) {
     assert.ok(decided.has(id), `scope decision ${id} must be recorded`);
   }
   for (const decision of closure.scopeDecisions) {
@@ -250,7 +250,9 @@ test("every aged row is followed at once by a same-account control (owner decisi
   const { PROGRAMS } = await import("./auth-mfa/corpus.mjs");
   const lifetime = PROGRAMS.at(-1);
   assert.equal(lifetime.id, "auth-mfa/lifetime");
-  for (const program of PROGRAMS.slice(-2)) checkAgedRows(program);
+  for (const program of PROGRAMS.filter(({ id }) => id.startsWith("auth-mfa/lifetime"))) {
+    checkAgedRows(program);
+  }
   const pendingAges = lifetime.steps
     .filter(({ id }) => id.startsWith("aged-pending-"))
     .map((row) => row.age.seconds);

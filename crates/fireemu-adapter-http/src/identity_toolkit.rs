@@ -7919,15 +7919,17 @@ fn parse_phone_factors(entries: &Value) -> Result<Vec<(String, Option<String>)>,
     };
     let mut out = Vec::with_capacity(items.len());
     for item in items {
-        // Production's words (sandbox recording 2026-09-24, auth-mfa/admin-factors
-        // #admin-set-totp-factor-ia and #admin-set-invalid-phone-ia).
-        if item.get("totpInfo").is_some_and(|v| !v.is_null()) {
-            return Err(error(
-                400,
-                "UNSUPPORTED_SECOND_FACTOR : attempting to add a new TOTP enrollment",
-            ));
-        }
+        // An entry with `phoneInfo` is a phone factor whatever else it carries, as the official
+        // emulator reads it. Production's words for an entry with only `totpInfo` (sandbox
+        // recording 2026-09-24, auth-mfa/admin-factors#admin-set-totp-factor-ia and
+        // #admin-set-invalid-phone-ia); one with both is unobserved and stays accepted.
         let Some(phone) = str_field(item, "phoneInfo") else {
+            if item.get("totpInfo").is_some_and(|v| !v.is_null()) {
+                return Err(error(
+                    400,
+                    "UNSUPPORTED_SECOND_FACTOR : attempting to add a new TOTP enrollment",
+                ));
+            }
             return Err(error(
                 400,
                 "INVALID_ARGUMENT : only phone second factors (phoneInfo) can be enrolled by an admin",

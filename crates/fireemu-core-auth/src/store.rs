@@ -5310,6 +5310,7 @@ impl AuthSnapshot {
             // silently transfer those settings.
             restored.config = live.config;
             restored.sign_in = live.sign_in.clone();
+            restored.mfa_config = live.mfa_config.clone();
             // A temporary proof is a credential of the captured namespace.
             restored.temporary_proofs.clear();
             // The local sign-up quota is namespace-owned control state as well. Preserve both

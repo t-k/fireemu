@@ -294,3 +294,22 @@ fn an_emulator_phone_enrollment_session_lives_ten_minutes() {
         Err(fireemu_core_auth::store::AuthError::InvalidSessionInfo)
     );
 }
+
+/// The project's `mfa` config is control-plane state of its namespace: a snapshot restored into
+/// another namespace keeps the destination's (safety review 2026-09-25, SF-1), as the client
+/// permissions and the sign-in config do. A restore into its own namespace brings it back.
+#[test]
+fn a_cross_namespace_restore_keeps_the_destination_mfa_config() {
+    let mut source = AuthStore::new("source", SplitMix64::new(3), TotpPolicy::default());
+    let snapshot = fireemu_core_auth::store::AuthSnapshot::capture(&source);
+    let mut destination = AuthStore::new("destination", SplitMix64::new(4), TotpPolicy::default());
+    destination.set_mfa_config(enabled(Some(5)));
+    snapshot.restore_into(&mut destination);
+    assert_eq!(destination.mfa_config(), &enabled(Some(5)));
+
+    source.set_mfa_config(enabled(Some(3)));
+    let snapshot = fireemu_core_auth::store::AuthSnapshot::capture(&source);
+    source.set_mfa_config(enabled(None));
+    snapshot.restore_into(&mut source);
+    assert_eq!(source.mfa_config(), &enabled(Some(3)));
+}

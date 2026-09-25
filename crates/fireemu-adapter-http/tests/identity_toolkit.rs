@@ -17931,3 +17931,49 @@ fn strict_expired_enrollment_sessions_do_not_hold_the_pending_budget() {
     let (status, body) = start(signed_in["idToken"].as_str().unwrap());
     assert_eq!(status, 200, "{body}");
 }
+
+/// An Admin factor entry with `phoneInfo` is a phone factor whatever else it carries, as the
+/// official emulator reads it (`getMfaEnrollmentsFromRequest` checks `phoneInfo` only).
+/// Production refused an entry with only `totpInfo`; one with both is unobserved, so neither
+/// profile refuses it (safety review 2026-09-25, SF-2).
+#[test]
+fn an_admin_factor_entry_with_phone_info_is_a_phone_factor_in_both_profiles() {
+    for s in [state(), strict_mfa_state()] {
+        let (status, created) = admin(
+            &s,
+            "POST",
+            &format!("{ADMIN}/accounts"),
+            &json!({"email": "both@example.com", "emailVerified": true}),
+        );
+        assert_eq!(status, 200, "{created}");
+        let (status, body) = admin(
+            &s,
+            "POST",
+            &format!("{ADMIN}/accounts:update"),
+            &json!({"localId": created["localId"], "mfa": {"enrollments": [
+                {"phoneInfo": "+16505550101", "totpInfo": {}, "displayName": "Both"}]}}),
+        );
+        assert_eq!(status, 200, "{body}");
+        let (status, body) = admin(
+            &s,
+            "POST",
+            &format!("{ADMIN}/accounts:update"),
+            &json!({"localId": created["localId"], "mfa": {"enrollments": [
+                {"totpInfo": {}, "displayName": "TOTP only"}]}}),
+        );
+        assert_eq!(
+            (status, message(&body)),
+            (
+                400,
+                Some("UNSUPPORTED_SECOND_FACTOR : attempting to add a new TOTP enrollment")
+            )
+        );
+        let (_, found) = admin(
+            &s,
+            "POST",
+            &format!("{ADMIN}/accounts:lookup"),
+            &json!({"localId": [created["localId"]]}),
+        );
+        assert_eq!(found["users"][0]["mfaInfo"][0]["phoneInfo"], "+16505550101");
+    }
+}

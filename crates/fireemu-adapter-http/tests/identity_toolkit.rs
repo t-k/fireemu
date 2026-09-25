@@ -17774,3 +17774,95 @@ fn strict_a_phone_enrollment_revokes_only_sessions_from_earlier_seconds() {
         assert_eq!((status, message(&body)), (400, Some(expected)), "gap {gap}");
     }
 }
+
+// ---- AUTH-MFA strict: short lifetimes (auth-mfa/lifetime, auth-mfa/lifetime-short) ----------
+
+/// A TOTP sign-in finalized `age` seconds after its pending credential was issued.
+fn totp_sign_in_aged(s: &AuthState, email: &str, age: i64) -> (u16, Value) {
+    let (started, _, _) = totp_enrolled(s, email);
+    advance(s, 60);
+    let pending = pending_of(s, email);
+    let factor = pending["mfaInfo"][0]["mfaEnrollmentId"].clone();
+    advance(s, age);
+    totp_sign_in(s, &pending, &factor, &totp_code_of(s, &started, 0))
+}
+
+/// Production accepted a TOTP pending credential 293 seconds old and refused one 303 seconds
+/// old with `TOTP_CHALLENGE_TIMEOUT`. Strict refuses from the youngest refused age only; the
+/// ages between are unobserved and stay accepted.
+#[test]
+fn strict_a_totp_pending_credential_times_out_where_production_refused() {
+    for (age, refused) in [(293, false), (302, false), (303, true), (1_800, true)] {
+        let s = strict_mfa_state();
+        let (status, body) = totp_sign_in_aged(&s, "pending-age@example.com", age);
+        if refused {
+            assert_eq!(
+                (status, v2_refusal(&body)),
+                (
+                    400,
+                    (
+                        "TOTP_CHALLENGE_TIMEOUT : TOTP challenge timeout, provide first factor again.",
+                        true
+                    )
+                ),
+                "{age}"
+            );
+        } else {
+            assert_eq!(status, 200, "{age} {body}");
+        }
+    }
+    // The emulator profile keeps its hour.
+    let s = state_with_totp_extension();
+    let (status, body) = totp_sign_in_aged(&s, "pending-age@example.com", 1_800);
+    assert_eq!(status, 200, "{body}");
+}
+
+/// A TOTP enrollment started with a session signed in `age` seconds earlier.
+fn totp_start_aged(s: &AuthState, email: &str, age: i64) -> (u16, Value) {
+    let token = verified_session(s, email);
+    advance(s, age);
+    post(
+        s,
+        &format!("{V2}/accounts/mfaEnrollment:start"),
+        &json!({"idToken": token, "totpEnrollmentInfo": {}}),
+    )
+}
+
+/// Production started a TOTP enrollment with a sign-in 244 seconds old and refused one 333
+/// seconds old with `CREDENTIAL_TOO_OLD_LOGIN_AGAIN`. Strict refuses from the youngest refused
+/// age only. A phone enrollment's need for a recent sign-in is unobserved, so it is not asked.
+#[test]
+fn strict_a_totp_enrollment_needs_a_sign_in_as_recent_as_production_asked() {
+    for (age, refused) in [(244, false), (332, false), (333, true), (1_800, true)] {
+        let s = strict_mfa_state();
+        let (status, body) = totp_start_aged(&s, "recent@example.com", age);
+        if refused {
+            assert_eq!(
+                (status, v2_refusal(&body)),
+                (400, ("CREDENTIAL_TOO_OLD_LOGIN_AGAIN", true)),
+                "{age}"
+            );
+        } else {
+            assert_eq!(status, 200, "{age} {body}");
+        }
+    }
+    let s = strict_mfa_state();
+    let (status, body) = patch_sign_in(
+        &s,
+        "signIn.phoneNumber.testPhoneNumbers",
+        &json!({"signIn": {"phoneNumber": {"testPhoneNumbers": {"+16505550101": "123456"}}}}),
+    );
+    assert_eq!(status, 200, "{body}");
+    let token = verified_session(&s, "recent-phone@example.com");
+    advance(&s, 1_800);
+    let (status, body) = post(
+        &s,
+        &format!("{V2}/accounts/mfaEnrollment:start"),
+        &json!({"idToken": token, "phoneEnrollmentInfo": {"phoneNumber": "+16505550101"}}),
+    );
+    assert_eq!(status, 200, "{body}");
+    // The emulator profile asks for no recent sign-in.
+    let s = state_with_totp_extension();
+    let (status, body) = totp_start_aged(&s, "recent@example.com", 1_800);
+    assert_eq!(status, 200, "{body}");
+}

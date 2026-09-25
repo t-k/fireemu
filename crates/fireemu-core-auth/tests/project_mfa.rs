@@ -313,3 +313,80 @@ fn a_cross_namespace_restore_keeps_the_destination_mfa_config() {
     snapshot.restore_into(&mut source);
     assert_eq!(source.mfa_config(), &enabled(Some(3)));
 }
+
+/// A phone code checked `age` seconds after it was sent for `purpose` under production's
+/// rules.
+fn phone_code_at(
+    purpose: impl FnOnce(
+        fireemu_core_auth::store::LocalId,
+    ) -> fireemu_core_auth::store::VerificationPurpose,
+    age: i64,
+) -> Result<(), fireemu_core_auth::store::AuthError> {
+    let mut s = AuthStore::new("demo-app", SplitMix64::new(3), TotpPolicy::default());
+    s.set_production_mfa(true);
+    s.set_mfa_config(enabled(Some(5)));
+    let uid = s
+        .create_user_with_id(NewUser::email("a@example.com"), Some("a"), t0())
+        .unwrap();
+    let sent = s
+        .send_verification_code("+16505550101", purpose(uid), t0())
+        .unwrap();
+    s.sweep_transient_credentials(seconds(age));
+    s.check_phone_code(&sent.session_info, &sent.code, seconds(age))
+        .map(|_| ())
+}
+
+/// The observed lifetime of a phone enrollment session reaches no other phone code: first-factor
+/// codes keep ten minutes under production's rules too (safety review 2026-09-25, SF-3 d).
+#[test]
+fn only_a_phone_enrollment_session_outlives_ten_minutes() {
+    use fireemu_core_auth::store::{AuthError, VerificationPurpose};
+    assert!(phone_code_at(|_| VerificationPurpose::SignIn, 600).is_ok());
+    assert_eq!(
+        phone_code_at(|_| VerificationPurpose::SignIn, 601),
+        Err(AuthError::InvalidSessionInfo)
+    );
+    assert!(phone_code_at(|uid| VerificationPurpose::Enrollment { uid }, 1_804).is_ok());
+}
+
+/// A tenant's second factors keep their earlier rules under a store that follows production's
+/// (scope decision M2; safety review 2026-09-25, SF-3 b): no challenge timeout, no recent
+/// sign-in, and a pending credential is spent by its success.
+#[test]
+fn a_tenant_keeps_its_earlier_second_factor_rules() {
+    let mut s = fireemu_core_auth::store::AuthStore::new_tenant(
+        "demo-app",
+        "tenant-a",
+        SplitMix64::new(3),
+        TotpPolicy::default(),
+    );
+    s.set_production_mfa(true);
+    assert!(!s.second_factor_rules_are_production());
+    assert!(!s.totp_enrollment_login_too_old(1_788_004_875, seconds(1_800)));
+    let (uid, material) = started(&mut s);
+    s.finalize_totp_enrollment_named(
+        &uid,
+        &material.session_id,
+        code_at(&material, t0()),
+        None,
+        t0(),
+    )
+    .unwrap();
+    let pending = s.start_mfa_sign_in(&uid, t0()).unwrap();
+    let factor = s.user_by_id("a").unwrap().mfa.totp_factors()[0]
+        .mfa_enrollment_id
+        .clone();
+    let late = seconds(1_800);
+    s.finalize_mfa_sign_in_for_factor(&uid, &pending, &factor, code_at(&material, late), late)
+        .unwrap();
+    assert_eq!(
+        s.finalize_mfa_sign_in_for_factor(
+            &uid,
+            &pending,
+            &factor,
+            code_at(&material, seconds(1_830)),
+            seconds(1_830)
+        ),
+        Err(MfaError::PendingSignInUnknown)
+    );
+}

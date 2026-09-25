@@ -544,3 +544,40 @@ fn an_emulator_enrollment_session_is_reaped_after_its_sibling_ends() {
         );
     }
 }
+
+/// Under the official emulator's rules a pending sign-in is reaped after its hour, also when
+/// another pending sign-in of the same user succeeded first (mutation follow-up,
+/// docs.local/mutation/auth-mfa/20260925).
+#[test]
+fn an_emulator_pending_sign_in_is_reaped_after_its_sibling_succeeds() {
+    let mut s = AuthStore::new("demo-app", SplitMix64::new(3), TotpPolicy::default());
+    s.set_mfa_config(enabled(Some(5)));
+    let (uid, material) = started(&mut s);
+    s.finalize_totp_enrollment_named(
+        &uid,
+        &material.session_id,
+        code_at(&material, t0()),
+        None,
+        t0(),
+    )
+    .unwrap();
+    let factor = s.user_by_id("a").unwrap().mfa.totp_factors()[0]
+        .mfa_enrollment_id
+        .clone();
+    let first = s.start_mfa_sign_in(&uid, seconds(60)).unwrap();
+    let second = s.start_mfa_sign_in(&uid, seconds(60)).unwrap();
+    s.finalize_mfa_sign_in_for_factor(
+        &uid,
+        &first,
+        &factor,
+        code_at(&material, seconds(60)),
+        seconds(60),
+    )
+    .unwrap();
+    let late = seconds(60 + 3_601);
+    s.sweep_transient_credentials(late);
+    assert_eq!(
+        s.finalize_mfa_sign_in_for_factor(&uid, &second, &factor, code_at(&material, late), late),
+        Err(MfaError::PendingSignInUnknown)
+    );
+}

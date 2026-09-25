@@ -1371,14 +1371,17 @@ pub const OBSERVED_MFA_PHONE_ENROLLMENT_SECONDS: i64 = 1_805;
 /// Under production's second-factor rules a TOTP sign-in whose pending credential is at least
 /// this old is `TOTP_CHALLENGE_TIMEOUT`: production accepted one 293 seconds old and refused
 /// one 303 seconds old (sandbox recordings 2026-09-24, `auth-mfa/lifetime-short#aged-pending-q290`
-/// and `auth-mfa/lifetime#aged-pending-p300`). The ages between are unobserved; refusing only
-/// from the youngest refused age adds no refusal production was not seen to make.
-pub const OBSERVED_TOTP_CHALLENGE_TIMEOUT_SECONDS: i64 = 303;
+/// and `auth-mfa/lifetime#aged-pending-p300`). Those ages run from one request's send to the
+/// next's, so the age the server saw differs from them by the two requests' latencies; the
+/// boundary sits one second below the refusal to absorb that, well above the accepted 293.
+/// Younger ages are unobserved and stay accepted.
+pub const OBSERVED_TOTP_CHALLENGE_TIMEOUT_SECONDS: i64 = 302;
 /// Under production's second-factor rules a TOTP enrollment start whose session signed in at
 /// least this long ago is `CREDENTIAL_TOO_OLD_LOGIN_AGAIN`: production started one with a
 /// sign-in 244 seconds old and refused one 333 seconds old (sandbox recording 2026-09-24,
 /// `auth-mfa/lifetime-short#aged-token-start-r240` and `-r330`). Refused from the youngest
-/// refused age only, as [`OBSERVED_TOTP_CHALLENGE_TIMEOUT_SECONDS`].
+/// refused age only; `auth_time` is whole seconds cut down from the sign-in, which makes the
+/// age the server computes up to a second older than the one the harness measured.
 pub const OBSERVED_TOTP_ENROLLMENT_LOGIN_AGE_SECONDS: i64 = 333;
 /// A pending second-factor sign-in (`mfaPendingCredential`) expires after an hour of virtual
 /// time. The official emulator's credential is stateless and never expires; this is a local

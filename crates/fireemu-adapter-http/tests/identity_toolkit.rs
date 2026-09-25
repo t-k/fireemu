@@ -18017,7 +18017,11 @@ fn real_number_phone_account(s: &AuthState, email: &str) -> (u16, Value) {
 fn strict_a_real_numbers_sms_session_is_single_use() {
     let s = strict_mfa_state();
     let (status, again) = real_number_phone_account(&s, "real@example.com");
-    assert_eq!(status, 400, "enrollment session again: {again}");
+    assert_eq!(
+        (status, v2_refusal(&again).0),
+        (400, "INVALID_SESSION_INFO"),
+        "enrollment session again: {again}"
+    );
     let pending = pending_of(&s, "real@example.com");
     let (status, started) = post(
         &s,
@@ -18198,4 +18202,42 @@ fn strict_entries_dropped_at_the_budget_answer_as_unknown() {
         finalize_totp(&s, fresh, &oldest, &totp_code_of(&s, &oldest, 0), Some("A"));
     assert_eq!(status, 400, "{body}");
     assert_eq!(v2_refusal(&body).0, "INVALID_SESSION_INFO", "{body}");
+}
+
+/// The emulator profile spends a test number's enrollment session too, as the official
+/// emulator spends every session (mutation follow-up, docs.local/mutation/auth-mfa/20260925).
+#[test]
+fn emulator_a_test_numbers_enrollment_session_is_single_use() {
+    let s = state();
+    let (status, body) = patch_sign_in(
+        &s,
+        "signIn.phoneNumber.testPhoneNumbers",
+        &json!({"signIn": {"phoneNumber": {"testPhoneNumbers": {"+16505550101": "123456"}}}}),
+    );
+    assert_eq!(status, 200, "{body}");
+    let token = verified_session(&s, "emulator-test-number@example.com");
+    let (status, started) = post(
+        &s,
+        &format!("{V2}/accounts/mfaEnrollment:start"),
+        &json!({"idToken": token, "phoneEnrollmentInfo": {"phoneNumber": "+16505550101"}}),
+    );
+    assert_eq!(status, 200, "{started}");
+    let finalize = json!({"idToken": token, "phoneVerificationInfo": {
+        "sessionInfo": started["phoneSessionInfo"]["sessionInfo"], "code": "123456"}});
+    let (status, enrolled) = post(
+        &s,
+        &format!("{V2}/accounts/mfaEnrollment:finalize"),
+        &finalize,
+    );
+    assert_eq!(status, 200, "{enrolled}");
+    let (status, again) = post(
+        &s,
+        &format!("{V2}/accounts/mfaEnrollment:finalize"),
+        &finalize,
+    );
+    assert_eq!(status, 400, "{again}");
+    assert!(
+        message(&again).is_some_and(|m| m.starts_with("INVALID_SESSION_INFO")),
+        "{again}"
+    );
 }

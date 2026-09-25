@@ -4,7 +4,7 @@ Status: `IN_PROGRESS`
 
 Goal ID: `IP-FS-PRODUCTION-COMPATIBILITY`
 
-Auth claim-source, MFA and Limits native updates remain local-only; executor `571d5a6bb63289893661d88470d47e8ffb4870a2` is source-only evidence. The parent remains `COMPAT_VERIFIED 0 / 14`.
+Auth claim-source, MFA and Limits native updates remain local-only; executor `571d5a6bb63289893661d88470d47e8ffb4870a2` is source-only evidence. The current parent count is `COMPAT_VERIFIED 0 / 18` after the owner added STORAGE-OBJECT, FUNCTIONS-HTTP, STORAGE-RULES and FUNCTIONS-EVENTS. The `0 / 14` counts in dated checkpoints below remain historical.
 
 ## FS-DATA-WRITE current closure correction (2026-09-24)
 
@@ -138,6 +138,14 @@ No target feature is moved to class B merely because it is unimplemented, unobse
 | FS-LISTEN-SDK | gRPC Listen, WebChannel and declared client SDKs; event order, resume, reconnect, cache, pending writes, unsubscribe and auth switching | Local gRPC/WebChannel and finite Node SDK reconnect/switch controls | `WAITING_ORACLE` | Browser and declared mobile SDK paths plus production notification/reconnect equivalence remain. The credential-free [Node SDK listen campaign preparation](fs-listen-sdk-campaign-preparation.md) freezes 14 cases with a local shadow and registers browser, mobile, raw resume-token and cross-identity paths as unobserved; no production observation is claimed. |
 | FS-CONFIG-LIFECYCLE | Default/named Native databases, project boundary, indexes/exemptions, TTL, import/export, backup/PITR and management-operation contract | Database projection v2 and configuration preservation evidence; API surfaces enumerated; the importer preflights every official managed-export partition, rejects corrupt or duplicate output references and bounds partition enumeration before publishing state; the local named-database export extension preserves default, named and cross-database reference values and rejects malformed database identities before import | `WAITING_ORACLE` | Multi-partition import is local format and atomicity evidence. The named-database extension is local safety evidence only. The [management-surface classification](fs-config-lifecycle-classification.md) and the credential-free [management campaign preparation](fs-config-lifecycle-campaign-preparation.md) exist; representative management behavior still requires production comparison. |
 | AUTH-FS-CROSS | Auth tokens, claims, tenant and revocation observed through Firestore Rules, transactions, listeners and SDK state changes | Local principal/project/tenant and SDK state invariants | `WAITING_ORACLE` | Cross-product production scenarios and final-artifact comparisons remain. |
+
+## Cloud Functions event parent status
+
+The owner added `FUNCTIONS-EVENTS` to the production-compatibility parents on 2026-09-25. Its 22-condition [closure proposal](../../spec/compatibility/closure/FUNCTIONS-EVENTS.json) covers Firestore, Storage, Auth and Pub/Sub trigger delivery and event contents. The condition set and eight remaining scope decisions await review; no production event recording or final-artifact comparison exists. The owner approved a dedicated sandbox project, but project preparation is a later stage.
+
+| Feature group | Required conditions | Current evidence | Parent state | Remaining completion work |
+| --- | --- | --- | --- | --- |
+| FUNCTIONS-EVENTS | Firestore document, Storage object, Auth user and Pub/Sub topic trigger routing, payloads, negative controls and bounded retry identity | Local runtime and emulator tests exist under `FN-CLAIM-EVENTS`; these are not production comparisons for this parent. | `IMPLEMENTING` | Review and freeze the proposal and resource scope, prepare the dedicated sandbox, record the same corpus twice in production, repair mismatches, compare one final artifact and obtain independent closure approval. |
 
 ## Existing evidence boundaries
 

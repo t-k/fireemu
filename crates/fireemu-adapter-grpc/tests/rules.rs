@@ -3688,6 +3688,71 @@ service cloud.firestore {{
     h.handle.abort();
 }
 
+/// A query counts distinct document paths once when a read rule uses `getAfter()`, including
+/// a path also read by `exists()`. The 21st distinct path still exceeds the shared limit.
+#[tokio::test]
+async fn a_query_rule_counts_get_after_by_distinct_document_path() {
+    let mut h = start().await;
+    let (_alice, alice_token) = h.user("alice@example.com");
+    let afters = |n: usize| {
+        (0..n)
+            .map(|i| format!("existsAfter(/databases/$(database)/documents/d/{i})"))
+            .collect::<Vec<_>>()
+            .join(" || ")
+    };
+    h.rules
+        .replace_source(&format!(
+            "rules_version = '2';
+service cloud.firestore {{
+  match /databases/{{database}}/documents {{
+    match /aftereleven/{{id}} {{ allow list: if !({}); }}
+    match /aftertwenty/{{id}} {{ allow list: if !({}); }}
+    match /aftertwentyone/{{id}} {{ allow list: if !({}); }}
+    match /mixedtwenty/{{id}} {{ allow list: if !(({}) || exists(/databases/$(database)/documents/d/0)); }}
+  }}
+}}",
+            afters(11),
+            afters(20),
+            afters(21),
+            afters(20),
+        ))
+        .unwrap();
+    let query = |collection: &str| pb::RunQueryRequest {
+        parent: DOCS.to_owned(),
+        query_type: Some(pb::run_query_request::QueryType::StructuredQuery(
+            pb::StructuredQuery {
+                from: vec![sq::CollectionSelector {
+                    collection_id: collection.into(),
+                    all_descendants: false,
+                }],
+                ..Default::default()
+            },
+        )),
+        ..Default::default()
+    };
+    for collection in ["aftereleven", "aftertwenty", "mixedtwenty"] {
+        let mut accepted = h
+            .client
+            .run_query(with_bearer(query(collection), &alice_token))
+            .await
+            .unwrap()
+            .into_inner();
+        while let Some(item) = accepted.next().await {
+            item.unwrap();
+        }
+    }
+    let refused = match h
+        .client
+        .run_query(with_bearer(query("aftertwentyone"), &alice_token))
+        .await
+    {
+        Err(error) => error,
+        Ok(stream) => stream.into_inner().next().await.unwrap().unwrap_err(),
+    };
+    assert_eq!(refused.code(), tonic::Code::PermissionDenied);
+    h.handle.abort();
+}
+
 /// Production's `request.query` has nine keys, not the three documented (FS-RULES exploration
 /// 2026-09-25, not evidence; the recorded rows see `keys().hasOnly(['limit', 'offset',
 /// 'orderBy'])` denied): `kind` is the collection id, `parent` null at the root and the parent

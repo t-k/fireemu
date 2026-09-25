@@ -122,17 +122,12 @@ impl DocumentAccess for AggregateReader<'_> {
 
     fn get_after(&self, segments: &[String]) -> Option<Option<RulesValue>> {
         if let Ok(mut seen) = self.seen.try_borrow_mut() {
-            // A distinct access from `get()` of the same path.
-            let mut key = vec![AFTER_MARKER.to_owned()];
-            key.extend_from_slice(segments);
-            seen.insert(key);
+            // The budget counts distinct document paths across get() and getAfter().
+            seen.insert(segments.to_vec());
         }
         self.inner.get_after(segments)
     }
 }
-
-/// Segment prefix distinguishing `getAfter()` accesses in the aggregate budget.
-const AFTER_MARKER: &str = "\u{0}after";
 
 /// `get()` over the current state and `getAfter()` over the state the commit being
 /// authorized will leave behind (every write of the batch applied).

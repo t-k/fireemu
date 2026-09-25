@@ -48,8 +48,14 @@ const FUNCTION_HOST = "https://cloudfunctions.googleapis.com";
 const RUN_HOST = "https://run.googleapis.com";
 const ARTIFACT_HOST = "https://artifactregistry.googleapis.com";
 const SERVICE_USAGE_HOST = "https://serviceusage.googleapis.com";
+const IAM_HOST = "https://iam.googleapis.com";
+const PROJECT_NUMBER = "1049549757969";
 const RESOURCE = `projects/${PROJECT}/locations/${REGION}`;
 const REPOSITORY = `${RESOURCE}/repositories/gcf-artifacts`;
+const SERVICE_IDENTITIES = {
+  eventarc: `service-${PROJECT_NUMBER}@gcp-sa-eventarc.iam.gserviceaccount.com`,
+  pubsub: `service-${PROJECT_NUMBER}@gcp-sa-pubsub.iam.gserviceaccount.com`,
+};
 const MAX_RESPONSE_BYTES = 1024 * 1024;
 const EXPOSURE_MS = 60 * 60 * 1000;
 
@@ -282,8 +288,8 @@ function createControl(adc, budget) {
   let token;
   return async function control(method, url, body, kind = "control", allowed = [200]) {
     if (
-      ![FUNCTION_HOST, RUN_HOST, ARTIFACT_HOST, AUTH_HOST, SERVICE_USAGE_HOST].some((host) =>
-        url.startsWith(`${host}/`),
+      ![FUNCTION_HOST, RUN_HOST, ARTIFACT_HOST, AUTH_HOST, SERVICE_USAGE_HOST, IAM_HOST].some(
+        (host) => url.startsWith(`${host}/`),
       )
     ) {
       throw new Error("unreviewed REST host");
@@ -418,6 +424,44 @@ export async function preflightCliSideEffects(control) {
   ) {
     throw new Error("gcf-artifacts reviewed cleanup policy changed");
   }
+}
+
+export async function readServiceIdentities(control) {
+  const result = {};
+  for (const [kind, email] of Object.entries(SERVICE_IDENTITIES)) {
+    const url = `${IAM_HOST}/v1/projects/${PROJECT}/serviceAccounts/${encodeURIComponent(email)}`;
+    const response = await control("GET", url, undefined, "control", [200, 404]);
+    if (response.status === 200) {
+      const name = response.value.name;
+      if (
+        response.value.email !== email ||
+        ![
+          `projects/${PROJECT}/serviceAccounts/${email}`,
+          `projects/${PROJECT_NUMBER}/serviceAccounts/${email}`,
+        ].includes(name)
+      ) {
+        throw new Error(`${kind} service identity readback changed`);
+      }
+    }
+    result[kind] = {
+      email,
+      exists: response.status === 200,
+      uniqueId: response.status === 200 ? response.value.uniqueId : null,
+    };
+  }
+  return result;
+}
+
+export function serviceIdentityChanges(before, after) {
+  const created = [];
+  for (const kind of Object.keys(SERVICE_IDENTITIES)) {
+    if (before[kind]?.exists && !after[kind]?.exists)
+      throw new Error(`${kind} service identity disappeared`);
+    if (before[kind]?.exists && before[kind].uniqueId !== after[kind]?.uniqueId)
+      throw new Error(`${kind} service identity changed unique ID`);
+    if (!before[kind]?.exists && after[kind]?.exists) created.push(kind);
+  }
+  return created;
 }
 
 async function inspectAbsence(control, target, kind) {
@@ -830,8 +874,15 @@ export async function recordProduction() {
     let outcome = "recorded";
     let reason;
     let residual = false;
+    let identitiesBefore;
     try {
       await preflightCliSideEffects(control);
+      identitiesBefore = await readServiceIdentities(control);
+      await writeFile(
+        join(runDir, "service-identities-before.json"),
+        `${JSON.stringify(identitiesBefore, null, 2)}\n`,
+        { mode: 0o600 },
+      );
       for (const program of corpus.programs) {
         if (abort.stopped) throw new Error("signal stopped the observation");
         await observeProgram(program, control, adc.path, budget, runDir, recordings, abort);
@@ -855,6 +906,26 @@ export async function recordProduction() {
       outcome = "stopped-needs-review";
       reason = error.message;
       residual = Boolean(error.residual);
+    }
+    if (identitiesBefore && budget.snapshot().cliDeploy > 0) {
+      try {
+        const identitiesAfter = await readServiceIdentities(control);
+        await writeFile(
+          join(runDir, "service-identities-after.json"),
+          `${JSON.stringify(identitiesAfter, null, 2)}\n`,
+          { mode: 0o600 },
+        );
+        for (const kind of serviceIdentityChanges(identitiesBefore, identitiesAfter)) {
+          await logChange(
+            "service-identity-created",
+            `${kind}: ${identitiesAfter[kind].email}; identity remains enabled`,
+          );
+        }
+      } catch (error) {
+        outcome = "stopped-needs-review";
+        reason = [reason, `service identity readback: ${error.message}`].filter(Boolean).join("; ");
+        residual = true;
+      }
     }
     await appendFile(
       LEDGER,

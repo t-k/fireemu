@@ -7,6 +7,8 @@ import {
   assertPublicReadback,
   expiredAt,
   preflightCliSideEffects,
+  readServiceIdentities,
+  serviceIdentityChanges,
   summarizeCliOutput,
 } from "./production.mjs";
 
@@ -205,4 +207,37 @@ test("CLI preflight requires the reviewed APIs and exact repository cleanup poli
       /cleanup policy/,
     );
   }
+});
+
+test("service identity readback records only new Pub/Sub and Eventarc agents", async () => {
+  const calls = [];
+  const before = await readServiceIdentities(async (method, url, body, kind, allowed) => {
+    calls.push({ method, url, body, kind, allowed });
+    return { status: 404, value: {} };
+  });
+  assert.equal(calls.length, 2);
+  assert.ok(
+    calls.every(
+      ({ method, url, kind, allowed }) =>
+        method === "GET" &&
+        url.startsWith(
+          "https://iam.googleapis.com/v1/projects/fireemu-oracle-query/serviceAccounts/",
+        ) &&
+        kind === "control" &&
+        allowed.includes(404),
+    ),
+  );
+  const after = await readServiceIdentities(async (_method, url) => {
+    const email = decodeURIComponent(url.split("/").at(-1));
+    return {
+      status: 200,
+      value: {
+        name: `projects/fireemu-oracle-query/serviceAccounts/${email}`,
+        email,
+        uniqueId: "123",
+      },
+    };
+  });
+  assert.deepEqual(serviceIdentityChanges(before, after), ["eventarc", "pubsub"]);
+  assert.throws(() => serviceIdentityChanges(after, before), /service identity disappeared/);
 });

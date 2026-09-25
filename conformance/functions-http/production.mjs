@@ -454,6 +454,18 @@ function createControl(adc, budget) {
   };
 }
 
+export function cliEnvironment(adcPath, isolatedConfig, base = process.env) {
+  return {
+    ...base,
+    GOOGLE_APPLICATION_CREDENTIALS: adcPath,
+    GOOGLE_CLOUD_QUOTA_PROJECT: PROJECT,
+    FIREBASE_TOKEN: "",
+    XDG_CONFIG_HOME: isolatedConfig,
+    FIREBASE_CLI_DISABLE_UPDATE_CHECK: "1",
+    CI: "1",
+  };
+}
+
 async function cli(args, adcPath, budget, kind, runDir) {
   const attempt = budget.take(kind);
   const isolatedConfig = join(runDir, "firebase-cli-config");
@@ -461,14 +473,7 @@ async function cli(args, adcPath, budget, kind, runDir) {
   const child = spawn(process.execPath, [CLI, ...args, "--project", PROJECT, "--non-interactive"], {
     cwd: HERE,
     detached: true,
-    env: {
-      ...process.env,
-      GOOGLE_APPLICATION_CREDENTIALS: adcPath,
-      FIREBASE_TOKEN: "",
-      XDG_CONFIG_HOME: isolatedConfig,
-      FIREBASE_CLI_DISABLE_UPDATE_CHECK: "1",
-      CI: "1",
-    },
+    env: cliEnvironment(adcPath, isolatedConfig),
     stdio: ["ignore", "pipe", "pipe"],
   });
   let output = "";

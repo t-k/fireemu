@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
@@ -10,6 +11,7 @@ import {
   assertOwnedImage,
   assertPublicReadback,
   assertReviewApproval,
+  cliEnvironment,
   expiredAt,
   preflightCliSideEffects,
   readPrivateProjectIdentity,
@@ -20,6 +22,31 @@ import {
   summarizeCliOutput,
   writeCliDiagnostic,
 } from "./production.mjs";
+
+const require = createRequire(import.meta.url);
+const { Client } = require("../node_modules/firebase-tools/lib/apiv2.js");
+
+test("Firebase CLI sends the reviewed project as its quota project", () => {
+  const environment = cliEnvironment("/private/owner-adc.json", "/private/isolated-config", {
+    GOOGLE_CLOUD_QUOTA_PROJECT: "unrelated-project",
+    FIREBASE_TOKEN: "unreviewed-token",
+  });
+  assert.equal(environment.GOOGLE_CLOUD_QUOTA_PROJECT, "fireemu-oracle-query");
+  assert.equal(environment.GOOGLE_APPLICATION_CREDENTIALS, "/private/owner-adc.json");
+  assert.equal(environment.XDG_CONFIG_HOME, "/private/isolated-config");
+  assert.equal(environment.FIREBASE_TOKEN, "");
+  const prior = process.env.GOOGLE_CLOUD_QUOTA_PROJECT;
+  try {
+    process.env.GOOGLE_CLOUD_QUOTA_PROJECT = environment.GOOGLE_CLOUD_QUOTA_PROJECT;
+    const request = new Client({ urlPrefix: "https://firebase.googleapis.com" }).addRequestHeaders({
+      headers: new Headers(),
+    });
+    assert.equal(request.headers.get("x-goog-user-project"), "fireemu-oracle-query");
+  } finally {
+    if (prior === undefined) delete process.env.GOOGLE_CLOUD_QUOTA_PROJECT;
+    else process.env.GOOGLE_CLOUD_QUOTA_PROJECT = prior;
+  }
+});
 
 test("stage 3 approval accepts only one authoritative decision block", () => {
   const sha = "a".repeat(40);

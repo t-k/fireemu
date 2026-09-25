@@ -337,11 +337,15 @@ export function createSession(
    * Writes the snapshot back and reads it back. A combined write production refuses is retried
    * one path at a time, so one member it will not take back leaves no other member changed.
    */
-  async function restore(snapshot) {
-    // Only what changed is written back: a member production refuses to write (the email
-    // templates, EMAIL_TEMPLATE_UPDATE_NOT_ALLOWED) never changed in the first place.
+  async function restore(snapshot, written = []) {
+    // What changed is written back, and so is every path a step wrote: production applies a
+    // write eventually, so one that does not read as changed yet may still land. A member
+    // production refuses to write (the email templates, EMAIL_TEMPLATE_UPDATE_NOT_ALLOWED)
+    // counts as restored when it reads back as it was (below).
     const now = await readConfig(Object.keys(snapshot), { cleanup: true });
-    const paths = Object.keys(snapshot).filter((path) => !configEquals(now[path], snapshot[path]));
+    const paths = Object.keys(snapshot).filter(
+      (path) => written.includes(path) || !configEquals(now[path], snapshot[path]),
+    );
     if (paths.length === 0) return now;
     try {
       await writeBack(paths, snapshot);

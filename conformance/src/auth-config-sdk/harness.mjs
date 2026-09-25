@@ -25,7 +25,8 @@ const MASKED = {
   passwordSalt: "<bytes>",
   // createAuthUri's session handle, new on every answer.
   sessionId: "<sessionId>",
-  // A temporary sign-up quota's start, which the corpus sets relative to the run.
+  // A temporary sign-up quota's start, which the corpus sets relative to the run (the epoch
+  // production supplies for a quota written without one is kept).
   startTime: "<start-time>",
 };
 
@@ -59,7 +60,11 @@ function describeLinks(value) {
 /** An RFC 1123 time as the Admin SDK prints it (UserRecord metadata, tokensValidAfterTime). */
 const HTTP_DATE = /^[A-Z][a-z]{2}, \d\d [A-Z][a-z]{2} \d{4} \d\d:\d\d:\d\d GMT$/;
 
+/** The start production supplies for a quota written without one, kept as it is. */
+const EPOCH = "1970-01-01T00:00:00Z";
+
 function mask(value, key, ctx) {
+  if (key === "startTime" && value === EPOCH) return value;
   if (typeof value === "string" && MASKED[key]) return MASKED[key];
   if (typeof value === "string" && HTTP_DATE.test(value)) {
     const millis = Date.parse(value);

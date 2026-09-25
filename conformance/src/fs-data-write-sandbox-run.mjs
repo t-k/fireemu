@@ -772,6 +772,7 @@ export function deltaV3RecoveryEnvironment({
   corpusDigest,
   sourceGitSha,
   remainingHttp,
+  cancelBulkDelete = false,
 }) {
   if (
     typeof token !== "string" ||
@@ -819,6 +820,7 @@ export function deltaV3RecoveryEnvironment({
     FIRESTORE_PROBE_DELETE_RUN_ID: runId,
     FIRESTORE_PROBE_CORPUS_DIGEST: corpusDigest,
     FIRESTORE_PROBE_SOURCE_GIT_SHA: sourceGitSha,
+    ...(cancelBulkDelete === true ? { FIRESTORE_PROBE_DELTA_V3_CANCEL_BULK_DELETE: "1" } : {}),
   };
 }
 
@@ -1086,7 +1088,7 @@ async function recoverV3() {
   process.stdout.write(`${JSON.stringify({ ...result, invocationGitSha: currentGitSha })}\n`);
 }
 
-async function recoverDeltaV3() {
+async function recoverDeltaV3({ cancelBulkDelete = false } = {}) {
   const gitCommonDir = (
     await execFileAsync("git", ["rev-parse", "--path-format=absolute", "--git-common-dir"], {
       cwd: ROOT,
@@ -1154,6 +1156,7 @@ async function recoverDeltaV3() {
           corpusDigest: resume.journal.corpusDigest,
           sourceGitSha: resume.journal.sourceGitSha,
           remainingHttp,
+          cancelBulkDelete,
         }),
         1_200_000,
       );
@@ -2522,7 +2525,11 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
   } else if (process.argv[2] === "recover-v3") {
     await recoverV3();
   } else if (process.argv[2] === "recover-delta-v3") {
-    await recoverDeltaV3();
+    const extra = process.argv.slice(3);
+    if (extra.some((argument) => argument !== "--cancel-bulk-delete")) {
+      throw new Error("recover-delta-v3 accepts only --cancel-bulk-delete");
+    }
+    await recoverDeltaV3({ cancelBulkDelete: extra.includes("--cancel-bulk-delete") });
   } else if (process.argv[2] === "prepare") {
     const prepared = await prepareSandboxCorpus();
     process.stdout.write(

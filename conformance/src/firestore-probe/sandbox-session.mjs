@@ -47,8 +47,9 @@ const PRODUCTION = process.env.FIRESTORE_PROBE_TARGET === "production";
 const RECOVERY_MODE = process.env.FIRESTORE_PROBE_RECOVERY_MODE;
 const DELTA_V3_MODE = process.env.FIRESTORE_PROBE_DELTA_V3 === "1";
 const DELTA_LOCK_HELD = process.env.FIRESTORE_PROBE_DELTA_LOCK_HELD === "1";
+// Owner-approved per use: cancel the journaled delta-v3 bulk delete before its cleanup.
+const DELTA_V3_CANCEL_BULK_DELETE = process.env.FIRESTORE_PROBE_DELTA_V3_CANCEL_BULK_DELETE === "1";
 const PARTIAL_MODE = process.env.FIRESTORE_PROBE_PARTIAL === "1";
-const PARTIAL_LOCK_HELD = process.env.FIRESTORE_PROBE_PARTIAL_LOCK_HELD === "1";
 const PARTIAL_BOUNDARY_ID = "writes/limits/index-entry-sum/adjacent";
 const CORPUS_DIGEST = process.env.FIRESTORE_PROBE_CORPUS_DIGEST;
 const SOURCE_GIT_SHA = process.env.FIRESTORE_PROBE_SOURCE_GIT_SHA;
@@ -1079,6 +1080,7 @@ async function writeDeltaCleanupJournal(status, extra = {}) {
     managedRequestCount: managedClearState.shrinkRequestCounter.current(),
     bulkDeleteIntent: managedClearState.bulkDeleteIntent ?? null,
     bulkDeleteOperation: managedClearState.bulkDeleteOperation ?? null,
+    bulkDeleteCancelled: managedClearState.bulkDeleteCancelled ?? null,
     pendingMutation: managedClearState.pendingMutation ?? null,
     lastMutation: managedClearState.lastMutation ?? null,
     cleanupDeleteIntent: managedClearState.cleanupDeleteIntent ?? null,
@@ -1150,6 +1152,28 @@ async function deleteDeltaV3Document(base, name) {
   await writeDeltaCleanupJournal("cleanup-deleted");
 }
 
+async function cancelDeltaV3BulkDelete() {
+  const operation = managedClearState?.bulkDeleteOperation;
+  if (!operation)
+    throw new Error("delta-v3 recovery has no journaled bulk-delete operation to cancel");
+  // Write-ahead: a cancel is idempotent, so a crash after this row only repeats it.
+  managedClearState.bulkDeleteCancelIntent = operation;
+  await writeDeltaCleanupJournal("bulk-delete-cancel-intent", {
+    bulkDeleteCancelIntent: operation,
+  });
+  const response = await managedShrinkRequest(
+    "delta-v3 bulk-delete cancel",
+    `${SCHEME}://${HOST}/v1/${operation}:cancel`,
+    {
+      method: "POST",
+      headers: authorized({ "content-type": "application/json" }),
+      body: "{}",
+      signal: timeoutSignal(),
+    },
+  );
+  if (!response.ok) throw new Error(`delta-v3 bulk-delete cancel ${response.status}`);
+}
+
 async function pollDeltaV3BulkDelete() {
   if (!managedClearState?.bulkDeleteOperation) {
     throw new Error("delta-v3 recovery cannot resume without a durable bulk-delete operation");
@@ -1167,10 +1191,22 @@ async function pollDeltaV3BulkDelete() {
     if (!response.ok) throw new Error(`delta-v3 bulk-delete poll ${response.status}`);
     const state = await response.json();
     if (state.done === true) {
-      validateManagedClearOperation(state, PROJECT);
+      const operation = managedClearState.bulkDeleteOperation;
+      if (managedClearState.bulkDeleteCancelIntent === operation && state.error) {
+        // google.rpc.Code CANCELLED: the operation stopped; the cleanup deletes what remains.
+        if (state.error.code !== 1 || state.name !== operation) {
+          throw new Error("cancelled delta-v3 bulk delete ended in an unexpected state");
+        }
+        managedClearState.bulkDeleteCancelled = operation;
+      } else {
+        validateManagedClearOperation(state, PROJECT);
+      }
       managedClearState.bulkDeleteOperation = null;
       managedClearState.bulkDeleteIntent = null;
-      await writeDeltaCleanupJournal("bulk-delete-done");
+      managedClearState.bulkDeleteCancelIntent = null;
+      await writeDeltaCleanupJournal(
+        managedClearState.bulkDeleteCancelled ? "bulk-delete-cancelled" : "bulk-delete-done",
+      );
       return;
     }
   }
@@ -1685,12 +1721,18 @@ async function runDeltaV3RecoveryOnly() {
     cleanupDeleteIntent: null,
     bulkDeleteIntent: journal.bulkDeleteIntent ?? null,
     bulkDeleteOperation: journal.bulkDeleteOperation ?? null,
+    bulkDeleteCancelled: null,
+    bulkDeleteCancelIntent: null,
     pendingMutation: journal.pendingMutation ?? null,
     lastMutation: journal.lastMutation ?? null,
   };
+  if (DELTA_V3_CANCEL_BULK_DELETE && !managedClearState.bulkDeleteOperation) {
+    throw new Error("delta-v3 recovery has no journaled bulk-delete operation to cancel");
+  }
   const base = `${SCHEME}://${HOST}/v1/projects/${PROJECT}/databases/(default)/documents`;
   managedClearBlocked = true;
   await resolveDeltaPendingMutation();
+  if (DELTA_V3_CANCEL_BULK_DELETE) await cancelDeltaV3BulkDelete();
   if (managedClearState.bulkDeleteOperation) await pollDeltaV3BulkDelete();
   await clearDeltaV3Exact(base, true);
   if (META_OUT) await writeFile(META_OUT, `${JSON.stringify({ requestCount })}\n`, { mode: 0o600 });
@@ -2414,9 +2456,15 @@ async function main() {
       exactScope: partialScope,
     });
   }
+  if (RECOVERY_MODE === undefined && DELTA_V3_CANCEL_BULK_DELETE) {
+    throw new Error("only delta-v3 recovery may cancel a bulk delete");
+  }
   if (RECOVERY_MODE !== undefined) {
     if (!["recover-legacy", "recover-v3", "recover-delta-v3"].includes(RECOVERY_MODE)) {
       throw new Error("unsupported Firestore probe recovery mode");
+    }
+    if (DELTA_V3_CANCEL_BULK_DELETE && RECOVERY_MODE !== "recover-delta-v3") {
+      throw new Error("only delta-v3 recovery may cancel a bulk delete");
     }
     if (!PRODUCTION || PROJECT !== "fireemu-oracle-sbx" || !HOST || !TOKEN) {
       throw new Error("legacy recovery requires the fixed sandbox production target");

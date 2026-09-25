@@ -5626,6 +5626,36 @@ pub enum RefreshTokenStoreMatch {
     Unavailable,
 }
 
+/// The ID of a tenant created with `display_name`. A display name of the documented form
+/// (4-20 letters, digits and hyphens, beginning with a letter: Identity Platform's "Managing
+/// tenants programmatically") gives production's shape, the display name, a hyphen and five
+/// characters of `[a-z0-9]` (FS-RULES sandbox recording 2026-09-25). The suffix is drawn from
+/// the creation sequence so that a run is reproducible; a taken ID moves on to the next one.
+/// Unobserved: whether production changes the case of a display name (it is kept as written
+/// here) and the suffix alphabet beyond `[a-z0-9]`. A display name outside the documented
+/// form, which production refuses according to the documentation, and a missing one keep
+/// fireemu's generated name: tenant validation belongs to AUTH-TENANT-BLOCKING.
+fn generated_tenant_id(display_name: Option<&str>, sequence: u64) -> String {
+    const ALPHABET: &[u8] = b"abcdefghijklmnopqrstuvwxyz0123456789";
+    let documented = display_name.filter(|name| {
+        (4..=20).contains(&name.len())
+            && name.starts_with(|c: char| c.is_ascii_alphabetic())
+            && name.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-')
+    });
+    let Some(name) = documented else {
+        return format!("fireemu-{sequence:020}");
+    };
+    let mut word = SplitMix64::new(sequence ^ 0x7465_6e61_6e74_6964).next_u64();
+    let suffix: String = (0..5)
+        .map(|_| {
+            let index = usize::try_from(word % 36).unwrap_or(0);
+            word /= 36;
+            char::from(ALPHABET[index])
+        })
+        .collect();
+    format!("{name}-{suffix}")
+}
+
 /// The Auth stores of every project a daemon serves: the configured (default) project plus
 /// the projects created as sessions through the control API. Tokens name their project in
 /// `aud`, so a verifier picks the store by audience.
@@ -7558,9 +7588,14 @@ impl AuthRegistry {
             projects.registered.get(project)?
         };
         let mut metadata = metadata;
+        let display_name = patch
+            .display_name
+            .clone()
+            .flatten()
+            .or_else(|| metadata.display_name.clone());
         loop {
             let sequence = self.next_tenant_id.fetch_add(1, Ordering::Relaxed);
-            let tenant = format!("fireemu-{sequence:020}");
+            let tenant = generated_tenant_id(display_name.as_deref(), sequence);
             let store = self.build_tenant_store(project, &tenant, parent)?;
             if let Some(patch) =
                 self.effective_tenant_config_override(&(project.to_owned(), tenant.clone()))

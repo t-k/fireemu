@@ -394,16 +394,72 @@ async function writeFixture({ programs, recordings, meta, secrets }) {
 }
 
 function ledgerEntries(ledgerText) {
+  const legacyTaskless = new Set([
+    "fireemu-35fe6|2026-09-23T14:41:46+00:00|auth05-one-shot-cleanup-completed",
+    "fireemu-oracle-idp|2026-09-23T15:02:54+00:00|exploratory-not-evidence",
+    "fireemu-fs-bisect-0924a|2026-09-25T11:39:08Z|project-deleted",
+  ]);
+  const knownEvents = new Set([
+    "started",
+    "finished",
+    "note",
+    "change",
+    "needs-recovery",
+    "cleanup-verified",
+    "config-change",
+    "project-deleted",
+    "campaign-control-terminal",
+  ]);
   return ledgerText
     .split("\n")
     .filter((line) => line.trim())
     .map((line) => {
+      let row;
       try {
-        return JSON.parse(line);
+        row = JSON.parse(line);
       } catch {
         throw new Error("malformed sandbox ledger JSON");
       }
+      if (row === null || typeof row !== "object" || Array.isArray(row))
+        throw new Error("malformed sandbox ledger row");
+      if (typeof row.project !== "string" || !row.project || !Number.isFinite(Date.parse(row.ts)))
+        throw new Error("sandbox ledger row needs a project and timestamp");
+      if (
+        (row.event === undefined && row.outcome === undefined) ||
+        (row.event !== undefined &&
+          (typeof row.event !== "string" || !knownEvents.has(row.event))) ||
+        (row.outcome !== undefined && (typeof row.outcome !== "string" || !row.outcome))
+      )
+        throw new Error("sandbox ledger row has no recognized state");
+      if (typeof row.taskId !== "string" || !row.taskId) {
+        const old = `${row.project}|${row.ts}|${row.outcome}`;
+        if (!legacyTaskless.has(old) || row.event === "started")
+          throw new Error("sandbox ledger row needs a task ID");
+      }
+      return row;
     });
+}
+
+function isCleanTerminal(row) {
+  if (row.event === "started") return false;
+  if (row.event === "cleanup-verified") return row.outcome === undefined;
+  if (
+    row.event !== undefined &&
+    row.event !== "finished" &&
+    row.event !== "campaign-control-terminal"
+  )
+    return false;
+  if (row.sandboxAtBaseline === false) return false;
+  if (row.event === "campaign-control-terminal")
+    return (
+      row.outcome === "preflight-failed" ||
+      (row.outcome === "iam-removed-readback" && row.iamBinding?.removedReadBack === true)
+    );
+  if (row.outcome === "recorded" || row.outcome === "restored-by-hand") return true;
+  if (row.outcome === "restored-by-operator") return row.sandboxAtBaseline === true;
+  if (row.outcome === "aborted-fatal" || row.outcome === "not-written")
+    return row.sandboxAtBaseline === true;
+  return row.outcome?.startsWith("exploration") === true;
 }
 
 /**
@@ -411,18 +467,27 @@ function ledgerEntries(ledgerText) {
  * this task's last run that did not end cleanly.
  */
 export function recentAbort(ledgerText, now = Date.now()) {
-  const last = ledgerEntries(ledgerText).findLast(
-    (entry) =>
-      entry.taskId === TASK_ID &&
-      entry.project === SANDBOX_PROJECT &&
-      (entry.outcome !== undefined || entry.event === "started"),
-  );
-  const clean = (outcome) => outcome === "recorded" || String(outcome).startsWith("exploration");
-  if (!last || clean(last.outcome)) return undefined;
+  let openStart;
+  let last;
+  for (const entry of ledgerEntries(ledgerText)) {
+    if (entry.taskId !== TASK_ID || entry.project !== SANDBOX_PROJECT) continue;
+    if (entry.event === "started") {
+      openStart = entry;
+      last = undefined;
+    } else if (isCleanTerminal(entry)) {
+      openStart = undefined;
+      last =
+        entry.outcome === "recorded" || entry.outcome?.startsWith("exploration")
+          ? undefined
+          : entry;
+    } else if (entry.outcome !== undefined && !openStart) {
+      last = entry;
+    }
+  }
+  if (openStart) return openStart;
   // An unfinished run stays closed to another recording even after the usual one-hour retry
   // interval. The caller must hold the shared O_EXCL lock across this check and the start append.
-  if (last.event === "started") return last;
-  return now - Date.parse(last.ts) < 3_600_000 ? last : undefined;
+  return last && now - Date.parse(last.ts) < 3_600_000 ? last : undefined;
 }
 
 /**
@@ -437,13 +502,18 @@ export function otherLaneOnSandbox(ledgerText, now = Date.now(), ignoredTaskIds 
       entry.taskId !== TASK_ID &&
       !ignoredTaskIds.includes(entry.taskId),
   );
-  const last = new Map();
+  const open = new Map();
   for (const entry of lines) {
-    if (entry.event === "started" || entry.event === "finished" || entry.outcome !== undefined)
-      last.set(entry.taskId, entry);
+    if (!entry.taskId) continue;
+    if (entry.event === "started") open.set(entry.taskId, entry);
+    else if (isCleanTerminal(entry)) open.delete(entry.taskId);
+    else if (entry.outcome !== undefined) open.set(entry.taskId, entry);
   }
-  const open = [...last.values()].find((entry) => entry.event === "started");
-  if (open) return `${open.taskId} started at ${open.ts} and has not finished`;
+  const held = [...open.values()][0];
+  if (held)
+    return held.event === "started"
+      ? `${held.taskId} started at ${held.ts} and has not finished`
+      : `${held.taskId} at ${held.ts} is not confirmed clean`;
   const recent = lines.find((entry) => now - Date.parse(entry.ts) < 30 * 60_000);
   return recent ? `${recent.taskId} wrote a line at ${recent.ts}` : undefined;
 }

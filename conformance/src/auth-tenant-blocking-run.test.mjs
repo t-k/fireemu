@@ -100,6 +100,20 @@ test("local admission fails closed on malformed rows and unknown task cost", asy
   const now = new Date(Date.now() - 2 * 3_600_000).toISOString();
   for (const rows of [
     ["{broken-json"],
+    ['"oops"'],
+    ["[]"],
+    ["null"],
+    [{ ts: now, project: "fireemu-oracle-idp", taskId: "AUTH-MFA-SANDBOX" }],
+    [{ ts: now, project: "fireemu-oracle-idp", event: "started" }],
+    [
+      {
+        ts: "not-a-date",
+        project: "fireemu-oracle-idp",
+        taskId: "AUTH-MFA-SANDBOX",
+        event: "note",
+      },
+    ],
+    [{ ts: now, project: "", taskId: "AUTH-MFA-SANDBOX", event: "note" }],
     [
       {
         ts: now,
@@ -112,6 +126,19 @@ test("local admission fails closed on malformed rows and unknown task cost", asy
     const result = await admitLocal(rows);
     assert.notEqual(result.status, 0);
   }
+});
+
+test("local admission accepts the historical taskless terminal", async () => {
+  const result = await admitLocal([
+    {
+      ts: "2026-09-23T15:02:54+00:00",
+      project: "fireemu-oracle-idp",
+      outcome: "exploratory-not-evidence",
+      requests: 17,
+      estimatedUsd: 0,
+    },
+  ]);
+  assert.equal(result.status, 0, result.stderr);
 });
 
 test("local admission reserves the reviewed run cost within each task's US$10 budget", async () => {
@@ -181,6 +208,50 @@ test("a note after another lane's start does not close its hold", () => {
   assert.match(otherLaneOnSandbox(ledger, now), /has not finished/);
   const closed = `${ledger}${row(31 * 60_000, { event: "finished", outcome: "recorded" })}\n`;
   assert.equal(otherLaneOnSandbox(closed, now), undefined);
+});
+
+test("a failed restore cannot close another lane's old hold", () => {
+  const now = Date.now();
+  const row = (age, fields) =>
+    JSON.stringify({
+      ts: new Date(now - age).toISOString(),
+      project: "fireemu-oracle-idp",
+      taskId: "AUTH-MFA-SANDBOX",
+      ...fields,
+    });
+  const started = `${row(3 * 3_600_000, { event: "started" })}\n`;
+  const failed = `${started}${row(2 * 3_600_000, { event: "finished", outcome: "restore-failed", sandboxAtBaseline: false })}\n`;
+  assert.match(otherLaneOnSandbox(failed, now), /has not finished|not confirmed clean/);
+  const restored = `${failed}${row(31 * 60_000, { event: "finished", outcome: "restored-by-operator", sandboxAtBaseline: true })}\n`;
+  assert.equal(otherLaneOnSandbox(restored, now), undefined);
+  const unverified = `${failed}${row(31 * 60_000, { event: "finished", outcome: "restored-by-operator", sandboxAtBaseline: false })}\n`;
+  assert.match(otherLaneOnSandbox(unverified, now), /has not finished|not confirmed clean/);
+});
+
+test("a verified cleanup event closes a foreign failed run's hold", () => {
+  const now = Date.now();
+  const row = (age, fields) =>
+    JSON.stringify({
+      ts: new Date(now - age).toISOString(),
+      project: "fireemu-oracle-idp",
+      taskId: "FS-RULES-SANDBOX",
+      ...fields,
+    });
+  const ledger = `${row(3 * 3_600_000, { event: "started" })}\n${row(2 * 3_600_000, { outcome: "aborted-cleanup-incomplete" })}\n${row(31 * 60_000, { event: "cleanup-verified" })}\n`;
+  assert.equal(otherLaneOnSandbox(ledger, now), undefined);
+});
+
+test("failed restore after this task's start keeps its own hold", () => {
+  const now = Date.now();
+  const row = (age, fields) =>
+    JSON.stringify({
+      ts: new Date(now - age).toISOString(),
+      project: "fireemu-oracle-idp",
+      taskId: TASK_ID,
+      ...fields,
+    });
+  const ledger = `${row(3 * 3_600_000, { event: "started" })}\n${row(2 * 3_600_000, { event: "finished", outcome: "restore-failed", sandboxAtBaseline: false })}\n`;
+  assert.equal(recentAbort(ledger, now)?.event, "started");
 });
 
 test("an IAM campaign hold survives sandbox restoration and blocks new recordings", async () => {

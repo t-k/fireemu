@@ -7485,12 +7485,14 @@ fn legacy_sign_in_token(
 }
 
 fn password_policy_notification(code: ViolationCode, policy: &PasswordPolicy) -> Value {
+    // Production words a character class as its refusals do (sandbox recording 2026-09-25,
+    // auth-config-sdk/password-policy/existing#sign-in-weak-notify: "an upper case character").
     let message = match code {
         ViolationCode::MissingLowercaseCharacter => {
-            "Password must contain a lowercase character".to_owned()
+            "Password must contain a lower case character".to_owned()
         }
         ViolationCode::MissingUppercaseCharacter => {
-            "Password must contain an uppercase character".to_owned()
+            "Password must contain an upper case character".to_owned()
         }
         ViolationCode::MissingNumericCharacter => {
             "Password must contain a numeric character".to_owned()

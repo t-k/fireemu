@@ -17932,7 +17932,13 @@ fn strict_expired_enrollment_sessions_do_not_hold_the_pending_budget() {
     }
     let (status, body) = start(&token);
     assert_eq!(status, 400, "live sessions fill the budget: {body}");
-    advance(&s, 901);
+    // At exactly its deadline a session is still live (it still finalizes), so none makes room.
+    advance(&s, 900);
+    let (status, signed_in) = password_sign_in(&s, "sessions@example.com", "password123");
+    assert_eq!(status, 200, "{signed_in}");
+    let (status, body) = start(signed_in["idToken"].as_str().unwrap());
+    assert_eq!(status, 400, "at the deadline: {body}");
+    advance(&s, 1);
     let (status, signed_in) = password_sign_in(&s, "sessions@example.com", "password123");
     assert_eq!(status, 200, "{signed_in}");
     let (status, body) = start(signed_in["idToken"].as_str().unwrap());

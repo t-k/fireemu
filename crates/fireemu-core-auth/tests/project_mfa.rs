@@ -436,3 +436,52 @@ fn the_new_mfa_refusals_describe_themselves() {
     }
     assert!(!MfaError::TooManyEnrollmentAttempts.to_string().is_empty());
 }
+
+/// Below the cap nothing makes room: an enrollment session older than the observed ages stays
+/// usable while other codes are sent (mutation follow-up, 20260925-followup).
+#[test]
+fn below_the_code_cap_an_old_enrollment_session_stays() {
+    use fireemu_core_auth::store::VerificationPurpose;
+    let mut s = AuthStore::new("demo-app", SplitMix64::new(3), TotpPolicy::default());
+    s.set_production_mfa(true);
+    s.set_mfa_config(enabled(Some(5)));
+    let uid = s
+        .create_user_with_id(NewUser::email("a@example.com"), Some("a"), t0())
+        .unwrap();
+    let old = s
+        .send_verification_code(
+            "+16505550101",
+            VerificationPurpose::Enrollment { uid: uid.clone() },
+            t0(),
+        )
+        .unwrap();
+    s.send_verification_code(
+        "+16505550101",
+        VerificationPurpose::Enrollment { uid },
+        seconds(1_806),
+    )
+    .unwrap();
+    assert!(s
+        .check_phone_code(&old.session_info, &old.code, seconds(1_806))
+        .is_ok());
+}
+
+/// A pending sign-in's debug form names it and whether it completed, never its credentials
+/// (mutation follow-up, 20260925-followup).
+#[test]
+fn a_pending_sign_in_debugs_its_state() {
+    let mut s = production_store();
+    let (uid, material) = started(&mut s);
+    s.finalize_totp_enrollment_named(
+        &uid,
+        &material.session_id,
+        code_at(&material, t0()),
+        Some("A".to_owned()),
+        t0(),
+    )
+    .unwrap();
+    s.start_mfa_sign_in(&uid, t0()).unwrap();
+    let debug = format!("{:?}", s.user_by_id("a").unwrap().mfa);
+    assert!(debug.contains("PendingSignIn"), "{debug}");
+    assert!(debug.contains("completed: false"), "{debug}");
+}

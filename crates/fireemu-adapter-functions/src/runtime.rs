@@ -835,6 +835,12 @@ struct RespawnGeneration {
     cleanup_dir: Option<Arc<CleanupDir>>,
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum RunnerGoneDisposition {
+    FailedAttempt,
+    FaultInterrupted,
+}
+
 struct CleanupDir(std::path::PathBuf);
 
 impl Drop for CleanupDir {
@@ -2916,6 +2922,30 @@ impl FunctionsRuntime {
         self.recover_dead_runner_locked(index, gate).await
     }
 
+    /// Waits for the selected Blocking Auth codebase's runner to become available.
+    pub async fn recover_blocking_auth_runner_for(
+        self: &Arc<Self>,
+        event: fireemu_core_functions::manifest::BlockingAuthEvent,
+        function: Option<&str>,
+    ) -> Result<(), String> {
+        let spec = self
+            .manifest
+            .functions
+            .iter()
+            .find(|candidate| {
+                matches!(candidate.trigger, Trigger::BlockingAuth { event: candidate_event, .. } if candidate_event == event)
+                    && function.is_none_or(|selected| candidate.name == selected)
+            })
+            .ok_or_else(|| "Blocking Auth function is no longer available".to_owned())?;
+        let owner = self.owner.get(&spec.name).copied().ok_or_else(|| {
+            format!(
+                "Blocking Auth function {:?} has no codebase owner",
+                spec.name
+            )
+        })?;
+        self.recover_dead_runner(owner).await.map(|_| ())
+    }
+
     async fn recover_dead_runner_locked(
         self: &Arc<Self>,
         index: usize,
@@ -4400,8 +4430,8 @@ impl FunctionsRuntime {
             let timeout = Duration::from_secs(u64::from(spec.timeout_seconds));
             let retry = spec.retry;
             if crash {
-                // The runner dies mid-invocation: the attempt is given back (RunnerGone) and
-                // a fresh runner takes over, as after a crashed instance.
+                // A planned crash gives back only this selected event's attempt. Other events
+                // in the same runner fail according to their own retry policy.
                 let generation = Some(inner.epoch);
                 self.crash_and_respawn(index, generation);
             }
@@ -4416,6 +4446,7 @@ impl FunctionsRuntime {
                             epoch,
                             retry_override,
                             &outcome,
+                            RunnerGoneDisposition::FailedAttempt,
                         );
                         runtime.release(&key);
                         return;
@@ -4423,7 +4454,21 @@ impl FunctionsRuntime {
                     None if runtime.config.debug_mode => runner.invoke_unbounded(request).await,
                     None => runner.invoke(request, timeout).await,
                 };
-                runtime.complete(id, &key, &function_name, attempt, epoch, retry, &outcome);
+                let disposition = if crash {
+                    RunnerGoneDisposition::FaultInterrupted
+                } else {
+                    RunnerGoneDisposition::FailedAttempt
+                };
+                runtime.complete(
+                    id,
+                    &key,
+                    &function_name,
+                    attempt,
+                    epoch,
+                    retry,
+                    &outcome,
+                    disposition,
+                );
                 match late {
                     // The handler is still running: its slot stays taken until it finishes
                     // (or the runner dies), so idle and concurrency stay truthful.
@@ -4494,6 +4539,7 @@ impl FunctionsRuntime {
         attempt: u32,
         now: LogicalInstant,
         outcome: &InvokeOutcome,
+        disposition: RunnerGoneDisposition,
         retirement: Result<Retirement, fireemu_core_events::outbox::OutboxError>,
         function: &str,
         text: String,
@@ -4506,7 +4552,9 @@ impl FunctionsRuntime {
                 Self::remove_payload(inner, id);
             }
             Ok(Retirement::StillActive) => {
-                let phase = if matches!(outcome, InvokeOutcome::RunnerGone(_)) {
+                let phase = if matches!(outcome, InvokeOutcome::RunnerGone(_))
+                    && disposition == RunnerGoneDisposition::FaultInterrupted
+                {
                     "interrupted"
                 } else {
                     "retry"
@@ -4541,6 +4589,7 @@ impl FunctionsRuntime {
         epoch: Epoch,
         retry: bool,
         outcome: &InvokeOutcome,
+        disposition: RunnerGoneDisposition,
     ) {
         let now = self.now();
         let _ = key;
@@ -4604,9 +4653,10 @@ impl FunctionsRuntime {
                 if matches!(outcome, InvokeOutcome::Ok) {
                     let _ = record.succeed();
                     Retirement::Retired
-                } else if matches!(outcome, InvokeOutcome::RunnerGone(_)) {
-                    // Infrastructure failure: the attempt is given back and the event waits,
-                    // pending, for a runner (dispatch stops while the runner is dead).
+                } else if matches!(outcome, InvokeOutcome::RunnerGone(_))
+                    && disposition == RunnerGoneDisposition::FaultInterrupted
+                {
+                    // Only a fault-plan crash deliberately gives this attempt back.
                     let _ = record.interrupt();
                     Retirement::StillActive
                 } else if matches!(
@@ -4624,6 +4674,7 @@ impl FunctionsRuntime {
                 attempt,
                 now,
                 outcome,
+                disposition,
                 outcome_of_record,
                 function,
                 text,

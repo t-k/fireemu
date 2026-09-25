@@ -133,6 +133,7 @@ send({
             {"name": "slow", "trigger": {"type": "storage", "eventType": "google.cloud.storage.object.v1.finalized"}, "timeoutSeconds": 1},
             {"name": "tick", "trigger": {"type": "schedule", "schedule": "every 5 minutes"}},
             {"name": "crashOnce", "trigger": {"type": "pubsub", "topic": "crash-once"}},
+            {"name": "crashAlways", "trigger": {"type": "pubsub", "topic": "crash-always"}},
             # A cron schedule (03:00 UTC daily). The tests start at 12:01 UTC, so it only
             # comes due for clock advances of a day or more.
             {"name": "nightly", "trigger": {"type": "schedule", "schedule": "0 3 * * *"}},

@@ -214,6 +214,8 @@ const MAX_FUNCTIONS_SOURCE_WATCH_FILES_PER_SECOND: u64 = 20_000;
 const MAX_FUNCTIONS_SOURCE_ENTRIES: u64 = 100_000;
 /// Maximum bytes one Functions source tree may read or copy per operation.
 const MAX_FUNCTIONS_SOURCE_BYTES: u64 = 256 * 1024 * 1024;
+const SOURCE_BYTE_BUDGET_ERROR_PREFIX: &str =
+    "Functions source tree exceeds the 256 MiB byte budget";
 /// Maximum supported source-tree nesting, excluding the source root.
 const MAX_FUNCTIONS_SOURCE_DEPTH: usize = 128;
 
@@ -289,7 +291,7 @@ impl FunctionsSourceByteBudget {
         if self.bytes > MAX_FUNCTIONS_SOURCE_BYTES {
             let (largest_path, largest_bytes) = self.largest.as_ref().unwrap();
             return Err(format!(
-                "Functions source tree exceeds the 256 MiB byte budget at {} ({} bytes counted); largest file is {} ({largest_bytes} bytes). Narrow functions.source or move generated files outside it; functions.ignore affects watcher scans but not runtime snapshots",
+                "{SOURCE_BYTE_BUDGET_ERROR_PREFIX} at {} ({} bytes counted); largest file is {} ({largest_bytes} bytes). Narrow functions.source or move generated files outside it; functions.ignore affects watcher scans but not runtime snapshots",
                 path.display(),
                 self.bytes,
                 largest_path.display()
@@ -1088,6 +1090,14 @@ fn warn_reload_once(last: &mut bool, codebase: &str, operation: &str, reason: &s
     first
 }
 
+fn source_scan_retry_delay(reason: Option<&str>) -> Duration {
+    if reason.is_some_and(|reason| reason.starts_with(SOURCE_BYTE_BUDGET_ERROR_PREFIX)) {
+        Duration::from_secs(30)
+    } else {
+        Duration::from_millis(750)
+    }
+}
+
 async fn supervise_codebase_reloads(
     weak_runtime: std::sync::Weak<FunctionsRuntime>,
     cfg: RuntimeConfig,
@@ -1102,20 +1112,23 @@ async fn supervise_codebase_reloads(
     let mut observed_stamp = initial_stamp.as_ref().ok().copied();
     let mut last_scan_error = false;
     let mut last_snapshot_error = false;
+    let mut retry_delay = source_scan_retry_delay(initial_stamp.as_ref().err().map(String::as_str));
     if let Err(reason) = initial_stamp {
         warn_reload_once(&mut last_scan_error, &codebase.codebase, "scan", &reason);
     }
     loop {
-        tokio::time::sleep(Duration::from_millis(750)).await;
+        tokio::time::sleep(retry_delay).await;
         let Some(runtime) = weak_runtime.upgrade() else {
             return;
         };
         let next_stamp = match scan_budget.scan(&root, &codebase.ignore).await {
             Ok(stamp) => {
                 last_scan_error = false;
+                retry_delay = source_scan_retry_delay(None);
                 stamp
             }
             Err(reason) => {
+                retry_delay = source_scan_retry_delay(Some(&reason));
                 warn_reload_once(&mut last_scan_error, &codebase.codebase, "scan", &reason);
                 continue;
             }
@@ -1142,6 +1155,7 @@ async fn supervise_codebase_reloads(
                 snapshot
             }
             Err(reason) => {
+                retry_delay = source_scan_retry_delay(Some(&reason));
                 warn_reload_once(
                     &mut last_snapshot_error,
                     &codebase.codebase,
@@ -4297,13 +4311,14 @@ mod tests {
         functions_source_stamp_with_file_version, hash_source_file, hash_source_stamp_entry,
         node_engine_matches, owned_pubsub_topic, package_node_engine, parse_node_version,
         provision_function_pubsub_resources, select_node_installation, snapshot_functions_source,
-        source_scan_pacing_delay, stream_source_chunks, update_watch_hash,
+        source_scan_pacing_delay, source_scan_retry_delay, stream_source_chunks, update_watch_hash,
         validate_functions_codebase_budget, warn_reload_once, BlockingAuthBridge,
         FunctionsSourceByteBudget, FunctionsSourceEntryBudget, FunctionsSourceFileVersion,
         FunctionsSourceScanBudget, FunctionsSourceStamp, FunctionsSourceTraversal,
         NodeInstallation, PubSubBridge, BLOCKING_AUTH_DEADLINE, MAX_BLOCKING_AUTH_RESPONSE_BYTES,
-        MAX_FUNCTIONS_SOURCE_ENTRIES, MAX_FUNCTIONS_SOURCE_WATCH_BYTES_PER_SECOND,
-        MAX_FUNCTIONS_SOURCE_WATCH_FILES_PER_SECOND, SOURCE_IO_BUFFER_BYTES,
+        MAX_FUNCTIONS_SOURCE_BYTES, MAX_FUNCTIONS_SOURCE_ENTRIES,
+        MAX_FUNCTIONS_SOURCE_WATCH_BYTES_PER_SECOND, MAX_FUNCTIONS_SOURCE_WATCH_FILES_PER_SECOND,
+        SOURCE_IO_BUFFER_BYTES,
     };
     #[cfg(not(windows))]
     use super::{push_node_candidate, run_node_probe};
@@ -4439,6 +4454,26 @@ mod tests {
             "scan",
             "256 MiB exceeded again"
         ));
+    }
+
+    #[test]
+    fn source_scan_waits_before_retrying_a_budget_exceeded_tree() {
+        let mut budget = FunctionsSourceByteBudget::default();
+        let reason = budget
+            .claim(
+                std::path::Path::new("too-large.bin"),
+                MAX_FUNCTIONS_SOURCE_BYTES + 1,
+            )
+            .unwrap_err();
+        assert_eq!(
+            source_scan_retry_delay(Some(&reason)),
+            Duration::from_secs(30)
+        );
+        assert_eq!(
+            source_scan_retry_delay(Some("permission denied")),
+            Duration::from_millis(750)
+        );
+        assert_eq!(source_scan_retry_delay(None), Duration::from_millis(750));
     }
 
     #[test]

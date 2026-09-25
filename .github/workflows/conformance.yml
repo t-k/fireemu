@@ -70,6 +70,11 @@ jobs:
           FIREEMU_BIN: ${{ github.workspace }}/target/release/fireemu
         run: pnpm -C conformance run check
 
+      - name: replay Pub/Sub against the committed matrix
+        env:
+          FIREEMU_BIN: ${{ github.workspace }}/target/release/fireemu
+        run: pnpm -C conformance run pubsub-probe:check
+
       # `record` re-derives the fixtures from the official emulators. It never commits: a
       # difference is reported as a diff so that an upstream change becomes an explicit review
       # rather than a silently updated baseline.

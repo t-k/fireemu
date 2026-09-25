@@ -151,6 +151,9 @@ send({
         ]
     },
 })
+if os.environ.get("FIREEMU_FAKE_CLOSE_STDOUT_AFTER_HELLO") == "1":
+    os.close(sys.stdout.fileno())
+
 while True:
     msg = read_frame()
     if msg is None or msg.get("type") == "shutdown":

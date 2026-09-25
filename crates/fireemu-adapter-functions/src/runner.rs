@@ -12,7 +12,7 @@ use tokio::io::{AsyncBufRead, AsyncBufReadExt, BufReader};
 #[cfg(not(windows))]
 use tokio::process::Child;
 use tokio::process::{ChildStdin, Command};
-use tokio::sync::{oneshot, Mutex as AsyncMutex};
+use tokio::sync::{oneshot, watch, Mutex as AsyncMutex};
 
 #[cfg(windows)]
 use process_wrap::tokio::{JobObject, KillOnDrop, TokioChildWrapper, TokioCommandWrap};
@@ -324,6 +324,8 @@ impl std::fmt::Debug for SpawnSpec {
 /// A running runner.
 pub struct Runner {
     child: AsyncMutex<Option<RunnerChild>>,
+    /// A child taken by `kill_now` is reaped here before `shutdown` returns.
+    reaper: Mutex<Option<tokio::task::JoinHandle<()>>>,
     stdin: AsyncMutex<Option<ChildStdin>>,
     hello: Hello,
     waiters: Arc<Mutex<HashMap<String, oneshot::Sender<InvokeOutcome>>>>,
@@ -462,37 +464,70 @@ impl Runner {
         .await
     }
 
+    /// Starts a runner whose cold-start handshake is cancelled and reaped on shutdown.
+    pub async fn spawn_spec_until_shutdown(
+        spec: &SpawnSpec,
+        shutdown: watch::Receiver<bool>,
+    ) -> Result<Self, String> {
+        Self::spawn_inner(
+            &spec.command,
+            spec.cwd.as_deref(),
+            &spec.env,
+            spec.hello_timeout,
+            Some(shutdown),
+        )
+        .await
+    }
+
     /// Kills the process immediately (session reset: handlers still running must not write
     /// into the reset state). Waiters learn it through the reader task's exit.
     pub fn kill_now(&self) {
         self.alive.store(false, Ordering::SeqCst);
         remove_credential_sandbox(&self.credential_sandbox);
+        let mut reaper = self
+            .reaper
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         if let Ok(mut slot) = self.child.try_lock() {
             if let Some(mut child) = slot.take() {
                 let _ = child.start_kill();
                 #[cfg(unix)]
                 kill_process_group(child.id());
-                // Reaped in the background: a killed runner must not linger as a zombie.
+                // The task keeps the child until it is reaped, and shutdown joins it.
                 if let Ok(handle) = tokio::runtime::Handle::try_current() {
-                    handle.spawn(async move {
+                    *reaper = Some(handle.spawn(async move {
                         let _ = wait_child(&mut child).await;
-                    });
+                    }));
                 }
             }
         }
+        drop(reaper);
         if let Ok(mut stdin) = self.stdin.try_lock() {
             *stdin = None;
         }
     }
 
     /// Spawns `command` (program + args) with `env`, in `cwd`, and waits for its `hello`.
-    #[allow(clippy::too_many_lines)]
     pub async fn spawn(
         command: &[String],
         cwd: Option<&str>,
         env: &[(String, String)],
         hello_timeout: Duration,
     ) -> Result<Self, String> {
+        Self::spawn_inner(command, cwd, env, hello_timeout, None).await
+    }
+
+    #[allow(clippy::too_many_lines)]
+    async fn spawn_inner(
+        command: &[String],
+        cwd: Option<&str>,
+        env: &[(String, String)],
+        hello_timeout: Duration,
+        shutdown: Option<watch::Receiver<bool>>,
+    ) -> Result<Self, String> {
+        if shutdown.as_ref().is_some_and(|closed| *closed.borrow()) {
+            return Err("functions runner start cancelled by shutdown".to_owned());
+        }
         let (program, args) = command
             .split_first()
             .ok_or_else(|| "functions runner: empty command".to_owned())?;
@@ -689,7 +724,25 @@ impl Runner {
                 }
             });
         }
-        let hello = match tokio::time::timeout(hello_timeout, hello_rx).await {
+        let hello_result = if let Some(mut shutdown) = shutdown {
+            let result = tokio::select! {
+                biased;
+                _ = shutdown.wait_for(|closed| *closed) => None,
+                result = tokio::time::timeout(hello_timeout, hello_rx) => Some(result),
+            };
+            if let Some(result) = result {
+                result
+            } else {
+                #[cfg(unix)]
+                kill_process_group(child.id());
+                let _ = kill_child(&mut child).await;
+                let _ = wait_child(&mut child).await;
+                return Err("functions runner start cancelled by shutdown".to_owned());
+            }
+        } else {
+            tokio::time::timeout(hello_timeout, hello_rx).await
+        };
+        let hello = match hello_result {
             Ok(Ok(h)) => h,
             Ok(Err(_)) => {
                 #[cfg(unix)]
@@ -712,6 +765,7 @@ impl Runner {
         let credential_sandbox = credential_sandbox_guard.into_path();
         Ok(Self {
             child: AsyncMutex::new(Some(child)),
+            reaper: Mutex::new(None),
             stdin: AsyncMutex::new(Some(stdin)),
             hello,
             waiters,
@@ -873,6 +927,14 @@ impl Runner {
             #[cfg(unix)]
             kill_process_group(pid);
             let _ = tokio::time::timeout(Duration::from_secs(2), wait_child(&mut child)).await;
+        }
+        let reaper = self
+            .reaper
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .take();
+        if let Some(reaper) = reaper {
+            let _ = reaper.await;
         }
         eprintln!("{} stopped", self.label);
         remove_credential_sandbox(&self.credential_sandbox);
@@ -1234,6 +1296,51 @@ mod tests {
             );
             tokio::time::sleep(Duration::from_millis(20)).await;
         }
+    }
+
+    #[cfg(unix)]
+    #[tokio::test(flavor = "current_thread")]
+    async fn shutdown_after_kill_now_waits_for_the_child_reaper() {
+        use std::process::Command;
+        use std::time::Duration;
+
+        let script = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fake_runner.py");
+        let runner = super::Runner::spawn(
+            &["python3".to_owned(), script.to_owned()],
+            None,
+            &[],
+            Duration::from_secs(5),
+        )
+        .await
+        .unwrap();
+        let pid = runner.child.lock().await.as_ref().unwrap().id().unwrap();
+        runner.kill_now();
+        runner.shutdown().await;
+
+        let reaped_when_shutdown_returned = !Command::new("/bin/kill")
+            .args(["-0", &pid.to_string()])
+            .status()
+            .unwrap()
+            .success();
+        if !reaped_when_shutdown_returned {
+            let deadline = tokio::time::Instant::now() + Duration::from_secs(3);
+            while Command::new("/bin/kill")
+                .args(["-0", &pid.to_string()])
+                .status()
+                .unwrap()
+                .success()
+            {
+                assert!(
+                    tokio::time::Instant::now() < deadline,
+                    "runner was not reaped"
+                );
+                tokio::task::yield_now().await;
+            }
+        }
+        assert!(
+            reaped_when_shutdown_returned,
+            "shutdown returned before runner {pid} was reaped"
+        );
     }
 
     #[tokio::test]

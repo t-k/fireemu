@@ -30,7 +30,7 @@ use fireemu_core_types::resources::{
 };
 use fireemu_core_types::time::{LogicalDuration, LogicalInstant};
 use serde_json::{json, Value};
-use tokio::sync::{Mutex as AsyncMutex, Notify, OwnedMutexGuard};
+use tokio::sync::{watch, Mutex as AsyncMutex, Notify, OwnedMutexGuard};
 
 use crate::events::{
     auth_event, change_kind, firestore_event, pubsub_event, schedule_event, storage_event,
@@ -537,6 +537,8 @@ struct Inner {
     payloads: BTreeMap<EventId, QueuedPayload>,
     active_event_bytes: usize,
     reserved_event_records: usize,
+    /// Cold runner handshakes admitted before shutdown and not yet reaped.
+    active_runner_spawns: usize,
     reserved_event_bytes: usize,
     active_eventarc_records: usize,
     active_eventarc_bytes: usize,
@@ -935,6 +937,8 @@ pub struct FunctionsRuntime {
     /// Only active Cloud Tasks dispatches own Tokio tasks. Reset and shutdown replace this set,
     /// which aborts every old-generation attempt and its retry timer.
     task_attempts: Mutex<tokio::task::JoinSet<()>>,
+    /// Reapers for runners displaced by reload; shutdown joins them after closing admission.
+    retired_runner_reapers: Mutex<tokio::task::JoinSet<()>>,
     wake: Notify,
     idle: Arc<Notify>,
     retry: RetryPolicy,
@@ -959,6 +963,8 @@ pub struct FunctionsRuntime {
     trigger_generation: std::sync::atomic::AtomicU64,
     /// Once set, no reload or respawn may install another child process.
     shutting_down: std::sync::atomic::AtomicBool,
+    /// Wakes a runner still waiting for hello so shutdown can reap it promptly.
+    runner_shutdown: watch::Sender<bool>,
     /// Set only after every source mutation that reserved a logical event batch has either
     /// published or cancelled it. The dispatcher remains alive during that handoff so a
     /// successful source write can never publish into an already stopped runtime.
@@ -973,6 +979,32 @@ struct TaskCompletion {
     id: u64,
     generation: u64,
     failed: bool,
+}
+
+/// Retains shutdown ownership from child spawn through handshake and cleanup.
+pub struct RunnerSpawnPermit {
+    runtime: Arc<FunctionsRuntime>,
+}
+
+impl RunnerSpawnPermit {
+    /// Signals shutdown to an admitted runner handshake.
+    #[must_use]
+    pub fn shutdown_receiver(&self) -> watch::Receiver<bool> {
+        self.runtime.runner_shutdown.subscribe()
+    }
+}
+
+impl Drop for RunnerSpawnPermit {
+    fn drop(&mut self) {
+        let mut inner = self
+            .runtime
+            .inner
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        inner.active_runner_spawns -= 1;
+        drop(inner);
+        self.runtime.idle.notify_waiters();
+    }
 }
 
 impl Drop for TaskCompletion {
@@ -1009,6 +1041,19 @@ impl Drop for RunnerRestartGuard {
 }
 
 impl FunctionsRuntime {
+    /// Admits an external reload startup into the shutdown wait set.
+    #[must_use]
+    pub fn reserve_runner_spawn(self: &Arc<Self>) -> Option<RunnerSpawnPermit> {
+        let mut inner = self.inner.lock().ok()?;
+        if self.shutting_down.load(std::sync::atomic::Ordering::SeqCst) {
+            return None;
+        }
+        inner.active_runner_spawns += 1;
+        Some(RunnerSpawnPermit {
+            runtime: self.clone(),
+        })
+    }
+
     fn empty_event_reservation(self: &Arc<Self>) -> EventBatchReservation {
         EventBatchReservation {
             runtime: Arc::downgrade(self),
@@ -1158,6 +1203,7 @@ impl FunctionsRuntime {
                 payloads: BTreeMap::new(),
                 active_event_bytes: 0,
                 reserved_event_records: 0,
+                active_runner_spawns: 0,
                 reserved_event_bytes: 0,
                 active_eventarc_records: 0,
                 active_eventarc_bytes: 0,
@@ -1178,6 +1224,7 @@ impl FunctionsRuntime {
                 causality: CausalityLog::new(MAX_CAUSALITY_ENTRIES),
             }),
             task_attempts: Mutex::new(tokio::task::JoinSet::new()),
+            retired_runner_reapers: Mutex::new(tokio::task::JoinSet::new()),
             wake: Notify::new(),
             idle: Arc::new(Notify::new()),
             retry,
@@ -1186,6 +1233,7 @@ impl FunctionsRuntime {
             background_triggers: std::sync::atomic::AtomicBool::new(true),
             trigger_generation: std::sync::atomic::AtomicU64::new(0),
             shutting_down: std::sync::atomic::AtomicBool::new(false),
+            runner_shutdown: watch::channel(false).0,
             dispatch_stopping: std::sync::atomic::AtomicBool::new(false),
         })
     }
@@ -1286,6 +1334,7 @@ impl FunctionsRuntime {
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         self.shutting_down
             .store(true, std::sync::atomic::Ordering::SeqCst);
+        self.runner_shutdown.send_replace(true);
         drop(inner);
         self.wake.notify_one();
         self.idle.notify_waiters();
@@ -1311,7 +1360,7 @@ impl FunctionsRuntime {
             if self
                 .inner
                 .lock()
-                .map(|inner| inner.reserved_event_records == 0)
+                .map(|inner| inner.reserved_event_records == 0 && inner.active_runner_spawns == 0)
                 .unwrap_or(true)
             {
                 break;
@@ -1331,6 +1380,14 @@ impl FunctionsRuntime {
         for (_, runner) in self.current_runners() {
             shutdowns.spawn(async move { runner.shutdown().await });
         }
+        let mut retired_runner_reapers = {
+            let mut reapers = self
+                .retired_runner_reapers
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            std::mem::take(&mut *reapers)
+        };
+        while retired_runner_reapers.join_next().await.is_some() {}
         while shutdowns.join_next().await.is_some() {}
     }
 
@@ -1403,6 +1460,10 @@ impl FunctionsRuntime {
             }
         };
         let old = {
+            let inner = self
+                .inner
+                .lock()
+                .map_err(|_| "runtime poisoned".to_owned())?;
             let mut generation = codebase.generation_mut();
             if self.shutting_down.load(std::sync::atomic::Ordering::SeqCst) {
                 spec.runner.kill_now();
@@ -1412,7 +1473,7 @@ impl FunctionsRuntime {
                 return Err("the Functions runtime is shutting down".to_owned());
             }
             let revision = generation.revision.saturating_add(1);
-            std::mem::replace(
+            let old = std::mem::replace(
                 &mut *generation,
                 CodebaseGeneration {
                     revision,
@@ -1421,7 +1482,17 @@ impl FunctionsRuntime {
                     cleanup_dir: CodebaseGeneration::cleanup(spec.cleanup_dir),
                     blocking_restart_ticket: None,
                 },
-            )
+            );
+            old.runner.kill_now();
+            let retired = old.runner.clone();
+            let mut reapers = self
+                .retired_runner_reapers
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            while reapers.try_join_next().is_some() {}
+            reapers.spawn(async move { retired.shutdown().await });
+            drop(inner);
+            old
         };
         self.trigger_generation
             .store(generation, std::sync::atomic::Ordering::SeqCst);
@@ -1430,9 +1501,8 @@ impl FunctionsRuntime {
         }
         *eventarc_registry = next_eventarc_registry;
         drop(eventarc_registry);
-        // In-flight invocations retain their `Arc`; killing after publication prevents any
-        // new dispatch from reaching the old generation and reaps it promptly.
-        old.runner.kill_now();
+        // In-flight invocations retain their `Arc`; the displaced runner was killed after
+        // publishing the replacement, and shutdown owns its reaper until it completes.
         drop(old);
         self.wake.notify_one();
         Ok(generation)
@@ -3061,6 +3131,7 @@ impl FunctionsRuntime {
         }
     }
 
+    #[allow(clippy::too_many_lines)]
     async fn recover_dead_runner_locked(
         self: &Arc<Self>,
         index: usize,
@@ -3116,29 +3187,41 @@ impl FunctionsRuntime {
                 tokio::time::sleep(delay).await;
             }
             // A reset or reload may have replaced the source while backoff elapsed.
-            let still_current = self.inner.lock().is_ok_and(|inner| {
-                inner.epoch == epoch && {
+            let still_current = self.inner.lock().is_ok_and(|mut inner| {
+                let current = inner.epoch == epoch && {
                     let current = codebase.generation();
                     current.revision == respawn.revision
                         && Arc::ptr_eq(&current.runner, &respawn.runner)
                         && tickets_match(current.blocking_restart_ticket.as_ref(), expected_ticket)
+                };
+                if current && !self.shutting_down.load(std::sync::atomic::Ordering::SeqCst) {
+                    inner.active_runner_spawns += 1;
+                    true
+                } else {
+                    false
                 }
             });
-            if !still_current || self.shutting_down.load(std::sync::atomic::Ordering::SeqCst) {
+            if !still_current {
                 return Err("runner recovery was superseded".to_owned());
             }
-            let _source_generation = respawn.cleanup_dir.clone();
-            let runner = match Runner::spawn_spec(spawn).await {
-                Ok(runner) => Arc::new(runner),
-                Err(error) => {
-                    eprintln!("[functions] runner restart attempt failed: {error}");
-                    if let Some(ticket) = expected_ticket {
-                        self.release_failed_blocking_restart(index, epoch, &respawn, ticket);
-                        return Err(error);
-                    }
-                    continue;
-                }
+            let _active_spawn = RunnerSpawnPermit {
+                runtime: self.clone(),
             };
+            let _source_generation = respawn.cleanup_dir.clone();
+            let runner =
+                match Runner::spawn_spec_until_shutdown(spawn, self.runner_shutdown.subscribe())
+                    .await
+                {
+                    Ok(runner) => Arc::new(runner),
+                    Err(error) => {
+                        eprintln!("[functions] runner restart attempt failed: {error}");
+                        if let Some(ticket) = expected_ticket {
+                            self.release_failed_blocking_restart(index, epoch, &respawn, ticket);
+                            return Err(error);
+                        }
+                        continue;
+                    }
+                };
             let old = self.inner.lock().ok().and_then(|inner| {
                 let mut current = codebase.generation_mut();
                 (inner.epoch == epoch
@@ -3153,9 +3236,10 @@ impl FunctionsRuntime {
             });
             if let Some(old) = old {
                 old.kill_now();
+                old.shutdown().await;
                 return Ok(runner);
             }
-            runner.kill_now();
+            runner.shutdown().await;
             return Err("runner recovery was superseded".to_owned());
         }
     }
@@ -4832,14 +4916,26 @@ mod task_completion_tests {
     use std::sync::{Arc, Mutex};
     use std::time::{Duration, Instant};
 
+    #[cfg(unix)]
+    mod trusted_temp {
+        include!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../tests/support/trusted_temp.rs"
+        ));
+    }
+
     async fn runtime() -> Arc<FunctionsRuntime> {
+        runtime_with_env(Vec::new()).await
+    }
+
+    async fn runtime_with_env(env: Vec<(String, String)>) -> Arc<FunctionsRuntime> {
         let spec = SpawnSpec {
             command: vec![
                 "python3".to_owned(),
                 concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fake_runner.py").to_owned(),
             ],
             cwd: None,
-            env: Vec::new(),
+            env,
             hello_timeout: Duration::from_secs(60),
         };
         let runner = Runner::spawn_spec(&spec).await.unwrap();
@@ -4877,6 +4973,196 @@ mod task_completion_tests {
             Arc::new(runner),
             Some(spec),
         )
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn shutdown_waits_for_a_cold_reset_runner_to_exit() {
+        use std::process::Command;
+
+        let runtime = runtime().await;
+        let root = trusted_temp::TrustedTempDir::new("cold-runner-shutdown");
+        let starts = root.join("starts");
+        runtime.codebases[0]
+            .generation_mut()
+            .spawn
+            .as_mut()
+            .unwrap()
+            .env = vec![
+            (
+                "FIREEMU_FAKE_START_PROBE".to_owned(),
+                starts.display().to_string(),
+            ),
+            ("FIREEMU_FAKE_HELLO_DELAY_MS".to_owned(), "30000".to_owned()),
+        ];
+        runtime.reset();
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+        while !starts.is_file() {
+            assert!(
+                tokio::time::Instant::now() < deadline,
+                "cold runner did not start"
+            );
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        let pid = std::fs::read_to_string(&starts).unwrap();
+        let pid = pid.trim();
+
+        runtime.shutdown().await;
+        let still_alive = Command::new("/bin/kill")
+            .args(["-0", pid])
+            .status()
+            .unwrap()
+            .success();
+        if still_alive {
+            let _ = Command::new("/bin/kill").args(["-KILL", pid]).status();
+        }
+        assert!(!still_alive, "cold runner {pid} survived shutdown");
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn shutdown_waits_for_a_cold_reload_runner_to_exit() {
+        use std::process::Command;
+
+        let runtime = runtime().await;
+        let root = trusted_temp::TrustedTempDir::new("cold-reload-shutdown");
+        let starts = root.join("starts");
+        let mut spec = runtime.codebases[0].generation().spawn.clone().unwrap();
+        spec.env = vec![
+            (
+                "FIREEMU_FAKE_START_PROBE".to_owned(),
+                starts.display().to_string(),
+            ),
+            ("FIREEMU_FAKE_HELLO_DELAY_MS".to_owned(), "30000".to_owned()),
+        ];
+        let reloading = runtime.clone();
+        let reload = tokio::spawn(async move {
+            let permit = reloading.reserve_runner_spawn().expect("reload admitted");
+            if let Ok(runner) =
+                Runner::spawn_spec_until_shutdown(&spec, permit.shutdown_receiver()).await
+            {
+                let _ = reloading.reload_codebase(super::CodebaseSpec {
+                    name: "default".to_owned(),
+                    manifest: reloading.manifest().clone(),
+                    runner: Arc::new(runner),
+                    spawn: Some(spec),
+                    cleanup_dir: None,
+                });
+            }
+            drop(permit);
+        });
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+        while !starts.is_file() {
+            assert!(
+                tokio::time::Instant::now() < deadline,
+                "cold reload runner did not start"
+            );
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        let pid = std::fs::read_to_string(&starts).unwrap();
+        let pid = pid.trim();
+
+        runtime.shutdown().await;
+        assert!(reload.is_finished(), "shutdown left reload in progress");
+        reload.await.unwrap();
+        let still_alive = Command::new("/bin/kill")
+            .args(["-0", pid])
+            .status()
+            .unwrap()
+            .success();
+        if still_alive {
+            let _ = Command::new("/bin/kill").args(["-KILL", pid]).status();
+        }
+        assert!(!still_alive, "cold reload runner {pid} survived shutdown");
+        assert!(!runtime.runner().is_alive());
+    }
+
+    #[cfg(unix)]
+    #[tokio::test(flavor = "current_thread")]
+    async fn shutdown_waits_for_a_reload_displaced_runner_to_be_reaped() {
+        use std::process::Command;
+
+        let root = trusted_temp::TrustedTempDir::new("retired-runner-shutdown");
+        let starts = root.join("starts");
+        let runtime = runtime_with_env(vec![(
+            "FIREEMU_FAKE_START_PROBE".to_owned(),
+            starts.display().to_string(),
+        )])
+        .await;
+        let old_pid = std::fs::read_to_string(&starts).unwrap();
+        let old_pid = old_pid.trim();
+        let spec = runtime.codebases[0].generation().spawn.clone().unwrap();
+        let replacement = Arc::new(Runner::spawn_spec(&spec).await.unwrap());
+        replacement.shutdown().await;
+        runtime
+            .reload_codebase(super::CodebaseSpec {
+                name: "default".to_owned(),
+                manifest: runtime.manifest().clone(),
+                runner: replacement,
+                spawn: None,
+                cleanup_dir: None,
+            })
+            .unwrap();
+
+        runtime.shutdown().await;
+        let reaped = !Command::new("/bin/kill")
+            .args(["-0", old_pid])
+            .status()
+            .unwrap()
+            .success();
+        if !reaped {
+            let _ = Command::new("/bin/kill").args(["-KILL", old_pid]).status();
+        }
+        assert!(reaped, "displaced runner {old_pid} survived shutdown");
+    }
+
+    #[cfg(unix)]
+    #[tokio::test(flavor = "current_thread")]
+    async fn recovery_reaps_a_runner_that_closed_stdout_before_it_returns() {
+        use std::process::Command;
+
+        let root = trusted_temp::TrustedTempDir::new("recovery-old-runner");
+        let starts = root.join("starts");
+        let runtime = runtime_with_env(vec![
+            (
+                "FIREEMU_FAKE_START_PROBE".to_owned(),
+                starts.display().to_string(),
+            ),
+            (
+                "FIREEMU_FAKE_CLOSE_STDOUT_AFTER_HELLO".to_owned(),
+                "1".to_owned(),
+            ),
+        ])
+        .await;
+        let old_pid = std::fs::read_to_string(&starts).unwrap();
+        let old_pid = old_pid.trim();
+        runtime.codebases[0]
+            .generation_mut()
+            .spawn
+            .as_mut()
+            .unwrap()
+            .env
+            .clear();
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+        while runtime.runner().is_alive() {
+            assert!(
+                tokio::time::Instant::now() < deadline,
+                "runner stdout stayed open"
+            );
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+
+        runtime.recover_dead_runner(0).await.unwrap();
+        let reaped_before_recovery_returned = !Command::new("/bin/kill")
+            .args(["-0", old_pid])
+            .status()
+            .unwrap()
+            .success();
+        runtime.shutdown().await;
+        assert!(
+            reaped_before_recovery_returned,
+            "recovery returned before old runner {old_pid} was reaped"
+        );
     }
 
     #[tokio::test]

@@ -3,9 +3,9 @@
 use std::sync::{Arc, Mutex};
 
 use fireemu_core_auth::jwt::{encode_unsigned, verify_id_token_decoded, JwtError};
-use fireemu_core_auth::mfa::TotpPolicy;
+use fireemu_core_auth::mfa::{TotpFactor, TotpPolicy, TotpSecret};
 use fireemu_core_auth::store::{
-    AuthRegistry, AuthStore, NewUser, TenantMetadata, TenantMetadataPatch,
+    AuthRegistry, AuthStore, NewUser, ProjectAuthConfigPatch, TenantMetadata, TenantMetadataPatch,
 };
 use fireemu_core_types::determinism::SplitMix64;
 use fireemu_core_types::time::LogicalInstant;
@@ -204,6 +204,16 @@ fn a_tenant_snapshot_does_not_capture_another_projects_tenants() {
     assert!(registry.register("other-app", store("other-app", 2)));
     registry.ensure_tenant("demo-app", "kept").unwrap();
     registry.ensure_tenant("other-app", "foreign").unwrap();
+    registry
+        .patch_tenant(
+            "other-app",
+            "foreign",
+            TenantMetadataPatch {
+                allow_duplicate_emails: Some(true),
+                ..TenantMetadataPatch::default()
+            },
+        )
+        .unwrap();
 
     let snapshot = registry.capture_tenants_snapshot("demo-app").unwrap();
     registry.ensure_tenant("demo-app", "added").unwrap();
@@ -214,6 +224,159 @@ fn a_tenant_snapshot_does_not_capture_another_projects_tenants() {
     assert_eq!(registry.tenants("demo-app"), ["kept"]);
     assert_eq!(registry.tenants("other-app"), ["foreign"]);
     assert!(registry.tenant_metadata("other-app", "foreign").is_some());
+    registry
+        .patch_project_config(
+            "other-app",
+            ProjectAuthConfigPatch {
+                allow_duplicate_emails: Some(false),
+                ..ProjectAuthConfigPatch::default()
+            },
+        )
+        .unwrap();
+    assert!(
+        registry
+            .tenant_store("other-app", "foreign")
+            .unwrap()
+            .lock()
+            .unwrap()
+            .config()
+            .allow_duplicate_emails
+    );
+}
+
+/// A session restore recovers captured tenant users and settings, recreates a deleted tenant,
+/// and removes a namespace that was published after the capture.
+#[test]
+fn a_tenant_snapshot_restores_membership_users_and_settings() {
+    let registry = AuthRegistry::new("demo-app", Arc::new(Mutex::new(store("demo-app", 1))));
+    let kept = registry.ensure_tenant("demo-app", "kept").unwrap();
+    let deleted = registry.ensure_tenant("demo-app", "deleted").unwrap();
+    for (handle, uid) in [(&kept, "kept-user"), (&deleted, "deleted-user")] {
+        let email = format!("{uid}@example.com");
+        handle
+            .lock()
+            .unwrap()
+            .create_user_with_id(NewUser::email(&email), Some(uid), NOW)
+            .unwrap();
+    }
+    registry
+        .patch_tenant(
+            "demo-app",
+            "kept",
+            TenantMetadataPatch {
+                display_name: Some(Some("Before capture".to_owned())),
+                ..TenantMetadataPatch::default()
+            },
+        )
+        .unwrap();
+    let snapshot = registry.capture_tenants_snapshot("demo-app").unwrap();
+
+    kept.lock()
+        .unwrap()
+        .create_user_with_id(NewUser::email("later@example.com"), Some("later"), NOW)
+        .unwrap();
+    registry
+        .patch_tenant(
+            "demo-app",
+            "kept",
+            TenantMetadataPatch {
+                display_name: Some(Some("After capture".to_owned())),
+                disable_auth: Some(true),
+                ..TenantMetadataPatch::default()
+            },
+        )
+        .unwrap();
+    assert!(registry.delete_tenant("demo-app", "deleted"));
+    let added = registry.ensure_tenant("demo-app", "added").unwrap();
+    added
+        .lock()
+        .unwrap()
+        .create_user_with_id(NewUser::email("added@example.com"), Some("added-user"), NOW)
+        .unwrap();
+
+    registry
+        .restore_tenants_snapshot("demo-app", &snapshot)
+        .unwrap();
+    assert_eq!(registry.tenants("demo-app"), ["deleted", "kept"]);
+    assert!(Arc::ptr_eq(
+        &kept,
+        &registry.tenant_store("demo-app", "kept").unwrap()
+    ));
+    let kept = kept.lock().unwrap();
+    assert!(kept.user_by_id("kept-user").is_some());
+    assert!(kept.user_by_id("later").is_none());
+    drop(kept);
+    let recreated = registry.tenant_store("demo-app", "deleted").unwrap();
+    assert!(recreated
+        .lock()
+        .unwrap()
+        .user_by_id("deleted-user")
+        .is_some());
+    assert!(registry.tenant_store("demo-app", "added").is_none());
+    assert_eq!(added.lock().unwrap().user_count(), 0);
+    let metadata = registry.tenant_metadata("demo-app", "kept").unwrap();
+    assert_eq!(metadata.display_name.as_deref(), Some("Before capture"));
+    assert!(!metadata.disable_auth);
+}
+
+/// A session snapshot cannot retain a TOTP secret. Restoring an enrolled factor after its live
+/// secret disappeared reports every factor it had to drop, including a recreated tenant.
+#[test]
+fn a_tenant_snapshot_reports_all_totp_factors_it_cannot_rebind() {
+    let registry = AuthRegistry::new("demo-app", Arc::new(Mutex::new(store("demo-app", 1))));
+    let live = registry.ensure_tenant("demo-app", "live").unwrap();
+    let recreated = registry.ensure_tenant("demo-app", "recreated").unwrap();
+    for (handle, name) in [(&live, "live"), (&recreated, "recreated")] {
+        let mut store = handle.lock().unwrap();
+        let uid = store
+            .create_user_with_id(NewUser::email("totp@example.com"), Some(name), NOW)
+            .unwrap();
+        store
+            .user_mut(&uid)
+            .unwrap()
+            .mfa
+            .import_factors(
+                vec![TotpFactor {
+                    mfa_enrollment_id: "factor".to_owned(),
+                    display_name: None,
+                    secret: TotpSecret::new(vec![1; 20]),
+                    enrolled_at: NOW,
+                    last_accepted_step: None,
+                }],
+                vec![],
+            )
+            .unwrap();
+    }
+    let snapshot = registry.capture_tenants_snapshot("demo-app").unwrap();
+    assert!(snapshot.holds_no_totp_secret());
+    let uid = live
+        .lock()
+        .unwrap()
+        .user_by_id("live")
+        .unwrap()
+        .local_id
+        .clone();
+    assert!(live
+        .lock()
+        .unwrap()
+        .unenroll_factor(&uid, "factor")
+        .unwrap());
+    assert!(registry.delete_tenant("demo-app", "recreated"));
+
+    let report = registry
+        .restore_tenants_snapshot("demo-app", &snapshot)
+        .unwrap();
+    assert_eq!(report.totp_factors_dropped, 2);
+    for name in ["live", "recreated"] {
+        let store = registry.tenant_store("demo-app", name).unwrap();
+        assert!(store
+            .lock()
+            .unwrap()
+            .user_by_id(name)
+            .unwrap()
+            .mfa
+            .is_empty());
+    }
 }
 
 /// Rolling a project's tenants back preserves the other project's published tenant metadata.
@@ -223,6 +386,16 @@ fn a_tenant_rollback_preserves_another_projects_tenants() {
     assert!(registry.register("other-app", store("other-app", 2)));
     registry.ensure_tenant("demo-app", "kept").unwrap();
     registry.ensure_tenant("other-app", "foreign").unwrap();
+    registry
+        .patch_tenant(
+            "other-app",
+            "foreign",
+            TenantMetadataPatch {
+                allow_duplicate_emails: Some(true),
+                ..TenantMetadataPatch::default()
+            },
+        )
+        .unwrap();
 
     let rollback = registry.capture_tenants_rollback("demo-app").unwrap();
     registry.ensure_tenant("demo-app", "added").unwrap();
@@ -231,6 +404,90 @@ fn a_tenant_rollback_preserves_another_projects_tenants() {
     assert_eq!(registry.tenants("demo-app"), ["kept"]);
     assert_eq!(registry.tenants("other-app"), ["foreign"]);
     assert!(registry.tenant_metadata("other-app", "foreign").is_some());
+    registry
+        .patch_project_config(
+            "other-app",
+            ProjectAuthConfigPatch {
+                allow_duplicate_emails: Some(false),
+                ..ProjectAuthConfigPatch::default()
+            },
+        )
+        .unwrap();
+    assert!(
+        registry
+            .tenant_store("other-app", "foreign")
+            .unwrap()
+            .lock()
+            .unwrap()
+            .config()
+            .allow_duplicate_emails
+    );
+}
+
+/// A failed session transition puts both previously published handles and their contents back.
+#[test]
+fn a_tenant_rollback_restores_handles_users_and_settings() {
+    let registry = AuthRegistry::new("demo-app", Arc::new(Mutex::new(store("demo-app", 1))));
+    let kept = registry.ensure_tenant("demo-app", "kept").unwrap();
+    let deleted = registry.ensure_tenant("demo-app", "deleted").unwrap();
+    kept.lock()
+        .unwrap()
+        .create_user_with_id(NewUser::email("kept@example.com"), Some("kept-user"), NOW)
+        .unwrap();
+    deleted
+        .lock()
+        .unwrap()
+        .create_user_with_id(
+            NewUser::email("deleted@example.com"),
+            Some("deleted-user"),
+            NOW,
+        )
+        .unwrap();
+    let rollback = registry.capture_tenants_rollback("demo-app").unwrap();
+
+    kept.lock()
+        .unwrap()
+        .create_user_with_id(NewUser::email("later@example.com"), Some("later"), NOW)
+        .unwrap();
+    registry
+        .patch_tenant(
+            "demo-app",
+            "kept",
+            TenantMetadataPatch {
+                disable_auth: Some(true),
+                ..TenantMetadataPatch::default()
+            },
+        )
+        .unwrap();
+    assert!(registry.delete_tenant("demo-app", "deleted"));
+    let added = registry.ensure_tenant("demo-app", "added").unwrap();
+    added
+        .lock()
+        .unwrap()
+        .create_user_with_id(NewUser::email("added@example.com"), Some("added-user"), NOW)
+        .unwrap();
+
+    registry.rollback_tenants("demo-app", &rollback).unwrap();
+    assert_eq!(registry.tenants("demo-app"), ["deleted", "kept"]);
+    assert!(Arc::ptr_eq(
+        &kept,
+        &registry.tenant_store("demo-app", "kept").unwrap()
+    ));
+    assert!(Arc::ptr_eq(
+        &deleted,
+        &registry.tenant_store("demo-app", "deleted").unwrap()
+    ));
+    assert!(kept.lock().unwrap().user_by_id("kept-user").is_some());
+    assert!(kept.lock().unwrap().user_by_id("later").is_none());
+    assert!(deleted.lock().unwrap().user_by_id("deleted-user").is_some());
+    assert!(
+        !registry
+            .tenant_metadata("demo-app", "kept")
+            .unwrap()
+            .disable_auth
+    );
+    assert!(registry.tenant_store("demo-app", "added").is_none());
+    assert_eq!(added.lock().unwrap().user_count(), 0);
 }
 
 /// A tenant created with a display name of the documented form (4-20 letters, digits and

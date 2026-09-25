@@ -191,9 +191,9 @@ export const PROGRAMS = [
     seed: OPEN,
     // Every row has its own instant; REST and gRPC alternate across neighbouring seconds so each
     // side of Firestore's allowance and of the 300 s Identity Toolkit allows is observed on both
-    // transports. Each row is sent 0.3 s after its offset. The second recording bracketed the
-    // allowance at (26.3, 30.3] s of token age; the half-second rows from 26.5 to 29.5 close it
-    // to a sub-second window (coordinator decision 2026-09-25).
+    // transports. Each row targets 0.3 s after its offset. The timer allows a 0.2 s late wakeup,
+    // and request dispatch is not timestamped. At nominal target ages, the half-second rows from
+    // 26.8 to 29.8 s were accepted and the 30.3 s REST row was refused.
     steps: [
       [-60, "rest"],
       [-59, "grpc"],

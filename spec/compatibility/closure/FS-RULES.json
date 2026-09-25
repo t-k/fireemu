@@ -98,8 +98,8 @@
             "project": "fireemu-oracle-idp"
           }
         ],
-        "finalArtifactSha256": "1026ca7d76b36070e8b2b9571c06898f1fb0f33e9ac7f4a28f5e48c9104fb4e5",
-        "sourceCommit": "bd79bb15cbc11b0f82f32943ec8fd624c8713525",
+        "finalArtifactSha256": "d6e322987a6a79528c27557cf254f10659a68007dd6d0c3966d6e77b25995447",
+        "sourceCommit": "4fe41c052fd6e2c5f56007a6c673a5dff3bbf732",
         "comparisonPath": "spec/compatibility/closure/evidence/FS-RULES-comparison.json",
         "rows": {
           "MATCH": 72
@@ -126,8 +126,8 @@
             "project": "fireemu-oracle-idp"
           }
         ],
-        "finalArtifactSha256": "1026ca7d76b36070e8b2b9571c06898f1fb0f33e9ac7f4a28f5e48c9104fb4e5",
-        "sourceCommit": "bd79bb15cbc11b0f82f32943ec8fd624c8713525",
+        "finalArtifactSha256": "d6e322987a6a79528c27557cf254f10659a68007dd6d0c3966d6e77b25995447",
+        "sourceCommit": "4fe41c052fd6e2c5f56007a6c673a5dff3bbf732",
         "comparisonPath": "spec/compatibility/closure/evidence/FS-RULES-comparison.json",
         "rows": {
           "MATCH": 628
@@ -154,8 +154,8 @@
             "project": "fireemu-oracle-idp"
           }
         ],
-        "finalArtifactSha256": "1026ca7d76b36070e8b2b9571c06898f1fb0f33e9ac7f4a28f5e48c9104fb4e5",
-        "sourceCommit": "bd79bb15cbc11b0f82f32943ec8fd624c8713525",
+        "finalArtifactSha256": "d6e322987a6a79528c27557cf254f10659a68007dd6d0c3966d6e77b25995447",
+        "sourceCommit": "4fe41c052fd6e2c5f56007a6c673a5dff3bbf732",
         "comparisonPath": "spec/compatibility/closure/evidence/FS-RULES-comparison.json",
         "rows": {
           "MATCH": 10
@@ -182,8 +182,8 @@
             "project": "fireemu-oracle-idp"
           }
         ],
-        "finalArtifactSha256": "1026ca7d76b36070e8b2b9571c06898f1fb0f33e9ac7f4a28f5e48c9104fb4e5",
-        "sourceCommit": "bd79bb15cbc11b0f82f32943ec8fd624c8713525",
+        "finalArtifactSha256": "d6e322987a6a79528c27557cf254f10659a68007dd6d0c3966d6e77b25995447",
+        "sourceCommit": "4fe41c052fd6e2c5f56007a6c673a5dff3bbf732",
         "comparisonPath": "spec/compatibility/closure/evidence/FS-RULES-comparison.json",
         "rows": {
           "MATCH": 47
@@ -200,7 +200,7 @@
         "default"
       ],
       "status": "VERIFIED",
-      "note": "get, exists, getAfter and existsAfter on present and missing documents, in reads, single writes, commits and transactions, including the pre- and post-commit state each one sees.",
+      "note": "get, exists, getAfter and existsAfter on present and missing documents, in reads, single writes and commits, including the pre- and post-commit state each one sees. Production refuses an end user a read-write transaction (read-only ones open; see refusal-shape), so no transaction commit is judged: the rows that depend on one (read-in-transaction, commit-get-after, commit-denied-write, commit-after-batch-get-transaction) are DEPENDENCY_REFUSED on both sides and confirm only that refusal.",
       "evidence": {
         "productionRecordings": [
           {
@@ -210,11 +210,12 @@
             "project": "fireemu-oracle-idp"
           }
         ],
-        "finalArtifactSha256": "1026ca7d76b36070e8b2b9571c06898f1fb0f33e9ac7f4a28f5e48c9104fb4e5",
-        "sourceCommit": "bd79bb15cbc11b0f82f32943ec8fd624c8713525",
+        "finalArtifactSha256": "d6e322987a6a79528c27557cf254f10659a68007dd6d0c3966d6e77b25995447",
+        "sourceCommit": "4fe41c052fd6e2c5f56007a6c673a5dff3bbf732",
         "comparisonPath": "spec/compatibility/closure/evidence/FS-RULES-comparison.json",
         "rows": {
-          "MATCH": 37
+          "MATCH": 33,
+          "DEPENDENCY_REFUSED": 4
         }
       }
     },
@@ -228,7 +229,7 @@
         "default"
       ],
       "status": "VERIFIED",
-      "note": "List authorization from query constraints for runQuery, runAggregationQuery and listDocuments: provable and unprovable filters, request.query limit, offset and orderBy, collection group queries against {path=**}, __name__ queries, and get rules that do not allow list. request.query carries production's nine keys (limit, offset, orderBy, allDescendants, distinct, groupBy, kind, parent, selectOnlyKeys), identified by exploratory probes on the sandbox (not evidence; docs.local); the recorded rows see keys().hasOnly of the three documented keys denied.",
+      "note": "List authorization from query constraints for runQuery, runAggregationQuery and listDocuments: provable and unprovable filters, request.query limit, offset and orderBy, collection group queries against {path=**}, __name__ queries, and get rules that do not allow list. The recorded rows see production's request.query carry more than the three documented keys (keys().hasOnly of them is denied, hasAll allowed). Exploratory probes on the sandbox (not evidence) named the nine keys and their values for a plain, a nested and a __name__-only query; The probes issued collection runQuery requests only (plain, nested and __name__-only); fireemu's values for collection-group queries (allDescendants true), queries without a collection id (kind empty), listDocuments and aggregation queries follow from each query's own scope and are not observed. The official emulator carries the same nine keys (conformance/fs-rules-official.json).",
       "evidence": {
         "productionRecordings": [
           {
@@ -238,8 +239,8 @@
             "project": "fireemu-oracle-idp"
           }
         ],
-        "finalArtifactSha256": "1026ca7d76b36070e8b2b9571c06898f1fb0f33e9ac7f4a28f5e48c9104fb4e5",
-        "sourceCommit": "bd79bb15cbc11b0f82f32943ec8fd624c8713525",
+        "finalArtifactSha256": "d6e322987a6a79528c27557cf254f10659a68007dd6d0c3966d6e77b25995447",
+        "sourceCommit": "4fe41c052fd6e2c5f56007a6c673a5dff3bbf732",
         "comparisonPath": "spec/compatibility/closure/evidence/FS-RULES-comparison.json",
         "rows": {
           "MATCH": 85
@@ -256,7 +257,7 @@
         "default"
       ],
       "status": "VERIFIED",
-      "note": "Document access call budgets: 10 per single-document request and 20 per multi-document request (batchGet, commit, transaction), at N and N+1, repeated paths, get together with getAfter of one path, and BatchWrite.",
+      "note": "Document access call budgets: 10 per single-document request and 20 per multi-document request (batchGet, commit), at N and N+1, repeated paths, and get together with getAfter of one path; a list or query rule may read 20 distinct documents (20 allowed, 21 denied). End-user BatchWrite is refused whole before any budget applies (see atomic-writes), and no transaction is judged (see document-access).",
       "evidence": {
         "productionRecordings": [
           {
@@ -266,8 +267,8 @@
             "project": "fireemu-oracle-idp"
           }
         ],
-        "finalArtifactSha256": "1026ca7d76b36070e8b2b9571c06898f1fb0f33e9ac7f4a28f5e48c9104fb4e5",
-        "sourceCommit": "bd79bb15cbc11b0f82f32943ec8fd624c8713525",
+        "finalArtifactSha256": "d6e322987a6a79528c27557cf254f10659a68007dd6d0c3966d6e77b25995447",
+        "sourceCommit": "4fe41c052fd6e2c5f56007a6c673a5dff3bbf732",
         "comparisonPath": "spec/compatibility/closure/evidence/FS-RULES-comparison.json",
         "rows": {
           "MATCH": 30
@@ -294,8 +295,8 @@
             "project": "fireemu-oracle-idp"
           }
         ],
-        "finalArtifactSha256": "1026ca7d76b36070e8b2b9571c06898f1fb0f33e9ac7f4a28f5e48c9104fb4e5",
-        "sourceCommit": "bd79bb15cbc11b0f82f32943ec8fd624c8713525",
+        "finalArtifactSha256": "d6e322987a6a79528c27557cf254f10659a68007dd6d0c3966d6e77b25995447",
+        "sourceCommit": "4fe41c052fd6e2c5f56007a6c673a5dff3bbf732",
         "comparisonPath": "spec/compatibility/closure/evidence/FS-RULES-comparison.json",
         "rows": {
           "MATCH": 57
@@ -312,7 +313,7 @@
         "default"
       ],
       "status": "VERIFIED",
-      "note": "Evaluation-time limits and errors: expressions per request, call depth at run time, and how an error in one allow expression (budget, invalid regex, missing member) combines with another allow that already holds.",
+      "note": "Evaluation-time limits and errors: expressions per request (including parentheses), a chain of 20 function calls at run time (a longer one does not compile, see compile-limits), and how an error in one allow expression (budget, invalid regex, missing member) combines with another allow that already holds; running out of the expression budget denies whatever else holds.",
       "evidence": {
         "productionRecordings": [
           {
@@ -322,8 +323,8 @@
             "project": "fireemu-oracle-idp"
           }
         ],
-        "finalArtifactSha256": "1026ca7d76b36070e8b2b9571c06898f1fb0f33e9ac7f4a28f5e48c9104fb4e5",
-        "sourceCommit": "bd79bb15cbc11b0f82f32943ec8fd624c8713525",
+        "finalArtifactSha256": "d6e322987a6a79528c27557cf254f10659a68007dd6d0c3966d6e77b25995447",
+        "sourceCommit": "4fe41c052fd6e2c5f56007a6c673a5dff3bbf732",
         "comparisonPath": "spec/compatibility/closure/evidence/FS-RULES-comparison.json",
         "rows": {
           "MATCH": 45
@@ -340,7 +341,7 @@
         "default"
       ],
       "status": "VERIFIED",
-      "note": "A commit or transaction with one denied write is refused as a whole with the post-state unchanged; BatchWrite reports a status per write and applies the allowed ones.",
+      "note": "A commit with one denied write is refused as a whole with the post-state unchanged. An end user's BatchWrite is refused as a whole, with production's denial, whatever the rules say of its writes, and an end user's read-write transaction is refused, so the rows that depend on one are DEPENDENCY_REFUSED on both sides.",
       "evidence": {
         "productionRecordings": [
           {
@@ -350,11 +351,12 @@
             "project": "fireemu-oracle-idp"
           }
         ],
-        "finalArtifactSha256": "1026ca7d76b36070e8b2b9571c06898f1fb0f33e9ac7f4a28f5e48c9104fb4e5",
-        "sourceCommit": "bd79bb15cbc11b0f82f32943ec8fd624c8713525",
+        "finalArtifactSha256": "d6e322987a6a79528c27557cf254f10659a68007dd6d0c3966d6e77b25995447",
+        "sourceCommit": "4fe41c052fd6e2c5f56007a6c673a5dff3bbf732",
         "comparisonPath": "spec/compatibility/closure/evidence/FS-RULES-comparison.json",
         "rows": {
-          "MATCH": 22
+          "MATCH": 21,
+          "DEPENDENCY_REFUSED": 1
         }
       }
     },
@@ -378,8 +380,8 @@
             "project": "fireemu-oracle-idp"
           }
         ],
-        "finalArtifactSha256": "1026ca7d76b36070e8b2b9571c06898f1fb0f33e9ac7f4a28f5e48c9104fb4e5",
-        "sourceCommit": "bd79bb15cbc11b0f82f32943ec8fd624c8713525",
+        "finalArtifactSha256": "d6e322987a6a79528c27557cf254f10659a68007dd6d0c3966d6e77b25995447",
+        "sourceCommit": "4fe41c052fd6e2c5f56007a6c673a5dff3bbf732",
         "comparisonPath": "spec/compatibility/closure/evidence/FS-RULES-comparison.json",
         "rows": {
           "MATCH": 21
@@ -406,8 +408,8 @@
             "project": "fireemu-oracle-idp"
           }
         ],
-        "finalArtifactSha256": "1026ca7d76b36070e8b2b9571c06898f1fb0f33e9ac7f4a28f5e48c9104fb4e5",
-        "sourceCommit": "bd79bb15cbc11b0f82f32943ec8fd624c8713525",
+        "finalArtifactSha256": "d6e322987a6a79528c27557cf254f10659a68007dd6d0c3966d6e77b25995447",
+        "sourceCommit": "4fe41c052fd6e2c5f56007a6c673a5dff3bbf732",
         "comparisonPath": "spec/compatibility/closure/evidence/FS-RULES-comparison.json",
         "rows": {
           "MATCH": 24
@@ -424,7 +426,7 @@
         "default"
       ],
       "status": "VERIFIED",
-      "note": "An ID token presented to Firestore at offsets around its exp, to find the accepted allowance after expiry. Production accepted a token 26 s past exp and refused one 30 s past, on REST and gRPC, in both recordings; the allowance lies in (26, 30]. fireemu refuses from exp + 30 (FIRESTORE_EXPIRY_LEEWAY_SECONDS = 30): 27 to 29 s are not observed, and 30 s was chosen as the round value at the observed refusal.",
+      "note": "An ID token presented to Firestore at offsets around its exp, to observe the post-expiry allowance. Requests target offset + 0.3 s; the production timer allows a 0.2 s late wakeup, and actual dispatch time is not recorded. Across two half-second-step recordings, nominal targets from 25.3 through 29.8 s were accepted on REST or gRPC, while nominal 30.3 s (REST) and 31.3 s (gRPC) were refused. These observations are consistent with fireemu refusing from exp + 30 s, but do not establish an exact acceptance boundary.",
       "evidence": {
         "productionRecordings": [
           {
@@ -432,13 +434,19 @@
             "gitSha": "d4cf6c69e80aea497f36ed166e1ba9bb53829e99",
             "recordings": 2,
             "project": "fireemu-oracle-idp"
+          },
+          {
+            "recordedAt": "2026-09-25T09:07:58.182Z",
+            "gitSha": "fc1826b1357cee55f58f2645e533dfbe177fd577",
+            "recordings": 2,
+            "project": "fireemu-oracle-idp"
           }
         ],
-        "finalArtifactSha256": "1026ca7d76b36070e8b2b9571c06898f1fb0f33e9ac7f4a28f5e48c9104fb4e5",
-        "sourceCommit": "bd79bb15cbc11b0f82f32943ec8fd624c8713525",
+        "finalArtifactSha256": "d6e322987a6a79528c27557cf254f10659a68007dd6d0c3966d6e77b25995447",
+        "sourceCommit": "4fe41c052fd6e2c5f56007a6c673a5dff3bbf732",
         "comparisonPath": "spec/compatibility/closure/evidence/FS-RULES-comparison.json",
         "rows": {
-          "MATCH": 36
+          "MATCH": 43
         }
       }
     },
@@ -462,8 +470,8 @@
             "project": "fireemu-oracle-idp"
           }
         ],
-        "finalArtifactSha256": "1026ca7d76b36070e8b2b9571c06898f1fb0f33e9ac7f4a28f5e48c9104fb4e5",
-        "sourceCommit": "bd79bb15cbc11b0f82f32943ec8fd624c8713525",
+        "finalArtifactSha256": "d6e322987a6a79528c27557cf254f10659a68007dd6d0c3966d6e77b25995447",
+        "sourceCommit": "4fe41c052fd6e2c5f56007a6c673a5dff3bbf732",
         "comparisonPath": "spec/compatibility/closure/evidence/FS-RULES-comparison.json",
         "rows": {
           "MATCH": 16
@@ -490,8 +498,8 @@
             "project": "fireemu-oracle-idp"
           }
         ],
-        "finalArtifactSha256": "1026ca7d76b36070e8b2b9571c06898f1fb0f33e9ac7f4a28f5e48c9104fb4e5",
-        "sourceCommit": "bd79bb15cbc11b0f82f32943ec8fd624c8713525",
+        "finalArtifactSha256": "d6e322987a6a79528c27557cf254f10659a68007dd6d0c3966d6e77b25995447",
+        "sourceCommit": "4fe41c052fd6e2c5f56007a6c673a5dff3bbf732",
         "comparisonPath": "spec/compatibility/closure/evidence/FS-RULES-comparison.json",
         "rows": {
           "MATCH": 12
@@ -511,24 +519,37 @@
         "default"
       ],
       "status": "VERIFIED",
-      "note": "The final artifact's FS-RULES comparison, with the AUTH-ACCOUNT and AUTH-CREDENTIAL comparisons re-run on the same artifact.",
+      "note": "The final artifact's FS-RULES comparison, with the AUTH-ACCOUNT, AUTH-CREDENTIAL and FS-QUERY-INDEX (owner decision 2026-09-25) comparisons re-run on the same artifact; their summaries are recorded with the artifact's sha256.",
       "evidence": {
-        "finalArtifactSha256": "1026ca7d76b36070e8b2b9571c06898f1fb0f33e9ac7f4a28f5e48c9104fb4e5",
-        "sourceCommit": "bd79bb15cbc11b0f82f32943ec8fd624c8713525",
+        "finalArtifactSha256": "d6e322987a6a79528c27557cf254f10659a68007dd6d0c3966d6e77b25995447",
+        "sourceCommit": "4fe41c052fd6e2c5f56007a6c673a5dff3bbf732",
         "comparisonPath": "spec/compatibility/closure/evidence/FS-RULES-comparison.json",
         "rows": {
-          "MATCH": 1142
+          "MATCH": 1144,
+          "DEPENDENCY_REFUSED": 5
         },
         "regressions": {
           "auth-account": {
-            "MATCH": 631
+            "artifactSha256": "d6e322987a6a79528c27557cf254f10659a68007dd6d0c3966d6e77b25995447",
+            "summary": {
+              "MATCH": 631
+            },
+            "comparisonPath": "spec/compatibility/closure/evidence/FS-RULES-auth-account-regression.json"
           },
           "auth-credential": {
-            "MATCH": 222
+            "artifactSha256": "d6e322987a6a79528c27557cf254f10659a68007dd6d0c3966d6e77b25995447",
+            "summary": {
+              "MATCH": 222
+            },
+            "comparisonPath": "spec/compatibility/closure/evidence/FS-RULES-auth-credential-regression.json"
           },
           "fs-query-index": {
-            "MATCH": 675,
-            "DIVERGENCE_APPROVED": 35
+            "artifactSha256": "d6e322987a6a79528c27557cf254f10659a68007dd6d0c3966d6e77b25995447",
+            "summary": {
+              "MATCH": 675,
+              "DIVERGENCE_APPROVED": 35
+            },
+            "comparisonPath": "spec/compatibility/closure/evidence/FS-RULES-fs-query-index-regression.json"
           }
         }
       }

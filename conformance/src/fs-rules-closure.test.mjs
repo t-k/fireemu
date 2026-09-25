@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { test } from "node:test";
@@ -98,5 +99,119 @@ test("closure recipes and corpus programs cover each other", async () => {
       own.some((recipe) => covers(recipe, id)),
       `corpus program ${id} belongs to no closure recipe`,
     );
+  }
+});
+
+const readRepo = (path) =>
+  JSON.parse(readFileSync(fileURLToPath(new URL(`../../${path}`, import.meta.url)), "utf8"));
+
+const PASSING = new Set(["MATCH", "MATCH_NONDETERMINISTIC", "DEPENDENCY_REFUSED"]);
+
+test("a verified condition is bound to the committed comparison, fixture and final artifact", async () => {
+  const { PROGRAMS } = await import("./fs-rules/corpus.mjs");
+  const closure = load();
+  const fixtureText = readFileSync(
+    fileURLToPath(new URL("../fs-rules-production.json", import.meta.url)),
+    "utf8",
+  );
+  const fixture = JSON.parse(fixtureText);
+  const steps = PROGRAMS.flatMap((program) =>
+    program.steps.filter((step) => !step.action).map((step) => `${program.id}#${step.id}`),
+  );
+  for (const condition of closure.conditions) {
+    const label = condition.conditionId;
+    if (condition.status !== "VERIFIED") continue;
+    const evidence = condition.evidence ?? {};
+    assert.match(evidence.finalArtifactSha256 ?? "", /^[0-9a-f]{64}$/, label);
+    assert.match(evidence.sourceCommit ?? "", /^[0-9a-f]{40}$/, label);
+    const comparison = readRepo(evidence.comparisonPath);
+    assert.equal(comparison.kind, "fs-rules-comparison-v1", label);
+    assert.equal(comparison.artifactSha256, evidence.finalArtifactSha256, label);
+    assert.equal(
+      comparison.fixtureSha256,
+      createHash("sha256").update(fixtureText).digest("hex"),
+      `${label}: the comparison was made against the committed fixture`,
+    );
+    assert.deepEqual(
+      comparison.rows.map(({ row }) => row).toSorted(),
+      steps.toSorted(),
+      `${label}: the comparison covers every corpus step once`,
+    );
+    const off = comparison.rows.filter(({ status }) => !PASSING.has(status));
+    assert.deepEqual(off, [], `${label}: every row passes`);
+    if (label === "FS-RULES/final-artifact-regression") {
+      assert.deepEqual(evidence.rows, comparison.summary, label);
+      // The other parents' comparisons ran on the same artifact and are recorded with it.
+      for (const parent of ["auth-account", "auth-credential", "fs-query-index"]) {
+        const result = evidence.regressions?.[parent];
+        assert.ok(result, `${label}: ${parent} is recorded`);
+        assert.equal(result.artifactSha256, evidence.finalArtifactSha256, `${label}: ${parent}`);
+        assert.match(
+          result.comparisonPath ?? "",
+          /^spec\/compatibility\/closure\/evidence\/FS-RULES-.*-regression\.json$/,
+          `${label}: ${parent} has committed row evidence`,
+        );
+        const regression = readRepo(result.comparisonPath);
+        assert.equal(regression.kind, `${parent}-comparison-v1`, `${label}: ${parent}`);
+        assert.equal(regression.artifactSha256, result.artifactSha256, `${label}: ${parent}`);
+        assert.deepEqual(regression.summary, result.summary, `${label}: ${parent}`);
+        const regressionFixture = readFileSync(
+          fileURLToPath(new URL(`../${parent}-production.json`, import.meta.url)),
+          "utf8",
+        );
+        assert.equal(
+          regression.fixtureSha256,
+          createHash("sha256").update(regressionFixture).digest("hex"),
+          `${label}: ${parent} fixture`,
+        );
+        assert.equal(
+          regression.rows.length,
+          Object.values(regression.summary).reduce((total, count) => total + count, 0),
+          `${label}: ${parent} row count`,
+        );
+        const rowIds = regression.rows.map(({ row }) => row);
+        assert.equal(rowIds.length, new Set(rowIds).size, `${label}: ${parent} unique row IDs`);
+        const counted = {};
+        for (const row of regression.rows) {
+          counted[row.status] = (counted[row.status] ?? 0) + 1;
+          if (row.status === "DIVERGENCE_APPROVED") {
+            assert.ok(row.decision && row.differences?.length, `${label}: ${parent} approved row`);
+          }
+        }
+        assert.deepEqual(counted, regression.summary, `${label}: ${parent} row statuses`);
+        const parentEvidence = readRepo(
+          `spec/compatibility/closure/evidence/${parent.toUpperCase()}-comparison.json`,
+        );
+        assert.deepEqual(regression.rows, parentEvidence.rows, `${label}: ${parent} original rows`);
+        assert.ok(
+          Object.keys(result.summary).every((status) =>
+            ["MATCH", "MATCH_NONDETERMINISTIC", "DIVERGENCE_APPROVED"].includes(status),
+          ),
+          `${label}: ${parent} passes`,
+        );
+      }
+      continue;
+    }
+    const covered = ({ row }) => {
+      const program = row.split("#")[0];
+      return condition.recipeIds.some((r) => program === r || program.startsWith(`${r}/`));
+    };
+    const rows = comparison.rows.filter(covered);
+    assert.ok(rows.length > 0, `${label}: its programs have rows`);
+    const counted = {};
+    for (const { status } of rows) counted[status] = (counted[status] ?? 0) + 1;
+    assert.deepEqual(evidence.rows, counted, `${label}: its figures are the comparison's`);
+    const runs = evidence.productionRecordings ?? [];
+    for (const run of runs) {
+      assert.equal(run.recordings, 2, `${label}: every production run is recorded twice`);
+      assert.equal(run.project, "fireemu-oracle-idp", label);
+    }
+    for (const program of new Set(rows.map(({ row }) => row.split("#")[0]))) {
+      const { recordedAt, gitSha } = fixture.programs[program];
+      assert.ok(
+        runs.some((run) => run.recordedAt === recordedAt && run.gitSha === gitSha),
+        `${label}: the recording of ${program} (${recordedAt}) is named`,
+      );
+    }
   }
 });

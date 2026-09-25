@@ -1,9 +1,10 @@
 {
   "kind": "fs-rules-comparison-v1",
-  "artifactSha256": "1026ca7d76b36070e8b2b9571c06898f1fb0f33e9ac7f4a28f5e48c9104fb4e5",
-  "fixtureSha256": "e0211c0ba180176750c3258d8c02a23b12fad16b9fdec369ef464070b120dcc9",
+  "artifactSha256": "d6e322987a6a79528c27557cf254f10659a68007dd6d0c3966d6e77b25995447",
+  "fixtureSha256": "b4f282ac4677b4adeb3c85f7c81abec220ffd751cf17641de0254fb14bbf479a",
   "summary": {
-    "MATCH": 1142
+    "MATCH": 1144,
+    "DEPENDENCY_REFUSED": 5
   },
   "rows": [
     {
@@ -3392,11 +3393,11 @@
     },
     {
       "row": "fs-rules/document-access/transaction#read-in-transaction",
-      "status": "MATCH"
+      "status": "DEPENDENCY_REFUSED"
     },
     {
       "row": "fs-rules/document-access/transaction#commit-get-after",
-      "status": "MATCH"
+      "status": "DEPENDENCY_REFUSED"
     },
     {
       "row": "fs-rules/document-access/transaction#begin-denied",
@@ -3404,7 +3405,7 @@
     },
     {
       "row": "fs-rules/document-access/transaction#commit-denied-write",
-      "status": "MATCH"
+      "status": "DEPENDENCY_REFUSED"
     },
     {
       "row": "fs-rules/document-access/transaction#begin-unauthenticated",
@@ -3428,7 +3429,7 @@
     },
     {
       "row": "fs-rules/document-access/transaction#commit-after-batch-get-transaction",
-      "status": "MATCH"
+      "status": "DEPENDENCY_REFUSED"
     },
     {
       "row": "fs-rules/document-access/transaction#run-query-new-read-only-transaction",
@@ -3480,7 +3481,7 @@
     },
     {
       "row": "fs-rules/atomic/commit-and-batch-write#transaction-one-denied",
-      "status": "MATCH"
+      "status": "DEPENDENCY_REFUSED"
     },
     {
       "row": "fs-rules/atomic/commit-and-batch-write#transaction-post-state",
@@ -4476,6 +4477,34 @@
     },
     {
       "row": "fs-rules/expiry/around-exp#exp-plus-26-grpc",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/expiry/around-exp#exp-plus-26-half-rest",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/expiry/around-exp#exp-plus-27-grpc",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/expiry/around-exp#exp-plus-27-half-rest",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/expiry/around-exp#exp-plus-28-grpc",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/expiry/around-exp#exp-plus-28-half-rest",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/expiry/around-exp#exp-plus-29-grpc",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/expiry/around-exp#exp-plus-29-half-rest",
       "status": "MATCH"
     },
     {

@@ -276,10 +276,9 @@ fn relative_runner_override_starts_from_the_daemon_working_directory() {
 }
 
 #[test]
+#[ignore = "requires tools/sdk-smoke dependencies; the SDK workflow runs this test"]
 fn a_same_size_rewrite_reloads_and_an_invalid_generation_keeps_the_last_good_one() {
-    if !have_sdk() {
-        return;
-    }
+    assert!(have_sdk(), "install tools/sdk-smoke dependencies first");
     let dir = scratch_codebase("same-size-reload");
     write(
         &dir,
@@ -407,10 +406,9 @@ fn observed(out: &Output) -> serde_json::Value {
 }
 
 #[test]
+#[ignore = "requires tools/sdk-smoke dependencies; the SDK workflow runs this test"]
 fn the_emulator_profile_inherits_the_parent_environment_but_strict_stays_isolated() {
-    if !have_sdk() {
-        return;
-    }
+    assert!(have_sdk(), "install tools/sdk-smoke dependencies first");
     let dir = scratch_codebase("parent-env");
     write(
         &dir,
@@ -454,10 +452,9 @@ fn the_emulator_profile_inherits_the_parent_environment_but_strict_stays_isolate
 /// wins, and `.secret.local` and `.runtimeconfig.json` reach the runtime the way they do
 /// under the Firebase CLI.
 #[test]
+#[ignore = "requires tools/sdk-smoke dependencies; the SDK workflow runs this test"]
 fn the_dotenv_chain_secret_overrides_and_runtime_config_reach_the_runtime() {
-    if !have_sdk() {
-        return;
-    }
+    assert!(have_sdk(), "install tools/sdk-smoke dependencies first");
     let dir = scratch_codebase("chain");
     write(
         &dir,
@@ -557,10 +554,9 @@ fn the_dotenv_chain_secret_overrides_and_runtime_config_reach_the_runtime() {
 /// anything starts: a reserved key would otherwise be silently overwritten by the emulator's
 /// own value, and a malformed line silently lose an assignment.
 #[test]
+#[ignore = "requires tools/sdk-smoke dependencies; the SDK workflow runs this test"]
 fn a_dotenv_file_the_official_parser_refuses_stops_the_run_with_its_message() {
-    if !have_sdk() {
-        return;
-    }
+    assert!(have_sdk(), "install tools/sdk-smoke dependencies first");
     for (body, expected) in [
         (
             "FUNCTION_TARGET=mine\n",

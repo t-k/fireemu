@@ -1427,7 +1427,7 @@ pub fn firebase_config(project: &str) -> String {
 
 /// The user environment of one codebase: the dotenv chain, invocation-scoped local secrets
 /// and the legacy runtime configuration, with the files each came from.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Clone, Default, PartialEq, Eq)]
 pub struct UserEnvironment {
     /// `.env` chain values, later files having overridden earlier ones.
     pub values: Vec<(String, String)>,
@@ -1440,13 +1440,33 @@ pub struct UserEnvironment {
     pub files: Vec<String>,
 }
 
+impl std::fmt::Debug for UserEnvironment {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("UserEnvironment")
+            .field("values", &"[redacted]")
+            .field("secrets", &"[redacted]")
+            .field("runtime_config", &"[redacted]")
+            .field("files", &self.files)
+            .finish()
+    }
+}
+
+fn redacted_environment_parse_error(error: &str) -> &str {
+    if error.starts_with("Invalid dotenv file") {
+        "Invalid dotenv file, error on lines: [redacted]"
+    } else {
+        error
+    }
+}
+
 /// Parent variables the official CLI would leave on the Functions child, excluding names
 /// owned by the emulator and ambient Google credentials. Function code is trusted local code,
 /// but these exclusions keep the callable trust boundary and the no-ADC guarantee intact.
 fn inheritable_parent_environment() -> Vec<(String, String)> {
     use fireemu_core_functions::env;
 
-    std::env::vars()
+    std::env::vars_os()
+        .filter_map(|(name, value)| Some((name.into_string().ok()?, value.into_string().ok()?)))
         .filter(|(name, _)| {
             env::validate_key(name).is_ok()
                 && name != "GOOGLE_APPLICATION_CREDENTIALS"
@@ -1504,8 +1524,12 @@ pub fn load_user_environment(
         }
         let text = std::fs::read_to_string(&path)
             .map_err(|e| format!("Failed to load environment variables from {name}. ({e})"))?;
-        let values = env::parse_strict(&text)
-            .map_err(|e| format!("Failed to load environment variables from {name}. {e}"))?;
+        let values = env::parse_strict(&text).map_err(|e| {
+            format!(
+                "Failed to load environment variables from {name}. {}",
+                redacted_environment_parse_error(&e)
+            )
+        })?;
         for (k, v) in values {
             out.values.retain(|(existing, _)| existing != &k);
             out.values.push((k, v));
@@ -1523,8 +1547,9 @@ pub fn load_user_environment(
         out.secrets = env::parse_strict(&text)
             .map_err(|e| {
                 format!(
-                    "Failed to read local secrets file {}: {e}",
-                    secrets.display()
+                    "Failed to read local secrets file {}: {}",
+                    secrets.display(),
+                    redacted_environment_parse_error(&e)
                 )
             })?
             .into_iter()
@@ -4623,11 +4648,17 @@ fn base64_encode(data: &[u8]) -> String {
 mod tests {
     use std::collections::{BTreeMap, BTreeSet};
     #[cfg(unix)]
+    use std::ffi::OsString;
+    #[cfg(unix)]
+    use std::os::unix::ffi::OsStringExt;
+    #[cfg(unix)]
     use std::process::Command;
     use std::sync::atomic::AtomicBool;
     use std::sync::{Arc, Mutex};
     use std::time::{Duration, Instant};
 
+    #[cfg(unix)]
+    use super::inheritable_parent_environment;
     use super::path_node_candidates;
     #[cfg(unix)]
     use super::probe_node;
@@ -4636,14 +4667,14 @@ mod tests {
         blocking_auth_write_request, changed_source_stamp, check_callable_app_check,
         function_pubsub_resources, functions_source_stamp, functions_source_stamp_with_charge,
         functions_source_stamp_with_file_version, hash_source_file, hash_source_stamp_entry,
-        node_engine_matches, owned_pubsub_topic, package_node_engine, parse_node_version,
+        load_user_environment, node_engine_matches, owned_pubsub_topic, package_node_engine, parse_node_version,
         provision_function_pubsub_resources, select_node_installation, snapshot_functions_source,
         source_scan_pacing_delay, source_scan_retry_delay, stream_source_chunks, update_watch_hash,
         validate_functions_codebase_budget, wait_for_fixed_inspector_port_release,
         warn_reload_once, BlockingAuthBridge, FunctionsSourceByteBudget,
         FunctionsSourceEntryBudget, FunctionsSourceFileVersion, FunctionsSourceScanBudget,
         FunctionsSourceSnapshot, FunctionsSourceStamp, FunctionsSourceTraversal, NodeInstallation,
-        PubSubBridge, BLOCKING_AUTH_DEADLINE, MAX_BLOCKING_AUTH_RESPONSE_BYTES,
+        PubSubBridge, UserEnvironment, BLOCKING_AUTH_DEADLINE, MAX_BLOCKING_AUTH_RESPONSE_BYTES,
         MAX_FUNCTIONS_SOURCE_BYTES, MAX_FUNCTIONS_SOURCE_ENTRIES,
         MAX_FUNCTIONS_SOURCE_WATCH_BYTES_PER_SECOND, MAX_FUNCTIONS_SOURCE_WATCH_FILES_PER_SECOND,
         SOURCE_IO_BUFFER_BYTES,
@@ -4679,6 +4710,79 @@ mod tests {
         wait_for_fixed_inspector_port_release(port, Duration::from_millis(50))
             .await
             .unwrap();
+    }
+
+    #[test]
+    fn user_environment_debug_redacts_all_loaded_values() {
+        let environment = UserEnvironment {
+            values: vec![("TOKEN".to_owned(), "dotenv-sentinel".to_owned())],
+            secrets: vec![("SECRET".to_owned(), "secret-sentinel".to_owned())],
+            runtime_config: Some("runtime-config-sentinel".to_owned()),
+            files: vec![".env".to_owned()],
+        };
+        let debug = format!("{environment:?}");
+        for value in [
+            "dotenv-sentinel",
+            "secret-sentinel",
+            "runtime-config-sentinel",
+        ] {
+            assert!(!debug.contains(value), "{debug}");
+        }
+        assert!(debug.contains("[redacted]"));
+    }
+
+    #[test]
+    fn invalid_environment_file_diagnostics_do_not_expose_values() {
+        let root = std::env::temp_dir().join(format!(
+            "fireemu-redacted-environment-{}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        for file in [".env", ".secret.local"] {
+            std::fs::write(root.join(file), "invalid-line-sentinel\n").unwrap();
+            let error = load_user_environment(&root, "demo", None).unwrap_err();
+            assert!(error.contains(file), "{error}");
+            assert!(!error.contains("invalid-line-sentinel"), "{error}");
+            std::fs::remove_file(root.join(file)).unwrap();
+        }
+        std::fs::remove_dir(&root).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn inheritable_parent_environment_skips_non_utf8_values() {
+        if std::env::var_os("FIREEMU_TEST_NON_UTF8_CHILD").is_some() {
+            let inherited = inheritable_parent_environment();
+            assert!(inherited
+                .iter()
+                .any(|(name, value)| { name == "VOLTA_FN_UTF8_PROBE" && value == "kept" }));
+            assert!(!inherited
+                .iter()
+                .any(|(name, _)| name == "VOLTA_FN_NON_UTF8_PROBE"));
+            println!("non-UTF-8 Functions environment probe ran");
+            return;
+        }
+
+        let output = Command::new(std::env::current_exe().unwrap())
+            .arg("--exact")
+            .arg("functions::tests::inheritable_parent_environment_skips_non_utf8_values")
+            .arg("--nocapture")
+            .env("FIREEMU_TEST_NON_UTF8_CHILD", "1")
+            .env("VOLTA_FN_UTF8_PROBE", "kept")
+            .env("VOLTA_FN_NON_UTF8_PROBE", OsString::from_vec(vec![0xff]))
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(
+            String::from_utf8_lossy(&output.stdout)
+                .contains("non-UTF-8 Functions environment probe ran"),
+            "child test did not run: {}",
+            String::from_utf8_lossy(&output.stdout)
+        );
     }
 
     #[test]

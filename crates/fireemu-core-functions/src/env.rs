@@ -112,12 +112,21 @@ pub fn validate_key(key: &str) -> Result<(), String> {
 
 /// One parsed dotenv file: its assignments in file order, and the lines that were neither
 /// blank, a comment nor an assignment.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Clone, Default, PartialEq, Eq)]
 pub struct Parsed {
     /// Assignments, last one per key winning, as the official parser's object does.
     pub envs: BTreeMap<String, String>,
     /// Lines the format does not describe. `parse_strict` refuses a file that has any.
     pub errors: Vec<String>,
+}
+
+impl std::fmt::Debug for Parsed {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Parsed")
+            .field("envs", &"[redacted]")
+            .field("errors", &"[redacted]")
+            .finish()
+    }
 }
 
 /// Whether a byte may appear in a dotenv key (`[\w./]` in the official line pattern).
@@ -304,6 +313,15 @@ mod tests {
 
     fn envs(data: &str) -> Vec<(String, String)> {
         parse(data).envs.into_iter().collect()
+    }
+
+    #[test]
+    fn parsed_debug_redacts_assignments_and_invalid_lines() {
+        let parsed = parse("TOKEN=assignment-sentinel\ninvalid-line-sentinel\n");
+        let debug = format!("{parsed:?}");
+        assert!(!debug.contains("assignment-sentinel"));
+        assert!(!debug.contains("invalid-line-sentinel"));
+        assert!(debug.contains("[redacted]"));
     }
 
     #[test]

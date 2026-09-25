@@ -11454,6 +11454,39 @@ fn concurrent_config_writes_keep_every_member() {
     }
 }
 
+/// Each concurrent PATCH response represents one committed project config snapshot.
+#[test]
+fn concurrent_config_patch_responses_keep_config_and_quota_together() {
+    let s = with_registry(strict_state());
+    std::thread::scope(|scope| {
+        for disabled in [false, true] {
+            let s = &s;
+            scope.spawn(move || {
+                for _ in 0..128 {
+                    let quota = if disabled { "7" } else { "5" };
+                    let (status, answer) = patch_sign_in(
+                        s,
+                        "client.permissions.disabledUserSignup,quota.signUpQuotaConfig",
+                        &json!({
+                            "client": {"permissions": {"disabledUserSignup": disabled}},
+                            "quota": {"signUpQuotaConfig": {"quota": quota, "startTime": "2030-01-01T00:00:00Z", "quotaDuration": "3600s"}}
+                        }),
+                    );
+                    assert_eq!(status, 200, "{answer}");
+                    let response_disabled = answer["client"]["permissions"]["disabledUserSignup"]
+                        .as_bool()
+                        .unwrap_or(false);
+                    assert_eq!(
+                        answer["quota"]["signUpQuotaConfig"]["quota"],
+                        if response_disabled { "7" } else { "5" },
+                        "{answer}"
+                    );
+                }
+            });
+        }
+    });
+}
+
 /// A mask below a stored member's scalar, or deeper than any config path, is refused or
 /// ignored without harming the store: the project keeps answering (security review
 /// 2026-09-25: a panic poisoned the store's mutex, a very deep mask overflowed the stack).

@@ -5141,7 +5141,7 @@ fn project_config_management(
             || field.starts_with("passwordPolicyConfig")
     });
     let written_at = now(state).to_rfc3339().ok();
-    let config = if let Some(registry) = state
+    if let Some(registry) = state
         .registry
         .as_ref()
         .filter(|_| pending_project.is_none())
@@ -5183,7 +5183,7 @@ fn project_config_management(
                 stored_members,
             })
         }) {
-            Ok(Some(config)) => config,
+            Ok(Some(_)) => {}
             Ok(None) => return rollback_blocking(error(500, "INTERNAL")),
             Err(response) => return rollback_blocking(response),
         }
@@ -5256,15 +5256,14 @@ fn project_config_management(
                 }
             }
         }
-        config
-    };
+    }
     JsonResponse {
         status: 200,
         body: {
             let Ok(store) = selected_store.lock() else {
                 return error(500, "INTERNAL");
             };
-            let document = project_config_document(state, project, &store, config);
+            let document = project_config_document(state, project, &store, store.config());
             if state.stateless_refresh_tokens {
                 document
             } else {

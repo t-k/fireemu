@@ -16,19 +16,40 @@ test("stage 3 admission requires terminal stage 2, a quiet shared project and a 
       ts: "2026-09-25T09:00:00Z",
       project: "fireemu-oracle-query",
       taskId: "STORAGE-OBJECT-SANDBOX",
-      outcome: "prepared",
+      corpusDigest: "fdd462cdae23ee9ccf17e3679622acf8e94781ba88b41d4f1d7d1b46f2785cc0",
+      outcome: "preparation-complete",
     },
     {
       ts: "2026-09-25T09:10:00Z",
       project: "fireemu-oracle-query",
       taskId: "FUNCTIONS-HTTP-SANDBOX",
-      stage: 2,
+      corpusDigest: "54f45a96a4360969f093aa4469381710506022e4fd259ae2f2deefb876123c3c",
       outcome: "prepared",
+    },
+    {
+      ts: "2026-09-24T08:23:52Z",
+      project: "fireemu-oracle-query",
+      taskId: "FS-CONFIG-LIFECYCLE-EXPLORE",
+      event: "started",
+    },
+    {
+      ts: "2026-09-24T08:24:23Z",
+      project: "fireemu-oracle-query",
+      taskId: "FS-CONFIG-LIFECYCLE-EXPLORE",
+      event: "finished",
+      outcome: { e1omit: { state: "SUCCESSFUL" } },
     },
   ];
   assert.doesNotThrow(() => assertAdmission(lines, "2026-09-25T09:41:00Z"));
   assert.throws(() => assertAdmission(lines, "2026-09-25T09:39:59Z"), /30 minutes/);
-  assert.throws(() => assertAdmission(lines.slice(0, 1), "2026-09-25T10:00:00Z"), /stage 2/);
+  assert.throws(
+    () =>
+      assertAdmission(
+        lines.filter((line) => line.taskId !== "FUNCTIONS-HTTP-SANDBOX"),
+        "2026-09-25T10:00:00Z",
+      ),
+    /stage 2/,
+  );
   assert.throws(
     () =>
       assertAdmission(
@@ -120,7 +141,7 @@ test("CLI output reports auto API enablement without revealing captured text", (
   );
 });
 
-test("CLI preflight refuses disabled Pub/Sub or a repository without cleanup policy", async () => {
+test("CLI preflight requires the reviewed APIs and exact repository cleanup policy", async () => {
   const names = [
     "cloudfunctions",
     "cloudbuild",
@@ -132,7 +153,15 @@ test("CLI preflight refuses disabled Pub/Sub or a repository without cleanup pol
   ].map((name) => ({ config: { name: `${name}.googleapis.com` } }));
   const repo = {
     name: "projects/fireemu-oracle-query/locations/us-central1/repositories/gcf-artifacts",
-    cleanupPolicies: { held: { action: "DELETE" } },
+    format: "DOCKER",
+    mode: "STANDARD_REPOSITORY",
+    cleanupPolicies: {
+      "firebase-functions-cleanup": {
+        id: "firebase-functions-cleanup",
+        condition: { tagState: "ANY", olderThan: "86400s" },
+        action: "DELETE",
+      },
+    },
   };
   const control = async (_method, url) =>
     url.includes("serviceusage.googleapis.com")
@@ -160,4 +189,20 @@ test("CLI preflight refuses disabled Pub/Sub or a repository without cleanup pol
       }),
     /cleanup policy/,
   );
+  for (const changed of [
+    { cleanupPolicies: { held: { action: "DELETE" } } },
+    { cleanupPolicyDryRun: true },
+    { format: "MAVEN" },
+    { cleanupPolicies: {}, labels: { "firebase-functions-cleanup-opted-out": "true" } },
+  ]) {
+    await assert.rejects(
+      () =>
+        preflightCliSideEffects(async (method, url) => {
+          const result = await control(method, url);
+          if (url.includes("artifactregistry")) result.value = { ...repo, ...changed };
+          return result;
+        }),
+      /cleanup policy/,
+    );
+  }
 });

@@ -83,10 +83,16 @@ async function logChange(action, detail) {
 export function assertAdmission(lines, currentTime = now()) {
   const relevant = lines.filter((line) => line.project === PROJECT);
   const storage = relevant.some(
-    (line) => line.taskId === "STORAGE-OBJECT-SANDBOX" && line.outcome === "prepared",
+    (line) =>
+      line.taskId === "STORAGE-OBJECT-SANDBOX" &&
+      line.corpusDigest === "fdd462cdae23ee9ccf17e3679622acf8e94781ba88b41d4f1d7d1b46f2785cc0" &&
+      line.outcome === "preparation-complete",
   );
   const stage2 = relevant.some(
-    (line) => line.taskId === TASK && line.stage === 2 && line.outcome === "prepared",
+    (line) =>
+      line.taskId === TASK &&
+      line.corpusDigest === "54f45a96a4360969f093aa4469381710506022e4fd259ae2f2deefb876123c3c" &&
+      line.outcome === "prepared",
   );
   if (!storage || !stage2)
     throw new Error("Storage and FUNCTIONS-HTTP stage 2 must both finish successfully");
@@ -95,15 +101,18 @@ export function assertAdmission(lines, currentTime = now()) {
   ) {
     throw new Error("a stage 3 attempt already exists; recovery or a new review is required");
   }
+  const terminalLine = (line) =>
+    line.outcome !== undefined &&
+    line.outcome !== null &&
+    !(typeof line.outcome === "string" && line.outcome.startsWith("reserved"));
+  const runKey = (line) => `${line.taskId ?? "<unknown>"}\0${line.runDir ?? "<none>"}`;
   const active = new Map();
-  for (const line of relevant) {
-    if (line.event === "started") active.set(line.taskId, true);
-    else if (line.outcome && !line.outcome.startsWith("reserved")) active.delete(line.taskId);
+  for (const line of relevant.toSorted((a, b) => Date.parse(a.ts) - Date.parse(b.ts))) {
+    if (line.event === "started") active.set(runKey(line), true);
+    else if (terminalLine(line)) active.delete(runKey(line));
   }
   if (active.size) throw new Error("another shared-project recording is active");
-  const terminal = relevant
-    .filter((line) => line.outcome && !line.outcome.startsWith("reserved"))
-    .map((line) => Date.parse(line.ts));
+  const terminal = relevant.filter(terminalLine).map((line) => Date.parse(line.ts));
   const last = Math.max(...terminal);
   if (!Number.isFinite(last) || Date.parse(currentTime) - last < 30 * 60 * 1000) {
     throw new Error("30 minutes have not elapsed after the last shared-project finish line");
@@ -393,10 +402,22 @@ export async function preflightCliSideEffects(control) {
     );
   }
   const policies = repo.value.cleanupPolicies ?? {};
-  const hasPolicy =
-    Object.keys(policies).length > 0 ||
-    repo.value.labels?.["firebase-functions-cleanup-opted-out"] === "true";
-  if (!hasPolicy) throw new Error("gcf-artifacts has no cleanup policy or reviewed opt-out");
+  const cleanupPolicy = policies["firebase-functions-cleanup"];
+  if (
+    repo.value.format !== "DOCKER" ||
+    repo.value.mode !== "STANDARD_REPOSITORY" ||
+    repo.value.cleanupPolicyDryRun === true ||
+    repo.value.labels?.["firebase-functions-cleanup-opted-out"] === "true" ||
+    Object.keys(policies).length !== 1 ||
+    cleanupPolicy?.id !== "firebase-functions-cleanup" ||
+    cleanupPolicy.action !== "DELETE" ||
+    Object.keys(cleanupPolicy).length !== 3 ||
+    cleanupPolicy.condition?.tagState !== "ANY" ||
+    cleanupPolicy.condition.olderThan !== "86400s" ||
+    Object.keys(cleanupPolicy.condition).length !== 2
+  ) {
+    throw new Error("gcf-artifacts reviewed cleanup policy changed");
+  }
 }
 
 async function inspectAbsence(control, target, kind) {

@@ -656,14 +656,23 @@ test("a quota-limited row passes only through its matching re-observation", asyn
     "auth-mfa/totp/sign-in#replayed-enrollment-code": "auth-mfa/totp/quota-free#replayed-enrollment-code",
     "auth-mfa/totp/sign-in#older-unused-code": "auth-mfa/totp/quota-free#older-unused-code",
   });
-  const statuses = new Map([
-    ["auth-mfa/totp/quota-free#replayed-enrollment-code", "MATCH"],
-    ["auth-mfa/totp/quota-free#older-unused-code", "MISMATCH"],
+  const refusal = (message) => ({ status: 400, body: { error: { code: 400, message, status: "INVALID_ARGUMENT" } } });
+  const invalid = refusal("INVALID_CODE");
+  const quota = refusal("QUOTA_EXCEEDED : Exceeded quota.");
+  const rows = new Map([
+    ["auth-mfa/totp/quota-free#replayed-enrollment-code", { status: "MATCH", production: invalid }],
+    ["auth-mfa/totp/quota-free#older-unused-code", { status: "MISMATCH", production: invalid }],
   ]);
-  const row = (name, status) => reobservedStatus({ row: name, status }, statuses);
-  assert.equal(row("auth-mfa/totp/sign-in#replayed-enrollment-code", "INDETERMINATE"), "REOBSERVED_MATCH");
-  assert.equal(row("auth-mfa/totp/sign-in#older-unused-code", "INDETERMINATE"), "INDETERMINATE");
+  const original = "auth-mfa/totp/sign-in#replayed-enrollment-code";
+  const row = (name, status, fireemu) => reobservedStatus({ row: name, status, fireemu }, rows);
+  assert.equal(row(original, "INDETERMINATE", invalid), "REOBSERVED_MATCH");
+  // fireemu's own answer on the original row must be the re-observed one.
+  assert.equal(row(original, "INDETERMINATE", quota), "INDETERMINATE");
+  assert.equal(row(original, "INDETERMINATE", { status: 500, body: {} }), "INDETERMINATE");
+  assert.equal(row(original, "INDETERMINATE", { status: 200, body: {} }), "INDETERMINATE");
+  // The re-observation itself must match.
+  assert.equal(row("auth-mfa/totp/sign-in#older-unused-code", "INDETERMINATE", invalid), "INDETERMINATE");
   // A determinate row keeps its own status; other indeterminate rows are not rescued.
-  assert.equal(row("auth-mfa/totp/sign-in#replayed-enrollment-code", "MISMATCH"), "MISMATCH");
-  assert.equal(row("auth-mfa/sms#x", "INDETERMINATE"), "INDETERMINATE");
+  assert.equal(row(original, "MISMATCH", invalid), "MISMATCH");
+  assert.equal(row("auth-mfa/sms#x", "INDETERMINATE", invalid), "INDETERMINATE");
 });

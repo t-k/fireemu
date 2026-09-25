@@ -18094,3 +18094,108 @@ fn strict_the_pending_answer_keeps_the_display_name() {
     assert_eq!(pending["displayName"], "Named", "{pending}");
     assert!(pending.get("isNewUser").is_none(), "{pending}");
 }
+
+/// Strict with a test-number phone factor on `email`.
+fn strict_phone_account(email: &str) -> AuthState {
+    let s = strict_mfa_state();
+    let (status, body) = patch_sign_in(
+        &s,
+        "signIn.phoneNumber.testPhoneNumbers",
+        &json!({"signIn": {"phoneNumber": {"testPhoneNumbers": {"+16505550101": "123456"}}}}),
+    );
+    assert_eq!(status, 200, "{body}");
+    create(
+        &s,
+        &json!({"email": email, "password": "password123", "emailVerified": true,
+            "mfaInfo": [{"phoneInfo": "+16505550101"}]}),
+    );
+    s
+}
+
+/// Completes a pending credential with the test number's code.
+fn complete_phone(s: &AuthState, pending: &Value) -> (u16, Value) {
+    let (status, started) = post(
+        s,
+        &format!("{V2}/accounts/mfaSignIn:start"),
+        &json!({"mfaPendingCredential": pending["mfaPendingCredential"],
+            "mfaEnrollmentId": pending["mfaInfo"][0]["mfaEnrollmentId"], "phoneSignInInfo": {}}),
+    );
+    if status != 200 {
+        return (status, started);
+    }
+    post(
+        s,
+        &format!("{V2}/accounts/mfaSignIn:finalize"),
+        &json!({"mfaPendingCredential": pending["mfaPendingCredential"],
+            "phoneVerificationInfo": {"sessionInfo": started["phoneResponseInfo"]["sessionInfo"], "code": "123456"}}),
+    )
+}
+
+/// Unfinished pending credentials still fill the budget: none is dropped to make room, the
+/// next first factor is refused and the oldest one still completes (safety confirmation
+/// review 2026-09-25, SF-2).
+#[test]
+fn strict_unfinished_pending_credentials_still_fill_the_budget() {
+    let s = strict_phone_account("unfinished@example.com");
+    let budget = fireemu_core_auth::mfa::MAX_PENDING_PER_USER;
+    let first = pending_of(&s, "unfinished@example.com");
+    for _ in 1..budget {
+        pending_of(&s, "unfinished@example.com");
+    }
+    let (status, body) = post(
+        &s,
+        &format!("{V1}/accounts:signInWithPassword"),
+        &json!({"email": "unfinished@example.com", "password": "password123"}),
+    );
+    assert_eq!(status, 400, "{body}");
+    assert!(
+        message(&body).is_some_and(|m| m.starts_with("QUOTA_EXCEEDED")),
+        "{body}"
+    );
+    let (status, body) = complete_phone(&s, &first);
+    assert_eq!(status, 200, "{body}");
+}
+
+/// What a dropped entry answers (CHANGELOG): a completed pending credential dropped at the
+/// budget is `INVALID_PENDING_TOKEN`, and an expired enrollment session dropped at the budget
+/// is `INVALID_SESSION_INFO`.
+#[test]
+fn strict_entries_dropped_at_the_budget_answer_as_unknown() {
+    let s = strict_phone_account("dropped@example.com");
+    let budget = fireemu_core_auth::mfa::MAX_PENDING_PER_USER;
+    let completed = pending_of(&s, "dropped@example.com");
+    let (status, body) = complete_phone(&s, &completed);
+    assert_eq!(status, 200, "{body}");
+    for _ in 1..=budget {
+        pending_of(&s, "dropped@example.com");
+    }
+    let (status, body) = complete_phone(&s, &completed);
+    assert_eq!(status, 400, "{body}");
+    assert_eq!(v2_refusal(&body).0, "INVALID_PENDING_TOKEN", "{body}");
+
+    let s = strict_mfa_state();
+    let token = verified_session(&s, "dropped-session@example.com");
+    let start = |token: &str| {
+        post(
+            &s,
+            &format!("{V2}/accounts/mfaEnrollment:start"),
+            &json!({"idToken": token, "totpEnrollmentInfo": {}}),
+        )
+    };
+    let (status, oldest) = start(&token);
+    assert_eq!(status, 200, "{oldest}");
+    // The oldest session expires first, so it is the one dropped.
+    advance(&s, 1);
+    for _ in 1..budget {
+        assert_eq!(start(&token).0, 200);
+    }
+    advance(&s, 901);
+    let (status, signed_in) = password_sign_in(&s, "dropped-session@example.com", "password123");
+    assert_eq!(status, 200, "{signed_in}");
+    let fresh = signed_in["idToken"].as_str().unwrap();
+    assert_eq!(start(fresh).0, 200);
+    let (status, body) =
+        finalize_totp(&s, fresh, &oldest, &totp_code_of(&s, &oldest, 0), Some("A"));
+    assert_eq!(status, 400, "{body}");
+    assert_eq!(v2_refusal(&body).0, "INVALID_SESSION_INFO", "{body}");
+}

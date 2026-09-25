@@ -11675,6 +11675,67 @@ fn client_permissions_refuse_end_users_as_admin_only_operations() {
     assert_eq!(refused["error"]["message"], "ADMIN_ONLY_OPERATION");
 }
 
+/// While client sign-up is off, production refuses a phone code for a number and an email
+/// sign-in link for an address that no account holds, when they are asked for, even from an
+/// administrator (sandbox recording 2026-09-25, auth-config-sdk/client-permissions). The
+/// official emulator has no client permissions; the emulator profile sends them and refuses
+/// the sign-in that would create the account.
+#[test]
+fn a_disabled_sign_up_refuses_codes_for_new_accounts_as_production_does() {
+    for strict in [true, false] {
+        let s = if strict { strict_state() } else { state() };
+        for body in [
+            json!({"phoneNumber": "+16505550102"}),
+            json!({"email": "link-existing@example.com"}),
+        ] {
+            let (status, created) = admin(&s, "POST", &format!("{ADMIN}/accounts"), &body);
+            assert_eq!(status, 200, "{created}");
+        }
+        let (status, updated) = patch_sign_in(
+            &s,
+            "client.permissions.disabledUserSignup,signIn.email.passwordRequired",
+            &json!({"client": {"permissions": {"disabledUserSignup": true}},
+                    "signIn": {"email": {"passwordRequired": false}}}),
+        );
+        assert_eq!(status, 200, "{updated}");
+        let send_code = |number: &str| {
+            post(
+                &s,
+                &format!("{V1}/accounts:sendVerificationCode"),
+                &json!({"phoneNumber": number, "recaptchaToken": "x"}),
+            )
+        };
+        let link = |email: &str| {
+            admin(
+                &s,
+                "POST",
+                &format!("{ADMIN}/accounts:sendOobCode"),
+                &json!({"requestType": "EMAIL_SIGNIN", "email": email, "returnOobLink": true, "continueUrl": "http://localhost/finish"}),
+            )
+        };
+        for (label, (status, answer)) in [
+            ("new number", send_code("+16505550101")),
+            ("new address", link("link-new@example.com")),
+        ] {
+            if strict {
+                assert_eq!(
+                    (status, answer["error"]["message"].as_str()),
+                    (400, Some("ADMIN_ONLY_OPERATION")),
+                    "{label}"
+                );
+            } else {
+                assert_eq!(status, 200, "{label}: {answer}");
+            }
+        }
+        for (label, (status, answer)) in [
+            ("existing number", send_code("+16505550102")),
+            ("existing address", link("link-existing@example.com")),
+        ] {
+            assert_eq!(status, 200, "strict {strict} {label}: {answer}");
+        }
+    }
+}
+
 #[test]
 fn project_client_permissions_are_exposed_and_applied_atomically() {
     let s = state();

@@ -3085,6 +3085,11 @@ fn handle_with_policy(
             return denial;
         }
     }
+    if !state.stateless_refresh_tokens {
+        if let Some(denial) = new_account_code_denial(route.handler, &store, body) {
+            return denial;
+        }
+    }
     // Verify the selected namespace and assertion before any account or transient mutation.
     if route.handler == routes::Handler::SignInWithIdp {
         if let Some(trust) = oidc_trust {
@@ -6595,6 +6600,33 @@ fn end_user_client_permission_denial(
         return Some(auth_error(&AuthError::UserSignupDisabled));
     }
     None
+}
+
+/// Strict: while client sign-up is off, production refuses a phone code for a number and an
+/// email sign-in link for an address that no account holds when they are asked for, also
+/// from an administrator (sandbox recording 2026-09-25, auth-config-sdk/client-permissions).
+fn new_account_code_denial(
+    handler: routes::Handler,
+    store: &AuthStore,
+    body: &Value,
+) -> Option<JsonResponse> {
+    if store.allows_user_signup(AuthPrincipal::EndUser)
+        || body.get("idToken").is_some_and(|value| !value.is_null())
+    {
+        return None;
+    }
+    let new_account = match handler {
+        routes::Handler::SendVerificationCode => str_field(body, "phoneNumber")
+            .is_some_and(|number| store.user_by_phone(number).is_none()),
+        routes::Handler::SendOobCode | routes::Handler::AdminSendOobCode => {
+            body.get("requestType").and_then(Value::as_str) == Some("EMAIL_SIGNIN")
+                && str_field(body, "email")
+                    .map(canonicalize_email)
+                    .is_some_and(|email| store.user_by_email(&email).is_none())
+        }
+        _ => false,
+    };
+    new_account.then(|| auth_error(&AuthError::UserSignupDisabled))
 }
 
 fn request_may_create_end_user(

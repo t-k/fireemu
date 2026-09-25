@@ -508,6 +508,11 @@ const clientPermissions = {
       email: "EMAIL(link-new)",
       oobCode: from("link-new:oobCode"),
     }),
+    client("send-link-new", "sendOobCode", {
+      requestType: "EMAIL_SIGNIN",
+      email: "EMAIL(send-link-new)",
+      continueUrl: HOSTING,
+    }),
     adminLink("link-existing", "EMAIL_SIGNIN", "EMAIL(existing)", { continueUrl: HOSTING }),
     client("sign-in-link-existing", "signInWithEmailLink", {
       email: "EMAIL(existing)",

@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
   "parent": "AUTH-MFA",
-  "parentStatus": "COMPAT_VERIFIED",
+  "parentStatus": "PENDING_CLOSURE_REVIEW",
   "oracleTrack": "disposable-sandbox",
   "scopeDecisions": [
     {
@@ -57,8 +57,8 @@
     },
     {
       "id": "M9",
-      "decision": "Where production's lifetimes were bracketed but not pinned, strict refuses only from the youngest age production refused: a TOTP pending credential from 302 seconds (accepted at 293, refused at 303, both measured send to send; one second below the refusal absorbs the two requests' differing latencies) and a TOTP enrollment start from a sign-in 333 seconds old (accepted at 244). Phone second factors keep their earlier limits where production's were not seen (an SMS pending credential was still accepted at about 303 seconds). The phone enrollment session is M12.",
-      "decidedBy": "agent (recorded in the owner ledger for the closure review)",
+      "decision": "Where production's lifetimes were bracketed but not pinned, strict refuses a TOTP pending credential from 302 seconds (accepted at 293, refused at 303, both measured send to send; one second below the refusal reproduces it despite the two requests' differing latencies) and a TOTP enrollment start from a sign-in 333 seconds old (accepted at 244). The owner approved both boundaries as a sub-second exception to AUTH-ACTION's rule of no inferred refusal (owner ledger, 2026-09-25, AUTH-MFA). The phone enrollment session is M12.",
+      "decidedBy": "owner (t-k)",
       "decidedOn": "2026-09-25"
     },
     {
@@ -71,6 +71,12 @@
       "id": "M10a",
       "decision": "How M10's re-observation is used: the comparison passes an original row only when its re-observation matches and fireemu's own answer on the row is the re-observed production answer (REOBSERVED_MATCH); a repeated QUOTA_EXCEEDED in the re-observation would have been recorded as it is, without retries. The per-account attempt quota itself (its count and window) is unobserved and not claimed by this parent.",
       "decidedBy": "agent (recorded in the owner ledger, not an owner decision)",
+      "decidedOn": "2026-09-25"
+    },
+    {
+      "id": "M10b",
+      "decision": "How the comparison passes rows production answered two ways: MATCH_NONDETERMINISTIC when fireemu gives the answer of either recording of the same row; MATCH_TIMING_DEPENDENT only for the phone control starts of auth-mfa/lifetime (control-start-s<age>), whose answer depends on whether the sign-in and the phone enrollment fell in the same second (production answered TOKEN_EXPIRED and SECOND_FACTOR_EXISTS for the same s600 and s1800 rows across its two recordings), and only when fireemu gives an answer production recorded for such a row.",
+      "decidedBy": "Claude under the owner's delegation to the coordinator (owner ledger, 2026-09-25, AUTH-MFA), as M10a",
       "decidedOn": "2026-09-25"
     },
     {
@@ -616,7 +622,7 @@
       "configProjections": [
         "default"
       ],
-      "status": "VERIFIED",
+      "status": "PENDING_REVIEW",
       "note": "An independent closure review and a separate safety review of the final artifact.",
       "evidence": {
         "productionRecordings": [
@@ -654,12 +660,12 @@
     }
   ],
   "closureReview": {
-    "decision": "APPROVED",
+    "decision": "PENDING",
     "decidedOn": "2026-09-25",
     "reviewer": "independent clean-context closure review of artifact 7fe1a3e5 (APPROVE WITH CHANGES) and its confirmation review of the fixes on artifact 9988fdbe (APPROVE), after the pre-send reviews of every recorded program, a separate safety review and its confirmation",
     "reviewedCommit": "bce2c0bdb",
     "finalArtifactSha256": "9988fdbe13b84459fd756ff4c6beee6b316d665be939ba5c293a614a8c101fda",
     "report": "docs.local/reviews/2026-09-25-auth-mfa-closure-confirmation.md (private; earlier: 2026-09-25-auth-mfa-closure-review.md, -safety-review.md, -safety-confirmation.md, -presend-review.md, -lifetime-short-presend-review.md, -quota-free-presend-review.md)",
-    "followUps": "Non-blocking and tracked privately (docs.local/issues/open/auth-mfa-unobserved-edges.md): the per-account TOTP attempt quota, the unobserved gaps inside the pending-credential and recent-sign-in brackets, the SMS pending lifetime, the phone enrollment session's lifetime past 1803 seconds, a finalized TOTP session offered again before three attempts, fireemu's own per-user budget, Admin entries with both phoneInfo and totpInfo, and tenant second factors (AUTH-TENANT-BLOCKING)."
+    "followUps": "The coordinator's promotion review (docs.local/instructions/2026-09-25-auth-mfa-promotion-review.md, private) kept the promotion conditionally and sent the follow-up directive (2026-09-25-auth-mfa-follow-up-directive.md): strict with auth.totp failing open, the SMS pending lifetime to observe, and four smaller items. The closure is re-approved after the fixes, the observation, a rebind and a confirmation review. Earlier follow-ups stay tracked privately in docs.local/issues/open/auth-mfa-unobserved-edges.md."
   }
 }

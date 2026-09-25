@@ -7439,7 +7439,7 @@ fn finish_sign_in_with_attributes_and_credentials(
     inbound_credentials: Option<&PendingSignInCredentials>,
 ) -> JsonResponse {
     let factors = mfa_info(store, uid, true);
-    if !factors.is_empty() && store.second_factor_required() {
+    if !factors.is_empty() && store.second_factor_required_for(uid) {
         let strict = store.second_factor_rules_are_production();
         // Second factor required: no ID token yet, only a pending credential.
         let email = store.user(uid).and_then(|u| u.email.clone());
@@ -9740,9 +9740,11 @@ fn mfa_enrollment_start(
             "INVALID_ARGUMENT : totpEnrollmentInfo or phoneEnrollmentInfo is required",
         );
     }
-    // TOTP is on when the project's `mfa` config enables it (production), or when the fireemu
-    // `auth.totp` extension is configured.
-    if !totp_extension_enabled && !store.mfa_config().totp_enabled() {
+    // TOTP is on when the project's `mfa` config enables it (production). The fireemu
+    // `auth.totp` extension turns it on too, except under production's rules, where only the
+    // project config does (`auth-mfa/disabled#totp-start`; AUTH-MFA follow-up directive).
+    let extension = totp_extension_enabled && !production;
+    if !extension && !store.mfa_config().totp_enabled() {
         return error(
             400,
             if strict {

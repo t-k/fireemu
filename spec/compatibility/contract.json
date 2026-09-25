@@ -1334,7 +1334,7 @@
           ],
           "fireemuOnly": [
             {
-              "behaviour": "declaring auth.totp enables local TOTP enrollment and sign-in; its acceptance window and enrolment session TTL are policies driven by the virtual clock, while an absent auth.totp preserves the official emulator's INVALID_ARGUMENT refusal",
+              "behaviour": "declaring auth.totp enables local TOTP enrollment and sign-in in the emulator profile; its acceptance window and enrolment session TTL are policies driven by the virtual clock, while an absent auth.totp preserves the official emulator's INVALID_ARGUMENT refusal. In the strict profile only the project mfa config enables TOTP, as in production, and an account with a TOTP factor is asked for it even while that config is off (fail closed; production was seen to skip only a phone factor then)",
               "precision": "boundary-conformance"
             },
             {

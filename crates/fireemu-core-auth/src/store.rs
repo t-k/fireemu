@@ -3264,14 +3264,21 @@ impl AuthStore {
         self.production_mfa = production;
     }
 
-    /// Whether a sign-in of an account with enrolled factors must ask for one: always under
-    /// the official emulator's rules; under production's only while the project's MFA is on
-    /// (sandbox recording 2026-09-24, `auth-mfa/disabled`).
+    /// Whether a sign-in of `uid`, an account with enrolled factors, must ask for one: always
+    /// under the official emulator's rules and while the project's MFA is on. Under
+    /// production's rules with the project's MFA off, production was seen to skip only a phone
+    /// factor (sandbox recording 2026-09-24, `auth-mfa/disabled#sign-in-a-with-factor`), so an
+    /// account with a TOTP factor is still asked (fail closed; AUTH-MFA follow-up directive).
     #[must_use]
-    pub fn second_factor_required(&self) -> bool {
+    pub fn second_factor_required_for(&self, uid: &LocalId) -> bool {
         // A tenant's own MFA config belongs to AUTH-TENANT-BLOCKING (scope decision M2); a
         // tenant keeps asking for enrolled factors.
-        !self.production_mfa || self.tenant_id.is_some() || self.mfa_config.state.is_on()
+        !self.second_factor_rules_are_production()
+            || self.mfa_config.state.is_on()
+            || self
+                .users
+                .get(uid)
+                .is_some_and(|user| !user.mfa.totp_factors().is_empty())
     }
 
     /// Whether second factors follow production's project rules (the strict profile).

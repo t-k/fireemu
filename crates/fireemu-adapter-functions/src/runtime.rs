@@ -3556,7 +3556,7 @@ impl FunctionsRuntime {
         self: &Arc<Self>,
         target: &HttpTarget,
         function_capacity: usize,
-    ) -> Result<(EventId, Admission), String> {
+    ) -> Result<(EventId, Epoch, Admission), String> {
         let Ok(mut inner) = self.inner.lock() else {
             return Err("runtime poisoned".into());
         };
@@ -3573,10 +3573,12 @@ impl FunctionsRuntime {
         }
         inner.next_event += 1;
         let id = EventId::new(u128::from(inner.next_event));
+        let epoch = inner.epoch;
         let key = format!("http-{}", inner.next_event);
         inner.running.insert(key.clone(), target.function.clone());
         Ok((
             id,
+            epoch,
             Admission {
                 runtime: self.clone(),
                 key,
@@ -3584,21 +3586,23 @@ impl FunctionsRuntime {
         ))
     }
 
-    fn record_http_invocation(&self, id: EventId, function: String, outcome: String) {
+    fn record_http_invocation(&self, epoch: Epoch, id: EventId, function: String, outcome: String) {
         if let Ok(mut inner) = self.inner.lock() {
-            inner.record_invocation(InvocationRecord {
-                event_id: id.value(),
-                function,
-                attempt: 1,
-                outcome,
-            });
+            if inner.epoch == epoch {
+                inner.record_invocation(InvocationRecord {
+                    event_id: id.value(),
+                    function,
+                    attempt: 1,
+                    outcome,
+                });
+            }
         }
     }
 
     fn retain_stream_lifecycle(
         self: &Arc<Self>,
         target: &HttpTarget,
-        id: EventId,
+        invocation: (EventId, Epoch),
         status: u16,
         timeout: u64,
         completion: tokio::sync::oneshot::Receiver<StreamCompletion>,
@@ -3606,6 +3610,7 @@ impl FunctionsRuntime {
     ) {
         let runtime = self.clone();
         let function = target.function.clone();
+        let (id, epoch) = invocation;
         tokio::spawn(async move {
             let completion = completion
                 .await
@@ -3620,7 +3625,7 @@ impl FunctionsRuntime {
             if matches!(completion, StreamCompletion::TimedOut) {
                 log_http_timeout(timeout);
             }
-            runtime.record_http_invocation(id, function, outcome);
+            runtime.record_http_invocation(epoch, id, function, outcome);
             drop(admission);
         });
     }
@@ -3650,26 +3655,33 @@ impl FunctionsRuntime {
                         function.http_capacity(self.config.max_running),
                     )
                 });
+        let fault_epoch = self
+            .inner
+            .lock()
+            .map_err(|_| "runtime poisoned".to_owned())?
+            .epoch;
         if let Some(faulted) = self.http_faults(&target.function) {
             if let Ok(mut inner) = self.inner.lock() {
-                inner.next_event += 1;
-                let event_id = inner.next_event;
-                inner.record_invocation(InvocationRecord {
-                    event_id: u128::from(event_id),
-                    function: target.function.clone(),
-                    attempt: 1,
-                    outcome: match &faulted {
-                        Ok(response) => format!("fault plan: http {}", response.status),
-                        Err(error) => format!("failed: {error}"),
-                    },
-                });
+                if inner.epoch == fault_epoch {
+                    inner.next_event += 1;
+                    let event_id = inner.next_event;
+                    inner.record_invocation(InvocationRecord {
+                        event_id: u128::from(event_id),
+                        function: target.function.clone(),
+                        attempt: 1,
+                        outcome: match &faulted {
+                            Ok(response) => format!("fault plan: http {}", response.status),
+                            Err(error) => format!("failed: {error}"),
+                        },
+                    });
+                }
             }
             return faulted
                 .map(HttpStreamStart::Buffered)
                 .map_err(HttpInvokeError::Message)
                 .map_err(HttpInvokeError::into_message);
         }
-        let (id, admission) = self.admit_http_stream(target, function_capacity)?;
+        let (id, epoch, admission) = self.admit_http_stream(target, function_capacity)?;
         let forwarded = runner_headers(headers, &self.config.runner_secret);
         let deadline = (!self.config.debug_mode)
             .then(|| tokio::time::Instant::now() + Duration::from_secs(timeout));
@@ -3687,7 +3699,7 @@ impl FunctionsRuntime {
                 let status = started.response.status;
                 self.retain_stream_lifecycle(
                     target,
-                    id,
+                    (id, epoch),
                     status,
                     timeout,
                     started.completion,
@@ -3696,7 +3708,12 @@ impl FunctionsRuntime {
                 Ok(HttpStreamStart::Streaming(started.response))
             }
             Err(StreamStartError::TimedOut) => {
-                self.record_http_invocation(id, target.function.clone(), "timeout".to_owned());
+                self.record_http_invocation(
+                    epoch,
+                    id,
+                    target.function.clone(),
+                    "timeout".to_owned(),
+                );
                 log_http_timeout(timeout);
                 drop(admission);
                 Ok(HttpStreamStart::Buffered(ProxiedResponse {
@@ -3707,6 +3724,7 @@ impl FunctionsRuntime {
             }
             Err(StreamStartError::Upstream(error)) => {
                 self.record_http_invocation(
+                    epoch,
                     id,
                     target.function.clone(),
                     format!("failed: {error}"),
@@ -3739,26 +3757,33 @@ impl FunctionsRuntime {
                         function.http_capacity(self.config.max_running),
                     )
                 });
+        let fault_epoch = self
+            .inner
+            .lock()
+            .map_err(|_| HttpInvokeError::Message("runtime poisoned".into()))?
+            .epoch;
         // The fault plan applies to HTTP invocations like to event ones (spec 18): an
         // error answers instead of the handler, a delay moves the clock first, a crash
         // takes the runner down.
         if let Some(faulted) = self.http_faults(&target.function) {
             if let Ok(mut inner) = self.inner.lock() {
-                inner.next_event += 1;
-                let event_id = inner.next_event;
-                inner.record_invocation(InvocationRecord {
-                    event_id: u128::from(event_id),
-                    function: target.function.clone(),
-                    attempt: 1,
-                    outcome: match &faulted {
-                        Ok(r) => format!("fault plan: http {}", r.status),
-                        Err(e) => format!("failed: {e}"),
-                    },
-                });
+                if inner.epoch == fault_epoch {
+                    inner.next_event += 1;
+                    let event_id = inner.next_event;
+                    inner.record_invocation(InvocationRecord {
+                        event_id: u128::from(event_id),
+                        function: target.function.clone(),
+                        attempt: 1,
+                        outcome: match &faulted {
+                            Ok(r) => format!("fault plan: http {}", r.status),
+                            Err(e) => format!("failed: {e}"),
+                        },
+                    });
+                }
             }
             return faulted.map_err(HttpInvokeError::Message);
         }
-        let (id, key) = {
+        let (id, key, epoch) = {
             let Ok(mut inner) = self.inner.lock() else {
                 return Err(HttpInvokeError::Message("runtime poisoned".into()));
             };
@@ -3776,8 +3801,9 @@ impl FunctionsRuntime {
             inner.next_event += 1;
             let id = EventId::new(u128::from(inner.next_event));
             let key = format!("http-{}", inner.next_event);
+            let epoch = inner.epoch;
             inner.running.insert(key.clone(), target.function.clone());
-            (id, key)
+            (id, key, epoch)
         };
         // The slot is released even if the client disconnects and this future is dropped.
         let _admission = Admission {
@@ -3804,14 +3830,7 @@ impl FunctionsRuntime {
             Ok(Err(e)) => format!("failed: {e}"),
             Err(_) => "timeout".to_owned(),
         };
-        if let Ok(mut inner) = self.inner.lock() {
-            inner.record_invocation(InvocationRecord {
-                event_id: id.value(),
-                function: target.function.clone(),
-                attempt: 1,
-                outcome,
-            });
-        }
+        self.record_http_invocation(epoch, id, target.function.clone(), outcome);
         if let Ok(answer) = result {
             answer.map_err(HttpInvokeError::Message)
         } else {

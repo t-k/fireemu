@@ -588,14 +588,13 @@ fn rest_collection_create_oversize_reports_the_explicit_document_resource() {
     assert_eq!(status, 404, "{missing}");
 }
 
+// A violation inside a nested map names the top-level property, as production does for
+// `writes/limits/aggregate-map/strict-only` and for over-long keys of an array-held map.
 #[test]
-fn rest_oversized_nested_values_report_canonical_paths_without_publishing() {
+fn rest_oversized_nested_values_report_the_top_level_property_without_publishing() {
     let s = state(None);
     let oversized = "x".repeat(1_048_488);
-    for (document_id, key, expected_path) in [
-        ("dotted-key", "with.dot", "items.`with.dot`"),
-        ("quoted-key", "with\"quote", "items.`with\"quote`"),
-    ] {
+    for (document_id, key) in [("dotted-key", "with.dot"), ("quoted-key", "with\"quote")] {
         let (status, body) = call(
             &s,
             "PATCH",
@@ -614,7 +613,7 @@ fn rest_oversized_nested_values_report_canonical_paths_without_publishing() {
         assert_eq!(body["error"]["status"], "INVALID_ARGUMENT");
         assert_eq!(
             body["error"]["message"],
-            format!("The value of property \"{expected_path}\" is longer than 1048487 bytes.")
+            "Property items contains an invalid nested entity."
         );
 
         let (status, missing) = call(
@@ -5444,4 +5443,107 @@ fn refusal_texts_echo_at_most_one_kibibyte_of_client_input() {
             assert!(message.contains("..."), "{what} strict={strict}");
         }
     }
+}
+
+/// `FS-DATA-WRITE/map-value-key-validation`: production answers a bad map key by context
+/// (partial supplement `partial-7bfd51026a2ac56617d81504`, recorded twice). A write refuses
+/// the enclosing property, a query filter accepts an empty key, and a `__type__` key holding an
+/// integer is a type-tag error before it is a reserved name.
+#[test]
+fn map_value_keys_are_validated_by_context_like_production() {
+    for strict in [true, false] {
+        let s = state_with_profile(strict);
+        let overlong = "k".repeat(1_501);
+        for (label, key, message) in [
+            ("empty", "", "Property m contains an invalid nested entity."),
+            (
+                "overlong",
+                overlong.as_str(),
+                "Property m contains an invalid nested entity.",
+            ),
+            ("reserved", "__bad__", "field name '__bad__' is reserved."),
+        ] {
+            let (status, body) = call(
+                &s,
+                "POST",
+                &format!("{DOCS}:commit"),
+                json!({"writes": [{"update": {
+                    "name": format!("projects/demo-app/databases/(default)/documents/mapValidation/{label}"),
+                    "fields": {"m": {"mapValue": {"fields": {key: {"integerValue": "1"}}}}}
+                }}]}),
+            );
+            assert_eq!(status, 400, "{label} {strict}: {body}");
+            assert_eq!(body["error"]["status"], "INVALID_ARGUMENT");
+            assert_eq!(body["error"]["message"], message, "{label} {strict}");
+            let (status, _) = call(
+                &s,
+                "GET",
+                &format!("{DOCS}/mapValidation/{label}"),
+                Value::Null,
+            );
+            assert_eq!(status, 404, "{label} {strict}");
+        }
+        let query = |key: &str| {
+            json!({"structuredQuery": {
+                "from": [{"collectionId": "mapValidation"}],
+                "where": {"fieldFilter": {
+                    "field": {"fieldPath": "m"},
+                    "op": "EQUAL",
+                    "value": {"mapValue": {"fields": {key: {"integerValue": "1"}}}}
+                }}
+            }})
+        };
+        let (status, body) = call(&s, "POST", &format!("{DOCS}:runQuery"), query(""));
+        assert_eq!(status, 200, "empty {strict}: {body}");
+        for (label, key, message) in [
+            (
+                "overlong",
+                overlong.as_str(),
+                "value for m is too large to be used in a query",
+            ),
+            ("reserved", "__bad__", "field name '__bad__' is reserved."),
+            (
+                "type-tag",
+                "__type__",
+                "Field __type__ must be a string; founds LONG.",
+            ),
+        ] {
+            let (status, body) = call(&s, "POST", &format!("{DOCS}:runQuery"), query(key));
+            assert_eq!(status, 400, "{label} {strict}: {body}");
+            // runQuery streams its answer, so a refusal before the first result is one element.
+            let error = if body.is_array() {
+                &body[0]["error"]
+            } else {
+                &body["error"]
+            };
+            assert_eq!(
+                error["status"], "INVALID_ARGUMENT",
+                "{label} {strict}: {body}"
+            );
+            assert_eq!(error["message"], message, "{label} {strict}");
+        }
+    }
+}
+
+/// `writes/limits/aggregate-map/strict-only`: an over-long string nested in a map is reported
+/// as an invalid nested entity of the top-level property, not by its dotted path.
+#[test]
+fn an_oversized_value_nested_in_a_map_is_an_invalid_nested_entity() {
+    let s = state_with_profile(true);
+    let (status, body) = call(
+        &s,
+        "POST",
+        &format!("{DOCS}:commit"),
+        json!({"writes": [{"update": {
+            "name": "projects/demo-app/databases/(default)/documents/m/x",
+            "fields": {"m": {"mapValue": {"fields": {"s": {"stringValue": "x".repeat(1_048_500)}}}}}
+        }}]}),
+    );
+    assert_eq!(status, 400, "{body}");
+    assert_eq!(
+        body["error"]["message"],
+        "Property m contains an invalid nested entity."
+    );
+    let (status, _) = call(&s, "GET", &format!("{DOCS}/m/x"), Value::Null);
+    assert_eq!(status, 404);
 }

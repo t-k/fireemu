@@ -5056,6 +5056,15 @@ impl<'a> PropertyPath<'a> {
         }
     }
 
+    /// The top-level property this path descends from.
+    fn top(&self) -> &'a str {
+        let mut current = self;
+        while let Some(parent) = current.parent {
+            current = parent;
+        }
+        current.name
+    }
+
     /// The dotted canonical form. Only a refusal renders one, so walking back up to the root
     /// here costs nothing on the path every accepted write takes.
     fn canonical(&self) -> String {
@@ -5120,6 +5129,11 @@ fn validate_value(
         Value::Map(fields) => {
             let mut total = 0u64;
             for (name, value) in fields {
+                // Production refuses an empty or over-long map key as an invalid nested entity
+                // of the top-level property (`writes/map-key-validation/*`).
+                if name.is_empty() || name.len() > crate::field_path::MAX_FIELD_NAME_BYTES {
+                    return Err(invalid_nested_entity(property_path));
+                }
                 validate_stored_field_name(name)?;
                 // Production accepts a direct field of an array-held map at 1,494 UTF-8
                 // bytes and refuses 1,495, even when the full implied path is shorter
@@ -5180,8 +5194,21 @@ fn scalar_size(value: &Value) -> Result<u64, FirestoreError> {
     field_value_size(value).map_err(|e| FirestoreError::InvalidArgument(e.to_string()))
 }
 
-/// The production wording for a field value over `FS-LIMIT-FIELD-VALUE-BYTES`.
+/// Production's answer for a violation inside a nested value: it names the top-level property.
+fn invalid_nested_entity(property_path: &PropertyPath) -> FirestoreError {
+    FirestoreError::InvalidArgument(format!(
+        "Property {} contains an invalid nested entity.",
+        property_path.top()
+    ))
+}
+
+/// The production wording for a field value over `FS-LIMIT-FIELD-VALUE-BYTES`. A value nested
+/// in a map is an invalid nested entity of its top-level property
+/// (`writes/limits/aggregate-map/strict-only`); a top-level value is named by its path.
 fn field_value_too_long(property_path: &PropertyPath) -> FirestoreError {
+    if property_path.parent.is_some() {
+        return invalid_nested_entity(property_path);
+    }
     FirestoreError::InvalidArgument(format!(
         "The value of property \"{}\" is longer than {} bytes.",
         property_path.canonical(),

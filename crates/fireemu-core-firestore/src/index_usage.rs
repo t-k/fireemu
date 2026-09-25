@@ -41,11 +41,6 @@ impl IndexUsage {
                 self.maximum_entry_bytes,
                 7_680,
             ),
-            (
-                crate::limits::INDEX_ENTRY_SUM_PER_DOCUMENT,
-                self.total_bytes,
-                8_388_608,
-            ),
         ] {
             if current > maximum {
                 if id == crate::limits::INDEX_ENTRIES_PER_DOCUMENT {
@@ -54,15 +49,22 @@ impl IndexUsage {
                         document.relative()
                     )));
                 }
-                if id == crate::limits::INDEX_ENTRY_SUM_PER_DOCUMENT {
-                    return Err(FirestoreError::InvalidArgument(
-                        "Transaction too big. Decrease transaction size.".into(),
-                    ));
-                }
                 return Err(FirestoreError::InvalidArgument(format!(
                     "{id}: {current} exceeds {maximum}"
                 )));
             }
+        }
+        Ok(())
+    }
+
+    /// The byte sum is judged only once the whole document is counted: production reports an
+    /// entry count over its limit even when the byte sum is also over
+    /// (`writes/limits/index-entry-sum/adjacent`, 500-byte name, 20,000 elements).
+    fn finish(&self) -> Result<(), FirestoreError> {
+        if self.total_bytes > 8_388_608 {
+            return Err(FirestoreError::InvalidArgument(
+                "Transaction too big. Decrease transaction size.".into(),
+            ));
         }
         Ok(())
     }
@@ -155,6 +157,7 @@ impl IndexSet {
                 )?;
             }
         }
+        usage.finish()?;
         Ok(usage)
     }
 
@@ -260,10 +263,46 @@ mod tests {
         assert!(IndexUsage::default().add(7_681, 1, &document).is_err());
         let mut sum = IndexUsage::default();
         assert!(sum.add(4_096, 2_048, &document).is_ok());
+        assert!(sum.finish().is_ok());
+        assert!(sum.add(1, 1, &document).is_ok());
         assert!(matches!(
-            sum.add(1, 1, &document),
+            sum.finish(),
             Err(crate::store::FirestoreError::InvalidArgument(message))
                 if message == "Transaction too big. Decrease transaction size."
         ));
+    }
+
+    /// `writes/limits/index-entry-sum/adjacent` (recorded twice): with a 500-byte name, 20,000
+    /// distinct array elements are refused for their entry count (2 entries per element plus
+    /// 2 for the field is 40,002), even though the byte sum is also large. The count wins.
+    #[test]
+    fn the_entry_count_is_reported_before_the_byte_sum() {
+        let collection = format!("g500b{}", "c".repeat(493));
+        let document = DocumentPath::parse(
+            &ProjectId::try_new("demo-app").unwrap(),
+            &DatabaseId::default_database(),
+            &format!("{collection}/d"),
+        )
+        .unwrap();
+        assert_eq!(document.relative().len(), 500);
+        let fields = |count: i64| {
+            std::collections::BTreeMap::from([(
+                "a".to_owned(),
+                crate::value::Value::Array((0..count).map(crate::value::Value::Integer).collect()),
+            )])
+        };
+        let refused = crate::index::IndexSet::default()
+            .document_index_usage(&document, &fields(20_000))
+            .expect_err("40,002 entries exceed 40,000");
+        assert!(matches!(
+            refused,
+            crate::store::FirestoreError::InvalidArgument(message)
+                if message == format!("too many index entries for entity /{collection}/d")
+        ));
+        let mut usage = IndexUsage::default();
+        crate::index::IndexSet::default()
+            .automatic_usage(&document, &fields(19_999), &mut Vec::new(), &mut usage)
+            .expect("19,999 elements stay within the entry count");
+        assert_eq!(usage.entries, 40_000);
     }
 }

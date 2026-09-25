@@ -19,6 +19,15 @@ use process_wrap::tokio::{JobObject, KillOnDrop, TokioChildWrapper, TokioCommand
 
 use crate::protocol::{read_frame, write_frame};
 
+/// Diagnostic output must not interrupt protocol reading or waiter cleanup when stderr closes.
+fn write_diagnostic(args: std::fmt::Arguments<'_>) {
+    use std::io::Write;
+
+    let mut stderr = std::io::stderr().lock();
+    let _ = stderr.write_fmt(args);
+    let _ = stderr.write_all(b"\n");
+}
+
 /// What the runner announced in its `hello`.
 #[derive(Debug, Clone, Default)]
 pub struct Hello {
@@ -615,7 +624,7 @@ impl Runner {
             tokio::spawn(async move {
                 let mut reader = BufReader::new(stderr);
                 while let Ok(Some(line)) = read_bounded_stderr_line(&mut reader).await {
-                    eprintln!("{label} {line}");
+                    write_diagnostic(format_args!("{label} {line}"));
                     if let Ok(mut l) = logs.lock() {
                         l.push(RunnerLog::raw(line));
                     }
@@ -639,7 +648,7 @@ impl Runner {
                         Ok(Some(f)) => f,
                         Ok(None) => break,
                         Err(e) => {
-                            eprintln!("{label} protocol error: {e}");
+                            write_diagnostic(format_args!("{label} protocol error: {e}"));
                             break;
                         }
                     };
@@ -705,7 +714,7 @@ impl Runner {
                                     .cloned()
                                     .unwrap_or_default(),
                             );
-                            eprintln!("{label} {}", log.display());
+                            write_diagnostic(format_args!("{label} {}", log.display()));
                             if let Ok(mut l) = logs.lock() {
                                 l.push(log);
                             }
@@ -716,7 +725,7 @@ impl Runner {
                 // The runner is gone: every waiter learns it and the runtime stops
                 // dispatching.
                 alive.store(false, Ordering::SeqCst);
-                eprintln!("{label} runner exited");
+                write_diagnostic(format_args!("{label} runner exited"));
                 if let Ok(mut w) = waiters.lock() {
                     for (_, tx) in w.drain() {
                         let _ = tx.send(InvokeOutcome::RunnerGone("runner exited".into()));
@@ -869,7 +878,10 @@ impl Runner {
         if !written {
             *stdin = None;
             self.alive.store(false, Ordering::SeqCst);
-            eprintln!("{} runner stopped reading its stdin", self.label);
+            write_diagnostic(format_args!(
+                "{} runner stopped reading its stdin",
+                self.label
+            ));
             forget(&self.waiters);
             return done(InvokeOutcome::RunnerGone(
                 "runner stopped reading its stdin".into(),
@@ -936,7 +948,7 @@ impl Runner {
         if let Some(reaper) = reaper {
             let _ = reaper.await;
         }
-        eprintln!("{} stopped", self.label);
+        write_diagnostic(format_args!("{} stopped", self.label));
         remove_credential_sandbox(&self.credential_sandbox);
     }
 }
@@ -1067,6 +1079,84 @@ mod tests {
         fn drop(&mut self) {
             let _ = std::fs::remove_dir_all(&self.0);
         }
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn broken_stderr_does_not_lose_runner_result() {
+        use std::io::{BufRead, Read, Write};
+        use std::process::{Command, Stdio};
+        use std::time::Duration;
+
+        const TEST_NAME: &str = "runner::tests::broken_stderr_does_not_lose_runner_result";
+        if std::env::var("FIREEMU_TEST_BROKEN_STDERR_CHILD").as_deref() == Ok("1") {
+            let script = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fake_runner.py");
+            let runner = super::Runner::spawn(
+                &["python3".to_owned(), script.to_owned()],
+                None,
+                &[],
+                Duration::from_secs(10),
+            )
+            .await
+            .unwrap();
+            println!("runner-ready");
+            std::io::stdout().flush().unwrap();
+            let mut release = [0_u8; 1];
+            std::io::stdin().read_exact(&mut release).unwrap();
+            let invocation = runner
+                .invoke(
+                    serde_json::json!({"invocationId": "broken-stderr", "function": "echo"}),
+                    Duration::from_secs(3),
+                )
+                .await;
+            assert!(
+                matches!(invocation.outcome, super::InvokeOutcome::Ok),
+                "runner result was lost after stderr closed: {:?}",
+                invocation.outcome
+            );
+            runner.shutdown().await;
+            return;
+        }
+
+        let mut child = Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", TEST_NAME, "--nocapture"])
+            .env("FIREEMU_TEST_BROKEN_STDERR_CHILD", "1")
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
+        let mut stdout = std::io::BufReader::new(child.stdout.take().unwrap());
+        let mut line = String::new();
+        loop {
+            line.clear();
+            assert_ne!(
+                stdout.read_line(&mut line).unwrap(),
+                0,
+                "child never started runner"
+            );
+            if line.contains("runner-ready") {
+                break;
+            }
+        }
+        drop(child.stderr.take());
+        child.stdin.take().unwrap().write_all(b"go").unwrap();
+        let deadline = std::time::Instant::now() + Duration::from_secs(12);
+        let status = loop {
+            if let Some(status) = child.try_wait().unwrap() {
+                break status;
+            }
+            if std::time::Instant::now() >= deadline {
+                let _ = child.kill();
+                let _ = child.wait();
+                panic!("test child did not finish after its stderr closed");
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        };
+        assert!(
+            status.success(),
+            "test child failed after its stderr closed"
+        );
     }
 
     #[test]

@@ -211,7 +211,7 @@ impl LogBuffer {
 }
 
 /// How to start (and restart) a runner.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct SpawnSpec {
     /// Program and arguments.
     pub command: Vec<String>,
@@ -221,6 +221,17 @@ pub struct SpawnSpec {
     pub env: Vec<(String, String)>,
     /// How long to wait for the `hello`.
     pub hello_timeout: Duration,
+}
+
+impl std::fmt::Debug for SpawnSpec {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SpawnSpec")
+            .field("command", &"[redacted]")
+            .field("cwd", &self.cwd)
+            .field("env", &"[redacted]")
+            .field("hello_timeout", &self.hello_timeout)
+            .finish()
+    }
 }
 
 /// A running runner.
@@ -1058,7 +1069,7 @@ mod tests {
             ],
             None,
             &[],
-            Duration::from_millis(100),
+            Duration::from_secs(5),
         )
         .await;
         let error = match result {

@@ -1,7 +1,4 @@
-//! Schedules over the virtual clock (spec 11): Unix cron (five fields, names, ranges,
-//! lists, steps) and the App Engine text form used by `onSchedule` (`every 5 minutes`,
-//! `every day 09:00`, `every monday 09:00`). Time zones are limited to zones without
-//! daylight saving time (a fixed offset table); others are refused rather than approximated.
+//! Schedules over the virtual clock (spec 11): Unix cron (five fields, names, ranges, lists, steps) and the App Engine text form used by `onSchedule` (`every 5 minutes`, `every day 09:00`, `every monday 09:00`). The adapter supplies IANA zone rules, including daylight saving time; this core module also provides a limited fixed-offset table.
 
 use std::fmt;
 
@@ -754,26 +751,24 @@ pub fn civil_from_days(z: i64) -> (i64, u32, u32) {
 /// Time zone errors.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TimeZoneError {
-    /// Unknown or daylight-saving zone (not approximated).
+    /// A zone absent from the core's fixed-offset table; the adapter may resolve it through IANA rules.
     Unsupported(String),
 }
 
 impl fmt::Display for TimeZoneError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::Unsupported(z) => write!(
-                f,
-                "time zone {z:?} is not supported (only UTC and fixed-offset zones without daylight saving time)"
-            ),
+            Self::Unsupported(z) => {
+                write!(f, "time zone {z:?} is not in the fixed-offset zone table")
+            }
         }
     }
 }
 
 impl std::error::Error for TimeZoneError {}
 
-/// UTC offset in seconds of a zone that has had a single fixed offset since 1992 (the
-/// virtual clock defaults to the 2020s; earlier instants in these zones are not modelled).
-/// Every other zone, daylight-saving ones included, is refused rather than approximated.
+/// UTC offset in seconds of a zone that has had a single fixed offset since 1992 (the virtual clock defaults to the 2020s; earlier instants in these zones are not modelled).
+/// Other zones must use an adapter-provided [`ZoneRules`] implementation; this helper never approximates daylight-saving transitions.
 pub fn fixed_offset_seconds(zone: Option<&str>) -> Result<i64, TimeZoneError> {
     let Some(zone) = zone else { return Ok(0) };
     let offset = match zone {

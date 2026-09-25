@@ -562,6 +562,15 @@ fn cron_schedules_compute_the_next_run_in_a_fixed_offset_zone() {
     assert_eq!((c.year, c.month, c.day, c.weekday), (1970, 1, 1, 4));
 }
 
+#[test]
+fn fixed_offset_error_describes_the_limited_table() {
+    let error = fixed_offset_seconds(Some("America/New_York")).unwrap_err();
+    assert_eq!(
+        error.to_string(),
+        "time zone \"America/New_York\" is not in the fixed-offset zone table"
+    );
+}
+
 /// A zone with daylight saving, so the schedule tests do not need the IANA database: US
 /// Eastern in 2026 (EDT between 2026-03-08T07:00Z and 2026-11-01T06:00Z, EST otherwise).
 struct UsEastern2026;

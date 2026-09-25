@@ -1344,7 +1344,8 @@ pub struct UserEnvironment {
 fn inheritable_parent_environment() -> Vec<(String, String)> {
     use fireemu_core_functions::env;
 
-    std::env::vars()
+    std::env::vars_os()
+        .filter_map(|(name, value)| Some((name.into_string().ok()?, value.into_string().ok()?)))
         .filter(|(name, _)| {
             env::validate_key(name).is_ok()
                 && name != "GOOGLE_APPLICATION_CREDENTIALS"
@@ -4499,11 +4500,17 @@ fn base64_encode(data: &[u8]) -> String {
 mod tests {
     use std::collections::{BTreeMap, BTreeSet};
     #[cfg(unix)]
+    use std::ffi::OsString;
+    #[cfg(unix)]
+    use std::os::unix::ffi::OsStringExt;
+    #[cfg(unix)]
     use std::process::Command;
     use std::sync::atomic::AtomicBool;
     use std::sync::{Arc, Mutex};
     use std::time::{Duration, Instant};
 
+    #[cfg(unix)]
+    use super::inheritable_parent_environment;
     use super::path_node_candidates;
     #[cfg(unix)]
     use super::probe_node;
@@ -4539,6 +4546,35 @@ mod tests {
     };
     use fireemu_core_session::clock::VirtualClock;
     use serde_json::json;
+
+    #[cfg(unix)]
+    #[test]
+    fn inheritable_parent_environment_skips_non_utf8_values() {
+        if std::env::var_os("FIREEMU_TEST_NON_UTF8_CHILD").is_some() {
+            let inherited = inheritable_parent_environment();
+            assert!(inherited
+                .iter()
+                .any(|(name, value)| { name == "VOLTA_FN_UTF8_PROBE" && value == "kept" }));
+            assert!(!inherited
+                .iter()
+                .any(|(name, _)| name == "VOLTA_FN_NON_UTF8_PROBE"));
+            return;
+        }
+
+        let output = Command::new(std::env::current_exe().unwrap())
+            .arg("--exact")
+            .arg("functions::tests::inheritable_parent_environment_skips_non_utf8_values")
+            .env("FIREEMU_TEST_NON_UTF8_CHILD", "1")
+            .env("VOLTA_FN_UTF8_PROBE", "kept")
+            .env("VOLTA_FN_NON_UTF8_PROBE", OsString::from_vec(vec![0xff]))
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
 
     #[test]
     fn source_streaming_bounds_each_read_and_charges_bytes_before_a_late_error() {

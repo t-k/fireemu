@@ -272,16 +272,46 @@ fn phone_enrollment_at(
         .map(|_| ())
 }
 
-/// Production still enrolled with a session about 1803 seconds old (`#aged-session-s1800`, both
-/// recordings); longer is unobserved, so it stays refused.
+/// Production enrolled with sessions of every age it was shown, up to about 1803 seconds
+/// (`#aged-session-s1800`, both recordings), and never refused one, so under its rules a phone
+/// enrollment session does not expire (owner decision M12, as AUTH-ACTION's long codes).
 #[test]
-fn a_production_phone_enrollment_session_lives_as_long_as_observed() {
-    for age in [603, 1_803, 1_805] {
+fn a_production_phone_enrollment_session_does_not_expire() {
+    for age in [603, 1_805, 1_806, 3 * 86_400] {
         assert!(phone_enrollment_at(true, age).is_ok(), "{age}");
     }
+}
+
+/// At the cap on outstanding phone codes, a phone enrollment session older than the observed
+/// ages makes room, oldest first; younger codes still fill the cap.
+#[test]
+fn at_the_code_cap_the_oldest_unobserved_enrollment_session_makes_room() {
+    use fireemu_core_auth::store::{AuthError, VerificationPurpose, MAX_OUTSTANDING_CODES};
+    let mut s = AuthStore::new("demo-app", SplitMix64::new(3), TotpPolicy::default());
+    s.set_production_mfa(true);
+    s.set_mfa_config(enabled(Some(5)));
+    let uid = s
+        .create_user_with_id(NewUser::email("a@example.com"), Some("a"), t0())
+        .unwrap();
+    let enroll = || VerificationPurpose::Enrollment { uid: uid.clone() };
+    let oldest = s
+        .send_verification_code("+16505550101", enroll(), t0())
+        .unwrap();
+    for _ in 1..MAX_OUTSTANDING_CODES {
+        s.send_verification_code("+16505550101", enroll(), seconds(1))
+            .unwrap();
+    }
     assert_eq!(
-        phone_enrollment_at(true, 1_806),
-        Err(fireemu_core_auth::store::AuthError::InvalidSessionInfo)
+        s.send_verification_code("+16505550101", enroll(), seconds(1_805)),
+        Err(AuthError::TooManyOutstandingCodes),
+        "no session is older than the observed ages yet"
+    );
+    s.send_verification_code("+16505550101", enroll(), seconds(1_806))
+        .unwrap();
+    assert_eq!(
+        s.check_phone_code(&oldest.session_info, &oldest.code, seconds(1_806)),
+        Err(AuthError::InvalidSessionInfo),
+        "the oldest session made room"
     );
 }
 
@@ -346,7 +376,7 @@ fn only_a_phone_enrollment_session_outlives_ten_minutes() {
         phone_code_at(|_| VerificationPurpose::SignIn, 601),
         Err(AuthError::InvalidSessionInfo)
     );
-    assert!(phone_code_at(|uid| VerificationPurpose::Enrollment { uid }, 1_804).is_ok());
+    assert!(phone_code_at(|uid| VerificationPurpose::Enrollment { uid }, 1_806).is_ok());
 }
 
 /// A tenant's second factors keep their earlier rules under a store that follows production's

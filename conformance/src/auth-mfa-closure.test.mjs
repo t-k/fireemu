@@ -194,7 +194,7 @@ test("AUTH-MFA closure inventory cannot silently omit a declared condition", () 
 test("scope decisions are recorded, not implied", () => {
   const closure = load();
   const decided = new Set(closure.scopeDecisions.map(({ id }) => id));
-  for (const id of ["M1", "M2", "M3", "M4", "M5", "M6", "M7", "M8", "M9", "M10", "M11"]) {
+  for (const id of ["M1", "M2", "M3", "M4", "M5", "M6", "M7", "M8", "M9", "M10", "M10a", "M11", "M12"]) {
     assert.ok(decided.has(id), `scope decision ${id} must be recorded`);
   }
   for (const decision of closure.scopeDecisions) {
@@ -293,3 +293,44 @@ function checkAgedRows({ id: programId, steps }) {
     );
   }
 }
+
+test("a passing status other than MATCH appears only where its rule applies", async () => {
+  const { REOBSERVED } = await import("./auth-mfa/run.mjs");
+  const comparison = readJson("spec/compatibility/closure/evidence/AUTH-MFA-comparison.json");
+  const fixture = readFixture("conformance/auth-mfa-production.json").programs;
+  const status = new Map(comparison.rows.map(({ row, status: s }) => [row, s]));
+  for (const { row, status: s } of comparison.rows) {
+    const [program, step] = row.split("#");
+    if (s === "MATCH_NONDETERMINISTIC") {
+      assert.ok(fixture[program]?.second?.[step] !== undefined, `${row}: the recordings differed`);
+    } else if (s === "MATCH_TIMING_DEPENDENT") {
+      assert.match(row, /^auth-mfa\/lifetime#control-start-s\d+$/, row);
+    } else if (s === "REOBSERVED_MATCH") {
+      assert.ok(REOBSERVED[row], `${row}: a re-observed row`);
+      assert.equal(status.get(REOBSERVED[row]), "MATCH", `${row}: its re-observation matched`);
+    }
+  }
+});
+
+test("each verified condition's row counts are its comparisons' own", () => {
+  const closure = load();
+  const covers = (recipes, row) => {
+    const program = row.split("#")[0];
+    return recipes.some(
+      (r) =>
+        ["auth-mfa", "auth-action", "auth-credential", "auth-account"].includes(r) ||
+        program === r ||
+        program.startsWith(`${r}/`),
+    );
+  };
+  for (const condition of closure.conditions) {
+    if (!condition.evidence) continue;
+    const counts = {};
+    for (const path of condition.evidence.comparisonPaths) {
+      for (const { row, status } of readJson(path).rows) {
+        if (covers(condition.recipeIds, row)) counts[status] = (counts[status] ?? 0) + 1;
+      }
+    }
+    assert.deepEqual(counts, condition.evidence.rows, condition.conditionId);
+  }
+});

@@ -57,19 +57,31 @@
     },
     {
       "id": "M9",
-      "decision": "Where production's lifetimes were bracketed but not pinned, strict refuses only from the youngest age production refused: a TOTP pending credential from 302 seconds (accepted at 293, refused at 303, both measured send to send; one second below the refusal absorbs the two requests' differing latencies) and a TOTP enrollment start from a sign-in 333 seconds old (accepted at 244). A phone enrollment session is accepted up to about 1805 seconds (production accepted about 1803). Phone second factors keep their earlier limits where production's were not seen (an SMS pending credential was still accepted at about 303 seconds).",
+      "decision": "Where production's lifetimes were bracketed but not pinned, strict refuses only from the youngest age production refused: a TOTP pending credential from 302 seconds (accepted at 293, refused at 303, both measured send to send; one second below the refusal absorbs the two requests' differing latencies) and a TOTP enrollment start from a sign-in 333 seconds old (accepted at 244). Phone second factors keep their earlier limits where production's were not seen (an SMS pending credential was still accepted at about 303 seconds). The phone enrollment session is M12.",
       "decidedBy": "agent (recorded in the owner ledger for the closure review)",
       "decidedOn": "2026-09-25"
     },
     {
       "id": "M10",
-      "decision": "The two rows of auth-mfa/totp/sign-in that production answered with its per-account TOTP attempt quota (QUOTA_EXCEEDED after the program's earlier wrong codes) are observed again by auth-mfa/totp/quota-free, where each check is the only wrong code of a new account. The comparison passes an original row only when its re-observation matches and fireemu's own answer on the row is the re-observed production answer. A repeated QUOTA_EXCEEDED would have been recorded as it is, without retries.",
+      "decision": "The two rows of auth-mfa/totp/sign-in that production answered with its per-account TOTP attempt quota (QUOTA_EXCEEDED after the program's earlier wrong codes) are observed again by auth-mfa/totp/quota-free, where each check is the only wrong code of a new account.",
       "decidedBy": "owner (t-k)",
+      "decidedOn": "2026-09-25"
+    },
+    {
+      "id": "M10a",
+      "decision": "How M10's re-observation is used: the comparison passes an original row only when its re-observation matches and fireemu's own answer on the row is the re-observed production answer (REOBSERVED_MATCH); a repeated QUOTA_EXCEEDED in the re-observation would have been recorded as it is, without retries. The per-account attempt quota itself (its count and window) is unobserved and not claimed by this parent.",
+      "decidedBy": "agent (recorded in the owner ledger, not an owner decision)",
       "decidedOn": "2026-09-25"
     },
     {
       "id": "M11",
       "decision": "The final-artifact regression re-runs the AUTH-ACTION, AUTH-CREDENTIAL and AUTH-ACCOUNT corpora and inherits their one documented divergence, as AUTH-ACTION scope decision E9 does: AUTH-ACCOUNT scope decision A12, the gson parser message text for malformed customAttributes JSON. The INVALID_CLAIMS refusal itself must match.",
+      "decidedBy": "owner (t-k)",
+      "decidedOn": "2026-09-25"
+    },
+    {
+      "id": "M12",
+      "decision": "Under production's rules a phone MFA enrollment session does not expire: production accepted sessions of every age it was shown (300, 450, 600 and about 1803 seconds, both recordings) and refused none, as AUTH-ACTION's long codes. At the cap of 1000 outstanding phone codes the oldest enrollment session older than the observed ages makes room.",
       "decidedBy": "owner (t-k)",
       "decidedOn": "2026-09-25"
     }
@@ -85,7 +97,7 @@
         "default"
       ],
       "status": "VERIFIED",
-      "note": "With the project's MFA switched off: TOTP and SMS enrollment starts, a phone factor written by the Admin API, and the first- and second-factor sign-in of that account.",
+      "note": "With the project's MFA switched off: TOTP and SMS enrollment starts, a phone factor written by the Admin API, and the password sign-in of that account, which returns tokens without asking for the factor (so the SMS second-factor rows after it have nothing to act on).",
       "evidence": {
         "productionRecordings": [
           {
@@ -145,7 +157,7 @@
         "default"
       ],
       "status": "VERIFIED",
-      "note": "mfaEnrollment:start and :finalize for TOTP: the start answer and its deadline, missing and unknown session info, missing, wrong and repeated wrong codes, the accepted code and its tokens, a finalized session offered again, the factor read back by the client and the Admin API, the first-factor session's token and refresh after enrollment, the start of a second TOTP enrollment, and the code window at enrollment (5 and 6 steps either side).",
+      "note": "mfaEnrollment:start and :finalize for TOTP: the start answer and its deadline, missing and unknown session info, missing, wrong and repeated wrong codes, the accepted code and its tokens, a finalized session offered again after three attempts (TOO_MANY_ENROLLMENT_ATTEMPTS), the factor read back by the client and the Admin API, the first-factor session's token and refresh after enrollment, the start of a second TOTP enrollment, and the code window at enrollment: 5 steps back accepted, 6 steps either side refused, and 5 steps ahead sent without a display name, which production refuses for the name first (the 5-steps-ahead acceptance is observed at sign-in, auth-mfa/totp/sign-in#pending-1-again).",
       "evidence": {
         "productionRecordings": [
           {
@@ -177,7 +189,7 @@
         "default"
       ],
       "status": "VERIFIED",
-      "note": "The first-factor answer that asks for a second factor, mfaSignIn:start for a TOTP factor, mfaSignIn:finalize with missing and unknown pending credentials, codes and factors, wrong codes, the code window at sign-in, the accepted code, the pending credential offered again after success, a code already used at sign-in or at enrollment, an unused code older than the last accepted one, the factor id left out, and phone verification offered for a TOTP factor. Production's per-account attempt quota answered QUOTA_EXCEEDED to the two used-code checks after the program's earlier wrong codes, so auth-mfa/totp/quota-free repeats them as the only wrong code of a new account (owner decision M10).",
+      "note": "The first-factor answer that asks for a second factor, mfaSignIn:start for a TOTP factor, mfaSignIn:finalize with missing and unknown pending credentials, codes and factors, wrong codes, the code window at sign-in, the accepted code, the pending credential offered again after success, a code already used at sign-in or at enrollment, an unused code older than the last accepted one, the factor id left out, and phone verification offered for a TOTP factor. Production's per-account attempt quota answered QUOTA_EXCEEDED to the two used-code checks after the program's earlier wrong codes, so auth-mfa/totp/quota-free repeats them as the only wrong code of a new account (owner decision M10; how the rows pass is M10a). The quota itself is not claimed.",
       "evidence": {
         "productionRecordings": [
           {
@@ -334,7 +346,7 @@
         "default"
       ],
       "status": "VERIFIED",
-      "note": "A second factor after an email-link sign-in (a password account, and an account that only ever signed in by link) and after a custom-token sign-in (owner decision M5).",
+      "note": "A second factor after an email-link sign-in (a password account, and an account that only ever signed in by link), both of which ask for the enrolled factor and complete with it; and a custom-token sign-in of an account with a TOTP factor, which production answers with tokens at once, without asking for the factor (owner decision M5), so the second-factor rows after it have nothing to act on.",
       "evidence": {
         "productionRecordings": [
           {
@@ -367,7 +379,7 @@
         "default"
       ],
       "status": "VERIFIED",
-      "note": "firebase.sign_in_second_factor and firebase.second_factor_identifier in the ID token after TOTP and SMS enrollment and sign-in, kept by a refresh, carried by a session cookie, and after email-link and custom-token first factors (AUTH-CREDENTIAL scope decision C7).",
+      "note": "firebase.sign_in_second_factor and firebase.second_factor_identifier in the ID token after TOTP and SMS enrollment and sign-in, kept by a refresh, carried by a session cookie, and after an email-link first factor completed with a second factor; a custom-token sign-in's token carries neither (it did not ask for the factor; AUTH-CREDENTIAL scope decision C7).",
       "evidence": {
         "productionRecordings": [
           {
@@ -444,7 +456,7 @@
         "default"
       ],
       "status": "VERIFIED",
-      "note": "A TOTP enrollment session finalized at 300, 450, 600, 870, 930 and 1800 seconds (either side of the 900 seconds its deadline announces) and an SMS enrollment session at 300, 450, 600 and 1800 seconds, each with the token of a sign-in made just before (so only the session is old) and followed by a same-account control with a session started then; and whether an enrollment start needs a recent sign-in (a token 1800 seconds old, then a new one). The recent sign-in an enrollment start needs is bracketed with tokens 240 and 330 seconds old (M8).",
+      "note": "A TOTP enrollment session finalized at 300, 450, 600, 870, 930 and 1800 seconds (either side of the 900 seconds its deadline announces) and an SMS enrollment session at 300, 450, 600 and 1800 seconds, each with the token of a sign-in made just before (so only the session is old). Each is followed by a same-account control start: after a refused session (TOTP at 930 and 1800 seconds) it starts and finalizes a new session; after an accepted one it is refused because the factor is now enrolled (SECOND_FACTOR_LIMIT_EXCEEDED, SECOND_FACTOR_EXISTS, or TOKEN_EXPIRED when the phone enrollment moved validSince past the sign-in's second), so its session row records nothing. Whether an enrollment start needs a recent sign-in: a token 1800 seconds old, then a new one, and the bracket of tokens 240 and 330 seconds old (M8).",
       "evidence": {
         "productionRecordings": [
           {

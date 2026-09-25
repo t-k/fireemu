@@ -10,6 +10,10 @@
 //! The dotenv files are written into a scratch codebase rather than committed: a repository
 //! that carries a file called `.secret.local` is a repository whose secret scanners cry wolf.
 
+#[cfg(target_os = "linux")]
+use std::os::unix::fs::MetadataExt;
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
 
@@ -131,6 +135,47 @@ fn exec_with_profile(source: &Path, project: &str, profile: &str) -> Output {
         .stdin(Stdio::null())
         .output()
         .unwrap()
+}
+
+#[cfg(unix)]
+#[test]
+#[ignore = "requires tools/sdk-smoke dependencies; the manual SDK workflow runs this test"]
+fn startup_removes_an_owned_orphan_snapshot_from_a_dead_pid() {
+    assert!(
+        have_sdk(),
+        "install tools/sdk-smoke dependencies before running this test"
+    );
+    let source = scratch_codebase("orphan-snapshot-sweep");
+    write(
+        &source,
+        "index.js",
+        "const { onRequest } = require('firebase-functions/v2/https');\nexports.fxReady = onRequest((_request, response) => response.send('ready'));\n",
+    );
+    let name = format!("fireemu-functions-{}-{}", i32::MAX, std::process::id());
+    #[cfg(target_os = "linux")]
+    let name = format!(
+        "{name}-n{}",
+        std::fs::metadata("/proc/self/ns/pid").unwrap().ino()
+    );
+    let orphan = std::env::temp_dir().join(name);
+    let _ = std::fs::remove_dir_all(&orphan);
+    std::fs::create_dir(&orphan).unwrap();
+    std::fs::set_permissions(&orphan, std::fs::Permissions::from_mode(0o700)).unwrap();
+
+    let output = exec_script_with_arg(
+        &source,
+        "demo-orphan-snapshot-sweep",
+        "i=0; while [ \"$i\" -lt 60 ]; do [ ! -e \"$1\" ] && exit 0; sleep 0.5; i=$((i+1)); done; exit 1",
+        &orphan,
+    );
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        output.status.success(),
+        "orphan sweep did not finish: {stderr}"
+    );
+    assert!(!orphan.exists());
+    std::fs::remove_dir_all(source).unwrap();
 }
 
 #[test]

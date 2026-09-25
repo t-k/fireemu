@@ -71,6 +71,8 @@ const PROGRAMS = SUITE === "blocking" ? BLOCKING_PROGRAMS : TENANT_PROGRAMS;
 const ALL_PROGRAMS = [...TENANT_PROGRAMS, ...BLOCKING_PROGRAMS];
 /** The blocking fixture's source, served locally by fireemu and deployed to production. */
 const FIXTURE_SOURCE = join(CONFORMANCE_DIR, "src", "auth-tenant-blocking", "function");
+/** How long the fixture's services may stay public in one recording (TB1: about an hour). */
+const PUBLIC_MINUTES = 50;
 const sha256 = (text) => createHash("sha256").update(text).digest("hex");
 
 /**
@@ -104,7 +106,16 @@ const programDigest = (program) => sha256(JSON.stringify(program));
  * Normalization and request semantics a saved row depends on; a change makes it stale. The
  * guard and corpus rules (guard.mjs) only refuse requests and are not part of it.
  */
-async function harnessDigest() {
+async function harnessDigest({ blocking = false } = {}) {
+  // A blocking program's rows also depend on the fixture the functions run (pre-send review
+  // SF-6); the tenant programs' digest stays what their recordings were bound to.
+  const fixture = blocking
+    ? await Promise.all(
+        ["index.js", "package.json", "package-lock.json", "firebase.json"].map((file) =>
+          readFile(join(FIXTURE_SOURCE, file), "utf8"),
+        ),
+      )
+    : [];
   const sources = await Promise.all(
     [
       "auth-tenant-blocking/harness.mjs",
@@ -118,7 +129,7 @@ async function harnessDigest() {
     ].map((file) => readFile(join(CONFORMANCE_DIR, "src", file), "utf8")),
   );
   return sha256(
-    `${sources.join("\n")}\n${JSON.stringify(BASELINE_CONFIG)}\n${JSON.stringify(AUTHORIZED_DOMAINS)}`,
+    `${sources.join("\n")}\n${JSON.stringify(BASELINE_CONFIG)}\n${JSON.stringify(AUTHORIZED_DOMAINS)}${fixture.length ? `\n${fixture.join("\n")}` : ""}`,
   );
 }
 
@@ -441,7 +452,7 @@ async function recordProduction() {
   const corpusRequests = validateTenantCorpus(programs);
   const meta = {
     sha: await gitSha(),
-    harness: await harnessDigest(),
+    harness: await harnessDigest({ blocking: SUITE === "blocking" }),
     startedAt: new Date().toISOString(),
     programs: programs.map((p) => p.id),
     corpusDigests: Object.fromEntries(programs.map((p) => [p.id, programDigest(p)])),
@@ -484,9 +495,11 @@ async function recordProduction() {
   let switchesAfter;
   let fixture;
   let deployer;
+  let publicDeadline;
   try {
     if (SUITE === "blocking") {
-      // The fixture is deployed once for both recordings and always removed below (TB1).
+      // The fixture is deployed once for both recordings and removed below whenever a
+      // deployment started (TB1; pre-send review MF-1).
       deployer = createDeployer({
         project: SANDBOX_PROJECT,
         number: web.projectNumber,
@@ -497,13 +510,19 @@ async function recordProduction() {
         },
         log: (line) => console.log(line),
       });
-      fixture = { deployed: false };
+      fixture = { deployed: false, cli: await deployer.cliVersion() };
       await deployer.preflight();
       await deployer.deploy(FIXTURE_SOURCE, join(runDir, "function-build"));
       fixture.deployed = true;
+      // The services are public from here on: stop the recording in time to remove them
+      // within the hour TB1 allows (pre-send review SF-2).
+      publicDeadline = setTimeout(() => controller.abort(), PUBLIC_MINUTES * 60_000);
+      if (controller.signal.aborted) throw new Error("stopped by a signal after the deployment");
       fixture.registered = await deployer.verifyRegistered();
       fixture.invokers = await deployer.invokers();
       console.log(`fixture registered: ${JSON.stringify(fixture)}`);
+      if (!Object.values(fixture.invokers).every((admits) => admits === true))
+        throw new Error("Identity Platform cannot call every fixture function; not recording");
     }
     for (const offset of [0, 1]) {
       const { secrets: seen, ...recording } = await recordOnce(
@@ -531,7 +550,9 @@ async function recordProduction() {
     console.error(`switches after the stop: ${JSON.stringify(switchesAfter)}`);
   }
   if (deployer) {
-    // Removal runs on every path, a signal and a failed deployment included.
+    // Removal runs on every path once a deployment started, a signal and a failed deployment
+    // included; before that it removes nothing.
+    clearTimeout(publicDeadline);
     try {
       fixture.removed = await deployer.remove(join(runDir, "function-build"));
     } catch (caught) {
@@ -587,7 +608,8 @@ async function recordProduction() {
         gitSha: meta.sha,
         corpusDigest: sha256(JSON.stringify(programs)),
         requests,
-        estimatedUsd: 0,
+        // The deployment's Cloud Build, storage and Cloud Run are well under a dollar (SF-7).
+        estimatedUsd: SUITE === "blocking" ? 0.5 : 0,
         outcome,
         taskId: TASK_ID,
         programs: meta.programs,
@@ -599,6 +621,13 @@ async function recordProduction() {
         ...(switchesAfter ? { switchesAfter } : {}),
       })}\n`,
     );
+    // A fixture that could not be removed keeps every other lane off the sandbox until it is
+    // removed by hand and a terminal line follows (SF-1).
+    if (fixture?.removed === false)
+      await appendFile(
+        ledger,
+        `${JSON.stringify({ ts: new Date().toISOString(), event: "started", taskId: TASK_ID, project: SANDBOX_PROJECT, reason: "fixture not removed; restore-sandbox removes it" })}\n`,
+      );
     for (const name of signalNames) process.off(name, onSignal);
   }
   if (error) throw new Error(error);
@@ -608,7 +637,7 @@ async function recordProduction() {
 /** Retries the fixture from a saved run directory; sends nothing to production. */
 async function rebuildFixture(runDir) {
   const meta = JSON.parse(await readFile(join(runDir, "meta.json"), "utf8"));
-  if (meta.harness !== (await harnessDigest()))
+  if (meta.harness !== (await harnessDigest({ blocking: SUITE === "blocking" })))
     throw new Error("harness changed since the recording");
   const recordings = await Promise.all(
     [1, 2].map(async (n) =>
@@ -776,14 +805,18 @@ async function check() {
     : { programs: {} };
   const selected = selectedPrograms();
   validateTenantCorpus(selected);
-  const harness = await harnessDigest();
+  const harnesses = {
+    tenant: await harnessDigest(),
+    blocking: await harnessDigest({ blocking: true }),
+  };
   const local = await runLocal(selected);
   const rows = [];
   for (const program of selected) {
     const saved = fixture.programs[program.id];
     const stale =
       saved !== undefined &&
-      (saved.corpusDigest !== programDigest(program) || saved.harnessDigest !== harness);
+      (saved.corpusDigest !== programDigest(program) ||
+        saved.harnessDigest !== harnesses[program.functions ? "blocking" : "tenant"]);
     for (const step of program.steps) {
       const production = saved?.steps?.[step.id];
       const alternative = saved?.second?.[step.id];
@@ -906,6 +939,7 @@ async function restoreSandbox() {
   let before;
   let deleted = 0;
   let nameless = 0;
+  let fixtureRemoved;
   let error;
   let requests = 0;
   const switches = Object.keys(PROJECT_SWITCH_BASELINE);
@@ -917,6 +951,23 @@ async function restoreSandbox() {
       maxCleanupRequests: 200,
       log: (line) => console.log(line),
     });
+    if (SUITE === "blocking") {
+      // A blocking run that could not remove its fixture: remove it first (pre-send review SF-1).
+      const deployer = createDeployer({
+        project: SANDBOX_PROJECT,
+        number: web.projectNumber,
+        token: async () => {
+          const token = await adminToken();
+          tokens.push(token);
+          return token;
+        },
+        log: (line) => console.log(line),
+      });
+      deployer.adoptLeftovers();
+      fixtureRemoved = await deployer.remove(
+        join(process.env.FIREEMU_AUTH_TENANT_PRIVATE_DIR ?? CONFORMANCE_DIR, "restore-build"),
+      );
+    }
     before = await session.readConfig(switches);
     await session.writeConfig(
       ["multiTenant.allowTenants"],
@@ -949,7 +1000,7 @@ async function restoreSandbox() {
     requests = session?.counts().harnessRequests ?? 0;
     await appendFile(
       ledger,
-      `${JSON.stringify({ ts: new Date().toISOString(), project: SANDBOX_PROJECT, database: null, taskId: TASK_ID, outcome, before, deletedTenants: deleted, namelessTenants: nameless, requests, ...(error ? { error } : {}) })}\n`,
+      `${JSON.stringify({ ts: new Date().toISOString(), project: SANDBOX_PROJECT, database: null, taskId: TASK_ID, outcome, before, deletedTenants: deleted, namelessTenants: nameless, ...(fixtureRemoved ? { fixtureRemoved } : {}), requests, ...(error ? { error } : {}) })}\n`,
     );
   }
   if (error) throw new Error(error);

@@ -190,8 +190,10 @@ export const PROGRAMS = [
     ruleset: "main",
     seed: OPEN,
     // Every row has its own instant; REST and gRPC alternate across neighbouring seconds so each
-    // side of Firestore's allowance (between 11 and 60 s in the first recording) and of the
-    // 300 s Identity Toolkit allows is observed on both transports.
+    // side of Firestore's allowance and of the 300 s Identity Toolkit allows is observed on both
+    // transports. Each row is sent 0.3 s after its offset. The second recording bracketed the
+    // allowance at (26.3, 30.3] s of token age; the half-second rows from 26.5 to 29.5 close it
+    // to a sub-second window (coordinator decision 2026-09-25).
     steps: [
       [-60, "rest"],
       [-59, "grpc"],
@@ -205,6 +207,13 @@ export const PROGRAMS = [
       [21, "grpc"],
       [25, "rest"],
       [26, "grpc"],
+      [26.5, "rest"],
+      [27, "grpc"],
+      [27.5, "rest"],
+      [28, "grpc"],
+      [28.5, "rest"],
+      [29, "grpc"],
+      [29.5, "rest"],
       [30, "rest"],
       [31, "grpc"],
       [35, "rest"],
@@ -231,7 +240,7 @@ export const PROGRAMS = [
       [601, "grpc"],
     ].map(([offset, transport]) =>
       get(
-        `exp-${offset < 0 ? `minus-${-offset}` : `plus-${offset}`}-${transport}`,
+        `exp-${offset < 0 ? `minus-${-offset}` : `plus-${Math.trunc(offset)}${offset % 1 ? "-half" : ""}`}-${transport}`,
         "expiring",
         "fsr-any/d",
         {

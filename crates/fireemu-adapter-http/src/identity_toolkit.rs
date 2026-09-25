@@ -3906,7 +3906,7 @@ fn password_policy_from_update(
     // payload must never become a partial successful update merely because its malformed
     // member was outside the selected mask. A leaf update supplies no versions; the merged
     // policy is checked below.
-    if !value.is_null() && object.contains_key("passwordPolicyVersions") {
+    if object.contains_key("passwordPolicyVersions") {
         let _supplied_policy = password_policy_from_config_json(value, one_version)?;
     }
     if policy_fields.contains(&"passwordPolicyConfig") {

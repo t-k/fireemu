@@ -1385,6 +1385,14 @@ pub const OBSERVED_TOTP_CHALLENGE_TIMEOUT_SECONDS: i64 = 302;
 /// refused age only; `auth_time` is whole seconds cut down from the sign-in, which makes the
 /// age the server computes up to a second older than the one the harness measured.
 pub const OBSERVED_TOTP_ENROLLMENT_LOGIN_AGE_SECONDS: i64 = 333;
+/// Under production's second-factor rules an SMS step started for a pending credential at least
+/// this old is `INVALID_MFA_PENDING_CREDENTIAL : MFA pending credential is expired.`:
+/// production started one about 453 seconds old and refused one about 603 seconds old (sandbox
+/// recording 2026-09-25, `auth-mfa/lifetime-sms`, response to response). As
+/// [`OBSERVED_TOTP_CHALLENGE_TIMEOUT_SECONDS`], the boundary sits one second below the refusal
+/// to absorb the requests' latency (the coordinator's delegated decision under the owner's M9
+/// exception). A finalize after an accepted start is not refused, as that was not observed.
+pub const OBSERVED_SMS_PENDING_START_SECONDS: i64 = 602;
 /// A pending second-factor sign-in (`mfaPendingCredential`) expires after an hour of virtual
 /// time. The official emulator's credential is stateless and never expires; this is a local
 /// lifecycle policy, not a claimed production value.
@@ -3393,6 +3401,28 @@ impl AuthStore {
     /// Whether `now` is at least `seconds` after `since` (an observed refusal age).
     fn expired_at(since: LogicalInstant, seconds: i64, now: LogicalInstant) -> bool {
         now.as_nanos() - since.as_nanos() >= i128::from(seconds) * 1_000_000_000
+    }
+
+    /// Whether the SMS step of `pending` is refused as expired under production's rules (see
+    /// [`OBSERVED_SMS_PENDING_START_SECONDS`]).
+    #[must_use]
+    pub fn sms_pending_start_expired(
+        &self,
+        pending: &PendingSignInId,
+        now: LogicalInstant,
+    ) -> bool {
+        if !self.second_factor_rules_are_production() {
+            return false;
+        }
+        let Some(uid) = self.pending_sign_in_owners.get(&pending.0) else {
+            return false;
+        };
+        self.users
+            .get(uid)
+            .and_then(|user| user.mfa.pending_sign_in(&pending.0))
+            .is_some_and(|p| {
+                Self::expired_at(p.started_at, OBSERVED_SMS_PENDING_START_SECONDS, now)
+            })
     }
 
     /// Whether a TOTP enrollment start is refused for its session's sign-in time

@@ -16,7 +16,13 @@ import {
   driftForm,
   withTimes,
 } from "./auth-config-sdk/session.mjs";
-import { linesAfter, otherLaneOnSandbox, recentAbort, restoreDue } from "./auth-config-sdk/run.mjs";
+import {
+  classify,
+  linesAfter,
+  otherLaneOnSandbox,
+  recentAbort,
+  restoreDue,
+} from "./auth-config-sdk/run.mjs";
 import { buildRequest } from "./auth-account/harness.mjs";
 import { materialize } from "./auth-credential/session.mjs";
 
@@ -423,6 +429,13 @@ test("volatile members are placeholders: auth URI sessions and quota start times
   );
   assert.equal(recorded.body.sessionId, "<sessionId>");
   assert.equal(recorded.body.quota.signUpQuotaConfig.startTime, "<start-time>");
+  // The start production supplies for a quota written without one is kept.
+  const epoch = normalizeHttp(
+    200,
+    JSON.stringify({ quota: { signUpQuotaConfig: { startTime: "1970-01-01T00:00:00Z" } } }),
+    ctx,
+  );
+  assert.equal(epoch.body.quota.signUpQuotaConfig.startTime, "1970-01-01T00:00:00Z");
 });
 
 test("SDK outcomes are recorded as values or error codes with generated ids masked", () => {
@@ -525,9 +538,12 @@ test("relative times resolve to whole seconds", () => {
 });
 
 /** A fake sandbox: an in-memory config and account list behind the session's fetch. */
-function fakeSandbox({ failPatchOn, sideEffect } = {}) {
+function fakeSandbox({ failPatchOn, sideEffect, deferFirstPatch = false } = {}) {
   const state = { config: { emailPrivacyConfig: { enableImprovedEmailPrivacy: true } }, users: [] };
   const calls = [];
+  // A write production accepted but has not applied yet lands before the next write.
+  const deferred = [];
+  const flush = () => deferred.splice(0).forEach((apply) => apply());
   const fetchImpl = async (url, init) => {
     const parsed = new URL(url);
     calls.push(`${init.method} ${parsed.pathname}`);
@@ -543,14 +559,22 @@ function fakeSandbox({ failPatchOn, sideEffect } = {}) {
       if (failPatchOn && JSON.stringify(body).includes(failPatchOn))
         return json(400, { error: { message: "INVALID_ARGUMENT" } });
       if (sideEffect) Object.assign(state.config, sideEffect);
-      for (const path of parsed.searchParams.get("updateMask").split(",")) {
-        const keys = path.split(".");
-        const value = keys.reduce((v, k) => v?.[k], body);
-        let target = state.config;
-        for (const k of keys.slice(0, -1)) target = target[k] ??= {};
-        if (value === undefined) delete target[keys.at(-1)];
-        else target[keys.at(-1)] = value;
+      const apply = () => {
+        for (const path of parsed.searchParams.get("updateMask").split(",")) {
+          const keys = path.split(".");
+          const value = keys.reduce((v, k) => v?.[k], body);
+          let target = state.config;
+          for (const k of keys.slice(0, -1)) target = target[k] ??= {};
+          if (value === undefined) delete target[keys.at(-1)];
+          else target[keys.at(-1)] = value;
+        }
+      };
+      flush();
+      if (deferFirstPatch && calls.filter((c) => c.startsWith("PATCH")).length === 1) {
+        deferred.push(apply);
+        return json(200, body);
       }
+      apply();
       return json(200, state.config);
     }
     if (parsed.pathname.endsWith("accounts:signUp")) {
@@ -559,7 +583,7 @@ function fakeSandbox({ failPatchOn, sideEffect } = {}) {
     }
     return json(404, {});
   };
-  return { state, calls, fetchImpl };
+  return { state, calls, fetchImpl, flush };
 }
 
 test("a program's touched paths are restored and read back even when it fails", async () => {
@@ -614,6 +638,29 @@ test("a restore writes back only the paths that changed", async () => {
   await session.runProgram(program);
   const patches = sandbox.calls.filter((call) => call.startsWith("PATCH"));
   assert.equal(patches.length, 2, "the step and one restore of the changed path");
+  assert.equal(sandbox.state.config.emailPrivacyConfig.enableImprovedEmailPrivacy, true);
+});
+
+test("a restore also writes back a written path that does not read as changed yet", async () => {
+  const sandbox = fakeSandbox({ deferFirstPatch: true });
+  const session = createSession(local(), { fetchImpl: sandbox.fetchImpl });
+  const program = {
+    id: "auth-config-sdk/t",
+    projection: "strict",
+    touches: ["emailPrivacyConfig.enableImprovedEmailPrivacy"],
+    steps: [
+      {
+        id: "off",
+        path: "admin/v2/projects/{project}/config",
+        auth: "admin",
+        method: "PATCH",
+        query: { updateMask: "emailPrivacyConfig.enableImprovedEmailPrivacy" },
+        body: { emailPrivacyConfig: { enableImprovedEmailPrivacy: false } },
+      },
+    ],
+  };
+  await session.runProgram(program);
+  sandbox.flush();
   assert.equal(sandbox.state.config.emailPrivacyConfig.enableImprovedEmailPrivacy, true);
 });
 
@@ -935,4 +982,22 @@ test("the SDK transports refuse what the guard cannot see", async () => {
     await opened.close();
   }
   await assert.rejects(fetch("http://127.0.0.1:1/"), /outside an SDK step/);
+});
+
+test("an SDK internal error both recordings answered alike is behaviour, not noise", () => {
+  const internal = { sdk: "error", code: "auth/internal-error", message: "m" };
+  // Production answers an Admin link for an unknown address under email privacy with no link,
+  // which the Admin SDK reports as an internal error, every time.
+  assert.equal(classify({ production: internal, fireemu: internal }), "MATCH");
+  assert.equal(
+    classify({ production: internal, fireemu: { sdk: "ok", value: "link" } }),
+    "MISMATCH",
+  );
+  // Once the recordings disagree, an internal error is noise again.
+  assert.equal(
+    classify({ production: internal, alternative: { sdk: "ok", value: 1 }, fireemu: internal }),
+    "INDETERMINATE",
+  );
+  const network = { sdk: "error", code: "auth/network-request-failed", message: "m" };
+  assert.equal(classify({ production: network, fireemu: network }), "INDETERMINATE");
 });

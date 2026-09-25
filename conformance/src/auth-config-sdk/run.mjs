@@ -865,10 +865,17 @@ export function classify({ stale, production, alternative, fireemu }) {
   if (stale) return "STALE_FIXTURE";
   if (production === undefined) return "MISSING_FIXTURE";
   if (fireemu === undefined) return "MISSING";
-  // A server error both recordings answered alike is the recorded behaviour, not noise.
+  // A server error both recordings answered alike is the recorded behaviour, not noise; so is
+  // an Admin SDK internal error (the SDK's name for an answer it cannot read, such as a link
+  // request answered without a link).
+  const internal = (recorded) =>
+    recorded?.sdk === "error" && recorded.code === "auth/internal-error";
   const repeatedServerError = production.status >= 500 && alternative === undefined;
+  const repeatedInternal = internal(production) && alternative === undefined;
   const indeterminate = (recorded) =>
-    transient(recorded) && !(repeatedServerError && recorded?.status >= 500);
+    transient(recorded) &&
+    !(repeatedServerError && recorded?.status >= 500) &&
+    !(repeatedInternal && internal(recorded));
   if ([production, alternative, fireemu].some(indeterminate)) return "INDETERMINATE";
   if (sameRecording(production, fireemu)) return alternative ? "MATCH_NONDETERMINISTIC" : "MATCH";
   if (alternative && sameRecording(alternative, fireemu)) return "MATCH_NONDETERMINISTIC";

@@ -167,3 +167,31 @@ fn concurrent_tenant_patches_compose_without_reverting_security_fields() {
     assert_eq!(metadata.display_name.as_deref(), Some("Customer"));
     assert!(metadata.disable_auth);
 }
+
+/// `TENRST-2`: a snapshot restore locks every tenant store before its first change, so a
+/// poisoned tenant store refuses the restore and leaves every tenant as it was.
+#[test]
+fn a_tenant_restore_with_a_poisoned_store_changes_nothing() {
+    let default = Arc::new(Mutex::new(store("demo-app", 1)));
+    let registry = AuthRegistry::new("demo-app", default);
+    registry.ensure_tenant("demo-app", "kept").unwrap();
+    let snapshot = registry.capture_tenants_snapshot("demo-app").unwrap();
+    let added = registry.ensure_tenant("demo-app", "added").unwrap();
+    added
+        .lock()
+        .unwrap()
+        .create_user(NewUser::email("added@example.com"), NOW)
+        .unwrap();
+    let poisoned = registry.tenant_store("demo-app", "kept").unwrap();
+    let _ = std::thread::spawn(move || {
+        let _guard = poisoned.lock().unwrap();
+        panic!("poison the tenant store");
+    })
+    .join();
+
+    assert!(registry
+        .restore_tenants_snapshot("demo-app", &snapshot)
+        .is_err());
+    assert_eq!(registry.tenants("demo-app"), ["added", "kept"]);
+    assert_eq!(added.lock().unwrap().user_count(), 1);
+}

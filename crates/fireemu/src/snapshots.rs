@@ -14,7 +14,9 @@ use std::sync::{Arc, Mutex};
 use fireemu_adapter_functions::runtime::FunctionsRuntime;
 use fireemu_adapter_grpc::local::{FirestoreSnapshot, LocalBackend};
 use fireemu_adapter_http::control::{SnapshotHook, SnapshotPart, TransitionFailure};
-use fireemu_core_auth::store::{AuthRegistry, AuthSnapshot, AuthStore};
+use fireemu_core_auth::store::{
+    AuthRegistry, AuthSnapshot, AuthStore, AuthTenantsRollback, AuthTenantsSnapshot,
+};
 use fireemu_core_firestore::text_index::TextIndexCatalog;
 use fireemu_core_rules::runtime::{LoadedRules, RulesetSlot};
 use fireemu_core_session::clock::VirtualClock;
@@ -252,8 +254,17 @@ impl SnapshotHook for Storage {
 /// faithful.
 pub struct Auth(pub Arc<AuthRegistry>);
 
+/// The Auth part of a snapshot: the project store and its tenant namespaces (`TENRST-2`).
+struct AuthScopeSnapshot {
+    project: AuthSnapshot,
+    tenants: AuthTenantsSnapshot,
+}
+
 #[derive(Clone)]
-struct AuthRollback(AuthStore);
+struct AuthRollback {
+    project: AuthStore,
+    tenants: AuthTenantsRollback,
+}
 
 impl Auth {
     fn store(&self, scope: &Scope) -> Result<Arc<Mutex<AuthStore>>, TransitionFailure> {
@@ -264,6 +275,18 @@ impl Auth {
             Scope::AllExcept(_) => Ok(self.0.default_store()),
         }
     }
+
+    /// The project whose tenant namespaces the scope owns.
+    fn tenant_project<'a>(&'a self, scope: &'a Scope) -> &'a str {
+        match scope {
+            Scope::Project(p) => p,
+            Scope::AllExcept(_) => self.0.default_project(),
+        }
+    }
+
+    fn failure(&self, reason: &'static str) -> TransitionFailure {
+        TransitionFailure::new(self.name(), reason)
+    }
 }
 
 impl SnapshotHook for Auth {
@@ -272,22 +295,33 @@ impl SnapshotHook for Auth {
     }
     fn capture(&self, scope: &Scope) -> Result<SnapshotPart, TransitionFailure> {
         let store = self.store(scope)?;
-        let guard = store
-            .lock()
-            .map_err(|_| poisoned(self.name(), "the Auth store"))?;
-        let snapshot = AuthSnapshot::capture(&guard);
-        debug_assert!(snapshot.holds_no_totp_secret());
-        Ok(Arc::new(snapshot))
+        let project = {
+            let guard = store
+                .lock()
+                .map_err(|_| poisoned(self.name(), "the Auth store"))?;
+            AuthSnapshot::capture(&guard)
+        };
+        let tenants = self
+            .0
+            .capture_tenants_snapshot(self.tenant_project(scope))
+            .map_err(|reason| self.failure(reason))?;
+        debug_assert!(project.holds_no_totp_secret() && tenants.holds_no_totp_secret());
+        Ok(Arc::new(AuthScopeSnapshot { project, tenants }))
     }
     fn capture_rollback(&self, scope: &Scope) -> Result<SnapshotPart, TransitionFailure> {
         let store = self.store(scope)?;
-        let guard = store
+        let project = store
             .lock()
-            .map_err(|_| poisoned(self.name(), "the Auth store"))?;
-        Ok(Arc::new(AuthRollback(guard.clone())))
+            .map_err(|_| poisoned(self.name(), "the Auth store"))?
+            .clone();
+        let tenants = self
+            .0
+            .capture_tenants_rollback(self.tenant_project(scope))
+            .map_err(|reason| self.failure(reason))?;
+        Ok(Arc::new(AuthRollback { project, tenants }))
     }
     fn validate(&self, scope: &Scope, part: &SnapshotPart) -> Result<(), TransitionFailure> {
-        part.downcast_ref::<AuthSnapshot>()
+        part.downcast_ref::<AuthScopeSnapshot>()
             .ok_or_else(|| wrong_shape(self.name()))?;
         self.store(scope)?
             .lock()
@@ -296,19 +330,23 @@ impl SnapshotHook for Auth {
     }
     fn restore(&self, scope: &Scope, part: &SnapshotPart) -> Result<(), TransitionFailure> {
         let snapshot = part
-            .downcast_ref::<AuthSnapshot>()
+            .downcast_ref::<AuthScopeSnapshot>()
             .ok_or_else(|| wrong_shape(self.name()))?;
         let store = self.store(scope)?;
         let mut store = store
             .lock()
             .map_err(|_| poisoned(self.name(), "the Auth store"))?;
-        let report = snapshot.restore_into(&mut store);
+        let mut dropped = snapshot.project.restore_into(&mut store).totp_factors_dropped;
         drop(store);
-        if report.totp_factors_dropped > 0 {
+        dropped += self
+            .0
+            .restore_tenants_snapshot(self.tenant_project(scope), &snapshot.tenants)
+            .map_err(|reason| self.failure(reason))?
+            .totp_factors_dropped;
+        if dropped > 0 {
             eprintln!(
-                "auth: restored project {} without {} TOTP factor(s) whose secret the store no longer held (default snapshots carry no shared secret; enrol again)",
-                snapshot.project_id(),
-                report.totp_factors_dropped
+                "auth: restored project {} without {dropped} TOTP factor(s) whose secret the store no longer held (default snapshots carry no shared secret; enrol again)",
+                snapshot.project.project_id(),
             );
         }
         Ok(())
@@ -321,12 +359,20 @@ impl SnapshotHook for Auth {
         let mut store = store
             .lock()
             .map_err(|_| poisoned(self.name(), "the Auth store"))?;
-        *store = rollback.0.clone();
-        Ok(())
+        *store = rollback.project.clone();
+        drop(store);
+        self.0
+            .rollback_tenants(self.tenant_project(scope), &rollback.tenants)
+            .map_err(|reason| self.failure(reason))
     }
     fn retained_bytes(&self, part: &SnapshotPart) -> u64 {
-        part.downcast_ref::<AuthSnapshot>()
-            .map_or(0, AuthSnapshot::retained_bytes)
+        part.downcast_ref::<AuthScopeSnapshot>()
+            .map_or(0, |snapshot| {
+                snapshot
+                    .project
+                    .retained_bytes()
+                    .saturating_add(snapshot.tenants.retained_bytes())
+            })
     }
 }
 
@@ -905,7 +951,7 @@ mod tests {
     #[test]
     fn a_default_auth_snapshot_holds_no_totp_secret_and_a_restore_rebinds_the_enrolled_factor() {
         use fireemu_core_auth::mfa::TotpPolicy;
-        use fireemu_core_auth::store::{AuthRegistry, AuthSnapshot, AuthStore, NewUser};
+        use fireemu_core_auth::store::{AuthRegistry, AuthStore, NewUser};
         use fireemu_core_auth::totp::totp_at;
         use fireemu_core_types::determinism::SplitMix64;
         use std::sync::{Arc, Mutex};
@@ -941,7 +987,8 @@ mod tests {
         hook.validate(&scope, &part)
             .expect("the part is this hook's");
         let snapshot = part
-            .downcast_ref::<AuthSnapshot>()
+            .downcast_ref::<super::AuthScopeSnapshot>()
+            .map(|part| &part.project)
             .expect("an AuthSnapshot");
         assert!(
             snapshot.holds_no_totp_secret(),
@@ -1061,6 +1108,150 @@ mod tests {
             .user_by_email("later@example.test")
             .is_some());
         assert!(verify_id_token(&valid_before_route, &store.lock().unwrap(), AT).is_ok());
+    }
+
+    fn tenant_registry() -> std::sync::Arc<fireemu_core_auth::store::AuthRegistry> {
+        use fireemu_core_auth::mfa::TotpPolicy;
+        use fireemu_core_auth::store::{AuthRegistry, AuthStore};
+        use fireemu_core_types::determinism::SplitMix64;
+        use std::collections::BTreeMap;
+        use std::sync::{Arc, Mutex};
+
+        let default = Arc::new(Mutex::new(AuthStore::new(
+            "demo-app",
+            SplitMix64::new(1),
+            TotpPolicy::default(),
+        )));
+        let registry = Arc::new(
+            AuthRegistry::with_project_numbers_and_lifecycle_incarnation(
+                "demo-app",
+                default,
+                BTreeMap::new(),
+                73,
+            ),
+        );
+        assert!(registry.register(
+            "worker-alpha",
+            AuthStore::new("worker-alpha", SplitMix64::new(2), TotpPolicy::default()),
+        ));
+        registry
+    }
+
+    fn tenant_user(
+        registry: &fireemu_core_auth::store::AuthRegistry,
+        project: &str,
+        tenant: &str,
+        email: &str,
+    ) -> fireemu_core_auth::store::LocalId {
+        registry
+            .ensure_tenant(project, tenant)
+            .unwrap()
+            .lock()
+            .unwrap()
+            .create_user(fireemu_core_auth::store::NewUser::email(email), AT)
+            .unwrap()
+    }
+
+    fn tenant_has(
+        registry: &fireemu_core_auth::store::AuthRegistry,
+        project: &str,
+        tenant: &str,
+        email: &str,
+    ) -> bool {
+        registry
+            .tenant_store(project, tenant)
+            .is_some_and(|store| store.lock().unwrap().user_by_email(email).is_some())
+    }
+
+    /// `TENRST-2`: a snapshot restore rolls the scope's tenant namespaces back to the capture.
+    /// A tenant user added later is gone, a tenant created later is removed with its
+    /// credentials, a tenant deleted later comes back with its users, and another project's
+    /// tenants are untouched.
+    #[test]
+    fn a_restore_rolls_the_scopes_tenant_namespaces_back_to_the_capture() {
+        use fireemu_core_auth::store::RefreshTokenStoreMatch;
+
+        let registry = tenant_registry();
+        tenant_user(&registry, "worker-alpha", "kept", "kept@example.test");
+        tenant_user(&registry, "worker-alpha", "gone", "gone@example.test");
+        tenant_user(&registry, "demo-app", "other", "other@example.test");
+        let hook = super::Auth(registry.clone());
+        let scope = Scope::Project("worker-alpha".to_owned());
+        let target = hook.capture(&scope).unwrap();
+
+        tenant_user(&registry, "worker-alpha", "kept", "later@example.test");
+        assert!(registry.delete_tenant("worker-alpha", "gone"));
+        let added = tenant_user(&registry, "worker-alpha", "added", "added@example.test");
+        let added_refresh = registry
+            .tenant_store("worker-alpha", "added")
+            .unwrap()
+            .lock()
+            .unwrap()
+            .issue_refresh_token(&added, AT)
+            .unwrap();
+        tenant_user(&registry, "demo-app", "other", "other-later@example.test");
+
+        hook.restore(&scope, &target).unwrap();
+
+        assert_eq!(registry.tenants("worker-alpha"), ["gone", "kept"]);
+        assert!(tenant_has(&registry, "worker-alpha", "kept", "kept@example.test"));
+        assert!(!tenant_has(&registry, "worker-alpha", "kept", "later@example.test"));
+        assert!(tenant_has(&registry, "worker-alpha", "gone", "gone@example.test"));
+        assert!(registry.tenant_store("worker-alpha", "added").is_none());
+        assert!(matches!(
+            registry.store_for_refresh_token(&added_refresh),
+            RefreshTokenStoreMatch::NotFound
+        ));
+        assert!(registry.tenant_metadata("worker-alpha", "gone").is_some());
+        assert!(tenant_has(&registry, "demo-app", "other", "other-later@example.test"));
+    }
+
+    /// `TENRST-2`: rolling back a restore puts the tenant namespaces back exactly as they were
+    /// before it, including a tenant the restore removed and credentials it still holds.
+    #[test]
+    fn a_rollback_puts_the_tenant_namespaces_back_as_they_were_before_the_restore() {
+        use fireemu_core_auth::store::RefreshTokenStoreMatch;
+
+        let registry = tenant_registry();
+        tenant_user(&registry, "worker-alpha", "kept", "kept@example.test");
+        let hook = super::Auth(registry.clone());
+        let scope = Scope::Project("worker-alpha".to_owned());
+        let target = hook.capture(&scope).unwrap();
+
+        tenant_user(&registry, "worker-alpha", "kept", "later@example.test");
+        let added = tenant_user(&registry, "worker-alpha", "added", "added@example.test");
+        let added_refresh = registry
+            .tenant_store("worker-alpha", "added")
+            .unwrap()
+            .lock()
+            .unwrap()
+            .issue_refresh_token(&added, AT)
+            .unwrap();
+        let pre_image = hook.capture_rollback(&scope).unwrap();
+
+        hook.restore(&scope, &target).unwrap();
+        assert!(registry.tenant_store("worker-alpha", "added").is_none());
+        hook.rollback(&scope, &pre_image).unwrap();
+
+        assert_eq!(registry.tenants("worker-alpha"), ["added", "kept"]);
+        assert!(tenant_has(&registry, "worker-alpha", "kept", "later@example.test"));
+        assert!(tenant_has(&registry, "worker-alpha", "added", "added@example.test"));
+        assert!(matches!(
+            registry.store_for_refresh_token(&added_refresh),
+            RefreshTokenStoreMatch::Unique(_)
+        ));
+    }
+
+    /// `TENRST-2`, `SNAP-MEM-01`: tenant users count toward the snapshot's retained bytes.
+    #[test]
+    fn the_auth_hook_counts_tenant_users_in_the_retained_bytes() {
+        let registry = tenant_registry();
+        let hook = super::Auth(registry.clone());
+        let scope = Scope::Project("worker-alpha".to_owned());
+        let empty = hook.capture(&scope).unwrap();
+        tenant_user(&registry, "worker-alpha", "kept", "kept@example.test");
+        let populated = hook.capture(&scope).unwrap();
+        assert!(hook.retained_bytes(&populated) > hook.retained_bytes(&empty));
     }
 
     /// `SNAP-MEM-01`: the production Auth hook reports a positive retained-byte estimate for a

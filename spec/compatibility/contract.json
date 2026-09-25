@@ -979,6 +979,10 @@
             {
               "behaviour": "three strict-profile-only refusals, as production refuses (FS-RULES sandbox, 2026-09-24): every client request while its database has no ruleset, an unusable credential in production's shapes (an expired token UNAUTHENTICATED, a bearer value that is not a JWT the front end's OAuth refusal, any other PERMISSION_DENIED), and an end user's read-write transaction (BeginTransaction or a read's newTransaction; read-only ones open); the emulator profile allows all three as the official emulator does",
               "precision": "documented-divergence"
+            },
+            {
+              "behaviour": "request.query carries the nine keys production showed an exploratory probe (FS-RULES 2026-09-25): limit, offset, orderBy, allDescendants, distinct, groupBy, kind, parent and selectOnlyKeys, in both profiles. The values were observed for a plain root query only (kind is the collection id, parent is null, allDescendants and distinct are false, groupBy is a map). The ninth name is inferred from its observed first 12 characters, and the official emulator's keys were not measured",
+              "precision": "documented-not-observed"
             }
           ],
           "productionOnly": [],

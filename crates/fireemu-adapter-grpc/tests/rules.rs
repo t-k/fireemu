@@ -3688,6 +3688,69 @@ service cloud.firestore {{
     h.handle.abort();
 }
 
+/// Production's `request.query` has nine keys, not the three documented (FS-RULES exploration
+/// 2026-09-25, not evidence; the recorded rows see `keys().hasOnly(['limit', 'offset',
+/// 'orderBy'])` denied): for a plain query `kind` is the collection id, `parent` null,
+/// `allDescendants` and `distinct` false, `groupBy` a map and the ninth a bool.
+#[tokio::test]
+async fn request_query_carries_productions_nine_keys() {
+    let mut h = start().await;
+    let (_alice, alice_token) = h.user("alice@example.com");
+    let ninth = fireemu_adapter_grpc::rules::REQUEST_QUERY_KEYS_ONLY_KEY;
+    h.rules
+        .replace_source(&format!(
+            "rules_version = '2';
+service cloud.firestore {{
+  match /databases/{{database}}/documents {{
+    match /nine/{{id}} {{ allow list: if request.query.size() == 9 && request.query.keys().hasAll(['limit', 'offset', 'orderBy', 'allDescendants', 'distinct', 'groupBy', 'kind', 'parent', '{ninth}']); }}
+    match /three/{{id}} {{ allow list: if request.query.keys().hasOnly(['limit', 'offset', 'orderBy']); }}
+    match /values/{{id}} {{ allow list: if request.query.kind == 'values' && request.query.parent == null && request.query.allDescendants == false && request.query.distinct == false && request.query.groupBy is map && request.query['{ninth}'] == false; }}
+    match /{{path=**}}/group/{{id}} {{ allow list: if request.query.allDescendants == true && request.query.kind == 'group'; }}
+  }}
+}}"
+        ))
+        .unwrap();
+    let run = |collection: &'static str, all_descendants: bool| pb::RunQueryRequest {
+        parent: DOCS.to_owned(),
+        query_type: Some(pb::run_query_request::QueryType::StructuredQuery(
+            pb::StructuredQuery {
+                from: vec![sq::CollectionSelector {
+                    collection_id: collection.into(),
+                    all_descendants,
+                }],
+                ..Default::default()
+            },
+        )),
+        ..Default::default()
+    };
+    for (collection, group, allowed) in [
+        ("nine", false, true),
+        ("three", false, false),
+        ("values", false, true),
+        ("group", true, true),
+    ] {
+        let outcome = match h
+            .client
+            .run_query(with_bearer(run(collection, group), &alice_token))
+            .await
+        {
+            Err(e) => Err(e.code()),
+            Ok(stream) => {
+                let mut stream = stream.into_inner();
+                let mut result = Ok(());
+                while let Some(item) = stream.next().await {
+                    if let Err(e) = item {
+                        result = Err(e.code());
+                    }
+                }
+                result
+            }
+        };
+        assert_eq!(outcome.is_ok(), allowed, "{collection}: {outcome:?}");
+    }
+    h.handle.abort();
+}
+
 /// `request.query` always carries `limit`, `offset` and `orderBy`; `orderBy` is a map, empty
 /// when the query has no order (the official emulator; production refuses `orderBy == null`).
 #[tokio::test]

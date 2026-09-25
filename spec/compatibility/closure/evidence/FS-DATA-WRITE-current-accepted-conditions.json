@@ -1,13 +1,13 @@
 {
   "schemaVersion": 1,
   "task": "FS-DATA-WRITE",
-  "sourceHead": "8192af5c22637ef9957d05286bc74eb1c21738c4",
-  "executableSha256": "7932f5b62577733fc50b4f7dfa87e2cfffc49c770d60b91e4e85bec91fc8e718",
-  "currentComparisonSha256": "15edc9aee91943c87e043493d8871aa871e4212b45f765e5475185d0550f2e15",
+  "sourceHead": "8db298cf6d903f67b598149dca5ffd0e988c15d6",
+  "executableSha256": "0fc1930de13e7ebf71d6908ed439138fe4248bee932efbf70f60daba68359589",
+  "currentComparisonSha256": "53dd72d7f23ac9bc3168e98288fef8ffc50fa1c446c878dfd38a76c858e9e437",
   "localResultDigests": {
     "restSha256": "763d734307808e4d1095a0115d8122547dddb44ff286eb0f205ed00f6de55248",
     "streamSha256": "d7f049a8d75484d2fcf74f9c27f25e628d8b032b859d5994a6b225f53fc8c9f6",
-    "bindingSha256": "3a1ae318f4b26a6ed95ad337737db5d796885ec7ebc68645753a86d10bdf76f4"
+    "bindingSha256": "99eca2332fee96eb1d2bac75b403294cb6b16c98e64adea006ceb7642cdd7606"
   },
   "approvedDifferenceIds": [
     "writes/limits/empty-document-name/4628#readback",
@@ -1429,5 +1429,5 @@
     }
   },
   "localProjectionPath": "spec/compatibility/closure/evidence/FS-DATA-WRITE-current-accepted-local-rows.json",
-  "localProjectionSha256": "3026a9d963b8daddeb119cdb228b8ab0d1e336f25ea8ee4e37beeb9c8fc7e23c"
+  "localProjectionSha256": "92e950d5e7809d604a1ffd4278b342f54281aca194a143134f6bb70b45a374c0"
 }

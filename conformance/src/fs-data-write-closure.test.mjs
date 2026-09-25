@@ -38,6 +38,12 @@ const acceptedLocalRowsPath = fileURLToPath(
     import.meta.url,
   ),
 );
+const savedStreamReplayPath = fileURLToPath(
+  new URL(
+    "../../spec/compatibility/closure/evidence/FS-DATA-WRITE-stream-transaction-current-saved-replay.json",
+    import.meta.url,
+  ),
+);
 const supplements = [
   "partial-7bfd51026a2ac56617d81504.json",
   "delta-v3-a14f265fea575003423c7ebd.json",
@@ -321,6 +327,97 @@ test("current accepted conditions bind every selected row and only D3 difference
   assert.deepEqual(accepted.unresolvedDifferenceIds, candidate.pendingOracleDifferenceIds);
 });
 
+test("saved stream transaction recompare binds its one production campaign and current local artifact", () => {
+  const closure = JSON.parse(readFileSync(closurePath, "utf8"));
+  const condition = closure.conditions.find(
+    ({ conditionId }) => conditionId === "FS-DATA-WRITE/stream-transaction-precedence",
+  );
+  const evidence = JSON.parse(readFileSync(savedStreamReplayPath, "utf8"));
+  const publicProductionPath = fileURLToPath(
+    new URL(`../../${evidence.productionPublicResultPath}`, import.meta.url),
+  );
+  const publicSavedPath = fileURLToPath(
+    new URL(`../../${evidence.savedComparisonPath}`, import.meta.url),
+  );
+  const publicProduction = JSON.parse(readFileSync(publicProductionPath, "utf8"));
+  const publicSaved = JSON.parse(readFileSync(publicSavedPath, "utf8"));
+  const recipeDigests = JSON.parse(readFileSync(manifestPath, "utf8"));
+  assert.equal(condition.status, "VERIFIED");
+  assert.deepEqual(condition.recipeIds, ["writes/write-stream-transaction"]);
+  assert.equal(condition.boundaryStatus, "NOT_APPLICABLE");
+  assert.equal(
+    condition.evidence.comparisonPath,
+    "spec/compatibility/closure/evidence/FS-DATA-WRITE-stream-transaction-current-saved-replay.json",
+  );
+  assert.equal(
+    condition.evidence.comparisonSha256,
+    createHash("sha256").update(readFileSync(savedStreamReplayPath)).digest("hex"),
+  );
+  assert.equal(condition.evidence.finalArtifactSha256, evidence.binarySha256);
+  assert.equal(condition.evidence.sourceHead, evidence.sourceCommit);
+  assert.equal(condition.evidence.productionReceiptSha256, evidence.productionReceiptSha256);
+  assert.equal(
+    condition.evidence.savedProductionAuthorityDigest,
+    evidence.savedProductionAuthorityDigest,
+  );
+  assert.equal(condition.evidence.productionRecordings, undefined);
+  assert.equal(evidence.recipeDigest, recipeDigests.streams[condition.recipeIds[0]]);
+  assert.equal(
+    evidence.productionPublicResultSha256,
+    createHash("sha256").update(readFileSync(publicProductionPath)).digest("hex"),
+  );
+  assert.equal(
+    evidence.savedComparisonSha256,
+    createHash("sha256").update(readFileSync(publicSavedPath)).digest("hex"),
+  );
+  assert.equal(
+    publicProduction.privateEvidenceSha256.productionReceipt,
+    evidence.productionReceiptSha256,
+  );
+  assert.equal(publicProduction.production.dataRequests, 23);
+  assert.equal(publicProduction.production.cleanupComplete, true);
+  assert.equal(
+    publicSaved.privateEvidenceSha256.originalProductionReceipt,
+    evidence.productionReceiptSha256,
+  );
+  assert.equal(publicSaved.repairedClassification, "EXPECTED_NONDETERMINISM");
+  assert.deepEqual(evidence.comparison, {
+    v1Classification: "SEMANTIC_MISMATCH",
+    v2Classification: "EXPECTED_NONDETERMINISM",
+    v1ComparedSlotCount: 15,
+    v1DifferingSlotCount: 5,
+    v1DifferenceLeafCount: 32,
+    indeterminate: 0,
+  });
+  assert.deepEqual(evidence.localRun, {
+    buildCases: 14,
+    gateEvents: 23,
+    observations: 15,
+    recoveryObservations: 10,
+    resourcesAbsent: 3,
+    processStopped: true,
+    listenersClosed: true,
+    reservationReleased: true,
+    configurationUnchanged: true,
+  });
+  assert.match(evidence.sourceCommit, /^[0-9a-f]{40}$/);
+  for (const field of [
+    "binarySha256",
+    "buildManifestSha256",
+    "localReceiptSha256",
+    "productionReceiptSha256",
+    "savedProductionAuthorityDigest",
+    "runtimeInputsDigest",
+  ]) {
+    assert.match(evidence[field], /^[0-9a-f]{64}$/, field);
+  }
+  assert.ok(evidence.runtimeInputCount > 400);
+  for (const [path, digest] of Object.entries(evidence.comparatorSourceSha256)) {
+    const absolute = fileURLToPath(new URL(`../../${path}`, import.meta.url));
+    assert.equal(digest, createHash("sha256").update(readFileSync(absolute)).digest("hex"), path);
+  }
+});
+
 const requiredConditions = new Set([
   "FS-WRITE-LIMITS-03/batch-malformed-middle",
   "FS-WRITE-LIMITS-03/batch-undecodable-value",
@@ -445,7 +542,14 @@ function verifyAcceptedCondition(condition) {
     ["BRACKETED", "RULE_TRANSITION", "NOT_APPLICABLE"].includes(condition.boundaryStatus),
     `${condition.conditionId}: unresolved boundary cannot be VERIFIED`,
   );
-  assert.equal(condition.evidence?.productionRecordings?.length, 2);
+  if (condition.conditionId === "FS-DATA-WRITE/stream-transaction-precedence") {
+    assert.equal(condition.boundaryStatus, "NOT_APPLICABLE");
+    assert.match(condition.evidence?.productionReceiptSha256 ?? "", /^[0-9a-f]{64}$/);
+    assert.match(condition.evidence?.savedProductionAuthorityDigest ?? "", /^[0-9a-f]{64}$/);
+    assert.equal(condition.evidence?.productionRecordings, undefined);
+  } else {
+    assert.equal(condition.evidence?.productionRecordings?.length, 2);
+  }
   assert.match(condition.evidence?.finalArtifactSha256 ?? "", /^[0-9a-f]{64}$/);
   assert.ok(condition.evidence?.comparisonPath);
   if (condition.status === "DIVERGENCE_APPROVED") {
@@ -572,6 +676,12 @@ test("verified conditions are bound to their saved comparisons", async () => {
       new URL(`../../${condition.evidence.comparisonPath}`, import.meta.url),
     );
     const comparison = JSON.parse(readFileSync(comparisonPath, "utf8"));
+    if (comparisonPath === savedStreamReplayPath) {
+      assert.equal(comparison.sourceCommit, condition.evidence.sourceHead);
+      assert.equal(comparison.binarySha256, condition.evidence.finalArtifactSha256);
+      assert.equal(comparison.productionReceiptSha256, condition.evidence.productionReceiptSha256);
+      continue;
+    }
     if (comparisonPath === acceptedConditionsPath) {
       assert.ok(comparison.conditions[condition.conditionId]);
       assert.equal(

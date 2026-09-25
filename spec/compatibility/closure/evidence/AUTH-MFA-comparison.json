@@ -1,0 +1,1689 @@
+{
+  "kind": "auth-mfa-comparison-v1",
+  "artifactSha256": "7fe1a3e5723e1f7337dfc60ed70fd363db5b109eab5954d9b7a7ad79c06d4e51",
+  "fixtureSha256": "729c47ce045364e2a995b2f7e6a3f35beb1a6b20e99cb7c78a3e662d01f81919",
+  "summary": {
+    "MATCH": 411,
+    "MATCH_NONDETERMINISTIC": 5,
+    "REOBSERVED_MATCH": 2,
+    "MATCH_TIMING_DEPENDENT": 1
+  },
+  "rows": [
+    {
+      "row": "auth-mfa/disabled#create-a",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/disabled#sign-in-a",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/disabled#totp-start",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/disabled#phone-start",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/disabled#admin-set-phone-factor",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/disabled#admin-lookup-a",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/disabled#sign-in-a-with-factor",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/disabled#sms-start",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/disabled#sms-finalize",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/config#read-enabled",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/config#write-adjacent-ten",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/config#write-adjacent-zero",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/config#write-adjacent-eleven",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/config#write-adjacent-negative",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/config#write-totp-without-provider-config",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/config#write-totp-disabled",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/config#write-enabled-without-providers",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/config#write-disabled-with-providers",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/config#write-mandatory",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/config#write-unknown-provider",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/config#write-unknown-state",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/config#read-after-writes",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/totp/enroll#create-a",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/totp/enroll#sign-in-a",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/totp/enroll#start-without-info",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/totp/enroll#start",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/totp/enroll#finalize-missing-code",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/totp/enroll#finalize-missing-session",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/totp/enroll#finalize-unknown-session",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/totp/enroll#finalize-wrong-code",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/totp/enroll#finalize-wrong-code-again",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/totp/enroll#finalize",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/totp/enroll#finalize-again",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/totp/enroll#lookup-new-token",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/totp/enroll#lookup-old-token",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/totp/enroll#refresh-old-token",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/totp/enroll#refresh-new-token",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/totp/enroll#admin-lookup-a",
+      "status": "MATCH_NONDETERMINISTIC"
+    },
+    {
+      "row": "auth-mfa/totp/enroll#start-second-totp",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/totp/enroll#create-wa",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/totp/enroll#sign-in-wa",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/totp/enroll#start-wa",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/totp/enroll#create-wb",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/totp/enroll#sign-in-wb",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/totp/enroll#start-wb",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/totp/enroll#finalize-wa-minus-6",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/totp/enroll#finalize-wa-minus-5",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/totp/enroll#finalize-wb-plus-6",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/totp/enroll#finalize-wb-plus-5",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/totp/enroll#admin-lookup-window",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/totp/sign-in#create-c",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/totp/sign-in#sign-in-c",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/totp/sign-in#start-c",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/totp/sign-in#finalize-c",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/totp/sign-in#pending-1",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/totp/sign-in#wrong-password",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/totp/sign-in#start-totp",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/totp/sign-in#start-totp-as-phone",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/totp/sign-in#finalize-missing-pending",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/totp/sign-in#finalize-unknown-pending",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/totp/sign-in#finalize-missing-code",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/totp/sign-in#finalize-unknown-enrollment",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/totp/sign-in#finalize-wrong-code",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/totp/sign-in#finalize-minus-6",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/totp/sign-in#finalize-plus-6",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/totp/sign-in#finalize-plus-4",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/totp/sign-in#pending-1-again",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/totp/sign-in#refresh-after-mfa",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/totp/sign-in#lookup-after-mfa",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/totp/sign-in#cookie-after-mfa",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/totp/sign-in#pending-2",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/totp/sign-in#replayed-sign-in-code",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/totp/sign-in#replayed-enrollment-code",
+      "status": "REOBSERVED_MATCH"
+    },
+    {
+      "row": "auth-mfa/totp/sign-in#older-unused-code",
+      "status": "REOBSERVED_MATCH"
+    },
+    {
+      "row": "auth-mfa/totp/sign-in#create-d",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/totp/sign-in#sign-in-d",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/totp/sign-in#start-d",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/totp/sign-in#finalize-d",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/totp/sign-in#pending-d1",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/totp/sign-in#finalize-without-enrollment-id",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/totp/sign-in#pending-d2",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/totp/sign-in#finalize-phone-info-for-totp",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/totp/quota-free#create-qe",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/totp/quota-free#sign-in-qe",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/totp/quota-free#start-qe",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/totp/quota-free#finalize-qe",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/totp/quota-free#pending-qe",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/totp/quota-free#plus-4-qe",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/totp/quota-free#pending-qe-again",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/totp/quota-free#replayed-enrollment-code",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/totp/quota-free#create-qo",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/totp/quota-free#sign-in-qo",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/totp/quota-free#start-qo",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/totp/quota-free#finalize-qo",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/totp/quota-free#pending-qo",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/totp/quota-free#plus-4-qo",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/totp/quota-free#pending-qo-again",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/totp/quota-free#older-unused-code",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/totp/withdraw#create-e",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/totp/withdraw#sign-in-e",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/totp/withdraw#start-e",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/totp/withdraw#finalize-e",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/totp/withdraw#withdraw-missing-id",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/totp/withdraw#withdraw-unknown-id",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/totp/withdraw#withdraw-missing-token",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/totp/withdraw#withdraw",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/totp/withdraw#lookup-token-before-withdraw",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/totp/withdraw#refresh-token-before-withdraw",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/totp/withdraw#lookup-first-factor-token",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/totp/withdraw#withdraw-again",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/totp/withdraw#admin-lookup-e",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/totp/withdraw#sign-in-after-withdraw",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/totp/withdraw#lookup-after-withdraw",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/totp/withdraw#create-f",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/totp/withdraw#sign-in-f",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/totp/withdraw#start-f",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/totp/withdraw#finalize-f",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/totp/withdraw#withdraw-with-first-factor-token",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/totp/withdraw#admin-lookup-f",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/sms#create-s",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/sms#sign-in-s",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/sms#start-missing-number",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/sms#start-invalid-number",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/sms#start",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/sms#finalize-missing-code",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/sms#finalize-wrong-code",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/sms#finalize",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/sms#finalize-again",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/sms#lookup-new-token",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/sms#admin-lookup-s",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/sms#pending-1",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/sms#sign-in-start-without-info",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/sms#sign-in-start-unknown-enrollment",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/sms#sign-in-start",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/sms#sign-in-wrong-code",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/sms#sign-in-finalize",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/sms#sign-in-finalize-again",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/sms#refresh-after-mfa",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/sms#cookie-after-mfa",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/sms#start-second-phone",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/sms#finalize-second-phone",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/sms#start-same-number",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/sms#pending-2",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/sms#sign-in-start-second-phone",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/sms#sign-in-second-phone",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/sms#withdraw-first-phone",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/sms#admin-lookup-after-withdraw",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/interactions#create-u",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/interactions#sign-in-u",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/interactions#unverified-totp-start",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/interactions#unverified-phone-start",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/interactions#anonymous-sign-up",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/interactions#anonymous-totp-start",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/interactions#anonymous-phone-start",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/interactions#phone-send-code",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/interactions#phone-sign-in",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/interactions#phone-account-totp-start",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/interactions#phone-account-phone-start",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/interactions#start-missing-token",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/interactions#start-garbage-token",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/interactions#create-b",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/interactions#sign-in-b",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/interactions#start-both-kinds",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/interactions#start-b-totp",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/interactions#finalize-b-totp",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/interactions#start-b-phone",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/interactions#finalize-b-phone",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/interactions#pending-b",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/interactions#create-l",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/interactions#admin-set-five-factors",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/interactions#sign-in-l",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/interactions#sign-in-l-start",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/interactions#sign-in-l-finalize",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/interactions#totp-start-at-limit",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/interactions#phone-start-at-limit",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/interactions#admin-set-six-factors",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/interactions#admin-lookup-l",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/interactions#create-x",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/interactions#sign-in-x",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/interactions#start-x",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/interactions#finalize-x",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/interactions#pending-x-disabled",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/interactions#admin-disable-x",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/interactions#finalize-x-disabled",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/interactions#admin-enable-x",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/interactions#finalize-x-enabled-again",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/interactions#pending-x-password",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/interactions#admin-password-change-x",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/interactions#finalize-x-after-password-change",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/interactions#pending-x-cleared",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/interactions#admin-clear-factors-x",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/interactions#finalize-x-after-factors-cleared",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/interactions#create-y",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/interactions#sign-in-y",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/interactions#start-y",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/interactions#finalize-y",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/interactions#pending-y",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/interactions#finalize-y-other-account-factor",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/interactions#admin-delete-y",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/interactions#finalize-y-deleted",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/admin-factors#batch-create",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/admin-factors#admin-lookup-imported",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/admin-factors#admin-set-password-ia",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/admin-factors#sign-in-ia",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/admin-factors#sign-in-ia-start",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/admin-factors#sign-in-ia-finalize",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/admin-factors#admin-replace-factors-ia",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/admin-factors#admin-lookup-replaced",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/admin-factors#admin-set-totp-factor-ia",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/admin-factors#admin-set-invalid-phone-ia",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/admin-factors#admin-clear-factors-ia",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/admin-factors#admin-lookup-cleared",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/admin-factors#sign-in-ia-after-clear",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/admin-factors#create-m",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/admin-factors#admin-set-factor-m",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/admin-factors#sign-in-m",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/admin-factors#sign-in-m-start",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/admin-factors#sign-in-m-finalize",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/admin-factors#start-m-totp",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/admin-factors#finalize-m-totp",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/admin-factors#admin-lookup-m",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/first-factor/email-link#create-el",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/first-factor/email-link#sign-in-el",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/first-factor/email-link#start-el",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/first-factor/email-link#finalize-el",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/first-factor/email-link#link-el",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/first-factor/email-link#sign-in-link-el",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/first-factor/email-link#finalize-link-el",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/first-factor/email-link#link-eln",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/first-factor/email-link#sign-in-link-eln",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/first-factor/email-link#start-eln",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/first-factor/email-link#finalize-eln",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/first-factor/email-link#link-eln-again",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/first-factor/email-link#sign-in-link-eln-again",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/first-factor/email-link#finalize-link-eln-again",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/first-factor/custom-token#create-ct",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/first-factor/custom-token#sign-in-ct",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/first-factor/custom-token#start-ct",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/first-factor/custom-token#finalize-ct",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/first-factor/custom-token#custom-token-ct",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/first-factor/custom-token#finalize-custom-token-ct",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/first-factor/custom-token#refresh-custom-token-ct",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/lifetime-short#create-q60",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/lifetime-short#sign-in-q60",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/lifetime-short#start-q60",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/lifetime-short#finalize-q60",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/lifetime-short#create-q120",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/lifetime-short#sign-in-q120",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/lifetime-short#start-q120",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/lifetime-short#finalize-q120",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/lifetime-short#create-q180",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/lifetime-short#sign-in-q180",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/lifetime-short#start-q180",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/lifetime-short#finalize-q180",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/lifetime-short#create-q240",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/lifetime-short#sign-in-q240",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/lifetime-short#start-q240",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/lifetime-short#finalize-q240",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/lifetime-short#create-q290",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/lifetime-short#sign-in-q290",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/lifetime-short#start-q290",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/lifetime-short#finalize-q290",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/lifetime-short#create-m150",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/lifetime-short#sign-in-m150",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/lifetime-short#start-m150",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/lifetime-short#finalize-m150",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/lifetime-short#create-m300",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/lifetime-short#sign-in-m300",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/lifetime-short#start-m300",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/lifetime-short#finalize-m300",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/lifetime-short#create-r240",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/lifetime-short#create-r330",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/lifetime-short#sign-in-r330",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/lifetime-short#pending-m300",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/lifetime-short#pending-q290",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/lifetime-short#pending-q240",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/lifetime-short#sign-in-r240",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/lifetime-short#pending-q180",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/lifetime-short#pending-m150",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/lifetime-short#pending-q120",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/lifetime-short#pending-q60",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/lifetime-short#aged-pending-q60",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/lifetime-short#control-pending-q60",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/lifetime-short#control-finalize-q60",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/lifetime-short#aged-pending-q120",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/lifetime-short#control-pending-q120",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/lifetime-short#control-finalize-q120",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/lifetime-short#sms-start-aged-m150",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/lifetime-short#aged-pending-m150",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/lifetime-short#control-pending-m150",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/lifetime-short#control-start-m150",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/lifetime-short#control-finalize-m150",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/lifetime-short#aged-pending-q180",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/lifetime-short#control-pending-q180",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/lifetime-short#control-finalize-q180",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/lifetime-short#aged-pending-q240",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/lifetime-short#control-pending-q240",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/lifetime-short#control-finalize-q240",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/lifetime-short#aged-token-start-r240",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/lifetime-short#control-sign-in-r240",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/lifetime-short#control-start-r240",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/lifetime-short#aged-pending-q290",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/lifetime-short#control-pending-q290",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/lifetime-short#control-finalize-q290",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/lifetime-short#sms-start-aged-m300",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/lifetime-short#aged-pending-m300",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/lifetime-short#control-pending-m300",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/lifetime-short#control-start-m300",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/lifetime-short#control-finalize-m300",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/lifetime-short#aged-token-start-r330",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/lifetime-short#control-sign-in-r330",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/lifetime-short#control-start-r330",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/lifetime#create-p300",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/lifetime#sign-in-p300",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/lifetime#start-p300",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/lifetime#finalize-p300",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/lifetime#create-p450",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/lifetime#sign-in-p450",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/lifetime#start-p450",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/lifetime#finalize-p450",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/lifetime#create-p600",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/lifetime#sign-in-p600",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/lifetime#start-p600",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/lifetime#finalize-p600",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/lifetime#create-p1800",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/lifetime#sign-in-p1800",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/lifetime#start-p1800",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/lifetime#finalize-p1800",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/lifetime#create-t300",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/lifetime#sign-in-t300",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/lifetime#create-t450",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/lifetime#sign-in-t450",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/lifetime#create-t600",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/lifetime#sign-in-t600",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/lifetime#create-t870",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/lifetime#sign-in-t870",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/lifetime#create-t930",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/lifetime#sign-in-t930",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/lifetime#create-t1800",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/lifetime#sign-in-t1800",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/lifetime#create-s300",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/lifetime#sign-in-s300",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/lifetime#create-s450",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/lifetime#sign-in-s450",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/lifetime#create-s600",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/lifetime#sign-in-s600",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/lifetime#create-s1800",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/lifetime#sign-in-s1800",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/lifetime#create-o1800",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/lifetime#pending-p1800",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/lifetime#start-t1800",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/lifetime#start-s1800",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/lifetime#sign-in-o1800",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/lifetime#start-t930",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/lifetime#start-t870",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/lifetime#pending-p600",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/lifetime#start-t600",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/lifetime#start-s600",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/lifetime#pending-p450",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/lifetime#start-t450",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/lifetime#start-s450",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/lifetime#pending-p300",
+      "status": "MATCH_NONDETERMINISTIC"
+    },
+    {
+      "row": "auth-mfa/lifetime#start-t300",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/lifetime#start-s300",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/lifetime#aged-pending-p300",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/lifetime#control-pending-p300",
+      "status": "MATCH_NONDETERMINISTIC"
+    },
+    {
+      "row": "auth-mfa/lifetime#control-finalize-p300",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/lifetime#fresh-sign-in-t300",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/lifetime#aged-session-t300",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/lifetime#control-start-t300",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/lifetime#control-session-t300",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/lifetime#fresh-sign-in-s300",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/lifetime#aged-session-s300",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/lifetime#control-start-s300",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/lifetime#control-session-s300",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/lifetime#aged-pending-p450",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/lifetime#control-pending-p450",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/lifetime#control-finalize-p450",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/lifetime#fresh-sign-in-t450",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/lifetime#aged-session-t450",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/lifetime#control-start-t450",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/lifetime#control-session-t450",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/lifetime#fresh-sign-in-s450",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/lifetime#aged-session-s450",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/lifetime#control-start-s450",
+      "status": "MATCH_TIMING_DEPENDENT"
+    },
+    {
+      "row": "auth-mfa/lifetime#control-session-s450",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/lifetime#aged-pending-p600",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/lifetime#control-pending-p600",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/lifetime#control-finalize-p600",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/lifetime#fresh-sign-in-t600",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/lifetime#aged-session-t600",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/lifetime#control-start-t600",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/lifetime#control-session-t600",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/lifetime#fresh-sign-in-s600",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/lifetime#aged-session-s600",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/lifetime#control-start-s600",
+      "status": "MATCH_NONDETERMINISTIC"
+    },
+    {
+      "row": "auth-mfa/lifetime#control-session-s600",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/lifetime#fresh-sign-in-t870",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/lifetime#aged-session-t870",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/lifetime#control-start-t870",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/lifetime#control-session-t870",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/lifetime#fresh-sign-in-t930",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/lifetime#aged-session-t930",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/lifetime#control-start-t930",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/lifetime#control-session-t930",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/lifetime#aged-pending-p1800",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/lifetime#control-pending-p1800",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/lifetime#control-finalize-p1800",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/lifetime#fresh-sign-in-t1800",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/lifetime#aged-session-t1800",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/lifetime#control-start-t1800",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/lifetime#control-session-t1800",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/lifetime#fresh-sign-in-s1800",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/lifetime#aged-session-s1800",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/lifetime#control-start-s1800",
+      "status": "MATCH_NONDETERMINISTIC"
+    },
+    {
+      "row": "auth-mfa/lifetime#control-session-s1800",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/lifetime#aged-token-start-o1800",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/lifetime#control-sign-in-o1800",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-mfa/lifetime#control-start-o1800",
+      "status": "MATCH"
+    }
+  ]
+}

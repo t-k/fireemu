@@ -2069,3 +2069,53 @@ fn a_registry_project_config_update_sets_the_mfa_config() {
         );
     }
 }
+
+/// A strict tenant keeps its earlier second-factor rules (scope decision M2): `auth.totp` still
+/// enables its TOTP enrollment, and an enrolled factor is asked for while the project's `mfa`
+/// config is off (follow-up confirmation SF-2).
+#[test]
+fn a_strict_tenant_keeps_auth_totp_and_asks_for_enrolled_factors() {
+    let mut state = strict_state();
+    state.totp_extension_enabled = true;
+    let registry = Arc::new(AuthRegistry::new("demo-app", state.store.clone()));
+    registry.ensure_tenant("demo-app", TENANT_A).unwrap();
+    state.registry = Some(registry);
+    let (status, created) = admin(
+        &state,
+        "POST",
+        &tenant_admin_path(TENANT_A, "accounts"),
+        &json!({"email": "tenant-totp@example.com", "password": "hunter22", "emailVerified": true}),
+    );
+    assert_eq!(status, 200, "{created}");
+    let (status, signed_in) = client(
+        &state,
+        &format!("{V1}/accounts:signInWithPassword"),
+        TENANT_A,
+        json!({"email": "tenant-totp@example.com", "password": "hunter22", "returnSecureToken": true}),
+    );
+    assert_eq!(status, 200, "{signed_in}");
+    let (status, started) = client(
+        &state,
+        &format!("{V2}/accounts/mfaEnrollment:start"),
+        TENANT_A,
+        json!({"idToken": signed_in["idToken"], "totpEnrollmentInfo": {}}),
+    );
+    assert_eq!(status, 200, "auth.totp enables a tenant's TOTP: {started}");
+    let (status, phone) = admin(
+        &state,
+        "POST",
+        &tenant_admin_path(TENANT_A, "accounts"),
+        &json!({"email": "tenant-phone@example.com", "password": "hunter22", "emailVerified": true,
+            "mfaInfo": [{"phoneInfo": "+15559876543"}]}),
+    );
+    assert_eq!(status, 200, "{phone}");
+    let (status, pending) = client(
+        &state,
+        &format!("{V1}/accounts:signInWithPassword"),
+        TENANT_A,
+        json!({"email": "tenant-phone@example.com", "password": "hunter22", "returnSecureToken": true}),
+    );
+    assert_eq!(status, 200, "{pending}");
+    assert!(pending["mfaPendingCredential"].is_string(), "{pending}");
+    assert!(pending.get("idToken").is_none(), "{pending}");
+}

@@ -87,7 +87,7 @@
     },
     {
       "id": "M12",
-      "decision": "Under production's rules a phone MFA enrollment session does not expire: production accepted sessions of every age it was shown (300, 450, 600 and about 1803 seconds, both recordings) and refused none, as AUTH-ACTION's long codes. At the cap of 1000 outstanding phone codes the oldest enrollment session older than the observed ages makes room.",
+      "decision": "Under production's rules a phone MFA enrollment session does not expire: production accepted sessions of every age it was shown (300, 450, 600 and about 1803 seconds, both recordings) and refused none, as AUTH-ACTION's long codes. At the cap of 1000 outstanding phone codes the oldest enrollment session older than the observed ages makes room. Changed by the follow-up directive's Should 2 (2026-09-25): an account holds at most 32 phone enrollment sessions; at that number, or at the project's cap, only its own oldest session older than the observed ages makes room, never another account's.",
       "decidedBy": "owner (t-k)",
       "decidedOn": "2026-09-25"
     },

@@ -32,6 +32,12 @@ const acceptedConditionsPath = fileURLToPath(
     import.meta.url,
   ),
 );
+const acceptedLocalRowsPath = fileURLToPath(
+  new URL(
+    "../../spec/compatibility/closure/evidence/FS-DATA-WRITE-current-accepted-local-rows.json",
+    import.meta.url,
+  ),
+);
 const supplements = [
   "partial-7bfd51026a2ac56617d81504.json",
   "delta-v3-a14f265fea575003423c7ebd.json",
@@ -104,6 +110,7 @@ test("current accepted conditions bind every selected row and only D3 difference
   const closure = JSON.parse(readFileSync(closurePath, "utf8"));
   const candidate = JSON.parse(readFileSync(reviewCandidatePath, "utf8"));
   const accepted = JSON.parse(readFileSync(acceptedConditionsPath, "utf8"));
+  const localRows = JSON.parse(readFileSync(acceptedLocalRowsPath, "utf8"));
   const fixture = JSON.parse(readFileSync(fixturePath, "utf8"));
   const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
   const { corpus } = await prepareSandboxCorpus();
@@ -133,10 +140,22 @@ test("current accepted conditions bind every selected row and only D3 difference
     createHash("sha256").update(readFileSync(reviewCandidatePath)).digest("hex"),
   );
   assert.deepEqual(accepted.localResultDigests, candidate.localResultDigests);
+  assert.equal(
+    accepted.localProjectionPath,
+    "spec/compatibility/closure/evidence/FS-DATA-WRITE-current-accepted-local-rows.json",
+  );
+  assert.equal(
+    accepted.localProjectionSha256,
+    createHash("sha256").update(readFileSync(acceptedLocalRowsPath)).digest("hex"),
+  );
+  assert.equal(localRows.sourceHead, accepted.sourceHead);
+  assert.equal(localRows.executableSha256, accepted.executableSha256);
+  assert.deepEqual(localRows.sourceResultDigests, accepted.localResultDigests);
   const acceptedSha256 = createHash("sha256")
     .update(readFileSync(acceptedConditionsPath))
     .digest("hex");
   const b1Rows = new Set(candidate.approvedKnownDifferenceIds);
+  const usedLocalRows = new Set();
   for (const [conditionId, status] of acceptedIds) {
     const condition = closure.conditions.find((row) => row.conditionId === conditionId);
     const comparison = accepted.conditions[conditionId];
@@ -176,7 +195,7 @@ test("current accepted conditions bind every selected row and only D3 difference
         transport,
       });
     }
-    const expectedSources = [...sourceFixtures.values()].sort(
+    const expectedSources = [...sourceFixtures.values()].toSorted(
       (a, b) => a.path.localeCompare(b.path) || a.transport.localeCompare(b.transport),
     );
     assert.deepEqual(comparison.sourceFixtures, expectedSources, conditionId);
@@ -205,6 +224,36 @@ test("current accepted conditions bind every selected row and only D3 difference
       if (source.matchedStreamIds.includes(id)) return [`${id}#grpc`];
       return Object.keys(source.fixture.programs[id].steps).map((step) => `${id}#${step}`);
     });
+    const actualDifferences = new Set();
+    for (const recipeId of condition.recipeIds) {
+      const source = sourceById.get(recipeId);
+      const stream = source.matchedStreamIds.includes(recipeId);
+      const ids = stream
+        ? [`${recipeId}#grpc`]
+        : Object.keys(source.fixture.programs[recipeId].steps).map((step) => `${recipeId}#${step}`);
+      const local = stream
+        ? localRows.rows[ids[0]]
+        : {
+            steps: Object.fromEntries(
+              ids.map((id) => [id.slice(id.lastIndexOf("#") + 1), localRows.rows[id]]),
+            ),
+          };
+      assert.ok(
+        ids.every((id) => localRows.rows[id] !== undefined),
+        recipeId,
+      );
+      ids.forEach((id) => usedLocalRows.add(id));
+      const recipe = corpus.restPrograms.find(({ id }) => id === recipeId);
+      const differences = compareSandboxArtifact(
+        stream
+          ? { streams: { [recipeId]: source.fixture.streams[recipeId] } }
+          : { programs: { [recipeId]: source.fixture.programs[recipeId] } },
+        stream ? {} : { [recipeId]: local },
+        stream ? { [recipeId]: local } : {},
+        { restPrograms: recipe ? [recipe] : [] },
+      );
+      differences.forEach((id) => actualDifferences.add(id));
+    }
     assert.equal(comparison.rows.length, expectedRows.length, conditionId);
     assert.equal(new Set(expectedRows).size, expectedRows.length, conditionId);
     assert.deepEqual(
@@ -212,10 +261,7 @@ test("current accepted conditions bind every selected row and only D3 difference
       new Set(expectedRows),
       conditionId,
     );
-    const differenceIds = comparison.rows
-      .filter(({ outcome }) => outcome !== "MATCH")
-      .map(({ id }) => id)
-      .toSorted();
+    const differenceIds = [...actualDifferences].toSorted();
     const knownIds =
       status === "DIVERGENCE_APPROVED"
         ? expectedRows.filter((id) => b1Rows.has(id)).toSorted()
@@ -252,15 +298,25 @@ test("current accepted conditions bind every selected row and only D3 difference
         row.id,
       );
       assert.equal(row.productionCode, stepId === "grpc" ? "GRPC" : production.code, row.id);
-      assert.match(row.localSha256, /^[0-9a-f]{64}$/, row.id);
-      assert.equal(row.comparisonResult, row.outcome === "MATCH" ? "MATCH" : "MISMATCH");
-      if (row.outcome !== "MATCH") {
+      const local = localRows.rows[row.id];
+      assert.equal(
+        row.localSha256,
+        createHash("sha256").update(JSON.stringify(local)).digest("hex"),
+        row.id,
+      );
+      assert.equal(row.localStatus, stepId === "grpc" ? local.status.code : local.status, row.id);
+      assert.equal(row.localCode, stepId === "grpc" ? "GRPC" : local.code, row.id);
+      const mismatch = actualDifferences.has(row.id);
+      assert.equal(row.comparisonResult, mismatch ? "MISMATCH" : "MATCH", row.id);
+      assert.equal(row.outcome, mismatch ? "DIVERGENCE_APPROVED" : "MATCH", row.id);
+      if (mismatch) {
         assert.equal(row.outcome, "DIVERGENCE_APPROVED");
         assert.equal(row.ownerDecision, "2026-09-25 FS-DATA-WRITE D3");
         assert.ok(b1Rows.has(row.id), row.id);
       }
     }
   }
+  assert.deepEqual(new Set(Object.keys(localRows.rows)), usedLocalRows);
   assert.deepEqual(new Set(accepted.approvedDifferenceIds), b1Rows);
   assert.deepEqual(accepted.unresolvedDifferenceIds, candidate.pendingOracleDifferenceIds);
 });

@@ -86,7 +86,7 @@
         "finalArtifactSha256": "7932f5b62577733fc50b4f7dfa87e2cfffc49c770d60b91e4e85bec91fc8e718",
         "sourceHead": "8192af5c22637ef9957d05286bc74eb1c21738c4",
         "comparisonPath": "spec/compatibility/closure/evidence/FS-DATA-WRITE-current-accepted-conditions.json",
-        "comparisonSha256": "11a41f5c2d6dfddafb6bda6deab7fa9f46d7792aa7e1bacb6c55c7adc25f0fe9"
+        "comparisonSha256": "8f5ff5e2a0a724a962b6d6119350441320363cb34238156d361dcd5841391d3a"
       }
     },
     {
@@ -122,7 +122,7 @@
         "finalArtifactSha256": "7932f5b62577733fc50b4f7dfa87e2cfffc49c770d60b91e4e85bec91fc8e718",
         "sourceHead": "8192af5c22637ef9957d05286bc74eb1c21738c4",
         "comparisonPath": "spec/compatibility/closure/evidence/FS-DATA-WRITE-current-accepted-conditions.json",
-        "comparisonSha256": "11a41f5c2d6dfddafb6bda6deab7fa9f46d7792aa7e1bacb6c55c7adc25f0fe9"
+        "comparisonSha256": "8f5ff5e2a0a724a962b6d6119350441320363cb34238156d361dcd5841391d3a"
       }
     },
     {
@@ -242,7 +242,7 @@
         "finalArtifactSha256": "7932f5b62577733fc50b4f7dfa87e2cfffc49c770d60b91e4e85bec91fc8e718",
         "sourceHead": "8192af5c22637ef9957d05286bc74eb1c21738c4",
         "comparisonPath": "spec/compatibility/closure/evidence/FS-DATA-WRITE-current-accepted-conditions.json",
-        "comparisonSha256": "11a41f5c2d6dfddafb6bda6deab7fa9f46d7792aa7e1bacb6c55c7adc25f0fe9"
+        "comparisonSha256": "8f5ff5e2a0a724a962b6d6119350441320363cb34238156d361dcd5841391d3a"
       }
     },
     {
@@ -292,7 +292,7 @@
         "finalArtifactSha256": "7932f5b62577733fc50b4f7dfa87e2cfffc49c770d60b91e4e85bec91fc8e718",
         "sourceHead": "8192af5c22637ef9957d05286bc74eb1c21738c4",
         "comparisonPath": "spec/compatibility/closure/evidence/FS-DATA-WRITE-current-accepted-conditions.json",
-        "comparisonSha256": "11a41f5c2d6dfddafb6bda6deab7fa9f46d7792aa7e1bacb6c55c7adc25f0fe9",
+        "comparisonSha256": "8f5ff5e2a0a724a962b6d6119350441320363cb34238156d361dcd5841391d3a",
         "ownerDecision": "2026-09-25 FS-DATA-WRITE D3",
         "knownDifferenceIds": [
           "writes/limits/empty-document-name/4628#readback",
@@ -349,7 +349,7 @@
         "finalArtifactSha256": "7932f5b62577733fc50b4f7dfa87e2cfffc49c770d60b91e4e85bec91fc8e718",
         "sourceHead": "8192af5c22637ef9957d05286bc74eb1c21738c4",
         "comparisonPath": "spec/compatibility/closure/evidence/FS-DATA-WRITE-current-accepted-conditions.json",
-        "comparisonSha256": "11a41f5c2d6dfddafb6bda6deab7fa9f46d7792aa7e1bacb6c55c7adc25f0fe9",
+        "comparisonSha256": "8f5ff5e2a0a724a962b6d6119350441320363cb34238156d361dcd5841391d3a",
         "ownerDecision": "2026-09-25 FS-DATA-WRITE D3",
         "knownDifferenceIds": [
           "writes/limits/index-entry-sum-per-document#observation-0",
@@ -419,7 +419,7 @@
         "finalArtifactSha256": "7932f5b62577733fc50b4f7dfa87e2cfffc49c770d60b91e4e85bec91fc8e718",
         "sourceHead": "8192af5c22637ef9957d05286bc74eb1c21738c4",
         "comparisonPath": "spec/compatibility/closure/evidence/FS-DATA-WRITE-current-accepted-conditions.json",
-        "comparisonSha256": "11a41f5c2d6dfddafb6bda6deab7fa9f46d7792aa7e1bacb6c55c7adc25f0fe9"
+        "comparisonSha256": "8f5ff5e2a0a724a962b6d6119350441320363cb34238156d361dcd5841391d3a"
       }
     },
     {
@@ -635,7 +635,7 @@
         "finalArtifactSha256": "7932f5b62577733fc50b4f7dfa87e2cfffc49c770d60b91e4e85bec91fc8e718",
         "sourceHead": "8192af5c22637ef9957d05286bc74eb1c21738c4",
         "comparisonPath": "spec/compatibility/closure/evidence/FS-DATA-WRITE-current-accepted-conditions.json",
-        "comparisonSha256": "11a41f5c2d6dfddafb6bda6deab7fa9f46d7792aa7e1bacb6c55c7adc25f0fe9"
+        "comparisonSha256": "8f5ff5e2a0a724a962b6d6119350441320363cb34238156d361dcd5841391d3a"
       }
     },
     {
@@ -691,7 +691,7 @@
         "finalArtifactSha256": "7932f5b62577733fc50b4f7dfa87e2cfffc49c770d60b91e4e85bec91fc8e718",
         "sourceHead": "8192af5c22637ef9957d05286bc74eb1c21738c4",
         "comparisonPath": "spec/compatibility/closure/evidence/FS-DATA-WRITE-current-accepted-conditions.json",
-        "comparisonSha256": "11a41f5c2d6dfddafb6bda6deab7fa9f46d7792aa7e1bacb6c55c7adc25f0fe9"
+        "comparisonSha256": "8f5ff5e2a0a724a962b6d6119350441320363cb34238156d361dcd5841391d3a"
       }
     },
     {

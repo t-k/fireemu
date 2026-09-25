@@ -1427,5 +1427,7 @@
         }
       ]
     }
-  }
+  },
+  "localProjectionPath": "spec/compatibility/closure/evidence/FS-DATA-WRITE-current-accepted-local-rows.json",
+  "localProjectionSha256": "3026a9d963b8daddeb119cdb228b8ab0d1e336f25ea8ee4e37beeb9c8fc7e23c"
 }

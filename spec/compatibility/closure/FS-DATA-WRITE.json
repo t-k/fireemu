@@ -57,7 +57,37 @@
         "writes/batch-write-malformed/bad-timestamp"
       ],
       "boundaryStatus": "NOT_APPLICABLE",
-      "status": "PRODUCTION_RECORDED"
+      "status": "VERIFIED",
+      "evidence": {
+        "productionRecordings": [
+          "88951232822baba76c480848bf48f6ead6d3a4bdc7ac9c237ccaa5e7178f82e2",
+          "88951232822baba76c480848bf48f6ead6d3a4bdc7ac9c237ccaa5e7178f82e2"
+        ],
+        "productionRecordingSources": [
+          {
+            "path": "conformance/fs-data-write-production-matrix.json",
+            "sha256": "69ddfa897d2f22f76bece8c0b243e45912f0ba3ca10eb790a59f9cd6c1468b42",
+            "recordingDigests": [
+              "7c794af67119e745072ceae3d742bd463df28c0aa804998c2155b1333b1625d9",
+              "7c794af67119e745072ceae3d742bd463df28c0aa804998c2155b1333b1625d9"
+            ],
+            "transport": "rest"
+          },
+          {
+            "path": "conformance/fs-data-write-production-supplements/partial-7bfd51026a2ac56617d81504.json",
+            "sha256": "975d1f9775373c4704707c7b5bcc7c97067bcf5267911b9a38cc4c02f541f70c",
+            "recordingDigests": [
+              "aee842159a37e001bcab5710eb49be8d0804dd53fa7b79521aa05a018048fee1",
+              "aee842159a37e001bcab5710eb49be8d0804dd53fa7b79521aa05a018048fee1"
+            ],
+            "transport": "rest"
+          }
+        ],
+        "finalArtifactSha256": "7932f5b62577733fc50b4f7dfa87e2cfffc49c770d60b91e4e85bec91fc8e718",
+        "sourceHead": "8192af5c22637ef9957d05286bc74eb1c21738c4",
+        "comparisonPath": "spec/compatibility/closure/evidence/FS-DATA-WRITE-current-accepted-conditions.json",
+        "comparisonSha256": "11a41f5c2d6dfddafb6bda6deab7fa9f46d7792aa7e1bacb6c55c7adc25f0fe9"
+      }
     },
     {
       "conditionId": "FS-DATA-WRITE/map-value-key-validation",
@@ -72,7 +102,28 @@
         "writes/map-key-validation/type-tag/query"
       ],
       "boundaryStatus": "NOT_APPLICABLE",
-      "status": "PRODUCTION_RECORDED"
+      "status": "VERIFIED",
+      "evidence": {
+        "productionRecordings": [
+          "5fb3971e33cfef1e1490121d566669ead28db1f32db540fb780cecf0dad5b612",
+          "5fb3971e33cfef1e1490121d566669ead28db1f32db540fb780cecf0dad5b612"
+        ],
+        "productionRecordingSources": [
+          {
+            "path": "conformance/fs-data-write-production-supplements/partial-7bfd51026a2ac56617d81504.json",
+            "sha256": "975d1f9775373c4704707c7b5bcc7c97067bcf5267911b9a38cc4c02f541f70c",
+            "recordingDigests": [
+              "aee842159a37e001bcab5710eb49be8d0804dd53fa7b79521aa05a018048fee1",
+              "aee842159a37e001bcab5710eb49be8d0804dd53fa7b79521aa05a018048fee1"
+            ],
+            "transport": "rest"
+          }
+        ],
+        "finalArtifactSha256": "7932f5b62577733fc50b4f7dfa87e2cfffc49c770d60b91e4e85bec91fc8e718",
+        "sourceHead": "8192af5c22637ef9957d05286bc74eb1c21738c4",
+        "comparisonPath": "spec/compatibility/closure/evidence/FS-DATA-WRITE-current-accepted-conditions.json",
+        "comparisonSha256": "11a41f5c2d6dfddafb6bda6deab7fa9f46d7792aa7e1bacb6c55c7adc25f0fe9"
+      }
     },
     {
       "conditionId": "FS-WRITE-LIMITS-03/batch-duplicate-document",
@@ -167,11 +218,32 @@
         "writes/limits/index-entry-sum/adjacent"
       ],
       "boundaryStatus": "BRACKETED",
-      "status": "PRODUCTION_RECORDED",
+      "status": "VERIFIED",
       "boundaryEvidence": [
         "writes/limits/index-entries-per-document#observation-0",
         "writes/limits/index-entries-per-document#observation-1"
-      ]
+      ],
+      "evidence": {
+        "productionRecordings": [
+          "5fb3971e33cfef1e1490121d566669ead28db1f32db540fb780cecf0dad5b612",
+          "5fb3971e33cfef1e1490121d566669ead28db1f32db540fb780cecf0dad5b612"
+        ],
+        "productionRecordingSources": [
+          {
+            "path": "conformance/fs-data-write-production-supplements/partial-7bfd51026a2ac56617d81504.json",
+            "sha256": "975d1f9775373c4704707c7b5bcc7c97067bcf5267911b9a38cc4c02f541f70c",
+            "recordingDigests": [
+              "aee842159a37e001bcab5710eb49be8d0804dd53fa7b79521aa05a018048fee1",
+              "aee842159a37e001bcab5710eb49be8d0804dd53fa7b79521aa05a018048fee1"
+            ],
+            "transport": "rest"
+          }
+        ],
+        "finalArtifactSha256": "7932f5b62577733fc50b4f7dfa87e2cfffc49c770d60b91e4e85bec91fc8e718",
+        "sourceHead": "8192af5c22637ef9957d05286bc74eb1c21738c4",
+        "comparisonPath": "spec/compatibility/closure/evidence/FS-DATA-WRITE-current-accepted-conditions.json",
+        "comparisonSha256": "11a41f5c2d6dfddafb6bda6deab7fa9f46d7792aa7e1bacb6c55c7adc25f0fe9"
+      }
     },
     {
       "conditionId": "FS-LIMIT-INDEX-ENTRY-BYTES",
@@ -187,11 +259,54 @@
         "writes/limits/index-entry-sum-per-document"
       ],
       "boundaryStatus": "BRACKETED",
-      "status": "MISMATCH",
+      "status": "DIVERGENCE_APPROVED",
       "boundaryEvidence": [
         "writes/limits/index-entry-string-name/2641#write",
         "writes/limits/index-entry-string-name/2642#write"
-      ]
+      ],
+      "evidence": {
+        "productionRecordings": [
+          "88951232822baba76c480848bf48f6ead6d3a4bdc7ac9c237ccaa5e7178f82e2",
+          "88951232822baba76c480848bf48f6ead6d3a4bdc7ac9c237ccaa5e7178f82e2"
+        ],
+        "productionRecordingSources": [
+          {
+            "path": "conformance/fs-data-write-production-matrix.json",
+            "sha256": "69ddfa897d2f22f76bece8c0b243e45912f0ba3ca10eb790a59f9cd6c1468b42",
+            "recordingDigests": [
+              "7c794af67119e745072ceae3d742bd463df28c0aa804998c2155b1333b1625d9",
+              "7c794af67119e745072ceae3d742bd463df28c0aa804998c2155b1333b1625d9"
+            ],
+            "transport": "rest"
+          },
+          {
+            "path": "conformance/fs-data-write-production-supplements/partial-7bfd51026a2ac56617d81504.json",
+            "sha256": "975d1f9775373c4704707c7b5bcc7c97067bcf5267911b9a38cc4c02f541f70c",
+            "recordingDigests": [
+              "aee842159a37e001bcab5710eb49be8d0804dd53fa7b79521aa05a018048fee1",
+              "aee842159a37e001bcab5710eb49be8d0804dd53fa7b79521aa05a018048fee1"
+            ],
+            "transport": "rest"
+          }
+        ],
+        "finalArtifactSha256": "7932f5b62577733fc50b4f7dfa87e2cfffc49c770d60b91e4e85bec91fc8e718",
+        "sourceHead": "8192af5c22637ef9957d05286bc74eb1c21738c4",
+        "comparisonPath": "spec/compatibility/closure/evidence/FS-DATA-WRITE-current-accepted-conditions.json",
+        "comparisonSha256": "11a41f5c2d6dfddafb6bda6deab7fa9f46d7792aa7e1bacb6c55c7adc25f0fe9",
+        "ownerDecision": "2026-09-25 FS-DATA-WRITE D3",
+        "knownDifferenceIds": [
+          "writes/limits/empty-document-name/4628#readback",
+          "writes/limits/empty-document-name/4628#write",
+          "writes/limits/index-entry-bytes#observation-0",
+          "writes/limits/index-entry-bytes#observation-1",
+          "writes/limits/index-entry-bytes#observation-2",
+          "writes/limits/index-entry-bytes#observation-3",
+          "writes/limits/index-entry-sum-per-document#observation-0",
+          "writes/limits/index-entry-sum-per-document#observation-1",
+          "writes/limits/index-entry-sum-per-document#observation-2",
+          "writes/limits/index-entry-sum-per-document#observation-3"
+        ]
+      }
     },
     {
       "conditionId": "FS-LIMIT-INDEX-ENTRY-SUM-PER-DOCUMENT",
@@ -201,11 +316,48 @@
         "writes/limits/index-entry-sum/adjacent"
       ],
       "boundaryStatus": "BRACKETED",
-      "status": "MISMATCH",
+      "status": "DIVERGENCE_APPROVED",
       "boundaryEvidence": [
         "writes/limits/index-entry-sum/adjacent#write-500-19999",
         "writes/limits/index-entry-sum/adjacent#write-500-20000"
-      ]
+      ],
+      "evidence": {
+        "productionRecordings": [
+          "88951232822baba76c480848bf48f6ead6d3a4bdc7ac9c237ccaa5e7178f82e2",
+          "88951232822baba76c480848bf48f6ead6d3a4bdc7ac9c237ccaa5e7178f82e2"
+        ],
+        "productionRecordingSources": [
+          {
+            "path": "conformance/fs-data-write-production-matrix.json",
+            "sha256": "69ddfa897d2f22f76bece8c0b243e45912f0ba3ca10eb790a59f9cd6c1468b42",
+            "recordingDigests": [
+              "7c794af67119e745072ceae3d742bd463df28c0aa804998c2155b1333b1625d9",
+              "7c794af67119e745072ceae3d742bd463df28c0aa804998c2155b1333b1625d9"
+            ],
+            "transport": "rest"
+          },
+          {
+            "path": "conformance/fs-data-write-production-supplements/partial-7bfd51026a2ac56617d81504.json",
+            "sha256": "975d1f9775373c4704707c7b5bcc7c97067bcf5267911b9a38cc4c02f541f70c",
+            "recordingDigests": [
+              "aee842159a37e001bcab5710eb49be8d0804dd53fa7b79521aa05a018048fee1",
+              "aee842159a37e001bcab5710eb49be8d0804dd53fa7b79521aa05a018048fee1"
+            ],
+            "transport": "rest"
+          }
+        ],
+        "finalArtifactSha256": "7932f5b62577733fc50b4f7dfa87e2cfffc49c770d60b91e4e85bec91fc8e718",
+        "sourceHead": "8192af5c22637ef9957d05286bc74eb1c21738c4",
+        "comparisonPath": "spec/compatibility/closure/evidence/FS-DATA-WRITE-current-accepted-conditions.json",
+        "comparisonSha256": "11a41f5c2d6dfddafb6bda6deab7fa9f46d7792aa7e1bacb6c55c7adc25f0fe9",
+        "ownerDecision": "2026-09-25 FS-DATA-WRITE D3",
+        "knownDifferenceIds": [
+          "writes/limits/index-entry-sum-per-document#observation-0",
+          "writes/limits/index-entry-sum-per-document#observation-1",
+          "writes/limits/index-entry-sum-per-document#observation-2",
+          "writes/limits/index-entry-sum-per-document#observation-3"
+        ]
+      }
     },
     {
       "conditionId": "FS-DATA-WRITE/near-limit-delete-refusal",
@@ -234,11 +386,41 @@
         "writes/limits/field-path-mask/1500"
       ],
       "boundaryStatus": "BRACKETED",
-      "status": "PRODUCTION_RECORDED",
+      "status": "VERIFIED",
       "boundaryEvidence": [
         "writes/limits/field-path-mask/1499#write",
         "writes/limits/field-path-mask/1500#write"
-      ]
+      ],
+      "evidence": {
+        "productionRecordings": [
+          "88951232822baba76c480848bf48f6ead6d3a4bdc7ac9c237ccaa5e7178f82e2",
+          "88951232822baba76c480848bf48f6ead6d3a4bdc7ac9c237ccaa5e7178f82e2"
+        ],
+        "productionRecordingSources": [
+          {
+            "path": "conformance/fs-data-write-production-matrix.json",
+            "sha256": "69ddfa897d2f22f76bece8c0b243e45912f0ba3ca10eb790a59f9cd6c1468b42",
+            "recordingDigests": [
+              "7c794af67119e745072ceae3d742bd463df28c0aa804998c2155b1333b1625d9",
+              "7c794af67119e745072ceae3d742bd463df28c0aa804998c2155b1333b1625d9"
+            ],
+            "transport": "rest"
+          },
+          {
+            "path": "conformance/fs-data-write-production-supplements/partial-7bfd51026a2ac56617d81504.json",
+            "sha256": "975d1f9775373c4704707c7b5bcc7c97067bcf5267911b9a38cc4c02f541f70c",
+            "recordingDigests": [
+              "aee842159a37e001bcab5710eb49be8d0804dd53fa7b79521aa05a018048fee1",
+              "aee842159a37e001bcab5710eb49be8d0804dd53fa7b79521aa05a018048fee1"
+            ],
+            "transport": "rest"
+          }
+        ],
+        "finalArtifactSha256": "7932f5b62577733fc50b4f7dfa87e2cfffc49c770d60b91e4e85bec91fc8e718",
+        "sourceHead": "8192af5c22637ef9957d05286bc74eb1c21738c4",
+        "comparisonPath": "spec/compatibility/closure/evidence/FS-DATA-WRITE-current-accepted-conditions.json",
+        "comparisonSha256": "11a41f5c2d6dfddafb6bda6deab7fa9f46d7792aa7e1bacb6c55c7adc25f0fe9"
+      }
     },
     {
       "conditionId": "FS-LIMIT-FIELD-VALUE-BYTES/scalar-refusal",
@@ -433,7 +615,28 @@
         "writes/write-stream-terminal/trailing-metadata"
       ],
       "boundaryStatus": "NOT_APPLICABLE",
-      "status": "PRODUCTION_RECORDED"
+      "status": "VERIFIED",
+      "evidence": {
+        "productionRecordings": [
+          "3b7d574043d1492815c260437d1130cdd573d8473354f25083934d92d728b701",
+          "3b7d574043d1492815c260437d1130cdd573d8473354f25083934d92d728b701"
+        ],
+        "productionRecordingSources": [
+          {
+            "path": "conformance/fs-data-write-production-matrix.json",
+            "sha256": "69ddfa897d2f22f76bece8c0b243e45912f0ba3ca10eb790a59f9cd6c1468b42",
+            "recordingDigests": [
+              "ba880dc6feb56588256298deba48c9cbfd53de115e2f9381968867a28279d56f",
+              "ba880dc6feb56588256298deba48c9cbfd53de115e2f9381968867a28279d56f"
+            ],
+            "transport": "grpc"
+          }
+        ],
+        "finalArtifactSha256": "7932f5b62577733fc50b4f7dfa87e2cfffc49c770d60b91e4e85bec91fc8e718",
+        "sourceHead": "8192af5c22637ef9957d05286bc74eb1c21738c4",
+        "comparisonPath": "spec/compatibility/closure/evidence/FS-DATA-WRITE-current-accepted-conditions.json",
+        "comparisonSha256": "11a41f5c2d6dfddafb6bda6deab7fa9f46d7792aa7e1bacb6c55c7adc25f0fe9"
+      }
     },
     {
       "conditionId": "FS-DATA-WRITE/write-stream-half-close",
@@ -468,7 +671,28 @@
         "writes/write-stream-terminal/response-before-half-close"
       ],
       "boundaryStatus": "NOT_APPLICABLE",
-      "status": "PRODUCTION_RECORDED"
+      "status": "VERIFIED",
+      "evidence": {
+        "productionRecordings": [
+          "485a913c16df4e33275781434b0dc095111377e07e048d64900c2fc8c098169a",
+          "485a913c16df4e33275781434b0dc095111377e07e048d64900c2fc8c098169a"
+        ],
+        "productionRecordingSources": [
+          {
+            "path": "conformance/fs-data-write-production-supplements/delta-v3-a14f265fea575003423c7ebd.json",
+            "sha256": "9b41137069ca71393659e5ff8e5bc8f867d6ca33eaaaf3594275d6e2ce1c1788",
+            "recordingDigests": [
+              "e12c830538c60737e0502d62a7cdec53d60c6a77b1fcbdb7e4b6c5c5e223b7db",
+              "e12c830538c60737e0502d62a7cdec53d60c6a77b1fcbdb7e4b6c5c5e223b7db"
+            ],
+            "transport": "grpc"
+          }
+        ],
+        "finalArtifactSha256": "7932f5b62577733fc50b4f7dfa87e2cfffc49c770d60b91e4e85bec91fc8e718",
+        "sourceHead": "8192af5c22637ef9957d05286bc74eb1c21738c4",
+        "comparisonPath": "spec/compatibility/closure/evidence/FS-DATA-WRITE-current-accepted-conditions.json",
+        "comparisonSha256": "11a41f5c2d6dfddafb6bda6deab7fa9f46d7792aa7e1bacb6c55c7adc25f0fe9"
+      }
     },
     {
       "conditionId": "FS-DATA-WRITE/final-artifact-regression",

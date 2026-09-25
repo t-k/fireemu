@@ -1187,6 +1187,22 @@
             {
               "behaviour": "the strict profile applies production's action-code rules (AUTH-ACTION sandbox recording 2026-09-24): a newer reset, change or sign-in code retires the older one, a deleted account's codes are void, a reset or verification finds its account by the code's address, a disabled account refuses a code (a refused reset spends it), an applied change voids the replaced address's verification codes and records it as initialEmail, an update with an ID token ignores oobCode, a reset code expires after an hour as EXPIRED_OOB_CODE while the other kinds outlive it, and production's refusal codes; the emulator profile keeps the official emulator's codes and answers and its one-hour local code lifetime",
               "precision": "documented-divergence"
+            },
+            {
+              "behaviour": "a tenant created with a display name of the documented form (4-20 letters, digits and hyphens, beginning with a letter) is named after it as production names it, the display name, a hyphen and five characters of [a-z0-9] drawn reproducibly from the creation sequence, in both profiles; the official emulator draws a random 28-character ID, and a tenant without such a display name keeps fireemu's generated name",
+              "precision": "documented-divergence"
+            },
+            {
+              "behaviour": "the Admin project config answers per profile (AUTH-CONFIG-SDK sandbox recording 2026-09-25): the strict profile answers production's document for a project initialized with Identity Platform (initial templates, hashConfig, mobile links, SMS regions, written strength options and quota as production normalizes them), the emulator profile the official emulator's members plus the members written; in both profiles the email and SMS templates and action links follow notification.defaultLocale (English and Japanese), a written SMS region policy replaces the other member of its oneof, and the reCAPTCHA member reads back as production stores it",
+              "precision": "documented-divergence"
+            },
+            {
+              "behaviour": "an Admin account update may set a password below six characters and a password sign-in of an address several imported accounts share reaches the earliest account holding a password, in both profiles as production does; the official emulator refuses the short password with WEAK_PASSWORD",
+              "precision": "documented-divergence"
+            },
+            {
+              "behaviour": "the strict profile adds production's configuration-dependent refusals the official emulator does not model (AUTH-CONFIG-SDK sandbox recording 2026-09-25): codes for new accounts while client sign-up is off, a written SMS region policy, mobile link settings (link domains, an app link without a continue URL, the Dynamic Links domain) and createAuthUri for a provider that is not configured; it also wraps app links in /__/auth/links as production does",
+              "precision": "documented-divergence"
             }
           ],
           "productionOnly": [

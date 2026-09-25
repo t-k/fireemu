@@ -72,7 +72,7 @@ const ALL_PROGRAMS = [...TENANT_PROGRAMS, ...BLOCKING_PROGRAMS];
 /** The blocking fixture's source, served locally by fireemu and deployed to production. */
 const FIXTURE_SOURCE = join(CONFORMANCE_DIR, "src", "auth-tenant-blocking", "function");
 /** How long the fixture's services may stay public in one recording (TB1: about an hour). */
-const PUBLIC_MINUTES = 50;
+const PUBLIC_MINUTES = 45;
 const sha256 = (text) => createHash("sha256").update(text).digest("hex");
 
 /**
@@ -512,11 +512,11 @@ async function recordProduction() {
       });
       fixture = { deployed: false, cli: await deployer.cliVersion() };
       fixture.preflight = await deployer.preflight();
+      // The services become public during the deployment: the recording stops in time to remove
+      // them within the hour TB1 allows, counted from the start of the deployment (SF-2, SF-C2).
+      publicDeadline = setTimeout(() => controller.abort(), PUBLIC_MINUTES * 60_000);
       await deployer.deploy(FIXTURE_SOURCE, join(runDir, "function-build"));
       fixture.deployed = true;
-      // The services are public from here on: stop the recording in time to remove them
-      // within the hour TB1 allows (pre-send review SF-2).
-      publicDeadline = setTimeout(() => controller.abort(), PUBLIC_MINUTES * 60_000);
       if (controller.signal.aborted) throw new Error("stopped by a signal after the deployment");
       fixture.registered = await deployer.verifyRegistered();
       fixture.invokers = await deployer.invokers();
@@ -553,6 +553,7 @@ async function recordProduction() {
     // Removal runs on every path once a deployment started, a signal and a failed deployment
     // included; before that it removes nothing.
     clearTimeout(publicDeadline);
+    fixture.repository = deployer.repositoryChange() ?? "unchanged";
     try {
       fixture.removed = await deployer.remove(join(runDir, "function-build"));
     } catch (caught) {
@@ -964,6 +965,7 @@ async function restoreSandbox() {
         log: (line) => console.log(line),
       });
       deployer.adoptLeftovers();
+      fixtureRemoved = false;
       fixtureRemoved = await deployer.remove(
         join(process.env.FIREEMU_AUTH_TENANT_PRIVATE_DIR ?? CONFORMANCE_DIR, "restore-build"),
       );
@@ -1000,8 +1002,14 @@ async function restoreSandbox() {
     requests = session?.counts().harnessRequests ?? 0;
     await appendFile(
       ledger,
-      `${JSON.stringify({ ts: new Date().toISOString(), project: SANDBOX_PROJECT, database: null, taskId: TASK_ID, outcome, before, deletedTenants: deleted, namelessTenants: nameless, ...(fixtureRemoved ? { fixtureRemoved } : {}), requests, ...(error ? { error } : {}) })}\n`,
+      `${JSON.stringify({ ts: new Date().toISOString(), project: SANDBOX_PROJECT, database: null, taskId: TASK_ID, outcome, before, deletedTenants: deleted, namelessTenants: nameless, ...(fixtureRemoved !== undefined ? { fixtureRemoved } : {}), requests, ...(error ? { error } : {}) })}\n`,
     );
+    // A fixture this restore could not remove keeps holding the sandbox (confirmation SF-C1).
+    if (fixtureRemoved === false)
+      await appendFile(
+        ledger,
+        `${JSON.stringify({ ts: new Date().toISOString(), event: "started", taskId: TASK_ID, project: SANDBOX_PROJECT, reason: "fixture not removed by restore-sandbox; remove it by hand" })}\n`,
+      );
   }
   if (error) throw new Error(error);
   console.log(JSON.stringify({ before, deletedTenants: deleted }, null, 2));

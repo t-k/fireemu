@@ -511,7 +511,7 @@ async function recordProduction() {
         log: (line) => console.log(line),
       });
       fixture = { deployed: false, cli: await deployer.cliVersion() };
-      await deployer.preflight();
+      fixture.preflight = await deployer.preflight();
       await deployer.deploy(FIXTURE_SOURCE, join(runDir, "function-build"));
       fixture.deployed = true;
       // The services are public from here on: stop the recording in time to remove them

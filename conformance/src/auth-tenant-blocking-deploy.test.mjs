@@ -6,6 +6,7 @@ import { test } from "node:test";
 
 import { BLOCKING_PROGRAMS } from "./auth-tenant-blocking/blocking-corpus.mjs";
 import {
+  CLEANUP_POLICY,
   FIXTURE_FUNCTIONS,
   REQUIRED_APIS,
   createDeployer,
@@ -29,6 +30,7 @@ function fakeCloud({
   packages = [],
   sources = [],
   uploads = [],
+  repository = { cleanupPolicies: { [CLEANUP_POLICY.id]: CLEANUP_POLICY } },
 } = {}) {
   const state = {
     functions: [...functions],
@@ -36,6 +38,7 @@ function fakeCloud({
     packages: [...packages],
     sources: [...sources],
     uploads: [...uploads],
+    repository: structuredClone(repository),
   };
   const calls = [];
   const json = (status, body) => new Response(JSON.stringify(body ?? {}), { status });
@@ -54,6 +57,14 @@ function fakeCloud({
     if (pathname.endsWith("/config")) {
       if (method === "PATCH") state.blocking = JSON.parse(init.body).blockingFunctions;
       return json(200, { blockingFunctions: state.blocking });
+    }
+    if (hostname === "artifactregistry.googleapis.com" && pathname.endsWith("/repositories")) {
+      state.repository = JSON.parse(init.body);
+      return json(200, { name: "operations/create" });
+    }
+    if (hostname === "artifactregistry.googleapis.com" && pathname.endsWith("/gcf-artifacts")) {
+      if (method === "PATCH") state.repository = { ...state.repository, ...JSON.parse(init.body) };
+      return state.repository ? json(200, state.repository) : json(404, {});
     }
     if (hostname === "artifactregistry.googleapis.com") {
       if (method === "DELETE") {
@@ -194,4 +205,36 @@ test("the blocking corpus is valid", () => {
     assert.match(program.id, /^atb\/blocking\//);
     assert.equal(program.functions, true);
   }
+});
+
+test("the preflight prepares gcf-artifacts with the CLI's cleanup policy once (decision C)", async () => {
+  const missing = fakeCloud({ repository: null });
+  assert.deepEqual(await missing.deployer.preflight(), {
+    repository: "created with the cleanup policy",
+  });
+  assert.equal(missing.state.repository.format, "DOCKER");
+  const other = fakeCloud({ repository: { cleanupPolicies: { keep: { id: "keep" } } } });
+  assert.deepEqual(await other.deployer.preflight(), { repository: "cleanup policy added" });
+  assert.deepEqual(Object.keys(other.state.repository.cleanupPolicies).toSorted(), [
+    CLEANUP_POLICY.id,
+    "keep",
+  ]);
+  const ready = fakeCloud();
+  assert.deepEqual(await ready.deployer.preflight(), { repository: "unchanged" });
+  assert.ok(!ready.calls.some((c) => c.startsWith("POST") || c.startsWith("PATCH")));
+});
+
+test("the deployment never passes --force to firebase deploy", async () => {
+  const { deployer, runs } = fakeCloud();
+  await deployer.preflight();
+  await deployer.deploy(source, await buildDir());
+  const deploy = runs.find((r) => r.startsWith("firebase deploy"));
+  assert.ok(deploy && !deploy.includes("--force"), deploy);
+});
+
+test("a restore leaves upload objects alone while another function exists", async () => {
+  const { deployer, state } = fakeCloud({ functions: ["hello"], uploads: ["someone.zip"] });
+  deployer.adoptLeftovers();
+  await assert.rejects(deployer.remove(await buildDir()), /another function exists/);
+  assert.deepEqual(state.uploads, ["someone.zip"]);
 });

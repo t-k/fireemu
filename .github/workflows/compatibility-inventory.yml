@@ -32,11 +32,15 @@ env:
   #   - an O7/O8 campaign test that fails only on the CI runner;
   #   - an O7/O8 campaign test that alone runs longer than the 45-minute job limit
   #     (test_request_bytes_admission.py, about 56 minutes on the CI runner).
+  #   - a lane's O2/O8 campaign for fireemu-35fe6 that the lane now closes on the
+  #     sandbox instead (owner decision 2026-09-25, AUTH-MFA:
+  #     auth-totp-enroll/test_mfa_shadow_binding.py, whose shadow is not re-taken).
   # tools/compat-inventory/closure_records.py refuses a closure that cites a path here,
   # and tools/compat-inventory/broad_shards.py leaves these files out of the shards.
   RETIRED_SUITES: |
     tools/compat-broad/auth-credential-tokens/test_credential_bootstrap.py
     tools/compat-broad/auth-credential-tokens/test_credential_production.py
+    tools/compat-broad/auth-totp-enroll/test_mfa_shadow_binding.py
     tools/compat-broad/fs-commit-transform-limits/test_commit_wire_archive.py
     tools/compat-broad/fs-commit-transform-limits/test_owned_transform_runner.py
     tools/compat-broad/fs-query-partition-cursor/test_partition_cursor_production.py

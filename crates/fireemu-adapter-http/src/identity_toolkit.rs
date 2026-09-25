@@ -3707,7 +3707,47 @@ fn apply_project_config_fields(
     Ok(())
 }
 
-fn password_policy_from_config_json(value: &Value) -> Result<PasswordPolicy, JsonResponse> {
+/// The strength options of a written policy's one version, `None` for the default options.
+/// Production requires exactly one version (sandbox recording 2026-09-25); without
+/// `one_version` a policy without versions takes the default options.
+fn policy_version_options(
+    object: &serde_json::Map<String, Value>,
+    one_version: bool,
+) -> Result<Option<&serde_json::Map<String, Value>>, JsonResponse> {
+    let one_version_refusal =
+        || config_proto::refusal("INVALID_CONFIG : Policy versions list must be of length 1");
+    match object.get("passwordPolicyVersions") {
+        None | Some(Value::Null) if one_version => Err(one_version_refusal()),
+        None | Some(Value::Null) => Ok(None),
+        Some(Value::Array(versions)) if versions.len() != 1 => Err(if one_version {
+            one_version_refusal()
+        } else {
+            error(400, "INVALID_ARGUMENT")
+        }),
+        Some(Value::Array(versions)) => {
+            let version = versions[0]
+                .as_object()
+                .ok_or_else(|| error(400, "INVALID_ARGUMENT"))?;
+            if version.keys().any(|field| field != "customStrengthOptions") {
+                return Err(error(400, "INVALID_ARGUMENT"));
+            }
+            match version.get("customStrengthOptions") {
+                Some(Value::Object(options)) => Ok(Some(options)),
+                Some(Value::Null) => Ok(None),
+                None | Some(_) => Err(error(400, "INVALID_ARGUMENT")),
+            }
+        }
+        Some(_) => Err(error(400, "INVALID_ARGUMENT")),
+    }
+}
+
+/// A written password policy. Strict requires exactly one version, as production does
+/// (sandbox recording 2026-09-25); otherwise a policy without versions takes the default
+/// options, as the official emulator (which does not check the policy) takes it.
+fn password_policy_from_config_json(
+    value: &Value,
+    one_version: bool,
+) -> Result<PasswordPolicy, JsonResponse> {
     let object = value
         .as_object()
         .ok_or_else(|| error(400, "INVALID_ARGUMENT"))?;
@@ -3732,27 +3772,7 @@ fn password_policy_from_config_json(value: &Value) -> Result<PasswordPolicy, Jso
         Some(Value::Bool(value)) => *value,
         Some(_) => return Err(error(400, "INVALID_ARGUMENT")),
     };
-    // Production requires exactly one version (sandbox recording 2026-09-25).
-    let one_version =
-        || config_proto::refusal("INVALID_CONFIG : Policy versions list must be of length 1");
-    let options = match object.get("passwordPolicyVersions") {
-        None | Some(Value::Null) => return Err(one_version()),
-        Some(Value::Array(versions)) if versions.len() != 1 => return Err(one_version()),
-        Some(Value::Array(versions)) => {
-            let version = versions[0]
-                .as_object()
-                .ok_or_else(|| error(400, "INVALID_ARGUMENT"))?;
-            if version.keys().any(|field| field != "customStrengthOptions") {
-                return Err(error(400, "INVALID_ARGUMENT"));
-            }
-            match version.get("customStrengthOptions") {
-                Some(Value::Object(options)) => Some(options),
-                Some(Value::Null) => None,
-                None | Some(_) => return Err(error(400, "INVALID_ARGUMENT")),
-            }
-        }
-        Some(_) => return Err(error(400, "INVALID_ARGUMENT")),
-    };
+    let options = policy_version_options(object, one_version)?;
     if options.is_some_and(|options| {
         options
             .keys()
@@ -3869,6 +3889,7 @@ fn password_policy_from_update(
     current: &PasswordPolicy,
     body: &Value,
     fields: &[String],
+    one_version: bool,
 ) -> Result<Option<PasswordPolicy>, JsonResponse> {
     let policy_fields: Vec<&str> = fields
         .iter()
@@ -3898,17 +3919,18 @@ fn password_policy_from_update(
     // member was outside the selected mask. A leaf update supplies no versions; the merged
     // policy is checked below.
     if !value.is_null() && object.contains_key("passwordPolicyVersions") {
-        let _supplied_policy = password_policy_from_config_json(value)?;
+        let _supplied_policy = password_policy_from_config_json(value, one_version)?;
     }
     if policy_fields.contains(&"passwordPolicyConfig") {
         if policy_fields.len() != 1 {
             return Err(error(400, "INVALID_ARGUMENT"));
         }
-        return password_policy_from_config_json(value).map(Some);
+        return password_policy_from_config_json(value, one_version).map(Some);
     }
 
-    // Production merges a leaf into the stored policy, or into none when the project has none.
-    let mut merged = if current.configured {
+    // Production merges a leaf into the stored policy, or into none when the project has none
+    // (strict); the emulator profile merges into the default policy, as it always has.
+    let mut merged = if current.configured || !one_version {
         password_policy_config_json(current)
     } else {
         json!({})
@@ -3936,7 +3958,7 @@ fn password_policy_from_update(
             _ => return Err(error(400, "INVALID_ARGUMENT")),
         }
     }
-    password_policy_from_config_json(&merged).map(Some)
+    password_policy_from_config_json(&merged, one_version).map(Some)
 }
 
 fn valid_password_policy_field(field: &str) -> bool {
@@ -4775,7 +4797,7 @@ fn validate_project_config_payload(body: &Value) -> Result<(), JsonResponse> {
     if let Some(value) = object.get("passwordPolicyConfig") {
         // A leaf update supplies no versions; the merged policy is checked when applied.
         if value.get("passwordPolicyVersions").is_some() {
-            password_policy_from_config_json(value)?;
+            password_policy_from_config_json(value, false)?;
         }
     }
     if let Some(value) = object.get("quota").filter(|value| !value.is_null()) {
@@ -5137,7 +5159,12 @@ fn project_config_management(
             project,
             patch,
             |current_policy, current_quota| {
-                let password_policy = password_policy_from_update(current_policy, body, &fields)?;
+                let password_policy = password_policy_from_update(
+                    current_policy,
+                    body,
+                    &fields,
+                    !state.stateless_refresh_tokens,
+                )?;
                 let signup_quota = quota_config_from_update(current_quota, body, &fields)?;
                 Ok((password_policy, signup_quota))
             },
@@ -5176,7 +5203,12 @@ fn project_config_management(
         };
         let current_policy = store.password_policy().clone();
         let current_quota = store.signup_quota().config().clone();
-        let password_policy = match password_policy_from_update(&current_policy, body, &fields) {
+        let password_policy = match password_policy_from_update(
+            &current_policy,
+            body,
+            &fields,
+            !state.stateless_refresh_tokens,
+        ) {
             Ok(policy) => policy,
             Err(response) => return rollback_blocking(response),
         };
@@ -6344,7 +6376,7 @@ fn validate_tenant_update_payload(body: &Value) -> Result<(), JsonResponse> {
 
     if let Some(value) = object.get("passwordPolicyConfig") {
         if !value.is_null() {
-            password_policy_from_config_json(value)?;
+            password_policy_from_config_json(value, false)?;
         }
     }
     Ok(())
@@ -6374,7 +6406,7 @@ fn tenant_management(
             };
             let password_policy = match body.get("passwordPolicyConfig") {
                 None => None,
-                Some(value) => match password_policy_from_config_json(value) {
+                Some(value) => match password_policy_from_config_json(value, false) {
                     Ok(policy) => Some(policy),
                     Err(response) => return response,
                 },
@@ -6513,10 +6545,12 @@ fn tenant_management(
                 None
             };
             let password_policy = match current_policy {
-                Some(current) => match password_policy_from_update(&current, body, &fields) {
-                    Ok(policy) => policy,
-                    Err(response) => return response,
-                },
+                Some(current) => {
+                    match password_policy_from_update(&current, body, &fields, false) {
+                        Ok(policy) => policy,
+                        Err(response) => return response,
+                    }
+                }
                 None => None,
             };
             let patch = match tenant_metadata_patch(body, query) {
@@ -12694,18 +12728,26 @@ mod tests {
                 "passwordPolicyEnforcementState": "ENFORCE",
                 "passwordPolicyVersions": versions,
             });
-            assert!(password_policy_from_config_json(&body).is_err());
+            assert!(password_policy_from_config_json(&body, true).is_err());
+            assert!(password_policy_from_config_json(&body, false).is_err());
         }
-        // Production requires exactly one version.
-        assert!(password_policy_from_config_json(&json!({
+        // Production requires exactly one version; the emulator profile takes none as the
+        // default options, as the official emulator takes any policy.
+        let without_versions = json!({
             "passwordPolicyEnforcementState": "ENFORCE",
             "passwordPolicyVersions": null,
-        }))
-        .is_err());
-        assert!(password_policy_from_config_json(&json!({
-            "passwordPolicyEnforcementState": "ENFORCE",
-            "passwordPolicyVersions": [{"customStrengthOptions": {"minPasswordLength": 12}}]
-        }))
-        .is_ok());
+        });
+        assert!(password_policy_from_config_json(&without_versions, true).is_err());
+        assert!(password_policy_from_config_json(&without_versions, false).is_ok());
+        for one_version in [true, false] {
+            assert!(password_policy_from_config_json(
+                &json!({
+                    "passwordPolicyEnforcementState": "ENFORCE",
+                    "passwordPolicyVersions": [{"customStrengthOptions": {"minPasswordLength": 12}}]
+                }),
+                one_version
+            )
+            .is_ok());
+        }
     }
 }

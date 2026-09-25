@@ -125,8 +125,8 @@
             "project": "fireemu-oracle-idp"
           }
         ],
-        "finalArtifactSha256": "9988fdbe13b84459fd756ff4c6beee6b316d665be939ba5c293a614a8c101fda",
-        "sourceCommit": "cdd781a9ce4a4384a8fe1a33286b7314ac96d500",
+        "finalArtifactSha256": "86172226d07d1f6e850a58934c24c650b05eda345361ab4058aaea174f921356",
+        "sourceCommit": "7bde3c8ecf42bd978166affd07863f84e9a6c10e",
         "comparisonPaths": [
           "spec/compatibility/closure/evidence/AUTH-MFA-comparison.json"
         ],
@@ -155,8 +155,8 @@
             "project": "fireemu-oracle-idp"
           }
         ],
-        "finalArtifactSha256": "9988fdbe13b84459fd756ff4c6beee6b316d665be939ba5c293a614a8c101fda",
-        "sourceCommit": "cdd781a9ce4a4384a8fe1a33286b7314ac96d500",
+        "finalArtifactSha256": "86172226d07d1f6e850a58934c24c650b05eda345361ab4058aaea174f921356",
+        "sourceCommit": "7bde3c8ecf42bd978166affd07863f84e9a6c10e",
         "comparisonPaths": [
           "spec/compatibility/closure/evidence/AUTH-MFA-comparison.json"
         ],
@@ -185,8 +185,8 @@
             "project": "fireemu-oracle-idp"
           }
         ],
-        "finalArtifactSha256": "9988fdbe13b84459fd756ff4c6beee6b316d665be939ba5c293a614a8c101fda",
-        "sourceCommit": "cdd781a9ce4a4384a8fe1a33286b7314ac96d500",
+        "finalArtifactSha256": "86172226d07d1f6e850a58934c24c650b05eda345361ab4058aaea174f921356",
+        "sourceCommit": "7bde3c8ecf42bd978166affd07863f84e9a6c10e",
         "comparisonPaths": [
           "spec/compatibility/closure/evidence/AUTH-MFA-comparison.json"
         ],
@@ -223,8 +223,8 @@
             "project": "fireemu-oracle-idp"
           }
         ],
-        "finalArtifactSha256": "9988fdbe13b84459fd756ff4c6beee6b316d665be939ba5c293a614a8c101fda",
-        "sourceCommit": "cdd781a9ce4a4384a8fe1a33286b7314ac96d500",
+        "finalArtifactSha256": "86172226d07d1f6e850a58934c24c650b05eda345361ab4058aaea174f921356",
+        "sourceCommit": "7bde3c8ecf42bd978166affd07863f84e9a6c10e",
         "comparisonPaths": [
           "spec/compatibility/closure/evidence/AUTH-MFA-comparison.json"
         ],
@@ -254,8 +254,8 @@
             "project": "fireemu-oracle-idp"
           }
         ],
-        "finalArtifactSha256": "9988fdbe13b84459fd756ff4c6beee6b316d665be939ba5c293a614a8c101fda",
-        "sourceCommit": "cdd781a9ce4a4384a8fe1a33286b7314ac96d500",
+        "finalArtifactSha256": "86172226d07d1f6e850a58934c24c650b05eda345361ab4058aaea174f921356",
+        "sourceCommit": "7bde3c8ecf42bd978166affd07863f84e9a6c10e",
         "comparisonPaths": [
           "spec/compatibility/closure/evidence/AUTH-MFA-comparison.json"
         ],
@@ -284,8 +284,8 @@
             "project": "fireemu-oracle-idp"
           }
         ],
-        "finalArtifactSha256": "9988fdbe13b84459fd756ff4c6beee6b316d665be939ba5c293a614a8c101fda",
-        "sourceCommit": "cdd781a9ce4a4384a8fe1a33286b7314ac96d500",
+        "finalArtifactSha256": "86172226d07d1f6e850a58934c24c650b05eda345361ab4058aaea174f921356",
+        "sourceCommit": "7bde3c8ecf42bd978166affd07863f84e9a6c10e",
         "comparisonPaths": [
           "spec/compatibility/closure/evidence/AUTH-MFA-comparison.json"
         ],
@@ -314,8 +314,8 @@
             "project": "fireemu-oracle-idp"
           }
         ],
-        "finalArtifactSha256": "9988fdbe13b84459fd756ff4c6beee6b316d665be939ba5c293a614a8c101fda",
-        "sourceCommit": "cdd781a9ce4a4384a8fe1a33286b7314ac96d500",
+        "finalArtifactSha256": "86172226d07d1f6e850a58934c24c650b05eda345361ab4058aaea174f921356",
+        "sourceCommit": "7bde3c8ecf42bd978166affd07863f84e9a6c10e",
         "comparisonPaths": [
           "spec/compatibility/closure/evidence/AUTH-MFA-comparison.json"
         ],
@@ -344,8 +344,8 @@
             "project": "fireemu-oracle-idp"
           }
         ],
-        "finalArtifactSha256": "9988fdbe13b84459fd756ff4c6beee6b316d665be939ba5c293a614a8c101fda",
-        "sourceCommit": "cdd781a9ce4a4384a8fe1a33286b7314ac96d500",
+        "finalArtifactSha256": "86172226d07d1f6e850a58934c24c650b05eda345361ab4058aaea174f921356",
+        "sourceCommit": "7bde3c8ecf42bd978166affd07863f84e9a6c10e",
         "comparisonPaths": [
           "spec/compatibility/closure/evidence/AUTH-MFA-comparison.json"
         ],
@@ -374,8 +374,8 @@
             "project": "fireemu-oracle-idp"
           }
         ],
-        "finalArtifactSha256": "9988fdbe13b84459fd756ff4c6beee6b316d665be939ba5c293a614a8c101fda",
-        "sourceCommit": "cdd781a9ce4a4384a8fe1a33286b7314ac96d500",
+        "finalArtifactSha256": "86172226d07d1f6e850a58934c24c650b05eda345361ab4058aaea174f921356",
+        "sourceCommit": "7bde3c8ecf42bd978166affd07863f84e9a6c10e",
         "comparisonPaths": [
           "spec/compatibility/closure/evidence/AUTH-MFA-comparison.json"
         ],
@@ -413,8 +413,8 @@
             "project": "fireemu-oracle-idp"
           }
         ],
-        "finalArtifactSha256": "9988fdbe13b84459fd756ff4c6beee6b316d665be939ba5c293a614a8c101fda",
-        "sourceCommit": "cdd781a9ce4a4384a8fe1a33286b7314ac96d500",
+        "finalArtifactSha256": "86172226d07d1f6e850a58934c24c650b05eda345361ab4058aaea174f921356",
+        "sourceCommit": "7bde3c8ecf42bd978166affd07863f84e9a6c10e",
         "comparisonPaths": [
           "spec/compatibility/closure/evidence/AUTH-MFA-comparison.json"
         ],
@@ -435,7 +435,7 @@
       "configProjections": [
         "default"
       ],
-      "status": "PENDING_CORPUS",
+      "status": "VERIFIED",
       "note": "A TOTP pending credential offered at 300, 450, 600 and 1800 seconds (owner decision M4) and, since production refused it already at 300, at 60, 120, 180, 240 and 290 seconds (M8); an SMS pending credential whose code is sent at 150 and 300 seconds (M8), and at 450, 600 and 1800 seconds (M13; production refused the SMS start from about 603 seconds, M14). Each is followed at once by a same-account control with a credential acquired then.",
       "evidence": {
         "productionRecordings": [
@@ -450,15 +450,21 @@
             "gitSha": "32b4b1977c69231f8663529507be5a2ca1fbe707",
             "recordings": 2,
             "project": "fireemu-oracle-idp"
+          },
+          {
+            "recordedAt": "2026-09-25T06:16:27.221Z",
+            "gitSha": "3541649c4039e17aea163decac0215e1d3fd32e9",
+            "recordings": 2,
+            "project": "fireemu-oracle-idp"
           }
         ],
-        "finalArtifactSha256": "9988fdbe13b84459fd756ff4c6beee6b316d665be939ba5c293a614a8c101fda",
-        "sourceCommit": "cdd781a9ce4a4384a8fe1a33286b7314ac96d500",
+        "finalArtifactSha256": "86172226d07d1f6e850a58934c24c650b05eda345361ab4058aaea174f921356",
+        "sourceCommit": "7bde3c8ecf42bd978166affd07863f84e9a6c10e",
         "comparisonPaths": [
           "spec/compatibility/closure/evidence/AUTH-MFA-comparison.json"
         ],
         "rows": {
-          "MATCH": 172,
+          "MATCH": 202,
           "MATCH_NONDETERMINISTIC": 4,
           "MATCH_TIMING_DEPENDENT": 1
         }
@@ -491,8 +497,8 @@
             "project": "fireemu-oracle-idp"
           }
         ],
-        "finalArtifactSha256": "9988fdbe13b84459fd756ff4c6beee6b316d665be939ba5c293a614a8c101fda",
-        "sourceCommit": "cdd781a9ce4a4384a8fe1a33286b7314ac96d500",
+        "finalArtifactSha256": "86172226d07d1f6e850a58934c24c650b05eda345361ab4058aaea174f921356",
+        "sourceCommit": "7bde3c8ecf42bd978166affd07863f84e9a6c10e",
         "comparisonPaths": [
           "spec/compatibility/closure/evidence/AUTH-MFA-comparison.json"
         ],
@@ -590,10 +596,16 @@
             "gitSha": "86ef1298089a8461bc0cb56db48b7fe6fe479a40",
             "recordings": 2,
             "project": "fireemu-oracle-idp"
+          },
+          {
+            "recordedAt": "2026-09-25T06:16:27.221Z",
+            "gitSha": "3541649c4039e17aea163decac0215e1d3fd32e9",
+            "recordings": 2,
+            "project": "fireemu-oracle-idp"
           }
         ],
-        "finalArtifactSha256": "9988fdbe13b84459fd756ff4c6beee6b316d665be939ba5c293a614a8c101fda",
-        "sourceCommit": "cdd781a9ce4a4384a8fe1a33286b7314ac96d500",
+        "finalArtifactSha256": "86172226d07d1f6e850a58934c24c650b05eda345361ab4058aaea174f921356",
+        "sourceCommit": "7bde3c8ecf42bd978166affd07863f84e9a6c10e",
         "comparisonPaths": [
           "spec/compatibility/closure/evidence/AUTH-MFA-comparison.json",
           "spec/compatibility/closure/evidence/AUTH-MFA-action-regression.json",
@@ -601,7 +613,7 @@
           "spec/compatibility/closure/evidence/AUTH-MFA-account-regression.json"
         ],
         "rows": {
-          "MATCH": 1609,
+          "MATCH": 1639,
           "MATCH_NONDETERMINISTIC": 5,
           "REOBSERVED_MATCH": 2,
           "MATCH_TIMING_DEPENDENT": 1,
@@ -619,11 +631,11 @@
         ],
         "workspaceTests": {
           "command": "cargo nextest run --workspace --profile pr",
-          "passed": 3426,
+          "passed": 3437,
           "failed": 0
         },
-        "buildTree": "clean (git status --porcelain empty at build); artifact copy, sha256, source commit and check logs in docs.local/runs/auth-mfa-final-20260925b/ (private)",
-        "mutation": "docs.local/mutation/auth-mfa/20260925/ (private): cargo-mutants over df08b28cf..261e60874 (264 mutants: 197 caught, 39 unviable, 1 timeout, 27 survivors) and 20260925-followup/ over 261e60874..c787d9f6e (50: 38 caught, 9 unviable, 3 survivors), in fireemu-core-auth and fireemu-adapter-http. All 30 survivors are triaged in 20260925/triage.md: 4 equivalent, 26 killed by tests added in HEAD (each checked against the hand-applied mutant); no src changed after the artifact's source."
+        "buildTree": "clean (git status --porcelain empty at build); artifact copy, sha256, source commit and check logs in docs.local/runs/auth-mfa-final-20260925c/ (private)",
+        "mutation": "docs.local/mutation/auth-mfa/20260925/ (private): cargo-mutants over df08b28cf..261e60874 (264 mutants: 197 caught, 39 unviable, 1 timeout, 27 survivors) and 20260925-followup/ over 261e60874..c787d9f6e (50: 38 caught, 9 unviable, 3 survivors), in fireemu-core-auth and fireemu-adapter-http. All 30 survivors are triaged in 20260925/triage.md: 4 equivalent, 26 killed by tests in HEAD. The follow-up directive's source changes after c787d9f6e (TOTP fail-closed, the per-account phone session bound, the SMS start limit) were not run through cargo-mutants; their boundaries are pinned by tests on both sides."
       }
     },
     {
@@ -656,15 +668,21 @@
             "gitSha": "86ef1298089a8461bc0cb56db48b7fe6fe479a40",
             "recordings": 2,
             "project": "fireemu-oracle-idp"
+          },
+          {
+            "recordedAt": "2026-09-25T06:16:27.221Z",
+            "gitSha": "3541649c4039e17aea163decac0215e1d3fd32e9",
+            "recordings": 2,
+            "project": "fireemu-oracle-idp"
           }
         ],
-        "finalArtifactSha256": "9988fdbe13b84459fd756ff4c6beee6b316d665be939ba5c293a614a8c101fda",
-        "sourceCommit": "cdd781a9ce4a4384a8fe1a33286b7314ac96d500",
+        "finalArtifactSha256": "86172226d07d1f6e850a58934c24c650b05eda345361ab4058aaea174f921356",
+        "sourceCommit": "7bde3c8ecf42bd978166affd07863f84e9a6c10e",
         "comparisonPaths": [
           "spec/compatibility/closure/evidence/AUTH-MFA-comparison.json"
         ],
         "rows": {
-          "MATCH": 411,
+          "MATCH": 441,
           "MATCH_NONDETERMINISTIC": 5,
           "REOBSERVED_MATCH": 2,
           "MATCH_TIMING_DEPENDENT": 1

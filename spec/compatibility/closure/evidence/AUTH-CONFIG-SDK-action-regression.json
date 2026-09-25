@@ -1,0 +1,1394 @@
+{
+  "kind": "auth-action-comparison-v1",
+  "artifactSha256": "0ef860222e0e326290593bbaa719ddc0f5cad3790174e7a51d4a09485fcdc98b",
+  "fixtureSha256": "4a83aa942859b2abb69fb2e457fe4dbd2dcd1560edf52f7125fd7ef510915c5f",
+  "summary": {
+    "MATCH": 346
+  },
+  "rows": [
+    {
+      "row": "auth-action/generate/admin#create-a",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-action/generate/admin#create-disabled",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-action/generate/admin#create-phone",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-action/generate/admin#reset-link",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-action/generate/admin#reset-link-check",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-action/generate/admin#reset-link-mixed-case",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-action/generate/admin#reset-link-continue-firebaseapp",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-action/generate/admin#reset-link-continue-web-app",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-action/generate/admin#reset-link-continue-localhost",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-action/generate/admin#reset-link-continue-unauthorized",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-action/generate/admin#reset-link-continue-malformed",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-action/generate/admin#reset-link-continue-empty",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-action/generate/admin#reset-link-in-app",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-action/generate/admin#reset-link-unknown",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-action/generate/admin#reset-link-disabled",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-action/generate/admin#reset-link-missing-email",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-action/generate/admin#reset-link-invalid-email",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-action/generate/admin#missing-request-type",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-action/generate/admin#unknown-request-type",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-action/generate/admin#unspecified-request-type",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-action/generate/admin#create-gv",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-action/generate/admin#verify-link",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-action/generate/admin#verify-link-check",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-action/generate/admin#verify-link-unknown",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-action/generate/admin#verify-link-disabled",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-action/generate/admin#verify-link-missing-email",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-action/generate/admin#change-link",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-action/generate/admin#change-link-check",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-action/generate/admin#change-link-missing-new-email",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-action/generate/admin#change-link-taken",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-action/generate/admin#change-link-same",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-action/generate/admin#change-link-invalid-new",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-action/generate/admin#change-link-unknown",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-action/generate/admin#change-link-disabled",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-action/generate/admin#sign-in-link-password-required",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-action/generate/admin#sign-in-a",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-action/generate/admin#create-gt",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-action/generate/admin#sign-in-gt",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-action/generate/admin#verify-link-by-token",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-action/generate/admin#change-link-by-token",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-action/generate/admin#change-link-by-token-check",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-action/generate/admin#verify-link-garbage-token",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-action/generate/admin#create-gu",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-action/generate/admin#create-gw",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-action/generate/admin#sign-in-gu",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-action/generate/admin#verify-link-token-and-email",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-action/generate/admin#phone-send-code",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-action/generate/admin#phone-sign-in",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-action/generate/admin#verify-link-phone-account",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-action/generate/client#reset-unknown",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-action/generate/client#reset-unknown-return-link",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-action/generate/client#reset-unknown-continue-authorized",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-action/generate/client#reset-unknown-continue-unauthorized",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-action/generate/client#reset-unknown-without-key",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-action/password-reset#create-a",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-action/password-reset#sign-in-before",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-action/password-reset#reset-link-1",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-action/password-reset#check-1",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-action/password-reset#reset-link-2",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-action/password-reset#check-1-after-second",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-action/password-reset#check-2",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-action/password-reset#reset-weak-password",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-action/password-reset#check-2-after-weak",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-action/password-reset#reset-missing-code",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-action/password-reset#reset-unknown-code",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-action/password-reset#reset-truncated-code",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-action/password-reset#reset-empty-password",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-action/password-reset#reset-consume",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-action/password-reset#reset-reuse",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-action/password-reset#check-2-after-consume",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-action/password-reset#sign-in-old-password",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-action/password-reset#sign-in-new-password",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-action/password-reset#lookup-token-before-reset",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-action/password-reset#refresh-token-before-reset",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-action/password-reset#admin-lookup-after-reset",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-action/password-reset#create-b",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-action/password-reset#reset-link-b",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-action/password-reset#admin-password-change-b",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-action/password-reset#check-b-after-admin-password-change",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-action/password-reset#reset-b-after-admin-password-change",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-action/password-reset#create-c",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-action/password-reset#sign-in-c",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-action/password-reset#reset-link-c",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-action/password-reset#client-password-change-c",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-action/password-reset#check-c-after-client-password-change",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-action/password-reset#reset-c-after-client-password-change",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-action/password-reset#create-e",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-action/password-reset#reset-link-e",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-action/password-reset#admin-email-change-e",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-action/password-reset#check-e-after-email-change",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-action/password-reset#reset-e-after-email-change",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-action/password-reset#admin-lookup-e",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-action/password-reset#create-f",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-action/password-reset#reset-link-f",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-action/password-reset#admin-disable-f",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-action/password-reset#check-f-disabled",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-action/password-reset#reset-f-disabled",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-action/password-reset#check-f-after-refused-reset",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-action/password-reset#admin-enable-f",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-action/password-reset#check-f-enabled",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-action/password-reset#reset-f-enabled",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-action/password-reset#create-g",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-action/password-reset#reset-link-g",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-action/password-reset#admin-delete-g",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-action/password-reset#check-g-deleted",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-action/password-reset#reset-g-deleted",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-action/password-reset#create-rh",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-action/password-reset#verify-link-rh",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-action/password-reset#reset-with-verify-code",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-action/password-reset#check-verify-code-after-reset-attempt",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-action/password-reset#sign-in-rh-original-password",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-action/verify-email#create-va",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-action/verify-email#sign-in-va",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-action/verify-email#verify-link-va",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-action/verify-email#check-va",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-action/verify-email#apply-truncated-code",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-action/verify-email#apply-va",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-action/verify-email#apply-va-again",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-action/verify-email#check-va-after-apply",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-action/verify-email#lookup-token-after-verify",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-action/verify-email#refresh-after-verify",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-action/verify-email#sign-in-va-after-verify",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-action/verify-email#apply-unknown-code",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-action/verify-email#create-vv",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-action/verify-email#verify-link-verified",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-action/verify-email#apply-verified",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-action/verify-email#create-vb",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-action/verify-email#verify-link-vb",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-action/verify-email#admin-email-change-vb",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-action/verify-email#check-vb-after-email-change",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-action/verify-email#apply-vb-after-email-change",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-action/verify-email#admin-lookup-vb",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-action/verify-email#create-vc",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-action/verify-email#verify-link-vc",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-action/verify-email#admin-disable-vc",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-action/verify-email#apply-vc-disabled",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-action/verify-email#check-vc-after-refused-apply",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-action/verify-email#admin-enable-vc",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-action/verify-email#check-vc-enabled",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-action/verify-email#apply-vc-enabled",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-action/verify-email#admin-lookup-vc",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-action/verify-email#create-ve",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-action/verify-email#verify-link-ve",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-action/verify-email#admin-delete-ve",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-action/verify-email#check-ve-deleted",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-action/verify-email#apply-ve-deleted",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-action/verify-email#create-vf",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-action/verify-email#reset-link-vf",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-action/verify-email#apply-reset-code",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-action/verify-email#check-reset-code-after-apply-attempt",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-action/verify-email#admin-lookup-vf",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-action/change-email#create-a",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-action/change-email#sign-in-a",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-action/change-email#change-link-1",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-action/change-email#check-1",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-action/change-email#change-link-2",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-action/change-email#check-1-after-second",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-action/change-email#check-2",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-action/change-email#apply-2",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-action/change-email#apply-2-again",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-action/change-email#apply-1",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-action/change-email#sign-in-original-email",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-action/change-email#sign-in-second-email",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-action/change-email#sign-in-first-email",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-action/change-email#lookup-token-before-change",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-action/change-email#refresh-token-before-change",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-action/change-email#admin-lookup-a",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-action/change-email#create-b",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-action/change-email#change-link-b",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-action/change-email#create-late",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-action/change-email#apply-b-taken",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-action/change-email#admin-lookup-b-after-taken",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-action/change-email#create-c",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-action/change-email#change-link-c",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-action/change-email#admin-email-change-c",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-action/change-email#check-c-after-admin-change",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-action/change-email#apply-c-after-admin-change",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-action/change-email#admin-lookup-c",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-action/change-email#create-e",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-action/change-email#change-link-e",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-action/change-email#admin-disable-e",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-action/change-email#apply-e-disabled",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-action/change-email#admin-lookup-e",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-action/change-email#create-f",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-action/change-email#change-link-f",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-action/change-email#admin-delete-f",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-action/change-email#apply-f-deleted",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-action/change-email#create-g",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-action/change-email#change-link-g",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-action/change-email#reset-with-change-code",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-action/change-email#check-change-code-after-reset-attempt",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-action/change-email#create-ch",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-action/change-email#verify-link-ch",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-action/change-email#change-link-ch",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-action/change-email#apply-change-ch",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-action/change-email#apply-old-verify-ch",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-action/change-email#admin-lookup-ch",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-action/email-link/sign-in#link-n",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-action/email-link/sign-in#check-link-n",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-action/email-link/sign-in#sign-in-mismatch",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-action/email-link/sign-in#sign-in-missing-email",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-action/email-link/sign-in#sign-in-missing-code",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-action/email-link/sign-in#sign-in-unknown-code",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-action/email-link/sign-in#sign-in-new",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-action/email-link/sign-in#sign-in-reuse",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-action/email-link/sign-in#admin-lookup-n",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-action/email-link/sign-in#link-m",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-action/email-link/sign-in#sign-in-mixed-case",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-action/email-link/sign-in#link-without-continue-url",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-action/email-link/sign-in#link-without-in-app",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-action/email-link/sign-in#link-in-app-false",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-action/email-link/sign-in#link-unauthorized-continue-url",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-action/email-link/sign-in#link-localhost-continue-url",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-action/email-link/sign-in#create-p",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-action/email-link/sign-in#link-p",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-action/email-link/sign-in#sign-in-existing",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-action/email-link/sign-in#admin-lookup-p",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-action/email-link/sign-in#sign-in-p-password",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-action/email-link/sign-in#link-q-1",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-action/email-link/sign-in#link-q-2",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-action/email-link/sign-in#check-q-1-after-second",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-action/email-link/sign-in#sign-in-q-1",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-action/email-link/sign-in#sign-in-q-2",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-action/email-link/sign-in#create-disabled",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-action/email-link/sign-in#link-disabled",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-action/email-link/sign-in#sign-in-disabled",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-action/email-link/sign-in#create-deleted",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-action/email-link/sign-in#link-deleted",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-action/email-link/sign-in#admin-delete-del",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-action/email-link/sign-in#sign-in-deleted",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-action/email-link/sign-in#admin-lookup-del",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-action/email-link/sign-in#anonymous-sign-up",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-action/email-link/sign-in#link-anon",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-action/email-link/sign-in#sign-in-link-to-anonymous",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-action/email-link/sign-in#admin-lookup-anon",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-action/email-link/sign-in#create-owner",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-action/email-link/sign-in#anonymous-sign-up-2",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-action/email-link/sign-in#link-owned",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-action/email-link/sign-in#sign-in-link-owned-address",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-action/email-link/sign-in#create-r",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-action/email-link/sign-in#sign-in-r",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-action/email-link/sign-in#link-r-other-address",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-action/email-link/sign-in#sign-in-link-other-address",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-action/email-link/sign-in#admin-lookup-r",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-action/email-link/sign-in#link-z",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-action/email-link/sign-in#reset-with-sign-in-code",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-action/email-link/sign-in#apply-sign-in-code",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-action/email-link/sign-in#check-z-after-misuse",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-action/email-link/sign-in#reset-link-p",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-action/email-link/sign-in#sign-in-with-reset-code",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-action/email-link/sign-in#check-reset-link-p-after-misuse",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-action/email-link/sign-in#reset-link-n",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-action/email-link/sign-in#reset-n",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-action/email-link/sign-in#admin-lookup-n-after-reset",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-action/email-link/sign-in#sign-in-n-password",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-action/email-link/session#link-s",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-action/email-link/session#sign-in-s",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-action/email-link/session#refresh-s",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-action/email-link/session#lookup-s",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-action/email-link/session#cookie-s",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-action/email-link/session#create-p",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-action/email-link/session#link-p",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-action/email-link/session#sign-in-p",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-action/email-link/session#refresh-p",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-action/email-link/session#cookie-p",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-action/email-link/session#sign-in-p-password",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-action/email-link/session#anonymous-sign-up",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-action/email-link/session#link-anon",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-action/email-link/session#sign-in-anon-link",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-action/email-link/session#refresh-anon-link",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-action/email-link/session#cookie-anon-link",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-action/legacy-token#create-la",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-action/legacy-token#legacy-sign-in-la",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-action/legacy-token#verify-link-by-legacy-token",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-action/legacy-token#verify-link-by-legacy-token-check",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-action/legacy-token#change-link-by-legacy-token",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-action/legacy-token#change-link-by-legacy-token-check",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-action/legacy-token#apply-change-by-legacy-token",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-action/legacy-token#admin-lookup-la",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-action/legacy-token#client-change-by-legacy-token",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-action/legacy-token#sign-in-la",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-action/legacy-token#client-change-by-secure-token",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-action/legacy-token#create-lr",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-action/legacy-token#legacy-sign-in-lr",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-action/legacy-token#link-legacy",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-action/legacy-token#sign-in-link-legacy-token",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-action/legacy-token#admin-lookup-lr",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-action/legacy-token#admin-lookup-lr-legacy",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-action/ownership#create-oa",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-action/ownership#create-ob",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-action/ownership#sign-in-ob",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-action/ownership#verify-link-oa",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-action/ownership#apply-oa-code-with-ob-token",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-action/ownership#admin-lookup-both-after-verify",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-action/ownership#reset-link-oa",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-action/ownership#check-oa-code-naming-ob",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-action/ownership#reset-oa-code-naming-ob",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-action/ownership#sign-in-oa-new-password",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-action/ownership#sign-in-ob-original-password",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-action/ownership#change-link-oa",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-action/ownership#apply-oa-change-with-ob-token",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-action/ownership#admin-lookup-both-after-change",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-action/ownership#verify-link-ob",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-action/ownership#apply-ob-code-with-garbage-token",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-action/ownership#admin-lookup-ob",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-action/address-reuse#create-rr",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-action/address-reuse#reset-link-rr",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-action/address-reuse#admin-move-rr",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-action/address-reuse#sign-up-rr-b",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-action/address-reuse#lookup-rr-b",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-action/address-reuse#check-reset-after-reuse",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-action/address-reuse#reset-after-reuse",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-action/address-reuse#sign-in-rr-b-new-password",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-action/address-reuse#sign-in-rr-b-original-password",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-action/address-reuse#sign-in-rr-a-new-password",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-action/address-reuse#admin-lookup-rr-b",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-action/address-reuse#admin-lookup-rr-a",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-action/address-reuse#create-rv",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-action/address-reuse#verify-link-rv",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-action/address-reuse#admin-move-rv",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-action/address-reuse#sign-up-rv-b",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-action/address-reuse#lookup-rv-b",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-action/address-reuse#check-verify-after-reuse",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-action/address-reuse#apply-verify-after-reuse",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-action/address-reuse#admin-lookup-rv-b",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-action/address-reuse#admin-lookup-rv-a",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-action/expiry#create-a",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-action/expiry#create-b",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-action/expiry#verify-link-a",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-action/expiry#change-link-b",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-action/expiry#link-n",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-action/expiry#reset-link-b",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-action/expiry#reset-link-a",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-action/expiry#check-reset-before-hour",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-action/expiry#check-reset-across-hour",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-action/expiry#reset-after-hour",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-action/expiry#reset-b-after-hour",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-action/expiry#check-verify-after-hour",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-action/expiry#check-change-after-hour",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-action/expiry#check-sign-in-link-after-hour",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-action/expiry#apply-verify-after-hour",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-action/expiry#apply-change-after-hour",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-action/expiry#sign-in-link-after-hour",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-action/expiry#reset-link-a-renewed",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-action/expiry#reset-with-renewed-code",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-action/expiry#admin-lookup-after-hour",
+      "status": "MATCH"
+    }
+  ]
+}

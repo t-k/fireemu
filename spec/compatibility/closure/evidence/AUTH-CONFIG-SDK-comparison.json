@@ -1,0 +1,1505 @@
+{
+  "kind": "auth-config-sdk-comparison-v1",
+  "artifactSha256": "0ef860222e0e326290593bbaa719ddc0f5cad3790174e7a51d4a09485fcdc98b",
+  "fixtureSha256": "8b7374e00864b1b6ca3a5eaf1fb04d7905d5f7f03dc3adf93b8f47b5811b1058",
+  "summary": {
+    "MATCH": 351,
+    "MISMATCH": 8
+  },
+  "rows": [
+    {
+      "row": "auth-config-sdk/config/read#admin-get",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-config-sdk/config/read#admin-get-v2-path",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-config-sdk/config/read#projects",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-config-sdk/config/read#projects-without-key",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-config-sdk/config/read#password-policy",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-config-sdk/config/read#password-policy-unknown-tenant",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-config-sdk/config/read#recaptcha-web",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-config-sdk/config/read#recaptcha-ios",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-config-sdk/config/read#recaptcha-android",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-config-sdk/config/read#recaptcha-without-client-type",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-config-sdk/config/read#recaptcha-without-version",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-config-sdk/config/read#recaptcha-unknown-client-type",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-config-sdk/config/read#recaptcha-params",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-config-sdk/config/mask#leaf",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-config-sdk/config/mask#read-after-leaf",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-config-sdk/config/mask#parent",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-config-sdk/config/mask#set-signup-switch",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-config-sdk/config/mask#masked-but-absent",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-config-sdk/config/mask#read-after-masked-but-absent",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-config-sdk/config/mask#outside-mask",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-config-sdk/config/mask#read-after-outside-mask",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-config-sdk/config/mask#set-both-switches",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-config-sdk/config/mask#parent-permissions",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-config-sdk/config/mask#read-after-parent-permissions",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-config-sdk/config/mask#unknown-path",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-config-sdk/config/mask#unknown-nested-path",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-config-sdk/config/mask#duplicate-path",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-config-sdk/config/mask#read-only-name",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-config-sdk/config/mask#read-only-subtype",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-config-sdk/config/mask#read-only-hosting-site",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-config-sdk/config/mask#read-final",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-config-sdk/config/invalid#phone-without-plus",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-config-sdk/config/invalid#phone-letters",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-config-sdk/config/invalid#phone-code-short",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-config-sdk/config/invalid#phone-code-letters",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-config-sdk/config/invalid#domain-with-scheme",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-config-sdk/config/invalid#domain-with-port",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-config-sdk/config/invalid#domain-wildcard",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-config-sdk/config/invalid#domain-empty",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-config-sdk/config/invalid#domain-with-space",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-config-sdk/config/invalid#mobile-links-unknown-domain",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-config-sdk/config/invalid#sms-region-both",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-config-sdk/config/invalid#sms-region-unknown-code",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-config-sdk/config/invalid#sms-region-lower-case",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-config-sdk/config/invalid#privacy-string",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-config-sdk/config/invalid#permissions-number",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-config-sdk/config/invalid#unknown-body-member",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-config-sdk/config/invalid#body-array",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-config-sdk/config/invalid#body-malformed",
+      "status": "MISMATCH",
+      "differences": [
+        "body.error.message"
+      ],
+      "sameErrorCode": false
+    },
+    {
+      "row": "auth-config-sdk/config/invalid#read-after-refusals",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-config-sdk/password-policy/config#enforce-minimum",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-config-sdk/password-policy/config#read-enforce-minimum",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-config-sdk/password-policy/config#off-with-version",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-config-sdk/password-policy/config#read-off-with-version",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-config-sdk/password-policy/config#enforce-force-false",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-config-sdk/password-policy/config#read-enforce-force-false",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-config-sdk/password-policy/config#enforce-force-true",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-config-sdk/password-policy/config#read-enforce-force-true",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-config-sdk/password-policy/config#leaf-state-off",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-config-sdk/password-policy/config#read-leaf-state-off",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-config-sdk/password-policy/config#clear",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-config-sdk/password-policy/config#read-cleared",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-config-sdk/password-policy/config#leaf-state-without-version",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-config-sdk/password-policy/config#minimum-5",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-config-sdk/password-policy/config#minimum-31",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-config-sdk/password-policy/config#minimum-fraction",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-config-sdk/password-policy/config#maximum-below-minimum",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-config-sdk/password-policy/config#maximum-5",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-config-sdk/password-policy/config#maximum-4097",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-config-sdk/password-policy/config#maximum-4096",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-config-sdk/password-policy/config#unknown-option",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-config-sdk/password-policy/config#state-unspecified",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-config-sdk/password-policy/config#state-unknown",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-config-sdk/password-policy/config#enforce-without-version",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-config-sdk/password-policy/config#no-versions",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-config-sdk/password-policy/config#two-versions",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-config-sdk/password-policy/config#schema-version-written",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-config-sdk/password-policy/config#read-final",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-config-sdk/password-policy/projection#set-off",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-config-sdk/password-policy/projection#policy-off",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-config-sdk/password-policy/projection#set-enforce-minimum-only",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-config-sdk/password-policy/projection#policy-enforce-minimum-only",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-config-sdk/password-policy/projection#set-enforce-maximum-only",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-config-sdk/password-policy/projection#policy-enforce-maximum-only",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-config-sdk/password-policy/projection#set-enforce-all-force",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-config-sdk/password-policy/projection#policy-enforce-all-force",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-config-sdk/password-policy/projection#set-enforce-all-notify",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-config-sdk/password-policy/projection#policy-enforce-all-notify",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-config-sdk/password-policy/projection#clear",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-config-sdk/password-policy/projection#policy-cleared",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-config-sdk/password-policy/existing#create-weak",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-config-sdk/password-policy/existing#create-admin-probe",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-config-sdk/password-policy/existing#admin-update-short",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-config-sdk/password-policy/existing#admin-update-long",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-config-sdk/password-policy/existing#enforce-force",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-config-sdk/password-policy/existing#sign-in-weak-force",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-config-sdk/password-policy/existing#sign-in-weak-force-wrong",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-config-sdk/password-policy/existing#enforce-notify",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-config-sdk/password-policy/existing#sign-in-weak-notify",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-config-sdk/password-policy/existing#update-weak-to-weak",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-config-sdk/password-policy/existing#update-weak-to-compliant",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-config-sdk/password-policy/existing#sign-in-compliant-notify",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-config-sdk/password-policy/existing#reset-link",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-config-sdk/password-policy/existing#reset-to-weak",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-config-sdk/password-policy/existing#reset-to-compliant",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-config-sdk/password-policy/existing#off",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-config-sdk/password-policy/existing#create-weak-off",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-config-sdk/password-policy/existing#enforce-force-again",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-config-sdk/password-policy/existing#sign-in-created-under-off",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-config-sdk/providers#create-email",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-config-sdk/providers#create-phone",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-config-sdk/providers#email-off",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-config-sdk/providers#email-off-sign-up",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-config-sdk/providers#email-off-sign-in",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-config-sdk/providers#email-off-reset-unknown",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-config-sdk/providers#email-off-admin-reset",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-config-sdk/providers#email-off-reset-confirm",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-config-sdk/providers#email-off-admin-create",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-config-sdk/providers#email-on",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-config-sdk/providers#anonymous-off",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-config-sdk/providers#anonymous-off-sign-up",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-config-sdk/providers#anonymous-off-email-sign-up",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-config-sdk/providers#phone-off",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-config-sdk/providers#phone-off-send-new",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-config-sdk/providers#phone-off-send-existing",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-config-sdk/providers#phone-off-admin-create",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-config-sdk/duplicate-email#allow",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-config-sdk/duplicate-email#import-two",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-config-sdk/duplicate-email#lookup-by-email",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-config-sdk/duplicate-email#create-auth-uri",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-config-sdk/duplicate-email#sign-in-first-password",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-config-sdk/duplicate-email#sign-in-second-password",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-config-sdk/duplicate-email#disallow-with-duplicates",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-config-sdk/duplicate-email#read-after-disallow",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-config-sdk/duplicate-email#lookup-after-disallow",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-config-sdk/email-privacy#create-password",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-config-sdk/email-privacy#create-mixed",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-config-sdk/email-privacy#create-no-password",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-config-sdk/email-privacy#privacy-off",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-config-sdk/email-privacy#off-auth-uri-pw",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-config-sdk/email-privacy#off-auth-uri-mixed",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-config-sdk/email-privacy#off-auth-uri-nopw",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-config-sdk/email-privacy#off-auth-uri-unknown",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-config-sdk/email-privacy#off-auth-uri-provider",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-config-sdk/email-privacy#off-auth-uri-no-continue",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-config-sdk/email-privacy#privacy-on",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-config-sdk/email-privacy#on-auth-uri-pw",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-config-sdk/email-privacy#on-auth-uri-mixed",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-config-sdk/email-privacy#on-auth-uri-nopw",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-config-sdk/email-privacy#on-auth-uri-unknown",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-config-sdk/email-privacy#on-auth-uri-provider",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-config-sdk/email-privacy#on-auth-uri-no-continue",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-config-sdk/client-permissions#create-phone",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-config-sdk/client-permissions#create-email",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-config-sdk/client-permissions#signup-off",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-config-sdk/client-permissions#send-new-number",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-config-sdk/client-permissions#sign-in-new-number",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-config-sdk/client-permissions#send-existing-number",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-config-sdk/client-permissions#sign-in-existing-number",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-config-sdk/client-permissions#links-on",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-config-sdk/client-permissions#link-new",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-config-sdk/client-permissions#sign-in-link-new",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-config-sdk/client-permissions#link-existing",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-config-sdk/client-permissions#sign-in-link-existing",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-config-sdk/recaptcha#unknown-state",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-config-sdk/recaptcha#score-between-steps",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-config-sdk/recaptcha#score-above-one",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-config-sdk/recaptcha#action-unspecified",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-config-sdk/recaptcha#sms-bot-score-phone-off",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-config-sdk/recaptcha#toll-fraud-between-steps",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-config-sdk/recaptcha#keys-written",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-config-sdk/recaptcha#off",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-config-sdk/recaptcha#read-off",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-config-sdk/recaptcha#client-off",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-config-sdk/recaptcha#audit-email",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-config-sdk/recaptcha#read-audit-email",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-config-sdk/recaptcha#client-audit-web",
+      "status": "MISMATCH",
+      "differences": [
+        "status",
+        "body.error",
+        "body.recaptchaEnforcementState",
+        "body.useSmsBotScore",
+        "body.useSmsTollFraudProtection"
+      ],
+      "sameErrorCode": false
+    },
+    {
+      "row": "auth-config-sdk/recaptcha#client-audit-ios",
+      "status": "MISMATCH",
+      "differences": [
+        "status",
+        "body.error",
+        "body.recaptchaEnforcementState",
+        "body.useSmsBotScore",
+        "body.useSmsTollFraudProtection"
+      ],
+      "sameErrorCode": false
+    },
+    {
+      "row": "auth-config-sdk/recaptcha#client-audit-android",
+      "status": "MISMATCH",
+      "differences": [
+        "status",
+        "body.error",
+        "body.recaptchaEnforcementState",
+        "body.useSmsBotScore",
+        "body.useSmsTollFraudProtection"
+      ],
+      "sameErrorCode": false
+    },
+    {
+      "row": "auth-config-sdk/recaptcha#audit-sign-up-without-token",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-config-sdk/recaptcha#audit-sign-in-without-token",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-config-sdk/recaptcha#audit-reset-unknown-without-token",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-config-sdk/recaptcha#audit-phone",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-config-sdk/recaptcha#read-audit-phone",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-config-sdk/recaptcha#client-audit-phone",
+      "status": "MISMATCH",
+      "differences": [
+        "status",
+        "body.error",
+        "body.recaptchaEnforcementState",
+        "body.useSmsBotScore",
+        "body.useSmsTollFraudProtection"
+      ],
+      "sameErrorCode": false
+    },
+    {
+      "row": "auth-config-sdk/recaptcha#audit-send-code-without-token",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-config-sdk/recaptcha#clear",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-config-sdk/recaptcha#read-cleared",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-config-sdk/recaptcha#client-cleared",
+      "status": "MISMATCH",
+      "differences": [
+        "status",
+        "body.error",
+        "body.recaptchaEnforcementState",
+        "body.useSmsBotScore",
+        "body.useSmsTollFraudProtection"
+      ],
+      "sameErrorCode": false
+    },
+    {
+      "row": "auth-config-sdk/quota#set",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-config-sdk/quota#read-set",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-config-sdk/quota#negative",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-config-sdk/quota#zero",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-config-sdk/quota#not-a-number",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-config-sdk/quota#very-large",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-config-sdk/quota#duration-zero",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-config-sdk/quota#duration-eight-days",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-config-sdk/quota#start-in-past",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-config-sdk/quota#start-far-future",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-config-sdk/quota#without-start",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-config-sdk/quota#without-duration",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-config-sdk/quota#read-after-refusals",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-config-sdk/quota#clear",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-config-sdk/quota#read-cleared",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-config-sdk/mobile-links#create-mobile-1",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-config-sdk/mobile-links#reset-all-settings",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-config-sdk/mobile-links#create-mobile-2",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-config-sdk/mobile-links#reset-ios-only",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-config-sdk/mobile-links#create-mobile-3",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-config-sdk/mobile-links#reset-android-only",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-config-sdk/mobile-links#create-mobile-4",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-config-sdk/mobile-links#reset-android-version-code",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-config-sdk/mobile-links#create-mobile-5",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-config-sdk/mobile-links#reset-install-without-package",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-config-sdk/mobile-links#create-mobile-6",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-config-sdk/mobile-links#reset-version-without-package",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-config-sdk/mobile-links#create-mobile-7",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-config-sdk/mobile-links#reset-ios-without-continue",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-config-sdk/mobile-links#create-mobile-8",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-config-sdk/mobile-links#reset-in-app-without-continue",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-config-sdk/mobile-links#create-mobile-9",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-config-sdk/mobile-links#reset-link-domain-hosting",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-config-sdk/mobile-links#create-mobile-10",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-config-sdk/mobile-links#reset-link-domain-other",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-config-sdk/mobile-links#create-mobile-11",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-config-sdk/mobile-links#reset-dynamic-link-domain",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-config-sdk/mobile-links#create-mobile-12",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-config-sdk/mobile-links#verify-all-settings",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-config-sdk/mobile-links#links-on",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-config-sdk/mobile-links#create-mobile-13",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-config-sdk/mobile-links#sign-in-all-settings",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-config-sdk/mobile-links#create-mobile-14",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-config-sdk/mobile-links#sign-in-not-in-app",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-config-sdk/mobile-links#dynamic-link-domain",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-config-sdk/mobile-links#read-dynamic-link-domain",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-config-sdk/mobile-links#create-mobile-15",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-config-sdk/mobile-links#sign-in-under-dynamic-link-domain",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-config-sdk/mobile-links#create-mobile-16",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-config-sdk/mobile-links#reset-under-dynamic-link-domain",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-config-sdk/other-fields#create",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-config-sdk/other-fields#locale",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-config-sdk/other-fields#read-locale",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-config-sdk/other-fields#reset-under-locale",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-config-sdk/other-fields#reset-subject",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-config-sdk/other-fields#read-reset-subject",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-config-sdk/other-fields#autodelete",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-config-sdk/other-fields#request-logging",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-config-sdk/other-fields#read-switches",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-config-sdk/other-fields#allowlist-japan",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-config-sdk/other-fields#send-us-under-allowlist",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-config-sdk/other-fields#deny-united-states",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-config-sdk/other-fields#read-sms-region",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-config-sdk/other-fields#send-us-under-denylist",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-config-sdk/other-fields#add-domain",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-config-sdk/other-fields#projects-with-domain",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-config-sdk/other-fields#reset-to-added-domain",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-config-sdk/other-fields#remove-hosting-domains",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-config-sdk/other-fields#reset-to-removed-domain",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-config-sdk/other-fields#read-domains",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-config-sdk/sdk/admin-config#get",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-config-sdk/sdk/admin-config#update-policy",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-config-sdk/sdk/admin-config#get-after-policy",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-config-sdk/sdk/admin-config#update-policy-unknown-state",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-config-sdk/sdk/admin-config#update-policy-minimum-5",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-config-sdk/sdk/admin-config#update-policy-fraction",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-config-sdk/sdk/admin-config#update-policy-off",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-config-sdk/sdk/admin-config#update-privacy-off",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-config-sdk/sdk/admin-config#get-after-privacy",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-config-sdk/sdk/admin-config#update-recaptcha-score-between-steps",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-config-sdk/sdk/admin-config#update-recaptcha-enforce-unknown",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-config-sdk/sdk/admin-config#update-recaptcha-off",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-config-sdk/sdk/admin-config#update-sms-region",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-config-sdk/sdk/admin-config#update-mobile-links",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-config-sdk/sdk/admin-config#get-after-updates",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-config-sdk/sdk/admin-config#update-unknown-member",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-config-sdk/sdk/admin-config#update-multi-factor-read-only-check",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-config-sdk/sdk/admin-tokens#sign-up",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-config-sdk/sdk/admin-tokens#token",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-config-sdk/sdk/admin-tokens#verify",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-config-sdk/sdk/admin-tokens#verify-checked",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-config-sdk/sdk/admin-tokens#verify-garbage",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-config-sdk/sdk/admin-tokens#cookie",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-config-sdk/sdk/admin-tokens#cookie-too-short",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-config-sdk/sdk/admin-tokens#verify-cookie",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-config-sdk/sdk/admin-tokens#verify-cookie-checked",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-config-sdk/sdk/admin-tokens#verify-cookie-as-token",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-config-sdk/sdk/admin-tokens#get-user",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-config-sdk/sdk/admin-tokens#revoke",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-config-sdk/sdk/admin-tokens#verify-after-revoke",
+      "status": "MISMATCH",
+      "differences": [
+        "sdk",
+        "value",
+        "code",
+        "message"
+      ],
+      "sameErrorCode": false
+    },
+    {
+      "row": "auth-config-sdk/sdk/admin-tokens#verify-checked-after-revoke",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-config-sdk/sdk/admin-tokens#verify-cookie-checked-after-revoke",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-config-sdk/sdk/admin-tokens#refresh-after-revoke",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-config-sdk/sdk/admin-tokens#sign-in-again",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-config-sdk/sdk/admin-tokens#token-again",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-config-sdk/sdk/admin-tokens#disable",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-config-sdk/sdk/admin-tokens#verify-disabled",
+      "status": "MISMATCH",
+      "differences": [
+        "sdk",
+        "value",
+        "code",
+        "message"
+      ],
+      "sameErrorCode": false
+    },
+    {
+      "row": "auth-config-sdk/sdk/admin-tokens#verify-checked-disabled",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-config-sdk/sdk/admin-tokens#delete",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-config-sdk/sdk/admin-tokens#verify-checked-deleted",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-config-sdk/sdk/admin-tokens#create-for-links",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-config-sdk/sdk/admin-tokens#reset-link",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-config-sdk/sdk/admin-tokens#reset-link-mobile",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-config-sdk/sdk/admin-tokens#reset-link-without-settings",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-config-sdk/sdk/admin-tokens#reset-link-unknown",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-config-sdk/sdk/admin-tokens#verify-link",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-config-sdk/sdk/admin-tokens#sign-in-link-password-required",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-config-sdk/sdk/admin-tokens#change-link",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-config-sdk/sdk/admin-tokens#reset-link-empty-link-domain",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-config-sdk/sdk/custom-token#mint",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-config-sdk/sdk/custom-token#mint-with-claims",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-config-sdk/sdk/custom-token#mint-reserved-claim",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-config-sdk/sdk/custom-token#mint-long-uid",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-config-sdk/sdk/custom-token#sign-in",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-config-sdk/sdk/custom-token#token-result",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-config-sdk/sdk/custom-token#verify",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-config-sdk/sdk/custom-token#get-user",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-config-sdk/sdk/custom-token#sign-in-plain",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-config-sdk/sdk/custom-token#plain-token-result",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-config-sdk/sdk/web-password-policy#create-weak",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-config-sdk/sdk/web-password-policy#validate-default",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-config-sdk/sdk/web-password-policy#validate-default-short",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-config-sdk/sdk/web-password-policy#enforce",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-config-sdk/sdk/web-password-policy#validate-cached",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-config-sdk/sdk/web-password-policy#create-weak-refused",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-config-sdk/sdk/web-password-policy#validate-refreshed",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-config-sdk/sdk/web-password-policy#validate-compliant",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-config-sdk/sdk/web-password-policy#validate-too-long",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-config-sdk/sdk/web-password-policy#create-compliant",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-config-sdk/sdk/web-password-policy#sign-in-weak-existing",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-config-sdk/sdk/web-password-policy#update-to-weak",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-config-sdk/sdk/web-password-policy#off",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-config-sdk/sdk/web-password-policy#validate-still-cached",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-config-sdk/sdk/web-password-policy#sign-in-weak-under-off",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-config-sdk/sdk/web-flows#sign-up",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-config-sdk/sdk/web-flows#current",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-config-sdk/sdk/web-flows#token-result",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-config-sdk/sdk/web-flows#token-result-refreshed",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-config-sdk/sdk/web-flows#sign-up-again",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-config-sdk/sdk/web-flows#update-password",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-config-sdk/sdk/web-flows#reload",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-config-sdk/sdk/web-flows#sign-out",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-config-sdk/sdk/web-flows#sign-in-wrong-password",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-config-sdk/sdk/web-flows#sign-in-unknown",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-config-sdk/sdk/web-flows#sign-in",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-config-sdk/sdk/web-flows#methods-privacy-on",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-config-sdk/sdk/web-flows#privacy-off",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-config-sdk/sdk/web-flows#methods-privacy-off",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-config-sdk/sdk/web-flows#methods-unknown-privacy-off",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-config-sdk/sdk/web-flows#sign-in-wrong-password-privacy-off",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-config-sdk/sdk/web-flows#sign-in-unknown-privacy-off",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-config-sdk/sdk/web-flows#delete",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-config-sdk/sdk/web-flows#anonymous",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-config-sdk/sdk/web-flows#anonymous-token",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-config-sdk/sdk/web-flows#anonymous-off",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-config-sdk/sdk/web-flows#sign-out-anonymous",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-config-sdk/sdk/web-flows#anonymous-refused",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-config-sdk/sdk/web-flows#signup-off",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-config-sdk/sdk/web-flows#sign-up-refused",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-config-sdk/sdk/web-flows#recaptcha-config-off",
+      "status": "MATCH"
+    }
+  ]
+}

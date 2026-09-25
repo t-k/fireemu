@@ -89,6 +89,30 @@
       "decision": "The sign-in providers (email/password, passwordRequired, anonymous, phone and test numbers) start enabled in both profiles, although a new production project enables none: a real project always enables what it uses, and a strict default of none would stop every first sign-up. The difference from production's initial configuration is known and recorded here; the startup key auth.signIn carries a production project's providers over.",
       "decidedBy": "owner (t-k)",
       "decidedOn": "2026-09-25"
+    },
+    {
+      "id": "K15",
+      "decision": "The client v2/recaptchaConfig answered 500 while a provider was AUDIT although the PATCH was accepted, so recaptchaenterprise.googleapis.com was enabled on the Identity Platform sandbox to observe the AUDIT shape and the requests without a token; the API stays enabled and the change is in the sandbox change log (widens K7). Owner ledger 2026-09-25, AUTH-CONFIG-SDK K15.",
+      "decidedBy": "owner (t-k)",
+      "decidedOn": "2026-09-25"
+    },
+    {
+      "id": "K16",
+      "decision": "A malformed JSON body (config/invalid#body-malformed) is a known difference in its message only: production appends its protobuf JSON parser's diagnostic ('Unexpected end of string. Expected an object key or }.' and a caret line), fireemu answers the same 400 INVALID_ARGUMENT with 'Invalid JSON payload received.'. Whether to reproduce common diagnostics is tracked separately (protobuf-json-parser-diagnostics). Owner ledger 2026-09-25.",
+      "decidedBy": "owner (t-k)",
+      "decidedOn": "2026-09-25"
+    },
+    {
+      "id": "K17",
+      "decision": "While a provider is AUDIT, production's client v2/recaptchaConfig answered 500 INTERNAL on the sandbox (recaptcha#client-audit-web, -ios, -android, -phone and #client-cleared), because no reCAPTCHA Enterprise key can be provisioned there even with the API enabled (K15). This is a difference the sandbox cannot observe; fireemu keeps answering the configured enforcement states with 200 and no key, and the configuration's read and write match production. Owner ledger 2026-09-25.",
+      "decidedBy": "owner (t-k)",
+      "decidedOn": "2026-09-25"
+    },
+    {
+      "id": "K18",
+      "decision": "The final-artifact regression re-runs the AUTH-ACCOUNT, AUTH-CREDENTIAL and AUTH-ACTION corpora and inherits their one documented divergence: AUTH-ACCOUNT scope decision A12, the gson parser message text for malformed customAttributes JSON (as AUTH-ACTION E9 inherits it).",
+      "decidedBy": "owner (t-k)",
+      "decidedOn": "2026-09-24"
     }
   ],
   "conditions": [
@@ -101,8 +125,26 @@
       "configProjections": [
         "strict"
       ],
-      "status": "PENDING_CORPUS",
-      "note": "The Admin GET config at the sandbox baseline, member for member (which unset members are absent, false switches omitted, the name with the project number, subtype, read-only members), and the client configuration reads at the same state: v1/projects, v2/passwordPolicy with no policy set, v2/recaptchaConfig with none set and without clientType, v1/recaptchaParams by shape."
+      "status": "VERIFIED",
+      "note": "The Admin GET config at the sandbox baseline, member for member (which unset members are absent, false switches omitted, the name with the project number, subtype, read-only members), and the client configuration reads at the same state: v1/projects, v2/passwordPolicy with no policy set, v2/recaptchaConfig with none set and without clientType, v1/recaptchaParams by shape.",
+      "evidence": {
+        "productionRecordings": [
+          {
+            "recordedAt": "2026-09-25T04:53:38.739Z",
+            "gitSha": "0b80fe7d00e9ebd60ac3a5894b9fae2cfde36c3e",
+            "recordings": 2,
+            "project": "fireemu-oracle-idp"
+          }
+        ],
+        "finalArtifactSha256": "0ef860222e0e326290593bbaa719ddc0f5cad3790174e7a51d4a09485fcdc98b",
+        "sourceCommit": "fc1833d650acdfe6ae8117fb7ec457dca4c6f8d8",
+        "comparisonPaths": [
+          "spec/compatibility/closure/evidence/AUTH-CONFIG-SDK-comparison.json"
+        ],
+        "rows": {
+          "MATCH": 13
+        }
+      }
     },
     {
       "conditionId": "AUTH-CONFIG-SDK/config-update-mask",
@@ -113,8 +155,26 @@
       "configProjections": [
         "strict"
       ],
-      "status": "PENDING_CORPUS",
-      "note": "The PATCH answer and the read-back for a leaf mask, a parent mask, a masked path absent from the body (reset), a body member outside the mask (ignored), an unknown path, a duplicate path, and a read-only path (name, subtype, defaultHostingSite, written back with its current value). An omitted or empty mask is K13."
+      "status": "VERIFIED",
+      "note": "The PATCH answer and the read-back for a leaf mask, a parent mask, a masked path absent from the body (reset), a body member outside the mask (ignored), an unknown path, a duplicate path, and a read-only path (name, subtype, defaultHostingSite, written back with its current value). An omitted or empty mask is K13.",
+      "evidence": {
+        "productionRecordings": [
+          {
+            "recordedAt": "2026-09-25T04:53:38.739Z",
+            "gitSha": "0b80fe7d00e9ebd60ac3a5894b9fae2cfde36c3e",
+            "recordings": 2,
+            "project": "fireemu-oracle-idp"
+          }
+        ],
+        "finalArtifactSha256": "0ef860222e0e326290593bbaa719ddc0f5cad3790174e7a51d4a09485fcdc98b",
+        "sourceCommit": "fc1833d650acdfe6ae8117fb7ec457dca4c6f8d8",
+        "comparisonPaths": [
+          "spec/compatibility/closure/evidence/AUTH-CONFIG-SDK-comparison.json"
+        ],
+        "rows": {
+          "MATCH": 18
+        }
+      }
     },
     {
       "conditionId": "AUTH-CONFIG-SDK/config-validation",
@@ -125,8 +185,37 @@
       "configProjections": [
         "strict"
       ],
-      "status": "PENDING_CORPUS",
-      "note": "Refusals (status, code and message) of invalid values outside the password policy: test phone numbers and codes, authorized domains, mobileLinksConfig, smsRegionConfig, wrong JSON types, unknown members, and a body that is not an object; and that a refused PATCH changes nothing."
+      "status": "VERIFIED",
+      "note": "Refusals (status, code and message) of invalid values outside the password policy: test phone numbers and codes, authorized domains, mobileLinksConfig, smsRegionConfig, wrong JSON types, unknown members, and a body that is not an object; and that a refused PATCH changes nothing.",
+      "evidence": {
+        "productionRecordings": [
+          {
+            "recordedAt": "2026-09-25T04:53:38.739Z",
+            "gitSha": "0b80fe7d00e9ebd60ac3a5894b9fae2cfde36c3e",
+            "recordings": 2,
+            "project": "fireemu-oracle-idp"
+          }
+        ],
+        "finalArtifactSha256": "0ef860222e0e326290593bbaa719ddc0f5cad3790174e7a51d4a09485fcdc98b",
+        "sourceCommit": "fc1833d650acdfe6ae8117fb7ec457dca4c6f8d8",
+        "comparisonPaths": [
+          "spec/compatibility/closure/evidence/AUTH-CONFIG-SDK-comparison.json"
+        ],
+        "rows": {
+          "MATCH": 18,
+          "MISMATCH": 1
+        },
+        "documentedDivergences": [
+          {
+            "row": "auth-config-sdk/config/invalid#body-malformed",
+            "kind": "message-text",
+            "decidedBy": "owner",
+            "decidedOn": "2026-09-25",
+            "scopeDecision": "K16",
+            "reason": "production's protobuf JSON parser appends its diagnostic to 'Invalid JSON payload received.'; the 400 INVALID_ARGUMENT refusal matches."
+          }
+        ]
+      }
     },
     {
       "conditionId": "AUTH-CONFIG-SDK/password-policy-config",
@@ -137,8 +226,26 @@
       "configProjections": [
         "strict"
       ],
-      "status": "PENDING_CORPUS",
-      "note": "passwordPolicyConfig writes: accepted shapes and their read-back (schemaVersion, lastUpdateTime, forceUpgradeOnSignin omitted when false, the cleared state), and refusals of lengths out of range, a maximum below the minimum, fractional lengths, zero or two versions, an unspecified state, and ENFORCE without a version."
+      "status": "VERIFIED",
+      "note": "passwordPolicyConfig writes: accepted shapes and their read-back (schemaVersion, lastUpdateTime, forceUpgradeOnSignin omitted when false, the cleared state), and refusals of lengths out of range, a maximum below the minimum, fractional lengths, zero or two versions, an unspecified state, and ENFORCE without a version.",
+      "evidence": {
+        "productionRecordings": [
+          {
+            "recordedAt": "2026-09-25T04:53:38.739Z",
+            "gitSha": "0b80fe7d00e9ebd60ac3a5894b9fae2cfde36c3e",
+            "recordings": 2,
+            "project": "fireemu-oracle-idp"
+          }
+        ],
+        "finalArtifactSha256": "0ef860222e0e326290593bbaa719ddc0f5cad3790174e7a51d4a09485fcdc98b",
+        "sourceCommit": "fc1833d650acdfe6ae8117fb7ec457dca4c6f8d8",
+        "comparisonPaths": [
+          "spec/compatibility/closure/evidence/AUTH-CONFIG-SDK-comparison.json"
+        ],
+        "rows": {
+          "MATCH": 28
+        }
+      }
     },
     {
       "conditionId": "AUTH-CONFIG-SDK/password-policy-projection",
@@ -149,8 +256,26 @@
       "configProjections": [
         "strict"
       ],
-      "status": "PENDING_CORPUS",
-      "note": "Client v2/passwordPolicy under no policy, OFF, and ENFORCE with a minimum only, a maximum only and every character class, with forceUpgradeOnSignin on and off."
+      "status": "VERIFIED",
+      "note": "Client v2/passwordPolicy under no policy, OFF, and ENFORCE with a minimum only, a maximum only and every character class, with forceUpgradeOnSignin on and off.",
+      "evidence": {
+        "productionRecordings": [
+          {
+            "recordedAt": "2026-09-25T04:53:38.739Z",
+            "gitSha": "0b80fe7d00e9ebd60ac3a5894b9fae2cfde36c3e",
+            "recordings": 2,
+            "project": "fireemu-oracle-idp"
+          }
+        ],
+        "finalArtifactSha256": "0ef860222e0e326290593bbaa719ddc0f5cad3790174e7a51d4a09485fcdc98b",
+        "sourceCommit": "fc1833d650acdfe6ae8117fb7ec457dca4c6f8d8",
+        "comparisonPaths": [
+          "spec/compatibility/closure/evidence/AUTH-CONFIG-SDK-comparison.json"
+        ],
+        "rows": {
+          "MATCH": 12
+        }
+      }
     },
     {
       "conditionId": "AUTH-CONFIG-SDK/password-policy-existing-accounts",
@@ -161,8 +286,26 @@
       "configProjections": [
         "strict"
       ],
-      "status": "PENDING_CORPUS",
-      "note": "An account whose password does not meet a policy set after it was created: sign-in under ENFORCE with forceUpgradeOnSignin (refused or not) and without it (userNotifications), under OFF, a compliant password change, a reset through an Admin-generated code, and the Admin update route under the default policy."
+      "status": "VERIFIED",
+      "note": "An account whose password does not meet a policy set after it was created: sign-in under ENFORCE with forceUpgradeOnSignin (refused or not) and without it (userNotifications), under OFF, a compliant password change, a reset through an Admin-generated code, and the Admin update route under the default policy.",
+      "evidence": {
+        "productionRecordings": [
+          {
+            "recordedAt": "2026-09-25T04:53:38.739Z",
+            "gitSha": "0b80fe7d00e9ebd60ac3a5894b9fae2cfde36c3e",
+            "recordings": 2,
+            "project": "fireemu-oracle-idp"
+          }
+        ],
+        "finalArtifactSha256": "0ef860222e0e326290593bbaa719ddc0f5cad3790174e7a51d4a09485fcdc98b",
+        "sourceCommit": "fc1833d650acdfe6ae8117fb7ec457dca4c6f8d8",
+        "comparisonPaths": [
+          "spec/compatibility/closure/evidence/AUTH-CONFIG-SDK-comparison.json"
+        ],
+        "rows": {
+          "MATCH": 19
+        }
+      }
     },
     {
       "conditionId": "AUTH-CONFIG-SDK/provider-switches",
@@ -173,8 +316,26 @@
       "configProjections": [
         "strict"
       ],
-      "status": "PENDING_CORPUS",
-      "note": "Results while email/password, anonymous or phone sign-in is disabled: client sign-up and sign-in, password reset, phone code requests and sign-in on test numbers, and the Admin routes, which the switches do not restrict."
+      "status": "VERIFIED",
+      "note": "Results while email/password, anonymous or phone sign-in is disabled: client sign-up and sign-in, password reset, phone code requests and sign-in on test numbers, and the Admin routes, which the switches do not restrict.",
+      "evidence": {
+        "productionRecordings": [
+          {
+            "recordedAt": "2026-09-25T04:53:38.739Z",
+            "gitSha": "0b80fe7d00e9ebd60ac3a5894b9fae2cfde36c3e",
+            "recordings": 2,
+            "project": "fireemu-oracle-idp"
+          }
+        ],
+        "finalArtifactSha256": "0ef860222e0e326290593bbaa719ddc0f5cad3790174e7a51d4a09485fcdc98b",
+        "sourceCommit": "fc1833d650acdfe6ae8117fb7ec457dca4c6f8d8",
+        "comparisonPaths": [
+          "spec/compatibility/closure/evidence/AUTH-CONFIG-SDK-comparison.json"
+        ],
+        "rows": {
+          "MATCH": 17
+        }
+      }
     },
     {
       "conditionId": "AUTH-CONFIG-SDK/duplicate-email-switch",
@@ -185,8 +346,26 @@
       "configProjections": [
         "strict"
       ],
-      "status": "PENDING_CORPUS",
-      "note": "Switching signIn.allowDuplicateEmails off while accounts share an address, and what lookups and sign-in answer while they do."
+      "status": "VERIFIED",
+      "note": "Switching signIn.allowDuplicateEmails off while accounts share an address, and what lookups and sign-in answer while they do.",
+      "evidence": {
+        "productionRecordings": [
+          {
+            "recordedAt": "2026-09-25T04:53:38.739Z",
+            "gitSha": "0b80fe7d00e9ebd60ac3a5894b9fae2cfde36c3e",
+            "recordings": 2,
+            "project": "fireemu-oracle-idp"
+          }
+        ],
+        "finalArtifactSha256": "0ef860222e0e326290593bbaa719ddc0f5cad3790174e7a51d4a09485fcdc98b",
+        "sourceCommit": "fc1833d650acdfe6ae8117fb7ec457dca4c6f8d8",
+        "comparisonPaths": [
+          "spec/compatibility/closure/evidence/AUTH-CONFIG-SDK-comparison.json"
+        ],
+        "rows": {
+          "MATCH": 9
+        }
+      }
     },
     {
       "conditionId": "AUTH-CONFIG-SDK/email-privacy-projection",
@@ -197,8 +376,26 @@
       "configProjections": [
         "strict"
       ],
-      "status": "PENDING_CORPUS",
-      "note": "createAuthUri (the fetchSignInMethodsForEmail source) for known, unknown and provider-mixed addresses with improved email privacy on and off."
+      "status": "VERIFIED",
+      "note": "createAuthUri (the fetchSignInMethodsForEmail source) for known, unknown and provider-mixed addresses with improved email privacy on and off.",
+      "evidence": {
+        "productionRecordings": [
+          {
+            "recordedAt": "2026-09-25T04:53:38.739Z",
+            "gitSha": "0b80fe7d00e9ebd60ac3a5894b9fae2cfde36c3e",
+            "recordings": 2,
+            "project": "fireemu-oracle-idp"
+          }
+        ],
+        "finalArtifactSha256": "0ef860222e0e326290593bbaa719ddc0f5cad3790174e7a51d4a09485fcdc98b",
+        "sourceCommit": "fc1833d650acdfe6ae8117fb7ec457dca4c6f8d8",
+        "comparisonPaths": [
+          "spec/compatibility/closure/evidence/AUTH-CONFIG-SDK-comparison.json"
+        ],
+        "rows": {
+          "MATCH": 17
+        }
+      }
     },
     {
       "conditionId": "AUTH-CONFIG-SDK/client-permissions-paths",
@@ -209,8 +406,26 @@
       "configProjections": [
         "strict"
       ],
-      "status": "PENDING_CORPUS",
-      "note": "disabledUserSignup on the account-creating routes AUTH-ACCOUNT did not observe (phone sign-in of a new number, email-link sign-in of a new address), and the same routes for an account that already exists. The client sign-up, anonymous sign-up and delete routes are closed in AUTH-ACCOUNT (K11)."
+      "status": "VERIFIED",
+      "note": "disabledUserSignup on the account-creating routes AUTH-ACCOUNT did not observe (phone sign-in of a new number, email-link sign-in of a new address), and the same routes for an account that already exists. The client sign-up, anonymous sign-up and delete routes are closed in AUTH-ACCOUNT (K11).",
+      "evidence": {
+        "productionRecordings": [
+          {
+            "recordedAt": "2026-09-25T04:53:38.739Z",
+            "gitSha": "0b80fe7d00e9ebd60ac3a5894b9fae2cfde36c3e",
+            "recordings": 2,
+            "project": "fireemu-oracle-idp"
+          }
+        ],
+        "finalArtifactSha256": "0ef860222e0e326290593bbaa719ddc0f5cad3790174e7a51d4a09485fcdc98b",
+        "sourceCommit": "fc1833d650acdfe6ae8117fb7ec457dca4c6f8d8",
+        "comparisonPaths": [
+          "spec/compatibility/closure/evidence/AUTH-CONFIG-SDK-comparison.json"
+        ],
+        "rows": {
+          "MATCH": 12
+        }
+      }
     },
     {
       "conditionId": "AUTH-CONFIG-SDK/recaptcha-config",
@@ -221,8 +436,69 @@
       "configProjections": [
         "strict"
       ],
-      "status": "PENDING_CORPUS",
-      "note": "recaptchaConfig writes and refusals (enforcement states, managed rules and their scores, the SMS flags), the client v2/recaptchaConfig projection per client type under OFF and AUDIT, and sign-up, sign-in and phone code requests without a reCAPTCHA token under AUDIT (K2)."
+      "status": "VERIFIED",
+      "note": "recaptchaConfig writes and refusals (enforcement states, managed rules and their scores, the SMS flags), the client v2/recaptchaConfig projection per client type under OFF and AUDIT, and sign-up, sign-in and phone code requests without a reCAPTCHA token under AUDIT (K2).",
+      "evidence": {
+        "productionRecordings": [
+          {
+            "recordedAt": "2026-09-25T04:53:38.739Z",
+            "gitSha": "0b80fe7d00e9ebd60ac3a5894b9fae2cfde36c3e",
+            "recordings": 2,
+            "project": "fireemu-oracle-idp"
+          }
+        ],
+        "finalArtifactSha256": "0ef860222e0e326290593bbaa719ddc0f5cad3790174e7a51d4a09485fcdc98b",
+        "sourceCommit": "fc1833d650acdfe6ae8117fb7ec457dca4c6f8d8",
+        "comparisonPaths": [
+          "spec/compatibility/closure/evidence/AUTH-CONFIG-SDK-comparison.json"
+        ],
+        "rows": {
+          "MATCH": 20,
+          "MISMATCH": 5
+        },
+        "documentedDivergences": [
+          {
+            "row": "auth-config-sdk/recaptcha#client-audit-web",
+            "kind": "sandbox-environment",
+            "decidedBy": "owner",
+            "decidedOn": "2026-09-25",
+            "scopeDecision": "K17",
+            "reason": "production answers 500 INTERNAL while a provider is AUDIT because the sandbox cannot provision a reCAPTCHA Enterprise key; fireemu answers the configured states with 200."
+          },
+          {
+            "row": "auth-config-sdk/recaptcha#client-audit-ios",
+            "kind": "sandbox-environment",
+            "decidedBy": "owner",
+            "decidedOn": "2026-09-25",
+            "scopeDecision": "K17",
+            "reason": "production answers 500 INTERNAL while a provider is AUDIT because the sandbox cannot provision a reCAPTCHA Enterprise key; fireemu answers the configured states with 200."
+          },
+          {
+            "row": "auth-config-sdk/recaptcha#client-audit-android",
+            "kind": "sandbox-environment",
+            "decidedBy": "owner",
+            "decidedOn": "2026-09-25",
+            "scopeDecision": "K17",
+            "reason": "production answers 500 INTERNAL while a provider is AUDIT because the sandbox cannot provision a reCAPTCHA Enterprise key; fireemu answers the configured states with 200."
+          },
+          {
+            "row": "auth-config-sdk/recaptcha#client-audit-phone",
+            "kind": "sandbox-environment",
+            "decidedBy": "owner",
+            "decidedOn": "2026-09-25",
+            "scopeDecision": "K17",
+            "reason": "production answers 500 INTERNAL while a provider is AUDIT because the sandbox cannot provision a reCAPTCHA Enterprise key; fireemu answers the configured states with 200."
+          },
+          {
+            "row": "auth-config-sdk/recaptcha#client-cleared",
+            "kind": "sandbox-environment",
+            "decidedBy": "owner",
+            "decidedOn": "2026-09-25",
+            "scopeDecision": "K17",
+            "reason": "production answers 500 INTERNAL while a provider is AUDIT because the sandbox cannot provision a reCAPTCHA Enterprise key; fireemu answers the configured states with 200."
+          }
+        ]
+      }
     },
     {
       "conditionId": "AUTH-CONFIG-SDK/quota-config",
@@ -233,8 +509,26 @@
       "configProjections": [
         "strict"
       ],
-      "status": "PENDING_CORPUS",
-      "note": "quota.signUpQuotaConfig writes, read-back and refusals (quota, startTime, quotaDuration). Enforcement is K4."
+      "status": "VERIFIED",
+      "note": "quota.signUpQuotaConfig writes, read-back and refusals (quota, startTime, quotaDuration). Enforcement is K4.",
+      "evidence": {
+        "productionRecordings": [
+          {
+            "recordedAt": "2026-09-25T04:53:38.739Z",
+            "gitSha": "0b80fe7d00e9ebd60ac3a5894b9fae2cfde36c3e",
+            "recordings": 2,
+            "project": "fireemu-oracle-idp"
+          }
+        ],
+        "finalArtifactSha256": "0ef860222e0e326290593bbaa719ddc0f5cad3790174e7a51d4a09485fcdc98b",
+        "sourceCommit": "fc1833d650acdfe6ae8117fb7ec457dca4c6f8d8",
+        "comparisonPaths": [
+          "spec/compatibility/closure/evidence/AUTH-CONFIG-SDK-comparison.json"
+        ],
+        "rows": {
+          "MATCH": 15
+        }
+      }
     },
     {
       "conditionId": "AUTH-CONFIG-SDK/mobile-link-settings",
@@ -245,8 +539,26 @@
       "configProjections": [
         "strict"
       ],
-      "status": "PENDING_CORPUS",
-      "note": "Moved from AUTH-ACTION E5: action links generated with iOSBundleId, androidPackageName, androidInstallApp, androidMinimumVersion (and the Web SDK's androidMinimumVersionCode), dynamicLinkDomain and linkDomain, their refusals, and mobileLinksConfig.domain."
+      "status": "VERIFIED",
+      "note": "Moved from AUTH-ACTION E5: action links generated with iOSBundleId, androidPackageName, androidInstallApp, androidMinimumVersion (and the Web SDK's androidMinimumVersionCode), dynamicLinkDomain and linkDomain, their refusals, and mobileLinksConfig.domain.",
+      "evidence": {
+        "productionRecordings": [
+          {
+            "recordedAt": "2026-09-25T04:53:38.739Z",
+            "gitSha": "0b80fe7d00e9ebd60ac3a5894b9fae2cfde36c3e",
+            "recordings": 2,
+            "project": "fireemu-oracle-idp"
+          }
+        ],
+        "finalArtifactSha256": "0ef860222e0e326290593bbaa719ddc0f5cad3790174e7a51d4a09485fcdc98b",
+        "sourceCommit": "fc1833d650acdfe6ae8117fb7ec457dca4c6f8d8",
+        "comparisonPaths": [
+          "spec/compatibility/closure/evidence/AUTH-CONFIG-SDK-comparison.json"
+        ],
+        "rows": {
+          "MATCH": 35
+        }
+      }
     },
     {
       "conditionId": "AUTH-CONFIG-SDK/other-config-fields",
@@ -257,8 +569,26 @@
       "configProjections": [
         "strict"
       ],
-      "status": "PENDING_CORPUS",
-      "note": "Read and write of notification (K8), autodeleteAnonymousUsers, monitoring.requestLogging, smsRegionConfig and its effect on a test number, and authorizedDomains with the client v1/projects projection."
+      "status": "VERIFIED",
+      "note": "Read and write of notification (K8), autodeleteAnonymousUsers, monitoring.requestLogging, smsRegionConfig and its effect on a test number, and authorizedDomains with the client v1/projects projection.",
+      "evidence": {
+        "productionRecordings": [
+          {
+            "recordedAt": "2026-09-25T04:53:38.739Z",
+            "gitSha": "0b80fe7d00e9ebd60ac3a5894b9fae2cfde36c3e",
+            "recordings": 2,
+            "project": "fireemu-oracle-idp"
+          }
+        ],
+        "finalArtifactSha256": "0ef860222e0e326290593bbaa719ddc0f5cad3790174e7a51d4a09485fcdc98b",
+        "sourceCommit": "fc1833d650acdfe6ae8117fb7ec457dca4c6f8d8",
+        "comparisonPaths": [
+          "spec/compatibility/closure/evidence/AUTH-CONFIG-SDK-comparison.json"
+        ],
+        "rows": {
+          "MATCH": 20
+        }
+      }
     },
     {
       "conditionId": "AUTH-CONFIG-SDK/admin-sdk-project-config",
@@ -269,8 +599,26 @@
       "configProjections": [
         "strict-unsigned-emulator"
       ],
-      "status": "PENDING_CORPUS",
-      "note": "Admin SDK projectConfigManager getProjectConfig and updateProjectConfig for its members (passwordPolicyConfig, emailPrivacyConfig, recaptchaConfig, smsRegionConfig, mobileLinksConfig; multiFactorConfig is K9), the SDK-side refusals and the server refusals it surfaces. An empty update sends an empty mask (K13)."
+      "status": "VERIFIED",
+      "note": "Admin SDK projectConfigManager getProjectConfig and updateProjectConfig for its members (passwordPolicyConfig, emailPrivacyConfig, recaptchaConfig, smsRegionConfig, mobileLinksConfig; multiFactorConfig is K9), the SDK-side refusals and the server refusals it surfaces. An empty update sends an empty mask (K13).",
+      "evidence": {
+        "productionRecordings": [
+          {
+            "recordedAt": "2026-09-25T04:53:38.739Z",
+            "gitSha": "0b80fe7d00e9ebd60ac3a5894b9fae2cfde36c3e",
+            "recordings": 2,
+            "project": "fireemu-oracle-idp"
+          }
+        ],
+        "finalArtifactSha256": "0ef860222e0e326290593bbaa719ddc0f5cad3790174e7a51d4a09485fcdc98b",
+        "sourceCommit": "fc1833d650acdfe6ae8117fb7ec457dca4c6f8d8",
+        "comparisonPaths": [
+          "spec/compatibility/closure/evidence/AUTH-CONFIG-SDK-comparison.json"
+        ],
+        "rows": {
+          "MATCH": 17
+        }
+      }
     },
     {
       "conditionId": "AUTH-CONFIG-SDK/admin-sdk-tokens",
@@ -281,8 +629,45 @@
       "configProjections": [
         "strict-unsigned-emulator"
       ],
-      "status": "PENDING_CORPUS",
-      "note": "Moved from AUTH-CREDENTIAL C2 and AUTH-ACTION E1: verifyIdToken with and without checkRevoked for a live, revoked, disabled and deleted account, createSessionCookie and verifySessionCookie, revokeRefreshTokens, getUser and the generate*Link calls with ActionCodeSettings. Differences caused by the SDK's emulator mode are K5 divergences."
+      "status": "VERIFIED",
+      "note": "Moved from AUTH-CREDENTIAL C2 and AUTH-ACTION E1: verifyIdToken with and without checkRevoked for a live, revoked, disabled and deleted account, createSessionCookie and verifySessionCookie, revokeRefreshTokens, getUser and the generate*Link calls with ActionCodeSettings. Differences caused by the SDK's emulator mode are K5 divergences.",
+      "evidence": {
+        "productionRecordings": [
+          {
+            "recordedAt": "2026-09-25T04:53:38.739Z",
+            "gitSha": "0b80fe7d00e9ebd60ac3a5894b9fae2cfde36c3e",
+            "recordings": 2,
+            "project": "fireemu-oracle-idp"
+          }
+        ],
+        "finalArtifactSha256": "0ef860222e0e326290593bbaa719ddc0f5cad3790174e7a51d4a09485fcdc98b",
+        "sourceCommit": "fc1833d650acdfe6ae8117fb7ec457dca4c6f8d8",
+        "comparisonPaths": [
+          "spec/compatibility/closure/evidence/AUTH-CONFIG-SDK-comparison.json"
+        ],
+        "rows": {
+          "MATCH": 30,
+          "MISMATCH": 2
+        },
+        "documentedDivergences": [
+          {
+            "row": "auth-config-sdk/sdk/admin-tokens#verify-after-revoke",
+            "kind": "sdk-emulator-mode",
+            "decidedBy": "owner",
+            "decidedOn": "2026-09-25",
+            "scopeDecision": "K5",
+            "reason": "the Admin SDK checks revocation and a disabled account whenever FIREBASE_AUTH_EMULATOR_HOST is set, also with checkRevoked false (firebase-admin lib/auth/base-auth.js verifyIdToken); production verifies the token only."
+          },
+          {
+            "row": "auth-config-sdk/sdk/admin-tokens#verify-disabled",
+            "kind": "sdk-emulator-mode",
+            "decidedBy": "owner",
+            "decidedOn": "2026-09-25",
+            "scopeDecision": "K5",
+            "reason": "the Admin SDK checks revocation and a disabled account whenever FIREBASE_AUTH_EMULATOR_HOST is set, also with checkRevoked false (firebase-admin lib/auth/base-auth.js verifyIdToken); production verifies the token only."
+          }
+        ]
+      }
     },
     {
       "conditionId": "AUTH-CONFIG-SDK/admin-sdk-custom-token",
@@ -293,8 +678,26 @@
       "configProjections": [
         "emulator"
       ],
-      "status": "PENDING_CORPUS",
-      "note": "createCustomToken with and without developer claims, signInWithCustomToken in the Web SDK, and the decoded ID token through verifyIdToken (K5: the emulator profile; K6: production signs through signBlob)."
+      "status": "VERIFIED",
+      "note": "createCustomToken with and without developer claims, signInWithCustomToken in the Web SDK, and the decoded ID token through verifyIdToken (K5: the emulator profile; K6: production signs through signBlob).",
+      "evidence": {
+        "productionRecordings": [
+          {
+            "recordedAt": "2026-09-25T04:53:38.739Z",
+            "gitSha": "0b80fe7d00e9ebd60ac3a5894b9fae2cfde36c3e",
+            "recordings": 2,
+            "project": "fireemu-oracle-idp"
+          }
+        ],
+        "finalArtifactSha256": "0ef860222e0e326290593bbaa719ddc0f5cad3790174e7a51d4a09485fcdc98b",
+        "sourceCommit": "fc1833d650acdfe6ae8117fb7ec457dca4c6f8d8",
+        "comparisonPaths": [
+          "spec/compatibility/closure/evidence/AUTH-CONFIG-SDK-comparison.json"
+        ],
+        "rows": {
+          "MATCH": 10
+        }
+      }
     },
     {
       "conditionId": "AUTH-CONFIG-SDK/web-sdk-password-policy",
@@ -305,8 +708,26 @@
       "configProjections": [
         "strict-unsigned-emulator"
       ],
-      "status": "PENDING_CORPUS",
-      "note": "Web SDK validatePassword under no policy, OFF and ENFORCE, the error codes of createUserWithEmailAndPassword and signInWithEmailAndPassword under ENFORCE, and the policy refresh after a server refusal."
+      "status": "VERIFIED",
+      "note": "Web SDK validatePassword under no policy, OFF and ENFORCE, the error codes of createUserWithEmailAndPassword and signInWithEmailAndPassword under ENFORCE, and the policy refresh after a server refusal.",
+      "evidence": {
+        "productionRecordings": [
+          {
+            "recordedAt": "2026-09-25T04:53:38.739Z",
+            "gitSha": "0b80fe7d00e9ebd60ac3a5894b9fae2cfde36c3e",
+            "recordings": 2,
+            "project": "fireemu-oracle-idp"
+          }
+        ],
+        "finalArtifactSha256": "0ef860222e0e326290593bbaa719ddc0f5cad3790174e7a51d4a09485fcdc98b",
+        "sourceCommit": "fc1833d650acdfe6ae8117fb7ec457dca4c6f8d8",
+        "comparisonPaths": [
+          "spec/compatibility/closure/evidence/AUTH-CONFIG-SDK-comparison.json"
+        ],
+        "rows": {
+          "MATCH": 15
+        }
+      }
     },
     {
       "conditionId": "AUTH-CONFIG-SDK/web-sdk-flows",
@@ -317,8 +738,26 @@
       "configProjections": [
         "strict-unsigned-emulator"
       ],
-      "status": "PENDING_CORPUS",
-      "note": "Moved from AUTH-ACCOUNT A5 and AUTH-CREDENTIAL C2: Web SDK sign-up, sign-in, anonymous sign-in, forced token refresh and getIdTokenResult claims, updatePassword, reload, delete, fetchSignInMethodsForEmail, and the SDK error codes for disabled providers, client permissions and email privacy."
+      "status": "VERIFIED",
+      "note": "Moved from AUTH-ACCOUNT A5 and AUTH-CREDENTIAL C2: Web SDK sign-up, sign-in, anonymous sign-in, forced token refresh and getIdTokenResult claims, updatePassword, reload, delete, fetchSignInMethodsForEmail, and the SDK error codes for disabled providers, client permissions and email privacy.",
+      "evidence": {
+        "productionRecordings": [
+          {
+            "recordedAt": "2026-09-25T04:53:38.739Z",
+            "gitSha": "0b80fe7d00e9ebd60ac3a5894b9fae2cfde36c3e",
+            "recordings": 2,
+            "project": "fireemu-oracle-idp"
+          }
+        ],
+        "finalArtifactSha256": "0ef860222e0e326290593bbaa719ddc0f5cad3790174e7a51d4a09485fcdc98b",
+        "sourceCommit": "fc1833d650acdfe6ae8117fb7ec457dca4c6f8d8",
+        "comparisonPaths": [
+          "spec/compatibility/closure/evidence/AUTH-CONFIG-SDK-comparison.json"
+        ],
+        "rows": {
+          "MATCH": 26
+        }
+      }
     },
     {
       "conditionId": "AUTH-CONFIG-SDK/final-artifact-regression",
@@ -332,8 +771,104 @@
       "configProjections": [
         "strict"
       ],
-      "status": "PENDING_CORPUS",
-      "note": "Every AUTH-CONFIG-SDK row and the AUTH-ACCOUNT, AUTH-CREDENTIAL and AUTH-ACTION regressions on one artifact, with the workspace tests and clippy."
+      "status": "VERIFIED",
+      "note": "Every AUTH-CONFIG-SDK row and the AUTH-ACCOUNT, AUTH-CREDENTIAL and AUTH-ACTION regressions on one artifact, with the workspace tests and clippy.",
+      "evidence": {
+        "productionRecordings": [
+          {
+            "recordedAt": "2026-09-23T11:52:22.579Z",
+            "gitSha": "2f9128f45f0d5aeb4aea9bdfaaa0f1e1c105e31f",
+            "recordings": 2,
+            "project": "fireemu-oracle-idp"
+          },
+          {
+            "recordedAt": "2026-09-23T12:44:15.390Z",
+            "gitSha": "3fdcb7f5350bfc24257fe448ea72be5417be26c7",
+            "recordings": 2,
+            "project": "fireemu-oracle-idp"
+          },
+          {
+            "recordedAt": "2026-09-23T15:29:14.879Z",
+            "gitSha": "81ba4d60f0faf5268a8b6b9eacb1ef34b03e5315",
+            "recordings": 2,
+            "project": "fireemu-oracle-idp"
+          },
+          {
+            "recordedAt": "2026-09-24T05:51:03.248Z",
+            "gitSha": "de2865c9a3ad3e3d6a8826b1291afd0e02223b75",
+            "recordings": 2,
+            "project": "fireemu-oracle-idp"
+          },
+          {
+            "recordedAt": "2026-09-24T05:53:09.841Z",
+            "gitSha": "4092354575c2d6a33179339b627c3e5db64c854a",
+            "recordings": 2,
+            "project": "fireemu-oracle-idp"
+          },
+          {
+            "recordedAt": "2026-09-24T08:04:46.724Z",
+            "gitSha": "092787b0e72597f66cd1fea368a6f3caa0d308be",
+            "recordings": 2,
+            "project": "fireemu-oracle-idp"
+          },
+          {
+            "recordedAt": "2026-09-24T12:13:38.654Z",
+            "gitSha": "37e8e0e461cc91319792748c94fa402afc8a60dd",
+            "recordings": 2,
+            "project": "fireemu-oracle-idp"
+          },
+          {
+            "recordedAt": "2026-09-24T14:23:20.843Z",
+            "gitSha": "268dd2569ad9aac0e62963c794609bce45f5e6d8",
+            "recordings": 2,
+            "project": "fireemu-oracle-idp"
+          },
+          {
+            "recordedAt": "2026-09-24T17:27:34.229Z",
+            "gitSha": "36a07517b322aff6b31db07308f7280421ccd74c",
+            "recordings": 2,
+            "project": "fireemu-oracle-idp"
+          },
+          {
+            "recordedAt": "2026-09-25T04:53:38.739Z",
+            "gitSha": "0b80fe7d00e9ebd60ac3a5894b9fae2cfde36c3e",
+            "recordings": 2,
+            "project": "fireemu-oracle-idp"
+          }
+        ],
+        "finalArtifactSha256": "0ef860222e0e326290593bbaa719ddc0f5cad3790174e7a51d4a09485fcdc98b",
+        "sourceCommit": "fc1833d650acdfe6ae8117fb7ec457dca4c6f8d8",
+        "comparisonPaths": [
+          "spec/compatibility/closure/evidence/AUTH-CONFIG-SDK-comparison.json",
+          "spec/compatibility/closure/evidence/AUTH-CONFIG-SDK-account-regression.json",
+          "spec/compatibility/closure/evidence/AUTH-CONFIG-SDK-credential-regression.json",
+          "spec/compatibility/closure/evidence/AUTH-CONFIG-SDK-action-regression.json"
+        ],
+        "workspace": {
+          "nextest": {
+            "command": "cargo nextest run --workspace --profile pr",
+            "passed": 3410,
+            "failed": 0
+          },
+          "clippy": "cargo clippy --workspace --all-targets: no warnings",
+          "fmt": "cargo fmt --all --check: clean",
+          "binaryCopy": "docs.local/runs/auth-config-sdk-final-20260925/ (private: the binary, its sha256, git status at build, each check log)"
+        },
+        "rows": {
+          "MATCH": 1549,
+          "MISMATCH": 9
+        },
+        "documentedDivergences": [
+          {
+            "row": "auth-account/admin/custom-attributes#invalid-json",
+            "kind": "message-text",
+            "decidedBy": "owner",
+            "decidedOn": "2026-09-24",
+            "scopeDecision": "K18",
+            "reason": "AUTH-ACCOUNT scope decision A12: production returns gson's parser message for malformed customAttributes JSON; the INVALID_CLAIMS refusal itself matches."
+          }
+        ]
+      }
     },
     {
       "conditionId": "AUTH-CONFIG-SDK/closure-review",
@@ -344,8 +879,12 @@
       "configProjections": [
         "strict"
       ],
-      "status": "PENDING_CORPUS",
-      "note": "An independent closure review and a safety review of the final artifact (no cargo-mutants in the reviews; the lane's own mutation evidence is checked)."
+      "status": "PENDING_REVIEW",
+      "note": "An independent closure review and a safety review of the final artifact (no cargo-mutants in the reviews; the lane's own mutation evidence is checked).",
+      "evidence": {
+        "finalArtifactSha256": "0ef860222e0e326290593bbaa719ddc0f5cad3790174e7a51d4a09485fcdc98b",
+        "sourceCommit": "fc1833d650acdfe6ae8117fb7ec457dca4c6f8d8"
+      }
     }
   ]
 }

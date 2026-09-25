@@ -335,8 +335,9 @@ test("the harness recognises its display names, and the corpus uses only them (M
  * A fake Identity Platform for the stop paths: the project config, tenants and an empty account
  * list. `createFails` answers a tenant create with 503 after creating it.
  */
-function fakeSandbox({ tenants = [], createFails = false } = {}) {
+function fakeSandbox({ tenants = [], createFails = false, failFirstList = false } = {}) {
   const state = { allowTenants: false, tenants: new Map(tenants.map((t) => [t.id, t])), seq: 0 };
+  let lists = 0;
   const json = (status, body) => new Response(JSON.stringify(body), { status });
   const fetchFake = async (url, init = {}) => {
     const { pathname } = new URL(url);
@@ -357,6 +358,8 @@ function fakeSandbox({ tenants = [], createFails = false } = {}) {
         ? json(503, { error: { code: 503, message: "UNAVAILABLE" } })
         : json(200, answer);
     }
+    if (pathname.endsWith("/tenants") && failFirstList && (lists += 1) === 1)
+      return json(503, { error: { code: 503, message: "UNAVAILABLE" } });
     if (pathname.endsWith("/tenants"))
       return json(200, {
         tenants: [...state.tenants.values()].map((t) => ({
@@ -456,5 +459,31 @@ test("a blocking trigger's function URI is recorded as the kind of host it names
   assert.equal(
     recorded.body.blockingFunctions.triggers.beforeCreate.functionUri,
     "<functionUri:run.app>",
+  );
+});
+
+test("a leftover survives a start check that failed once (confirmation NM-1)", async () => {
+  const { createSession } = await import("./auth-tenant-blocking/session.mjs");
+  const leftover = { id: "atb-x-a-zzzzz", displayName: "atb-x-a" };
+  const { state, fetchFake } = fakeSandbox({ tenants: [leftover], failFirstList: true });
+  const program = {
+    id: "atb/tenant/x",
+    tenants: { a: { displayName: "atb-x-a" } },
+    steps: [{ id: "list", path: "v2/projects/{project}/tenants", method: "GET", auth: "admin" }],
+  };
+  const session = createSession(production, { configSettleMs: 0 });
+  await assert.rejects(withFetch(fetchFake, () => session.runProgram(program)));
+  assert.deepEqual([...state.tenants.keys()], [leftover.id]);
+  assert.equal(state.allowTenants, false);
+});
+
+test("a tenant create answered 200 without test numbers leaves the tenant none (SF-B)", () => {
+  const send = (body) => ({ id: "s", path: "v1/accounts:sendVerificationCode", auth: "key", body });
+  assert.throws(
+    () =>
+      guard(send({ phoneNumber: "+16505550101", tenantId: OURS }), {
+        tenantPhones: new Map([[OURS, new Set()]]),
+      }),
+    /not a test number/,
   );
 });

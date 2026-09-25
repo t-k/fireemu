@@ -1465,6 +1465,8 @@ impl StorageState {
     /// toward a positive `max_results`, as specified by the Firebase and Cloud Storage list APIs:
     /// <https://firebase.google.com/docs/reference/js/storage.listoptions>
     /// <https://cloud.google.com/storage/docs/json_api/v1/objects/list>
+    /// Returning each folded prefix once across pages is inferred from treating prefixes
+    /// and items as one ordered page of entries; those references do not state it explicitly.
     /// The token names the first entry of the next page, which that page includes. An
     /// unknown token restarts the listing. Production handling of `max_results=0` is
     /// unobserved, so that input retains its existing empty-page behavior.
@@ -1519,10 +1521,10 @@ impl StorageState {
         let token_is_entry = page_token.is_some_and(|token| {
             self.objects
                 .range(lower.clone()..)
-                .any(|((candidate_bucket, name), _)| {
-                    if candidate_bucket != bucket || !name.as_str().starts_with(prefix) {
-                        return false;
-                    }
+                .take_while(|((candidate_bucket, name), _)| {
+                    candidate_bucket == bucket && name.as_str().starts_with(prefix)
+                })
+                .any(|((_, name), _)| {
                     let folded = fold(name.as_str());
                     folded.as_deref().unwrap_or(name.as_str()) == token
                 })

@@ -1288,6 +1288,7 @@ async fn snapshot_consistent_reload_source(
     Some(snapshot)
 }
 
+#[allow(clippy::too_many_lines)]
 async fn supervise_codebase_reloads(
     weak_runtime: std::sync::Weak<FunctionsRuntime>,
     cfg: RuntimeConfig,
@@ -1354,6 +1355,10 @@ async fn supervise_codebase_reloads(
         };
         let mut staged = codebase.clone();
         staged.source = snapshot.to_string_lossy().into_owned();
+        let Some(spawn_permit) = runtime.reserve_runner_spawn() else {
+            discard_reload_snapshot(snapshot, &codebase.codebase).await;
+            return;
+        };
         match start_codebase(
             &cfg,
             &staged,
@@ -1361,13 +1366,19 @@ async fn supervise_codebase_reloads(
             &secret,
             callable_trusted_protocol,
             &resources.node_probe_cache,
+            Some(spawn_permit.shutdown_receiver()),
         )
         .await
         {
             Ok(mut spec) => {
                 spec.cleanup_dir = Some(snapshot.into_path());
+                let started_runner = spec.runner.clone();
+                let installed = runtime.reload_codebase(spec);
+                if installed.is_err() {
+                    started_runner.shutdown().await;
+                }
                 report_reload_install(
-                    runtime.reload_codebase(spec),
+                    installed,
                     cfg.functions_inspect_port.is_some(),
                     &codebase.codebase,
                     stable_stamp,
@@ -1392,6 +1403,7 @@ async fn supervise_codebase_reloads(
                 discard_reload_snapshot(snapshot, &codebase.codebase).await;
             }
         }
+        drop(spawn_permit);
     }
 }
 
@@ -2527,6 +2539,7 @@ pub async fn start(
                     &runner_secret,
                     callable_trusted_protocol,
                     &node_probe_cache,
+                    None,
                 )
                 .await
             });
@@ -2658,6 +2671,7 @@ async fn start_codebase(
     runner_secret: &str,
     callable_trusted_protocol: bool,
     node_probe_cache: &Arc<NodeProbeCache>,
+    shutdown: Option<tokio::sync::watch::Receiver<bool>>,
 ) -> Result<fireemu_adapter_functions::runtime::CodebaseSpec, String> {
     let source = codebase.source.clone();
     let label = &codebase.codebase;
@@ -2810,11 +2824,12 @@ async fn start_codebase(
         env,
         hello_timeout: Duration::from_secs(60),
     };
-    let runner = Arc::new(
-        Runner::spawn_spec(&spec)
-            .await
-            .map_err(|e| format!("the Functions codebase {label:?}: {e}"))?,
-    );
+    let spawned = if let Some(shutdown) = shutdown {
+        Runner::spawn_spec_until_shutdown(&spec, shutdown).await
+    } else {
+        Runner::spawn_spec(&spec).await
+    };
+    let runner = Arc::new(spawned.map_err(|e| format!("the Functions codebase {label:?}: {e}"))?);
     if cfg.functions_inspect_dynamic || cfg.functions_inspect_port.is_some() {
         let actual = runner.hello().inspector_port;
         let port_matches = cfg
@@ -2825,7 +2840,7 @@ async fn start_codebase(
             None => false,
         };
         if !endpoint_active || !port_matches {
-            runner.kill_now();
+            runner.shutdown().await;
             return Err(match cfg.functions_inspect_port {
                 Some(expected) => format!(
                     "the Functions codebase {label:?}: requested debugger port {expected} is not active"
@@ -2911,7 +2926,7 @@ async fn start_codebase(
         })
     })();
     if configured.is_err() {
-        runner.kill_now();
+        runner.shutdown().await;
     }
     configured
 }

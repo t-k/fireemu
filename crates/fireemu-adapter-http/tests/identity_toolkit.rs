@@ -11029,6 +11029,51 @@ fn patch_sign_in(s: &AuthState, mask: &str, body: &Value) -> (u16, Value) {
     )
 }
 
+/// Strict: a written SMS region policy refuses a code for a number of a region it does not
+/// allow, as production does (sandbox recording 2026-09-25, auth-config-sdk/other-fields).
+/// The emulator profile sends it, as the official emulator (which has no region policy) does.
+#[test]
+fn a_written_sms_region_policy_refuses_codes_under_strict() {
+    const REFUSAL: &str =
+        "OPERATION_NOT_ALLOWED : SMS unable to be sent until this region enabled by the app developer.";
+    for strict in [true, false] {
+        let s = if strict { strict_state() } else { state() };
+        let send = |number: &str| {
+            post(
+                &s,
+                &format!("{V1}/accounts:sendVerificationCode"),
+                &json!({"phoneNumber": number, "recaptchaToken": "x"}),
+            )
+        };
+        // A new project's `allowlistOnly: {}` refuses nothing.
+        let (status, unconfigured) = send("+16505550101");
+        assert_eq!(status, 200, "{unconfigured}");
+        for policy in [
+            json!({"allowlistOnly": {"allowedRegions": ["JP"]}}),
+            json!({"allowByDefault": {"disallowedRegions": ["US"]}}),
+        ] {
+            let (status, config) =
+                patch_sign_in(&s, "smsRegionConfig", &json!({"smsRegionConfig": policy}));
+            assert_eq!(status, 200, "{config}");
+            let (status, answer) = send("+16505550103");
+            if strict {
+                assert_eq!(
+                    (status, answer["error"]["message"].as_str()),
+                    (400, Some(REFUSAL)),
+                    "{policy}"
+                );
+            } else {
+                assert_eq!(status, 200, "{answer}");
+            }
+            let (status, answer) = send("+819012345678");
+            assert_eq!(status, 200, "{policy}: {answer}");
+        }
+        // A Canadian number of the North American plan is not a United States one.
+        let (status, answer) = send("+14165550100");
+        assert_eq!(status, 200, "{answer}");
+    }
+}
+
 /// A URL query component with its `%XX` escapes decoded.
 fn percent_decoded(value: &str) -> String {
     let bytes = value.as_bytes();

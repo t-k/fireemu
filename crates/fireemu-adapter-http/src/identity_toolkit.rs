@@ -68,6 +68,7 @@ mod custom_token;
 pub use custom_token::{CustomTokenRefusal, CustomTokenTrust};
 mod config_proto;
 mod password_hash;
+mod phone_region;
 mod project_config;
 pub use password_hash::restorable_spec as restorable_imported_hash_spec;
 mod routes;
@@ -3509,7 +3510,14 @@ fn dispatch(
         Handler::SignInWithEmailLink => {
             sign_in_with_email_link(store, body, at, !options.stateless_refresh_tokens)
         }
-        Handler::SendVerificationCode => send_verification_code(store, body, at),
+        Handler::SendVerificationCode => {
+            if !options.stateless_refresh_tokens {
+                if let Some(refusal) = sms_region_refusal(store, body) {
+                    return refusal;
+                }
+            }
+            send_verification_code(store, body, at)
+        }
         Handler::SignInWithPhoneNumber => sign_in_with_phone_number(store, body, at),
         Handler::SignInWithIdp => {
             sign_in_with_idp(store, body, at, options.inbound_credential_policy)
@@ -11139,6 +11147,23 @@ fn send_verification_code(store: &mut AuthStore, body: &Value, at: LogicalInstan
         }
         Err(e) => auth_error(&e),
     }
+}
+
+/// Strict: a written SMS region policy refuses a code for a number of a region it does not
+/// allow (sandbox recording 2026-09-25, auth-config-sdk/other-fields).
+fn sms_region_refusal(store: &AuthStore, body: &Value) -> Option<JsonResponse> {
+    let number = str_field(body, "phoneNumber")?;
+    let policy = project_config::member_value(
+        store.stored_config_members(),
+        "smsRegionConfig",
+        store.project_id(),
+    )?;
+    phone_region::policy_refuses(&policy, number).then(|| {
+        error(
+            400,
+            "OPERATION_NOT_ALLOWED : SMS unable to be sent until this region enabled by the app developer.",
+        )
+    })
 }
 
 /// `accounts:signInWithPhoneNumber`: `sessionInfo` + `code`; with an `idToken` the number

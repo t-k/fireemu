@@ -8,6 +8,7 @@ import { compareSandboxArtifact } from "./fs-data-write-sandbox.mjs";
 import {
   prepareSandboxCorpus,
   selectComparableSandboxRecipes,
+  selectSupplementComparisons,
 } from "./fs-data-write-sandbox-run.mjs";
 
 const closurePath = fileURLToPath(
@@ -19,6 +20,79 @@ const fixturePath = fileURLToPath(
 const manifestPath = fileURLToPath(
   new URL("../fs-data-write-recipe-digests.json", import.meta.url),
 );
+const reviewCandidatePath = fileURLToPath(
+  new URL(
+    "../../spec/compatibility/closure/evidence/FS-DATA-WRITE-current-comparison.json",
+    import.meta.url,
+  ),
+);
+const supplements = [
+  "partial-7bfd51026a2ac56617d81504.json",
+  "delta-v3-a14f265fea575003423c7ebd.json",
+].map((name) => ({
+  name,
+  fixture: JSON.parse(
+    readFileSync(
+      new URL(`../fs-data-write-production-supplements/${name}`, import.meta.url),
+      "utf8",
+    ),
+  ),
+}));
+
+function currentRecordingSelection(fixture, manifest, corpus) {
+  const base = selectComparableSandboxRecipes(fixture, manifest, corpus, corpus);
+  const supplemental = selectSupplementComparisons(
+    supplements,
+    corpus,
+    base.pendingRestIds,
+    base.pendingStreamIds,
+  );
+  return { base, supplemental };
+}
+
+test("final write comparison keeps approved B1 rows and unresolved D5 rows explicit", () => {
+  const candidate = JSON.parse(readFileSync(reviewCandidatePath, "utf8"));
+  assert.equal(candidate.task, "FS-DATA-WRITE");
+  assert.equal(candidate.decision, "PENDING_REVIEW");
+  assert.match(candidate.sourceHead, /^[0-9a-f]{40}$/);
+  assert.match(candidate.executableSha256, /^[0-9a-f]{64}$/);
+  assert.equal(candidate.comparedRestPrograms, 74);
+  assert.equal(candidate.comparedGrpcStreams, 7);
+  assert.deepEqual(candidate.pendingRestIds, []);
+  assert.deepEqual(candidate.pendingStreamIds, []);
+  assert.deepEqual(candidate.otherDifferenceIds, []);
+  assert.equal(candidate.retiredRestIds.length, 10);
+  assert.deepEqual(
+    candidate.approvedKnownDifferenceIds,
+    [
+      ...Array.from({ length: 4 }, (_, at) => `writes/limits/index-entry-bytes#observation-${at}`),
+      ...Array.from(
+        { length: 4 },
+        (_, at) => `writes/limits/index-entry-sum-per-document#observation-${at}`,
+      ),
+      "writes/limits/empty-document-name/4628#readback",
+      "writes/limits/empty-document-name/4628#write",
+    ].toSorted(),
+  );
+  assert.deepEqual(candidate.pendingOracleDifferenceIds, [
+    "writes/limits/grpc-stream-request-bytes/10485760#grpc",
+    "writes/limits/grpc-stream-request-bytes/10485761#grpc",
+  ]);
+  assert.deepEqual(candidate.historicalRegression, {
+    command: "pnpm -C conformance firestore:check-production",
+    comparableRows: 322,
+    knownMismatches: 16,
+    indeterminateRows: 1,
+    newMismatches: 0,
+    newIndeterminateRows: 0,
+  });
+  for (const fixture of candidate.productionFixtures) {
+    const path = fileURLToPath(new URL(`../../${fixture.path}`, import.meta.url));
+    const digest = createHash("sha256").update(readFileSync(path)).digest("hex");
+    assert.equal(fixture.sha256, digest, fixture.path);
+    assert.equal(fixture.recordingDigests.length, 2, fixture.path);
+  }
+});
 
 const requiredConditions = new Set([
   "FS-WRITE-LIMITS-03/batch-malformed-middle",
@@ -453,57 +527,80 @@ test("final artifact closure names both saved production regression commands", (
   assert.notEqual(condition.status, "VERIFIED");
 });
 
-test("request-byte transports remain pending production recording after local corpus checks", () => {
+test("request-byte transports retain observed boundaries and the unresolved gRPC token mismatch", () => {
   const closure = JSON.parse(readFileSync(closurePath, "utf8"));
   const nonCommitRest = closure.conditions.find(
     (row) => row.conditionId === "FS-LIMIT-API-REQUEST-BYTES/non-commit-rest",
   );
-  assert.equal(nonCommitRest.status, "PENDING_RECORDING");
-  assert.equal(nonCommitRest.boundaryStatus, "PENDING_RECORDING");
+  assert.equal(nonCommitRest.status, "PRODUCTION_RECORDED");
+  assert.equal(nonCommitRest.boundaryStatus, "UNBRACKETED");
   const grpc = closure.conditions.find(
     (row) => row.conditionId === "FS-LIMIT-API-REQUEST-BYTES/grpc",
   );
-  assert.equal(grpc.status, "PENDING_RECORDING");
-  assert.equal(grpc.boundaryStatus, "PENDING_RECORDING");
+  assert.equal(grpc.status, "MISMATCH");
+  assert.equal(grpc.boundaryStatus, "UNBRACKETED");
   const webchannel = closure.conditions.find(
     (row) => row.conditionId === "FS-LIMIT-API-REQUEST-BYTES/webchannel",
   );
-  assert.equal(webchannel.status, "PENDING_RECORDING");
-  assert.equal(webchannel.boundaryStatus, "PENDING_RECORDING");
+  assert.equal(webchannel.status, "PRODUCTION_RECORDED");
+  assert.equal(webchannel.boundaryStatus, "UNBRACKETED");
 });
 
-test("new strict-only map observation remains pending production recording", () => {
+test("new strict-only map observation is recorded for closure review", () => {
   const closure = JSON.parse(readFileSync(closurePath, "utf8"));
   const condition = closure.conditions.find(
     ({ conditionId }) => conditionId === "FS-LIMIT-FIELD-VALUE-BYTES/aggregate-map",
   );
   assert.ok(condition.recipeIds.includes("writes/limits/aggregate-map/strict-only"));
-  assert.equal(condition.status, "PENDING_RECORDING");
+  assert.equal(condition.status, "PRODUCTION_RECORDED");
 });
 
-test("changed field-path and indexed-value recipes remain pending recording", async () => {
+test("near-limit deletion names all six recorded route and size combinations", () => {
+  const closure = JSON.parse(readFileSync(closurePath, "utf8"));
+  const condition = closure.conditions.find(
+    ({ conditionId }) => conditionId === "FS-DATA-WRITE/near-limit-delete-refusal",
+  );
+  const expected = ["rest", "commit", "batch-write"].flatMap((route) =>
+    [12112, 12113].map((count) => `writes/limits/near-limit-delete-refusal/${route}/${count}`),
+  );
+  assert.deepEqual(new Set(condition.recipeIds), new Set(expected));
+  assert.equal(condition.status, "PRODUCTION_RECORDED");
+  assert.equal(condition.boundaryStatus, "UNBRACKETED");
+  const delta = supplements.find(({ name }) => name.startsWith("delta-v3"));
+  assert.deepEqual(new Set(Object.keys(delta.fixture.programs)), new Set(expected));
+  assert.deepEqual(
+    new Set(delta.fixture.evidence.nondeterministicPrograms),
+    new Set([
+      "writes/limits/near-limit-delete-refusal/rest/12112",
+      "writes/limits/near-limit-delete-refusal/batch-write/12112",
+    ]),
+  );
+});
+
+test("changed field-path and indexed-value recipes are covered by the partial supplement", async () => {
   const closure = JSON.parse(readFileSync(closurePath, "utf8"));
   const fixture = JSON.parse(readFileSync(fixturePath, "utf8"));
   const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
   const { corpus } = await prepareSandboxCorpus();
-  const selected = selectComparableSandboxRecipes(fixture, manifest, corpus, corpus);
+  const { base, supplemental } = currentRecordingSelection(fixture, manifest, corpus);
   for (const [conditionId, recipeId] of [
     ["FS-LIMIT-FIELD-PATH-BYTES", "writes/limits/field-path-mask/1500"],
     ["FS-LIMIT-INDEXED-FIELD-VALUE-BYTES", "writes/limits/indexed-field-value-bytes"],
   ]) {
     const condition = closure.conditions.find((row) => row.conditionId === conditionId);
     assert.ok(condition.recipeIds.includes(recipeId));
-    assert.ok(selected.pendingRestIds.includes(recipeId));
-    assert.equal(condition.status, "PENDING_RECORDING", conditionId);
+    assert.ok(base.pendingRestIds.includes(recipeId));
+    assert.ok(!supplemental.pendingRestIds.includes(recipeId));
+    assert.equal(condition.status, "PRODUCTION_RECORDED", conditionId);
   }
 });
 
-test("an unrecorded empty-write response cannot inherit the known trailer mismatch", async () => {
+test("the recorded empty-write response remains separate from half-close and trailing metadata", async () => {
   const closure = JSON.parse(readFileSync(closurePath, "utf8"));
   const fixture = JSON.parse(readFileSync(fixturePath, "utf8"));
   const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
   const { corpus } = await prepareSandboxCorpus();
-  const selected = selectComparableSandboxRecipes(fixture, manifest, corpus, corpus);
+  const { base, supplemental } = currentRecordingSelection(fixture, manifest, corpus);
   const responseId = "writes/write-stream-terminal/response-before-half-close";
   const response = closure.conditions.find(
     ({ conditionId }) => conditionId === "FS-DATA-WRITE/write-stream-empty-write-response",
@@ -511,8 +608,9 @@ test("an unrecorded empty-write response cannot inherit the known trailer mismat
   const halfClose = closure.conditions.find(
     ({ conditionId }) => conditionId === "FS-DATA-WRITE/write-stream-half-close",
   );
-  assert.ok(selected.pendingStreamIds.includes(responseId));
-  assert.equal(response.status, "PENDING_RECORDING");
+  assert.ok(base.pendingStreamIds.includes(responseId));
+  assert.ok(!supplemental.pendingStreamIds.includes(responseId));
+  assert.equal(response.status, "PRODUCTION_RECORDED");
   assert.deepEqual(response.recipeIds, [responseId]);
   assert.equal(halfClose.status, "VERIFIED");
   assert.match(
@@ -594,8 +692,8 @@ test("half-close accepts the source-bound current run without rewriting historic
   const finalRegression = closure.conditions.find(
     ({ conditionId }) => conditionId === "FS-DATA-WRITE/final-artifact-regression",
   );
-  assert.equal(trailingMetadata.status, "MISMATCH");
-  assert.equal(emptyResponse.status, "PENDING_RECORDING");
+  assert.equal(trailingMetadata.status, "PRODUCTION_RECORDED");
+  assert.equal(emptyResponse.status, "PRODUCTION_RECORDED");
   assert.equal(finalRegression.status, "PENDING_REVIEW");
   assert.equal(comparison.result.wholeRunKnownMismatchRows, 9);
   assert.equal(comparison.result.wholeRunPendingStreams, 5);
@@ -646,8 +744,8 @@ test("recorded conditions contain no changed or unrecorded runnable recipes", as
   const fixture = JSON.parse(readFileSync(fixturePath, "utf8"));
   const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
   const { corpus } = await prepareSandboxCorpus();
-  const selected = selectComparableSandboxRecipes(fixture, manifest, corpus, corpus);
-  const pending = new Set([...selected.pendingRestIds, ...selected.pendingStreamIds]);
+  const { supplemental } = currentRecordingSelection(fixture, manifest, corpus);
+  const pending = new Set([...supplemental.pendingRestIds, ...supplemental.pendingStreamIds]);
   const failures = closure.conditions
     .filter(({ status }) => ["PRODUCTION_RECORDED", "VERIFIED"].includes(status))
     .flatMap(({ conditionId, recipeIds }) =>
@@ -661,6 +759,11 @@ test("recorded conditions contain no changed or unrecorded runnable recipes", as
 test("FS-DATA-WRITE closure inventory cannot silently omit a declared condition", () => {
   const closure = JSON.parse(readFileSync(closurePath, "utf8"));
   const fixture = JSON.parse(readFileSync(fixturePath, "utf8"));
+  const allPrograms = Object.assign(
+    {},
+    fixture.programs,
+    ...supplements.map(({ fixture: additional }) => additional.programs),
+  );
   assert.equal(closure.parent, "FS-DATA-WRITE");
   const ids = closure.conditions.map(({ conditionId }) => conditionId);
   assert.equal(ids.length, new Set(ids).size, "condition IDs must be unique");
@@ -690,7 +793,7 @@ test("FS-DATA-WRITE closure inventory cannot silently omit a declared condition"
       );
       const pair = condition.boundaryEvidence.map((reference) => {
         const [programId, stepId] = reference.split("#");
-        const step = fixture.programs[programId]?.steps[stepId];
+        const step = allPrograms[programId]?.steps[stepId];
         assert.ok(step, `${condition.conditionId}: missing fixture step ${reference}`);
         return step;
       });
@@ -711,7 +814,7 @@ test("FS-DATA-WRITE closure inventory cannot silently omit a declared condition"
         assert.notEqual(pair[0].message, pair[1].message, condition.conditionId);
       }
     }
-    if (condition.recipeIds.some((recipe) => fixture.programs[recipe])) {
+    if (condition.recipeIds.some((recipe) => allPrograms[recipe])) {
       assert.notEqual(condition.status, "PENDING_CORPUS", condition.conditionId);
     }
     assert.ok(

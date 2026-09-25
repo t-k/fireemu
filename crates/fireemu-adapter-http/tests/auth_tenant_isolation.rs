@@ -2046,3 +2046,26 @@ fn a_tenant_phone_enrollment_keeps_the_earlier_rules() {
         assert_eq!(status, 200, "{profile}: {enrolled}");
     }
 }
+
+/// With a registry, a masked `mfa` update reaches the project's store and reads back in both
+/// profiles (mutation follow-up, docs.local/mutation/auth-mfa/20260925).
+#[test]
+fn a_registry_project_config_update_sets_the_mfa_config() {
+    for (profile, state, registry) in profiles() {
+        let (status, body) = admin(
+            &state,
+            "PATCH",
+            &format!("{PROJECT_CONFIG}?updateMask=mfa"),
+            &json!({"mfa": {"state": "ENABLED", "enabledProviders": ["PHONE_SMS"]}}),
+        );
+        assert_eq!(status, 200, "{profile}: {body}");
+        let (status, read) = admin(&state, "GET", PROJECT_CONFIG, &json!({}));
+        assert_eq!(status, 200, "{profile}: {read}");
+        assert_eq!(read["mfa"]["state"], "ENABLED", "{profile}: {read}");
+        let store = registry.store_for("demo-app").unwrap();
+        assert!(
+            store.lock().unwrap().mfa_config().sms_enabled(),
+            "{profile}"
+        );
+    }
+}

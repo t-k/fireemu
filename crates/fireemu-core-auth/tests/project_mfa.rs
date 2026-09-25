@@ -485,3 +485,62 @@ fn a_pending_sign_in_debugs_its_state() {
     assert!(debug.contains("PendingSignIn"), "{debug}");
     assert!(debug.contains("completed: false"), "{debug}");
 }
+
+/// Production's enrollment ids are version-4 UUIDs: version nibble 4, variant 8 to b, and the
+/// variant byte's low bits random (mutation follow-up, docs.local/mutation/auth-mfa/20260925).
+#[test]
+fn production_enrollment_ids_are_random_version_4_uuids() {
+    let mut s = AuthStore::new("demo-app", SplitMix64::new(7), TotpPolicy::default());
+    s.set_production_mfa(true);
+    let mut variant_bytes = std::collections::BTreeSet::new();
+    for n in 0..64 {
+        let id = s.imported_factor_defaults(t0()).unwrap().0;
+        let parts: Vec<&str> = id.split('-').collect();
+        assert_eq!(
+            parts.iter().map(|p| p.len()).collect::<Vec<_>>(),
+            [8, 4, 4, 4, 12],
+            "{n}: {id}"
+        );
+        assert!(
+            id.chars().all(|c| c == '-' || c.is_ascii_hexdigit()),
+            "{id}"
+        );
+        assert_eq!(&parts[2][..1], "4", "version: {id}");
+        assert!("89ab".contains(&parts[3][..1]), "variant: {id}");
+        variant_bytes.insert(parts[3][..2].to_owned());
+    }
+    assert!(variant_bytes.len() > 8, "{variant_bytes:?}");
+}
+
+/// Under the official emulator's rules an enrollment session is reaped one lifetime after it
+/// expired, also when another session of the same user ended first, by success or by expiry
+/// (mutation follow-up, docs.local/mutation/auth-mfa/20260925).
+#[test]
+fn an_emulator_enrollment_session_is_reaped_after_its_sibling_ends() {
+    for sibling_succeeds in [true, false] {
+        let mut s = AuthStore::new("demo-app", SplitMix64::new(3), TotpPolicy::default());
+        s.set_mfa_config(enabled(Some(5)));
+        let (uid, first) = started(&mut s);
+        let second = s.start_totp_enrollment(&uid, t0()).unwrap();
+        let ended_at = if sibling_succeeds { t0() } else { seconds(901) };
+        let _ = s.finalize_totp_enrollment_named(
+            &uid,
+            &first.session_id,
+            code_at(&first, ended_at),
+            Some("A".to_owned()),
+            ended_at,
+        );
+        s.sweep_transient_credentials(seconds(1_801));
+        assert_eq!(
+            s.finalize_totp_enrollment_named(
+                &uid,
+                &second.session_id,
+                code_at(&second, seconds(1_801)),
+                Some("B".to_owned()),
+                seconds(1_801)
+            ),
+            Err(MfaError::EnrollmentSessionUnknown),
+            "sibling succeeds: {sibling_succeeds}"
+        );
+    }
+}

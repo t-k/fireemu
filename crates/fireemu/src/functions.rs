@@ -1255,7 +1255,7 @@ impl RunnerSource {
 /// The bundled Node runner as located on this host.
 #[derive(Debug, Clone)]
 pub struct RunnerScript {
-    /// Absolute (or as-given, for the environment override) path of `index.mjs`.
+    /// Absolute path of `index.mjs`.
     pub path: PathBuf,
     /// Where it was found.
     pub source: RunnerSource,
@@ -1352,7 +1352,8 @@ pub fn locate_runner() -> Result<RunnerScript, String> {
     for (source, path) in &candidates {
         if path.is_file() {
             return Ok(RunnerScript {
-                path: path.clone(),
+                path: std::path::absolute(path)
+                    .map_err(|error| format!("runner {}: {error}", path.display()))?,
                 source: *source,
             });
         }
@@ -2125,6 +2126,12 @@ async fn start_codebase(
             "the Functions codebase {label:?}: source {source:?} is not a directory"
         ));
     }
+    let source = std::fs::canonicalize(&source)
+        .map_err(|e| {
+            format!("the Functions codebase {label:?}: cannot resolve source {source:?}: {e}")
+        })?
+        .to_string_lossy()
+        .into_owned();
     let mut command = match cfg.functions_runner.clone() {
         Some(command) => command,
         None => default_runner_for_codebase(codebase)
@@ -2252,7 +2259,7 @@ async fn start_codebase(
     }
     let spec = SpawnSpec {
         command,
-        cwd: None,
+        cwd: Some(source),
         env,
         hello_timeout: Duration::from_secs(60),
     };

@@ -215,6 +215,26 @@
         "message": "Batch writes require admin authentication."
       }
     },
+    "delete-sees-a-null-request-resource": {
+      "status": 200,
+      "allowed": true
+    },
+    "create-on-an-existing-document-denied-by-rules-first": {
+      "status": 403,
+      "allowed": false,
+      "error": {
+        "status": "PERMISSION_DENIED",
+        "message": "\nfalse for 'create' @ L4"
+      }
+    },
+    "create-on-an-existing-document-allowed-then-refused-as-existing": {
+      "status": 409,
+      "allowed": true,
+      "error": {
+        "status": "ALREADY_EXISTS",
+        "message": "entity already exists: EntityRef[partitionRef=dev~demo-fs-rules-official, path=/c/d]"
+      }
+    },
     "query-keys-has-only-the-documented-three": {
       "status": 403,
       "allowed": false,

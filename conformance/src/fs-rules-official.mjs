@@ -74,6 +74,24 @@ export const RUNTIME_CASES = [
     production: ["fs-rules/atomic/commit-and-batch-write", "batch-write-all-allowed"],
   },
   {
+    name: "delete-sees-a-null-request-resource",
+    rules: "match /c/{d} { allow read: if true; allow delete: if request.resource == null; }",
+    request: { method: "DELETE", path: "c/gone", user: "u1" },
+    production: ["fs-rules/request-resource/writes", "delete-no-request-resource"],
+  },
+  {
+    name: "create-on-an-existing-document-denied-by-rules-first",
+    rules: "match /c/{d} { allow read: if true; allow create: if false; allow update: if true; }",
+    request: { method: "POST", path: "c?documentId=d", user: "u1", body: () => ({ fields: {} }) },
+    production: ["fs-rules/principals/separation", "verified-create-in-b"],
+  },
+  {
+    name: "create-on-an-existing-document-allowed-then-refused-as-existing",
+    rules: "match /c/{d} { allow read: if true; allow create: if true; allow update: if false; }",
+    request: { method: "POST", path: "c?documentId=d", user: "u1", body: () => ({ fields: {} }) },
+    production: ["fs-rules/document-access/reads-and-writes", "write-get-before-partner-existing"],
+  },
+  {
     name: "query-keys-has-only-the-documented-three",
     rules:
       "match /q/{d} { allow list: if request.query.keys().hasOnly(['limit', 'offset', 'orderBy']); }",
@@ -153,7 +171,7 @@ async function record() {
   }
   // Seed as the owner, which the official emulator lets bypass rules.
   const owner = { authorization: "Bearer owner", "content-type": "application/json" };
-  for (const path of ["c/d", "src/present", "q/one"]) {
+  for (const path of ["c/d", "c/gone", "src/present", "q/one"]) {
     await fetch(`${base}/v1/${docs}/${path}`, {
       method: "PATCH",
       headers: owner,
@@ -192,7 +210,9 @@ async function record() {
     const error = (Array.isArray(parsed) ? parsed : [parsed]).find((e) => e?.error)?.error;
     runtime[name] = {
       status: response.status,
-      allowed: response.status < 400 && !error,
+      // Whether Security Rules allowed it: a later refusal (a failed precondition, a missing
+      // document) is still an allow.
+      allowed: response.status !== 403 && error?.status !== "PERMISSION_DENIED",
       ...(error
         ? { error: { status: error.status, message: String(error.message).slice(0, 160) } }
         : {}),

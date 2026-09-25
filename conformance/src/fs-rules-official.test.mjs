@@ -22,14 +22,12 @@ const OFFICIAL_DIFFERS = {
     "The official emulator compiles a source over 256 KiB, production refuses it; fireemu refuses it (RULES-SOURCE-SIZE) in both profiles, as it did before FS-RULES.",
 };
 
+// Whether Security Rules allowed the recorded request: only their denial is a refusal here; a
+// failed precondition or a missing document after an allow is not.
 const allowed = (recorded) => {
-  if (recorded.grpc !== undefined) return recorded.grpc === 0 || recorded.grpc === 5;
+  if (recorded.grpc !== undefined) return recorded.grpc !== 7;
   const body = Array.isArray(recorded.body) ? recorded.body : [recorded.body];
-  // A read of a missing document that the rules allowed is 404 in production.
-  return (
-    (recorded.status < 400 || recorded.status === 404) &&
-    !body.some((e) => e?.error?.status === "PERMISSION_DENIED")
-  );
+  return recorded.status !== 403 && !body.some((e) => e?.error?.status === "PERMISSION_DENIED");
 };
 
 test("the official emulator compiles what production compiles", () => {

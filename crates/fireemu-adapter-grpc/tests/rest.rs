@@ -1886,34 +1886,62 @@ fn rest_run_query_supports_standard_find_nearest() {
     );
 }
 
-/// Under production's refusals an end user's `beginTransaction` is the ordinary denial
-/// (FS-RULES, 2026-09-24); the owner still opens one.
+/// Under production's refusals an end user may not open a read-write transaction, by
+/// `beginTransaction` or a read's `newTransaction`, and may open a read-only one (FS-RULES,
+/// 2026-09-25); the owner opens either.
 #[test]
-fn end_users_may_not_begin_a_transaction_over_rest_in_production() {
-    let (mut s, clock) = state_with_clock(Some("rules_version = '2';\nservice cloud.firestore { match /databases/{d}/documents { match /{document=**} { allow read, write: if true; } } }"), TokenAcceptance::Verified);
+fn end_users_may_not_open_a_read_write_transaction_over_rest_in_production() {
+    const OPEN: &str = "rules_version = '2';\nservice cloud.firestore { match /databases/{d}/documents { match /{document=**} { allow read, write: if true; } } }";
+    let (mut s, clock) = state_with_clock(Some(OPEN), TokenAcceptance::Verified);
     let auth = Arc::new(Mutex::new(AuthStore::new(
         "demo-app",
         SplitMix64::new(3),
         TotpPolicy::default(),
     )));
-    let loaded = Arc::new(RulesetSlot::new(
-        LoadedRules::from_source("rules_version = '2';\nservice cloud.firestore { match /databases/{d}/documents { match /{document=**} { allow read, write: if true; } } }").unwrap(),
-    ));
+    let loaded = Arc::new(RulesetSlot::new(LoadedRules::from_source(OPEN).unwrap()));
     s.rules = Some(Arc::new(
         RulesEnforcer::new(loaded, auth, clock).with_end_user_transactions(false),
     ));
+    let denial = json!({"error": {"code": 403, "message": "Missing or insufficient permissions.", "status": "PERMISSION_DENIED"}});
+    let document = "projects/demo-app/databases/(default)/documents/c/d";
+    let query = json!({"from": [{"collectionId": "c"}]});
+    for body in [json!({}), json!({"options": {"readWrite": {}}})] {
+        let (status, err) = call_as(&s, "POST", &format!("{DOCS}:beginTransaction"), body, None);
+        assert_eq!((status, err), (403, denial.clone()));
+    }
     let (status, err) = call_as(
         &s,
         "POST",
-        &format!("{DOCS}:beginTransaction"),
-        json!({}),
+        &format!("{DOCS}:batchGet"),
+        json!({"documents": [document], "newTransaction": {"readWrite": {}}}),
         None,
     );
-    assert_eq!(status, 403, "{err}");
-    assert_eq!(
-        err,
-        json!({"error": {"code": 403, "message": "Missing or insufficient permissions.", "status": "PERMISSION_DENIED"}})
+    assert_eq!((status, err), (403, json!([denial.clone()])));
+    let (status, err) = call_as(
+        &s,
+        "POST",
+        &format!("{DOCS}:runQuery"),
+        json!({"structuredQuery": query, "newTransaction": {}}),
+        None,
     );
+    assert_eq!((status, err), (403, json!([denial])));
+    for (path, body) in [
+        (
+            format!("{DOCS}:beginTransaction"),
+            json!({"options": {"readOnly": {}}}),
+        ),
+        (
+            format!("{DOCS}:batchGet"),
+            json!({"documents": [document], "newTransaction": {"readOnly": {}}}),
+        ),
+        (
+            format!("{DOCS}:runQuery"),
+            json!({"structuredQuery": query, "newTransaction": {"readOnly": {}}}),
+        ),
+    ] {
+        let (status, body) = call_as(&s, "POST", &path, body, None);
+        assert_eq!(status, 200, "{path}: {body}");
+    }
     let (status, body) = call(&s, "POST", &format!("{DOCS}:beginTransaction"), json!({}));
     assert_eq!(status, 200, "{body}");
 }

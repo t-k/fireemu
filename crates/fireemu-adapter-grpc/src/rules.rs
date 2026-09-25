@@ -371,8 +371,8 @@ pub struct RulesEnforcer {
     /// refuses every client request without a `cloud.firestore` release (the `strict`
     /// profile); the official emulator allows everything (the `emulator` profile).
     refuse_without_ruleset: bool,
-    /// Whether an end user may open a transaction with `BeginTransaction`: production refuses
-    /// it with the ordinary denial (the `strict` profile); the official emulator opens it.
+    /// Whether an end user may open a read-write transaction: production refuses it with the
+    /// ordinary denial (the `strict` profile); the official emulator opens it.
     end_user_transactions: bool,
 }
 
@@ -403,18 +403,25 @@ impl RulesEnforcer {
         self
     }
 
-    /// Sets whether an end user may open a transaction with `BeginTransaction`.
+    /// Sets whether an end user may open a read-write transaction.
     #[must_use]
     pub const fn with_end_user_transactions(mut self, allowed: bool) -> Self {
         self.end_user_transactions = allowed;
         self
     }
 
-    /// Whether `principal` may open a transaction with `BeginTransaction`: production refuses
-    /// an end user, signed in or not, with its usual denial whatever the rules say (FS-RULES,
-    /// 2026-09-24).
-    pub fn check_begin_transaction(&self, principal: &Principal) -> Result<(), Status> {
-        if self.end_user_transactions || matches!(principal, Principal::Owner) {
+    /// Whether `principal` may open a transaction with `options` (`None` is the default, a
+    /// read-write transaction), by `BeginTransaction` or a read's `newTransaction`.
+    /// Production refuses an end user, signed in or not, a read-write transaction with its
+    /// usual denial whatever the rules say, and opens a read-only one (FS-RULES, 2026-09-25).
+    pub fn check_new_transaction(
+        &self,
+        principal: &Principal,
+        options: Option<&fireemu_proto_firestore::google::firestore::v1::TransactionOptions>,
+    ) -> Result<(), Status> {
+        use fireemu_proto_firestore::google::firestore::v1::transaction_options::Mode;
+        let read_only = options.is_some_and(|o| matches!(o.mode, Some(Mode::ReadOnly(_))));
+        if read_only || self.end_user_transactions || matches!(principal, Principal::Owner) {
             return Ok(());
         }
         let rules = self.rules.snapshot().map_err(Status::internal)?;
@@ -423,7 +430,7 @@ impl RulesEnforcer {
             principal,
             Method::Get,
             "BeginTransaction".to_owned(),
-            "an end user may not begin a transaction in production".to_owned(),
+            "an end user may not open a read-write transaction in production".to_owned(),
         ))
     }
 

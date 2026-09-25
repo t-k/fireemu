@@ -463,6 +463,18 @@ impl RestState {
         .map_err(|status| front_end_refusal(status, &req.method, action))
     }
 
+    /// Refuses an end user a read-write transaction where production does (see
+    /// `RulesEnforcer::check_new_transaction`).
+    fn check_new_transaction(
+        &self,
+        caller: &Caller,
+        options: Option<&pb::TransactionOptions>,
+    ) -> Result<(), Status> {
+        self.rules.as_ref().map_or(Ok(()), |rules| {
+            rules.check_new_transaction(&caller.principal, options)
+        })
+    }
+
     fn write_guard<'a>(&'a self, caller: &'a Caller) -> rules::BoxedWriteGuard<'a> {
         let inner = rules::write_guard(self.rules.as_ref(), &caller.principal);
         let barrier = self.local.barrier();
@@ -1139,17 +1151,15 @@ impl RestState {
         json::strict_keys(body, &["options", "requestOptions"]).map_err(|e| bad(&e))?;
         let database = database_of(resource)?;
         self.check_database_audience(principal, &database)?;
-        if let Some(rules) = &self.rules {
-            rules.check_begin_transaction(principal)?;
-        }
+        let options =
+            transaction_options_from_json(body.get("options"), "options").map_err(|e| bad(&e))?;
+        let request_options =
+            request_options_from_json(body.get("requestOptions")).map_err(|e| bad(&e))?;
+        self.check_new_transaction(principal, Some(&options))?;
         let token = self.local.begin_transaction(&pb::BeginTransactionRequest {
             database,
-            options: Some(
-                transaction_options_from_json(body.get("options"), "options")
-                    .map_err(|e| bad(&e))?,
-            ),
-            request_options: request_options_from_json(body.get("requestOptions"))
-                .map_err(|e| bad(&e))?,
+            options: Some(options),
+            request_options,
         })?;
         Ok(ok(json!({"transaction": base64_encode(&token)})))
     }
@@ -1471,6 +1481,11 @@ impl RestState {
             request_options: None,
             consistency_selector,
         };
+        if let Some(pb::batch_get_documents_request::ConsistencySelector::NewTransaction(options)) =
+            &req.consistency_selector
+        {
+            self.check_new_transaction(principal, Some(options))?;
+        }
         let guard = self.read_guard(principal);
         let outcome = self.local.batch_get_documents(&req, &*guard)?;
         let read_time = optional_timestamp_to_json(Some(&encode_instant(outcome.read_time)));
@@ -1550,6 +1565,11 @@ impl RestState {
             )),
             consistency_selector,
         };
+        if let Some(pb::run_query_request::ConsistencySelector::NewTransaction(options)) =
+            &req.consistency_selector
+        {
+            self.check_new_transaction(principal, Some(options))?;
+        }
         let guard = self.read_guard(principal);
         let (responses, _warnings) = self.local.run_query(&req, &*guard)?;
         let out: Vec<Value> = responses
@@ -1654,6 +1674,12 @@ impl RestState {
             ),
             consistency_selector,
         };
+        if let Some(pb::run_aggregation_query_request::ConsistencySelector::NewTransaction(
+            options,
+        )) = &req.consistency_selector
+        {
+            self.check_new_transaction(principal, Some(options))?;
+        }
         let guard = self.read_guard(principal);
         let response = self.local.run_aggregation_query(&req, &*guard)?;
         let fields: serde_json::Map<String, Value> = response

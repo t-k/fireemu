@@ -288,9 +288,9 @@ impl CompatibilityProfile {
         matches!(self, Self::Strict)
     }
 
-    /// Whether an end user may open a transaction with `BeginTransaction`. Production refuses
-    /// it with the ordinary Security Rules denial (FS-RULES, 2026-09-24); the official emulator
-    /// opens it.
+    /// Whether an end user may open a read-write transaction. Production refuses it with the
+    /// ordinary Security Rules denial and opens a read-only one (FS-RULES, 2026-09-25); the
+    /// official emulator opens both.
     #[must_use]
     pub const fn end_user_transactions(self) -> bool {
         matches!(self, Self::Emulator)
@@ -959,7 +959,7 @@ pub struct RuntimeConfig {
     /// Whether a client request is refused while its database has no ruleset
     /// (profile-derived; there is no key of its own).
     pub refuse_without_ruleset: bool,
-    /// Whether an end user may open a transaction with `BeginTransaction`
+    /// Whether an end user may open a read-write transaction
     /// (profile-derived; there is no key of its own).
     pub end_user_transactions: bool,
     /// How long a document whose time-to-live field has expired stays readable before the

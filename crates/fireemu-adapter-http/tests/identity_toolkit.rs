@@ -11029,6 +11029,65 @@ fn patch_sign_in(s: &AuthState, mask: &str, body: &Value) -> (u16, Value) {
     )
 }
 
+/// Strict `createAuthUri` answers as production does without improved email privacy: no
+/// empty provider lists, and a provider that is not configured is refused (sandbox recording
+/// 2026-09-25, auth-config-sdk/email-privacy). The emulator profile keeps the official
+/// emulator's answers: empty lists, and `NOT_IMPLEMENTED` for a provider.
+#[test]
+fn create_auth_uri_answers_as_production_under_strict() {
+    for strict in [true, false] {
+        let s = if strict { strict_state() } else { state() };
+        let (status, config) = patch_sign_in(
+            &s,
+            "emailPrivacyConfig.enableImprovedEmailPrivacy",
+            &json!({"emailPrivacyConfig": {"enableImprovedEmailPrivacy": false}}),
+        );
+        assert_eq!(status, 200, "{config}");
+        let (status, created) = admin(
+            &s,
+            "POST",
+            &format!("{ADMIN}/accounts"),
+            &json!({"email": "nopw@example.com"}),
+        );
+        assert_eq!(status, 200, "{created}");
+        for (identifier, registered) in [("nopw@example.com", true), ("unknown@example.com", false)]
+        {
+            let (status, answer) = post(
+                &s,
+                &format!("{V1}/accounts:createAuthUri"),
+                &json!({"identifier": identifier, "continueUri": "http://localhost/finish"}),
+            );
+            assert_eq!(status, 200, "{answer}");
+            assert_eq!(answer["registered"], registered, "{answer}");
+            if strict {
+                assert!(answer.get("allProviders").is_none(), "{answer}");
+                assert!(answer.get("signinMethods").is_none(), "{answer}");
+            } else {
+                assert_eq!(answer["allProviders"], json!([]), "{answer}");
+                assert_eq!(answer["signinMethods"], json!([]), "{answer}");
+            }
+        }
+        let (status, refused) = post(
+            &s,
+            &format!("{V1}/accounts:createAuthUri"),
+            &json!({"providerId": "google.com", "continueUri": "http://localhost/finish"}),
+        );
+        if strict {
+            assert_eq!(
+                (status, refused["error"]["message"].as_str()),
+                (
+                    400,
+                    Some(
+                        "OPERATION_NOT_ALLOWED : The identity provider configuration is not found."
+                    )
+                )
+            );
+        } else {
+            assert_eq!(status, 501, "{refused}");
+        }
+    }
+}
+
 /// An administrator may set a password below the minimum length, as production lets it
 /// (sandbox recording 2026-09-25, auth-config-sdk/password-policy/existing#admin-update-short);
 /// an end user may not.

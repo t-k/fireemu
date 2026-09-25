@@ -3514,7 +3514,7 @@ fn dispatch(
         Handler::SignInWithIdp => {
             sign_in_with_idp(store, body, at, options.inbound_credential_policy)
         }
-        Handler::CreateAuthUri => create_auth_uri(store, body),
+        Handler::CreateAuthUri => create_auth_uri(store, body, !options.stateless_refresh_tokens),
         Handler::Projects => client_project_config(store, !options.stateless_refresh_tokens),
         Handler::RecaptchaParams => {
             let mut body = json!({
@@ -11786,14 +11786,27 @@ fn normalized_idp_params(request_uri: &str, post_body: Option<&str>) -> BTreeMap
 /// `accounts:createAuthUri` (`fetchSignInMethodsForEmail`): whether the email is
 /// registered and how it can sign in. A `providerId` (a sign-in-with-identity-provider request) is not
 /// implemented by the official emulator, and neither is it here.
-fn create_auth_uri(store: &AuthStore, body: &Value) -> JsonResponse {
+/// `accounts:createAuthUri`. Strict answers as production does (sandbox recording
+/// 2026-09-25, auth-config-sdk/email-privacy): a provider that is not configured is refused,
+/// and empty provider lists are left out.
+fn create_auth_uri(store: &AuthStore, body: &Value, strict: bool) -> JsonResponse {
     let session_id = str_field(body, "sessionId")
         .filter(|s| !s.is_empty())
         .unwrap_or("fireemu-session")
         .to_owned();
     // The official emulator does not implement createAuthUri for a provider (it is a legacy
-    // redirect helper the SDKs no longer use); it answers NotImplementedError.
-    if body.get("providerId").is_some_and(|v| !v.is_null()) {
+    // redirect helper the SDKs no longer use); it answers NotImplementedError. Production's
+    // answer for a configured provider is unobserved.
+    if let Some(provider) = body.get("providerId").filter(|v| !v.is_null()) {
+        let configured = provider
+            .as_str()
+            .is_some_and(|id| store.oidc_config(id).is_some() || store.saml_config(id).is_some());
+        if strict && !configured {
+            return error(
+                400,
+                "OPERATION_NOT_ALLOWED : The identity provider configuration is not found.",
+            );
+        }
         return not_implemented("Sign-in with IDP is not yet supported.");
     }
     let Some(identifier) = str_field(body, "identifier") else {
@@ -11829,15 +11842,22 @@ fn create_auth_uri(store: &AuthStore, body: &Value) -> JsonResponse {
         }
         None => false,
     };
+    let mut answer = json!({
+        "kind": "identitytoolkit#CreateAuthUriResponse",
+        "registered": registered,
+        "signinMethods": methods,
+        "allProviders": methods,
+        "sessionId": session_id,
+    });
+    if strict && methods.is_empty() {
+        if let Some(fields) = answer.as_object_mut() {
+            fields.remove("signinMethods");
+            fields.remove("allProviders");
+        }
+    }
     JsonResponse {
         status: 200,
-        body: json!({
-            "kind": "identitytoolkit#CreateAuthUriResponse",
-            "registered": registered,
-            "signinMethods": methods,
-            "allProviders": methods,
-            "sessionId": session_id,
-        }),
+        body: answer,
     }
 }
 

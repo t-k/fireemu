@@ -1203,6 +1203,10 @@
             {
               "behaviour": "the strict profile accepts only signed custom tokens verified against auth.customTokenSigners, answers password and custom-token sign-in without returnSecureToken with production's legacy Identity Toolkit token (honoured where production was observed to honour it: account lookup, update and delete, a verification mail, phone linking, a sign-up upgrade and MFA enrollment; refused by email-link and identity-provider linking and session-cookie creation), answers MFA enrollment with production's v2 error shape and TOTP-disabled refusal, and applies production's custom-token claim rules; the emulator profile keeps the official emulator's unsigned and JSON fake tokens and secure tokens",
               "precision": "documented-divergence"
+            },
+            {
+              "behaviour": "a tenant created with a display name of the documented form (4-20 letters, digits and hyphens, beginning with a letter) is named after it as production names it, the display name, a hyphen and five characters of [a-z0-9] drawn reproducibly from the creation sequence, in both profiles; the official emulator draws a random 28-character ID, and a tenant without such a display name keeps fireemu's generated name",
+              "precision": "documented-divergence"
             }
           ],
           "productionOnly": [

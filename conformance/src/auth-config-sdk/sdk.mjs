@@ -19,7 +19,7 @@ import http2 from "node:http2";
 import https from "node:https";
 
 import { describeJwt, decodeJwt } from "../auth-credential/tokens.mjs";
-import { describeLink } from "../auth-action/harness.mjs";
+import { describeActionLink as describeLink } from "./harness.mjs";
 import { SANDBOX_PROJECT, resolveValue } from "../auth-account/harness.mjs";
 import { materialize } from "../auth-credential/session.mjs";
 

@@ -325,7 +325,8 @@ const projectionSteps = [
   ["enforce-all-notify", "ENFORCE", ALL_CLASSES, { forceUpgradeOnSignin: false }],
 ].flatMap(([name, state, options, extra]) => [
   setPolicy(`set-${name}`, state, options, extra),
-  { ...clientGet(`policy-${name}`, "v2/passwordPolicy"), delayMs: 3000 },
+  // Production limits password policy reads per project (QUOTA_EXCEEDED); the reads are spaced.
+  { ...clientGet(`policy-${name}`, "v2/passwordPolicy"), delayMs: 12_000 },
 ]);
 
 const policyProjection = {
@@ -335,7 +336,7 @@ const policyProjection = {
   steps: [
     ...projectionSteps,
     clearPolicy("clear"),
-    { ...clientGet("policy-cleared", "v2/passwordPolicy"), delayMs: 3000 },
+    { ...clientGet("policy-cleared", "v2/passwordPolicy"), delayMs: 12_000 },
   ],
 };
 

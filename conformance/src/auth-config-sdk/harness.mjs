@@ -4,7 +4,7 @@
 // harness, token decoding from the AUTH-CREDENTIAL harness and action-link description from the
 // AUTH-ACTION harness; the request guard and the corpus rules live in guard.mjs.
 
-import { normalizeActionResponse } from "../auth-action/harness.mjs";
+import { describeLink, normalizeActionResponse } from "../auth-action/harness.mjs";
 
 /**
  * Config members other lanes own and may change on the shared sandbox (scope decisions K9 and
@@ -23,7 +23,38 @@ const MASKED = {
   producerProjectNumber: "<producer-project-number>",
   // An Admin SDK UserRecord carries the stored hash and salt.
   passwordSalt: "<bytes>",
+  // createAuthUri's session handle, new on every answer.
+  sessionId: "<sessionId>",
+  // A temporary sign-up quota's start, which the corpus sets relative to the run.
+  startTime: "<start-time>",
 };
+
+/**
+ * An action link as AUTH-ACTION records it (E2), and when production wraps it for an app
+ * (mobile link settings: `/__/auth/links?link=<action link>`), the inner link described the
+ * same way, so its code is never recorded.
+ */
+export function describeActionLink(link, oobCode) {
+  const described = describeLink(link, oobCode);
+  if (described && typeof described === "object" && typeof described.params?.link === "string")
+    described.params.link = describeLink(described.params.link, oobCode);
+  return described;
+}
+
+function describeLinks(value) {
+  if (Array.isArray(value)) return value.map(describeLinks);
+  if (value && typeof value === "object") {
+    return Object.fromEntries(
+      Object.entries(value).map(([k, v]) => [
+        k,
+        k === "oobLink" && typeof v === "string"
+          ? describeActionLink(v, value.oobCode)
+          : describeLinks(v),
+      ]),
+    );
+  }
+  return value;
+}
 
 /** An RFC 1123 time as the Admin SDK prints it (UserRecord metadata, tokensValidAfterTime). */
 const HTTP_DATE = /^[A-Z][a-z]{2}, \d\d [A-Z][a-z]{2} \d{4} \d\d:\d\d:\d\d GMT$/;
@@ -65,7 +96,7 @@ export function normalizeHttp(status, text, ctx, { config = false } = {}) {
   } catch {
     return { status, nonJson: true };
   }
-  const projected = config ? withoutOtherLanes(body) : body;
+  const projected = describeLinks(config ? withoutOtherLanes(body) : body);
   return normalizeActionResponse(status, JSON.stringify(mask(projected, "", ctx)), ctx);
 }
 

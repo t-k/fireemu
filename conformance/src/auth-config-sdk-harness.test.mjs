@@ -6,7 +6,7 @@ import { test } from "node:test";
 import { SANDBOX_PROJECT, createContext } from "./auth-account/harness.mjs";
 import { PROGRAMS } from "./auth-config-sdk/corpus.mjs";
 import { guardHttp, validateConfigSdkCorpus } from "./auth-config-sdk/guard.mjs";
-import { normalizeHttp, normalizeSdk } from "./auth-config-sdk/harness.mjs";
+import { describeActionLink, normalizeHttp, normalizeSdk } from "./auth-config-sdk/harness.mjs";
 import { SDK_OPERATIONS } from "./auth-config-sdk/sdk.mjs";
 import {
   configCovers,
@@ -382,6 +382,47 @@ test("normalization drops other lanes' members and masks key material", () => {
   );
   // Outside the config route the members are kept (a sign-up answer has none of them anyway).
   assert.deepEqual(normalizeHttp(200, '{"mfa":1}', ctx).body, { mfa: 1 });
+});
+
+test("a wrapped action link is recorded as its parameters with the inner link described", () => {
+  const ctx = production();
+  const inner =
+    "https://fireemu-oracle-idp.firebaseapp.com/__/auth/action?apiKey=AIzaTESTKEY&mode=resetPassword&oobCode=CODE1&continueUrl=https://x.example.com/f&lang=en";
+  const outer = `https://fireemu-oracle-idp.firebaseapp.com/__/auth/links?link=${encodeURIComponent(inner)}`;
+  const recorded = normalizeHttp(200, JSON.stringify({ oobLink: outer, oobCode: "CODE1" }), ctx);
+  assert.deepEqual(recorded.body.oobLink, {
+    handler: "<action-handler>",
+    code: "absent",
+    params: {
+      link: {
+        handler: "<action-handler>",
+        code: "the-answer-oobCode",
+        params: {
+          apiKey: "<api-key>",
+          mode: "resetPassword",
+          continueUrl: "https://x.example.com/f",
+          lang: "en",
+        },
+      },
+    },
+  });
+  assert.doesNotMatch(JSON.stringify(recorded), /CODE1|AIzaTESTKEY/);
+  const sdk = normalizeSdk({ value: describeActionLink(outer) }, ctx);
+  assert.equal(sdk.value.params.link.code, "another-code");
+});
+
+test("volatile members are placeholders: auth URI sessions and quota start times", () => {
+  const ctx = production();
+  const recorded = normalizeHttp(
+    200,
+    JSON.stringify({
+      sessionId: "abc",
+      quota: { signUpQuotaConfig: { startTime: "2030-01-01T00:00:00Z" } },
+    }),
+    ctx,
+  );
+  assert.equal(recorded.body.sessionId, "<sessionId>");
+  assert.equal(recorded.body.quota.signUpQuotaConfig.startTime, "<start-time>");
 });
 
 test("SDK outcomes are recorded as values or error codes with generated ids masked", () => {

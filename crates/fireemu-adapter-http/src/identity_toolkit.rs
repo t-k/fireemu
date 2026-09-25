@@ -8195,7 +8195,9 @@ fn parse_valid_since(body: &Value) -> Result<Option<LogicalInstant>, JsonRespons
     }
 }
 
-fn parse_update(body: &Value) -> Result<UpdatePlan, JsonResponse> {
+/// An update's plan. An administrator may set a password below the minimum length, as
+/// production lets it (sandbox recording 2026-09-25); an end user may not.
+fn parse_update(body: &Value, self_service: bool) -> Result<UpdatePlan, JsonResponse> {
     reject_unsupported(body, UNSUPPORTED_UPDATE_FIELDS)?;
     let claims = match opt_str(body, "customAttributes")? {
         Some(attrs) => Some(parse_custom_claims(attrs)?),
@@ -8203,7 +8205,12 @@ fn parse_update(body: &Value) -> Result<UpdatePlan, JsonResponse> {
     };
     let password = opt_str(body, "password")?.map(str::to_owned);
     if let Some(p) = &password {
-        AuthStore::validate_password(p).map_err(|e| auth_error(&e))?;
+        if self_service {
+            AuthStore::validate_password(p)
+        } else {
+            AuthStore::validate_imported_password(p)
+        }
+        .map_err(|e| auth_error(&e))?;
     }
     let change = |key: &str| -> Result<Change, JsonResponse> {
         Ok(opt_str(body, key)?.map_or(Change::Keep, |v| Change::Set(v.to_owned())))
@@ -8351,7 +8358,7 @@ fn parse_client_update(body: &Value) -> Result<UpdatePlan, JsonResponse> {
             fields.insert("displayName".to_owned(), Value::String(number.to_string()));
         }
     }
-    parse_update(&client)
+    parse_update(&client, true)
 }
 
 #[allow(clippy::too_many_lines)]
@@ -8466,14 +8473,18 @@ fn update(
     let plan = match if self_service {
         parse_client_update(body)
     } else {
-        parse_update(body)
+        parse_update(body, false)
     } {
         Ok(p) => p,
         Err(r) => return r,
     };
     if let Some(password) = &plan.password {
         if let Err(e) = store.validate_password_for(
-            fireemu_core_auth::password_policy::Operation::Change,
+            if self_service {
+                fireemu_core_auth::password_policy::Operation::Change
+            } else {
+                fireemu_core_auth::password_policy::Operation::AdminUpdate
+            },
             password,
         ) {
             return auth_error(&e);
@@ -8641,7 +8652,11 @@ fn update(
             &uid,
             password,
             at,
-            fireemu_core_auth::password_policy::Operation::Change,
+            if self_service {
+                fireemu_core_auth::password_policy::Operation::Change
+            } else {
+                fireemu_core_auth::password_policy::Operation::AdminUpdate
+            },
         ) {
             return auth_error(&e);
         }

@@ -27,6 +27,9 @@ pub enum Operation {
     CredentialAddition,
     /// Changing an existing password.
     Change,
+    /// An administrator setting an account's password: production takes one below the
+    /// minimum length (sandbox recording 2026-09-25).
+    AdminUpdate,
     /// Confirming a password reset.
     Reset,
     /// Signing in with an existing password credential.

@@ -3905,7 +3905,11 @@ impl AuthStore {
         operation: PasswordPolicyOperation,
         password: &str,
     ) -> Result<Vec<ViolationCode>, AuthError> {
-        Self::validate_password(password)?;
+        if operation == PasswordPolicyOperation::AdminUpdate {
+            Self::validate_imported_password(password)?;
+        } else {
+            Self::validate_password(password)?;
+        }
         let violations = if self.password_policy.enforcement_state
             == crate::password_policy::EnforcementState::Enforce
         {

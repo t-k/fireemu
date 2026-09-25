@@ -3690,8 +3690,9 @@ service cloud.firestore {{
 
 /// Production's `request.query` has nine keys, not the three documented (FS-RULES exploration
 /// 2026-09-25, not evidence; the recorded rows see `keys().hasOnly(['limit', 'offset',
-/// 'orderBy'])` denied): for a plain query `kind` is the collection id, `parent` null,
-/// `allDescendants` and `distinct` false, `groupBy` a map and the ninth a bool.
+/// 'orderBy'])` denied): `kind` is the collection id, `parent` null at the root and the parent
+/// document's path below one, `allDescendants` and `distinct` false, `groupBy` an empty map and
+/// `selectOnlyKeys` false, even for a query that selects only `__name__`.
 #[tokio::test]
 async fn request_query_carries_productions_nine_keys() {
     let mut h = start().await;
@@ -3704,20 +3705,31 @@ service cloud.firestore {{
   match /databases/{{database}}/documents {{
     match /nine/{{id}} {{ allow list: if request.query.size() == 9 && request.query.keys().hasAll(['limit', 'offset', 'orderBy', 'allDescendants', 'distinct', 'groupBy', 'kind', 'parent', '{ninth}']); }}
     match /three/{{id}} {{ allow list: if request.query.keys().hasOnly(['limit', 'offset', 'orderBy']); }}
-    match /values/{{id}} {{ allow list: if request.query.kind == 'values' && request.query.parent == null && request.query.allDescendants == false && request.query.distinct == false && request.query.groupBy is map && request.query['{ninth}'] == false; }}
+    match /values/{{id}} {{ allow list: if request.query.kind == 'values' && request.query.parent == null && request.query.allDescendants == false && request.query.distinct == false && request.query.groupBy == {{}} && request.query['{ninth}'] == false; }}
+    match /p/x/nested/{{id}} {{ allow list: if request.query.kind == 'nested' && request.query.parent == /databases/$(database)/documents/p/x && request.query.size() == 9; }}
+    match /keys/{{id}} {{ allow list: if request.query['{ninth}'] == false && request.query.size() == 9; }}
     match /{{path=**}}/group/{{id}} {{ allow list: if request.query.allDescendants == true && request.query.kind == 'group'; }}
   }}
 }}"
         ))
         .unwrap();
     let run = |collection: &'static str, all_descendants: bool| pb::RunQueryRequest {
-        parent: DOCS.to_owned(),
+        parent: if collection == "nested" {
+            format!("{DOCS}/p/x")
+        } else {
+            DOCS.to_owned()
+        },
         query_type: Some(pb::run_query_request::QueryType::StructuredQuery(
             pb::StructuredQuery {
                 from: vec![sq::CollectionSelector {
                     collection_id: collection.into(),
                     all_descendants,
                 }],
+                select: (collection == "keys").then(|| sq::Projection {
+                    fields: vec![sq::FieldReference {
+                        field_path: "__name__".into(),
+                    }],
+                }),
                 ..Default::default()
             },
         )),
@@ -3728,6 +3740,8 @@ service cloud.firestore {{
         ("three", false, false),
         ("values", false, true),
         ("group", true, true),
+        ("nested", false, true),
+        ("keys", false, true),
     ] {
         let outcome = match h
             .client

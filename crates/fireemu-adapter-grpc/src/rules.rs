@@ -1389,17 +1389,15 @@ fn tighten(mut range: ValueRange, (bound, is_lower): (RangeBound, bool)) -> Opti
 /// while `orderBy is list` does not (`conformance/rules-programs.json`,
 /// `query-order-by-shape`). Without an explicit ordering it is `null`, as `limit` is
 /// without a limit.
-/// The name of the ninth `request.query` key. The FS-RULES exploration (2026-09-25, not
-/// evidence) read its first 12 characters, `selectOnlyKe`, a length over 12 and a bool; the
-/// rest of the name is inferred until it is read.
+/// The name of the ninth `request.query` key (FS-RULES exploration 2026-09-25, not evidence).
 pub const REQUEST_QUERY_KEYS_ONLY_KEY: &str = "selectOnlyKeys";
 
 /// `request.query` as production builds it: the three documented keys and six more (FS-RULES
-/// exploration 2026-09-25, not evidence). Observed for a plain root query: `kind` is the
-/// collection id, `parent` null, `allDescendants` and `distinct` false, `groupBy` a map and the
-/// keys-only flag a bool. Unobserved: `kind` of a query without a collection id (empty here),
-/// `parent` below a document (its path here), `groupBy`'s members (none here) and the keys-only
-/// flag's value (true here only for a projection of exactly `__name__`).
+/// exploration 2026-09-25, not evidence). Observed: `kind` is the collection id; `parent` is
+/// null for a root query and the parent document's path below one; `allDescendants` and
+/// `distinct` are false for a collection query; `groupBy` is an empty map; `selectOnlyKeys` is
+/// false, also for a query that selects only `__name__`. Unobserved: `kind` of a query without a
+/// collection id (empty here) and `allDescendants` of a collection-group query (true here).
 fn query_value(query: &Query) -> RulesValue {
     let (parent, kind, all_descendants) = match &query.scope {
         QueryScope::Collection {
@@ -1429,12 +1427,7 @@ fn query_value(query: &Query) -> RulesValue {
     );
     m.insert(
         REQUEST_QUERY_KEYS_ONLY_KEY.to_owned(),
-        RulesValue::Bool(
-            query
-                .projection
-                .as_ref()
-                .is_some_and(|fields| fields.len() == 1 && fields[0].is_document_name()),
-        ),
+        RulesValue::Bool(false),
     );
     m.insert(
         "limit".to_owned(),

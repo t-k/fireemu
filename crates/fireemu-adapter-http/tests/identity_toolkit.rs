@@ -18259,3 +18259,23 @@ fn a_masked_mfa_update_without_a_value_resets_the_config() {
         assert_eq!(body["mfa"], json!({"state": "DISABLED"}), "{body}");
     }
 }
+
+/// Strict checks the session before the display name: an unknown session without a display
+/// name is `INVALID_SESSION_INFO` (auth-mfa/totp/enroll#finalize-missing-session; mutation
+/// follow-up, docs.local/mutation/auth-mfa/20260925).
+#[test]
+fn strict_an_unknown_enrollment_session_is_refused_before_the_display_name() {
+    let s = strict_mfa_state();
+    let token = verified_session(&s, "unknown-session@example.com");
+    start_totp(&s, &token);
+    let (status, body) = post(
+        &s,
+        &format!("{V2}/accounts/mfaEnrollment:finalize"),
+        &json!({"idToken": token, "totpVerificationInfo": {"sessionInfo": "enroll-not-a-session", "verificationCode": "123456"}}),
+    );
+    assert_eq!(
+        (status, v2_refusal(&body).0),
+        (400, "INVALID_SESSION_INFO"),
+        "{body}"
+    );
+}

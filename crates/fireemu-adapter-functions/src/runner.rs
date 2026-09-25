@@ -8,7 +8,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use serde_json::{json, Map, Value};
-use tokio::io::{AsyncBufReadExt, BufReader};
+use tokio::io::{AsyncBufRead, AsyncBufReadExt, BufReader};
 #[cfg(not(windows))]
 use tokio::process::Child;
 use tokio::process::{ChildStdin, Command};
@@ -79,6 +79,10 @@ pub const INHERITED_ENV: &[&str] = &[
 pub const INHERITED_ENV_PREFIXES: &[&str] = &["VOLTA_", "MISE_", "ASDF_", "FNM_"];
 
 const LOG_CAPACITY: usize = 1_000;
+const LOG_ENTRY_BYTE_LIMIT: usize = 1024 * 1024;
+const LOG_BUFFER_BYTE_LIMIT: usize = 8 * 1024 * 1024;
+const STDERR_LINE_BYTE_LIMIT: usize = 256 * 1024;
+const STDERR_TRUNCATION_MARKER: &str = "...[truncated]";
 static RUNNER_SANDBOX_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
 /// One retained runner line with the metadata needed by the official Logging stream.
@@ -103,6 +107,7 @@ impl RunnerLog {
             user: false,
             fields: Map::new(),
         }
+        .bounded()
     }
 
     fn structured(
@@ -127,6 +132,31 @@ impl RunnerLog {
             user,
             fields,
         }
+        .bounded()
+    }
+
+    fn retained_bytes(&self) -> usize {
+        self.display
+            .len()
+            .saturating_add(self.level.len())
+            .saturating_add(self.message.len())
+            .saturating_add(self.function.as_ref().map_or(0, String::len))
+            .saturating_add(
+                serde_json::to_vec(&self.fields).map_or(usize::MAX, |fields| fields.len()),
+            )
+    }
+
+    fn bounded(mut self) -> Self {
+        if self.retained_bytes() > LOG_ENTRY_BYTE_LIMIT {
+            let marker = "[runner log truncated: byte limit]".to_owned();
+            self.display = marker.clone();
+            "warning".clone_into(&mut self.level);
+            self.message = marker;
+            self.function = None;
+            self.user = false;
+            self.fields.clear();
+        }
+        self
     }
 
     /// Existing text form consumed by the fireemu UI and stderr diagnostics.
@@ -179,17 +209,24 @@ pub struct LogSlice {
 
 #[derive(Debug, Default)]
 struct LogBuffer {
-    lines: VecDeque<RunnerLog>,
+    lines: VecDeque<(RunnerLog, usize)>,
+    bytes: usize,
     first_seq: u64,
     next_seq: u64,
 }
 
 impl LogBuffer {
     fn push(&mut self, line: RunnerLog) {
-        self.lines.push_back(line);
+        let bytes = line.retained_bytes();
+        self.lines.push_back((line, bytes));
+        self.bytes = self.bytes.saturating_add(bytes);
         self.next_seq = self.next_seq.saturating_add(1);
-        if self.lines.len() > LOG_CAPACITY {
-            self.lines.pop_front();
+        while self.lines.len() > LOG_CAPACITY || self.bytes > LOG_BUFFER_BYTE_LIMIT {
+            let (_, bytes) = self
+                .lines
+                .pop_front()
+                .expect("the log buffer is over a limit");
+            self.bytes -= bytes;
             self.first_seq = self.first_seq.saturating_add(1);
         }
     }
@@ -203,15 +240,65 @@ impl LogBuffer {
             .saturating_sub(self.first_seq);
         let start = usize::try_from(start).unwrap_or(usize::MAX);
         LogSlice {
-            lines: self.lines.iter().skip(start).cloned().collect(),
+            lines: self
+                .lines
+                .iter()
+                .skip(start)
+                .map(|(line, _)| line.clone())
+                .collect(),
             next_seq: self.next_seq,
             truncated,
         }
     }
 }
 
+async fn read_bounded_stderr_line<R: AsyncBufRead + Unpin>(
+    reader: &mut R,
+) -> std::io::Result<Option<String>> {
+    let keep = STDERR_LINE_BYTE_LIMIT - STDERR_TRUNCATION_MARKER.len();
+    let mut bytes = Vec::new();
+    let mut saw_input = false;
+    let mut truncated = false;
+    loop {
+        let available = reader.fill_buf().await?;
+        if available.is_empty() {
+            if !saw_input {
+                return Ok(None);
+            }
+            break;
+        }
+        saw_input = true;
+        let newline = available.iter().position(|byte| *byte == b'\n');
+        let consumed = newline.map_or(available.len(), |index| index + 1);
+        let content = &available[..newline.unwrap_or(consumed)];
+        let copy = content.len().min(keep.saturating_sub(bytes.len()));
+        bytes.extend_from_slice(&content[..copy]);
+        truncated |= copy < content.len();
+        reader.consume(consumed);
+        if newline.is_some() {
+            break;
+        }
+    }
+    if !truncated && bytes.last() == Some(&b'\r') {
+        bytes.pop();
+    }
+    let mut line = String::from_utf8_lossy(&bytes).into_owned();
+    if line.len() > keep {
+        let end = (0..=keep)
+            .rev()
+            .find(|end| line.is_char_boundary(*end))
+            .unwrap_or(0);
+        line.truncate(end);
+        truncated = true;
+    }
+    if truncated {
+        line.push_str(STDERR_TRUNCATION_MARKER);
+    }
+    Ok(Some(line))
+}
+
 /// How to start (and restart) a runner.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct SpawnSpec {
     /// Program and arguments.
     pub command: Vec<String>,
@@ -221,6 +308,17 @@ pub struct SpawnSpec {
     pub env: Vec<(String, String)>,
     /// How long to wait for the `hello`.
     pub hello_timeout: Duration,
+}
+
+impl std::fmt::Debug for SpawnSpec {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SpawnSpec")
+            .field("command", &"[redacted]")
+            .field("cwd", &self.cwd)
+            .field("env", &"[redacted]")
+            .field("hello_timeout", &self.hello_timeout)
+            .finish()
+    }
 }
 
 /// A running runner.
@@ -299,7 +397,8 @@ fn create_credential_sandbox() -> Result<PathBuf, String> {
 /// The environment of a runner child: the inherited allowlist, then `extra` (emulator
 /// endpoints and project settings).
 fn child_env(extra: &[(String, String)]) -> Result<(Vec<(String, String)>, PathBuf), String> {
-    let mut env: Vec<(String, String)> = std::env::vars()
+    let mut env: Vec<(String, String)> = std::env::vars_os()
+        .filter_map(|(key, value)| Some((key.into_string().ok()?, value.into_string().ok()?)))
         .filter(|(k, _)| {
             INHERITED_ENV.contains(&k.as_str())
                 || INHERITED_ENV_PREFIXES.iter().any(|p| k.starts_with(p))
@@ -479,8 +578,8 @@ impl Runner {
             let label = label.clone();
             let logs = logs.clone();
             tokio::spawn(async move {
-                let mut lines = BufReader::new(stderr).lines();
-                while let Ok(Some(line)) = lines.next_line().await {
+                let mut reader = BufReader::new(stderr);
+                while let Ok(Some(line)) = read_bounded_stderr_line(&mut reader).await {
                     eprintln!("{label} {line}");
                     if let Ok(mut l) = logs.lock() {
                         l.push(RunnerLog::raw(line));
@@ -582,9 +681,7 @@ impl Runner {
                 // The runner is gone: every waiter learns it and the runtime stops
                 // dispatching.
                 alive.store(false, Ordering::SeqCst);
-                eprintln!(
-                    "{label} runner exited; functions are unavailable until the daemon restarts"
-                );
+                eprintln!("{label} runner exited");
                 if let Ok(mut w) = waiters.lock() {
                     for (_, tx) in w.drain() {
                         let _ = tx.send(InvokeOutcome::RunnerGone("runner exited".into()));
@@ -718,10 +815,7 @@ impl Runner {
         if !written {
             *stdin = None;
             self.alive.store(false, Ordering::SeqCst);
-            eprintln!(
-                "{} runner stopped reading its stdin; functions are unavailable until the daemon restarts",
-                self.label
-            );
+            eprintln!("{} runner stopped reading its stdin", self.label);
             forget(&self.waiters);
             return done(InvokeOutcome::RunnerGone(
                 "runner stopped reading its stdin".into(),
@@ -980,6 +1074,51 @@ mod tests {
         std::fs::remove_dir_all(second.1).expect("second sandbox cleanup");
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn child_env_skips_non_utf8_inherited_values_without_panicking() {
+        use std::ffi::OsString;
+        use std::os::unix::ffi::OsStringExt;
+        use std::process::Command;
+
+        const PROBE: &str = "FIREEMU_RUNNER_NON_UTF8_CHILD_TEST";
+        if std::env::var(PROBE).as_deref() == Ok("1") {
+            let (environment, sandbox) = child_env(&[]).expect("runner environment");
+            assert_eq!(
+                environment_value(&environment, "VOLTA_FIREEMU_VALID"),
+                "retained"
+            );
+            assert!(environment
+                .iter()
+                .all(|(key, _)| key != "VOLTA_FIREEMU_INVALID"));
+            std::fs::remove_dir_all(sandbox).expect("sandbox cleanup");
+            println!("non-UTF-8 environment probe ran");
+            return;
+        }
+
+        let output = Command::new(std::env::current_exe().expect("test executable"))
+            .args([
+                "--exact",
+                "runner::tests::child_env_skips_non_utf8_inherited_values_without_panicking",
+                "--nocapture",
+            ])
+            .env(PROBE, "1")
+            .env("VOLTA_FIREEMU_VALID", "retained")
+            .env("VOLTA_FIREEMU_INVALID", OsString::from_vec(vec![0xff]))
+            .output()
+            .expect("test subprocess");
+        assert!(
+            output.status.success(),
+            "stdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(
+            String::from_utf8_lossy(&output.stdout).contains("non-UTF-8 environment probe ran"),
+            "the subprocess did not run the probe"
+        );
+    }
+
     #[test]
     fn spawn_setup_guard_removes_its_owned_sandbox_on_error_and_unwind() {
         let on_error = super::create_credential_sandbox().unwrap();
@@ -1012,7 +1151,7 @@ mod tests {
             ],
             None,
             &[],
-            Duration::from_millis(100),
+            Duration::from_secs(5),
         )
         .await;
         let error = match result {
@@ -1164,6 +1303,87 @@ mod tests {
         assert!(delta.truncated);
         assert_eq!(delta.lines.first().map(RunnerLog::display), Some("line-1"));
         assert_eq!(delta.next_seq, (LOG_CAPACITY + 1) as u64);
+    }
+
+    #[test]
+    fn log_buffer_limits_a_single_raw_or_structured_entry() {
+        let mut logs = LogBuffer::default();
+        logs.push(RunnerLog::raw("x".repeat(10 * 1024 * 1024)));
+        let raw = logs.since(None);
+        assert_eq!(raw.lines.len(), 1);
+        assert!(raw.lines[0].display().len() <= 1024 * 1024);
+
+        let fields = serde_json::Map::from_iter([(
+            "payload".to_owned(),
+            serde_json::json!("x".repeat(2 * 1024 * 1024)),
+        )]);
+        logs.push(RunnerLog::structured(
+            "info",
+            "large fields",
+            None,
+            None,
+            true,
+            fields,
+        ));
+        let structured = logs.since(Some(1));
+        assert_eq!(structured.lines.len(), 1);
+        assert!(
+            serde_json::to_vec(structured.lines[0].fields())
+                .unwrap()
+                .len()
+                <= 1024 * 1024
+        );
+    }
+
+    #[test]
+    fn log_buffer_evicts_by_total_bytes_as_well_as_line_count() {
+        let mut logs = LogBuffer::default();
+        for _ in 0..100 {
+            logs.push(RunnerLog::raw("x".repeat(100_000)));
+        }
+        let slice = logs.since(None);
+        let retained: usize = slice
+            .lines
+            .iter()
+            .map(|line| line.display().len() + line.message().len())
+            .sum();
+        assert!(retained <= 8 * 1024 * 1024);
+        assert!(slice.truncated);
+        assert_eq!(slice.next_seq, 100);
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn oversized_stderr_line_is_truncated_and_the_next_line_survives() {
+        let script = r#"import sys
+payload = b'{"type":"hello","runner":"node"}'
+sys.stdout.buffer.write(str(len(payload)).encode() + b'\n' + payload)
+sys.stdout.buffer.flush()
+sys.stderr.write('x' * 280000 + '\nshort\n')
+sys.stderr.flush()
+sys.stdin.readline()
+"#;
+        let runner = super::Runner::spawn(
+            &["python3".to_owned(), "-c".to_owned(), script.to_owned()],
+            None,
+            &[],
+            std::time::Duration::from_secs(5),
+        )
+        .await
+        .unwrap();
+        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
+        let logs = loop {
+            let logs = runner.logs_since(None);
+            if logs.lines.len() >= 2 || tokio::time::Instant::now() >= deadline {
+                break logs;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        };
+        runner.shutdown().await;
+        assert_eq!(logs.lines.len(), 2);
+        assert_eq!(logs.lines[1].display(), "short");
+        assert!(logs.lines[0].display().len() <= 256 * 1024);
+        assert!(logs.lines[0].display().contains("[truncated]"));
     }
 
     #[test]

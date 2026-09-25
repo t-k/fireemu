@@ -31,7 +31,7 @@ use crate::runtime::FunctionsRuntime;
 pub const MAX_FUNCTION_BODY_BYTES: usize = 32 * 1024 * 1024;
 /// Express' default JSON limit used by the pinned Cloud Tasks emulator.
 pub const MAX_TASK_BODY_BYTES: usize = 100 * 1024;
-/// Maximum response body accepted from a function (responses are buffered).
+/// Maximum raw HTTP response accepted from a function, including framing and headers.
 pub const MAX_FUNCTION_RESPONSE_BYTES: u64 = 64 * 1024 * 1024;
 /// Production's maximum streamed response size for a second-generation function.
 pub const MAX_STREAMING_FUNCTION_RESPONSE_BYTES: u64 = 10 * 1024 * 1024;
@@ -1585,6 +1585,43 @@ pub async fn serve_tasks(
     admission: HttpAdmission,
 ) -> std::io::Result<()> {
     serve_surface(listener, runtime, HttpSurface::Tasks, admission).await
+}
+
+#[cfg(test)]
+mod buffered_response_tests {
+    use super::parse_response;
+
+    const LARGE_BODY: usize = 10 * 1024 * 1024 + 1;
+
+    fn response(headers: &str, body: &[u8]) -> Vec<u8> {
+        let mut raw = format!("HTTP/1.1 200 OK\r\n{headers}\r\n").into_bytes();
+        raw.extend_from_slice(body);
+        raw
+    }
+
+    #[test]
+    fn ordinary_on_request_content_length_body_above_ten_mib_is_forwarded() {
+        let body = vec![b'x'; LARGE_BODY];
+        let raw = response(&format!("Content-Length: {}\r\n", body.len()), &body);
+        assert_eq!(parse_response(&raw, "GET").unwrap().body, body);
+    }
+
+    #[test]
+    fn ordinary_on_request_close_delimited_body_above_ten_mib_is_forwarded() {
+        let body = vec![b'x'; LARGE_BODY];
+        let raw = response("", &body);
+        assert_eq!(parse_response(&raw, "GET").unwrap().body, body);
+    }
+
+    #[test]
+    fn ordinary_on_request_chunked_body_above_ten_mib_is_forwarded() {
+        let body = vec![b'x'; LARGE_BODY];
+        let mut wire = format!("{:x}\r\n", LARGE_BODY - 1).into_bytes();
+        wire.extend_from_slice(&body[..LARGE_BODY - 1]);
+        wire.extend_from_slice(b"\r\n1\r\nx\r\n0\r\n\r\n");
+        let raw = response("Transfer-Encoding: chunked\r\n", &wire);
+        assert_eq!(parse_response(&raw, "GET").unwrap().body, body);
+    }
 }
 
 #[cfg(test)]

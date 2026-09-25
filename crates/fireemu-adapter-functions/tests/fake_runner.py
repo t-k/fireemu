@@ -24,6 +24,10 @@ if probe := os.environ.get("FIREEMU_SANDBOX_PROBE"):
         encoding="utf-8",
     )
 
+if probe := os.environ.get("FIREEMU_FAKE_START_PROBE"):
+    with open(probe, "a", encoding="utf-8") as starts:
+        starts.write(f"{os.getpid()}\n")
+
 
 def send(msg):
     payload = json.dumps(msg).encode()
@@ -128,6 +132,8 @@ send({
             {"name": "fail", "trigger": {"type": "firestore", "eventType": "google.cloud.firestore.document.v1.written", "document": "items/{id}"}, "retry": True},
             {"name": "slow", "trigger": {"type": "storage", "eventType": "google.cloud.storage.object.v1.finalized"}, "timeoutSeconds": 1},
             {"name": "tick", "trigger": {"type": "schedule", "schedule": "every 5 minutes"}},
+            {"name": "crashOnce", "trigger": {"type": "pubsub", "topic": "crash-once"}},
+            {"name": "crashAlways", "trigger": {"type": "pubsub", "topic": "crash-always"}},
             # A cron schedule (03:00 UTC daily). The tests start at 12:01 UTC, so it only
             # comes due for clock advances of a day or more.
             {"name": "nightly", "trigger": {"type": "schedule", "schedule": "0 3 * * *"}},
@@ -152,7 +158,12 @@ while True:
     if msg.get("type") != "invoke":
         continue
     name = msg["function"]
-    if "crash" in name:
+    if name == "crashOnce":
+        marker = pathlib.Path(os.environ["FIREEMU_FAKE_CRASH_ONCE_MARKER"])
+        if not marker.exists():
+            marker.write_text("crashed", encoding="utf-8")
+            sys.exit(3)
+    elif "crash" in name:
         sys.exit(3)
     if "slow" in name:
         continue

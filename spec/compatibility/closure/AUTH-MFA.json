@@ -54,6 +54,24 @@
       "decision": "The first recording (2026-09-24) found a TOTP pending credential already refused at 300 seconds (TOTP_CHALLENGE_TIMEOUT, its same-account control accepted) and an enrollment start refused with a token 1800 seconds old (CREDENTIAL_TOO_OLD_LOGIN_AGAIN). One more small program brackets them: a TOTP pending credential at 60, 120, 180, 240 and 290 seconds, an SMS pending credential at 150 and 300 seconds, and an enrollment start with a token 240 and 330 seconds old, each with a same-account control, recorded twice in the same task.",
       "decidedBy": "owner (t-k)",
       "decidedOn": "2026-09-25"
+    },
+    {
+      "id": "M9",
+      "decision": "Where production's lifetimes were bracketed but not pinned, strict refuses only from the youngest age production refused: a TOTP pending credential from 302 seconds (accepted at 293, refused at 303, both measured send to send; one second below the refusal absorbs the two requests' differing latencies) and a TOTP enrollment start from a sign-in 333 seconds old (accepted at 244). A phone enrollment session is accepted up to about 1805 seconds (production accepted about 1803). Phone second factors keep their earlier limits where production's were not seen (an SMS pending credential was still accepted at about 303 seconds).",
+      "decidedBy": "agent (recorded in the owner ledger for the closure review)",
+      "decidedOn": "2026-09-25"
+    },
+    {
+      "id": "M10",
+      "decision": "The two rows of auth-mfa/totp/sign-in that production answered with its per-account TOTP attempt quota (QUOTA_EXCEEDED after the program's earlier wrong codes) are observed again by auth-mfa/totp/quota-free, where each check is the only wrong code of a new account. The comparison passes an original row only when its re-observation matches and fireemu's own answer on the row is the re-observed production answer. A repeated QUOTA_EXCEEDED would have been recorded as it is, without retries.",
+      "decidedBy": "owner (t-k)",
+      "decidedOn": "2026-09-25"
+    },
+    {
+      "id": "M11",
+      "decision": "The final-artifact regression re-runs the AUTH-ACTION, AUTH-CREDENTIAL and AUTH-ACCOUNT corpora and inherits their one documented divergence, as AUTH-ACTION scope decision E9 does: AUTH-ACCOUNT scope decision A12, the gson parser message text for malformed customAttributes JSON. The INVALID_CLAIMS refusal itself must match.",
+      "decidedBy": "owner (t-k)",
+      "decidedOn": "2026-09-25"
     }
   ],
   "conditions": [

@@ -1,0 +1,1082 @@
+{
+  "schemaVersion": 1,
+  "project": "fireemu-oracle-query",
+  "region": "us-central1",
+  "fixtureSource": "conformance/functions-http/fixtures",
+  "functions": {
+    "http": "fireemuHttpProbe",
+    "callable": "fireemuCallableProbe"
+  },
+  "placeholders": ["idToken", "invalidSignatureIdToken", "expiredIdToken"],
+  "programs": [
+    {
+      "id": "functions-http/http/request-shape",
+      "cases": [
+        {
+          "id": "GET",
+          "target": "http",
+          "request": {
+            "method": "GET",
+            "path": "/echo",
+            "headers": {}
+          },
+          "capture": "complete"
+        },
+        {
+          "id": "POST",
+          "target": "http",
+          "request": {
+            "method": "POST",
+            "path": "/echo",
+            "headers": {
+              "content-type": "application/json"
+            },
+            "body": {
+              "probe": "post"
+            }
+          },
+          "capture": "complete"
+        },
+        {
+          "id": "HEAD",
+          "target": "http",
+          "request": {
+            "method": "HEAD",
+            "path": "/echo",
+            "headers": {}
+          },
+          "capture": "complete"
+        },
+        {
+          "id": "nested-path",
+          "target": "http",
+          "request": {
+            "method": "GET",
+            "path": "/echo/a/b",
+            "headers": {}
+          },
+          "capture": "complete"
+        },
+        {
+          "id": "repeated-query-key",
+          "target": "http",
+          "request": {
+            "method": "GET",
+            "path": "/echo?x=1&x=2",
+            "headers": {}
+          },
+          "capture": "complete"
+        },
+        {
+          "id": "encoded-query",
+          "target": "http",
+          "request": {
+            "method": "GET",
+            "path": "/echo?name=%E6%97%A5",
+            "headers": {}
+          },
+          "capture": "complete"
+        }
+      ]
+    },
+    {
+      "id": "functions-http/http/request-headers",
+      "cases": [
+        {
+          "id": "custom-request-header",
+          "target": "http",
+          "request": {
+            "method": "GET",
+            "path": "/echo",
+            "headers": {
+              "x-fireemu-probe": "request-header"
+            }
+          },
+          "capture": "complete"
+        },
+        {
+          "id": "x-forwarded-for",
+          "target": "http",
+          "request": {
+            "method": "GET",
+            "path": "/echo",
+            "headers": {}
+          },
+          "capture": "complete"
+        },
+        {
+          "id": "x-forwarded-proto",
+          "target": "http",
+          "request": {
+            "method": "GET",
+            "path": "/echo",
+            "headers": {}
+          },
+          "capture": "complete"
+        },
+        {
+          "id": "function-execution-id-presence",
+          "target": "http",
+          "request": {
+            "method": "GET",
+            "path": "/echo",
+            "headers": {}
+          },
+          "capture": "complete"
+        }
+      ]
+    },
+    {
+      "id": "functions-http/http/request-bodies",
+      "cases": [
+        {
+          "id": "json",
+          "target": "http",
+          "request": {
+            "method": "POST",
+            "path": "/echo",
+            "headers": {
+              "content-type": "application/json"
+            },
+            "body": {
+              "value": {
+                "nested": true
+              }
+            }
+          },
+          "capture": "complete"
+        },
+        {
+          "id": "raw-text",
+          "target": "http",
+          "request": {
+            "method": "POST",
+            "path": "/echo",
+            "headers": {
+              "content-type": "text/plain"
+            },
+            "body": "plain text"
+          },
+          "capture": "complete"
+        },
+        {
+          "id": "form-urlencoded",
+          "target": "http",
+          "request": {
+            "method": "POST",
+            "path": "/echo",
+            "headers": {
+              "content-type": "application/x-www-form-urlencoded"
+            },
+            "body": "a=1&b=two"
+          },
+          "capture": "complete"
+        },
+        {
+          "id": "empty",
+          "target": "http",
+          "request": {
+            "method": "POST",
+            "path": "/echo",
+            "headers": {}
+          },
+          "capture": "complete"
+        },
+        {
+          "id": "malformed-json",
+          "target": "http",
+          "request": {
+            "method": "POST",
+            "path": "/echo",
+            "headers": {
+              "content-type": "application/json"
+            },
+            "body": "{"
+          },
+          "capture": "complete"
+        }
+      ]
+    },
+    {
+      "id": "functions-http/http/response-shape",
+      "cases": [
+        {
+          "id": "custom-status",
+          "target": "http",
+          "request": {
+            "method": "GET",
+            "path": "/status?status=201",
+            "headers": {}
+          },
+          "capture": "complete"
+        },
+        {
+          "id": "custom-header",
+          "target": "http",
+          "request": {
+            "method": "GET",
+            "path": "/status?status=201",
+            "headers": {}
+          },
+          "capture": "complete"
+        },
+        {
+          "id": "content-type",
+          "target": "http",
+          "request": {
+            "method": "GET",
+            "path": "/status?status=201",
+            "headers": {}
+          },
+          "capture": "complete"
+        },
+        {
+          "id": "no-content",
+          "target": "http",
+          "request": {
+            "method": "GET",
+            "path": "/status?status=204",
+            "headers": {}
+          },
+          "capture": "complete"
+        }
+      ]
+    },
+    {
+      "id": "functions-http/http/large-response",
+      "cases": [
+        {
+          "id": "one-mib-response-length-and-sha256",
+          "target": "http",
+          "request": {
+            "method": "GET",
+            "path": "/large",
+            "headers": {}
+          },
+          "capture": "complete"
+        }
+      ]
+    },
+    {
+      "id": "functions-http/http/streaming",
+      "cases": [
+        {
+          "id": "ordered-chunks-before-completion",
+          "target": "http",
+          "request": {
+            "method": "GET",
+            "path": "/stream",
+            "headers": {}
+          },
+          "capture": "complete"
+        },
+        {
+          "id": "completed-stream",
+          "target": "http",
+          "request": {
+            "method": "GET",
+            "path": "/stream",
+            "headers": {}
+          },
+          "capture": "complete"
+        },
+        {
+          "id": "client-disconnect",
+          "target": "http",
+          "request": {
+            "method": "GET",
+            "path": "/stream",
+            "headers": {}
+          },
+          "capture": "first-chunk-then-abort"
+        }
+      ]
+    },
+    {
+      "id": "functions-http/http/cors",
+      "cases": [
+        {
+          "id": "options-preflight",
+          "target": "http",
+          "request": {
+            "method": "OPTIONS",
+            "path": "/echo",
+            "headers": {
+              "origin": "https://example.com",
+              "access-control-request-method": "POST",
+              "access-control-request-headers": "content-type"
+            }
+          },
+          "capture": "complete"
+        },
+        {
+          "id": "cross-origin-post",
+          "target": "http",
+          "request": {
+            "method": "POST",
+            "path": "/echo",
+            "headers": {
+              "origin": "https://example.com",
+              "content-type": "application/json"
+            },
+            "body": {
+              "probe": "cors"
+            }
+          },
+          "capture": "complete"
+        }
+      ]
+    },
+    {
+      "id": "functions-http/http/failures",
+      "cases": [
+        {
+          "id": "synchronous-throw",
+          "target": "http",
+          "request": {
+            "method": "GET",
+            "path": "/throw-sync",
+            "headers": {}
+          },
+          "capture": "complete"
+        },
+        {
+          "id": "rejected-promise",
+          "target": "http",
+          "request": {
+            "method": "GET",
+            "path": "/throw-async",
+            "headers": {}
+          },
+          "capture": "complete"
+        },
+        {
+          "id": "handler-exceeds-one-second-timeout",
+          "target": "http",
+          "request": {
+            "method": "GET",
+            "path": "/timeout",
+            "headers": {}
+          },
+          "capture": "complete"
+        },
+        {
+          "id": "handler-returns-without-sending-response",
+          "target": "http",
+          "request": {
+            "method": "GET",
+            "path": "/no-response",
+            "headers": {}
+          },
+          "capture": "complete"
+        }
+      ]
+    },
+    {
+      "id": "functions-http/callable/success",
+      "cases": [
+        {
+          "id": "object-result",
+          "target": "callable",
+          "request": {
+            "method": "POST",
+            "path": "/",
+            "headers": {
+              "content-type": "application/json"
+            },
+            "body": {
+              "data": {
+                "op": "success",
+                "value": {
+                  "marker": "bounded"
+                }
+              }
+            }
+          },
+          "capture": "complete"
+        },
+        {
+          "id": "scalar-result",
+          "target": "callable",
+          "request": {
+            "method": "POST",
+            "path": "/",
+            "headers": {
+              "content-type": "application/json"
+            },
+            "body": {
+              "data": {
+                "op": "success",
+                "value": 7
+              }
+            }
+          },
+          "capture": "complete"
+        },
+        {
+          "id": "null-result",
+          "target": "callable",
+          "request": {
+            "method": "POST",
+            "path": "/",
+            "headers": {
+              "content-type": "application/json"
+            },
+            "body": {
+              "data": {
+                "op": "success",
+                "value": null
+              }
+            }
+          },
+          "capture": "complete"
+        },
+        {
+          "id": "data-envelope",
+          "target": "callable",
+          "request": {
+            "method": "POST",
+            "path": "/",
+            "headers": {
+              "content-type": "application/json"
+            },
+            "body": {
+              "data": {
+                "op": "success",
+                "value": {
+                  "marker": "bounded"
+                }
+              }
+            }
+          },
+          "capture": "complete"
+        }
+      ]
+    },
+    {
+      "id": "functions-http/callable/https-errors",
+      "cases": [
+        {
+          "id": "ok",
+          "target": "callable",
+          "request": {
+            "method": "POST",
+            "path": "/",
+            "headers": {
+              "content-type": "application/json"
+            },
+            "body": {
+              "data": {
+                "op": "error",
+                "code": "ok"
+              }
+            }
+          },
+          "capture": "complete"
+        },
+        {
+          "id": "cancelled",
+          "target": "callable",
+          "request": {
+            "method": "POST",
+            "path": "/",
+            "headers": {
+              "content-type": "application/json"
+            },
+            "body": {
+              "data": {
+                "op": "error",
+                "code": "cancelled"
+              }
+            }
+          },
+          "capture": "complete"
+        },
+        {
+          "id": "unknown",
+          "target": "callable",
+          "request": {
+            "method": "POST",
+            "path": "/",
+            "headers": {
+              "content-type": "application/json"
+            },
+            "body": {
+              "data": {
+                "op": "error",
+                "code": "unknown"
+              }
+            }
+          },
+          "capture": "complete"
+        },
+        {
+          "id": "invalid-argument",
+          "target": "callable",
+          "request": {
+            "method": "POST",
+            "path": "/",
+            "headers": {
+              "content-type": "application/json"
+            },
+            "body": {
+              "data": {
+                "op": "error",
+                "code": "invalid-argument"
+              }
+            }
+          },
+          "capture": "complete"
+        },
+        {
+          "id": "deadline-exceeded",
+          "target": "callable",
+          "request": {
+            "method": "POST",
+            "path": "/",
+            "headers": {
+              "content-type": "application/json"
+            },
+            "body": {
+              "data": {
+                "op": "error",
+                "code": "deadline-exceeded"
+              }
+            }
+          },
+          "capture": "complete"
+        },
+        {
+          "id": "not-found",
+          "target": "callable",
+          "request": {
+            "method": "POST",
+            "path": "/",
+            "headers": {
+              "content-type": "application/json"
+            },
+            "body": {
+              "data": {
+                "op": "error",
+                "code": "not-found"
+              }
+            }
+          },
+          "capture": "complete"
+        },
+        {
+          "id": "already-exists",
+          "target": "callable",
+          "request": {
+            "method": "POST",
+            "path": "/",
+            "headers": {
+              "content-type": "application/json"
+            },
+            "body": {
+              "data": {
+                "op": "error",
+                "code": "already-exists"
+              }
+            }
+          },
+          "capture": "complete"
+        },
+        {
+          "id": "permission-denied",
+          "target": "callable",
+          "request": {
+            "method": "POST",
+            "path": "/",
+            "headers": {
+              "content-type": "application/json"
+            },
+            "body": {
+              "data": {
+                "op": "error",
+                "code": "permission-denied"
+              }
+            }
+          },
+          "capture": "complete"
+        },
+        {
+          "id": "resource-exhausted",
+          "target": "callable",
+          "request": {
+            "method": "POST",
+            "path": "/",
+            "headers": {
+              "content-type": "application/json"
+            },
+            "body": {
+              "data": {
+                "op": "error",
+                "code": "resource-exhausted"
+              }
+            }
+          },
+          "capture": "complete"
+        },
+        {
+          "id": "failed-precondition",
+          "target": "callable",
+          "request": {
+            "method": "POST",
+            "path": "/",
+            "headers": {
+              "content-type": "application/json"
+            },
+            "body": {
+              "data": {
+                "op": "error",
+                "code": "failed-precondition"
+              }
+            }
+          },
+          "capture": "complete"
+        },
+        {
+          "id": "aborted",
+          "target": "callable",
+          "request": {
+            "method": "POST",
+            "path": "/",
+            "headers": {
+              "content-type": "application/json"
+            },
+            "body": {
+              "data": {
+                "op": "error",
+                "code": "aborted"
+              }
+            }
+          },
+          "capture": "complete"
+        },
+        {
+          "id": "out-of-range",
+          "target": "callable",
+          "request": {
+            "method": "POST",
+            "path": "/",
+            "headers": {
+              "content-type": "application/json"
+            },
+            "body": {
+              "data": {
+                "op": "error",
+                "code": "out-of-range"
+              }
+            }
+          },
+          "capture": "complete"
+        },
+        {
+          "id": "unimplemented",
+          "target": "callable",
+          "request": {
+            "method": "POST",
+            "path": "/",
+            "headers": {
+              "content-type": "application/json"
+            },
+            "body": {
+              "data": {
+                "op": "error",
+                "code": "unimplemented"
+              }
+            }
+          },
+          "capture": "complete"
+        },
+        {
+          "id": "internal",
+          "target": "callable",
+          "request": {
+            "method": "POST",
+            "path": "/",
+            "headers": {
+              "content-type": "application/json"
+            },
+            "body": {
+              "data": {
+                "op": "error",
+                "code": "internal"
+              }
+            }
+          },
+          "capture": "complete"
+        },
+        {
+          "id": "unavailable",
+          "target": "callable",
+          "request": {
+            "method": "POST",
+            "path": "/",
+            "headers": {
+              "content-type": "application/json"
+            },
+            "body": {
+              "data": {
+                "op": "error",
+                "code": "unavailable"
+              }
+            }
+          },
+          "capture": "complete"
+        },
+        {
+          "id": "data-loss",
+          "target": "callable",
+          "request": {
+            "method": "POST",
+            "path": "/",
+            "headers": {
+              "content-type": "application/json"
+            },
+            "body": {
+              "data": {
+                "op": "error",
+                "code": "data-loss"
+              }
+            }
+          },
+          "capture": "complete"
+        },
+        {
+          "id": "unauthenticated",
+          "target": "callable",
+          "request": {
+            "method": "POST",
+            "path": "/",
+            "headers": {
+              "content-type": "application/json"
+            },
+            "body": {
+              "data": {
+                "op": "error",
+                "code": "unauthenticated"
+              }
+            }
+          },
+          "capture": "complete"
+        },
+        {
+          "id": "details",
+          "target": "callable",
+          "request": {
+            "method": "POST",
+            "path": "/",
+            "headers": {
+              "content-type": "application/json"
+            },
+            "body": {
+              "data": {
+                "op": "error",
+                "code": "invalid-argument"
+              }
+            }
+          },
+          "capture": "complete"
+        },
+        {
+          "id": "unhandled-error",
+          "target": "callable",
+          "request": {
+            "method": "POST",
+            "path": "/",
+            "headers": {
+              "content-type": "application/json"
+            },
+            "body": {
+              "data": {
+                "op": "unhandled-error"
+              }
+            }
+          },
+          "capture": "complete"
+        }
+      ]
+    },
+    {
+      "id": "functions-http/callable/malformed",
+      "cases": [
+        {
+          "id": "wrong-method",
+          "target": "callable",
+          "request": {
+            "method": "GET",
+            "path": "/",
+            "headers": {}
+          },
+          "capture": "complete"
+        },
+        {
+          "id": "wrong-content-type",
+          "target": "callable",
+          "request": {
+            "method": "POST",
+            "path": "/",
+            "headers": {
+              "content-type": "text/plain"
+            },
+            "body": "not json"
+          },
+          "capture": "complete"
+        },
+        {
+          "id": "missing-data",
+          "target": "callable",
+          "request": {
+            "method": "POST",
+            "path": "/",
+            "headers": {
+              "content-type": "application/json"
+            },
+            "body": {}
+          },
+          "capture": "complete"
+        },
+        {
+          "id": "extra-field",
+          "target": "callable",
+          "request": {
+            "method": "POST",
+            "path": "/",
+            "headers": {
+              "content-type": "application/json"
+            },
+            "body": {
+              "data": {},
+              "extra": true
+            }
+          },
+          "capture": "complete"
+        },
+        {
+          "id": "malformed-json",
+          "target": "callable",
+          "request": {
+            "method": "POST",
+            "path": "/",
+            "headers": {
+              "content-type": "application/json"
+            },
+            "body": "{"
+          },
+          "capture": "complete"
+        }
+      ]
+    },
+    {
+      "id": "functions-http/callable/auth-context",
+      "cases": [
+        {
+          "id": "no-authorization",
+          "target": "callable",
+          "request": {
+            "method": "POST",
+            "path": "/",
+            "headers": {
+              "content-type": "application/json"
+            },
+            "body": {
+              "data": {
+                "op": "auth"
+              }
+            }
+          },
+          "capture": "complete"
+        },
+        {
+          "id": "valid-project-id-token",
+          "target": "callable",
+          "request": {
+            "method": "POST",
+            "path": "/",
+            "headers": {
+              "content-type": "application/json",
+              "authorization": "Bearer {{idToken}}"
+            },
+            "body": {
+              "data": {
+                "op": "auth"
+              }
+            }
+          },
+          "capture": "complete"
+        },
+        {
+          "id": "uid-and-claims",
+          "target": "callable",
+          "request": {
+            "method": "POST",
+            "path": "/",
+            "headers": {
+              "content-type": "application/json",
+              "authorization": "Bearer {{idToken}}"
+            },
+            "body": {
+              "data": {
+                "op": "auth"
+              }
+            }
+          },
+          "capture": "complete"
+        }
+      ]
+    },
+    {
+      "id": "functions-http/callable/auth-refusal",
+      "cases": [
+        {
+          "id": "malformed-bearer",
+          "target": "callable",
+          "request": {
+            "method": "POST",
+            "path": "/",
+            "headers": {
+              "content-type": "application/json",
+              "authorization": "Bearer malformed"
+            },
+            "body": {
+              "data": {
+                "op": "auth"
+              }
+            }
+          },
+          "capture": "complete"
+        },
+        {
+          "id": "invalid-signature",
+          "target": "callable",
+          "request": {
+            "method": "POST",
+            "path": "/",
+            "headers": {
+              "content-type": "application/json",
+              "authorization": "Bearer {{invalidSignatureIdToken}}"
+            },
+            "body": {
+              "data": {
+                "op": "auth"
+              }
+            }
+          },
+          "capture": "complete"
+        },
+        {
+          "id": "expired-id-token",
+          "target": "callable",
+          "request": {
+            "method": "POST",
+            "path": "/",
+            "headers": {
+              "content-type": "application/json",
+              "authorization": "Bearer {{expiredIdToken}}"
+            },
+            "body": {
+              "data": {
+                "op": "auth"
+              }
+            }
+          },
+          "capture": "complete"
+        }
+      ]
+    },
+    {
+      "id": "functions-http/callable/streaming",
+      "cases": [
+        {
+          "id": "send-chunk-order",
+          "target": "callable",
+          "request": {
+            "method": "POST",
+            "path": "/",
+            "headers": {
+              "content-type": "application/json",
+              "accept": "text/event-stream"
+            },
+            "body": {
+              "data": {
+                "op": "stream"
+              }
+            }
+          },
+          "capture": "complete"
+        },
+        {
+          "id": "final-result",
+          "target": "callable",
+          "request": {
+            "method": "POST",
+            "path": "/",
+            "headers": {
+              "content-type": "application/json",
+              "accept": "text/event-stream"
+            },
+            "body": {
+              "data": {
+                "op": "stream"
+              }
+            }
+          },
+          "capture": "complete"
+        },
+        {
+          "id": "client-disconnect",
+          "target": "callable",
+          "request": {
+            "method": "POST",
+            "path": "/",
+            "headers": {
+              "content-type": "application/json",
+              "accept": "text/event-stream"
+            },
+            "body": {
+              "data": {
+                "op": "stream"
+              }
+            }
+          },
+          "capture": "first-chunk-then-abort"
+        }
+      ]
+    },
+    {
+      "id": "functions-http/deployment/public-invocation",
+      "cases": [
+        {
+          "id": "http-without-cloud-run-credentials",
+          "target": "http",
+          "request": {
+            "method": "GET",
+            "path": "/echo",
+            "headers": {}
+          },
+          "capture": "complete"
+        },
+        {
+          "id": "callable-without-cloud-run-credentials",
+          "target": "callable",
+          "request": {
+            "method": "POST",
+            "path": "/",
+            "headers": {
+              "content-type": "application/json"
+            },
+            "body": {
+              "data": {
+                "op": "success",
+                "value": "public"
+              }
+            }
+          },
+          "capture": "complete"
+        }
+      ]
+    }
+  ]
+}

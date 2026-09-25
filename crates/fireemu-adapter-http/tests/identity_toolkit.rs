@@ -11077,6 +11077,60 @@ fn patch_sign_in(s: &AuthState, mask: &str, body: &Value) -> (u16, Value) {
     )
 }
 
+/// Concurrent config writes of different stored members keep every write, and the derived
+/// sign-up quota matches the quota finally stored (closure review 2026-09-25: the members
+/// were read under one lock and written under another).
+#[test]
+fn concurrent_config_writes_keep_every_member() {
+    for strict in [true, false] {
+        let s = if strict { strict_state() } else { state() };
+        std::thread::scope(|scope| {
+            for round in 0..8 {
+                let s = &s;
+                scope.spawn(move || {
+                    let (status, answer) = patch_sign_in(
+                        s,
+                        "notification.defaultLocale",
+                        &json!({"notification": {"defaultLocale": if round % 2 == 0 { "ja" } else { "en" }}}),
+                    );
+                    assert_eq!(status, 200, "{answer}");
+                });
+                scope.spawn(move || {
+                    let (status, answer) = patch_sign_in(
+                        s,
+                        "mobileLinksConfig.domain",
+                        &json!({"mobileLinksConfig": {"domain": "FIREBASE_DYNAMIC_LINK_DOMAIN"}}),
+                    );
+                    assert_eq!(status, 200, "{answer}");
+                });
+                scope.spawn(move || {
+                    let (status, answer) = patch_sign_in(
+                        s,
+                        "quota.signUpQuotaConfig",
+                        &json!({"quota": {"signUpQuotaConfig": {"quota": "5", "startTime": "2030-01-01T00:00:00Z", "quotaDuration": "3600s"}}}),
+                    );
+                    assert_eq!(status, 200, "{answer}");
+                });
+            }
+        });
+        let (status, read) = admin(&s, "GET", PROJECT_CONFIG, &Value::Null);
+        assert_eq!(status, 200, "{read}");
+        assert_eq!(
+            read["mobileLinksConfig"]["domain"], "FIREBASE_DYNAMIC_LINK_DOMAIN",
+            "strict {strict}: {read}"
+        );
+        assert_eq!(
+            read["quota"]["signUpQuotaConfig"]["quota"], "5",
+            "strict {strict}: {read}"
+        );
+        assert!(
+            read["notification"]["defaultLocale"] == "ja"
+                || read["notification"]["defaultLocale"] == "en",
+            "{read}"
+        );
+    }
+}
+
 /// A mask below a stored member's scalar, or deeper than any config path, is refused or
 /// ignored without harming the store: the project keeps answering (security review
 /// 2026-09-25: a panic poisoned the store's mutex, a very deep mask overflowed the stack).

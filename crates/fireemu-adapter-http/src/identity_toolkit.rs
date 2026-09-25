@@ -5148,6 +5148,15 @@ fn project_config_management(
         }
         response
     };
+    // Members derived from the write (the normalized sign-up quota, when the policy was
+    // written and which of its options) are stored in the same update as the written members.
+    let derives_members = fields.iter().any(|field| {
+        field == "quota"
+            || field.starts_with("quota.signUpQuotaConfig")
+            || field.starts_with("passwordPolicyConfig")
+    });
+    let written_at = now(state).to_rfc3339().ok();
+    let policy_configured = std::cell::Cell::new(false);
     let config = if let Some(registry) = state
         .registry
         .as_ref()
@@ -5165,6 +5174,12 @@ fn project_config_management(
                     &fields,
                     !state.stateless_refresh_tokens,
                 )?;
+                policy_configured.set(
+                    password_policy
+                        .as_ref()
+                        .unwrap_or(current_policy)
+                        .configured,
+                );
                 let signup_quota = quota_config_from_update(current_quota, body, &fields)?;
                 Ok((password_policy, signup_quota))
             },
@@ -5180,10 +5195,21 @@ fn project_config_management(
                         Err(response) => return rollback_blocking(response),
                     }
                 }
-                if stored_members.is_some() {
+                if stored_members.is_some() || derives_members {
                     match registry.update_project_stored_members(project, |current| {
-                        project_config::apply_stored_members(current, body, &fields, project)
-                            .map(|next| next.unwrap_or_else(|| current.clone()))
+                        project_config::apply_stored_members(current, body, &fields, project).map(
+                            |next| {
+                                let mut next = next.unwrap_or_else(|| current.clone());
+                                with_derived_members(
+                                    &mut next,
+                                    body,
+                                    &fields,
+                                    policy_configured.get(),
+                                    written_at.as_deref(),
+                                );
+                                next
+                            },
+                        )
                     }) {
                         Ok(Some(_)) => {}
                         Ok(None) => return rollback_blocking(error(500, "INTERNAL")),
@@ -5240,9 +5266,21 @@ fn project_config_management(
                 return rollback_blocking(error(400, "INVALID_ARGUMENT"));
             }
         }
-        let has_members = stored_members.is_some();
-        if let Some(members) = stored_members {
-            store.set_stored_config_members(members);
+        let has_members = stored_members.is_some() || derives_members;
+        if has_members {
+            // From the members as they are under this lock, so a concurrent write is kept.
+            let Ok(next) = project_config::apply_stored_members(
+                store.stored_config_members(),
+                body,
+                &fields,
+                project,
+            ) else {
+                return rollback_blocking(error(400, "INVALID_ARGUMENT"));
+            };
+            let mut next = next.unwrap_or_else(|| store.stored_config_members().clone());
+            let configured = store.password_policy().configured;
+            with_derived_members(&mut next, body, &fields, configured, written_at.as_deref());
+            store.set_stored_config_members(next);
         }
         drop(store);
         if !patch.is_empty() || has_policy || has_quota || has_sign_in || has_members {
@@ -5257,49 +5295,9 @@ fn project_config_management(
     JsonResponse {
         status: 200,
         body: {
-            let Ok(mut store) = selected_store.lock() else {
+            let Ok(store) = selected_store.lock() else {
                 return error(500, "INTERNAL");
             };
-            // The sign-up quota as production normalizes and reports it.
-            if fields
-                .iter()
-                .any(|field| field == "quota" || field.starts_with("quota.signUpQuotaConfig"))
-            {
-                let mut members = store.stored_config_members().clone();
-                members.set(
-                    project_config::SIGN_UP_QUOTA,
-                    project_config::normalized_sign_up_quota(body).map(|quota| quota.to_string()),
-                );
-                store.set_stored_config_members(members);
-            }
-            // Production records when the password policy was last written.
-            if fields
-                .iter()
-                .any(|field| field.starts_with("passwordPolicyConfig"))
-            {
-                let mut members = store.stored_config_members().clone();
-                let time = store
-                    .password_policy()
-                    .configured
-                    .then(|| now(state).to_rfc3339().ok())
-                    .flatten()
-                    .map(|time| json!(time).to_string());
-                members.set(project_config::POLICY_UPDATE_TIME, time);
-                let configured = store.password_policy().configured;
-                if !configured {
-                    members.set(project_config::POLICY_WRITTEN_OPTIONS, None);
-                } else if fields.iter().any(|field| {
-                    field == "passwordPolicyConfig"
-                        || field.starts_with("passwordPolicyConfig.passwordPolicyVersions")
-                }) {
-                    members.set(
-                        project_config::POLICY_WRITTEN_OPTIONS,
-                        project_config::written_policy_options(body)
-                            .map(|names| json!(names).to_string()),
-                    );
-                }
-                store.set_stored_config_members(members);
-            }
             let document = project_config_document(state, project, &store, config);
             if state.stateless_refresh_tokens {
                 document
@@ -5307,6 +5305,46 @@ fn project_config_management(
                 project_config::patch_answer(document)
             }
         },
+    }
+}
+
+/// The stored members a config write derives: the sign-up quota as production normalizes and
+/// reports it, and when the password policy was last written and which of its options.
+fn with_derived_members(
+    members: &mut fireemu_core_auth::config_members::StoredConfigMembers,
+    body: &Value,
+    fields: &[String],
+    policy_configured: bool,
+    written_at: Option<&str>,
+) {
+    if fields
+        .iter()
+        .any(|field| field == "quota" || field.starts_with("quota.signUpQuotaConfig"))
+    {
+        members.set(
+            project_config::SIGN_UP_QUOTA,
+            project_config::normalized_sign_up_quota(body).map(|quota| quota.to_string()),
+        );
+    }
+    if fields
+        .iter()
+        .any(|field| field.starts_with("passwordPolicyConfig"))
+    {
+        let time = written_at
+            .filter(|_| policy_configured)
+            .map(|time| json!(time).to_string());
+        members.set(project_config::POLICY_UPDATE_TIME, time);
+        if !policy_configured {
+            members.set(project_config::POLICY_WRITTEN_OPTIONS, None);
+        } else if fields.iter().any(|field| {
+            field == "passwordPolicyConfig"
+                || field.starts_with("passwordPolicyConfig.passwordPolicyVersions")
+        }) {
+            members.set(
+                project_config::POLICY_WRITTEN_OPTIONS,
+                project_config::written_policy_options(body).map(|names| json!(names).to_string()),
+            );
+        }
     }
 }
 

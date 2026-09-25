@@ -10,6 +10,7 @@ bytes that reach the runner, not on the daemon's intent.
 FIREEMU_FAKE_CONSUME=enabled|undetermined makes the guarded callable declare that
 consumeAppCheckToken value, for the fail-closed discovery tests.
 FIREEMU_FAKE_EXIT_BEFORE_HELLO=1 records the start and exits without a hello.
+FIREEMU_FAKE_HELLO_GATE=<directory> marks when hello is blocked until release exists.
 """
 import http.server
 import json
@@ -118,6 +119,14 @@ threading.Thread(target=echo.serve_forever, daemon=True).start()
 
 consume = os.environ.get("FIREEMU_FAKE_CONSUME", "disabled")
 time.sleep(int(os.environ.get("FIREEMU_FAKE_HELLO_DELAY_MS", "0")) / 1000)
+if gate := os.environ.get("FIREEMU_FAKE_HELLO_GATE"):
+    gate_dir = pathlib.Path(gate)
+    (gate_dir / "waiting").write_text(str(os.getpid()), encoding="utf-8")
+    deadline = time.monotonic() + 30
+    while not (gate_dir / "release").exists():
+        if time.monotonic() >= deadline:
+            sys.exit(18)
+        time.sleep(0.01)
 
 send({
     "type": "hello",

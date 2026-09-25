@@ -2215,6 +2215,17 @@ where
         .map_err(|error| format!("Node selection task failed: {error}"))
 }
 
+#[cfg(unix)]
+fn kill_node_probe_group(id: u32) {
+    let Some(pid) = i32::try_from(id)
+        .ok()
+        .and_then(rustix::process::Pid::from_raw)
+    else {
+        return;
+    };
+    let _ = rustix::process::kill_process_group(pid, rustix::process::Signal::KILL);
+}
+
 #[cfg(not(windows))]
 fn run_node_probe(program: &Path, arguments: &[&str], label: &str) -> Result<Vec<u8>, String> {
     const MAX_OUTPUT_BYTES: usize = 256;
@@ -2254,13 +2265,7 @@ fn run_node_probe(program: &Path, arguments: &[&str], label: &str) -> Result<Vec
         }
         if Instant::now() >= deadline {
             #[cfg(unix)]
-            let _ = Command::new("/bin/kill")
-                .args(["-KILL", "--", &format!("-{}", child.id())])
-                .env_clear()
-                .stdin(Stdio::null())
-                .stdout(Stdio::null())
-                .stderr(Stdio::null())
-                .status();
+            kill_node_probe_group(child.id());
             let _ = child.kill();
             let _ = child.wait();
             return Err(format!("Node {label} timed out"));
@@ -2270,13 +2275,7 @@ fn run_node_probe(program: &Path, arguments: &[&str], label: &str) -> Result<Vec
     let remaining = deadline.saturating_duration_since(Instant::now());
     let output = receiver.recv_timeout(remaining).map_err(|_| {
         #[cfg(unix)]
-        let _ = Command::new("/bin/kill")
-            .args(["-KILL", "--", &format!("-{}", child.id())])
-            .env_clear()
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .status();
+        kill_node_probe_group(child.id());
         format!("Node {label} timed out")
     })?;
     if !status.success() {
@@ -6767,11 +6766,17 @@ mod tests {
         assert!(started.elapsed() < Duration::from_secs(3));
         let pid = std::fs::read_to_string(&pid_file).unwrap();
         std::thread::sleep(Duration::from_millis(50));
-        assert!(!Command::new("/bin/kill")
+        let still_alive = Command::new("/bin/kill")
             .args(["-0", pid.trim()])
             .status()
             .unwrap()
-            .success());
+            .success();
+        if still_alive {
+            let _ = Command::new("/bin/kill")
+                .args(["-KILL", pid.trim()])
+                .status();
+        }
+        assert!(!still_alive);
         std::fs::remove_dir_all(root).unwrap();
     }
 

@@ -90,6 +90,12 @@
       "decision": "Under production's rules a phone MFA enrollment session does not expire: production accepted sessions of every age it was shown (300, 450, 600 and about 1803 seconds, both recordings) and refused none, as AUTH-ACTION's long codes. At the cap of 1000 outstanding phone codes the oldest enrollment session older than the observed ages makes room.",
       "decidedBy": "owner (t-k)",
       "decidedOn": "2026-09-25"
+    },
+    {
+      "id": "M13",
+      "decision": "The SMS pending credential's lifetime is observed too: auth-mfa/lifetime-sms samples it at 450 and 600 seconds with 1800 seconds as the refusal-side control, each followed at once by a same-account control, recorded twice in the same task (within M1 and M4). Strict follows the result and places no inferred refusal outside the measured bracket.",
+      "decidedBy": "Claude under the owner's delegation to the coordinator (owner ledger, 2026-09-25, AUTH-MFA)",
+      "decidedOn": "2026-09-25"
     }
   ],
   "conditions": [
@@ -417,13 +423,14 @@
       "source": "docs/compatibility/auth-mfa-next-campaign-preparation.md",
       "recipeIds": [
         "auth-mfa/lifetime",
-        "auth-mfa/lifetime-short"
+        "auth-mfa/lifetime-short",
+        "auth-mfa/lifetime-sms"
       ],
       "configProjections": [
         "default"
       ],
-      "status": "VERIFIED",
-      "note": "A TOTP pending credential offered at 300, 450, 600 and 1800 seconds (owner decision M4) and, since production refused it already at 300, at 60, 120, 180, 240 and 290 seconds (M8); an SMS pending credential whose code is sent at 150 and 300 seconds (M8). Each is followed at once by a same-account control with a credential acquired then.",
+      "status": "PENDING_CORPUS",
+      "note": "A TOTP pending credential offered at 300, 450, 600 and 1800 seconds (owner decision M4) and, since production refused it already at 300, at 60, 120, 180, 240 and 290 seconds (M8); an SMS pending credential whose code is sent at 150 and 300 seconds (M8), and at 450, 600 and 1800 seconds (M13). Each is followed at once by a same-account control with a credential acquired then.",
       "evidence": {
         "productionRecordings": [
           {

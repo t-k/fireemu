@@ -1003,6 +1003,57 @@ function shortLifetimeSteps() {
 
 const lifetimeShort = program("auth-mfa/lifetime-short", shortLifetimeSteps(), ENABLED);
 
+// ---- the SMS pending credential's lifetime (follow-up directive, Must 2; waits 30 minutes) -----
+
+// Only TOTP pending credentials were sampled at 300, 450, 600 and 1800 seconds; an SMS one was
+// sampled up to about 303 seconds (lifetime-short) and still accepted. An earlier production
+// observation (GAP-AUTH-007) refused one from 600 seconds. This program samples an SMS pending
+// credential at 450 and 600 seconds, with 1800 seconds as the refusal-side control (owner
+// decisions M1 and M4, extended by the coordinator's delegation): its code is sent at that age
+// and entered at once, and each row is followed at once by a same-account control.
+const SMS_PENDING_AGES = [450, 600, 1800];
+
+function smsLifetimeSteps() {
+  const setup = [];
+  const acquire = [];
+  const rows = [];
+  SMS_PENDING_AGES.forEach((age, index) => {
+    const n = `m${age}`;
+    setup.push(
+      adminCreate(`create-${n}`, n),
+      signIn(`sign-in-${n}`, n),
+      phoneStart(`start-${n}`, `sign-in-${n}`, index),
+      phoneFinalize(`finalize-${n}`, `sign-in-${n}`, `start-${n}`),
+    );
+    acquire.push(signIn(`pending-${n}`, n));
+    rows.push({
+      age,
+      steps: [
+        aged(
+          smsStart(`sms-start-aged-${n}`, `pending-${n}`, listed(`pending-${n}`)),
+          `pending-${n}`,
+          age,
+        ),
+        smsSignIn(`aged-pending-${n}`, `pending-${n}`, listed(`pending-${n}`), `sms-start-aged-${n}`),
+        signIn(`control-pending-${n}`, n),
+        smsStart(`control-start-${n}`, `control-pending-${n}`, listed(`control-pending-${n}`)),
+        smsSignIn(
+          `control-finalize-${n}`,
+          `control-pending-${n}`,
+          listed(`control-pending-${n}`),
+          `control-start-${n}`,
+        ),
+      ],
+    });
+  });
+  const order = (step) => -Number(/\d+$/.exec(step.id)?.[0] ?? 0);
+  acquire.sort((a, b) => order(a) - order(b));
+  rows.sort((a, b) => a.age - b.age);
+  return [...setup, ...acquire, ...rows.flatMap((row) => row.steps)];
+}
+
+const lifetimeSms = program("auth-mfa/lifetime-sms", smsLifetimeSteps(), ENABLED);
+
 /** Every program, in recording order: MFA disabled first, the waiting programs last. */
 export const PROGRAMS = [
   disabled,
@@ -1017,5 +1068,6 @@ export const PROGRAMS = [
   emailLinkFirstFactor,
   customTokenFirstFactor,
   lifetimeShort,
+  lifetimeSms,
   lifetime,
 ];

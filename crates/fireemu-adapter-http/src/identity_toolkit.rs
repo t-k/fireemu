@@ -3534,7 +3534,7 @@ fn dispatch(
             !options.stateless_refresh_tokens,
         ),
         Handler::MfaEnrollmentFinalize => v2_error_shape(
-            mfa_enrollment_finalize(store, body, at, !options.stateless_refresh_tokens),
+            mfa_enrollment_finalize(store, body, at),
             !options.stateless_refresh_tokens,
         ),
         Handler::MfaEnrollmentWithdraw => v2_error_shape(
@@ -9657,6 +9657,35 @@ fn verify_enrollment_session(
     verify_session_accepting(store, body, at, jwt_error, LegacyTokens::Honoured)
 }
 
+/// Production's answers to an enrollment start's shape and to a full phone slate (sandbox
+/// recording 2026-09-24, auth-mfa/totp/enroll#start-without-info,
+/// interactions#start-both-kinds and #phone-start-at-limit).
+fn production_enrollment_start_refusal(
+    store: &AuthStore,
+    uid: &LocalId,
+    body: &Value,
+) -> Option<JsonResponse> {
+    let totp = body.get("totpEnrollmentInfo").is_some_and(|v| !v.is_null());
+    let phone = body
+        .get("phoneEnrollmentInfo")
+        .is_some_and(|v| !v.is_null());
+    if totp && phone {
+        return Some(oneof_already_set("enrollment_info", "phoneEnrollmentInfo"));
+    }
+    if !totp && !phone {
+        return Some(error(400, "Request contains an invalid argument."));
+    }
+    let full = store
+        .user(uid)
+        .is_some_and(|u| u.mfa.factor_count() >= fireemu_core_auth::mfa::MAX_FACTORS_PER_USER);
+    (phone && full).then(|| {
+        error(
+            400,
+            "SECOND_FACTOR_LIMIT_EXCEEDED : Too many second factors enrolled for this account.",
+        )
+    })
+}
+
 fn mfa_enrollment_start(
     store: &mut AuthStore,
     body: &Value,
@@ -9669,35 +9698,19 @@ fn mfa_enrollment_start(
         Err(r) => return r,
     };
     let uid = session.uid.clone();
-    // Strict: production's answers to the request's shape (sandbox recording 2026-09-24,
-    // auth-mfa/totp/enroll#start-without-info and interactions#start-both-kinds).
-    if strict {
-        let totp = body.get("totpEnrollmentInfo").is_some_and(|v| !v.is_null());
-        let phone = body
-            .get("phoneEnrollmentInfo")
-            .is_some_and(|v| !v.is_null());
-        if totp && phone {
-            return oneof_already_set("enrollment_info", "phoneEnrollmentInfo");
-        }
-        if !totp && !phone {
-            return error(400, "Request contains an invalid argument.");
-        }
-        if phone
-            && store.user(&uid).is_some_and(|u| {
-                u.mfa.factor_count() >= fireemu_core_auth::mfa::MAX_FACTORS_PER_USER
-            })
-        {
-            return error(
-                400,
-                "SECOND_FACTOR_LIMIT_EXCEEDED : Too many second factors enrolled for this account.",
-            );
+    // Production's second-factor rules (strict, outside tenants, whose second factors keep
+    // their earlier rules under scope decision M2).
+    let production = store.second_factor_rules_are_production();
+    if production {
+        if let Some(refusal) = production_enrollment_start_refusal(store, &uid, body) {
+            return refusal;
         }
     }
     if let Some(phone) = body.get("phoneEnrollmentInfo") {
         // Strict: production refuses a phone factor while the project does not enable SMS
         // second factors (sandbox recording 2026-09-24, auth-mfa/disabled#phone-start); the
         // official emulator always enrolls one.
-        if strict && !store.mfa_config().sms_enabled() {
+        if production && !store.mfa_config().sms_enabled() {
             return error(400, "OPERATION_NOT_ALLOWED : SMS based MFA not enabled.");
         }
         let number = str_field(phone, "phoneNumber").unwrap_or("");
@@ -9767,7 +9780,7 @@ fn mfa_enrollment_start(
                 }),
             }
         }
-        Err(e) if strict && matches!(e, MfaError::LimitExceeded(_)) => error(
+        Err(e) if production && matches!(e, MfaError::LimitExceeded(_)) => error(
             400,
             "SECOND_FACTOR_LIMIT_EXCEEDED : Too many TOTP based second factors enrolled for this account.",
         ),
@@ -9809,7 +9822,6 @@ fn mfa_enrollment_finalize(
     store: &mut AuthStore,
     body: &Value,
     at: LogicalInstant,
-    strict: bool,
 ) -> JsonResponse {
     let session = match verify_enrollment_session(store, body, at) {
         Ok(s) => s,
@@ -9832,10 +9844,11 @@ fn mfa_enrollment_finalize(
     let display_name = str_field(body, "displayName")
         .filter(|name| !name.is_empty())
         .map(str::to_owned);
-    // Strict: production checks the session, then the display name, then the code (sandbox
-    // recording 2026-09-24, auth-mfa/totp/enroll#finalize-missing-session and
-    // #finalize-missing-code).
-    if strict {
+    // Production checks the session, then the display name, then the code (sandbox recording
+    // 2026-09-24, auth-mfa/totp/enroll#finalize-missing-session and #finalize-missing-code);
+    // tenants keep their earlier rules (scope decision M2).
+    let production = store.second_factor_rules_are_production();
+    if production {
         if session.is_none_or(|session| !store.has_enrollment_session(&uid, session)) {
             return error(400, "INVALID_SESSION_INFO");
         }
@@ -9862,7 +9875,7 @@ fn mfa_enrollment_finalize(
                     let mut response = token_only_response(&tokens, false);
                     // Production's TOTP answer names its factor kind (sandbox recording
                     // 2026-09-24, auth-mfa/totp/enroll#finalize).
-                    if strict {
+                    if production {
                         response.body["totpAuthInfo"] = json!({});
                     }
                     response

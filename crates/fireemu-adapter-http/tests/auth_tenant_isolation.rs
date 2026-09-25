@@ -2002,3 +2002,47 @@ fn deleting_a_tenant_invalidates_its_credentials_and_leaves_the_sibling_and_proj
             .is_none_or(Vec::is_empty));
     }
 }
+
+/// A tenant's second factors keep the rules they had (AUTH-MFA scope decision M2): the
+/// project's `mfa` config, which a tenant never reads, does not refuse a tenant's phone
+/// enrollment in either profile (AUTH-MFA safety review 2026-09-25, MF-1).
+#[test]
+fn a_tenant_phone_enrollment_keeps_the_earlier_rules() {
+    for (profile, state, _registry) in profiles() {
+        let (status, created) = admin(
+            &state,
+            "POST",
+            &tenant_admin_path(TENANT_A, "accounts"),
+            &json!({"email": "enroll@example.com", "password": "hunter22", "emailVerified": true}),
+        );
+        assert_eq!(status, 200, "{profile}: {created}");
+        let (status, signed_in) = client(
+            &state,
+            &format!("{V1}/accounts:signInWithPassword"),
+            TENANT_A,
+            json!({"email": "enroll@example.com", "password": "hunter22", "returnSecureToken": true}),
+        );
+        assert_eq!(status, 200, "{profile}: {signed_in}");
+        let token = signed_in["idToken"].clone();
+        let (status, started) = client(
+            &state,
+            &format!("{V2}/accounts/mfaEnrollment:start"),
+            TENANT_A,
+            json!({"idToken": token, "phoneEnrollmentInfo": {"phoneNumber": "+15559876543"}}),
+        );
+        assert_eq!(status, 200, "{profile}: {started}");
+        let session = started["phoneSessionInfo"]["sessionInfo"].clone();
+        let code = verification_codes(&state, TENANT_A)
+            .into_iter()
+            .find(|c| c["sessionInfo"] == session)
+            .map(|c| c["code"].clone())
+            .unwrap();
+        let (status, enrolled) = client(
+            &state,
+            &format!("{V2}/accounts/mfaEnrollment:finalize"),
+            TENANT_A,
+            json!({"idToken": token, "phoneVerificationInfo": {"sessionInfo": session, "code": code}}),
+        );
+        assert_eq!(status, 200, "{profile}: {enrolled}");
+    }
+}

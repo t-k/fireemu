@@ -11135,11 +11135,21 @@ fn config_writes_through_the_registry_behave_as_without_it() {
     }
 }
 
-/// A config write to a routed project that changes only its policy, quota, providers or
-/// stored members installs the project, as a change of the project config does.
+/// A config write to a routed project that changes its project patch, policy, quota, providers
+/// or stored members installs the project, as a change of the project config does.
 #[test]
 fn a_routed_project_is_installed_by_any_config_write() {
     for (project, mask, body) in [
+        (
+            "routed-client-permission",
+            "client.permissions.disabledUserSignup",
+            json!({"client": {"permissions": {"disabledUserSignup": true}}}),
+        ),
+        (
+            "routed-authorized-domains",
+            "authorizedDomains",
+            json!({"authorizedDomains": ["routed-authorized-domains.web.app"]}),
+        ),
         (
             "routed-policy",
             "passwordPolicyConfig",

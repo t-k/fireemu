@@ -162,8 +162,8 @@ pub fn drops_connection(response: &RestResponse) -> bool {
 }
 
 /// Production answers an error of a streaming REST method (`runQuery`, `runAggregationQuery`,
-/// `executePipeline`) inside the JSON array that would have carried its results. A fault that
-/// drops the connection keeps its own path.
+/// `executePipeline`, `batchGet`) inside the JSON array that would have carried its results,
+/// body decoding errors included. A fault that drops the connection keeps its own path.
 fn stream_errors(result: Result<RestResponse, Status>) -> Result<RestResponse, Status> {
     result.or_else(|status| {
         if status
@@ -1128,7 +1128,7 @@ impl RestState {
         match action {
             "commit" => self.commit(principal, resource, body),
             "batchWrite" => self.batch_write(principal, resource, body),
-            "batchGet" => self.batch_get(principal, resource, body),
+            "batchGet" => stream_errors(self.batch_get(principal, resource, body)),
             "beginTransaction" => {
                 json::strict_keys(body, &["options", "requestOptions"]).map_err(|e| bad(&e))?;
                 let database = database_of(resource)?;

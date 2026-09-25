@@ -1941,6 +1941,19 @@ fn rest_requests_are_authorized_like_grpc() {
         err[0]["error"]["message"],
         "Missing or insufficient permissions."
     );
+    // batchGet streams too (FS-RULES production recording, 2026-09-24).
+    let (status, err) = call_as(
+        &s,
+        "POST",
+        &format!("{DOCS}:batchGet"),
+        json!({"documents": [format!("projects/demo-app/databases/(default)/documents/closed/a")]}),
+        None,
+    );
+    assert_eq!(status, 403, "{err}");
+    assert_eq!(
+        err[0]["error"]["message"],
+        "Missing or insufficient permissions."
+    );
 }
 
 #[test]
@@ -2457,7 +2470,8 @@ fn malformed_batch_get_documents_is_rejected_without_starting_a_transaction() {
             json!({"documents": documents, "newTransaction": {"readWrite": {}}}),
         );
         assert_eq!(status, 400, "{body}");
-        assert_eq!(body["error"]["status"], "INVALID_ARGUMENT", "{body}");
+        // A streaming method's refusal comes inside a one-element array, as for runQuery.
+        assert_eq!(body[0]["error"]["status"], "INVALID_ARGUMENT", "{body}");
     }
 
     let after = s
@@ -2911,6 +2925,12 @@ fn malformed_retry_transaction_token_is_refused_in_productions_wording() {
         );
         let (status, response) = call(&s, "POST", &path, body);
         assert_eq!(status, 400, "{path}: {response}");
+        // batchGet streams, so its refusal comes inside a one-element array.
+        let response = if path.ends_with(":batchGet") {
+            response[0].clone()
+        } else {
+            response
+        };
         assert_eq!(response["error"]["status"], "INVALID_ARGUMENT", "{path}");
         assert_eq!(response["error"]["message"], expected, "{path}");
     }
@@ -4519,7 +4539,10 @@ fn every_data_plane_surface_refuses_a_database_that_was_never_created() {
         // Production answers the streaming methods' errors inside a one-element array (recorded
         // for refusals in FS-QUERY-INDEX; a never-created database was seen so only in an
         // exploratory probe, which is not closure evidence).
-        let body = if path.ends_with(":runQuery") || path.ends_with(":runAggregationQuery") {
+        let body = if path.ends_with(":runQuery")
+            || path.ends_with(":runAggregationQuery")
+            || path.ends_with(":batchGet")
+        {
             body[0].clone()
         } else {
             body

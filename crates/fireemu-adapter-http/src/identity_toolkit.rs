@@ -10375,22 +10375,22 @@ fn mobile_link(store: &AuthStore, body: &Value, link: String) -> String {
     if !names_mobile_app(body) {
         return link;
     }
-    let wrapper = format!(
+    let links_handler = format!(
         "https://{}.firebaseapp.com/__/auth/links?link=",
         store.project_id()
     );
     if handled_in_app(body) {
-        return format!("{wrapper}{}", percent_encode(&link));
+        return format!("{links_handler}{}", percent_encode(&link));
     }
     let Some(continue_url) = str_field(body, "continueUrl") else {
         return link;
     };
-    let plain = format!("continueUrl={}", percent_encode(continue_url));
-    let wrapped = format!(
+    let direct = format!("continueUrl={}", percent_encode(continue_url));
+    let through_handler = format!(
         "continueUrl={}",
-        percent_encode(&format!("{wrapper}{continue_url}"))
+        percent_encode(&format!("{links_handler}{continue_url}"))
     );
-    link.replacen(&plain, &wrapped, 1)
+    link.replacen(&direct, &through_handler, 1)
 }
 
 /// The refusal of a continue URL whose host is not one of the project's authorized domains.

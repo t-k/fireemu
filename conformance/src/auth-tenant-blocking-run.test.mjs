@@ -85,7 +85,24 @@ test("an IAM campaign hold survives sandbox restoration and blocks new recording
     );
     const afterFailure = await readFile(ledger, "utf8");
     assert.match(otherLaneOnSandbox(afterFailure, now + 2 * 3_600_000), /has not finished/);
-    const afterSandboxSuccess = `${afterFailure}${row(TASK_ID, { outcome: "restored-by-hand" })}\n`;
+    await restoreSandbox({
+      ledger,
+      isRecordingRunning: async () => false,
+      webConfig: async () => ({ projectNumber: "123456789012" }),
+      context: async () => ({}),
+      sessionFactory: () => ({
+        readConfig: async () => ({}),
+        writeConfig: async () => {},
+        listTenants: async () => [],
+        counts: () => ({ harnessRequests: 0 }),
+      }),
+      baselineCheck: async () => {},
+    });
+    const afterSandboxSuccess = await readFile(ledger, "utf8");
+    assert.equal(
+      afterSandboxSuccess.trim().split("\n").map(JSON.parse).at(-1).outcome,
+      "restored-by-hand",
+    );
     assert.match(otherLaneOnSandbox(afterSandboxSuccess, now + 2 * 3_600_000), /has not finished/);
   } finally {
     await rm(dir, { recursive: true, force: true });

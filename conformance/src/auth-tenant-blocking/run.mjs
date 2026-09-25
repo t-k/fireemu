@@ -947,6 +947,7 @@ export async function restoreSandbox({
   webConfig = sandboxWebConfig,
   context = productionContext,
   sessionFactory = createSession,
+  baselineCheck = prepareProject,
 } = {}) {
   if (!ledger) throw new Error("FIREEMU_SANDBOX_LEDGER is required");
   const text = existsSync(ledger) ? await readFile(ledger, "utf8") : "";
@@ -1016,7 +1017,7 @@ export async function restoreSandbox({
         `${nameless} tenants without a display name remain; multi-tenancy left on for a hand check`,
       );
     await session.writeConfig(switches, PROJECT_SWITCH_BASELINE, { cleanup: true });
-    await prepareProject(ctx, { apply: false });
+    await baselineCheck(ctx, { apply: false });
     outcome = "restored-by-hand";
   } catch (caught) {
     error = String(caught?.message ?? caught);

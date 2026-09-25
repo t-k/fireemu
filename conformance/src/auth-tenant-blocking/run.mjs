@@ -411,10 +411,16 @@ function ledgerEntries(ledgerText) {
  */
 export function recentAbort(ledgerText, now = Date.now()) {
   const last = ledgerEntries(ledgerText).findLast(
-    (entry) => entry.taskId === TASK_ID && entry.outcome !== undefined,
+    (entry) =>
+      entry.taskId === TASK_ID &&
+      entry.project === SANDBOX_PROJECT &&
+      (entry.outcome !== undefined || entry.event === "started"),
   );
   const clean = (outcome) => outcome === "recorded" || String(outcome).startsWith("exploration");
   if (!last || clean(last.outcome)) return undefined;
+  // An unfinished run stays closed to another recording even after the usual one-hour retry
+  // interval. The caller must hold the shared O_EXCL lock across this check and the start append.
+  if (last.event === "started") return last;
   return now - Date.parse(last.ts) < 3_600_000 ? last : undefined;
 }
 
@@ -445,7 +451,11 @@ async function recordProduction() {
   const ledgerText = existsSync(ledger) ? await readFile(ledger, "utf8") : "";
   const aborted = recentAbort(ledgerText);
   if (aborted)
-    throw new Error(`the last run aborted at ${aborted.ts}; wait an hour before retrying`);
+    throw new Error(
+      aborted.event === "started"
+        ? `the last run started at ${aborted.ts} and has not finished or been restored`
+        : `the last run aborted at ${aborted.ts}; wait an hour before retrying`,
+    );
   const busy = otherLaneOnSandbox(ledgerText);
   if (busy) throw new Error(`another lane is on the sandbox: ${busy}`);
   const programs = selectedPrograms();
@@ -926,15 +936,20 @@ async function recordingRunning() {
  * harness runs, or while another lane is on the sandbox. A terminal ledger line is always
  * written.
  */
-async function restoreSandbox() {
-  const ledger = process.env.FIREEMU_SANDBOX_LEDGER;
+export async function restoreSandbox({
+  ledger = process.env.FIREEMU_SANDBOX_LEDGER,
+  isRecordingRunning = recordingRunning,
+  webConfig = sandboxWebConfig,
+  context = productionContext,
+  sessionFactory = createSession,
+} = {}) {
   if (!ledger) throw new Error("FIREEMU_SANDBOX_LEDGER is required");
   const text = existsSync(ledger) ? await readFile(ledger, "utf8") : "";
   if (!restoreDue(text)) throw new Error("the ledger shows no run of this task to restore after");
-  if (await recordingRunning()) throw new Error("a recording of this harness is still running");
+  if (await isRecordingRunning()) throw new Error("a recording of this harness is still running");
   const busy = otherLaneOnSandbox(text);
   if (busy) throw new Error(`another lane is on the sandbox: ${busy}`);
-  const web = await sandboxWebConfig();
+  const web = await webConfig();
   const tokens = [];
   let outcome = "restore-failed";
   let before;
@@ -946,8 +961,8 @@ async function restoreSandbox() {
   const switches = Object.keys(PROJECT_SWITCH_BASELINE);
   let session;
   try {
-    const ctx = await productionContext(String(Date.now()), web, tokens);
-    session = createSession(ctx, {
+    const ctx = await context(String(Date.now()), web, tokens);
+    session = sessionFactory(ctx, {
       maxHarnessRequests: 80,
       maxCleanupRequests: 200,
       log: (line) => console.log(line),
@@ -1000,16 +1015,34 @@ async function restoreSandbox() {
     error = String(caught?.message ?? caught);
   } finally {
     requests = session?.counts().harnessRequests ?? 0;
+    const terminal = {
+      ts: new Date().toISOString(),
+      project: SANDBOX_PROJECT,
+      database: null,
+      taskId: TASK_ID,
+      outcome,
+      before,
+      deletedTenants: deleted,
+      namelessTenants: nameless,
+      ...(fixtureRemoved !== undefined ? { fixtureRemoved } : {}),
+      requests,
+      ...(error ? { error } : {}),
+    };
+    // Keep the previous sandbox hold on every failed restore, including failures before a
+    // deployer was created. Append the terminal and new hold in one call to avoid an inter-call
+    // gap while the fixture or switches might still remain.
+    const retain = outcome !== "restored-by-hand" || fixtureRemoved === false;
+    const hold = {
+      ts: new Date().toISOString(),
+      event: "started",
+      taskId: TASK_ID,
+      project: SANDBOX_PROJECT,
+      reason: "restore-sandbox did not confirm full cleanup; inspect the terminal line",
+    };
     await appendFile(
       ledger,
-      `${JSON.stringify({ ts: new Date().toISOString(), project: SANDBOX_PROJECT, database: null, taskId: TASK_ID, outcome, before, deletedTenants: deleted, namelessTenants: nameless, ...(fixtureRemoved !== undefined ? { fixtureRemoved } : {}), requests, ...(error ? { error } : {}) })}\n`,
+      `${JSON.stringify(terminal)}\n${retain ? `${JSON.stringify(hold)}\n` : ""}`,
     );
-    // A fixture this restore could not remove keeps holding the sandbox (confirmation SF-C1).
-    if (fixtureRemoved === false)
-      await appendFile(
-        ledger,
-        `${JSON.stringify({ ts: new Date().toISOString(), event: "started", taskId: TASK_ID, project: SANDBOX_PROJECT, reason: "fixture not removed by restore-sandbox; remove it by hand" })}\n`,
-      );
   }
   if (error) throw new Error(error);
   console.log(JSON.stringify({ before, deletedTenants: deleted }, null, 2));

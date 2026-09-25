@@ -621,13 +621,13 @@ const RECAPTCHA_PHONE_SIDE: &[&str] = &[
 
 /// What a masked clear leaves of the reCAPTCHA config: its phone side.
 fn recaptcha_phone_side(config: Value) -> Value {
+    let Value::Object(fields) = config else {
+        return json!({});
+    };
     Value::Object(
-        config
-            .as_object()
+        fields
             .into_iter()
-            .flatten()
             .filter(|(key, _)| RECAPTCHA_PHONE_SIDE.contains(&key.as_str()))
-            .map(|(key, value)| (key.clone(), value.clone()))
             .collect(),
     )
 }

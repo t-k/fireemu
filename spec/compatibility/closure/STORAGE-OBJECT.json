@@ -3,7 +3,7 @@
   "parent": "STORAGE-OBJECT",
   "parentStatus": "IMPLEMENTING",
   "oracleTrack": "disposable-sandbox",
-  "inventoryState": "PROPOSED",
+  "inventoryState": "FROZEN",
   "closureReview": {
     "decision": "PENDING_REVIEW"
   },
@@ -17,43 +17,64 @@
   "scopeDecisions": [
     {
       "id": "S1",
-      "status": "PROPOSED",
+      "status": "APPROVED",
+      "decidedBy": "owner",
+      "decidedOn": "2026-09-25",
+      "ownerDecisionRef": "docs.local/instructions/owner-decisions.md (2026-09-25, STORAGE-OBJECT S1-S7)",
       "decision": "Storage Security Rules language, matching, publication and denial semantics belong to STORAGE-RULES. STORAGE-OBJECT exercises Firebase requests under a fixed allow rule and checks credential identity at the API boundary.",
       "recommendation": "Approve the split while retaining an ID-token request and a permission-error control in this parent."
     },
     {
       "id": "S2",
-      "status": "PROPOSED",
+      "status": "APPROVED",
+      "decidedBy": "owner",
+      "decidedOn": "2026-09-25",
+      "ownerDecisionRef": "docs.local/instructions/owner-decisions.md (2026-09-25, STORAGE-OBJECT S1-S7)",
       "decision": "Cloud Functions object triggers and event delivery belong to FUNCTIONS-EVENTS.",
       "recommendation": "Approve; object responses and persisted state remain in STORAGE-OBJECT."
     },
     {
       "id": "S3",
-      "status": "PROPOSED",
+      "status": "APPROVED",
+      "decidedBy": "owner",
+      "decidedOn": "2026-09-25",
+      "ownerDecisionRef": "docs.local/instructions/owner-decisions.md (2026-09-25, STORAGE-OBJECT S1-S7)",
       "decision": "Bucket creation, bucket configuration and IAM administration are outside this object-data parent. The default Firebase Storage bucket is a recorded precondition, not a compared object operation.",
       "recommendation": "Approve and require a separate parent decision for bucket administration."
     },
     {
       "id": "S4",
-      "status": "PROPOSED",
+      "status": "APPROVED",
+      "decidedBy": "owner",
+      "decidedOn": "2026-09-25",
+      "ownerDecisionRef": "docs.local/instructions/owner-decisions.md (2026-09-25, STORAGE-OBJECT S1-S7)",
       "decision": "Signed URLs, the XML API, object ACLs, compose and notification administration are outside the two REST dialects declared for this parent.",
       "recommendation": "Approve for this parent; retain GCS JSON copy and rewrite because the current Storage contract claims them."
     },
     {
       "id": "S5",
-      "status": "PROPOSED",
+      "status": "APPROVED",
+      "decidedBy": "owner",
+      "decidedOn": "2026-09-25",
+      "ownerDecisionRef": "docs.local/instructions/owner-decisions.md (2026-09-25, STORAGE-OBJECT S1-S7)",
       "decision": "Archived object generations, lifecycle transitions and versioning configuration are outside the current-generation object contract. Generation changes and preconditions on the current object remain in scope.",
       "recommendation": "Approve only if the owner accepts a current-generation-only claim; otherwise add a versioning condition before freeze."
     },
     {
       "id": "S6",
-      "status": "PROPOSED",
+      "status": "APPROVED",
+      "decidedBy": "owner",
+      "decidedOn": "2026-09-25",
+      "ownerDecisionRef": "docs.local/instructions/owner-decisions.md (2026-09-25, STORAGE-OBJECT S1-S7)",
       "decision": "The finite production corpus uses small bounded objects. The existing fireemu 256 MiB object cap and process memory budget are not established as production parity by this closure.",
       "recommendation": "Keep the local cap disclosed as a bounded known difference; ask the owner whether it blocks COMPAT_VERIFIED or belongs to a separate large-object condition."
     },
     {
       "id": "S7",
-      "status": "PROPOSED",
+      "status": "APPROVED",
+      "decidedBy": "owner",
+      "decidedOn": "2026-09-25",
+      "ownerDecisionRef": "docs.local/instructions/owner-decisions.md (2026-09-25, STORAGE-OBJECT S1-S7)",
       "decision": "This closure compares raw Firebase Storage and GCS JSON HTTP requests. SDK client behavior, including browser and mobile transport details, is outside this REST corpus.",
       "recommendation": "Approve this protocol boundary and retain the official-emulator SDK smoke checks as regression evidence only."
     }

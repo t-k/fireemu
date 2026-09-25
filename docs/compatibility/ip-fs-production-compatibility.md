@@ -141,11 +141,11 @@ No target feature is moved to class B merely because it is unimplemented, unobse
 
 ## Storage object production closure
 
-The owner added STORAGE-OBJECT to the parent inventory on 2026-09-25. The resulting target is 16 parents; historical `0 / 14` checkpoints above describe the earlier inventory. The [proposed closure inventory](../../spec/compatibility/closure/STORAGE-OBJECT.json) separates object behavior from Storage Security Rules and Functions events. Its scope decisions require owner confirmation before the inventory is frozen.
+The owner added STORAGE-OBJECT to the parent inventory on 2026-09-25. The resulting target is 16 parents; historical `0 / 14` checkpoints above describe the earlier inventory. The [frozen closure inventory](../../spec/compatibility/closure/STORAGE-OBJECT.json) separates object behavior from Storage Security Rules and Functions events. The owner approved its seven scope decisions on 2026-09-25. S6 limits this closure's parity claim to objects no larger than 256 MiB; the fireemu cap is a disclosed limitation and tracked separately.
 
 | Parent | Required conditions | Current evidence | Parent state | Remaining completion work |
 | --- | --- | --- | --- | --- |
-| STORAGE-OBJECT | Firebase and GCS JSON object upload, download, metadata, delete, list and paging; current-object generation and metageneration preconditions; checksums; error shapes; owner and Firebase Auth ID-token access; cross-dialect state | Local Storage tests and the official-emulator `storage-probe` matrix exist. No production Storage object recording is counted for this parent. | `IMPLEMENTING` | Confirm scope decisions, freeze the inventory, record the reviewed corpus twice on the disposable sandbox, repair mismatches, compare both Storage suites on one final artifact and obtain an independent closure review. |
+| STORAGE-OBJECT | Firebase and GCS JSON object upload, download, metadata, delete, list and paging; current-object generation and metageneration preconditions; checksums; error shapes; owner and Firebase Auth ID-token access; cross-dialect state | Local Storage tests and the official-emulator `storage-probe` matrix exist. No production Storage object recording is counted for this parent. | `IMPLEMENTING` | Prepare the sandbox, record the reviewed corpus twice, repair mismatches, compare both Storage suites on one final artifact and obtain an independent closure review. |
 
 ## Existing evidence boundaries
 

@@ -43,6 +43,9 @@ const PROJECT_IDENTITY_SHA = "e7b988b49c3ca24496b8c030a27b4714a31182950f9e9b7108
 const SANDBOX_DOC = join(PRIVATE_ROOT, "sandbox-oracles.md");
 const CLI = join(CONFORMANCE, "node_modules/firebase-tools/lib/bin/firebase.js");
 const TASK = "FUNCTIONS-HTTP-SANDBOX";
+const FIRST_RUN_DIR = join(PRIVATE_ROOT, "runs/functions-http-stage3-2026-09-25T130504.907Z");
+const FIRST_RUN_COMMIT = "50f3625e3d2eb1b5f85879eb6210e2cf8b212649";
+const RECOVERY_READBACK_SHA = "50817abfe8246b7c3b7ea85d96f79ba6015d14ee75d1076cb700fd728e8031e5";
 const CORPUS_SHA = "836c138ba213546428e700e7ecb51644089bb5b0cdc91946eb9904a648106bea";
 const FIXTURE_SHA = "0c481ec6b6ec87db71a2f90550238ce69ec2b923c7a92b7ea5171cb7909886a5";
 const FIREBASE_CONFIG_SHA = "0b76734c83f808f8842ee093177fc9ecc2fda2ec9f9d06e025436a0d7f9f7197";
@@ -92,7 +95,7 @@ async function logChange(action, detail) {
   await appendFile(SANDBOX_DOC, `- ${ts}: ${action}: ${detail}.\n`);
 }
 
-export function assertAdmission(lines, currentTime = now()) {
+export function assertAdmission(lines, currentTime = now(), firstRunDir = FIRST_RUN_DIR) {
   const relevant = lines.filter((line) => line.project === PROJECT);
   const storage = relevant.some(
     (line) =>
@@ -108,10 +111,28 @@ export function assertAdmission(lines, currentTime = now()) {
   );
   if (!storage || !stage2)
     throw new Error("Storage and FUNCTIONS-HTTP stage 2 must both finish successfully");
+  const stage3 = relevant.filter((line) => line.taskId === TASK && line.stage === 3);
+  if (stage3.length !== 4) throw new Error("stage 3 attempt was not recovered exactly once");
+  const [started, change, failed, recovered] = stage3;
   if (
-    relevant.some((line) => line.taskId === TASK && line.stage === 3 && line.event === "started")
+    started.event !== "started" ||
+    change.event !== "change" ||
+    change.action !== "service-identity-generation-possible" ||
+    failed.event !== "needs-recovery" ||
+    recovered.event !== "finished" ||
+    [started, failed, recovered].some(
+      (line) =>
+        line.runDir !== firstRunDir ||
+        line.gitSha !== FIRST_RUN_COMMIT ||
+        line.corpusDigest !== CORPUS_SHA,
+    ) ||
+    failed.requests?.invocation !== 0 ||
+    failed.requests.cliDeploy !== 1 ||
+    recovered.outcome !== "recovered-no-observation" ||
+    recovered.recoveryReadbackSha256 !== RECOVERY_READBACK_SHA ||
+    recovered.recoveryRequests !== 5
   ) {
-    throw new Error("a stage 3 attempt already exists; recovery or a new review is required");
+    throw new Error("stage 3 attempt recovery evidence differs from the reviewed result");
   }
   const terminalLine = (line) =>
     line.outcome !== undefined &&
@@ -136,6 +157,14 @@ const estimatedUsd = (requests) =>
     9,
     Math.ceil((0.01 + requests.cliDeploy * 0.55 + requests.invocation * 0.001) * 100) / 100,
   );
+
+export function retryAccounting(requests) {
+  const current = estimatedUsd(requests);
+  const priorAttemptResidualAllowanceUsd = 0.02;
+  const cumulativeEstimatedUsd = Number((current + priorAttemptResidualAllowanceUsd).toFixed(2));
+  if (cumulativeEstimatedUsd > 9) throw new Error("stage 3 budget would be exceeded");
+  return { estimatedUsd: current, priorAttemptResidualAllowanceUsd, cumulativeEstimatedUsd };
+}
 
 export function assertOwnedImage(image, target) {
   const name = packageId(target);
@@ -330,6 +359,35 @@ export async function readPrivateProjectIdentity(path, expectedSha) {
     throw new Error("private project identity is invalid");
   }
   return value.projectNumber;
+}
+
+export async function readRecoveryReadback(path, expectedSha, firstRunDir) {
+  const metadata = await stat(path);
+  if (metadata.size > MAX_RESPONSE_BYTES || (metadata.mode & 0o077) !== 0)
+    throw new Error("private recovery readback is not bounded and owner-only");
+  const content = await readFile(path);
+  if (digest(content) !== expectedSha) throw new Error("private recovery readback digest changed");
+  let value;
+  try {
+    value = JSON.parse(content);
+  } catch {
+    throw new Error("private recovery readback is invalid");
+  }
+  const observed = value?.readbacks;
+  if (
+    value?.project !== PROJECT ||
+    value.runDir !== firstRunDir ||
+    value.requests !== 5 ||
+    value.outcome !== "no-function-service-package-or-build-observed" ||
+    observed?.function !== "absent" ||
+    observed.service !== "absent" ||
+    observed.package !== "absent" ||
+    !Array.isArray(observed.builds) ||
+    observed.builds.length !== 0
+  ) {
+    throw new Error("private recovery readback is invalid");
+  }
+  return value;
 }
 
 async function acquireToken(adc, budget, kind) {
@@ -913,6 +971,11 @@ export async function recordProduction() {
     PROJECT_IDENTITY_FILE,
     PROJECT_IDENTITY_SHA,
   );
+  await readRecoveryReadback(
+    join(FIRST_RUN_DIR, "recovery-readback.json"),
+    RECOVERY_READBACK_SHA,
+    FIRST_RUN_DIR,
+  );
   const ledgerLines = (await readFile(LEDGER, "utf8"))
     .trim()
     .split("\n")
@@ -956,10 +1019,13 @@ export async function recordProduction() {
       corpusDigest: CORPUS_SHA,
       runDir,
       maxEstimatedUsd: 9,
+      attempt: 2,
+      reservationLedgerTs: "2026-09-25T13:05:04.913Z",
+      reservationReusedUsd: 9,
     };
     await appendFile(
       LEDGER,
-      `${JSON.stringify({ ...base, event: "started", requests: null, estimatedUsd: 9 })}\n`,
+      `${JSON.stringify({ ...base, event: "started", requests: null, estimatedUsd: 0 })}\n`,
     );
     const control = createControl(adc.file, budget);
     const recordings = [{}, {}];
@@ -1033,7 +1099,7 @@ export async function recordProduction() {
         ...(residual ? { event: "needs-recovery" } : { outcome }),
         reason,
         requests: budget.snapshot(),
-        estimatedUsd: estimatedUsd(budget.snapshot()),
+        ...retryAccounting(budget.snapshot()),
       })}\n`,
     );
     terminal = !residual;

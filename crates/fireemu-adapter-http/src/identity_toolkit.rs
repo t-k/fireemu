@@ -2793,6 +2793,18 @@ fn handle_with_policy(
     } else {
         match select_store(state, path, query, body, resolution) {
             Ok(store) => store,
+            // Production answers a client policy read of an unknown tenant with the v2 API's
+            // INVALID_TENANT_ID (sandbox recording 2026-09-25).
+            Err(response)
+                if response.body["error"]["message"] == "TENANT_NOT_FOUND"
+                    && matches!(
+                        resolution,
+                        routes::Resolution::Matched { route, .. }
+                            if route.handler == routes::Handler::PasswordPolicy
+                    ) =>
+            {
+                return config_proto::refusal("INVALID_TENANT_ID");
+            }
             Err(response) => return response,
         }
     };
@@ -3025,6 +3037,11 @@ fn handle_with_policy(
         return tenant_management(state, route.handler, project, tenant, query, body);
     }
     if tenant.is_some() && store.tenant_id() != tenant {
+        // Production answers a client policy read of an unknown tenant with the v2 API's
+        // INVALID_TENANT_ID (sandbox recording 2026-09-25).
+        if route.handler == routes::Handler::PasswordPolicy {
+            return config_proto::refusal("INVALID_TENANT_ID");
+        }
         return error(404, "TENANT_NOT_FOUND");
     }
     if route.handler == routes::Handler::SignInWithIdp
@@ -3494,14 +3511,19 @@ fn dispatch(
         }
         Handler::CreateAuthUri => create_auth_uri(store, body),
         Handler::Projects => client_project_config(store, !options.stateless_refresh_tokens),
-        Handler::RecaptchaParams => JsonResponse {
-            status: 200,
-            body: json!({
+        Handler::RecaptchaParams => {
+            let mut body = json!({
                 "kind": "identitytoolkit#GetRecaptchaParamResponse",
                 "recaptchaStoken": "This-is-a-fake-token__Dont-send-this-to-the-Recaptcha-service__The-Auth-Emulator-does-not-support-Recaptcha",
                 "recaptchaSiteKey": "Fake-key__Do-not-send-this-to-Recaptcha_",
-            }),
-        },
+            });
+            // Production also names the reCAPTCHA project; no key of it is real here.
+            if !options.stateless_refresh_tokens {
+                body["producerProjectNumber"] = json!("000000000000");
+            }
+            JsonResponse { status: 200, body }
+        }
+        Handler::RecaptchaConfig => project_config::client_recaptcha_config(store, query),
         Handler::PasswordPolicy => password_policy_json(store.password_policy()),
         // Strict: production's answer when TOTP is not enabled, and the v2 API's error shape
         // (sandbox recording 2026-09-24); the emulator keeps the official emulator's.
@@ -3687,6 +3709,7 @@ fn password_policy_from_config_json(value: &Value) -> Result<PasswordPolicy, Jso
         Some(Value::String(value)) => match value.as_str() {
             "OFF" => EnforcementState::Off,
             "ENFORCE" => EnforcementState::Enforce,
+            "PASSWORD_POLICY_ENFORCEMENT_STATE_UNSPECIFIED" => EnforcementState::Unspecified,
             _ => return Err(error(400, "INVALID_ARGUMENT")),
         },
         Some(_) => return Err(error(400, "INVALID_ARGUMENT")),
@@ -3762,6 +3785,12 @@ fn password_policy_from_config_json(value: &Value) -> Result<PasswordPolicy, Jso
         boolean("containsNonAlphanumericCharacter")?,
         fireemu_core_auth::password_policy::default_allowed_non_alphanumeric(),
     )
+    .map(|mut policy| {
+        policy.min_length_written = options
+            .and_then(|o| o.get("minPasswordLength"))
+            .is_some_and(|v| !v.is_null());
+        policy
+    })
     .map_err(|refused| password_policy_refusal(refused, max))
 }
 
@@ -3787,7 +3816,6 @@ fn password_policy_refusal(
 
 fn password_policy_config_json(policy: &PasswordPolicy) -> Value {
     let mut options = serde_json::Map::from_iter([
-        ("minPasswordLength".to_owned(), json!(policy.min_length)),
         (
             "containsUppercaseCharacter".to_owned(),
             json!(policy.require_uppercase),
@@ -3805,17 +3833,23 @@ fn password_policy_config_json(policy: &PasswordPolicy) -> Value {
             json!(policy.require_non_alphanumeric),
         ),
     ]);
+    if policy.min_length_written || !policy.configured {
+        options.insert("minPasswordLength".to_owned(), json!(policy.min_length));
+    }
     if let Some(max) = policy.max_length {
         options.insert("maxPasswordLength".to_owned(), json!(max));
     }
-    json!({
-        "passwordPolicyEnforcementState": match policy.enforcement_state {
-            EnforcementState::Off => "OFF",
-            EnforcementState::Enforce => "ENFORCE",
-        },
+    let mut config = json!({
         "forceUpgradeOnSignin": policy.force_upgrade_on_signin,
         "passwordPolicyVersions": [{"customStrengthOptions": options}],
-    })
+    });
+    // Production stores an unspecified state as none.
+    match policy.enforcement_state {
+        EnforcementState::Off => config["passwordPolicyEnforcementState"] = json!("OFF"),
+        EnforcementState::Enforce => config["passwordPolicyEnforcementState"] = json!("ENFORCE"),
+        EnforcementState::Unspecified => {}
+    }
+    config
 }
 
 fn password_policy_from_update(
@@ -4859,6 +4893,11 @@ fn project_config_document(
         project_number: store.project_number(),
         api_key: tenancy.as_ref().and_then(|t| t.api_key_for(project)),
         sign_in: sign_in.get("signIn").cloned().unwrap_or_else(|| json!({})),
+        providers: project_config::sign_in_providers(store.sign_in_config()),
+        policy_update_time: store
+            .stored_config_members()
+            .get(project_config::POLICY_UPDATE_TIME)
+            .and_then(|text| serde_json::from_str::<String>(text).ok()),
         sign_in_written,
         allow_duplicate_emails: config.allow_duplicate_emails,
         improved_email_privacy: config.enable_improved_email_privacy,
@@ -5151,10 +5190,30 @@ fn project_config_management(
     JsonResponse {
         status: 200,
         body: {
-            let Ok(store) = selected_store.lock() else {
+            let Ok(mut store) = selected_store.lock() else {
                 return error(500, "INTERNAL");
             };
-            project_config_document(state, project, &store, config)
+            // Production records when the password policy was last written.
+            if fields
+                .iter()
+                .any(|field| field.starts_with("passwordPolicyConfig"))
+            {
+                let mut members = store.stored_config_members().clone();
+                let time = store
+                    .password_policy()
+                    .configured
+                    .then(|| now(state).to_rfc3339().ok())
+                    .flatten()
+                    .map(|time| json!(time).to_string());
+                members.set(project_config::POLICY_UPDATE_TIME, time);
+                store.set_stored_config_members(members);
+            }
+            let document = project_config_document(state, project, &store, config);
+            if state.stateless_refresh_tokens {
+                document
+            } else {
+                project_config::patch_answer(document)
+            }
         },
     }
 }
@@ -12023,40 +12082,46 @@ fn password_policy_json(policy: &PasswordPolicy) -> JsonResponse {
             }),
         };
     }
-    // Production's order first, then any other configured character in code-point order.
-    let order = fireemu_core_auth::password_policy::DEFAULT_NON_ALPHANUMERIC_ORDER;
-    let allowed: Vec<String> = order
-        .chars()
-        .filter(|c| policy.allowed_non_alphanumeric.contains(c))
-        .chain(
-            policy
-                .allowed_non_alphanumeric
-                .iter()
-                .copied()
-                .filter(|c| !order.contains(*c)),
-        )
-        .map(String::from)
-        .collect();
+    // A configured policy as production projects it (sandbox recording 2026-09-25): the
+    // written options without false ones, the symbol list only when a symbol is required, and
+    // the sign-in upgrade only when it is on.
     let options = password_policy_config_json(policy)
         .get("passwordPolicyVersions")
         .and_then(Value::as_array)
         .and_then(|versions| versions.first())
         .and_then(|version| version.get("customStrengthOptions"))
         .cloned()
-        .unwrap_or_else(|| json!({}));
-    JsonResponse {
-        status: 200,
-        body: json!({
-            "customStrengthOptions": options,
-            "allowedNonAlphanumericCharacters": allowed,
-            "enforcementState": match policy.enforcement_state {
-                EnforcementState::Off => "OFF",
-                EnforcementState::Enforce => "ENFORCE",
-            },
-            "forceUpgradeOnSignin": policy.force_upgrade_on_signin,
-            "schemaVersion": 1,
-        }),
+        .map_or_else(|| json!({}), project_config::without_false);
+    let mut body = json!({
+        "customStrengthOptions": options,
+        "schemaVersion": 1,
+        "enforcementState": match policy.enforcement_state {
+            EnforcementState::Off => "OFF",
+            EnforcementState::Enforce => "ENFORCE",
+            EnforcementState::Unspecified => "ENFORCEMENT_STATE_UNSPECIFIED",
+        },
+    });
+    if policy.require_non_alphanumeric {
+        // Production's order first, then any other configured character in code-point order.
+        let order = fireemu_core_auth::password_policy::DEFAULT_NON_ALPHANUMERIC_ORDER;
+        let allowed: Vec<String> = order
+            .chars()
+            .filter(|c| policy.allowed_non_alphanumeric.contains(c))
+            .chain(
+                policy
+                    .allowed_non_alphanumeric
+                    .iter()
+                    .copied()
+                    .filter(|c| !order.contains(*c)),
+            )
+            .map(String::from)
+            .collect();
+        body["allowedNonAlphanumericCharacters"] = json!(allowed);
     }
+    if policy.force_upgrade_on_signin {
+        body["forceUpgradeOnSignin"] = json!(true);
+    }
+    JsonResponse { status: 200, body }
 }
 
 #[cfg(test)]

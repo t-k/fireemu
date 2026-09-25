@@ -120,6 +120,37 @@ pub(super) fn without_false(value: Value) -> Value {
     }
 }
 
+/// The stored member holding when the project's password policy was last written: kept with
+/// the written members but never reported as a member of its own.
+pub(super) const POLICY_UPDATE_TIME: &str = "_passwordPolicyLastUpdateTime";
+
+/// The sign-in provider objects production reports once written: each object with its
+/// switches, a false one left out by the document's false omission.
+pub(super) fn sign_in_providers(config: &fireemu_core_auth::store::SignInConfig) -> Value {
+    let mut phone = json!({"enabled": config.phone_enabled});
+    if !config.test_phone_numbers.is_empty() {
+        phone["testPhoneNumbers"] = json!(config.test_phone_numbers);
+    }
+    json!({
+        "email": {"enabled": config.email_enabled, "passwordRequired": config.password_required},
+        "anonymous": {"enabled": config.anonymous_enabled},
+        "phoneNumber": phone,
+    })
+}
+
+/// A PATCH answer as production gives it: the configuration without the email templates.
+pub(super) fn patch_answer(mut document: Value) -> Value {
+    if let Some(send_email) = document
+        .pointer_mut("/notification/sendEmail")
+        .and_then(Value::as_object_mut)
+    {
+        for template in TEMPLATES {
+            send_email.remove(*template);
+        }
+    }
+    document
+}
+
 /// What the document is assembled from: the members' switches as they are stored.
 #[allow(clippy::struct_excessive_bools)]
 pub(super) struct ConfigSources<'a> {
@@ -128,6 +159,10 @@ pub(super) struct ConfigSources<'a> {
     pub api_key: Option<&'a str>,
     /// `signIn` with the providers and `allowDuplicateEmails`, as the adapter projects them.
     pub sign_in: Value,
+    /// Every provider object ([`sign_in_providers`]), as strict reports them.
+    pub providers: Value,
+    /// When the configured password policy was last written (RFC 3339).
+    pub policy_update_time: Option<String>,
     /// Whether the sign-in providers were ever written (the emulator profile's document shows
     /// them only then).
     pub sign_in_written: bool,
@@ -150,7 +185,7 @@ pub(super) struct ConfigSources<'a> {
 /// Production's document (strict profile).
 pub(super) fn strict_document(sources: &ConfigSources<'_>) -> Value {
     let project = sources.project;
-    let mut sign_in = sources.sign_in.clone();
+    let mut sign_in = sources.providers.clone();
     sign_in["allowDuplicateEmails"] = json!(sources.allow_duplicate_emails);
     sign_in["hashConfig"] = hash_config(project);
     let mut quota = Map::new();
@@ -186,14 +221,29 @@ pub(super) fn strict_document(sources: &ConfigSources<'_>) -> Value {
         "defaultHostingSite": project,
     });
     if let Some(policy) = &sources.password_policy {
-        document["passwordPolicyConfig"] = policy.clone();
+        let mut policy = policy.clone();
+        for version in policy
+            .get_mut("passwordPolicyVersions")
+            .and_then(Value::as_array_mut)
+            .into_iter()
+            .flatten()
+        {
+            version["schemaVersion"] = json!(1);
+        }
+        if let Some(time) = &sources.policy_update_time {
+            policy["lastUpdateTime"] = json!(time);
+        }
+        document["passwordPolicyConfig"] = policy;
     }
+    // A false switch of the members fireemu models is left out; a written member keeps what
+    // was written, false switches included, as production does for them.
+    let mut document = without_false(document);
     for member in STORED_MEMBERS {
         if let Some(value) = member_value(sources.members, member, project) {
             document[*member] = value;
         }
     }
-    without_false(document)
+    document
 }
 
 /// The official Auth emulator's document, with the members written since (emulator profile).
@@ -231,7 +281,11 @@ pub(super) fn emulator_document(sources: &ConfigSources<'_>) -> Value {
     if sources.authorized_domains_written {
         document["authorizedDomains"] = json!(sources.authorized_domains);
     }
-    for (member, text) in sources.members.iter() {
+    for (member, text) in sources
+        .members
+        .iter()
+        .filter(|(member, _)| !member.starts_with('_'))
+    {
         if let Ok(value) = serde_json::from_str::<Value>(text) {
             document[member] = value;
         }
@@ -543,6 +597,92 @@ pub(super) fn validate_values(
         return Err(refusal("EMAIL_TEMPLATE_UPDATE_NOT_ALLOWED"));
     }
     Ok(())
+}
+
+/// The client types `v2/recaptchaConfig` takes.
+const CLIENT_TYPES: &[&str] = &[
+    "CLIENT_TYPE_UNSPECIFIED",
+    "CLIENT_TYPE_WEB",
+    "CLIENT_TYPE_ANDROID",
+    "CLIENT_TYPE_IOS",
+];
+
+/// Parses a query string into its decoded pairs.
+fn query_pairs(query: Option<&str>) -> Vec<(String, String)> {
+    query
+        .unwrap_or_default()
+        .split('&')
+        .filter(|pair| !pair.is_empty())
+        .map(|pair| {
+            let (key, value) = pair.split_once('=').unwrap_or((pair, ""));
+            (
+                super::decode_query_component(key),
+                super::decode_query_component(value),
+            )
+        })
+        .collect()
+}
+
+/// `GET v2/recaptchaConfig`: the project's reCAPTCHA enforcement as clients read it (sandbox
+/// recording 2026-09-25, AUTH-CONFIG-SDK): both providers' states (unspecified until
+/// written), the SMS switches, and production's refusals of a missing or unknown client type
+/// and a missing version.
+pub(super) fn client_recaptcha_config(
+    store: &fireemu_core_auth::store::AuthStore,
+    query: Option<&str>,
+) -> JsonResponse {
+    use super::config_proto::refusal;
+    let pairs = query_pairs(query);
+    let param = |name: &str| {
+        pairs
+            .iter()
+            .find(|(k, _)| k == name)
+            .map(|(_, v)| v.as_str())
+    };
+    let Some(client_type) = param("clientType") else {
+        return refusal("MISSING_CLIENT_TYPE");
+    };
+    if !CLIENT_TYPES.contains(&client_type) {
+        let message = format!(
+            "Invalid value at 'client_type' (type.googleapis.com/google.cloud.identitytoolkit.v2.ClientType), \"{client_type}\""
+        );
+        return JsonResponse {
+            status: 400,
+            body: json!({"error": {
+                "code": 400,
+                "message": message,
+                "status": "INVALID_ARGUMENT",
+                "details": [{
+                    "@type": "type.googleapis.com/google.rpc.BadRequest",
+                    "fieldViolations": [{"field": "client_type", "description": message}],
+                }],
+            }}),
+        };
+    }
+    if param("version").is_none() {
+        return refusal("MISSING_RECAPTCHA_VERSION");
+    }
+    let config = store
+        .stored_config_members()
+        .get("recaptchaConfig")
+        .and_then(|text| serde_json::from_str::<Value>(text).ok())
+        .unwrap_or_else(|| json!({}));
+    let state = |key: &str| match config.get(key).and_then(Value::as_str) {
+        Some(state @ ("OFF" | "AUDIT" | "ENFORCE")) => state.to_owned(),
+        _ => "ENFORCEMENT_STATE_UNSPECIFIED".to_owned(),
+    };
+    let flag = |key: &str| config.get(key).and_then(Value::as_bool).unwrap_or(false);
+    JsonResponse {
+        status: 200,
+        body: json!({
+            "recaptchaEnforcementState": [
+                {"provider": "EMAIL_PASSWORD_PROVIDER", "enforcementState": state("emailPasswordEnforcementState")},
+                {"provider": "PHONE_PROVIDER", "enforcementState": state("phoneEnforcementState")},
+            ],
+            "useSmsBotScore": flag("useSmsBotScore"),
+            "useSmsTollFraudProtection": flag("useSmsTollFraudProtection"),
+        }),
+    }
 }
 
 #[cfg(test)]

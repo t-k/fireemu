@@ -13011,8 +13011,10 @@ fn explicit_tenant_policy_query_uses_the_registered_tenant_without_tenancy_selec
         &format!("{V2}/passwordPolicy?key=fake-api-key&tenantId=missing-tenant"),
         &Value::Null,
     );
-    assert_eq!(unknown.0, 404, "{}", unknown.1);
-    assert_eq!(unknown.1["error"]["message"], "TENANT_NOT_FOUND");
+    // Production answers an unknown tenant's policy with the v2 API's INVALID_TENANT_ID
+    // (sandbox recording 2026-09-25, AUTH-CONFIG-SDK config/read).
+    assert_eq!(unknown.0, 400, "{}", unknown.1);
+    assert_eq!(unknown.1["error"]["message"], "INVALID_TENANT_ID");
 }
 
 #[test]
@@ -17293,4 +17295,194 @@ fn config_values_are_refused_with_production_messages() {
         let (status, answer) = patch(&emulator, mask, body);
         assert_eq!(status, 200, "{mask}: {answer}");
     }
+}
+
+/// Production's config document after writes (sandbox recording 2026-09-25, AUTH-CONFIG-SDK):
+/// a PATCH answer leaves the email templates out, a disabled provider keeps its object, a
+/// written member keeps its false switches, and a policy reports its schema version, its last
+/// update and no unspecified state.
+#[test]
+fn the_strict_config_document_after_writes_reads_as_production() {
+    const CONFIG: &str = "/identitytoolkit.googleapis.com/admin/v2/projects/demo-app/config";
+    let s = strict_state();
+    let patch =
+        |mask: &str, body: Value| admin(&s, "PATCH", &format!("{CONFIG}?updateMask={mask}"), &body);
+    let (status, answer) = patch(
+        "signIn.email.enabled,signIn.anonymous.enabled,recaptchaConfig",
+        json!({
+            "signIn": {"email": {"enabled": false}, "anonymous": {"enabled": false}},
+            "recaptchaConfig": {"phoneEnforcementState": "OFF", "useSmsBotScore": false},
+        }),
+    );
+    assert_eq!(status, 200, "{answer}");
+    let send_email = answer["notification"]["sendEmail"].as_object().unwrap();
+    assert!(
+        !send_email.contains_key("resetPasswordTemplate"),
+        "{answer}"
+    );
+    assert!(send_email.contains_key("callbackUri"));
+    let (_, read) = admin(&s, "GET", CONFIG, &Value::Null);
+    assert!(read["notification"]["sendEmail"]
+        .get("resetPasswordTemplate")
+        .is_some());
+    assert_eq!(read["signIn"]["email"], json!({}));
+    assert_eq!(read["signIn"]["anonymous"], json!({}));
+    assert_eq!(
+        read["recaptchaConfig"],
+        json!({"phoneEnforcementState": "OFF", "useSmsBotScore": false})
+    );
+
+    let (status, answer) = patch(
+        "passwordPolicyConfig",
+        json!({"passwordPolicyConfig": {
+            "passwordPolicyEnforcementState": "PASSWORD_POLICY_ENFORCEMENT_STATE_UNSPECIFIED",
+            "passwordPolicyVersions": [{"customStrengthOptions": {"minPasswordLength": 8}}],
+        }}),
+    );
+    assert_eq!(status, 200, "{answer}");
+    let policy = &answer["passwordPolicyConfig"];
+    assert!(
+        policy.get("passwordPolicyEnforcementState").is_none(),
+        "{policy}"
+    );
+    assert_eq!(
+        policy["passwordPolicyVersions"],
+        json!([{"customStrengthOptions": {"minPasswordLength": 8}, "schemaVersion": 1}])
+    );
+    assert!(
+        policy["lastUpdateTime"]
+            .as_str()
+            .is_some_and(|t| t.ends_with('Z')),
+        "{policy}"
+    );
+    let (_, cleared) = patch("passwordPolicyConfig", json!({}));
+    assert!(cleared.get("passwordPolicyConfig").is_none(), "{cleared}");
+}
+
+/// Client configuration reads as production answers them (sandbox recording 2026-09-25,
+/// AUTH-CONFIG-SDK config/read, password-policy/projection, recaptcha).
+#[test]
+#[allow(clippy::too_many_lines)]
+fn client_configuration_reads_as_production() {
+    const CONFIG: &str = "/identitytoolkit.googleapis.com/admin/v2/projects/demo-app/config";
+    let s = strict_state();
+    let get = |path: &str| {
+        let r = handle(
+            &s,
+            "GET",
+            &with_client_key(&s, path, "fake-api-key"),
+            &Value::Null,
+        );
+        (r.status, r.body)
+    };
+    let policy = |state: &str, options: Value, force: bool| {
+        let (status, answer) = admin(
+            &s,
+            "PATCH",
+            &format!("{CONFIG}?updateMask=passwordPolicyConfig"),
+            &json!({"passwordPolicyConfig": {
+                "passwordPolicyEnforcementState": state,
+                "passwordPolicyVersions": [{"customStrengthOptions": options}],
+                "forceUpgradeOnSignin": force,
+            }}),
+        );
+        assert_eq!(status, 200, "{answer}");
+    };
+    policy(
+        "OFF",
+        json!({"minPasswordLength": 8, "containsNumericCharacter": true}),
+        false,
+    );
+    assert_eq!(
+        get(&format!("{V2}/passwordPolicy")),
+        (
+            200,
+            json!({
+                "customStrengthOptions": {"minPasswordLength": 8, "containsNumericCharacter": true},
+                "schemaVersion": 1,
+                "enforcementState": "OFF",
+            })
+        )
+    );
+    policy("ENFORCE", json!({"maxPasswordLength": 16}), false);
+    assert_eq!(
+        get(&format!("{V2}/passwordPolicy")).1,
+        json!({"customStrengthOptions": {"maxPasswordLength": 16}, "schemaVersion": 1, "enforcementState": "ENFORCE"})
+    );
+    policy(
+        "ENFORCE",
+        json!({"minPasswordLength": 8, "containsNonAlphanumericCharacter": true}),
+        true,
+    );
+    let (_, answer) = get(&format!("{V2}/passwordPolicy"));
+    assert_eq!(answer["forceUpgradeOnSignin"], json!(true));
+    assert_eq!(
+        answer["allowedNonAlphanumericCharacters"]
+            .as_array()
+            .map(Vec::len),
+        Some(30)
+    );
+    let (_, config) = admin(&s, "GET", CONFIG, &Value::Null);
+    assert_eq!(
+        config["passwordPolicyConfig"]["passwordPolicyVersions"][0]["customStrengthOptions"],
+        json!({"minPasswordLength": 8, "containsNonAlphanumericCharacter": true})
+    );
+    assert_eq!(
+        get(&format!("{V2}/passwordPolicy?tenantId=no-such-tenant")),
+        (
+            400,
+            json!({"error": {"code": 400, "message": "INVALID_TENANT_ID", "status": "INVALID_ARGUMENT"}})
+        )
+    );
+
+    let recaptcha =
+        format!("{V2}/recaptchaConfig?clientType=CLIENT_TYPE_WEB&version=RECAPTCHA_ENTERPRISE");
+    let unset = json!({
+        "recaptchaEnforcementState": [
+            {"provider": "EMAIL_PASSWORD_PROVIDER", "enforcementState": "ENFORCEMENT_STATE_UNSPECIFIED"},
+            {"provider": "PHONE_PROVIDER", "enforcementState": "ENFORCEMENT_STATE_UNSPECIFIED"},
+        ],
+        "useSmsBotScore": false,
+        "useSmsTollFraudProtection": false,
+    });
+    assert_eq!(get(&recaptcha), (200, unset));
+    let (status, _) = admin(
+        &s,
+        "PATCH",
+        &format!("{CONFIG}?updateMask=recaptchaConfig"),
+        &json!({"recaptchaConfig": {"emailPasswordEnforcementState": "OFF", "phoneEnforcementState": "OFF"}}),
+    );
+    assert_eq!(status, 200);
+    assert_eq!(
+        get(&recaptcha).1["recaptchaEnforcementState"],
+        json!([
+            {"provider": "EMAIL_PASSWORD_PROVIDER", "enforcementState": "OFF"},
+            {"provider": "PHONE_PROVIDER", "enforcementState": "OFF"},
+        ])
+    );
+    let v2_error = |message: &str| json!({"error": {"code": 400, "message": message, "status": "INVALID_ARGUMENT"}});
+    assert_eq!(
+        get(&format!("{V2}/recaptchaConfig")),
+        (400, v2_error("MISSING_CLIENT_TYPE"))
+    );
+    assert_eq!(
+        get(&format!("{V2}/recaptchaConfig?clientType=CLIENT_TYPE_WEB")),
+        (400, v2_error("MISSING_RECAPTCHA_VERSION"))
+    );
+    let (status, answer) = get(&format!(
+        "{V2}/recaptchaConfig?clientType=CLIENT_TYPE_TV&version=RECAPTCHA_ENTERPRISE"
+    ));
+    assert_eq!(status, 400);
+    let message = "Invalid value at 'client_type' (type.googleapis.com/google.cloud.identitytoolkit.v2.ClientType), \"CLIENT_TYPE_TV\"";
+    assert_eq!(answer["error"]["message"], json!(message));
+    assert_eq!(
+        answer["error"]["details"][0]["fieldViolations"][0],
+        json!({"field": "client_type", "description": message})
+    );
+
+    let (_, params) = get(&format!("{V1}/recaptchaParams"));
+    assert!(
+        params["producerProjectNumber"].as_str().is_some(),
+        "{params}"
+    );
 }

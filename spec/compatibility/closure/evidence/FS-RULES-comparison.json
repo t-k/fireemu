@@ -1,0 +1,4578 @@
+{
+  "kind": "fs-rules-comparison-v1",
+  "artifactSha256": "1026ca7d76b36070e8b2b9571c06898f1fb0f33e9ac7f4a28f5e48c9104fb4e5",
+  "fixtureSha256": "e0211c0ba180176750c3258d8c02a23b12fad16b9fdec369ef464070b120dcc9",
+  "summary": {
+    "MATCH": 1142
+  },
+  "rows": [
+    {
+      "row": "fs-rules/publication/no-release#get-unauthenticated",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/publication/no-release#get-signed-in",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/publication/no-release#get-missing-signed-in",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/publication/no-release#list-signed-in",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/publication/no-release#create-signed-in",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/publication/no-release#get-signed-in-grpc",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/publication/no-release#get-unauthenticated-grpc",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/compile/acceptance#valid",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/compile/acceptance#syntax-error",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/compile/acceptance#unknown-function",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/compile/acceptance#exists-after",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/compile/acceptance#unused-function",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/compile/acceptance#arity-mismatch",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/compile/acceptance#duplicate-function",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/compile/acceptance#recursion",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/compile/acceptance#mutual-recursion",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/compile/acceptance#call-depth-20",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/compile/acceptance#call-depth-21",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/compile/acceptance#arguments-7",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/compile/acceptance#arguments-8",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/compile/acceptance#let-10",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/compile/acceptance#let-11",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/compile/acceptance#match-nesting-10",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/compile/acceptance#match-nesting-11",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/compile/acceptance#captures-20",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/compile/acceptance#captures-21",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/compile/acceptance#source-256k-minus",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/compile/acceptance#source-256k-plus",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/compile/acceptance#version-1-recursive-last",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/compile/acceptance#version-1-recursive-middle",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/compile/acceptance#version-2-recursive-middle",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/compile/acceptance#two-recursive-wildcards",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/compile/acceptance#version-3",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/compile/acceptance#no-version",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/compile/acceptance#unknown-method",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/compile/acceptance#wrong-service",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/compile/acceptance#type-error-literal",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/compile/acceptance#regex-invalid-literal",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/compile/acceptance#undefined-variable",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/compile/acceptance#math-is-infinite",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/compile/acceptance#unknown-namespace-function",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/compile/acceptance#missing-semicolon",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/compile/acceptance#and-chain-98",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/compile/acceptance#and-chain-99",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/compile/acceptance#or-chain-98",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/compile/acceptance#or-chain-99",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/compile/acceptance#plus-chain-98",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/compile/acceptance#plus-chain-99",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/compile/acceptance#not-98",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/compile/acceptance#not-99",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/compile/acceptance#parentheses-98",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/compile/acceptance#parentheses-99",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/compile/acceptance#list-nesting-98",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/compile/acceptance#list-nesting-99",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/compile/acceptance#balanced-1000",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/compile/acceptance#not-parentheses-49",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/compile/acceptance#not-parentheses-50",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/compile/acceptance#map-nesting-98",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/compile/acceptance#map-nesting-99",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/compile/acceptance#call-nesting-98",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/compile/acceptance#call-nesting-99",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/compile/acceptance#and-chain-97",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/compile/acceptance#let-20",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/compile/acceptance#let-50",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/principals/separation#none-get-a-own",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/principals/separation#none-get-null-clause",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/principals/separation#none-get-any-clause",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/principals/separation#none-get-open",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/principals/separation#none-list-a-own",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/principals/separation#anon-get-a-own",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/principals/separation#anon-get-null-clause",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/principals/separation#anon-get-any-clause",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/principals/separation#anon-get-open",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/principals/separation#anon-list-a-own",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/principals/separation#anon-create-own",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/principals/separation#anon-create-in-b",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/principals/separation#a-get-a-own",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/principals/separation#a-get-null-clause",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/principals/separation#a-get-any-clause",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/principals/separation#a-get-open",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/principals/separation#a-list-a-own",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/principals/separation#a-create-own",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/principals/separation#a-create-in-b",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/principals/separation#b-get-a-own",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/principals/separation#b-get-null-clause",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/principals/separation#b-get-any-clause",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/principals/separation#b-get-open",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/principals/separation#b-list-a-own",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/principals/separation#b-create-own",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/principals/separation#b-create-in-b",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/principals/separation#verified-get-a-own",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/principals/separation#verified-get-null-clause",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/principals/separation#verified-get-any-clause",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/principals/separation#verified-get-open",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/principals/separation#verified-list-a-own",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/principals/separation#verified-create-own",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/principals/separation#verified-create-in-b",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/principals/separation#phone-get-a-own",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/principals/separation#phone-get-null-clause",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/principals/separation#phone-get-any-clause",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/principals/separation#phone-get-open",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/principals/separation#phone-list-a-own",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/principals/separation#phone-create-own",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/principals/separation#phone-create-in-b",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/principals/separation#custom-get-a-own",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/principals/separation#custom-get-null-clause",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/principals/separation#custom-get-any-clause",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/principals/separation#custom-get-open",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/principals/separation#custom-list-a-own",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/principals/separation#custom-create-own",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/principals/separation#custom-create-in-b",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/principals/separation#tenant-get-a-own",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/principals/separation#tenant-get-null-clause",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/principals/separation#tenant-get-any-clause",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/principals/separation#tenant-get-open",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/principals/separation#tenant-list-a-own",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/principals/separation#tenant-create-own",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/principals/separation#tenant-create-in-b",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/principals/grpc#none-get-a-own",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/principals/grpc#none-get-null-clause",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/principals/grpc#none-list-a-own",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/principals/grpc#anon-get-a-own",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/principals/grpc#anon-get-null-clause",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/principals/grpc#anon-list-a-own",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/principals/grpc#a-get-a-own",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/principals/grpc#a-get-null-clause",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/principals/grpc#a-list-a-own",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/principals/grpc#b-get-a-own",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/principals/grpc#b-get-null-clause",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/principals/grpc#b-list-a-own",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/principals/grpc#custom-get-a-own",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/principals/grpc#custom-get-null-clause",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/principals/grpc#custom-list-a-own",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/principals/grpc#tenant-get-a-own",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/principals/grpc#tenant-get-null-clause",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/principals/grpc#tenant-list-a-own",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#none-auth-null",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#none-auth-present",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#none-uid-is-sub",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#none-uid-is-user-id",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#none-uid-string",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#none-uid-custom-shape",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#none-token-map",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#none-keys-known",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#none-firebase-keys-known",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#none-has-iss",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#none-has-aud",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#none-has-auth-time",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#none-has-user-id",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#none-has-sub",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#none-has-iat",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#none-has-exp",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#none-has-email",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#none-has-email-verified",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#none-has-phone-number",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#none-has-name",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#none-has-picture",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#none-has-firebase",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#none-has-role",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#none-has-level",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#none-has-ratio",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#none-has-flags",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#none-has-tags",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#none-has-tier",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#none-firebase-has-identities",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#none-firebase-has-sign-in-provider",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#none-firebase-has-tenant",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#none-size-leq-8",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#none-size-leq-9",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#none-size-leq-10",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#none-size-leq-11",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#none-size-leq-12",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#none-size-leq-13",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#none-size-leq-14",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#none-aud-project",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#none-iss-project",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#none-iat-int",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#none-exp-int",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#none-auth-time-int",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#none-lifetime-3600",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#none-auth-time-not-after-iat",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#none-iat-before-request",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#none-exp-after-request",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#none-email-shape",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#none-email-verified-true",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#none-email-verified-false",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#none-email-verified-bool",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#none-phone-number",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#none-name",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#none-picture",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#none-provider-password",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#none-provider-anonymous",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#none-provider-phone",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#none-provider-custom",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#none-identities-map",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#none-identities-empty",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#none-identities-email-only",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#none-identities-phone-only",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#none-identities-email-is-token-email",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#none-identities-phone-is-token-phone",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#none-tenant-shape",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#none-tenant-suffix-4",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#none-tenant-suffix-5",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#none-tenant-suffix-6",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#none-tenant-suffix-digits",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#none-tenant-absent",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#none-claim-role-editor",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#none-claim-level-int",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#none-claim-ratio-float",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#none-claim-flags-map",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#none-claim-tags-list",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#none-claim-role-admin",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#none-claim-tier-int",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#none-claim-role-late",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#anon-auth-null",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#anon-auth-present",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#anon-uid-is-sub",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#anon-uid-is-user-id",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#anon-uid-string",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#anon-uid-custom-shape",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#anon-token-map",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#anon-keys-known",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#anon-firebase-keys-known",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#anon-has-iss",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#anon-has-aud",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#anon-has-auth-time",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#anon-has-user-id",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#anon-has-sub",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#anon-has-iat",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#anon-has-exp",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#anon-has-email",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#anon-has-email-verified",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#anon-has-phone-number",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#anon-has-name",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#anon-has-picture",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#anon-has-firebase",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#anon-has-role",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#anon-has-level",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#anon-has-ratio",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#anon-has-flags",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#anon-has-tags",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#anon-has-tier",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#anon-firebase-has-identities",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#anon-firebase-has-sign-in-provider",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#anon-firebase-has-tenant",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#anon-size-leq-8",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#anon-size-leq-9",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#anon-size-leq-10",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#anon-size-leq-11",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#anon-size-leq-12",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#anon-size-leq-13",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#anon-size-leq-14",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#anon-aud-project",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#anon-iss-project",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#anon-iat-int",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#anon-exp-int",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#anon-auth-time-int",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#anon-lifetime-3600",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#anon-auth-time-not-after-iat",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#anon-iat-before-request",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#anon-exp-after-request",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#anon-email-shape",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#anon-email-verified-true",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#anon-email-verified-false",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#anon-email-verified-bool",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#anon-phone-number",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#anon-name",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#anon-picture",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#anon-provider-password",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#anon-provider-anonymous",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#anon-provider-phone",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#anon-provider-custom",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#anon-identities-map",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#anon-identities-empty",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#anon-identities-email-only",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#anon-identities-phone-only",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#anon-identities-email-is-token-email",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#anon-identities-phone-is-token-phone",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#anon-tenant-shape",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#anon-tenant-suffix-4",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#anon-tenant-suffix-5",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#anon-tenant-suffix-6",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#anon-tenant-suffix-digits",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#anon-tenant-absent",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#anon-claim-role-editor",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#anon-claim-level-int",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#anon-claim-ratio-float",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#anon-claim-flags-map",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#anon-claim-tags-list",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#anon-claim-role-admin",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#anon-claim-tier-int",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#anon-claim-role-late",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#a-auth-null",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#a-auth-present",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#a-uid-is-sub",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#a-uid-is-user-id",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#a-uid-string",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#a-uid-custom-shape",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#a-token-map",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#a-keys-known",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#a-firebase-keys-known",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#a-has-iss",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#a-has-aud",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#a-has-auth-time",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#a-has-user-id",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#a-has-sub",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#a-has-iat",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#a-has-exp",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#a-has-email",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#a-has-email-verified",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#a-has-phone-number",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#a-has-name",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#a-has-picture",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#a-has-firebase",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#a-has-role",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#a-has-level",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#a-has-ratio",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#a-has-flags",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#a-has-tags",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#a-has-tier",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#a-firebase-has-identities",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#a-firebase-has-sign-in-provider",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#a-firebase-has-tenant",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#a-size-leq-8",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#a-size-leq-9",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#a-size-leq-10",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#a-size-leq-11",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#a-size-leq-12",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#a-size-leq-13",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#a-size-leq-14",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#a-aud-project",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#a-iss-project",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#a-iat-int",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#a-exp-int",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#a-auth-time-int",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#a-lifetime-3600",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#a-auth-time-not-after-iat",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#a-iat-before-request",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#a-exp-after-request",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#a-email-shape",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#a-email-verified-true",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#a-email-verified-false",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#a-email-verified-bool",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#a-phone-number",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#a-name",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#a-picture",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#a-provider-password",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#a-provider-anonymous",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#a-provider-phone",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#a-provider-custom",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#a-identities-map",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#a-identities-empty",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#a-identities-email-only",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#a-identities-phone-only",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#a-identities-email-is-token-email",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#a-identities-phone-is-token-phone",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#a-tenant-shape",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#a-tenant-suffix-4",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#a-tenant-suffix-5",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#a-tenant-suffix-6",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#a-tenant-suffix-digits",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#a-tenant-absent",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#a-claim-role-editor",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#a-claim-level-int",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#a-claim-ratio-float",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#a-claim-flags-map",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#a-claim-tags-list",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#a-claim-role-admin",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#a-claim-tier-int",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#a-claim-role-late",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#b-auth-null",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#b-auth-present",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#b-uid-is-sub",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#b-uid-is-user-id",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#b-uid-string",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#b-uid-custom-shape",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#b-token-map",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#b-keys-known",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#b-firebase-keys-known",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#b-has-iss",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#b-has-aud",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#b-has-auth-time",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#b-has-user-id",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#b-has-sub",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#b-has-iat",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#b-has-exp",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#b-has-email",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#b-has-email-verified",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#b-has-phone-number",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#b-has-name",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#b-has-picture",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#b-has-firebase",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#b-has-role",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#b-has-level",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#b-has-ratio",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#b-has-flags",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#b-has-tags",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#b-has-tier",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#b-firebase-has-identities",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#b-firebase-has-sign-in-provider",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#b-firebase-has-tenant",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#b-size-leq-8",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#b-size-leq-9",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#b-size-leq-10",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#b-size-leq-11",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#b-size-leq-12",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#b-size-leq-13",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#b-size-leq-14",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#b-aud-project",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#b-iss-project",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#b-iat-int",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#b-exp-int",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#b-auth-time-int",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#b-lifetime-3600",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#b-auth-time-not-after-iat",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#b-iat-before-request",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#b-exp-after-request",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#b-email-shape",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#b-email-verified-true",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#b-email-verified-false",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#b-email-verified-bool",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#b-phone-number",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#b-name",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#b-picture",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#b-provider-password",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#b-provider-anonymous",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#b-provider-phone",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#b-provider-custom",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#b-identities-map",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#b-identities-empty",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#b-identities-email-only",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#b-identities-phone-only",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#b-identities-email-is-token-email",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#b-identities-phone-is-token-phone",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#b-tenant-shape",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#b-tenant-suffix-4",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#b-tenant-suffix-5",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#b-tenant-suffix-6",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#b-tenant-suffix-digits",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#b-tenant-absent",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#b-claim-role-editor",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#b-claim-level-int",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#b-claim-ratio-float",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#b-claim-flags-map",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#b-claim-tags-list",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#b-claim-role-admin",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#b-claim-tier-int",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#b-claim-role-late",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#verified-auth-null",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#verified-auth-present",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#verified-uid-is-sub",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#verified-uid-is-user-id",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#verified-uid-string",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#verified-uid-custom-shape",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#verified-token-map",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#verified-keys-known",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#verified-firebase-keys-known",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#verified-has-iss",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#verified-has-aud",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#verified-has-auth-time",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#verified-has-user-id",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#verified-has-sub",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#verified-has-iat",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#verified-has-exp",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#verified-has-email",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#verified-has-email-verified",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#verified-has-phone-number",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#verified-has-name",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#verified-has-picture",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#verified-has-firebase",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#verified-has-role",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#verified-has-level",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#verified-has-ratio",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#verified-has-flags",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#verified-has-tags",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#verified-has-tier",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#verified-firebase-has-identities",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#verified-firebase-has-sign-in-provider",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#verified-firebase-has-tenant",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#verified-size-leq-8",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#verified-size-leq-9",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#verified-size-leq-10",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#verified-size-leq-11",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#verified-size-leq-12",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#verified-size-leq-13",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#verified-size-leq-14",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#verified-aud-project",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#verified-iss-project",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#verified-iat-int",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#verified-exp-int",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#verified-auth-time-int",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#verified-lifetime-3600",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#verified-auth-time-not-after-iat",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#verified-iat-before-request",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#verified-exp-after-request",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#verified-email-shape",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#verified-email-verified-true",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#verified-email-verified-false",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#verified-email-verified-bool",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#verified-phone-number",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#verified-name",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#verified-picture",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#verified-provider-password",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#verified-provider-anonymous",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#verified-provider-phone",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#verified-provider-custom",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#verified-identities-map",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#verified-identities-empty",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#verified-identities-email-only",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#verified-identities-phone-only",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#verified-identities-email-is-token-email",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#verified-identities-phone-is-token-phone",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#verified-tenant-shape",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#verified-tenant-suffix-4",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#verified-tenant-suffix-5",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#verified-tenant-suffix-6",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#verified-tenant-suffix-digits",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#verified-tenant-absent",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#verified-claim-role-editor",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#verified-claim-level-int",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#verified-claim-ratio-float",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#verified-claim-flags-map",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#verified-claim-tags-list",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#verified-claim-role-admin",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#verified-claim-tier-int",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#verified-claim-role-late",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#phone-auth-null",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#phone-auth-present",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#phone-uid-is-sub",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#phone-uid-is-user-id",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#phone-uid-string",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#phone-uid-custom-shape",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#phone-token-map",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#phone-keys-known",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#phone-firebase-keys-known",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#phone-has-iss",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#phone-has-aud",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#phone-has-auth-time",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#phone-has-user-id",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#phone-has-sub",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#phone-has-iat",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#phone-has-exp",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#phone-has-email",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#phone-has-email-verified",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#phone-has-phone-number",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#phone-has-name",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#phone-has-picture",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#phone-has-firebase",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#phone-has-role",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#phone-has-level",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#phone-has-ratio",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#phone-has-flags",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#phone-has-tags",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#phone-has-tier",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#phone-firebase-has-identities",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#phone-firebase-has-sign-in-provider",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#phone-firebase-has-tenant",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#phone-size-leq-8",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#phone-size-leq-9",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#phone-size-leq-10",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#phone-size-leq-11",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#phone-size-leq-12",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#phone-size-leq-13",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#phone-size-leq-14",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#phone-aud-project",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#phone-iss-project",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#phone-iat-int",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#phone-exp-int",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#phone-auth-time-int",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#phone-lifetime-3600",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#phone-auth-time-not-after-iat",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#phone-iat-before-request",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#phone-exp-after-request",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#phone-email-shape",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#phone-email-verified-true",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#phone-email-verified-false",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#phone-email-verified-bool",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#phone-phone-number",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#phone-name",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#phone-picture",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#phone-provider-password",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#phone-provider-anonymous",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#phone-provider-phone",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#phone-provider-custom",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#phone-identities-map",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#phone-identities-empty",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#phone-identities-email-only",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#phone-identities-phone-only",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#phone-identities-email-is-token-email",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#phone-identities-phone-is-token-phone",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#phone-tenant-shape",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#phone-tenant-suffix-4",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#phone-tenant-suffix-5",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#phone-tenant-suffix-6",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#phone-tenant-suffix-digits",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#phone-tenant-absent",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#phone-claim-role-editor",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#phone-claim-level-int",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#phone-claim-ratio-float",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#phone-claim-flags-map",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#phone-claim-tags-list",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#phone-claim-role-admin",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#phone-claim-tier-int",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#phone-claim-role-late",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#custom-auth-null",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#custom-auth-present",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#custom-uid-is-sub",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#custom-uid-is-user-id",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#custom-uid-string",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#custom-uid-custom-shape",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#custom-token-map",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#custom-keys-known",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#custom-firebase-keys-known",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#custom-has-iss",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#custom-has-aud",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#custom-has-auth-time",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#custom-has-user-id",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#custom-has-sub",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#custom-has-iat",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#custom-has-exp",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#custom-has-email",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#custom-has-email-verified",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#custom-has-phone-number",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#custom-has-name",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#custom-has-picture",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#custom-has-firebase",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#custom-has-role",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#custom-has-level",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#custom-has-ratio",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#custom-has-flags",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#custom-has-tags",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#custom-has-tier",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#custom-firebase-has-identities",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#custom-firebase-has-sign-in-provider",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#custom-firebase-has-tenant",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#custom-size-leq-8",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#custom-size-leq-9",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#custom-size-leq-10",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#custom-size-leq-11",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#custom-size-leq-12",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#custom-size-leq-13",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#custom-size-leq-14",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#custom-aud-project",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#custom-iss-project",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#custom-iat-int",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#custom-exp-int",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#custom-auth-time-int",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#custom-lifetime-3600",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#custom-auth-time-not-after-iat",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#custom-iat-before-request",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#custom-exp-after-request",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#custom-email-shape",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#custom-email-verified-true",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#custom-email-verified-false",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#custom-email-verified-bool",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#custom-phone-number",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#custom-name",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#custom-picture",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#custom-provider-password",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#custom-provider-anonymous",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#custom-provider-phone",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#custom-provider-custom",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#custom-identities-map",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#custom-identities-empty",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#custom-identities-email-only",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#custom-identities-phone-only",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#custom-identities-email-is-token-email",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#custom-identities-phone-is-token-phone",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#custom-tenant-shape",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#custom-tenant-suffix-4",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#custom-tenant-suffix-5",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#custom-tenant-suffix-6",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#custom-tenant-suffix-digits",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#custom-tenant-absent",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#custom-claim-role-editor",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#custom-claim-level-int",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#custom-claim-ratio-float",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#custom-claim-flags-map",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#custom-claim-tags-list",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#custom-claim-role-admin",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#custom-claim-tier-int",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#custom-claim-role-late",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#tenant-auth-null",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#tenant-auth-present",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#tenant-uid-is-sub",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#tenant-uid-is-user-id",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#tenant-uid-string",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#tenant-uid-custom-shape",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#tenant-token-map",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#tenant-keys-known",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#tenant-firebase-keys-known",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#tenant-has-iss",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#tenant-has-aud",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#tenant-has-auth-time",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#tenant-has-user-id",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#tenant-has-sub",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#tenant-has-iat",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#tenant-has-exp",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#tenant-has-email",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#tenant-has-email-verified",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#tenant-has-phone-number",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#tenant-has-name",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#tenant-has-picture",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#tenant-has-firebase",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#tenant-has-role",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#tenant-has-level",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#tenant-has-ratio",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#tenant-has-flags",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#tenant-has-tags",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#tenant-has-tier",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#tenant-firebase-has-identities",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#tenant-firebase-has-sign-in-provider",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#tenant-firebase-has-tenant",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#tenant-size-leq-8",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#tenant-size-leq-9",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#tenant-size-leq-10",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#tenant-size-leq-11",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#tenant-size-leq-12",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#tenant-size-leq-13",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#tenant-size-leq-14",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#tenant-aud-project",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#tenant-iss-project",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#tenant-iat-int",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#tenant-exp-int",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#tenant-auth-time-int",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#tenant-lifetime-3600",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#tenant-auth-time-not-after-iat",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#tenant-iat-before-request",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#tenant-exp-after-request",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#tenant-email-shape",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#tenant-email-verified-true",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#tenant-email-verified-false",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#tenant-email-verified-bool",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#tenant-phone-number",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#tenant-name",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#tenant-picture",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#tenant-provider-password",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#tenant-provider-anonymous",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#tenant-provider-phone",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#tenant-provider-custom",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#tenant-identities-map",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#tenant-identities-empty",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#tenant-identities-email-only",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#tenant-identities-phone-only",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#tenant-identities-email-is-token-email",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#tenant-identities-phone-is-token-phone",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#tenant-tenant-shape",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#tenant-tenant-suffix-4",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#tenant-tenant-suffix-5",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#tenant-tenant-suffix-6",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#tenant-tenant-suffix-digits",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#tenant-tenant-absent",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#tenant-claim-role-editor",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#tenant-claim-level-int",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#tenant-claim-ratio-float",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#tenant-claim-flags-map",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#tenant-claim-tags-list",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#tenant-claim-role-admin",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#tenant-claim-tier-int",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims#tenant-claim-role-late",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims-need-refresh#before-change",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims-need-refresh#old-token-after-change",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims-need-refresh#refreshed-token",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/auth-token/claims-need-refresh#refreshed-keys-known",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/tenant/separation#tenant-tenant-rule",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/tenant/separation#tenant-tenant-rule-grpc",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/tenant/separation#a-tenant-rule",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/tenant/separation#a-tenant-rule-grpc",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/tenant/separation#anon-tenant-rule",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/tenant/separation#anon-tenant-rule-grpc",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/tenant/separation#custom-tenant-rule",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/tenant/separation#custom-tenant-rule-grpc",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/tenant/separation#none-tenant-rule",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/tenant/separation#none-tenant-rule-grpc",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/request-resource/writes#create-shape",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/request-resource/writes#create-shape-control",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/request-resource/writes#create-resource-null",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/request-resource/writes#create-id",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/request-resource/writes#create-name",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/request-resource/writes#create-name-path",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/request-resource/writes#create-method",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/request-resource/writes#create-request-path",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/request-resource/writes#create-time-is-request-time",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/request-resource/writes#create-time-is-request-time-control",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/request-resource/writes#create-time-type",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/request-resource/writes#create-size",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/request-resource/writes#create-size-control",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/request-resource/writes#create-by-patch-precondition",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/request-resource/writes#create-by-create-document",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/request-resource/writes#update-merged",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/request-resource/writes#update-merged-control",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/request-resource/writes#update-merged-by-patch",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/request-resource/writes#update-resource",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/request-resource/writes#update-diff",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/request-resource/writes#update-diff-control",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/request-resource/writes#update-diff-changed",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/request-resource/writes#update-diff-changed-same-value",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/request-resource/writes#update-method",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/request-resource/writes#update-set-replaces",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/request-resource/writes#update-increment",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/request-resource/writes#update-increment-mixed-double",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/request-resource/writes#update-server-time",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/request-resource/writes#update-array-union",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/request-resource/writes#update-remove-field",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/request-resource/writes#update-missing-document",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/request-resource/writes#delete-resource",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/request-resource/writes#delete-missing",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/request-resource/writes#delete-method",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/request-resource/writes#delete-no-request-resource",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/request-resource/writes#delete-by-rest-delete",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/request-resource/writes#get-resource",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/request-resource/writes#get-missing-resource-null",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/request-resource/writes#get-method",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/request-resource/writes#get-resource-id",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/request-resource/writes#get-name-type",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/request-resource/writes#get-request-resource-null",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/request-resource/writes#get-request-resource-absent",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/request-resource/writes#delete-request-resource-in",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/request-resource/writes#get-resource-grpc",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/request-resource/writes#update-merged-grpc",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/request-resource/writes#post-state-update-merged",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/document-access/reads-and-writes#get-present",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/document-access/reads-and-writes#get-missing",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/document-access/reads-and-writes#get-missing-is-null",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/document-access/reads-and-writes#exists-present",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/document-access/reads-and-writes#exists-missing",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/document-access/reads-and-writes#get-string-path",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/document-access/reads-and-writes#get-id",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/document-access/reads-and-writes#get-after-in-read",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/document-access/reads-and-writes#exists-after-in-read",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/document-access/reads-and-writes#write-exists",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/document-access/reads-and-writes#write-get-after-partner",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/document-access/reads-and-writes#write-get-after-partner-missing",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/document-access/reads-and-writes#write-get-before-partner-new",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/document-access/reads-and-writes#write-get-before-partner-existing",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/document-access/reads-and-writes#write-exists-after-partner",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/document-access/reads-and-writes#write-exists-after-partner-missing",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/document-access/reads-and-writes#write-exists-after-deleted",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/document-access/reads-and-writes#write-exists-before-deleted",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/document-access/reads-and-writes#write-get-after-self",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/document-access/reads-and-writes#write-get-after-self-control",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/document-access/reads-and-writes#write-get-after-updated",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/document-access/reads-and-writes#write-get-before-updated",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/document-access/reads-and-writes#get-present-grpc",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/document-access/reads-and-writes#get-missing-grpc",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/document-access/transaction#begin",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/document-access/transaction#read-in-transaction",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/document-access/transaction#commit-get-after",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/document-access/transaction#begin-denied",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/document-access/transaction#commit-denied-write",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/document-access/transaction#begin-unauthenticated",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/document-access/transaction#begin-read-only",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/document-access/transaction#begin-read-write",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/document-access/transaction#begin-grpc",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/document-access/transaction#batch-get-new-transaction",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/document-access/transaction#commit-after-batch-get-transaction",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/document-access/transaction#run-query-new-read-only-transaction",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/document-access/transaction#batch-get-new-read-only-transaction",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/atomic/commit-and-batch-write#commit-one-denied",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/atomic/commit-and-batch-write#commit-post-state",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/atomic/commit-and-batch-write#commit-denied-create",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/atomic/commit-and-batch-write#commit-denied-create-post-state",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/atomic/commit-and-batch-write#commit-two-allowed",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/atomic/commit-and-batch-write#commit-two-allowed-post-state",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/atomic/commit-and-batch-write#commit-same-document-twice",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/atomic/commit-and-batch-write#batch-write-mixed",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/atomic/commit-and-batch-write#batch-write-post-state-allowed",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/atomic/commit-and-batch-write#begin",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/atomic/commit-and-batch-write#transaction-one-denied",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/atomic/commit-and-batch-write#transaction-post-state",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/atomic/commit-and-batch-write#commit-one-denied-grpc",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/atomic/commit-and-batch-write#batch-write-mixed-grpc",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/atomic/commit-and-batch-write#final-post-state",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/atomic/commit-and-batch-write#batch-write-all-allowed",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/atomic/commit-and-batch-write#batch-write-precondition-and-allowed",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/atomic/commit-and-batch-write#batch-write-precondition-post-state",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/atomic/commit-and-batch-write#precondition-exists-on-missing-denied",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/atomic/commit-and-batch-write#precondition-absent-on-existing-denied",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/atomic/commit-and-batch-write#precondition-update-time-denied",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/atomic/commit-and-batch-write#masked-get",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/query/constraints#owner-filter-own",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/query/constraints#owner-filter-other",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/query/constraints#no-filter",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/query/constraints#owner-filter-unauthenticated",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/query/constraints#owner-in-own",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/query/constraints#owner-in-mixed",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/query/constraints#owner-and-n",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/query/constraints#limit-2",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/query/constraints#limit-3",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/query/constraints#limit-absent",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/query/constraints#limit-absent-rule-null",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/query/constraints#limit-present-rule-null",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/query/constraints#offset-absent",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/query/constraints#offset-0",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/query/constraints#offset-1",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/query/constraints#offset-1-le-1",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/query/constraints#offset-2-le-1",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/query/constraints#order-absent",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/query/constraints#order-by-n",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/query/constraints#public-filter",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/query/constraints#public-filter-false",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/query/constraints#public-in",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/query/constraints#public-no-filter",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/query/constraints#get-only-collection",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/query/constraints#get-only-collection-get",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/query/constraints#name-equal-allowed-id",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/query/constraints#name-equal-other-id",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/query/constraints#name-equal-owned",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/query/constraints#name-equal-foreign",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/query/constraints#no-filter-id-rule",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/query/constraints#group-owner-filter",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/query/constraints#group-no-filter",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/query/constraints#group-without-recursive-rule",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/query/constraints#group-scoped-to-parent",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/query/constraints#count-owner-filter",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/query/constraints#count-no-filter",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/query/constraints#count-limit-rule",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/query/constraints#list-documents-owned-rule",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/query/constraints#list-documents-limit-rule",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/query/constraints#list-documents-limit-rule-3",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/query/constraints#list-documents-limit-rule-default",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/query/constraints#list-documents-open",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/query/constraints#owner-filter-own-grpc",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/query/constraints#no-filter-grpc",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/query/constraints#count-no-filter-grpc",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/query/constraints#list-documents-owned-rule-grpc",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/query/constraints#shape-map",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/query/constraints#shape-map-ordered",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/query/constraints#shape-map-limited",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/query/constraints#shape-keys",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/query/constraints#shape-keys-ordered",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/query/constraints#shape-keys-limited",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/query/constraints#shape-keys-all",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/query/constraints#shape-keys-all-ordered",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/query/constraints#shape-keys-all-limited",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/query/constraints#shape-order-in",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/query/constraints#shape-order-in-ordered",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/query/constraints#shape-order-in-limited",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/query/constraints#shape-order-map",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/query/constraints#shape-order-map-ordered",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/query/constraints#shape-order-map-limited",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/query/constraints#shape-order-list",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/query/constraints#shape-order-list-ordered",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/query/constraints#shape-order-list-limited",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/query/constraints#shape-order-string",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/query/constraints#shape-order-string-ordered",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/query/constraints#shape-order-string-limited",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/query/constraints#shape-order-empty",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/query/constraints#shape-order-empty-ordered",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/query/constraints#shape-order-empty-limited",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/query/constraints#shape-order-n-asc",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/query/constraints#shape-order-n-asc-ordered",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/query/constraints#shape-order-n-asc-limited",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/query/constraints#shape-order-name",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/query/constraints#shape-order-name-ordered",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/query/constraints#shape-order-name-limited",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/query/constraints#shape-limit-int",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/query/constraints#shape-limit-int-ordered",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/query/constraints#shape-limit-int-limited",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/query/constraints#shape-offset-int",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/query/constraints#shape-offset-int-ordered",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/query/constraints#shape-offset-int-limited",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/query/constraints#shape-offset-zero",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/query/constraints#shape-offset-zero-ordered",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/query/constraints#shape-offset-zero-limited",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/budgets/access-calls#get-10",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/budgets/access-calls#get-11",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/budgets/access-calls#same-path-11",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/budgets/access-calls#exists-10",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/budgets/access-calls#exists-11",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/budgets/access-calls#get-and-exists-same-path",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/budgets/access-calls#list-10",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/budgets/access-calls#list-11",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/budgets/access-calls#list-empty-10",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/budgets/access-calls#list-one-document-10",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/budgets/access-calls#list-empty-11",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/budgets/access-calls#list-one-document-11",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/budgets/access-calls#list-empty-15",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/budgets/access-calls#list-one-document-15",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/budgets/access-calls#list-empty-20",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/budgets/access-calls#list-one-document-20",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/budgets/access-calls#list-empty-21",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/budgets/access-calls#list-one-document-21",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/budgets/access-calls#write-10",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/budgets/access-calls#write-11",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/budgets/access-calls#write-get-and-get-after-same-path",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/budgets/access-calls#commit-10-and-10",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/budgets/access-calls#commit-7-7-7",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/budgets/access-calls#commit-7-7-shared-paths",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/budgets/access-calls#batch-get-6-6-6",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/budgets/access-calls#batch-get-6-6-6-7",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/budgets/access-calls#batch-get-6-shared-twice",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/budgets/access-calls#batch-write-7-7-7",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/budgets/access-calls#get-11-grpc",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/budgets/access-calls#commit-7-7-7-grpc",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/runtime-limits/evaluation#terms-100",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/runtime-limits/evaluation#terms-250",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/runtime-limits/evaluation#terms-333",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/runtime-limits/evaluation#terms-334",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/runtime-limits/evaluation#terms-335",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/runtime-limits/evaluation#terms-400",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/runtime-limits/evaluation#terms-500",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/runtime-limits/evaluation#terms-501",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/runtime-limits/evaluation#terms-999",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/runtime-limits/evaluation#terms-1000",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/runtime-limits/evaluation#terms-1001",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/runtime-limits/evaluation#terms-2000",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/runtime-limits/evaluation#call-chain-20",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/runtime-limits/evaluation#true-then-error",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/runtime-limits/evaluation#error-then-true",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/runtime-limits/evaluation#true-then-budget",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/runtime-limits/evaluation#true-then-bad-regex",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/runtime-limits/evaluation#true-then-get-after",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/runtime-limits/evaluation#budget-then-true",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/runtime-limits/evaluation#bad-regex-then-true",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/runtime-limits/evaluation#terms-500-then-true",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/runtime-limits/evaluation#true-then-terms-500",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/runtime-limits/evaluation#terms-500-or-true",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/runtime-limits/evaluation#error-or-true",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/runtime-limits/evaluation#true-or-error",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/runtime-limits/evaluation#error-and-false",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/runtime-limits/evaluation#false-and-error",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/runtime-limits/evaluation#missing-member",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/runtime-limits/evaluation#missing-member-default",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/runtime-limits/evaluation#missing-member-in",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/runtime-limits/evaluation#bad-regex-dynamic",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/runtime-limits/evaluation#int-overflow",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/runtime-limits/evaluation#int-division",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/runtime-limits/evaluation#float-division",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/runtime-limits/evaluation#int-float-equality",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/runtime-limits/evaluation#math-is-infinite",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/runtime-limits/evaluation#debug-returns-value",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/runtime-limits/evaluation#unknown-function-runtime",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/runtime-limits/evaluation#exists-after-runtime-read",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/runtime-limits/evaluation#null-comparison",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/runtime-limits/evaluation#string-size-bytes",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/runtime-limits/evaluation#timestamp-date",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/runtime-limits/evaluation#duration-value",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/runtime-limits/evaluation#terms-1000-grpc",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/runtime-limits/evaluation#true-then-error-grpc",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/refusals/credentials#denied-rest",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/refusals/credentials#denied-grpc",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/refusals/credentials#denied-query-rest",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/refusals/credentials#denied-query-grpc",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/refusals/credentials#empty-bearer-rest",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/refusals/credentials#empty-bearer-grpc",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/refusals/credentials#malformed-bearer-rest",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/refusals/credentials#malformed-bearer-grpc",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/refusals/credentials#basic-scheme-rest",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/refusals/credentials#basic-scheme-grpc",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/refusals/credentials#lowercase-scheme-rest",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/refusals/credentials#lowercase-scheme-grpc",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/refusals/credentials#tampered-signature-rest",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/refusals/credentials#tampered-signature-grpc",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/refusals/credentials#unsigned-rest",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/refusals/credentials#unsigned-grpc",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/refusals/credentials#list-collection-ids-root",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/refusals/credentials#list-collection-ids-document",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/refusals/credentials#list-collection-ids-unauthenticated",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/refusals/credentials#list-collection-ids-grpc",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/refusals/credentials#partition-query",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/token-states/after-account-change#revoked-before",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/token-states/after-account-change#disabled-before",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/token-states/after-account-change#deleted-before",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/token-states/after-account-change#kept-before",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/token-states/after-account-change#revoked-after-get",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/token-states/after-account-change#revoked-after-get-grpc",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/token-states/after-account-change#revoked-after-list",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/token-states/after-account-change#revoked-after-create",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/token-states/after-account-change#revoked-after-auth-null-clause",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/token-states/after-account-change#disabled-after-get",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/token-states/after-account-change#disabled-after-get-grpc",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/token-states/after-account-change#disabled-after-list",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/token-states/after-account-change#disabled-after-create",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/token-states/after-account-change#disabled-after-auth-null-clause",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/token-states/after-account-change#deleted-after-get",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/token-states/after-account-change#deleted-after-get-grpc",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/token-states/after-account-change#deleted-after-list",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/token-states/after-account-change#deleted-after-create",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/token-states/after-account-change#deleted-after-auth-null-clause",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/token-states/after-account-change#kept-after-get",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/token-states/after-account-change#kept-after-get-grpc",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/token-states/after-account-change#kept-after-list",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/token-states/after-account-change#kept-after-create",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/token-states/after-account-change#kept-after-auth-null-clause",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/publication/switch#alt-refuses-owner",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/publication/switch#alt-keeps-open",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/publication/switch#refused-compile",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/publication/switch#alt-still-in-force",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/publication/switch#main-allows-owner",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/publication/switch#main-keeps-open",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/publication/switch#deleted-release-refuses-owner",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/publication/switch#deleted-release-refuses-open",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/publication/switch#deleted-release-refuses-open-grpc",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/named-database/releases#default-open",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/named-database/releases#default-named-only",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/named-database/releases#named-open",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/named-database/releases#named-named-only",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/named-database/releases#named-named-only-unauthenticated",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/named-database/releases#named-auth-signed-in",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/named-database/releases#named-auth-unauthenticated",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/named-database/releases#bare-open",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/named-database/releases#bare-named-only",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/named-database/releases#bare-list",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/named-database/releases#named-named-only-grpc",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/named-database/releases#bare-open-grpc",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/expiry/around-exp#exp-minus-60-rest",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/expiry/around-exp#exp-minus-59-grpc",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/expiry/around-exp#exp-plus-1-rest",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/expiry/around-exp#exp-plus-2-grpc",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/expiry/around-exp#exp-plus-10-rest",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/expiry/around-exp#exp-plus-11-grpc",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/expiry/around-exp#exp-plus-15-rest",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/expiry/around-exp#exp-plus-16-grpc",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/expiry/around-exp#exp-plus-20-rest",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/expiry/around-exp#exp-plus-21-grpc",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/expiry/around-exp#exp-plus-25-rest",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/expiry/around-exp#exp-plus-26-grpc",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/expiry/around-exp#exp-plus-30-rest",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/expiry/around-exp#exp-plus-31-grpc",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/expiry/around-exp#exp-plus-35-rest",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/expiry/around-exp#exp-plus-36-grpc",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/expiry/around-exp#exp-plus-40-rest",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/expiry/around-exp#exp-plus-41-grpc",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/expiry/around-exp#exp-plus-45-rest",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/expiry/around-exp#exp-plus-46-grpc",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/expiry/around-exp#exp-plus-50-rest",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/expiry/around-exp#exp-plus-51-grpc",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/expiry/around-exp#exp-plus-55-rest",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/expiry/around-exp#exp-plus-56-grpc",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/expiry/around-exp#exp-plus-60-rest",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/expiry/around-exp#exp-plus-61-grpc",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/expiry/around-exp#exp-plus-240-rest",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/expiry/around-exp#exp-plus-241-grpc",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/expiry/around-exp#exp-plus-298-grpc",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/expiry/around-exp#exp-plus-299-rest",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/expiry/around-exp#exp-plus-301-grpc",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/expiry/around-exp#exp-plus-302-rest",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/expiry/around-exp#exp-plus-330-rest",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/expiry/around-exp#exp-plus-331-grpc",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/expiry/around-exp#exp-plus-600-rest",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-rules/expiry/around-exp#exp-plus-601-grpc",
+      "status": "MATCH"
+    }
+  ]
+}

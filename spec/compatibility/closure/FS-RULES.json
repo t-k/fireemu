@@ -87,8 +87,24 @@
       "configProjections": [
         "default"
       ],
-      "status": "PENDING_CORPUS",
-      "note": "Unauthenticated, anonymous, email/password, test-phone and custom-token principals are told apart by ownership rules and by the explicit request.auth == null clause, on get, list and write."
+      "status": "VERIFIED",
+      "note": "Unauthenticated, anonymous, email/password, test-phone and custom-token principals are told apart by ownership rules and by the explicit request.auth == null clause, on get, list and write.",
+      "evidence": {
+        "productionRecordings": [
+          {
+            "recordedAt": "2026-09-25T01:50:53.794Z",
+            "gitSha": "d4cf6c69e80aea497f36ed166e1ba9bb53829e99",
+            "recordings": 2,
+            "project": "fireemu-oracle-idp"
+          }
+        ],
+        "finalArtifactSha256": "1026ca7d76b36070e8b2b9571c06898f1fb0f33e9ac7f4a28f5e48c9104fb4e5",
+        "sourceCommit": "bd79bb15cbc11b0f82f32943ec8fd624c8713525",
+        "comparisonPath": "spec/compatibility/closure/evidence/FS-RULES-comparison.json",
+        "rows": {
+          "MATCH": 72
+        }
+      }
     },
     {
       "conditionId": "FS-RULES/auth-token-fields",
@@ -99,8 +115,24 @@
       "configProjections": [
         "default"
       ],
-      "status": "PENDING_CORPUS",
-      "note": "request.auth.uid and request.auth.token per provider: the key set, the type and value of each standard claim (iss, aud, sub, iat, exp, auth_time, email, email_verified, phone_number, name, picture, firebase.sign_in_provider, firebase.identities), account custom claims and custom-token developer claims, and a claim change that is only seen after a token refresh."
+      "status": "VERIFIED",
+      "note": "request.auth.uid and request.auth.token per provider: the key set, the type and value of each standard claim (iss, aud, sub, iat, exp, auth_time, email, email_verified, phone_number, name, picture, firebase.sign_in_provider, firebase.identities), account custom claims and custom-token developer claims, and a claim change that is only seen after a token refresh.",
+      "evidence": {
+        "productionRecordings": [
+          {
+            "recordedAt": "2026-09-25T01:50:53.794Z",
+            "gitSha": "d4cf6c69e80aea497f36ed166e1ba9bb53829e99",
+            "recordings": 2,
+            "project": "fireemu-oracle-idp"
+          }
+        ],
+        "finalArtifactSha256": "1026ca7d76b36070e8b2b9571c06898f1fb0f33e9ac7f4a28f5e48c9104fb4e5",
+        "sourceCommit": "bd79bb15cbc11b0f82f32943ec8fd624c8713525",
+        "comparisonPath": "spec/compatibility/closure/evidence/FS-RULES-comparison.json",
+        "rows": {
+          "MATCH": 628
+        }
+      }
     },
     {
       "conditionId": "FS-RULES/tenant",
@@ -111,8 +143,24 @@
       "configProjections": [
         "default"
       ],
-      "status": "PENDING_CORPUS",
-      "note": "A tenant principal carries request.auth.token.firebase.tenant; tenant and project-level principals with the same rule are separated."
+      "status": "VERIFIED",
+      "note": "A tenant principal carries request.auth.token.firebase.tenant; tenant and project-level principals with the same rule are separated. The tenant ID in request.auth.token.firebase.tenant has production's shape (display name, '-', five characters of [a-z0-9]) since caa632bda, a cherry-pick of the AUTH-CONFIG-SDK tenant-only commit fefda2b2f (coordinator decision 2026-09-25).",
+      "evidence": {
+        "productionRecordings": [
+          {
+            "recordedAt": "2026-09-25T01:50:53.794Z",
+            "gitSha": "d4cf6c69e80aea497f36ed166e1ba9bb53829e99",
+            "recordings": 2,
+            "project": "fireemu-oracle-idp"
+          }
+        ],
+        "finalArtifactSha256": "1026ca7d76b36070e8b2b9571c06898f1fb0f33e9ac7f4a28f5e48c9104fb4e5",
+        "sourceCommit": "bd79bb15cbc11b0f82f32943ec8fd624c8713525",
+        "comparisonPath": "spec/compatibility/closure/evidence/FS-RULES-comparison.json",
+        "rows": {
+          "MATCH": 10
+        }
+      }
     },
     {
       "conditionId": "FS-RULES/request-resource",
@@ -123,8 +171,24 @@
       "configProjections": [
         "default"
       ],
-      "status": "PENDING_CORPUS",
-      "note": "request.resource and resource on create, update (full and masked), merge, delete and field transforms (serverTimestamp against request.time), map diff, request.method, request.path, resource on a missing document, and request.time."
+      "status": "VERIFIED",
+      "note": "request.resource and resource on create, update (full and masked), merge, delete and field transforms (serverTimestamp against request.time), map diff, request.method, request.path, resource on a missing document, and request.time.",
+      "evidence": {
+        "productionRecordings": [
+          {
+            "recordedAt": "2026-09-25T01:50:53.794Z",
+            "gitSha": "d4cf6c69e80aea497f36ed166e1ba9bb53829e99",
+            "recordings": 2,
+            "project": "fireemu-oracle-idp"
+          }
+        ],
+        "finalArtifactSha256": "1026ca7d76b36070e8b2b9571c06898f1fb0f33e9ac7f4a28f5e48c9104fb4e5",
+        "sourceCommit": "bd79bb15cbc11b0f82f32943ec8fd624c8713525",
+        "comparisonPath": "spec/compatibility/closure/evidence/FS-RULES-comparison.json",
+        "rows": {
+          "MATCH": 47
+        }
+      }
     },
     {
       "conditionId": "FS-RULES/document-access",
@@ -135,8 +199,24 @@
       "configProjections": [
         "default"
       ],
-      "status": "PENDING_CORPUS",
-      "note": "get, exists, getAfter and existsAfter on present and missing documents, in reads, single writes, commits and transactions, including the pre- and post-commit state each one sees."
+      "status": "VERIFIED",
+      "note": "get, exists, getAfter and existsAfter on present and missing documents, in reads, single writes, commits and transactions, including the pre- and post-commit state each one sees.",
+      "evidence": {
+        "productionRecordings": [
+          {
+            "recordedAt": "2026-09-25T01:50:53.794Z",
+            "gitSha": "d4cf6c69e80aea497f36ed166e1ba9bb53829e99",
+            "recordings": 2,
+            "project": "fireemu-oracle-idp"
+          }
+        ],
+        "finalArtifactSha256": "1026ca7d76b36070e8b2b9571c06898f1fb0f33e9ac7f4a28f5e48c9104fb4e5",
+        "sourceCommit": "bd79bb15cbc11b0f82f32943ec8fd624c8713525",
+        "comparisonPath": "spec/compatibility/closure/evidence/FS-RULES-comparison.json",
+        "rows": {
+          "MATCH": 37
+        }
+      }
     },
     {
       "conditionId": "FS-RULES/query-proofs",
@@ -147,8 +227,24 @@
       "configProjections": [
         "default"
       ],
-      "status": "PENDING_CORPUS",
-      "note": "List authorization from query constraints for runQuery, runAggregationQuery and listDocuments: provable and unprovable filters, request.query limit, offset and orderBy, collection group queries against {path=**}, __name__ queries, and get rules that do not allow list."
+      "status": "VERIFIED",
+      "note": "List authorization from query constraints for runQuery, runAggregationQuery and listDocuments: provable and unprovable filters, request.query limit, offset and orderBy, collection group queries against {path=**}, __name__ queries, and get rules that do not allow list. request.query carries production's nine keys (limit, offset, orderBy, allDescendants, distinct, groupBy, kind, parent, selectOnlyKeys), identified by exploratory probes on the sandbox (not evidence; docs.local); the recorded rows see keys().hasOnly of the three documented keys denied.",
+      "evidence": {
+        "productionRecordings": [
+          {
+            "recordedAt": "2026-09-25T01:50:53.794Z",
+            "gitSha": "d4cf6c69e80aea497f36ed166e1ba9bb53829e99",
+            "recordings": 2,
+            "project": "fireemu-oracle-idp"
+          }
+        ],
+        "finalArtifactSha256": "1026ca7d76b36070e8b2b9571c06898f1fb0f33e9ac7f4a28f5e48c9104fb4e5",
+        "sourceCommit": "bd79bb15cbc11b0f82f32943ec8fd624c8713525",
+        "comparisonPath": "spec/compatibility/closure/evidence/FS-RULES-comparison.json",
+        "rows": {
+          "MATCH": 85
+        }
+      }
     },
     {
       "conditionId": "FS-RULES/access-budgets",
@@ -159,8 +255,24 @@
       "configProjections": [
         "default"
       ],
-      "status": "PENDING_CORPUS",
-      "note": "Document access call budgets: 10 per single-document request and 20 per multi-document request (batchGet, commit, transaction), at N and N+1, repeated paths, get together with getAfter of one path, and BatchWrite."
+      "status": "VERIFIED",
+      "note": "Document access call budgets: 10 per single-document request and 20 per multi-document request (batchGet, commit, transaction), at N and N+1, repeated paths, get together with getAfter of one path, and BatchWrite.",
+      "evidence": {
+        "productionRecordings": [
+          {
+            "recordedAt": "2026-09-25T01:50:53.794Z",
+            "gitSha": "d4cf6c69e80aea497f36ed166e1ba9bb53829e99",
+            "recordings": 2,
+            "project": "fireemu-oracle-idp"
+          }
+        ],
+        "finalArtifactSha256": "1026ca7d76b36070e8b2b9571c06898f1fb0f33e9ac7f4a28f5e48c9104fb4e5",
+        "sourceCommit": "bd79bb15cbc11b0f82f32943ec8fd624c8713525",
+        "comparisonPath": "spec/compatibility/closure/evidence/FS-RULES-comparison.json",
+        "rows": {
+          "MATCH": 30
+        }
+      }
     },
     {
       "conditionId": "FS-RULES/compile-limits",
@@ -171,8 +283,24 @@
       "configProjections": [
         "default"
       ],
-      "status": "PENDING_CORPUS",
-      "note": "Ruleset acceptance and refusal at compile time (production rulesets.create against fireemu's ruleset load): syntax errors, unknown functions, recursion, call depth, function arguments, let bindings, match nesting, path captures and source size, compared as accepted or refused."
+      "status": "VERIFIED",
+      "note": "Ruleset acceptance and refusal at compile time (production rulesets.create against fireemu's ruleset load): syntax errors, unknown functions, recursion, call depth, function arguments, let bindings, match nesting, path captures and source size, compared as accepted or refused.",
+      "evidence": {
+        "productionRecordings": [
+          {
+            "recordedAt": "2026-09-25T01:50:53.794Z",
+            "gitSha": "d4cf6c69e80aea497f36ed166e1ba9bb53829e99",
+            "recordings": 2,
+            "project": "fireemu-oracle-idp"
+          }
+        ],
+        "finalArtifactSha256": "1026ca7d76b36070e8b2b9571c06898f1fb0f33e9ac7f4a28f5e48c9104fb4e5",
+        "sourceCommit": "bd79bb15cbc11b0f82f32943ec8fd624c8713525",
+        "comparisonPath": "spec/compatibility/closure/evidence/FS-RULES-comparison.json",
+        "rows": {
+          "MATCH": 57
+        }
+      }
     },
     {
       "conditionId": "FS-RULES/runtime-limits",
@@ -183,8 +311,24 @@
       "configProjections": [
         "default"
       ],
-      "status": "PENDING_CORPUS",
-      "note": "Evaluation-time limits and errors: expressions per request, call depth at run time, and how an error in one allow expression (budget, invalid regex, missing member) combines with another allow that already holds."
+      "status": "VERIFIED",
+      "note": "Evaluation-time limits and errors: expressions per request, call depth at run time, and how an error in one allow expression (budget, invalid regex, missing member) combines with another allow that already holds.",
+      "evidence": {
+        "productionRecordings": [
+          {
+            "recordedAt": "2026-09-25T01:50:53.794Z",
+            "gitSha": "d4cf6c69e80aea497f36ed166e1ba9bb53829e99",
+            "recordings": 2,
+            "project": "fireemu-oracle-idp"
+          }
+        ],
+        "finalArtifactSha256": "1026ca7d76b36070e8b2b9571c06898f1fb0f33e9ac7f4a28f5e48c9104fb4e5",
+        "sourceCommit": "bd79bb15cbc11b0f82f32943ec8fd624c8713525",
+        "comparisonPath": "spec/compatibility/closure/evidence/FS-RULES-comparison.json",
+        "rows": {
+          "MATCH": 45
+        }
+      }
     },
     {
       "conditionId": "FS-RULES/atomic-writes",
@@ -195,8 +339,24 @@
       "configProjections": [
         "default"
       ],
-      "status": "PENDING_CORPUS",
-      "note": "A commit or transaction with one denied write is refused as a whole with the post-state unchanged; BatchWrite reports a status per write and applies the allowed ones."
+      "status": "VERIFIED",
+      "note": "A commit or transaction with one denied write is refused as a whole with the post-state unchanged; BatchWrite reports a status per write and applies the allowed ones.",
+      "evidence": {
+        "productionRecordings": [
+          {
+            "recordedAt": "2026-09-25T01:50:53.794Z",
+            "gitSha": "d4cf6c69e80aea497f36ed166e1ba9bb53829e99",
+            "recordings": 2,
+            "project": "fireemu-oracle-idp"
+          }
+        ],
+        "finalArtifactSha256": "1026ca7d76b36070e8b2b9571c06898f1fb0f33e9ac7f4a28f5e48c9104fb4e5",
+        "sourceCommit": "bd79bb15cbc11b0f82f32943ec8fd624c8713525",
+        "comparisonPath": "spec/compatibility/closure/evidence/FS-RULES-comparison.json",
+        "rows": {
+          "MATCH": 22
+        }
+      }
     },
     {
       "conditionId": "FS-RULES/refusal-shape",
@@ -207,8 +367,24 @@
       "configProjections": [
         "default"
       ],
-      "status": "PENDING_CORPUS",
-      "note": "The wire shape of refusals over REST and gRPC: permission denial, a malformed, empty or foreign bearer credential, and methods an end user may not call (listCollectionIds, partitionQuery)."
+      "status": "VERIFIED",
+      "note": "The wire shape of refusals over REST and gRPC: permission denial, a malformed, empty or foreign bearer credential, and methods an end user may not call (listCollectionIds, partitionQuery).",
+      "evidence": {
+        "productionRecordings": [
+          {
+            "recordedAt": "2026-09-25T01:50:53.794Z",
+            "gitSha": "d4cf6c69e80aea497f36ed166e1ba9bb53829e99",
+            "recordings": 2,
+            "project": "fireemu-oracle-idp"
+          }
+        ],
+        "finalArtifactSha256": "1026ca7d76b36070e8b2b9571c06898f1fb0f33e9ac7f4a28f5e48c9104fb4e5",
+        "sourceCommit": "bd79bb15cbc11b0f82f32943ec8fd624c8713525",
+        "comparisonPath": "spec/compatibility/closure/evidence/FS-RULES-comparison.json",
+        "rows": {
+          "MATCH": 21
+        }
+      }
     },
     {
       "conditionId": "FS-RULES/token-states",
@@ -219,8 +395,24 @@
       "configProjections": [
         "default"
       ],
-      "status": "PENDING_CORPUS",
-      "note": "An unexpired ID token of an account whose refresh tokens were revoked, that was disabled, or that was deleted, presented to Firestore after the change."
+      "status": "VERIFIED",
+      "note": "An unexpired ID token of an account whose refresh tokens were revoked, that was disabled, or that was deleted, presented to Firestore after the change.",
+      "evidence": {
+        "productionRecordings": [
+          {
+            "recordedAt": "2026-09-25T01:50:53.794Z",
+            "gitSha": "d4cf6c69e80aea497f36ed166e1ba9bb53829e99",
+            "recordings": 2,
+            "project": "fireemu-oracle-idp"
+          }
+        ],
+        "finalArtifactSha256": "1026ca7d76b36070e8b2b9571c06898f1fb0f33e9ac7f4a28f5e48c9104fb4e5",
+        "sourceCommit": "bd79bb15cbc11b0f82f32943ec8fd624c8713525",
+        "comparisonPath": "spec/compatibility/closure/evidence/FS-RULES-comparison.json",
+        "rows": {
+          "MATCH": 24
+        }
+      }
     },
     {
       "conditionId": "FS-RULES/token-expiry",
@@ -231,8 +423,24 @@
       "configProjections": [
         "default"
       ],
-      "status": "PENDING_CORPUS",
-      "note": "An ID token presented to Firestore at offsets around its exp, to find the accepted allowance after expiry."
+      "status": "VERIFIED",
+      "note": "An ID token presented to Firestore at offsets around its exp, to find the accepted allowance after expiry. Production accepted a token 26 s past exp and refused one 30 s past, on REST and gRPC, in both recordings; the allowance lies in (26, 30]. fireemu refuses from exp + 30 (FIRESTORE_EXPIRY_LEEWAY_SECONDS = 30): 27 to 29 s are not observed, and 30 s was chosen as the round value at the observed refusal.",
+      "evidence": {
+        "productionRecordings": [
+          {
+            "recordedAt": "2026-09-25T01:50:53.794Z",
+            "gitSha": "d4cf6c69e80aea497f36ed166e1ba9bb53829e99",
+            "recordings": 2,
+            "project": "fireemu-oracle-idp"
+          }
+        ],
+        "finalArtifactSha256": "1026ca7d76b36070e8b2b9571c06898f1fb0f33e9ac7f4a28f5e48c9104fb4e5",
+        "sourceCommit": "bd79bb15cbc11b0f82f32943ec8fd624c8713525",
+        "comparisonPath": "spec/compatibility/closure/evidence/FS-RULES-comparison.json",
+        "rows": {
+          "MATCH": 36
+        }
+      }
     },
     {
       "conditionId": "FS-RULES/publication",
@@ -243,8 +451,24 @@
       "configProjections": [
         "default"
       ],
-      "status": "PENDING_CORPUS",
-      "note": "A project with no cloud.firestore release refuses every client request; after a release switch has propagated, the new ruleset governs every decision; a ruleset refused at compile time leaves the previous one in force."
+      "status": "VERIFIED",
+      "note": "A project with no cloud.firestore release refuses every client request; after a release switch has propagated, the new ruleset governs every decision; a ruleset refused at compile time leaves the previous one in force.",
+      "evidence": {
+        "productionRecordings": [
+          {
+            "recordedAt": "2026-09-25T01:50:53.794Z",
+            "gitSha": "d4cf6c69e80aea497f36ed166e1ba9bb53829e99",
+            "recordings": 2,
+            "project": "fireemu-oracle-idp"
+          }
+        ],
+        "finalArtifactSha256": "1026ca7d76b36070e8b2b9571c06898f1fb0f33e9ac7f4a28f5e48c9104fb4e5",
+        "sourceCommit": "bd79bb15cbc11b0f82f32943ec8fd624c8713525",
+        "comparisonPath": "spec/compatibility/closure/evidence/FS-RULES-comparison.json",
+        "rows": {
+          "MATCH": 16
+        }
+      }
     },
     {
       "conditionId": "FS-RULES/named-database",
@@ -255,8 +479,24 @@
       "configProjections": [
         "default"
       ],
-      "status": "PENDING_CORPUS",
-      "note": "A named database is governed by its own release cloud.firestore/<database>, not by the (default) release, and refuses every client request while it has none."
+      "status": "VERIFIED",
+      "note": "A named database is governed by its own release cloud.firestore/<database>, not by the (default) release, and refuses every client request while it has none.",
+      "evidence": {
+        "productionRecordings": [
+          {
+            "recordedAt": "2026-09-25T01:50:53.794Z",
+            "gitSha": "d4cf6c69e80aea497f36ed166e1ba9bb53829e99",
+            "recordings": 2,
+            "project": "fireemu-oracle-idp"
+          }
+        ],
+        "finalArtifactSha256": "1026ca7d76b36070e8b2b9571c06898f1fb0f33e9ac7f4a28f5e48c9104fb4e5",
+        "sourceCommit": "bd79bb15cbc11b0f82f32943ec8fd624c8713525",
+        "comparisonPath": "spec/compatibility/closure/evidence/FS-RULES-comparison.json",
+        "rows": {
+          "MATCH": 12
+        }
+      }
     },
     {
       "conditionId": "FS-RULES/final-artifact-regression",
@@ -264,13 +504,34 @@
       "recipeIds": [
         "fs-rules",
         "auth-credential",
-        "auth-account"
+        "auth-account",
+        "fs-query-index"
       ],
       "configProjections": [
         "default"
       ],
-      "status": "PENDING_CORPUS",
-      "note": "The final artifact's FS-RULES comparison, with the AUTH-ACCOUNT and AUTH-CREDENTIAL comparisons re-run on the same artifact."
+      "status": "VERIFIED",
+      "note": "The final artifact's FS-RULES comparison, with the AUTH-ACCOUNT and AUTH-CREDENTIAL comparisons re-run on the same artifact.",
+      "evidence": {
+        "finalArtifactSha256": "1026ca7d76b36070e8b2b9571c06898f1fb0f33e9ac7f4a28f5e48c9104fb4e5",
+        "sourceCommit": "bd79bb15cbc11b0f82f32943ec8fd624c8713525",
+        "comparisonPath": "spec/compatibility/closure/evidence/FS-RULES-comparison.json",
+        "rows": {
+          "MATCH": 1142
+        },
+        "regressions": {
+          "auth-account": {
+            "MATCH": 631
+          },
+          "auth-credential": {
+            "MATCH": 222
+          },
+          "fs-query-index": {
+            "MATCH": 675,
+            "DIVERGENCE_APPROVED": 35
+          }
+        }
+      }
     },
     {
       "conditionId": "FS-RULES/closure-review",
@@ -282,7 +543,7 @@
       "configProjections": [
         "default"
       ],
-      "status": "PENDING_CORPUS",
+      "status": "PENDING_REVIEW",
       "note": "Independent clean-context closure review and a separate safety review of every change that widens what a request may do."
     }
   ]

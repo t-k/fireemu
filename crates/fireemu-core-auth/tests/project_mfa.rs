@@ -390,3 +390,19 @@ fn a_tenant_keeps_its_earlier_second_factor_rules() {
         Err(MfaError::PendingSignInUnknown)
     );
 }
+
+/// The refusals this parent added describe themselves (mutation follow-up,
+/// docs.local/mutation/auth-mfa/20260925).
+#[test]
+fn the_new_mfa_refusals_describe_themselves() {
+    for (error, text) in [
+        (MfaError::TotpChallengeTimeout, "TOTP challenge timeout"),
+        (
+            MfaError::EnrollmentAlreadyComplete,
+            "enrollment already complete",
+        ),
+    ] {
+        assert_eq!(error.to_string(), text);
+    }
+    assert!(!MfaError::TooManyEnrollmentAttempts.to_string().is_empty());
+}

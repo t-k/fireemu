@@ -134,6 +134,11 @@ async fn an_empty_write_with_an_open_sender_returns_an_error_over_grpc() {
     let error = responses.message().await.unwrap_err();
     assert_eq!(error.code(), tonic::Code::InvalidArgument);
     assert_eq!(error.message(), "empty write operation");
+    assert_eq!(
+        error.metadata().get("content-disposition").unwrap(),
+        "attachment"
+    );
+    assert!(!error.metadata().contains_key("fireemu-reason"));
     drop(tx);
     server.abort();
 }

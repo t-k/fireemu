@@ -776,16 +776,21 @@ fn normalize_transport_frame(
 ) -> Frame<Bytes> {
     if let Some(trailers) = frame.trailers_mut() {
         normalize_transport_status(trailers, enforce_limits);
-        if enforce_limits
+        let write_terminal = enforce_limits
             && write_stream
-            && Status::from_header_map(trailers)
-                .is_some_and(|status| status.code() == tonic::Code::Ok)
-            && !trailers.contains_key("content-disposition")
-        {
+            && Status::from_header_map(trailers).is_some_and(|status| {
+                status.code() == tonic::Code::Ok
+                    || (status.code() == tonic::Code::InvalidArgument
+                        && status.message() == "empty write operation")
+            });
+        if write_terminal && !trailers.contains_key("content-disposition") {
             trailers.insert(
                 "content-disposition",
                 HeaderValue::from_static("attachment"),
             );
+        }
+        if write_terminal {
+            trailers.remove("fireemu-reason");
         }
     }
     frame

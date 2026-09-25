@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
   "parent": "AUTH-MFA",
-  "parentStatus": "IMPLEMENTING",
+  "parentStatus": "COMPAT_VERIFIED",
   "oracleTrack": "disposable-sandbox",
   "scopeDecisions": [
     {
@@ -604,7 +604,7 @@
           "failed": 0
         },
         "buildTree": "clean (git status --porcelain empty at build); artifact copy, sha256, source commit and check logs in docs.local/runs/auth-mfa-final-20260925b/ (private)",
-        "mutation": "docs.local/mutation/auth-mfa/20260925/ (private) runs cargo-mutants over df08b28cf..261e60874, and docs.local/mutation/auth-mfa/20260925-followup/ over 261e60874..c787d9f6e, in fireemu-core-auth and fireemu-adapter-http; survivors are triaged in 20260925/triage.md and pinned by tests without changing the artifact's source. The closure review is approved only after both runs complete and are triaged."
+        "mutation": "docs.local/mutation/auth-mfa/20260925/ (private): cargo-mutants over df08b28cf..261e60874 (264 mutants: 197 caught, 39 unviable, 1 timeout, 27 survivors) and 20260925-followup/ over 261e60874..c787d9f6e (50: 38 caught, 9 unviable, 3 survivors), in fireemu-core-auth and fireemu-adapter-http. All 30 survivors are triaged in 20260925/triage.md: 4 equivalent, 26 killed by tests added in HEAD (each checked against the hand-applied mutant); no src changed after the artifact's source."
       }
     },
     {
@@ -616,7 +616,7 @@
       "configProjections": [
         "default"
       ],
-      "status": "PENDING_REVIEW",
+      "status": "VERIFIED",
       "note": "An independent closure review and a separate safety review of the final artifact.",
       "evidence": {
         "productionRecordings": [
@@ -653,5 +653,13 @@
       }
     }
   ],
-  "closureReview": null
+  "closureReview": {
+    "decision": "APPROVED",
+    "decidedOn": "2026-09-25",
+    "reviewer": "independent clean-context closure review of artifact 7fe1a3e5 (APPROVE WITH CHANGES) and its confirmation review of the fixes on artifact 9988fdbe (APPROVE), after the pre-send reviews of every recorded program, a separate safety review and its confirmation",
+    "reviewedCommit": "bce2c0bdb",
+    "finalArtifactSha256": "9988fdbe13b84459fd756ff4c6beee6b316d665be939ba5c293a614a8c101fda",
+    "report": "docs.local/reviews/2026-09-25-auth-mfa-closure-confirmation.md (private; earlier: 2026-09-25-auth-mfa-closure-review.md, -safety-review.md, -safety-confirmation.md, -presend-review.md, -lifetime-short-presend-review.md, -quota-free-presend-review.md)",
+    "followUps": "Non-blocking and tracked privately (docs.local/issues/open/auth-mfa-unobserved-edges.md): the per-account TOTP attempt quota, the unobserved gaps inside the pending-credential and recent-sign-in brackets, the SMS pending lifetime, the phone enrollment session's lifetime past 1803 seconds, a finalized TOTP session offered again before three attempts, fireemu's own per-user budget, Admin entries with both phoneInfo and totpInfo, and tenant second factors (AUTH-TENANT-BLOCKING)."
+  }
 }

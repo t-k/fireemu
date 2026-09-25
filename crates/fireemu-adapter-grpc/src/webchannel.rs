@@ -1487,16 +1487,17 @@ impl Hub {
     }
 
     fn session(&self, req: &ChannelRequest, sid: &str) -> Result<Arc<Session>, ChannelResponse> {
+        let strict = self.state.gateway.enforce_limits;
         let s = self
             .sessions
             .lock()
             .ok()
             .and_then(|m| m.get(sid).cloned())
             .filter(|s| !s.is_terminated())
-            .ok_or_else(unknown_session)?;
+            .ok_or_else(|| unknown_session(strict))?;
         // A session answers only the origin and stream kind that opened it.
         if s.kind != req.kind || s.origin != req.origin {
-            return Err(unknown_session());
+            return Err(unknown_session(strict));
         }
         s.touch();
         Ok(s)
@@ -2215,9 +2216,26 @@ fn bad_json(e: &JsonError) -> Status {
     Status::invalid_argument(e.to_string())
 }
 
-fn unknown_session() -> ChannelResponse {
-    // The client classifies this body as an unknown session and re-handshakes.
-    text_response(400, "Error: Unknown SID".to_owned())
+/// What production answers a `WebChannel` request for an unknown session: HTTP 400 with Google's
+/// HTML error page (owner decision D6, 2026-09-25; `writes/limits/webchannel-request-bytes`,
+/// recorded twice). Only the first 400 characters of that page were recorded, so this is
+/// exactly that prefix and nothing is invented past it; the rest of the page and its
+/// content type are unobserved.
+pub const STRICT_UNKNOWN_SESSION_BODY: &str = "<!DOCTYPE html>\n<html lang=en>\n  <meta charset=utf-8>\n  <meta name=viewport content=\"initial-scale=1, minimum-scale=1, width=device-width\">\n  <title>Error 400 (Bad Request)!!1</title>\n  <style>\n    *{margin:0;padding:0}html,code{font:15px/22px arial,sans-serif}html{background:#fff;color:#222;padding:15px}body{margin:7% auto 0;max-width:390px;min-height:180px;padding:30px 0 15px}* > body{background";
+
+/// The emulator profile keeps the official emulator's answer, which the web SDK classifies as
+/// an unknown session and re-handshakes on.
+pub const EMULATOR_UNKNOWN_SESSION_BODY: &str = "Error: Unknown SID";
+
+fn unknown_session(strict: bool) -> ChannelResponse {
+    if strict {
+        return ChannelResponse::Full {
+            status: 400,
+            headers: vec![("content-type", "text/html; charset=UTF-8".to_owned())],
+            body: STRICT_UNKNOWN_SESSION_BODY.to_owned(),
+        };
+    }
+    text_response(400, EMULATOR_UNKNOWN_SESSION_BODY.to_owned())
 }
 
 fn error_chunk(e: &Status) -> ChannelResponse {

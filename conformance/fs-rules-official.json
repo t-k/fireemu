@@ -1,0 +1,251 @@
+{
+  "recordedAgainst": "firebase-tools 15.28.2 (conformance devDependency), its Firestore emulator, local; not production",
+  "project": "demo-fs-rules-official",
+  "compile": {
+    "valid": {
+      "accepted": true
+    },
+    "syntax-error": {
+      "accepted": false
+    },
+    "unknown-function": {
+      "accepted": true
+    },
+    "exists-after": {
+      "accepted": true
+    },
+    "unused-function": {
+      "accepted": true
+    },
+    "arity-mismatch": {
+      "accepted": true
+    },
+    "duplicate-function": {
+      "accepted": false
+    },
+    "recursion": {
+      "accepted": false
+    },
+    "mutual-recursion": {
+      "accepted": false
+    },
+    "call-depth-20": {
+      "accepted": true
+    },
+    "call-depth-21": {
+      "accepted": true
+    },
+    "arguments-7": {
+      "accepted": true
+    },
+    "arguments-8": {
+      "accepted": false
+    },
+    "let-10": {
+      "accepted": true
+    },
+    "let-11": {
+      "accepted": true
+    },
+    "match-nesting-10": {
+      "accepted": true
+    },
+    "match-nesting-11": {
+      "accepted": false
+    },
+    "captures-20": {
+      "accepted": false
+    },
+    "captures-21": {
+      "accepted": false
+    },
+    "source-256k-minus": {
+      "accepted": true
+    },
+    "source-256k-plus": {
+      "accepted": true
+    },
+    "version-1-recursive-last": {
+      "accepted": true
+    },
+    "version-1-recursive-middle": {
+      "accepted": false
+    },
+    "version-2-recursive-middle": {
+      "accepted": true
+    },
+    "two-recursive-wildcards": {
+      "accepted": false
+    },
+    "version-3": {
+      "accepted": false
+    },
+    "no-version": {
+      "accepted": true
+    },
+    "unknown-method": {
+      "accepted": true
+    },
+    "wrong-service": {
+      "accepted": true
+    },
+    "type-error-literal": {
+      "accepted": true
+    },
+    "regex-invalid-literal": {
+      "accepted": false
+    },
+    "undefined-variable": {
+      "accepted": true
+    },
+    "math-is-infinite": {
+      "accepted": true
+    },
+    "unknown-namespace-function": {
+      "accepted": true
+    },
+    "missing-semicolon": {
+      "accepted": true
+    },
+    "and-chain-98": {
+      "accepted": true
+    },
+    "and-chain-99": {
+      "accepted": true
+    },
+    "or-chain-98": {
+      "accepted": true
+    },
+    "or-chain-99": {
+      "accepted": true
+    },
+    "plus-chain-98": {
+      "accepted": true
+    },
+    "plus-chain-99": {
+      "accepted": false
+    },
+    "not-98": {
+      "accepted": true
+    },
+    "not-99": {
+      "accepted": false
+    },
+    "parentheses-98": {
+      "accepted": true
+    },
+    "parentheses-99": {
+      "accepted": false
+    },
+    "list-nesting-98": {
+      "accepted": true
+    },
+    "list-nesting-99": {
+      "accepted": false
+    },
+    "balanced-1000": {
+      "accepted": true
+    },
+    "not-parentheses-49": {
+      "accepted": true
+    },
+    "not-parentheses-50": {
+      "accepted": false
+    },
+    "map-nesting-98": {
+      "accepted": false
+    },
+    "map-nesting-99": {
+      "accepted": false
+    },
+    "call-nesting-98": {
+      "accepted": true
+    },
+    "call-nesting-99": {
+      "accepted": false
+    },
+    "and-chain-97": {
+      "accepted": true
+    },
+    "let-20": {
+      "accepted": false
+    },
+    "let-50": {
+      "accepted": false
+    }
+  },
+  "runtime": {
+    "terms-334": {
+      "status": 200,
+      "allowed": true
+    },
+    "terms-335": {
+      "status": 403,
+      "allowed": false,
+      "error": {
+        "status": "PERMISSION_DENIED",
+        "message": "\nUnable to evaluate the expression as the maximum of 1000 expressions to evaluate has been reached. for 'get' @ L4"
+      }
+    },
+    "terms-500-then-true": {
+      "status": 403,
+      "allowed": false,
+      "error": {
+        "status": "PERMISSION_DENIED",
+        "message": "\nUnable to evaluate the expression as the maximum of 1000 expressions to evaluate has been reached. for 'get' @ L4, Unable to evaluate the expression as the max"
+      }
+    },
+    "error-then-true": {
+      "status": 200,
+      "allowed": true
+    },
+    "exists-after-in-a-read": {
+      "status": 200,
+      "allowed": true
+    },
+    "get-of-a-missing-document-is-null": {
+      "status": 200,
+      "allowed": true
+    },
+    "end-user-batch-write": {
+      "status": 403,
+      "allowed": false,
+      "error": {
+        "status": "PERMISSION_DENIED",
+        "message": "Batch writes require admin authentication."
+      }
+    },
+    "query-keys-has-only-the-documented-three": {
+      "status": 403,
+      "allowed": false,
+      "error": {
+        "status": "PERMISSION_DENIED",
+        "message": "\nfalse for 'list' @ L4"
+      }
+    },
+    "query-keys-has-all-the-documented-three": {
+      "status": 200,
+      "allowed": true
+    },
+    "query-order-by-is-an-empty-map": {
+      "status": 200,
+      "allowed": true
+    },
+    "query-has-nine-keys": {
+      "status": 200,
+      "allowed": true
+    },
+    "list-reads-20-documents": {
+      "status": 200,
+      "allowed": true
+    },
+    "list-reads-21-documents": {
+      "status": 403,
+      "allowed": false,
+      "error": {
+        "status": "PERMISSION_DENIED",
+        "message": "\nevaluation error at L4:35 for 'list' @ L4, Service call error. Function: [exists], Argument: [path_value {\n  segments {\n    simple: \"databases\"\n  }\n  segments "
+      }
+    }
+  }
+}

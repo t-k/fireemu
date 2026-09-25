@@ -3544,6 +3544,61 @@ service cloud.firestore {
     h.handle.abort();
 }
 
+/// Firestore honours an ID token for 30 seconds past its `exp` (FS-RULES production recording,
+/// 2026-09-25: accepted up to 26 seconds after it, refused from 30 on REST and gRPC), and
+/// then refuses it as an expired credential.
+#[tokio::test]
+async fn an_id_token_is_honoured_for_thirty_seconds_past_its_expiry() {
+    let mut h = start().await;
+    h.rules
+        .replace_source(
+            "rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    match /open/{id} { allow read: if request.auth != null; }
+  }
+}",
+        )
+        .unwrap();
+    let (alice, _) = h.user("alice@example.com");
+    let expired_for = |seconds: i128| {
+        let store = h.auth.lock().unwrap();
+        let uid = store.user_by_id(&alice).unwrap().local_id.clone();
+        let claims = store
+            .id_token_claims(
+                &uid,
+                None,
+                LogicalInstant::from_nanos(START.as_nanos() - (3600 + seconds) * 1_000_000_000),
+            )
+            .unwrap();
+        encode_unsigned(&claims)
+    };
+    for seconds in [0, 1, 29] {
+        let err = h
+            .client
+            .get_document(with_bearer(get("open/d"), &expired_for(seconds)))
+            .await
+            .unwrap_err();
+        assert_eq!(err.code(), tonic::Code::NotFound, "{seconds}: {err}");
+    }
+    for seconds in [30, 31, 300] {
+        let err = h
+            .client
+            .get_document(with_bearer(get("open/d"), &expired_for(seconds)))
+            .await
+            .unwrap_err();
+        assert_eq!(
+            (err.code(), err.message()),
+            (
+                tonic::Code::Unauthenticated,
+                "Missing or invalid authentication."
+            ),
+            "{seconds}"
+        );
+    }
+    h.handle.abort();
+}
+
 /// An end user may not call `BatchWrite`: production refuses it with the ordinary denial and the
 /// official emulator with "Batch writes require admin authentication." (FS-RULES, 2026-09-24),
 /// whatever the rules would say of each write. The owner may.

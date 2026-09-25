@@ -735,8 +735,10 @@ pub fn verify_firestore_token(
     Ok(decoded)
 }
 
-/// How long past `exp` Firestore still honours an ID token.
-pub const FIRESTORE_EXPIRY_LEEWAY_SECONDS: i64 = 0;
+/// How long past `exp` Firestore still honours an ID token: production accepted a token 26
+/// seconds past it and refused one 30 seconds past it, on REST and gRPC (FS-RULES production
+/// recording, 2026-09-25). A token is refused from `exp + 30`.
+pub const FIRESTORE_EXPIRY_LEEWAY_SECONDS: i64 = 30;
 
 /// The token checks that do not read the account: see [`verify_firestore_token`].
 fn verify_token_claims(

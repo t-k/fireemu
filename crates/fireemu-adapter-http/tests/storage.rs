@@ -2419,8 +2419,8 @@ fn four_large_uploads_leave_tokio_workers_available() {
     use std::sync::mpsc;
     use std::time::Duration;
 
-    static BUDGET: BodyBudget = BodyBudget::new(512 * 1024 * 1024);
-    const BODY_BYTES: usize = 64 * 1024 * 1024;
+    static BUDGET: BodyBudget = BodyBudget::new(64 * 1024 * 1024);
+    const BODY_BYTES: usize = 8 * 1024 * 1024;
 
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .worker_threads(2)
@@ -2435,7 +2435,7 @@ fn four_large_uploads_leave_tokio_workers_available() {
     let server = runtime.spawn(serve_storage_with_budget(listener, shared.clone(), &BUDGET));
 
     // Holding the store lock makes all admitted handlers wait at the same synchronous
-    // boundary. Each 64 MiB write exceeds the socket buffer, so completed writes show
+    // boundary. Each 8 MiB write exceeds the socket buffer, so completed writes show
     // that at least two handlers have drained most of their request bodies.
     let store_guard = shared.store.lock().unwrap();
     let payload = Arc::new(vec![7u8; BODY_BYTES]);
@@ -2493,6 +2493,69 @@ fn four_large_uploads_leave_tokio_workers_available() {
         heartbeat_responded,
         "Storage handlers blocked both Tokio workers"
     );
+    assert_eq!(BUDGET.in_flight(), 0);
+}
+
+#[test]
+fn more_than_sixteen_storage_handlers_wait_instead_of_rejecting() {
+    use std::io::{Read, Write};
+    use std::sync::mpsc;
+    use std::time::Duration;
+
+    static BUDGET: BodyBudget = BodyBudget::new(32 * 1024 * 1024);
+    const REQUESTS: usize = 17;
+    const BODY_BYTES: usize = 1024;
+
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(2)
+        .enable_all()
+        .build()
+        .unwrap();
+    let shared = Arc::new(state(None));
+    let listener = runtime
+        .block_on(tokio::net::TcpListener::bind("127.0.0.1:0"))
+        .unwrap();
+    let address = listener.local_addr().unwrap();
+    let server = runtime.spawn(serve_storage_with_budget(listener, shared.clone(), &BUDGET));
+
+    let store_guard = shared.store.lock().unwrap();
+    let (written_tx, written_rx) = mpsc::channel();
+    let clients: Vec<_> = (0..REQUESTS)
+        .map(|index| {
+            let written_tx = written_tx.clone();
+            std::thread::spawn(move || {
+                let mut stream = std::net::TcpStream::connect(address).unwrap();
+                stream
+                    .set_read_timeout(Some(Duration::from_secs(60)))
+                    .unwrap();
+                stream
+                    .write_all(upload_head(&format!("queued-{index}.bin"), BODY_BYTES).as_bytes())
+                    .unwrap();
+                stream.write_all(&[7u8; BODY_BYTES]).unwrap();
+                written_tx.send(()).unwrap();
+                let mut response = [0u8; 4096];
+                let received = stream.read(&mut response).unwrap();
+                String::from_utf8_lossy(&response[..received]).into_owned()
+            })
+        })
+        .collect();
+    drop(written_tx);
+    for _ in 0..REQUESTS {
+        written_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+    }
+    // Give the server time to admit each buffered body while all handlers wait on the lock.
+    std::thread::sleep(Duration::from_millis(200));
+    let buffered = BUDGET.in_flight();
+    drop(store_guard);
+    for client in clients {
+        let response = client.join().unwrap();
+        assert!(response.starts_with("HTTP/1.1 200"), "{response}");
+    }
+    server.abort();
+    runtime.block_on(async {
+        let _ = server.await;
+    });
+    assert_eq!(buffered, REQUESTS * CHUNK);
     assert_eq!(BUDGET.in_flight(), 0);
 }
 

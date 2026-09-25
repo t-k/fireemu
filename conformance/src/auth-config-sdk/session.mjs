@@ -417,7 +417,33 @@ export function createSession(
     }
   }
 
-  async function runSteps(program, raw, steps) {
+  /**
+   * The touched paths a step may have written: every masked path of a config PATCH that was
+   * not refused, and every touched path for an SDK config update.
+   */
+  function wrote(program, step, recorded, written) {
+    const touches = program.touches ?? [];
+    if (step.sdk === "admin.updateProjectConfig") {
+      written.push(...touches);
+      return;
+    }
+    if (!isConfigPath(step.path ?? "") || step.method !== "PATCH") return;
+    if (recorded.status >= 400 && recorded.status < 500) return;
+    const mask = String(step.query?.updateMask ?? "")
+      .split(",")
+      .filter(Boolean);
+    for (const touched of touches) {
+      if (
+        mask.some(
+          (path) =>
+            path === touched || path.startsWith(`${touched}.`) || touched.startsWith(`${path}.`),
+        )
+      )
+        written.push(touched);
+    }
+  }
+
+  async function runSteps(program, raw, steps, written) {
     let opened;
     const kept = new Map();
     let violation;
@@ -446,11 +472,13 @@ export function createSession(
           if (violation)
             throw fatal(`guard refused an SDK request in ${step.id}: ${violation.message}`);
           steps[step.id] = normalizeSdk(outcome, ctx);
+          wrote(program, step, {}, written);
           log(`${program.id}#${step.id} ${steps[step.id].sdk} ${steps[step.id].code ?? ""}`);
           if (step.settleTo && outcome.value !== undefined) await awaitConfig(step.settleTo);
           continue;
         }
         const { recorded, json, sentBody } = await runHttpStep(step, raw);
+        wrote(program, step, recorded, written);
         raw.set(step.id, json);
         raw.set(`recorded:${step.id}`, recorded);
         steps[step.id] = recorded;
@@ -476,11 +504,12 @@ export function createSession(
     await wipe();
     const touches = program.touches ?? [];
     const snapshot = touches.length ? await readConfig(touches) : undefined;
+    const written = [];
     let failure;
     // The guard lets a program write only the paths it restores.
     ctx.touches = touches;
     try {
-      await runSteps(program, raw, steps);
+      await runSteps(program, raw, steps, written);
     } catch (error) {
       failure = error;
     } finally {
@@ -496,7 +525,7 @@ export function createSession(
     }
     if (snapshot) {
       try {
-        await restore(snapshot);
+        await restore(snapshot, [...new Set(written)]);
       } catch (error) {
         const now = await readConfig(touches, { cleanup: true }).catch(() => "unreadable");
         log(`SANDBOX CONFIG CHANGED by ${program.id}: ${JSON.stringify(now)}`);

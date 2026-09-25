@@ -696,7 +696,8 @@ async function recordLocked({ ledger, privateRoot, programs, corpusRequests, web
     error = String(caught.message ?? caught);
   } finally {
     // After anything but a clean recording, read the sandbox back before handing it over.
-    if (outcome !== "recorded") baseline = await verifyBaseline(web, startConfig);
+    // Every run reads the sandbox back before handing it over, a clean one too.
+    baseline = await verifyBaseline(web, startConfig);
     await appendLedger(ledger, {
       event: "finished",
       project: SANDBOX_PROJECT,

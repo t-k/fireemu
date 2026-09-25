@@ -1886,6 +1886,42 @@ fn rest_run_query_supports_standard_find_nearest() {
     );
 }
 
+/// Every REST route names its gRPC method in the OAuth refusal's `ErrorInfo`.
+#[test]
+fn the_oauth_refusal_names_the_transcoded_method() {
+    let s = state(Some(
+        "rules_version = '2';\nservice cloud.firestore { match /databases/{d}/documents { match /closed/{id} { allow read, write: if false; } } }",
+    ));
+    for (method, path, grpc_method) in [
+        ("GET", format!("{DOCS}/closed"), "GetOrListDocuments"),
+        ("PATCH", format!("{DOCS}/closed/a"), "UpdateDocument"),
+        ("DELETE", format!("{DOCS}/closed/a"), "DeleteDocument"),
+        (
+            "POST",
+            format!("{DOCS}/closed?documentId=a"),
+            "CreateDocument",
+        ),
+        ("POST", format!("{DOCS}:commit"), "Commit"),
+        ("POST", format!("{DOCS}:batchGet"), "BatchGetDocuments"),
+        ("POST", format!("{DOCS}:runQuery"), "RunQuery"),
+        (
+            "POST",
+            format!("{DOCS}:listCollectionIds"),
+            "ListCollectionIds",
+        ),
+    ] {
+        let (status, err) = call_as(&s, method, &path, json!({}), Some("Bearer not-a-token"));
+        assert_eq!(status, 401, "{method} {path}: {err}");
+        // Only the document read was recorded; the other methods' names are the gRPC methods
+        // the routes transcode to, and their refusals stay plain objects (not observed).
+        assert_eq!(
+            err["error"]["details"][0]["metadata"]["method"],
+            format!("google.firestore.v1.Firestore.{grpc_method}"),
+            "{method} {path}: {err}"
+        );
+    }
+}
+
 #[test]
 fn rest_requests_are_authorized_like_grpc() {
     let s = state(Some(
@@ -1928,6 +1964,24 @@ fn rest_requests_are_authorized_like_grpc() {
         Some("Bearer not-a-token"),
     );
     assert_eq!(status, 401, "{err}");
+    // The front end's body, with the ErrorInfo it names the method in (FS-RULES production
+    // recording, 2026-09-24): a document read is `GetOrListDocuments`.
+    assert_eq!(
+        err,
+        json!({"error": {
+            "code": 401,
+            "message": "Request had invalid authentication credentials. Expected OAuth 2 access token, login cookie or other valid authentication credential. See https://developers.google.com/identity/sign-in/web/devconsole-project.",
+            "status": "UNAUTHENTICATED",
+            "details": [{
+                "@type": "type.googleapis.com/google.rpc.ErrorInfo",
+                "reason": "CREDENTIALS_MISSING",
+                "metadata": {
+                    "service": "firestore.googleapis.com",
+                    "method": "google.firestore.v1.Firestore.GetOrListDocuments",
+                },
+            }],
+        }})
+    );
     let (status, err) = call_as(
         &s,
         "POST",

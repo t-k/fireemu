@@ -975,6 +975,10 @@
             {
               "behaviour": "both profiles answer every Security Rules denial with production's PERMISSION_DENIED text \"Missing or insufficient permissions.\" (observed on the FS-RULES sandbox, 2026-09-24) instead of the official emulator's per-allow trace; the reason stays in the request-trace control route",
               "precision": "documented-divergence"
+            },
+            {
+              "behaviour": "three strict-profile-only refusals, as production refuses (FS-RULES sandbox, 2026-09-24): every client request while its database has no ruleset, an unusable credential in production's shapes (an expired token UNAUTHENTICATED, a bearer value that is not a JWT the front end's OAuth refusal, any other PERMISSION_DENIED), and an end user's BeginTransaction; the emulator profile allows all three as the official emulator does",
+              "precision": "documented-divergence"
             }
           ],
           "productionOnly": [],

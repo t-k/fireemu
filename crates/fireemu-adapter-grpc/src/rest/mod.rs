@@ -1130,6 +1130,30 @@ impl RestState {
         Ok(ok(json!({})))
     }
 
+    fn begin_transaction(
+        &self,
+        principal: &Caller,
+        resource: &str,
+        body: &Value,
+    ) -> Result<RestResponse, Status> {
+        json::strict_keys(body, &["options", "requestOptions"]).map_err(|e| bad(&e))?;
+        let database = database_of(resource)?;
+        self.check_database_audience(principal, &database)?;
+        if let Some(rules) = &self.rules {
+            rules.check_begin_transaction(principal)?;
+        }
+        let token = self.local.begin_transaction(&pb::BeginTransactionRequest {
+            database,
+            options: Some(
+                transaction_options_from_json(body.get("options"), "options")
+                    .map_err(|e| bad(&e))?,
+            ),
+            request_options: request_options_from_json(body.get("requestOptions"))
+                .map_err(|e| bad(&e))?,
+        })?;
+        Ok(ok(json!({"transaction": base64_encode(&token)})))
+    }
+
     fn custom_method(
         &self,
         principal: &Caller,
@@ -1141,21 +1165,7 @@ impl RestState {
             "commit" => self.commit(principal, resource, body),
             "batchWrite" => self.batch_write(principal, resource, body),
             "batchGet" => stream_errors(self.batch_get(principal, resource, body)),
-            "beginTransaction" => {
-                json::strict_keys(body, &["options", "requestOptions"]).map_err(|e| bad(&e))?;
-                let database = database_of(resource)?;
-                self.check_database_audience(principal, &database)?;
-                let token = self.local.begin_transaction(&pb::BeginTransactionRequest {
-                    database,
-                    options: Some(
-                        transaction_options_from_json(body.get("options"), "options")
-                            .map_err(|e| bad(&e))?,
-                    ),
-                    request_options: request_options_from_json(body.get("requestOptions"))
-                        .map_err(|e| bad(&e))?,
-                })?;
-                Ok(ok(json!({"transaction": base64_encode(&token)})))
-            }
+            "beginTransaction" => self.begin_transaction(principal, resource, body),
             "rollback" => {
                 let database = database_of(resource)?;
                 self.check_database_audience(principal, &database)?;

@@ -10,9 +10,10 @@
 
 import { createRequire } from "node:module";
 import { pathToFileURL } from "node:url";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, readlinkSync } from "node:fs";
 import { resolve, join, dirname } from "node:path";
 import { createServer } from "node:http";
+import { execFileSync, spawn } from "node:child_process";
 import { url as inspectorUrl } from "node:inspector";
 import { instrumentCallables } from "./callable-app-check.mjs";
 import { blockingFailure } from "./blocking-error.mjs";
@@ -54,12 +55,146 @@ const frameOutput = new FrameWriter(process.stdout, {
   },
 });
 let finishingOutput = false;
+let groupCleanupPromise = Promise.resolve(true);
 function finishOutput() {
   if (finishingOutput || outputFailed) return;
   finishingOutput = true;
-  void Promise.all([frameOutput.finish(), diagnosticOutput.finish()])
+  void Promise.all([frameOutput.finish(), diagnosticOutput.finish(), groupCleanupPromise])
     .then(results => process.exit(results.every(Boolean) && !outputFailed ? 0 : 2));
 }
+
+function processField(pid, field) {
+  try {
+    return execFileSync('/bin/ps', ['-o', `${field}=`, '-p', String(pid)], {
+      encoding: 'utf8', timeout: 1000, maxBuffer: 2048,
+    }).trim();
+  } catch {
+    return null;
+  }
+}
+
+function processExecutable(pid) {
+  try {
+    if (process.platform === 'linux') return readlinkSync(`/proc/${pid}/exe`);
+    if (process.platform === 'darwin') {
+      const files = execFileSync('/usr/sbin/lsof', ['-a', '-p', String(pid), '-d', 'txt', '-Fn'], {
+        encoding: 'utf8', timeout: 1000, maxBuffer: 16384,
+      });
+      return files.split('\n').find(line => line.startsWith('n'))?.slice(1) ?? null;
+    }
+  } catch {
+    // Unknown executable identity cannot authorize signaling a parent-led group.
+  }
+  return null;
+}
+
+function runnerProcessGroup() {
+  if (process.platform === 'win32') return null;
+  const group = Number(processField(process.pid, 'pgid'));
+  if (!Number.isSafeInteger(group) || group <= 1) return null;
+  if (group === process.pid) return group;
+  if (group !== process.ppid || Number(processField(group, 'pgid')) !== group) return null;
+  return processExecutable(group)?.endsWith('/volta-shim') ? group : null;
+}
+
+// Capture the group before user code can spawn children or replace process information.
+const daemonManagedRunner = process.env.FIREEMU_RUNNER === '1';
+const ownedProcessGroup = daemonManagedRunner ? runnerProcessGroup() : null;
+let inputCleanupStarted = false;
+let explicitShutdown = false;
+let deferredExitCleanup = false;
+const groupCleanupHelper = `
+const {execFileSync} = require('node:child_process');
+const group = Number(process.argv[1]);
+function killOwnedGroup() {
+  try {
+    const ownGroup = Number(execFileSync('/bin/ps', ['-o', 'pgid=', '-p', String(process.pid)], {
+      encoding: 'utf8', timeout: 1000
+    }).trim());
+    if (group > 1 && ownGroup === group) process.kill(-group, 'SIGKILL');
+  } catch { /* The group is already gone or signaling is unavailable. */ }
+}
+const watchdog = setTimeout(killOwnedGroup, 4000);
+process.stdin.on('end', () => {
+  clearTimeout(watchdog);
+  setTimeout(killOwnedGroup, 1500);
+});
+process.stdin.on('error', () => {});
+process.stdin.resume();
+`;
+function deferCleanShutdownGroupCleanup() {
+  if (!ownedProcessGroup ||
+      Number(processField(process.pid, 'pgid')) !== ownedProcessGroup) return;
+  // Keep a known member in the group after Node exits. Rust normally kills it
+  // first; if the daemon dies in that gap, the helper performs bounded cleanup.
+  try {
+    const helper = spawn(process.execPath, ['-e', groupCleanupHelper, String(ownedProcessGroup)], {
+      stdio: ['pipe', 'ignore', 'ignore'], env: {},
+    });
+    if (!helper.pid) return;
+    helper.on('error', () => { deferredExitCleanup = false; });
+    helper.stdin.on('error', () => {});
+    helper.unref();
+    helper.stdin.unref?.();
+    deferredExitCleanup = true;
+  } catch {
+    // The exit handler still cleans the group when a helper cannot start.
+  }
+}
+function deferOwnedGroupCleanupUntilUserExitHandlers() {
+  if (!ownedProcessGroup) return;
+  process.removeListener('exit', killOwnedGroupOnExit);
+  process.on('exit', killOwnedGroupOnExit);
+}
+function cleanupProcessGroupOnInputClose() {
+  if (inputCleanupStarted || process.platform === 'win32') return;
+  inputCleanupStarted = true;
+  if (!ownedProcessGroup || Number(processField(process.pid, 'pgid')) !== ownedProcessGroup) {
+    if (daemonManagedRunner) {
+      process.stderr.write('[functions] stdin closed; runner process group ownership is unverified\n');
+    }
+    return;
+  }
+  // The group signal reaches this Node process too. Keep it alive until escalation;
+  // a shim may forward another TERM after receiving the group signal itself.
+  process.on('SIGTERM', () => {});
+  // User exit handlers registered during discovery must run before final group cleanup.
+  deferOwnedGroupCleanupUntilUserExitHandlers();
+  groupCleanupPromise = new Promise(resolve => {
+    setTimeout(() => {
+      // An undrained output pipe must not postpone descendant cleanup.
+      if (Number(processField(process.pid, 'pgid')) === ownedProcessGroup) {
+        try { process.kill(-ownedProcessGroup, 'SIGKILL'); }
+        catch { /* The exit handler makes one final ownership-checked attempt. */ }
+      }
+      resolve(true);
+    }, 500);
+  });
+  try {
+    process.kill(-ownedProcessGroup, 'SIGTERM');
+  } catch (error) {
+    process.stderr.write(`[functions] runner process group cleanup failed: ${error.code ?? 'unknown'}\n`);
+  }
+}
+function killOwnedGroupOnExit() {
+  // A fatal frame or output error can exit before stdin close or the grace timer.
+  // The runner is still a member, so its original group ID cannot be reused yet.
+  if (deferredExitCleanup || !ownedProcessGroup ||
+      Number(processField(process.pid, 'pgid')) !== ownedProcessGroup) return;
+  // Fatal exits can precede user exit listeners. Keep a verified group member
+  // alive until those listeners finish, then let it reap the group.
+  if (!inputCleanupStarted) {
+    deferCleanShutdownGroupCleanup();
+    if (deferredExitCleanup) return;
+  }
+  try { process.kill(-ownedProcessGroup, 'SIGKILL'); }
+  catch { /* The group has already ended or signaling was denied. */ }
+}
+process.on('exit', killOwnedGroupOnExit);
+process.stdin.on('close', () => {
+  if (!explicitShutdown) cleanupProcessGroupOnInputClose();
+  finishOutput();
+});
 process.stdout.write = (chunk, encoding, cb) => process.stderr.write(chunk, encoding, cb);
 
 const localSecrets = (() => {
@@ -1218,6 +1353,59 @@ async function invoke(functions, manifest, msg) {
 
 
 async function main() {
+  let functions;
+  let manifest;
+  let runnerReady = false;
+  const activeInvocations = new InvocationBudget();
+  // Read before loading user code, which may await indefinitely after spawning children.
+  readFrames(
+    process.stdin,
+    (msg, payloadBytes) => {
+      if (msg.type === "shutdown") {
+        explicitShutdown = true;
+        // Volta must observe Node exit before its shim is killed, or the daemon
+        // can finish shutdown while Node still owns an inspector listener.
+        deferCleanShutdownGroupCleanup();
+        finishOutput();
+        return false;
+      }
+      if (!runnerReady) {
+        process.stderr.write('[functions] invocation received before runner hello\n');
+        process.exit(2);
+      }
+      // Includes callbacks waiting for secret/debugger environment selection.
+      // Retire on overflow; never report an unexecuted request as successful or
+      // retry uncertain in-flight side effects inside this runner.
+      const release = activeInvocations.reserve(msg.invocationId, payloadBytes);
+      invoke(functions, manifest, msg)
+        .then(() => send({ type: "result", invocationId: msg.invocationId, ok: true }))
+        .catch((error) => {
+          const failure = invocationFailure(error);
+          try {
+            log("error", `${msg.function}: ${failure.diagnostic}`, msg.invocationId, msg.function);
+          } catch {
+            // Diagnostic output cannot suppress the invocation's failure result.
+          }
+          send({
+            type: "result",
+            invocationId: msg.invocationId,
+            ok: false,
+            error: failure.message,
+          });
+        })
+        .finally(release);
+    },
+    () => {
+      cleanupProcessGroupOnInputClose();
+      finishOutput();
+    },
+    (error) => {
+      // The pipe cannot be resynchronized safely. Retire the runner so the daemon
+      // resolves outstanding invocations as RunnerGone, rather than timing out.
+      // Do not print JSON.parse diagnostics containing user payload fragments.
+      try { process.stderr.write(`${error.message}\n`); } finally { process.exit(2); }
+    },
+  );
   // Before any user code loads: the callable options are only observable as a callable is
   // declared (spec 13.4).
   const instrumentation = instrumentCallables(sourceDir);
@@ -1245,7 +1433,9 @@ async function main() {
   } catch (e) {
     log("warn", `cannot inspect firebase-functions global options: ${invocationFailure(e).message}`);
   }
-  const { functions, broken } = collectFunctions(ns);
+  const discovered = collectFunctions(ns);
+  functions = discovered.functions;
+  const { broken } = discovered;
   const described = [...functions.entries()].map(([name, fn]) => {
     try {
       return describe(name, fn, instrumentation);
@@ -1274,7 +1464,7 @@ async function main() {
   // Nothing is dropped: an export this runner cannot serve travels in the manifest's
   // `ignored` array with its region, its trigger type and its product scope, and the daemon
   // decides what to do with it.
-  const manifest = {
+  manifest = {
     functions: described.filter((d) => !d.ignored && !d.omitted),
     ignored: described
       .filter((d) => d.ignored)
@@ -1325,44 +1515,7 @@ async function main() {
       graphs: instrumentation.graphs,
     },
   });
-  const activeInvocations = new InvocationBudget();
-  readFrames(
-    process.stdin,
-    (msg, payloadBytes) => {
-      if (msg.type === "shutdown") {
-        finishOutput();
-        return false;
-      }
-      // Includes callbacks waiting for secret/debugger environment selection.
-      // Retire on overflow; never report an unexecuted request as successful or
-      // retry uncertain in-flight side effects inside this runner.
-      const release = activeInvocations.reserve(msg.invocationId, payloadBytes);
-      invoke(functions, manifest, msg)
-        .then(() => send({ type: "result", invocationId: msg.invocationId, ok: true }))
-        .catch((error) => {
-          const failure = invocationFailure(error);
-          try {
-            log("error", `${msg.function}: ${failure.diagnostic}`, msg.invocationId, msg.function);
-          } catch {
-            // Diagnostic output cannot suppress the invocation's failure result.
-          }
-          send({
-            type: "result",
-            invocationId: msg.invocationId,
-            ok: false,
-            error: failure.message,
-          });
-        })
-        .finally(release);
-    },
-    () => finishOutput(),
-    (error) => {
-      // The pipe cannot be resynchronized safely. Retire the runner so the daemon
-      // resolves outstanding invocations as RunnerGone, rather than timing out.
-      // Do not print JSON.parse diagnostics containing user payload fragments.
-      try { process.stderr.write(`${error.message}\n`); } finally { process.exit(2); }
-    },
-  );
+  runnerReady = true;
 }
 
 main().catch((error) => {

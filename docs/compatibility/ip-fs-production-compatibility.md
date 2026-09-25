@@ -139,6 +139,14 @@ No target feature is moved to class B merely because it is unimplemented, unobse
 | FS-CONFIG-LIFECYCLE | Default/named Native databases, project boundary, indexes/exemptions, TTL, import/export, backup/PITR and management-operation contract | Database projection v2 and configuration preservation evidence; API surfaces enumerated; the importer preflights every official managed-export partition, rejects corrupt or duplicate output references and bounds partition enumeration before publishing state; the local named-database export extension preserves default, named and cross-database reference values and rejects malformed database identities before import | `WAITING_ORACLE` | Multi-partition import is local format and atomicity evidence. The named-database extension is local safety evidence only. The [management-surface classification](fs-config-lifecycle-classification.md) and the credential-free [management campaign preparation](fs-config-lifecycle-campaign-preparation.md) exist; representative management behavior still requires production comparison. |
 | AUTH-FS-CROSS | Auth tokens, claims, tenant and revocation observed through Firestore Rules, transactions, listeners and SDK state changes | Local principal/project/tenant and SDK state invariants | `WAITING_ORACLE` | Cross-product production scenarios and final-artifact comparisons remain. |
 
+## Storage object production closure
+
+The owner added STORAGE-OBJECT to the parent inventory on 2026-09-25. The resulting target is 16 parents; historical `0 / 14` checkpoints above describe the earlier inventory. The [proposed closure inventory](../../spec/compatibility/closure/STORAGE-OBJECT.json) separates object behavior from Storage Security Rules and Functions events. Its scope decisions require owner confirmation before the inventory is frozen.
+
+| Parent | Required conditions | Current evidence | Parent state | Remaining completion work |
+| --- | --- | --- | --- | --- |
+| STORAGE-OBJECT | Firebase and GCS JSON object upload, download, metadata, delete, list and paging; current-object generation and metageneration preconditions; checksums; error shapes; owner and Firebase Auth ID-token access; cross-dialect state | Local Storage tests and the official-emulator `storage-probe` matrix exist. No production Storage object recording is counted for this parent. | `IMPLEMENTING` | Confirm scope decisions, freeze the inventory, record the reviewed corpus twice on the disposable sandbox, repair mismatches, compare both Storage suites on one final artifact and obtain an independent closure review. |
+
 ## Existing evidence boundaries
 
 - First46 retains its original 35 matches/11 mismatches and corrected 46/46 saved-reference comparison.

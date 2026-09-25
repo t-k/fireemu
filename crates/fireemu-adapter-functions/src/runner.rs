@@ -582,9 +582,7 @@ impl Runner {
                 // The runner is gone: every waiter learns it and the runtime stops
                 // dispatching.
                 alive.store(false, Ordering::SeqCst);
-                eprintln!(
-                    "{label} runner exited; functions are unavailable until the daemon restarts"
-                );
+                eprintln!("{label} runner exited");
                 if let Ok(mut w) = waiters.lock() {
                     for (_, tx) in w.drain() {
                         let _ = tx.send(InvokeOutcome::RunnerGone("runner exited".into()));
@@ -718,10 +716,7 @@ impl Runner {
         if !written {
             *stdin = None;
             self.alive.store(false, Ordering::SeqCst);
-            eprintln!(
-                "{} runner stopped reading its stdin; functions are unavailable until the daemon restarts",
-                self.label
-            );
+            eprintln!("{} runner stopped reading its stdin", self.label);
             forget(&self.waiters);
             return done(InvokeOutcome::RunnerGone(
                 "runner stopped reading its stdin".into(),

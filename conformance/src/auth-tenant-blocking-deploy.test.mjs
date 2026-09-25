@@ -160,8 +160,8 @@ test("nothing is removed before a deployment started (MF-1)", async () => {
 
 test("a removal takes out exactly what the deployment created (MF-1, MF-3)", async () => {
   const { deployer, state, runs } = fakeCloud({
-    packages: ["other-image"],
-    sources: ["other/function-source.zip"],
+    packages: ["other-image", "fireemu--oracle--idp__us--central1__atb_before_create_other"],
+    sources: ["other/function-source.zip", "atbBeforeSignInOther/function-source.zip"],
     uploads: ["older-upload.zip"],
   });
   const dir = await buildDir();
@@ -176,8 +176,14 @@ test("a removal takes out exactly what the deployment created (MF-1, MF-3)", asy
   assert.equal(removed.sources, 2);
   assert.deepEqual(state.functions, []);
   assert.deepEqual(state.blocking, {});
-  assert.deepEqual(state.packages, ["other-image"]);
-  assert.deepEqual(state.sources, ["other/function-source.zip"]);
+  assert.deepEqual(state.packages, [
+    "other-image",
+    "fireemu--oracle--idp__us--central1__atb_before_create_other",
+  ]);
+  assert.deepEqual(state.sources, [
+    "other/function-source.zip",
+    "atbBeforeSignInOther/function-source.zip",
+  ]);
   assert.deepEqual(state.uploads, ["older-upload.zip"]);
   assert.ok(runs.some((r) => r.startsWith("firebase deploy --only functions:atb-blocking")));
   assert.ok(runs.some((r) => r.startsWith("firebase functions:delete atbBeforeCreate")));
@@ -198,8 +204,12 @@ test("fixture artifacts are recognised by function name only", () => {
   assert.ok(isFixtureArtifact("fireemu--oracle--idp__us--central1__atb_before_send_sms/cache"));
   assert.ok(isFixtureArtifact("atbBeforeSignIn/function-source.zip"));
   assert.ok(!isFixtureArtifact("fireemu--oracle--idp__us--central1__hello"));
+  assert.ok(!isFixtureArtifact("fireemu--oracle--idp__us--central1__atb_before_create_other"));
+  assert.ok(!isFixtureArtifact("other--project__us--central1__atb_before_create"));
+  assert.ok(!isFixtureArtifact("atbBeforeSignInOther/function-source.zip"));
   assert.ok(isFixtureTrigger(fn("atbBeforeCreate")));
   assert.ok(!isFixtureTrigger(fn("hello")));
+  assert.ok(!isFixtureTrigger(fn("atbBeforeCreateOther")));
 });
 
 test("the blocking corpus is valid", () => {

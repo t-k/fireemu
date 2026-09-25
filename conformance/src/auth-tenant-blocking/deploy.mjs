@@ -29,6 +29,18 @@ export const FIXTURE_FUNCTIONS = {
   beforeSendSms: "atbBeforeSendSms",
 };
 const NAMES = Object.values(FIXTURE_FUNCTIONS);
+const encodePackagePart = (value) =>
+  value
+    .replaceAll("_", "__")
+    .replaceAll("-", "--")
+    .replace(/^[A-Z]/, (first) => `${first.toLowerCase()}-${first.toLowerCase()}`)
+    .replace(/[A-Z]/g, (letter) => `_${letter.toLowerCase()}`);
+const PACKAGE_IDS = new Set(
+  NAMES.map(
+    (name) =>
+      `${encodePackagePart("fireemu-oracle-idp")}__${encodePackagePart(REGION)}__${encodePackagePart(name)}`,
+  ),
+);
 /**
  * Every API firebase-tools ensures for a 2nd gen deployment (it enables a missing one without
  * asking, pre-send review MF-2); the fixture also declares identitytoolkit. A deployment is only
@@ -74,16 +86,33 @@ export function hasCleanupPolicy(repository) {
 
 /** Whether an Artifact Registry package or a source object belongs to the fixture. */
 export function isFixtureArtifact(name) {
-  const flat = String(name)
-    .toLowerCase()
-    .replaceAll(/[^a-z0-9]/g, "");
-  return NAMES.some((fn) => flat.includes(fn.toLowerCase()));
+  const path = String(name);
+  const packageId = (path.includes("/packages/") ? path.split("/packages/").at(-1) : path).split(
+    "/",
+  )[0];
+  const sourcePrefix = path.split("/")[0].toLowerCase();
+  return PACKAGE_IDS.has(packageId) || NAMES.some((fn) => sourcePrefix === fn.toLowerCase());
 }
 
 /** Whether a registered trigger's URI names a fixture function. */
 export function isFixtureTrigger(trigger) {
-  const uri = String(trigger?.functionUri ?? "").toLowerCase();
-  return NAMES.some((fn) => uri.includes(fn.toLowerCase()));
+  let uri;
+  try {
+    uri = new URL(trigger?.functionUri);
+  } catch {
+    return false;
+  }
+  if (uri.hostname.endsWith(".cloudfunctions.net"))
+    return NAMES.some((fn) => uri.pathname === `/${fn}`);
+  if (!uri.hostname.endsWith(".run.app")) return false;
+  const service = uri.hostname.split(".")[0];
+  const parts = service.split("-");
+  return (
+    parts.length === 3 &&
+    /^[a-z0-9]+$/.test(parts[1]) &&
+    /^[a-z]{2}$/.test(parts[2]) &&
+    NAMES.some((fn) => parts[0] === fn.toLowerCase())
+  );
 }
 
 /** A failed CLI call without its output: the exit and at most one short line (SF-5). */

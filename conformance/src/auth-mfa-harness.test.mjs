@@ -629,3 +629,23 @@ test("a phone control start matches any answer production recorded for a control
   assert.deepEqual(timingAlternatives("auth-mfa/sms", "control-start-s450", saved), []);
   assert.deepEqual(timingAlternatives(program, "control-start-t450", saved), []);
 });
+
+test("quota-free sends each account one wrong code and mints no token", async () => {
+  const { PROGRAMS } = await import("./auth-mfa/corpus.mjs");
+  const program = PROGRAMS.find((p) => p.id === "auth-mfa/totp/quota-free");
+  assert.equal(program.tokens, undefined);
+  const codeOf = (step) => step.body?.totpVerificationInfo?.verificationCode;
+  const checks = { qe: "replayed-enrollment-code", qo: "older-unused-code" };
+  for (const [account, check] of Object.entries(checks)) {
+    const totpRows = program.steps.filter(
+      (step) => codeOf(step) !== undefined && JSON.stringify(step).includes(`-${account}`),
+    );
+    const wrong = totpRows.filter((step) => step.id === check);
+    assert.equal(wrong.length, 1, account);
+    assert.deepEqual(
+      totpRows.map((step) => step.id),
+      [`finalize-${account}`, `plus-4-${account}`, check],
+      account,
+    );
+  }
+});

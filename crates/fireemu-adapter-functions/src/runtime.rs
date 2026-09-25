@@ -766,6 +766,7 @@ struct Codebase {
     restart_gate: Arc<AsyncMutex<()>>,
     restart_budget: Mutex<RestartBudget>,
     restart_wake_scheduled: std::sync::atomic::AtomicBool,
+    spawn_in_flight: std::sync::atomic::AtomicBool,
 }
 
 #[derive(Default)]
@@ -1100,6 +1101,7 @@ impl FunctionsRuntime {
                     restart_gate: Arc::new(AsyncMutex::new(())),
                     restart_budget: Mutex::new(RestartBudget::default()),
                     restart_wake_scheduled: std::sync::atomic::AtomicBool::new(false),
+                    spawn_in_flight: std::sync::atomic::AtomicBool::new(false),
                     generation: std::sync::RwLock::new(CodebaseGeneration {
                         revision: 0,
                         runner: c.runner,
@@ -3136,129 +3138,93 @@ impl FunctionsRuntime {
         if self.shutting_down.load(std::sync::atomic::Ordering::SeqCst) {
             return;
         }
-        let RespawnGeneration {
-            runner: retired_runner,
-            spawn,
-            revision: codebase_revision,
-            cleanup_dir: source_generation,
-        } = respawn;
-        let Some(spawn) = spawn else {
-            return;
-        };
-        let runtime = self.clone();
-        tokio::spawn(async move {
-            // Retain the immutable source until this spawn either installs or is rejected as
-            // stale. A concurrent reload can otherwise drop its last live owner mid-import.
-            let _source_generation = source_generation;
-            match Runner::spawn_spec(&spawn).await {
-                Ok(runner) => {
-                    if runtime
-                        .shutting_down
-                        .load(std::sync::atomic::Ordering::SeqCst)
-                    {
-                        runner.kill_now();
-                        return;
-                    }
-                    // A later reset supersedes this restart: its own replacement is
-                    // the runner of record and this one must not outlive the kill.
-                    // Checked and installed under the runtime lock (the lock a reset
-                    // bumps the epoch and kills under), so the two cannot interleave.
-                    let installed = match runtime.inner.lock() {
-                        Ok(inner) if Some(inner.epoch) == generation => {
-                            let mut current = runtime.codebases[index].generation_mut();
-                            if !runtime
-                                .shutting_down
-                                .load(std::sync::atomic::Ordering::SeqCst)
-                                && current.revision == codebase_revision
-                                && Arc::ptr_eq(&current.runner, &retired_runner)
-                            {
-                                let old = std::mem::replace(&mut current.runner, Arc::new(runner));
-                                current.blocking_restart_ticket = None;
-                                drop(current);
-                                old.kill_now();
-                                true
-                            } else {
-                                runner.kill_now();
-                                false
-                            }
-                        }
-                        _ => {
-                            runner.kill_now();
-                            false
-                        }
-                    };
-                    if installed {
-                        runtime.wake.notify_one();
-                    }
-                }
-                Err(e) => eprintln!("[functions] runner restart failed: {e}"),
-            }
-        });
-    }
-
-    fn spawn_blocking_auth_restart(
-        self: &Arc<Self>,
-        index: usize,
-        ticket: Arc<()>,
-        respawn: RespawnGeneration,
-    ) {
-        if self.shutting_down.load(std::sync::atomic::Ordering::SeqCst) {
+        if respawn.spawn.is_none() {
             return;
         }
-        let RespawnGeneration {
-            spawn,
-            cleanup_dir: source_generation,
-            ..
-        } = respawn;
-        let Some(spawn) = spawn else {
+        let codebase = &self.codebases[index];
+        if codebase
+            .spawn_in_flight
+            .swap(true, std::sync::atomic::Ordering::SeqCst)
+        {
             return;
-        };
-        let runtime = self.clone();
-        tokio::spawn(async move {
-            let _source_generation = source_generation;
-            match Runner::spawn_spec(&spawn).await {
+        }
+        tokio::spawn(self.clone().spawn_coalesced(index, generation, respawn));
+    }
+
+    async fn spawn_coalesced(
+        self: Arc<Self>,
+        index: usize,
+        mut attempted_epoch: Option<Epoch>,
+        mut respawn: RespawnGeneration,
+    ) {
+        let codebase = &self.codebases[index];
+        loop {
+            // The captured source remains owned until its child finishes or is killed.
+            if self.shutting_down.load(std::sync::atomic::Ordering::SeqCst) {
+                codebase
+                    .spawn_in_flight
+                    .store(false, std::sync::atomic::Ordering::SeqCst);
+                return;
+            }
+            let Some(spawn) = respawn.spawn.as_ref() else {
+                codebase
+                    .spawn_in_flight
+                    .store(false, std::sync::atomic::Ordering::SeqCst);
+                return;
+            };
+            let _source_generation = respawn.cleanup_dir.clone();
+            let result = Runner::spawn_spec(spawn).await;
+            let Ok(inner) = self.inner.lock() else {
+                if let Ok(runner) = result {
+                    runner.kill_now();
+                }
+                codebase
+                    .spawn_in_flight
+                    .store(false, std::sync::atomic::Ordering::SeqCst);
+                return;
+            };
+            let mut current = codebase.generation_mut();
+            let same_source = current.revision == respawn.revision
+                && Arc::ptr_eq(&current.runner, &respawn.runner);
+            let current_dead = !current.runner.is_alive();
+            let shutting_down = self.shutting_down.load(std::sync::atomic::Ordering::SeqCst);
+            let retry = match result {
+                Ok(runner) if same_source && current_dead && !shutting_down => {
+                    let old = std::mem::replace(&mut current.runner, Arc::new(runner));
+                    current.blocking_restart_ticket = None;
+                    old.kill_now();
+                    self.wake.notify_one();
+                    false
+                }
                 Ok(runner) => {
-                    if runtime
-                        .shutting_down
-                        .load(std::sync::atomic::Ordering::SeqCst)
-                    {
-                        runner.kill_now();
-                        return;
-                    }
-                    let installed = if let Ok(_inner) = runtime.inner.lock() {
-                        let mut current = runtime.codebases[index].generation_mut();
-                        if !runtime
-                            .shutting_down
-                            .load(std::sync::atomic::Ordering::SeqCst)
-                            && current
-                                .blocking_restart_ticket
-                                .as_ref()
-                                .is_some_and(|active| Arc::ptr_eq(active, &ticket))
-                        {
-                            let old = std::mem::replace(&mut current.runner, Arc::new(runner));
-                            current.blocking_restart_ticket = None;
-                            drop(current);
-                            old.kill_now();
-                            true
-                        } else {
-                            runner.kill_now();
-                            false
-                        }
-                    } else {
-                        runner.kill_now();
-                        false
-                    };
-                    if installed {
-                        runtime.wake.notify_one();
-                    }
+                    runner.kill_now();
+                    current_dead && !shutting_down
                 }
                 Err(error) => {
-                    // The matching ticket deliberately remains set: admission stays fail closed
-                    // until an explicit reset or a successful source reload replaces it.
-                    eprintln!("[functions] Blocking Auth runner restart failed: {error}");
+                    eprintln!("[functions] runner restart failed: {error}");
+                    current_dead
+                        && !shutting_down
+                        && (!same_source || Some(inner.epoch) != attempted_epoch)
                 }
+            };
+            if !retry {
+                // Reset holds the same runtime lock before killing the installed runner, so
+                // it cannot miss the transition from in-flight to ready for a new spawn.
+                codebase
+                    .spawn_in_flight
+                    .store(false, std::sync::atomic::Ordering::SeqCst);
+                return;
             }
-        });
+            respawn = RespawnGeneration {
+                runner: current.runner.clone(),
+                spawn: current.spawn.clone(),
+                revision: current.revision,
+                cleanup_dir: current.cleanup_dir.clone(),
+            };
+            attempted_epoch = Some(inner.epoch);
+            drop(current);
+            drop(inner);
+        }
     }
 
     /// Notified whenever an invocation completes or the runtime resets.
@@ -3870,10 +3836,11 @@ impl FunctionsRuntime {
             revision: current.revision,
             cleanup_dir: current.cleanup_dir.clone(),
         };
+        let epoch = inner.epoch;
         drop(current);
         drop(inner);
         respawn.runner.kill_now();
-        self.spawn_blocking_auth_restart(target.owner, ticket, respawn);
+        self.spawn_captured(target.owner, Some(epoch), respawn);
         true
     }
 

@@ -1,4 +1,5 @@
-// Regex authorization exhaustion precedence and production evaluator cases.
+// Regex authorization: exhaustion never grants, and a holding allow decides (production and
+// the official emulator, FS-RULES 2026-09-24), with production evaluator cases.
 
 module RegexAuthorizationLogic {
   type Outcome = Matched | NotMatched | Exhausted
@@ -12,8 +13,8 @@ module RegexAuthorizationLogic {
     } else outcome
 
   pure def merge(parent: Outcome, nested: Outcome): Outcome =
-    if (parent == Exhausted or nested == Exhausted) Exhausted
-    else if (parent == Matched or nested == Matched) Matched
+    if (parent == Matched or nested == Matched) Matched
+    else if (parent == Exhausted or nested == Exhausted) Exhausted
     else NotMatched
 
   pure def authorizationOutcome(
@@ -66,15 +67,21 @@ module RegexAuthorizationProof {
     nestedOutcome.in(OUTCOMES),
   }
 
-  val ExhaustionNeverAllows =
-    (parentOutcome == Exhausted or nestedOutcome == Exhausted).implies(
-      decision(authorizationOutcome(
-        parentOutcome,
-        nestedOutcome,
-        parentNegated,
-        nestedNegated
-      )) == "Deny"
-    )
+  // Whether a condition holds, read from the outcome itself (not through `condition`, which
+  // the properties check): a match, or a non-match under `!`. Exhaustion never holds.
+  pure def holdsFor(outcome: Outcome, negated: bool): bool =
+    (outcome == Matched and not(negated)) or (outcome == NotMatched and negated)
+
+  val holds = holdsFor(parentOutcome, parentNegated) or holdsFor(nestedOutcome, nestedNegated)
+
+  val decided =
+    decision(authorizationOutcome(parentOutcome, nestedOutcome, parentNegated, nestedNegated))
+
+  // An exhausted condition never grants: only a condition that holds allows.
+  val ExhaustionNeverAllows = (decided == "Allow").implies(holds)
+
+  // Allow statements are alternatives: one that holds allows whatever the other raises.
+  val AlternativesDecide = holds.implies(decided == "Allow")
 }
 
 module RegexAuthorizationConnect {
@@ -86,6 +93,7 @@ module RegexAuthorizationConnect {
     "notMatched",
     "stepExhausted",
     "depthExhausted",
+    "exhaustedBesideAllow",
     "parentNegated",
     "nestedNegated"
   )
@@ -94,10 +102,10 @@ module RegexAuthorizationConnect {
   var actionTaken: ActionTaken
 
   pure def expectedDecision(case: str): str =
-    if (case.in(Set("matched", "nestedNegated"))) "Allow" else "Deny"
+    if (case.in(Set("matched", "nestedNegated", "exhaustedBesideAllow"))) "Allow" else "Deny"
 
   pure def expectedDenialClass(case: str): str =
-    if (case.in(Set("matched", "nestedNegated"))) "None"
+    if (case.in(Set("matched", "nestedNegated", "exhaustedBesideAllow"))) "None"
     else if (case == "stepExhausted") "FIREEMU-REGEX-STEPS-PER-MATCH"
     else if (case == "depthExhausted") "FIREEMU-REGEX-DEPTH-PER-MATCH"
     else "RuleMismatch"
@@ -140,6 +148,9 @@ module RegexAuthorizationScenarios {
 
   run depthExhausted = init.then(evaluateCase("depthExhausted"))
     .expect(observable.decision == "Deny" and observable.denialClass == "FIREEMU-REGEX-DEPTH-PER-MATCH")
+
+  run exhaustedBesideAllow = init.then(evaluateCase("exhaustedBesideAllow"))
+    .expect(observable.decision == "Allow" and observable.denialClass == "None")
 
   run parentNegated = init.then(evaluateCase("parentNegated"))
     .expect(observable.decision == "Deny" and observable.denialClass == "RuleMismatch")

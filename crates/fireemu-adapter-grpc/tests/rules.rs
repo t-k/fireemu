@@ -300,6 +300,17 @@ async fn start_with_options(
     indexes: IndexSet,
     refuse_without_ruleset: bool,
 ) -> Harness {
+    start_with_all(acceptance, indexes, refuse_without_ruleset, false).await
+}
+
+/// `preconditions_before_rules`: the strict profile's order of a failed precondition and a
+/// Security Rules denial.
+async fn start_with_all(
+    acceptance: TokenAcceptance,
+    indexes: IndexSet,
+    refuse_without_ruleset: bool,
+    preconditions_before_rules: bool,
+) -> Harness {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     let gateway = Gateway {
@@ -324,7 +335,8 @@ async fn start_with_options(
         RulesEnforcer::new(rules.clone(), auth.clone(), clock)
             .with_token_acceptance(acceptance)
             .with_registry(registry.clone())
-            .with_refusal_without_ruleset(refuse_without_ruleset),
+            .with_refusal_without_ruleset(refuse_without_ruleset)
+            .with_preconditions_before_rules(preconditions_before_rules),
     );
     let svc =
         FirestoreServer::new(GatewayService::local(gateway, backend.clone()).with_rules(enforcer));
@@ -2069,7 +2081,7 @@ service cloud.firestore {
 async fn aggregation_implicit_order_does_not_change_security_rules_query_metadata() {
     let mut h = start().await;
     let (_, token) = h.user("aggregation@example.com");
-    h.rules.replace_source("rules_version = '2'; service cloud.firestore { match /databases/{database}/documents { match /ordered/{id} { allow list: if request.query.orderBy == null; } } }").unwrap();
+    h.rules.replace_source("rules_version = '2'; service cloud.firestore { match /databases/{database}/documents { match /ordered/{id} { allow list: if request.query.orderBy.size() == 0; } } }").unwrap();
     for explicit in [false, true] {
         let Some(pb::run_query_request::QueryType::StructuredQuery(mut query)) =
             list("ordered").query_type
@@ -3393,4 +3405,207 @@ service cloud.firestore {
         .unwrap_err();
     assert_eq!(err.code(), tonic::Code::NotFound);
     h.handle.abort();
+}
+
+/// An end user may not call `BatchWrite`: production refuses it with the ordinary denial and the
+/// official emulator with "Batch writes require admin authentication." (FS-RULES, 2026-09-24),
+/// whatever the rules would say of each write. The owner may.
+#[tokio::test]
+async fn end_users_may_not_batch_write() {
+    let mut h = start().await;
+    let (alice, alice_token) = h.user("alice@example.com");
+    let request = || pb::BatchWriteRequest {
+        database: DB.to_owned(),
+        writes: vec![set_write(
+            &format!("profiles/{alice}"),
+            &[("name", s("Alice"))],
+        )],
+        ..Default::default()
+    };
+    let err = h
+        .client
+        .batch_write(with_bearer(request(), &alice_token))
+        .await
+        .unwrap_err();
+    assert_eq!(err.code(), tonic::Code::PermissionDenied);
+    assert_eq!(err.message(), "Missing or insufficient permissions.");
+    h.client
+        .batch_write(with_bearer(request(), "owner"))
+        .await
+        .unwrap();
+    h.handle.abort();
+}
+
+/// A query may make 20 distinct document reads in its rule, as many as a multi-document
+/// request; the 21st is refused (the official emulator, and production allows 11).
+#[tokio::test]
+async fn a_query_rule_may_read_twenty_documents() {
+    let mut h = start().await;
+    let (_alice, alice_token) = h.user("alice@example.com");
+    let gets = |n: usize| {
+        (0..n)
+            .map(|i| format!("exists(/databases/$(database)/documents/d/{i})"))
+            .collect::<Vec<_>>()
+            .join(" || ")
+    };
+    h.rules
+        .replace_source(&format!(
+            "rules_version = '2';
+service cloud.firestore {{
+  match /databases/{{database}}/documents {{
+    match /twenty/{{id}} {{ allow list: if !({}); }}
+    match /twentyone/{{id}} {{ allow list: if !({}); }}
+  }}
+}}",
+            gets(20),
+            gets(21)
+        ))
+        .unwrap();
+    let query = |collection: &str| pb::RunQueryRequest {
+        parent: DOCS.to_owned(),
+        query_type: Some(pb::run_query_request::QueryType::StructuredQuery(
+            pb::StructuredQuery {
+                from: vec![sq::CollectionSelector {
+                    collection_id: collection.into(),
+                    all_descendants: false,
+                }],
+                ..Default::default()
+            },
+        )),
+        ..Default::default()
+    };
+    let mut ok = h
+        .client
+        .run_query(with_bearer(query("twenty"), &alice_token))
+        .await
+        .unwrap()
+        .into_inner();
+    while let Some(item) = ok.next().await {
+        item.unwrap();
+    }
+    let refused = match h
+        .client
+        .run_query(with_bearer(query("twentyone"), &alice_token))
+        .await
+    {
+        Err(e) => e,
+        Ok(stream) => stream.into_inner().next().await.unwrap().unwrap_err(),
+    };
+    assert_eq!(refused.code(), tonic::Code::PermissionDenied);
+    h.handle.abort();
+}
+
+/// `request.query` always carries `limit`, `offset` and `orderBy`; `orderBy` is a map, empty
+/// when the query has no order (the official emulator; production refuses `orderBy == null`).
+#[tokio::test]
+async fn request_query_always_has_an_order_by_map() {
+    let mut h = start().await;
+    let (_alice, alice_token) = h.user("alice@example.com");
+    h.rules
+        .replace_source(
+            "rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    match /map/{id} { allow list: if request.query.orderBy is map && request.query.orderBy.size() == 0; }
+    match /keys/{id} { allow list: if request.query.keys().hasAll(['limit', 'offset', 'orderBy']); }
+    match /null/{id} { allow list: if request.query.orderBy == null; }
+  }
+}",
+        )
+        .unwrap();
+    let run = |collection: &'static str| pb::RunQueryRequest {
+        parent: DOCS.to_owned(),
+        query_type: Some(pb::run_query_request::QueryType::StructuredQuery(
+            pb::StructuredQuery {
+                from: vec![sq::CollectionSelector {
+                    collection_id: collection.into(),
+                    all_descendants: false,
+                }],
+                ..Default::default()
+            },
+        )),
+        ..Default::default()
+    };
+    for (collection, allowed) in [("map", true), ("keys", true), ("null", false)] {
+        let outcome = match h
+            .client
+            .run_query(with_bearer(run(collection), &alice_token))
+            .await
+        {
+            Err(e) => Err(e.code()),
+            Ok(stream) => {
+                let mut stream = stream.into_inner();
+                let mut result = Ok(());
+                while let Some(item) = stream.next().await {
+                    if let Err(e) = item {
+                        result = Err(e.code());
+                    }
+                }
+                result
+            }
+        };
+        assert_eq!(outcome.is_ok(), allowed, "{collection}: {outcome:?}");
+    }
+    h.handle.abort();
+}
+
+/// Production answers a create of an existing document with `ALREADY_EXISTS` even where a rule
+/// denies it, and an update of a missing document with `NOT_FOUND` (FS-RULES, 2026-09-24): the
+/// strict profile checks the precondition first. The emulator profile answers the rule's
+/// denial first, as the official emulator does.
+#[tokio::test]
+async fn strict_answers_a_failed_precondition_before_the_rules() {
+    for (preconditions_first, expected) in [
+        (true, tonic::Code::AlreadyExists),
+        (false, tonic::Code::PermissionDenied),
+    ] {
+        let mut h = start_with_all(
+            TokenAcceptance::Verified,
+            IndexSet::default(),
+            false,
+            preconditions_first,
+        )
+        .await;
+        let (_alice, alice_token) = h.user("alice@example.com");
+        h.client
+            .commit(with_bearer(
+                commit(vec![set_write("norule/present", &[("n", s("1"))])]),
+                "owner",
+            ))
+            .await
+            .unwrap();
+        let mut create = set_write("norule/present", &[("n", s("2"))]);
+        create.current_document = Some(pb::Precondition {
+            condition_type: Some(pb::precondition::ConditionType::Exists(false)),
+        });
+        let err = h
+            .client
+            .commit(with_bearer(commit(vec![create]), &alice_token))
+            .await
+            .unwrap_err();
+        assert_eq!(err.code(), expected, "{err}");
+        if preconditions_first {
+            let mut update = set_write("norule/missing", &[("n", s("2"))]);
+            update.current_document = Some(pb::Precondition {
+                condition_type: Some(pb::precondition::ConditionType::Exists(true)),
+            });
+            let err = h
+                .client
+                .commit(with_bearer(commit(vec![update]), &alice_token))
+                .await
+                .unwrap_err();
+            assert_eq!(err.code(), tonic::Code::NotFound, "{err}");
+            // A write whose precondition holds is still judged by the rules.
+            let err = h
+                .client
+                .commit(with_bearer(
+                    commit(vec![set_write("norule/other", &[("n", s("3"))])]),
+                    &alice_token,
+                ))
+                .await
+                .unwrap_err();
+            assert_eq!(err.code(), tonic::Code::PermissionDenied, "{err}");
+        }
+        h.handle.abort();
+    }
 }

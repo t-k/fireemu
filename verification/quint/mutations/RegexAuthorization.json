@@ -4,10 +4,17 @@
   "mutations": [
     {
       "id": "M-FORMAL-RULES-REGEX-001",
+      "property": "AlternativesDecide",
+      "operator": "prefer-regex-exhaustion-over-a-holding-allow",
+      "from": "if (parent == Matched or nested == Matched) Matched\n    else if (parent == Exhausted or nested == Exhausted) Exhausted",
+      "to": "if (parent == Exhausted or nested == Exhausted) Exhausted\n    else if (parent == Matched or nested == Matched) Matched"
+    },
+    {
+      "id": "M-FORMAL-RULES-REGEX-002",
       "property": "ExhaustionNeverAllows",
-      "operator": "prefer-nested-allow-over-regex-exhaustion",
-      "from": "if (parent == Exhausted or nested == Exhausted) Exhausted\n    else if (parent == Matched or nested == Matched) Matched",
-      "to": "if (parent == Matched or nested == Matched) Matched\n    else if (parent == Exhausted or nested == Exhausted) Exhausted"
+      "operator": "exhaustion-counts-as-a-match",
+      "from": "    if (outcome == Exhausted) Exhausted\n    else if (negated) {",
+      "to": "    if (outcome == Exhausted) Matched\n    else if (negated) {"
     }
   ]
 }

@@ -11029,6 +11029,81 @@ fn patch_sign_in(s: &AuthState, mask: &str, body: &Value) -> (u16, Value) {
     )
 }
 
+/// The default locale localizes the email and SMS templates and names the language of action
+/// links, as production does (sandbox recording 2026-09-25, auth-config-sdk/other-fields).
+/// Only English and Japanese are modelled.
+#[test]
+fn the_default_locale_localizes_templates_and_action_links() {
+    let s = strict_state();
+    let (status, created) = admin(
+        &s,
+        "POST",
+        &format!("{ADMIN}/accounts"),
+        &json!({"email": "locale@example.com", "password": "password1"}),
+    );
+    assert_eq!(status, 200, "{created}");
+    let link = || {
+        let (status, answer) = admin(
+            &s,
+            "POST",
+            &format!("{ADMIN}/accounts:sendOobCode"),
+            &json!({"requestType": "PASSWORD_RESET", "email": "locale@example.com", "returnOobLink": true}),
+        );
+        assert_eq!(status, 200, "{answer}");
+        answer["oobLink"].as_str().unwrap().to_owned()
+    };
+    assert!(link().contains("lang=en"));
+    let (status, answer) = patch_sign_in(
+        &s,
+        "notification.defaultLocale",
+        &json!({"notification": {"defaultLocale": "ja"}}),
+    );
+    assert_eq!(status, 200, "{answer}");
+    assert_eq!(
+        answer["notification"]["sendSms"]["smsTemplate"]["content"],
+        "%APP_NAME% の確認コードは %LOGIN_CODE% です。"
+    );
+    let (_, read) = admin(&s, "GET", PROJECT_CONFIG, &Value::Null);
+    let email = &read["notification"]["sendEmail"];
+    for (template, subject) in [
+        (
+            "resetPasswordTemplate",
+            "%APP_NAME% のパスワードを再設定してください",
+        ),
+        ("verifyEmailTemplate", "%APP_NAME% のメールアドレスの確認"),
+        (
+            "changeEmailTemplate",
+            "%APP_NAME% のログイン用メールアドレスが変更されました",
+        ),
+        (
+            "revertSecondFactorAdditionTemplate",
+            "%APP_NAME% アカウントに 2 段階認証プロセスを追加しました。",
+        ),
+    ] {
+        assert_eq!(email[template]["subject"], subject, "{template}");
+        assert!(
+            email[template]["body"]
+                .as_str()
+                .is_some_and(|body| body.contains("%APP_NAME% チーム")),
+            "{template}"
+        );
+        assert_eq!(email[template]["senderLocalPart"], "noreply");
+    }
+    assert!(link().contains("lang=ja"));
+    let (status, _) = patch_sign_in(
+        &s,
+        "notification.defaultLocale",
+        &json!({"notification": {"defaultLocale": "en"}}),
+    );
+    assert_eq!(status, 200);
+    let (_, read) = admin(&s, "GET", PROJECT_CONFIG, &Value::Null);
+    assert_eq!(
+        read["notification"]["sendEmail"]["resetPasswordTemplate"]["subject"],
+        "Reset your password for %APP_NAME%"
+    );
+    assert!(link().contains("lang=en"));
+}
+
 /// Strict `createAuthUri` answers as production does without improved email privacy: no
 /// empty provider lists, and a provider that is not configured is refused (sandbox recording
 /// 2026-09-25, auth-config-sdk/email-privacy). The emulator profile keeps the official

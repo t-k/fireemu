@@ -32,6 +32,56 @@ const VERIFY_BODY: &str = "<p>Hello %DISPLAY_NAME%,</p>\n<p>Follow this link to 
 const CHANGE_BODY: &str = "<p>Hello %DISPLAY_NAME%,</p>\n<p>Your sign-in email for %APP_NAME% was changed to %NEW_EMAIL%.</p>\n<p>If you didn\u{2019}t ask to change your email, follow this link to reset your sign-in email.</p>\n<p><a href='%LINK%'>%LINK%</a></p>\n<p>Thanks,</p>\n<p>Your %APP_NAME% team</p>";
 const REVERT_BODY: &str = "<p>Hello %DISPLAY_NAME%,</p>\n<p>Your account in %APP_NAME% has been updated with %SECOND_FACTOR% for 2-step verification.</p>\n<p>If you didn't add this 2-step verification, click the link below to remove it.</p>\n<p><a href='%LINK%'>%LINK%</a></p>\n<p>Thanks,</p>\n<p>Your %APP_NAME% team</p>";
 
+/// Production's Japanese templates (`defaultLocale` `ja`, sandbox recording 2026-09-25).
+const JA_TEMPLATES: &[(&str, &str, &str)] = &[
+    (
+        "resetPasswordTemplate",
+        "%APP_NAME% のパスワードを再設定してください",
+        "<p>お客様</p>\n<p>%APP_NAME% の %EMAIL% アカウントのパスワードをリセットするには、次のリンクをクリックしてください。</p>\n<p><a href='%LINK%'>%LINK%</a></p>\n<p>パスワードのリセットを依頼していない場合は、このメールを無視してください。</p>\n<p>よろしくお願いいたします。</p>\n<p>%APP_NAME% チーム</p>",
+    ),
+    (
+        "verifyEmailTemplate",
+        "%APP_NAME% のメールアドレスの確認",
+        "<p>%DISPLAY_NAME% 様</p>\n<p>メールアドレスを確認するには、次のリンクをクリックしてください。</p>\n<p><a href='%LINK%'>%LINK%</a></p>\n<p>このアドレスの確認を依頼していない場合は、このメールを無視してください。</p>\n<p>よろしくお願いいたします。</p>\n<p>%APP_NAME% チーム</p>",
+    ),
+    (
+        "changeEmailTemplate",
+        "%APP_NAME% のログイン用メールアドレスが変更されました",
+        "<p>%DISPLAY_NAME% 様</p>\n<p>%APP_NAME% のログイン用メールアドレスが %NEW_EMAIL% に変更されました。</p>\n<p>メールの変更を依頼していない場合は、次のリンクをクリックして、ログイン用メールアドレスをリセットしてください。</p>\n<p><a href='%LINK%'>%LINK%</a></p>\n<p>よろしくお願いいたします。</p>\n<p>%APP_NAME% チーム</p>",
+    ),
+    (
+        "revertSecondFactorAdditionTemplate",
+        "%APP_NAME% アカウントに 2 段階認証プロセスを追加しました。",
+        "<p>%DISPLAY_NAME% 様</p>\n<p>2 段階認証プロセスの %SECOND_FACTOR% で %APP_NAME% のアカウントが更新されました。</p>\n<p>この 2 段階認証プロセスを追加していない場合は、下のリンクをクリックして削除してください。</p>\n<p><a href='%LINK%'>%LINK%</a></p>\n<p>よろしくお願いいたします。</p>\n<p>%APP_NAME% チーム</p>",
+    ),
+];
+const JA_SMS: &str = "%APP_NAME% の確認コードは %LOGIN_CODE% です。";
+
+/// Production's English templates, the ones a new project reports.
+const EN_TEMPLATES: &[(&str, &str, &str)] = &[
+    (
+        "resetPasswordTemplate",
+        "Reset your password for %APP_NAME%",
+        RESET_BODY,
+    ),
+    (
+        "verifyEmailTemplate",
+        "Verify your email for %APP_NAME%",
+        VERIFY_BODY,
+    ),
+    (
+        "changeEmailTemplate",
+        "Your sign-in email was changed for %APP_NAME%",
+        CHANGE_BODY,
+    ),
+    (
+        "revertSecondFactorAdditionTemplate",
+        "You've added 2 step verification to your %APP_NAME% account.",
+        REVERT_BODY,
+    ),
+];
+const EN_SMS: &str = "%LOGIN_CODE% is your verification code for %APP_NAME%.";
+
 fn template(subject: &str, body: &str) -> Value {
     json!({
         "senderLocalPart": "noreply",
@@ -48,20 +98,17 @@ fn initial_notification(project: &str) -> Value {
     json!({
         "sendEmail": {
             "method": "DEFAULT",
-            "resetPasswordTemplate": template("Reset your password for %APP_NAME%", RESET_BODY),
-            "verifyEmailTemplate": template("Verify your email for %APP_NAME%", VERIFY_BODY),
-            "changeEmailTemplate": template("Your sign-in email was changed for %APP_NAME%", CHANGE_BODY),
+            "resetPasswordTemplate": template(EN_TEMPLATES[0].1, EN_TEMPLATES[0].2),
+            "verifyEmailTemplate": template(EN_TEMPLATES[1].1, EN_TEMPLATES[1].2),
+            "changeEmailTemplate": template(EN_TEMPLATES[2].1, EN_TEMPLATES[2].2),
             "callbackUri": format!("https://{project}.firebaseapp.com/__/auth/action"),
             "dnsInfo": {
                 "customDomainState": "NOT_STARTED",
                 "domainVerificationRequestTime": "1970-01-01T00:00:00Z",
             },
-            "revertSecondFactorAdditionTemplate": template(
-                "You've added 2 step verification to your %APP_NAME% account.",
-                REVERT_BODY,
-            ),
+            "revertSecondFactorAdditionTemplate": template(EN_TEMPLATES[3].1, EN_TEMPLATES[3].2),
         },
-        "sendSms": {"smsTemplate": {"content": "%LOGIN_CODE% is your verification code for %APP_NAME%."}},
+        "sendSms": {"smsTemplate": {"content": EN_SMS}},
         "defaultLocale": "en",
     })
 }
@@ -84,10 +131,55 @@ pub(super) fn member_value(
     member: &str,
     project: &str,
 ) -> Option<Value> {
-    members
+    let value = members
         .get(member)
         .and_then(|text| serde_json::from_str(text).ok())
-        .or_else(|| initial_member(member, project))
+        .or_else(|| initial_member(member, project));
+    if member == "notification" {
+        return value.map(localized_notification);
+    }
+    value
+}
+
+/// The project's default locale (`notification.defaultLocale`), `en` until one is written.
+pub(super) fn default_locale(
+    members: &fireemu_core_auth::config_members::StoredConfigMembers,
+) -> String {
+    members
+        .get("notification")
+        .and_then(|text| serde_json::from_str::<Value>(text).ok())
+        .and_then(|notification| {
+            notification
+                .get("defaultLocale")
+                .and_then(Value::as_str)
+                .map(str::to_owned)
+        })
+        .unwrap_or_else(|| "en".to_owned())
+}
+
+/// The templates production reports for the default locale: they are not writable
+/// (`EMAIL_TEMPLATE_UPDATE_NOT_ALLOWED`) and follow the locale (sandbox recording 2026-09-25).
+/// Only English and Japanese are modelled; any other locale reports the English ones.
+fn localized_notification(mut notification: Value) -> Value {
+    let (templates, sms) = match notification.get("defaultLocale").and_then(Value::as_str) {
+        Some("ja") => (JA_TEMPLATES, JA_SMS),
+        _ => (EN_TEMPLATES, EN_SMS),
+    };
+    if let Some(send_email) = notification
+        .pointer_mut("/sendEmail")
+        .and_then(Value::as_object_mut)
+    {
+        for (name, subject, body) in templates {
+            if let Some(template) = send_email.get_mut(*name).and_then(Value::as_object_mut) {
+                template.insert("subject".to_owned(), json!(subject));
+                template.insert("body".to_owned(), json!(body));
+            }
+        }
+    }
+    if let Some(content) = notification.pointer_mut("/sendSms/smsTemplate/content") {
+        *content = json!(sms);
+    }
+    notification
 }
 
 /// The project's Firebase scrypt parameters as production reports them. fireemu hashes

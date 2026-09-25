@@ -5,12 +5,42 @@ import {
   assertAdmission,
   assertOwnedImage,
   assertPublicReadback,
+  assertReviewApproval,
   expiredAt,
   preflightCliSideEffects,
-  readServiceIdentities,
-  serviceIdentityChanges,
+  readServiceAgentGrants,
+  serviceAgentGrantChanges,
   summarizeCliOutput,
 } from "./production.mjs";
+
+test("stage 3 approval accepts only one authoritative decision block", () => {
+  const sha = "a".repeat(40);
+  const digest = "b".repeat(64);
+  const block = `Decision: APPROVE\ngitSha: ${sha}\ncorpusDigest: ${digest}\n`;
+  assert.doesNotThrow(() => assertReviewApproval(block, sha, digest));
+  assert.throws(
+    () =>
+      assertReviewApproval(
+        `Decision: REJECT\ngitSha: ${sha}\ncorpusDigest: ${digest}\n\n${block}`,
+        sha,
+        digest,
+      ),
+    /APPROVE/,
+  );
+  assert.throws(
+    () => assertReviewApproval(`# Review\n\n\`\`\`\n${block}\`\`\`\n`, sha, digest),
+    /APPROVE/,
+  );
+  assert.throws(() => assertReviewApproval(`${block}\nDecision: REJECT\n`, sha, digest), /APPROVE/);
+  assert.throws(
+    () => assertReviewApproval(`${block}\n## Decision: REJECT\n`, sha, digest),
+    /APPROVE/,
+  );
+  assert.throws(
+    () => assertReviewApproval(block.replace(sha, "c".repeat(40)), sha, digest),
+    /APPROVE/,
+  );
+});
 
 test("stage 3 admission requires terminal stage 2, a quiet shared project and a 30-minute gap", () => {
   const lines = [
@@ -209,35 +239,39 @@ test("CLI preflight requires the reviewed APIs and exact repository cleanup poli
   }
 });
 
-test("service identity readback records only new Pub/Sub and Eventarc agents", async () => {
+test("project IAM readback records only Pub/Sub and Eventarc service-agent grants", async () => {
   const calls = [];
-  const before = await readServiceIdentities(async (method, url, body, kind, allowed) => {
-    calls.push({ method, url, body, kind, allowed });
-    return { status: 404, value: {} };
+  const before = await readServiceAgentGrants(async (method, url, body, kind) => {
+    calls.push({ method, url, body, kind });
+    return { status: 200, value: { bindings: [] } };
   });
-  assert.equal(calls.length, 2);
-  assert.ok(
-    calls.every(
-      ({ method, url, kind, allowed }) =>
-        method === "GET" &&
-        url.startsWith(
-          "https://iam.googleapis.com/v1/projects/fireemu-oracle-query/serviceAccounts/",
-        ) &&
-        kind === "control" &&
-        allowed.includes(404),
-    ),
-  );
-  const after = await readServiceIdentities(async (_method, url) => {
-    const email = decodeURIComponent(url.split("/").at(-1));
-    return {
-      status: 200,
-      value: {
-        name: `projects/fireemu-oracle-query/serviceAccounts/${email}`,
-        email,
-        uniqueId: "123",
-      },
-    };
-  });
-  assert.deepEqual(serviceIdentityChanges(before, after), ["eventarc", "pubsub"]);
-  assert.throws(() => serviceIdentityChanges(after, before), /service identity disappeared/);
+  assert.deepEqual(calls, [
+    {
+      method: "POST",
+      url: "https://cloudresourcemanager.googleapis.com/v3/projects/1049549757969:getIamPolicy",
+      body: { options: { requestedPolicyVersion: 3 } },
+      kind: "control",
+    },
+  ]);
+  const after = await readServiceAgentGrants(async () => ({
+    status: 200,
+    value: {
+      bindings: [
+        {
+          role: "roles/pubsub.serviceAgent",
+          members: ["serviceAccount:service-1049549757969@gcp-sa-pubsub.iam.gserviceaccount.com"],
+        },
+        {
+          role: "roles/eventarc.serviceAgent",
+          members: ["serviceAccount:service-1049549757969@gcp-sa-eventarc.iam.gserviceaccount.com"],
+        },
+        { role: "roles/owner", members: ["user:someone@example.com"] },
+      ],
+    },
+  }));
+  assert.deepEqual(serviceAgentGrantChanges(before, after), [
+    { kind: "eventarc", role: "roles/eventarc.serviceAgent" },
+    { kind: "pubsub", role: "roles/pubsub.serviceAgent" },
+  ]);
+  assert.throws(() => serviceAgentGrantChanges(after, before), /service-agent grant disappeared/);
 });

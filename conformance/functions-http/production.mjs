@@ -48,7 +48,7 @@ const FUNCTION_HOST = "https://cloudfunctions.googleapis.com";
 const RUN_HOST = "https://run.googleapis.com";
 const ARTIFACT_HOST = "https://artifactregistry.googleapis.com";
 const SERVICE_USAGE_HOST = "https://serviceusage.googleapis.com";
-const IAM_HOST = "https://iam.googleapis.com";
+const RESOURCE_MANAGER_HOST = "https://cloudresourcemanager.googleapis.com";
 const PROJECT_NUMBER = "1049549757969";
 const RESOURCE = `projects/${PROJECT}/locations/${REGION}`;
 const REPOSITORY = `${RESOURCE}/repositories/gcf-artifacts`;
@@ -204,6 +204,18 @@ async function requiredSourceDigests() {
   return corpus;
 }
 
+export function assertReviewApproval(content, gitSha, corpusDigest) {
+  const lines = content.replaceAll("\r\n", "\n").split("\n");
+  if (
+    lines[0] !== "Decision: APPROVE" ||
+    lines[1] !== `gitSha: ${gitSha}` ||
+    lines[2] !== `corpusDigest: ${corpusDigest}` ||
+    lines.slice(3).some((line) => /(?:^|[\s#>])(?:Decision|gitSha|corpusDigest)\s*:/.test(line))
+  ) {
+    throw new Error("stage 3 pre-send APPROVE must bind a single decision, commit and corpus");
+  }
+}
+
 async function assertPrivateApproval() {
   const path = process.env.FIREEMU_FUNCTIONS_HTTP_STAGE3_REVIEW;
   if (!path || !resolve(path).startsWith(`${PRIVATE_ROOT}/`))
@@ -222,14 +234,10 @@ async function assertPrivateApproval() {
     ],
     { cwd: ROOT, encoding: "utf8" },
   );
-  if (
-    dirty ||
-    !/^Decision:\s*APPROVE\s*$/im.test(content) ||
-    !content.includes(`gitSha: ${gitSha}`) ||
-    !content.includes(`corpusDigest: ${CORPUS_SHA}`)
-  ) {
+  if (dirty) {
     throw new Error("stage 3 pre-send APPROVE must bind a clean reviewed commit and corpus");
   }
+  assertReviewApproval(content, gitSha, CORPUS_SHA);
 }
 
 async function ownerAdc() {
@@ -288,9 +296,14 @@ function createControl(adc, budget) {
   let token;
   return async function control(method, url, body, kind = "control", allowed = [200]) {
     if (
-      ![FUNCTION_HOST, RUN_HOST, ARTIFACT_HOST, AUTH_HOST, SERVICE_USAGE_HOST, IAM_HOST].some(
-        (host) => url.startsWith(`${host}/`),
-      )
+      ![
+        FUNCTION_HOST,
+        RUN_HOST,
+        ARTIFACT_HOST,
+        AUTH_HOST,
+        SERVICE_USAGE_HOST,
+        RESOURCE_MANAGER_HOST,
+      ].some((host) => url.startsWith(`${host}/`))
     ) {
       throw new Error("unreviewed REST host");
     }
@@ -426,42 +439,43 @@ export async function preflightCliSideEffects(control) {
   }
 }
 
-export async function readServiceIdentities(control) {
+export async function readServiceAgentGrants(control) {
+  const response = await control(
+    "POST",
+    `${RESOURCE_MANAGER_HOST}/v3/projects/${PROJECT_NUMBER}:getIamPolicy`,
+    { options: { requestedPolicyVersion: 3 } },
+    "control",
+  );
+  const bindings = response.value.bindings ?? [];
+  if (!Array.isArray(bindings)) throw new Error("project IAM policy bindings are invalid");
   const result = {};
   for (const [kind, email] of Object.entries(SERVICE_IDENTITIES)) {
-    const url = `${IAM_HOST}/v1/projects/${PROJECT}/serviceAccounts/${encodeURIComponent(email)}`;
-    const response = await control("GET", url, undefined, "control", [200, 404]);
-    if (response.status === 200) {
-      const name = response.value.name;
-      if (
-        response.value.email !== email ||
-        ![
-          `projects/${PROJECT}/serviceAccounts/${email}`,
-          `projects/${PROJECT_NUMBER}/serviceAccounts/${email}`,
-        ].includes(name)
-      ) {
-        throw new Error(`${kind} service identity readback changed`);
-      }
+    const member = `serviceAccount:${email}`;
+    result[kind] = [];
+    for (const binding of bindings) {
+      if (!binding.members?.includes(member)) continue;
+      if (typeof binding.role !== "string" || binding.condition)
+        throw new Error(`${kind} service-agent grant is unreviewed`);
+      result[kind].push(binding.role);
     }
-    result[kind] = {
-      email,
-      exists: response.status === 200,
-      uniqueId: response.status === 200 ? response.value.uniqueId : null,
-    };
+    result[kind] = [...new Set(result[kind])].toSorted();
   }
   return result;
 }
 
-export function serviceIdentityChanges(before, after) {
-  const created = [];
+export function serviceAgentGrantChanges(before, after) {
+  const added = [];
   for (const kind of Object.keys(SERVICE_IDENTITIES)) {
-    if (before[kind]?.exists && !after[kind]?.exists)
-      throw new Error(`${kind} service identity disappeared`);
-    if (before[kind]?.exists && before[kind].uniqueId !== after[kind]?.uniqueId)
-      throw new Error(`${kind} service identity changed unique ID`);
-    if (!before[kind]?.exists && after[kind]?.exists) created.push(kind);
+    const prior = new Set(before[kind]);
+    const current = new Set(after[kind]);
+    for (const role of prior) {
+      if (!current.has(role)) throw new Error(`${kind} service-agent grant disappeared`);
+    }
+    for (const role of current) {
+      if (!prior.has(role)) added.push({ kind, role });
+    }
   }
-  return created;
+  return added;
 }
 
 async function inspectAbsence(control, target, kind) {
@@ -874,13 +888,13 @@ export async function recordProduction() {
     let outcome = "recorded";
     let reason;
     let residual = false;
-    let identitiesBefore;
+    let grantsBefore;
     try {
       await preflightCliSideEffects(control);
-      identitiesBefore = await readServiceIdentities(control);
+      grantsBefore = await readServiceAgentGrants(control);
       await writeFile(
-        join(runDir, "service-identities-before.json"),
-        `${JSON.stringify(identitiesBefore, null, 2)}\n`,
+        join(runDir, "service-agent-grants-before.json"),
+        `${JSON.stringify(grantsBefore, null, 2)}\n`,
         { mode: 0o600 },
       );
       for (const program of corpus.programs) {
@@ -907,23 +921,29 @@ export async function recordProduction() {
       reason = error.message;
       residual = Boolean(error.residual);
     }
-    if (identitiesBefore && budget.snapshot().cliDeploy > 0) {
+    if (grantsBefore && budget.snapshot().cliDeploy > 0) {
       try {
-        const identitiesAfter = await readServiceIdentities(control);
+        const grantsAfter = await readServiceAgentGrants(control);
         await writeFile(
-          join(runDir, "service-identities-after.json"),
-          `${JSON.stringify(identitiesAfter, null, 2)}\n`,
+          join(runDir, "service-agent-grants-after.json"),
+          `${JSON.stringify(grantsAfter, null, 2)}\n`,
           { mode: 0o600 },
         );
-        for (const kind of serviceIdentityChanges(identitiesBefore, identitiesAfter)) {
+        for (const { kind, role } of serviceAgentGrantChanges(grantsBefore, grantsAfter)) {
           await logChange(
-            "service-identity-created",
-            `${kind}: ${identitiesAfter[kind].email}; identity remains enabled`,
+            "service-agent-project-grant-observed",
+            `${kind}: ${SERVICE_IDENTITIES[kind]}; ${role}; project IAM readback`,
           );
         }
+        await logChange(
+          "service-identity-generation-possible",
+          "Firebase CLI 15.28.2 v2 deploy invokes Pub/Sub and Eventarc generateServiceIdentity; direct creation readback is unavailable",
+        );
       } catch (error) {
         outcome = "stopped-needs-review";
-        reason = [reason, `service identity readback: ${error.message}`].filter(Boolean).join("; ");
+        reason = [reason, `service-agent grant readback: ${error.message}`]
+          .filter(Boolean)
+          .join("; ");
         residual = true;
       }
     }

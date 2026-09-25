@@ -1,10 +1,15 @@
 //! The region of a phone number, for the project's SMS region policy (`smsRegionConfig`).
 //!
 //! Production refuses a code for a number of a region its policy does not allow (sandbox
-//! recording 2026-09-25, AUTH-CONFIG-SDK `other-fields`). fireemu names the region of the
-//! North American Numbering Plan by area code and of other numbers by calling code; a calling
-//! code shared by several regions, or one missing from the table, has no region, and the
-//! policy then refuses nothing.
+//! recording 2026-09-25, AUTH-CONFIG-SDK `other-fields`, a +1 650 test number under an
+//! allowlist of JP and under a disallowed US). Identity Platform documents the policy as
+//! "based on the calling code of the destination phone number" (`SmsRegionConfig`), with
+//! CLDR region codes. A calling code of one region names that region. The North American
+//! Numbering Plan's +1 may be read as the United States (the calling code) or as the region
+//! of its area code, so both are candidates and a policy refuses such a number only when it
+//! refuses every candidate. A calling code shared by several regions, or one missing from the
+//! table, has no candidate, and the policy then refuses nothing. Unobserved: every region but
+//! the one US test number, and the MFA SMS routes, which fireemu leaves unrefused.
 
 use serde_json::Value;
 
@@ -137,13 +142,32 @@ pub(super) fn region_of(number: &str) -> Option<&'static str> {
         .map(|(_, region)| *region)
 }
 
-/// Whether a written SMS region policy refuses a code for `number`. A new project's
-/// `allowlistOnly: {}` refuses nothing, as production sends codes under it; an allowlist
-/// refuses a region it does not name, a default allowance the regions it disallows.
-pub(super) fn policy_refuses(policy: &Value, number: &str) -> bool {
+/// The regions `number` may be taken to belong to: none when fireemu cannot name one, the
+/// United States and the area code's region for a +1 number, else its calling code's region.
+fn candidate_regions(number: &str) -> Vec<&'static str> {
     let Some(region) = region_of(number) else {
-        return false;
+        return Vec::new();
     };
+    if number.starts_with("+1") && region != "US" {
+        vec!["US", region]
+    } else {
+        vec![region]
+    }
+}
+
+/// Whether a written SMS region policy refuses a code for `number`: only when it refuses every
+/// region the number may belong to. A new project's `allowlistOnly: {}` refuses nothing, as
+/// production sends codes under it; an allowlist refuses a region it does not name, a default
+/// allowance the regions it disallows.
+pub(super) fn policy_refuses(policy: &Value, number: &str) -> bool {
+    let candidates = candidate_regions(number);
+    !candidates.is_empty()
+        && candidates
+            .iter()
+            .all(|region| region_refused(policy, region))
+}
+
+fn region_refused(policy: &Value, region: &str) -> bool {
     let names = |list: Option<&Value>| {
         list.and_then(Value::as_array)
             .is_some_and(|regions| regions.iter().any(|r| r.as_str() == Some(region)))
@@ -196,6 +220,24 @@ mod tests {
         assert!(!policy_refuses(
             &json!({"allowlistOnly": {"allowedRegions": ["JP"]}}),
             "+447700900000"
+        ));
+        // A +1 number's region may be taken from its calling code alone (the United States)
+        // or from its area code; a policy refuses it only when it refuses both.
+        assert!(!policy_refuses(
+            &json!({"allowlistOnly": {"allowedRegions": ["US"]}}),
+            "+18765550100"
+        ));
+        assert!(!policy_refuses(
+            &json!({"allowByDefault": {"disallowedRegions": ["US"]}}),
+            "+14165550100"
+        ));
+        assert!(policy_refuses(
+            &json!({"allowByDefault": {"disallowedRegions": ["US", "CA"]}}),
+            "+14165550100"
+        ));
+        assert!(policy_refuses(
+            &json!({"allowlistOnly": {"allowedRegions": ["JP"]}}),
+            "+14165550100"
         ));
     }
 }

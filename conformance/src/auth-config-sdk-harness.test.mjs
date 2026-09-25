@@ -204,6 +204,15 @@ test("config writes stay on reviewed paths, never key material, other lanes or E
     { recaptchaConfig: { phoneEnforcementState: "ENFORCE" } },
     /never enforced/,
   );
+  // Production also takes the proto names; any spelling of a state is checked (security
+  // review 2026-09-25).
+  for (const state of [
+    { email_password_enforcement_state: "ENFORCE" },
+    { phone_enforcement_state: "ENFORCE" },
+    { emailPasswordEnforcementState: "enforce" },
+    { phoneEnforcementState: 3 },
+  ])
+    refused("recaptchaConfig", { recaptchaConfig: state }, /never enforced/);
   refused(
     undefined,
     { emailPrivacyConfig: { enableImprovedEmailPrivacy: false } },

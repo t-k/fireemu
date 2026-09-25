@@ -2713,6 +2713,10 @@ async fn a_malformed_v2_body_is_an_invalid_argument() {
     .await;
     assert_eq!(status, "400");
     assert_eq!(refused["error"]["status"], "INVALID_ARGUMENT", "{refused}");
+    assert_eq!(
+        refused["error"]["message"], "Invalid JSON payload received.",
+        "{refused}"
+    );
     assert!(refused["error"].get("errors").is_none(), "{refused}");
     let (status, refused) = send(format!("{V1}/accounts:update")).await;
     assert_eq!(status, "400");
@@ -11603,6 +11607,21 @@ fn an_admin_update_takes_a_short_password_and_a_client_update_does_not() {
             &json!({"email": "short@example.com", "password": "12345", "returnSecureToken": true}),
         );
         assert_eq!(status, 200, "strict {strict}: {signed_in}");
+        // An empty password is unobserved and stays refused, as it was.
+        let (status, refused) = admin(
+            &s,
+            "POST",
+            &format!("{ADMIN}/accounts:update"),
+            &json!({"localId": created["localId"], "password": ""}),
+        );
+        assert_eq!(
+            (status, refused["error"]["message"].as_str()),
+            (
+                400,
+                Some("WEAK_PASSWORD : Password should be at least 6 characters")
+            ),
+            "strict {strict}"
+        );
     }
 }
 

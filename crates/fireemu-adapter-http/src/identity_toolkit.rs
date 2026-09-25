@@ -7450,8 +7450,6 @@ fn custom_token_claims_hold(payload: &JsonValue, now_secs: i64) -> bool {
         && now_secs < exp.saturating_add(leeway)
 }
 
-/// The v2 API's refusal: a gRPC status name and no `errors` list (sandbox recording
-/// 2026-09-24, mfaEnrollment:start and :withdraw). Applied in the strict profile only.
 /// `GET v1/projects`: the project named by its number, as production and the official
 /// emulator both answer, and the project's authorized domains (sandbox read 2026-09-25). The
 /// emulator profile keeps the official emulator's `localhost` until domains are configured.
@@ -7471,6 +7469,8 @@ fn client_project_config(store: &AuthStore, strict: bool) -> JsonResponse {
     }
 }
 
+/// The v2 API's refusal: a gRPC status name and no `errors` list (sandbox recording
+/// 2026-09-24, mfaEnrollment:start and :withdraw). Applied in the strict profile only.
 fn v2_error_shape(response: JsonResponse, strict: bool) -> JsonResponse {
     if strict && response.status == 400 {
         secure_token_error_shape(response)
@@ -8266,7 +8266,7 @@ fn parse_update(body: &Value, self_service: bool) -> Result<UpdatePlan, JsonResp
         if self_service {
             AuthStore::validate_password(p)
         } else {
-            AuthStore::validate_imported_password(p)
+            AuthStore::validate_admin_password(p)
         }
         .map_err(|e| auth_error(&e))?;
     }

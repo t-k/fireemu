@@ -96,7 +96,7 @@ pub struct AuthSignInSettings {
     pub anonymous_enabled: Option<bool>,
     /// `auth.signIn.phoneNumber.enabled`.
     pub phone_enabled: Option<bool>,
-    /// `auth.signIn.phoneNumber.testPhoneNumbers`: E.164 number to its six-digit code.
+    /// `auth.signIn.phoneNumber.testPhoneNumbers`: E.164 number to its code.
     pub test_phone_numbers: Option<BTreeMap<String, String>>,
 }
 
@@ -2683,14 +2683,11 @@ fn parse_sign_in_providers(
                             "{path}: {number} is not an E.164 number"
                         )));
                     }
+                    // Any text, as production's Admin config takes a test number's code.
                     match code.as_str() {
-                        Some(code)
-                            if code.len() == 6 && code.bytes().all(|b| b.is_ascii_digit()) =>
-                        {
-                            Ok((number.clone(), code.to_owned()))
-                        }
-                        _ => Err(ConfigError(format!(
-                            "{path}: the code of {number} is not six digits"
+                        Some(code) => Ok((number.clone(), code.to_owned())),
+                        None => Err(ConfigError(format!(
+                            "{path}: the code of {number} is not text"
                         ))),
                     }
                 })
@@ -3696,16 +3693,25 @@ mod tests {
             }
         );
         for (invalid, message) in [
-            (json!({"email": {"enabled": "yes"}}), "auth.signIn.email.enabled must be a boolean"),
-            (json!({"email": {"other": true}}), "unknown config key auth.signIn.email.other"),
-            (json!({"anonymous": true}), "auth.signIn.anonymous must be an object"),
+            (
+                json!({"email": {"enabled": "yes"}}),
+                "auth.signIn.email.enabled must be a boolean",
+            ),
+            (
+                json!({"email": {"other": true}}),
+                "unknown config key auth.signIn.email.other",
+            ),
+            (
+                json!({"anonymous": true}),
+                "auth.signIn.anonymous must be an object",
+            ),
             (
                 json!({"phoneNumber": {"testPhoneNumbers": {"16505550101": "123456"}}}),
                 "auth.signIn.phoneNumber.testPhoneNumbers: 16505550101 is not an E.164 number",
             ),
             (
-                json!({"phoneNumber": {"testPhoneNumbers": {"+16505550101": "12345"}}}),
-                "auth.signIn.phoneNumber.testPhoneNumbers: the code of +16505550101 is not six digits",
+                json!({"phoneNumber": {"testPhoneNumbers": {"+16505550101": 123_456}}}),
+                "auth.signIn.phoneNumber.testPhoneNumbers: the code of +16505550101 is not text",
             ),
         ] {
             assert_eq!(
@@ -3714,6 +3720,25 @@ mod tests {
                 "{message}"
             );
         }
+        // A code is taken as production's Admin config takes it: any text (AUTH-CONFIG-SDK
+        // sandbox recording 2026-09-25 took "12345" and "abc").
+        let cfg = with_profile(
+            json!({"auth": {"signIn": {"phoneNumber": {"testPhoneNumbers": {
+                "+16505550101": "12345",
+                "+16505550102": "abc",
+            }}}}}),
+        )
+        .unwrap();
+        assert_eq!(
+            cfg.auth_sign_in.test_phone_numbers,
+            Some(
+                [
+                    ("+16505550101".to_owned(), "12345".to_owned()),
+                    ("+16505550102".to_owned(), "abc".to_owned()),
+                ]
+                .into()
+            )
+        );
     }
 
     #[test]

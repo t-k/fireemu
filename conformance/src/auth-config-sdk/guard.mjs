@@ -303,11 +303,22 @@ function guardConfigWrite(method, parsed, body, role, ctx) {
       throw new Error(`config body member ${leaf} is not reviewed`);
     if (!touched(leaf)) throw new Error(`config body member ${leaf} is not touched by the program`);
   }
-  const recaptcha = body.recaptchaConfig ?? {};
   // Only OFF, AUDIT and unspecified (what a cleared config keeps), or the one unknown name the
   // validation probes send (`SOMETIMES`), which production refuses; never ENFORCE or a numeric
-  // enum value (K2).
-  const states = [recaptcha.emailPasswordEnforcementState, recaptcha.phoneEnforcementState];
+  // enum value (K2). Production also takes the proto names (`email_password_enforcement_state`),
+  // so every member under recaptchaConfig named like a state is checked, whatever its spelling.
+  const recaptcha = body.recaptchaConfig ?? body.recaptcha_config;
+  const states = [];
+  const collectStates = (value) => {
+    if (Array.isArray(value)) value.forEach(collectStates);
+    else if (value && typeof value === "object") {
+      for (const [key, inner] of Object.entries(value)) {
+        if (/enforcement_?state$/i.test(key)) states.push(inner);
+        else collectStates(inner);
+      }
+    }
+  };
+  collectStates(recaptcha);
   if (
     states.some(
       (state) =>

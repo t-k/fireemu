@@ -872,11 +872,20 @@ fn strict_json_list_rejects_filters_it_cannot_apply() {
     // https://cloud.google.com/storage/docs/json_api/v1/objects/list
     let strict = state(None);
     let emulator = state_with(None, TokenAcceptance::EmulatorMock);
+    let uploaded = handle(
+        &strict,
+        req(
+            "POST",
+            &format!("/upload/storage/v1/b/{BUCKET}/o?uploadType=media&name=current.txt"),
+            &[],
+            b"current",
+        ),
+    );
+    assert_eq!(uploaded.status, 200);
     for filter in [
         "matchGlob=*.txt",
         "startOffset=b",
         "endOffset=z",
-        "versions=true",
         "includeTrailingDelimiter=true",
     ] {
         let path = format!("/storage/v1/b/{BUCKET}/o?{filter}");
@@ -885,10 +894,28 @@ fn strict_json_list_rejects_filters_it_cannot_apply() {
         let compatible = handle(&emulator, req("GET", &path, &[], b""));
         assert_eq!(compatible.status, 200, "{filter}");
     }
-    for filter in ["versions=false", "includeTrailingDelimiter=false"] {
+    for filter in [
+        "versions=false",
+        "versions=true",
+        "includeTrailingDelimiter=false",
+    ] {
         let path = format!("/storage/v1/b/{BUCKET}/o?{filter}");
         assert_eq!(handle(&strict, req("GET", &path, &[], b"")).status, 200);
     }
+    let listed = |versions: &str| {
+        handle(
+            &strict,
+            req(
+                "GET",
+                &format!("/storage/v1/b/{BUCKET}/o?versions={versions}"),
+                &[],
+                b"",
+            ),
+        )
+    };
+    let current_only = listed("false");
+    assert_eq!(listed("true").body, current_only.body);
+    assert_eq!(json_body(&current_only)["items"][0]["name"], "current.txt");
 }
 
 #[test]
@@ -1695,6 +1722,17 @@ fn json_api_preconditions_generations_and_ranges_are_strict() {
     let r = get("bytes=10-");
     assert_eq!(r.status, 416);
     assert_eq!(header(&r, "content-range"), Some("bytes */10"));
+    let r = handle(
+        &s,
+        req(
+            "GET",
+            &format!("/v0/b/{BUCKET}/o/g.bin?alt=media"),
+            &[("authorization", "Bearer owner"), ("range", "bytes=10-")],
+            b"",
+        ),
+    );
+    assert_eq!(r.status, 416);
+    assert_eq!(header(&r, "content-range"), Some("bytes */10"));
     let compatible = state_with(None, TokenAcceptance::EmulatorMock);
     let uploaded = handle(
         &compatible,
@@ -1757,6 +1795,35 @@ fn json_api_preconditions_generations_and_ranges_are_strict() {
     );
     assert_eq!(r.status, 200, "{}", String::from_utf8_lossy(&r.body));
     assert_eq!(json_body(&r)["size"], "6");
+}
+
+#[test]
+fn strict_empty_object_accepts_nonzero_suffix_range() {
+    // RFC 9110 section 14.1.1 allows a nonzero suffix on a zero-length representation.
+    // https://www.rfc-editor.org/rfc/rfc9110.html#section-14.1.1
+    let s = state(None);
+    let object = format!("/storage/v1/b/{BUCKET}/o/empty.bin");
+    let uploaded = handle(
+        &s,
+        req(
+            "POST",
+            &format!("/upload/storage/v1/b/{BUCKET}/o?uploadType=media&name=empty.bin"),
+            &[],
+            b"",
+        ),
+    );
+    assert_eq!(uploaded.status, 200);
+    let response = handle(
+        &s,
+        req(
+            "GET",
+            &format!("{object}?alt=media"),
+            &[("range", "bytes=-5")],
+            b"",
+        ),
+    );
+    assert_eq!(response.status, 200);
+    assert!(response.body.is_empty());
 }
 
 #[test]

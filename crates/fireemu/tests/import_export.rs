@@ -2441,6 +2441,19 @@ fn emulators_export_refuses_a_locator_it_must_not_believe() {
         "the routable origin was contacted: {log}"
     );
 
+    // An oversized locator is refused before the CLI reads its token or contacts its origin.
+    let (project, path) = locator_for("oversized");
+    let mut oversized = genuine.to_vec();
+    oversized.resize(1024 * 1024 + 1, b' ');
+    std::fs::write(&path, oversized).unwrap();
+    let output = run(&project);
+    let log = text(&output);
+    let _ = std::fs::remove_file(&path);
+    assert_eq!(output.status.code(), Some(1), "{log}");
+    assert!(log.contains("larger than a locator document"), "{log}");
+    assert!(!log.contains("secret-control-token"), "{log}");
+    assert!(!log.contains("the export request"), "{log}");
+
     // A symlink, even one pointing at a locator this user owns, is not the locator.
     #[cfg(unix)]
     {

@@ -9,7 +9,7 @@ use std::sync::{Arc, Mutex, RwLock};
 use fireemu_adapter_grpc::gateway::Gateway;
 use fireemu_adapter_grpc::local::LocalBackend;
 use fireemu_adapter_grpc::rest::RestState;
-use fireemu_adapter_grpc::rules::RulesEnforcer;
+use fireemu_adapter_grpc::rules::{RulesEnforcer, TokenSemantics};
 use fireemu_adapter_grpc::serve::serve_multiplexed;
 use fireemu_adapter_grpc::service::GatewayService;
 use fireemu_adapter_http::identity_toolkit::{AuthState, AuthWallClock};
@@ -892,6 +892,7 @@ fn assemble_suite(assembly: ServiceAssembly, exec_mode: bool) -> Result<ReadySui
     let enforcer = cfg.rules_enforced.then(|| {
         Arc::new(
             RulesEnforcer::new(rules.clone(), auth_store.clone(), clock.clone())
+                .with_token_semantics(TokenSemantics::Firestore)
                 .with_registry(registry.clone())
                 .with_database_rules(database_rules.clone())
                 .with_token_acceptance(cfg.token_acceptance)

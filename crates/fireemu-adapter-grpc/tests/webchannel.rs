@@ -7,7 +7,7 @@ use std::sync::{Arc, Mutex};
 use fireemu_adapter_grpc::gateway::Gateway;
 use fireemu_adapter_grpc::local::LocalBackend;
 use fireemu_adapter_grpc::rest::RestState;
-use fireemu_adapter_grpc::rules::RulesEnforcer;
+use fireemu_adapter_grpc::rules::{RulesEnforcer, TokenSemantics};
 use fireemu_adapter_grpc::webchannel::{ChannelRequest, ChannelResponse, Hub, StreamKind};
 use fireemu_core_auth::jwt::{base64url_encode, TokenAcceptance};
 use fireemu_core_auth::mfa::TotpPolicy;
@@ -64,6 +64,7 @@ fn hub_and_local(rules: Option<&str>, acceptance: TokenAcceptance) -> (Hub, Arc<
                 auth,
                 clock,
             )
+            .with_token_semantics(TokenSemantics::Firestore)
             .with_token_acceptance(acceptance),
         )
     });

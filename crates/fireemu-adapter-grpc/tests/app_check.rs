@@ -18,7 +18,7 @@ use std::sync::{Arc, Mutex, RwLock};
 use fireemu_adapter_grpc::gateway::Gateway;
 use fireemu_adapter_grpc::local::LocalBackend;
 use fireemu_adapter_grpc::rest::{RestRequest, RestState};
-use fireemu_adapter_grpc::rules::RulesEnforcer;
+use fireemu_adapter_grpc::rules::{RulesEnforcer, TokenSemantics};
 use fireemu_adapter_grpc::service::GatewayService;
 use fireemu_adapter_grpc::webchannel::{ChannelRequest, ChannelResponse, Hub, StreamKind};
 use fireemu_core_app_check::admission::{AppCheckGate, ServiceAdmission};
@@ -250,7 +250,10 @@ async fn start(mode: BaselineMode) -> Harness {
     let rules = Arc::new(RulesetSlot::new(
         LoadedRules::from_source(RULES).expect("the fixture ruleset compiles"),
     ));
-    let enforcer = Arc::new(RulesEnforcer::new(rules, auth.clone(), enforcer_clock));
+    let enforcer = Arc::new(
+        RulesEnforcer::new(rules, auth.clone(), enforcer_clock)
+            .with_token_semantics(TokenSemantics::Firestore),
+    );
     let gate = gate();
     let policy = ServiceAdmission::new(gate.clone(), "firestore", mode).map(Arc::new);
 

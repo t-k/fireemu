@@ -36,7 +36,10 @@ use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::{Arc, Mutex};
 
-use fireemu_core_auth::jwt::{verify_firestore_rules_token, JwtError, TokenAcceptance};
+use fireemu_core_auth::jwt::{
+    verify_firestore_rules_token, verify_rules_token, verify_rules_token_for_project, JwtError,
+    TokenAcceptance,
+};
 use fireemu_core_auth::store::AuthStore;
 use fireemu_core_firestore::field_path::FieldPath;
 use fireemu_core_firestore::path::DocumentPath;
@@ -355,6 +358,19 @@ pub enum RulesLoadError {
     Publish(String),
 }
 
+/// Which ID-token checks a caller's credential goes through.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum TokenSemantics {
+    /// ID-token verification as Identity Toolkit and the Admin SDK do it: a revoked, disabled
+    /// or deleted account's token is refused, and so is one past `exp`. The default, for every
+    /// surface nothing observed to be more lenient (callable Functions).
+    #[default]
+    IdToken,
+    /// What Firestore was observed to check (FS-RULES, 2026-09-24/25): the token alone, with a
+    /// 30-second allowance past `exp`, not the account.
+    Firestore,
+}
+
 /// Rules enforcement state shared by every surface.
 pub struct RulesEnforcer {
     rules: Arc<RulesetSlot>,
@@ -374,6 +390,8 @@ pub struct RulesEnforcer {
     /// Whether an end user may open a read-write transaction: production refuses it with the
     /// ordinary denial (the `strict` profile); the official emulator opens it.
     end_user_transactions: bool,
+    /// Which ID-token checks apply (see [`TokenSemantics`]).
+    token_semantics: TokenSemantics,
 }
 
 impl RulesEnforcer {
@@ -393,7 +411,16 @@ impl RulesEnforcer {
             acceptance: TokenAcceptance::default(),
             refuse_without_ruleset: false,
             end_user_transactions: true,
+            token_semantics: TokenSemantics::default(),
         }
+    }
+
+    /// Sets which ID-token checks apply: the Firestore surfaces use
+    /// [`TokenSemantics::Firestore`].
+    #[must_use]
+    pub const fn with_token_semantics(mut self, semantics: TokenSemantics) -> Self {
+        self.token_semantics = semantics;
+        self
     }
 
     /// Sets whether a client request is refused while its database has no ruleset.
@@ -621,15 +648,22 @@ impl RulesEnforcer {
         let store = store_arc
             .lock()
             .map_err(|_| Status::internal("auth store lock poisoned"))?;
-        let decoded =
-            verify_firestore_rules_token(token, &store, now, self.acceptance, expected_project)
-                .map_err(|error| match error {
-                    JwtError::Expired if production => {
-                        Status::unauthenticated(EXPIRED_CREDENTIALS_MESSAGE)
-                    }
-                    _ if production => Status::permission_denied(PERMISSION_DENIED_MESSAGE),
-                    error => Status::unauthenticated(format!("invalid ID token: {error}")),
-                })?;
+        let verified = match (self.token_semantics, expected_project) {
+            (TokenSemantics::Firestore, _) => {
+                verify_firestore_rules_token(token, &store, now, self.acceptance, expected_project)
+            }
+            (TokenSemantics::IdToken, Some(project)) => {
+                verify_rules_token_for_project(token, &store, now, self.acceptance, project)
+            }
+            (TokenSemantics::IdToken, None) => {
+                verify_rules_token(token, &store, now, self.acceptance)
+            }
+        };
+        let decoded = verified.map_err(|error| match error {
+            JwtError::Expired if production => Status::unauthenticated(EXPIRED_CREDENTIALS_MESSAGE),
+            _ if production => Status::permission_denied(PERMISSION_DENIED_MESSAGE),
+            error => Status::unauthenticated(format!("invalid ID token: {error}")),
+        })?;
         drop(store);
         let ctx = AuthContext::from_id_token_json(&decoded.payload_json).map_err(|e| {
             if production {

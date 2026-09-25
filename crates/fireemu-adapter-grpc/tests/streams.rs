@@ -6,7 +6,7 @@ use std::sync::{Arc, Mutex};
 
 use fireemu_adapter_grpc::gateway::Gateway;
 use fireemu_adapter_grpc::local::{FirestoreSnapshot, LocalBackend};
-use fireemu_adapter_grpc::rules::RulesEnforcer;
+use fireemu_adapter_grpc::rules::{RulesEnforcer, TokenSemantics};
 use fireemu_adapter_grpc::service::GatewayService;
 use fireemu_core_auth::mfa::TotpPolicy;
 use fireemu_core_auth::store::AuthStore;
@@ -93,7 +93,9 @@ async fn start_with_rules_source(
         let rules = Arc::new(RulesetSlot::new(
             LoadedRules::from_source(rules_source).unwrap(),
         ));
-        service = service.with_rules(Arc::new(RulesEnforcer::new(rules, auth, clock)));
+        service = service.with_rules(Arc::new(
+            RulesEnforcer::new(rules, auth, clock).with_token_semantics(TokenSemantics::Firestore),
+        ));
     }
     let svc = FirestoreServer::new(service);
     let handle = tokio::spawn(async move {

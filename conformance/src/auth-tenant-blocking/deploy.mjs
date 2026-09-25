@@ -55,6 +55,23 @@ const DROPPED_ENV = [
 ];
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
+/**
+ * The cleanup policy firebase-tools expects on `gcf-artifacts` (functions/artifacts.js): with it
+ * in place the CLI deploys without `--force` and changes no policy (owner decision C, 2026-09-25:
+ * the repository and this policy are created once, through REST, before the first deployment).
+ */
+export const CLEANUP_POLICY = {
+  id: "firebase-functions-cleanup",
+  condition: { tagState: "ANY", olderThan: "86400s" },
+  action: "DELETE",
+};
+
+/** Whether a repository carries the CLI's cleanup policy (the CLI's own comparison). */
+export function hasCleanupPolicy(repository) {
+  const policy = repository?.cleanupPolicies?.[CLEANUP_POLICY.id];
+  return policy?.condition?.tagState === "ANY" && policy?.condition?.olderThan === "86400s";
+}
+
 /** Whether an Artifact Registry package or a source object belongs to the fixture. */
 export function isFixtureArtifact(name) {
   const flat = String(name)
@@ -103,6 +120,7 @@ export function createDeployer({
   let baseline;
   let uploadsBefore;
   let deployStarted;
+  let adopted = false;
 
   async function call(method, url, body) {
     requests += 1;
@@ -183,6 +201,40 @@ export function createDeployer({
   }
 
   /**
+   * Creates `us-central1/gcf-artifacts` with the CLI's cleanup policy when it does not exist, or
+   * adds the policy when it is missing, and reads it back; returns what it changed (for the change
+   * log). Called by the preflight, before anything is deployed.
+   */
+  async function prepareRepository() {
+    const read = async () => call("GET", repository);
+    let { status, json } = await read();
+    if (status === 200 && hasCleanupPolicy(json)) return "unchanged";
+    let change;
+    if (status === 404) {
+      const created = await call(
+        "POST",
+        `${repository.replace(/\/gcf-artifacts$/, "")}?repositoryId=gcf-artifacts`,
+        { format: "DOCKER", cleanupPolicies: { [CLEANUP_POLICY.id]: CLEANUP_POLICY } },
+      );
+      if (created.status !== 200) throw new Error(`repository create: HTTP ${created.status}`);
+      change = "created with the cleanup policy";
+    } else if (status === 200) {
+      const patched = await call("PATCH", `${repository}?updateMask=cleanupPolicies`, {
+        cleanupPolicies: { ...json.cleanupPolicies, [CLEANUP_POLICY.id]: CLEANUP_POLICY },
+      });
+      if (patched.status !== 200) throw new Error(`repository policy: HTTP ${patched.status}`);
+      change = "cleanup policy added";
+    } else throw new Error(`repository read: HTTP ${status}`);
+    // Creation is a long-running operation: read back until the repository carries the policy.
+    for (let attempt = 0; attempt < 12; attempt += 1) {
+      ({ status, json } = await read());
+      if (status === 200 && hasCleanupPolicy(json)) return change;
+      await sleep(retryMs);
+    }
+    throw new Error("gcf-artifacts did not read back with the cleanup policy");
+  }
+
+  /**
    * Refuses to deploy unless every API the CLI ensures is on, no function exists in the region,
    * and no blocking trigger is registered. Keeps the blockingFunctions value and the upload
    * objects it saw, for the removal.
@@ -197,6 +249,7 @@ export function createDeployer({
       throw new Error("blocking triggers are already registered");
     baseline = config;
     uploadsBefore = new Set((await objects(uploadsBucket)) ?? []);
+    return { repository: await prepareRepository() };
   }
 
   /** Deploys a private copy of the fixture with the pinned CLI; the removal is due from here. */
@@ -225,8 +278,8 @@ export function createDeployer({
           "--only",
           `functions:${CODEBASE}`,
           `--project=${project}`,
+          // No --force: it would rewrite the cleanup policy and skip other confirmations.
           "--non-interactive",
-          "--force",
         ],
         { cwd: buildDir, timeout: 1_800_000 },
       );
@@ -294,6 +347,9 @@ export function createDeployer({
 
   /** The objects this deployment created: fixture sources, and uploads new since the preflight. */
   async function deployedObjects() {
+    // A restore takes every upload object as the harness's only while no other function exists.
+    if (adopted && (await listFunctions()).some((fn) => !NAMES.includes(fn)))
+      throw new Error("another function exists; upload objects are left for a hand check");
     const sources = ((await objects(sourcesBucket)) ?? []).filter(isFixtureArtifact);
     const uploads = ((await objects(uploadsBucket)) ?? []).filter(
       (name) => !uploadsBefore.has(name),
@@ -339,6 +395,8 @@ export function createDeployer({
             `--region=${REGION}`,
             `--project=${project}`,
             "--non-interactive",
+            // Here --force only answers the deletion prompt for the functions listed above
+            // (a non-interactive run otherwise aborts); it changes no policy.
             "--force",
           ],
           { cwd: buildDir, timeout: 1_200_000 },
@@ -428,6 +486,7 @@ export function createDeployer({
     baseline = {};
     uploadsBefore = new Set();
     deployStarted = new Date(0);
+    adopted = true;
   }
 
   return {

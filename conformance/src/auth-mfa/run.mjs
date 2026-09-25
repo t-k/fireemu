@@ -611,6 +611,18 @@ async function runLocal(programs) {
   return { binary, ...merged };
 }
 
+/**
+ * The local session's clock starts pinned: fireemu's virtual clock then moves only when the
+ * session advances it, so a check is reproducible. It starts at the current second (custom
+ * tokens carry the real time) with a sub-second part whose microsecond digits are not zero, so
+ * a microsecond instant never loses its trailing digits and a sign-in never straddles a second
+ * boundary while it is processed (closure confirmation S1: `enrolledAt` fraction digits and the
+ * `aged-token-start-r330` boundary had flaked 3 times in 27 runs).
+ */
+export function pinnedClockStart(now = Date.now()) {
+  return new Date(Math.floor(now / 1000) * 1000).toISOString().replace(".000Z", ".123456789Z");
+}
+
 async function runLocalSession(programs) {
   await mkdir(RUN_DIR, { recursive: true, mode: 0o700 });
   const inPath = join(RUN_DIR, "programs.json");
@@ -624,7 +636,10 @@ async function runLocalSession(programs) {
     JSON.stringify({
       schemaVersion: 1,
       profile: "strict",
-      daemon: { authProjectNumbers: { [SANDBOX_PROJECT]: LOCAL_PROJECT_NUMBER } },
+      daemon: {
+        authProjectNumbers: { [SANDBOX_PROJECT]: LOCAL_PROJECT_NUMBER },
+        clockStart: pinnedClockStart(),
+      },
       auth: {
         idTokenSigning: "session-rsa",
         apiKeys: ["fake-api-key"],

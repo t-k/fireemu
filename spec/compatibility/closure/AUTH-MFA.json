@@ -436,7 +436,7 @@
         "default"
       ],
       "status": "VERIFIED",
-      "note": "A TOTP pending credential offered at 300, 450, 600 and 1800 seconds (owner decision M4) and, since production refused it already at 300, at 60, 120, 180, 240 and 290 seconds (M8); an SMS pending credential whose code is sent at 150 and 300 seconds (M8), and at 450, 600 and 1800 seconds (M13; production refused the SMS start from about 603 seconds, M14). Each is followed at once by a same-account control with a credential acquired then.",
+      "note": "A TOTP pending credential offered at 300, 450, 600 and 1800 seconds (owner decision M4) and, since production refused it already at 300, at 60, 120, 180, 240 and 290 seconds (M8); an SMS pending credential whose code is sent at 150 and 300 seconds (M8), and at 450, 600 and 1800 seconds (M13; production refused the SMS start from about 603 seconds, M14). Each is followed at once by a same-account control with a credential acquired then. The ages the SMS start rows reached are not in the harness's own timings (it reads the clock only for rows that use a code, a deadline or an enrollment start); they come from the timestamped recording log, response to response (about 453, 603 and 1803 seconds). Reading the clock for every aged row waits for the next harness change, since the harness is part of the fixture's digest.",
       "evidence": {
         "productionRecordings": [
           {
@@ -631,11 +631,12 @@
         ],
         "workspaceTests": {
           "command": "cargo nextest run --workspace --profile pr",
-          "passed": 3437,
-          "failed": 0
+          "passed": 3439,
+          "failed": 0,
+          "note": "Measured after d300036be and the pinned local clock, which add tests only; the artifact's source 7bde3c8ec passed 3437."
         },
         "buildTree": "clean (git status --porcelain empty at build); artifact copy, sha256, source commit and check logs in docs.local/runs/auth-mfa-final-20260925c/ (private)",
-        "mutation": "docs.local/mutation/auth-mfa/20260925/ (private): cargo-mutants over df08b28cf..261e60874 (264 mutants: 197 caught, 39 unviable, 1 timeout, 27 survivors) and 20260925-followup/ over 261e60874..c787d9f6e (50: 38 caught, 9 unviable, 3 survivors), in fireemu-core-auth and fireemu-adapter-http. All 30 survivors are triaged in 20260925/triage.md: 4 equivalent, 26 killed by tests in HEAD. The follow-up directive's source changes after c787d9f6e (TOTP fail-closed, the per-account phone session bound, the SMS start limit) were not run through cargo-mutants; their boundaries are pinned by tests on both sides."
+        "mutation": "docs.local/mutation/auth-mfa/ (private): cargo-mutants over df08b28cf..261e60874 (264 mutants: 197 caught, 39 unviable, 1 timeout, 27 survivors), 20260925-followup/ over 261e60874..c787d9f6e (50: 38 caught, 9 unviable, 3 survivors) and 20260925-directive/ over the follow-up directive's source changes c787d9f6e..7bde3c8ec (26: 21 caught, 4 unviable, 1 survivor), in fireemu-core-auth and fireemu-adapter-http. All 31 survivors are triaged (20260925/triage.md, 20260925-directive/triage.md): 5 equivalent, 26 killed by tests in HEAD."
       }
     },
     {
@@ -697,6 +698,6 @@
     "reviewedCommit": "cd7b4e3a6",
     "finalArtifactSha256": "86172226d07d1f6e850a58934c24c650b05eda345361ab4058aaea174f921356",
     "report": "docs.local/reviews/2026-09-25-auth-mfa-follow-up-confirmation.md (private; earlier: docs.local/instructions/2026-09-25-auth-mfa-promotion-review.md, 2026-09-25-auth-mfa-follow-up-directive.md, docs.local/reviews/2026-09-25-auth-mfa-closure-review.md, -closure-confirmation.md, -safety-review.md, -safety-confirmation.md and the pre-send reviews)",
-    "followUps": "Non-blocking and tracked privately (docs.local/issues/open/auth-mfa-unobserved-edges.md, mfa-pending-credential-survives-token-revocation.md): the per-account TOTP attempt quota, the unobserved gaps inside the measured brackets (TOTP pending, recent sign-in, SMS start), the SMS finalize after an accepted start, the phone enrollment session's lifetime past about 1803 seconds, a finalized TOTP session offered again before three attempts, fireemu's own per-user and per-account bounds, Admin entries with both phoneInfo and totpInfo, pending credentials after token revocation, and tenant second factors (AUTH-TENANT-BLOCKING). The follow-up directive's source changes were not run through cargo-mutants; their boundaries are pinned by tests on both sides."
+    "followUps": "Non-blocking and tracked privately (docs.local/issues/open/auth-mfa-unobserved-edges.md, mfa-pending-credential-survives-token-revocation.md): the per-account TOTP attempt quota, the unobserved gaps inside the measured brackets (TOTP pending, recent sign-in, SMS start), the SMS finalize after an accepted start, the phone enrollment session's lifetime past about 1803 seconds, a finalized TOTP session offered again before three attempts, fireemu's own per-user and per-account bounds, Admin entries with both phoneInfo and totpInfo, pending credentials after a refresh-token revocation (a password change was observed and production still completes), and tenant second factors (AUTH-TENANT-BLOCKING). The local check runs each program with a pinned clock so it is reproducible; the harness does not record the ages its SMS start rows reach (see the pending-credential-lifetime note)."
   }
 }

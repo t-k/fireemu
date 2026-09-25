@@ -2749,8 +2749,14 @@ fn parse_range(header: Option<&str>, len: u64) -> ParsedRange {
         let Ok(suffix) = last.parse::<u64>() else {
             return ParsedRange::Ignored;
         };
-        if suffix == 0 || len == 0 {
+        if suffix == 0 {
             return ParsedRange::Unsatisfiable;
+        }
+        // RFC 9110 section 14.1.1 calls a nonzero suffix satisfiable even for an empty
+        // representation. Serving its empty body as 200 avoids an invalid 206 Content-Range.
+        // https://www.rfc-editor.org/rfc/rfc9110.html#section-14.1.1
+        if len == 0 {
+            return ParsedRange::Ignored;
         }
         return ParsedRange::Satisfiable(len.saturating_sub(suffix), len);
     }
@@ -3263,14 +3269,15 @@ fn gcs_list(
     host: &str,
 ) -> Outcome {
     // These production filters change the answer and cannot be silently ignored in strict
-    // mode. Explicit `false` has the documented default meaning for the two switches.
+    // mode. This store has no archived generations, so `versions=true` has the same result
+    // as `versions=false`. Explicit `false` is the default for includeTrailingDelimiter.
     // https://cloud.google.com/storage/docs/json_api/v1/objects/list
     if state.token_acceptance == TokenAcceptance::Verified {
         let unsupported = ["matchGlob", "startOffset", "endOffset"]
             .into_iter()
             .find(|name| params.contains_key(*name))
             .or_else(|| {
-                ["versions", "includeTrailingDelimiter"]
+                ["includeTrailingDelimiter"]
                     .into_iter()
                     .find(|name| params.get(*name).is_some_and(|value| value != "false"))
             });

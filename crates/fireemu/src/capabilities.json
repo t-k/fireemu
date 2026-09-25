@@ -720,12 +720,12 @@
   "ST-OBJ-1": {
     "implemented": [
       "Firebase Storage protocol (/v0/b, the X-Goog-Upload resumable command grammar with terminal denied sessions, download tokens incl. the ?create_token / ?delete_token routes and the official first-read minting, the official plain-status and rules-denial bodies)",
-      "JSON API with the official route table (/b short spelling for every object method; /storage/v1 and /download/storage/v1 for reads and deletes; /upload/storage/v1 uploads; object update and copy registered on the short spelling only, exactly as the official emulator registers them, with 501 Not Implemented on the rest; the XML-style GET /{bucket}/{object} fallback, GET /b bucket listing, the multipart/form-data POST /{bucket} upload and the ACL stub)",
+      "JSON API with /b short spelling for every object method, /storage/v1 long spelling including object PATCH and copy/rewrite, /download/storage/v1 reads and deletes, /upload/storage/v1 uploads, the XML-style GET /{bucket}/{object} fallback, GET /b bucket listing, multipart/form-data POST /{bucket} upload and the ACL stub",
       "generation / metageneration preconditions (match / not-match / source) and declared-checksum verification, honoured as production honours them; the official emulator ignores both, and every such step is pinned as a documented divergence in conformance/storage-matrix.json",
       "generation selectors (current generation only, JSON API dialect)",
       "prefix / delimiter listing with the official pagination (all folded prefixes on every page, items paged, the token names the first item of the next page)",
       "MD5 / CRC32C (X-Goog-Hash verified before commit)",
-      "Range: bytes=a-b / a- / -n; an unsatisfiable range serves the whole object, as the official emulator serves it",
+      "Range: bytes=a-b / a- / -n; an unsatisfiable range serves the whole object in the emulator profile, while strict returns 416 with Content-Range: bytes */N",
       "custom metadata keeps the official defined-versus-absent distinction (an empty-but-defined map serializes as metadata: {} on the Firebase dialect)"
     ],
     "notes": [

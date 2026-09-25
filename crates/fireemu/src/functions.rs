@@ -1255,7 +1255,7 @@ impl RunnerSource {
 /// The bundled Node runner as located on this host.
 #[derive(Debug, Clone)]
 pub struct RunnerScript {
-    /// Absolute (or as-given, for the environment override) path of `index.mjs`.
+    /// Absolute path of `index.mjs`.
     pub path: PathBuf,
     /// Where it was found.
     pub source: RunnerSource,
@@ -1352,7 +1352,8 @@ pub fn locate_runner() -> Result<RunnerScript, String> {
     for (source, path) in &candidates {
         if path.is_file() {
             return Ok(RunnerScript {
-                path: path.clone(),
+                path: std::path::absolute(path)
+                    .map_err(|error| format!("runner {}: {error}", path.display()))?,
                 source: *source,
             });
         }

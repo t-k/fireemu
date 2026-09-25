@@ -5,6 +5,11 @@ on:
   push:
     branches: [main]
   workflow_dispatch:
+    inputs:
+      run_retired:
+        description: Also run the retired suites listed in RETIRED_SUITES and the frozen O7-era history check.
+        type: boolean
+        default: false
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -13,7 +18,74 @@ concurrency:
 permissions:
   contents: read
 
+env:
+  # Retired from the required compat-broad shards (owner decision 2026-09-25, the
+  # FS-DATA-WRITE CI retirement directive). These are tests of the O7/O8 production
+  # campaigns for fireemu-35fe6 that the 2026-09-23 sandbox directive stopped; the
+  # sandbox corpora replaced them. Code and published records stay; the
+  # compat-broad-retired job runs them on demand (workflow_dispatch, run_retired).
+  # Each entry is one file whose failure was traced to one of:
+  #   - 866bb0634 moving the shared request_bytes_preflight.py to the sandbox project
+  #     (the file passes at 866bb0634^ and fails at 866bb0634);
+  #   - an O7/O8 local shadow or runtime binding that predates later source changes
+  #     (already failing before 866bb0634);
+  #   - an O7/O8 campaign test that fails only on the CI runner;
+  #   - an O7/O8 campaign test that alone runs longer than the 45-minute job limit
+  #     (test_request_bytes_admission.py, about 56 minutes on the CI runner).
+  # tools/compat-inventory/closure_records.py refuses a closure that cites a path here,
+  # and tools/compat-inventory/broad_shards.py leaves these files out of the shards.
+  RETIRED_SUITES: |
+    tools/compat-broad/auth-credential-tokens/test_credential_bootstrap.py
+    tools/compat-broad/auth-credential-tokens/test_credential_production.py
+    tools/compat-broad/fs-commit-transform-limits/test_commit_wire_archive.py
+    tools/compat-broad/fs-commit-transform-limits/test_owned_transform_runner.py
+    tools/compat-broad/fs-query-partition-cursor/test_partition_cursor_production.py
+    tools/compat-broad/fs-query-partition-cursor/test_partition_cursor_production_abnormal_exit.py
+    tools/compat-broad/fs-request-bytes-boundary/test_request_bytes_admission.py
+    tools/compat-broad/fs-request-bytes-boundary/test_request_bytes_bounded_compare.py
+    tools/compat-broad/fs-request-bytes-boundary/test_request_bytes_deadlines.py
+    tools/compat-broad/fs-request-bytes-boundary/test_request_bytes_evidence.py
+    tools/compat-broad/fs-request-bytes-boundary/test_request_bytes_production.py
+    tools/compat-broad/fs-request-bytes-boundary/test_request_bytes_recovery_campaign.py
+    tools/compat-broad/fs-request-bytes-boundary/test_request_bytes_sentinel.py
+    tools/compat-broad/fs-write-limits/test_limits_03_failed_apply_recovery.py
+    tools/compat-broad/fs-write-limits/test_limits_03_held_recovery.py
+    tools/compat-broad/fs-write-limits/test_limits_03_index_hosting.py
+    tools/compat-broad/fs-write-limits/test_limits_03_o8.py
+    tools/compat-broad/fs-write-limits/test_package_03.py
+    tools/compat-broad/fs-write-txn/test_txn_expiry_evidence.py
+    tools/compat-broad/fs-write-txn/test_txn_expiry_production.py
+    tools/compat-broad/production-admission/test_auth_source_refusal.py
+    tools/compat-broad/production-admission/test_reservations.py
+
 jobs:
+  closure-record-integrity:
+    # Every record a current closure cites must exist and match its pinned digest, and
+    # the closure contracts (saved comparisons, fixtures, recipe digests) must hold.
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - name: Install uv
+        run: python3 -m pip install uv==0.11.28
+      - name: Check cited records and the shard plan
+        run: |
+          uv run --project tools/compat-inventory --locked --python 3.12 tools/compat-inventory/closure_records.py --check
+          uv run --project tools/compat-inventory --locked --python 3.12 -m pytest tools/compat-inventory/test_closure_records.py tools/compat-inventory/test_broad_shards.py -q
+          uv run --project tools/compat-inventory --locked --python 3.12 tools/compat-inventory/broad_shards.py --shards 7
+      - uses: pnpm/action-setup@f40ffcd9367d9f12939873eb1018b921a783ffaa
+        with:
+          version: 10.32.1
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: 24
+      - name: Run the closure contracts
+        run: |
+          pnpm -C conformance install --frozen-lockfile
+          node --test conformance/src/*-closure.test.mjs
+
   feature-inventory-integrity:
     runs-on: ubuntu-latest
     timeout-minutes: 60
@@ -119,8 +191,8 @@ jobs:
           do
             uv run --project tools/compat-inventory --locked --python 3.12 "tools/${publisher}.py" --check
           done
-      - name: Check immutable historical tools, observations and approvals
-        run: uv run --project tools/compat-inventory --locked --python 3.12 tools/compat-history/history.py --check
+      # The O7-era frozen-bytes check (history.py) moved to compat-broad-retired: it is
+      # not the basis of any current closure (see RETIRED_SUITES above for the decision).
       - name: Check later approved observations at their fixed historical source
         run: uv run --project tools/compat-inventory --locked --python 3.12 tools/compat-history/password_history.py --check
       - name: Test current historical isolation
@@ -173,7 +245,10 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        shard: [0, 1, 2, 3]
+        # Shards are planned from measured per-file durations
+        # (tools/compat-inventory/broad-test-durations.json); broad_shards.py refuses a
+        # plan in which any shard would need more than 35 minutes.
+        shard: [0, 1, 2, 3, 4, 5, 6]
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
@@ -181,39 +256,33 @@ jobs:
           fetch-depth: 0
       - name: Install uv
         run: python3 -m pip install uv==0.11.28
-      - name: Run deterministic broad-test shard
+      - name: Run duration-balanced broad-test shard
         env:
           PYTEST_SHARD: ${{ matrix.shard }}
         run: |
-          python3 - <<'PY'
-          import os
-          import pathlib
-          import subprocess
+          uv run --project tools/compat-inventory --locked --python 3.12 tools/compat-inventory/broad_shards.py --shards 7 --shard "$PYTEST_SHARD" > shard-files.txt
+          mapfile -t files < shard-files.txt
+          echo "shard $PYTEST_SHARD: ${#files[@]} files"
+          uv run --project tools/compat-inventory --locked --python 3.12 -m pytest "${files[@]}" -q
 
-          shard = int(os.environ["PYTEST_SHARD"])
-          shard_count = 4
-          root = pathlib.Path("tools/compat-broad")
-          test_files = sorted(
-              str(path)
-              for path in root.rglob("*.py")
-              if path.name.startswith("test_") or path.name.endswith("_test.py")
-          )
-          selected = [path for index, path in enumerate(test_files) if index % shard_count == shard]
-          if not selected:
-              raise SystemExit(f"shard {shard} has no pytest files")
-          print(f"shard {shard}/{shard_count}: {len(selected)} of {len(test_files)} files")
-          command = [
-              "uv",
-              "run",
-              "--project",
-              "tools/compat-inventory",
-              "--locked",
-              "--python",
-              "3.12",
-              "-m",
-              "pytest",
-              *selected,
-              "-q",
-          ]
-          raise SystemExit(subprocess.call(command))
-          PY
+  compat-broad-retired:
+    # On demand only: the retired O7/O8 campaign suites and the frozen O7-era history
+    # check. Not a required check.
+    if: github.event_name == 'workflow_dispatch' && inputs.run_retired
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Install uv
+        run: python3 -m pip install uv==0.11.28
+      - name: Run the retired suites
+        run: |
+          uv run --project tools/compat-inventory --locked --python 3.12 tools/compat-inventory/broad_shards.py --shards 1 --retired > retired-files.txt
+          mapfile -t files < retired-files.txt
+          uv run --project tools/compat-inventory --locked --python 3.12 -m pytest "${files[@]}" -q
+      - name: Check immutable historical tools, observations and approvals
+        if: always()
+        run: uv run --project tools/compat-inventory --locked --python 3.12 tools/compat-history/history.py --check

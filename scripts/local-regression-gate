@@ -62,14 +62,17 @@ here=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 wrapper="$here/cargo-session"
 
 json_string() {
-  # Escapes one string for a JSON literal: backslash, double quote, and the control
-  # characters JSON forbids in raw form.
-  local value=$1
+  # NUL cannot occur in a Bash argument. Escape every other JSON control byte,
+  # not just newline/tab: a valid test-filter argument must never corrupt a receipt.
+  local value=$1 code octal character escaped
   value=${value//\\/\\\\}
   value=${value//\"/\\\"}
-  value=${value//$'\n'/\\n}
-  value=${value//$'\r'/\\r}
-  value=${value//$'\t'/\\t}
+  for ((code = 1; code < 32; code++)); do
+    printf -v octal '%03o' "$code"
+    printf -v character '%b' "\\$octal"
+    printf -v escaped '\\u%04x' "$code"
+    value=${value//"$character"/"$escaped"}
+  done
   printf '"%s"' "$value"
 }
 
@@ -88,7 +91,19 @@ commit=$(git rev-parse HEAD 2>/dev/null || printf 'unknown')
 if [[ -n "$(git status --porcelain 2>/dev/null)" ]]; then dirty=true; else dirty=false; fi
 started=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 
+# Never reuse or overwrite a prior result, including a dangling symlink. A
+# same-directory temporary file is published using an exclusive hard link below.
+report_dir=$(dirname -- "$report")
+if ! mkdir -p -- "$report_dir" || [[ -e "$report" || -L "$report" ]]; then
+  printf 'local-regression-gate: a new writable report path is required: %s\n' "$report" >&2
+  exit 73
+fi
+report_tmp=$(mktemp "$report_dir/.runtime-report.XXXXXXXX") || exit 73
+log=
+trap 'rm -f -- "$report_tmp" "${log:-}"' EXIT
+
 status=
+summary=
 exit_status=0
 run=0
 passed=0
@@ -102,29 +117,48 @@ if ! nextest_version=$(cargo nextest --version 2>/dev/null | head -n 1) || [[ -z
   exit_status=127
   printf 'local-regression-gate: cargo-nextest is not installed; nothing was tested (install it with cargo install cargo-nextest --locked)\n' >&2
 else
-  log=$(mktemp "${TMPDIR:-/tmp}/local-regression-gate.XXXXXX")
-  trap 'rm -f -- "$log"' EXIT
+  log=$(mktemp "${TMPDIR:-/tmp}/local-regression-gate.XXXXXX") || exit 73
   "$wrapper" --session "$session" -- cargo nextest run --profile "$profile" "$@" 2>&1 | tee "$log"
-  exit_status=${PIPESTATUS[0]}
+  pipeline_status=("${PIPESTATUS[@]}")
+  exit_status=${pipeline_status[0]}
   summary=$(grep -E '^[[:space:]]*Summary \[' "$log" | tail -n 1 || true)
-  if [[ -z "$summary" ]]; then
+  if ((pipeline_status[1] != 0)); then
+    status=recording-failed
+    ((exit_status != 0)) || exit_status=74
+    printf 'local-regression-gate: test log could not be recorded\n' >&2
+  elif [[ -z "$summary" ]]; then
     status=no-summary
     printf 'local-regression-gate: nextest printed no summary line; the run is not evidence\n' >&2
   else
     # "Summary [   1.234s] 12 tests run: 11 passed (1 slow), 1 failed, 3 skipped"
     run=$(sed -nE 's/.* ([0-9]+) tests? run: .*/\1/p' <<<"$summary")
     passed=$(sed -nE 's/.* ([0-9]+) passed.*/\1/p' <<<"$summary")
-    failed=$(sed -nE 's/.*, ([0-9]+) failed.*/\1/p' <<<"$summary")
-    skipped=$(sed -nE 's/.*, ([0-9]+) skipped.*/\1/p' <<<"$summary")
-    run=${run:-0}
-    passed=${passed:-0}
-    failed=${failed:-0}
-    skipped=${skipped:-0}
-    if ((run == 0)); then
+    failed=$(sed -nE 's/.* ([0-9]+) failed.*/\1/p' <<<"$summary")
+    skipped=$(sed -nE 's/.* ([0-9]+) skipped.*/\1/p' <<<"$summary")
+    invalid_counts=false
+    # Reject malformed/overflowing counters before Bash arithmetic. The bound is
+    # below signed 64-bit range; it is a parser bound, not a test selection cap.
+    for count_name in run passed failed skipped; do
+      value=${!count_name}
+      value=${value:-0}
+      if [[ ! "$value" =~ ^[0-9]{1,18}$ ]]; then
+        invalid_counts=true
+        printf -v "$count_name" '%d' 0
+      else
+        printf -v "$count_name" '%d' "$((10#$value))"
+      fi
+    done
+    if [[ "$invalid_counts" == true ]]; then
+      status=invalid-summary
+      printf 'local-regression-gate: unparseable test counters\n' >&2
+    elif ((run == 0)); then
       status=no-tests
       printf 'local-regression-gate: no test ran; an empty selection is not a pass\n' >&2
     elif ((exit_status != 0)) || ((failed > 0)); then
       status=failed
+    elif ((passed != run)); then
+      status=incomplete-summary
+      printf 'local-regression-gate: not every executed test is accounted for as passed\n' >&2
     else
       status=passed
     fi
@@ -134,26 +168,43 @@ else
   fi
 fi
 
+# Normalize the result before publishing: the receipt and process exit must agree.
+if [[ "$status" != passed ]] && ((exit_status == 0)); then
+  exit_status=1
+fi
 finished=$(date -u +%Y-%m-%dT%H:%M:%SZ)
-mkdir -p -- "$(dirname -- "$report")"
+report_data=$(cat <<EOF
 {
-  printf '{\n'
-  printf '  "schemaVersion": 1,\n'
-  printf '  "kind": "runtime-tests",\n'
-  printf '  "status": %s,\n' "$(json_string "$status")"
-  printf '  "commit": %s,\n' "$(json_string "$commit")"
-  printf '  "dirty": %s,\n' "$dirty"
-  printf '  "session": %s,\n' "$(json_string "$session")"
-  printf '  "profile": %s,\n' "$(json_string "$profile")"
-  printf '  "arguments": %s,\n' "$(json_array "$@")"
-  printf '  "nextest": %s,\n' "$(json_string "$nextest_version")"
-  printf '  "rustc": %s,\n' "$(json_string "$rustc_version")"
-  printf '  "counts": {"run": %d, "passed": %d, "failed": %d, "skipped": %d},\n' "$run" "$passed" "$failed" "$skipped"
-  printf '  "exitStatus": %d,\n' "$exit_status"
-  printf '  "startedAt": %s,\n' "$(json_string "$started")"
-  printf '  "finishedAt": %s\n' "$(json_string "$finished")"
-  printf '}\n'
-} >"$report"
+  "schemaVersion": 1,
+  "kind": "runtime-tests",
+  "status": $(json_string "$status"),
+  "commit": $(json_string "$commit"),
+  "dirty": $dirty,
+  "session": $(json_string "$session"),
+  "profile": $(json_string "$profile"),
+  "arguments": $(json_array "$@"),
+  "nextest": $(json_string "$nextest_version"),
+  "rustc": $(json_string "$rustc_version"),
+  "summary": $(json_string "$summary"),
+  "counts": {"run": $run, "passed": $passed, "failed": $failed, "skipped": $skipped},
+  "exitStatus": $exit_status,
+  "startedAt": $(json_string "$started"),
+  "finishedAt": $(json_string "$finished")
+}
+EOF
+) || exit 74
+if ! printf '%s\n' "$report_data" >"$report_tmp"; then
+  printf 'local-regression-gate: report write failed\n' >&2
+  exit 74
+fi
+# ln cannot truncate a pre-existing file. Verify the exact destination as well:
+# portable ln otherwise accepts a directory (or directory symlink) created in the
+# race window and links *inside* it instead of publishing the requested pathname.
+if ! ln -- "$report_tmp" "$report" ||
+   [[ ! -f "$report" || -L "$report" || ! "$report_tmp" -ef "$report" ]]; then
+  printf 'local-regression-gate: report publication failed: %s\n' "$report" >&2
+  exit 73
+fi
 
 printf 'local-regression-gate: %s (%d run, %d passed, %d failed, %d skipped) at %s%s; report %s\n' \
   "$status" "$run" "$passed" "$failed" "$skipped" "${commit:0:12}" "$([[ $dirty == true ]] && printf ' (dirty)')" "$report" >&2

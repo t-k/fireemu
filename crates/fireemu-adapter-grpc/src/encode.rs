@@ -2,7 +2,7 @@
 
 use std::collections::BTreeMap;
 
-use fireemu_core_firestore::field_path::FieldPath;
+use fireemu_core_firestore::field_path::{FieldPath, FieldPathError};
 use fireemu_core_firestore::path::DocumentPath;
 use fireemu_core_firestore::store::{
     Document, FieldTransform, FirestoreError, Precondition, TransactionId, TransformKind, Write,
@@ -118,6 +118,20 @@ pub fn decode_fields(
 ) -> Result<BTreeMap<String, Value>, DecodeError> {
     let mut out = BTreeMap::new();
     for (k, v) in fields {
+        if k == "__name__" {
+            return Err(DecodeError::InvalidStoredFieldName(
+                "field name __name__ is reserved".into(),
+            ));
+        }
+        FieldPath::from_segments([k.as_str()]).map_err(|error| match error {
+            FieldPathError::EmptySegment { .. } => {
+                DecodeError::InvalidStoredFieldName("The property.name is the empty string.".into())
+            }
+            FieldPathError::ReservedSegment { .. } => {
+                DecodeError::InvalidStoredFieldName(format!("field name {k} is reserved"))
+            }
+            _ => DecodeError::InvalidFieldPath(error.to_string()),
+        })?;
         out.insert(k.clone(), decode_value(v)?);
     }
     Ok(out)
@@ -128,7 +142,33 @@ pub fn decode_mask(mask: Option<&pb::DocumentMask>) -> Result<Option<Vec<FieldPa
     let Some(mask) = mask else { return Ok(None) };
     mask.field_paths
         .iter()
-        .map(|p| FieldPath::parse(p).map_err(|e| DecodeError::InvalidFieldPath(e.to_string())))
+        .map(|p| {
+            let path = FieldPath::parse(p).map_err(|error| match error {
+                FieldPathError::PathTooLong { .. } => DecodeError::InvalidPropertyPath(
+                    "property path is longer than 1500 bytes.".into(),
+                ),
+                FieldPathError::EmptySegment { .. } if p.len() <= 4_096 => {
+                    DecodeError::InvalidPropertyPath(format!(
+                        r#"Invalid property path "{p}". Unquoted property paths must match regex ([a-zA-Z_][a-zA-Z_0-9]*), and quoted property paths must match regex (`(?:[^`\\]|(?:\\.))+`)"#
+                    ))
+                }
+                _ => DecodeError::InvalidFieldPath(error.to_string()),
+            })?;
+            // Production accepts 1,499 decoded field-path bytes in a mask but rejects
+            // 1,500; the stored-field path limit is a distinct inclusive boundary.
+            let decoded_bytes = path
+                .segments()
+                .iter()
+                .map(String::len)
+                .sum::<usize>()
+                .saturating_add(path.segments().len() - 1);
+            if decoded_bytes >= 1_500 {
+                return Err(DecodeError::InvalidPropertyPath(
+                    "property path is longer than 1500 bytes.".into(),
+                ));
+            }
+            Ok(path)
+        })
         .collect::<Result<Vec<_>, _>>()
         .map(Some)
 }
@@ -240,7 +280,7 @@ pub fn decode_write(w: &pb::Write) -> Result<Write, DecodeError> {
                 update_mask: Some(Vec::new()),
             }
         }
-        None => return Err(DecodeError::InvalidQuery("write without operation".into())),
+        None => return Err(DecodeError::EmptyWriteOperation),
     };
     if w.update_mask.is_some() && !matches!(op, WriteOp::Set { .. }) {
         return Err(DecodeError::InvalidQuery(
@@ -273,7 +313,7 @@ pub fn decode_transaction(bytes: &[u8]) -> Result<TransactionId, DecodeError> {
 pub fn status_from_error(e: &FirestoreError) -> tonic::Status {
     let mut status = match e {
         FirestoreError::InvalidArgument(m) => tonic::Status::invalid_argument(m.clone()),
-        FirestoreError::FailedPrecondition(m) => tonic::Status::failed_precondition(m.clone()),
+        FirestoreError::FailedPrecondition(m) => crate::production_status::failed_precondition(m),
         FirestoreError::AlreadyExists(p) => {
             tonic::Status::already_exists(format!("Document already exists: {}", p.resource_name()))
         }

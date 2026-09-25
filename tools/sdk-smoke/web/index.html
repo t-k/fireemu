@@ -3,9 +3,9 @@
 <body>
 <pre id="out">starting</pre>
 <script type="module">
-import { initializeApp } from "https://www.gstatic.com/firebasejs/12.4.0/firebase-app.js";
-import { getAuth, connectAuthEmulator, createUserWithEmailAndPassword, signOut } from "https://www.gstatic.com/firebasejs/12.4.0/firebase-auth.js";
-import { getFirestore, connectFirestoreEmulator, doc, setDoc, getDoc, getDocs, onSnapshot, collection, query, where, deleteDoc, updateDoc, increment, runTransaction } from "https://www.gstatic.com/firebasejs/12.4.0/firebase-firestore.js";
+import { initializeApp } from "https://www.gstatic.com/firebasejs/12.18.0/firebase-app.js";
+import { getAuth, connectAuthEmulator, createUserWithEmailAndPassword, signOut } from "https://www.gstatic.com/firebasejs/12.18.0/firebase-auth.js";
+import { getFirestore, connectFirestoreEmulator, doc, setDoc, getDoc, getDocs, onSnapshot, collection, query, where, deleteDoc, updateDoc, increment, runTransaction } from "https://www.gstatic.com/firebasejs/12.18.0/firebase-firestore.js";
 
 const params = new URLSearchParams(location.search);
 const fsPort = Number(params.get("fs"));

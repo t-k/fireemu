@@ -16,7 +16,8 @@
     "e2e": "playwright test",
     "size": "node scripts/size-report.mjs",
     "size:test": "node --test scripts/*.test.mjs",
-    "mutation": "stryker run"
+    "mutation": "stryker run",
+    "mutation:sanity": "node scripts/mutation-sanity.mjs"
   },
   "dependencies": {
     "@solidjs/router": "^1.0.0",

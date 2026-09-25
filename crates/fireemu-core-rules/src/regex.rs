@@ -1,7 +1,7 @@
 //! A small RE2-style regular expression engine for `string.matches()` / `string.replace()`.
 //!
 //! Supported syntax: literals, `.`, character classes (`[abc]`, `[^a-z]`, `\d \w \s` and
-//! their negations, POSIX classes `[[:alpha:]]` and Unicode classes `\p{L}`, also inside
+//! their negations, ASCII POSIX classes `[[:alpha:]]` and Unicode classes `\p{L}`, also inside
 //! classes), anchors `^` `$`, capturing groups `( )` and non-capturing `(?: )`, the inline
 //! flags `(?i)` / `(?s)` / `(?m)`, alternation `|`, quantifiers `* + ? {n} {n,} {n,m}` with
 //! lazy variants, `\0` / zero-prefixed octal escapes, and `\xHH` / `\x{H...}` escapes. RE2
@@ -141,43 +141,124 @@ enum ClassItem {
     Digit(bool),
     Word(bool),
     Space(bool),
-    /// A POSIX class (`[:alpha:]`) or a Unicode class (`\p{L}`), with `false` for the
-    /// negated form.
+    /// A named ASCII class (`[:alpha:]`), distinct from Unicode properties.
+    /// `false` complements the class after any simple case folding.
+    Posix(AsciiClass, bool),
+    /// A Unicode class (`\p{L}`), with `false` for the negated form.
     Named(NamedClass, bool),
 }
 
-/// The named character classes both `[[:name:]]` and `\p{Name}` resolve to.
+/// The exact ASCII sets and lowercase names in RE2's POSIX class table.
+/// Do not resolve these through Unicode property aliases such as `L` or `Lu`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum AsciiClass {
+    Alnum,
+    Alpha,
+    Ascii,
+    Blank,
+    Control,
+    Digit,
+    Graph,
+    Lower,
+    Print,
+    Punct,
+    Space,
+    Upper,
+    Word,
+    HexDigit,
+}
+
+impl AsciiClass {
+    fn parse(name: &str) -> Option<Self> {
+        Some(match name {
+            "alnum" => Self::Alnum,
+            "alpha" => Self::Alpha,
+            "ascii" => Self::Ascii,
+            "blank" => Self::Blank,
+            "cntrl" => Self::Control,
+            "digit" => Self::Digit,
+            "graph" => Self::Graph,
+            "lower" => Self::Lower,
+            "print" => Self::Print,
+            "punct" => Self::Punct,
+            "space" => Self::Space,
+            "upper" => Self::Upper,
+            "word" => Self::Word,
+            "xdigit" => Self::HexDigit,
+            _ => return None,
+        })
+    }
+
+    fn contains(self, c: char) -> bool {
+        match self {
+            Self::Alnum => c.is_ascii_alphanumeric(),
+            Self::Alpha => c.is_ascii_alphabetic(),
+            Self::Ascii => c.is_ascii(),
+            Self::Blank => matches!(c, ' ' | '\t'),
+            Self::Control => c.is_ascii_control(),
+            Self::Digit => c.is_ascii_digit(),
+            Self::Graph => c.is_ascii_graphic(),
+            Self::Lower => c.is_ascii_lowercase(),
+            Self::Print => matches!(c, ' '..='~'),
+            Self::Punct => c.is_ascii_punctuation(),
+            // POSIX space includes VT; Perl \s below deliberately does not.
+            Self::Space => matches!(c, ' ' | '\t' | '\n' | '\r' | '\x0B' | '\x0C'),
+            Self::Upper => c.is_ascii_uppercase(),
+            Self::Word => c.is_ascii_alphanumeric() || c == '_',
+            Self::HexDigit => c.is_ascii_hexdigit(),
+        }
+    }
+
+    fn contains_folded(self, c: char, case_insensitive: bool) -> bool {
+        if !case_insensitive {
+            return self.contains(c);
+        }
+        // The only non-ASCII members of simple-fold cycles containing ASCII are
+        // long s (S/s) and Kelvin sign (K/k). Full Unicode upper/lower expansion is
+        // not simple folding: it would also turn e.g. sharp s into two ASCII S's.
+        let c = match c {
+            '\u{017f}' => 's',
+            '\u{212a}' => 'k',
+            other => other,
+        };
+        self.contains(c)
+            || self.contains(c.to_ascii_lowercase())
+            || self.contains(c.to_ascii_uppercase())
+    }
+}
+
+/// Unicode property names recognized by the existing subset; not POSIX class names.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum NamedClass {
-    /// `[:alpha:]`, `\p{L}`, `\p{Alpha}`
+    /// `\p{L}`, `\p{Alpha}` (existing property aliases).
     Alpha,
-    /// `[:digit:]`, `\p{Nd}`
+    /// `\p{Nd}`.
     Digit,
-    /// `[:alnum:]`, `\p{Alnum}`
+    /// `\p{Alnum}` (existing alias).
     Alnum,
-    /// `[:space:]`, `\p{Zs}`, `\p{Space}`
+    /// `\p{Zs}`, `\p{Space}` (existing subset).
     Space,
-    /// `[:upper:]`, `\p{Lu}`
+    /// `\p{Lu}`.
     Upper,
-    /// `[:lower:]`, `\p{Ll}`
+    /// `\p{Ll}`.
     Lower,
-    /// `[:punct:]`, `\p{P}`
+    /// `\p{P}`.
     Punct,
-    /// `[:xdigit:]`
+    /// Existing `\p{XDigit}` alias.
     HexDigit,
-    /// `[:word:]`, `\p{N}` is folded into `Number`
+    /// Existing `\p{Word}` alias.
     Word,
     /// `\p{N}`
     Number,
-    /// `[:ascii:]`
+    /// Existing `\p{ASCII}` alias.
     Ascii,
-    /// `[:cntrl:]`
+    /// `\p{Cc}` and existing aliases.
     Control,
-    /// `[:print:]`
+    /// Existing `\p{Print}` alias.
     Print,
-    /// `[:graph:]`
+    /// Existing `\p{Graph}` alias.
     Graph,
-    /// `[:blank:]`
+    /// Existing `\p{Blank}` alias.
     Blank,
 }
 
@@ -592,9 +673,9 @@ impl Parser<'_> {
                 }
                 if self.peek() == Some(':') && self.chars.get(self.pos + 1) == Some(&']') {
                     self.pos += 2;
-                    let class = NamedClass::parse(&name)
+                    let class = AsciiClass::parse(&name)
                         .ok_or_else(|| RegexError(format!("unknown POSIX class [:{name}:]")))?;
-                    items.push(ClassItem::Named(class, !negated_item));
+                    items.push(ClassItem::Posix(class, !negated_item));
                     first = false;
                     continue;
                 }
@@ -1054,23 +1135,23 @@ fn restore_captures(ctx: &MatchContext<'_>, captures: &Captures) {
 }
 
 fn class_matches(negated: bool, items: &[ClassItem], c: char, flags: Flags) -> bool {
-    let hit = |c: char| {
-        items.iter().any(|item| match item {
-            ClassItem::Range(lo, hi) => (*lo..=*hi).contains(&c),
-            ClassItem::Digit(yes) => c.is_ascii_digit() == *yes,
-            ClassItem::Word(yes) => (c.is_ascii_alphanumeric() || c == '_') == *yes,
-            ClassItem::Space(yes) => {
-                matches!(c, ' ' | '\t' | '\n' | '\r' | '\x0B' | '\x0C') == *yes
-            }
-            ClassItem::Named(class, yes) => class.contains(c) == *yes,
-        })
-    };
-    let found = if flags.case_insensitive {
-        hit(c) || c.to_lowercase().any(hit) || c.to_uppercase().any(hit)
-    } else {
-        hit(c)
-    };
+    let found = items.iter().any(|item| match item {
+        ClassItem::Posix(class, yes) => class.contains_folded(c, flags.case_insensitive) == *yes,
+        ClassItem::Digit(yes) => c.is_ascii_digit() == *yes,
+        ClassItem::Word(yes) => AsciiClass::Word.contains_folded(c, flags.case_insensitive) == *yes,
+        ClassItem::Space(yes) => matches!(c, ' ' | '\t' | '\n' | '\r' | '\x0C') == *yes,
+        // Keep the existing range / Unicode-property semantics separate. In
+        // particular, neither path is restricted to ASCII by the POSIX repair.
+        ClassItem::Range(lo, hi) => legacy_class_fold_hit(|c| (*lo..=*hi).contains(&c), c, flags),
+        ClassItem::Named(class, yes) => {
+            legacy_class_fold_hit(|c| class.contains(c) == *yes, c, flags)
+        }
+    });
     found != negated
+}
+
+fn legacy_class_fold_hit(hit: impl Fn(char) -> bool, c: char, flags: Flags) -> bool {
+    hit(c) || (flags.case_insensitive && (c.to_lowercase().any(&hit) || c.to_uppercase().any(hit)))
 }
 
 fn chars_equal(a: char, b: char, flags: Flags) -> bool {

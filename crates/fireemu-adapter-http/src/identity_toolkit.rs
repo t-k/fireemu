@@ -15,18 +15,24 @@
 //!
 //! Error bodies use the Firebase shape `{"error": {"code": 400, "message": "EMAIL_EXISTS"}}`.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::{Arc, Mutex};
 
 use fireemu_core_app_check::admission::{AdmissionRequest, PrivilegedBypass, ServiceAdmission};
 use fireemu_core_app_check::header::classify_app_check_header;
 use fireemu_core_auth::base32;
 use fireemu_core_auth::claims::{ClaimValue, CustomClaims};
-use fireemu_core_auth::jwt::{base64url_decode, encode_payload_with, encode_with, JwtError};
+use fireemu_core_auth::jwt::{base64url_decode, encode_with, HeaderShape, JwtError};
 use fireemu_core_auth::mfa::{MfaError, PendingSignInContext, PendingSignInCredentials};
+use fireemu_core_auth::password_policy::{EnforcementState, PasswordPolicy, ViolationCode};
+use fireemu_core_auth::signup_quota::{
+    QuotaAlgorithm, QuotaMode, SignupQuotaConfig, SignupReservation, TemporaryQuota,
+};
 use fireemu_core_auth::store::{
-    AuthError, AuthStore, CredentialNotice, FederatedIdentity, LocalId, NewUser, OobRequestType,
-    PendingSignInId, PhoneCodeUse, RoutedStoreInstall, SecondFactorAssertion, VerificationCode,
+    AuthError, AuthPrincipal, AuthStore, CredentialNotice, FederatedIdentity,
+    InboundSamlProviderConfig, LocalId, NewUser, OAuthResponseType, OidcProviderConfig,
+    OobRequestType, PendingSignInId, PhoneCodeUse, ProjectAuthConfigPatch, RoutedStoreInstall,
+    SecondFactorAssertion, SignInConfig, UserQueryExpression, UserSortField, VerificationCode,
     VerificationPurpose,
 };
 use fireemu_core_session::clock::VirtualClock;
@@ -36,6 +42,32 @@ use fireemu_core_types::json::JsonValue;
 use fireemu_core_types::time::{LogicalDuration, LogicalInstant};
 use serde_json::{json, Value};
 
+const PASSWORD_POLICY_FIELDS: [&str; 3] = [
+    "passwordPolicyEnforcementState",
+    "forceUpgradeOnSignin",
+    "passwordPolicyVersions",
+];
+const PASSWORD_POLICY_OPTION_FIELDS: [&str; 6] = [
+    "minPasswordLength",
+    "maxPasswordLength",
+    "containsUppercaseCharacter",
+    "containsLowercaseCharacter",
+    "containsNumericCharacter",
+    "containsNonAlphanumericCharacter",
+];
+const QUOTA_FIELDS: [&str; 2] = ["signUpQuotaConfig", "quotaSimulation"];
+const QUOTA_SIMULATION_FIELDS: [&str; 4] = [
+    "mode",
+    "algorithm",
+    "defaultQuotaPerHour",
+    "maxTrackedBuckets",
+];
+const SIGNUP_QUOTA_FIELDS: [&str; 3] = ["quota", "startTime", "quotaDuration"];
+
+mod custom_token;
+pub use custom_token::{CustomTokenRefusal, CustomTokenTrust};
+mod password_hash;
+pub use password_hash::restorable_spec as restorable_imported_hash_spec;
 mod routes;
 pub mod widget;
 mod widget_templates;
@@ -419,6 +451,84 @@ pub trait AuthBlockingHook: Send + Sync {
     ) -> Result<Option<Value>, BlockingFunctionFailure> {
         self.invoke_for(project, tenant, event, user)
     }
+
+    /// Returns the logical project-level blocking settings, when this hook is backed by a
+    /// configurable local Functions runtime. The projection must not contain runner addresses,
+    /// secrets or dynamic ports.
+    fn blocking_auth_settings(&self) -> Option<Value> {
+        None
+    }
+
+    /// Returns the logical settings for an export, or an error when an explicit local target can
+    /// no longer be resolved. Export must not silently discard a configured target after a
+    /// Functions manifest change.
+    fn blocking_auth_settings_for_export(&self) -> Result<Option<Value>, String> {
+        Ok(self.blocking_auth_settings())
+    }
+
+    /// Captures enough logical state to restore a settings update if the paired Auth config
+    /// commit fails. Runtime-backed bridges may include private discovery markers here; this
+    /// value is never written to an export.
+    fn blocking_auth_settings_snapshot(&self) -> Result<Option<Value>, String> {
+        Ok(self.blocking_auth_settings())
+    }
+
+    /// Restores a snapshot captured by [`Self::blocking_auth_settings_snapshot`].
+    fn restore_blocking_auth_settings_snapshot(&self, snapshot: &Value) -> Result<(), String> {
+        self.update_blocking_auth_settings(snapshot)
+    }
+
+    /// Restores a snapshot only when the public blocking settings still equal the candidate
+    /// written by this request. The project config route holds its Auth operation gate across
+    /// this check and the paired Auth update, so an intervening config request cannot be erased
+    /// by rollback. Runtime-backed implementations may override this when their settings store
+    /// provides a stronger compare-and-swap primitive.
+    fn restore_blocking_auth_settings_snapshot_if_unchanged(
+        &self,
+        snapshot: &Value,
+        candidate: &Value,
+    ) -> Result<(), String> {
+        let current = self
+            .blocking_auth_settings()
+            .ok_or_else(|| "blocking Auth settings are unavailable".to_owned())?;
+        if current != *candidate {
+            return Err("blocking Auth settings changed during the transaction".to_owned());
+        }
+        self.restore_blocking_auth_settings_snapshot(snapshot)
+    }
+
+    /// Validates a complete logical blocking settings projection without changing state.
+    fn validate_blocking_auth_settings(&self, _settings: &Value) -> Result<(), String> {
+        Err("blocking Auth settings are not configurable for this hook".to_owned())
+    }
+
+    /// Atomically replaces a previously validated logical blocking settings projection.
+    fn update_blocking_auth_settings(&self, _settings: &Value) -> Result<(), String> {
+        Err("blocking Auth settings are not configurable for this hook".to_owned())
+    }
+
+    /// Applies a masked logical settings update. Runtime-backed hooks may override this to
+    /// preserve internal discovery selections while complete replacements still use explicit
+    /// omitted-event semantics. The default treats the supplied value as a complete projection.
+    fn update_blocking_auth_settings_masked(
+        &self,
+        settings: &Value,
+        _fields: &[String],
+    ) -> Result<(), String> {
+        self.update_blocking_auth_settings(settings)
+    }
+
+    /// Returns the project whose daemon-owned Functions manifest backs this hook.
+    fn blocking_auth_project(&self) -> Option<&str> {
+        None
+    }
+
+    /// Monotonic revision of the selected blocking-function configuration. Bridges with mutable
+    /// function selection should increment it whenever the selection or token policy changes;
+    /// the default keeps legacy immutable in-process hooks compatible.
+    fn blocking_auth_revision(&self) -> u64 {
+        0
+    }
 }
 
 fn handler_may_invoke_blocking_auth(
@@ -446,6 +556,31 @@ fn handler_may_invoke_blocking_auth(
     );
     (may_create && blocking.handles(BeforeCreate))
         || (may_sign_in && blocking.handles(BeforeSignIn))
+}
+
+/// Returns whether a blocking hook is allowed to observe the selected Auth project.
+///
+/// A runtime-backed bridge reports the project owned by its Functions runtime. Hooks that do not
+/// report a binding are legacy in-process hooks: they remain valid for the default store, but a
+/// registry-backed adapter must not pass them users from a routed project. This check belongs at
+/// the adapter boundary because the default `invoke_for` implementation cannot know which stores
+/// the adapter exposes.
+fn blocking_hook_applies_to_project(
+    state: &AuthState,
+    blocking: &dyn AuthBlockingHook,
+    project: &str,
+) -> bool {
+    let bound_project = blocking.blocking_auth_project();
+    if bound_project.is_some_and(|bound_project| bound_project != project) {
+        return false;
+    }
+    if bound_project.is_some() || state.registry.is_none() {
+        return true;
+    }
+    state
+        .registry
+        .as_ref()
+        .is_some_and(|registry| registry.default_project() == project)
 }
 
 pub(crate) fn request_may_invoke_blocking_auth(
@@ -488,6 +623,24 @@ pub enum AuthQueryLimits {
     ProductionBounded,
 }
 
+/// Whether client routes admit a caller that presents neither an API key nor a credential.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ClientApiKeyPolicy {
+    /// Match the Firebase Auth Emulator, which serves keyless client requests.
+    Optional,
+    /// Refuse them as production's API front end does ("unregistered callers").
+    Required,
+}
+
+/// Whether this embedding exposes bounded local `pendingToken` continuation handles.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum IdpContinuationPolicy {
+    /// Preserve the Firebase Emulator response shape; pending-token input is unsupported.
+    Disabled,
+    /// Enable namespace/authority-bound local handles, never production token verification.
+    LocalBounded,
+}
+
 /// Shared Auth state behind the REST surface.
 pub struct AuthState {
     /// User store (shared with the gRPC adapter, which verifies ID tokens against it).
@@ -526,8 +679,15 @@ pub struct AuthState {
     pub stateless_refresh_tokens: bool,
     /// Expiry policy for unsigned fake custom tokens.
     pub fake_custom_token_expiry: FakeCustomTokenExpiry,
+    /// Service-account keys signed custom tokens verify against (`auth.customTokenSigners`).
+    /// With none, the unsigned tokens the Admin SDK mints in emulator mode are accepted.
+    pub custom_token_trust: Option<Arc<CustomTokenTrust>>,
     /// Profile-specific Admin query behavior.
     pub query_limits: AuthQueryLimits,
+    /// Whether client routes refuse a request carrying neither an API key nor a credential.
+    pub client_api_key: ClientApiKeyPolicy,
+    /// Explicit local `IdP` continuation policy, independent of query paging.
+    pub idp_continuations: IdpContinuationPolicy,
     /// App Check exchange, JWKS and debug-token management, when `appCheck.enabled` selects
     /// them. `None` makes every App Check route a 404 (the activation table of section 8).
     pub app_check: Option<Arc<crate::app_check::AppCheckState>>,
@@ -574,6 +734,61 @@ pub struct JsonResponse {
     pub body: Value,
 }
 
+/// A proto3 JSON decoding refusal as production sends it: the gRPC status name, an `errors`
+/// entry without a domain, and a `BadRequest` violation naming the proto field (sandbox
+/// recording 2026-09-23).
+fn proto_field_error(field: &str, description: &str) -> JsonResponse {
+    JsonResponse {
+        status: 400,
+        body: json!({"error": {
+            "code": 400,
+            "message": description,
+            "errors": [{"message": description, "reason": "invalid"}],
+            "status": "INVALID_ARGUMENT",
+            "details": [{
+                "@type": "type.googleapis.com/google.rpc.BadRequest",
+                "fieldViolations": [{"field": field, "description": description}],
+            }],
+        }}),
+    }
+}
+
+/// Secure Token refusals carry a gRPC status name and no `errors` list, unlike Identity
+/// Toolkit's (sandbox recording 2026-09-23).
+fn secure_token_error_shape(mut response: JsonResponse) -> JsonResponse {
+    if let Some(error) = response
+        .body
+        .get_mut("error")
+        .and_then(Value::as_object_mut)
+    {
+        error.remove("errors");
+        if response.status == 400 {
+            error.insert("status".to_owned(), json!("INVALID_ARGUMENT"));
+        }
+    }
+    response
+}
+
+/// Production answers an Admin create with a longer id with an internal error and creates
+/// nothing (sandbox exploration 2026-09-24).
+fn local_id_too_long(id: &str) -> bool {
+    id.encode_utf16().count() > fireemu_core_auth::store::MAX_LOCAL_ID_UTF16_UNITS
+}
+
+/// Production's generic backend failure (sandbox recording 2026-09-23).
+fn backend_internal_error() -> JsonResponse {
+    const MESSAGE: &str = "Internal error encountered.";
+    JsonResponse {
+        status: 500,
+        body: json!({"error": {
+            "code": 500,
+            "message": MESSAGE,
+            "errors": [{"message": MESSAGE, "domain": "global", "reason": "backendError"}],
+            "status": "INTERNAL",
+        }}),
+    }
+}
+
 fn error(status: u16, message: &str) -> JsonResponse {
     JsonResponse {
         status,
@@ -611,9 +826,15 @@ fn sign_response_tokens(
         if parts.next() != Some("") || parts.next().is_some() {
             return error(500, "INTERNAL");
         }
-        if base64url_decode(header).as_deref() != Ok(br#"{"alg":"none","typ":"JWT"}"#) {
+        let Ok(header) = base64url_decode(header) else {
             return error(500, "INTERNAL");
-        }
+        };
+        let Some(shape) = [HeaderShape::Typed, HeaderShape::Untyped]
+            .into_iter()
+            .find(|shape| header == fireemu_core_auth::jwt::unsigned_header(*shape))
+        else {
+            return error(500, "INTERNAL");
+        };
         let Ok(payload) = base64url_decode(payload) else {
             return error(500, "INTERNAL");
         };
@@ -623,7 +844,33 @@ fn sign_response_tokens(
         let Ok(payload) = std::str::from_utf8(&payload) else {
             return error(500, "INTERNAL");
         };
-        *token = encode_payload_with(payload, Some(signer));
+        *token = fireemu_core_auth::jwt::encode_payload_shaped(payload, Some(signer), shape);
+    }
+    response
+}
+
+/// Commit the issuance timestamp only after a successful response has been signed.
+fn finish_token_response(
+    response: JsonResponse,
+    signer: Option<&dyn fireemu_core_auth::jwt::IdTokenSigner>,
+    store: &Arc<Mutex<AuthStore>>,
+    at: LogicalInstant,
+) -> JsonResponse {
+    let response = sign_response_tokens(response, signer);
+    if response.status == 200
+        && (response.body.get("idToken").is_some() || response.body.get("id_token").is_some())
+    {
+        if let Some(refresh) = response
+            .body
+            .get("refreshToken")
+            .or_else(|| response.body.get("refresh_token"))
+            .and_then(Value::as_str)
+        {
+            let Ok(mut store) = store.lock() else {
+                return error(500, "INTERNAL");
+            };
+            store.record_token_issuance(refresh, at);
+        }
     }
     response
 }
@@ -677,12 +924,27 @@ fn auth_error(e: &AuthError) -> JsonResponse {
             400,
             "WEAK_PASSWORD : Password should be at least 6 characters",
         ),
+        AuthError::PasswordTooLong => error(
+            400,
+            "PASSWORD_DOES_NOT_MEET_REQUIREMENTS : Password cannot be longer than 4096 characters",
+        ),
+        AuthError::PasswordPolicyViolation(refusal) => {
+            error(400, &password_requirements_message(refusal))
+        }
+        // Production names the client-permission refusal (sandbox recording 2026-09-23).
+        AuthError::UserSignupDisabled | AuthError::UserDeletionDisabled => {
+            error(400, "ADMIN_ONLY_OPERATION")
+        }
+        AuthError::SignupQuotaExceeded => error(400, "SIGNUP_QUOTA_EXCEEDED"),
+        AuthError::SignupQuotaUnavailable => error(500, "SIGNUP_QUOTA_UNAVAILABLE"),
         AuthError::InvalidCredentials => error(400, "INVALID_LOGIN_CREDENTIALS"),
         AuthError::InvalidPassword => error(400, "INVALID_PASSWORD"),
         AuthError::UserDisabled => error(400, "USER_DISABLED"),
         AuthError::InvalidRefreshToken => error(400, "INVALID_REFRESH_TOKEN"),
+        AuthError::ExpiredRefreshToken => error(400, "TOKEN_EXPIRED"),
         AuthError::UserNotFound => error(400, "USER_NOT_FOUND"),
         AuthError::InvalidLocalId => error(400, "INVALID_LOCAL_ID"),
+        AuthError::ImportedHashFailure => backend_internal_error(),
         AuthError::LocalIdExists => error(400, "DUPLICATE_LOCAL_ID"),
         AuthError::PhoneNumberExists => error(400, "PHONE_NUMBER_EXISTS"),
         AuthError::InvalidPhoneNumber => error(400, "INVALID_PHONE_NUMBER"),
@@ -691,12 +953,61 @@ fn auth_error(e: &AuthError) -> JsonResponse {
         AuthError::InvalidSessionInfo => error(400, "INVALID_SESSION_INFO"),
         AuthError::InvalidVerificationCode => error(400, "INVALID_CODE"),
         AuthError::FederatedUserIdAlreadyLinked => error(400, "FEDERATED_USER_ID_ALREADY_LINKED"),
+        AuthError::ControlCharacterInText(field) => error(
+            400,
+            &format!("INVALID_ARGUMENT : {field} must not contain control characters"),
+        ),
         AuthError::TooManyOutstandingCodes => error(
             400,
             "QUOTA_EXCEEDED : too many outstanding codes; consume or expire some first",
         ),
+        AuthError::LimitExceeded(v) if v.limit_id == "AUTH-LIMIT-CUSTOM-CLAIMS-BYTES" => {
+            error(400, "CLAIMS_TOO_LARGE")
+        }
         AuthError::LimitExceeded(v) => error(400, &format!("INVALID_CLAIMS : {}", v.limit_id)),
     }
+}
+
+/// Production lists every unmet requirement of a custom password policy (sandbox recording
+/// 2026-09-23, auth-account/policy/enforce-custom). The maximum, upper-case, numeric and
+/// non-alphanumeric sentences and their relative order are observed; the minimum and
+/// lower-case sentences follow the same wording and are not yet observed.
+fn password_requirements_message(
+    refusal: &fireemu_core_auth::password_policy::PolicyRefusal,
+) -> String {
+    use fireemu_core_auth::password_policy::ViolationCode;
+    let sentences: Vec<String> = refusal
+        .violations
+        .iter()
+        .map(|violation| match violation {
+            ViolationCode::MinimumPasswordLength => {
+                format!(
+                    "Password must contain at least {} characters",
+                    refusal.min_length
+                )
+            }
+            ViolationCode::MaximumPasswordLength => format!(
+                "Password may contain at most {} characters",
+                refusal.max_length.unwrap_or(4096)
+            ),
+            ViolationCode::MissingLowercaseCharacter => {
+                "Password must contain a lower case character".to_owned()
+            }
+            ViolationCode::MissingUppercaseCharacter => {
+                "Password must contain an upper case character".to_owned()
+            }
+            ViolationCode::MissingNumericCharacter => {
+                "Password must contain a numeric character".to_owned()
+            }
+            ViolationCode::MissingNonAlphanumericCharacter => {
+                "Password must contain a non-alphanumeric character".to_owned()
+            }
+        })
+        .collect();
+    format!(
+        "PASSWORD_DOES_NOT_MEET_REQUIREMENTS : Missing password requirements: [{}]",
+        sentences.join(", ")
+    )
 }
 
 fn mfa_error(e: &MfaError) -> JsonResponse {
@@ -716,13 +1027,19 @@ fn mfa_error(e: &MfaError) -> JsonResponse {
         MfaError::LimitExceeded(_) => error(400, "SECOND_FACTOR_EXISTS"),
         MfaError::UserDisabled => error(400, "USER_DISABLED"),
         MfaError::UserNotFound => error(400, "USER_NOT_FOUND"),
+        MfaError::ControlCharacterInText(field) => error(
+            400,
+            &format!("INVALID_ARGUMENT : {field} must not contain control characters"),
+        ),
     }
 }
 
 fn jwt_error(e: &JwtError) -> JsonResponse {
     match e {
-        JwtError::Expired => error(400, "TOKEN_EXPIRED"),
-        JwtError::Revoked => error(400, "TOKEN_EXPIRED : credentials revoked"),
+        // Production has no detail for a revoked token either (sandbox recording 2026-09-23),
+        // and answers a token past its expiry allowance as invalid, not expired (2026-09-24).
+        JwtError::Revoked => error(400, "TOKEN_EXPIRED"),
+        JwtError::UserDisabled => error(400, "USER_DISABLED"),
         _ => error(400, "INVALID_ID_TOKEN"),
     }
 }
@@ -820,7 +1137,8 @@ fn issue_tokens_replacing(
         .id_token_claims(uid, second, at)
         .map_err(|e| auth_error(&e))?;
     if let Some(p) = &issue.provider {
-        p.id().clone_into(&mut claims.firebase.sign_in_provider);
+        p.sign_in_provider_claim()
+            .clone_into(&mut claims.firebase.sign_in_provider);
     }
     claims.firebase.sign_in_attributes = issue.sign_in_attributes.cloned();
     if let Some(extra) = issue.extra {
@@ -858,6 +1176,15 @@ fn verify(store: &AuthStore, body: &Value, at: LogicalInstant) -> Result<LocalId
     verify_session(store, body, at).map(|s| s.uid)
 }
 
+/// [`verify`] on a route production was observed to honour the legacy token on.
+fn verify_honouring_legacy(
+    store: &AuthStore,
+    body: &Value,
+    at: LogicalInstant,
+) -> Result<LocalId, JsonResponse> {
+    verify_session_accepting(store, body, at, jwt_error, LegacyTokens::Honoured).map(|s| s.uid)
+}
+
 /// The session an `idToken` proves: the user and the provider it signed in with (the
 /// official emulator reads `firebase.sign_in_provider` back from the token for the routes
 /// whose behaviour depends on the first factor).
@@ -881,20 +1208,68 @@ fn verify_session(
     body: &Value,
     at: LogicalInstant,
 ) -> Result<Session, JsonResponse> {
+    verify_session_with_error(store, body, at, jwt_error)
+}
+
+fn verify_session_with_error(
+    store: &AuthStore,
+    body: &Value,
+    at: LogicalInstant,
+    map_error: fn(&fireemu_core_auth::jwt::JwtError) -> JsonResponse,
+) -> Result<Session, JsonResponse> {
+    verify_session_accepting(store, body, at, map_error, LegacyTokens::Refused)
+}
+
+/// Whether a route honours the legacy Identity Toolkit token. Production was observed to honour
+/// it on account lookup, update and delete, a verification mail, phone linking, a sign-up
+/// upgrade and MFA enrollment (sandbox recordings 2026-09-24); email-link and identity-provider linking and
+/// session-cookie creation refuse it (the last observed, the others until observed).
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum LegacyTokens {
+    Honoured,
+    Refused,
+}
+
+fn verify_session_accepting(
+    store: &AuthStore,
+    body: &Value,
+    at: LogicalInstant,
+    map_error: fn(&fireemu_core_auth::jwt::JwtError) -> JsonResponse,
+    legacy_tokens: LegacyTokens,
+) -> Result<Session, JsonResponse> {
     let token = match body.get("idToken") {
         None | Some(Value::Null) => return Err(error(400, "MISSING_ID_TOKEN")),
         Some(Value::String(t)) => t.as_str(),
         Some(_) => return Err(error(400, "INVALID_ID_TOKEN")),
     };
-    let (v, decoded) = fireemu_core_auth::jwt::verify_id_token_decoded(token, store, at)
-        .map_err(|e| jwt_error(&e))?;
-    let provider = decoded
-        .payload
-        .get("firebase")
-        .and_then(|f| f.get("sign_in_provider"))
-        .and_then(JsonValue::as_str)
-        .unwrap_or("")
-        .to_owned();
+    // Account lookup, update and delete also honour the legacy Identity Toolkit token (sandbox
+    // recording 2026-09-24); every other route verifies ID tokens only.
+    let leeway = fireemu_core_auth::jwt::IDENTITY_TOOLKIT_EXPIRY_LEEWAY_SECONDS;
+    let (v, decoded) =
+        match fireemu_core_auth::jwt::verify_id_token_decoded_with_leeway(token, store, at, leeway)
+        {
+            // A token of another issuer may be a legacy token; that verifier checks the issuer.
+            Err(fireemu_core_auth::jwt::JwtError::WrongIssuer { .. })
+                if legacy_tokens == LegacyTokens::Honoured =>
+            {
+                fireemu_core_auth::jwt::verify_legacy_token(token, store, at, leeway)
+            }
+            verified => verified,
+        }
+        .map_err(|e| map_error(&e))?;
+    let legacy = decoded.payload.get("iss").and_then(JsonValue::as_str)
+        == Some(fireemu_core_auth::jwt::LEGACY_TOKEN_ISSUER);
+    let provider = if legacy {
+        decoded.payload.get("sign_in_provider")
+    } else {
+        decoded
+            .payload
+            .get("firebase")
+            .and_then(|f| f.get("sign_in_provider"))
+    }
+    .and_then(JsonValue::as_str)
+    .unwrap_or("")
+    .to_owned();
     let second_factor = decoded.payload.get("firebase").and_then(|firebase| {
         let sign_in_second_factor = firebase.get("sign_in_second_factor")?.as_str()?;
         let second_factor_identifier = firebase.get("second_factor_identifier")?.as_str()?;
@@ -906,7 +1281,12 @@ fn verify_session(
     });
     let sign_in_attributes = sign_in_attributes(&decoded.payload);
     let mut extra_claims = CustomClaims::default();
-    if let JsonValue::Object(values) = &decoded.payload {
+    let developer = if legacy {
+        decoded.payload.get("extra_claims")
+    } else {
+        Some(&decoded.payload)
+    };
+    if let Some(JsonValue::Object(values)) = developer {
         for (name, value) in values {
             // Reserved token fields are rejected by insert; everything else is a developer,
             // user or blocking-function session claim that a replacement token must retain.
@@ -944,6 +1324,9 @@ pub struct RequestHeaders {
     /// Every `X-Firebase-AppCheck` field instance, in wire order. A value the transport could
     /// not render as text is carried as an empty string, which classifies as malformed.
     pub app_check: Vec<String>,
+    /// Trusted transport peer address. The HTTP server populates this from `peer_addr`; callers
+    /// of the in-process handler may leave it absent and receive the loopback test default.
+    pub peer_ip: Option<String>,
 }
 
 /// The exact credential the emulator's Admin SDK surface requires. It is the privileged
@@ -956,10 +1339,11 @@ pub const OWNER_CREDENTIAL: &str = "Bearer owner";
 fn admin_guard(
     headers: &RequestHeaders,
     method: &str,
+    api_key: bool,
     project: &str,
     store: &AuthStore,
 ) -> Result<(), JsonResponse> {
-    admin_request_guard(headers, method)?;
+    admin_request_guard(headers, method, api_key)?;
     if project.is_empty() || project != store.project_id() {
         return Err(error(
             400,
@@ -972,7 +1356,134 @@ fn admin_guard(
     Ok(())
 }
 
-fn admin_request_guard(headers: &RequestHeaders, method: &str) -> Result<(), JsonResponse> {
+/// Production's API front end refuses a key the project does not own before the service reads
+/// the request (sandbox recording 2026-09-24, auth-credential/refresh/refusals#invalid-api-key).
+fn invalid_api_key(service: &str) -> JsonResponse {
+    const MESSAGE: &str = "API key not valid. Please pass a valid API key.";
+    let mut response = invalid_api_key_without_errors(service);
+    // Identity Toolkit adds its `errors` list; Secure Token does not (2026-09-24).
+    if service == "identitytoolkit.googleapis.com" {
+        response.body["error"]["errors"] =
+            json!([{"message": MESSAGE, "domain": "global", "reason": "badRequest"}]);
+    }
+    response
+}
+
+fn invalid_api_key_without_errors(service: &str) -> JsonResponse {
+    const MESSAGE: &str = "API key not valid. Please pass a valid API key.";
+    JsonResponse {
+        status: 400,
+        body: json!({"error": {
+            "code": 400,
+            "message": MESSAGE,
+            "status": "INVALID_ARGUMENT",
+            "details": [
+                {
+                    "@type": "type.googleapis.com/google.rpc.ErrorInfo",
+                    "reason": "API_KEY_INVALID",
+                    "domain": "googleapis.com",
+                    "metadata": {"service": service},
+                },
+                {
+                    "@type": "type.googleapis.com/google.rpc.LocalizedMessage",
+                    "locale": "en-US",
+                    "message": MESSAGE,
+                },
+            ],
+        }}),
+    }
+}
+
+/// Production's refusal of an API key where session management needs a credential.
+fn session_management_credentials_missing() -> JsonResponse {
+    JsonResponse {
+        status: 401,
+        body: json!({"error": {
+            "code": 401,
+            "message": "API keys are not supported by this API. Expected OAuth2 access token or other authentication credentials that assert a principal. See https://cloud.google.com/docs/authentication",
+            "errors": [{
+                "message": "Login Required.",
+                "domain": "global",
+                "reason": "required",
+                "location": "Authorization",
+                "locationType": "header",
+            }],
+            "status": "UNAUTHENTICATED",
+            "details": [{
+                "@type": "type.googleapis.com/google.rpc.ErrorInfo",
+                "reason": "CREDENTIALS_MISSING",
+                "domain": "googleapis.com",
+                "metadata": {
+                    "method": "google.cloud.identitytoolkit.v1.SessionManagementService.CreateSessionCookie",
+                    "service": "identitytoolkit.googleapis.com",
+                },
+            }],
+        }}),
+    }
+}
+
+/// The Google API a request path addresses, as the front end names it.
+fn api_service(path: &str) -> &'static str {
+    if path.starts_with("/securetoken.googleapis.com/") {
+        "securetoken.googleapis.com"
+    } else {
+        "identitytoolkit.googleapis.com"
+    }
+}
+
+/// Refuses an API key the project did not declare, when it declared any.
+fn declared_api_key_check(
+    state: &AuthState,
+    path: &str,
+    query: Option<&str>,
+) -> Result<(), JsonResponse> {
+    let (Ok((Some(key), _)), Some(tenancy)) = (query_selectors(query), state.tenancy.as_ref())
+    else {
+        return Ok(());
+    };
+    let Ok(tenancy) = tenancy.read() else {
+        return Err(error(500, "INTERNAL"));
+    };
+    if tenancy.refuses_api_key(&key) {
+        return Err(invalid_api_key(api_service(path)));
+    }
+    Ok(())
+}
+
+/// Production's API front end refuses a caller that presents no identity at all: neither a
+/// credential nor an API key (sandbox recording 2026-09-23).
+fn unregistered_caller() -> JsonResponse {
+    const MESSAGE: &str = "Method doesn't allow unregistered callers (callers without established identity). Please use API Key or other form of API consumer identity to call this API.";
+    JsonResponse {
+        status: 403,
+        body: json!({"error": {
+            "code": 403,
+            "message": MESSAGE,
+            "errors": [{"message": MESSAGE, "domain": "global", "reason": "forbidden"}],
+            "status": "PERMISSION_DENIED",
+        }}),
+    }
+}
+
+fn admin_request_guard(
+    headers: &RequestHeaders,
+    method: &str,
+    api_key: bool,
+) -> Result<(), JsonResponse> {
+    // Without an `Authorization` header production answers by what the request still
+    // carries: an API key identifies the caller but cannot address a project, and nothing at
+    // all is an unregistered caller (sandbox recording 2026-09-23). A present but foreign
+    // credential keeps the local owner-credential refusal; its production shape is unobserved.
+    if headers.authorization.is_none() {
+        return Err(if api_key {
+            error(
+                400,
+                "INSUFFICIENT_PERMISSION : Only authenticated requests can specify target_project_id.",
+            )
+        } else {
+            unregistered_caller()
+        });
+    }
     if headers.authorization.as_deref() != Some(OWNER_CREDENTIAL) {
         return Err(error(
             401,
@@ -1577,19 +2088,60 @@ fn discard_pending_inbound_credentials(
     store.clear_pending_sign_in_credentials(pending);
 }
 
+fn discard_pending_inbound_credentials_if_revision_current(
+    store: &Arc<Mutex<AuthStore>>,
+    pending: Option<&PendingSignInId>,
+    settings_gate: &Arc<Mutex<()>>,
+    blocking: &dyn AuthBlockingHook,
+    expected_blocking_revision: u64,
+) -> Result<(), JsonResponse> {
+    let Some(pending) = pending else {
+        return Ok(());
+    };
+    let Ok(_settings_operation) = settings_gate.lock() else {
+        return Err(error(500, "INTERNAL"));
+    };
+    if blocking.blocking_auth_revision() != expected_blocking_revision {
+        return Err(error(409, "BLOCKING_FUNCTION_CONFIGURATION_CHANGED"));
+    }
+    discard_pending_inbound_credentials(store, Some(pending));
+    Ok(())
+}
+
+struct GeneratedLocalIdReservation {
+    store: Arc<Mutex<AuthStore>>,
+    id: String,
+    generation: u64,
+    ticket: u64,
+}
+
+impl Drop for GeneratedLocalIdReservation {
+    fn drop(&mut self) {
+        let store = self
+            .store
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        store.release_reserved_generated_local_id_at_ticket(&self.id, self.generation, self.ticket);
+    }
+}
+
 // The request parts stay separate here so the ordinary dispatcher remains the one source of
 // route behavior; grouping them in a second request type would duplicate that boundary.
 #[allow(clippy::too_many_arguments, clippy::too_many_lines)]
 fn dispatch_with_blocking_hook(
     state: &AuthState,
     blocking: &dyn AuthBlockingHook,
+    expected_blocking_revision: u64,
     handler: routes::Handler,
     store_arc: &Arc<Mutex<AuthStore>>,
     store: std::sync::MutexGuard<'_, AuthStore>,
+    settings_gate: &Arc<Mutex<()>>,
+    operation_gate: Option<&Arc<Mutex<()>>>,
     query: Option<&str>,
     body: &Value,
     headers: &RequestHeaders,
     at: LogicalInstant,
+    quota_reservation: &mut Option<SignupReservation>,
 ) -> JsonResponse {
     let pending_continuation = (handler == routes::Handler::MfaSignInFinalize)
         .then(|| str_field(body, "mfaPendingCredential"))
@@ -1602,7 +2154,28 @@ fn dispatch_with_blocking_hook(
                 store.pending_sign_in_context(&pending)?.clone(),
             ))
         });
+    if blocking.blocking_auth_revision() != expected_blocking_revision {
+        return error(409, "BLOCKING_FUNCTION_CONFIGURATION_CHANGED");
+    }
+    let generated_id_interference = store.generated_id_interference_count();
     let mut candidate = store.clone();
+    let live_snapshot = store.clone();
+    let reset_generation = store.reset_generation();
+    let reserve_local_id = request_may_create_end_user(handler, &store, body, at)
+        .then(|| candidate.reserve_next_generated_local_id_with_ticket());
+    // Register the reservation while the candidate still shares its reservation registry with
+    // the live store, then release the request's store guard before constructing the Drop guard.
+    // Every subsequent early return may therefore safely release the reservation without trying
+    // to re-lock this still-held mutex.
+    drop(store);
+    let reservation_ticket = reserve_local_id.clone();
+    let _reserved_local_id =
+        reserve_local_id.map(|(id, generation, ticket)| GeneratedLocalIdReservation {
+            store: store_arc.clone(),
+            id,
+            generation,
+            ticket,
+        });
     let response = dispatch(
         handler,
         &mut candidate,
@@ -1610,8 +2183,11 @@ fn dispatch_with_blocking_hook(
         body,
         headers,
         at,
-        state.into(),
+        &blocking_dispatch_options(state),
     );
+    if blocking.blocking_auth_revision() != expected_blocking_revision {
+        return error(409, "BLOCKING_FUNCTION_CONFIGURATION_CHANGED");
+    }
     let is_authentication = matches!(
         handler,
         routes::Handler::SignUp
@@ -1635,7 +2211,7 @@ fn dispatch_with_blocking_hook(
     let speculative_uid = uid.clone();
     let is_new = is_authentication
         && uid_text.as_deref().is_some_and(|uid| {
-            store.user_by_id(uid).is_none() && candidate.user_by_id(uid).is_some()
+            live_snapshot.user_by_id(uid).is_none() && candidate.user_by_id(uid).is_some()
         });
     let signed_in = is_authentication
         && response.status == 200
@@ -1658,9 +2234,8 @@ fn dispatch_with_blocking_hook(
         .any()
         .then(|| inbound_credentials_from_request(body, retained_policy))
         .flatten();
-    let project = store.project_id().to_owned();
-    let tenant = store.tenant_id().map(str::to_owned);
-    drop(store);
+    let project = live_snapshot.project_id().to_owned();
+    let tenant = live_snapshot.tenant_id().map(str::to_owned);
     let mut blocking_responses = Vec::new();
     if response.status == 200 {
         if let Some(uid) = uid {
@@ -1733,10 +2308,17 @@ fn dispatch_with_blocking_hook(
                     ) {
                         Ok(value) => value,
                         Err(failure) => {
-                            discard_pending_inbound_credentials(
-                                store_arc,
-                                pending_continuation.as_ref().map(|(pending, _, _)| pending),
-                            );
+                            if let Err(response) =
+                                discard_pending_inbound_credentials_if_revision_current(
+                                    store_arc,
+                                    pending_continuation.as_ref().map(|(pending, _, _)| pending),
+                                    settings_gate,
+                                    blocking,
+                                    expected_blocking_revision,
+                                )
+                            {
+                                return response;
+                            }
                             return error(failure.identity_status(), &failure.client_message());
                         }
                     }
@@ -1748,10 +2330,17 @@ fn dispatch_with_blocking_hook(
                         fireemu_core_functions::manifest::BlockingAuthEvent::BeforeSignIn,
                         &value,
                     ) {
-                        discard_pending_inbound_credentials(
-                            store_arc,
-                            pending_continuation.as_ref().map(|(pending, _, _)| pending),
-                        );
+                        if let Err(response) =
+                            discard_pending_inbound_credentials_if_revision_current(
+                                store_arc,
+                                pending_continuation.as_ref().map(|(pending, _, _)| pending),
+                                settings_gate,
+                                blocking,
+                                expected_blocking_revision,
+                            )
+                        {
+                            return response;
+                        }
                         return error(400, &reason);
                     }
                     blocking_responses.push((
@@ -1762,7 +2351,13 @@ fn dispatch_with_blocking_hook(
             }
         }
     }
-    let commit = |metadata: Option<&fireemu_core_auth::store::TenantMetadata>| {
+    if blocking.blocking_auth_revision() != expected_blocking_revision {
+        return error(409, "BLOCKING_FUNCTION_CONFIGURATION_CHANGED");
+    }
+    let mut commit = |metadata: Option<&fireemu_core_auth::store::TenantMetadata>| {
+        if blocking.blocking_auth_revision() != expected_blocking_revision {
+            return error(409, "BLOCKING_FUNCTION_CONFIGURATION_CHANGED");
+        }
         if tenant.is_some() {
             if let Some(denial) = tenant_policy_denial_with_metadata(handler, metadata, body) {
                 return denial;
@@ -1771,7 +2366,40 @@ fn dispatch_with_blocking_hook(
         let Ok(mut live) = store_arc.lock() else {
             return error(500, "INTERNAL");
         };
+        if live.reset_generation() != reset_generation {
+            return error(409, "AUTH_STATE_RESET");
+        }
+        if tenant.is_none() {
+            if let Some(denial) = project_provider_denial(handler, live.sign_in_config(), body) {
+                return denial;
+            }
+        }
+        if live.generated_id_interference_count() != generated_id_interference {
+            return error(
+                400,
+                "BLOCKING_FUNCTION_ERROR_RESPONSE : identity changed while the hook was running",
+            );
+        }
         let mut committed = live.clone();
+        if is_new {
+            if let Some(uid) = speculative_uid.as_ref().map(LocalId::as_str) {
+                // Some creation routes (for example custom-token sign-in) use an explicit UID
+                // supplied by the caller rather than the generated reservation. Only retire a
+                // ticket when it names the UID that the candidate actually selected; otherwise
+                // the outer guard releases the unused generated reservation on return.
+                if let Some((reserved_id, generation, ticket)) = reservation_ticket.as_ref() {
+                    if reserved_id == uid
+                        && !committed.use_reserved_generated_local_id_with_ticket(
+                            uid,
+                            *generation,
+                            *ticket,
+                        )
+                    {
+                        return error(409, "AUTH_STATE_CHANGED");
+                    }
+                }
+            }
+        }
         let mut committed_response = if handler == routes::Handler::SignUp && is_new {
             sign_up(
                 &mut committed,
@@ -1789,7 +2417,7 @@ fn dispatch_with_blocking_hook(
                 body,
                 headers,
                 at,
-                state.into(),
+                &blocking_dispatch_options(state),
             )
         };
         if committed_response.status != 200 {
@@ -1872,6 +2500,38 @@ fn dispatch_with_blocking_hook(
                     Err(reason) => return error(400, &reason),
                 }
             }
+            // A hook response that disables the account refuses the very request that
+            // ran it with USER_DISABLED and no tokens (production, recorded 2026-09-11
+            // and 2026-09-12). What persists depends on the request, as recorded: a
+            // sign-up keeps its created, disabled record (a second sign-up is
+            // EMAIL_EXISTS); an MFA finalize persists the response on the record; a
+            // first-factor sign-in of an existing account persists nothing (the flag
+            // read back as not disabled before, immediately after, and up to thirty
+            // seconds after the refusal, while sign-ins stayed refused under the
+            // registered function; the same account after the function's removal was
+            // not observed in production). Paths other than password sign-in, sign-up
+            // and phone MFA finalize are unobserved and follow the existing-account
+            // rule.
+            if issued_session.is_some() && committed.user(&uid).is_some_and(|u| u.disabled) {
+                if live.user(&uid).is_none() {
+                    committed.revoke_refresh_tokens(&uid);
+                    *live = committed;
+                } else if handler == routes::Handler::MfaSignInFinalize {
+                    // Applied to a working copy so that a response that passed on the
+                    // committed copy but fails against the live record (claims size)
+                    // leaves no partial update; the refusal is USER_DISABLED either way.
+                    let mut updated = live.clone();
+                    let applied = blocking_responses.iter().all(|(event, value)| {
+                        apply_blocking_response(&mut updated, &uid, *event, value).is_ok()
+                    });
+                    if applied {
+                        *live = updated;
+                    }
+                }
+                // Do not call `discard_pending_inbound_credentials` here: it takes the
+                // store lock that this closure already holds.
+                return error(400, "USER_DISABLED");
+            }
             if let Some(mut session) = issued_session.take() {
                 for name in &persisted_claim_names {
                     session.extra_claims.remove(name);
@@ -1931,8 +2591,31 @@ fn dispatch_with_blocking_hook(
                 }
             }
         }
+        if let Some(reservation) = quota_reservation.clone() {
+            if is_new {
+                if let Err(error) = committed.commit_signup(reservation, now(state)) {
+                    return auth_error(&error);
+                }
+                quota_reservation.take();
+            }
+        }
         *live = committed;
         committed_response
+    };
+    // Do not hold either adapter settings gate or namespace gate while invoking the synchronous
+    // hook: hooks may re-enter Auth routes (for example, an Admin update) before returning.
+    // Acquire both only after the callback completes, before reading metadata or locking the
+    // live store. This preserves the adapter-to-registry gate order at the commit boundary while
+    // allowing a callback to perform a nested settings operation.
+    let Ok(_settings_operation) = settings_gate.lock() else {
+        return error(500, "INTERNAL");
+    };
+    let _operation = match operation_gate {
+        Some(gate) => match gate.lock() {
+            Ok(operation) => Some(operation),
+            Err(_) => return error(500, "INTERNAL"),
+        },
+        None => None,
     };
     match (tenant.as_deref(), state.registry.as_ref()) {
         (Some(tenant), Some(registry)) => {
@@ -1943,12 +2626,31 @@ fn dispatch_with_blocking_hook(
     }
 }
 
-/// Routes one request with its headers (privileged routes check them).
+/// Handles standard REST requests with caller-pinned local OIDC verification enabled.
+///
+/// This embedder/test configuration is not a new HTTP API. Every `signInWithIdp` request
+/// must match this single trust pin and an enabled provider configuration in the selected
+/// namespace; refusal never falls back to fixture parsing. No discovery or network calls
+/// occur. The daemon and [`handle_with`] retain fixture mode until explicitly wired here.
 ///
 /// The order is fixed: the store of the target project is selected, App Check decides, the
 /// route's privilege class is checked (owner credential, control token, project match), and
 /// only then does the handler run. Every step reads the same route table
 /// (`AUTH-ROUTE-03`).
+#[must_use]
+#[allow(clippy::too_many_lines)]
+pub fn handle_with_oidc_trust(
+    state: &AuthState,
+    method: &str,
+    path: &str,
+    headers: &RequestHeaders,
+    body: &Value,
+    trust: &crate::oidc::LocalOidcTrust,
+) -> JsonResponse {
+    handle_with_policy(state, method, path, headers, body, Some(trust))
+}
+
+/// Handles a request using the emulator fixture assertion policy.
 #[must_use]
 #[allow(clippy::too_many_lines)]
 pub fn handle_with(
@@ -1958,18 +2660,79 @@ pub fn handle_with(
     headers: &RequestHeaders,
     body: &Value,
 ) -> JsonResponse {
+    handle_with_policy(state, method, path, headers, body, None)
+}
+
+#[allow(clippy::too_many_lines)]
+fn handle_with_policy(
+    state: &AuthState,
+    method: &str,
+    path: &str,
+    headers: &RequestHeaders,
+    body: &Value,
+    oidc_trust: Option<&crate::oidc::LocalOidcTrust>,
+) -> JsonResponse {
     let (path, query) = match path.split_once('?') {
         Some((p, q)) => (p, Some(q)),
         None => (path, None),
     };
+    // Whether the caller identified itself with an API key; its validity is checked when the
+    // store is selected.
+    let api_key = query_selectors(query).is_ok_and(|(key, _)| key.is_some());
     let at = now(state);
-    let _admitted = state.barrier.as_ref().map(|b| b.admit());
     let resolution = routes::resolve(method, path);
+    // Production's API front end answers a caller without identity before the service reads
+    // any selector, tenant or body (sandbox recording 2026-09-23).
+    if let Err(response) = caller_identity_check(state, resolution, headers, api_key) {
+        return if api_service(path) == "securetoken.googleapis.com" {
+            secure_token_error_shape(response)
+        } else {
+            response
+        };
+    }
+    if let Err(response) = declared_api_key_check(state, path, query) {
+        return response;
+    }
+    let emulator_clear = matches!(
+        resolution,
+        routes::Resolution::Matched {
+            route,
+            ..
+        } if route.handler == routes::Handler::EmulatorClearAccounts
+    );
+    // Account clearing is a lifecycle boundary. Take the shared session barrier exclusively so
+    // a blocking candidate cannot finish its callback and publish after the wipe. Ordinary Auth
+    // requests retain shared admission; embedded states without a barrier are protected by the
+    // store generation checked at the blocking commit boundary below.
+    let _exclusive =
+        emulator_clear.then(|| state.barrier.as_ref().map(|barrier| barrier.exclusive()));
+    let _admitted = (!emulator_clear).then(|| state.barrier.as_ref().map(|b| b.admit()));
+    // Project configuration uses this adapter-level gate. Blocking Auth requests acquire the
+    // same gate only at their commit boundary, after their synchronous callback has returned, so
+    // a callback can re-enter an Admin configuration route without recursively locking it.
+    let settings_boundary = matches!(
+        resolution,
+        routes::Resolution::Matched { route, .. }
+            if matches!(
+                route.handler,
+                routes::Handler::AdminGetProjectConfig
+                    | routes::Handler::AdminUpdateProjectConfig
+            )
+    );
+    let _settings_operation = if settings_boundary {
+        match state.operation_gate.lock() {
+            Ok(operation) => Some(operation),
+            Err(_) => return error(500, "INTERNAL"),
+        }
+    } else {
+        None
+    };
     let routed_project = match resolution {
         routes::Resolution::Matched {
             route,
             project: Some(project),
             tenant: None,
+            ..
         } if state.allow_routed_projects && route.class == routes::RouteClass::Admin => {
             Some(project)
         }
@@ -1979,7 +2742,7 @@ pub fn handle_with(
         if fireemu_core_types::ids::ProjectId::try_new(project.to_owned()).is_err() {
             return error(400, "INVALID_PROJECT_ID");
         }
-        if let Err(response) = admin_request_guard(headers, method) {
+        if let Err(response) = admin_request_guard(headers, method, api_key) {
             return response;
         }
     }
@@ -1999,7 +2762,7 @@ pub fn handle_with(
     } else {
         None
     };
-    let _routed_operation = match routed_gate.as_ref() {
+    let routed_operation = match routed_gate.as_ref() {
         Some(gate) => match gate.lock() {
             Ok(operation) => Some(operation),
             Err(_) => return error(500, "INTERNAL"),
@@ -2029,6 +2792,11 @@ pub fn handle_with(
             Err(response) => return response,
         }
     };
+    let end_user_request = matches!(
+        resolution,
+        routes::Resolution::Matched { route, .. }
+            if route.class == routes::RouteClass::EndUser
+    );
     let (store_project, store_tenant) = {
         let Ok(store) = store_arc.lock() else {
             return error(500, "INTERNAL");
@@ -2038,33 +2806,75 @@ pub fn handle_with(
             store.tenant_id().map(str::to_owned),
         )
     };
-    let operation_gate = if state.blocking.as_deref().is_some_and(|blocking| {
+    let blocking_auth = state.blocking.as_deref().is_some_and(|blocking| {
         matches!(
             resolution,
             routes::Resolution::Matched { route, .. }
                 if handler_may_invoke_blocking_auth(blocking, route.handler)
-        )
-    }) {
+        ) && blocking_hook_applies_to_project(state, blocking, &store_project)
+    });
+    let blocking_revision = state
+        .blocking
+        .as_deref()
+        .map_or(0, AuthBlockingHook::blocking_auth_revision);
+    // End-user requests take the namespace gate before acquiring the store guard. Configuration
+    // PATCHes use this same gate and then lock the store, so keeping one order prevents a signup
+    // from holding the store while a concurrent PATCH waits for the gate. The gate also covers
+    // ordinary reads in a routed namespace; this is deliberately conservative because deciding
+    // whether a request creates an account requires the store snapshot.
+    // A registry-backed namespace has one gate shared by end-user admission and config PATCHes.
+    // The legacy single-store blocking bridge may synchronously call back into that store from
+    // its hook (some test and embedding bridges do), so preserve its re-entrant store behavior
+    // when no registry exists instead of introducing a store/gate deadlock. The adapter-wide
+    // gate is reacquired by the blocking commit boundary after the callback returns. End-user
+    // requests without a blocking hook still use the adapter-wide gate, which is also used by
+    // the single-store config route.
+    let operation_gate = if emulator_clear {
         let gate = match state.registry.as_ref() {
-            Some(registry) => {
-                let Some(gate) = registry.operation_gate(&store_project, store_tenant.as_deref())
-                else {
-                    return error(500, "INTERNAL");
-                };
-                gate
-            }
-            None => state.operation_gate.clone(),
+            Some(registry) => registry
+                .operation_gate(&store_project, None)
+                .ok_or_else(|| error(500, "INTERNAL")),
+            None => Ok(state.operation_gate.clone()),
         };
-        Some(gate)
+        Some(match gate {
+            Ok(gate) => gate,
+            Err(response) => return response,
+        })
+    } else if state.registry.is_none() && state.blocking.is_some() {
+        // Release the namespace gate before invoking a legacy single-store hook. The gate is
+        // reacquired by dispatch_with_blocking_hook for its commit, while non-hooking routes can
+        // continue to read the store during an external callback.
+        None
+    } else if blocking_auth || end_user_request {
+        let gate = match state.registry.as_ref() {
+            Some(registry) => registry
+                // Project and tenant management both commit through the project gate. A
+                // tenant-specific request therefore uses that same parent gate so a project
+                // update cannot race a tenant policy admission or store commit.
+                .operation_gate(&store_project, None)
+                .ok_or_else(|| error(500, "INTERNAL")),
+            None => Ok(state.operation_gate.clone()),
+        };
+        Some(match gate {
+            Ok(gate) => gate,
+            Err(response) => return response,
+        })
     } else {
         None
     };
-    let _operation = match operation_gate.as_ref() {
-        Some(gate) => match gate.lock() {
-            Ok(operation) => Some(operation),
-            Err(_) => return error(500, "INTERNAL"),
-        },
-        None => None,
+    // Non-blocking end-user requests keep the gate through admission and commit. Blocking hooks
+    // release it while the external callback runs and reacquire it in the commit boundary below,
+    // so a synchronous hook can safely re-enter Auth.
+    let _operation = if blocking_auth {
+        None
+    } else {
+        match operation_gate.as_ref() {
+            Some(gate) => match gate.lock() {
+                Ok(operation) => Some(operation),
+                Err(_) => return error(500, "INTERNAL"),
+            },
+            None => None,
+        }
     };
     let tenant_metadata = store_tenant.as_deref().and_then(|tenant| {
         state
@@ -2103,16 +2913,31 @@ pub fn handle_with(
             route,
             project,
             tenant,
+            resource: _,
         } => (route, project, tenant),
         routes::Resolution::MethodNotAllowed { class, project, .. } => {
-            if let Err(r) = privilege_check(state, class, project, headers, method, &store) {
+            if let Err(r) = privilege_check(state, class, project, headers, method, api_key, &store)
+            {
                 return r;
+            }
+            // Production's front end answers a POST to accounts:batchGet with a plain 404
+            // (sandbox recording 2026-09-23); other method mismatches are unobserved.
+            if path.ends_with("/accounts:batchGet") {
+                return not_found();
             }
             return error(405, "METHOD_NOT_ALLOWED");
         }
         routes::Resolution::NotFound => return not_found(),
     };
-    if let Err(r) = privilege_check(state, route.class, project, headers, method, &store) {
+    if let Err(r) = privilege_check(
+        state,
+        route.class,
+        project,
+        headers,
+        method,
+        api_key,
+        &store,
+    ) {
         return r;
     }
     if matches!(
@@ -2120,7 +2945,65 @@ pub fn handle_with(
         routes::Handler::AdminGetProjectConfig | routes::Handler::AdminUpdateProjectConfig
     ) {
         drop(store);
-        return project_config_management(state, route.handler, project, body);
+        // Existing namespaces commit through the core-owned gate. A pending candidate remains
+        // isolated under the routed gate until a successful write installs it.
+        if pending_routed_project.is_none() {
+            drop(routed_operation);
+        }
+        return project_config_management(
+            state,
+            route.handler,
+            project,
+            &store_arc,
+            pending_routed_project.as_deref(),
+            query,
+            body,
+        );
+    }
+    if matches!(
+        route.handler,
+        routes::Handler::ProviderCreate
+            | routes::Handler::ProviderList
+            | routes::Handler::ProviderGet
+            | routes::Handler::ProviderUpdate
+            | routes::Handler::ProviderDelete
+    ) {
+        if tenant.is_some() && store.tenant_id() != tenant {
+            return error(404, "TENANT_NOT_FOUND");
+        }
+        let resource = match resolution {
+            routes::Resolution::Matched { resource, .. } => resource,
+            _ => None,
+        };
+        let provider_kind = if path.contains("/oauthIdpConfigs") {
+            ProviderKind::Oidc
+        } else {
+            ProviderKind::Saml
+        };
+        drop(store);
+        let response = provider_config_management(
+            &store_arc,
+            route.handler,
+            provider_kind,
+            project,
+            tenant,
+            resource,
+            query,
+            body,
+        );
+        if response.status == 200
+            && matches!(
+                route.handler,
+                routes::Handler::ProviderCreate | routes::Handler::ProviderUpdate
+            )
+        {
+            if let Some(project) = pending_routed_project.as_deref() {
+                if let Err(response) = install_routed_candidate(state, project, &store_arc) {
+                    return response;
+                }
+            }
+        }
+        return response;
     }
     if matches!(
         route.handler,
@@ -2134,11 +3017,36 @@ pub fn handle_with(
         // project's configuration. Release the request's selected store before that registry
         // operation so initialization never attempts to reacquire the same non-reentrant lock.
         drop(store);
+        drop(routed_operation);
         return tenant_management(state, route.handler, project, tenant, query, body);
     }
     if tenant.is_some() && store.tenant_id() != tenant {
         return error(404, "TENANT_NOT_FOUND");
     }
+    if route.handler == routes::Handler::SignInWithIdp
+        && state.idp_continuations == IdpContinuationPolicy::Disabled
+        && body
+            .get("pendingToken")
+            .is_some_and(|value| !value.is_null())
+    {
+        return not_implemented("pendingToken requires local continuation mode.");
+    }
+    let idp_authority = (route.handler == routes::Handler::SignInWithIdp
+        && state.idp_continuations == IdpContinuationPolicy::LocalBounded)
+        .then(|| idp_continuation_authority(oidc_trust));
+    let idp_generation = store.reset_generation();
+    let incoming_pending = body
+        .get("pendingToken")
+        .and_then(Value::as_str)
+        .map(str::to_owned);
+    let resumed_body = match idp_authority.as_deref() {
+        Some(authority) => match resume_idp_body(&store, body, authority, at) {
+            Ok(body) => body,
+            Err(response) => return response,
+        },
+        None => None,
+    };
+    let body = resumed_body.as_ref().unwrap_or(body);
     if route.class == routes::RouteClass::EndUser && store_tenant.is_some() {
         if let Some(denial) =
             tenant_policy_denial_with_metadata(route.handler, tenant_metadata.as_ref(), body)
@@ -2146,9 +3054,42 @@ pub fn handle_with(
             return denial;
         }
     }
+    if route.class == routes::RouteClass::EndUser && store_tenant.is_none() {
+        if let Some(denial) = project_provider_denial(route.handler, store.sign_in_config(), body) {
+            return denial;
+        }
+    }
+    if route.class == routes::RouteClass::EndUser {
+        if let Some(denial) = end_user_client_permission_denial(route.handler, &store, body, at) {
+            return denial;
+        }
+    }
+    // Verify the selected namespace and assertion before any account or transient mutation.
+    if route.handler == routes::Handler::SignInWithIdp {
+        if let Some(trust) = oidc_trust {
+            let params = normalized_idp_params(
+                str_field(body, "requestUri").unwrap_or_default(),
+                str_field(body, "postBody"),
+            );
+            if !trust.accepts(&store, &params, at) {
+                return error(400, "INVALID_IDP_RESPONSE");
+            }
+        }
+    }
     // Expired transient credentials are swept before every request is served, so nothing
     // past its lifetime is observable (`AUTH-TRANSIENT-01`, `-02`).
     store.sweep_transient_credentials(at);
+    let quota_request = route.class == routes::RouteClass::EndUser
+        && request_may_create_end_user(route.handler, &store, body, at);
+    let mut quota_reservation = if quota_request {
+        let peer_ip = headers.peer_ip.as_deref().unwrap_or("127.0.0.1");
+        match store.reserve_signup(AuthPrincipal::EndUser, peer_ip, at) {
+            Ok(reservation) => Some(reservation),
+            Err(e) => return auth_error(&e),
+        }
+    } else {
+        None
+    };
     if route.class != routes::RouteClass::EndUser {
         let signer = store.signer_arc();
         let response = dispatch(
@@ -2158,7 +3099,7 @@ pub fn handle_with(
             body,
             headers,
             at,
-            state.into(),
+            &state.into(),
         );
         let retain_candidate = response.status == 200
             && pending_routed_project.is_some()
@@ -2170,19 +3111,8 @@ pub fn handle_with(
         drop(store);
         if retain_candidate {
             let project = pending_routed_project.expect("checked above");
-            let Some(registry) = state.registry.as_ref() else {
-                return error(500, "INTERNAL");
-            };
-            match registry.install_routed(&project, store_arc.clone()) {
-                RoutedStoreInstall::Installed(_) => {}
-                RoutedStoreInstall::Existing(_) => {
-                    return error(409, "CONCURRENT_PROJECT_OWNERSHIP");
-                }
-                RoutedStoreInstall::RegisteredConflict => {
-                    return error(400, "INVALID_PROJECT_ID");
-                }
-                RoutedStoreInstall::Capacity => return error(429, "RESOURCE_EXHAUSTED"),
-                RoutedStoreInstall::InvalidStore => return error(500, "INTERNAL"),
+            if let Err(response) = install_routed_candidate(state, &project, &store_arc) {
+                return response;
             }
         }
         let response = if response.status == 200 {
@@ -2193,25 +3123,95 @@ pub fn handle_with(
         } else {
             response
         };
-        return sign_response_tokens(response, signer.as_deref());
+        return finish_token_response(response, signer.as_deref(), &store_arc, at);
     }
     let signer = store.signer_arc();
-    let response = if let Some(blocking) = state
-        .blocking
-        .as_deref()
-        .filter(|blocking| handler_may_invoke_blocking_auth(*blocking, route.handler))
+    if !blocking_auth
+        && state.blocking.as_deref().is_some_and(|blocking| {
+            blocking.blocking_auth_revision() != blocking_revision
+                || (handler_may_invoke_blocking_auth(blocking, route.handler)
+                    && blocking_hook_applies_to_project(state, blocking, &store_project))
+        })
     {
+        // A hook enabled after admission must not be silently skipped. Returning a conflict
+        // gives the caller a coherent retry point without dispatching while retaining a gate
+        // that the hook commit path would need to reacquire.
+        return error(409, "BLOCKING_FUNCTION_CONFIGURATION_CHANGED");
+    }
+    let response = if blocking_auth {
+        let Some(blocking) = state.blocking.as_deref() else {
+            return error(500, "INTERNAL");
+        };
+        // The first decision also determines whether this request owns the namespace gate. A
+        // mutable Functions manifest may change between planning and dispatch; reject that
+        // transition instead of entering the hook path while retaining a guard that the commit
+        // path would acquire again (or silently using a stale allow/deny decision).
+        let still_applies = handler_may_invoke_blocking_auth(blocking, route.handler)
+            && blocking_hook_applies_to_project(state, blocking, &store_project);
+        if !still_applies || blocking.blocking_auth_revision() != blocking_revision {
+            return error(409, "BLOCKING_FUNCTION_CONFIGURATION_CHANGED");
+        }
         dispatch_with_blocking_hook(
             state,
             blocking,
+            blocking_revision,
             route.handler,
             &store_arc,
             store,
+            &state.operation_gate,
+            operation_gate.as_ref(),
             query,
             body,
             headers,
             at,
+            &mut quota_reservation,
         )
+    } else if let Some(reservation) = quota_reservation.clone() {
+        // Run quota-accounted creation on an isolated store copy. This gives the quota
+        // commit a real transaction boundary: if the effective policy or window changed
+        // before commit, neither the account nor its credentials reach the live store.
+        let mut candidate = store.clone();
+        let response = dispatch(
+            route.handler,
+            &mut candidate,
+            query,
+            body,
+            headers,
+            at,
+            &state.into(),
+        );
+        // Determine creation from the request's returned identity and the isolated store
+        // transition. A global user-count delta is not a per-request result: another actor may
+        // delete an unrelated account while this request is being processed.
+        let created = response.status == 200
+            && response
+                .body
+                .get("localId")
+                .and_then(Value::as_str)
+                .is_some_and(|uid| {
+                    store.user_by_id(uid).is_none() && candidate.user_by_id(uid).is_some()
+                });
+        if created {
+            if let Err(error) = candidate.commit_signup(reservation, now(state)) {
+                let _ = store.release_signup(
+                    quota_reservation
+                        .take()
+                        .expect("live quota reservation remains until candidate commit"),
+                );
+                return auth_error(&error);
+            }
+            quota_reservation.take();
+            *store = candidate;
+        } else {
+            let live_reservation = quota_reservation
+                .take()
+                .expect("live quota reservation remains until candidate dispatch completes");
+            if let Err(error) = store.release_signup(live_reservation) {
+                return auth_error(&error);
+            }
+        }
+        drop(store);
+        response
     } else {
         let response = dispatch(
             route.handler,
@@ -2220,20 +3220,123 @@ pub fn handle_with(
             body,
             headers,
             at,
-            state.into(),
+            &state.into(),
         );
         drop(store);
         response
     };
     let response = if response.status == 200 {
+        let body = without_nulls(response.body);
         JsonResponse {
             status: 200,
-            body: without_nulls(response.body),
+            body: if route.handler == routes::Handler::SignInWithCustomToken {
+                public_custom_token_answer(body)
+            } else {
+                body
+            },
         }
     } else {
         response
     };
-    sign_response_tokens(response, signer.as_deref())
+    let mut response = finish_token_response(response, signer.as_deref(), &store_arc, at);
+    if let Some(reservation) = quota_reservation.take() {
+        // Blocking dispatch commits a successful new-account reservation at its typed
+        // per-request creation boundary. Any reservation left here belongs to a failed or
+        // non-creating request and must be released; comparing the live user count with a stale
+        // preflight count would misclassify an unrelated deletion as a failed signup.
+        let Ok(mut store) = store_arc.lock() else {
+            return error(500, "INTERNAL");
+        };
+        let result = store.release_signup(reservation);
+        if let Err(e) = result {
+            return auth_error(&e);
+        }
+    }
+    if let Some(authority) = idp_authority {
+        let continuation_response = response.status == 200
+            && response
+                .body
+                .get("providerId")
+                .and_then(Value::as_str)
+                .is_some()
+            && (response
+                .body
+                .get("idToken")
+                .and_then(Value::as_str)
+                .is_some()
+                || response
+                    .body
+                    .get("mfaPendingCredential")
+                    .and_then(Value::as_str)
+                    .is_some()
+                || response
+                    .body
+                    .get("needConfirmation")
+                    .and_then(Value::as_bool)
+                    == Some(true)
+                || matches!(
+                    response.body.get("errorMessage").and_then(Value::as_str),
+                    Some("EMAIL_EXISTS" | "FEDERATED_USER_ID_ALREADY_LINKED")
+                ));
+        if continuation_response {
+            if let Ok(mut live) = store_arc.lock() {
+                // A reset while a blocking hook/signing task ran must not mint a
+                // continuation in the next incarnation from a pre-reset assertion.
+                if live.reset_generation() == idp_generation {
+                    let token = incoming_pending.or_else(|| {
+                        let original = json!({
+                            "requestUri": body.get("requestUri"),
+                            "postBody": body.get("postBody"),
+                        });
+                        live.remember_idp_sign_in(original.to_string(), authority, at)
+                    });
+                    if let Some(token) = token {
+                        response.body["pendingToken"] = json!(token);
+                    }
+                }
+            }
+        }
+    }
+    response
+}
+
+/// Refuses a request that carries no `Authorization` header where production's front end does:
+/// every Admin route, and client routes when the profile requires an API key.
+fn caller_identity_check(
+    state: &AuthState,
+    resolution: routes::Resolution<'_>,
+    headers: &RequestHeaders,
+    api_key: bool,
+) -> Result<(), JsonResponse> {
+    if headers.authorization.is_some() {
+        return Ok(());
+    }
+    let class = match resolution {
+        routes::Resolution::Matched { route, .. } => route.class,
+        routes::Resolution::MethodNotAllowed { class, .. } => class,
+        routes::Resolution::NotFound => return Ok(()),
+    };
+    match class {
+        // Session management refuses an API key in place of a credential with its own shape
+        // (sandbox recording 2026-09-24, session-cookie/sessions#client-api-key).
+        routes::RouteClass::Admin
+            if api_key
+                && matches!(
+                    resolution,
+                    routes::Resolution::Matched { route, .. }
+                        if route.handler == routes::Handler::AdminCreateSessionCookie
+                ) =>
+        {
+            Err(session_management_credentials_missing())
+        }
+        routes::RouteClass::Admin => admin_request_guard(headers, "", api_key),
+        routes::RouteClass::EndUser
+            if state.client_api_key == ClientApiKeyPolicy::Required && !api_key =>
+        {
+            Err(unregistered_caller())
+        }
+        _ => Ok(()),
+    }
 }
 
 /// The credential and project checks of a route class.
@@ -2243,6 +3346,7 @@ fn privilege_check(
     project: Option<&str>,
     headers: &RequestHeaders,
     method: &str,
+    api_key: bool,
     store: &AuthStore,
 ) -> Result<(), JsonResponse> {
     match class {
@@ -2256,18 +3360,35 @@ fn privilege_check(
             }
             Ok(())
         }
-        routes::RouteClass::Admin => admin_guard(headers, method, project.unwrap_or(""), store),
+        routes::RouteClass::Admin => {
+            admin_guard(headers, method, api_key, project.unwrap_or(""), store)
+        }
     }
 }
 
 /// Runs the handler of a resolved route.
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 struct DispatchOptions {
     totp_extension_enabled: bool,
     stateless_refresh_tokens: bool,
     fake_custom_token_expiry: FakeCustomTokenExpiry,
+    custom_token_trust: Option<Arc<CustomTokenTrust>>,
+    /// Whether sign-in without `returnSecureToken` answers with the legacy token, as
+    /// production does. The emulator profile (stateless refresh tokens) keeps the official
+    /// emulator's secure tokens. A request whose blocking trigger is selected keeps secure tokens
+    /// too: the hook re-issues tokens through the refresh session a legacy sign-in does not open,
+    /// and the legacy behaviour of blocking functions is unobserved.
+    legacy_tokens: bool,
     query_limits: AuthQueryLimits,
     inbound_credential_policy: fireemu_core_functions::manifest::BlockingAuthTokenPolicy,
+}
+
+/// The options of a request whose blocking trigger is selected: it keeps secure tokens.
+fn blocking_dispatch_options(state: &AuthState) -> DispatchOptions {
+    DispatchOptions {
+        legacy_tokens: false,
+        ..state.into()
+    }
 }
 
 impl From<&AuthState> for DispatchOptions {
@@ -2276,6 +3397,8 @@ impl From<&AuthState> for DispatchOptions {
             totp_extension_enabled: state.totp_extension_enabled,
             stateless_refresh_tokens: state.stateless_refresh_tokens,
             fake_custom_token_expiry: state.fake_custom_token_expiry,
+            custom_token_trust: state.custom_token_trust.clone(),
+            legacy_tokens: !state.stateless_refresh_tokens,
             query_limits: state.query_limits,
             inbound_credential_policy: state.blocking.as_deref().map_or_else(
                 fireemu_core_functions::manifest::BlockingAuthTokenPolicy::default,
@@ -2293,6 +3416,7 @@ impl From<&AuthState> for DispatchOptions {
     }
 }
 
+#[allow(clippy::too_many_lines)]
 fn dispatch(
     handler: routes::Handler,
     store: &mut AuthStore,
@@ -2300,7 +3424,7 @@ fn dispatch(
     body: &Value,
     headers: &RequestHeaders,
     at: LogicalInstant,
-    options: DispatchOptions,
+    options: &DispatchOptions,
 ) -> JsonResponse {
     use routes::Handler;
     match handler {
@@ -2322,19 +3446,27 @@ fn dispatch(
             }
         }
         Handler::SignUp => sign_up(store, body, at, None),
-        Handler::SignInWithPassword => sign_in_with_password(store, body, at),
+        Handler::SignInWithPassword => {
+            sign_in_with_password(store, body, at, options.legacy_tokens)
+        }
         Handler::SignInWithCustomToken => sign_in_with_custom_token(
             store,
             body,
             at,
             options.fake_custom_token_expiry == FakeCustomTokenExpiry::Reject,
+            options.custom_token_trust.as_deref(),
+            options.legacy_tokens,
         ),
         Handler::Lookup => lookup(store, body, at, false),
-        Handler::Update | Handler::AdminUpdate => {
-            update(store, body, at, options.stateless_refresh_tokens)
-        }
+        Handler::Update | Handler::AdminUpdate => update(
+            store,
+            body,
+            at,
+            options.stateless_refresh_tokens,
+            handler == Handler::AdminUpdate,
+        ),
         Handler::Delete => delete_account(store, body, at, false),
-        Handler::SendOobCode => send_oob_code(store, body, at, headers),
+        Handler::SendOobCode => send_oob_code(store, body, at, headers, false),
         Handler::ResetPassword => reset_password(store, body, at, options.stateless_refresh_tokens),
         Handler::SignInWithEmailLink => sign_in_with_email_link(store, body, at),
         Handler::SendVerificationCode => send_verification_code(store, body, at),
@@ -2355,14 +3487,29 @@ fn dispatch(
                 "recaptchaSiteKey": "Fake-key__Do-not-send-this-to-Recaptcha_",
             }),
         },
-        Handler::MfaEnrollmentStart => {
-            mfa_enrollment_start(store, body, at, options.totp_extension_enabled)
-        }
+        Handler::PasswordPolicy => password_policy_json(store.password_policy()),
+        // Strict: production's answer when TOTP is not enabled, and the v2 API's error shape
+        // (sandbox recording 2026-09-24); the emulator keeps the official emulator's.
+        Handler::MfaEnrollmentStart => v2_error_shape(
+            mfa_enrollment_start(
+                store,
+                body,
+                at,
+                options.totp_extension_enabled,
+                !options.stateless_refresh_tokens,
+            ),
+            !options.stateless_refresh_tokens,
+        ),
         Handler::MfaEnrollmentFinalize => mfa_enrollment_finalize(store, body, at),
-        Handler::MfaEnrollmentWithdraw => mfa_enrollment_withdraw(store, body, at),
+        Handler::MfaEnrollmentWithdraw => v2_error_shape(
+            mfa_enrollment_withdraw(store, body, at),
+            !options.stateless_refresh_tokens,
+        ),
         Handler::MfaSignInStart => mfa_sign_in_start(store, body, at),
         Handler::MfaSignInFinalize => mfa_sign_in_finalize(store, body, at),
-        Handler::Token => refresh(store, body, at, options.stateless_refresh_tokens),
+        Handler::Token => {
+            secure_token_error_shape(refresh(store, body, at, options.stateless_refresh_tokens))
+        }
         Handler::AdminCreate => admin_create(store, body, at),
         Handler::AdminLookup => lookup(store, body, at, true),
         Handler::AdminDelete => delete_account(store, body, at, true),
@@ -2372,16 +3519,27 @@ fn dispatch(
         Handler::AdminQuery => admin_query(store, body, options.query_limits),
         // Admin link generators: the code and link come back to the caller.
         Handler::AdminSendOobCode => {
+            if let Err(response) = opt_bool(body, "returnOobLink") {
+                return response;
+            }
             let mut with_link = body.clone();
             with_link["returnOobLink"] = json!(true);
-            send_oob_code(store, &with_link, at, headers)
+            send_oob_code(store, &with_link, at, headers, true)
         }
-        Handler::AdminCreateSessionCookie => create_session_cookie(store, body, at),
+        // Stateful refresh sessions mark the strict profile.
+        Handler::AdminCreateSessionCookie => {
+            create_session_cookie(store, body, at, !options.stateless_refresh_tokens)
+        }
         Handler::TenantCreate
         | Handler::TenantList
         | Handler::TenantGet
         | Handler::TenantUpdate
         | Handler::TenantDelete
+        | Handler::ProviderCreate
+        | Handler::ProviderList
+        | Handler::ProviderGet
+        | Handler::ProviderUpdate
+        | Handler::ProviderDelete
         | Handler::AdminGetProjectConfig
         | Handler::AdminUpdateProjectConfig => error(500, "INTERNAL"),
         Handler::EmulatorOobCodes => emulator_route(store, "GET", "oobCodes", headers, body),
@@ -2399,110 +3557,2253 @@ fn dispatch(
     }
 }
 
+fn install_routed_candidate(
+    state: &AuthState,
+    project: &str,
+    store: &Arc<Mutex<AuthStore>>,
+) -> Result<(), JsonResponse> {
+    let Some(registry) = state.registry.as_ref() else {
+        return Err(error(500, "INTERNAL"));
+    };
+    match registry.install_routed(project, store.clone()) {
+        RoutedStoreInstall::Installed(_) => Ok(()),
+        RoutedStoreInstall::Existing(_) => Err(error(409, "CONCURRENT_PROJECT_OWNERSHIP")),
+        RoutedStoreInstall::RegisteredConflict => Err(error(400, "INVALID_PROJECT_ID")),
+        RoutedStoreInstall::Capacity => Err(error(429, "RESOURCE_EXHAUSTED")),
+        RoutedStoreInstall::InvalidStore => Err(error(500, "INTERNAL")),
+    }
+}
+
+fn apply_project_config_fields(
+    config: &mut ProjectAuthConfigPatch,
+    body: &Value,
+    fields: &[String],
+) -> Result<(), JsonResponse> {
+    for field in fields {
+        match field.as_str() {
+            "signIn" => apply_project_config_parent(
+                body,
+                "signIn",
+                "allowDuplicateEmails",
+                &mut config.allow_duplicate_emails,
+            )?,
+            "signIn.allowDuplicateEmails" => {
+                config.allow_duplicate_emails = Some(nested_bool_default_false(
+                    body,
+                    "signIn",
+                    "allowDuplicateEmails",
+                )?);
+            }
+            "emailPrivacyConfig" => apply_project_config_parent(
+                body,
+                "emailPrivacyConfig",
+                "enableImprovedEmailPrivacy",
+                &mut config.enable_improved_email_privacy,
+            )?,
+            "emailPrivacyConfig.enableImprovedEmailPrivacy" => {
+                config.enable_improved_email_privacy = Some(nested_bool_default_false(
+                    body,
+                    "emailPrivacyConfig",
+                    "enableImprovedEmailPrivacy",
+                )?);
+            }
+            "client.permissions" => {
+                apply_project_config_parent_path(
+                    body,
+                    &["client", "permissions"],
+                    "disabledUserSignup",
+                    &mut config.disabled_user_signup,
+                )?;
+                apply_project_config_parent_path(
+                    body,
+                    &["client", "permissions"],
+                    "disabledUserDeletion",
+                    &mut config.disabled_user_deletion,
+                )?;
+            }
+            "client.permissions.disabledUserSignup" => {
+                config.disabled_user_signup = Some(nested_bool_default_false_path(
+                    body,
+                    &["client", "permissions", "disabledUserSignup"],
+                )?);
+            }
+            "client.permissions.disabledUserDeletion" => {
+                config.disabled_user_deletion = Some(nested_bool_default_false_path(
+                    body,
+                    &["client", "permissions", "disabledUserDeletion"],
+                )?);
+            }
+            field
+                if field == "passwordPolicyConfig"
+                    || field.starts_with("passwordPolicyConfig.")
+                    || SIGN_IN_PROVIDER_FIELDS.contains(&field)
+                    || valid_blocking_config_field(field)
+                    || valid_quota_field(field) => {}
+            _ => return Err(error(400, "INVALID_ARGUMENT")),
+        }
+    }
+    Ok(())
+}
+
+fn password_policy_from_config_json(value: &Value) -> Result<PasswordPolicy, JsonResponse> {
+    let object = value
+        .as_object()
+        .ok_or_else(|| error(400, "INVALID_ARGUMENT"))?;
+    if object
+        .keys()
+        .any(|field| !PASSWORD_POLICY_FIELDS.contains(&field.as_str()))
+    {
+        return Err(error(400, "INVALID_ARGUMENT"));
+    }
+    let state = match object.get("passwordPolicyEnforcementState") {
+        None | Some(Value::Null) => EnforcementState::Off,
+        Some(Value::String(value)) => match value.as_str() {
+            "OFF" => EnforcementState::Off,
+            "ENFORCE" => EnforcementState::Enforce,
+            _ => return Err(error(400, "INVALID_ARGUMENT")),
+        },
+        Some(_) => return Err(error(400, "INVALID_ARGUMENT")),
+    };
+    let force = match object.get("forceUpgradeOnSignin") {
+        None | Some(Value::Null) => false,
+        Some(Value::Bool(value)) => *value,
+        Some(_) => return Err(error(400, "INVALID_ARGUMENT")),
+    };
+    let options = match object.get("passwordPolicyVersions") {
+        None | Some(Value::Null) => None,
+        Some(Value::Array(versions)) if versions.len() == 1 => {
+            let version = versions[0]
+                .as_object()
+                .ok_or_else(|| error(400, "INVALID_ARGUMENT"))?;
+            if version.keys().any(|field| field != "customStrengthOptions") {
+                return Err(error(400, "INVALID_ARGUMENT"));
+            }
+            match version.get("customStrengthOptions") {
+                Some(Value::Object(options)) => Some(options),
+                Some(Value::Null) => None,
+                None | Some(_) => return Err(error(400, "INVALID_ARGUMENT")),
+            }
+        }
+        Some(_) => return Err(error(400, "INVALID_ARGUMENT")),
+    };
+    if options.is_some_and(|options| {
+        options
+            .keys()
+            .any(|field| !PASSWORD_POLICY_OPTION_FIELDS.contains(&field.as_str()))
+    }) {
+        return Err(error(400, "INVALID_ARGUMENT"));
+    }
+    let number = |key: &str, default: usize| {
+        options
+            .and_then(|o| o.get(key))
+            .filter(|value| !value.is_null())
+            .map_or(Ok(default), |v| {
+                v.as_u64()
+                    .and_then(|n| usize::try_from(n).ok())
+                    .ok_or_else(|| error(400, "INVALID_ARGUMENT"))
+            })
+    };
+    let boolean = |key: &str| {
+        options
+            .and_then(|o| o.get(key))
+            .filter(|value| !value.is_null())
+            .map_or(Ok(false), |v| {
+                v.as_bool().ok_or_else(|| error(400, "INVALID_ARGUMENT"))
+            })
+    };
+    let max = options
+        .and_then(|o| o.get("maxPasswordLength"))
+        .filter(|v| !v.is_null())
+        .map(|v| {
+            v.as_u64()
+                .and_then(|n| usize::try_from(n).ok())
+                .ok_or_else(|| error(400, "INVALID_ARGUMENT"))
+        })
+        .transpose()?;
+    PasswordPolicy::try_new(
+        state,
+        force,
+        number("minPasswordLength", 6)?,
+        max,
+        boolean("containsUppercaseCharacter")?,
+        boolean("containsLowercaseCharacter")?,
+        boolean("containsNumericCharacter")?,
+        boolean("containsNonAlphanumericCharacter")?,
+        fireemu_core_auth::password_policy::default_allowed_non_alphanumeric(),
+    )
+    .map_err(|_| error(400, "INVALID_ARGUMENT"))
+}
+
+fn password_policy_config_json(policy: &PasswordPolicy) -> Value {
+    let mut options = serde_json::Map::from_iter([
+        ("minPasswordLength".to_owned(), json!(policy.min_length)),
+        (
+            "containsUppercaseCharacter".to_owned(),
+            json!(policy.require_uppercase),
+        ),
+        (
+            "containsLowercaseCharacter".to_owned(),
+            json!(policy.require_lowercase),
+        ),
+        (
+            "containsNumericCharacter".to_owned(),
+            json!(policy.require_numeric),
+        ),
+        (
+            "containsNonAlphanumericCharacter".to_owned(),
+            json!(policy.require_non_alphanumeric),
+        ),
+    ]);
+    if let Some(max) = policy.max_length {
+        options.insert("maxPasswordLength".to_owned(), json!(max));
+    }
+    json!({
+        "passwordPolicyEnforcementState": match policy.enforcement_state {
+            EnforcementState::Off => "OFF",
+            EnforcementState::Enforce => "ENFORCE",
+        },
+        "forceUpgradeOnSignin": policy.force_upgrade_on_signin,
+        "passwordPolicyVersions": [{"customStrengthOptions": options}],
+    })
+}
+
+fn password_policy_from_update(
+    current: &PasswordPolicy,
+    body: &Value,
+    fields: &[String],
+) -> Result<Option<PasswordPolicy>, JsonResponse> {
+    let policy_fields: Vec<&str> = fields
+        .iter()
+        .map(String::as_str)
+        .filter(|field| {
+            *field == "passwordPolicyConfig" || field.starts_with("passwordPolicyConfig.")
+        })
+        .collect();
+    if policy_fields.is_empty() {
+        return Ok(None);
+    }
+    let Some(value) = body.get("passwordPolicyConfig") else {
+        return Err(error(400, "INVALID_ARGUMENT"));
+    };
+    if value.is_null() && policy_fields.contains(&"passwordPolicyConfig") {
+        if policy_fields.len() != 1 {
+            return Err(error(400, "INVALID_ARGUMENT"));
+        }
+        return Ok(Some(PasswordPolicy::default()));
+    }
+    let object = match value {
+        Value::Null => serde_json::Map::new(),
+        Value::Object(object) => object.clone(),
+        _ => return Err(error(400, "INVALID_ARGUMENT")),
+    };
+    // Validate the complete supplied policy before applying the mask. A malformed policy
+    // payload must never become a partial successful update merely because its malformed
+    // member was outside the selected mask.
+    if !value.is_null() {
+        let _supplied_policy = password_policy_from_config_json(value)?;
+    }
+    if policy_fields.contains(&"passwordPolicyConfig") {
+        if policy_fields.len() != 1 {
+            return Err(error(400, "INVALID_ARGUMENT"));
+        }
+        return password_policy_from_config_json(value).map(Some);
+    }
+
+    let mut merged = password_policy_config_json(current);
+    let merged_object = merged
+        .as_object_mut()
+        .expect("password policy projection is an object");
+    for field in policy_fields {
+        let child = field
+            .strip_prefix("passwordPolicyConfig.")
+            .expect("nested password policy field");
+        match child {
+            "passwordPolicyEnforcementState"
+            | "forceUpgradeOnSignin"
+            | "passwordPolicyVersions" => {
+                if let Some(value) = object.get(child).filter(|value| !value.is_null()) {
+                    merged_object.insert(child.to_owned(), value.clone());
+                } else {
+                    let defaults = password_policy_config_json(&PasswordPolicy::default());
+                    if let Some(value) = defaults.get(child) {
+                        merged_object.insert(child.to_owned(), value.clone());
+                    }
+                }
+            }
+            _ => return Err(error(400, "INVALID_ARGUMENT")),
+        }
+    }
+    password_policy_from_config_json(&merged).map(Some)
+}
+
+fn valid_password_policy_field(field: &str) -> bool {
+    matches!(
+        field,
+        "passwordPolicyConfig"
+            | "passwordPolicyConfig.passwordPolicyEnforcementState"
+            | "passwordPolicyConfig.forceUpgradeOnSignin"
+            | "passwordPolicyConfig.passwordPolicyVersions"
+    )
+}
+
+fn apply_project_config_parent(
+    body: &Value,
+    parent: &str,
+    child: &str,
+    current: &mut Option<bool>,
+) -> Result<(), JsonResponse> {
+    let Some(value) = body.get(parent) else {
+        return Ok(());
+    };
+    if value.is_null() {
+        *current = Some(false);
+        return Ok(());
+    }
+    let Some(object) = value.as_object() else {
+        return Err(error(400, "INVALID_ARGUMENT"));
+    };
+    if let Some(value) = object.get(child) {
+        *current = Some(match value {
+            Value::Bool(value) => *value,
+            Value::Null => false,
+            _ => return Err(error(400, "INVALID_ARGUMENT")),
+        });
+    }
+    Ok(())
+}
+
+fn nested_bool_default_false(
+    body: &Value,
+    parent: &str,
+    child: &str,
+) -> Result<bool, JsonResponse> {
+    let Some(value) = body.get(parent) else {
+        return Ok(false);
+    };
+    if value.is_null() {
+        return Ok(false);
+    }
+    let Some(object) = value.as_object() else {
+        return Err(error(400, "INVALID_ARGUMENT"));
+    };
+    match object.get(child) {
+        Some(Value::Bool(value)) => Ok(*value),
+        None | Some(Value::Null) => Ok(false),
+        Some(_) => Err(error(400, "INVALID_ARGUMENT")),
+    }
+}
+
+fn apply_project_config_parent_path(
+    body: &Value,
+    parent_path: &[&str],
+    child: &str,
+    current: &mut Option<bool>,
+) -> Result<(), JsonResponse> {
+    let mut path = parent_path.to_vec();
+    path.push(child);
+    *current = Some(nested_bool_default_false_path(body, &path)?);
+    Ok(())
+}
+
+fn valid_project_config_field(field: &str) -> bool {
+    matches!(
+        field,
+        "signIn"
+            | "signIn.allowDuplicateEmails"
+            | "emailPrivacyConfig"
+            | "emailPrivacyConfig.enableImprovedEmailPrivacy"
+            | "client.permissions"
+            | "client.permissions.disabledUserSignup"
+            | "client.permissions.disabledUserDeletion"
+            | "passwordPolicyConfig"
+            | "passwordPolicyConfig.passwordPolicyEnforcementState"
+            | "passwordPolicyConfig.forceUpgradeOnSignin"
+            | "passwordPolicyConfig.passwordPolicyVersions"
+            | "quota"
+            | "quota.signUpQuotaConfig"
+            | "quota.quotaSimulation"
+            | "quota.quotaSimulation.mode"
+            | "quota.quotaSimulation.algorithm"
+            | "quota.quotaSimulation.defaultQuotaPerHour"
+            | "quota.quotaSimulation.maxTrackedBuckets"
+            | "blockingFunctions"
+            | "blockingFunctions.triggers"
+            | "blockingFunctions.triggers.beforeCreate"
+            | "blockingFunctions.triggers.beforeSignIn"
+            | "blockingFunctions.forwardInboundCredentials"
+            | "blockingFunctions.forwardInboundCredentials.idToken"
+            | "blockingFunctions.forwardInboundCredentials.accessToken"
+            | "blockingFunctions.forwardInboundCredentials.refreshToken"
+    ) || SIGN_IN_PROVIDER_FIELDS.contains(&field)
+}
+
+/// Project config fields of the sign-in providers and test phone numbers.
+const SIGN_IN_PROVIDER_FIELDS: &[&str] = &[
+    "signIn.email",
+    "signIn.email.enabled",
+    "signIn.email.passwordRequired",
+    "signIn.anonymous",
+    "signIn.anonymous.enabled",
+    "signIn.phoneNumber",
+    "signIn.phoneNumber.enabled",
+    "signIn.phoneNumber.testPhoneNumbers",
+];
+
+/// The sign-in configuration a masked Admin config PATCH produces from `current`, or `None`
+/// when the mask names no sign-in provider field. A whole-object mask (`signIn.email`)
+/// replaces the object, so an omitted switch is off; the parent `signIn` mask replaces only
+/// the provider objects the body carries.
+fn sign_in_config_from_update(
+    current: &SignInConfig,
+    body: &Value,
+    fields: &[String],
+) -> Result<Option<SignInConfig>, JsonResponse> {
+    let invalid = || error(400, "INVALID_ARGUMENT");
+    let provider = |name: &str| {
+        body.get("signIn")
+            .and_then(|sign_in| sign_in.get(name))
+            .filter(|value| !value.is_null())
+    };
+    let switch = |name: &str, key: &str| match provider(name).and_then(|p| p.get(key)) {
+        None | Some(Value::Null) => Ok(false),
+        Some(Value::Bool(value)) => Ok(*value),
+        Some(_) => Err(invalid()),
+    };
+    let numbers = || -> Result<BTreeMap<String, String>, JsonResponse> {
+        match provider("phoneNumber").and_then(|p| p.get("testPhoneNumbers")) {
+            None | Some(Value::Null) => Ok(BTreeMap::new()),
+            Some(Value::Object(entries)) => entries
+                .iter()
+                .map(|(number, code)| {
+                    code.as_str()
+                        .map(|code| (number.clone(), code.to_owned()))
+                        .ok_or_else(invalid)
+                })
+                .collect(),
+            Some(_) => Err(invalid()),
+        }
+    };
+    let mut next = current.clone();
+    let mut changed = false;
+    for field in fields {
+        let whole = |name: &str| field == "signIn" && provider(name).is_some();
+        if field == "signIn.email" || whole("email") {
+            next.email_enabled = switch("email", "enabled")?;
+            next.password_required = switch("email", "passwordRequired")?;
+            changed = true;
+        }
+        if field == "signIn.anonymous" || whole("anonymous") {
+            next.anonymous_enabled = switch("anonymous", "enabled")?;
+            changed = true;
+        }
+        if field == "signIn.phoneNumber" || whole("phoneNumber") {
+            next.phone_enabled = switch("phoneNumber", "enabled")?;
+            next.test_phone_numbers = numbers()?;
+            changed = true;
+        }
+        match field.as_str() {
+            "signIn.email.enabled" => next.email_enabled = switch("email", "enabled")?,
+            "signIn.email.passwordRequired" => {
+                next.password_required = switch("email", "passwordRequired")?;
+            }
+            "signIn.anonymous.enabled" => next.anonymous_enabled = switch("anonymous", "enabled")?,
+            "signIn.phoneNumber.enabled" => next.phone_enabled = switch("phoneNumber", "enabled")?,
+            "signIn.phoneNumber.testPhoneNumbers" => next.test_phone_numbers = numbers()?,
+            _ => continue,
+        }
+        changed = true;
+    }
+    if !changed {
+        return Ok(None);
+    }
+    if !next.is_valid() {
+        return Err(invalid());
+    }
+    Ok(Some(next))
+}
+
+/// Adds the sign-in providers to a project config body in production's shape: an enabled
+/// provider reports `enabled`, a disabled one is omitted, and test numbers are listed.
+fn add_sign_in_config_json(body: &mut Value, config: &SignInConfig) {
+    let sign_in = &mut body["signIn"];
+    if config.email_enabled {
+        sign_in["email"] = json!({"enabled": true});
+        if config.password_required {
+            sign_in["email"]["passwordRequired"] = json!(true);
+        }
+    }
+    if config.anonymous_enabled {
+        sign_in["anonymous"] = json!({"enabled": true});
+    }
+    if config.phone_enabled || !config.test_phone_numbers.is_empty() {
+        let mut phone = serde_json::Map::new();
+        if config.phone_enabled {
+            phone.insert("enabled".to_owned(), json!(true));
+        }
+        if !config.test_phone_numbers.is_empty() {
+            phone.insert(
+                "testPhoneNumbers".to_owned(),
+                json!(config.test_phone_numbers),
+            );
+        }
+        sign_in["phoneNumber"] = Value::Object(phone);
+    }
+}
+
+/// Project sign-in providers gate their client flows as a tenant's switches do.
+fn project_provider_denial(
+    handler: routes::Handler,
+    config: &SignInConfig,
+    body: &Value,
+) -> Option<JsonResponse> {
+    if !config.phone_enabled
+        && matches!(
+            handler,
+            routes::Handler::SendVerificationCode | routes::Handler::SignInWithPhoneNumber
+        )
+    {
+        return Some(error(400, "OPERATION_NOT_ALLOWED"));
+    }
+    let metadata = fireemu_core_auth::store::TenantMetadata {
+        allow_password_signup: config.email_enabled,
+        enable_email_link_signin: config.email_enabled && !config.password_required,
+        enable_anonymous_user: config.anonymous_enabled,
+        ..fireemu_core_auth::store::TenantMetadata::default()
+    };
+    tenant_policy_denial_with_metadata(handler, Some(&metadata), body)
+}
+
+fn valid_blocking_config_field(field: &str) -> bool {
+    matches!(
+        field,
+        "blockingFunctions"
+            | "blockingFunctions.triggers"
+            | "blockingFunctions.triggers.beforeCreate"
+            | "blockingFunctions.triggers.beforeSignIn"
+            | "blockingFunctions.forwardInboundCredentials"
+            | "blockingFunctions.forwardInboundCredentials.idToken"
+            | "blockingFunctions.forwardInboundCredentials.accessToken"
+            | "blockingFunctions.forwardInboundCredentials.refreshToken"
+    )
+}
+
+/// Decodes the complete blocking-functions message using `ProtoJSON` message-null semantics.
+///
+/// A null nested message is equivalent to an omitted nested message. Keep this normalization at
+/// the HTTP boundary so the blocking bridge receives the same object it would receive when the
+/// nested fields were omitted, while malformed non-null siblings still reach the normal full
+/// candidate validation path.
+fn normalize_complete_blocking_functions(value: Value) -> Value {
+    let Value::Object(mut object) = value else {
+        return value;
+    };
+    for key in ["triggers", "forwardInboundCredentials"] {
+        if object.get(key).is_some_and(Value::is_null) {
+            object.remove(key);
+        }
+    }
+    Value::Object(object)
+}
+
+fn project_blocking_settings_update(
+    state: &AuthState,
+    project: &str,
+    body: &Value,
+    fields: &[String],
+) -> Result<Option<Value>, JsonResponse> {
+    let blocking_fields: Vec<&str> = fields
+        .iter()
+        .map(String::as_str)
+        .filter(|field| valid_blocking_config_field(field))
+        .collect();
+    if blocking_fields.is_empty() {
+        return Ok(None);
+    }
+    let Some(blocking) = state
+        .blocking
+        .as_ref()
+        .filter(|hook| hook.blocking_auth_project() == Some(project))
+    else {
+        return Err(error(400, "FAILED_PRECONDITION"));
+    };
+    let mut candidate = blocking
+        .blocking_auth_settings()
+        .unwrap_or_else(|| Value::Object(serde_json::Map::new()));
+    for field in blocking_fields {
+        let input = body
+            .get("blockingFunctions")
+            .filter(|value| !value.is_null());
+        let value = match field {
+            "blockingFunctions" => {
+                normalize_complete_blocking_functions(input.cloned().unwrap_or_else(|| json!({})))
+            }
+            "blockingFunctions.triggers" => input
+                .and_then(|value| value.get("triggers"))
+                .filter(|value| !value.is_null())
+                .cloned()
+                .unwrap_or_else(|| json!({})),
+            "blockingFunctions.triggers.beforeCreate"
+            | "blockingFunctions.triggers.beforeSignIn" => {
+                let event = field
+                    .strip_prefix("blockingFunctions.triggers.")
+                    .expect("validated blocking trigger field");
+                input
+                    .and_then(|value| value.get("triggers"))
+                    .and_then(|value| value.get(event))
+                    .cloned()
+                    .unwrap_or(Value::Null)
+            }
+            "blockingFunctions.forwardInboundCredentials" => input
+                .and_then(|value| value.get("forwardInboundCredentials"))
+                .filter(|value| !value.is_null())
+                .cloned()
+                .unwrap_or_else(|| json!({})),
+            "blockingFunctions.forwardInboundCredentials.idToken"
+            | "blockingFunctions.forwardInboundCredentials.accessToken"
+            | "blockingFunctions.forwardInboundCredentials.refreshToken" => {
+                let key = field
+                    .strip_prefix("blockingFunctions.forwardInboundCredentials.")
+                    .expect("validated blocking forwarding field");
+                input
+                    .and_then(|value| value.get("forwardInboundCredentials"))
+                    .and_then(|value| value.get(key))
+                    .filter(|value| !value.is_null())
+                    .cloned()
+                    .unwrap_or(Value::Bool(false))
+            }
+            _ => return Err(error(400, "INVALID_ARGUMENT")),
+        };
+        if field == "blockingFunctions" {
+            candidate = value;
+            continue;
+        }
+        let root = candidate
+            .as_object_mut()
+            .ok_or_else(|| error(400, "INVALID_ARGUMENT"))?;
+        let (group, key) = if let Some(key) = field.strip_prefix("blockingFunctions.triggers.") {
+            ("triggers", key)
+        } else if let Some(key) = field.strip_prefix("blockingFunctions.forwardInboundCredentials.")
+        {
+            ("forwardInboundCredentials", key)
+        } else if field == "blockingFunctions.triggers" {
+            root.insert("triggers".to_owned(), value);
+            continue;
+        } else if field == "blockingFunctions.forwardInboundCredentials" {
+            root.insert("forwardInboundCredentials".to_owned(), value);
+            continue;
+        } else {
+            return Err(error(400, "INVALID_ARGUMENT"));
+        };
+        let group_value = root
+            .entry(group.to_owned())
+            .or_insert_with(|| Value::Object(serde_json::Map::new()));
+        let group_object = group_value
+            .as_object_mut()
+            .ok_or_else(|| error(400, "INVALID_ARGUMENT"))?;
+        group_object.insert(key.to_owned(), value);
+    }
+    blocking
+        .validate_blocking_auth_settings(&candidate)
+        .map_err(|_| error(400, "INVALID_ARGUMENT"))?;
+    Ok(Some(candidate))
+}
+
+fn valid_quota_field(field: &str) -> bool {
+    field == "quota"
+        || field == "quota.signUpQuotaConfig"
+        || field == "quota.quotaSimulation"
+        || matches!(
+            field,
+            "quota.quotaSimulation.mode"
+                | "quota.quotaSimulation.algorithm"
+                | "quota.quotaSimulation.defaultQuotaPerHour"
+                | "quota.quotaSimulation.maxTrackedBuckets"
+        )
+}
+
+fn quota_duration_from_json(value: &Value) -> Result<LogicalDuration, JsonResponse> {
+    let text = value
+        .as_str()
+        .ok_or_else(|| error(400, "INVALID_ARGUMENT"))?;
+    let body = text
+        .strip_suffix('s')
+        .filter(|body| !body.is_empty() && !body.starts_with(['+', '-']))
+        .ok_or_else(|| error(400, "INVALID_ARGUMENT"))?;
+    let (seconds, fraction) = body
+        .split_once('.')
+        .map_or((body, None), |(seconds, fraction)| {
+            (seconds, Some(fraction))
+        });
+    if !seconds.bytes().all(|byte| byte.is_ascii_digit()) {
+        return Err(error(400, "INVALID_ARGUMENT"));
+    }
+    let seconds = seconds
+        .parse::<i128>()
+        .map_err(|_| error(400, "INVALID_ARGUMENT"))?;
+    let fraction_nanos = match fraction {
+        None => 0,
+        Some(fraction)
+            if !fraction.is_empty()
+                && fraction.len() <= 9
+                && fraction.bytes().all(|byte| byte.is_ascii_digit()) =>
+        {
+            fraction
+                .parse::<i128>()
+                .map_err(|_| error(400, "INVALID_ARGUMENT"))?
+                .checked_mul(10_i128.pow(u32::try_from(9 - fraction.len()).unwrap_or(0)))
+                .ok_or_else(|| error(400, "INVALID_ARGUMENT"))?
+        }
+        Some(_) => return Err(error(400, "INVALID_ARGUMENT")),
+    };
+    let nanos = seconds
+        .checked_mul(1_000_000_000)
+        .and_then(|value| value.checked_add(fraction_nanos))
+        .ok_or_else(|| error(400, "INVALID_ARGUMENT"))?;
+    Ok(LogicalDuration::from_nanos(nanos))
+}
+
+fn quota_mode_from_json(value: &Value) -> Result<QuotaMode, JsonResponse> {
+    match value
+        .as_str()
+        .ok_or_else(|| error(400, "INVALID_ARGUMENT"))?
+    {
+        "off" => Ok(QuotaMode::Off),
+        "observe" => Ok(QuotaMode::Observe),
+        "enforce" => Ok(QuotaMode::Enforce),
+        _ => Err(error(400, "INVALID_ARGUMENT")),
+    }
+}
+
+fn quota_config_from_json(
+    value: &Value,
+    current: &SignupQuotaConfig,
+) -> Result<SignupQuotaConfig, JsonResponse> {
+    let object = value
+        .as_object()
+        .ok_or_else(|| error(400, "INVALID_ARGUMENT"))?;
+    if object
+        .keys()
+        .any(|field| field != "signUpQuotaConfig" && field != "quotaSimulation")
+    {
+        return Err(error(400, "INVALID_ARGUMENT"));
+    }
+    let mut next = current.clone();
+    if let Some(value) = object.get("signUpQuotaConfig") {
+        next.temporary = if value.is_null() {
+            None
+        } else {
+            let quota_object = value
+                .as_object()
+                .ok_or_else(|| error(400, "INVALID_ARGUMENT"))?;
+            if quota_object
+                .keys()
+                .any(|field| !SIGNUP_QUOTA_FIELDS.contains(&field.as_str()))
+            {
+                return Err(error(400, "INVALID_ARGUMENT"));
+            }
+            let quota_number = quota_object
+                .get("quota")
+                .and_then(Value::as_str)
+                .filter(|value| {
+                    !value.is_empty()
+                        && value.bytes().all(|byte| byte.is_ascii_digit())
+                        && value
+                            .parse::<u64>()
+                            .is_ok_and(|value| i64::try_from(value).is_ok())
+                })
+                .ok_or_else(|| error(400, "INVALID_ARGUMENT"))?
+                .parse::<u64>()
+                .map_err(|_| error(400, "INVALID_ARGUMENT"))?;
+            let start_time = LogicalInstant::parse_rfc3339(
+                quota_object
+                    .get("startTime")
+                    .and_then(Value::as_str)
+                    .ok_or_else(|| error(400, "INVALID_ARGUMENT"))?,
+            )
+            .map_err(|_| error(400, "INVALID_ARGUMENT"))?;
+            let duration = quota_duration_from_json(
+                quota_object
+                    .get("quotaDuration")
+                    .ok_or_else(|| error(400, "INVALID_ARGUMENT"))?,
+            )?;
+            Some(
+                TemporaryQuota::new(quota_number, start_time, duration)
+                    .map_err(|_| error(400, "INVALID_ARGUMENT"))?,
+            )
+        };
+    }
+    if let Some(value) = object
+        .get("quotaSimulation")
+        .filter(|value| !value.is_null())
+    {
+        let simulation = value
+            .as_object()
+            .ok_or_else(|| error(400, "INVALID_ARGUMENT"))?;
+        if simulation
+            .keys()
+            .any(|field| !QUOTA_SIMULATION_FIELDS.contains(&field.as_str()))
+        {
+            return Err(error(400, "INVALID_ARGUMENT"));
+        }
+        if let Some(value) = simulation.get("mode").filter(|value| !value.is_null()) {
+            next.mode = quota_mode_from_json(value)?;
+        }
+        if let Some(value) = simulation.get("algorithm").filter(|value| !value.is_null()) {
+            if value.as_str() != Some("fixed-window-v1") {
+                return Err(error(400, "INVALID_ARGUMENT"));
+            }
+            next.algorithm = QuotaAlgorithm::FixedWindowV1;
+        }
+        if let Some(value) = simulation
+            .get("defaultQuotaPerHour")
+            .filter(|value| !value.is_null())
+        {
+            next.default_quota_per_hour = value
+                .as_u64()
+                .filter(|value| *value <= 1_000_000)
+                .ok_or_else(|| error(400, "INVALID_ARGUMENT"))?;
+        }
+        if let Some(value) = simulation
+            .get("maxTrackedBuckets")
+            .filter(|value| !value.is_null())
+        {
+            next.max_tracked_buckets = value
+                .as_u64()
+                .filter(|value| (1..=65_536).contains(value))
+                .and_then(|value| usize::try_from(value).ok())
+                .ok_or_else(|| error(400, "INVALID_ARGUMENT"))?;
+        }
+    }
+    next.validate()
+        .map_err(|_| error(400, "INVALID_ARGUMENT"))?;
+    Ok(next)
+}
+
+#[allow(clippy::too_many_lines)]
+fn quota_config_from_update(
+    current: &SignupQuotaConfig,
+    body: &Value,
+    fields: &[String],
+) -> Result<Option<SignupQuotaConfig>, JsonResponse> {
+    let quota_fields = fields
+        .iter()
+        .filter(|field| valid_quota_field(field))
+        .map(String::as_str)
+        .collect::<Vec<_>>();
+    if quota_fields.is_empty() {
+        return Ok(None);
+    }
+    if quota_fields.contains(&"quota") && quota_fields.len() != 1 {
+        return Err(error(400, "INVALID_ARGUMENT"));
+    }
+    let Some(quota_value) = body.get("quota") else {
+        return Err(error(400, "INVALID_ARGUMENT"));
+    };
+    if quota_value.is_null() {
+        if quota_fields.contains(&"quota") {
+            return Ok(Some(SignupQuotaConfig::default()));
+        }
+        let mut selected = serde_json::Map::new();
+        if quota_fields.contains(&"quota.signUpQuotaConfig") {
+            selected.insert("signUpQuotaConfig".to_owned(), Value::Null);
+        }
+        if quota_fields.contains(&"quota.quotaSimulation") {
+            selected.insert(
+                "quotaSimulation".to_owned(),
+                quota_config_json(&SignupQuotaConfig::default())["quotaSimulation"].clone(),
+            );
+        } else if quota_fields
+            .iter()
+            .any(|field| field.starts_with("quota.quotaSimulation."))
+        {
+            let defaults = quota_config_json(&SignupQuotaConfig::default());
+            let mut simulation = serde_json::Map::new();
+            for field in quota_fields
+                .iter()
+                .filter_map(|field| field.strip_prefix("quota.quotaSimulation."))
+            {
+                if let Some(value) = defaults["quotaSimulation"].get(field) {
+                    simulation.insert(field.to_owned(), value.clone());
+                }
+            }
+            selected.insert("quotaSimulation".to_owned(), Value::Object(simulation));
+        }
+        return quota_config_from_json(&Value::Object(selected), current).map(Some);
+    }
+    let quota = quota_value
+        .as_object()
+        .ok_or_else(|| error(400, "INVALID_ARGUMENT"))?;
+    // Validate every supplied quota member before applying the mask. A malformed value outside
+    // the selected mask must not be smuggled through as a successful partial update.
+    quota_config_from_json(&Value::Object(quota.clone()), current)?;
+    let mut selected = serde_json::Map::new();
+    if quota_fields
+        .iter()
+        .any(|field| *field == "quota" || *field == "quota.signUpQuotaConfig")
+    {
+        if let Some(value) = quota.get("signUpQuotaConfig") {
+            selected.insert("signUpQuotaConfig".to_owned(), value.clone());
+        }
+    }
+    if quota_fields
+        .iter()
+        .any(|field| *field == "quota" || *field == "quota.quotaSimulation")
+    {
+        if let Some(value) = quota.get("quotaSimulation") {
+            if value.is_null() {
+                selected.insert(
+                    "quotaSimulation".to_owned(),
+                    quota_config_json(&SignupQuotaConfig::default())["quotaSimulation"].clone(),
+                );
+            } else {
+                selected.insert("quotaSimulation".to_owned(), value.clone());
+            }
+        }
+    }
+    if quota_fields
+        .iter()
+        .any(|field| field.starts_with("quota.quotaSimulation."))
+    {
+        let mut simulation = serde_json::Map::new();
+        let value = quota.get("quotaSimulation");
+        let defaults = quota_config_json(&SignupQuotaConfig::default());
+        let value = value.and_then(Value::as_object);
+        for field in quota_fields
+            .iter()
+            .filter_map(|field| field.strip_prefix("quota.quotaSimulation."))
+        {
+            if let Some(value) = value.and_then(|value| value.get(field)) {
+                if value.is_null() {
+                    if let Some(default) = defaults["quotaSimulation"].get(field) {
+                        simulation.insert(field.to_owned(), default.clone());
+                    }
+                } else {
+                    simulation.insert(field.to_owned(), value.clone());
+                }
+            } else if let Some(default) = defaults["quotaSimulation"].get(field) {
+                simulation.insert(field.to_owned(), default.clone());
+            }
+        }
+        selected.insert("quotaSimulation".to_owned(), Value::Object(simulation));
+    }
+    quota_config_from_json(&Value::Object(selected), current).map(Some)
+}
+
+fn quota_config_json(quota: &SignupQuotaConfig) -> Value {
+    let mode = match quota.mode {
+        QuotaMode::Off => "off",
+        QuotaMode::Observe => "observe",
+        QuotaMode::Enforce => "enforce",
+    };
+    let mut quota_object = serde_json::Map::new();
+    if let Some(temporary) = quota.temporary {
+        let nanos = temporary.duration.as_nanos();
+        let seconds = nanos.div_euclid(1_000_000_000);
+        let fraction = nanos.rem_euclid(1_000_000_000);
+        let duration = if fraction == 0 {
+            format!("{seconds}s")
+        } else {
+            format!("{seconds}.{fraction:09}s")
+                .trim_end_matches('0')
+                .to_owned()
+        };
+        quota_object.insert(
+            "signUpQuotaConfig".to_owned(),
+            json!({
+                "quota": temporary.quota.to_string(),
+                "startTime": temporary.start_time.to_rfc3339().unwrap_or_default(),
+                "quotaDuration": duration,
+            }),
+        );
+    }
+    quota_object.insert(
+        "quotaSimulation".to_owned(),
+        json!({
+            "mode": mode,
+            "algorithm": "fixed-window-v1",
+            "defaultQuotaPerHour": quota.default_quota_per_hour,
+            "maxTrackedBuckets": quota.max_tracked_buckets,
+        }),
+    );
+    Value::Object(quota_object)
+}
+
+#[allow(clippy::too_many_lines)]
+fn validate_project_config_payload(body: &Value) -> Result<(), JsonResponse> {
+    let object = body
+        .as_object()
+        .ok_or_else(|| error(400, "INVALID_ARGUMENT"))?;
+    for key in object.keys() {
+        if !matches!(
+            key.as_str(),
+            "signIn"
+                | "emailPrivacyConfig"
+                | "client"
+                | "passwordPolicyConfig"
+                | "quota"
+                | "blockingFunctions"
+        ) {
+            return Err(error(400, "INVALID_ARGUMENT"));
+        }
+    }
+    if let Some(value) = object.get("signIn").filter(|value| !value.is_null()) {
+        let sign_in = value
+            .as_object()
+            .ok_or_else(|| error(400, "INVALID_ARGUMENT"))?;
+        if sign_in.keys().any(|key| {
+            !matches!(
+                key.as_str(),
+                "allowDuplicateEmails" | "email" | "anonymous" | "phoneNumber"
+            )
+        }) {
+            return Err(error(400, "INVALID_ARGUMENT"));
+        }
+        for (provider, allowed) in [
+            ("email", &["enabled", "passwordRequired"][..]),
+            ("anonymous", &["enabled"][..]),
+            ("phoneNumber", &["enabled", "testPhoneNumbers"][..]),
+        ] {
+            match sign_in.get(provider) {
+                None | Some(Value::Null) => {}
+                Some(Value::Object(fields)) => {
+                    if fields.keys().any(|key| !allowed.contains(&key.as_str())) {
+                        return Err(error(400, "INVALID_ARGUMENT"));
+                    }
+                }
+                Some(_) => return Err(error(400, "INVALID_ARGUMENT")),
+            }
+        }
+        if sign_in
+            .get("allowDuplicateEmails")
+            .is_some_and(|value| !value.is_boolean() && !value.is_null())
+        {
+            return Err(error(400, "INVALID_ARGUMENT"));
+        }
+    }
+    if let Some(value) = object
+        .get("emailPrivacyConfig")
+        .filter(|value| !value.is_null())
+    {
+        let privacy = value
+            .as_object()
+            .ok_or_else(|| error(400, "INVALID_ARGUMENT"))?;
+        if privacy
+            .keys()
+            .any(|key| key != "enableImprovedEmailPrivacy")
+        {
+            return Err(error(400, "INVALID_ARGUMENT"));
+        }
+        if privacy
+            .get("enableImprovedEmailPrivacy")
+            .is_some_and(|value| !value.is_boolean() && !value.is_null())
+        {
+            return Err(error(400, "INVALID_ARGUMENT"));
+        }
+    }
+    if let Some(value) = object.get("client").filter(|value| !value.is_null()) {
+        let client = value
+            .as_object()
+            .ok_or_else(|| error(400, "INVALID_ARGUMENT"))?;
+        if client.keys().any(|key| key != "permissions") {
+            return Err(error(400, "INVALID_ARGUMENT"));
+        }
+        if let Some(permissions) = client.get("permissions").filter(|value| !value.is_null()) {
+            let permissions = permissions
+                .as_object()
+                .ok_or_else(|| error(400, "INVALID_ARGUMENT"))?;
+            if permissions
+                .keys()
+                .any(|key| key != "disabledUserSignup" && key != "disabledUserDeletion")
+            {
+                return Err(error(400, "INVALID_ARGUMENT"));
+            }
+            for key in ["disabledUserSignup", "disabledUserDeletion"] {
+                if permissions
+                    .get(key)
+                    .is_some_and(|value| !value.is_boolean() && !value.is_null())
+                {
+                    return Err(error(400, "INVALID_ARGUMENT"));
+                }
+            }
+        }
+    }
+    if let Some(value) = object.get("passwordPolicyConfig") {
+        if !value.is_null() {
+            password_policy_from_config_json(value)?;
+        }
+    }
+    if let Some(value) = object.get("quota").filter(|value| !value.is_null()) {
+        let quota = value
+            .as_object()
+            .ok_or_else(|| error(400, "INVALID_ARGUMENT"))?;
+        if quota
+            .keys()
+            .any(|key| !QUOTA_FIELDS.contains(&key.as_str()))
+        {
+            return Err(error(400, "INVALID_ARGUMENT"));
+        }
+        if let Some(value) = quota.get("signUpQuotaConfig") {
+            if !value.is_null() {
+                let config = value
+                    .as_object()
+                    .ok_or_else(|| error(400, "INVALID_ARGUMENT"))?;
+                if config
+                    .keys()
+                    .any(|key| !SIGNUP_QUOTA_FIELDS.contains(&key.as_str()))
+                {
+                    return Err(error(400, "INVALID_ARGUMENT"));
+                }
+            }
+        }
+        if let Some(value) = quota
+            .get("quotaSimulation")
+            .filter(|value| !value.is_null())
+        {
+            let simulation = value
+                .as_object()
+                .ok_or_else(|| error(400, "INVALID_ARGUMENT"))?;
+            if simulation
+                .keys()
+                .any(|key| !QUOTA_SIMULATION_FIELDS.contains(&key.as_str()))
+            {
+                return Err(error(400, "INVALID_ARGUMENT"));
+            }
+        }
+        // Validate the complete supplied quota before applying updateMask. This catches a
+        // malformed unselected member without changing the current namespace.
+        quota_config_from_json(value, &SignupQuotaConfig::default())?;
+    }
+    if let Some(value) = object
+        .get("blockingFunctions")
+        .filter(|value| !value.is_null())
+    {
+        let blocking = value
+            .as_object()
+            .ok_or_else(|| error(400, "INVALID_ARGUMENT"))?;
+        if blocking
+            .keys()
+            .any(|key| key != "triggers" && key != "forwardInboundCredentials")
+        {
+            return Err(error(400, "INVALID_ARGUMENT"));
+        }
+        if let Some(triggers) = blocking.get("triggers").filter(|value| !value.is_null()) {
+            let triggers = triggers
+                .as_object()
+                .ok_or_else(|| error(400, "INVALID_ARGUMENT"))?;
+            if triggers
+                .keys()
+                .any(|key| key != "beforeCreate" && key != "beforeSignIn")
+            {
+                return Err(error(400, "INVALID_ARGUMENT"));
+            }
+            for key in ["beforeCreate", "beforeSignIn"] {
+                let Some(value) = triggers.get(key) else {
+                    continue;
+                };
+                if value.is_null() {
+                    continue;
+                }
+                let trigger = value
+                    .as_object()
+                    .ok_or_else(|| error(400, "INVALID_ARGUMENT"))?;
+                if trigger.keys().any(|field| field != "functionUri")
+                    || trigger
+                        .get("functionUri")
+                        .and_then(Value::as_str)
+                        .is_none_or(str::is_empty)
+                {
+                    return Err(error(400, "INVALID_ARGUMENT"));
+                }
+            }
+        }
+        if let Some(forwarding) = blocking
+            .get("forwardInboundCredentials")
+            .filter(|value| !value.is_null())
+        {
+            let forwarding = forwarding
+                .as_object()
+                .ok_or_else(|| error(400, "INVALID_ARGUMENT"))?;
+            if forwarding
+                .keys()
+                .any(|key| key != "idToken" && key != "accessToken" && key != "refreshToken")
+                || forwarding
+                    .values()
+                    .any(|value| !value.is_boolean() && !value.is_null())
+            {
+                return Err(error(400, "INVALID_ARGUMENT"));
+            }
+        }
+    }
+    Ok(())
+}
+
+fn contains_non_null_value(value: &Value) -> bool {
+    match value {
+        Value::Null => false,
+        Value::Array(values) => values.iter().any(contains_non_null_value),
+        Value::Object(values) => values.values().any(contains_non_null_value),
+        _ => true,
+    }
+}
+
+#[allow(clippy::too_many_lines)]
 fn project_config_management(
     state: &AuthState,
     handler: routes::Handler,
     project: Option<&str>,
+    selected_store: &Arc<Mutex<AuthStore>>,
+    pending_project: Option<&str>,
+    query: Option<&str>,
     body: &Value,
 ) -> JsonResponse {
     use routes::Handler;
     let Some(project) = project else {
         return error(400, "INVALID_PROJECT_ID");
     };
-    let store = state
+    if handler == Handler::AdminGetProjectConfig {
+        let Ok(store) = selected_store.lock() else {
+            return error(500, "INTERNAL");
+        };
+        let mut body = project_config_json_with_auth_settings(
+            store.config(),
+            store.password_policy(),
+            store.signup_quota().config(),
+        );
+        add_sign_in_config_json(&mut body, store.sign_in_config());
+        if let Some(blocking) = state
+            .blocking
+            .as_ref()
+            .filter(|hook| hook.blocking_auth_project() == Some(project))
+            .and_then(|hook| hook.blocking_auth_settings())
+        {
+            body["blockingFunctions"] = blocking;
+        }
+        return JsonResponse { status: 200, body };
+    }
+    if !body.is_object() {
+        return error(400, "INVALID_ARGUMENT");
+    }
+    if let Err(response) = validate_project_config_payload(body) {
+        return response;
+    }
+    let fields = match update_mask(query) {
+        Ok(Some(fields)) => fields,
+        Ok(None) => {
+            let mut fields = Vec::new();
+            if body.get("signIn").is_some_and(contains_non_null_value) {
+                fields.push("signIn".to_owned());
+            }
+            if body
+                .get("emailPrivacyConfig")
+                .is_some_and(contains_non_null_value)
+            {
+                fields.push("emailPrivacyConfig".to_owned());
+            }
+            if body
+                .get("client")
+                .and_then(|value| value.get("permissions"))
+                .is_some_and(contains_non_null_value)
+            {
+                fields.push("client.permissions".to_owned());
+            }
+            if body
+                .get("passwordPolicyConfig")
+                .is_some_and(contains_non_null_value)
+            {
+                fields.push("passwordPolicyConfig".to_owned());
+            }
+            if let Some(quota) = body
+                .get("quota")
+                .filter(|value| !value.is_null())
+                .and_then(Value::as_object)
+            {
+                for field in quota.keys() {
+                    if quota.get(field).is_some_and(contains_non_null_value) {
+                        fields.push(format!("quota.{field}"));
+                    }
+                }
+            }
+            if body
+                .get("blockingFunctions")
+                .is_some_and(contains_non_null_value)
+            {
+                fields.push("blockingFunctions".to_owned());
+            }
+            fields
+        }
+        Err(response) => return response,
+    };
+    if fields.iter().any(|field| {
+        (field.starts_with("passwordPolicyConfig") && !valid_password_policy_field(field))
+            || (!valid_project_config_field(field) && !valid_blocking_config_field(field))
+    }) {
+        return error(400, "INVALID_ARGUMENT");
+    }
+    let blocking_settings = match project_blocking_settings_update(state, project, body, &fields) {
+        Ok(settings) => settings,
+        Err(response) => return response,
+    };
+    let mut patch = ProjectAuthConfigPatch::default();
+    if let Err(response) = apply_project_config_fields(&mut patch, body, &fields) {
+        return response;
+    }
+    // Decode the sign-in providers before anything changes; they are applied after the rest.
+    let updates_sign_in = match sign_in_config_from_update(&SignInConfig::default(), body, &fields)
+    {
+        Ok(update) => update.is_some(),
+        Err(response) => return response,
+    };
+    // Keep a rollback snapshot while the paired Auth candidate is published. Runtime-backed
+    // bridges include private discovery markers in this snapshot so a failed Auth update cannot
+    // turn an omitted Discovery trigger into Disabled.
+    let blocking_transaction = if let Some(settings) = blocking_settings.as_ref() {
+        let Some(blocking) = state
+            .blocking
+            .as_ref()
+            .filter(|hook| hook.blocking_auth_project() == Some(project))
+        else {
+            return error(400, "FAILED_PRECONDITION");
+        };
+        let Ok(Some(snapshot)) = blocking.blocking_auth_settings_snapshot() else {
+            return error(400, "FAILED_PRECONDITION");
+        };
+        if blocking
+            .update_blocking_auth_settings_masked(settings, &fields)
+            .is_err()
+        {
+            return error(400, "INVALID_ARGUMENT");
+        }
+        Some((blocking, snapshot, settings.clone()))
+    } else {
+        None
+    };
+
+    let rollback_blocking = |response: JsonResponse| {
+        if let Some((blocking, snapshot, candidate)) = &blocking_transaction {
+            let _ =
+                blocking.restore_blocking_auth_settings_snapshot_if_unchanged(snapshot, candidate);
+        }
+        response
+    };
+    let config = if let Some(registry) = state
         .registry
         .as_ref()
-        .and_then(|registry| registry.store_for(project))
-        .or_else(|| {
-            (project == state.store.lock().ok()?.project_id()).then(|| state.store.clone())
-        });
-    let Some(store) = store else {
-        return error(400, "INVALID_PROJECT_ID");
-    };
-    let Ok(store) = store.lock() else {
-        return error(500, "INTERNAL");
-    };
-    let mut config = store.config();
-    if handler == Handler::AdminGetProjectConfig {
-        return JsonResponse {
-            status: 200,
-            body: project_config_json(config),
-        };
-    }
-    if let Some(value) = body
-        .get("signIn")
-        .and_then(|sign_in| sign_in.get("allowDuplicateEmails"))
-        .and_then(Value::as_bool)
+        .filter(|_| pending_project.is_none())
     {
-        config.allow_duplicate_emails = value;
-    }
-    if let Some(value) = body
-        .get("emailPrivacyConfig")
-        .and_then(|privacy| privacy.get("enableImprovedEmailPrivacy"))
-        .and_then(Value::as_bool)
-    {
-        config.enable_improved_email_privacy = value;
-    }
-    drop(store);
-    if let Some(registry) = &state.registry {
-        if !registry.set_project_config(project, config) {
-            return error(500, "INTERNAL");
+        // Decode masked replacements after the registry has acquired the namespace gate. This
+        // keeps a concurrent PATCH from merging against a stale policy or quota snapshot.
+        match registry.patch_project_config_with_current_settings(
+            project,
+            patch,
+            |current_policy, current_quota| {
+                let password_policy = password_policy_from_update(current_policy, body, &fields)?;
+                let signup_quota = quota_config_from_update(current_quota, body, &fields)?;
+                Ok((password_policy, signup_quota))
+            },
+        ) {
+            Ok(Some(config)) => {
+                if updates_sign_in {
+                    match registry.update_project_sign_in_config(project, |current| {
+                        sign_in_config_from_update(current, body, &fields)
+                            .map(|next| next.unwrap_or_else(|| current.clone()))
+                    }) {
+                        Ok(Some(_)) => {}
+                        Ok(None) => return rollback_blocking(error(500, "INTERNAL")),
+                        Err(response) => return rollback_blocking(response),
+                    }
+                }
+                config
+            }
+            Ok(None) => return rollback_blocking(error(500, "INTERNAL")),
+            Err(response) => return rollback_blocking(response),
         }
-    } else if let Ok(mut store) = state.store.lock() {
-        store.set_config(config);
     } else {
-        return error(500, "INTERNAL");
-    }
+        // A pending routed project is not published in the registry yet. Keep its config and
+        // policy transition under the selected store lock until the candidate is installed.
+        let Ok(mut store) = selected_store.lock() else {
+            return rollback_blocking(error(500, "INTERNAL"));
+        };
+        let current_policy = store.password_policy().clone();
+        let current_quota = store.signup_quota().config().clone();
+        let password_policy = match password_policy_from_update(&current_policy, body, &fields) {
+            Ok(policy) => policy,
+            Err(response) => return rollback_blocking(response),
+        };
+        let signup_quota = match quota_config_from_update(&current_quota, body, &fields) {
+            Ok(quota) => quota,
+            Err(response) => return rollback_blocking(response),
+        };
+        let sign_in = match sign_in_config_from_update(store.sign_in_config(), body, &fields) {
+            Ok(sign_in) => sign_in,
+            Err(response) => return rollback_blocking(response),
+        };
+        let has_policy = password_policy.is_some();
+        let has_quota = signup_quota.is_some();
+        let has_sign_in = sign_in.is_some();
+        let config = patch.apply_to(store.config());
+        if !patch.is_empty() {
+            store.set_config(config);
+        }
+        if let Some(policy) = password_policy {
+            store.set_password_policy(policy);
+        }
+        if let Some(quota) = signup_quota {
+            if store.set_signup_quota_config(quota).is_err() {
+                return rollback_blocking(error(400, "INVALID_ARGUMENT"));
+            }
+        }
+        if let Some(sign_in) = sign_in {
+            if store.set_sign_in_config(sign_in).is_err() {
+                return rollback_blocking(error(400, "INVALID_ARGUMENT"));
+            }
+        }
+        drop(store);
+        if !patch.is_empty() || has_policy || has_quota || has_sign_in {
+            if let Some(project) = pending_project {
+                if let Err(response) = install_routed_candidate(state, project, selected_store) {
+                    return rollback_blocking(response);
+                }
+            }
+        }
+        config
+    };
     JsonResponse {
         status: 200,
-        body: project_config_json(config),
+        body: {
+            let Ok(store) = selected_store.lock() else {
+                return error(500, "INTERNAL");
+            };
+            let mut body = project_config_json_with_auth_settings(
+                config,
+                store.password_policy(),
+                store.signup_quota().config(),
+            );
+            add_sign_in_config_json(&mut body, store.sign_in_config());
+            if let Some(blocking) = state
+                .blocking
+                .as_ref()
+                .filter(|hook| hook.blocking_auth_project() == Some(project))
+                .and_then(|hook| hook.blocking_auth_settings())
+            {
+                body["blockingFunctions"] = blocking;
+            }
+            body
+        },
     }
 }
 
-fn tenant_metadata(body: &Value) -> fireemu_core_auth::store::TenantMetadata {
-    fireemu_core_auth::store::TenantMetadata {
-        display_name: str_field(body, "displayName").map(str::to_owned),
-        allow_password_signup: body
-            .get("allowPasswordSignup")
-            .and_then(Value::as_bool)
-            .unwrap_or(false),
-        enable_email_link_signin: body
-            .get("enableEmailLinkSignin")
-            .and_then(Value::as_bool)
-            .unwrap_or(false),
-        enable_anonymous_user: body
-            .get("enableAnonymousUser")
-            .and_then(Value::as_bool)
-            .unwrap_or(false),
-        disable_auth: body
-            .get("disableAuth")
-            .and_then(Value::as_bool)
-            .unwrap_or(false),
+#[derive(Clone, Copy)]
+enum ProviderKind {
+    Oidc,
+    Saml,
+}
+
+#[allow(clippy::too_many_arguments, clippy::too_many_lines)]
+fn provider_config_management(
+    store: &Arc<Mutex<AuthStore>>,
+    handler: routes::Handler,
+    kind: ProviderKind,
+    project: Option<&str>,
+    tenant: Option<&str>,
+    resource: Option<&str>,
+    query: Option<&str>,
+    body: &Value,
+) -> JsonResponse {
+    use routes::Handler;
+    let Some(project) = project else {
+        return error(400, "INVALID_PROJECT_ID");
+    };
+    let path_prefix = format!("projects/{project}/");
+    let path_prefix = if let Some(tenant) = tenant {
+        format!("{path_prefix}tenants/{tenant}/")
+    } else {
+        path_prefix
+    };
+    let (collection, collection_key) = match kind {
+        ProviderKind::Oidc => ("oauthIdpConfigs", "oauthIdpConfigs"),
+        ProviderKind::Saml => ("inboundSamlConfigs", "inboundSamlConfigs"),
+    };
+    let name = |id: &str| format!("{path_prefix}{collection}/{id}");
+    let response = match (kind, handler) {
+        (ProviderKind::Oidc, Handler::ProviderCreate) => {
+            let Some(id) = query_params(query)
+                .get("oauthIdpConfigId")
+                .filter(|id| valid_provider_id(id, ProviderKind::Oidc))
+                .cloned()
+            else {
+                return error(400, "INVALID_ARGUMENT");
+            };
+            let config = match parse_oidc(body, id) {
+                Ok(config) => config,
+                Err(response) => return response,
+            };
+            let Ok(mut store) = store.lock() else {
+                return error(500, "INTERNAL");
+            };
+            if !store.create_oidc_config(config.clone()) {
+                return error(409, "ALREADY_EXISTS");
+            }
+            JsonResponse {
+                status: 200,
+                body: oidc_json(&name(&config.id), &config),
+            }
+        }
+        (ProviderKind::Saml, Handler::ProviderCreate) => {
+            let Some(id) = query_params(query)
+                .get("inboundSamlConfigId")
+                .filter(|id| valid_provider_id(id, ProviderKind::Saml))
+                .cloned()
+            else {
+                return error(400, "INVALID_ARGUMENT");
+            };
+            let config = match parse_saml(body, id) {
+                Ok(config) => config,
+                Err(response) => return response,
+            };
+            let Ok(mut store) = store.lock() else {
+                return error(500, "INTERNAL");
+            };
+            if !store.create_saml_config(config.clone()) {
+                return error(409, "ALREADY_EXISTS");
+            }
+            JsonResponse {
+                status: 200,
+                body: saml_json(&name(&config.id), &config),
+            }
+        }
+        (ProviderKind::Oidc, Handler::ProviderList) => {
+            let Ok(store) = store.lock() else {
+                return error(500, "INTERNAL");
+            };
+            let params = query_params(query);
+            let page_size = params
+                .get("pageSize")
+                .and_then(|value| value.parse::<usize>().ok())
+                .unwrap_or(20)
+                .clamp(1, 1_000);
+            let page_token = params.get("pageToken").map(String::as_str);
+            let mut configs = store
+                .oidc_configs()
+                .map(|config| oidc_json(&name(&config.id), config))
+                .collect::<Vec<_>>();
+            if let Some(token) = page_token {
+                let Some(index) = configs.iter().position(|config| {
+                    config["name"]
+                        .as_str()
+                        .and_then(|value| value.rsplit('/').next())
+                        == Some(token)
+                }) else {
+                    configs.clear();
+                    return JsonResponse {
+                        status: 400,
+                        body: json!({"error": "INVALID_ARGUMENT"}),
+                    };
+                };
+                configs = configs.into_iter().skip(index + 1).collect();
+            }
+            let next = (configs.len() > page_size)
+                .then(|| {
+                    configs
+                        .get(page_size - 1)
+                        .and_then(|config| config["name"].as_str())
+                        .and_then(|name| name.rsplit('/').next())
+                        .map(str::to_owned)
+                })
+                .flatten();
+            configs.truncate(page_size);
+            let mut body = json!({});
+            body[collection_key] = json!(configs);
+            if let Some(next) = next {
+                body["nextPageToken"] = json!(next);
+            }
+            JsonResponse { status: 200, body }
+        }
+        (ProviderKind::Saml, Handler::ProviderList) => {
+            let Ok(store) = store.lock() else {
+                return error(500, "INTERNAL");
+            };
+            let params = query_params(query);
+            let page_size = params
+                .get("pageSize")
+                .and_then(|value| value.parse::<usize>().ok())
+                .unwrap_or(20)
+                .clamp(1, 1_000);
+            let page_token = params.get("pageToken").map(String::as_str);
+            let mut configs = store
+                .saml_configs()
+                .map(|config| saml_json(&name(&config.id), config))
+                .collect::<Vec<_>>();
+            if let Some(token) = page_token {
+                let Some(index) = configs.iter().position(|config| {
+                    config["name"]
+                        .as_str()
+                        .and_then(|value| value.rsplit('/').next())
+                        == Some(token)
+                }) else {
+                    configs.clear();
+                    return JsonResponse {
+                        status: 400,
+                        body: json!({"error": "INVALID_ARGUMENT"}),
+                    };
+                };
+                configs = configs.into_iter().skip(index + 1).collect();
+            }
+            let next = (configs.len() > page_size)
+                .then(|| {
+                    configs
+                        .get(page_size - 1)
+                        .and_then(|config| config["name"].as_str())
+                        .and_then(|name| name.rsplit('/').next())
+                        .map(str::to_owned)
+                })
+                .flatten();
+            configs.truncate(page_size);
+            let mut body = json!({});
+            body[collection_key] = json!(configs);
+            if let Some(next) = next {
+                body["nextPageToken"] = json!(next);
+            }
+            JsonResponse { status: 200, body }
+        }
+        (
+            ProviderKind::Oidc,
+            Handler::ProviderGet | Handler::ProviderUpdate | Handler::ProviderDelete,
+        ) => {
+            let Some(id) = resource.filter(|id| valid_provider_id(id, ProviderKind::Oidc)) else {
+                return error(400, "INVALID_ARGUMENT");
+            };
+            let Ok(mut store) = store.lock() else {
+                return error(500, "INTERNAL");
+            };
+            let Some(existing) = store.oidc_config(id).cloned() else {
+                return error(404, "NOT_FOUND");
+            };
+            match handler {
+                Handler::ProviderGet => JsonResponse {
+                    status: 200,
+                    body: oidc_json(&name(id), &existing),
+                },
+                Handler::ProviderDelete => {
+                    store.delete_oidc_config(id);
+                    JsonResponse {
+                        status: 200,
+                        body: json!({}),
+                    }
+                }
+                Handler::ProviderUpdate => {
+                    let updated = match patch_oidc(existing, body, query) {
+                        Ok(updated) => updated,
+                        Err(response) => return response,
+                    };
+                    store.replace_oidc_config(updated.clone());
+                    JsonResponse {
+                        status: 200,
+                        body: oidc_json(&name(id), &updated),
+                    }
+                }
+                _ => unreachable!(),
+            }
+        }
+        (
+            ProviderKind::Saml,
+            Handler::ProviderGet | Handler::ProviderUpdate | Handler::ProviderDelete,
+        ) => {
+            let Some(id) = resource.filter(|id| valid_provider_id(id, ProviderKind::Saml)) else {
+                return error(400, "INVALID_ARGUMENT");
+            };
+            let Ok(mut store) = store.lock() else {
+                return error(500, "INTERNAL");
+            };
+            let Some(existing) = store.saml_config(id).cloned() else {
+                return error(404, "NOT_FOUND");
+            };
+            match handler {
+                Handler::ProviderGet => JsonResponse {
+                    status: 200,
+                    body: saml_json(&name(id), &existing),
+                },
+                Handler::ProviderDelete => {
+                    store.delete_saml_config(id);
+                    JsonResponse {
+                        status: 200,
+                        body: json!({}),
+                    }
+                }
+                Handler::ProviderUpdate => {
+                    let updated = match patch_saml(existing, body, query) {
+                        Ok(updated) => updated,
+                        Err(response) => return response,
+                    };
+                    store.replace_saml_config(updated.clone());
+                    JsonResponse {
+                        status: 200,
+                        body: saml_json(&name(id), &updated),
+                    }
+                }
+                _ => unreachable!(),
+            }
+        }
+        _ => error(500, "INTERNAL"),
+    };
+    response
+}
+
+fn valid_provider_id(id: &str, kind: ProviderKind) -> bool {
+    let prefix = match kind {
+        ProviderKind::Oidc => "oidc.",
+        ProviderKind::Saml => "saml.",
+    };
+    id.starts_with(prefix)
+        && (prefix.len() + 1..=128).contains(&id.len())
+        && id[prefix.len()..].chars().all(|character| {
+            character.is_ascii_alphanumeric() || matches!(character, '.' | '-' | '_')
+        })
+}
+
+fn required_string(body: &Value, field: &str) -> Result<String, JsonResponse> {
+    body.get(field)
+        .and_then(Value::as_str)
+        .filter(|value| !value.is_empty())
+        .map(str::to_owned)
+        .ok_or_else(|| error(400, "INVALID_ARGUMENT"))
+}
+
+fn optional_string(body: &Value, field: &str) -> Result<Option<String>, JsonResponse> {
+    match body.get(field) {
+        None | Some(Value::Null) => Ok(None),
+        Some(Value::String(value)) => Ok(Some(value.clone())),
+        Some(_) => Err(error(400, "INVALID_ARGUMENT")),
     }
+}
+
+fn optional_bool(body: &Value, field: &str, default: bool) -> Result<bool, JsonResponse> {
+    match body.get(field) {
+        None => Ok(default),
+        Some(Value::Bool(value)) => Ok(*value),
+        Some(_) => Err(error(400, "INVALID_ARGUMENT")),
+    }
+}
+
+fn parse_response_type(value: Option<&Value>) -> Result<OAuthResponseType, JsonResponse> {
+    let Some(value) = value else {
+        return Ok(OAuthResponseType {
+            id_token: true,
+            ..OAuthResponseType::default()
+        });
+    };
+    let Some(object) = value.as_object() else {
+        return Err(error(400, "INVALID_ARGUMENT"));
+    };
+    let read = |field: &str| match object.get(field) {
+        None => Ok(false),
+        Some(Value::Bool(value)) => Ok(*value),
+        Some(_) => Err(error(400, "INVALID_ARGUMENT")),
+    };
+    let response = OAuthResponseType {
+        id_token: read("idToken")?,
+        code: read("code")?,
+        token: read("token")?,
+    };
+    validate_response_type(response)?;
+    Ok(response)
+}
+
+fn validate_response_type(response: OAuthResponseType) -> Result<(), JsonResponse> {
+    if response.token
+        || (!response.id_token && !response.code)
+        || (response.id_token && response.code)
+    {
+        return Err(error(400, "INVALID_ARGUMENT"));
+    }
+    Ok(())
+}
+
+fn parse_oidc(body: &Value, id: String) -> Result<OidcProviderConfig, JsonResponse> {
+    let config = OidcProviderConfig {
+        id,
+        display_name: optional_string(body, "displayName")?,
+        enabled: optional_bool(body, "enabled", false)?,
+        client_id: required_string(body, "clientId")?,
+        issuer: required_string(body, "issuer")?,
+        client_secret: optional_string(body, "clientSecret")?,
+        response_type: parse_response_type(body.get("responseType"))?,
+    };
+    validate_oidc(&config)?;
+    Ok(config)
+}
+
+fn valid_url(value: &str) -> bool {
+    let Some((scheme, host)) = value.split_once("://") else {
+        return false;
+    };
+    matches!(scheme, "http" | "https")
+        && !host.is_empty()
+        && !host
+            .chars()
+            .any(|character| character.is_whitespace() || character.is_control())
+}
+
+fn validate_oidc(config: &OidcProviderConfig) -> Result<(), JsonResponse> {
+    if !valid_url(&config.issuer)
+        || (config.response_type.code && config.client_secret.as_deref().is_none_or(str::is_empty))
+    {
+        return Err(error(400, "INVALID_ARGUMENT"));
+    }
+    Ok(())
+}
+
+fn parse_saml(body: &Value, id: String) -> Result<InboundSamlProviderConfig, JsonResponse> {
+    let Some(idp) = body.get("idpConfig").and_then(Value::as_object) else {
+        return Err(error(400, "INVALID_ARGUMENT"));
+    };
+    let Some(sp) = body.get("spConfig").and_then(Value::as_object) else {
+        return Err(error(400, "INVALID_ARGUMENT"));
+    };
+    let required_object_string = |object: &serde_json::Map<String, Value>, field: &str| {
+        object
+            .get(field)
+            .and_then(Value::as_str)
+            .filter(|value| !value.is_empty())
+            .map(str::to_owned)
+            .ok_or_else(|| error(400, "INVALID_ARGUMENT"))
+    };
+    let certificates = match idp.get("idpCertificates") {
+        None => Vec::new(),
+        Some(Value::Array(values)) => values
+            .iter()
+            .map(|value| {
+                value
+                    .get("x509Certificate")
+                    .and_then(Value::as_str)
+                    .filter(|value| !value.is_empty())
+                    .map(str::to_owned)
+                    .ok_or_else(|| error(400, "INVALID_ARGUMENT"))
+            })
+            .collect::<Result<Vec<_>, _>>()?,
+        Some(_) => return Err(error(400, "INVALID_ARGUMENT")),
+    };
+    if certificates.is_empty() {
+        return Err(error(400, "INVALID_ARGUMENT"));
+    }
+    let config = InboundSamlProviderConfig {
+        id,
+        display_name: optional_string(body, "displayName")?,
+        enabled: optional_bool(body, "enabled", false)?,
+        idp_entity_id: required_object_string(idp, "idpEntityId")?,
+        sso_url: required_object_string(idp, "ssoUrl")?,
+        idp_certificates: certificates,
+        sign_request: match idp.get("signRequest") {
+            None => Ok(false),
+            Some(Value::Bool(value)) => Ok(*value),
+            Some(_) => Err(error(400, "INVALID_ARGUMENT")),
+        }?,
+        sp_entity_id: required_object_string(sp, "spEntityId")?,
+        callback_uri: required_object_string(sp, "callbackUri")?,
+    };
+    if !valid_url(&config.sso_url) || !valid_url(&config.callback_uri) {
+        return Err(error(400, "INVALID_ARGUMENT"));
+    }
+    Ok(config)
+}
+
+fn update_mask(query: Option<&str>) -> Result<Option<Vec<String>>, JsonResponse> {
+    let mut value = None;
+    for pair in query
+        .unwrap_or_default()
+        .split('&')
+        .filter(|pair| !pair.is_empty())
+    {
+        let (key, candidate) = pair.split_once('=').unwrap_or((pair, ""));
+        if malformed_query_component(key) || malformed_query_component(candidate) {
+            return Err(error(400, "INVALID_ARGUMENT"));
+        }
+        let decoded_key = decode_query_component(key);
+        if decoded_key != "updateMask" {
+            continue;
+        }
+        if value.is_some() {
+            return Err(error(400, "INVALID_ARGUMENT"));
+        }
+        value = Some(decode_query_component(candidate));
+    }
+    let Some(value) = value else {
+        return Ok(None);
+    };
+    if value.is_empty() {
+        return Ok(Some(Vec::new()));
+    }
+    let mut fields = Vec::new();
+    let mut seen = BTreeSet::new();
+    for field in value.split(',') {
+        if field.is_empty()
+            || field.split('.').any(|part| {
+                part.is_empty()
+                    || !part.chars().enumerate().all(|(index, character)| {
+                        (index == 0 && (character.is_ascii_alphabetic() || character == '_'))
+                            || (index > 0
+                                && (character.is_ascii_alphanumeric() || character == '_'))
+                    })
+            })
+        {
+            return Err(error(400, "INVALID_ARGUMENT"));
+        }
+        if !seen.insert(field.to_owned()) {
+            return Err(error(400, "INVALID_ARGUMENT"));
+        }
+        fields.push(field.to_owned());
+    }
+    Ok(Some(fields))
+}
+
+fn malformed_query_component(value: &str) -> bool {
+    let bytes = value.as_bytes();
+    let mut index = 0;
+    while index < bytes.len() {
+        if bytes[index] == b'%' {
+            if index + 2 >= bytes.len()
+                || !bytes[index + 1].is_ascii_hexdigit()
+                || !bytes[index + 2].is_ascii_hexdigit()
+            {
+                return true;
+            }
+            index += 3;
+        } else {
+            index += 1;
+        }
+    }
+    false
+}
+
+fn patch_oidc(
+    mut current: OidcProviderConfig,
+    body: &Value,
+    query: Option<&str>,
+) -> Result<OidcProviderConfig, JsonResponse> {
+    for field in update_mask(query)?.unwrap_or_default() {
+        match field.as_str() {
+            "displayName" => current.display_name = optional_string(body, "displayName")?,
+            "enabled" => current.enabled = optional_bool(body, "enabled", false)?,
+            "clientId" => current.client_id = required_string(body, "clientId")?,
+            "issuer" => current.issuer = required_string(body, "issuer")?,
+            "clientSecret" => current.client_secret = optional_string(body, "clientSecret")?,
+            "responseType" => {
+                current.response_type = parse_response_type(body.get("responseType"))?;
+            }
+            "responseType.idToken" => {
+                current.response_type.id_token = nested_bool(body, "responseType", "idToken")?;
+            }
+            "responseType.code" => {
+                current.response_type.code = nested_bool(body, "responseType", "code")?;
+            }
+            "responseType.token" => {
+                current.response_type.token = nested_bool(body, "responseType", "token")?;
+            }
+            "name" => {}
+            _ => return Err(error(400, "INVALID_ARGUMENT")),
+        }
+    }
+    validate_response_type(current.response_type)?;
+    validate_oidc(&current)?;
+    Ok(current)
+}
+
+fn nested_bool(body: &Value, parent: &str, field: &str) -> Result<bool, JsonResponse> {
+    body.get(parent)
+        .and_then(Value::as_object)
+        .and_then(|object| object.get(field))
+        .and_then(Value::as_bool)
+        .ok_or_else(|| error(400, "INVALID_ARGUMENT"))
+}
+
+fn patch_saml(
+    mut current: InboundSamlProviderConfig,
+    body: &Value,
+    query: Option<&str>,
+) -> Result<InboundSamlProviderConfig, JsonResponse> {
+    if !body.is_object() {
+        return Err(error(400, "INVALID_ARGUMENT"));
+    }
+    let fields = update_mask(query)?.unwrap_or_default();
+    for field in fields {
+        match field.as_str() {
+            "displayName" => current.display_name = optional_string(body, "displayName")?,
+            "enabled" => current.enabled = optional_bool(body, "enabled", false)?,
+            "idpConfig" => {
+                let Some(idp) = body.get("idpConfig").and_then(Value::as_object) else {
+                    return Err(error(400, "INVALID_ARGUMENT"));
+                };
+                if let Some(value) = idp.get("idpEntityId") {
+                    current.idp_entity_id = value
+                        .as_str()
+                        .filter(|value| !value.is_empty())
+                        .map(str::to_owned)
+                        .ok_or_else(|| error(400, "INVALID_ARGUMENT"))?;
+                }
+                if let Some(value) = idp.get("ssoUrl") {
+                    current.sso_url = value
+                        .as_str()
+                        .filter(|value| !value.is_empty())
+                        .map(str::to_owned)
+                        .ok_or_else(|| error(400, "INVALID_ARGUMENT"))?;
+                }
+                if let Some(value) = idp.get("idpCertificates") {
+                    current.idp_certificates = parse_saml_certificates(value)?;
+                }
+                if let Some(value) = idp.get("signRequest") {
+                    current.sign_request = value
+                        .as_bool()
+                        .ok_or_else(|| error(400, "INVALID_ARGUMENT"))?;
+                }
+            }
+            "idpConfig.idpEntityId" | "idpConfig.ssoUrl" | "idpConfig.idpCertificates" => {
+                let Some(idp) = body.get("idpConfig").and_then(Value::as_object) else {
+                    return Err(error(400, "INVALID_ARGUMENT"));
+                };
+                if field == "idpConfig.idpEntityId" {
+                    if let Some(value) = idp.get("idpEntityId") {
+                        current.idp_entity_id = value
+                            .as_str()
+                            .filter(|value| !value.is_empty())
+                            .map(str::to_owned)
+                            .ok_or_else(|| error(400, "INVALID_ARGUMENT"))?;
+                    }
+                }
+                if field == "idpConfig.ssoUrl" {
+                    if let Some(value) = idp.get("ssoUrl") {
+                        current.sso_url = value
+                            .as_str()
+                            .filter(|value| !value.is_empty())
+                            .map(str::to_owned)
+                            .ok_or_else(|| error(400, "INVALID_ARGUMENT"))?;
+                    }
+                }
+                if field == "idpConfig.idpCertificates" {
+                    if let Some(value) = idp.get("idpCertificates") {
+                        current.idp_certificates = parse_saml_certificates(value)?;
+                    }
+                }
+            }
+            "idpConfig.signRequest" => {
+                current.sign_request = nested_bool_default_false(body, "idpConfig", "signRequest")?;
+            }
+            "spConfig" | "spConfig.spEntityId" | "spConfig.callbackUri" => {
+                let Some(sp) = body.get("spConfig").and_then(Value::as_object) else {
+                    return Err(error(400, "INVALID_ARGUMENT"));
+                };
+                if field == "spConfig" || field == "spConfig.spEntityId" {
+                    if let Some(value) = sp.get("spEntityId") {
+                        current.sp_entity_id = value
+                            .as_str()
+                            .filter(|value| !value.is_empty())
+                            .map(str::to_owned)
+                            .ok_or_else(|| error(400, "INVALID_ARGUMENT"))?;
+                    }
+                }
+                if field == "spConfig" || field == "spConfig.callbackUri" {
+                    if let Some(value) = sp.get("callbackUri") {
+                        current.callback_uri = value
+                            .as_str()
+                            .filter(|value| !value.is_empty())
+                            .map(str::to_owned)
+                            .ok_or_else(|| error(400, "INVALID_ARGUMENT"))?;
+                    }
+                }
+            }
+            "name" => {}
+            _ => return Err(error(400, "INVALID_ARGUMENT")),
+        }
+    }
+    if current.idp_certificates.is_empty()
+        || !valid_url(&current.sso_url)
+        || !valid_url(&current.callback_uri)
+    {
+        return Err(error(400, "INVALID_ARGUMENT"));
+    }
+    Ok(current)
+}
+
+fn parse_saml_certificates(value: &Value) -> Result<Vec<String>, JsonResponse> {
+    let Some(values) = value.as_array() else {
+        return Err(error(400, "INVALID_ARGUMENT"));
+    };
+    values
+        .iter()
+        .map(|value| {
+            value
+                .get("x509Certificate")
+                .and_then(Value::as_str)
+                .filter(|value| !value.is_empty())
+                .map(str::to_owned)
+                .ok_or_else(|| error(400, "INVALID_ARGUMENT"))
+        })
+        .collect()
+}
+
+fn oidc_json(name: &str, config: &OidcProviderConfig) -> Value {
+    let mut body = json!({
+        "name": name,
+        "enabled": config.enabled,
+        "clientId": config.client_id,
+        "issuer": config.issuer,
+        "responseType": {
+            "idToken": config.response_type.id_token,
+            "code": config.response_type.code,
+            "token": config.response_type.token,
+        },
+    });
+    if let Some(display_name) = &config.display_name {
+        body["displayName"] = json!(display_name);
+    }
+    if let Some(client_secret) = &config.client_secret {
+        body["clientSecret"] = json!(client_secret);
+    }
+    body
+}
+
+fn saml_json(name: &str, config: &InboundSamlProviderConfig) -> Value {
+    let mut body = json!({
+        "name": name,
+        "enabled": config.enabled,
+        "idpConfig": {
+            "idpEntityId": config.idp_entity_id,
+            "ssoUrl": config.sso_url,
+            "idpCertificates": config.idp_certificates.iter().map(|certificate| json!({"x509Certificate": certificate})).collect::<Vec<_>>(),
+            "signRequest": config.sign_request,
+        },
+        "spConfig": {
+            "spEntityId": config.sp_entity_id,
+            "callbackUri": config.callback_uri,
+        },
+    });
+    if let Some(display_name) = &config.display_name {
+        body["displayName"] = json!(display_name);
+    }
+    body
+}
+
+fn tenant_metadata(body: &Value) -> Result<fireemu_core_auth::store::TenantMetadata, JsonResponse> {
+    let object = body
+        .as_object()
+        .ok_or_else(|| error(400, "INVALID_ARGUMENT"))?;
+    if object.keys().any(|key| {
+        !matches!(
+            key.as_str(),
+            "displayName"
+                | "allowPasswordSignup"
+                | "enableEmailLinkSignin"
+                | "enableAnonymousUser"
+                | "disableAuth"
+                | "client"
+                | "emailPrivacyConfig"
+                | "passwordPolicyConfig"
+        )
+    }) {
+        return Err(error(400, "INVALID_ARGUMENT"));
+    }
+    let display_name = match object.get("displayName") {
+        None => None,
+        Some(Value::String(value)) => Some(value.clone()),
+        Some(_) => return Err(error(400, "INVALID_ARGUMENT")),
+    };
+    let scalar_bool = |key: &str| match object.get(key) {
+        None => Ok(false),
+        Some(Value::Bool(value)) => Ok(*value),
+        Some(_) => Err(error(400, "INVALID_ARGUMENT")),
+    };
+    let client = match object.get("client") {
+        None => None,
+        Some(Value::Object(value)) => Some(value),
+        Some(_) => return Err(error(400, "INVALID_ARGUMENT")),
+    };
+    let permissions = match client {
+        None => None,
+        Some(client) => {
+            if client.keys().any(|key| key != "permissions") {
+                return Err(error(400, "INVALID_ARGUMENT"));
+            }
+            match client.get("permissions") {
+                Some(Value::Object(value)) => Some(value),
+                Some(_) | None => return Err(error(400, "INVALID_ARGUMENT")),
+            }
+        }
+    };
+    if permissions.is_some_and(|value| {
+        value
+            .keys()
+            .any(|key| key != "disabledUserSignup" && key != "disabledUserDeletion")
+    }) {
+        return Err(error(400, "INVALID_ARGUMENT"));
+    }
+    let nested_bool = |key: &str| match permissions.and_then(|value| value.get(key)) {
+        None => Ok(false),
+        Some(Value::Bool(value)) => Ok(*value),
+        Some(_) => Err(error(400, "INVALID_ARGUMENT")),
+    };
+    let privacy = match object.get("emailPrivacyConfig") {
+        None => None,
+        Some(Value::Object(value)) => Some(value),
+        Some(_) => return Err(error(400, "INVALID_ARGUMENT")),
+    };
+    if privacy.is_some_and(|value| value.keys().any(|key| key != "enableImprovedEmailPrivacy")) {
+        return Err(error(400, "INVALID_ARGUMENT"));
+    }
+    let improved_email_privacy =
+        match privacy.and_then(|value| value.get("enableImprovedEmailPrivacy")) {
+            None => false,
+            Some(Value::Bool(value)) => *value,
+            Some(_) => return Err(error(400, "INVALID_ARGUMENT")),
+        };
+    Ok(fireemu_core_auth::store::TenantMetadata {
+        display_name,
+        allow_password_signup: scalar_bool("allowPasswordSignup")?,
+        enable_email_link_signin: scalar_bool("enableEmailLinkSignin")?,
+        enable_anonymous_user: scalar_bool("enableAnonymousUser")?,
+        disable_auth: scalar_bool("disableAuth")?,
+        disabled_user_signup: nested_bool("disabledUserSignup")?,
+        disabled_user_deletion: nested_bool("disabledUserDeletion")?,
+        enable_improved_email_privacy: improved_email_privacy,
+    })
 }
 
 fn tenant_metadata_patch(
     body: &Value,
     query: Option<&str>,
 ) -> Result<fireemu_core_auth::store::TenantMetadataPatch, JsonResponse> {
-    const FIELDS: [&str; 5] = [
+    const FIELDS: [&str; 10] = [
         "displayName",
         "allowPasswordSignup",
         "enableEmailLinkSignin",
         "enableAnonymousUser",
         "disableAuth",
+        "client.permissions.disabledUserSignup",
+        "client.permissions.disabledUserDeletion",
+        "emailPrivacyConfig.enableImprovedEmailPrivacy",
+        "client.permissions",
+        "emailPrivacyConfig",
     ];
     let params = query_params(query);
     let fields: Vec<&str> = params.get("updateMask").map_or_else(
         || {
             FIELDS
                 .into_iter()
-                .filter(|field| body.get(*field).is_some())
+                .filter(|field| match *field {
+                    "client.permissions" => body
+                        .get("client")
+                        .and_then(|value| value.get("permissions"))
+                        .is_some_and(contains_non_null_value),
+                    "emailPrivacyConfig" => body
+                        .get("emailPrivacyConfig")
+                        .is_some_and(contains_non_null_value),
+                    field => body.get(field).is_some_and(contains_non_null_value),
+                })
                 .collect()
         },
         |mask| mask.split(',').filter(|field| !field.is_empty()).collect(),
     );
-    if fields.iter().any(|field| !FIELDS.contains(field)) {
+    if fields
+        .iter()
+        .any(|field| !FIELDS.contains(field) && !valid_password_policy_field(field))
+    {
         return Err(error(400, "INVALID_ARGUMENT"));
     }
     let mut patch = fireemu_core_auth::store::TenantMetadataPatch::default();
@@ -2525,10 +5826,57 @@ fn tenant_metadata_patch(
                 patch.enable_anonymous_user = Some(bool_update(body, field)?);
             }
             "disableAuth" => patch.disable_auth = Some(bool_update(body, field)?),
+            "client.permissions.disabledUserSignup" => {
+                patch.disabled_user_signup = Some(nested_bool_default_false_path(
+                    body,
+                    &["client", "permissions", "disabledUserSignup"],
+                )?);
+            }
+            "client.permissions.disabledUserDeletion" => {
+                patch.disabled_user_deletion = Some(nested_bool_default_false_path(
+                    body,
+                    &["client", "permissions", "disabledUserDeletion"],
+                )?);
+            }
+            "emailPrivacyConfig.enableImprovedEmailPrivacy" | "emailPrivacyConfig" => {
+                patch.enable_improved_email_privacy = Some(nested_bool_default_false_path(
+                    body,
+                    &["emailPrivacyConfig", "enableImprovedEmailPrivacy"],
+                )?);
+            }
+            "client.permissions" => {
+                patch.disabled_user_signup = Some(nested_bool_default_false_path(
+                    body,
+                    &["client", "permissions", "disabledUserSignup"],
+                )?);
+                patch.disabled_user_deletion = Some(nested_bool_default_false_path(
+                    body,
+                    &["client", "permissions", "disabledUserDeletion"],
+                )?);
+            }
+            field if valid_password_policy_field(field) => {}
             _ => unreachable!("tenant update mask was validated"),
         }
     }
     Ok(patch)
+}
+
+fn nested_bool_default_false_path(body: &Value, path: &[&str]) -> Result<bool, JsonResponse> {
+    let mut value = body;
+    for key in &path[..path.len().saturating_sub(1)] {
+        value = match value.get(*key) {
+            None | Some(Value::Null) => return Ok(false),
+            Some(value) => value,
+        };
+        if !value.is_object() {
+            return Err(error(400, "INVALID_ARGUMENT"));
+        }
+    }
+    match value.get(path[path.len() - 1]) {
+        Some(Value::Bool(value)) => Ok(*value),
+        None | Some(Value::Null) => Ok(false),
+        Some(_) => Err(error(400, "INVALID_ARGUMENT")),
+    }
 }
 
 fn bool_update(body: &Value, field: &str) -> Result<bool, JsonResponse> {
@@ -2551,10 +5899,160 @@ fn tenant_json(
         "enableEmailLinkSignin": metadata.enable_email_link_signin,
         "enableAnonymousUser": metadata.enable_anonymous_user,
         "disableAuth": metadata.disable_auth,
+        "client": {"permissions": {
+            "disabledUserSignup": metadata.disabled_user_signup,
+            "disabledUserDeletion": metadata.disabled_user_deletion,
+        }},
+        "emailPrivacyConfig": {
+            "enableImprovedEmailPrivacy": metadata.enable_improved_email_privacy,
+        },
         "mfaConfig": {"state": "DISABLED", "enabledProviders": []},
     })
 }
 
+fn tenant_json_with_policy(
+    project: &str,
+    tenant: &str,
+    metadata: &fireemu_core_auth::store::TenantMetadata,
+    policy: &PasswordPolicy,
+) -> Value {
+    let mut result = tenant_json(project, tenant, metadata);
+    result["passwordPolicyConfig"] = project_config_json_with_password_policy(
+        fireemu_core_auth::store::ProjectAuthConfig::default(),
+        policy,
+    )["passwordPolicyConfig"]
+        .clone();
+    result
+}
+
+fn tenant_client_config_patch(body: &Value) -> fireemu_core_auth::store::TenantMetadataPatch {
+    let disabled_user_signup = body
+        .get("client")
+        .and_then(|client| client.get("permissions"))
+        .and_then(|permissions| permissions.get("disabledUserSignup"))
+        .and_then(Value::as_bool);
+    let disabled_user_deletion = body
+        .get("client")
+        .and_then(|client| client.get("permissions"))
+        .and_then(|permissions| permissions.get("disabledUserDeletion"))
+        .and_then(Value::as_bool);
+    let enable_improved_email_privacy = body
+        .get("emailPrivacyConfig")
+        .and_then(|config| config.get("enableImprovedEmailPrivacy"))
+        .and_then(Value::as_bool);
+    fireemu_core_auth::store::TenantMetadataPatch {
+        disabled_user_signup,
+        disabled_user_deletion,
+        enable_improved_email_privacy,
+        ..Default::default()
+    }
+}
+
+fn validate_tenant_update_payload(body: &Value) -> Result<(), JsonResponse> {
+    const FIELDS: [&str; 9] = [
+        "tenantId",
+        "displayName",
+        "allowPasswordSignup",
+        "enableEmailLinkSignin",
+        "enableAnonymousUser",
+        "disableAuth",
+        "client",
+        "emailPrivacyConfig",
+        "passwordPolicyConfig",
+    ];
+    let object = body
+        .as_object()
+        .ok_or_else(|| error(400, "INVALID_ARGUMENT"))?;
+    if object.keys().any(|field| !FIELDS.contains(&field.as_str())) {
+        return Err(error(400, "INVALID_ARGUMENT"));
+    }
+
+    if object
+        .get("tenantId")
+        .is_some_and(|value| !value.is_null() && value.as_str().is_none_or(str::is_empty))
+    {
+        return Err(error(400, "INVALID_ARGUMENT"));
+    }
+    if object
+        .get("displayName")
+        .is_some_and(|value| !value.is_string() && !value.is_null())
+    {
+        return Err(error(400, "INVALID_ARGUMENT"));
+    }
+    for field in [
+        "allowPasswordSignup",
+        "enableEmailLinkSignin",
+        "enableAnonymousUser",
+        "disableAuth",
+    ] {
+        if object
+            .get(field)
+            .is_some_and(|value| !value.is_boolean() && !value.is_null())
+        {
+            return Err(error(400, "INVALID_ARGUMENT"));
+        }
+    }
+
+    if let Some(value) = object.get("client") {
+        if !value.is_null() {
+            let client = value
+                .as_object()
+                .ok_or_else(|| error(400, "INVALID_ARGUMENT"))?;
+            if client.keys().any(|field| field != "permissions") {
+                return Err(error(400, "INVALID_ARGUMENT"));
+            }
+            if let Some(permissions) = client.get("permissions") {
+                if !permissions.is_null() {
+                    let permissions = permissions
+                        .as_object()
+                        .ok_or_else(|| error(400, "INVALID_ARGUMENT"))?;
+                    if permissions.keys().any(|field| {
+                        field != "disabledUserSignup" && field != "disabledUserDeletion"
+                    }) {
+                        return Err(error(400, "INVALID_ARGUMENT"));
+                    }
+                    for field in ["disabledUserSignup", "disabledUserDeletion"] {
+                        if permissions
+                            .get(field)
+                            .is_some_and(|value| !value.is_boolean() && !value.is_null())
+                        {
+                            return Err(error(400, "INVALID_ARGUMENT"));
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    if let Some(value) = object.get("emailPrivacyConfig") {
+        if !value.is_null() {
+            let privacy = value
+                .as_object()
+                .ok_or_else(|| error(400, "INVALID_ARGUMENT"))?;
+            if privacy
+                .keys()
+                .any(|field| field != "enableImprovedEmailPrivacy")
+            {
+                return Err(error(400, "INVALID_ARGUMENT"));
+            }
+            if privacy
+                .get("enableImprovedEmailPrivacy")
+                .is_some_and(|value| !value.is_boolean() && !value.is_null())
+            {
+                return Err(error(400, "INVALID_ARGUMENT"));
+            }
+        }
+    }
+
+    if let Some(value) = object.get("passwordPolicyConfig") {
+        if !value.is_null() {
+            password_policy_from_config_json(value)?;
+        }
+    }
+    Ok(())
+}
+
+#[allow(clippy::too_many_lines)]
 fn tenant_management(
     state: &AuthState,
     handler: routes::Handler,
@@ -2572,13 +6070,32 @@ fn tenant_management(
     };
     match handler {
         Handler::TenantCreate => {
-            let metadata = tenant_metadata(body);
-            let Some(tenant) = registry.create_tenant(project, metadata.clone()) else {
-                return error(400, "INVALID_PROJECT_ID");
+            let metadata = match tenant_metadata(body) {
+                Ok(metadata) => metadata,
+                Err(response) => return response,
+            };
+            let password_policy = match body.get("passwordPolicyConfig") {
+                None => None,
+                Some(value) => match password_policy_from_config_json(value) {
+                    Ok(policy) => Some(policy),
+                    Err(response) => return response,
+                },
+            };
+            let Some((tenant, metadata, policy)) = registry.create_tenant_with_password_policy(
+                project,
+                metadata,
+                tenant_client_config_patch(body),
+                password_policy,
+            ) else {
+                return if registry.store_for(project).is_some() {
+                    error(500, "INTERNAL")
+                } else {
+                    error(400, "INVALID_PROJECT_ID")
+                };
             };
             JsonResponse {
                 status: 200,
-                body: tenant_json(project, &tenant, &metadata),
+                body: tenant_json_with_policy(project, &tenant, &metadata, &policy),
             }
         }
         Handler::TenantList => {
@@ -2599,9 +6116,15 @@ fn tenant_management(
             let tenants: Vec<Value> = ids
                 .iter()
                 .filter_map(|id| {
-                    registry
-                        .tenant_metadata(project, id)
-                        .map(|metadata| tenant_json(project, id, &metadata))
+                    let metadata = registry.tenant_metadata(project, id)?;
+                    let store = registry.tenant_store(project, id)?;
+                    let store = store.lock().ok()?;
+                    Some(tenant_json_with_policy(
+                        project,
+                        id,
+                        &metadata,
+                        store.password_policy(),
+                    ))
                 })
                 .collect();
             let next = has_more.then(|| ids.last().cloned()).flatten();
@@ -2617,25 +6140,99 @@ fn tenant_management(
             let Some(metadata) = registry.tenant_metadata(project, tenant) else {
                 return error(404, "TENANT_NOT_FOUND");
             };
+            let Some(store) = registry.tenant_store(project, tenant) else {
+                return error(404, "TENANT_NOT_FOUND");
+            };
+            let Ok(store) = store.lock() else {
+                return error(500, "INTERNAL");
+            };
             JsonResponse {
                 status: 200,
-                body: tenant_json(project, tenant, &metadata),
+                body: tenant_json_with_policy(project, tenant, &metadata, store.password_policy()),
             }
         }
         Handler::TenantUpdate => {
             let Some(tenant) = tenant else {
                 return error(400, "INVALID_TENANT_ID");
             };
+            if let Err(response) = validate_tenant_update_payload(body) {
+                return response;
+            }
+            let fields = match update_mask(query) {
+                Ok(Some(fields)) => fields,
+                Ok(None) => {
+                    let mut fields = Vec::new();
+                    for field in [
+                        "displayName",
+                        "allowPasswordSignup",
+                        "enableEmailLinkSignin",
+                        "enableAnonymousUser",
+                        "disableAuth",
+                    ] {
+                        if body.get(field).is_some() {
+                            fields.push(field.to_owned());
+                        }
+                    }
+                    if body
+                        .get("client")
+                        .and_then(|value| value.get("permissions"))
+                        .is_some()
+                    {
+                        fields.push("client.permissions".to_owned());
+                    }
+                    if body.get("emailPrivacyConfig").is_some() {
+                        fields.push("emailPrivacyConfig".to_owned());
+                    }
+                    // A message-level ProtoJSON null is absent when no update mask selects it.
+                    // An explicit mask still reaches `password_policy_from_update` and can
+                    // clear the policy.
+                    if body
+                        .get("passwordPolicyConfig")
+                        .is_some_and(contains_non_null_value)
+                    {
+                        fields.push("passwordPolicyConfig".to_owned());
+                    }
+                    fields
+                }
+                Err(response) => return response,
+            };
+            if fields.iter().any(|field| {
+                field.starts_with("passwordPolicyConfig") && !valid_password_policy_field(field)
+            }) {
+                return error(400, "INVALID_ARGUMENT");
+            }
+            let current_policy = if fields.iter().any(|field| {
+                field == "passwordPolicyConfig" || field.starts_with("passwordPolicyConfig.")
+            }) {
+                let Some(store) = registry.tenant_store(project, tenant) else {
+                    return error(404, "TENANT_NOT_FOUND");
+                };
+                let Ok(store) = store.lock() else {
+                    return error(500, "INTERNAL");
+                };
+                Some(store.password_policy().clone())
+            } else {
+                None
+            };
+            let password_policy = match current_policy {
+                Some(current) => match password_policy_from_update(&current, body, &fields) {
+                    Ok(policy) => policy,
+                    Err(response) => return response,
+                },
+                None => None,
+            };
             let patch = match tenant_metadata_patch(body, query) {
                 Ok(patch) => patch,
                 Err(response) => return response,
             };
-            let Some(metadata) = registry.patch_tenant(project, tenant, patch) else {
+            let Some((metadata, policy)) =
+                registry.patch_tenant_with_password_policy(project, tenant, patch, password_policy)
+            else {
                 return error(404, "TENANT_NOT_FOUND");
             };
             JsonResponse {
                 status: 200,
-                body: tenant_json(project, tenant, &metadata),
+                body: tenant_json_with_policy(project, tenant, &metadata, &policy),
             }
         }
         Handler::TenantDelete => {
@@ -2672,6 +6269,9 @@ fn tenant_policy_denial_with_metadata(
             | routes::Handler::SignInWithPhoneNumber
             | routes::Handler::SignInWithIdp
             | routes::Handler::MfaSignInFinalize
+            | routes::Handler::Lookup
+            | routes::Handler::SendOobCode
+            | routes::Handler::ResetPassword
     );
     if metadata.disable_auth && authenticates {
         return Some(error(400, "PROJECT_DISABLED"));
@@ -2682,8 +6282,23 @@ fn tenant_policy_denial_with_metadata(
     if handler == routes::Handler::SignInWithEmailLink && !metadata.enable_email_link_signin {
         return Some(error(400, "OPERATION_NOT_ALLOWED"));
     }
+    if matches!(
+        handler,
+        routes::Handler::SendOobCode | routes::Handler::ResetPassword
+    ) {
+        let password_operation = handler == routes::Handler::ResetPassword
+            || body.get("requestType").and_then(Value::as_str) == Some("PASSWORD_RESET");
+        if password_operation && !metadata.allow_password_signup {
+            return Some(error(400, "OPERATION_NOT_ALLOWED"));
+        }
+        let email_link_operation =
+            body.get("requestType").and_then(Value::as_str) == Some("EMAIL_SIGNIN");
+        if email_link_operation && !metadata.enable_email_link_signin {
+            return Some(error(400, "OPERATION_NOT_ALLOWED"));
+        }
+    }
     if handler == routes::Handler::SignUp {
-        let links_existing_user = body.get("idToken").is_some();
+        let links_existing_user = body.get("idToken").is_some_and(|value| !value.is_null());
         let has_password = str_field(body, "password").is_some();
         let has_email = str_field(body, "email").is_some();
         if has_password && !links_existing_user && !metadata.allow_password_signup {
@@ -2696,10 +6311,81 @@ fn tenant_policy_denial_with_metadata(
     None
 }
 
+fn end_user_client_permission_denial(
+    handler: routes::Handler,
+    store: &AuthStore,
+    body: &Value,
+    at: LogicalInstant,
+) -> Option<JsonResponse> {
+    if !store.allows_user_signup(AuthPrincipal::EndUser)
+        && request_may_create_end_user(handler, store, body, at)
+    {
+        return Some(auth_error(&AuthError::UserSignupDisabled));
+    }
+    None
+}
+
+fn request_may_create_end_user(
+    handler: routes::Handler,
+    store: &AuthStore,
+    body: &Value,
+    at: LogicalInstant,
+) -> bool {
+    match handler {
+        routes::Handler::SignUp => body.get("idToken").is_none_or(Value::is_null),
+        routes::Handler::SignInWithCustomToken => {
+            custom_token_uid(body).is_some_and(|uid| store.user_by_id(&uid).is_none())
+        }
+        routes::Handler::SignInWithEmailLink => {
+            body.get("idToken").is_none_or(Value::is_null)
+                && str_field(body, "email")
+                    .map(canonicalize_email)
+                    .is_some_and(|email| store.user_by_email(&email).is_none())
+        }
+        routes::Handler::SignInWithPhoneNumber => {
+            if body.get("idToken").is_some_and(|value| !value.is_null()) {
+                return false;
+            }
+            let (Some(session), Some(code)) =
+                (str_field(body, "sessionInfo"), str_field(body, "code"))
+            else {
+                return false;
+            };
+            store
+                .check_phone_code(session, code, at)
+                .ok()
+                .is_some_and(|verified| store.user_by_phone(&verified.phone_number).is_none())
+        }
+        routes::Handler::SignInWithIdp => {
+            if body.get("idToken").is_some_and(|value| !value.is_null()) {
+                return false;
+            }
+            let Ok(resolved) = resolve_idp_credential(body) else {
+                return false;
+            };
+            if store
+                .user_by_federated(&resolved.provider_id, &resolved.info.raw_id)
+                .is_some()
+            {
+                return false;
+            }
+            store.config().allow_duplicate_emails
+                || resolved
+                    .info
+                    .email
+                    .as_deref()
+                    .and_then(|email| store.user_by_email(email))
+                    .is_none()
+        }
+        _ => false,
+    }
+}
+
 /// The store a request is for. Project-scoped routes (Admin SDK, emulator inspection)
 /// name their project; client SDK routes of a session project are recognised by the API
 /// key the session declared, by the audience of the ID token they carry, or by the store
 /// that issued their refresh token; everything else is the default project's.
+#[allow(clippy::too_many_lines)]
 fn select_store(
     state: &AuthState,
     path: &str,
@@ -2707,55 +6393,35 @@ fn select_store(
     body: &Value,
     resolution: routes::Resolution<'_>,
 ) -> Result<Arc<Mutex<AuthStore>>, JsonResponse> {
-    let Some(registry) = &state.registry else {
-        return Ok(state.store.clone());
-    };
-    if let Some((project, tenant)) = routes::scoped_target(path) {
-        return Ok(tenant
-            .and_then(|tenant| registry.tenant_store(project, tenant))
-            .or_else(|| registry.store_for(project))
-            .or_else(|| registry.routed_store_for(project))
-            .unwrap_or_else(|| state.store.clone()));
+    let (api_key, query_tenant) = query_selectors(query)?;
+    let query_body_scope = state.query_limits == AuthQueryLimits::ProductionBounded
+        && matches!(
+            resolution,
+            routes::Resolution::Matched { route, .. }
+                if route.handler == routes::Handler::AdminQuery
+        );
+    if query_body_scope
+        && body
+            .get("tenantId")
+            .is_some_and(|value| !value.is_null() && !value.is_string())
+    {
+        return Err(error(400, "INVALID_ARGUMENT : tenantId must be a string"));
     }
-    let (api_key, query_tenant) = query_selectors(query);
-    if let Some(key) = api_key.as_deref() {
-        let project = state
-            .tenancy
-            .as_ref()
-            .and_then(|t| t.read().ok())
-            .and_then(|t| t.project_of_api_key(key).map(str::to_owned));
-        if let Some(project) = project {
-            let tenant = str_field(body, "tenantId").or(query_tenant.as_deref());
-            if let Some(store) = tenant
-                .and_then(|tenant| registry.tenant_store(&project, tenant))
-                .or_else(|| registry.store_for(&project))
-            {
-                return Ok(store);
-            }
+    let body_tenant = str_field(body, "tenantId");
+    if let Some((body_tenant, query_tenant)) = body_tenant.as_ref().zip(query_tenant.as_ref()) {
+        if body_tenant != query_tenant {
+            return Err(error(400, "TENANT_ID_MISMATCH"));
         }
     }
-    let exchanges_custom_token = matches!(
-        resolution,
-        routes::Resolution::Matched { route, .. }
-            if route.handler == routes::Handler::SignInWithCustomToken
-    );
-    if state.allow_routed_projects && exchanges_custom_token {
-        if let Some(uid) = custom_token_uid(body) {
-            use fireemu_core_auth::store::CompatibilityUserStoreMatch;
-
-            match registry.compatibility_store_for_unique_user(&uid) {
-                CompatibilityUserStoreMatch::Unique(store) => return Ok(store),
-                CompatibilityUserStoreMatch::Ambiguous => {
-                    return Err(error(400, "INVALID_CUSTOM_TOKEN"));
-                }
-                CompatibilityUserStoreMatch::Unavailable => return Err(error(500, "INTERNAL")),
-                CompatibilityUserStoreMatch::NotFound => {}
-            }
+    let requested_tenant = body_tenant.or(query_tenant.as_deref());
+    if let Some((_, Some(path_tenant))) = routes::scoped_target(path) {
+        if requested_tenant.is_some_and(|requested| requested != path_tenant) {
+            return Err(error(400, "TENANT_ID_MISMATCH"));
         }
     }
-    if let Some(token) = str_field(body, "idToken") {
+    let id_token_target = str_field(body, "idToken").and_then(|token| {
         let signer = state.store.lock().ok().and_then(|s| s.signer_arc());
-        let target = fireemu_core_auth::jwt::decode_token(token, signer.as_deref())
+        fireemu_core_auth::jwt::decode_token(token, signer.as_deref())
             .ok()
             .and_then(|d| {
                 let audience = d
@@ -2770,16 +6436,185 @@ fn select_store(
                     .and_then(fireemu_core_types::json::JsonValue::as_str)
                     .map(str::to_owned);
                 Some((audience, tenant))
-            });
-        if let Some((project, tenant)) = target {
-            if let Some(store) = tenant
+            })
+    });
+    let exchanges_custom_token = matches!(
+        resolution,
+        routes::Resolution::Matched { route, .. }
+            if route.handler == routes::Handler::SignInWithCustomToken
+    );
+    let exchanges_refresh_token = matches!(
+        resolution,
+        routes::Resolution::Matched { route, .. }
+            if route.handler == routes::Handler::Token
+    );
+    if exchanges_custom_token {
+        // A selected tenant is an explicit namespace assertion, whether it came from the query
+        // or the request body. A valid custom token without a tenant claim is project-scoped and
+        // must not be silently rebound to the requested tenant; malformed tokens are left to the
+        // normal handler for its existing error shape.
+        if let Some(requested_tenant) = requested_tenant {
+            let token_mismatches = match custom_token_tenant(body) {
+                Some(CustomTokenTenant::ProjectScoped) => true,
+                Some(CustomTokenTenant::Tenant(token_tenant)) => token_tenant != requested_tenant,
+                None => false,
+            };
+            if token_mismatches {
+                return Err(error(400, "TENANT_ID_MISMATCH"));
+            }
+        }
+    }
+    if let Some((_, token_tenant)) = id_token_target.as_ref() {
+        if query_tenant
+            .as_ref()
+            .is_some_and(|requested| token_tenant.as_deref() != Some(requested.as_str()))
+        {
+            // A query tenant is an explicit namespace assertion. Do not let a tenant
+            // embedded in the ID token override it, and do not let a project-scoped token
+            // silently fall back to the project store for a tenant request.
+            return Err(error(400, "TENANT_ID_MISMATCH"));
+        }
+    }
+    let Some(registry) = &state.registry else {
+        if requested_tenant.is_some()
+            || routes::scoped_target(path).is_some_and(|(_, tenant)| tenant.is_some())
+        {
+            return Err(error(
+                if body_tenant.is_some() { 400 } else { 404 },
+                "TENANT_NOT_FOUND",
+            ));
+        }
+        return Ok(state.store.clone());
+    };
+    if let Some((project, tenant)) = routes::scoped_target(path) {
+        if let Some(tenant) = tenant {
+            let Some(store) = registry.tenant_store(project, tenant) else {
+                return Err(error(404, "TENANT_NOT_FOUND"));
+            };
+            return Ok(store);
+        }
+        // Administrator query accepts its tenant selector in the JSON body as well.
+        // Do not route a tenant query into the default project store. Other handlers
+        // retain their existing selector rules; path/body/query conflicts were checked above.
+        let selected_tenant =
+            query_tenant
                 .as_deref()
-                .and_then(|tenant| registry.tenant_store(&project, tenant))
-                .or_else(|| registry.store_for(&project))
-                .or_else(|| registry.routed_store_for(&project))
-            {
+                .or(if query_body_scope { body_tenant } else { None });
+        if let Some(selected_tenant) = selected_tenant {
+            let Some(store) = registry.tenant_store(project, selected_tenant) else {
+                return Err(error(404, "TENANT_NOT_FOUND"));
+            };
+            return Ok(store);
+        }
+        return Ok(registry
+            .store_for(project)
+            .or_else(|| registry.routed_store_for(project))
+            .unwrap_or_else(|| state.store.clone()));
+    }
+    if exchanges_refresh_token && query_tenant.is_some() {
+        if let Some(token) = str_field(body, "refresh_token") {
+            use fireemu_core_auth::store::RefreshTokenStoreMatch;
+
+            if let RefreshTokenStoreMatch::Unique(store) = registry.store_for_refresh_token(token) {
+                let token_tenant = store
+                    .lock()
+                    .ok()
+                    .and_then(|store| store.tenant_id().map(str::to_owned));
+                if token_tenant.as_deref() != query_tenant.as_deref() {
+                    return Err(error(400, "TENANT_ID_MISMATCH"));
+                }
+            }
+        }
+    }
+    if let Some(key) = api_key.as_deref() {
+        // A registry without a tenancy selector is the single-namespace adapter/test
+        // configuration. It has no API-key ownership map to consult, so retain the historical
+        // default-store behavior for compatibility keys such as the emulator's fake key.
+        let selected_project = match state.tenancy.as_ref() {
+            None => None,
+            Some(tenancy) => {
+                let Ok(tenancy) = tenancy.read() else {
+                    return Err(error(500, "INTERNAL"));
+                };
+                match tenancy.project_of_api_key(key).map(str::to_owned) {
+                    Some(project) => Some(project),
+                    None if tenancy.registered().is_empty() || tenancy.is_default_api_key(key) => {
+                        None
+                    }
+                    None => {
+                        // An explicit API-key selector is an assertion about the target
+                        // project. Never silently route an unknown key to the default namespace.
+                        return Err(invalid_api_key(if exchanges_refresh_token {
+                            "securetoken.googleapis.com"
+                        } else {
+                            "identitytoolkit.googleapis.com"
+                        }));
+                    }
+                }
+            }
+        };
+        if let Some(tenant) = requested_tenant {
+            let project = selected_project
+                .as_deref()
+                .unwrap_or_else(|| registry.default_project());
+            let Some(store) = registry.tenant_store(project, tenant) else {
+                return Err(error(404, "TENANT_NOT_FOUND"));
+            };
+            return Ok(store);
+        }
+        if exchanges_refresh_token {
+            // The Web SDK renews a tenant session on securetoken with the API key alone
+            // (`requestStsToken` never sends `tenantId`; the securetoken API has no such
+            // parameter). The refresh token encodes its issuing namespace, so a token minted
+            // by a tenant of the key's project selects that tenant store. A token of another
+            // project, a legacy or unowned token, and a deleted tenant's token keep falling
+            // through to the project store, where the existing refusal applies.
+            if let Some(store) = tenant_store_issuing_refresh_token(
+                registry,
+                selected_project
+                    .as_deref()
+                    .unwrap_or_else(|| registry.default_project()),
+                body,
+            )? {
                 return Ok(store);
             }
+        }
+        let Some(project) = selected_project else {
+            // With no registered tenancy sessions, preserve the historical fake-key behavior for
+            // the default namespace. An explicit tenant above still had to resolve through the
+            // registry, so it can never silently land in this store.
+            return Ok(state.store.clone());
+        };
+        let Some(store) = registry
+            .store_for(&project)
+            .or_else(|| registry.routed_store_for(&project))
+        else {
+            return Err(error(400, "INVALID_PROJECT_ID"));
+        };
+        return Ok(store);
+    }
+    if state.allow_routed_projects && exchanges_custom_token {
+        if let Some(uid) = custom_token_uid(body) {
+            use fireemu_core_auth::store::CompatibilityUserStoreMatch;
+
+            match registry.compatibility_store_for_unique_user(&uid) {
+                CompatibilityUserStoreMatch::Unique(store) => return Ok(store),
+                CompatibilityUserStoreMatch::Ambiguous => {
+                    return Err(error(400, "INVALID_CUSTOM_TOKEN"));
+                }
+                CompatibilityUserStoreMatch::Unavailable => return Err(error(500, "INTERNAL")),
+                CompatibilityUserStoreMatch::NotFound => {}
+            }
+        }
+    }
+    if let Some((project, tenant)) = id_token_target {
+        if let Some(store) = tenant
+            .as_deref()
+            .and_then(|tenant| registry.tenant_store(&project, tenant))
+            .or_else(|| registry.store_for(&project))
+            .or_else(|| registry.routed_store_for(&project))
+        {
+            return Ok(store);
         }
     }
     if let Some(token) = str_field(body, "refresh_token") {
@@ -2794,30 +6629,75 @@ fn select_store(
             RefreshTokenStoreMatch::NotFound => {}
         }
     }
-    if let Some(tenant) = str_field(body, "tenantId").or(query_tenant.as_deref()) {
-        if let Some(store) = registry.tenant_store(registry.default_project(), tenant) {
-            return Ok(store);
-        }
+    if let Some(tenant) = body_tenant.or(query_tenant.as_deref()) {
+        let Some(store) = registry.tenant_store(registry.default_project(), tenant) else {
+            // Preserve the client-body tenant error shape while refusing to route an
+            // unknown query tenant to the default project namespace.
+            return Err(error(
+                if body_tenant.is_some() { 400 } else { 404 },
+                "TENANT_NOT_FOUND",
+            ));
+        };
+        return Ok(store);
     }
     Ok(state.store.clone())
+}
+
+/// The tenant store of `project` that issued the request's `refresh_token`, when the token
+/// names one; `None` for project-scoped, foreign-project, legacy and unowned tokens.
+fn tenant_store_issuing_refresh_token(
+    registry: &fireemu_core_auth::store::AuthRegistry,
+    project: &str,
+    body: &Value,
+) -> Result<Option<Arc<Mutex<AuthStore>>>, JsonResponse> {
+    use fireemu_core_auth::store::RefreshTokenStoreMatch;
+
+    let Some(token) = str_field(body, "refresh_token") else {
+        return Ok(None);
+    };
+    let store = match registry.store_for_refresh_token(token) {
+        RefreshTokenStoreMatch::Unique(store) => store,
+        RefreshTokenStoreMatch::Unavailable => return Err(error(500, "INTERNAL")),
+        RefreshTokenStoreMatch::Ambiguous | RefreshTokenStoreMatch::NotFound => return Ok(None),
+    };
+    let issued_by_tenant_of_project = match store.lock() {
+        Ok(issuer) => issuer.tenant_id().is_some() && issuer.project_id() == project,
+        Err(_) => return Err(error(500, "INTERNAL")),
+    };
+    Ok(issued_by_tenant_of_project.then_some(store))
 }
 
 /// The API key (`key`, or the action link's `apiKey`) and the action link's `tenantId` a
 /// query carries, decoded. Keys are declared from [A-Za-z0-9._-], but a client may still
 /// percent-encode them.
-fn query_selectors(query: Option<&str>) -> (Option<String>, Option<String>) {
+fn query_selectors(query: Option<&str>) -> Result<(Option<String>, Option<String>), JsonResponse> {
     let decode = |value: &str| {
         fireemu_core_types::codec::percent_decode(value, fireemu_core_types::codec::PlusMode::Space)
     };
-    let find = |names: &[&str]| {
-        query
-            .and_then(|q| {
-                q.split('&')
-                    .find_map(|kv| names.iter().find_map(|name| kv.strip_prefix(name)))
-            })
-            .map(decode)
-    };
-    (find(&["key=", "apiKey="]), find(&["tenantId="]))
+    let mut api_key = None;
+    let mut tenant = None;
+    for kv in query.unwrap_or("").split('&').filter(|kv| !kv.is_empty()) {
+        let Some((name, value)) = kv.split_once('=') else {
+            if matches!(decode(kv).as_str(), "key" | "apiKey" | "tenantId") {
+                return Err(error(400, "INVALID_ARGUMENT"));
+            }
+            continue;
+        };
+        let decoded_name = decode(name);
+        let slot = match decoded_name.as_str() {
+            "key" | "apiKey" => &mut api_key,
+            "tenantId" => &mut tenant,
+            _ => continue,
+        };
+        if value.is_empty() || malformed_query_component(name) || malformed_query_component(value) {
+            return Err(error(400, "INVALID_ARGUMENT"));
+        }
+        if slot.is_some() {
+            return Err(error(400, "INVALID_ARGUMENT"));
+        }
+        *slot = Some(decode(value));
+    }
+    Ok((api_key, tenant))
 }
 
 fn custom_token_uid(body: &Value) -> Option<String> {
@@ -2839,9 +6719,37 @@ fn custom_token_uid(body: &Value) -> Option<String> {
         })
 }
 
+/// Returns the tenant scope of a syntactically valid custom token. `None` means that the token is
+/// absent or malformed, so the normal sign-in handler retains responsibility for its existing
+/// validation error. A valid project-scoped token is represented separately from a tenant token
+/// for query-tenant assertions.
+enum CustomTokenTenant {
+    /// A valid custom token without a tenant claim.
+    ProjectScoped,
+    /// A valid custom token carrying a tenant claim.
+    Tenant(String),
+}
+
+fn custom_token_tenant(body: &Value) -> Option<CustomTokenTenant> {
+    let token = str_field(body, "token")?;
+    let payload = if token.trim_start().starts_with('{') {
+        fireemu_core_types::json::parse(token).ok()?
+    } else {
+        let decoded = fireemu_core_auth::jwt::decode_unsigned(token).ok()?;
+        (decoded.payload.get("aud").and_then(JsonValue::as_str) == Some(CUSTOM_TOKEN_AUDIENCE))
+            .then_some(decoded.payload)?
+    };
+    match payload.get("tenant_id") {
+        None => Some(CustomTokenTenant::ProjectScoped),
+        Some(JsonValue::String(tenant)) => Some(CustomTokenTenant::Tenant(tenant.clone())),
+        Some(_) => None,
+    }
+}
+
 /// `accounts:signUp`: a password user when an email or a password is present (both are then
 /// required, the email first, as the official emulator checks them), otherwise an anonymous
 /// user. `localId` is an Admin-only parameter on this route.
+#[allow(clippy::too_many_lines)]
 fn sign_up(
     store: &mut AuthStore,
     body: &Value,
@@ -2851,8 +6759,21 @@ fn sign_up(
     if body.get("localId").is_some_and(|v| !v.is_null()) {
         return error(400, "UNEXPECTED_PARAMETER : User ID");
     }
-    let email = str_field(body, "email");
-    let password = str_field(body, "password");
+    // `str_field` ignores a non-string the way the assignment below does: this guard adds a
+    // refusal for control characters, not a new type refusal.
+    if let Some(name) = str_field(body, "displayName") {
+        if let Err(r) = reject_control_characters(name, "displayName") {
+            return r;
+        }
+    }
+    let email = match opt_str(body, "email") {
+        Ok(email) => email,
+        Err(r) => return r,
+    };
+    let password = match opt_str(body, "password") {
+        Ok(password) => password,
+        Err(r) => return r,
+    };
     // With an `idToken` the request upgrades that session's account (the client SDK's
     // `linkWithCredential` for an email credential) instead of creating one.
     let has_session = body.get("idToken").is_some_and(|t| !t.is_null());
@@ -2867,25 +6788,30 @@ fn sign_up(
     } else {
         NewUser::anonymous()
     };
-    // Validated before the account exists: a rejected password leaves no user behind.
-    if let Some(password) = password {
-        if let Err(e) = AuthStore::validate_password(password) {
-            return auth_error(&e);
-        }
-    }
-    let uid = if has_session {
-        let uid = match verify(store, body, at) {
+    let (uid, created_new) = if has_session {
+        let uid = match verify_honouring_legacy(store, body, at) {
             Ok(uid) => uid,
             Err(r) => return r,
         };
+        // Authenticate the session before evaluating a supplied password. This keeps invalid,
+        // expired, or cross-session tokens from being classified as password-policy failures.
+        if let Some(password) = password {
+            if let Err(e) = store.validate_password_for(
+                fireemu_core_auth::password_policy::Operation::Registration,
+                password,
+            ) {
+                return auth_error(&e);
+            }
+        }
         let Some(email) = new_user.email.as_deref() else {
             return error(400, "MISSING_EMAIL");
         };
-        if !store.config().allow_duplicate_emails
-            && store
-                .user_by_email(email)
-                .is_some_and(|u| u.local_id != uid)
-        {
+        // The upgrade always gives the account a password, so another password account on
+        // the address refuses it even in duplicate-email mode (closure re-review 2026-09-24).
+        if store.users_by_email(email).iter().any(|u| {
+            u.local_id != uid
+                && (!store.config().allow_duplicate_emails || store.has_password(&u.local_id))
+        }) {
             return error(400, "EMAIL_EXISTS");
         }
         if let Err(e) = store.set_email(&uid, email) {
@@ -2895,15 +6821,32 @@ fn sign_up(
             u.email_verified = false;
             u.provider = fireemu_core_auth::store::Provider::Password;
         }
-        uid
+        (uid, false)
     } else {
-        match store.create_user_with_id(new_user, forced_local_id, at) {
-            Ok(uid) => uid,
+        // Validate before creating a new account so rejected passwords leave no user behind.
+        if let Some(password) = password {
+            if let Err(e) = store.validate_password_for(
+                fireemu_core_auth::password_policy::Operation::Registration,
+                password,
+            ) {
+                return auth_error(&e);
+            }
+        }
+        match store.create_user_with_id_as(AuthPrincipal::EndUser, new_user, forced_local_id, at) {
+            Ok(uid) => (uid, true),
             Err(e) => return auth_error(&e),
         }
     };
     if let Some(password) = password {
-        if let Err(e) = store.set_password(&uid, password, at) {
+        if let Err(e) = store.set_password_for(
+            &uid,
+            password,
+            at,
+            fireemu_core_auth::password_policy::Operation::Registration,
+        ) {
+            if created_new {
+                let _ = store.delete_user_by_id(uid.as_str());
+            }
             return auth_error(&e);
         }
     }
@@ -2912,6 +6855,9 @@ fn sign_up(
             u.display_name = Some(name.to_owned());
         }
     }
+    // `photoUrl` is listed on the sign-up request but production does not persist it
+    // (recorded 2026-09-12, tools/auth-blocking-create-disable: the control's photo URL
+    // was absent on lookup and invisible to a blocking hook); it stays ignored here.
     store.record_sign_in(&uid, at);
     let display_name = store.user(&uid).and_then(|u| u.display_name.clone());
     match issue_tokens(store, &uid, None, at) {
@@ -2920,7 +6866,12 @@ fn sign_up(
             body["displayName"] = json!(display_name);
             JsonResponse { status: 200, body }
         }
-        Err(r) => r,
+        Err(r) => {
+            if created_new {
+                let _ = store.delete_user_by_id(uid.as_str());
+            }
+            r
+        }
     }
 }
 
@@ -2930,20 +6881,44 @@ pub const CUSTOM_TOKEN_AUDIENCE: &str =
 
 /// `accounts:signInWithCustomToken`: the Admin SDK mints unsigned (`alg: none`) custom
 /// tokens against an emulator; the user is created on first sign-in.
+#[allow(clippy::too_many_lines)]
 fn sign_in_with_custom_token(
     store: &mut AuthStore,
     body: &Value,
     at: LogicalInstant,
     reject_expired: bool,
+    trust: Option<&CustomTokenTrust>,
+    legacy_tokens: bool,
 ) -> JsonResponse {
-    let Some(token) = str_field(body, "token").filter(|t| !t.is_empty()) else {
-        return error(400, "MISSING_CUSTOM_TOKEN");
+    // Production's rules apply with configured signers and in the strict profile; the
+    // emulator profile keeps the official emulator's leniency (sandbox recording 2026-09-24).
+    let production_rules = trust.is_some() || reject_expired;
+    // Production accepts only a signed token. The strict profile therefore needs the signers
+    // (`auth.customTokenSigners`) to verify one, and without them refuses every custom token as
+    // production refuses an unsigned one; the daemon says so at startup.
+    if reject_expired && trust.is_none() && str_field(body, "token").is_some_and(|t| !t.is_empty())
+    {
+        return error(400, "INVALID_CUSTOM_TOKEN");
+    }
+    // An empty token is a malformed one to production and a missing one to the emulator.
+    let token = match str_field(body, "token") {
+        Some("") if production_rules => {
+            return error(400, custom_token::INVALID_ASSERTION_FORMAT);
+        }
+        None | Some("") => return error(400, "MISSING_CUSTOM_TOKEN"),
+        Some(token) => token,
     };
-    // Like the official emulator, a strict JSON object is accepted as a fake custom token
+    // With configured signers only a token they signed is accepted, as in production; without
+    // them, like the official emulator, a strict JSON object is accepted as a fake custom token
     // beside the unsigned JWT the Admin SDK mints.
-    let payload = if token.trim_start().starts_with('{') {
+    let (payload, jwt) = if let Some(trust) = trust {
+        match trust.verify(token, store.project_id()) {
+            Ok(claims) => (claims, true),
+            Err(refusal) => return error(400, refusal.message()),
+        }
+    } else if token.trim_start().starts_with('{') {
         match fireemu_core_types::json::parse(token) {
-            Ok(v) => v,
+            Ok(v) => (v, false),
             Err(_) => {
                 return error(
                     400,
@@ -2953,44 +6928,90 @@ fn sign_in_with_custom_token(
         }
     } else {
         let Ok(decoded) = fireemu_core_auth::jwt::decode_unsigned(token) else {
-            return error(400, "INVALID_CUSTOM_TOKEN : Invalid assertion format");
+            return error(
+                400,
+                if production_rules {
+                    custom_token::INVALID_ASSERTION_FORMAT
+                } else {
+                    "INVALID_CUSTOM_TOKEN : Invalid assertion format"
+                },
+            );
         };
-        if decoded.payload.get("aud").and_then(JsonValue::as_str) != Some(CUSTOM_TOKEN_AUDIENCE) {
+        if !production_rules
+            && decoded.payload.get("aud").and_then(JsonValue::as_str) != Some(CUSTOM_TOKEN_AUDIENCE)
+        {
             return error(400, "INVALID_CUSTOM_TOKEN : wrong audience");
         }
-        decoded.payload
+        (decoded.payload, true)
     };
-    let uid = payload
-        .get("uid")
-        .or_else(|| payload.get("user_id"))
-        .and_then(|v| match v {
-            JsonValue::String(s) => Some(s.clone()),
-            JsonValue::Int(i) => Some(i.to_string()),
-            _ => None,
-        })
-        .filter(|s| !s.is_empty());
+    let now_secs = i64::try_from(at.as_nanos().div_euclid(1_000_000_000)).unwrap_or(i64::MAX);
+    if production_rules && jwt && !custom_token_claims_hold(&payload, now_secs) {
+        return error(400, "INVALID_CUSTOM_TOKEN");
+    }
+    if let Some(tenant_id) = payload.get("tenant_id") {
+        let Some(tenant_id) = tenant_id.as_str() else {
+            return error(400, "INVALID_CUSTOM_TOKEN : tenant_id must be a string");
+        };
+        if store.tenant_id() != Some(tenant_id) {
+            return error(400, "TENANT_ID_MISMATCH");
+        }
+    }
+    let uid = match payload.get("uid").or_else(|| payload.get("user_id")) {
+        Some(JsonValue::String(s)) => Some(s.clone()),
+        Some(JsonValue::Int(i)) => Some(i.to_string()),
+        _ => None,
+    };
     let Some(uid) = uid else {
         return error(400, "MISSING_IDENTIFIER");
     };
-    let uid = uid.as_str();
-    let now_secs = i64::try_from(at.as_nanos().div_euclid(1_000_000_000)).unwrap_or(i64::MAX);
-    if reject_expired
-        && payload
-            .get("exp")
-            .and_then(JsonValue::as_i64)
-            .is_some_and(|exp| now_secs >= exp)
-    {
-        return error(400, "TOKEN_EXPIRED");
+    // Production bounds the uid to 1..=128 characters (sandbox recording 2026-09-24).
+    if production_rules && (uid.is_empty() || uid.chars().count() > 128) {
+        return error(
+            400,
+            "INVALID_IDENTIFIER : Invalid user ID length. Expect to have length between 1 and 128.",
+        );
     }
+    if uid.is_empty() {
+        return error(400, "MISSING_IDENTIFIER");
+    }
+    if uid.chars().count() > 128 {
+        return auth_error(&AuthError::InvalidLocalId);
+    }
+    let uid = uid.as_str();
     let mut extra = CustomClaims::default();
-    if let Some(JsonValue::Object(claims)) = payload.get("claims") {
+    if let Some(claims) = payload.get("claims") {
+        let JsonValue::Object(claims) = claims else {
+            return error(
+                400,
+                if production_rules {
+                    "INVALID_CLAIMS"
+                } else {
+                    "INVALID_CUSTOM_TOKEN : claims must be an object"
+                },
+            );
+        };
         for (k, v) in claims {
             let Some(cv) = claims_from_json(v) else {
                 return error(400, "INVALID_CUSTOM_TOKEN : unsupported claim value");
             };
             if let Err(e) = extra.insert(k, cv) {
-                return error(400, &format!("INVALID_CUSTOM_TOKEN : {e}"));
+                return error(
+                    400,
+                    &if production_rules {
+                        format!("FORBIDDEN_CLAIM : {k}")
+                    } else {
+                        format!("INVALID_CUSTOM_TOKEN : {e}")
+                    },
+                );
             }
+        }
+    }
+    // Production accepted developer claims past the 1000-byte account-claim limit (sandbox
+    // recording 2026-09-24, custom-token/sign-in#claims-over-limit); the official emulator's
+    // bound stays in the emulator profile.
+    if !production_rules {
+        if let Err(e) = extra.check_size() {
+            return error(400, &format!("INVALID_CUSTOM_TOKEN : {e}"));
         }
     }
     let (uid, is_new) = if let Some(u) = store.user_by_id(uid) {
@@ -3001,7 +7022,7 @@ fn sign_in_with_custom_token(
             email_verified: false,
             provider: fireemu_core_auth::store::Provider::Custom,
         };
-        match store.create_user_with_id(new_user, Some(uid), at) {
+        match store.create_user_with_id_as(AuthPrincipal::EndUser, new_user, Some(uid), at) {
             Ok(id) => (id, true),
             Err(e) => return auth_error(&e),
         }
@@ -3009,7 +7030,27 @@ fn sign_in_with_custom_token(
     if store.user(&uid).is_some_and(|u| u.disabled) {
         return error(400, "USER_DISABLED");
     }
+    // Any custom-token sign-in marks the account (sandbox recording 2026-09-24,
+    // id-token/methods#admin-lookup-after-custom-sign-in).
+    if let Some(user) = store.user_mut(&uid) {
+        user.custom_auth = true;
+    }
     store.record_sign_in(&uid, at);
+    if legacy_tokens && wants_legacy_token(store, body) {
+        let id_token = match legacy_sign_in_token(store, &uid, at, "custom", Some(&extra)) {
+            Ok(token) => token,
+            Err(r) => return r,
+        };
+        return JsonResponse {
+            status: 200,
+            body: json!({
+                "kind": "identitytoolkit#VerifyCustomTokenResponse",
+                "localId": uid.as_str(),
+                "idToken": id_token,
+                "isNewUser": is_new,
+            }),
+        };
+    }
     match issue_tokens_with(
         store,
         &uid,
@@ -3019,6 +7060,8 @@ fn sign_in_with_custom_token(
         Some(fireemu_core_auth::store::Provider::Custom),
     ) {
         Ok(mut body) => {
+            // `localId` and `email` stay until the request's creation is committed; the answer
+            // is trimmed afterwards (`public_custom_token_answer`).
             body["kind"] = json!("identitytoolkit#VerifyCustomTokenResponse");
             body["isNewUser"] = json!(is_new);
             JsonResponse { status: 200, body }
@@ -3027,7 +7070,109 @@ fn sign_in_with_custom_token(
     }
 }
 
-fn sign_in_with_password(store: &mut AuthStore, body: &Value, at: LogicalInstant) -> JsonResponse {
+/// The claims production requires of a custom token (sandbox recording 2026-09-24): its
+/// audience, `iss` equal to `sub`, an `iat` and an `exp` at most an hour apart, an `iat` no more
+/// than the skew allowance ahead, and an `exp` no more than the allowance behind.
+fn custom_token_claims_hold(payload: &JsonValue, now_secs: i64) -> bool {
+    let leeway = fireemu_core_auth::jwt::IDENTITY_TOOLKIT_EXPIRY_LEEWAY_SECONDS;
+    let text = |name: &str| payload.get(name).and_then(JsonValue::as_str);
+    let (Some(iat), Some(exp)) = (
+        payload.get("iat").and_then(JsonValue::as_i64),
+        payload.get("exp").and_then(JsonValue::as_i64),
+    ) else {
+        return false;
+    };
+    text("aud") == Some(CUSTOM_TOKEN_AUDIENCE)
+        && text("iss").is_some()
+        && text("iss") == text("sub")
+        && exp.saturating_sub(iat) <= 3600
+        && iat <= now_secs.saturating_add(leeway)
+        && now_secs < exp.saturating_add(leeway)
+}
+
+/// The v2 API's refusal: a gRPC status name and no `errors` list (sandbox recording
+/// 2026-09-24, mfaEnrollment:start and :withdraw). Applied in the strict profile only.
+fn v2_error_shape(response: JsonResponse, strict: bool) -> JsonResponse {
+    if strict && response.status == 400 {
+        secure_token_error_shape(response)
+    } else {
+        response
+    }
+}
+
+/// Production's custom-token answer names the account only inside the token (sandbox
+/// recording 2026-09-24): the `localId` and `email` the creation commit reads are removed once
+/// it has run.
+fn public_custom_token_answer(mut body: Value) -> Value {
+    if let Some(object) = body.as_object_mut() {
+        object.remove("localId");
+        object.remove("email");
+    }
+    body
+}
+
+/// Whether a sign-in answers with the legacy Identity Toolkit token: production does so for
+/// password and custom-token sign-in unless `returnSecureToken` is true (sandbox recording
+/// 2026-09-24). Tenant namespaces keep secure tokens until their legacy shape is observed.
+fn wants_legacy_token(store: &AuthStore, body: &Value) -> bool {
+    body.get("returnSecureToken").and_then(Value::as_bool) != Some(true)
+        && store.tenant_id().is_none()
+}
+
+/// A legacy Identity Toolkit token for `uid`, in the unsigned internal form the response
+/// signer replaces. It opens no refresh session.
+fn legacy_sign_in_token(
+    store: &mut AuthStore,
+    uid: &LocalId,
+    at: LogicalInstant,
+    sign_in_provider: &str,
+    developer_claims: Option<&CustomClaims>,
+) -> Result<String, JsonResponse> {
+    let iat = i64::try_from(at.as_nanos().div_euclid(1_000_000_000)).unwrap_or(i64::MAX);
+    let payload = store
+        .legacy_token_payload(uid, iat, sign_in_provider, developer_claims)
+        .map_err(|e| auth_error(&e))?;
+    Ok(fireemu_core_auth::jwt::encode_payload_shaped(
+        &payload,
+        None,
+        HeaderShape::Untyped,
+    ))
+}
+
+fn password_policy_notification(code: ViolationCode, policy: &PasswordPolicy) -> Value {
+    let message = match code {
+        ViolationCode::MissingLowercaseCharacter => {
+            "Password must contain a lowercase character".to_owned()
+        }
+        ViolationCode::MissingUppercaseCharacter => {
+            "Password must contain an uppercase character".to_owned()
+        }
+        ViolationCode::MissingNumericCharacter => {
+            "Password must contain a numeric character".to_owned()
+        }
+        ViolationCode::MissingNonAlphanumericCharacter => {
+            "Password must contain a non-alphanumeric character".to_owned()
+        }
+        ViolationCode::MinimumPasswordLength => {
+            format!("Password must be at least {} characters", policy.min_length)
+        }
+        ViolationCode::MaximumPasswordLength => policy.max_length.map_or_else(
+            || "Password exceeds the maximum allowed length".to_owned(),
+            |max| format!("Password must be at most {max} characters"),
+        ),
+    };
+    json!({
+        "notificationCode": code.as_str(),
+        "notificationMessage": message,
+    })
+}
+
+fn sign_in_with_password(
+    store: &mut AuthStore,
+    body: &Value,
+    at: LogicalInstant,
+    legacy_tokens: bool,
+) -> JsonResponse {
     // The official order: the email is checked (present, well-formed) before the password.
     let Some(email) = str_field(body, "email") else {
         return error(400, "MISSING_EMAIL");
@@ -3038,8 +7183,13 @@ fn sign_in_with_password(store: &mut AuthStore, body: &Value, at: LogicalInstant
     let Some(password) = str_field(body, "password").filter(|p| !p.is_empty()) else {
         return error(400, "MISSING_PASSWORD");
     };
-    let uid = match store.verify_password(email, password, at) {
-        Ok(uid) => uid,
+    let (uid, violations) = match store.verify_password_with_imports(
+        email,
+        password,
+        at,
+        &password_hash::ImportedHashes,
+    ) {
+        Ok(result) => result,
         Err(e) => return auth_error(&e),
     };
     // Production always carries `displayName`, empty when the account has none.
@@ -3047,16 +7197,50 @@ fn sign_in_with_password(store: &mut AuthStore, body: &Value, at: LogicalInstant
         .user(&uid)
         .and_then(|u| u.display_name.clone())
         .unwrap_or_default();
+    let mut extra = vec![
+        ("kind", json!("identitytoolkit#VerifyPasswordResponse")),
+        ("registered", json!(true)),
+        ("displayName", json!(display_name)),
+    ];
+    if let Some(photo) = store.user(&uid).and_then(|u| u.photo_url.clone()) {
+        extra.push(("profilePicture", json!(photo)));
+    }
+    if !violations.is_empty() {
+        let policy = store.password_policy().clone();
+        extra.push((
+            "userNotifications",
+            Value::Array(
+                violations
+                    .into_iter()
+                    .map(|code| password_policy_notification(code, &policy))
+                    .collect(),
+            ),
+        ));
+    }
+    if legacy_tokens && wants_legacy_token(store, body) && mfa_info(store, &uid, true).is_empty() {
+        let id_token = match legacy_sign_in_token(store, &uid, at, "password", None) {
+            Ok(token) => token,
+            Err(r) => return r,
+        };
+        let mut response = json!({
+            "localId": uid.as_str(),
+            "email": store.user(&uid).and_then(|u| u.email.clone()),
+            "idToken": id_token,
+        });
+        for (key, value) in extra {
+            response[key] = value;
+        }
+        return JsonResponse {
+            status: 200,
+            body: response,
+        };
+    }
     finish_sign_in(
         store,
         &uid,
         at,
         Some(fireemu_core_auth::store::Provider::Password),
-        &[
-            ("kind", json!("identitytoolkit#VerifyPasswordResponse")),
-            ("registered", json!(true)),
-            ("displayName", json!(display_name)),
-        ],
+        &extra,
     )
 }
 
@@ -3178,7 +7362,15 @@ fn user_json(store: &AuthStore, uid: &LocalId) -> Value {
         return Value::Null;
     };
     let mfa = mfa_info(store, uid, false);
+    // Production lists phone first, then federated identities in link order, then password
+    // (sandbox recording 2026-09-23: auth-account/provider, admin/create, admin/import).
     let mut providers: Vec<Value> = Vec::new();
+    if let Some(phone) = &u.phone_number {
+        providers.push(json!({"providerId": "phone", "rawId": phone, "phoneNumber": phone}));
+    }
+    for f in &u.federated {
+        providers.push(json!({"providerId": f.provider_id, "rawId": f.raw_id, "federatedId": f.raw_id, "email": f.email, "displayName": f.display_name, "photoUrl": f.photo_url}));
+    }
     // The official record lists a `password` provider for an email with a password or an
     // email-link sign-in, and nothing for an address that has neither.
     if let Some(email) = &u.email {
@@ -3186,19 +7378,16 @@ fn user_json(store: &AuthStore, uid: &LocalId) -> Value {
             providers.push(json!({"providerId": "password", "rawId": email, "federatedId": email, "email": email, "displayName": u.display_name, "photoUrl": u.photo_url}));
         }
     }
-    if let Some(phone) = &u.phone_number {
-        providers.push(json!({"providerId": "phone", "rawId": phone, "phoneNumber": phone}));
-    }
-    for f in &u.federated {
-        providers.push(json!({"providerId": f.provider_id, "rawId": f.raw_id, "federatedId": f.raw_id, "email": f.email, "displayName": f.display_name, "photoUrl": f.photo_url}));
-    }
-    // Production omits every default-valued field (proto3 JSON): no `disabled: false`, no
-    // empty `mfaInfo` or `providerUserInfo`, `emailVerified` only with an address, and
-    // `validSince` once tokens were ever revoked or a password set. The password hash is the
+    // Production omits most default-valued fields (proto3 JSON): no empty `mfaInfo` or
+    // `providerUserInfo`, `emailVerified` only with an address. `disabled` and `validSince`
+    // are present for an account the Admin API created (the sandbox recording of 2026-09-23),
+    // and otherwise `disabled` only when true and `validSince` once tokens were ever revoked
+    // or a password set. The password hash is the
     // redacted marker production sends a caller without hash-config permission
     // (conformance/auth-production-matrix.json, password/sign-up-and-sign-in#lookup).
     let has_password = store.has_password(uid);
-    let valid_since = (has_password || u.tokens_revoked).then_some(u.tokens_valid_after);
+    let valid_since = (has_password || u.tokens_revoked || u.admin_created || u.custom_auth)
+        .then_some(u.tokens_valid_after);
     json!({
         "localId": u.local_id.as_str(),
         "tenantId": store.tenant_id(),
@@ -3206,17 +7395,22 @@ fn user_json(store: &AuthStore, uid: &LocalId) -> Value {
         "displayName": u.display_name,
         "photoUrl": u.photo_url,
         "phoneNumber": u.phone_number,
-        "emailVerified": u.email.as_ref().map(|_| u.email_verified),
-        "disabled": u.disabled.then_some(true),
+        // Reported with an address, and while true even without one (production keeps the
+        // flag through an Admin email removal).
+        "emailVerified": (u.email.is_some() || u.email_verified || u.email_verified_recorded)
+            .then_some(u.email_verified),
+        "disabled": (u.disabled || u.admin_created).then_some(u.disabled),
         // Absent, not "{}", when no claim is set: what the Admin SDK reads back as no claims.
-        "customAttributes": (u.custom_claims.canonical_json() != "{}").then(|| u.custom_claims.canonical_json()),
+        "customAttributes": u.custom_claims.attributes_text(),
         "providerUserInfo": (!providers.is_empty()).then_some(providers),
         "mfaInfo": (!mfa.is_empty()).then_some(mfa),
         "passwordHash": has_password.then_some(REDACTED_PASSWORD_HASH),
         "passwordUpdatedAt": store.password_updated_at(uid).map(|t| t.as_nanos() / 1_000_000),
         "createdAt": (u.created_at.as_nanos() / 1_000_000).to_string(),
+        "lastRefreshAt": u.last_refresh_at.and_then(|t| LogicalInstant::to_rfc3339(t).ok()),
         "lastLoginAt": u.last_sign_in_at.map(|t| (t.as_nanos() / 1_000_000).to_string()),
         "validSince": valid_since.map(|t| (t.as_nanos() / 1_000_000_000).to_string()),
+        "customAuth": u.custom_auth.then_some(true),
     })
 }
 
@@ -3224,8 +7418,9 @@ fn user_json(store: &AuthStore, uid: &LocalId) -> Value {
 /// configuration: base64 of `REDACTED`.
 const REDACTED_PASSWORD_HASH: &str = "UkVEQUNURUQ=";
 
-/// Maximum identifiers per lookup (Admin SDK `getUsers`).
-const MAX_LOOKUP_IDENTIFIERS: usize = 100;
+/// Maximum identifiers per lookup. Production accepted 101 (sandbox recording 2026-09-23);
+/// this is a local guard, not an observed quota.
+const MAX_LOOKUP_IDENTIFIERS: usize = 10_000;
 
 /// Optional string field; a present non-string (other than null) is a type error.
 fn opt_str<'a>(body: &'a Value, key: &str) -> Result<Option<&'a str>, JsonResponse> {
@@ -3261,6 +7456,9 @@ fn id_list(body: &Value, key: &str) -> Result<Vec<String>, JsonResponse> {
             for item in items {
                 match item {
                     Value::String(s) => out.push(s.clone()),
+                    // Proto3 JSON reads a number into a string field (production accepted
+                    // `localId: [42]`).
+                    Value::Number(n) => out.push(n.to_string()),
                     _ => {
                         return Err(error(
                             400,
@@ -3287,25 +7485,75 @@ fn id_list(body: &Value, key: &str) -> Result<Vec<String>, JsonResponse> {
     Ok(items)
 }
 
-fn lookup(store: &AuthStore, body: &Value, at: LogicalInstant, admin: bool) -> JsonResponse {
-    let lists = (|| -> Result<_, JsonResponse> {
-        let federated: Vec<(String, String)> =
-            match body.get("federatedUserId") {
-                None | Some(Value::Null) => Vec::new(),
-                Some(Value::Array(items)) if items.iter().all(Value::is_object) => items
-                    .iter()
-                    .map(|i| {
-                        (
-                            str_field(i, "providerId").unwrap_or("").to_owned(),
-                            str_field(i, "rawId").unwrap_or("").to_owned(),
+fn federated_identifiers(body: &Value) -> Result<Vec<(String, String)>, JsonResponse> {
+    match body.get("federatedUserId") {
+        None | Some(Value::Null) => Ok(Vec::new()),
+        Some(Value::Array(items)) => items
+            .iter()
+            .map(|item| {
+                let object = item.as_object().ok_or_else(|| {
+                    error(
+                        400,
+                        "INVALID_ARGUMENT : federatedUserId must be an array of {providerId, rawId}",
+                    )
+                })?;
+                let provider_id = object
+                    .get("providerId")
+                    .and_then(Value::as_str)
+                    .ok_or_else(|| {
+                        error(
+                            400,
+                            "INVALID_ARGUMENT : federatedUserId items require string providerId and rawId",
                         )
-                    })
-                    .collect(),
-                Some(_) => return Err(error(
-                    400,
-                    "INVALID_ARGUMENT : federatedUserId must be an array of {providerId, rawId}",
-                )),
-            };
+                    })?;
+                let raw_id = object
+                    .get("rawId")
+                    .and_then(Value::as_str)
+                    .ok_or_else(|| {
+                        error(
+                            400,
+                            "INVALID_ARGUMENT : federatedUserId items require string providerId and rawId",
+                        )
+                    })?;
+                Ok((provider_id.to_owned(), raw_id.to_owned()))
+            })
+            .collect(),
+        Some(_) => Err(error(
+            400,
+            "INVALID_ARGUMENT : federatedUserId must be an array of {providerId, rawId}",
+        )),
+    }
+}
+
+fn lookup(store: &AuthStore, body: &Value, at: LogicalInstant, admin: bool) -> JsonResponse {
+    if !admin {
+        // Select the trust boundary before parsing any administrator search criteria.
+        // End-user lookup always verifies a token and can return only its subject.
+        let session = match verify_session_accepting(
+            store,
+            body,
+            at,
+            |e| {
+                if matches!(e, fireemu_core_auth::jwt::JwtError::UnknownUser) {
+                    error(400, "USER_NOT_FOUND")
+                } else {
+                    jwt_error(e)
+                }
+            },
+            LegacyTokens::Honoured,
+        ) {
+            Ok(session) => session,
+            Err(response) => return response,
+        };
+        // Admin selectors beside a verified session are ignored: production answers with the
+        // session's subject only (sandbox recording 2026-09-23).
+        return JsonResponse {
+            status: 200,
+            body: json!({"kind": "identitytoolkit#GetAccountInfoResponse", "users": [user_json(store, &session.uid)]}),
+        };
+    }
+    let lists = (|| -> Result<_, JsonResponse> {
+        let federated = federated_identifiers(body)?;
         Ok((
             id_list(body, "localId")?,
             id_list(body, "email")?,
@@ -3317,7 +7565,13 @@ fn lookup(store: &AuthStore, body: &Value, at: LogicalInstant, admin: bool) -> J
         Ok(l) => l,
         Err(r) => return r,
     };
-    let total = local_ids.len() + emails.len() + phones.len() + federated.len();
+    // `initialEmail` is a selector production accepts; it matched nothing in the sandbox
+    // recording (2026-09-23) and fireemu keeps no initial address, so it never matches here.
+    let initial_emails = match id_list(body, "initialEmail") {
+        Ok(list) => list.len(),
+        Err(r) => return r,
+    };
+    let total = local_ids.len() + emails.len() + phones.len() + federated.len() + initial_emails;
     if total > MAX_LOOKUP_IDENTIFIERS {
         return error(
             400,
@@ -3325,22 +7579,10 @@ fn lookup(store: &AuthStore, body: &Value, at: LogicalInstant, admin: bool) -> J
         );
     }
     if total == 0 {
-        if admin {
-            return error(
-                400,
-                "MISSING_IDENTIFIER : localId, email, phoneNumber or federatedUserId",
-            );
-        }
-        return match verify(store, body, at) {
-            Ok(uid) => JsonResponse {
-                status: 200,
-                body: json!({"kind": "identitytoolkit#GetAccountInfoResponse", "users": [user_json(store, &uid)]}),
-            },
-            Err(r) => r,
-        };
+        // Production answers an Admin lookup without identifiers as if it lacked a token.
+        return error(400, "MISSING_ID_TOKEN");
     }
-    // Resolve every identifier, in request order, without duplicates. Federated
-    // identities are never linked in this runtime, so they match nobody.
+    // Authenticated Admin lookup resolves identifiers in request order without duplicates.
     let mut found: Vec<LocalId> = Vec::new();
     let mut push = |uid: LocalId| {
         if !found.contains(&uid) {
@@ -3352,8 +7594,10 @@ fn lookup(store: &AuthStore, body: &Value, at: LogicalInstant, admin: bool) -> J
             push(u.local_id.clone());
         }
     }
+    // Every account sharing an address answers (sandbox recording 2026-09-23,
+    // `config/duplicate-email#admin-lookup-by-email`).
     for email in &emails {
-        if let Some(u) = store.user_by_email(email) {
+        for u in store.users_by_email(email) {
             push(u.local_id.clone());
         }
     }
@@ -3450,27 +7694,52 @@ struct UpdatePlan {
 /// being silently dropped.
 const UNSUPPORTED_UPDATE_FIELDS: &[&str] = &["mfaInfo"];
 
-/// `{providerId, rawId, email?, displayName?, photoUrl?}` of a link request.
-fn parse_identity(v: &Value) -> Result<FederatedIdentity, JsonResponse> {
-    let provider_id = opt_str(v, "providerId")?
-        .filter(|p| !p.is_empty())
-        .ok_or_else(|| error(400, "INVALID_ARGUMENT : providerId is required"))?;
-    let raw_id = opt_str(v, "rawId")?
-        .filter(|p| !p.is_empty())
-        .ok_or_else(|| error(400, "INVALID_ARGUMENT : rawId is required"))?;
-    if matches!(provider_id, "password" | "phone" | "emailLink") {
+/// Refuses a profile string a request states directly when it carries a NUL or another
+/// control character. [`AuthStore::import_user`] already refuses these at its own boundary,
+/// so a value that cannot be imported cannot be created through a request either.
+/// Production's refusal shape for this input is unobserved, and so are the length bounds it
+/// applies, which are therefore not imposed here.
+fn reject_control_characters(value: &str, field: &str) -> Result<(), JsonResponse> {
+    if value.chars().any(char::is_control) {
         return Err(error(
             400,
-            "INVALID_ARGUMENT : linkProviderUserInfo takes a federated providerId",
+            &format!("INVALID_ARGUMENT : {field} must not contain control characters"),
         ));
     }
-    Ok(FederatedIdentity {
+    Ok(())
+}
+
+/// `{providerId, rawId, email?, displayName?, photoUrl?}` of a link request.
+fn parse_identity(v: &Value) -> Result<FederatedIdentity, JsonResponse> {
+    // Production's refusals (sandbox recording 2026-09-23, auth-account/provider).
+    let missing = || {
+        error(
+            400,
+            "MISSING_IDENTIFIER : providerId & rawId are both required for provider linking",
+        )
+    };
+    let provider_id = opt_str(v, "providerId")?
+        .filter(|p| !p.is_empty())
+        .ok_or_else(missing)?;
+    let raw_id = opt_str(v, "rawId")?
+        .filter(|p| !p.is_empty())
+        .ok_or_else(missing)?;
+    if matches!(provider_id, "password" | "phone" | "emailLink") {
+        return Err(error(400, "INVALID_PROVIDER_ID"));
+    }
+    let identity = FederatedIdentity {
         provider_id: provider_id.to_owned(),
         raw_id: raw_id.to_owned(),
         email: opt_str(v, "email")?.map(str::to_owned),
         display_name: opt_str(v, "displayName")?.map(str::to_owned),
         photo_url: opt_str(v, "photoUrl")?.map(str::to_owned),
-    })
+    };
+    // The store's `FederatedIdentity::validate` is the single truth, but it runs when the
+    // identity is linked, which is after this request's other writes. Parsing is before all
+    // of them, so the same check runs here to keep a refused request from applying half of
+    // itself.
+    identity.validate().map_err(|e| auth_error(&e))?;
+    Ok(identity)
 }
 
 /// Phone factors of `mfaInfo` / `mfa.enrollments` entries (`{phoneInfo, displayName}`).
@@ -3500,21 +7769,92 @@ fn parse_phone_factors(entries: &Value) -> Result<Vec<(String, Option<String>)>,
 
 fn parse_custom_claims(attrs: &str) -> Result<CustomClaims, JsonResponse> {
     let Ok(JsonValue::Object(parsed)) = fireemu_core_types::json::parse(attrs) else {
-        return Err(error(
-            400,
-            "INVALID_CLAIMS : customAttributes must be a JSON object",
-        ));
+        return Err(match serde_json::from_str::<Value>(attrs) {
+            Ok(value) => error(400, &format!("INVALID_CLAIMS : Not a JSON Object: {value}")),
+            Err(_) => error(400, &malformed_custom_attributes_message(attrs)),
+        });
     };
     let mut claims = CustomClaims::default();
     for (k, v) in &parsed {
         let Some(cv) = claims_from_json(v) else {
             return Err(error(400, "INVALID_CLAIMS"));
         };
-        if let Err(e) = claims.insert(k, cv) {
-            return Err(error(400, &format!("FORBIDDEN_CLAIM : {e}")));
+        if claims.insert(k, cv).is_err() {
+            // Production names only the claim: "FORBIDDEN_CLAIM : sub".
+            return Err(error(400, &format!("FORBIDDEN_CLAIM : {k}")));
         }
     }
-    Ok(claims)
+    // Production reads the attributes back as they were set (sandbox recording 2026-09-23).
+    Ok(claims.with_source(attrs))
+}
+
+fn malformed_custom_attributes_message(attrs: &str) -> String {
+    const MAX_DIAGNOSTIC_SCAN_BYTES: usize = 1_024;
+    const MAX_PATH_KEY_BYTES: usize = 64;
+    const TROUBLESHOOTING_URL: &str =
+        "https://github.com/google/gson/blob/main/Troubleshooting.md#malformed-json";
+
+    // The saved production case is a lenient, unquoted object name followed by a value
+    // without the required colon (for example, `{not json`). Recognize that syntax shape
+    // without echoing caller input or attempting to duplicate Gson's general JSON parser.
+    let bytes = attrs.as_bytes();
+    if bytes.len() > MAX_DIAGNOSTIC_SCAN_BYTES {
+        return "INVALID_CLAIMS : customAttributes must be a JSON object".to_owned();
+    }
+
+    let mut cursor = 0;
+    while bytes.get(cursor).is_some_and(u8::is_ascii_whitespace) {
+        cursor += 1;
+    }
+    if bytes.get(cursor) != Some(&b'{') {
+        return "INVALID_CLAIMS : customAttributes must be a JSON object".to_owned();
+    }
+    cursor += 1;
+    while bytes.get(cursor).is_some_and(u8::is_ascii_whitespace) {
+        cursor += 1;
+    }
+
+    let key_start = cursor;
+    if !bytes
+        .get(cursor)
+        .is_some_and(|byte| byte.is_ascii_alphabetic() || matches!(byte, b'_' | b'$'))
+    {
+        return "INVALID_CLAIMS : customAttributes must be a JSON object".to_owned();
+    }
+    cursor += 1;
+    while bytes
+        .get(cursor)
+        .is_some_and(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'$'))
+    {
+        cursor += 1;
+    }
+    let key_end = cursor;
+    if key_end - key_start > MAX_PATH_KEY_BYTES
+        || !bytes.get(cursor).is_some_and(u8::is_ascii_whitespace)
+    {
+        return "INVALID_CLAIMS : customAttributes must be a JSON object".to_owned();
+    }
+    while bytes.get(cursor).is_some_and(u8::is_ascii_whitespace) {
+        cursor += 1;
+    }
+    if !bytes
+        .get(cursor)
+        .is_some_and(|byte| byte.is_ascii_alphabetic() || matches!(byte, b'_' | b'$'))
+    {
+        return "INVALID_CLAIMS : customAttributes must be a JSON object".to_owned();
+    }
+
+    // Gson's lenient reader consumes the first byte of the unexpected value before it
+    // reports the expected delimiter. Keep its line and column positions for this ASCII
+    // syntax shape; all other malformed input retains the bounded generic refusal.
+    let consumed = &attrs[..=cursor];
+    let line = consumed.matches('\n').count() + 1;
+    let line_start = consumed.rfind('\n').map_or(0, |index| index + 1);
+    let column = cursor - line_start + 2;
+    let key = &attrs[key_start..key_end];
+    format!(
+        "INVALID_CLAIMS : com.google.gson.stream.MalformedJsonException: Expected ':' at line {line} column {column} path $.{key}\nSee {TROUBLESHOOTING_URL}"
+    )
 }
 
 fn reject_unsupported(body: &Value, fields: &[&str]) -> Result<(), JsonResponse> {
@@ -3599,16 +7939,30 @@ fn parse_update(body: &Value) -> Result<UpdatePlan, JsonResponse> {
     let change = |key: &str| -> Result<Change, JsonResponse> {
         Ok(opt_str(body, key)?.map_or(Change::Keep, |v| Change::Set(v.to_owned())))
     };
+    // Production stores a displayName carrying control characters, NUL included, on update
+    // (sandbox recording 2026-09-23, auth-account/values). photoUrl stays refused until observed.
+    if let Some(value) = opt_str(body, "photoUrl")? {
+        reject_control_characters(value, "photoUrl")?;
+    }
     let mut display_name = change("displayName")?;
     let mut photo_url = change("photoUrl")?;
     let mut phone_number = change("phoneNumber")?;
-    if let Change::Set(p) = &phone_number {
-        AuthStore::validate_phone_number(p).map_err(|e| auth_error(&e))?;
+    if let Change::Set(p) = &mut phone_number {
+        *p = AuthStore::normalize_phone_number(p).map_err(|e| auth_error(&e))?;
+    }
+    // Java string length, so UTF-16 units (sandbox recording 2026-09-23, 257 is refused).
+    if let Change::Set(name) = &display_name {
+        if name.encode_utf16().count() > 256 {
+            return Err(error(
+                400,
+                "INVALID_PROFILE_ATTRIBUTE : Display name too long.",
+            ));
+        }
     }
     let mut clear_password = false;
     let mut clear_email = false;
     if let Some(attrs) = body.get("deleteAttribute") {
-        for a in string_list(attrs, "deleteAttribute")? {
+        for (index, a) in string_list(attrs, "deleteAttribute")?.iter().enumerate() {
             match a.as_str() {
                 "USER_ATTRIBUTE_NAME_UNSPECIFIED" => {}
                 "DISPLAY_NAME" => display_name = Change::Clear,
@@ -3616,10 +7970,12 @@ fn parse_update(body: &Value) -> Result<UpdatePlan, JsonResponse> {
                 "PASSWORD" => clear_password = true,
                 "EMAIL" => clear_email = true,
                 other => {
-                    return Err(error(
-                        400,
-                        &format!("INVALID_ARGUMENT : unknown deleteAttribute {other:?}"),
-                    ))
+                    // The proto3 JSON enum decoder's refusal, index and all.
+                    let field = format!("delete_attribute[{index}]");
+                    return Err(proto_field_error(
+                        &field,
+                        &format!("Invalid value at '{field}' (type.googleapis.com/google.cloud.identitytoolkit.v1.SetAccountInfoRequest.UserAttributeName), {other:?}"),
+                    ));
                 }
             }
         }
@@ -3629,11 +7985,9 @@ fn parse_update(body: &Value) -> Result<UpdatePlan, JsonResponse> {
         for p in string_list(providers, "deleteProvider")? {
             match p.as_str() {
                 "phone" => phone_number = Change::Clear,
-                // The official emulator drops the address with the credential.
-                "password" => {
-                    clear_password = true;
-                    clear_email = true;
-                }
+                // Production keeps the address when the password provider is removed
+                // (sandbox recording 2026-09-23); the official emulator drops it.
+                "password" => clear_password = true,
                 "emailLink" => {
                     return Err(error(
                         400,
@@ -3671,36 +8025,163 @@ fn parse_update(body: &Value) -> Result<UpdatePlan, JsonResponse> {
     })
 }
 
+// A verified client may update normal profile fields, but email verification remains
+// server-controlled. OOB and Admin planning do not use this projection.
+// Second45 observed client scalar decoding. Keep session error precedence and the
+// Admin/OOB routes separate; no mutation is planned before this check succeeds.
+fn validate_client_update_shapes(body: &Value) -> Result<(), JsonResponse> {
+    for (field, proto) in [
+        ("localId", "local_id"),
+        ("displayName", "display_name"),
+        ("emailVerified", "email_verified"),
+        ("customAttributes", "custom_attributes"),
+    ] {
+        let Some(value) = body.get(field) else {
+            continue;
+        };
+        let (description, field_path) = if value.is_object() {
+            (
+                format!("Invalid value ({proto}), Starting an object on a scalar field"),
+                false,
+            )
+        } else if value.is_array() {
+            (format!("Invalid JSON payload received. Unknown name \"{field}\": Proto field is not repeating, cannot start list."), false)
+        } else if field == "displayName" && value.is_boolean() {
+            (
+                format!("Invalid value at '{proto}' (TYPE_STRING), {value}"),
+                true,
+            )
+        } else {
+            continue;
+        };
+        let mut violation = json!({"description": description});
+        if field_path {
+            violation["field"] = json!(proto);
+        }
+        return Err(JsonResponse {
+            status: 400,
+            body: json!({"error": {
+                "code": 400, "message": description,
+                "errors": [{"message": description, "reason": "invalid"}],
+                "status": "INVALID_ARGUMENT",
+                "details": [{"@type": "type.googleapis.com/google.rpc.BadRequest", "fieldViolations": [violation]}]
+            }}),
+        });
+    }
+    Ok(())
+}
+
+fn parse_client_update(body: &Value) -> Result<UpdatePlan, JsonResponse> {
+    let mut client = body.clone();
+    if let Some(fields) = client.as_object_mut() {
+        fields.remove("emailVerified");
+        if fields.get("customAttributes").is_some_and(Value::is_null) {
+            fields.remove("customAttributes");
+        }
+        if let Some(Value::Number(number)) = fields.get("displayName") {
+            fields.insert("displayName".to_owned(), Value::String(number.to_string()));
+        }
+    }
+    parse_update(&client)
+}
+
 #[allow(clippy::too_many_lines)]
 fn update(
     store: &mut AuthStore,
     body: &Value,
     at: LogicalInstant,
     stateless_refresh_tokens: bool,
+    privileged: bool,
 ) -> JsonResponse {
+    // Account ownership does not authorize administrative field changes. Presence
+    // includes false/empty/null. On the OOB route the field is rejected before the code
+    // is consumed; on the end-user session route the session is authenticated first and
+    // the field authorized after (see the session branch below).
+    let has_admin_field = !privileged
+        && [
+            "customAttributes",
+            "emailVerified",
+            "mfa",
+            "linkProviderUserInfo",
+        ]
+        .iter()
+        .any(|field| body.get(*field).is_some());
     // `applyActionCode`: an email verification / change code instead of a session.
     if let Some(code) = str_field(body, "oobCode") {
+        if has_admin_field {
+            return error(400, "OPERATION_NOT_ALLOWED");
+        }
         return apply_oob_code(store, code, at);
     }
-    let local_id = match opt_str(body, "localId") {
-        Ok(v) => v,
-        Err(r) => return r,
+    let self_service = !privileged;
+    let local_id = if privileged {
+        match opt_str(body, "localId") {
+            Ok(v) => v,
+            Err(r) => return r,
+        }
+    } else {
+        None
     };
+    // The observed missing/null token profile family does not change shared token errors.
+    if self_service
+        && body.as_object().is_some_and(|o| {
+            o.contains_key("displayName")
+                && o.keys()
+                    .all(|k| matches!(k.as_str(), "displayName" | "localId" | "idToken"))
+                && o.get("idToken").is_none_or(Value::is_null)
+        })
+    {
+        return error(400, "INVALID_REQ_TYPE");
+    }
     // The provider the request's session signed in with, when it carries one: the official
     // emulator re-issues tokens for a session whose credentials it just changed.
     let mut session_provider: Option<fireemu_core_auth::store::Provider> = None;
+    if privileged && local_id.is_none() && body.get("idToken").is_none_or(Value::is_null) {
+        return error(400, "MISSING_LOCAL_ID");
+    }
     let uid = if let Some(local_id) = local_id {
+        // An enforced custom policy refuses the password before the account is looked up;
+        // the default minimum length is checked after (sandbox recording 2026-09-23,
+        // `policy/enforce-custom#admin-update-weak`, `policy/default/routes#admin-update-weak`).
+        if let Some(password) = str_field(body, "password") {
+            if let Err(e @ AuthError::PasswordPolicyViolation(_)) = store.validate_password_for(
+                fireemu_core_auth::password_policy::Operation::Change,
+                password,
+            ) {
+                return auth_error(&e);
+            }
+        }
         match store.user_by_id(local_id) {
             Some(u) => u.local_id.clone(),
             None => return error(400, "USER_NOT_FOUND"),
         }
     } else {
-        match verify_session(store, body, at) {
+        // Authenticate the client before planning any mutation. A supplied localId is
+        // never a client selector, and does not change self-service invalidation rules.
+        match verify_session_accepting(store, body, at, jwt_error, LegacyTokens::Honoured) {
             Ok(session) => {
+                if self_service {
+                    if let Err(response) = validate_client_update_shapes(body) {
+                        return response;
+                    }
+                    if body.get("customAttributes").is_some_and(|v| !v.is_null()) {
+                        return error(400, "INSUFFICIENT_PERMISSION");
+                    }
+                }
+                if has_admin_field && body.get("linkProviderUserInfo").is_some() {
+                    // Sandbox recording 2026-09-23 (`client-update-link-provider`).
+                    return error(
+                        400,
+                        "UNEXPECTED_PARAMETER : link_provider_user_info is not allowed with ID token.",
+                    );
+                }
+                if has_admin_field && body.get("mfa").is_some() {
+                    return error(400, "OPERATION_NOT_ALLOWED");
+                }
                 if body.get("disableUser").is_some_and(|v| !v.is_null()) {
                     return error(400, "OPERATION_NOT_ALLOWED");
                 }
-                session_provider = Some(provider_from_id(&session.provider));
+                session_provider = self_service.then(|| provider_from_id(&session.provider));
                 session.uid
             }
             Err(r) => return r,
@@ -3708,19 +8189,41 @@ fn update(
     };
     // Validate the whole request before touching the store (a rejected request changes
     // nothing); email / phone uniqueness is part of the validation.
-    let plan = match parse_update(body) {
+    let plan = match if self_service {
+        parse_client_update(body)
+    } else {
+        parse_update(body)
+    } {
         Ok(p) => p,
         Err(r) => return r,
     };
+    if let Some(password) = &plan.password {
+        if let Err(e) = store.validate_password_for(
+            fireemu_core_auth::password_policy::Operation::Change,
+            password,
+        ) {
+            return auth_error(&e);
+        }
+    }
     // Improved email privacy requires a proof-of-ownership OOB flow for address changes.
     // It also removes the legacy setAccountInfo email/password linking path; clients link
     // through accounts:signUp with the current ID token instead. Privileged Admin updates
     // remain available for account administration.
-    if local_id.is_none()
+    if self_service
         && store.config().enable_improved_email_privacy
         && (plan.email.is_some() || plan.clear_email)
     {
-        return error(400, "OPERATION_NOT_ALLOWED");
+        if plan
+            .email
+            .as_deref()
+            .is_some_and(|email| !email.contains('@'))
+        {
+            return error(400, "INVALID_EMAIL");
+        }
+        return error(
+            400,
+            "OPERATION_NOT_ALLOWED : Please verify the new email before changing email.",
+        );
     }
     if let Some(email) = &plan.email {
         if !store.config().allow_duplicate_emails
@@ -3730,6 +8233,29 @@ fn update(
         {
             return error(400, "EMAIL_EXISTS");
         }
+    }
+    // Duplicate-email mode never gives an address two password accounts, judged on the state
+    // this update produces, so neither the address nor the password can arrive second
+    // (closure re-review 2026-09-24).
+    let final_email = if plan.clear_email {
+        None
+    } else {
+        plan.email
+            .clone()
+            .or_else(|| store.user(&uid).and_then(|u| u.email.clone()))
+    };
+    let final_password =
+        plan.password.is_some() || (store.has_password(&uid) && !plan.clear_password);
+    if final_password
+        && (plan.email.is_some() || plan.password.is_some())
+        && final_email.as_deref().is_some_and(|email| {
+            store
+                .users_by_email(email)
+                .iter()
+                .any(|other| other.local_id != uid && store.has_password(&other.local_id))
+        })
+    {
+        return error(400, "EMAIL_EXISTS");
     }
     if let Change::Set(phone) = &plan.phone_number {
         if store
@@ -3745,6 +8271,26 @@ fn update(
             .is_some_and(|u| u.local_id != uid)
         {
             return error(400, "FEDERATED_USER_ID_ALREADY_LINKED");
+        }
+    }
+    // Every refusal a later step of this update can raise is decided here, before the first
+    // write. The store calls below run in a fixed order (claims, providers, factors,
+    // address, ...), so a condition checked only by the step that owns it would let the
+    // steps ahead of it land and then return 400. The order of the checks is the order of
+    // the writes they stand for, which keeps the error a request with several faults gets.
+    if let Some(claims) = &plan.claims {
+        if let Err(e) = claims.check_size() {
+            return auth_error(&AuthError::LimitExceeded(e));
+        }
+    }
+    if let Some(factors) = &plan.phone_factors {
+        if let Err(e) = store.check_phone_factors(&uid, factors) {
+            return mfa_error(&e);
+        }
+    }
+    if let Some(email) = &plan.email {
+        if let Err(e) = store.validate_email_update(&uid, email) {
+            return auth_error(&e);
         }
     }
     if let Some(claims) = plan.claims {
@@ -3771,19 +8317,31 @@ fn update(
     // address also ends the existing sessions, as a password change does.
     let mut email_changed = false;
     if let Some(email) = &plan.email {
-        email_changed = store.user(&uid).and_then(|u| u.email.as_deref()) != Some(email);
+        let canonical_email = canonicalize_email(email);
+        email_changed =
+            store.user(&uid).and_then(|u| u.email.as_deref()) != Some(canonical_email.as_str());
         if let Err(e) = store.set_email(&uid, email) {
             return auth_error(&e);
         }
-        if email_changed {
+        // Production keeps emailVerified through an Admin email change (sandbox recording
+        // 2026-09-23); an end-user change still starts unverified.
+        if email_changed && self_service {
             if let Some(u) = store.user_mut(&uid) {
                 u.email_verified = false;
             }
         }
     }
     if plan.clear_email {
+        let verified = store.user(&uid).is_some_and(|u| u.email_verified);
         if let Err(e) = store.clear_email(&uid) {
             return auth_error(&e);
+        }
+        // An Admin email removal keeps emailVerified in production (sandbox recording
+        // 2026-09-23, auth-account/admin/update#delete-email).
+        if !self_service && verified {
+            if let Some(u) = store.user_mut(&uid) {
+                u.email_verified = true;
+            }
         }
     }
     if plan.clear_password {
@@ -3805,11 +8363,22 @@ fn update(
         }
     }
     if let Some(password) = &plan.password {
-        if let Err(e) = store.set_password(&uid, password, at) {
+        if let Err(e) = store.set_password_for(
+            &uid,
+            password,
+            at,
+            fireemu_core_auth::password_policy::Operation::Change,
+        ) {
             return auth_error(&e);
         }
-        // Setting a password makes the session a password session.
-        session_provider = Some(fireemu_core_auth::store::Provider::Password);
+        // Setting a password over a session makes it a password session, so the session's
+        // own credential change re-issues tokens. A privileged administrative update
+        // (localId, no session) issues nothing: production returns no tokens for an
+        // administrative password update, of an enabled account as of a disabled one
+        // (auth-pending-trigger admin-password-update, recorded and approved 2026-09-12).
+        if self_service {
+            session_provider = Some(fireemu_core_auth::store::Provider::Password);
+        }
     }
     if let Some(u) = store.user_mut(&uid) {
         plan.display_name.apply(&mut u.display_name);
@@ -3821,32 +8390,44 @@ fn update(
             u.disabled = disable;
         }
     }
-    // A password change, an email change, an explicit `validSince` and a disablement all
-    // move `validSince`, so ID tokens issued before this second are refused (what the
-    // official emulator does). Under the emulator profile, refresh tokens remain stateless
-    // and usable after these mutations, matching the official emulator. The strict profile
-    // revokes them after privileged revocation, disablement and privileged credential changes.
-    // Self-service credential changes keep the current refresh token in both profiles.
+    // Disable-only strict updates suspend use without destroying existing credentials,
+    // matching the recorded disable/re-enable flow. Preserve the emulator's validSince
+    // behavior, and keep credential changes and explicit revocation independent of disablement.
     let credentials_changed = plan.password.is_some() || email_changed || plan.revoke_at.is_some();
-    if credentials_changed || plan.disable == Some(true) {
-        let _ = store.revoke_tokens(&uid, plan.revoke_at.unwrap_or(at));
+    let implicit_revocation = plan.password.is_some() || email_changed;
+    if implicit_revocation || (stateless_refresh_tokens && plan.disable == Some(true)) {
+        let _ = store.revoke_tokens(&uid, at);
     }
-    let self_service = local_id.is_none();
-    if !stateless_refresh_tokens
-        && (plan.revoke_at.is_some()
-            || plan.disable == Some(true)
-            || (credentials_changed && !self_service))
-    {
+    // An administrator's validSince is stored as given, even when it is earlier than before;
+    // sessions are judged against it when they are used (sandbox recording 2026-09-24). A
+    // client update's validSince changes nothing (AUTH-ACCOUNT recording 2026-09-23,
+    // privilege/valid-token-admin-fields#admin-readback-valid-since).
+    if let Some(valid_since) = plan.revoke_at.filter(|_| !self_service) {
+        let _ = store.set_valid_since(&uid, valid_since);
+    }
+    // A privileged password replacement or an explicit validSince advances `validSince` but
+    // keeps the refresh-session record, so a session issued in the revocation second is not
+    // older than the floored instant and older sessions fail as TOKEN_EXPIRED. Administrative
+    // email changes still retire the session immediately. Credential-removal flags retain their
+    // existing session behavior.
+    let removes_refresh_credential = email_changed && !self_service;
+    if !stateless_refresh_tokens && removes_refresh_credential {
         store.revoke_refresh_tokens(&uid);
     }
     let mut response =
         json!({"localId": uid.as_str(), "kind": "identitytoolkit#SetAccountInfoResponse"});
     if let Some(u) = store.user(&uid) {
         response["email"] = json!(u.email);
-        response["emailVerified"] = json!(u.email_verified);
+        // As in a lookup: with an address, and while true after one was removed; never for an
+        // account that had none (sandbox recording 2026-09-24).
+        if u.email.is_some() || u.email_verified || u.email_verified_recorded {
+            response["emailVerified"] = json!(u.email_verified);
+        }
         response["displayName"] = json!(u.display_name);
         response["photoUrl"] = json!(u.photo_url);
-        if email_changed {
+        // Production's Admin update answer carries no `newEmail` (sandbox recording
+        // 2026-09-23, `auth-account/admin/update#change-email`).
+        if email_changed && self_service {
             response["newEmail"] = json!(u.email);
         }
     }
@@ -3856,12 +8437,24 @@ fn update(
             response[key] = value.clone();
         }
     }
-    if credentials_changed && plan.disable != Some(true) {
+    // Tokens follow a credential change only for an account that is enabled after this
+    // update: production (recorded 2026-09-12) applies an administrative password
+    // replacement to a disabled account without returning tokens.
+    let enabled_after = store.user(&uid).is_some_and(|u| !u.disabled);
+    if credentials_changed && enabled_after {
         if let Some(provider) = session_provider {
             match issue_tokens_with(store, &uid, None, at, None, Some(provider)) {
                 Ok(tokens) => {
-                    for key in ["idToken", "refreshToken", "expiresIn"] {
-                        response[key] = tokens[key].clone();
+                    // Production returns the refresh token and its lifetime only when the
+                    // request asks with returnSecureToken (sandbox recording 2026-09-23).
+                    let keys: &[&str] =
+                        if body.get("returnSecureToken").and_then(Value::as_bool) == Some(true) {
+                            &["idToken", "refreshToken", "expiresIn"]
+                        } else {
+                            &["idToken"]
+                        };
+                    for key in keys {
+                        response[*key] = tokens[*key].clone();
                     }
                 }
                 Err(r) => return r,
@@ -3905,12 +8498,32 @@ fn delete_account(
             Err(r) => return r,
         }
     } else {
-        match verify(store, body, at) {
-            Ok(uid) => uid,
+        // As for lookup, a token whose account is gone is USER_NOT_FOUND.
+        match verify_session_accepting(
+            store,
+            body,
+            at,
+            |e| {
+                if matches!(e, fireemu_core_auth::jwt::JwtError::UnknownUser) {
+                    error(400, "USER_NOT_FOUND")
+                } else {
+                    jwt_error(e)
+                }
+            },
+            LegacyTokens::Honoured,
+        ) {
+            Ok(session) => session.uid,
             Err(r) => return r,
         }
     };
-    match store.delete_user_by_id(uid.as_str()) {
+    match store.delete_user_by_id_as(
+        if admin {
+            AuthPrincipal::Admin
+        } else {
+            AuthPrincipal::EndUser
+        },
+        uid.as_str(),
+    ) {
         Ok(()) => JsonResponse {
             status: 200,
             body: json!({"kind": "identitytoolkit#DeleteAccountResponse"}),
@@ -3932,9 +8545,15 @@ fn admin_create(store: &mut AuthStore, body: &Value, at: LogicalInstant) -> Json
         if password.is_some() && email.is_none() {
             return Err(error(400, "INVALID_ARGUMENT : password requires an email"));
         }
-        let phone = opt_str(body, "phoneNumber")?.map(str::to_owned);
+        // Production's Admin create stores the number normalized and names the format problem
+        // (sandbox recording 2026-09-23).
+        let phone = opt_str(body, "phoneNumber")?
+            .map(|p| {
+                AuthStore::normalize_phone_number(p)
+                    .map_err(|_| error(400, "INVALID_PHONE_NUMBER : Invalid format."))
+            })
+            .transpose()?;
         if let Some(p) = &phone {
-            AuthStore::validate_phone_number(p).map_err(|e| auth_error(&e))?;
             if store.user_by_phone(p).is_some() {
                 return Err(error(400, "PHONE_NUMBER_EXISTS"));
             }
@@ -3943,6 +8562,11 @@ fn admin_create(store: &mut AuthStore, body: &Value, at: LogicalInstant) -> Json
             None | Some(Value::Null) => Vec::new(),
             Some(v) => parse_phone_factors(v)?,
         };
+        for field in ["displayName", "photoUrl"] {
+            if let Some(value) = opt_str(body, field)? {
+                reject_control_characters(value, field)?;
+            }
+        }
         Ok((
             email,
             password,
@@ -3969,6 +8593,9 @@ fn admin_create(store: &mut AuthStore, body: &Value, at: LogicalInstant) -> Json
         Ok(p) => p,
         Err(r) => return r,
     };
+    if requested_id.as_deref().is_some_and(local_id_too_long) {
+        return backend_internal_error();
+    }
     let new_user = match &email {
         Some(email) => NewUser {
             email: Some(email.clone()),
@@ -3977,7 +8604,12 @@ fn admin_create(store: &mut AuthStore, body: &Value, at: LogicalInstant) -> Json
         },
         None => NewUser::anonymous(),
     };
-    let uid = match store.create_user_with_id(new_user, requested_id.as_deref(), at) {
+    let uid = match store.create_user_with_id_as(
+        AuthPrincipal::Admin,
+        new_user,
+        requested_id.as_deref(),
+        at,
+    ) {
         Ok(uid) => uid,
         Err(e) => return auth_error(&e),
     };
@@ -3996,6 +8628,7 @@ fn admin_create(store: &mut AuthStore, body: &Value, at: LogicalInstant) -> Json
         u.display_name = display_name;
         u.photo_url = photo_url;
         u.disabled = disabled;
+        u.admin_created = true;
     }
     if let Err(e) = store.set_phone_factors(&uid, factors, at) {
         let _ = store.delete_user_by_id(uid.as_str());
@@ -4003,7 +8636,8 @@ fn admin_create(store: &mut AuthStore, body: &Value, at: LogicalInstant) -> Json
     }
     JsonResponse {
         status: 200,
-        body: json!({"kind": "identitytoolkit#SignupNewUserResponse", "localId": uid.as_str(), "email": email, "tenantId": store.tenant_id()}),
+        // Production always carries `email` here, empty when the request gave none.
+        body: json!({"kind": "identitytoolkit#SignupNewUserResponse", "localId": uid.as_str(), "email": email.as_deref().unwrap_or(""), "tenantId": store.tenant_id()}),
     }
 }
 
@@ -4043,17 +8677,25 @@ fn admin_batch_delete(store: &mut AuthStore, body: &Value) -> JsonResponse {
     }
 }
 
-/// Admin `accounts:query` (`queryAccounts`): the count, or users in `localId` order.
-/// Expressions are not implemented by the official emulator either. The Firebase profile
-/// preserves its ignored paging fields; strict applies the documented production contract.
+/// Admin `accounts:query` (`queryAccounts`): count or a bounded, field-sorted page.
+/// The Firebase profile preserves its unimplemented expression/ignored paging behavior.
+/// Strict mode accepts the typed `SqlExpression` shape, with an explicit local exact-union policy.
 fn admin_query(store: &AuthStore, body: &Value, limits: AuthQueryLimits) -> JsonResponse {
-    if body
-        .get("expression")
-        .and_then(Value::as_array)
-        .is_some_and(|e| !e.is_empty())
-    {
-        return not_implemented("expression is not implemented.");
-    }
+    let expressions = if limits == AuthQueryLimits::ProductionBounded {
+        match parse_admin_query_expressions(body) {
+            Ok(expressions) => expressions,
+            Err(response) => return response,
+        }
+    } else {
+        if body
+            .get("expression")
+            .and_then(Value::as_array)
+            .is_some_and(|e| !e.is_empty())
+        {
+            return not_implemented("expression is not implemented.");
+        }
+        Vec::new()
+    };
     let return_user_info = if limits == AuthQueryLimits::ProductionBounded {
         match opt_bool(body, "returnUserInfo") {
             Ok(value) => value.unwrap_or(true),
@@ -4062,12 +8704,14 @@ fn admin_query(store: &AuthStore, body: &Value, limits: AuthQueryLimits) -> Json
     } else {
         body.get("returnUserInfo").and_then(Value::as_bool) != Some(false)
     };
-    if limits == AuthQueryLimits::ProductionBounded {
-        if let Err(response) = validate_production_admin_query_enums(body) {
-            return response;
+    let sort = if limits == AuthQueryLimits::ProductionBounded {
+        match validate_production_admin_query_enums(body) {
+            Ok(sort) => sort,
+            Err(response) => return response,
         }
-    }
-    let count = store.user_count();
+    } else {
+        UserSortField::LocalId
+    };
     if !return_user_info {
         if limits == AuthQueryLimits::ProductionBounded
             && ["limit", "offset"]
@@ -4081,11 +8725,11 @@ fn admin_query(store: &AuthStore, body: &Value, limits: AuthQueryLimits) -> Json
         }
         return JsonResponse {
             status: 200,
-            body: json!({"recordsCount": count.to_string()}),
+            body: json!({"recordsCount": store.matching_user_count(&expressions).to_string()}),
         };
     }
     if limits == AuthQueryLimits::ProductionBounded {
-        return production_admin_query_page(store, body);
+        return production_admin_query_page(store, body, sort, &expressions);
     }
     let mut ids = store.all_user_ids();
     if str_field(body, "order") == Some("DESC") {
@@ -4094,15 +8738,77 @@ fn admin_query(store: &AuthStore, body: &Value, limits: AuthQueryLimits) -> Json
     let users: Vec<Value> = ids.iter().map(|uid| user_json(store, uid)).collect();
     JsonResponse {
         status: 200,
-        body: json!({"recordsCount": count.to_string(), "userInfo": users}),
+        body: json!({"recordsCount": store.user_count().to_string(), "userInfo": users}),
     }
 }
 
-fn production_admin_query_page(store: &AuthStore, body: &Value) -> JsonResponse {
+/// Decode `SqlExpression`, not a SQL string. Validate every field before applying the
+/// documented priority email > phoneNumber > userId. Unrecognized or mistyped selectors are
+/// refused; an empty one is no constraint, as production answers it. Limits below are local
+/// parser safety limits, not claimed Identity Platform quotas.
+fn parse_admin_query_expressions(body: &Value) -> Result<Vec<UserQueryExpression>, JsonResponse> {
+    const MAX_EXPRESSIONS: usize = 128;
+    const MAX_SELECTOR_BYTES: usize = 4_096;
+    let expressions = match body.get("expression") {
+        None | Some(Value::Null) => return Ok(Vec::new()),
+        Some(Value::Array(expressions)) if expressions.len() <= MAX_EXPRESSIONS => expressions,
+        _ => return Err(error(400, "INVALID_ARGUMENT : invalid expression array")),
+    };
+    let mut result = Vec::new();
+    for expression in expressions {
+        let Some(object) = expression.as_object() else {
+            return Err(error(
+                400,
+                "INVALID_ARGUMENT : expression must be an object",
+            ));
+        };
+        if object
+            .keys()
+            .any(|key| !matches!(key.as_str(), "email" | "phoneNumber" | "userId"))
+        {
+            return Err(error(400, "INVALID_ARGUMENT : unknown expression field"));
+        }
+        // JSON null is an unset proto scalar; every supplied non-null value is typed,
+        // including a lower-priority selector that will not be used for matching.
+        for value in object.values() {
+            if !value.is_null()
+                && !value.as_str().is_some_and(|text| {
+                    text.len() <= MAX_SELECTOR_BYTES && !text.chars().any(char::is_control)
+                })
+            {
+                return Err(error(400, "INVALID_ARGUMENT : invalid expression selector"));
+            }
+        }
+        // The first non-empty selector in email > phoneNumber > userId order; none at all is
+        // no constraint, as production answers it (sandbox recording 2026-09-23,
+        // expression-empty-item and expression-empty-string).
+        let non_empty = |key: &str| str_field(expression, key).filter(|v| !v.is_empty());
+        let selected = non_empty("email")
+            .map(|email| UserQueryExpression::Email(canonicalize_email(email)))
+            .or_else(|| {
+                non_empty("phoneNumber")
+                    .map(|phone| UserQueryExpression::PhoneNumber(phone.to_owned()))
+            })
+            .or_else(|| non_empty("userId").map(|id| UserQueryExpression::UserId(id.to_owned())));
+        result.push(selected);
+    }
+    // Production evaluates only the first expression (sandbox recording 2026-09-23,
+    // auth-account/admin/query#expression-two); every item is still type-checked above.
+    Ok(result.into_iter().next().flatten().into_iter().collect())
+}
+
+fn production_admin_query_page(
+    store: &AuthStore,
+    body: &Value,
+    sort: UserSortField,
+    expressions: &[UserQueryExpression],
+) -> JsonResponse {
     // Enum fields were validated before the count-only branch in `admin_query`.
     let descending = str_field(body, "order") == Some("DESC");
+    // Production accepts a limit above 500 (sandbox recording 2026-09-23); the upper bound
+    // here is a local guard, not an observed quota.
     let limit = match query_i64(body, "limit", 500) {
-        Ok(limit @ 0..=500) => usize::try_from(limit).unwrap_or(500),
+        Ok(limit @ 0..=10_000) => usize::try_from(limit).unwrap_or(500),
         Ok(_) | Err(()) => return error(400, "INVALID_ARGUMENT : invalid limit"),
     };
     let offset = match query_i64(body, "offset", 0) {
@@ -4110,29 +8816,40 @@ fn production_admin_query_page(store: &AuthStore, body: &Value) -> JsonResponse 
             Ok(offset) => offset,
             Err(_) => return error(400, "INVALID_ARGUMENT : invalid offset"),
         },
-        Ok(_) | Err(()) => return error(400, "INVALID_ARGUMENT : invalid offset"),
+        // Production fails a negative offset internally (corpus v2 recording 2026-09-24).
+        Ok(_) => return backend_internal_error(),
+        Err(()) => return error(400, "INVALID_ARGUMENT : invalid offset"),
     };
-    let page = store.users_by_local_id_page(offset, limit, descending);
+    let page = store.users_matching_sorted_page(expressions, sort, offset, limit, descending);
     let users = page
         .iter()
         .map(|user| user_json(store, &user.local_id))
         .collect::<Vec<_>>();
-    JsonResponse {
-        status: 200,
-        body: json!({"recordsCount": users.len().to_string(), "userInfo": users}),
+    // An empty page carries no `userInfo` (sandbox recording 2026-09-23, limit-0).
+    let mut body = json!({"recordsCount": users.len().to_string()});
+    if !users.is_empty() {
+        body["userInfo"] = Value::Array(users);
     }
+    JsonResponse { status: 200, body }
 }
 
-fn validate_production_admin_query_enums(body: &Value) -> Result<(), JsonResponse> {
-    match opt_str(body, "sortBy") {
-        Ok(None | Some("SORT_BY_FIELD_UNSPECIFIED" | "USER_ID")) => {}
-        Ok(Some("NAME" | "CREATED_AT" | "LAST_LOGIN_AT" | "USER_EMAIL")) => {
-            return Err(not_implemented("sortBy is not implemented."));
+fn validate_production_admin_query_enums(body: &Value) -> Result<UserSortField, JsonResponse> {
+    let sort = match opt_str(body, "sortBy") {
+        Ok(None | Some("SORT_BY_FIELD_UNSPECIFIED" | "USER_ID")) => UserSortField::LocalId,
+        Ok(Some("NAME")) => UserSortField::Name,
+        Ok(Some("CREATED_AT")) => UserSortField::CreatedAt,
+        Ok(Some("LAST_LOGIN_AT")) => UserSortField::LastLoginAt,
+        Ok(Some("USER_EMAIL")) => UserSortField::Email,
+        Ok(Some(other)) => {
+            return Err(proto_field_error(
+                "sort_by",
+                &format!("Invalid value at 'sort_by' (type.googleapis.com/google.cloud.identitytoolkit.v1.QueryUserInfoRequest.SortByField), {other:?}"),
+            ))
         }
-        Ok(Some(_)) | Err(_) => return Err(error(400, "INVALID_ARGUMENT : invalid sortBy")),
-    }
+        Err(_) => return Err(error(400, "INVALID_ARGUMENT : invalid sortBy")),
+    };
     match opt_str(body, "order") {
-        Ok(None | Some("ORDER_UNSPECIFIED" | "ASC" | "DESC")) => Ok(()),
+        Ok(None | Some("ORDER_UNSPECIFIED" | "ASC" | "DESC")) => Ok(sort),
         Ok(Some(_)) | Err(_) => Err(error(400, "INVALID_ARGUMENT : invalid order")),
     }
 }
@@ -4162,28 +8879,50 @@ const SESSION_COOKIE_MAX_SECONDS: i64 = 14 * 24 * 60 * 60;
 /// the session-cookie issuer and the requested lifetime. Unsigned when the session is, as
 /// the official emulator's cookies are (the Admin SDK's `verifySessionCookie` accepts only
 /// `alg: none` while it points at an emulator).
-fn create_session_cookie(store: &AuthStore, body: &Value, at: LogicalInstant) -> JsonResponse {
+fn create_session_cookie(
+    store: &AuthStore,
+    body: &Value,
+    at: LogicalInstant,
+    strict: bool,
+) -> JsonResponse {
+    // Strict: `validDuration` is an int64 decoded with the request; an omitted one is the maximum
+    // and any other value, zero included, must lie within the bounds (sandbox recording
+    // 2026-09-24). Emulator: the official emulator's `Number(v) || two weeks`.
+    let valid_duration = match body.get("validDuration") {
+        None | Some(Value::Null) => SESSION_COOKIE_MAX_SECONDS,
+        Some(value) if !strict => emulator_valid_duration(value),
+        Some(value) => {
+            let decoded = match value {
+                Value::String(text) => text.parse::<i64>().ok(),
+                Value::Number(n) => n.as_i64(),
+                _ => None,
+            };
+            let Some(decoded) = decoded else {
+                return proto_field_error(
+                    "valid_duration",
+                    &format!("Invalid value at 'valid_duration' (TYPE_INT64), {value}"),
+                );
+            };
+            decoded
+        }
+    };
     let token = match body.get("idToken") {
         None | Some(Value::Null) => return error(400, "MISSING_ID_TOKEN"),
         Some(Value::String(t)) => t.as_str(),
         Some(_) => return error(400, "INVALID_ID_TOKEN"),
     };
-    let valid_duration = match body.get("validDuration") {
-        None | Some(Value::Null) => SESSION_COOKIE_MAX_SECONDS,
-        Some(Value::String(s)) => s.parse::<i64>().unwrap_or(0),
-        Some(Value::Number(n)) => n.as_i64().unwrap_or(0),
-        Some(_) => 0,
-    };
-    let valid_duration = if valid_duration == 0 {
-        SESSION_COOKIE_MAX_SECONDS
-    } else {
-        valid_duration
-    };
     if !(SESSION_COOKIE_MIN_SECONDS..=SESSION_COOKIE_MAX_SECONDS).contains(&valid_duration) {
         return error(400, "INVALID_DURATION");
     }
-    let (_, decoded) = match fireemu_core_auth::jwt::verify_id_token_decoded(token, store, at) {
+    let (_, decoded) = match fireemu_core_auth::jwt::verify_id_token_decoded_with_leeway(
+        token,
+        store,
+        at,
+        fireemu_core_auth::jwt::IDENTITY_TOOLKIT_EXPIRY_LEEWAY_SECONDS,
+    ) {
         Ok(v) => v,
+        // A deleted account's token names nobody (sandbox recording 2026-09-24).
+        Err(JwtError::UnknownUser) => return error(400, "USER_NOT_FOUND"),
         Err(e) => return jwt_error(&e),
     };
     let Ok(mut payload) = serde_json::from_str::<Value>(&decoded.payload_json) else {
@@ -4196,52 +8935,47 @@ fn create_session_cookie(store: &AuthStore, body: &Value, at: LogicalInstant) ->
         "https://session.firebase.google.com/{}",
         store.project_id()
     ));
-    let cookie = fireemu_core_auth::jwt::encode_payload_with(&payload.to_string(), None);
+    let cookie = fireemu_core_auth::jwt::encode_payload_shaped(
+        &payload.to_string(),
+        None,
+        HeaderShape::Untyped,
+    );
     JsonResponse {
         status: 200,
         body: json!({"sessionCookie": cookie}),
     }
 }
 
-/// Minimal `application/x-www-form-urlencoded` query decoding (ASCII percent escapes).
-fn query_params(query: Option<&str>) -> BTreeMap<String, String> {
-    fn decode(s: &str) -> String {
-        let bytes = s.as_bytes();
-        let mut out = Vec::with_capacity(bytes.len());
-        let mut i = 0;
-        while i < bytes.len() {
-            match bytes[i] {
-                b'%' if i + 2 < bytes.len() => {
-                    if let Some(b) = s
-                        .get(i + 1..i + 3)
-                        .and_then(|hex| u8::from_str_radix(hex, 16).ok())
-                    {
-                        out.push(b);
-                        i += 3;
-                    } else {
-                        out.push(b'%');
-                        i += 1;
-                    }
-                }
-                b'+' => {
-                    out.push(b' ');
-                    i += 1;
-                }
-                b => {
-                    out.push(b);
-                    i += 1;
-                }
-            }
-        }
-        String::from_utf8_lossy(&out).into_owned()
+/// The official emulator's `Number(validDuration) || two weeks`, in whole seconds: zero, blank
+/// text and a value that is not a number mean the maximum, and a fraction is truncated as the
+/// emulator's signer truncates the resulting expiry.
+fn emulator_valid_duration(value: &Value) -> i64 {
+    let number = match value {
+        Value::Number(n) => n.as_f64(),
+        Value::String(text) => text.trim().parse::<f64>().ok(),
+        Value::Bool(flag) => Some(if *flag { 1.0 } else { 0.0 }),
+        _ => None,
     }
+    .filter(|n| n.is_finite() && *n != 0.0);
+    // A float-to-integer `as` saturates, so an enormous value stays out of range, as it is.
+    #[allow(clippy::cast_possible_truncation)]
+    number.map_or(SESSION_COOKIE_MAX_SECONDS, |n| n.trunc() as i64)
+}
+
+/// `application/x-www-form-urlencoded` query decoding through the shared codec: `+` is a
+/// space and only two ASCII hexadecimal digits form an escape, so `%+f` stays literal.
+fn decode_query_component(s: &str) -> String {
+    fireemu_core_types::codec::percent_decode(s, fireemu_core_types::codec::PlusMode::Space)
+}
+
+fn query_params(query: Option<&str>) -> BTreeMap<String, String> {
     query
         .unwrap_or("")
         .split('&')
         .filter(|kv| !kv.is_empty())
         .map(|kv| match kv.split_once('=') {
-            Some((k, v)) => (decode(k), decode(v)),
-            None => (decode(kv), String::new()),
+            Some((k, v)) => (decode_query_component(k), decode_query_component(v)),
+            None => (decode_query_component(kv), String::new()),
         })
         .collect()
 }
@@ -4253,7 +8987,7 @@ fn query_params(query: Option<&str>) -> BTreeMap<String, String> {
 /// a hash it cannot compare (a sign-in against it fails).
 fn batch_row_password(row: &Value) -> Result<Option<(String, String)>, JsonResponse> {
     if let Some(raw) = opt_str(row, "rawPassword")? {
-        AuthStore::validate_password(raw).map_err(|e| auth_error(&e))?;
+        AuthStore::validate_imported_password(raw).map_err(|e| auth_error(&e))?;
         let salt = opt_str(row, "salt")?
             .filter(|s| !s.is_empty())
             .map_or_else(|| "fakeSaltimport".to_owned(), str::to_owned);
@@ -4268,9 +9002,7 @@ fn batch_row_password(row: &Value) -> Result<Option<(String, String)>, JsonRespo
     let Some((salt, password)) = rest.split_once(":password=") else {
         return Ok(None);
     };
-    if AuthStore::validate_password(password).is_err() {
-        return Ok(None);
-    }
+    AuthStore::validate_password(password).map_err(|e| auth_error(&e))?;
     Ok(Some((salt.to_owned(), password.to_owned())))
 }
 
@@ -4282,6 +9014,46 @@ fn millis_field(row: &Value, key: &str) -> Option<LogicalInstant> {
         _ => return None,
     };
     Some(LogicalInstant::from_nanos(i128::from(millis) * 1_000_000))
+}
+
+fn validate_batch_row_shapes(row: &Value) -> Result<(), JsonResponse> {
+    for key in ["mfaInfo", "providerUserInfo"] {
+        match row.get(key) {
+            None | Some(Value::Null) => {}
+            Some(Value::Array(items)) => {
+                if items.iter().any(|item| !item.is_object()) {
+                    return Err(error(
+                        400,
+                        &format!("INVALID_ARGUMENT : {key} entries must be objects"),
+                    ));
+                }
+            }
+            Some(_) => {
+                return Err(error(
+                    400,
+                    &format!("INVALID_ARGUMENT : {key} must be an array"),
+                ));
+            }
+        }
+    }
+    for key in ["createdAt", "lastLoginAt"] {
+        let Some(value) = row.get(key) else {
+            continue;
+        };
+        let valid = match value {
+            Value::Null => true,
+            Value::String(value) => value.parse::<i64>().is_ok(),
+            Value::Number(value) => value.as_i64().is_some(),
+            _ => false,
+        };
+        if !valid {
+            return Err(error(
+                400,
+                &format!("INVALID_ARGUMENT : {key} must be a millisecond timestamp"),
+            ));
+        }
+    }
+    Ok(())
 }
 
 /// The second factors of a `batchCreate` row: phone factors as the official emulator
@@ -4362,8 +9134,10 @@ fn batch_row_factors(
 fn batch_row_user(
     row: &Value,
     at: LogicalInstant,
+    hash_spec: Option<&password_hash::HashSpec>,
 ) -> Result<fireemu_core_auth::store::ImportedUser, JsonResponse> {
     use fireemu_core_auth::store::{ImportedUser, Provider};
+    validate_batch_row_shapes(row)?;
     let local_id = opt_str(row, "localId")?
         .filter(|id| !id.is_empty())
         .ok_or_else(|| error(400, "localId is missing"))?;
@@ -4409,7 +9183,12 @@ fn batch_row_user(
     let (totp_factors, phone_factors) =
         batch_row_factors(row, local_id, email.is_some(), email_verified, at)?;
     let password = batch_row_password(row)?;
-    let provider = if password.is_some() || email.is_some() {
+    let imported_password = if password.is_none() {
+        batch_row_imported_hash(row, hash_spec)?
+    } else {
+        None
+    };
+    let provider = if password.is_some() || imported_password.is_some() || email.is_some() {
         Provider::Password
     } else if phone_number.is_some() {
         Provider::Phone
@@ -4430,18 +9209,94 @@ fn batch_row_user(
         custom_claims,
         created_at: millis_field(row, "createdAt").unwrap_or(at),
         last_sign_in_at: millis_field(row, "lastLoginAt"),
+        last_refresh_at: str_field(row, "lastRefreshAt")
+            .and_then(|v| LogicalInstant::parse_rfc3339(v).ok()),
         tokens_valid_after: at,
         federated,
         password,
+        imported_password,
+        allow_shared_email: true,
         totp_factors,
         phone_factors,
     })
+}
+
+/// A row's `passwordHash` (and `salt`) under the request's hash algorithm, kept for the
+/// adapter's verifier. A row without a hash has no password credential.
+fn batch_row_imported_hash(
+    row: &Value,
+    spec: Option<&password_hash::HashSpec>,
+) -> Result<Option<fireemu_core_auth::store::ImportedPasswordHash>, JsonResponse> {
+    let Some(hash) = opt_str(row, "passwordHash")? else {
+        return Ok(None);
+    };
+    let hash =
+        password_hash::base64_decode(hash).ok_or_else(|| error(400, "INVALID_PASSWORD_HASH"))?;
+    // proto3 reads empty bytes as unset: an empty hash is no password credential (external
+    // review 2026-09-24; unobserved in production).
+    if hash.is_empty() {
+        return Ok(None);
+    }
+    let salt = match opt_str(row, "salt")? {
+        Some(salt) => {
+            password_hash::base64_decode(salt).ok_or_else(|| error(400, "INVALID_SALT"))?
+        }
+        None => Vec::new(),
+    };
+    // Without `hashAlgorithm` production still keeps the hash as the password credential;
+    // no password ever matches it.
+    Ok(Some(fireemu_core_auth::store::ImportedPasswordHash {
+        spec: spec.map_or_else(
+            || password_hash::UNSPECIFIED_SPEC.to_owned(),
+            password_hash::encode,
+        ),
+        hash,
+        salt,
+    }))
 }
 
 /// Admin `accounts:batchCreate` (`importUsers`): every row is attempted, and a refused row
 /// is reported by index in `error` while the others are created, which is the official
 /// contract of the route. With `allowOverwrite` an existing account of the same `localId`
 /// is replaced; without it the row is refused.
+/// Bytes and int64 fields of `batchCreate` rows are decoded with the request, before anything
+/// else is validated; a malformed one refuses the whole request.
+fn decode_batch_rows(rows: &[Value]) -> Result<(), JsonResponse> {
+    for (index, row) in rows.iter().enumerate() {
+        for (key, field) in [
+            ("createdAt", "created_at"),
+            ("lastLoginAt", "last_login_at"),
+        ] {
+            let decodes = match row.get(key) {
+                None | Some(Value::Null) => true,
+                Some(Value::Number(n)) => n.is_i64(),
+                Some(Value::String(text)) => text.parse::<i64>().is_ok(),
+                Some(_) => false,
+            };
+            if !decodes {
+                let field = format!("users[{index}].{field}");
+                let value = row.get(key).map(Value::to_string).unwrap_or_default();
+                return Err(proto_field_error(
+                    &field,
+                    &format!("Invalid value at '{field}' (TYPE_INT64), {value}"),
+                ));
+            }
+        }
+        for (key, field) in [("passwordHash", "password"), ("salt", "salt")] {
+            if let Some(text) = row.get(key).and_then(Value::as_str) {
+                if !text.starts_with("fakeHash:") && password_hash::base64_decode(text).is_none() {
+                    let field = format!("users[{index}].{field}");
+                    return Err(proto_field_error(
+                        &field,
+                        &format!("Invalid value at '{field}' (TYPE_BYTES), Base64 decoding failed for {text:?}"),
+                    ));
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
 fn admin_batch_create(store: &mut AuthStore, body: &Value, at: LogicalInstant) -> JsonResponse {
     let Some(rows) = body
         .get("users")
@@ -4450,23 +9305,42 @@ fn admin_batch_create(store: &mut AuthStore, body: &Value, at: LogicalInstant) -
     else {
         return error(400, "MISSING_USER_ACCOUNT");
     };
-    let allow_overwrite = body
-        .get("allowOverwrite")
-        .and_then(Value::as_bool)
-        .unwrap_or(false);
-    if !allow_overwrite {
+    let allow_overwrite = match body.get("allowOverwrite") {
+        None | Some(Value::Null) => false,
+        Some(Value::Bool(value)) => *value,
+        Some(_) => return error(400, "INVALID_ARGUMENT : allowOverwrite must be a boolean"),
+    };
+    // Production upserts rows by localId whatever allowOverwrite says: a repeated localId in
+    // the request is replaced by its later row and an existing account is replaced without an
+    // error (sandbox recording 2026-09-23). The field is still type-checked above.
+    let _ = allow_overwrite;
+    // sanityCheck refuses an address repeated inside the request, before anything is imported.
+    if body.get("sanityCheck").and_then(Value::as_bool) == Some(true) {
         let mut seen = std::collections::BTreeSet::new();
         for row in rows {
-            let id = str_field(row, "localId").unwrap_or("");
-            if !seen.insert(id) {
-                return error(400, &format!("DUPLICATE_LOCAL_ID : {id}"));
+            if let Some(email) = str_field(row, "email").filter(|e| !e.is_empty()) {
+                if !seen.insert(canonicalize_email(email)) {
+                    return error(400, &format!("DUPLICATE_EMAIL : {email}"));
+                }
             }
         }
     }
+    if let Err(response) = decode_batch_rows(rows) {
+        return response;
+    }
+    // The hash algorithm and its parameters apply to every row of the request; production
+    // refuses the whole request when they are invalid.
+    let hash_spec = match body.get("hashAlgorithm") {
+        None | Some(Value::Null) => None,
+        Some(_) => match password_hash::spec_from_options(body) {
+            Ok(spec) => Some(spec),
+            Err(code) => return error(400, code),
+        },
+    };
     let mut errors = Vec::new();
     for (index, row) in rows.iter().enumerate() {
         let refused = |message: String| json!({"index": index, "message": message});
-        let user = match batch_row_user(row, at) {
+        let user = match batch_row_user(row, at, hash_spec.as_ref()) {
             Ok(u) => u,
             Err(r) => {
                 let message = r.body["error"]["message"]
@@ -4477,27 +9351,43 @@ fn admin_batch_create(store: &mut AuthStore, body: &Value, at: LogicalInstant) -
                 continue;
             }
         };
-        if store.user_by_id(&user.local_id).is_some() {
-            if !allow_overwrite {
-                errors.push(refused(
-                    "localId belongs to an existing account - can not overwrite.".to_owned(),
-                ));
-                continue;
+        let imported_password = user.imported_password.is_some() || user.password.is_some();
+        let import_result = if store.user_by_id(&user.local_id).is_some() {
+            // Validate and install a replacement on a copy first. A row can fail after the
+            // UID collision check (for example because its email belongs to another account),
+            // and a failed import must leave the existing account untouched.
+            let mut replacement = store.clone();
+            let _ = replacement.delete_user_by_id(&user.local_id);
+            match replacement.import_user(user) {
+                Ok(uid) => {
+                    *store = replacement;
+                    Ok(uid)
+                }
+                Err(error) => Err(error),
             }
-            let _ = store.delete_user_by_id(&user.local_id);
-        }
-        if let Err(e) = store.import_user(user) {
-            errors.push(refused(e.to_string()));
+        } else {
+            store.import_user(user)
+        };
+        match import_result {
+            // Production stamps an imported password, raw or hashed, with the import time.
+            Ok(uid) if imported_password => store.set_password_updated_at(&uid, at),
+            Ok(_) => {}
+            Err(e) => errors.push(refused(e.to_string())),
         }
     }
     JsonResponse {
         status: 200,
-        body: json!({"kind": "identitytoolkit#UploadAccountResponse", "error": errors}),
+        // Production omits `error` when every row was imported.
+        body: if errors.is_empty() {
+            json!({"kind": "identitytoolkit#UploadAccountResponse"})
+        } else {
+            json!({"kind": "identitytoolkit#UploadAccountResponse", "error": errors})
+        },
     }
 }
 
 /// Admin `accounts:batchGet` (`listUsers`): `GET ?maxResults=&nextPageToken=`, users in
-/// creation order; the page token is an opaque versioned cursor.
+/// user-id order; the page token is the last user id of the page.
 fn admin_batch_get(store: &AuthStore, query: Option<&str>, body: &Value) -> JsonResponse {
     let params = query_params(query);
     let max_text = params.get("maxResults").cloned().or_else(|| {
@@ -4506,11 +9396,13 @@ fn admin_batch_get(store: &AuthStore, query: Option<&str>, body: &Value) -> Json
             other => other.to_string(),
         })
     });
+    // Production answers maxResults 0 with no users and caps larger values at 1000 (sandbox
+    // recording 2026-09-23).
     let max = match max_text.as_deref() {
         None => 1_000usize,
         Some(t) => match t.parse::<usize>() {
-            Ok(n) if (1..=1_000).contains(&n) => n,
-            _ => return error(400, "INVALID_ARGUMENT : maxResults must be 1..=1000"),
+            Ok(n) => n.min(1_000),
+            Err(_) => return error(400, "INVALID_ARGUMENT : maxResults must be a number"),
         },
     };
     let token = params
@@ -4522,22 +9414,34 @@ fn admin_batch_get(store: &AuthStore, query: Option<&str>, body: &Value) -> Json
                 .map(str::to_owned)
         })
         .filter(|t| !t.is_empty());
-    let after: u64 = match token.as_deref() {
-        None => 0,
-        Some(t) => match t.strip_prefix("v1:").and_then(|n| n.parse::<u64>().ok()) {
-            Some(n) => n,
-            None => return error(400, "INVALID_PAGE_TOKEN"),
-        },
-    };
+    // The page token is the last user id of the previous page; production reads any other
+    // string the same way (sandbox recording 2026-09-23).
     let page: Vec<&fireemu_core_auth::store::UserRecord> =
-        store.users_after_sequence(after, max.saturating_add(1));
+        store.users_after_local_id(token.as_deref(), max.saturating_add(1));
     let has_more = page.len() > max;
     let page = &page[..page.len().min(max)];
-    let users: Vec<Value> = page.iter().map(|u| user_json(store, &u.local_id)).collect();
-    let mut response = json!({"kind": "identitytoolkit#DownloadAccountResponse", "users": users});
+    // The Admin download carries the stored hash material production returns to a caller that
+    // may read it: fireemu's own digest and salt, and hash version 0.
+    let users: Vec<Value> = page
+        .iter()
+        .map(|u| {
+            let mut user = user_json(store, &u.local_id);
+            if let Some(digest) = store.password_digest(&u.local_id) {
+                let (hash, salt) = digest.stored_material();
+                user["passwordHash"] = json!(fireemu_core_types::hash::base64_standard(&hash));
+                user["salt"] = json!(fireemu_core_types::hash::base64_standard(&salt));
+                user["version"] = json!(0);
+            }
+            user
+        })
+        .collect();
+    let mut response = json!({"kind": "identitytoolkit#DownloadAccountResponse"});
+    if !users.is_empty() {
+        response["users"] = json!(users);
+    }
     if has_more {
         if let Some(last) = page.last() {
-            response["nextPageToken"] = Value::String(format!("v1:{}", last.sequence));
+            response["nextPageToken"] = Value::String(last.local_id.as_str().to_owned());
         }
     }
     JsonResponse {
@@ -4606,7 +9510,7 @@ fn verify_enrollment_session(
     if matches!(body.get("idToken"), None | Some(Value::Null)) {
         return Err(error(400, "INVALID_ID_TOKEN"));
     }
-    verify_session(store, body, at)
+    verify_session_accepting(store, body, at, jwt_error, LegacyTokens::Honoured)
 }
 
 fn mfa_enrollment_start(
@@ -4614,6 +9518,7 @@ fn mfa_enrollment_start(
     body: &Value,
     at: LogicalInstant,
     totp_extension_enabled: bool,
+    strict: bool,
 ) -> JsonResponse {
     let session = match verify_enrollment_session(store, body, at) {
         Ok(s) => s,
@@ -4647,7 +9552,14 @@ fn mfa_enrollment_start(
         );
     }
     if !totp_extension_enabled {
-        return error(400, "INVALID_ARGUMENT : ((Missing phoneEnrollmentInfo.))");
+        return error(
+            400,
+            if strict {
+                "OPERATION_NOT_ALLOWED : TOTP based MFA not enabled."
+            } else {
+                "INVALID_ARGUMENT : ((Missing phoneEnrollmentInfo.))"
+            },
+        );
     }
     if let Some(refusal) = phone_enrollment_refusal(store, &session, None, true) {
         return refusal;
@@ -4796,10 +9708,13 @@ fn refresh(
     at: LogicalInstant,
     stateless_refresh_tokens: bool,
 ) -> JsonResponse {
-    if str_field(body, "grant_type") != Some("refresh_token") {
-        return error(400, "INVALID_GRANT_TYPE");
+    // An empty field is an absent one, as proto3 reads it (sandbox recording 2026-09-24).
+    match str_field(body, "grant_type") {
+        None | Some("") => return error(400, "MISSING_GRANT_TYPE"),
+        Some("refresh_token") => {}
+        Some(_) => return error(400, "INVALID_GRANT_TYPE"),
     }
-    let Some(token) = str_field(body, "refresh_token") else {
+    let Some(token) = str_field(body, "refresh_token").filter(|token| !token.is_empty()) else {
         return error(400, "MISSING_REFRESH_TOKEN");
     };
     let session = match if stateless_refresh_tokens {
@@ -4822,7 +9737,7 @@ fn refresh(
                     "expires_in": "3600",
                     "token_type": "Bearer",
                     "user_id": session.uid.as_str(),
-                    "project_id": store.project_id(),
+                    "project_id": store.project_number().map_or_else(|| store.project_id().to_owned(), |number| number.to_string()),
                 }),
             }
         }
@@ -4903,12 +9818,25 @@ fn percent_encode(s: &str) -> String {
 /// `EMAIL_SIGNIN` (email), `VERIFY_AND_CHANGE_EMAIL` (idToken + newEmail). Nothing is
 /// mailed: the code is kept for `/emulator/v1/projects/{p}/oobCodes`, and returned here
 /// with its link when `returnOobLink` is set (the Admin SDK's link generators).
+// Keep authorization, target selection and credential issuance in one auditable flow.
+#[allow(clippy::too_many_lines)]
 fn send_oob_code(
     store: &mut AuthStore,
     body: &Value,
     at: LogicalInstant,
     headers: &RequestHeaders,
+    privileged: bool,
 ) -> JsonResponse {
+    let return_oob_link = match opt_bool(body, "returnOobLink") {
+        Ok(Some(value)) => value,
+        Ok(None) => false,
+        Err(response) => return response,
+    };
+    // Only the authenticated Admin route may return a credential to the caller.
+    // Check before creating a code or emitting a delivery notice.
+    if !privileged && return_oob_link {
+        return error(400, "OPERATION_NOT_ALLOWED");
+    }
     let request_type = match str_field(body, "requestType") {
         None | Some("" | "OOB_REQ_TYPE_UNSPECIFIED") => return error(400, "MISSING_REQ_TYPE"),
         Some(t) => match OobRequestType::parse(t) {
@@ -4923,14 +9851,16 @@ fn send_oob_code(
     };
     let (email, uid, new_email) = match request_type {
         OobRequestType::PasswordReset => {
-            let Some(email) = str_field(body, "email") else {
+            let Some(email) = str_field(body, "email").map(canonicalize_email) else {
                 return error(400, "MISSING_EMAIL");
             };
-            match store.user_by_email(email) {
-                Some(u) => (email.to_owned(), Some(u.local_id.clone()), None),
+            match store.user_by_email(&email) {
+                Some(u) => (email.clone(), Some(u.local_id.clone()), None),
                 // Improved email privacy: an unknown address is answered as if a mail had
-                // been sent, and no code is created.
-                None if store.config().enable_improved_email_privacy => {
+                // been sent, and no code is created. An Admin link generator is already
+                // authenticated and can read every account, so hiding the address from it
+                // would only withhold the link it asked for: it keeps `EMAIL_NOT_FOUND`.
+                None if store.config().enable_improved_email_privacy && !return_oob_link => {
                     return JsonResponse {
                         status: 200,
                         body: json!({"kind": "identitytoolkit#GetOobConfirmationCodeResponse", "email": email}),
@@ -4940,43 +9870,49 @@ fn send_oob_code(
             }
         }
         OobRequestType::EmailSignIn => {
-            let Some(email) = str_field(body, "email") else {
+            let Some(email) = str_field(body, "email").map(canonicalize_email) else {
                 return error(400, "MISSING_EMAIL");
             };
             if !email.contains('@') {
                 return error(400, "INVALID_EMAIL");
             }
-            let uid = store.user_by_email(email).map(|u| u.local_id.clone());
-            (email.to_owned(), uid, None)
+            let uid = store.user_by_email(&email).map(|u| u.local_id.clone());
+            (email.clone(), uid, None)
         }
         OobRequestType::VerifyEmail | OobRequestType::VerifyAndChangeEmail => {
-            // A session, or (Admin link generators) the email itself.
-            let uid = match (str_field(body, "idToken"), str_field(body, "email")) {
-                (Some(_), _) => match verify(store, body, at) {
-                    Ok(uid) => uid,
-                    Err(r) => return r,
-                },
-                (None, Some(email)) => match store.user_by_email(email) {
+            // Email-based target selection is reserved for authenticated Admin generators.
+            let uid = match (
+                privileged,
+                str_field(body, "idToken"),
+                str_field(body, "email"),
+            ) {
+                (false, _, _) | (true, Some(_), _) => {
+                    match verify_honouring_legacy(store, body, at) {
+                        Ok(uid) => uid,
+                        Err(r) => return r,
+                    }
+                }
+                (true, None, Some(email)) => match store.user_by_email(email) {
                     Some(u) => u.local_id.clone(),
                     None => return error(400, "EMAIL_NOT_FOUND"),
                 },
-                (None, None) => return error(400, "MISSING_ID_TOKEN"),
+                (true, None, None) => return error(400, "MISSING_ID_TOKEN"),
             };
             let Some(email) = store.user(&uid).and_then(|u| u.email.clone()) else {
                 return error(400, "MISSING_EMAIL : the user has no email");
             };
             let new_email = if request_type == OobRequestType::VerifyAndChangeEmail {
-                let Some(new_email) = str_field(body, "newEmail") else {
+                let Some(new_email) = str_field(body, "newEmail").map(canonicalize_email) else {
                     return error(400, "MISSING_NEW_EMAIL");
                 };
                 if !store.config().allow_duplicate_emails
                     && store
-                        .user_by_email(new_email)
+                        .user_by_email(&new_email)
                         .is_some_and(|u| u.local_id != uid)
                 {
                     return error(400, "EMAIL_EXISTS");
                 }
-                Some(new_email.to_owned())
+                Some(new_email.clone())
             } else {
                 None
             };
@@ -4989,7 +9925,7 @@ fn send_oob_code(
     };
     let mut response =
         json!({"kind": "identitytoolkit#GetOobConfirmationCodeResponse", "email": email});
-    if body.get("returnOobLink").and_then(Value::as_bool) == Some(true) {
+    if return_oob_link {
         response["oobCode"] = json!(code);
         response["oobLink"] = json!(oob_link(
             headers,
@@ -5027,19 +9963,24 @@ fn reset_password(
     let Some(entry) = store.oob_code(code).cloned() else {
         return error(400, "INVALID_OOB_CODE");
     };
+    let new_password = match opt_str(body, "newPassword") {
+        // Check mode (`checkActionCode` / `verifyPasswordResetCode`): describe the code
+        // without consuming it, whatever its type. Only the reset itself is restricted to
+        // `PASSWORD_RESET`.
+        Ok(None) => return check_oob_code(&entry),
+        Ok(Some(new_password)) => new_password,
+        Err(r) => return r,
+    };
     if entry.request_type != OobRequestType::PasswordReset {
         return error(400, "INVALID_OOB_CODE");
     }
     let Some(uid) = entry.uid.clone() else {
         return error(400, "INVALID_OOB_CODE");
     };
-    let Some(new_password) = str_field(body, "newPassword") else {
-        return JsonResponse {
-            status: 200,
-            body: json!({"kind": "identitytoolkit#ResetPasswordResponse", "email": entry.email, "requestType": "PASSWORD_RESET"}),
-        };
-    };
-    if let Err(e) = AuthStore::validate_password(new_password) {
+    if let Err(e) = store.validate_password_for(
+        fireemu_core_auth::password_policy::Operation::Reset,
+        new_password,
+    ) {
         return auth_error(&e);
     }
     if store.user(&uid).is_none_or(|u| u.disabled) {
@@ -5048,7 +9989,12 @@ fn reset_password(
     if let Err(e) = store.consume_oob_code(code, Some(OobRequestType::PasswordReset), at) {
         return auth_error(&e);
     }
-    if let Err(e) = store.set_password(&uid, new_password, at) {
+    if let Err(e) = store.set_password_for(
+        &uid,
+        new_password,
+        at,
+        fireemu_core_auth::password_policy::Operation::Reset,
+    ) {
         return auth_error(&e);
     }
     // A reset advances `validSince` and verifies the address (the user read the mail). The
@@ -5067,6 +10013,31 @@ fn reset_password(
     }
 }
 
+/// The `accounts:resetPassword` answer for a code that is only being inspected. Production
+/// reports the code's own `requestType`, the address it concerns and, for a pending address
+/// change, the new address; the address is omitted for a sign-in link.
+fn check_oob_code(entry: &fireemu_core_auth::store::OobCode) -> JsonResponse {
+    let mut body = serde_json::Map::new();
+    body.insert(
+        "kind".to_owned(),
+        Value::String("identitytoolkit#ResetPasswordResponse".to_owned()),
+    );
+    body.insert(
+        "requestType".to_owned(),
+        Value::String(entry.request_type.as_str().to_owned()),
+    );
+    if entry.request_type != OobRequestType::EmailSignIn {
+        body.insert("email".to_owned(), Value::String(entry.email.clone()));
+    }
+    if let Some(new_email) = entry.new_email.clone() {
+        body.insert("newEmail".to_owned(), Value::String(new_email));
+    }
+    JsonResponse {
+        status: 200,
+        body: Value::Object(body),
+    }
+}
+
 /// `accounts:update` with an `oobCode` (`applyActionCode`): `VERIFY_EMAIL` marks the
 /// address verified, `VERIFY_AND_CHANGE_EMAIL` switches to the new address.
 fn apply_oob_code(store: &mut AuthStore, code: &str, at: LogicalInstant) -> JsonResponse {
@@ -5078,6 +10049,9 @@ fn apply_oob_code(store: &mut AuthStore, code: &str, at: LogicalInstant) -> Json
     };
     match entry.request_type {
         OobRequestType::VerifyEmail => {
+            if store.user(&uid).is_none() {
+                return error(400, "INVALID_OOB_CODE");
+            }
             if let Err(e) = store.consume_oob_code(code, None, at) {
                 return auth_error(&e);
             }
@@ -5089,6 +10063,12 @@ fn apply_oob_code(store: &mut AuthStore, code: &str, at: LogicalInstant) -> Json
             let Some(new_email) = entry.new_email.clone() else {
                 return error(400, "INVALID_OOB_CODE");
             };
+            if store.user(&uid).is_none() {
+                return error(400, "INVALID_OOB_CODE");
+            }
+            if let Err(e) = store.validate_email_update(&uid, &new_email) {
+                return auth_error(&e);
+            }
             if let Err(e) = store.consume_oob_code(code, None, at) {
                 return auth_error(&e);
             }
@@ -5189,6 +10169,7 @@ fn emulator_action(
         Some("verifyEmail") => action_apply(
             store,
             code,
+            OobRequestType::VerifyEmail,
             continue_url,
             at,
             ("verify your email", "Try verifying your email again."),
@@ -5197,12 +10178,22 @@ fn emulator_action(
         Some("verifyAndChangeEmail") => action_apply(
             store,
             code,
+            OobRequestType::VerifyAndChangeEmail,
             continue_url,
             at,
             ("change your email", "Try changing your email again."),
             |email| json!({"success": "The email has been successfully changed.", "newEmail": email}),
         ),
-        Some("signIn") => action_sign_in(query, &params, continue_url),
+        Some("signIn") => {
+            if store
+                .oob_code(code)
+                .is_none_or(|entry| entry.request_type != OobRequestType::EmailSignIn)
+            {
+                action_expired("sign in", "Try signing in again.")
+            } else {
+                action_sign_in(query, &params, continue_url)
+            }
+        }
         _ => action_response(400, json!({"error": "Invalid mode"})),
     }
 }
@@ -5281,11 +10272,18 @@ fn action_reset_password(
 fn action_apply(
     store: &mut AuthStore,
     code: &str,
+    expected: OobRequestType,
     continue_url: Option<&str>,
     at: LogicalInstant,
     (what, retry): (&str, &str),
     success: impl FnOnce(&Value) -> Value,
 ) -> JsonResponse {
+    if store
+        .oob_code(code)
+        .is_none_or(|entry| entry.request_type != expected)
+    {
+        return action_expired(what, retry);
+    }
     let response = apply_oob_code(store, code, at);
     if response.status != 200 {
         return if response.body["error"]["message"].as_str() == Some("INVALID_OOB_CODE") {
@@ -5413,6 +10411,7 @@ fn sign_in_with_email_link(
     let (Some(email), Some(code)) = (str_field(body, "email"), str_field(body, "oobCode")) else {
         return error(400, "MISSING_OOB_CODE");
     };
+    let email = canonicalize_email(email);
     let matches = store
         .oob_code(code)
         .is_some_and(|c| c.request_type == OobRequestType::EmailSignIn && c.email == email);
@@ -5428,7 +10427,7 @@ fn sign_in_with_email_link(
         };
         if !store.config().allow_duplicate_emails
             && store
-                .user_by_email(email)
+                .user_by_email(&email)
                 .is_some_and(|u| u.local_id != uid)
         {
             return error(400, "EMAIL_EXISTS");
@@ -5436,7 +10435,7 @@ fn sign_in_with_email_link(
         if let Err(e) = store.consume_oob_code(code, Some(OobRequestType::EmailSignIn), at) {
             return auth_error(&e);
         }
-        if let Err(e) = store.set_email(&uid, email) {
+        if let Err(e) = store.set_email(&uid, &email) {
             return auth_error(&e);
         }
         if let Some(u) = store.user_mut(&uid) {
@@ -5456,10 +10455,13 @@ fn sign_in_with_email_link(
     if let Err(e) = store.consume_oob_code(code, Some(OobRequestType::EmailSignIn), at) {
         return auth_error(&e);
     }
-    let (uid, is_new) = match store.sign_in_with_email_link(email, at) {
+    let (uid, is_new) = match store.sign_in_with_email_link(&email, at) {
         Ok(r) => r,
         Err(e) => return auth_error(&e),
     };
+    // The account and the pending credential keep `Provider::EmailLink`, which drives
+    // `providerUserInfo`, the `createAuthUri` sign-in methods and the `emailLink` sign-in
+    // method Blocking Functions see. The token claim itself is rendered as `password`.
     finish_sign_in(
         store,
         &uid,
@@ -5508,8 +10510,15 @@ fn sign_in_with_phone_number(
     body: &Value,
     at: LogicalInstant,
 ) -> JsonResponse {
-    let (Some(session), Some(code)) = (str_field(body, "sessionInfo"), str_field(body, "code"))
-    else {
+    if let Some(proof) = str_field(body, "temporaryProof") {
+        return sign_in_with_temporary_proof(store, body, proof, at);
+    }
+    // Production names the missing code before the session (sandbox recording 2026-09-23,
+    // `auth-account/phone#missing-code`).
+    let Some(code) = str_field(body, "code") else {
+        return error(400, "MISSING_CODE");
+    };
+    let Some(session) = str_field(body, "sessionInfo") else {
         return error(400, "MISSING_SESSION_INFO");
     };
     // Checked first, consumed once the request is known to succeed.
@@ -5521,7 +10530,7 @@ fn sign_in_with_phone_number(
         return error(400, "INVALID_SESSION_INFO");
     }
     if body.get("idToken").is_some_and(|t| !t.is_null()) {
-        let uid = match verify(store, body, at) {
+        let uid = match verify_honouring_legacy(store, body, at) {
             Ok(uid) => uid,
             Err(r) => return r,
         };
@@ -5529,14 +10538,40 @@ fn sign_in_with_phone_number(
             .user_by_phone(&verified.phone_number)
             .is_some_and(|u| u.local_id != uid)
         {
-            return error(400, "PHONE_NUMBER_EXISTS");
+            // Production answers a link to a taken number with a proof of the verified number
+            // instead of an error (sandbox recording 2026-09-23, `phone#link-taken-phone`).
+            store.consume_phone_code(session);
+            return match store.issue_temporary_proof(&verified.phone_number, at) {
+                Ok(proof) => JsonResponse {
+                    status: 200,
+                    body: json!({
+                        "temporaryProof": proof,
+                        "phoneNumber": verified.phone_number,
+                        "temporaryProofExpiresIn":
+                            fireemu_core_auth::store::TEMPORARY_PROOF_TTL_SECONDS.to_string(),
+                    }),
+                },
+                Err(e) => auth_error(&e),
+            };
         }
         store.consume_phone_code(session);
         if let Err(e) = store.set_phone_number(&uid, Some(&verified.phone_number)) {
             return auth_error(&e);
         }
-        return match issue_tokens(store, &uid, None, at) {
+        // The new session is a phone sign-in (sandbox recording 2026-09-24).
+        return match issue_tokens_with(
+            store,
+            &uid,
+            None,
+            at,
+            None,
+            Some(fireemu_core_auth::store::Provider::Phone),
+        ) {
             Ok(mut tokens) => {
+                // Production's link answer carries no email (sandbox recording 2026-09-23).
+                if let Some(fields) = tokens.as_object_mut() {
+                    fields.remove("email");
+                }
                 tokens["phoneNumber"] = json!(verified.phone_number);
                 tokens["isNewUser"] = json!(false);
                 JsonResponse {
@@ -5561,6 +10596,33 @@ fn sign_in_with_phone_number(
             ("phoneNumber", json!(verified.phone_number)),
             ("isNewUser", json!(is_new)),
         ],
+    )
+}
+
+/// `accounts:signInWithPhoneNumber` with a `temporaryProof`: signs in to the number's owner,
+/// as the SDK does after a link to a taken number.
+fn sign_in_with_temporary_proof(
+    store: &mut AuthStore,
+    body: &Value,
+    proof: &str,
+    at: LogicalInstant,
+) -> JsonResponse {
+    let Some(phone) = str_field(body, "phoneNumber") else {
+        return error(400, "MISSING_PHONE_NUMBER");
+    };
+    if !store.check_temporary_proof(proof, phone, at) {
+        return error(400, "INVALID_TEMPORARY_PROOF");
+    }
+    let (uid, is_new) = match store.sign_in_with_phone(phone, at) {
+        Ok(r) => r,
+        Err(e) => return auth_error(&e),
+    };
+    finish_sign_in(
+        store,
+        &uid,
+        at,
+        Some(fireemu_core_auth::store::Provider::Phone),
+        &[("phoneNumber", json!(phone)), ("isNewUser", json!(is_new))],
     )
 }
 
@@ -5714,6 +10776,7 @@ fn idp_response_base(
     info: &IdpUserInfo,
     oauth_id_token: Option<&String>,
     oauth_access_token_out: &str,
+    oauth_refresh_token: Option<&String>,
 ) -> IdpBase {
     vec![
         ("kind", json!("identitytoolkit#VerifyAssertionResponse")),
@@ -5732,6 +10795,7 @@ fn idp_response_base(
         ("emailVerified", json!(info.email_verified)),
         ("photoUrl", json!(info.photo_url)),
         ("rawUserInfo", json!(info.raw_user_info)),
+        ("oauthRefreshToken", json!(oauth_refresh_token.cloned())),
     ]
 }
 
@@ -5767,37 +10831,123 @@ fn idp_missing_claims_error(
 fn validate_saml_response(raw: Option<&String>) -> Result<Option<Value>, JsonResponse> {
     let Some(raw) = raw else { return Ok(None) };
     let parsed: Value = serde_json::from_str(raw).unwrap_or(Value::Null);
-    let present = |v: Option<&Value>| v.is_some() && v != Some(&Value::Null);
     let assertion = parsed.get("assertion");
-    if !present(assertion) {
+    if !assertion.is_some_and(Value::is_object) {
         return Err(error(
             400,
             "INVALID_IDP_RESPONSE ((Missing assertion in SAMLResponse.))",
         ));
     }
     let subject = assertion.and_then(|a| a.get("subject"));
-    if !present(subject) {
+    if !subject.is_some_and(Value::is_object) {
         return Err(error(
             400,
             "INVALID_IDP_RESPONSE ((Missing assertion.subject in SAMLResponse.))",
         ));
     }
-    if !present(subject.and_then(|s| s.get("nameId"))) {
+    if !subject
+        .and_then(|s| s.get("nameId"))
+        .and_then(Value::as_str)
+        .is_some_and(|name| !name.is_empty() && !name.chars().any(char::is_control))
+    {
         return Err(error(
             400,
             "INVALID_IDP_RESPONSE ((Missing assertion.subject.nameId in SAMLResponse.))",
         ));
     }
+    if assertion
+        .and_then(|a| a.get("attributeStatements"))
+        .is_some_and(|value| !value.is_null() && !value.is_object())
+    {
+        return Err(error(
+            400,
+            "INVALID_IDP_RESPONSE ((Invalid SAML attributeStatements.))",
+        ));
+    }
     Ok(Some(parsed))
+}
+
+/// Opaque continuation authority is supplied by the trusted embedder, never by HTTP.
+fn idp_continuation_authority(trust: Option<&crate::oidc::LocalOidcTrust>) -> String {
+    match trust {
+        None => "fixture-idp-v1".to_owned(),
+        Some(trust) => {
+            let pin = json!({
+                "project": trust.project_id,
+                "tenant": trust.tenant_id,
+                "provider": trust.provider_id,
+                "issuer": trust.issuer,
+                "client": trust.client_id,
+                "jwk": trust.jwk,
+            });
+            format!(
+                "signed-oidc-v1:{}",
+                fireemu_core_types::hash::hex_lower(&fireemu_core_types::hash::sha256(
+                    pin.to_string().as_bytes()
+                ))
+            )
+        }
+    }
+}
+
+/// Resolve pendingToken *before* signup admission and assertion verification. A caller
+/// cannot replace cached credentials with a postBody, change the original redirect URI,
+/// or carry a linking ID token over from the earlier request. The current request's ID
+/// token and response flags are validated normally after this function.
+fn resume_idp_body(
+    store: &AuthStore,
+    body: &Value,
+    authority: &str,
+    at: LogicalInstant,
+) -> Result<Option<Value>, JsonResponse> {
+    let token = match body.get("pendingToken") {
+        None | Some(Value::Null) => return Ok(None),
+        Some(Value::String(token)) if !token.is_empty() && token.len() <= 256 => token,
+        _ => return Err(error(400, "INVALID_PENDING_TOKEN")),
+    };
+    if body.get("postBody").is_some_and(|value| !value.is_null())
+        || body
+            .get("pendingIdToken")
+            .is_some_and(|value| !value.is_null())
+    {
+        return Err(error(400, "INVALID_PENDING_TOKEN"));
+    }
+    let Some(raw) = store.pending_idp_sign_in(token, authority, at) else {
+        return Err(error(400, "INVALID_PENDING_TOKEN"));
+    };
+    let original: Value =
+        serde_json::from_str(raw).map_err(|_| error(400, "INVALID_PENDING_TOKEN"))?;
+    let Some(uri) = original.get("requestUri").and_then(Value::as_str) else {
+        return Err(error(400, "INVALID_PENDING_TOKEN"));
+    };
+    if body.get("requestUri").and_then(Value::as_str) != Some(uri) {
+        return Err(error(400, "INVALID_REQUEST_URI"));
+    }
+    let mut resolved = body.clone();
+    let Some(object) = resolved.as_object_mut() else {
+        return Err(error(400, "INVALID_PENDING_TOKEN"));
+    };
+    object.remove("pendingToken");
+    object.insert(
+        "postBody".to_owned(),
+        original.get("postBody").cloned().unwrap_or(Value::Null),
+    );
+    Ok(Some(resolved))
 }
 
 /// Parses and validates a `signInWithIdp` credential, or the error the official emulator raises.
 fn resolve_idp_credential(body: &Value) -> Result<ResolvedIdp, JsonResponse> {
-    if body.get("returnRefreshToken").is_some_and(|v| !v.is_null()) {
-        return Err(not_implemented(
-            "returnRefreshToken is not implemented yet.",
-        ));
+    if body
+        .get("pendingToken")
+        .is_some_and(|value| !value.is_null())
+    {
+        return Err(error(400, "INVALID_PENDING_TOKEN"));
     }
+    let return_refresh_token = match body.get("returnRefreshToken") {
+        None | Some(Value::Null) => false,
+        Some(Value::Bool(value)) => *value,
+        Some(_) => return Err(error(400, "INVALID_ARGUMENT")),
+    };
     if body.get("pendingIdToken").is_some_and(|v| !v.is_null()) {
         return Err(not_implemented("pendingIdToken is not implemented yet."));
     }
@@ -5844,7 +10994,21 @@ fn resolve_idp_credential(body: &Value) -> Result<ResolvedIdp, JsonResponse> {
         || format!("FirebaseAuthEmulatorFakeAccessToken_{provider_id}"),
         String::clone,
     );
-    let base = idp_response_base(&provider_id, &info, oauth_id_token, &oauth_access_token_out);
+    let oauth_refresh_token = return_refresh_token
+        .then(|| {
+            params
+                .get("refresh_token")
+                .filter(|token| !token.is_empty())
+                .cloned()
+        })
+        .flatten();
+    let base = idp_response_base(
+        &provider_id,
+        &info,
+        oauth_id_token,
+        &oauth_access_token_out,
+        oauth_refresh_token.as_ref(),
+    );
     Ok(ResolvedIdp {
         provider_id,
         info,
@@ -6139,7 +11303,7 @@ fn mfa_enrollment_withdraw(
     body: &Value,
     at: LogicalInstant,
 ) -> JsonResponse {
-    let uid = match verify(store, body, at) {
+    let uid = match verify_honouring_legacy(store, body, at) {
         Ok(uid) => uid,
         Err(r) => return r,
     };
@@ -6177,6 +11341,11 @@ fn mfa_sign_in_start(store: &mut AuthStore, body: &Value, at: LogicalInstant) ->
     let Some(uid) = store.pending_sign_in_user(&pending_id) else {
         return error(400, "INVALID_MFA_PENDING_CREDENTIAL");
     };
+    // A disabled account is not refused here: production accepts mfaSignIn:start on an
+    // account disabled after its pending credential and issues the code, enforcing
+    // USER_DISABLED only at mfaSignIn:finalize (auth-mfa-start-disabled, recorded and
+    // approved 2026-09-12, GAP-AUTH-005). The finalize path already refuses a disabled
+    // account, so the sign-in still cannot complete.
     if body.get("phoneSignInInfo").is_none() {
         return error(
             400,
@@ -6222,7 +11391,7 @@ fn finalize_phone_sign_in(
     else {
         return error(400, "INVALID_CODE : missing sessionInfo or code");
     };
-    let verified = match store.verify_phone_code(session, code, at) {
+    let verified = match store.check_phone_code(session, code, at) {
         Ok(v) => v,
         Err(e) => return auth_error(&e),
     };
@@ -6239,23 +11408,26 @@ fn finalize_phone_sign_in(
     }
     let first_factor = store.pending_sign_in_context(&pending_id).cloned();
     match store.finalize_phone_mfa_sign_in(&uid, &pending_id, &enrollment_id, at) {
-        Ok(assertion) => match issue_tokens_with_sign_in_attributes(
-            store,
-            &uid,
-            Some(&assertion),
-            at,
-            None,
-            first_factor
-                .as_ref()
-                .and_then(PendingSignInContext::sign_in_provider)
-                .map(provider_from_id),
-            first_factor
-                .as_ref()
-                .and_then(PendingSignInContext::sign_in_attributes),
-        ) {
-            Ok(tokens) => token_only_response(&tokens, false),
-            Err(r) => r,
-        },
+        Ok(assertion) => {
+            store.consume_phone_code(session);
+            match issue_tokens_with_sign_in_attributes(
+                store,
+                &uid,
+                Some(&assertion),
+                at,
+                None,
+                first_factor
+                    .as_ref()
+                    .and_then(PendingSignInContext::sign_in_provider)
+                    .map(provider_from_id),
+                first_factor
+                    .as_ref()
+                    .and_then(PendingSignInContext::sign_in_attributes),
+            ) {
+                Ok(tokens) => token_only_response(&tokens, false),
+                Err(r) => r,
+            }
+        }
         Err(e) => mfa_error(&e),
     }
 }
@@ -6333,6 +11505,22 @@ fn emulator_route(
             {
                 config.enable_improved_email_privacy = v;
             }
+            if let Some(v) = body
+                .get("client")
+                .and_then(|s| s.get("permissions"))
+                .and_then(|s| s.get("disabledUserSignup"))
+                .and_then(Value::as_bool)
+            {
+                config.disabled_user_signup = v;
+            }
+            if let Some(v) = body
+                .get("client")
+                .and_then(|s| s.get("permissions"))
+                .and_then(|s| s.get("disabledUserDeletion"))
+                .and_then(Value::as_bool)
+            {
+                config.disabled_user_deletion = v;
+            }
             store.set_config(config);
             JsonResponse {
                 status: 200,
@@ -6350,17 +11538,80 @@ fn emulator_route(
 fn project_config_json(config: fireemu_core_auth::store::ProjectAuthConfig) -> Value {
     json!({
         "signIn": {"allowDuplicateEmails": config.allow_duplicate_emails},
+        "client": {"permissions": {
+            "disabledUserSignup": config.disabled_user_signup,
+            "disabledUserDeletion": config.disabled_user_deletion,
+        }},
         "emailPrivacyConfig": {"enableImprovedEmailPrivacy": config.enable_improved_email_privacy},
     })
+}
+
+fn project_config_json_with_password_policy(
+    config: fireemu_core_auth::store::ProjectAuthConfig,
+    policy: &PasswordPolicy,
+) -> Value {
+    let mut result = project_config_json(config);
+    result["passwordPolicyConfig"] = password_policy_config_json(policy);
+    result
+}
+
+fn project_config_json_with_auth_settings(
+    config: fireemu_core_auth::store::ProjectAuthConfig,
+    policy: &PasswordPolicy,
+    quota: &SignupQuotaConfig,
+) -> Value {
+    let mut result = project_config_json_with_password_policy(config, policy);
+    result["quota"] = quota_config_json(quota);
+    result
+}
+
+fn password_policy_json(policy: &PasswordPolicy) -> JsonResponse {
+    // Production's order first, then any other configured character in code-point order.
+    let order = fireemu_core_auth::password_policy::DEFAULT_NON_ALPHANUMERIC_ORDER;
+    let allowed: Vec<String> = order
+        .chars()
+        .filter(|c| policy.allowed_non_alphanumeric.contains(c))
+        .chain(
+            policy
+                .allowed_non_alphanumeric
+                .iter()
+                .copied()
+                .filter(|c| !order.contains(*c)),
+        )
+        .map(String::from)
+        .collect();
+    let options = password_policy_config_json(policy)
+        .get("passwordPolicyVersions")
+        .and_then(Value::as_array)
+        .and_then(|versions| versions.first())
+        .and_then(|version| version.get("customStrengthOptions"))
+        .cloned()
+        .unwrap_or_else(|| json!({}));
+    JsonResponse {
+        status: 200,
+        body: json!({
+            "customStrengthOptions": options,
+            "allowedNonAlphanumericCharacters": allowed,
+            "enforcementState": match policy.enforcement_state {
+                EnforcementState::Off => "OFF",
+                EnforcementState::Enforce => "ENFORCE",
+            },
+            "forceUpgradeOnSignin": policy.force_upgrade_on_signin,
+            "schemaVersion": 1,
+        }),
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use fireemu_core_auth::mfa::TotpPolicy;
+    use fireemu_core_types::determinism::SplitMix64;
 
     struct AllBlockingHooks;
     struct BeforeCreateOnlyHook;
     struct NoBlockingHooks;
+    struct FixedBlockingRevision(u64);
 
     impl AuthBlockingHook for AllBlockingHooks {
         fn invoke(
@@ -6383,6 +11634,20 @@ mod tests {
             _user: &fireemu_core_auth::store::UserRecord,
         ) -> Result<Value, BlockingFunctionFailure> {
             unreachable!("a bridge without matching exports is never invoked")
+        }
+    }
+
+    impl AuthBlockingHook for FixedBlockingRevision {
+        fn invoke(
+            &self,
+            _event: fireemu_core_functions::manifest::BlockingAuthEvent,
+            _user: &fireemu_core_auth::store::UserRecord,
+        ) -> Result<Value, BlockingFunctionFailure> {
+            unreachable!("the revision helper test never invokes a hook")
+        }
+
+        fn blocking_auth_revision(&self) -> u64 {
+            self.0
         }
     }
 
@@ -6487,6 +11752,58 @@ mod tests {
             None
         );
         assert_eq!(BlockingFunctionCode::from_canonical_name("OK"), None);
+    }
+
+    #[test]
+    fn stale_before_sign_in_cleanup_does_not_discard_pending_credentials() {
+        let now = LogicalInstant::from_unix_seconds(1_788_004_860);
+        let mut store = AuthStore::new("demo-app", SplitMix64::new(7), TotpPolicy::default());
+        let uid = store
+            .create_user_with_password(NewUser::email("pending@example.com"), "hunter22", now)
+            .unwrap();
+        store
+            .set_phone_factors(
+                &uid,
+                vec![("+15550001234".to_owned(), Some("primary".to_owned()))],
+                now,
+            )
+            .unwrap();
+        let pending = store
+            .start_mfa_sign_in_with_context(
+                &uid,
+                now,
+                PendingSignInContext::new_with_credentials(
+                    Some("password".to_owned()),
+                    false,
+                    None,
+                    Some(PendingSignInCredentials::new(
+                        Some("access-token".to_owned()),
+                        Some("id-token".to_owned()),
+                        Some("refresh-token".to_owned()),
+                    )),
+                ),
+            )
+            .unwrap();
+        let store = Arc::new(Mutex::new(store));
+        let settings_gate = Arc::new(Mutex::new(()));
+        let result = discard_pending_inbound_credentials_if_revision_current(
+            &store,
+            Some(&pending),
+            &settings_gate,
+            &FixedBlockingRevision(1),
+            0,
+        );
+        let response = result.unwrap_err();
+        assert_eq!(response.status, 409);
+
+        let store = store.lock().unwrap();
+        let credentials = store
+            .pending_sign_in_context(&pending)
+            .and_then(PendingSignInContext::inbound_credentials)
+            .expect("revision drift must retain pending credentials");
+        assert_eq!(credentials.access_token(), Some("access-token"));
+        assert_eq!(credentials.id_token(), Some("id-token"));
+        assert_eq!(credentials.refresh_token(), Some("refresh-token"));
     }
 
     #[test]
@@ -6600,5 +11917,30 @@ mod tests {
             .unwrap();
 
         assert!(wall_clock.now() >= start.checked_add(LogicalDuration::from_seconds(2)).unwrap());
+    }
+
+    #[test]
+    fn password_policy_versions_rejects_malformed_presence() {
+        for versions in [
+            json!([]),
+            json!([{}, {}]),
+            json!([{"customStrengthOptions": {}} , {}]),
+        ] {
+            let body = json!({
+                "passwordPolicyEnforcementState": "ENFORCE",
+                "passwordPolicyVersions": versions,
+            });
+            assert!(password_policy_from_config_json(&body).is_err());
+        }
+        assert!(password_policy_from_config_json(&json!({
+            "passwordPolicyEnforcementState": "ENFORCE",
+            "passwordPolicyVersions": null,
+        }))
+        .is_ok());
+        assert!(password_policy_from_config_json(&json!({
+            "passwordPolicyEnforcementState": "ENFORCE",
+            "passwordPolicyVersions": [{"customStrengthOptions": {"minPasswordLength": 12}}]
+        }))
+        .is_ok());
     }
 }

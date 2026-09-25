@@ -9,6 +9,9 @@
     "smoke:large-query": "node large-query.mjs",
     "bench:firestore": "node firestore-performance.mjs",
     "smoke:client": "node client.mjs",
+    "smoke:auth-refresh-same-second": "node auth-refresh-same-second.mjs",
+    "smoke:g3": "node g3-sdk.mjs",
+    "smoke:g3-pending-switch": "node pending-switch.mjs",
     "smoke:lite": "node lite.mjs",
     "smoke:storage": "node storage.mjs",
     "smoke:storage-targets": "node storage-targets.mjs",
@@ -22,16 +25,23 @@
     "smoke:rules-unit-testing-explicit-rules": "node rules-unit-testing-explicit-rules.mjs",
     "smoke:recursive-delete": "node recursive-delete.mjs",
     "smoke:firestore-contention": "node firestore-contention.mjs",
+    "smoke:pending-switch": "node pending-switch.mjs",
+    "smoke:auth-config": "node auth-config-sdk.mjs",
+    "smoke:password-policy": "node password-policy-sdk.mjs",
+    "smoke:auth-settings-oracle": "node auth-settings-sdk-oracle.mjs",
+    "test:sdk-pins": "node --test sdk-pins.test.mjs",
+    "test:password-policy": "node --test password-policy-sdk.test.mjs",
+    "test:auth-settings-oracle": "node --test auth-settings-sdk-oracle.test.mjs",
     "smoke:server-timestamp-query": "node server-timestamp-transaction-query.mjs",
     "smoke:listener-replacement": "node listener-replacement.mjs",
     "test:listener-runtime": "node --test listener-runtime-compat.test.mjs"
   },
   "dependencies": {
     "@firebase/rules-unit-testing": "5.0.2",
-    "@google-cloud/pubsub": "^4",
-    "firebase": "^12",
+    "@google-cloud/pubsub": "4.11.0",
+    "firebase": "12.18.0",
     "firebase-admin": "14.3.0",
-    "firebase-functions": ">=6 <8"
+    "firebase-functions": "7.3.2"
   },
   "overrides": {
     "uuid": "11.1.1"

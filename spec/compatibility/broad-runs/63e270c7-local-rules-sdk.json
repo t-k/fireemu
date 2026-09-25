@@ -1,0 +1,841 @@
+{
+  "kind": "local-rules-sdk-continuation",
+  "productionExecuted": false,
+  "rules": {
+    "status": "completed",
+    "productionExecuted": false,
+    "reference": "historical official emulator, not production",
+    "artifactSha256": "8e433fc24df9585573ce6a213152269de8d51a22d60b1800a4d0e62e0d15508e",
+    "executionCommit": "63e270c73d7f52108fb96f9af14414084b821676",
+    "sourceInputs": {
+      "conformance/src/rules-probe/programs.mjs": "72ec2aeb340fd5f308b1ed2aa39c1fcf873c1910b10e0c1039309ae55855b004",
+      "conformance/src/rules-probe/session-programs.mjs": "8a81033c87e80eeec924302648cd36442718c8557deecf258bc6cacca8abef7a",
+      "conformance/rules-programs.json": "38bf374ec8103bec3f7d9cfbef8968250250bb7363fa8f72c0b7e40e5b02eef5",
+      "tools/compat-broad/local-guard.mjs": "02d69cb419900a4676ab4a9b2d7314123e1d02a7db09f1da78b8862df9b10f39"
+    },
+    "exitCode": 0,
+    "rows": [
+      {
+        "program": "budget-get-10",
+        "step": "read",
+        "actual": {
+          "status": 404,
+          "code": "NOT_FOUND",
+          "message": "Document not found: projects/demo-rules-matrix/databases/(default)/documents/probe/x"
+        },
+        "reference": {
+          "status": 404,
+          "code": "NOT_FOUND",
+          "message": "Document (projects/demo-rules-matrix/databases/(default)/documents/probe/x) not found."
+        },
+        "result": "match"
+      },
+      {
+        "program": "budget-get-11",
+        "step": "read",
+        "actual": {
+          "status": 403,
+          "code": "PERMISSION_DENIED",
+          "message": "get on probe/x denied by Security Rules: RULES-DOC-ACCESS-SINGLE: 11 exceeds 10"
+        },
+        "reference": {
+          "status": 403,
+          "code": "PERMISSION_DENIED",
+          "message": "\nevaluation error at L5:22 for 'get' @ L5, Service call error. Function: [exists], Argument: [path_value {\n  segments {\n    simple: \"databases\"\n  }\n  segments {\n    simple: \"(default)\"\n  }\n  segments {\n    simple: \"documents\"\n  }\n  segments {\n    simple: \"budget\"\n  }\n  segments {\n    simple: \"d10\"\n "
+        },
+        "result": "match"
+      },
+      {
+        "program": "budget-get-12",
+        "step": "read",
+        "actual": {
+          "status": 403,
+          "code": "PERMISSION_DENIED",
+          "message": "get on probe/x denied by Security Rules: RULES-DOC-ACCESS-SINGLE: 11 exceeds 10"
+        },
+        "reference": {
+          "status": 403,
+          "code": "PERMISSION_DENIED",
+          "message": "\nevaluation error at L5:22 for 'get' @ L5, Service call error. Function: [exists], Argument: [path_value {\n  segments {\n    simple: \"databases\"\n  }\n  segments {\n    simple: \"(default)\"\n  }\n  segments {\n    simple: \"documents\"\n  }\n  segments {\n    simple: \"budget\"\n  }\n  segments {\n    simple: \"d10\"\n "
+        },
+        "result": "match"
+      },
+      {
+        "program": "budget-get-21",
+        "step": "read",
+        "actual": {
+          "status": 403,
+          "code": "PERMISSION_DENIED",
+          "message": "get on probe/x denied by Security Rules: RULES-DOC-ACCESS-SINGLE: 11 exceeds 10"
+        },
+        "reference": {
+          "status": 403,
+          "code": "PERMISSION_DENIED",
+          "message": "\nevaluation error at L5:22 for 'get' @ L5, Service call error. Function: [exists], Argument: [path_value {\n  segments {\n    simple: \"databases\"\n  }\n  segments {\n    simple: \"(default)\"\n  }\n  segments {\n    simple: \"documents\"\n  }\n  segments {\n    simple: \"budget\"\n  }\n  segments {\n    simple: \"d10\"\n "
+        },
+        "result": "match"
+      },
+      {
+        "program": "budget-get-repeated-path",
+        "step": "read",
+        "actual": {
+          "status": 404,
+          "code": "NOT_FOUND",
+          "message": "Document not found: projects/demo-rules-matrix/databases/(default)/documents/probe/x"
+        },
+        "reference": {
+          "status": 404,
+          "code": "NOT_FOUND",
+          "message": "Document (projects/demo-rules-matrix/databases/(default)/documents/probe/x) not found."
+        },
+        "result": "match"
+      },
+      {
+        "program": "budget-get-11-in-a-commit",
+        "step": "commit",
+        "actual": {
+          "status": 403,
+          "code": "PERMISSION_DENIED",
+          "message": "create on probe/a denied by Security Rules: RULES-DOC-ACCESS-SINGLE: 11 exceeds 10"
+        },
+        "reference": {
+          "status": 403,
+          "code": "PERMISSION_DENIED",
+          "message": "\nevaluation error at L5:23 for 'create' @ L5, evaluation error at L5:23 for 'update' @ L5, evaluation error at L5:23 for 'create' @ L5, evaluation error at L5:23 for 'update' @ L5, Service call error. Function: [exists], Argument: [path_value {\n  segments {\n    simple: \"databases\"\n  }\n  segments {\n "
+        },
+        "result": "match"
+      }
+    ],
+    "recordedAgainst": {
+      "firebaseTools": "15.28.2"
+    },
+    "ownedProcess": {
+      "pid": 38144,
+      "stopped": true,
+      "listenersClosed": true
+    },
+    "configuration": {
+      "schemaVersion": 1,
+      "profile": "strict",
+      "daemon": {
+        "authProjectNumbers": {}
+      },
+      "firestore": {
+        "edition": "standard",
+        "apiMode": "native"
+      }
+    },
+    "selectedPrograms": [
+      {
+        "id": "budget-get-10",
+        "area": "budget",
+        "rules": "rules_version = '2';\nservice cloud.firestore {\n  match /databases/{database}/documents {\n    match /probe/{id} {\n      allow read: if exists(/databases/$(database)/documents/budget/d0) && exists(/databases/$(database)/documents/budget/d1) && exists(/databases/$(database)/documents/budget/d2) && exists(/databases/$(database)/documents/budget/d3) && exists(/databases/$(database)/documents/budget/d4) && exists(/databases/$(database)/documents/budget/d5) && exists(/databases/$(database)/documents/budget/d6) && exists(/databases/$(database)/documents/budget/d7) && exists(/databases/$(database)/documents/budget/d8) && exists(/databases/$(database)/documents/budget/d9);\n    }\n  }\n}",
+        "seed": [
+          {
+            "path": "/v1/projects/PROJECT/databases/(default)/documents/budget/d0",
+            "fields": {
+              "n": {
+                "integerValue": "0"
+              }
+            }
+          },
+          {
+            "path": "/v1/projects/PROJECT/databases/(default)/documents/budget/d1",
+            "fields": {
+              "n": {
+                "integerValue": "1"
+              }
+            }
+          },
+          {
+            "path": "/v1/projects/PROJECT/databases/(default)/documents/budget/d2",
+            "fields": {
+              "n": {
+                "integerValue": "2"
+              }
+            }
+          },
+          {
+            "path": "/v1/projects/PROJECT/databases/(default)/documents/budget/d3",
+            "fields": {
+              "n": {
+                "integerValue": "3"
+              }
+            }
+          },
+          {
+            "path": "/v1/projects/PROJECT/databases/(default)/documents/budget/d4",
+            "fields": {
+              "n": {
+                "integerValue": "4"
+              }
+            }
+          },
+          {
+            "path": "/v1/projects/PROJECT/databases/(default)/documents/budget/d5",
+            "fields": {
+              "n": {
+                "integerValue": "5"
+              }
+            }
+          },
+          {
+            "path": "/v1/projects/PROJECT/databases/(default)/documents/budget/d6",
+            "fields": {
+              "n": {
+                "integerValue": "6"
+              }
+            }
+          },
+          {
+            "path": "/v1/projects/PROJECT/databases/(default)/documents/budget/d7",
+            "fields": {
+              "n": {
+                "integerValue": "7"
+              }
+            }
+          },
+          {
+            "path": "/v1/projects/PROJECT/databases/(default)/documents/budget/d8",
+            "fields": {
+              "n": {
+                "integerValue": "8"
+              }
+            }
+          },
+          {
+            "path": "/v1/projects/PROJECT/databases/(default)/documents/budget/d9",
+            "fields": {
+              "n": {
+                "integerValue": "9"
+              }
+            }
+          }
+        ],
+        "steps": [
+          {
+            "id": "read",
+            "method": "GET",
+            "path": "/v1/projects/PROJECT/databases/(default)/documents/probe/x"
+          }
+        ]
+      },
+      {
+        "id": "budget-get-11",
+        "area": "budget",
+        "rules": "rules_version = '2';\nservice cloud.firestore {\n  match /databases/{database}/documents {\n    match /probe/{id} {\n      allow read: if exists(/databases/$(database)/documents/budget/d0) && exists(/databases/$(database)/documents/budget/d1) && exists(/databases/$(database)/documents/budget/d2) && exists(/databases/$(database)/documents/budget/d3) && exists(/databases/$(database)/documents/budget/d4) && exists(/databases/$(database)/documents/budget/d5) && exists(/databases/$(database)/documents/budget/d6) && exists(/databases/$(database)/documents/budget/d7) && exists(/databases/$(database)/documents/budget/d8) && exists(/databases/$(database)/documents/budget/d9) && exists(/databases/$(database)/documents/budget/d10);\n    }\n  }\n}",
+        "seed": [
+          {
+            "path": "/v1/projects/PROJECT/databases/(default)/documents/budget/d0",
+            "fields": {
+              "n": {
+                "integerValue": "0"
+              }
+            }
+          },
+          {
+            "path": "/v1/projects/PROJECT/databases/(default)/documents/budget/d1",
+            "fields": {
+              "n": {
+                "integerValue": "1"
+              }
+            }
+          },
+          {
+            "path": "/v1/projects/PROJECT/databases/(default)/documents/budget/d2",
+            "fields": {
+              "n": {
+                "integerValue": "2"
+              }
+            }
+          },
+          {
+            "path": "/v1/projects/PROJECT/databases/(default)/documents/budget/d3",
+            "fields": {
+              "n": {
+                "integerValue": "3"
+              }
+            }
+          },
+          {
+            "path": "/v1/projects/PROJECT/databases/(default)/documents/budget/d4",
+            "fields": {
+              "n": {
+                "integerValue": "4"
+              }
+            }
+          },
+          {
+            "path": "/v1/projects/PROJECT/databases/(default)/documents/budget/d5",
+            "fields": {
+              "n": {
+                "integerValue": "5"
+              }
+            }
+          },
+          {
+            "path": "/v1/projects/PROJECT/databases/(default)/documents/budget/d6",
+            "fields": {
+              "n": {
+                "integerValue": "6"
+              }
+            }
+          },
+          {
+            "path": "/v1/projects/PROJECT/databases/(default)/documents/budget/d7",
+            "fields": {
+              "n": {
+                "integerValue": "7"
+              }
+            }
+          },
+          {
+            "path": "/v1/projects/PROJECT/databases/(default)/documents/budget/d8",
+            "fields": {
+              "n": {
+                "integerValue": "8"
+              }
+            }
+          },
+          {
+            "path": "/v1/projects/PROJECT/databases/(default)/documents/budget/d9",
+            "fields": {
+              "n": {
+                "integerValue": "9"
+              }
+            }
+          },
+          {
+            "path": "/v1/projects/PROJECT/databases/(default)/documents/budget/d10",
+            "fields": {
+              "n": {
+                "integerValue": "10"
+              }
+            }
+          }
+        ],
+        "steps": [
+          {
+            "id": "read",
+            "method": "GET",
+            "path": "/v1/projects/PROJECT/databases/(default)/documents/probe/x"
+          }
+        ]
+      },
+      {
+        "id": "budget-get-12",
+        "area": "budget",
+        "rules": "rules_version = '2';\nservice cloud.firestore {\n  match /databases/{database}/documents {\n    match /probe/{id} {\n      allow read: if exists(/databases/$(database)/documents/budget/d0) && exists(/databases/$(database)/documents/budget/d1) && exists(/databases/$(database)/documents/budget/d2) && exists(/databases/$(database)/documents/budget/d3) && exists(/databases/$(database)/documents/budget/d4) && exists(/databases/$(database)/documents/budget/d5) && exists(/databases/$(database)/documents/budget/d6) && exists(/databases/$(database)/documents/budget/d7) && exists(/databases/$(database)/documents/budget/d8) && exists(/databases/$(database)/documents/budget/d9) && exists(/databases/$(database)/documents/budget/d10) && exists(/databases/$(database)/documents/budget/d11);\n    }\n  }\n}",
+        "seed": [
+          {
+            "path": "/v1/projects/PROJECT/databases/(default)/documents/budget/d0",
+            "fields": {
+              "n": {
+                "integerValue": "0"
+              }
+            }
+          },
+          {
+            "path": "/v1/projects/PROJECT/databases/(default)/documents/budget/d1",
+            "fields": {
+              "n": {
+                "integerValue": "1"
+              }
+            }
+          },
+          {
+            "path": "/v1/projects/PROJECT/databases/(default)/documents/budget/d2",
+            "fields": {
+              "n": {
+                "integerValue": "2"
+              }
+            }
+          },
+          {
+            "path": "/v1/projects/PROJECT/databases/(default)/documents/budget/d3",
+            "fields": {
+              "n": {
+                "integerValue": "3"
+              }
+            }
+          },
+          {
+            "path": "/v1/projects/PROJECT/databases/(default)/documents/budget/d4",
+            "fields": {
+              "n": {
+                "integerValue": "4"
+              }
+            }
+          },
+          {
+            "path": "/v1/projects/PROJECT/databases/(default)/documents/budget/d5",
+            "fields": {
+              "n": {
+                "integerValue": "5"
+              }
+            }
+          },
+          {
+            "path": "/v1/projects/PROJECT/databases/(default)/documents/budget/d6",
+            "fields": {
+              "n": {
+                "integerValue": "6"
+              }
+            }
+          },
+          {
+            "path": "/v1/projects/PROJECT/databases/(default)/documents/budget/d7",
+            "fields": {
+              "n": {
+                "integerValue": "7"
+              }
+            }
+          },
+          {
+            "path": "/v1/projects/PROJECT/databases/(default)/documents/budget/d8",
+            "fields": {
+              "n": {
+                "integerValue": "8"
+              }
+            }
+          },
+          {
+            "path": "/v1/projects/PROJECT/databases/(default)/documents/budget/d9",
+            "fields": {
+              "n": {
+                "integerValue": "9"
+              }
+            }
+          },
+          {
+            "path": "/v1/projects/PROJECT/databases/(default)/documents/budget/d10",
+            "fields": {
+              "n": {
+                "integerValue": "10"
+              }
+            }
+          },
+          {
+            "path": "/v1/projects/PROJECT/databases/(default)/documents/budget/d11",
+            "fields": {
+              "n": {
+                "integerValue": "11"
+              }
+            }
+          }
+        ],
+        "steps": [
+          {
+            "id": "read",
+            "method": "GET",
+            "path": "/v1/projects/PROJECT/databases/(default)/documents/probe/x"
+          }
+        ]
+      },
+      {
+        "id": "budget-get-21",
+        "area": "budget",
+        "rules": "rules_version = '2';\nservice cloud.firestore {\n  match /databases/{database}/documents {\n    match /probe/{id} {\n      allow read: if exists(/databases/$(database)/documents/budget/d0) && exists(/databases/$(database)/documents/budget/d1) && exists(/databases/$(database)/documents/budget/d2) && exists(/databases/$(database)/documents/budget/d3) && exists(/databases/$(database)/documents/budget/d4) && exists(/databases/$(database)/documents/budget/d5) && exists(/databases/$(database)/documents/budget/d6) && exists(/databases/$(database)/documents/budget/d7) && exists(/databases/$(database)/documents/budget/d8) && exists(/databases/$(database)/documents/budget/d9) && exists(/databases/$(database)/documents/budget/d10) && exists(/databases/$(database)/documents/budget/d11) && exists(/databases/$(database)/documents/budget/d12) && exists(/databases/$(database)/documents/budget/d13) && exists(/databases/$(database)/documents/budget/d14) && exists(/databases/$(database)/documents/budget/d15) && exists(/databases/$(database)/documents/budget/d16) && exists(/databases/$(database)/documents/budget/d17) && exists(/databases/$(database)/documents/budget/d18) && exists(/databases/$(database)/documents/budget/d19) && exists(/databases/$(database)/documents/budget/d20);\n    }\n  }\n}",
+        "seed": [
+          {
+            "path": "/v1/projects/PROJECT/databases/(default)/documents/budget/d0",
+            "fields": {
+              "n": {
+                "integerValue": "0"
+              }
+            }
+          },
+          {
+            "path": "/v1/projects/PROJECT/databases/(default)/documents/budget/d1",
+            "fields": {
+              "n": {
+                "integerValue": "1"
+              }
+            }
+          },
+          {
+            "path": "/v1/projects/PROJECT/databases/(default)/documents/budget/d2",
+            "fields": {
+              "n": {
+                "integerValue": "2"
+              }
+            }
+          },
+          {
+            "path": "/v1/projects/PROJECT/databases/(default)/documents/budget/d3",
+            "fields": {
+              "n": {
+                "integerValue": "3"
+              }
+            }
+          },
+          {
+            "path": "/v1/projects/PROJECT/databases/(default)/documents/budget/d4",
+            "fields": {
+              "n": {
+                "integerValue": "4"
+              }
+            }
+          },
+          {
+            "path": "/v1/projects/PROJECT/databases/(default)/documents/budget/d5",
+            "fields": {
+              "n": {
+                "integerValue": "5"
+              }
+            }
+          },
+          {
+            "path": "/v1/projects/PROJECT/databases/(default)/documents/budget/d6",
+            "fields": {
+              "n": {
+                "integerValue": "6"
+              }
+            }
+          },
+          {
+            "path": "/v1/projects/PROJECT/databases/(default)/documents/budget/d7",
+            "fields": {
+              "n": {
+                "integerValue": "7"
+              }
+            }
+          },
+          {
+            "path": "/v1/projects/PROJECT/databases/(default)/documents/budget/d8",
+            "fields": {
+              "n": {
+                "integerValue": "8"
+              }
+            }
+          },
+          {
+            "path": "/v1/projects/PROJECT/databases/(default)/documents/budget/d9",
+            "fields": {
+              "n": {
+                "integerValue": "9"
+              }
+            }
+          },
+          {
+            "path": "/v1/projects/PROJECT/databases/(default)/documents/budget/d10",
+            "fields": {
+              "n": {
+                "integerValue": "10"
+              }
+            }
+          },
+          {
+            "path": "/v1/projects/PROJECT/databases/(default)/documents/budget/d11",
+            "fields": {
+              "n": {
+                "integerValue": "11"
+              }
+            }
+          },
+          {
+            "path": "/v1/projects/PROJECT/databases/(default)/documents/budget/d12",
+            "fields": {
+              "n": {
+                "integerValue": "12"
+              }
+            }
+          },
+          {
+            "path": "/v1/projects/PROJECT/databases/(default)/documents/budget/d13",
+            "fields": {
+              "n": {
+                "integerValue": "13"
+              }
+            }
+          },
+          {
+            "path": "/v1/projects/PROJECT/databases/(default)/documents/budget/d14",
+            "fields": {
+              "n": {
+                "integerValue": "14"
+              }
+            }
+          },
+          {
+            "path": "/v1/projects/PROJECT/databases/(default)/documents/budget/d15",
+            "fields": {
+              "n": {
+                "integerValue": "15"
+              }
+            }
+          },
+          {
+            "path": "/v1/projects/PROJECT/databases/(default)/documents/budget/d16",
+            "fields": {
+              "n": {
+                "integerValue": "16"
+              }
+            }
+          },
+          {
+            "path": "/v1/projects/PROJECT/databases/(default)/documents/budget/d17",
+            "fields": {
+              "n": {
+                "integerValue": "17"
+              }
+            }
+          },
+          {
+            "path": "/v1/projects/PROJECT/databases/(default)/documents/budget/d18",
+            "fields": {
+              "n": {
+                "integerValue": "18"
+              }
+            }
+          },
+          {
+            "path": "/v1/projects/PROJECT/databases/(default)/documents/budget/d19",
+            "fields": {
+              "n": {
+                "integerValue": "19"
+              }
+            }
+          },
+          {
+            "path": "/v1/projects/PROJECT/databases/(default)/documents/budget/d20",
+            "fields": {
+              "n": {
+                "integerValue": "20"
+              }
+            }
+          }
+        ],
+        "steps": [
+          {
+            "id": "read",
+            "method": "GET",
+            "path": "/v1/projects/PROJECT/databases/(default)/documents/probe/x"
+          }
+        ]
+      },
+      {
+        "id": "budget-get-repeated-path",
+        "area": "budget",
+        "rules": "rules_version = '2';\nservice cloud.firestore {\n  match /databases/{database}/documents {\n    match /probe/{id} {\n      allow read: if exists(/databases/$(database)/documents/budget/same) && exists(/databases/$(database)/documents/budget/same) && exists(/databases/$(database)/documents/budget/same) && exists(/databases/$(database)/documents/budget/same) && exists(/databases/$(database)/documents/budget/same) && exists(/databases/$(database)/documents/budget/same) && exists(/databases/$(database)/documents/budget/same) && exists(/databases/$(database)/documents/budget/same) && exists(/databases/$(database)/documents/budget/same) && exists(/databases/$(database)/documents/budget/same) && exists(/databases/$(database)/documents/budget/same) && exists(/databases/$(database)/documents/budget/same) && exists(/databases/$(database)/documents/budget/same) && exists(/databases/$(database)/documents/budget/same) && exists(/databases/$(database)/documents/budget/same) && exists(/databases/$(database)/documents/budget/same) && exists(/databases/$(database)/documents/budget/same) && exists(/databases/$(database)/documents/budget/same) && exists(/databases/$(database)/documents/budget/same) && exists(/databases/$(database)/documents/budget/same) && exists(/databases/$(database)/documents/budget/same) && exists(/databases/$(database)/documents/budget/same) && exists(/databases/$(database)/documents/budget/same) && exists(/databases/$(database)/documents/budget/same) && exists(/databases/$(database)/documents/budget/same) && exists(/databases/$(database)/documents/budget/same) && exists(/databases/$(database)/documents/budget/same) && exists(/databases/$(database)/documents/budget/same) && exists(/databases/$(database)/documents/budget/same) && exists(/databases/$(database)/documents/budget/same);\n    }\n  }\n}",
+        "seed": [
+          {
+            "path": "/v1/projects/PROJECT/databases/(default)/documents/budget/same",
+            "fields": {
+              "n": {
+                "integerValue": "1"
+              }
+            }
+          }
+        ],
+        "steps": [
+          {
+            "id": "read",
+            "method": "GET",
+            "path": "/v1/projects/PROJECT/databases/(default)/documents/probe/x"
+          }
+        ]
+      },
+      {
+        "id": "budget-get-11-in-a-commit",
+        "area": "budget",
+        "rules": "rules_version = '2';\nservice cloud.firestore {\n  match /databases/{database}/documents {\n    match /probe/{id} {\n      allow write: if exists(/databases/$(database)/documents/budget/d0) && exists(/databases/$(database)/documents/budget/d1) && exists(/databases/$(database)/documents/budget/d2) && exists(/databases/$(database)/documents/budget/d3) && exists(/databases/$(database)/documents/budget/d4) && exists(/databases/$(database)/documents/budget/d5) && exists(/databases/$(database)/documents/budget/d6) && exists(/databases/$(database)/documents/budget/d7) && exists(/databases/$(database)/documents/budget/d8) && exists(/databases/$(database)/documents/budget/d9) && exists(/databases/$(database)/documents/budget/d10);\n    }\n  }\n}",
+        "seed": [
+          {
+            "path": "/v1/projects/PROJECT/databases/(default)/documents/budget/d0",
+            "fields": {
+              "n": {
+                "integerValue": "0"
+              }
+            }
+          },
+          {
+            "path": "/v1/projects/PROJECT/databases/(default)/documents/budget/d1",
+            "fields": {
+              "n": {
+                "integerValue": "1"
+              }
+            }
+          },
+          {
+            "path": "/v1/projects/PROJECT/databases/(default)/documents/budget/d2",
+            "fields": {
+              "n": {
+                "integerValue": "2"
+              }
+            }
+          },
+          {
+            "path": "/v1/projects/PROJECT/databases/(default)/documents/budget/d3",
+            "fields": {
+              "n": {
+                "integerValue": "3"
+              }
+            }
+          },
+          {
+            "path": "/v1/projects/PROJECT/databases/(default)/documents/budget/d4",
+            "fields": {
+              "n": {
+                "integerValue": "4"
+              }
+            }
+          },
+          {
+            "path": "/v1/projects/PROJECT/databases/(default)/documents/budget/d5",
+            "fields": {
+              "n": {
+                "integerValue": "5"
+              }
+            }
+          },
+          {
+            "path": "/v1/projects/PROJECT/databases/(default)/documents/budget/d6",
+            "fields": {
+              "n": {
+                "integerValue": "6"
+              }
+            }
+          },
+          {
+            "path": "/v1/projects/PROJECT/databases/(default)/documents/budget/d7",
+            "fields": {
+              "n": {
+                "integerValue": "7"
+              }
+            }
+          },
+          {
+            "path": "/v1/projects/PROJECT/databases/(default)/documents/budget/d8",
+            "fields": {
+              "n": {
+                "integerValue": "8"
+              }
+            }
+          },
+          {
+            "path": "/v1/projects/PROJECT/databases/(default)/documents/budget/d9",
+            "fields": {
+              "n": {
+                "integerValue": "9"
+              }
+            }
+          },
+          {
+            "path": "/v1/projects/PROJECT/databases/(default)/documents/budget/d10",
+            "fields": {
+              "n": {
+                "integerValue": "10"
+              }
+            }
+          }
+        ],
+        "steps": [
+          {
+            "id": "commit",
+            "method": "POST",
+            "path": "/v1/projects/PROJECT/databases/(default)/documents:commit",
+            "body": {
+              "writes": [
+                {
+                  "update": {
+                    "name": "projects/PROJECT/databases/(default)/documents/probe/a",
+                    "fields": {
+                      "n": {
+                        "integerValue": "1"
+                      }
+                    }
+                  }
+                },
+                {
+                  "update": {
+                    "name": "projects/PROJECT/databases/(default)/documents/probe/b",
+                    "fields": {
+                      "n": {
+                        "integerValue": "2"
+                      }
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        ]
+      }
+    ]
+  },
+  "sdk": {
+    "executionSourceCommit": "63e270c73d7f52108fb96f9af14414084b821676",
+    "runtimeArtifactSourceCommit": "ed90292a067866999a308f5c9bf029e0846c17b0",
+    "runtimeInputsVerifiedEqual": true,
+    "results": [
+      {
+        "kind": "rules-unit-testing-explicit-rules",
+        "configuration": {
+          "schemaVersion": 1,
+          "profile": "emulator",
+          "daemon": {
+            "authProjectNumbers": {}
+          },
+          "firestore": {
+            "edition": "standard",
+            "apiMode": "native"
+          },
+          "rules": {
+            "source": "tools/sdk-smoke/rules-unit-testing.rules"
+          }
+        },
+        "artifactSha256": "8e433fc24df9585573ce6a213152269de8d51a22d60b1800a4d0e62e0d15508e",
+        "sourceSha256": "6cf60110ea9350ed0e2408bd0ebf8ba1c880e15bbdedd9bad6e2829b6f341e5d",
+        "productionExecuted": false,
+        "basis": "local-SDK-and-Rules",
+        "exitCode": 0,
+        "ownedProcess": {
+          "stopped": true,
+          "listenersClosed": true
+        },
+        "stdout": "ok  the environment carries the hub and the project\nok  Firestore enforces the dynamically loaded rules\nok  Storage enforces the dynamically loaded rules\nrules-unit-testing explicit-rules smoke: ok\n",
+        "rulesFileSha256": {
+          "tools/sdk-smoke/rules-unit-testing.rules": "4a0ededcab2cb62ecbd76125075fbbc06f7e67cb6b3d615d4dc539a017607717",
+          "tools/sdk-smoke/rules-unit-testing.storage.rules": "fea96bb1a637d37724625c30bee42fb2aac92493aa8922d94f5b96f6ef12d990"
+        }
+      },
+      {
+        "kind": "listener-replacement",
+        "configuration": {
+          "schemaVersion": 1,
+          "profile": "strict",
+          "daemon": {
+            "authProjectNumbers": {}
+          },
+          "firestore": {
+            "edition": "standard",
+            "apiMode": "native"
+          },
+          "rules": {
+            "source": "tools/sdk-smoke/listener-replacement.rules"
+          }
+        },
+        "artifactSha256": "8e433fc24df9585573ce6a213152269de8d51a22d60b1800a4d0e62e0d15508e",
+        "sourceSha256": "a74e0138dc8f778be872f056c359ef7ba4c485632a70aebefc84ae679655548f",
+        "productionExecuted": false,
+        "basis": "local-SDK-and-Rules",
+        "exitCode": 0,
+        "ownedProcess": {
+          "stopped": true,
+          "listenersClosed": true
+        },
+        "stdout": "{\n  \"passed\": true,\n  \"transport\": \"force-long-polling\",\n  \"firstValues\": [\n    [\n      0\n    ]\n  ],\n  \"replacementValues\": [\n    [\n      0\n    ],\n    [\n      1\n    ]\n  ]\n}\n",
+        "rulesFileSha256": {
+          "tools/sdk-smoke/listener-replacement.rules": "c3f78c6222fbaf6ae34fd18b90e353638150f51017c83be989fe531c581b1824"
+        }
+      }
+    ]
+  },
+  "limitations": [
+    "Rules REST comparison uses firebase-tools 15.28.2 saved reference, not production.",
+    "SDK outcomes are local assertions, not saved production comparison.",
+    "Storage explicit-rules smoke is separate from Firestore coverage.",
+    "Earlier private wrapper failures occurred before SDK execution: invalid control-origin handling, missing injected environment, disabled Hub. They are not runtime gaps."
+  ]
+}

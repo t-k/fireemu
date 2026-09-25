@@ -1,0 +1,380 @@
+{
+  "schemaVersion": 1,
+  "sources": [
+    {
+      "id": "AUTH-OVERVIEW",
+      "url": "https://firebase.google.com/docs/auth",
+      "kind": "guide",
+      "language": "en",
+      "review": "discovered",
+      "sections": [
+        {
+          "id": "entry",
+          "classification": "unknown",
+          "reason": "Discovery pointer only; full section extraction, version pinning and review remain open.",
+          "requirements": []
+        }
+      ]
+    },
+    {
+      "id": "AUTH-REST",
+      "url": "https://firebase.google.com/docs/reference/rest/auth",
+      "kind": "reference",
+      "language": "en",
+      "review": "discovered",
+      "sections": [
+        {
+          "id": "entry",
+          "classification": "unknown",
+          "reason": "Discovery pointer only; full section extraction, version pinning and review remain open.",
+          "requirements": []
+        }
+      ]
+    },
+    {
+      "id": "AUTH-V1",
+      "url": "https://docs.cloud.google.com/identity-platform/docs/reference/rest",
+      "kind": "reference",
+      "language": "en",
+      "review": "discovered",
+      "sections": [
+        {
+          "id": "entry",
+          "classification": "unknown",
+          "reason": "Discovery pointer only; full section extraction, version pinning and review remain open.",
+          "requirements": []
+        }
+      ]
+    },
+    {
+      "id": "AUTH-V2",
+      "url": "https://docs.cloud.google.com/identity-platform/docs/reference/rest/v2",
+      "kind": "reference",
+      "language": "en",
+      "review": "discovered",
+      "sections": [
+        {
+          "id": "entry",
+          "classification": "unknown",
+          "reason": "Discovery pointer only; full section extraction, version pinning and review remain open.",
+          "requirements": []
+        }
+      ]
+    },
+    {
+      "id": "AUTH-DISCOVERY-V1",
+      "url": "https://identitytoolkit.googleapis.com/$discovery/rest?version=v1",
+      "kind": "discovery",
+      "language": "en",
+      "review": "discovered",
+      "sections": [
+        {
+          "id": "entry",
+          "classification": "unknown",
+          "reason": "Discovery pointer only; full section extraction, version pinning and review remain open.",
+          "requirements": []
+        }
+      ]
+    },
+    {
+      "id": "AUTH-DISCOVERY-V2",
+      "url": "https://identitytoolkit.googleapis.com/$discovery/rest?version=v2",
+      "kind": "discovery",
+      "language": "en",
+      "review": "discovered",
+      "sections": [
+        {
+          "id": "entry",
+          "classification": "unknown",
+          "reason": "Discovery pointer only; full section extraction, version pinning and review remain open.",
+          "requirements": []
+        }
+      ]
+    },
+    {
+      "id": "AUTH-TOTP",
+      "url": "https://firebase.google.com/docs/auth/web/totp-mfa",
+      "kind": "guide",
+      "language": "en",
+      "review": "discovered",
+      "sections": [
+        {
+          "id": "entry",
+          "classification": "unknown",
+          "reason": "Discovery pointer only; full section extraction, version pinning and review remain open.",
+          "requirements": []
+        }
+      ]
+    },
+    {
+      "id": "AUTH-SESSIONS",
+      "url": "https://firebase.google.com/docs/auth/admin/manage-sessions",
+      "kind": "guide",
+      "language": "en",
+      "review": "discovered",
+      "sections": [
+        {
+          "id": "entry",
+          "classification": "unknown",
+          "reason": "Discovery pointer only; full section extraction, version pinning and review remain open.",
+          "requirements": []
+        }
+      ]
+    },
+    {
+      "id": "AUTH-LIMITS",
+      "url": "https://firebase.google.com/docs/auth/limits",
+      "kind": "limits",
+      "language": "en",
+      "review": "discovered",
+      "sections": [
+        {
+          "id": "entry",
+          "classification": "unknown",
+          "reason": "Discovery pointer only; full section extraction, version pinning and review remain open.",
+          "requirements": []
+        }
+      ]
+    },
+    {
+      "id": "AUTH-SDK",
+      "url": "https://firebase.google.com/docs/reference/js/auth",
+      "kind": "sdk",
+      "language": "en",
+      "review": "discovered",
+      "sections": [
+        {
+          "id": "entry",
+          "classification": "unknown",
+          "reason": "Discovery pointer only; full section extraction, version pinning and review remain open.",
+          "requirements": []
+        }
+      ]
+    },
+    {
+      "id": "AUTH-EMULATOR",
+      "url": "https://firebase.google.com/docs/emulator-suite/connect_auth",
+      "kind": "emulator",
+      "language": "en",
+      "review": "discovered",
+      "sections": [
+        {
+          "id": "entry",
+          "classification": "unknown",
+          "reason": "Discovery pointer only; full section extraction, version pinning and review remain open.",
+          "requirements": []
+        }
+      ]
+    },
+    {
+      "id": "FS-OVERVIEW",
+      "url": "https://firebase.google.com/docs/firestore",
+      "kind": "guide",
+      "language": "en",
+      "review": "discovered",
+      "sections": [
+        {
+          "id": "entry",
+          "classification": "unknown",
+          "reason": "Discovery pointer only; full section extraction, version pinning and review remain open.",
+          "requirements": []
+        }
+      ]
+    },
+    {
+      "id": "FS-EDITIONS",
+      "url": "https://firebase.google.com/docs/firestore/editions",
+      "kind": "guide",
+      "language": "en",
+      "review": "discovered",
+      "sections": [
+        {
+          "id": "entry",
+          "classification": "unknown",
+          "reason": "Discovery pointer only; full section extraction, version pinning and review remain open.",
+          "requirements": []
+        }
+      ]
+    },
+    {
+      "id": "FS-RPC",
+      "url": "https://firebase.google.com/docs/firestore/reference/rpc/google.firestore.v1",
+      "kind": "reference",
+      "language": "en",
+      "review": "discovered",
+      "sections": [
+        {
+          "id": "entry",
+          "classification": "unknown",
+          "reason": "Discovery pointer only; full section extraction, version pinning and review remain open.",
+          "requirements": []
+        }
+      ]
+    },
+    {
+      "id": "FS-DISCOVERY-V1",
+      "url": "https://firestore.googleapis.com/$discovery/rest?version=v1",
+      "kind": "discovery",
+      "language": "en",
+      "review": "discovered",
+      "sections": [
+        {
+          "id": "entry",
+          "classification": "unknown",
+          "reason": "Discovery pointer only; full section extraction, version pinning and review remain open.",
+          "requirements": []
+        }
+      ]
+    },
+    {
+      "id": "FS-TRANSACTIONS",
+      "url": "https://firebase.google.com/docs/firestore/transaction-data-contention",
+      "kind": "guide",
+      "language": "en",
+      "review": "discovered",
+      "sections": [
+        {
+          "id": "entry",
+          "classification": "unknown",
+          "reason": "Discovery pointer only; full section extraction, version pinning and review remain open.",
+          "requirements": []
+        }
+      ]
+    },
+    {
+      "id": "FS-OFFLINE",
+      "url": "https://firebase.google.com/docs/firestore/manage-data/enable-offline",
+      "kind": "guide",
+      "language": "en",
+      "review": "discovered",
+      "sections": [
+        {
+          "id": "entry",
+          "classification": "unknown",
+          "reason": "Discovery pointer only; full section extraction, version pinning and review remain open.",
+          "requirements": []
+        }
+      ]
+    },
+    {
+      "id": "FS-LIMITS",
+      "url": "https://firebase.google.com/docs/firestore/quotas",
+      "kind": "limits",
+      "language": "en",
+      "review": "discovered",
+      "sections": [
+        {
+          "id": "entry",
+          "classification": "unknown",
+          "reason": "Discovery pointer only; full section extraction, version pinning and review remain open.",
+          "requirements": []
+        }
+      ]
+    },
+    {
+      "id": "FS-INDEXES",
+      "url": "https://firebase.google.com/docs/firestore/query-data/index-overview",
+      "kind": "guide",
+      "language": "en",
+      "review": "discovered",
+      "sections": [
+        {
+          "id": "entry",
+          "classification": "unknown",
+          "reason": "Discovery pointer only; full section extraction, version pinning and review remain open.",
+          "requirements": []
+        }
+      ]
+    },
+    {
+      "id": "FS-AGGREGATIONS",
+      "url": "https://firebase.google.com/docs/firestore/query-data/aggregation-queries",
+      "kind": "guide",
+      "language": "en",
+      "review": "discovered",
+      "sections": [
+        {
+          "id": "entry",
+          "classification": "unknown",
+          "reason": "Discovery pointer only; full section extraction, version pinning and review remain open.",
+          "requirements": []
+        }
+      ]
+    },
+    {
+      "id": "FS-RULES",
+      "url": "https://firebase.google.com/docs/firestore/security/rules-conditions",
+      "kind": "guide",
+      "language": "en",
+      "review": "discovered",
+      "sections": [
+        {
+          "id": "entry",
+          "classification": "unknown",
+          "reason": "Discovery pointer only; full section extraction, version pinning and review remain open.",
+          "requirements": []
+        }
+      ]
+    },
+    {
+      "id": "FS-EMULATOR",
+      "url": "https://firebase.google.com/docs/emulator-suite/connect_firestore",
+      "kind": "emulator",
+      "language": "en",
+      "review": "discovered",
+      "sections": [
+        {
+          "id": "entry",
+          "classification": "unknown",
+          "reason": "Discovery pointer only; full section extraction, version pinning and review remain open.",
+          "requirements": []
+        }
+      ]
+    },
+    {
+      "id": "FS-SDK",
+      "url": "https://firebase.google.com/docs/reference/js/firestore_",
+      "kind": "sdk",
+      "language": "en",
+      "review": "discovered",
+      "sections": [
+        {
+          "id": "entry",
+          "classification": "unknown",
+          "reason": "Discovery pointer only; full section extraction, version pinning and review remain open.",
+          "requirements": []
+        }
+      ]
+    },
+    {
+      "id": "FS-ADMIN",
+      "url": "https://cloud.google.com/firestore/docs/reference/rest/v1/projects.databases",
+      "kind": "reference",
+      "language": "en",
+      "review": "discovered",
+      "sections": [
+        {
+          "id": "entry",
+          "classification": "unknown",
+          "reason": "Discovery pointer only; full section extraction, version pinning and review remain open.",
+          "requirements": []
+        }
+      ]
+    },
+    {
+      "id": "FS-PROTO",
+      "url": "https://github.com/googleapis/googleapis/tree/master/google/firestore/v1",
+      "kind": "protobuf",
+      "language": "en",
+      "review": "discovered",
+      "sections": [
+        {
+          "id": "entry",
+          "classification": "unknown",
+          "reason": "Discovery pointer only; full section extraction, version pinning and review remain open.",
+          "requirements": []
+        }
+      ]
+    }
+  ]
+}

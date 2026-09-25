@@ -1,0 +1,129 @@
+{
+  "schemaVersion": 1,
+  "kind": "blocking-disable-case-mapping",
+  "reviewer": "Claude (agent-authored interpretation, not human approval)",
+  "reviewedAt": "2026-09-11",
+  "executionApproval": "not-granted",
+  "sources": [
+    {
+      "id": "blocking",
+      "url": "https://firebase.google.com/docs/functions/auth-blocking-events",
+      "locators": [
+        "modifying_a_user",
+        "blocking_sign_in"
+      ]
+    },
+    {
+      "id": "blocking-ip",
+      "url": "https://cloud.google.com/identity-platform/docs/blocking-functions",
+      "locators": [
+        "response-format"
+      ]
+    },
+    {
+      "id": "mfa-finalize",
+      "url": "https://docs.cloud.google.com/identity-platform/docs/reference/rest/v2/accounts.mfaSignIn/finalize",
+      "locators": [
+        "request-body",
+        "response-body"
+      ]
+    },
+    {
+      "id": "admin-lookup",
+      "url": "https://docs.cloud.google.com/identity-platform/docs/reference/rest/v1/projects.accounts/lookup",
+      "locators": [
+        "request-body"
+      ]
+    },
+    {
+      "id": "auth-rest",
+      "url": "https://firebase.google.com/docs/reference/rest/auth",
+      "locators": [
+        "section-sign-in-email-password",
+        "section-get-account-info",
+        "section-refresh-token"
+      ]
+    }
+  ],
+  "obligations": [
+    {
+      "case": "baseline-b-fresh-finalize",
+      "source": "mfa-finalize",
+      "basis": "harness-control",
+      "condition": "With the function registered, the control (no claim) completes a phone MFA finalize before the hook observations; the ID token names the control through claims and a derived lookup."
+    },
+    {
+      "case": "hook-c-first-signin",
+      "source": "blocking",
+      "basis": "diagnostic",
+      "condition": "Password sign-in of the account carrying the disabling claim while the function answers disabled: true. Accepted and refused are both valid observations; the row is always executed."
+    },
+    {
+      "case": "hook-c-token-lookup",
+      "source": "auth-rest",
+      "basis": "diagnostic",
+      "condition": "If tokens were returned, accounts:lookup with the ID token names the account; executed exactly when the first sign-in was accepted."
+    },
+    {
+      "case": "hook-c-token-refresh",
+      "source": "auth-rest",
+      "basis": "diagnostic",
+      "condition": "If tokens were returned, the refresh token is redeemed and the derived ID token names the account; executed exactly when the first sign-in was accepted."
+    },
+    {
+      "case": "hook-c-disabled-readback",
+      "source": "admin-lookup",
+      "basis": "observation",
+      "condition": "The disabled flag of the account as read through privileged accounts:lookup immediately after the first sign-in, recorded true or false."
+    },
+    {
+      "case": "hook-c-second-signin",
+      "source": "blocking",
+      "basis": "diagnostic",
+      "condition": "A second password sign-in of the same account, still under the function; accepted and refused are both valid."
+    },
+    {
+      "case": "hook-a-first-finalize",
+      "source": "blocking",
+      "basis": "diagnostic",
+      "condition": "Phone MFA finalize of the account carrying the disabling claim: the function runs after the second factor. Accepted and refused are both valid; the row is always executed."
+    },
+    {
+      "case": "hook-a-token-lookup",
+      "source": "auth-rest",
+      "basis": "diagnostic",
+      "condition": "If tokens were returned, accounts:lookup with the ID token names the account; executed exactly when the finalize was accepted."
+    },
+    {
+      "case": "hook-a-token-refresh",
+      "source": "auth-rest",
+      "basis": "diagnostic",
+      "condition": "If tokens were returned, the refresh token is redeemed; executed exactly when the finalize was accepted."
+    },
+    {
+      "case": "hook-a-disabled-readback",
+      "source": "admin-lookup",
+      "basis": "observation",
+      "condition": "The disabled flag of the MFA account as read through privileged accounts:lookup immediately after the finalize, recorded true or false."
+    },
+    {
+      "case": "hook-a-second-signin",
+      "source": "blocking",
+      "basis": "diagnostic",
+      "condition": "A second password sign-in of the MFA account; accepted (a pending credential) and refused are both valid."
+    },
+    {
+      "case": "final-b-fresh-finalize",
+      "source": "mfa-finalize",
+      "basis": "harness-control",
+      "condition": "After the hook observations the control completes another phone MFA finalize, bounding the run against an environment-wide failure."
+    }
+  ],
+  "limitations": [
+    "URLs were read during design; no new frozen full-body source snapshot or completed page-review claim is made by this mapping.",
+    "The sources document that a blocking function may set disabled on the user and that beforeSignIn runs after the second factor and before the ID token is returned; they do not state whether the request in which the function disables the user is refused or completed. The observation, not the sources, answers that for the recorded conditions.",
+    "One function shape (a disabling response for a claim) deployed with the first-generation API; no rejecting function, no beforeCreate, no other response fields, no tenant, one run. The persisted flag was read back once immediately; no wait or second readback.",
+    "The oracle project's blocking trigger, MFA, phone sign-in and SMS region configuration were changed for the run and restored; the restore readback and whole-configuration digest comparison are part of the receipt.",
+    "No execution approval, independent signature verification, SDK or Rules claim follows from this mapping."
+  ]
+}

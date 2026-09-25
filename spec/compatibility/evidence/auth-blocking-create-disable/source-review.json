@@ -1,0 +1,107 @@
+{
+  "schemaVersion": 1,
+  "kind": "blocking-create-disable-r2-case-mapping",
+  "reviewer": "Claude (agent-authored interpretation, not human approval)",
+  "reviewedAt": "2026-09-12",
+  "executionApproval": "not-granted",
+  "sources": [
+    {
+      "id": "blocking",
+      "url": "https://firebase.google.com/docs/functions/auth-blocking-events",
+      "locators": [
+        "modifying_a_user",
+        "blocking_sign_in"
+      ]
+    },
+    {
+      "id": "signup",
+      "url": "https://firebase.google.com/docs/reference/rest/auth",
+      "locators": [
+        "section-create-email-password"
+      ]
+    },
+    {
+      "id": "admin-lookup",
+      "url": "https://docs.cloud.google.com/identity-platform/docs/reference/rest/v1/projects.accounts/lookup",
+      "locators": [
+        "request-body"
+      ]
+    },
+    {
+      "id": "auth-rest",
+      "url": "https://firebase.google.com/docs/reference/rest/auth",
+      "locators": [
+        "section-sign-in-email-password",
+        "section-get-account-info",
+        "section-refresh-token"
+      ]
+    }
+  ],
+  "obligations": [
+    {
+      "case": "control-c-signup",
+      "source": "auth-rest",
+      "basis": "harness-control",
+      "condition": "The control signs up with a plain photo URL under the registered function."
+    },
+    {
+      "case": "control-c-signup-readback",
+      "source": "admin-lookup",
+      "basis": "observation",
+      "condition": "Whether the sign-up photo URL is on the record read back through privileged lookup, recorded true or false."
+    },
+    {
+      "case": "control-c-signin",
+      "source": "auth-rest",
+      "basis": "harness-control",
+      "condition": "The control signs in."
+    },
+    {
+      "case": "target-t-signup",
+      "source": "blocking",
+      "basis": "diagnostic",
+      "condition": "The target signs up with the selector email prefix; accepted and refused are both valid."
+    },
+    {
+      "case": "target-t-token-lookup",
+      "source": "auth-rest",
+      "basis": "diagnostic",
+      "condition": "If tokens were returned, lookup with the ID token; executed exactly when the sign-up was accepted."
+    },
+    {
+      "case": "target-t-token-refresh",
+      "source": "auth-rest",
+      "basis": "diagnostic",
+      "condition": "If tokens were returned, the refresh token is redeemed; executed exactly when the sign-up was accepted."
+    },
+    {
+      "case": "target-t-record-readback",
+      "source": "admin-lookup",
+      "basis": "observation",
+      "condition": "Whether a record for the target exists afterwards and whether it is disabled, recorded as seen."
+    },
+    {
+      "case": "target-t-signin",
+      "source": "blocking",
+      "basis": "diagnostic",
+      "condition": "The target's own password sign-in; accepted and refused are both valid."
+    },
+    {
+      "case": "target-t-second-signup",
+      "source": "auth-rest",
+      "basis": "diagnostic",
+      "condition": "A second sign-up with the same email; accepted and refused are both valid."
+    },
+    {
+      "case": "control-c-final-signin",
+      "source": "auth-rest",
+      "basis": "harness-control",
+      "condition": "The control signs in again at the end."
+    }
+  ],
+  "limitations": [
+    "URLs were read during design; no new frozen full-body source snapshot or completed page-review claim is made by this mapping.",
+    "Revision 2 selects on an email-prefix the function can see on the creating request; the observation, not the sources, shows whether the creating request is refused and whether the created record persists.",
+    "One function shape, one run, no tenant; no execution approval, independent signature verification, SDK or Rules claim follows."
+  ]
+}

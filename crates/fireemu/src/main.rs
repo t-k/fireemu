@@ -368,20 +368,23 @@ fn export_command(args: &[String]) -> Result<(), CliError> {
             .unwrap_or_else(|| config::RuntimeConfig::default().auth_project)
     };
     let locator = hub::Locator::path_for(&project);
-    let text = std::fs::read_to_string(&locator).map_err(|_| {
-        CliError::refused(format!(
+    // "Not there at all" is the ordinary case and says how to start a suite. Anything else the
+    // locator might be -- a symlink, another user's file, a file anyone can write, a document
+    // too large to be a locator -- is a refusal from the shared reader, because reaching the
+    // origin this file names means presenting the run's control capability.
+    if std::fs::symlink_metadata(&locator).is_err() {
+        return Err(CliError::refused(format!(
             "no running fireemu suite for {project} was found: {} does not exist. Start one with `fireemu up --project {project}`, or name the project with --project.",
             locator.display()
-        ))
-    })?;
-    let document: serde_json::Value = serde_json::from_str(&text)
-        .map_err(|e| CliError::refused(format!("{} does not parse: {e}", locator.display())))?;
+        )));
+    }
+    let document = hub::read_locator(&locator).map_err(CliError::refused)?;
     let origin = document
         .get("origins")
         .and_then(|o| o.get(0))
         .and_then(serde_json::Value::as_str)
         .ok_or_else(|| CliError::refused(format!("{} names no Hub origin", locator.display())))?;
-    let address = origin.trim_start_matches("http://");
+    let address = hub::loopback_authority(origin).map_err(CliError::refused)?;
     let token = document
         .get("fireemuControlToken")
         .and_then(serde_json::Value::as_str)
@@ -396,7 +399,7 @@ fn export_command(args: &[String]) -> Result<(), CliError> {
         "initiatedBy": "emulators:export",
     })
     .to_string();
-    let (status, response) = post_json(address, "/_admin/export", &body, token)
+    let (status, response) = post_json(&address, "/_admin/export", &body, token)
         .map_err(|e| CliError::refused(format!("the export request to {origin} failed: {e}")))?;
     if status != 200 {
         let message = serde_json::from_str::<serde_json::Value>(&response)
@@ -413,6 +416,21 @@ fn export_command(args: &[String]) -> Result<(), CliError> {
     Ok(())
 }
 
+/// Refuses a connection that did not land on this host's loopback interface.
+///
+/// The control capability is only ever presented to a peer whose address is loopback. A
+/// locator naming `http://localhost:4400` passes the origin rule, but the name is resolved by
+/// the host, so the address it resolved to is what decides.
+fn refuse_non_loopback_peer(peer: std::net::SocketAddr) -> Result<(), String> {
+    if peer.ip().is_loopback() {
+        return Ok(());
+    }
+    Err(format!(
+        "the Hub origin resolved to {}, which is not loopback; the control capability is not sent there",
+        peer.ip()
+    ))
+}
+
 /// One `POST` against a loopback Hub, written by hand: the binary carries a server-side
 /// hyper only, and the Hub's answers are small enough to read in one go.
 fn post_json(
@@ -423,6 +441,13 @@ fn post_json(
 ) -> Result<(u16, String), String> {
     use std::io::{Read as _, Write as _};
     let mut stream = std::net::TcpStream::connect(address).map_err(|e| e.to_string())?;
+    // `loopback_authority` has already refused every origin but a loopback one, and it accepts
+    // the name `localhost` because that is what a locator usually spells. A name is resolved
+    // by the host, and the host can be told to resolve it elsewhere (HOSTALIASES, /etc/hosts,
+    // a search domain), so what the connection actually reached is checked before the control
+    // capability is written to it.
+    let peer = stream.peer_addr().map_err(|e| e.to_string())?;
+    refuse_non_loopback_peer(peer)?;
     stream
         .set_read_timeout(Some(std::time::Duration::from_secs(120)))
         .map_err(|e| e.to_string())?;
@@ -1016,17 +1041,25 @@ fn resolve_export_on_exit(
             })?
             .to_path_buf(),
     };
-    let absolute = std::fs::canonicalize(&dir).unwrap_or_else(|_| dir.clone());
+    // The directory is made absolute here, where the working directory is still the one the
+    // user typed the flag in. A one-element relative name like `out` otherwise reaches the
+    // publication stage with the empty path as its parent, and restricting the permissions of
+    // "" fails with ENOENT at exit, after the command has already run: the export is lost and
+    // the command's own exit status hides it. `emulators:export` absolutizes for this reason
+    // too, and the official CLI resolves `--export-on-exit=out` against the working directory.
+    let absolute = std::path::absolute(&dir)
+        .map_err(|e| CliError::refused(format!("--export-on-exit {}: {e}", dir.display())))?;
+    let resolved = std::fs::canonicalize(&absolute).unwrap_or_else(|_| absolute.clone());
     if let Ok(cwd) = std::env::current_dir() {
-        if cwd.starts_with(&absolute) {
+        if cwd.starts_with(&resolved) {
             return Err(CliError::refused(format!(
                 "--export-on-exit {}: that is the working directory or one of its parents, and an export replaces what the directory holds; choose a dedicated directory",
                 dir.display()
             )));
         }
     }
-    import_export::may_overwrite(&dir).map_err(CliError::refused)?;
-    Ok(Some(dir))
+    import_export::may_overwrite(&absolute).map_err(CliError::refused)?;
+    Ok(Some(absolute))
 }
 
 /// `--inspect-functions [port]`: the bundled runner is a Node script, so the inspector is
@@ -1092,15 +1125,9 @@ struct BoundAddrs {
 /// `FIREBASE_DATABASE_EMULATOR_HOST` is deliberately absent: it names a Realtime Database
 /// emulator, and fireemu has none to point it at.
 ///
-/// Two deliberate differences from the official CLI, both published:
-///
-/// - it also sets `GOOGLE_CLOUD_PROJECT` (the official CLI sets only `GCLOUD_PROJECT`),
-///   because the Google client libraries read either and a test suite should not have to
-///   care which;
-/// - it *removes* the variables of unselected services from the command's environment. The
-///   official CLI only adds, so a stale `FIRESTORE_EMULATOR_HOST` in the shell survives
-///   `--only auth` and silently points the suite at whatever used to run there. Clearing is
-///   the safe reading of "only these emulators are running".
+/// Like the official CLI, selected endpoints override inherited values; endpoints for other
+/// emulators remain inherited so removing a routing variable cannot send a SDK to production.
+/// fireemu additionally sets `GOOGLE_CLOUD_PROJECT` next to `GCLOUD_PROJECT`.
 fn child_environment(
     cfg: &RuntimeConfig,
     only: &Selection,
@@ -1186,27 +1213,6 @@ fn child_environment(
     env
 }
 
-/// The emulator variables `exec` owns: those not selected by `--only` are removed from the
-/// command's environment, so a shell configured for other emulators cannot leak into it.
-/// `FIREBASE_DATABASE_EMULATOR_HOST` is on the list although fireemu never sets it: an
-/// inherited one would point a Realtime Database client at something fireemu does not serve.
-const OWNED_VARIABLES: [&str; 14] = [
-    "FIRESTORE_EMULATOR_HOST",
-    "FIREBASE_FIRESTORE_EMULATOR_ADDRESS",
-    "FIREBASE_AUTH_EMULATOR_HOST",
-    "FIREBASE_STORAGE_EMULATOR_HOST",
-    "STORAGE_EMULATOR_HOST",
-    "FIREBASE_DATABASE_EMULATOR_HOST",
-    "FIREBASE_EMULATOR_HUB",
-    "FIREBASE_LOGGING_EMULATOR_HOST",
-    "FIREEMU_FUNCTIONS_HOST",
-    "CLOUD_EVENTARC_EMULATOR_HOST",
-    "CLOUD_TASKS_EMULATOR_HOST",
-    "PUBSUB_EMULATOR_HOST",
-    "FIREEMU_APP_CHECK_EMULATOR_HOST",
-    "FIREEMU_APP_CHECK_JWKS_URL",
-];
-
 /// The command runs in its own process group when the supervisor is not on a terminal
 /// (CI, a script), so a signal reaches its whole tree; on a terminal it stays in the
 /// foreground group so it keeps the terminal and receives Ctrl-C itself.
@@ -1269,9 +1275,6 @@ fn spawn_child(plan: &ExecPlan, env: &[(String, String)]) -> Result<ExecChild, S
         ExecCommand::Shell(script) => shell_child_command(script),
     };
     cmd.kill_on_drop(true);
-    for name in OWNED_VARIABLES {
-        cmd.env_remove(name);
-    }
     cmd.envs(env.iter().cloned());
     #[cfg(unix)]
     if own_process_group() {
@@ -1426,6 +1429,45 @@ fn exit_code(status: std::process::ExitStatus) -> i32 {
     1
 }
 
+/// Wipes the default session's Pub/Sub project and recreates the resources the Functions
+/// manifest owns.
+///
+/// Reprovisioning is not guaranteed to succeed. Topics are a daemon-wide budget that a
+/// loopback gRPC client fills from any project, so the recreate can be refused with
+/// `RESOURCE_EXHAUSTED` by state this session does not own. That refusal used to be an
+/// `expect`, which panicked while both the publication gate and the Pub/Sub state lock were
+/// held: both were poisoned and every later Pub/Sub request panicked on the poisoned lock, so
+/// one reset took the service down for the life of the daemon. The reset is refused instead.
+fn reset_function_pubsub_resources(
+    pubsub: &Mutex<fireemu_core_pubsub::PubSubState>,
+    project: &str,
+    resources: &[functions::FunctionPubSubResource],
+) -> Result<(), String> {
+    let Ok(mut state) = pubsub.lock() else {
+        return Err("the Pub/Sub state lock is poisoned".to_owned());
+    };
+    state.clear_project(project);
+    functions::provision_function_pubsub_resources(&mut state, resources).map_err(|e| {
+        format!("Functions Pub/Sub resources could not be reprovisioned after the reset: {e}")
+    })
+}
+
+/// The process exit status fireemu reports for a child exit code.
+///
+/// A process exit status is one byte, but a child's reported code is not. Windows reports the
+/// full 32-bit value that `ExitProcess` or a fatal NTSTATUS produced, and `std` hands it over
+/// as a signed `i32`: `cmd /c exit -1` arrives as `-1`, an access violation as `-1073741819`
+/// (0xC0000005), a Ctrl-C termination as `-1073741510` (0xC000013A). Truncating any of those
+/// to a byte, or clamping them into `0..=255`, turns a crashed child into a success and lets a
+/// CI job that trusts fireemu's exit code pass.
+///
+/// So only the codes that survive the byte intact are passed through. Every code outside
+/// `0..=255` -- negative, or 256 and above -- becomes 1, the generic failure. Signal-terminated
+/// children already arrive here as `128 + signal` from [`exit_code`] and pass through.
+fn reportable_exit_code(code: i32) -> u8 {
+    u8::try_from(code).unwrap_or(1)
+}
+
 fn load_rules(cfg: &RuntimeConfig) -> Result<LoadedRules, String> {
     match &cfg.rules_file {
         Some(path) => {
@@ -1519,11 +1561,13 @@ fn watched_file(path: &str) -> Result<(WatchedFileStamp, u64, Vec<u8>), String> 
     Ok((watched_file_stamp(path)?, signature, bytes))
 }
 
-async fn watched_file_stamp_off_thread(path: &str) -> Result<WatchedFileStamp, String> {
-    let path = path.to_owned();
-    tokio::task::spawn_blocking(move || watched_file_stamp(&path))
-        .await
-        .map_err(|error| format!("watch worker failed: {error}"))?
+fn watched_file_changed(
+    observed_stamp: Option<WatchedFileStamp>,
+    observed_signature: Option<u64>,
+    candidate_stamp: WatchedFileStamp,
+    candidate_signature: u64,
+) -> bool {
+    observed_stamp != Some(candidate_stamp) || observed_signature != Some(candidate_signature)
 }
 
 async fn watched_file_off_thread(path: &str) -> Result<(WatchedFileStamp, u64, Vec<u8>), String> {
@@ -1531,6 +1575,29 @@ async fn watched_file_off_thread(path: &str) -> Result<(WatchedFileStamp, u64, V
     tokio::task::spawn_blocking(move || watched_file(&path))
         .await
         .map_err(|error| format!("watch worker failed: {error}"))?
+}
+
+#[cfg(test)]
+fn rules_reload_scan_counts() -> &'static Mutex<std::collections::BTreeMap<String, u64>> {
+    static SCANS: std::sync::OnceLock<Mutex<std::collections::BTreeMap<String, u64>>> =
+        std::sync::OnceLock::new();
+    SCANS.get_or_init(|| Mutex::new(std::collections::BTreeMap::new()))
+}
+
+#[cfg(test)]
+fn note_rules_reload_scan(path: &str) {
+    if let Ok(mut scans) = rules_reload_scan_counts().lock() {
+        *scans.entry(path.to_owned()).or_default() += 1;
+    }
+}
+
+#[cfg(test)]
+fn rules_reload_scan_count(path: &str) -> u64 {
+    rules_reload_scan_counts()
+        .lock()
+        .ok()
+        .and_then(|scans| scans.get(path).copied())
+        .unwrap_or_default()
 }
 
 fn start_rules_reload_supervisor(
@@ -1542,41 +1609,68 @@ fn start_rules_reload_supervisor(
     let weak = Arc::downgrade(rules);
     let barrier = barrier.clone();
     let initial = watched_file(&path).ok();
-    let mut observed_stamp = initial.as_ref().map(|(stamp, _, _)| *stamp);
-    let mut observed_signature = initial.as_ref().map(|(_, signature, _)| *signature);
+    let initial_differs = initial
+        .as_ref()
+        .and_then(|(_, _, bytes)| std::str::from_utf8(bytes).ok())
+        .is_some_and(|source| {
+            rules
+                .snapshot()
+                .ok()
+                .and_then(|snapshot| snapshot.source.clone())
+                .as_deref()
+                != Some(source)
+        });
+    let mut observed_stamp = initial
+        .as_ref()
+        .map(|(stamp, _, _)| *stamp)
+        .filter(|_| !initial_differs);
+    let mut observed_signature = initial
+        .as_ref()
+        .map(|(_, signature, _)| *signature)
+        .filter(|_| !initial_differs);
     tokio::spawn(async move {
         loop {
             tokio::time::sleep(std::time::Duration::from_millis(750)).await;
             let Some(rules) = weak.upgrade() else {
                 return;
             };
-            let stamp = match watched_file_stamp_off_thread(&path).await {
-                Ok(stamp) if observed_stamp != Some(stamp) => stamp,
-                Ok(_) => continue,
-                Err(reason) => {
-                    eprintln!("warning: {label} reload scan failed: {reason}");
-                    continue;
-                }
-            };
-            tokio::time::sleep(std::time::Duration::from_millis(250)).await;
-            let (candidate_stamp, candidate_signature, bytes) =
+            let (candidate_stamp, candidate_signature, _) =
                 match watched_file_off_thread(&path).await {
                     Ok(candidate) => candidate,
-                    Err(error) => {
-                        eprintln!(
-                        "warning: {label} reload failed; keeping the last-known-good rules: {error}"
-                    );
+                    Err(reason) => {
+                        eprintln!("warning: {label} reload scan failed: {reason}");
                         continue;
                     }
                 };
-            if candidate_stamp != stamp {
+            tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+            let (stable_stamp, stable_signature, bytes) = match watched_file_off_thread(&path).await
+            {
+                Ok(candidate) => candidate,
+                Err(error) => {
+                    eprintln!(
+                        "warning: {label} reload failed; keeping the last-known-good rules: {error}"
+                    );
+                    continue;
+                }
+            };
+            if stable_stamp != candidate_stamp || stable_signature != candidate_signature {
                 continue;
             }
-            observed_stamp = Some(candidate_stamp);
-            if observed_signature == Some(candidate_signature) {
+            if !watched_file_changed(
+                observed_stamp,
+                observed_signature,
+                stable_stamp,
+                stable_signature,
+            ) {
                 continue;
             }
-            observed_signature = Some(candidate_signature);
+            #[cfg(test)]
+            note_rules_reload_scan(&path);
+            observed_stamp = Some(stable_stamp);
+            if observed_signature == Some(stable_signature) {
+                continue;
+            }
+            observed_signature = Some(stable_signature);
             let source = match String::from_utf8(bytes) {
                 Ok(source) => source,
                 Err(error) => {
@@ -1615,17 +1709,16 @@ fn start_index_reload_supervisor(path: String, database: String, backend: &Arc<L
             let Some(backend) = weak.upgrade() else {
                 return;
             };
-            let stamp = match watched_file_stamp_off_thread(&path).await {
-                Ok(stamp) if observed_stamp != Some(stamp) => stamp,
-                Ok(_) => continue,
-                Err(reason) => {
-                    eprintln!("warning: Firestore index reload scan failed: {reason}");
-                    continue;
-                }
-            };
+            let (candidate_stamp, candidate_signature, _) =
+                match watched_file_off_thread(&path).await {
+                    Ok(candidate) => candidate,
+                    Err(reason) => {
+                        eprintln!("warning: Firestore index reload scan failed: {reason}");
+                        continue;
+                    }
+                };
             tokio::time::sleep(std::time::Duration::from_millis(250)).await;
-            let (candidate_stamp, candidate_signature, bytes) = match watched_file_off_thread(&path)
-                .await
+            let (stable_stamp, stable_signature, bytes) = match watched_file_off_thread(&path).await
             {
                 Ok(candidate) => candidate,
                 Err(error) => {
@@ -1635,14 +1728,17 @@ fn start_index_reload_supervisor(path: String, database: String, backend: &Arc<L
                     continue;
                 }
             };
-            if candidate_stamp != stamp {
+            if stable_stamp != candidate_stamp || stable_signature != candidate_signature {
                 continue;
             }
-            observed_stamp = Some(candidate_stamp);
-            if observed_signature == Some(candidate_signature) {
+            if !watched_file_changed(
+                observed_stamp,
+                observed_signature,
+                stable_stamp,
+                stable_signature,
+            ) {
                 continue;
             }
-            observed_signature = Some(candidate_signature);
             let text = match String::from_utf8(bytes) {
                 Ok(text) => text,
                 Err(error) => {
@@ -1654,8 +1750,15 @@ fn start_index_reload_supervisor(path: String, database: String, backend: &Arc<L
             };
             match control::parse_indexes(&path, &text) {
                 Ok(indexes) => {
-                    backend.replace_database_indexes(&database, indexes);
-                    eprintln!("note: reloaded Firestore indexes for {database} from {path}");
+                    if backend.replace_database_indexes(&database, indexes) {
+                        observed_stamp = Some(stable_stamp);
+                        observed_signature = Some(stable_signature);
+                        eprintln!("note: reloaded Firestore indexes for {database} from {path}");
+                    } else {
+                        eprintln!(
+                            "warning: Firestore index reload failed; keeping the last-known-good indexes: index catalog lock poisoned"
+                        );
+                    }
                 }
                 Err(error) => eprintln!(
                     "warning: Firestore index reload failed; keeping the last-known-good indexes: {error}"
@@ -1722,6 +1825,7 @@ fn storage_state(
     clock_observer: Option<Arc<dyn Fn() + Send + Sync>>,
     app_check_policy: Option<Arc<fireemu_core_app_check::ServiceAdmission>>,
     admin_capability: String,
+    control_token: String,
 ) -> Result<Arc<fireemu_adapter_http::storage::StorageState>, String> {
     let parent = fireemu_adapter_grpc::decode::Parent {
         project: fireemu_core_types::ids::ProjectId::try_new(cfg.auth_project.clone())
@@ -1752,6 +1856,7 @@ fn storage_state(
         app_check_policy,
         admin_capability: Some(admin_capability),
         token_acceptance: cfg.token_acceptance,
+        control_token: Some(control_token),
     }))
 }
 
@@ -1960,6 +2065,7 @@ fn clock_millis(clock: &Arc<Mutex<VirtualClock>>) -> i64 {
     i64::try_from(nanos / 1_000_000).unwrap_or(i64::MAX)
 }
 
+#[allow(clippy::too_many_lines)]
 fn print_banner(
     cfg: &RuntimeConfig,
     verb: &str,
@@ -1972,13 +2078,27 @@ fn print_banner(
         None => println!("  firestore:        not selected by --only (nothing is bound)"),
     }
     match addrs.auth {
-        Some(a) => println!("  auth (REST):      {a}   FIREBASE_AUTH_EMULATOR_HOST={a}"),
+        Some(a) => {
+            println!("  auth (REST):      {a}   FIREBASE_AUTH_EMULATOR_HOST={a}");
+            if let Some(note) = daemon::custom_token_signer_note(cfg) {
+                println!("{note}");
+            }
+        }
         None => println!("  auth:             not selected by --only (nothing is bound)"),
     }
     match addrs.storage {
-        Some(a) => println!(
-            "  storage (HTTP):   {a}   FIREBASE_STORAGE_EMULATOR_HOST={a}   STORAGE_EMULATOR_HOST=http://{a}"
-        ),
+        Some(a) => {
+            println!(
+                "  storage (HTTP):   {a}   FIREBASE_STORAGE_EMULATOR_HOST={a}   STORAGE_EMULATOR_HOST=http://{a}"
+            );
+            // A run with no ruleset denies every end-user request, as production's default
+            // rules do; say so, because the configuration that reaches it is an omission.
+            if cfg.storage_rules_file.is_none() && cfg.storage_rules_by_target.is_empty() {
+                println!(
+                    "  storage rules:    none loaded, so every end-user request is denied; set storage.rules in firebase.json (the owner credential and the JSON API are unaffected)"
+                );
+            }
+        }
         None => println!("  storage:          not selected by --only (nothing is bound)"),
     }
     match addrs.functions {
@@ -2080,6 +2200,8 @@ struct Exporter {
     clock: Arc<Mutex<VirtualClock>>,
     project: String,
     products: import_export::Products,
+    blocking: Option<Arc<dyn fireemu_adapter_http::identity_toolkit::AuthBlockingHook>>,
+    auth_operation_gate: Arc<Mutex<()>>,
 }
 
 impl Exporter {
@@ -2090,6 +2212,8 @@ impl Exporter {
             storage: &self.storage,
             clock: &self.clock,
             project: &self.project,
+            blocking: self.blocking.as_deref(),
+            auth_operation_gate: Some(&self.auth_operation_gate),
         }
     }
 }
@@ -2102,43 +2226,112 @@ impl hub::ExportRunner for Exporter {
     }
 }
 
-/// Resolves on SIGTERM (so a killed daemon still stops its runner); never on platforms
-/// without it.
-async fn terminate_signal() {
-    #[cfg(unix)]
-    {
-        match tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()) {
-            Ok(mut s) => {
-                s.recv().await;
-            }
-            Err(_) => std::future::pending::<()>().await,
+/// The stop signals, installed before the daemon advertises readiness.
+///
+/// Installing a handler is what replaces a signal's default disposition, and the default
+/// disposition for SIGTERM terminates the process without running a single destructor.
+/// Registering lazily inside the serving `select!` left a window that opened the moment the
+/// readiness banner was printed: a SIGTERM arriving there killed the daemon outright, so the
+/// Hub locator outlived the process that wrote it. The handlers therefore go up before the
+/// suite is assembled; a signal that arrives before the `select!` first polls them is
+/// buffered and delivered on that poll.
+pub(crate) struct ShutdownSignals {
+    /// SIGINT, which is also what Ctrl-C raises.
+    pub(crate) interrupt: InterruptSignal,
+    /// SIGTERM, so a killed daemon still stops its runner.
+    pub(crate) terminate: TerminateSignal,
+}
+
+impl ShutdownSignals {
+    /// Installs both handlers. Called from inside the runtime, before anything an operator
+    /// or a test can observe as readiness. A handler that cannot be installed never
+    /// resolves, which is what a platform without the signal already did.
+    pub(crate) fn install() -> Self {
+        Self {
+            interrupt: InterruptSignal::install(),
+            terminate: TerminateSignal::install(),
         }
     }
-    #[cfg(not(unix))]
-    std::future::pending::<()>().await;
+}
+
+/// The installed SIGINT handler.
+pub(crate) struct InterruptSignal {
+    #[cfg(unix)]
+    signal: Option<tokio::signal::unix::Signal>,
+}
+
+impl InterruptSignal {
+    fn install() -> Self {
+        Self {
+            #[cfg(unix)]
+            signal: tokio::signal::unix::signal(tokio::signal::unix::SignalKind::interrupt()).ok(),
+        }
+    }
+
+    /// Resolves on the first interrupt.
+    pub(crate) async fn recv(&mut self) {
+        #[cfg(unix)]
+        {
+            match &mut self.signal {
+                Some(signal) => {
+                    signal.recv().await;
+                }
+                None => std::future::pending::<()>().await,
+            }
+        }
+        #[cfg(not(unix))]
+        {
+            let _ = tokio::signal::ctrl_c().await;
+        }
+    }
+}
+
+/// The installed SIGTERM handler; never resolves on a platform without the signal.
+pub(crate) struct TerminateSignal {
+    #[cfg(unix)]
+    signal: Option<tokio::signal::unix::Signal>,
+}
+
+impl TerminateSignal {
+    fn install() -> Self {
+        Self {
+            #[cfg(unix)]
+            signal: tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()).ok(),
+        }
+    }
+
+    /// Resolves on the first termination request.
+    pub(crate) async fn recv(&mut self) {
+        #[cfg(unix)]
+        {
+            match &mut self.signal {
+                Some(signal) => {
+                    signal.recv().await;
+                }
+                None => std::future::pending::<()>().await,
+            }
+        }
+        #[cfg(not(unix))]
+        std::future::pending::<()>().await;
+    }
 }
 
 /// A 128-bit secret from the operating system's entropy source; the daemon refuses to start
 /// without one (these values authorize control and runner access).
 fn random_secret() -> Result<String, String> {
-    use std::fmt::Write as _;
-    use std::io::Read as _;
-    let mut bytes = [0u8; 16];
-    std::fs::File::open("/dev/urandom")
-        .and_then(|mut f| f.read_exact(&mut bytes))
-        .map_err(|e| format!("cannot read /dev/urandom for the control token: {e}"))?;
-    Ok(bytes.iter().fold(String::with_capacity(32), |mut acc, b| {
-        let _ = write!(acc, "{b:02x}");
-        acc
-    }))
+    fireemu_adapter_support::entropy::hex_128()
+        .map_err(|e| format!("cannot draw the control token: {e}"))
+}
+
+/// An unpredictable 128-bit daemon-local incarnation from the operating system CSPRNG.
+fn random_u128() -> Result<u128, String> {
+    fireemu_adapter_support::entropy::u128_value()
+        .map_err(|e| format!("cannot build a daemon incarnation: {e}"))
 }
 
 /// An unpredictable 128-bit project session epoch from the operating system CSPRNG (spec 7.2).
 fn random_epoch() -> Result<fireemu_core_app_check::ProjectEpoch, String> {
-    let hex = random_secret()?;
-    let value = u128::from_str_radix(&hex, 16)
-        .map_err(|e| format!("cannot build an App Check epoch: {e}"))?;
-    Ok(fireemu_core_app_check::ProjectEpoch::new(value))
+    random_u128().map(fireemu_core_app_check::ProjectEpoch::new)
 }
 
 /// Builds the App Check state from canonical configuration: the registry, a fresh epoch per
@@ -2236,11 +2429,12 @@ fn control_state(
     pubsub_resources: &[functions::FunctionPubSubResource],
 ) -> fireemu_adapter_http::control::ControlState {
     let _ = auth_store;
-    // Snapshot parts: what the session owns (Firestore databases, buckets, users, fault
-    // plan, text indexes) and, for the default session, the shared parts (clock, both
+    // Snapshot parts: what the session owns (Firestore databases and their field
+    // configuration, buckets, users, fault plan, text indexes) and, for the default session, the shared parts (clock, both
     // rulesets; a restore also resets the functions runtime).
     let mut snapshot_hooks: Vec<Arc<dyn fireemu_adapter_http::control::SnapshotHook>> = vec![
         Arc::new(snapshots::Firestore(backend.clone())),
+        Arc::new(snapshots::FieldConfig(backend.clone())),
         Arc::new(snapshots::Storage(storage.clone())),
         Arc::new(snapshots::Auth(registry.clone())),
         Arc::new(snapshots::Faults(faults.clone(), cfg.auth_project.clone())),
@@ -2266,22 +2460,18 @@ fn control_state(
     }
     // The default session's scope is wiped by the project hooks; the shared functions
     // runtime is reset afterwards.
-    let mut reset_hooks: Vec<Arc<dyn Fn() + Send + Sync>> = Vec::new();
+    let mut reset_hooks: Vec<Arc<dyn Fn() -> Result<(), String> + Send + Sync>> = Vec::new();
     let pubsub_for_reset = pubsub.clone();
     let pubsub_handle_for_reset = pubsub_handle.clone();
     let functions_for_reset = functions.cloned();
     let pubsub_resources = pubsub_resources.to_vec();
     let pubsub_project = cfg.auth_project.clone();
     reset_hooks.push(Arc::new(move || {
-        let _publication = pubsub_handle_for_reset.lock_publication();
+        let _publication = pubsub_handle_for_reset.lock_publication()?;
         if let Some(runtime) = &functions_for_reset {
             runtime.reset();
         }
-        if let Ok(mut state) = pubsub_for_reset.lock() {
-            state.clear_project(&pubsub_project);
-            functions::provision_function_pubsub_resources(&mut state, &pubsub_resources)
-                .expect("validated Functions Pub/Sub resources reprovision after reset");
-        }
+        reset_function_pubsub_resources(&pubsub_for_reset, &pubsub_project, &pubsub_resources)
     }));
     // Resource diagnostics, one hook per service (spec 15); collected one after another.
     let mut resource_hooks: Vec<Arc<dyn fireemu_adapter_http::control::ResourceHook>> = vec![
@@ -2353,9 +2543,12 @@ mod config_reload_tests {
 
     const RULES_ONE: &str = "rules_version = '2'; service cloud.firestore { match /databases/{database}/documents { match /{document=**} { allow read: if true; } } }";
     const RULES_TWO: &str = "rules_version = '2'; service cloud.firestore { match /databases/{database}/documents { match /{document=**} { allow write: if false; } } }";
+    const RULES_DENY_READ: &str = "rules_version = '2'; service cloud.firestore { match /databases/{database}/documents { match /{document=**} { allow read: if false; } } }";
     const STORAGE_ALLOW: &str = "rules_version = '2'; service firebase.storage { match /b/{bucket}/o { match /{path=**} { allow read: if true; } } }";
     const STORAGE_DENY: &str = "rules_version = '2'; service firebase.storage { match /b/{bucket}/o { match /{path=**} { allow read: if false; } } }";
     const STORAGE_WRITE: &str = "rules_version = '2'; service firebase.storage { match /b/{bucket}/o { match /{path=**} { allow write: if true; } } }";
+    const INDEXES_ONE: &str = r#"{"indexes":[{"collectionGroup":"items","queryScope":"COLLECTION","fields":[{"fieldPath":"a","order":"ASCENDING"},{"fieldPath":"b","order":"DESCENDING"}]}],"fieldOverrides":[]}"#;
+    const INDEXES_TWO: &str = r#"{"indexes":[{"collectionGroup":"other","queryScope":"COLLECTION","fields":[{"fieldPath":"c","order":"ASCENDING"},{"fieldPath":"d","order":"DESCENDING"}]}],"fieldOverrides":[]}"#;
 
     fn scratch(name: &str) -> std::path::PathBuf {
         let dir =
@@ -2363,6 +2556,85 @@ mod config_reload_tests {
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         dir
+    }
+
+    fn write_rules_generation(
+        path: &std::path::Path,
+        source: &str,
+        modified: std::time::SystemTime,
+    ) {
+        std::fs::write(path, source).unwrap();
+        std::fs::File::options()
+            .write(true)
+            .open(path)
+            .unwrap()
+            .set_times(std::fs::FileTimes::new().set_modified(modified))
+            .unwrap();
+    }
+
+    fn index_backend(indexes: &str) -> Arc<LocalBackend> {
+        let gateway = Gateway {
+            enforce_limits: true,
+            ctx: PlanningContext {
+                edition: FirestoreEdition::Standard,
+                api_mode: FirestoreApiMode::Native,
+                policy: IndexValidationPolicy::Production,
+            },
+            indexes: IndexSet::default(),
+        };
+        let backend = Arc::new(LocalBackend::new(
+            gateway,
+            Arc::new(Mutex::new(VirtualClock::new(LogicalInstant::UNIX_EPOCH))),
+            7,
+        ));
+        backend.replace_database_indexes(
+            "staging",
+            control::parse_indexes("indexes", indexes).unwrap(),
+        );
+        backend
+    }
+
+    fn write_index_generation(
+        path: &std::path::Path,
+        bytes: &[u8],
+        modified: std::time::SystemTime,
+    ) {
+        std::fs::write(path, bytes).unwrap();
+        std::fs::File::options()
+            .write(true)
+            .open(path)
+            .unwrap()
+            .set_times(std::fs::FileTimes::new().set_modified(modified))
+            .unwrap();
+    }
+
+    async fn wait_for_index_collection(backend: &Arc<LocalBackend>, collection: &str) {
+        tokio::time::timeout(std::time::Duration::from_secs(4), async {
+            loop {
+                if backend
+                    .indexes_for_database("staging")
+                    .composites()
+                    .first()
+                    .is_some_and(|index| index.collection_group.as_str() == collection)
+                {
+                    break;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+            }
+        })
+        .await
+        .expect("the valid index generation should reload");
+    }
+
+    #[test]
+    fn rules_reload_checks_content_when_file_metadata_is_unchanged() {
+        let stamp = WatchedFileStamp {
+            len: 42,
+            modified_nanos: 7,
+        };
+
+        assert!(watched_file_changed(Some(stamp), Some(1), stamp, 2));
+        assert!(!watched_file_changed(Some(stamp), Some(1), stamp, 1));
     }
 
     #[test]
@@ -2688,6 +2960,36 @@ mod config_reload_tests {
     }
 
     #[tokio::test]
+    async fn rules_reload_reconciles_file_changed_before_supervisor_start() {
+        let dir = scratch("rules-before-supervisor");
+        let path = dir.join("firestore.rules");
+        std::fs::write(&path, RULES_TWO).unwrap();
+        let rules = Arc::new(RulesetSlot::new(
+            LoadedRules::from_source(RULES_ONE).unwrap(),
+        ));
+        let barrier = Arc::new(fireemu_core_session::barrier::AdmissionBarrier::new());
+        start_rules_reload_supervisor(
+            path.to_string_lossy().into_owned(),
+            "Firestore rules",
+            &rules,
+            &barrier,
+        );
+
+        tokio::time::timeout(std::time::Duration::from_secs(4), async {
+            loop {
+                if rules.snapshot().unwrap().source.as_deref() == Some(RULES_TWO) {
+                    break;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+            }
+        })
+        .await
+        .expect("the file present before supervisor start should reconcile");
+        drop(rules);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[tokio::test]
     async fn storage_target_reload_changes_only_its_own_bucket_group() {
         let dir = scratch("storage-target-isolation");
         let public_path = dir.join("public.rules");
@@ -2755,6 +3057,183 @@ mod config_reload_tests {
         );
     }
 
+    #[allow(clippy::too_many_lines)]
+    #[tokio::test]
+    async fn named_firestore_rules_reload_isolated_from_default_database() {
+        let dir = scratch("named-rules-isolation");
+        let default_path = dir.join("default.rules");
+        let named_path = dir.join("named.rules");
+        std::fs::write(&default_path, RULES_ONE).unwrap();
+        std::fs::write(&named_path, RULES_ONE).unwrap();
+
+        let gateway = Gateway {
+            enforce_limits: true,
+            ctx: PlanningContext {
+                edition: FirestoreEdition::Standard,
+                api_mode: FirestoreApiMode::Native,
+                policy: IndexValidationPolicy::Production,
+            },
+            indexes: IndexSet::default(),
+        };
+        let backend = Arc::new(LocalBackend::new(
+            gateway,
+            Arc::new(Mutex::new(VirtualClock::new(LogicalInstant::UNIX_EPOCH))),
+            7,
+        ));
+        let default_rules = Arc::new(RulesetSlot::new(
+            LoadedRules::from_source(RULES_ONE).unwrap(),
+        ));
+        let named_rules = Arc::new(RulesetSlot::new(
+            LoadedRules::from_source(RULES_ONE).unwrap(),
+        ));
+        let database_rules =
+            std::collections::BTreeMap::from([("staging".to_owned(), named_rules.clone())]);
+        let cfg = RuntimeConfig {
+            firestore_databases: std::collections::BTreeMap::from([
+                (
+                    fireemu_core_types::ids::DatabaseId::DEFAULT.to_owned(),
+                    crate::config::FirestoreDatabaseFiles {
+                        rules: Some(default_path.display().to_string()),
+                        indexes: None,
+                    },
+                ),
+                (
+                    "staging".to_owned(),
+                    crate::config::FirestoreDatabaseFiles {
+                        rules: Some(named_path.display().to_string()),
+                        indexes: None,
+                    },
+                ),
+            ]),
+            ..RuntimeConfig::default()
+        };
+        let loaded_storage = LoadedStorageRules {
+            registry: Arc::new(fireemu_adapter_http::storage::StorageRulesRegistry::global(
+                Arc::new(RulesetSlot::default()),
+            )),
+            watched: Vec::new(),
+        };
+        let barrier = Arc::new(fireemu_core_session::barrier::AdmissionBarrier::new());
+        start_firestore_config_reload_supervisors(
+            &cfg,
+            &backend,
+            &default_rules,
+            &database_rules,
+            &loaded_storage,
+            &barrier,
+        );
+        let auth = Arc::new(Mutex::new(AuthStore::new(
+            "demo-app",
+            fireemu_core_types::determinism::SplitMix64::new(7),
+            fireemu_core_auth::mfa::TotpPolicy::default(),
+        )));
+        let clock = Arc::new(Mutex::new(VirtualClock::new(LogicalInstant::UNIX_EPOCH)));
+        let enforcer =
+            fireemu_adapter_grpc::rules::RulesEnforcer::new(default_rules.clone(), auth, clock)
+                .with_database_rules(database_rules);
+        let project = fireemu_core_types::ids::ProjectId::try_new("demo-app").unwrap();
+        let authorize = |database: &str| {
+            let database_id = fireemu_core_types::ids::DatabaseId::try_new(database).unwrap();
+            let path = fireemu_core_firestore::path::DocumentPath::parse(
+                &project,
+                &database_id,
+                "items/a",
+            )
+            .unwrap();
+            let reader = fireemu_adapter_grpc::rules::LatestReader {
+                backend: backend.clone(),
+                parent: fireemu_adapter_grpc::decode::Parent {
+                    project: project.clone(),
+                    database: database_id,
+                    document: None,
+                },
+            };
+            enforcer
+                .authorize_get(
+                    &fireemu_adapter_grpc::rules::Principal::Anonymous,
+                    &path,
+                    None,
+                    &reader,
+                )
+                .is_ok()
+        };
+
+        assert!(authorize("(default)"));
+        assert!(authorize("staging"));
+        std::fs::write(&named_path, RULES_DENY_READ).unwrap();
+        tokio::time::timeout(std::time::Duration::from_secs(4), async {
+            loop {
+                if named_rules.snapshot().unwrap().source.as_deref() == Some(RULES_DENY_READ) {
+                    break;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+            }
+        })
+        .await
+        .expect("named rules should reload");
+        assert!(authorize("(default)"));
+        assert!(!authorize("staging"));
+
+        let deny_generation = named_rules.snapshot().unwrap().generation();
+        let deny_mtime = std::fs::metadata(&named_path).unwrap().modified().unwrap();
+        let named_path_string = named_path.display().to_string();
+        let scans_before_malformed = rules_reload_scan_count(&named_path_string);
+        std::fs::write(&named_path, "malformed rules").unwrap();
+        std::fs::File::options()
+            .write(true)
+            .open(&named_path)
+            .unwrap()
+            .set_times(
+                std::fs::FileTimes::new()
+                    .set_modified(deny_mtime + std::time::Duration::from_secs(1)),
+            )
+            .unwrap();
+        tokio::time::timeout(std::time::Duration::from_secs(4), async {
+            loop {
+                if rules_reload_scan_count(&named_path_string) > scans_before_malformed {
+                    break;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+            }
+        })
+        .await
+        .expect("the malformed named generation should be scanned");
+        assert!(authorize("(default)"));
+        assert!(!authorize("staging"));
+
+        write_rules_generation(&named_path, RULES_DENY_READ, deny_mtime);
+        tokio::time::timeout(std::time::Duration::from_secs(4), async {
+            loop {
+                if named_rules.snapshot().unwrap().generation() > deny_generation {
+                    break;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+            }
+        })
+        .await
+        .expect("the malformed named generation should be observed and retained");
+        assert!(!authorize("staging"));
+
+        std::fs::write(&named_path, RULES_ONE).unwrap();
+        tokio::time::timeout(std::time::Duration::from_secs(4), async {
+            loop {
+                if named_rules.snapshot().unwrap().source.as_deref() == Some(RULES_ONE) {
+                    break;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+            }
+        })
+        .await
+        .expect("named rules should recover");
+        assert!(authorize("(default)"));
+        assert!(authorize("staging"));
+        drop(enforcer);
+        drop(default_rules);
+        drop(named_rules);
+        drop(backend);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
     #[tokio::test]
     async fn global_storage_file_keeps_reloading_after_a_control_update() {
         let dir = scratch("storage-global-control-reload");
@@ -2812,6 +3291,88 @@ mod config_reload_tests {
     }
 
     #[tokio::test]
+    async fn index_reload_retries_equal_length_malformed_json_and_recovers() {
+        assert_eq!(INDEXES_ONE.len(), INDEXES_TWO.len());
+        let dir = scratch("indexes-equal-length-malformed-json");
+        let path = dir.join("firestore.indexes.json");
+        std::fs::write(&path, INDEXES_ONE).unwrap();
+        let original_mtime = std::fs::metadata(&path).unwrap().modified().unwrap();
+        let backend = index_backend(INDEXES_ONE);
+        start_index_reload_supervisor(path.display().to_string(), "staging".to_owned(), &backend);
+
+        let mut malformed = INDEXES_TWO.as_bytes().to_vec();
+        let array_start = malformed.iter().position(|byte| *byte == b'[').unwrap();
+        malformed[array_start] = b'{';
+        write_index_generation(&path, &malformed, original_mtime);
+        tokio::time::sleep(std::time::Duration::from_millis(1_300)).await;
+        assert_eq!(
+            backend.indexes_for_database("staging").composites()[0]
+                .collection_group
+                .as_str(),
+            "items"
+        );
+
+        write_index_generation(&path, INDEXES_TWO.as_bytes(), original_mtime);
+        wait_for_index_collection(&backend, "other").await;
+        drop(backend);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[tokio::test]
+    async fn index_reload_retries_equal_length_invalid_utf8_and_recovers() {
+        assert_eq!(INDEXES_ONE.len(), INDEXES_TWO.len());
+        let dir = scratch("indexes-equal-length-invalid-utf8");
+        let path = dir.join("firestore.indexes.json");
+        std::fs::write(&path, INDEXES_ONE).unwrap();
+        let original_mtime = std::fs::metadata(&path).unwrap().modified().unwrap();
+        let backend = index_backend(INDEXES_ONE);
+        start_index_reload_supervisor(path.display().to_string(), "staging".to_owned(), &backend);
+
+        let mut invalid_utf8 = INDEXES_TWO.as_bytes().to_vec();
+        invalid_utf8[0] = 0xff;
+        write_index_generation(&path, &invalid_utf8, original_mtime);
+        tokio::time::sleep(std::time::Duration::from_millis(1_300)).await;
+        assert_eq!(
+            backend.indexes_for_database("staging").composites()[0]
+                .collection_group
+                .as_str(),
+            "items"
+        );
+
+        write_index_generation(&path, INDEXES_TWO.as_bytes(), original_mtime);
+        wait_for_index_collection(&backend, "other").await;
+        drop(backend);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[tokio::test]
+    async fn index_reload_recovers_from_malformed_json_with_changed_metadata() {
+        assert_eq!(INDEXES_ONE.len(), INDEXES_TWO.len());
+        let dir = scratch("indexes-malformed-json");
+        let path = dir.join("firestore.indexes.json");
+        std::fs::write(&path, INDEXES_ONE).unwrap();
+        let backend = index_backend(INDEXES_ONE);
+        start_index_reload_supervisor(path.display().to_string(), "staging".to_owned(), &backend);
+
+        let mut malformed = INDEXES_TWO.as_bytes().to_vec();
+        let array_start = malformed.iter().position(|byte| *byte == b'[').unwrap();
+        malformed[array_start] = b'{';
+        std::fs::write(&path, malformed).unwrap();
+        tokio::time::sleep(std::time::Duration::from_millis(1_300)).await;
+        assert_eq!(
+            backend.indexes_for_database("staging").composites()[0]
+                .collection_group
+                .as_str(),
+            "items"
+        );
+
+        std::fs::write(&path, INDEXES_TWO).unwrap();
+        wait_for_index_collection(&backend, "other").await;
+        drop(backend);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[tokio::test]
     async fn index_reload_replaces_the_query_planners_catalog() {
         let dir = scratch("indexes");
         let path = dir.join("firestore.indexes.json");
@@ -2849,5 +3410,202 @@ mod config_reload_tests {
         );
         drop(backend);
         let _ = std::fs::remove_dir_all(dir);
+    }
+}
+
+#[cfg(test)]
+mod exit_code_tests {
+    use super::reportable_exit_code;
+
+    #[test]
+    fn codes_that_fit_a_byte_are_reported_unchanged() {
+        assert_eq!(reportable_exit_code(0), 0);
+        assert_eq!(reportable_exit_code(1), 1);
+        assert_eq!(reportable_exit_code(23), 23);
+        assert_eq!(reportable_exit_code(255), 255);
+    }
+
+    #[test]
+    fn signal_terminations_keep_their_unix_spelling() {
+        // `exit_code` maps a signal to 128 + signal; SIGKILL is 137, SIGTERM 143, SIGSEGV 139.
+        for code in [128 + 9, 128 + 15, 128 + 11] {
+            assert_eq!(reportable_exit_code(code), u8::try_from(code).unwrap());
+        }
+    }
+
+    #[test]
+    fn windows_negative_status_codes_never_report_success() {
+        // `cmd /c exit -1`, STATUS_ACCESS_VIOLATION, STATUS_CONTROL_C_EXIT, and the extreme.
+        for code in [-1, -1_073_741_819, -1_073_741_510, i32::MIN] {
+            assert_eq!(
+                reportable_exit_code(code),
+                1,
+                "a negative child status must not be reported as success"
+            );
+        }
+    }
+
+    #[test]
+    fn codes_above_a_byte_never_report_success_or_a_truncated_value() {
+        // 256 and 512 truncate to 0 under a cast; 300 truncates to 44.
+        for code in [256, 300, 512, 0x0100_0000, i32::MAX] {
+            assert_eq!(reportable_exit_code(code), 1);
+        }
+    }
+}
+
+#[cfg(test)]
+mod reset_pubsub_tests {
+    use std::collections::BTreeMap;
+    use std::sync::Mutex;
+
+    use fireemu_core_pubsub::{PubSubState, TopicName};
+
+    use super::{functions, reset_function_pubsub_resources};
+
+    fn manifest_resources(project: &str) -> Vec<functions::FunctionPubSubResource> {
+        let manifest = fireemu_adapter_functions::manifest_json::parse_manifest(
+            &serde_json::json!({"functions": [
+                {"name": "worker", "trigger": {"type": "pubsub", "topic": "shared-jobs"}}
+            ]}),
+        )
+        .expect("the manifest parses");
+        functions::function_pubsub_resources(project, &manifest).expect("the resources resolve")
+    }
+
+    /// RSTPS-2: topics are a daemon-wide budget that any project can fill, so recreating the
+    /// Functions resources after a reset can be refused by state this session does not own.
+    /// The refusal is reported; it must not panic while the Pub/Sub state lock is held,
+    /// because that poisons the lock and every later Pub/Sub request panics on it in turn.
+    #[test]
+    fn a_refused_reprovision_is_reported_and_leaves_the_lock_usable() {
+        let resources = manifest_resources("demo-app");
+        let pubsub = Mutex::new(PubSubState::new(11));
+        {
+            let mut state = pubsub.lock().expect("the fresh lock is usable");
+            // Another project fills the daemon-wide topic budget. Wiping `demo-app` frees
+            // nothing, so the recreate below has nowhere to go.
+            for index in 0..fireemu_core_pubsub::state::MAX_TOPICS {
+                let name = TopicName::new("demo-other", format!("filler-{index}"))
+                    .expect("the topic name is valid");
+                state
+                    .create_topic(name, BTreeMap::new())
+                    .expect("the budget admits this topic");
+            }
+        }
+
+        let error = reset_function_pubsub_resources(&pubsub, "demo-app", &resources)
+            .expect_err("a reprovision with no room must be refused");
+
+        assert!(error.contains("reprovisioned"), "{error}");
+        assert!(error.contains("shared-jobs"), "{error}");
+        // The lock is still usable, which a panic through the guard would have prevented.
+        let mut state = pubsub
+            .lock()
+            .expect("the refusal must not poison the Pub/Sub state lock");
+        assert!(state.list_topics("demo-app").is_empty());
+        state.clear_project("demo-other");
+        drop(state);
+
+        // With the budget free, the same reset succeeds and the manifest's resources are back.
+        reset_function_pubsub_resources(&pubsub, "demo-app", &resources)
+            .expect("the reset succeeds once there is room");
+        let state = pubsub.lock().expect("the lock is still usable");
+        assert_eq!(state.list_topics("demo-app").len(), 1);
+        assert_eq!(state.list_subscriptions("demo-app").len(), 1);
+    }
+}
+
+#[cfg(test)]
+mod loopback_peer_tests {
+    use std::net::{SocketAddr, TcpListener, UdpSocket};
+
+    use super::{post_json, refuse_non_loopback_peer};
+
+    /// LOOPPEER-1: the origin rule accepts the name `localhost`, and a name is resolved by the
+    /// host, which can be told to resolve it elsewhere. What the connection reached is what
+    /// decides whether the control capability is written to it.
+    #[test]
+    fn only_a_peer_on_the_loopback_interface_is_trusted() {
+        for loopback in ["127.0.0.1:4400", "127.0.0.2:4400", "[::1]:4400"] {
+            let peer: SocketAddr = loopback.parse().expect("the address parses");
+            assert_eq!(refuse_non_loopback_peer(peer), Ok(()), "{loopback}");
+        }
+        for routable in ["10.0.0.1:4400", "203.0.113.7:80", "[2001:db8::1]:4400"] {
+            let peer: SocketAddr = routable.parse().expect("the address parses");
+            let refusal =
+                refuse_non_loopback_peer(peer).expect_err("a routable peer must be refused");
+            assert!(refusal.contains("not loopback"), "{refusal}");
+            assert!(refusal.contains(&peer.ip().to_string()), "{refusal}");
+        }
+    }
+
+    /// The address this host would use to reach the outside world, when it has one. No packet
+    /// is sent: a connected UDP socket only fixes the route so the local address can be read.
+    fn outward_address() -> Option<std::net::IpAddr> {
+        let socket = UdpSocket::bind("0.0.0.0:0").ok()?;
+        socket.connect("203.0.113.1:80").ok()?;
+        let address = socket.local_addr().ok()?.ip();
+        (!address.is_loopback() && !address.is_unspecified()).then_some(address)
+    }
+
+    /// LOOPPEER-2: the same rule over a real connection. A Hub reached on this host's own
+    /// non-loopback address is refused, and the socket it reached is left with nothing written
+    /// to it, so the control capability never lands where other hosts can also connect.
+    ///
+    /// The refusal is the claim being fixed here. The check that nothing was written is
+    /// best-effort by nature: connecting to an ephemeral port on this same host can produce a
+    /// TCP simultaneous open, where the socket connects to itself and the listener never sees
+    /// it. That case leaves nothing to inspect, and the test says so rather than hanging on an
+    /// accept that will not arrive.
+    #[test]
+    fn a_hub_reached_off_the_loopback_interface_is_never_sent_the_capability() {
+        let Some(address) = outward_address() else {
+            // A host with no non-loopback address cannot exercise this; LOOPPEER-1 still does.
+            return;
+        };
+        let Ok(listener) = TcpListener::bind((address, 0)) else {
+            return;
+        };
+        let bound = listener.local_addr().expect("the listener has an address");
+        listener
+            .set_nonblocking(true)
+            .expect("the listener accepts without blocking");
+
+        let refusal = post_json(
+            &bound.to_string(),
+            "/_admin/export",
+            "{}",
+            "secret-control-token",
+        )
+        .expect_err("a non-loopback peer must be refused");
+
+        assert!(refusal.contains("not loopback"), "{refusal}");
+        assert!(refusal.contains(&address.to_string()), "{refusal}");
+
+        // Whatever reached the listener, if anything did, carried no request.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+        while std::time::Instant::now() < deadline {
+            match listener.accept() {
+                Ok((mut stream, _)) => {
+                    use std::io::Read as _;
+                    stream
+                        .set_read_timeout(Some(std::time::Duration::from_secs(2)))
+                        .expect("the timeout is set");
+                    let mut received = Vec::new();
+                    let _ = stream.read_to_end(&mut received);
+                    assert!(
+                        received.is_empty(),
+                        "nothing may be written to a non-loopback peer, but it received {:?}",
+                        String::from_utf8_lossy(&received)
+                    );
+                    return;
+                }
+                Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                    std::thread::sleep(std::time::Duration::from_millis(20));
+                }
+                Err(_) => return,
+            }
+        }
     }
 }

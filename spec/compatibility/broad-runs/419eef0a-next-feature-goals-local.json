@@ -1,0 +1,300 @@
+{
+  "schemaVersion": 1,
+  "kind": "finite-local-feature-goals",
+  "status": "done-local",
+  "runtimeCommit": "419eef0aba53848d8a37081aa5fa1d25142cee3d",
+  "productionExecuted": false,
+  "capturedAt": "2026-09-13T09:18:46Z",
+  "preservedEvidence": {
+    "g0FixedCommit": "a35f85b464743d62344a3a58763d382b5b3838ce",
+    "g0ExecutionInputs": "spec/compatibility/broad-runs/a35f85b4-shared-execution-inputs.json",
+    "changed": false,
+    "limitations": "Owner, permission window, unused production nonce, current settings and pricing acceptance, and recovery owner remain unset. No Cloud authentication, read or data operation was performed."
+  },
+  "goals": {
+    "G3-pending-switch-local": {
+      "state": "done-local",
+      "transport": "Firebase JS SDK 12.18.0 Node gRPC with loopback REST state checks",
+      "ownerFlow": [
+        {
+          "owner": "reconnect_goal",
+          "model": "gpt-5.6-luna",
+          "reviewReadyAttempts": 2,
+          "outcome": "transferred after two independent review rejections"
+        },
+        {
+          "owner": "g3_auth_specialist",
+          "model": "gpt-6-astra",
+          "outcome": "completed finite implementation and regression"
+        }
+      ],
+      "conditions": [
+        "seed A, disable network, attach A listener, queue exactly one A write, sign out A, create and sign in B, reconnect",
+        "original A write promise remains explicitly nonterminal during the bounded post-reconnect observation",
+        "listener reports exactly two offline snapshots followed by one terminal permission-denied error and a quiet window",
+        "separate B cache observation rolls back to A revision0 without pending metadata",
+        "B-token REST read and write of A are denied while A-token server read remains owner A revision0",
+        "nearby B offline/reconnect write resolves and reaches a server-backed nonpending snapshot",
+        "both owned documents are deleted and verified absent; Auth, Firestore, app and listener lifecycles close"
+      ],
+      "limits": [
+        "The original A write promise's eventual terminal disposition is not established.",
+        "No browser, WebChannel or production behavior is claimed."
+      ],
+      "newConfirmedProductionGap": false
+    },
+    "G4-where-equal-local": {
+      "state": "done-local",
+      "transport": "owner-authorized Enterprise ExecutePipeline gRPC local latest read",
+      "ownerFlow": [
+        {
+          "owner": "scale_goal",
+          "model": "gpt-5.6-luna",
+          "reviewReadyAttempts": 2,
+          "outcome": "transferred after two independent review rejections"
+        },
+        {
+          "owner": "enterprise_where_specialist",
+          "model": "gpt-6-astra",
+          "outcome": "completed finite implementation, tests, mutations and catalog"
+        }
+      ],
+      "grammar": "collection(path), optional one where(equal(top-level field reference, scalar literal)), optional one select, optional one nonnegative limit",
+      "conditions": [
+        "ordinary scalar equality compiles to FieldFilter EQUAL",
+        "null and NaN compile to UnaryFilter IS_NULL and IS_NAN",
+        "12 tonic scalar rows cover bool, numeric cross-representation, timestamp, string, bytes, reference, geo, infinity, null, NaN and missing fields",
+        "filtering precedes projection and limit",
+        "21 refusal rows distinguish malformed supported shapes from well-formed unsupported shapes and verify unchanged source readback",
+        "existing paging, snapshot and cancellation path remains in use"
+      ],
+      "excluded": [
+        "function names other than exact equal",
+        "nested and __name__ fields",
+        "complex and expression operands",
+        "where after select or limit and repeated where",
+        "consistency selectors, other stages, optimizer, full-text and MongoDB"
+      ],
+      "productionCompatibility": "unobserved"
+    }
+  },
+  "validation": {
+    "integratedAdapter": {
+      "command": [
+        "cargo",
+        "nextest",
+        "run",
+        "-p",
+        "fireemu-adapter-grpc",
+        "--profile",
+        "pr"
+      ],
+      "runId": "f05b738d-e81c-480f-ad79-2f6719c96ddb",
+      "passed": 257,
+      "failed": 0,
+      "skipped": 1
+    },
+    "clippy": {
+      "command": [
+        "cargo",
+        "clippy",
+        "-p",
+        "fireemu-adapter-grpc",
+        "--all-targets",
+        "--",
+        "-D",
+        "warnings"
+      ],
+      "exitCode": 0
+    },
+    "compatibilityCatalog": {
+      "command": [
+        "cargo",
+        "run",
+        "--locked",
+        "-p",
+        "compat-check"
+      ],
+      "coveredEntries": 47,
+      "exitCode": 0
+    },
+    "workspace": {
+      "command": [
+        "cargo",
+        "nextest",
+        "run",
+        "--workspace",
+        "--profile",
+        "pr",
+        "--no-fail-fast"
+      ],
+      "passed": 2038,
+      "failed": 3,
+      "skipped": 81,
+      "failedReason": "Existing Quint evidence and repository traceability drift for unchanged source; reproduced against the Goal baseline and not rewritten by this Goal."
+    },
+    "g3ActualRun": {
+      "sourceCommit": "419eef0aba53848d8a37081aa5fa1d25142cee3d",
+      "artifactSha256": "26f150cc68583001ab72e83e338572d1f7296bb0ce84e99a208250ab38938d5c",
+      "command": [
+        "fireemu",
+        "exec",
+        "--only",
+        "auth,firestore",
+        "--firestore-port",
+        "0",
+        "--http-port",
+        "0",
+        "--hub-port",
+        "0",
+        "--logging-port",
+        "0",
+        "--ui-port",
+        "0",
+        "--project",
+        "demo-app",
+        "--",
+        "npm",
+        "--prefix",
+        "tools/sdk-smoke",
+        "run",
+        "smoke:g3-pending-switch"
+      ],
+      "exitCode": 0,
+      "elapsedSeconds": 1.717,
+      "timedOut": false,
+      "survivingOwnedPids": [],
+      "listeningPortsAfterExit": [],
+      "logSha256": "55a3ca8fed4f34642d8ff647fcca1e5ce45312f831c761943171d9ee62757c3d",
+      "processRecordSha256": "b0c6902ec18741e32b708b73e29548f377af3f6b7730ba22f44ed37efceb765f"
+    },
+    "mutations": {
+      "isolatedNormalAndMutationOutputs": true,
+      "baselinePipelineTestsPassed": 17,
+      "killed": 7,
+      "survived": 0,
+      "names": [
+        "function-name",
+        "operand-position",
+        "null-operator",
+        "nan-operator",
+        "field-path",
+        "stage-order",
+        "filter-assignment"
+      ]
+    }
+  },
+  "reviews": {
+    "securitySpecialistFileAvailable": false,
+    "method": "Independent reviewers explicitly applied correctness and Security Specialist perspectives.",
+    "g3": {
+      "approval": "approved",
+      "blockerOrHighRemaining": 0,
+      "reviewSha256": "423e5ffd3af5f785fcf8c77fcc8e73921a30b1511428f28bdd3cba892456cfc4"
+    },
+    "g4": {
+      "approval": "approved",
+      "blockerOrHighRemaining": 0,
+      "reviewSha256": "58c00ec28c3d23321e0aee610ded5324880e3b68e1eee025a083718edd3e3834"
+    },
+    "handoffs": "Each Luna owner received two review rejections. Runtime ownership then moved to one gpt-6-astra specialist and the Luna owner stopped editing that implementation; no post-transfer overlapping source work was recorded."
+  },
+  "usage": {
+    "windowStart": "2026-09-13T08:45:04.637Z",
+    "sampledAt": "2026-09-13T09:17:45.265532+00:00",
+    "method": "Existing per-session rollout cumulative differences. Repeated totals excluded; cached input is a subset of input; parent Goal-tool totals are not added.",
+    "currencyCost": null,
+    "rows": [
+      {
+        "role": "coordinator",
+        "owner": "coordinator",
+        "models": ["gpt-5.6-sol", "gpt-6-astra"],
+        "inputTokens": 19946274,
+        "cachedInputTokens": 19671296,
+        "inputExcludingCached": 274978,
+        "outputTokens": 33059
+      },
+      {
+        "role": "implementation",
+        "owner": "reconnect_goal",
+        "models": ["gpt-5.6-luna"],
+        "inputTokens": 5328219,
+        "cachedInputTokens": 5276928,
+        "inputExcludingCached": 51291,
+        "outputTokens": 11047
+      },
+      {
+        "role": "implementation",
+        "owner": "scale_goal",
+        "models": ["gpt-5.6-luna"],
+        "inputTokens": 4850693,
+        "cachedInputTokens": 4804608,
+        "inputExcludingCached": 46085,
+        "outputTokens": 7898
+      },
+      {
+        "role": "specialist",
+        "owner": "g3_auth_specialist",
+        "models": ["gpt-6-astra"],
+        "inputTokens": 1199682,
+        "cachedInputTokens": 1146624,
+        "inputExcludingCached": 53058,
+        "outputTokens": 14302
+      },
+      {
+        "role": "specialist",
+        "owner": "enterprise_where_specialist",
+        "models": ["gpt-6-astra"],
+        "inputTokens": 2480881,
+        "cachedInputTokens": 2403584,
+        "inputExcludingCached": 77297,
+        "outputTokens": 16485
+      },
+      {
+        "role": "review",
+        "owner": "g3_pending_review",
+        "models": ["gpt-5.6-sol"],
+        "inputTokens": 1094459,
+        "cachedInputTokens": 1007872,
+        "inputExcludingCached": 86587,
+        "outputTokens": 15624
+      },
+      {
+        "role": "review",
+        "owner": "enterprise_next_review",
+        "models": ["gpt-5.6-sol"],
+        "inputTokens": 2745316,
+        "cachedInputTokens": 2589952,
+        "inputExcludingCached": 155364,
+        "outputTokens": 15726
+      },
+      {
+        "role": "design",
+        "owner": "enterprise_next_advice",
+        "models": ["gpt-5.6-sol"],
+        "inputTokens": 3210722,
+        "cachedInputTokens": 3030784,
+        "inputExcludingCached": 179938,
+        "outputTokens": 13120
+      }
+    ],
+    "crossSession": {
+      "inputTokens": 40856246,
+      "cachedInputTokens": 39931648,
+      "inputExcludingCached": 924598,
+      "outputTokens": 127261
+    },
+    "limits": "Coordinator work is mixed across integration, research and evidence. Review-ready phase duration and currency cost are unavailable and are not estimated."
+  },
+  "remaining": {
+    "productionUnobserved": [
+      "G3 pending-write identity switch over production and browser/WebChannel",
+      "Enterprise ExecutePipeline equality execution and exact error parity",
+      "G0 two-scenario BatchWrite comparison until explicit owner inputs are supplied"
+    ],
+    "queued": [
+      "G4-select-copy-local remains a low-priority finite measurement and is not a prerequisite for new Enterprise features.",
+      "The eventual terminal disposition of the former user's pending write remains a separate finite question."
+    ]
+  }
+}

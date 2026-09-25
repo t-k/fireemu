@@ -42,6 +42,12 @@ unless `retainAckedMessages` is set), and `check` replays fireemu alone against 
 `check` needs `cargo build -p fireemu` first (or `FIREEMU_BIN=/path/to/fireemu`).
 `CONFORMANCE_VERBOSE=1` streams both supervisors' output.
 
+The Firestore probe also contains three bounded Admin database-inventory requests. They are
+marked `localOnly` in the operation manifest because the official emulator has no corresponding
+route. `firestore:check` still requires a complete local HTTP observation for those rows, but
+does not present them as official-emulator compatibility matches; production status for the
+Admin surface is tracked separately in `FIRESTORE-PRODUCTION-MATRIX.md`.
+
 ## What it compares
 
 For each step: the HTTP status or gRPC code, the error code and message, the payload shape, the

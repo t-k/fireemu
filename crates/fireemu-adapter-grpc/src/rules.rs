@@ -981,6 +981,7 @@ fn abstract_resource(disjunction: &[FilterExpr]) -> RulesValue {
     // Inequality filters on one field combine into one range (Firestore requires every
     // range filter of a field to share the value's class); an equality wins over them.
     let mut ranges: BTreeMap<&FieldPath, Option<ValueRange>> = BTreeMap::new();
+    let mut exclusions: BTreeMap<&FieldPath, Vec<RulesValue>> = BTreeMap::new();
     for atom in disjunction {
         if let FilterExpr::Field { field, op, value } = atom {
             if !field.is_document_name() {
@@ -993,15 +994,34 @@ fn abstract_resource(disjunction: &[FilterExpr]) -> RulesValue {
                     });
                     *entry = entry.take().and_then(|r| tighten(r, bound));
                 }
+                match op {
+                    FieldOp::NotEqual => exclusions
+                        .entry(field)
+                        .or_default()
+                        .push(rules_value(value)),
+                    FieldOp::NotIn => {
+                        if let Value::Array(items) = value {
+                            exclusions
+                                .entry(field)
+                                .or_default()
+                                .extend(items.iter().map(rules_value));
+                        }
+                    }
+                    _ => {}
+                }
             }
         }
     }
-    for (field, range) in ranges {
-        set_nested(
-            &mut data,
-            field,
-            range.map_or(RulesValue::Unknown, RulesValue::Range),
-        );
+    for (field, range) in &ranges {
+        let value = match (range.clone(), exclusions.get(field)) {
+            (Some(range), Some(excluded)) => RulesValue::RangeExcluding {
+                range,
+                excluded: excluded.clone(),
+            },
+            (Some(range), None) => RulesValue::Range(range),
+            (None, _) => RulesValue::Unknown,
+        };
+        set_nested(&mut data, field, value);
     }
     for atom in disjunction {
         match atom {
@@ -1038,23 +1058,6 @@ fn abstract_resource(disjunction: &[FilterExpr]) -> RulesValue {
                         }
                     }
                 }
-                // Exists, is not null and differs from the listed values.
-                FieldOp::NotEqual => {
-                    set_nested(
-                        &mut data,
-                        field,
-                        RulesValue::NotOneOf(vec![rules_value(value)]),
-                    );
-                }
-                FieldOp::NotIn => {
-                    if let Value::Array(items) = value {
-                        set_nested(
-                            &mut data,
-                            field,
-                            RulesValue::NotOneOf(items.iter().map(rules_value).collect()),
-                        );
-                    }
-                }
                 _ => {}
             },
             FilterExpr::Unary {
@@ -1062,6 +1065,11 @@ fn abstract_resource(disjunction: &[FilterExpr]) -> RulesValue {
                 op: UnaryOp::IsNull,
             } => set_nested(&mut data, field, RulesValue::Null),
             _ => {}
+        }
+    }
+    for (field, excluded) in exclusions {
+        if !ranges.contains_key(field) {
+            set_nested_exclusion(&mut data, field, excluded);
         }
     }
     let mut m = BTreeMap::new();
@@ -1191,17 +1199,81 @@ fn set_nested(fields: &mut BTreeMap<String, RulesValue>, path: &FieldPath, value
         let entry = map
             .entry(s.clone())
             .or_insert_with(|| RulesValue::PartialMap(BTreeMap::new()));
-        if !matches!(entry, RulesValue::PartialMap(_) | RulesValue::Map(_)) {
+        if !matches!(
+            entry,
+            RulesValue::PartialMap(_) | RulesValue::PartialMapExcluding { .. } | RulesValue::Map(_)
+        ) {
             *entry = RulesValue::PartialMap(BTreeMap::new());
         }
         map = match entry {
             RulesValue::PartialMap(m) | RulesValue::Map(m) => m,
+            RulesValue::PartialMapExcluding { fields, .. } => fields,
             _ => return,
         };
     }
     if let Some(last) = segments.last() {
         map.insert(last.clone(), value);
     }
+}
+
+/// Merges a parent-level exclusion with any partial child constraints already present at that
+/// path. Query proofs need both facts: a child range remains available to the evaluator while
+/// the complete map is known not to equal each excluded value.
+fn set_nested_exclusion(
+    fields: &mut BTreeMap<String, RulesValue>,
+    path: &FieldPath,
+    excluded_values: Vec<RulesValue>,
+) {
+    let segments = path.segments();
+    let Some(last) = segments.last() else {
+        return;
+    };
+    let mut map = fields;
+    for segment in &segments[..segments.len() - 1] {
+        let entry = map
+            .entry(segment.clone())
+            .or_insert_with(|| RulesValue::PartialMap(BTreeMap::new()));
+        if let RulesValue::NotOneOf(excluded) = entry {
+            // A parent exclusion may be encountered before a nested exclusion (the
+            // BTreeMap ordering is parent-first). Preserve it while introducing the
+            // partial child map instead of replacing the parent's constraint.
+            let parent_excluded = std::mem::take(excluded);
+            *entry = RulesValue::PartialMapExcluding {
+                fields: BTreeMap::new(),
+                excluded: parent_excluded,
+            };
+        } else if !matches!(
+            entry,
+            RulesValue::PartialMap(_) | RulesValue::PartialMapExcluding { .. } | RulesValue::Map(_)
+        ) {
+            *entry = RulesValue::PartialMap(BTreeMap::new());
+        }
+        map = match entry {
+            RulesValue::PartialMap(m) | RulesValue::Map(m) => m,
+            RulesValue::PartialMapExcluding { fields, .. } => fields,
+            _ => return,
+        };
+    }
+    let merged = match map.remove(last) {
+        Some(RulesValue::PartialMap(fields)) => RulesValue::PartialMapExcluding {
+            fields,
+            excluded: excluded_values,
+        },
+        Some(RulesValue::PartialMapExcluding {
+            fields,
+            mut excluded,
+        }) => {
+            excluded.extend(excluded_values);
+            RulesValue::PartialMapExcluding { fields, excluded }
+        }
+        Some(RulesValue::NotOneOf(mut previous)) => {
+            previous.extend(excluded_values);
+            RulesValue::NotOneOf(previous)
+        }
+        Some(existing) => existing,
+        None => RulesValue::NotOneOf(excluded_values),
+    };
+    map.insert(last.clone(), merged);
 }
 
 const fn method_name(m: Method) -> &'static str {
@@ -1266,6 +1338,16 @@ pub fn placeholder_paths(parent: &Parent, query: &Query) -> Result<Vec<DocumentP
         ),
         QueryScope::KindlessAllDescendants { parent: None } => {
             format!("{ABSTRACT_PREFIX}/{ABSTRACT_SEGMENT}/{ABSTRACT_PREFIX}/{ABSTRACT_SEGMENT}")
+        }
+        // Any collection directly under the parent: the collection id is undetermined too.
+        QueryScope::KindlessChildren {
+            parent: Some(parent),
+        } => format!(
+            "{}/{ABSTRACT_SEGMENT}/{ABSTRACT_SEGMENT}",
+            parent.relative()
+        ),
+        QueryScope::KindlessChildren { parent: None } => {
+            format!("{ABSTRACT_SEGMENT}/{ABSTRACT_SEGMENT}")
         }
     };
     let path = DocumentPath::parse(&parent.project, &parent.database, &relative)
@@ -1336,6 +1418,9 @@ fn query_scope_contains(
         QueryScope::KindlessAllDescendants { parent } => parent
             .as_ref()
             .is_none_or(|ancestor| path_is_below(path, ancestor)),
+        QueryScope::KindlessChildren { parent } => {
+            path.parent_document().as_ref() == parent.as_ref()
+        }
     }
 }
 
@@ -1430,5 +1515,90 @@ pub fn same_epoch(
         Err(Status::unavailable(
             "the session was reset while the request was in flight; retry against the new session",
         ))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::abstract_resource;
+    use fireemu_core_firestore::field_path::FieldPath;
+    use fireemu_core_firestore::query::{FieldOp, FilterExpr};
+    use fireemu_core_firestore::value::Value;
+    use fireemu_core_rules::value::RulesValue;
+    use std::collections::BTreeMap;
+
+    #[test]
+    fn abstract_resource_retains_parent_exclusion_when_nested_exclusion_is_added() {
+        let parent = FieldPath::parse("meta").unwrap();
+        let nested = FieldPath::parse("meta.score").unwrap();
+        let mut excluded_map = BTreeMap::new();
+        excluded_map.insert("score".to_owned(), Value::Integer(6));
+        let resource = abstract_resource(&[
+            FilterExpr::Field {
+                field: parent,
+                op: FieldOp::NotEqual,
+                value: Value::Map(excluded_map),
+            },
+            FilterExpr::Field {
+                field: nested,
+                op: FieldOp::NotEqual,
+                value: Value::Integer(5),
+            },
+        ]);
+
+        let RulesValue::Map(resource) = resource else {
+            panic!("resource should be a map");
+        };
+        let RulesValue::PartialMap(data) = resource.get("data").expect("resource data") else {
+            panic!("resource data should be a partial map");
+        };
+        let RulesValue::PartialMapExcluding { fields, excluded } =
+            data.get("meta").expect("meta constraint")
+        else {
+            panic!("parent exclusion must be retained alongside nested constraints");
+        };
+        assert_eq!(
+            fields.get("score"),
+            Some(&RulesValue::NotOneOf(vec![RulesValue::Int(5)]))
+        );
+        assert_eq!(excluded.len(), 1);
+        assert!(matches!(
+            &excluded[0],
+            RulesValue::Map(values)
+                if values.get("score") == Some(&RulesValue::Int(6))
+        ));
+    }
+
+    #[test]
+    fn a_kindless_children_query_stands_for_any_direct_child_of_its_parent() {
+        use super::{placeholder_paths, query_scope_contains};
+        use crate::decode::Parent;
+        use fireemu_core_firestore::path::DocumentPath;
+        use fireemu_core_firestore::query::{Query, QueryScope};
+        use fireemu_core_rules::eval::ABSTRACT_SEGMENT;
+        use fireemu_core_types::ids::{DatabaseId, ProjectId};
+        let project = ProjectId::try_new("p").unwrap();
+        let database = DatabaseId::try_new("(default)").unwrap();
+        let doc = |relative: &str| DocumentPath::parse(&project, &database, relative).unwrap();
+        let parent = Parent {
+            project: project.clone(),
+            database: database.clone(),
+            document: None,
+        };
+        let root = Query::new(QueryScope::kindless_children(None));
+        assert_eq!(
+            placeholder_paths(&parent, &root).unwrap(),
+            vec![doc(&format!("{ABSTRACT_SEGMENT}/{ABSTRACT_SEGMENT}"))]
+        );
+        let nested = Query::new(QueryScope::kindless_children(Some(doc("a/b"))));
+        assert_eq!(
+            placeholder_paths(&parent, &nested).unwrap(),
+            vec![doc(&format!("a/b/{ABSTRACT_SEGMENT}/{ABSTRACT_SEGMENT}"))]
+        );
+        assert!(query_scope_contains(&root.scope, &doc("x/1")));
+        assert!(!query_scope_contains(&root.scope, &doc("x/1/y/2")));
+        assert!(query_scope_contains(&nested.scope, &doc("a/b/c/d")));
+        assert!(!query_scope_contains(&nested.scope, &doc("a/b/c/d/e/f")));
+        assert!(!query_scope_contains(&nested.scope, &doc("a/c/c/d")));
     }
 }

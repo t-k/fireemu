@@ -26,7 +26,6 @@
 #![allow(clippy::result_large_err)]
 
 use std::collections::{BTreeMap, HashMap, VecDeque};
-use std::hash::{BuildHasher, Hasher};
 use std::io::Write as _;
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::mpsc::{sync_channel, SyncSender, TrySendError};
@@ -58,8 +57,8 @@ const LONG_POLL_WAIT: Duration = Duration::from_secs(30);
 const LONG_POLL_MAX: Duration = Duration::from_secs(60);
 /// Streaming back channels send a keep-alive after this much silence.
 const KEEPALIVE: Duration = Duration::from_secs(30);
-/// Maximum accepted form body.
-pub const MAX_FORM_BYTES: usize = 10 * 1024 * 1024;
+/// Maximum accepted form body (`FS-LIMIT-API-REQUEST-BYTES`).
+pub const MAX_FORM_BYTES: usize = crate::serve::API_REQUEST_BYTES;
 /// Maximum concurrent sessions.
 pub const MAX_SESSIONS: usize = 256;
 /// Maximum unacknowledged arrays per session before it is closed.
@@ -595,45 +594,23 @@ impl ListenObserver for WebchannelListenObserver {
     }
 }
 
-/// 128 bits from the operating system CSPRNG.
+/// 128 bits from the operating system CSPRNG, or no session at all.
 ///
 /// A channel id was always unguessable-by-construction, but since App Check admits a channel
 /// once and later envelopes ride on that admission (specification section 13.1), knowing one
-/// *is* the capability to use an admitted channel. It is drawn from the same source as the
-/// control token, the runner secret and the project epochs rather than from keyed hashing of a
-/// counter. A failed draw falls back to that keyed hashing rather than to anything predictable:
-/// refusing to open channels because `/dev/urandom` is unreadable would be worse, and the
-/// fallback is exactly the previous behaviour.
-fn random_sid() -> String {
-    use std::fmt::Write as _;
-    use std::io::Read as _;
-    let mut bytes = [0u8; 16];
-    if std::fs::File::open("/dev/urandom")
-        .and_then(|mut f| f.read_exact(&mut bytes))
-        .is_ok()
-    {
-        let mut out = String::with_capacity(32);
-        for byte in bytes {
-            let _ = write!(out, "{byte:02x}");
-        }
-        return out;
-    }
-    keyed_sid()
+/// *is* the capability to use an admitted channel. So it is drawn from the same source as the
+/// control token, the runner secret and the project epochs, and a failed draw refuses the
+/// handshake. Falling back to keyed hashing of a counter would mint the capability from a
+/// weaker source exactly when the strong one is unavailable, which is the moment it matters.
+fn random_sid() -> Result<String, String> {
+    sid_from_entropy(fireemu_adapter_support::entropy::hex_128)
 }
 
-/// The fallback of [`random_sid`]: system-keyed hashing of a counter, not derived from the
-/// deterministic runtime seed.
-fn keyed_sid() -> String {
-    static COUNTER: AtomicU64 = AtomicU64::new(1);
-    let n = COUNTER.fetch_add(1, Ordering::Relaxed);
-    let state = std::collections::hash_map::RandomState::new();
-    let mut a = state.build_hasher();
-    a.write_u64(n);
-    a.write_u64(0xA5A5);
-    let mut b = state.build_hasher();
-    b.write_u64(n ^ 0x5A5A_5A5A);
-    b.write_u64(u64::from(std::process::id()));
-    format!("{:016x}{:016x}", a.finish(), b.finish())
+/// [`random_sid`] over an explicit entropy source, so a failing one can be observed.
+fn sid_from_entropy<E: std::fmt::Display>(
+    draw: impl FnOnce() -> Result<String, E>,
+) -> Result<String, String> {
+    draw().map_err(|e| format!("a WebChannel session id cannot be drawn: {e}"))
 }
 
 fn next_trace_session_id() -> u64 {
@@ -1684,7 +1661,10 @@ impl Hub {
             },
             None => crate::rules::Principal::Owner,
         };
-        let sid = random_sid();
+        let sid = match random_sid() {
+            Ok(sid) => sid,
+            Err(e) => return text_response(500, e),
+        };
         let (inbound_tx, inbound_rx) = mpsc::channel::<Result<Value, Status>>(64);
         let session = Arc::new(Session {
             sid: sid.clone(),
@@ -3521,5 +3501,42 @@ mod tests {
         assert!(rx.try_recv().is_err());
         assert!(session.finish_backchannel(replacement_generation));
         assert!(!session.backchannel_attached());
+    }
+}
+
+#[cfg(test)]
+mod sid_entropy_tests {
+    use super::{random_sid, sid_from_entropy};
+
+    /// SIDENT-1: the session id is the capability to use an admitted channel, so it is drawn
+    /// from the operating system CSPRNG and nowhere else. A failed draw refuses the handshake
+    /// rather than minting the capability from a weaker source at the moment the strong one
+    /// is unavailable.
+    #[test]
+    fn a_failed_entropy_draw_refuses_the_session_instead_of_weakening_it() {
+        struct Unavailable;
+        impl std::fmt::Display for Unavailable {
+            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                f.write_str("the operating system random number generator is unavailable")
+            }
+        }
+
+        let refused = sid_from_entropy(|| Err::<String, _>(Unavailable))
+            .expect_err("a failed draw must not produce a session id");
+        assert!(refused.contains("cannot be drawn"), "{refused}");
+        assert!(refused.contains("unavailable"), "{refused}");
+
+        // The working source is passed through unchanged, and the real one is 32 hex digits.
+        assert_eq!(
+            sid_from_entropy(|| Ok::<_, Unavailable>("0123456789abcdef".to_owned())).as_deref(),
+            Ok("0123456789abcdef")
+        );
+        let drawn = random_sid().expect("the operating system CSPRNG is available under test");
+        assert_eq!(drawn.len(), 32);
+        assert!(drawn.bytes().all(|b| b.is_ascii_hexdigit()));
+        assert_ne!(
+            drawn,
+            random_sid().expect("the operating system CSPRNG is available under test")
+        );
     }
 }

@@ -3,6 +3,10 @@ name: Quint verification
 on:
   workflow_dispatch:
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 env:
   CARGO_TERM_COLOR: always
   RUSTFLAGS: -D warnings
@@ -10,13 +14,53 @@ env:
 jobs:
   quint:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: "21"
+      - name: install protected verification JDK
+        shell: bash
+        run: |
+          set -euo pipefail
+          java_path="$(readlink -f "$(command -v java)")"
+          source_jdk="$(dirname "$(dirname "$java_path")")"
+          test "$source_jdk" != / && test -x "$source_jdk/bin/java"
+          test -x "$source_jdk/bin/javac" && test -x "$source_jdk/bin/jar"
+
+          protected_jdk="$(sudo mktemp -d /usr/lib/fireemu-quint-jdk.XXXXXX)"
+          # Dereference internal JDK symlinks so every executable remains inside the protected
+          # copy and no permissive symlink mode is mistaken for an executable permission.
+          sudo cp -aL "$source_jdk"/. "$protected_jdk"/
+          sudo chown -R root:root "$protected_jdk"
+          sudo chmod -R go-w "$protected_jdk"
+          sudo chmod 0755 "$protected_jdk"
+
+          for executable in java javac jar; do
+            path="$protected_jdk/bin/$executable"
+            test -x "$path"
+            resolved="$(readlink -f "$path")"
+            test "$resolved" = "$path"
+          done
+
+          # trusted_path() rejects any non-root-owned or caller-writable ancestor.
+          test "$(find "$protected_jdk" -xdev \( ! -user root -o -perm /022 \) -print -quit)" = ""
+          for executable in java javac jar; do
+            path="$protected_jdk/bin/$executable"
+            parent="$path"
+            while true; do
+              test "$(stat -c '%u' "$parent")" = 0
+              mode="$(stat -c '%a' "$parent")"
+              test "$((8#$mode & 022))" = 0
+              test "$parent" != / || break
+              parent="$(dirname "$parent")"
+            done
+          done
+
+          echo "JAVA_HOME=$protected_jdk" >> "$GITHUB_ENV"
+          echo "$protected_jdk/bin" >> "$GITHUB_PATH"
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
@@ -41,6 +85,8 @@ jobs:
         run: |
           echo "QUINT_REAL_BIN=$GITHUB_WORKSPACE/verification/quint/node_modules/.bin/quint" >> "$GITHUB_ENV"
           echo "$GITHUB_WORKSPACE/verification/quint/bin" >> "$GITHUB_PATH"
+      - name: fetch locked workspace dependencies for offline authority checks
+        run: cargo fetch --locked
       - name: normal Quint crate tests
         run: cargo test -p fireemu-verification-quint
       - name: complete Quint authority pass without retry

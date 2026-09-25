@@ -51,9 +51,9 @@
     "verification/quint/tests/auth_totp_connect.rs"
   ],
   "digests": {
-    ".github/workflows/quint.yml": "3badb445fa0f0bc42bbaab7ff6e4b4b1eed6875087c37fe052402bd6a801f9f2",
-    "crates/fireemu-core-auth/src/mfa.rs": "6c55bbf95fc51554ec889db5e50128b50689983d5e928eceeb10960f0668ac18",
-    "crates/fireemu-core-auth/src/store.rs": "08d668c4babb6d4a31801df7b2e574365aadd581c978acd7f4c4fa1fdbb77327",
+    ".github/workflows/quint.yml": "3322397d1feaaea0a163de7b8a289a33d071650d51f4674c4a4556df6b45e972",
+    "crates/fireemu-core-auth/src/mfa.rs": "5b0272ef34645b525341bd861c351de03f87caf1d7cd66e2c69735e7e6838d08",
+    "crates/fireemu-core-auth/src/store.rs": "2e124478e5ae9cb98b9629c9f44412ee9b4bb33ab30bd4fdb01b995b7ae3f028",
     "crates/fireemu-core-auth/src/totp.rs": "71d3b816fd50d184455dd33f7689ea0c5c9fb6b25c77ac7e069175ca174b73e4",
     "rust-toolchain.toml": "689fafb1dd9b80ee9a2a9b5e2bbb31e8f7ea4adad403717777689b35d4f861b2",
     "verification/quint/apalache.lock.json": "16cff85b68117df35e66c575244c297215a7c442bfde6e64ecb97822062c7ad3",
@@ -61,14 +61,14 @@
     "verification/quint/bin/process-group": "b75c438b3ce254d4d112d2005afc52d94e64a1fc22e0d5d86f5652ef30285b94",
     "verification/quint/bin/quint": "ef9df9d26e4e2ee2e081ae407c0e10d82fcad75c75bad6fb93a62046192507ed",
     "verification/quint/configs/AuthTotp.json": "e46a8cd3559c3c7c1efb240e78c2b2a4fd54a42dca1736e079c209d290408ff7",
-    "verification/quint/evidence/cargo-authority.json": "cb3ee0f9e6a8cf1d62872ce301fa27b224ca0865c175480a532c152352944cf0",
+    "verification/quint/evidence/cargo-authority.json": "650d7da16f13aa92c1afc41b5d4e6c3b190de745bf5ce8bd2d8a163170294289",
     "verification/quint/java/io/fireemu/verification/LoopbackServerProviderAgent.java": "6f4f23bb6cf8f2d8da2d55478c409bfe30f56d1a78296b5259647df4511888dc",
     "verification/quint/mutations/AuthTotp.json": "6826766b9fe39160b52bfa0e8483664c9e89e2d99d96b36df20a10a076fc9220",
     "verification/quint/package.json": "0544cbb331fabdba1e770dbfd72fc7521ace0dc17cf60ee96df0ae27384552d4",
     "verification/quint/pnpm-lock.yaml": "c46de8feb983d78945bf816a5a4d54d505d3840c88f1ebe19772a08acd9f0556",
     "verification/quint/run-verification.sh": "57eeb07ba39d042eea571b8a939e35ab05dd37218a30aa559785788d2aa81b7f",
     "verification/quint/specs/AuthTotp.qnt": "6bcb671e488bb35568679bb3f564fdb4ea22ee13745eb3b5d28884f72838b3d3",
-    "verification/quint/src/auth_totp.rs": "c1009d13ce7ca9e76a3af89488faab72da2b4ecffaa2677d043ef2c87511175e",
+    "verification/quint/src/auth_totp.rs": "b55c33ff5868c925f53ed11970f49485234afba0cc7915abb73f37991ed2f4b9",
     "verification/quint/src/cargo_authority.rs": "2c67dbd90419daa38f42f44b5f62c87388d5a15637ced48a2110b252dcbbd33a",
     "verification/quint/src/evidence.rs": "2fcf95169ee6ae80bb768c874430e3869d2a29dadf4c87f7cae2794c64dbf4be",
     "verification/quint/src/lib.rs": "2addd005fe8bee74c693854dc7ccb19dde14153b408f3d3e7335c5a8abbe929f",
@@ -76,7 +76,7 @@
     "verification/quint/src/model.rs": "74a5503f62e2b182c16e38d394d19bf8933b49beb69acc20542beeca89eef255",
     "verification/quint/src/process.rs": "56fbdc380eb60993a038366f050f45c030b22f5dc7048971aa451f54883dbb5f",
     "verification/quint/src/publication.rs": "e4b57348c74d51585609b9f114ad56366309f90fa6e2297639546f42922e53a8",
-    "verification/quint/src/server.rs": "07dcb8709d2a22637101cc337c97b647dc5406ce837ddb6c10485b674d6d3518",
+    "verification/quint/src/server.rs": "b0d10768918bf0449419d9e6384a574e14db01f651264e6037856c3367e05c0a",
     "verification/quint/tests/auth_totp_connect.rs": "e1874cf4d137d031f4e270d32272d7d9d1f59010f78b576ef8e0562189a33b14"
   },
   "invariants": [

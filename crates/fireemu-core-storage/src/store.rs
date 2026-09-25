@@ -215,6 +215,13 @@ impl PreparedObject {
 }
 
 impl ObjectDigests {
+    /// The digests an object already carries, for an operation that reuses its exact bytes
+    /// (a copy) instead of hashing them again.
+    #[must_use]
+    pub const fn from_parts(md5: [u8; 16], crc32c: u32) -> Self {
+        Self { md5, crc32c }
+    }
+
     /// Computes both Storage object digests.
     #[must_use]
     pub fn new(bytes: &[u8]) -> Self {
@@ -397,6 +404,9 @@ pub enum StorageError {
     ChecksumMismatch(String),
     /// An imported live object used a reserved generation identity.
     InvalidImportedIdentity(String),
+    /// A metadata string that is served as an HTTP header carries a control character. The
+    /// message names the field and never repeats the value.
+    InvalidMetadata(String),
     /// No further losslessly persisted generation identity can be allocated.
     IdentityExhausted,
     /// A coupled logical event batch could not be reserved before publication.
@@ -423,6 +433,7 @@ impl fmt::Display for StorageError {
             Self::UploadCapacityExceeded => f.write_str("resumable upload byte budget exhausted"),
             Self::ChecksumMismatch(m) => write!(f, "checksum mismatch: {m}"),
             Self::InvalidImportedIdentity(m) => write!(f, "invalid imported identity: {m}"),
+            Self::InvalidMetadata(m) => write!(f, "invalid metadata: {m}"),
             Self::IdentityExhausted => f.write_str("storage identity space exhausted"),
             Self::EventAdmission(error) => write!(f, "event admission failed: {error}"),
             Self::NotModified(m) => write!(f, "not modified: {m}"),
@@ -431,6 +442,56 @@ impl fmt::Display for StorageError {
 }
 
 impl std::error::Error for StorageError {}
+
+/// Whether a metadata string may be served as an HTTP header value.
+///
+/// A Unicode control character -- C0 (U+0000 included), DEL and C1 -- can split a header, a
+/// log line or a re-exported artifact, and production refuses them where an object is written,
+/// so nothing may enter the store carrying one. C1 is tested as a character rather than as a
+/// byte on purpose: it is multi-byte in UTF-8, so a byte-wise test would pass it through while
+/// the value still reaches a response header and a log line.
+///
+/// This is the single classification every entry point uses: the HTTP upload, patch and
+/// form-upload paths, [`StorageState::insert_imported`], and the Auth and Storage sections of
+/// an import artifact.
+#[must_use]
+pub fn is_header_safe(value: &str) -> bool {
+    !value.chars().any(char::is_control)
+}
+
+/// [`is_header_safe`] as a store refusal that names `field` and never repeats the value.
+fn header_safe(field: &str, value: &str) -> Result<(), StorageError> {
+    if is_header_safe(value) {
+        Ok(())
+    } else {
+        Err(StorageError::InvalidMetadata(format!(
+            "{field} contains a control character"
+        )))
+    }
+}
+
+/// Every metadata string of an imported object that leaves the store as an HTTP header.
+fn imported_metadata_is_header_safe(object: &ImportedObject) -> Result<(), StorageError> {
+    header_safe("contentType", &object.content_type)?;
+    for (field, value) in [
+        ("contentDisposition", &object.content_disposition),
+        ("contentEncoding", &object.content_encoding),
+        ("contentLanguage", &object.content_language),
+        ("cacheControl", &object.cache_control),
+    ] {
+        if let Some(value) = value {
+            header_safe(field, value)?;
+        }
+    }
+    for (key, value) in &object.custom {
+        header_safe("metadata key", key)?;
+        header_safe(&format!("metadata.{key}"), value)?;
+    }
+    for token in &object.download_tokens {
+        header_safe("downloadTokens", token)?;
+    }
+    Ok(())
+}
 
 /// Storage events (spec 9.7), appended for the outbox.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1061,7 +1122,14 @@ impl StorageState {
         )?;
         let event = StorageEvent::Finalized(meta.clone());
         let reservation = admit(&event)?;
-        self.apply_planned_put(key, &meta, next_blob, next_generation, bytes, event);
+        self.apply_planned_put(
+            key,
+            &meta,
+            next_blob,
+            next_generation,
+            Arc::new(bytes),
+            event,
+        );
         Ok((meta, reservation))
     }
 
@@ -1125,7 +1193,7 @@ impl StorageState {
         meta: &ObjectMetadata,
         next_blob: u64,
         next_generation: u64,
-        bytes: Vec<u8>,
+        bytes: Arc<Vec<u8>>,
         event: StorageEvent,
     ) {
         let blob = meta.blob;
@@ -1134,7 +1202,7 @@ impl StorageState {
         if let Some(old) = self.objects.insert(key, meta.clone()) {
             self.blobs.remove(&old.blob);
         }
-        self.blobs.insert(blob, Arc::new(bytes));
+        self.blobs.insert(blob, bytes);
         self.events.push(event);
     }
 
@@ -1359,7 +1427,17 @@ impl StorageState {
             .get(source.0, source.1)
             .cloned()
             .ok_or(StorageError::NotFound)?;
-        let bytes = self.bytes(&src).to_vec();
+        // The destination is the same bytes: it shares the source allocation under a new blob
+        // identity and reuses the digests the source already carries, so a copy costs nothing
+        // per byte and holds the store lock for as long as a metadata write does. Each object
+        // keeps its own blob entry, so overwriting or deleting either side leaves the other
+        // untouched, and `retained_blob_bytes` deliberately counts a shared buffer once per
+        // object (the conservative accounting snapshots already use).
+        let shared = self
+            .blobs
+            .get(&src.blob)
+            .cloned()
+            .unwrap_or_else(|| Arc::new(Vec::new()));
         let metadata = metadata.unwrap_or(NewMetadata {
             content_type: Some(src.content_type.clone()),
             content_disposition: src.content_disposition.clone(),
@@ -1368,7 +1446,19 @@ impl StorageState {
             cache_control: src.cache_control.clone(),
             custom: src.custom_defined.then(|| src.custom.clone()),
         });
-        self.put_with_admission(dst_bucket, dst_name, bytes, metadata, pre, now, admit)
+        let (key, meta, next_blob, next_generation) = self.plan_put(
+            dst_bucket,
+            dst_name,
+            shared.len() as u64,
+            ObjectDigests::from_parts(src.md5, src.crc32c),
+            metadata,
+            pre,
+            now,
+        )?;
+        let event = StorageEvent::Finalized(meta.clone());
+        let reservation = admit(&event)?;
+        self.apply_planned_put(key, &meta, next_blob, next_generation, shared, event);
+        Ok((meta, reservation))
     }
 
     /// Lists objects of `bucket` under `prefix`, bytewise by name, the way the official
@@ -1474,6 +1564,10 @@ impl StorageState {
         if custom_metadata_size(&object.custom) > MAX_CUSTOM_METADATA_BYTES {
             return Err(StorageError::MetadataTooLarge);
         }
+        // The import boundary is an input boundary like an upload: a control character here
+        // would make every later download and metadata update fail while the response is
+        // built, and would travel back out through re-export and the Rules `resource`.
+        imported_metadata_is_header_safe(&object)?;
         if object.generation == 0
             || object.generation > MAX_PERSISTED_IDENTITY
             || object.metageneration == 0
@@ -2012,7 +2106,14 @@ impl StorageState {
             .get_mut(id)
             .map(|upload| std::mem::take(&mut upload.received))
             .ok_or(StorageError::UploadNotFound)?;
-        self.apply_planned_put(key, &meta, next_blob, next_generation, bytes, event);
+        self.apply_planned_put(
+            key,
+            &meta,
+            next_blob,
+            next_generation,
+            Arc::new(bytes),
+            event,
+        );
         if let Some(u) = self.uploads.get_mut(id) {
             u.state = UploadState::Committed(Box::new(meta.clone()));
         }

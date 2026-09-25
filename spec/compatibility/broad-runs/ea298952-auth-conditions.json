@@ -1,0 +1,2020 @@
+{
+  "kind": "auth-conditions-owned-local",
+  "executionCommit": "ea2989525b55364d33bdb4b9cd87f9c8aca18ed5",
+  "artifactSha256": "8e433fc24df9585573ce6a213152269de8d51a22d60b1800a4d0e62e0d15508e",
+  "runtimeInputsMatch": true,
+  "retainedArtifactSource": "ed90292a067866999a308f5c9bf029e0846c17b0",
+  "productionExecuted": false,
+  "exitCode": 0,
+  "ownedProcess": {
+    "stopped": true,
+    "listenersClosed": true
+  },
+  "runtimeInputsMatchAfter": true,
+  "artifactUnchanged": true,
+  "configuration": {
+    "schemaVersion": 1,
+    "profile": "strict",
+    "auth": {
+      "idTokenSigning": "session-rsa"
+    },
+    "daemon": {
+      "authProjectNumbers": {
+        "fireemu-35fe6": "592603257417"
+      }
+    },
+    "firestore": {
+      "edition": "standard",
+      "apiMode": "native"
+    }
+  },
+  "observations": {
+    "kind": "auth-conditions-local-v1",
+    "rows": [
+      {
+        "id": "auth-conditions/verified-password/self/true",
+        "coverage": {
+          "id": "auth-conditions/verified-password/self/true",
+          "principal": "verified-password",
+          "actor": "b",
+          "selector": "self",
+          "emailVerified": true,
+          "productionExpectation": null
+        },
+        "status": "pass",
+        "basis": "local-safety-invariant",
+        "httpStatus": 200,
+        "observation": {
+          "displayName": "updated-auth-conditions/verified-password/self/true",
+          "email": {
+            "$email": "b"
+          },
+          "emailVerified": true,
+          "kind": "identitytoolkit#SetAccountInfoResponse",
+          "localId": {
+            "$account": "b"
+          },
+          "passwordHash": {
+            "$opaque": "passwordHash",
+            "jsonType": "string",
+            "nonempty": true
+          },
+          "providerUserInfo": [
+            {
+              "displayName": "updated-auth-conditions/verified-password/self/true",
+              "email": {
+                "$email": "b"
+              },
+              "federatedId": {
+                "$email": "b"
+              },
+              "providerId": "password",
+              "rawId": {
+                "$email": "b"
+              }
+            }
+          ]
+        },
+        "before": {
+          "a": {
+            "createdAt": {
+              "$absoluteTime": true,
+              "jsonType": "string",
+              "formatValid": true
+            },
+            "displayName": "a-before-auth-conditions/verified-password/self/true",
+            "email": {
+              "$email": "a"
+            },
+            "emailVerified": true,
+            "lastLoginAt": {
+              "$absoluteTime": true,
+              "jsonType": "string",
+              "formatValid": true
+            },
+            "lastRefreshAt": {
+              "$absoluteTime": true,
+              "jsonType": "string",
+              "formatValid": true,
+              "format": "RFC3339"
+            },
+            "localId": {
+              "$account": "a"
+            },
+            "passwordHash": {
+              "$opaque": "passwordHash",
+              "jsonType": "string",
+              "nonempty": true
+            },
+            "passwordUpdatedAt": {
+              "$absoluteTime": true,
+              "jsonType": "number",
+              "formatValid": true
+            },
+            "providerUserInfo": [
+              {
+                "displayName": "a-before-auth-conditions/verified-password/self/true",
+                "email": {
+                  "$email": "a"
+                },
+                "federatedId": {
+                  "$email": "a"
+                },
+                "providerId": "password",
+                "rawId": {
+                  "$email": "a"
+                }
+              }
+            ],
+            "validSince": {
+              "$absoluteTime": true,
+              "jsonType": "string",
+              "formatValid": true
+            }
+          },
+          "b": {
+            "createdAt": {
+              "$absoluteTime": true,
+              "jsonType": "string",
+              "formatValid": true
+            },
+            "displayName": "b-before-auth-conditions/verified-password/self/true",
+            "email": {
+              "$email": "b"
+            },
+            "emailVerified": true,
+            "lastLoginAt": {
+              "$absoluteTime": true,
+              "jsonType": "string",
+              "formatValid": true
+            },
+            "lastRefreshAt": {
+              "$absoluteTime": true,
+              "jsonType": "string",
+              "formatValid": true,
+              "format": "RFC3339"
+            },
+            "localId": {
+              "$account": "b"
+            },
+            "passwordHash": {
+              "$opaque": "passwordHash",
+              "jsonType": "string",
+              "nonempty": true
+            },
+            "passwordUpdatedAt": {
+              "$absoluteTime": true,
+              "jsonType": "number",
+              "formatValid": true
+            },
+            "providerUserInfo": [
+              {
+                "displayName": "b-before-auth-conditions/verified-password/self/true",
+                "email": {
+                  "$email": "b"
+                },
+                "federatedId": {
+                  "$email": "b"
+                },
+                "providerId": "password",
+                "rawId": {
+                  "$email": "b"
+                }
+              }
+            ],
+            "validSince": {
+              "$absoluteTime": true,
+              "jsonType": "string",
+              "formatValid": true
+            }
+          }
+        },
+        "after": {
+          "a": {
+            "createdAt": {
+              "$absoluteTime": true,
+              "jsonType": "string",
+              "formatValid": true
+            },
+            "displayName": "a-before-auth-conditions/verified-password/self/true",
+            "email": {
+              "$email": "a"
+            },
+            "emailVerified": true,
+            "lastLoginAt": {
+              "$absoluteTime": true,
+              "jsonType": "string",
+              "formatValid": true
+            },
+            "lastRefreshAt": {
+              "$absoluteTime": true,
+              "jsonType": "string",
+              "formatValid": true,
+              "format": "RFC3339"
+            },
+            "localId": {
+              "$account": "a"
+            },
+            "passwordHash": {
+              "$opaque": "passwordHash",
+              "jsonType": "string",
+              "nonempty": true
+            },
+            "passwordUpdatedAt": {
+              "$absoluteTime": true,
+              "jsonType": "number",
+              "formatValid": true
+            },
+            "providerUserInfo": [
+              {
+                "displayName": "a-before-auth-conditions/verified-password/self/true",
+                "email": {
+                  "$email": "a"
+                },
+                "federatedId": {
+                  "$email": "a"
+                },
+                "providerId": "password",
+                "rawId": {
+                  "$email": "a"
+                }
+              }
+            ],
+            "validSince": {
+              "$absoluteTime": true,
+              "jsonType": "string",
+              "formatValid": true
+            }
+          },
+          "b": {
+            "createdAt": {
+              "$absoluteTime": true,
+              "jsonType": "string",
+              "formatValid": true
+            },
+            "displayName": "updated-auth-conditions/verified-password/self/true",
+            "email": {
+              "$email": "b"
+            },
+            "emailVerified": true,
+            "lastLoginAt": {
+              "$absoluteTime": true,
+              "jsonType": "string",
+              "formatValid": true
+            },
+            "lastRefreshAt": {
+              "$absoluteTime": true,
+              "jsonType": "string",
+              "formatValid": true,
+              "format": "RFC3339"
+            },
+            "localId": {
+              "$account": "b"
+            },
+            "passwordHash": {
+              "$opaque": "passwordHash",
+              "jsonType": "string",
+              "nonempty": true
+            },
+            "passwordUpdatedAt": {
+              "$absoluteTime": true,
+              "jsonType": "number",
+              "formatValid": true
+            },
+            "providerUserInfo": [
+              {
+                "displayName": "updated-auth-conditions/verified-password/self/true",
+                "email": {
+                  "$email": "b"
+                },
+                "federatedId": {
+                  "$email": "b"
+                },
+                "providerId": "password",
+                "rawId": {
+                  "$email": "b"
+                }
+              }
+            ],
+            "validSince": {
+              "$absoluteTime": true,
+              "jsonType": "string",
+              "formatValid": true
+            }
+          }
+        },
+        "checks": {
+          "httpResponsePresent": true,
+          "bothAccountsPresent": true,
+          "identitiesPreserved": true,
+          "nonTargetUnchanged": true,
+          "refusalAtomic": true,
+          "noPrivilegeChange": true,
+          "credentialsPreserved": true,
+          "providersPreserved": true
+        },
+        "productionCompatibility": "unobserved"
+      },
+      {
+        "id": "auth-conditions/verified-password/self/false",
+        "coverage": {
+          "id": "auth-conditions/verified-password/self/false",
+          "principal": "verified-password",
+          "actor": "b",
+          "selector": "self",
+          "emailVerified": false,
+          "productionExpectation": null
+        },
+        "status": "pass",
+        "basis": "local-safety-invariant",
+        "httpStatus": 200,
+        "observation": {
+          "displayName": "updated-auth-conditions/verified-password/self/false",
+          "email": {
+            "$email": "b"
+          },
+          "emailVerified": true,
+          "kind": "identitytoolkit#SetAccountInfoResponse",
+          "localId": {
+            "$account": "b"
+          },
+          "passwordHash": {
+            "$opaque": "passwordHash",
+            "jsonType": "string",
+            "nonempty": true
+          },
+          "providerUserInfo": [
+            {
+              "displayName": "updated-auth-conditions/verified-password/self/false",
+              "email": {
+                "$email": "b"
+              },
+              "federatedId": {
+                "$email": "b"
+              },
+              "providerId": "password",
+              "rawId": {
+                "$email": "b"
+              }
+            }
+          ]
+        },
+        "before": {
+          "a": {
+            "createdAt": {
+              "$absoluteTime": true,
+              "jsonType": "string",
+              "formatValid": true
+            },
+            "displayName": "a-before-auth-conditions/verified-password/self/false",
+            "email": {
+              "$email": "a"
+            },
+            "emailVerified": true,
+            "lastLoginAt": {
+              "$absoluteTime": true,
+              "jsonType": "string",
+              "formatValid": true
+            },
+            "lastRefreshAt": {
+              "$absoluteTime": true,
+              "jsonType": "string",
+              "formatValid": true,
+              "format": "RFC3339"
+            },
+            "localId": {
+              "$account": "a"
+            },
+            "passwordHash": {
+              "$opaque": "passwordHash",
+              "jsonType": "string",
+              "nonempty": true
+            },
+            "passwordUpdatedAt": {
+              "$absoluteTime": true,
+              "jsonType": "number",
+              "formatValid": true
+            },
+            "providerUserInfo": [
+              {
+                "displayName": "a-before-auth-conditions/verified-password/self/false",
+                "email": {
+                  "$email": "a"
+                },
+                "federatedId": {
+                  "$email": "a"
+                },
+                "providerId": "password",
+                "rawId": {
+                  "$email": "a"
+                }
+              }
+            ],
+            "validSince": {
+              "$absoluteTime": true,
+              "jsonType": "string",
+              "formatValid": true
+            }
+          },
+          "b": {
+            "createdAt": {
+              "$absoluteTime": true,
+              "jsonType": "string",
+              "formatValid": true
+            },
+            "displayName": "b-before-auth-conditions/verified-password/self/false",
+            "email": {
+              "$email": "b"
+            },
+            "emailVerified": true,
+            "lastLoginAt": {
+              "$absoluteTime": true,
+              "jsonType": "string",
+              "formatValid": true
+            },
+            "lastRefreshAt": {
+              "$absoluteTime": true,
+              "jsonType": "string",
+              "formatValid": true,
+              "format": "RFC3339"
+            },
+            "localId": {
+              "$account": "b"
+            },
+            "passwordHash": {
+              "$opaque": "passwordHash",
+              "jsonType": "string",
+              "nonempty": true
+            },
+            "passwordUpdatedAt": {
+              "$absoluteTime": true,
+              "jsonType": "number",
+              "formatValid": true
+            },
+            "providerUserInfo": [
+              {
+                "displayName": "b-before-auth-conditions/verified-password/self/false",
+                "email": {
+                  "$email": "b"
+                },
+                "federatedId": {
+                  "$email": "b"
+                },
+                "providerId": "password",
+                "rawId": {
+                  "$email": "b"
+                }
+              }
+            ],
+            "validSince": {
+              "$absoluteTime": true,
+              "jsonType": "string",
+              "formatValid": true
+            }
+          }
+        },
+        "after": {
+          "a": {
+            "createdAt": {
+              "$absoluteTime": true,
+              "jsonType": "string",
+              "formatValid": true
+            },
+            "displayName": "a-before-auth-conditions/verified-password/self/false",
+            "email": {
+              "$email": "a"
+            },
+            "emailVerified": true,
+            "lastLoginAt": {
+              "$absoluteTime": true,
+              "jsonType": "string",
+              "formatValid": true
+            },
+            "lastRefreshAt": {
+              "$absoluteTime": true,
+              "jsonType": "string",
+              "formatValid": true,
+              "format": "RFC3339"
+            },
+            "localId": {
+              "$account": "a"
+            },
+            "passwordHash": {
+              "$opaque": "passwordHash",
+              "jsonType": "string",
+              "nonempty": true
+            },
+            "passwordUpdatedAt": {
+              "$absoluteTime": true,
+              "jsonType": "number",
+              "formatValid": true
+            },
+            "providerUserInfo": [
+              {
+                "displayName": "a-before-auth-conditions/verified-password/self/false",
+                "email": {
+                  "$email": "a"
+                },
+                "federatedId": {
+                  "$email": "a"
+                },
+                "providerId": "password",
+                "rawId": {
+                  "$email": "a"
+                }
+              }
+            ],
+            "validSince": {
+              "$absoluteTime": true,
+              "jsonType": "string",
+              "formatValid": true
+            }
+          },
+          "b": {
+            "createdAt": {
+              "$absoluteTime": true,
+              "jsonType": "string",
+              "formatValid": true
+            },
+            "displayName": "updated-auth-conditions/verified-password/self/false",
+            "email": {
+              "$email": "b"
+            },
+            "emailVerified": true,
+            "lastLoginAt": {
+              "$absoluteTime": true,
+              "jsonType": "string",
+              "formatValid": true
+            },
+            "lastRefreshAt": {
+              "$absoluteTime": true,
+              "jsonType": "string",
+              "formatValid": true,
+              "format": "RFC3339"
+            },
+            "localId": {
+              "$account": "b"
+            },
+            "passwordHash": {
+              "$opaque": "passwordHash",
+              "jsonType": "string",
+              "nonempty": true
+            },
+            "passwordUpdatedAt": {
+              "$absoluteTime": true,
+              "jsonType": "number",
+              "formatValid": true
+            },
+            "providerUserInfo": [
+              {
+                "displayName": "updated-auth-conditions/verified-password/self/false",
+                "email": {
+                  "$email": "b"
+                },
+                "federatedId": {
+                  "$email": "b"
+                },
+                "providerId": "password",
+                "rawId": {
+                  "$email": "b"
+                }
+              }
+            ],
+            "validSince": {
+              "$absoluteTime": true,
+              "jsonType": "string",
+              "formatValid": true
+            }
+          }
+        },
+        "checks": {
+          "httpResponsePresent": true,
+          "bothAccountsPresent": true,
+          "identitiesPreserved": true,
+          "nonTargetUnchanged": true,
+          "refusalAtomic": true,
+          "noPrivilegeChange": true,
+          "credentialsPreserved": true,
+          "providersPreserved": true
+        },
+        "productionCompatibility": "unobserved"
+      },
+      {
+        "id": "auth-conditions/verified-password/foreign/true",
+        "coverage": {
+          "id": "auth-conditions/verified-password/foreign/true",
+          "principal": "verified-password",
+          "actor": "b",
+          "selector": "foreign",
+          "emailVerified": true,
+          "productionExpectation": null
+        },
+        "status": "pass",
+        "basis": "local-safety-invariant",
+        "httpStatus": 200,
+        "observation": {
+          "displayName": "updated-auth-conditions/verified-password/foreign/true",
+          "email": {
+            "$email": "b"
+          },
+          "emailVerified": true,
+          "kind": "identitytoolkit#SetAccountInfoResponse",
+          "localId": {
+            "$account": "b"
+          },
+          "passwordHash": {
+            "$opaque": "passwordHash",
+            "jsonType": "string",
+            "nonempty": true
+          },
+          "providerUserInfo": [
+            {
+              "displayName": "updated-auth-conditions/verified-password/foreign/true",
+              "email": {
+                "$email": "b"
+              },
+              "federatedId": {
+                "$email": "b"
+              },
+              "providerId": "password",
+              "rawId": {
+                "$email": "b"
+              }
+            }
+          ]
+        },
+        "before": {
+          "a": {
+            "createdAt": {
+              "$absoluteTime": true,
+              "jsonType": "string",
+              "formatValid": true
+            },
+            "displayName": "a-before-auth-conditions/verified-password/foreign/true",
+            "email": {
+              "$email": "a"
+            },
+            "emailVerified": true,
+            "lastLoginAt": {
+              "$absoluteTime": true,
+              "jsonType": "string",
+              "formatValid": true
+            },
+            "lastRefreshAt": {
+              "$absoluteTime": true,
+              "jsonType": "string",
+              "formatValid": true,
+              "format": "RFC3339"
+            },
+            "localId": {
+              "$account": "a"
+            },
+            "passwordHash": {
+              "$opaque": "passwordHash",
+              "jsonType": "string",
+              "nonempty": true
+            },
+            "passwordUpdatedAt": {
+              "$absoluteTime": true,
+              "jsonType": "number",
+              "formatValid": true
+            },
+            "providerUserInfo": [
+              {
+                "displayName": "a-before-auth-conditions/verified-password/foreign/true",
+                "email": {
+                  "$email": "a"
+                },
+                "federatedId": {
+                  "$email": "a"
+                },
+                "providerId": "password",
+                "rawId": {
+                  "$email": "a"
+                }
+              }
+            ],
+            "validSince": {
+              "$absoluteTime": true,
+              "jsonType": "string",
+              "formatValid": true
+            }
+          },
+          "b": {
+            "createdAt": {
+              "$absoluteTime": true,
+              "jsonType": "string",
+              "formatValid": true
+            },
+            "displayName": "b-before-auth-conditions/verified-password/foreign/true",
+            "email": {
+              "$email": "b"
+            },
+            "emailVerified": true,
+            "lastLoginAt": {
+              "$absoluteTime": true,
+              "jsonType": "string",
+              "formatValid": true
+            },
+            "lastRefreshAt": {
+              "$absoluteTime": true,
+              "jsonType": "string",
+              "formatValid": true,
+              "format": "RFC3339"
+            },
+            "localId": {
+              "$account": "b"
+            },
+            "passwordHash": {
+              "$opaque": "passwordHash",
+              "jsonType": "string",
+              "nonempty": true
+            },
+            "passwordUpdatedAt": {
+              "$absoluteTime": true,
+              "jsonType": "number",
+              "formatValid": true
+            },
+            "providerUserInfo": [
+              {
+                "displayName": "b-before-auth-conditions/verified-password/foreign/true",
+                "email": {
+                  "$email": "b"
+                },
+                "federatedId": {
+                  "$email": "b"
+                },
+                "providerId": "password",
+                "rawId": {
+                  "$email": "b"
+                }
+              }
+            ],
+            "validSince": {
+              "$absoluteTime": true,
+              "jsonType": "string",
+              "formatValid": true
+            }
+          }
+        },
+        "after": {
+          "a": {
+            "createdAt": {
+              "$absoluteTime": true,
+              "jsonType": "string",
+              "formatValid": true
+            },
+            "displayName": "a-before-auth-conditions/verified-password/foreign/true",
+            "email": {
+              "$email": "a"
+            },
+            "emailVerified": true,
+            "lastLoginAt": {
+              "$absoluteTime": true,
+              "jsonType": "string",
+              "formatValid": true
+            },
+            "lastRefreshAt": {
+              "$absoluteTime": true,
+              "jsonType": "string",
+              "formatValid": true,
+              "format": "RFC3339"
+            },
+            "localId": {
+              "$account": "a"
+            },
+            "passwordHash": {
+              "$opaque": "passwordHash",
+              "jsonType": "string",
+              "nonempty": true
+            },
+            "passwordUpdatedAt": {
+              "$absoluteTime": true,
+              "jsonType": "number",
+              "formatValid": true
+            },
+            "providerUserInfo": [
+              {
+                "displayName": "a-before-auth-conditions/verified-password/foreign/true",
+                "email": {
+                  "$email": "a"
+                },
+                "federatedId": {
+                  "$email": "a"
+                },
+                "providerId": "password",
+                "rawId": {
+                  "$email": "a"
+                }
+              }
+            ],
+            "validSince": {
+              "$absoluteTime": true,
+              "jsonType": "string",
+              "formatValid": true
+            }
+          },
+          "b": {
+            "createdAt": {
+              "$absoluteTime": true,
+              "jsonType": "string",
+              "formatValid": true
+            },
+            "displayName": "updated-auth-conditions/verified-password/foreign/true",
+            "email": {
+              "$email": "b"
+            },
+            "emailVerified": true,
+            "lastLoginAt": {
+              "$absoluteTime": true,
+              "jsonType": "string",
+              "formatValid": true
+            },
+            "lastRefreshAt": {
+              "$absoluteTime": true,
+              "jsonType": "string",
+              "formatValid": true,
+              "format": "RFC3339"
+            },
+            "localId": {
+              "$account": "b"
+            },
+            "passwordHash": {
+              "$opaque": "passwordHash",
+              "jsonType": "string",
+              "nonempty": true
+            },
+            "passwordUpdatedAt": {
+              "$absoluteTime": true,
+              "jsonType": "number",
+              "formatValid": true
+            },
+            "providerUserInfo": [
+              {
+                "displayName": "updated-auth-conditions/verified-password/foreign/true",
+                "email": {
+                  "$email": "b"
+                },
+                "federatedId": {
+                  "$email": "b"
+                },
+                "providerId": "password",
+                "rawId": {
+                  "$email": "b"
+                }
+              }
+            ],
+            "validSince": {
+              "$absoluteTime": true,
+              "jsonType": "string",
+              "formatValid": true
+            }
+          }
+        },
+        "checks": {
+          "httpResponsePresent": true,
+          "bothAccountsPresent": true,
+          "identitiesPreserved": true,
+          "nonTargetUnchanged": true,
+          "refusalAtomic": true,
+          "noPrivilegeChange": true,
+          "credentialsPreserved": true,
+          "providersPreserved": true
+        },
+        "productionCompatibility": "unobserved"
+      },
+      {
+        "id": "auth-conditions/verified-password/foreign/false",
+        "coverage": {
+          "id": "auth-conditions/verified-password/foreign/false",
+          "principal": "verified-password",
+          "actor": "b",
+          "selector": "foreign",
+          "emailVerified": false,
+          "productionExpectation": null
+        },
+        "status": "pass",
+        "basis": "local-safety-invariant",
+        "httpStatus": 200,
+        "observation": {
+          "displayName": "updated-auth-conditions/verified-password/foreign/false",
+          "email": {
+            "$email": "b"
+          },
+          "emailVerified": true,
+          "kind": "identitytoolkit#SetAccountInfoResponse",
+          "localId": {
+            "$account": "b"
+          },
+          "passwordHash": {
+            "$opaque": "passwordHash",
+            "jsonType": "string",
+            "nonempty": true
+          },
+          "providerUserInfo": [
+            {
+              "displayName": "updated-auth-conditions/verified-password/foreign/false",
+              "email": {
+                "$email": "b"
+              },
+              "federatedId": {
+                "$email": "b"
+              },
+              "providerId": "password",
+              "rawId": {
+                "$email": "b"
+              }
+            }
+          ]
+        },
+        "before": {
+          "a": {
+            "createdAt": {
+              "$absoluteTime": true,
+              "jsonType": "string",
+              "formatValid": true
+            },
+            "displayName": "a-before-auth-conditions/verified-password/foreign/false",
+            "email": {
+              "$email": "a"
+            },
+            "emailVerified": true,
+            "lastLoginAt": {
+              "$absoluteTime": true,
+              "jsonType": "string",
+              "formatValid": true
+            },
+            "lastRefreshAt": {
+              "$absoluteTime": true,
+              "jsonType": "string",
+              "formatValid": true,
+              "format": "RFC3339"
+            },
+            "localId": {
+              "$account": "a"
+            },
+            "passwordHash": {
+              "$opaque": "passwordHash",
+              "jsonType": "string",
+              "nonempty": true
+            },
+            "passwordUpdatedAt": {
+              "$absoluteTime": true,
+              "jsonType": "number",
+              "formatValid": true
+            },
+            "providerUserInfo": [
+              {
+                "displayName": "a-before-auth-conditions/verified-password/foreign/false",
+                "email": {
+                  "$email": "a"
+                },
+                "federatedId": {
+                  "$email": "a"
+                },
+                "providerId": "password",
+                "rawId": {
+                  "$email": "a"
+                }
+              }
+            ],
+            "validSince": {
+              "$absoluteTime": true,
+              "jsonType": "string",
+              "formatValid": true
+            }
+          },
+          "b": {
+            "createdAt": {
+              "$absoluteTime": true,
+              "jsonType": "string",
+              "formatValid": true
+            },
+            "displayName": "b-before-auth-conditions/verified-password/foreign/false",
+            "email": {
+              "$email": "b"
+            },
+            "emailVerified": true,
+            "lastLoginAt": {
+              "$absoluteTime": true,
+              "jsonType": "string",
+              "formatValid": true
+            },
+            "lastRefreshAt": {
+              "$absoluteTime": true,
+              "jsonType": "string",
+              "formatValid": true,
+              "format": "RFC3339"
+            },
+            "localId": {
+              "$account": "b"
+            },
+            "passwordHash": {
+              "$opaque": "passwordHash",
+              "jsonType": "string",
+              "nonempty": true
+            },
+            "passwordUpdatedAt": {
+              "$absoluteTime": true,
+              "jsonType": "number",
+              "formatValid": true
+            },
+            "providerUserInfo": [
+              {
+                "displayName": "b-before-auth-conditions/verified-password/foreign/false",
+                "email": {
+                  "$email": "b"
+                },
+                "federatedId": {
+                  "$email": "b"
+                },
+                "providerId": "password",
+                "rawId": {
+                  "$email": "b"
+                }
+              }
+            ],
+            "validSince": {
+              "$absoluteTime": true,
+              "jsonType": "string",
+              "formatValid": true
+            }
+          }
+        },
+        "after": {
+          "a": {
+            "createdAt": {
+              "$absoluteTime": true,
+              "jsonType": "string",
+              "formatValid": true
+            },
+            "displayName": "a-before-auth-conditions/verified-password/foreign/false",
+            "email": {
+              "$email": "a"
+            },
+            "emailVerified": true,
+            "lastLoginAt": {
+              "$absoluteTime": true,
+              "jsonType": "string",
+              "formatValid": true
+            },
+            "lastRefreshAt": {
+              "$absoluteTime": true,
+              "jsonType": "string",
+              "formatValid": true,
+              "format": "RFC3339"
+            },
+            "localId": {
+              "$account": "a"
+            },
+            "passwordHash": {
+              "$opaque": "passwordHash",
+              "jsonType": "string",
+              "nonempty": true
+            },
+            "passwordUpdatedAt": {
+              "$absoluteTime": true,
+              "jsonType": "number",
+              "formatValid": true
+            },
+            "providerUserInfo": [
+              {
+                "displayName": "a-before-auth-conditions/verified-password/foreign/false",
+                "email": {
+                  "$email": "a"
+                },
+                "federatedId": {
+                  "$email": "a"
+                },
+                "providerId": "password",
+                "rawId": {
+                  "$email": "a"
+                }
+              }
+            ],
+            "validSince": {
+              "$absoluteTime": true,
+              "jsonType": "string",
+              "formatValid": true
+            }
+          },
+          "b": {
+            "createdAt": {
+              "$absoluteTime": true,
+              "jsonType": "string",
+              "formatValid": true
+            },
+            "displayName": "updated-auth-conditions/verified-password/foreign/false",
+            "email": {
+              "$email": "b"
+            },
+            "emailVerified": true,
+            "lastLoginAt": {
+              "$absoluteTime": true,
+              "jsonType": "string",
+              "formatValid": true
+            },
+            "lastRefreshAt": {
+              "$absoluteTime": true,
+              "jsonType": "string",
+              "formatValid": true,
+              "format": "RFC3339"
+            },
+            "localId": {
+              "$account": "b"
+            },
+            "passwordHash": {
+              "$opaque": "passwordHash",
+              "jsonType": "string",
+              "nonempty": true
+            },
+            "passwordUpdatedAt": {
+              "$absoluteTime": true,
+              "jsonType": "number",
+              "formatValid": true
+            },
+            "providerUserInfo": [
+              {
+                "displayName": "updated-auth-conditions/verified-password/foreign/false",
+                "email": {
+                  "$email": "b"
+                },
+                "federatedId": {
+                  "$email": "b"
+                },
+                "providerId": "password",
+                "rawId": {
+                  "$email": "b"
+                }
+              }
+            ],
+            "validSince": {
+              "$absoluteTime": true,
+              "jsonType": "string",
+              "formatValid": true
+            }
+          }
+        },
+        "checks": {
+          "httpResponsePresent": true,
+          "bothAccountsPresent": true,
+          "identitiesPreserved": true,
+          "nonTargetUnchanged": true,
+          "refusalAtomic": true,
+          "noPrivilegeChange": true,
+          "credentialsPreserved": true,
+          "providersPreserved": true
+        },
+        "productionCompatibility": "unobserved"
+      },
+      {
+        "id": "auth-conditions/signed-anonymous/self/true",
+        "coverage": {
+          "id": "auth-conditions/signed-anonymous/self/true",
+          "principal": "signed-anonymous",
+          "actor": "b",
+          "selector": "self",
+          "emailVerified": true,
+          "productionExpectation": null
+        },
+        "status": "pass",
+        "basis": "local-safety-invariant",
+        "httpStatus": 200,
+        "observation": {
+          "displayName": "updated-auth-conditions/signed-anonymous/self/true",
+          "emailVerified": false,
+          "kind": "identitytoolkit#SetAccountInfoResponse",
+          "localId": {
+            "$account": "b"
+          }
+        },
+        "before": {
+          "a": {
+            "createdAt": {
+              "$absoluteTime": true,
+              "jsonType": "string",
+              "formatValid": true
+            },
+            "displayName": "a-before-auth-conditions/signed-anonymous/self/true",
+            "email": {
+              "$email": "a"
+            },
+            "emailVerified": true,
+            "lastLoginAt": {
+              "$absoluteTime": true,
+              "jsonType": "string",
+              "formatValid": true
+            },
+            "lastRefreshAt": {
+              "$absoluteTime": true,
+              "jsonType": "string",
+              "formatValid": true,
+              "format": "RFC3339"
+            },
+            "localId": {
+              "$account": "a"
+            },
+            "passwordHash": {
+              "$opaque": "passwordHash",
+              "jsonType": "string",
+              "nonempty": true
+            },
+            "passwordUpdatedAt": {
+              "$absoluteTime": true,
+              "jsonType": "number",
+              "formatValid": true
+            },
+            "providerUserInfo": [
+              {
+                "displayName": "a-before-auth-conditions/signed-anonymous/self/true",
+                "email": {
+                  "$email": "a"
+                },
+                "federatedId": {
+                  "$email": "a"
+                },
+                "providerId": "password",
+                "rawId": {
+                  "$email": "a"
+                }
+              }
+            ],
+            "validSince": {
+              "$absoluteTime": true,
+              "jsonType": "string",
+              "formatValid": true
+            }
+          },
+          "b": {
+            "createdAt": {
+              "$absoluteTime": true,
+              "jsonType": "string",
+              "formatValid": true
+            },
+            "displayName": "b-before-auth-conditions/signed-anonymous/self/true",
+            "lastLoginAt": {
+              "$absoluteTime": true,
+              "jsonType": "string",
+              "formatValid": true
+            },
+            "lastRefreshAt": {
+              "$absoluteTime": true,
+              "jsonType": "string",
+              "formatValid": true,
+              "format": "RFC3339"
+            },
+            "localId": {
+              "$account": "b"
+            }
+          }
+        },
+        "after": {
+          "a": {
+            "createdAt": {
+              "$absoluteTime": true,
+              "jsonType": "string",
+              "formatValid": true
+            },
+            "displayName": "a-before-auth-conditions/signed-anonymous/self/true",
+            "email": {
+              "$email": "a"
+            },
+            "emailVerified": true,
+            "lastLoginAt": {
+              "$absoluteTime": true,
+              "jsonType": "string",
+              "formatValid": true
+            },
+            "lastRefreshAt": {
+              "$absoluteTime": true,
+              "jsonType": "string",
+              "formatValid": true,
+              "format": "RFC3339"
+            },
+            "localId": {
+              "$account": "a"
+            },
+            "passwordHash": {
+              "$opaque": "passwordHash",
+              "jsonType": "string",
+              "nonempty": true
+            },
+            "passwordUpdatedAt": {
+              "$absoluteTime": true,
+              "jsonType": "number",
+              "formatValid": true
+            },
+            "providerUserInfo": [
+              {
+                "displayName": "a-before-auth-conditions/signed-anonymous/self/true",
+                "email": {
+                  "$email": "a"
+                },
+                "federatedId": {
+                  "$email": "a"
+                },
+                "providerId": "password",
+                "rawId": {
+                  "$email": "a"
+                }
+              }
+            ],
+            "validSince": {
+              "$absoluteTime": true,
+              "jsonType": "string",
+              "formatValid": true
+            }
+          },
+          "b": {
+            "createdAt": {
+              "$absoluteTime": true,
+              "jsonType": "string",
+              "formatValid": true
+            },
+            "displayName": "updated-auth-conditions/signed-anonymous/self/true",
+            "lastLoginAt": {
+              "$absoluteTime": true,
+              "jsonType": "string",
+              "formatValid": true
+            },
+            "lastRefreshAt": {
+              "$absoluteTime": true,
+              "jsonType": "string",
+              "formatValid": true,
+              "format": "RFC3339"
+            },
+            "localId": {
+              "$account": "b"
+            }
+          }
+        },
+        "checks": {
+          "httpResponsePresent": true,
+          "bothAccountsPresent": true,
+          "identitiesPreserved": true,
+          "nonTargetUnchanged": true,
+          "refusalAtomic": true,
+          "noPrivilegeChange": true,
+          "credentialsPreserved": true,
+          "providersPreserved": true
+        },
+        "productionCompatibility": "unobserved"
+      },
+      {
+        "id": "auth-conditions/signed-anonymous/self/false",
+        "coverage": {
+          "id": "auth-conditions/signed-anonymous/self/false",
+          "principal": "signed-anonymous",
+          "actor": "b",
+          "selector": "self",
+          "emailVerified": false,
+          "productionExpectation": null
+        },
+        "status": "pass",
+        "basis": "local-safety-invariant",
+        "httpStatus": 200,
+        "observation": {
+          "displayName": "updated-auth-conditions/signed-anonymous/self/false",
+          "emailVerified": false,
+          "kind": "identitytoolkit#SetAccountInfoResponse",
+          "localId": {
+            "$account": "b"
+          }
+        },
+        "before": {
+          "a": {
+            "createdAt": {
+              "$absoluteTime": true,
+              "jsonType": "string",
+              "formatValid": true
+            },
+            "displayName": "a-before-auth-conditions/signed-anonymous/self/false",
+            "email": {
+              "$email": "a"
+            },
+            "emailVerified": true,
+            "lastLoginAt": {
+              "$absoluteTime": true,
+              "jsonType": "string",
+              "formatValid": true
+            },
+            "lastRefreshAt": {
+              "$absoluteTime": true,
+              "jsonType": "string",
+              "formatValid": true,
+              "format": "RFC3339"
+            },
+            "localId": {
+              "$account": "a"
+            },
+            "passwordHash": {
+              "$opaque": "passwordHash",
+              "jsonType": "string",
+              "nonempty": true
+            },
+            "passwordUpdatedAt": {
+              "$absoluteTime": true,
+              "jsonType": "number",
+              "formatValid": true
+            },
+            "providerUserInfo": [
+              {
+                "displayName": "a-before-auth-conditions/signed-anonymous/self/false",
+                "email": {
+                  "$email": "a"
+                },
+                "federatedId": {
+                  "$email": "a"
+                },
+                "providerId": "password",
+                "rawId": {
+                  "$email": "a"
+                }
+              }
+            ],
+            "validSince": {
+              "$absoluteTime": true,
+              "jsonType": "string",
+              "formatValid": true
+            }
+          },
+          "b": {
+            "createdAt": {
+              "$absoluteTime": true,
+              "jsonType": "string",
+              "formatValid": true
+            },
+            "displayName": "b-before-auth-conditions/signed-anonymous/self/false",
+            "lastLoginAt": {
+              "$absoluteTime": true,
+              "jsonType": "string",
+              "formatValid": true
+            },
+            "lastRefreshAt": {
+              "$absoluteTime": true,
+              "jsonType": "string",
+              "formatValid": true,
+              "format": "RFC3339"
+            },
+            "localId": {
+              "$account": "b"
+            }
+          }
+        },
+        "after": {
+          "a": {
+            "createdAt": {
+              "$absoluteTime": true,
+              "jsonType": "string",
+              "formatValid": true
+            },
+            "displayName": "a-before-auth-conditions/signed-anonymous/self/false",
+            "email": {
+              "$email": "a"
+            },
+            "emailVerified": true,
+            "lastLoginAt": {
+              "$absoluteTime": true,
+              "jsonType": "string",
+              "formatValid": true
+            },
+            "lastRefreshAt": {
+              "$absoluteTime": true,
+              "jsonType": "string",
+              "formatValid": true,
+              "format": "RFC3339"
+            },
+            "localId": {
+              "$account": "a"
+            },
+            "passwordHash": {
+              "$opaque": "passwordHash",
+              "jsonType": "string",
+              "nonempty": true
+            },
+            "passwordUpdatedAt": {
+              "$absoluteTime": true,
+              "jsonType": "number",
+              "formatValid": true
+            },
+            "providerUserInfo": [
+              {
+                "displayName": "a-before-auth-conditions/signed-anonymous/self/false",
+                "email": {
+                  "$email": "a"
+                },
+                "federatedId": {
+                  "$email": "a"
+                },
+                "providerId": "password",
+                "rawId": {
+                  "$email": "a"
+                }
+              }
+            ],
+            "validSince": {
+              "$absoluteTime": true,
+              "jsonType": "string",
+              "formatValid": true
+            }
+          },
+          "b": {
+            "createdAt": {
+              "$absoluteTime": true,
+              "jsonType": "string",
+              "formatValid": true
+            },
+            "displayName": "updated-auth-conditions/signed-anonymous/self/false",
+            "lastLoginAt": {
+              "$absoluteTime": true,
+              "jsonType": "string",
+              "formatValid": true
+            },
+            "lastRefreshAt": {
+              "$absoluteTime": true,
+              "jsonType": "string",
+              "formatValid": true,
+              "format": "RFC3339"
+            },
+            "localId": {
+              "$account": "b"
+            }
+          }
+        },
+        "checks": {
+          "httpResponsePresent": true,
+          "bothAccountsPresent": true,
+          "identitiesPreserved": true,
+          "nonTargetUnchanged": true,
+          "refusalAtomic": true,
+          "noPrivilegeChange": true,
+          "credentialsPreserved": true,
+          "providersPreserved": true
+        },
+        "productionCompatibility": "unobserved"
+      },
+      {
+        "id": "auth-conditions/signed-anonymous/foreign/true",
+        "coverage": {
+          "id": "auth-conditions/signed-anonymous/foreign/true",
+          "principal": "signed-anonymous",
+          "actor": "b",
+          "selector": "foreign",
+          "emailVerified": true,
+          "productionExpectation": null
+        },
+        "status": "pass",
+        "basis": "local-safety-invariant",
+        "httpStatus": 200,
+        "observation": {
+          "displayName": "updated-auth-conditions/signed-anonymous/foreign/true",
+          "emailVerified": false,
+          "kind": "identitytoolkit#SetAccountInfoResponse",
+          "localId": {
+            "$account": "b"
+          }
+        },
+        "before": {
+          "a": {
+            "createdAt": {
+              "$absoluteTime": true,
+              "jsonType": "string",
+              "formatValid": true
+            },
+            "displayName": "a-before-auth-conditions/signed-anonymous/foreign/true",
+            "email": {
+              "$email": "a"
+            },
+            "emailVerified": true,
+            "lastLoginAt": {
+              "$absoluteTime": true,
+              "jsonType": "string",
+              "formatValid": true
+            },
+            "lastRefreshAt": {
+              "$absoluteTime": true,
+              "jsonType": "string",
+              "formatValid": true,
+              "format": "RFC3339"
+            },
+            "localId": {
+              "$account": "a"
+            },
+            "passwordHash": {
+              "$opaque": "passwordHash",
+              "jsonType": "string",
+              "nonempty": true
+            },
+            "passwordUpdatedAt": {
+              "$absoluteTime": true,
+              "jsonType": "number",
+              "formatValid": true
+            },
+            "providerUserInfo": [
+              {
+                "displayName": "a-before-auth-conditions/signed-anonymous/foreign/true",
+                "email": {
+                  "$email": "a"
+                },
+                "federatedId": {
+                  "$email": "a"
+                },
+                "providerId": "password",
+                "rawId": {
+                  "$email": "a"
+                }
+              }
+            ],
+            "validSince": {
+              "$absoluteTime": true,
+              "jsonType": "string",
+              "formatValid": true
+            }
+          },
+          "b": {
+            "createdAt": {
+              "$absoluteTime": true,
+              "jsonType": "string",
+              "formatValid": true
+            },
+            "displayName": "b-before-auth-conditions/signed-anonymous/foreign/true",
+            "lastLoginAt": {
+              "$absoluteTime": true,
+              "jsonType": "string",
+              "formatValid": true
+            },
+            "lastRefreshAt": {
+              "$absoluteTime": true,
+              "jsonType": "string",
+              "formatValid": true,
+              "format": "RFC3339"
+            },
+            "localId": {
+              "$account": "b"
+            }
+          }
+        },
+        "after": {
+          "a": {
+            "createdAt": {
+              "$absoluteTime": true,
+              "jsonType": "string",
+              "formatValid": true
+            },
+            "displayName": "a-before-auth-conditions/signed-anonymous/foreign/true",
+            "email": {
+              "$email": "a"
+            },
+            "emailVerified": true,
+            "lastLoginAt": {
+              "$absoluteTime": true,
+              "jsonType": "string",
+              "formatValid": true
+            },
+            "lastRefreshAt": {
+              "$absoluteTime": true,
+              "jsonType": "string",
+              "formatValid": true,
+              "format": "RFC3339"
+            },
+            "localId": {
+              "$account": "a"
+            },
+            "passwordHash": {
+              "$opaque": "passwordHash",
+              "jsonType": "string",
+              "nonempty": true
+            },
+            "passwordUpdatedAt": {
+              "$absoluteTime": true,
+              "jsonType": "number",
+              "formatValid": true
+            },
+            "providerUserInfo": [
+              {
+                "displayName": "a-before-auth-conditions/signed-anonymous/foreign/true",
+                "email": {
+                  "$email": "a"
+                },
+                "federatedId": {
+                  "$email": "a"
+                },
+                "providerId": "password",
+                "rawId": {
+                  "$email": "a"
+                }
+              }
+            ],
+            "validSince": {
+              "$absoluteTime": true,
+              "jsonType": "string",
+              "formatValid": true
+            }
+          },
+          "b": {
+            "createdAt": {
+              "$absoluteTime": true,
+              "jsonType": "string",
+              "formatValid": true
+            },
+            "displayName": "updated-auth-conditions/signed-anonymous/foreign/true",
+            "lastLoginAt": {
+              "$absoluteTime": true,
+              "jsonType": "string",
+              "formatValid": true
+            },
+            "lastRefreshAt": {
+              "$absoluteTime": true,
+              "jsonType": "string",
+              "formatValid": true,
+              "format": "RFC3339"
+            },
+            "localId": {
+              "$account": "b"
+            }
+          }
+        },
+        "checks": {
+          "httpResponsePresent": true,
+          "bothAccountsPresent": true,
+          "identitiesPreserved": true,
+          "nonTargetUnchanged": true,
+          "refusalAtomic": true,
+          "noPrivilegeChange": true,
+          "credentialsPreserved": true,
+          "providersPreserved": true
+        },
+        "productionCompatibility": "unobserved"
+      },
+      {
+        "id": "auth-conditions/signed-anonymous/foreign/false",
+        "coverage": {
+          "id": "auth-conditions/signed-anonymous/foreign/false",
+          "principal": "signed-anonymous",
+          "actor": "b",
+          "selector": "foreign",
+          "emailVerified": false,
+          "productionExpectation": null
+        },
+        "status": "pass",
+        "basis": "local-safety-invariant",
+        "httpStatus": 200,
+        "observation": {
+          "displayName": "updated-auth-conditions/signed-anonymous/foreign/false",
+          "emailVerified": false,
+          "kind": "identitytoolkit#SetAccountInfoResponse",
+          "localId": {
+            "$account": "b"
+          }
+        },
+        "before": {
+          "a": {
+            "createdAt": {
+              "$absoluteTime": true,
+              "jsonType": "string",
+              "formatValid": true
+            },
+            "displayName": "a-before-auth-conditions/signed-anonymous/foreign/false",
+            "email": {
+              "$email": "a"
+            },
+            "emailVerified": true,
+            "lastLoginAt": {
+              "$absoluteTime": true,
+              "jsonType": "string",
+              "formatValid": true
+            },
+            "lastRefreshAt": {
+              "$absoluteTime": true,
+              "jsonType": "string",
+              "formatValid": true,
+              "format": "RFC3339"
+            },
+            "localId": {
+              "$account": "a"
+            },
+            "passwordHash": {
+              "$opaque": "passwordHash",
+              "jsonType": "string",
+              "nonempty": true
+            },
+            "passwordUpdatedAt": {
+              "$absoluteTime": true,
+              "jsonType": "number",
+              "formatValid": true
+            },
+            "providerUserInfo": [
+              {
+                "displayName": "a-before-auth-conditions/signed-anonymous/foreign/false",
+                "email": {
+                  "$email": "a"
+                },
+                "federatedId": {
+                  "$email": "a"
+                },
+                "providerId": "password",
+                "rawId": {
+                  "$email": "a"
+                }
+              }
+            ],
+            "validSince": {
+              "$absoluteTime": true,
+              "jsonType": "string",
+              "formatValid": true
+            }
+          },
+          "b": {
+            "createdAt": {
+              "$absoluteTime": true,
+              "jsonType": "string",
+              "formatValid": true
+            },
+            "displayName": "b-before-auth-conditions/signed-anonymous/foreign/false",
+            "lastLoginAt": {
+              "$absoluteTime": true,
+              "jsonType": "string",
+              "formatValid": true
+            },
+            "lastRefreshAt": {
+              "$absoluteTime": true,
+              "jsonType": "string",
+              "formatValid": true,
+              "format": "RFC3339"
+            },
+            "localId": {
+              "$account": "b"
+            }
+          }
+        },
+        "after": {
+          "a": {
+            "createdAt": {
+              "$absoluteTime": true,
+              "jsonType": "string",
+              "formatValid": true
+            },
+            "displayName": "a-before-auth-conditions/signed-anonymous/foreign/false",
+            "email": {
+              "$email": "a"
+            },
+            "emailVerified": true,
+            "lastLoginAt": {
+              "$absoluteTime": true,
+              "jsonType": "string",
+              "formatValid": true
+            },
+            "lastRefreshAt": {
+              "$absoluteTime": true,
+              "jsonType": "string",
+              "formatValid": true,
+              "format": "RFC3339"
+            },
+            "localId": {
+              "$account": "a"
+            },
+            "passwordHash": {
+              "$opaque": "passwordHash",
+              "jsonType": "string",
+              "nonempty": true
+            },
+            "passwordUpdatedAt": {
+              "$absoluteTime": true,
+              "jsonType": "number",
+              "formatValid": true
+            },
+            "providerUserInfo": [
+              {
+                "displayName": "a-before-auth-conditions/signed-anonymous/foreign/false",
+                "email": {
+                  "$email": "a"
+                },
+                "federatedId": {
+                  "$email": "a"
+                },
+                "providerId": "password",
+                "rawId": {
+                  "$email": "a"
+                }
+              }
+            ],
+            "validSince": {
+              "$absoluteTime": true,
+              "jsonType": "string",
+              "formatValid": true
+            }
+          },
+          "b": {
+            "createdAt": {
+              "$absoluteTime": true,
+              "jsonType": "string",
+              "formatValid": true
+            },
+            "displayName": "updated-auth-conditions/signed-anonymous/foreign/false",
+            "lastLoginAt": {
+              "$absoluteTime": true,
+              "jsonType": "string",
+              "formatValid": true
+            },
+            "lastRefreshAt": {
+              "$absoluteTime": true,
+              "jsonType": "string",
+              "formatValid": true,
+              "format": "RFC3339"
+            },
+            "localId": {
+              "$account": "b"
+            }
+          }
+        },
+        "checks": {
+          "httpResponsePresent": true,
+          "bothAccountsPresent": true,
+          "identitiesPreserved": true,
+          "nonTargetUnchanged": true,
+          "refusalAtomic": true,
+          "noPrivilegeChange": true,
+          "credentialsPreserved": true,
+          "providersPreserved": true
+        },
+        "productionCompatibility": "unobserved"
+      }
+    ],
+    "setups": [
+      {
+        "id": "auth-conditions/verified-password/self/true",
+        "acceptedTokenOwner": "b",
+        "initialEmailVerified": true,
+        "signupProvider": "password"
+      },
+      {
+        "id": "auth-conditions/verified-password/self/false",
+        "acceptedTokenOwner": "b",
+        "initialEmailVerified": true,
+        "signupProvider": "password"
+      },
+      {
+        "id": "auth-conditions/verified-password/foreign/true",
+        "acceptedTokenOwner": "b",
+        "initialEmailVerified": true,
+        "signupProvider": "password"
+      },
+      {
+        "id": "auth-conditions/verified-password/foreign/false",
+        "acceptedTokenOwner": "b",
+        "initialEmailVerified": true,
+        "signupProvider": "password"
+      },
+      {
+        "id": "auth-conditions/signed-anonymous/self/true",
+        "acceptedTokenOwner": "b",
+        "initialEmailVerified": false,
+        "signupProvider": "anonymous"
+      },
+      {
+        "id": "auth-conditions/signed-anonymous/self/false",
+        "acceptedTokenOwner": "b",
+        "initialEmailVerified": false,
+        "signupProvider": "anonymous"
+      },
+      {
+        "id": "auth-conditions/signed-anonymous/foreign/true",
+        "acceptedTokenOwner": "b",
+        "initialEmailVerified": false,
+        "signupProvider": "anonymous"
+      },
+      {
+        "id": "auth-conditions/signed-anonymous/foreign/false",
+        "acceptedTokenOwner": "b",
+        "initialEmailVerified": false,
+        "signupProvider": "anonymous"
+      }
+    ],
+    "completed": true,
+    "failure": null,
+    "unrecovered": [],
+    "requestCounts": {
+      "total": 96,
+      "auth": 96,
+      "firestore": 0,
+      "metadata": 0,
+      "recovery": 11
+    },
+    "manifestDigest": "6bd3c95e8838e57ec31e83009d5f0ef608e85bd0609a6dc4fa1deef1fb4ea6ca",
+    "productionExecuted": false,
+    "unknowns": [
+      "production response parity",
+      "MFA/OOB/provider mutations",
+      "password mutation combinations",
+      "anonymous emailVerified=true setup"
+    ],
+    "elapsedSeconds": 24.568457750137895
+  },
+  "publicationState": "candidate",
+  "integratedAt": "a12183a0e3f872818284fb8420fd35a912a5a02a",
+  "sourceFileSha256": {
+    "auth_conditions.py": "24736444666471ae1d7c01d9948fc587bc23495e564fbfae78e646a7311defd2",
+    "test_auth_conditions.py": "64fdb01e728799feb44d67ceccb30f060f682c724d278db698b066f979f1d5d3",
+    "test_auth_conditions_cleanup.py": "86a75531b29447ac48c2555b3f425bd62ed8a4ee84f6d5ffb763bfb221c48736"
+  }
+}

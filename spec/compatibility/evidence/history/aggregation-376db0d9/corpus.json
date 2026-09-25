@@ -1,0 +1,273 @@
+{
+  "schemaVersion": 1,
+  "scope": {
+    "feature": "FS-AGGREGATIONS",
+    "edition": "STANDARD",
+    "apiMode": "FIRESTORE_NATIVE",
+    "transport": "REST",
+    "profile": "strict",
+    "rules": "admin-bypass"
+  },
+  "fixtures": {
+    "A": {
+      "x": {
+        "integerValue": "10"
+      },
+      "y": {
+        "integerValue": "100"
+      }
+    },
+    "B": {},
+    "C": {
+      "x": {
+        "stringValue": "not-a-number"
+      },
+      "y": {
+        "integerValue": "20"
+      }
+    },
+    "D": {
+      "x": {
+        "doubleValue": 20.5
+      }
+    }
+  },
+  "queries": [
+    {
+      "id": "count-alone",
+      "aggregations": [
+        {
+          "alias": "count",
+          "count": {}
+        }
+      ],
+      "query": {},
+      "expected": {
+        "count": {
+          "integerValue": "4"
+        }
+      }
+    },
+    {
+      "id": "count-sum",
+      "aggregations": [
+        {
+          "alias": "count",
+          "count": {}
+        },
+        {
+          "alias": "sum",
+          "sum": {
+            "field": {
+              "fieldPath": "x"
+            }
+          }
+        }
+      ],
+      "query": {},
+      "expected": {
+        "count": {
+          "integerValue": "3"
+        },
+        "sum": {
+          "doubleValue": 30.5
+        }
+      }
+    },
+    {
+      "id": "count-average",
+      "aggregations": [
+        {
+          "alias": "count",
+          "count": {}
+        },
+        {
+          "alias": "avg",
+          "avg": {
+            "field": {
+              "fieldPath": "x"
+            }
+          }
+        }
+      ],
+      "query": {},
+      "expected": {
+        "count": {
+          "integerValue": "3"
+        },
+        "avg": {
+          "doubleValue": 15.25
+        }
+      }
+    },
+    {
+      "id": "sum-average",
+      "aggregations": [
+        {
+          "alias": "sum",
+          "sum": {
+            "field": {
+              "fieldPath": "x"
+            }
+          }
+        },
+        {
+          "alias": "avg",
+          "avg": {
+            "field": {
+              "fieldPath": "x"
+            }
+          }
+        }
+      ],
+      "query": {},
+      "expected": {
+        "sum": {
+          "doubleValue": 30.5
+        },
+        "avg": {
+          "doubleValue": 15.25
+        }
+      }
+    },
+    {
+      "id": "multiple-fields",
+      "aggregations": [
+        {
+          "alias": "count",
+          "count": {}
+        },
+        {
+          "alias": "sum",
+          "sum": {
+            "field": {
+              "fieldPath": "x"
+            }
+          }
+        },
+        {
+          "alias": "avg",
+          "avg": {
+            "field": {
+              "fieldPath": "y"
+            }
+          }
+        }
+      ],
+      "query": {},
+      "expected": {
+        "count": {
+          "integerValue": "2"
+        },
+        "sum": {
+          "integerValue": "10"
+        },
+        "avg": {
+          "doubleValue": 60
+        }
+      }
+    },
+    {
+      "id": "empty-result",
+      "aggregations": [
+        {
+          "alias": "count",
+          "count": {}
+        },
+        {
+          "alias": "sum",
+          "sum": {
+            "field": {
+              "fieldPath": "x"
+            }
+          }
+        },
+        {
+          "alias": "avg",
+          "avg": {
+            "field": {
+              "fieldPath": "x"
+            }
+          }
+        }
+      ],
+      "query": {
+        "where": {
+          "fieldFilter": {
+            "field": {
+              "fieldPath": "x"
+            },
+            "op": "GREATER_THAN",
+            "value": {
+              "integerValue": "1000"
+            }
+          }
+        }
+      },
+      "expected": {
+        "count": {
+          "integerValue": "0"
+        },
+        "sum": {
+          "integerValue": "0"
+        },
+        "avg": {
+          "nullValue": null
+        }
+      }
+    },
+    {
+      "id": "missing-before-limit",
+      "aggregations": [
+        {
+          "alias": "count",
+          "count": {}
+        },
+        {
+          "alias": "sum",
+          "sum": {
+            "field": {
+              "fieldPath": "x"
+            }
+          }
+        }
+      ],
+      "query": {
+        "limit": 2
+      },
+      "expected": {
+        "count": {
+          "integerValue": "2"
+        },
+        "sum": {
+          "integerValue": "10"
+        }
+      }
+    },
+    {
+      "id": "bounded-count",
+      "aggregations": [
+        {
+          "alias": "count",
+          "count": {
+            "upTo": "2"
+          }
+        }
+      ],
+      "query": {},
+      "expected": {
+        "count": {
+          "integerValue": "2"
+        }
+      }
+    }
+  ],
+  "stateCases": [
+    "refused-commit",
+    "unchanged-state"
+  ],
+  "limitations": [
+    "REST only; no SDK, gRPC, Rules authorization, transactions, Enterprise or MongoDB attestation.",
+    "Finite fixtures, not all numeric precision, null/NaN, cursor/index or scheduling combinations."
+  ]
+}

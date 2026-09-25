@@ -1,0 +1,83 @@
+{
+  "blockingReasons": [
+    "owner permission envelope fields are unset",
+    "no production release artifact SHA-256 is bound",
+    "no fresh production nonce is reserved",
+    "the declared index exemption is not deployed",
+    "ambiguous or lost creates remain owner-escalation until resolved",
+    "the production nx exemption and restore evidence are not verified"
+  ],
+  "campaignId": "FS-WRITE-LIMITS-03",
+  "campaignIds": [
+    "FS-WRITE-LIMITS-03"
+  ],
+  "collector": {
+    "differenceFromLimits02": "Every mutating method is gated by the write-safety predicate, not PATCH alone, because this campaign sends writes over :batchWrite. The preflight prefix length is read from the plan. A row the campaign has declared it cannot predict locally is excused from the safety predicate, though its journal integrity is still checked. collector.py is byte-for-byte unchanged, so the frozen limits-02 collector source digest still resolves.",
+    "digest": "ed194e2da565395c703531af5ea47e3368a3549ab22d47c765cbacaaddc46600",
+    "path": "tools/compat-broad/fs-write-limits/collector_03.py",
+    "productionCollector": null,
+    "scope": "REST BatchWrite per-position outcome, create-only document writes, typed readbacks and request-stage name refusals, with ownership and version bound cleanup. No configuration, index, Rules or account operation.",
+    "status": "local-only",
+    "technicalBlocker": "The O8 launcher exists and drives collector_03 through the shared Gate. Production admission remains unavailable until the owner envelope, release artifact, index exemption readback, and saved receipt/restore evidence are independently bound."
+  },
+  "comparator": {
+    "addition": "A per-row structural field reports status, typed error code and status, the per-item BatchWrite codes and whether the document is present, with diagnostic wording removed. It is additive and never changes the classification. It is what keeps a known wording difference from hiding the answer this campaign exists to get.",
+    "contract": "The limits-02 contract: both plans are regenerated from the compiler, every ordered request including its typed body is checked, a complete response journal is required, and normalized document identity and server timestamps may differ as EXPECTED_NONDETERMINISM while everything else, message text included, is significant.",
+    "digest": "741452930a7905157b3253194ee1bd94dabbd677f757c0ee8edaa5a00bc95fe7",
+    "path": "tools/compat-broad/fs-write-limits/comparator_03.py",
+    "productionComparator": null,
+    "status": "preparation-only"
+  },
+  "gateEnvelope": {
+    "executionWindow": null,
+    "owner": null,
+    "permissionReference": null,
+    "productionAuthorization": false,
+    "productionNonce": null,
+    "requiredInputs": [
+      "owner identity and explicit permission reference covering this owned-data campaign",
+      "project/database/tenant and configuration readback",
+      "a fresh nonce per part, absent from every current, next and backlog campaign",
+      "current release artifact SHA-256",
+      "collector and comparator digests",
+      "recovery owner and tariff acceptance",
+      "the declared index exemption deployed and READY"
+    ],
+    "stopConditions": [
+      "binding drift",
+      "unexpected resource",
+      "an accepted write at a refused boundary",
+      "budget exhaustion",
+      "cleanup uncertainty",
+      "incomplete receipt"
+    ]
+  },
+  "kind": "firestore-write-limits-campaign-binding-v2",
+  "localShadow": {
+    "path": "spec/compatibility/broad-runs/fs-write-limits-03-local-shadow.json",
+    "productionExecuted": false,
+    "sha256": "3b68e3d01c0a1e0e29c6ec8708ff271830fa9151a5e4882740478aac7ede95f4",
+    "status": "completed"
+  },
+  "manifest": {
+    "path": "spec/compatibility/broad-runs/fs-write-limits-03.json",
+    "sha256": "145134bd10a13a9d0cead3f06929aaee6f2f491bf14bd04ab26cc6ec45cc434f"
+  },
+  "o8": {
+    "descriptor": "tools/compat-broad/fs-write-limits/limits_03_descriptor.py",
+    "launcher": "tools/compat-broad/fs-write-limits/limits_03_o8.py",
+    "launcherSha256": "005c64bebdaf04f568189665eed3ca63f6d6bb06dd4315b658cf0e6e5d79231b",
+    "workerSha256": "cca47769c29929485eb0decb3e27f6fbef5b8f95ebf6bfaa76de4abc35d80499"
+  },
+  "productionExecuted": false,
+  "source": {
+    "codeSourceHead": "16a37e8379c289297b305c88add4a62fdbf588f8",
+    "commit": "16a37e8379c289297b305c88add4a62fdbf588f8",
+    "productionArtifactSha256": null,
+    "shadowArtifactSha256": {
+      "ALL": "617c3f381f49ba600f076f14bc8a2cc066b647062825ba07c7a21b8069102a86"
+    }
+  },
+  "status": "BLOCKED_OWNER",
+  "technicalStatus": "BLOCKED_TECHNICAL"
+}

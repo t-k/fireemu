@@ -127,7 +127,291 @@ fn index_entry_size_and_total_size_budgets_are_independent() {
         .document_index_usage(&long_path, &array(3000))
         .unwrap_err()
         .to_string()
-        .contains("FS-LIMIT-INDEX-ENTRY-SUM-PER-DOCUMENT"));
+        .contains("Transaction too big. Decrease transaction size."));
+}
+
+#[test]
+fn empty_document_with_long_name_has_an_oversized_name_index_entry() {
+    use fireemu_core_firestore::path::DocumentPath;
+    use fireemu_core_types::ids::{DatabaseId, ProjectId};
+    use std::collections::BTreeMap;
+
+    let path = DocumentPath::parse(
+        &ProjectId::try_new("demo-app").unwrap(),
+        &DatabaseId::default_database(),
+        &format!(
+            "c/{}/c/{}/c/{}/c/{}",
+            "d".repeat(1248),
+            "d".repeat(1247),
+            "d".repeat(1247),
+            "d".repeat(1247),
+        ),
+    )
+    .unwrap();
+    let error = IndexSet::default()
+        .document_index_usage(&path, &BTreeMap::new())
+        .unwrap_err();
+    assert_eq!(
+        error.to_string(),
+        "invalid argument: Index entry is too large."
+    );
+}
+
+#[test]
+fn empty_document_at_recorded_4621_and_4622_byte_names_pass_index_accounting() {
+    use fireemu_core_firestore::path::DocumentPath;
+    use fireemu_core_types::ids::{DatabaseId, ProjectId};
+    use std::collections::BTreeMap;
+
+    for third_segment_bytes in [1152, 1153] {
+        let path = DocumentPath::parse(
+            &ProjectId::try_new("demo-app").unwrap(),
+            &DatabaseId::default_database(),
+            &format!(
+                "c/{}/c/{}/c/{}/c/{}",
+                "d".repeat(1153),
+                "d".repeat(1153),
+                "d".repeat(third_segment_bytes),
+                "d".repeat(1152),
+            ),
+        )
+        .unwrap();
+        assert!(IndexSet::default()
+            .document_index_usage(&path, &BTreeMap::new())
+            .is_ok());
+    }
+}
+
+#[test]
+fn frozen_default_aggregate_map_and_index_count_points_pass_index_accounting() {
+    use fireemu_core_firestore::path::DocumentPath;
+    use fireemu_core_types::ids::{DatabaseId, ProjectId};
+    use std::collections::BTreeMap;
+
+    let project = ProjectId::try_new("demo-app").unwrap();
+    let database = DatabaseId::default_database();
+    let indexes = IndexSet::default();
+    for (name, length) in [("agg-map-accept", 1_048_452), ("agg-map-refuse", 1_048_453)] {
+        let path = DocumentPath::parse(
+            &project,
+            &database,
+            &format!("oracle/{}/limits-03/{name}", "a".repeat(32)),
+        )
+        .unwrap();
+        let fields = BTreeMap::from([(
+            "m".into(),
+            Value::Map(BTreeMap::from([(
+                "s".into(),
+                Value::String("x".repeat(length)),
+            )])),
+        )]);
+        assert!(
+            indexes.document_index_usage(&path, &fields).is_ok(),
+            "{name}"
+        );
+    }
+    for (name, count) in [("iec-accept", 19_998), ("iec-refuse", 19_999)] {
+        let path = DocumentPath::parse(
+            &project,
+            &database,
+            &format!("oracle/{}/limits-03/{name}", "a".repeat(32)),
+        )
+        .unwrap();
+        let fields = BTreeMap::from([(
+            "a".into(),
+            Value::Array((0..count).map(Value::Integer).collect()),
+        )]);
+        assert!(
+            indexes.document_index_usage(&path, &fields).is_ok(),
+            "{name}"
+        );
+    }
+}
+
+#[test]
+fn index_entry_count_refusal_names_the_relative_entity_path() {
+    use fireemu_core_firestore::path::DocumentPath;
+    use fireemu_core_types::ids::{DatabaseId, ProjectId};
+    use std::collections::BTreeMap;
+
+    let path = DocumentPath::parse(
+        &ProjectId::try_new("demo-app").unwrap(),
+        &DatabaseId::default_database(),
+        "ie2/arr20000",
+    )
+    .unwrap();
+    let fields = BTreeMap::from([(
+        "a".into(),
+        Value::Array((0..20_000).map(Value::Integer).collect()),
+    )]);
+    let accepted = BTreeMap::from([(
+        "a".into(),
+        Value::Array((0..19_999).map(Value::Integer).collect()),
+    )]);
+    assert!(IndexSet::default()
+        .document_index_usage(&path, &accepted)
+        .is_ok());
+    assert_eq!(
+        IndexSet::default()
+            .document_index_usage(&path, &fields)
+            .unwrap_err()
+            .to_string(),
+        "invalid argument: too many index entries for entity /ie2/arr20000"
+    );
+}
+
+#[test]
+fn indexed_1500_byte_string_uses_recorded_long_name_refusal_points() {
+    use fireemu_core_firestore::path::DocumentPath;
+    use fireemu_core_types::ids::{DatabaseId, ProjectId};
+    use std::collections::BTreeMap;
+
+    let path = |relative_bytes: usize| {
+        let document_bytes = relative_bytes - 5;
+        let first = document_bytes.div_ceil(2);
+        let second = document_bytes / 2;
+        DocumentPath::parse(
+            &ProjectId::try_new("demo-app").unwrap(),
+            &DatabaseId::default_database(),
+            &format!("c/{}/c/{}", "d".repeat(first), "d".repeat(second)),
+        )
+        .unwrap()
+    };
+    let fields = BTreeMap::from([("s".into(), Value::String("x".repeat(1500)))]);
+    let indexes = IndexSet::default();
+    assert!(indexes.document_index_usage(&path(2600), &fields).is_ok());
+    assert!(indexes.document_index_usage(&path(2641), &fields).is_ok());
+    for relative_bytes in [2642, 2643] {
+        assert_eq!(
+            indexes
+                .document_index_usage(&path(relative_bytes), &fields)
+                .unwrap_err()
+                .to_string(),
+            "invalid argument: Index entry is too large."
+        );
+    }
+
+    let mut exempt = IndexSet::default();
+    exempt.add_exemption(&SingleFieldExemption {
+        collection_group: CollectionId::try_new("c").unwrap(),
+        field: fp("s"),
+        query_scope: IndexQueryScope::Collection,
+    });
+    assert!(exempt.document_index_usage(&path(2642), &fields).is_ok());
+}
+
+/// Exploratory production points only; this deliberately ignored diagnostic pins the saved
+/// default-database empty-document pair without treating one exploratory recording as closure
+/// evidence. Enable it only after corpus v3 reproduces the point and a reviewed formula replaces
+/// the current conservative name guard.
+#[test]
+#[ignore = "exploratory sbx point; awaiting corpus-v3 reproduction and reviewed formula"]
+fn exploratory_default_empty_document_index_entry_pair() {
+    use fireemu_core_firestore::path::DocumentPath;
+    use fireemu_core_types::ids::{DatabaseId, ProjectId};
+    use std::collections::BTreeMap;
+
+    let project = ProjectId::try_new("demo-app").unwrap();
+    let database = DatabaseId::default_database();
+    let path = |relative_bytes: usize| {
+        let segment_bytes = relative_bytes - 11;
+        let base = segment_bytes / 4;
+        let remainder = segment_bytes % 4;
+        let segments: Vec<String> = (0..4)
+            .map(|index| "x".repeat(base + usize::from(index < remainder)))
+            .collect();
+        DocumentPath::parse(
+            &project,
+            &database,
+            &format!(
+                "c/{}/c/{}/c/{}/c/{}",
+                segments[0], segments[1], segments[2], segments[3]
+            ),
+        )
+        .unwrap()
+    };
+    let indexes = IndexSet::default();
+    assert!(indexes
+        .document_index_usage(&path(4627), &BTreeMap::new())
+        .is_ok());
+    assert_eq!(
+        indexes
+            .document_index_usage(&path(4628), &BTreeMap::new())
+            .unwrap_err()
+            .to_string(),
+        "invalid argument: Index entry is too large."
+    );
+}
+
+/// Exploratory production points only; these default-database transaction-size pairs are
+/// intentionally ignored because the current 8 MiB per-document accumulator does not
+/// reproduce the recorded transaction-size boundary. They remain pending compatibility inputs
+/// until corpus v3 provides the required independent recordings.
+#[test]
+#[ignore = "exploratory sbx points; awaiting corpus-v3 reproduction and reviewed formula"]
+fn exploratory_default_array_transaction_size_pairs() {
+    use fireemu_core_firestore::path::DocumentPath;
+    use fireemu_core_types::ids::{DatabaseId, ProjectId};
+    use std::collections::BTreeMap;
+
+    let project = ProjectId::try_new("demo-app").unwrap();
+    let database = DatabaseId::default_database();
+    let path = |relative_bytes: usize| {
+        let segment_bytes = relative_bytes - 11;
+        let base = segment_bytes / 4;
+        let remainder = segment_bytes % 4;
+        let segments: Vec<String> = (0..4)
+            .map(|index| "x".repeat(base + usize::from(index < remainder)))
+            .collect();
+        DocumentPath::parse(
+            &project,
+            &database,
+            &format!(
+                "c/{}/c/{}/c/{}/c/{}",
+                segments[0], segments[1], segments[2], segments[3]
+            ),
+        )
+        .unwrap()
+    };
+    let fields = |count| {
+        BTreeMap::from([(
+            "a".to_owned(),
+            Value::Array((0..count).map(Value::Integer).collect()),
+        )])
+    };
+    let indexes = IndexSet::default();
+
+    // Exploratory sandbox pair: 500-byte relative name, entry-count refusal.
+    assert!(matches!(
+        indexes.document_index_usage(&path(500), &fields(20_000)),
+        Err(fireemu_core_firestore::store::FirestoreError::InvalidArgument(message))
+            if message.starts_with("too many index entries for entity /")
+    ));
+    assert!(indexes
+        .document_index_usage(&path(500), &fields(19_999))
+        .is_ok());
+
+    // Exploratory sandbox pairs: transaction-size refusals.
+    assert!(indexes
+        .document_index_usage(&path(1000), &fields(12_123))
+        .is_ok());
+    assert_eq!(
+        indexes
+            .document_index_usage(&path(1000), &fields(12_124))
+            .unwrap_err()
+            .to_string(),
+        "invalid argument: Transaction too big. Decrease transaction size."
+    );
+    assert!(indexes
+        .document_index_usage(&path(2000), &fields(7_184))
+        .is_ok());
+    assert_eq!(
+        indexes
+            .document_index_usage(&path(2000), &fields(7_185))
+            .unwrap_err()
+            .to_string(),
+        "invalid argument: Transaction too big. Decrease transaction size."
+    );
 }
 
 #[test]
@@ -193,6 +477,170 @@ fn composite(fields: &[(&str, IndexFieldMode)]) -> IndexDefinition {
 }
 fn decide(q: &Query, indexes: &IndexSet, ctx: PlanningContext) -> IndexDecision {
     fireemu_core_firestore::index::decide(&q.canonicalize().unwrap(), indexes, &ctx)
+}
+
+fn nearest_query() -> Query {
+    tasks().with_find_nearest(fireemu_core_firestore::query::FindNearest {
+        vector_field: fp("embedding"),
+        query_vector: vec![0.0, 1.0],
+        distance_measure: fireemu_core_firestore::query::DistanceMeasure::Cosine,
+        limit: 5,
+        distance_result_field: None,
+        distance_threshold: None,
+    })
+}
+
+#[test]
+fn vector_queries_without_a_collection_source_are_unsupported_in_production() {
+    let query = Query::new(QueryScope::kindless_all_descendants(None)).with_find_nearest(
+        fireemu_core_firestore::query::FindNearest {
+            vector_field: fp("embedding"),
+            query_vector: vec![0.0, 1.0],
+            distance_measure: fireemu_core_firestore::query::DistanceMeasure::Cosine,
+            limit: 5,
+            distance_result_field: None,
+            distance_threshold: None,
+        },
+    );
+    assert!(matches!(
+        decide(&query, &IndexSet::default(), standard()),
+        IndexDecision::Unsupported {
+            feature: "findNearest requires a collection source"
+        }
+    ));
+}
+
+#[test]
+fn vector_queries_require_a_dimensioned_vector_index_in_production() {
+    let query = nearest_query();
+    let missing = decide(&query, &IndexSet::default(), standard());
+    let requirement = match missing {
+        IndexDecision::MissingRequired { requirement } => requirement,
+        other => panic!("{other:?}"),
+    };
+    assert_eq!(requirement.fields.len(), 1);
+    assert_eq!(requirement.fields[0].path, fp("embedding"));
+    assert_eq!(
+        requirement.fields[0].mode,
+        IndexFieldMode::Vector { dimension: 2 }
+    );
+    assert!(requirement
+        .indexes_json_fragment()
+        .contains(r#"vectorConfig": {"dimension": 2, "flat": {}}"#));
+
+    let mut wrong_dimension = IndexSet::default();
+    wrong_dimension.add_composite(composite(&[(
+        "embedding",
+        IndexFieldMode::Vector { dimension: 3 },
+    )]));
+    assert!(matches!(
+        decide(&query, &wrong_dimension, standard()),
+        IndexDecision::MissingRequired { .. }
+    ));
+
+    let mut configured = IndexSet::default();
+    configured.add_composite(composite(&[(
+        "embedding",
+        IndexFieldMode::Vector { dimension: 2 },
+    )]));
+    assert!(matches!(
+        decide(&query, &configured, standard()),
+        IndexDecision::UseIndex { .. }
+    ));
+}
+
+#[test]
+fn vector_queries_use_a_matching_single_field_vector_index() {
+    let query = nearest_query();
+    let collection = CollectionId::try_new("tasks").unwrap();
+    let mut configured = IndexSet::default();
+    configured.set_single_field_indexes(
+        &collection,
+        &fp("embedding"),
+        vec![(
+            IndexQueryScope::Collection,
+            IndexFieldMode::Vector { dimension: 2 },
+        )],
+    );
+
+    assert!(matches!(
+        decide(&query, &configured, standard()),
+        IndexDecision::UseIndex { index }
+            if index.fields == vec![IndexField {
+                path: fp("embedding"),
+                mode: IndexFieldMode::Vector { dimension: 2 },
+            }]
+    ));
+
+    let mut wrong_dimension = configured.clone();
+    wrong_dimension.set_single_field_indexes(
+        &collection,
+        &fp("embedding"),
+        vec![(
+            IndexQueryScope::Collection,
+            IndexFieldMode::Vector { dimension: 3 },
+        )],
+    );
+    assert!(matches!(
+        decide(&query, &wrong_dimension, standard()),
+        IndexDecision::MissingRequired { .. }
+    ));
+
+    let mut wrong_scope = configured;
+    wrong_scope.set_single_field_indexes(
+        &collection,
+        &fp("embedding"),
+        vec![(
+            IndexQueryScope::CollectionGroup,
+            IndexFieldMode::Vector { dimension: 2 },
+        )],
+    );
+    assert!(matches!(
+        decide(&query, &wrong_scope, standard()),
+        IndexDecision::MissingRequired { .. }
+    ));
+}
+
+#[test]
+fn vector_query_prefilters_require_the_same_composite_vector_index() {
+    let query = nearest_query().with_filter(field(
+        "category",
+        FieldOp::Equal,
+        Value::String("book".to_owned()),
+    ));
+    let mut only_vector = IndexSet::default();
+    only_vector.add_composite(composite(&[(
+        "embedding",
+        IndexFieldMode::Vector { dimension: 2 },
+    )]));
+    assert!(matches!(
+        decide(&query, &only_vector, standard()),
+        IndexDecision::MissingRequired { .. }
+    ));
+
+    let mut configured = IndexSet::default();
+    configured.add_composite(composite(&[
+        ("category", IndexFieldMode::Ascending),
+        ("embedding", IndexFieldMode::Vector { dimension: 2 }),
+    ]));
+    assert!(matches!(
+        decide(&query, &configured, standard()),
+        IndexDecision::UseIndex { .. }
+    ));
+}
+
+#[test]
+fn emulator_vector_queries_assume_a_vector_index_without_using_name_index() {
+    let query = nearest_query();
+    let mut indexes = IndexSet::default();
+    indexes.add_composite(composite(&[("__name__", IndexFieldMode::Ascending)]));
+    let mut emulator = standard();
+    emulator.policy = IndexValidationPolicy::Emulator;
+    assert!(matches!(
+        decide(&query, &indexes, emulator),
+        IndexDecision::AssumedIndex { requirement }
+            if requirement.fields[0].mode == IndexFieldMode::Vector { dimension: 2 }
+    ));
 }
 
 #[test]
@@ -769,6 +1217,8 @@ fn firebase_policy_index_merge_stops_at_ordering_arrays_and_inequalities() {
         ),
         IndexDecision::MissingRequired { .. }
     ));
+    // An array-contains joins the merge through its automatic contains index (FS-QUERY-INDEX
+    // index-selection/automatic-and-merge#equality-and-array-contains-merge).
     assert!(matches!(
         decide(
             &tasks().with_filter(FilterExpr::And(vec![
@@ -782,7 +1232,7 @@ fn firebase_policy_index_merge_stops_at_ordering_arrays_and_inequalities() {
             &IndexSet::default(),
             standard(),
         ),
-        IndexDecision::MissingRequired { .. }
+        IndexDecision::MergeIndexes { .. }
     ));
     assert!(matches!(
         decide(
@@ -932,6 +1382,29 @@ fn collection_group_scope_is_not_ignored() {
 }
 
 #[test]
+fn collection_group_index_serves_a_collection_query() {
+    // Production serves a collection query from a collection-group composite (FS-QUERY-INDEX
+    // index-selection/scopes-and-exemptions#group-scope-composite-for-collection).
+    let q = tasks().with_filter(FilterExpr::And(vec![
+        field("done", FieldOp::Equal, Value::Boolean(false)),
+        field("owner", FieldOp::Equal, Value::String("u".to_owned())),
+    ]));
+    let mut group = IndexSet::default();
+    let mut index = composite(&[
+        ("done", IndexFieldMode::Ascending),
+        ("owner", IndexFieldMode::Ascending),
+    ]);
+    index.query_scope = IndexQueryScope::CollectionGroup;
+    group.set_default_single_field_indexes(&CollectionId::try_new("tasks").unwrap(), vec![]);
+    group.add_composite(index);
+
+    assert!(matches!(
+        decide(&q, &group, standard()),
+        IndexDecision::UseIndex { .. }
+    ));
+}
+
+#[test]
 fn array_mode_is_not_ignored() {
     let q = tasks().with_filter(FilterExpr::And(vec![
         field(
@@ -941,7 +1414,11 @@ fn array_mode_is_not_ignored() {
         ),
         field("owner", FieldOp::Equal, Value::String("u".to_owned())),
     ]));
+    // Without the automatic single-field indexes (which production would merge), only a
+    // composite serves, and only one whose array field is CONTAINS.
+    let tasks_id = CollectionId::try_new("tasks").unwrap();
     let mut asc = IndexSet::default();
+    asc.set_default_single_field_indexes(&tasks_id, vec![]);
     asc.add_composite(composite(&[
         ("owner", IndexFieldMode::Ascending),
         ("tags", IndexFieldMode::Ascending),
@@ -951,6 +1428,7 @@ fn array_mode_is_not_ignored() {
         IndexDecision::MissingRequired { .. }
     ));
     let mut contains = IndexSet::default();
+    contains.set_default_single_field_indexes(&tasks_id, vec![]);
     contains.add_composite(composite(&[
         ("owner", IndexFieldMode::Ascending),
         ("tags", IndexFieldMode::Contains),
@@ -1328,5 +1806,115 @@ fn document_name_equality_is_served_without_field_indexes() {
     assert!(matches!(
         decide(&name_and_two, &explicit, standard()),
         IndexDecision::UseIndex { .. }
+    ));
+}
+
+/// The Explain plan lists the scans of each DNF disjunct in `dnf()` order: the automatic
+/// index, a composite, the merge members, or the vector index (FS-QUERY-INDEX explain).
+#[test]
+fn plan_scans_name_the_index_of_each_disjunct() {
+    use fireemu_core_firestore::index::{plan_scans, PlannedScan};
+    let plan = |q: &Query, indexes: &IndexSet| {
+        plan_scans(&q.canonicalize().unwrap(), &[], indexes, &standard())
+    };
+    let auto = |path: &str, mode: IndexFieldMode, name: IndexFieldMode| {
+        PlannedScan::Index(composite(&[(path, mode), ("__name__", name)]))
+    };
+    let none = IndexSet::default();
+    assert_eq!(
+        plan(&tasks(), &none),
+        Some(vec![PlannedScan::Index(composite(&[(
+            "__name__",
+            IndexFieldMode::Ascending
+        )]))])
+    );
+    let mut or = tasks();
+    or.filter = Some(FilterExpr::Or(vec![
+        field("g", FieldOp::Equal, Value::Integer(1)),
+        field("h", FieldOp::Equal, Value::Integer(0)),
+    ]));
+    assert_eq!(
+        plan(&or, &none),
+        Some(vec![
+            auto("g", IndexFieldMode::Ascending, IndexFieldMode::Ascending),
+            auto("h", IndexFieldMode::Ascending, IndexFieldMode::Ascending),
+        ])
+    );
+    let mut composed = tasks();
+    composed.filter = Some(FilterExpr::And(vec![
+        field("g", FieldOp::Equal, Value::Integer(1)),
+        field("n", FieldOp::GreaterThan, Value::Integer(3)),
+    ]));
+    assert_eq!(plan(&composed, &none), None, "the composite is missing");
+    let mut indexes = IndexSet::default();
+    let g_n = composite(&[
+        ("g", IndexFieldMode::Ascending),
+        ("n", IndexFieldMode::Ascending),
+    ]);
+    indexes.add_composite(g_n.clone());
+    assert_eq!(
+        plan(&composed, &indexes),
+        Some(vec![PlannedScan::Index(g_n)])
+    );
+    let mut merged = tasks();
+    merged.filter = Some(FilterExpr::And(vec![
+        field("c", FieldOp::Equal, Value::Integer(1)),
+        field("d", FieldOp::Equal, Value::Integer(4)),
+    ]));
+    match plan(&merged, &none).as_deref() {
+        Some([PlannedScan::Merge(members)]) => {
+            assert_eq!(members.len(), 2);
+            for path in ["c", "d"] {
+                assert!(members.contains(&composite(&[
+                    (path, IndexFieldMode::Ascending),
+                    ("__name__", IndexFieldMode::Ascending)
+                ])));
+            }
+        }
+        other => panic!("two equalities merge their automatic indexes: {other:?}"),
+    }
+    // An assumed index stands for itself under the emulator policy.
+    let emulator = PlanningContext {
+        policy: IndexValidationPolicy::Emulator,
+        ..standard()
+    };
+    assert_eq!(
+        plan_scans(&composed.canonicalize().unwrap(), &[], &none, &emulator)
+            .map(|scans| scans.len()),
+        Some(1)
+    );
+    // A kindless query has no index plan.
+    assert_eq!(
+        plan(
+            &Query::new(QueryScope::kindless_all_descendants(None)),
+            &none
+        ),
+        None
+    );
+}
+
+/// An explicit order on an equality field stops production merging automatic indexes
+/// (query-limits/components#equalities-99-and-order needs a composite); without the order
+/// the same equalities merge (index-selection/automatic-and-merge#two-equalities-merge).
+#[test]
+fn an_order_on_an_equality_field_disables_the_merge() {
+    let equalities = || {
+        tasks().with_filter(FilterExpr::And(vec![
+            field("a", FieldOp::Equal, Value::Integer(1)),
+            field("b", FieldOp::Equal, Value::Integer(1)),
+        ]))
+    };
+    let none = IndexSet::default();
+    assert!(matches!(
+        decide(&equalities(), &none, standard()),
+        IndexDecision::MergeIndexes { .. }
+    ));
+    let ordered = equalities().with_order(OrderClause {
+        field: fp("a"),
+        direction: Direction::Ascending,
+    });
+    assert!(matches!(
+        decide(&ordered, &none, standard()),
+        IndexDecision::MissingRequired { .. }
     ));
 }

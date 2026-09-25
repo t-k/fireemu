@@ -1,0 +1,310 @@
+{
+  "kind": "firestore-index-merge-local-v1",
+  "status": "local-only",
+  "productionCompatibility": "unobserved",
+  "sourceCommit": "244dc5250b7cd0451ad525d026dfbd15527a0cc6",
+  "artifact": {
+    "path": "target/codex-current/debug/fireemu",
+    "sha256": "3d04896d1657c39700f3c585352fe46fb81fab902fa9814d1924db4fd060d72a",
+    "buildTarget": "target/codex-current"
+  },
+  "configuration": {
+    "daemonConfig": "tools/sdk-smoke/fireemu.index-merge.json",
+    "daemonConfigSha256": "03a0d074c3e6852251892f3f7079e93a93f3d5355a11bdeb627a8a37dfc8ef9e",
+    "firebaseConfig": "conformance/firebase.json",
+    "firebaseConfigSha256": "774916f2d5a4136a0088a7dd22c1063d71d87e51b0c4b50e4a9c4447f64c609f",
+    "indexes": "conformance/firestore.indexes.json",
+    "indexesSha256": "62d5387f860555c8a966d115ea95c2619c907c498b75e4c2e7a465503b452ec7",
+    "profile": "strict",
+    "project": "demo-app",
+    "database": "(default)"
+  },
+  "command": "target/codex-current/debug/fireemu exec --config tools/sdk-smoke/fireemu.index-merge.json --firebase-json conformance/firebase.json --only firestore --project demo-app -- sh -c 'cd tools/sdk-smoke && GOOGLE_CLOUD_PROJECT=demo-app npm run smoke:index-merge'",
+  "caseCount": 20,
+  "matchedCases": 20,
+  "results": [
+    {
+      "name": "mrg: category == AND city == orderBy star_rating (merge two composites)",
+      "mode": "regression",
+      "expected": {
+        "outcome": "ok",
+        "value": [
+          "b",
+          "a"
+        ]
+      },
+      "outcome": "ok",
+      "detail": "[\"b\",\"a\"]",
+      "outcomeMatches": true,
+      "valueMatches": true,
+      "matches": true
+    },
+    {
+      "name": "mrg: category == AND city == (merge automatic indexes)",
+      "mode": "regression",
+      "expected": {
+        "outcome": "ok",
+        "value": [
+          "a",
+          "b"
+        ]
+      },
+      "outcome": "ok",
+      "detail": "[\"a\",\"b\"]",
+      "outcomeMatches": true,
+      "valueMatches": true,
+      "matches": true
+    },
+    {
+      "name": "mrg: + editors_pick == orderBy star_rating (no editors_pick composite)",
+      "mode": "regression",
+      "expected": {
+        "outcome": "9"
+      },
+      "outcome": "9",
+      "detail": "9 FAILED_PRECONDITION: The query requires an index. missing index (category Ascending, city Ascending, editors_pick Ascending, star_rating Ascending, __name__ A",
+      "outcomeMatches": true,
+      "valueMatches": null,
+      "matches": true
+    },
+    {
+      "name": "mrg: category == AND city == orderBy star_rating DESC (direction mismatch)",
+      "mode": "regression",
+      "expected": {
+        "outcome": "9"
+      },
+      "outcome": "9",
+      "detail": "9 FAILED_PRECONDITION: The query requires an index. missing index (category Ascending, city Ascending, star_rating Descending, __name__ Descending)",
+      "outcomeMatches": true,
+      "valueMatches": null,
+      "matches": true
+    },
+    {
+      "name": "mrg: category == orderBy star_rating (single composite)",
+      "mode": "regression",
+      "expected": {
+        "outcome": "ok",
+        "value": [
+          "b",
+          "a",
+          "c"
+        ]
+      },
+      "outcome": "ok",
+      "detail": "[\"b\",\"a\",\"c\"]",
+      "outcomeMatches": true,
+      "valueMatches": true,
+      "matches": true
+    },
+    {
+      "name": "mrg: __name__ == ref AND star_rating > 0",
+      "mode": "regression",
+      "expected": {
+        "outcome": "3"
+      },
+      "outcome": "3",
+      "detail": "3 INVALID_ARGUMENT: Equality on key is not allowed if there are other inequality fields and key does not appear in inequalities.",
+      "outcomeMatches": true,
+      "valueMatches": null,
+      "matches": true
+    },
+    {
+      "name": "mrg: __name__ in refs AND star_rating > 0",
+      "mode": "regression",
+      "expected": {
+        "outcome": "3"
+      },
+      "outcome": "3",
+      "detail": "3 INVALID_ARGUMENT: Equality on key is not allowed if there are other inequality fields and key does not appear in inequalities.",
+      "outcomeMatches": true,
+      "valueMatches": null,
+      "matches": true
+    },
+    {
+      "name": "mrg: category == AND star_rating > 0 (range control)",
+      "mode": "regression",
+      "expected": {
+        "outcome": "ok",
+        "value": [
+          "b",
+          "a",
+          "c"
+        ]
+      },
+      "outcome": "ok",
+      "detail": "[\"b\",\"a\",\"c\"]",
+      "outcomeMatches": true,
+      "valueMatches": true,
+      "matches": true
+    },
+    {
+      "name": "pk: n == 1 (exempt field, control)",
+      "mode": "regression",
+      "expected": {
+        "outcome": "9"
+      },
+      "outcome": "9",
+      "detail": "9 FAILED_PRECONDITION: The query requires an index. missing index (n Ascending, __name__ Ascending)",
+      "outcomeMatches": true,
+      "valueMatches": null,
+      "matches": true
+    },
+    {
+      "name": "pk: __name__ == ref",
+      "mode": "regression",
+      "expected": {
+        "outcome": "ok",
+        "value": [
+          "a"
+        ]
+      },
+      "outcome": "ok",
+      "detail": "[\"a\"]",
+      "outcomeMatches": true,
+      "valueMatches": true,
+      "matches": true
+    },
+    {
+      "name": "pk: __name__ in [refs]",
+      "mode": "regression",
+      "expected": {
+        "outcome": "ok",
+        "value": [
+          "a",
+          "b"
+        ]
+      },
+      "outcome": "ok",
+      "detail": "[\"a\",\"b\"]",
+      "outcomeMatches": true,
+      "valueMatches": true,
+      "matches": true
+    },
+    {
+      "name": "pk: __name__ > ref",
+      "mode": "regression",
+      "expected": {
+        "outcome": "ok",
+        "value": [
+          "b"
+        ]
+      },
+      "outcome": "ok",
+      "detail": "[\"b\"]",
+      "outcomeMatches": true,
+      "valueMatches": true,
+      "matches": true
+    },
+    {
+      "name": "pk: orderBy __name__ desc (no __name__ DESC index)",
+      "mode": "regression",
+      "expected": {
+        "outcome": "9"
+      },
+      "outcome": "9",
+      "detail": "9 FAILED_PRECONDITION: The query requires an index. missing index (__name__ Descending)",
+      "outcomeMatches": true,
+      "valueMatches": null,
+      "matches": true
+    },
+    {
+      "name": "pk: __name__ > ref orderBy __name__ desc",
+      "mode": "regression",
+      "expected": {
+        "outcome": "9"
+      },
+      "outcome": "9",
+      "detail": "9 FAILED_PRECONDITION: The query requires an index. missing index (__name__ Descending)",
+      "outcomeMatches": true,
+      "valueMatches": null,
+      "matches": true
+    },
+    {
+      "name": "pk: collectionGroup orderBy __name__ desc",
+      "mode": "regression",
+      "expected": {
+        "outcome": "9"
+      },
+      "outcome": "9",
+      "detail": "9 FAILED_PRECONDITION: The query requires an index. missing index (__name__ Descending)",
+      "outcomeMatches": true,
+      "valueMatches": null,
+      "matches": true
+    },
+    {
+      "name": "mrg: category == orderBy __name__ desc (automatic descending index)",
+      "mode": "regression",
+      "expected": {
+        "outcome": "ok",
+        "value": [
+          "c",
+          "b",
+          "a"
+        ]
+      },
+      "outcome": "ok",
+      "detail": "[\"c\",\"b\",\"a\"]",
+      "outcomeMatches": true,
+      "valueMatches": true,
+      "matches": true
+    },
+    {
+      "name": "mrg: orderBy __name__ desc without filter (default single-field config)",
+      "mode": "regression",
+      "expected": {
+        "outcome": "9"
+      },
+      "outcome": "9",
+      "detail": "9 FAILED_PRECONDITION: The query requires an index. missing index (__name__ Descending)",
+      "outcomeMatches": true,
+      "valueMatches": null,
+      "matches": true
+    },
+    {
+      "name": "mrg: collectionGroup orderBy __name__ desc (default single-field config)",
+      "mode": "regression",
+      "expected": {
+        "outcome": "9"
+      },
+      "outcome": "9",
+      "detail": "9 FAILED_PRECONDITION: The query requires an index. missing index (__name__ Descending)",
+      "outcomeMatches": true,
+      "valueMatches": null,
+      "matches": true
+    },
+    {
+      "name": "ord: orderBy __name__ desc (explicit __name__ DESC composite)",
+      "mode": "regression",
+      "expected": {
+        "outcome": "ok",
+        "value": [
+          "b",
+          "a"
+        ]
+      },
+      "outcome": "ok",
+      "detail": "[\"b\",\"a\"]",
+      "outcomeMatches": true,
+      "valueMatches": true,
+      "matches": true
+    },
+    {
+      "name": "pk: __name__ == ref AND n == 1 (exempt field stays required)",
+      "mode": "regression",
+      "expected": {
+        "outcome": "9"
+      },
+      "outcome": "9",
+      "detail": "9 FAILED_PRECONDITION: The query requires an index. missing index (n Ascending, __name__ Ascending)",
+      "outcomeMatches": true,
+      "valueMatches": null,
+      "matches": true
+    }
+  ],
+  "evidenceBoundary": "The 20 cases are a local SDK/REST/gRPC strict-profile regression. Recorded production index-merge observations exist separately; this file does not compare them or promote local results to production compatibility.",
+  "cleanup": {
+    "ownedResources": "all index-merge fixture documents",
+    "processes": "fireemu exec stopped owned daemon and child",
+    "listeners": "closed by fireemu exec"
+  }
+}

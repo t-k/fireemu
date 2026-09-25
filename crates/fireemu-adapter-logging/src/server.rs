@@ -2,6 +2,7 @@
 //! needed; the handshake is a handful of headers and the frames are small.
 
 use std::io;
+use std::time::Duration;
 
 use tokio::io::{AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::net::{TcpListener, TcpStream};
@@ -10,12 +11,34 @@ use tokio::sync::broadcast::error::RecvError;
 use crate::bus::LogBus;
 use crate::wire::{
     close_frame, encode_frame, encode_text_frame, handshake_response, parse_handshake, unmask,
-    ClientFrame,
+    ClientFrame, HandshakeError,
 };
 
 /// The largest handshake request head accepted, in bytes. A well-formed handshake is a few
 /// hundred bytes; anything larger is refused rather than buffered.
 const MAX_HANDSHAKE_BYTES: usize = 8 * 1024;
+
+/// How long a peer may take to send its complete handshake head.
+const HANDSHAKE_READ_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// The bounds a connection's handshake must stay inside. Both exist so one peer cannot hold a
+/// task and a file descriptor open for free; neither is reachable by a well-formed client.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct HandshakeLimits {
+    /// How long the peer may take to send the complete request head.
+    pub read_timeout: Duration,
+    /// The largest request head accepted, in bytes.
+    pub max_head_bytes: usize,
+}
+
+impl Default for HandshakeLimits {
+    fn default() -> Self {
+        Self {
+            read_timeout: HANDSHAKE_READ_TIMEOUT,
+            max_head_bytes: MAX_HANDSHAKE_BYTES,
+        }
+    }
+}
 
 /// The largest client frame payload accepted, in bytes. Clients send only tiny control frames;
 /// a larger frame closes the connection rather than allocating for it.
@@ -24,6 +47,16 @@ const MAX_CLIENT_PAYLOAD: usize = 1 << 20;
 /// Serves the Logging emulator on `listener` until the task is dropped. Each accepted connection
 /// is handled on its own task; a failing connection never affects the others or the daemon.
 pub async fn serve_logging(listener: TcpListener, bus: LogBus) {
+    serve_logging_with_limits(listener, bus, HandshakeLimits::default()).await;
+}
+
+/// [`serve_logging`] with explicit handshake bounds. Tests use it to exercise the deadline and
+/// the header-size cap without waiting for the production values.
+pub async fn serve_logging_with_limits(
+    listener: TcpListener,
+    bus: LogBus,
+    limits: HandshakeLimits,
+) {
     loop {
         // A transient accept error must not tear the whole emulator down.
         let Ok((stream, _peer)) = listener.accept().await else {
@@ -31,27 +64,40 @@ pub async fn serve_logging(listener: TcpListener, bus: LogBus) {
         };
         let bus = bus.clone();
         tokio::spawn(async move {
-            let _ = handle_connection(stream, bus).await;
+            let _ = handle_connection(stream, bus, limits).await;
         });
     }
 }
 
-async fn handle_connection(stream: TcpStream, bus: LogBus) -> io::Result<()> {
+async fn handle_connection(
+    stream: TcpStream,
+    bus: LogBus,
+    limits: HandshakeLimits,
+) -> io::Result<()> {
     // Disable Nagle so a single small log frame reaches the client immediately.
     let _ = stream.set_nodelay(true);
     let mut reader = BufReader::new(stream);
 
-    // The peer closed or overflowed the handshake buffer: nothing to answer.
-    let Some(head) = read_handshake_head(&mut reader).await? else {
-        return Ok(());
+    // The head must arrive whole, inside the deadline and inside the size cap. A peer that
+    // stalls or floods is answered once and dropped, so it cannot hold this task and its file
+    // descriptor open. Nothing of the log stream is written on any of these paths.
+    let head = match tokio::time::timeout(
+        limits.read_timeout,
+        read_handshake_head(&mut reader, limits.max_head_bytes),
+    )
+    .await
+    {
+        Ok(outcome) => match outcome? {
+            HeadOutcome::Head(head) => head,
+            // The peer closed first: there is nobody left to answer.
+            HeadOutcome::Closed => return Ok(()),
+            HeadOutcome::TooLarge => return refuse(&mut reader, &HandshakeError::TooLarge).await,
+        },
+        Err(_elapsed) => return refuse(&mut reader, &HandshakeError::Timeout).await,
     };
     let handshake = match parse_handshake(&head) {
         Ok(h) => h,
-        Err(e) => {
-            reader.get_mut().write_all(e.response().as_bytes()).await?;
-            let _ = reader.get_mut().shutdown().await;
-            return Ok(());
-        }
+        Err(e) => return refuse(&mut reader, &e).await,
     };
 
     reader
@@ -97,24 +143,47 @@ async fn handle_connection(stream: TcpStream, bus: LogBus) -> io::Result<()> {
     }
 }
 
-/// Reads the request head up to the blank line that ends the headers. `Ok(None)` means the peer
-/// closed first or the head exceeded [`MAX_HANDSHAKE_BYTES`].
+/// Answers one refused handshake and closes the connection. No frame is ever written here.
+async fn refuse(reader: &mut BufReader<TcpStream>, error: &HandshakeError) -> io::Result<()> {
+    reader
+        .get_mut()
+        .write_all(error.response().as_bytes())
+        .await?;
+    let _ = reader.get_mut().shutdown().await;
+    Ok(())
+}
+
+/// How reading the request head ended.
+enum HeadOutcome {
+    /// The complete head, up to and including the blank line.
+    Head(String),
+    /// The peer closed before the head was complete.
+    Closed,
+    /// The head exceeded the accepted size.
+    TooLarge,
+}
+
+/// Reads the request head up to the blank line that ends the headers, refusing one larger than
+/// `max_head_bytes`. The caller bounds this in time.
 async fn read_handshake_head<R: AsyncReadExt + Unpin>(
     reader: &mut R,
-) -> io::Result<Option<String>> {
+    max_head_bytes: usize,
+) -> io::Result<HeadOutcome> {
     let mut buf = Vec::with_capacity(512);
     let mut byte = [0u8; 1];
     loop {
         let n = reader.read(&mut byte).await?;
         if n == 0 {
-            return Ok(None);
+            return Ok(HeadOutcome::Closed);
         }
         buf.push(byte[0]);
         if buf.ends_with(b"\r\n\r\n") {
-            return Ok(Some(String::from_utf8_lossy(&buf).into_owned()));
+            return Ok(HeadOutcome::Head(
+                String::from_utf8_lossy(&buf).into_owned(),
+            ));
         }
-        if buf.len() > MAX_HANDSHAKE_BYTES {
-            return Ok(None);
+        if buf.len() > max_head_bytes {
+            return Ok(HeadOutcome::TooLarge);
         }
     }
 }

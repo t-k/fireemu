@@ -1,0 +1,168 @@
+{
+  "campaign": {
+    "budget": {
+      "cleanupReserveDeletes": 150,
+      "cleanupReserveReads": 300,
+      "cleanupReserveSeconds": 180,
+      "estimatedCostUsd": 0.01,
+      "hardCostCeilingUsd": 0.5,
+      "maxAccounts": 2,
+      "maxClients": 3,
+      "maxConcurrency": 1,
+      "maxConcurrentListeners": 3,
+      "maxDeletes": 80,
+      "maxDocuments": 6,
+      "maxDurationSeconds": 600,
+      "maxListenerRegistrations": 40,
+      "maxReads": 600,
+      "maxRuns": 1,
+      "maxSnapshots": 120,
+      "maxWrites": 60
+    },
+    "caseId": "FS-LISTEN-SDK",
+    "caseIds": [
+      "FS-LISTEN-SDK-101",
+      "FS-LISTEN-SDK-101C",
+      "FS-LISTEN-SDK-102",
+      "FS-LISTEN-SDK-102C",
+      "FS-LISTEN-SDK-103",
+      "FS-LISTEN-SDK-103C",
+      "FS-LISTEN-SDK-104",
+      "FS-LISTEN-SDK-104C",
+      "FS-LISTEN-SDK-105",
+      "FS-LISTEN-SDK-105C",
+      "FS-LISTEN-SDK-106",
+      "FS-LISTEN-SDK-106N",
+      "FS-LISTEN-SDK-107",
+      "FS-LISTEN-SDK-107C",
+      "FS-LISTEN-SDK-108",
+      "FS-LISTEN-SDK-108C",
+      "FS-LISTEN-SDK-109",
+      "FS-LISTEN-SDK-109C"
+    ],
+    "database": "(default)",
+    "estimatedCostUsd": 0.000235,
+    "owner": {
+      "namespace": "o6/FS-LISTEN-SDK/1473a02140f2c1dec70aed83dc1f3211",
+      "nonceDigest": "4ceac18341d6d73306b5842fee0d3d34fadeacd6bbde7d2c0bc76b1e49f438fe",
+      "paths": {
+        "absent": "o6_listen/{uid}/runs/1473a02140f2c1dec70aed83dc1f3211/docs/absent",
+        "alpha": "o6_listen/{uid}/runs/1473a02140f2c1dec70aed83dc1f3211/docs/alpha",
+        "beta": "o6_listen/{uid}/runs/1473a02140f2c1dec70aed83dc1f3211/docs/beta",
+        "gamma": "o6_listen/{uid}/runs/1473a02140f2c1dec70aed83dc1f3211/docs/gamma",
+        "private": "o6_listen_private/{uid}",
+        "privateB": "o6_listen_private/{uidB}",
+        "run": "o6_listen/{uid}/runs/1473a02140f2c1dec70aed83dc1f3211"
+      }
+    },
+    "ownerPreconditions": [
+      {
+        "id": "rules-fragment",
+        "requirement": "Merge the additive Rules fragment into the oracle project and publish it. The fragment grants nothing to unauthenticated callers.",
+        "verifiable": "requiredRulesDigest matches the deployed fragment"
+      },
+      {
+        "id": "throwaway-account",
+        "requirement": "Create two throwaway email/password accounts owned by the campaign operator in the oracle project: the principal every case signs in as, and the second principal of the cross-identity and revocation cases. Each password is supplied to the collector through its own private file descriptor, never through argv or the environment.",
+        "verifiable": "exactly two account identifiers appear in the receipt"
+      },
+      {
+        "id": "single-field-index",
+        "requirement": "No composite index is needed: the query filters and orders on the same field, which the automatic single-field index serves.",
+        "verifiable": "no FAILED_PRECONDITION index error in the receipt"
+      },
+      {
+        "id": "clean-prefix",
+        "requirement": "The nonce-scoped run document and the private document must not exist before the run.",
+        "verifiable": "preflight absence rows for every owned path"
+      }
+    ],
+    "permission": null,
+    "permissionEnvelope": {
+      "allows": [
+        "one run of the declared case catalog against the oracle project",
+        "sign-in, sign-out and session revocation of at most two throwaway accounts",
+        "creation and conditional deletion of the declared owned documents"
+      ],
+      "forbids": [
+        "reuse of any earlier compat-broad permission",
+        "any write outside the nonce-scoped run document and the two private documents",
+        "any retry after the deadline or the hard cost ceiling",
+        "recording an identity token, refresh token or password in any output"
+      ],
+      "inheritsFrom": null,
+      "scope": "fs-listen-sdk-campaign"
+    },
+    "plannedCounts": {
+      "cleanupDeletes": 114,
+      "cleanupReads": 228,
+      "deletes": 1,
+      "listenerRegistrations": 21,
+      "rawSnapshotAllowance": 92,
+      "reads": 29,
+      "snapshots": 23,
+      "writes": 32
+    },
+    "productionExecuted": false,
+    "project": "fireemu-35fe6",
+    "requiredRulesDigest": "767ffbe957f1991cb17d282a9e15b1ec43d82d7fb52f8c8d5876b9f2262ea740",
+    "requiredRulesFragment": "match /o6_listen/{uid}/runs/{runId}/docs/{docId} {\n  allow read, write: if request.auth != null && uid == request.auth.uid;\n}\nmatch /o6_listen_private/{uid} {\n  allow read, write: if request.auth != null && request.auth.uid == uid;\n}\n",
+    "schema": "o6-listen-sdk-campaign-v1",
+    "sdk": {
+      "@firebase/auth": "1.13.5",
+      "@firebase/firestore": "4.17.1",
+      "@firebase/webchannel-wrapper": "1.0.7",
+      "firebase": "12.18.0"
+    },
+    "sdkIntegrity": {
+      "@firebase/auth": "sha512-1AXoBJqBVD8WL8FZYo3S2GmJF9YUoom6Y6ngMxOSkzzhW5sT83pLchb6TGFgxes91dfXx8s/VYc5VrLDNqpLog==",
+      "@firebase/firestore": "sha512-8lqPNf2w10CtYG+tayVjZO1pSyQpnhztQRudeD109VtXDzNbASTaYdO43sj5PMsDcWq0aOYY3RmJOUlXu9++jw==",
+      "@firebase/webchannel-wrapper": "sha512-phBFwieDLvkZGYN9CE9ZFNEIoBVksprzsnCzQejCmCHtgwCXReeuRpoEGN9C4EbhONztv8NRV1tau6Rb9pONwQ==",
+      "firebase": "sha512-XaL6tlE5Xd20ZDhckqOMIw+JJTET+wTdeZPxQ7ihc42oxRb7kWUyn/j1LO5V9dH1xq8Rv5R71Pv1fBCdIkt9Rw=="
+    },
+    "sourceBinding": {
+      "catalogDigest": "a91a671ae9e65518d11fa0ab1e442492eeebb06ca9baaced76289f377f07713f",
+      "evidence": "declaration-only",
+      "kind": "resolved-lockfile-pin",
+      "lockfile": "tools/sdk-smoke/package-lock.json",
+      "lockfileDigest": "77320cd304149c5c3e99289b7548757e307c08373bf02a811a5ae8518775704c"
+    },
+    "status": "BLOCKED_OWNER",
+    "transport": {
+      "kind": "grpc-listen",
+      "rawResumeTokenVisible": false,
+      "resumeBoundary": "sdk-managed",
+      "selectedBy": "firebase/firestore node entrypoint"
+    },
+    "unobservedPaths": [
+      {
+        "path": "browser-webchannel",
+        "plan": "A separate browser campaign driving the same case catalog through the existing headless Chromium adapter against the same oracle project, with the WebChannel request log captured from the page rather than from Node.",
+        "reason": "The Node SDK build selects the gRPC transport; this campaign does not exercise WebChannel framing, long polling, the streamed backchannel or browser tab lifecycle in production. A local browser shadow (listen_browser_adapter.mjs) runs the same catalog through headless Chromium, but that is local evidence only."
+      },
+      {
+        "path": "android-sdk",
+        "plan": "An instrumented Android test module that replays the same case catalog and emits the same normalized event rows for comparison.",
+        "reason": "No Android runtime, Gradle toolchain or device is available to this lane."
+      },
+      {
+        "path": "apple-sdk",
+        "plan": "An XCTest target replaying the same case catalog and emitting the same normalized event rows.",
+        "reason": "No iOS or macOS SDK harness exists in this repository."
+      },
+      {
+        "path": "tenant-isolation",
+        "plan": "A tenant-scoped throwaway account and a listener case whose principal carries a tenant claim, expecting permission-denied across the tenant boundary, once the oracle project has a second tenant.",
+        "reason": "Cases 108/108C observe one principal being refused another principal's private document within one project. Identity Platform tenants are not exercised: both accounts live in the default tenant, so a MATCH says nothing about cross-tenant isolation under Rules."
+      },
+      {
+        "path": "raw-resume-token",
+        "plan": "A direct gRPC Listen probe that supplies a chosen resume token and records the TargetChange response, kept as a separate case from SDK-level resume.",
+        "reason": "The Node client SDK owns the resume token; it is not exposed to application code, so RESET and stale-token behavior cannot be driven here."
+      }
+    ]
+  },
+  "campaignDigest": "7c43eaad9fbcd6bd574f471ac4caad0f69414a8b0aae39053060ddb3a0bb93fd",
+  "nonce": "1473a02140f2c1dec70aed83dc1f3211",
+  "schema": "o6-listen-sdk-shadow-campaign-v1"
+}

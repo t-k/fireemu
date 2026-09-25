@@ -13,7 +13,7 @@ use fireemu_core_firestore::path::{
 use fireemu_core_firestore::query::{
     Cursor, Direction, FieldOp, FilterExpr, OrderClause, Query, QueryScope, UnaryOp,
 };
-use fireemu_core_firestore::size::{document_size, MAX_CONTRIBUTORS};
+use fireemu_core_firestore::size::{document_name_size, document_size, MAX_CONTRIBUTORS};
 use fireemu_core_firestore::value::Value;
 use fireemu_core_types::edition::{FirestoreApiMode, FirestoreEdition};
 use fireemu_core_types::ids::{CollectionId, DatabaseId, IdSyntaxError, ProjectId};
@@ -60,8 +60,9 @@ fn document_paths_report_exact_segment_indexes_depths_and_lengths() {
             maximum: MAX_SUBCOLLECTION_DEPTH
         }
     );
-    // The resource name limit is inclusive: exactly 6144 bytes is accepted, one more is not.
-    let prefix = parse("c/d").unwrap().resource_name().len() - "c/d".len();
+    // Production measures the document name charge, not the project-qualified wire prefix.
+    // A 6127-byte relative path charges 6144 bytes; the next byte is refused.
+    let prefix = 17;
     let mut pairs: Vec<String> = Vec::new();
     while prefix + pairs.join("/").len() + "/c/".len() + 1400 < MAX_DOCUMENT_NAME_BYTES {
         pairs.push(format!("c/{}", "d".repeat(1400)));
@@ -73,7 +74,11 @@ fn document_paths_report_exact_segment_indexes_depths_and_lengths() {
         "e".repeat(MAX_DOCUMENT_NAME_BYTES - used)
     );
     let ok = parse(&exact).unwrap();
-    assert_eq!(ok.resource_name().len(), MAX_DOCUMENT_NAME_BYTES);
+    assert_eq!(
+        document_name_size(&ok).unwrap(),
+        MAX_DOCUMENT_NAME_BYTES as u64
+    );
+    assert_eq!(ok.relative().len(), MAX_DOCUMENT_NAME_BYTES - prefix);
     assert_eq!(ok.to_string(), ok.resource_name());
     let over = format!(
         "{}/c/{}",
@@ -313,20 +318,21 @@ fn query_operator_names_cursor_arity_and_limit_boundaries() {
     assert_eq!(FieldOp::Equal.name(), "EQUAL");
     assert_eq!(FieldOp::ArrayContainsAny.name(), "ARRAY_CONTAINS_ANY");
     assert_eq!(FieldOp::NotIn.name(), "NOT_IN");
-    // Cursor values may not exceed the effective order-by arity (one field + __name__).
+    // Cursor values may not exceed the explicit order-by: production gives the implicit
+    // `__name__` tiebreak no value (FS-QUERY-INDEX cursors, 2026-09-24).
     let ordered = tasks().with_order(order("priority", Direction::Ascending));
-    let mut two = ordered.clone();
+    let mut one_value = ordered.clone();
+    one_value.start_at = Some(Cursor {
+        values: vec![Value::Integer(1)],
+        before: true,
+    });
+    assert!(one_value.canonicalize().is_ok());
+    let mut two = ordered;
     two.start_at = Some(Cursor {
         values: vec![Value::Integer(1), Value::String("t1".into())],
         before: true,
     });
-    assert!(two.canonicalize().is_ok());
-    let mut three = ordered;
-    three.start_at = Some(Cursor {
-        values: vec![Value::Integer(1), Value::String("t1".into()), Value::Null],
-        before: true,
-    });
-    assert!(three.canonicalize().is_err());
+    assert!(two.canonicalize().is_err());
     // One array-contains without array-contains-any is fine.
     let one = tasks()
         .with_filter(field(

@@ -18,6 +18,109 @@ use fireemu_proto_firestore::google::firestore::v1::structured_query as sq;
 use tokio_stream::wrappers::TcpListenerStream;
 
 #[test]
+fn aggregation_order_normalization_preserves_invalid_argument_and_index_direction() {
+    use fireemu_core_firestore::query::{Direction, OrderClause, Query, QueryScope};
+    use fireemu_core_firestore::store::Aggregation;
+    let gateway = Gateway {
+        enforce_limits: true,
+        ctx: PlanningContext {
+            edition: FirestoreEdition::Standard,
+            api_mode: FirestoreApiMode::Native,
+            policy: IndexValidationPolicy::Emulator,
+        },
+        indexes: IndexSet::default(),
+    };
+    let mut query = Query::new(QueryScope::collection(
+        None,
+        CollectionId::try_new("items").unwrap(),
+    ));
+    let x = FieldPath::parse("x").unwrap();
+    let y = FieldPath::parse("y").unwrap();
+    query.order_by = vec![OrderClause {
+        field: FieldPath::document_name(),
+        direction: Direction::Ascending,
+    }];
+    let rejection = gateway
+        .validate_aggregation_query_with_indexes(
+            &query,
+            &[Aggregation::Sum(x.clone())],
+            &gateway.indexes,
+        )
+        .unwrap_err();
+    assert_eq!(rejection.to_status().code(), tonic::Code::InvalidArgument);
+    query.order_by = vec![OrderClause {
+        field: x.clone(),
+        direction: Direction::Descending,
+    }];
+    let accepted = gateway
+        .validate_aggregation_query_with_indexes(
+            &query,
+            &[Aggregation::Avg(y.clone()), Aggregation::Sum(x.clone())],
+            &gateway.indexes,
+        )
+        .unwrap();
+    // The emulator profile's canonical query carries no production-only refusals.
+    assert_eq!(
+        accepted.query,
+        Query {
+            production_refusals: false,
+            ..query.clone()
+        },
+        "authorization must retain caller-supplied order metadata"
+    );
+    let fireemu_core_firestore::index::IndexDecision::AssumedIndex { requirement } =
+        accepted.decision
+    else {
+        panic!("missing composite must remain explicit")
+    };
+    assert_eq!(
+        requirement
+            .fields
+            .iter()
+            .map(|field| (&field.path, field.mode))
+            .collect::<Vec<_>>(),
+        vec![
+            (&x, IndexFieldMode::Descending),
+            (&y, IndexFieldMode::Descending),
+            (&FieldPath::document_name(), IndexFieldMode::Descending)
+        ]
+    );
+}
+
+#[test]
+fn aggregation_array_contains_target_requires_the_production_index_but_count_does_not() {
+    use fireemu_core_firestore::query::{FieldOp, FilterExpr, Query, QueryScope};
+    use fireemu_core_firestore::store::Aggregation;
+    use fireemu_core_firestore::value::Value;
+    let gateway = Gateway {
+        enforce_limits: true,
+        ctx: PlanningContext {
+            edition: FirestoreEdition::Standard,
+            api_mode: FirestoreApiMode::Native,
+            policy: IndexValidationPolicy::Production,
+        },
+        indexes: IndexSet::default(),
+    };
+    let field = FieldPath::parse("x").unwrap();
+    let mut query = Query::new(QueryScope::collection(
+        None,
+        CollectionId::try_new("items").unwrap(),
+    ));
+    query.filter = Some(FilterExpr::Field {
+        field: field.clone(),
+        op: FieldOp::ArrayContains,
+        value: Value::Integer(10),
+    });
+    assert!(gateway
+        .validate_aggregation_query(&query, &[Aggregation::Count { up_to: None }])
+        .is_ok());
+    let error = gateway
+        .validate_aggregation_query(&query, &[Aggregation::Sum(field)])
+        .unwrap_err();
+    assert_eq!(error.to_status().code(), tonic::Code::FailedPrecondition);
+}
+
+#[test]
 #[allow(clippy::too_many_lines)] // Keep the bounded operator/boolean/policy matrix together.
 fn key_equalities_and_other_inequalities_follow_production_constraints() {
     use fireemu_core_firestore::query::{FieldOp, FilterExpr, Query, QueryScope, UnaryOp};
@@ -283,10 +386,9 @@ async fn standard_query_limit_violation_is_invalid_argument() {
         .await
         .unwrap_err();
     assert_eq!(status.code(), tonic::Code::InvalidArgument);
-    assert!(
-        status.message().contains("FS-QUERY-LIMIT-NOT-IN-VALUES"),
-        "{}",
-        status.message()
+    assert_eq!(
+        status.message(),
+        "'NOT_IN' supports up to 10 comparison values."
     );
     handle.abort();
 }
@@ -475,7 +577,10 @@ fn the_limit_switch_turns_a_refusal_into_an_observation() {
     };
     let rejection = strict.validate_query(&query).unwrap_err();
     assert_eq!(rejection.to_status().code(), tonic::Code::InvalidArgument);
-    assert!(rejection.to_string().contains("NOT-IN"), "{rejection}");
+    assert_eq!(
+        rejection.to_string(),
+        "'NOT_IN' supports up to 10 comparison values."
+    );
 
     let firebase = Gateway {
         enforce_limits: false,
@@ -517,4 +622,129 @@ fn the_limit_switch_turns_a_refusal_into_an_observation() {
         rejection.to_status().message(),
         "A maximum of 1 'ARRAY_CONTAINS' filter is allowed per disjunction."
     );
+}
+
+// Production's cursor refusals belong to the strict profile. The compatibility contract
+// forbids the `emulator` profile from adding a rejection the pinned Local Emulator Suite
+// does not make, so the gateway applies these checks only under the production index
+// validation policy, which is what the strict profile selects.
+mod cursor_validation {
+    use super::{Gateway, IndexSet, IndexValidationPolicy, PlanningContext};
+    use fireemu_core_firestore::field_path::FieldPath;
+    use fireemu_core_firestore::path::DocumentPath;
+    use fireemu_core_firestore::query::{Cursor, Direction, OrderClause, Query, QueryScope};
+    use fireemu_core_firestore::value::Value;
+    use fireemu_core_types::edition::{FirestoreApiMode, FirestoreEdition};
+    use fireemu_core_types::ids::{CollectionId, DatabaseId, ProjectId};
+
+    fn gateway(policy: IndexValidationPolicy) -> Gateway {
+        Gateway {
+            enforce_limits: true,
+            ctx: PlanningContext {
+                edition: FirestoreEdition::Standard,
+                api_mode: FirestoreApiMode::Native,
+                policy,
+            },
+            indexes: IndexSet::default(),
+        }
+    }
+
+    fn document(relative: &str) -> DocumentPath {
+        DocumentPath::parse(
+            &ProjectId::try_new("demo-app").unwrap(),
+            &DatabaseId::default_database(),
+            relative,
+        )
+        .unwrap()
+    }
+
+    fn query(values: Vec<Value>) -> Query {
+        Query {
+            start_at: Some(Cursor {
+                values,
+                before: true,
+            }),
+            ..Query::new(QueryScope::collection(
+                Some(document("root/r1")),
+                CollectionId::try_new("cur").unwrap(),
+            ))
+            .with_order(OrderClause {
+                field: FieldPath::document_name(),
+                direction: Direction::Ascending,
+            })
+        }
+    }
+
+    fn mistyped() -> Query {
+        query(vec![Value::String("c3".to_owned())])
+    }
+
+    fn foreign() -> Query {
+        query(vec![Value::Reference(
+            document("root/r1/other/absent").resource_name(),
+        )])
+    }
+
+    fn member() -> Query {
+        query(vec![Value::Reference(
+            document("root/r1/cur/c3").resource_name(),
+        )])
+    }
+
+    #[test]
+    fn the_strict_profile_refuses_a_mistyped_document_name_cursor() {
+        let rejection = gateway(IndexValidationPolicy::Production)
+            .validate_query(&mistyped())
+            .unwrap_err();
+        assert_eq!(rejection.to_status().code(), tonic::Code::InvalidArgument);
+    }
+
+    #[test]
+    fn the_strict_profile_accepts_a_cursor_reference_outside_the_collection() {
+        // Production positions by a document of another collection (FS-QUERY-INDEX
+        // cursors/names#name-foreign-collection, recorded 2026-09-24).
+        gateway(IndexValidationPolicy::Production)
+            .validate_query(&foreign())
+            .expect("a reference to any document of the database is a position");
+    }
+
+    #[test]
+    fn the_emulator_profile_keeps_the_lenient_cursor_behaviour() {
+        let gateway = gateway(IndexValidationPolicy::Emulator);
+        gateway
+            .validate_query(&mistyped())
+            .expect("the emulator profile may not add a rejection");
+        gateway
+            .validate_query(&foreign())
+            .expect("the emulator profile may not add a rejection");
+    }
+
+    #[test]
+    fn a_well_formed_document_cursor_is_accepted_under_both_profiles() {
+        for policy in [
+            IndexValidationPolicy::Production,
+            IndexValidationPolicy::Emulator,
+        ] {
+            gateway(policy)
+                .validate_query(&member())
+                .expect("a member document positions the cursor");
+        }
+    }
+
+    #[test]
+    fn the_strict_profile_refuses_a_cursor_longer_than_the_order_by() {
+        // The arity rule lives in canonicalization and is refused under either profile.
+        for policy in [
+            IndexValidationPolicy::Production,
+            IndexValidationPolicy::Emulator,
+        ] {
+            let rejection = gateway(policy)
+                .validate_query(&query(vec![
+                    Value::Reference(document("root/r1/cur/c3").resource_name()),
+                    Value::Integer(9),
+                ]))
+                .unwrap_err();
+            assert_eq!(rejection.to_status().code(), tonic::Code::InvalidArgument);
+        }
+    }
 }

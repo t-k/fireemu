@@ -4,7 +4,7 @@
 //! string_size(s)        = utf8_byte_len(s) + 1
 //! document_name_size    = Σ string_size(segment) + 16
 //! document_size         = document_name_size + Σ string_size(field_name) + Σ value_size + 32
-//! map_size              = Σ string_size(key) + Σ value_size + 32
+//! map_size              = Σ string_size(key) + Σ value_size
 //! ```
 
 use core::fmt;
@@ -16,10 +16,10 @@ use crate::path::DocumentPath;
 use crate::value::Value;
 
 /// Revision of the size model. Bumped when the official formula or its interpretation changes.
-pub const SIZE_MODEL_REVISION: &str = "firestore-storage-size-2026-08-25";
+pub const SIZE_MODEL_REVISION: &str = "firestore-storage-size-2026-09-23-reference-index";
 
-/// Maximum bytes of an indexed value (`FS-LIMIT-INDEXED-FIELD-VALUE-BYTES`); larger values
-/// are truncated in the index representation only.
+/// Published maximum bytes of an indexed value (`FS-LIMIT-INDEXED-FIELD-VALUE-BYTES`);
+/// larger non-reference values are truncated for the index-size charge.
 pub const INDEXED_VALUE_TRUNCATION_BYTES: u64 = 1_500;
 
 /// Size calculation errors.
@@ -87,8 +87,13 @@ pub fn document_name_size(path: &DocumentPath) -> Result<u64, SizeError> {
 /// Size of a resource-name string used as a reference value: same formula, applied to the
 /// segments after `documents/`.
 fn reference_size(resource_name: &str) -> Result<u64, SizeError> {
+    // Consume the namespace in order. A project or database ID may itself be
+    // `documents`; searching the entire resource name would count namespace
+    // segments as part of the referenced document (and overcharge every use).
     let relative = resource_name
-        .split_once("/documents/")
+        .strip_prefix("projects/")
+        .and_then(|rest| rest.split_once("/databases/"))
+        .and_then(|(_, rest)| rest.split_once("/documents/"))
         .map_or(resource_name, |(_, rest)| rest);
     let mut total: u64 = 16;
     for segment in relative.split('/') {
@@ -97,8 +102,18 @@ fn reference_size(resource_name: &str) -> Result<u64, SizeError> {
     Ok(total)
 }
 
+#[cfg(test)]
+thread_local! {
+    /// Counts [`field_value_size`] calls, so a test can prove the write path measures each
+    /// value once instead of re-walking every subtree at every nesting level.
+    pub(crate) static FIELD_VALUE_SIZE_CALLS: std::cell::Cell<usize> =
+        const { std::cell::Cell::new(0) };
+}
+
 /// Size of a field value per the official table.
 pub fn field_value_size(value: &Value) -> Result<u64, SizeError> {
+    #[cfg(test)]
+    FIELD_VALUE_SIZE_CALLS.with(|count| count.set(count.get().saturating_add(1)));
     Ok(match value {
         Value::Null | Value::Boolean(_) => 1,
         Value::Integer(_) | Value::Double(_) | Value::Timestamp(_) => 8,
@@ -117,9 +132,7 @@ pub fn field_value_size(value: &Value) -> Result<u64, SizeError> {
             .map_err(|_| SizeError::Overflow)?
             .checked_mul(8)
             .ok_or(SizeError::Overflow)?,
-        Value::Map(entries) => fields_size(entries)?
-            .checked_add(32)
-            .ok_or(SizeError::Overflow)?,
+        Value::Map(entries) => fields_size(entries)?,
     })
 }
 
@@ -193,9 +206,15 @@ pub enum IndexEntryScope {
     CompositeCollectionGroup,
 }
 
-/// Indexed representation size of a value: the value size, truncated at 1,500 bytes.
+/// Indexed representation size of a value. Production retains the full document name of
+/// a reference value in an index entry; other values use the 1,500-byte cap.
 pub fn indexed_value_size(value: &Value) -> Result<u64, SizeError> {
-    Ok(field_value_size(value)?.min(INDEXED_VALUE_TRUNCATION_BYTES))
+    let size = field_value_size(value)?;
+    Ok(if matches!(value, Value::Reference(_)) {
+        size
+    } else {
+        size.min(INDEXED_VALUE_TRUNCATION_BYTES)
+    })
 }
 
 /// Size of one index entry.

@@ -408,6 +408,8 @@ pub enum ImportedFactorError {
     TooMany,
     /// A factor has an empty enrollment id, or two share one.
     InvalidEnrollmentId,
+    /// A factor's display name carries a NUL or another control character.
+    ControlCharacterInDisplayName,
 }
 
 impl fmt::Display for ImportedFactorError {
@@ -420,6 +422,9 @@ impl fmt::Display for ImportedFactorError {
             Self::InvalidEnrollmentId => f.write_str(
                 "an imported second factor has an empty enrollment id, or two share one",
             ),
+            Self::ControlCharacterInDisplayName => {
+                f.write_str("an imported second factor has a display name with a control character")
+            }
         }
     }
 }
@@ -452,6 +457,22 @@ pub enum MfaError {
     TooManyPending,
     /// A limit was violated.
     LimitExceeded(LimitViolation),
+    /// A stored text field carries a NUL or another control character. The payload names the
+    /// field as the request spells it.
+    ControlCharacterInText(&'static str),
+}
+
+/// Refuses a second factor's display name when it carries a NUL or another control
+/// character.
+///
+/// A factor's display name is stored text like an account profile string, and it is rendered
+/// back to clients. Enrollment and import both call this before they mutate anything, so the
+/// two writers cannot drift. Production's refusal shape for this input is unobserved.
+pub(crate) fn validate_factor_display_name(display_name: Option<&str>) -> Result<(), MfaError> {
+    if display_name.is_some_and(|name| name.chars().any(char::is_control)) {
+        return Err(MfaError::ControlCharacterInText("displayName"));
+    }
+    Ok(())
 }
 
 /// Outstanding pending enrollments plus pending sign-ins one user may hold. A client that
@@ -473,6 +494,9 @@ impl fmt::Display for MfaError {
             Self::TooManyFactors => f.write_str("too many second factors"),
             Self::TooManyPending => f.write_str("too many pending second-factor sessions"),
             Self::LimitExceeded(v) => write!(f, "limit exceeded: {v}"),
+            Self::ControlCharacterInText(field) => {
+                write!(f, "{field} must not contain control characters")
+            }
         }
     }
 }
@@ -580,6 +604,14 @@ impl MfaState {
             if id.is_empty() || !seen.insert(id.clone()) {
                 return Err(ImportedFactorError::InvalidEnrollmentId);
             }
+        }
+        for display_name in totp
+            .iter()
+            .map(|f| f.display_name.as_deref())
+            .chain(phone.iter().map(|f| f.display_name.as_deref()))
+        {
+            validate_factor_display_name(display_name)
+                .map_err(|_| ImportedFactorError::ControlCharacterInDisplayName)?;
         }
         self.totp = totp;
         self.phone = phone;

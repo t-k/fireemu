@@ -1,0 +1,118 @@
+{
+  "schemaVersion": 1,
+  "conditionId": "FS-LIMIT-SUBCOLLECTION-DEPTH",
+  "sourceCommit": "3d7ceabb866d0d03eecbb866a9b84aa8e8cc4f2e",
+  "artifactSha256": "d6db62596e71c152883dc5b83bf8dc48b79b703777d49bab10874c1fae6dfc6d",
+  "configSha256": "0f15f02dbfef3f0ee5cd6302684e8bb547b8c49dea5a825deeb57b2938545f0b",
+  "indexConfigSha256": "62d5387f860555c8a966d115ea95c2619c907c498b75e4c2e7a465503b452ec7",
+  "productionFixtureSha256": "69ddfa897d2f22f76bece8c0b243e45912f0ba3ca10eb790a59f9cd6c1468b42",
+  "productionRecordingDigests": [
+    "7c794af67119e745072ceae3d742bd463df28c0aa804998c2155b1333b1625d9",
+    "7c794af67119e745072ceae3d742bd463df28c0aa804998c2155b1333b1625d9"
+  ],
+  "localRun": "conformance/.runs/fs-data-write-local-S4xrlQ",
+  "localRestResultSha256": "46d36b0ab5d554e3b178283206859508c3dd651a1d69990c2c4690cdde300044",
+  "command": "pnpm -C conformance fs-data-write:check",
+  "comparisonCommand": "node conformance/src/fs-data-write-sandbox-run.mjs compare-local conformance/.runs/fs-data-write-local-S4xrlQ",
+  "recipeIds": [
+    "writes/limits/subcollection-depth"
+  ],
+  "result": {
+    "comparableRecipes": 1,
+    "mismatchedRecipes": 0,
+    "wholeRunComparableRestPrograms": 49,
+    "wholeRunComparableStreams": 2,
+    "wholeRunKnownMismatchRows": 12,
+    "wholeRunPendingRestPrograms": 14,
+    "wholeRunPendingStreams": 1
+  },
+  "scopeNote": "The independently extracted depth-boundary result sets are retained here and equal on this artifact. Other whole-run mismatches and unrecorded recipes remain open; this record does not promote FS-DATA-WRITE.",
+  "productionPrograms": {
+    "writes/limits/subcollection-depth": {
+      "steps": {
+        "observation-0": {
+          "status": 200,
+          "code": "OK",
+          "body": {
+            "createTime": "<now>",
+            "fields": {
+              "v": {
+                "integerValue": "102"
+              }
+            },
+            "name": "projects/demo-firestore-probe/databases/(default)/documents/oracle/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/limits-03/depth-exact/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d",
+            "updateTime": "<now>"
+          }
+        },
+        "observation-1": {
+          "status": 400,
+          "code": "INVALID_ARGUMENT",
+          "message": "Key path is too long. Cannot exceed 100 elements."
+        },
+        "observation-2": {
+          "status": 400,
+          "code": "INVALID_ARGUMENT",
+          "message": "Key path is too long. Cannot exceed 100 elements."
+        },
+        "observation-3": {
+          "status": 200,
+          "code": "OK",
+          "body": {
+            "createTime": "<now>",
+            "fields": {
+              "v": {
+                "integerValue": "102"
+              }
+            },
+            "name": "projects/demo-firestore-probe/databases/(default)/documents/oracle/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/limits-03/depth-exact/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d",
+            "updateTime": "<now>"
+          }
+        }
+      }
+    }
+  },
+  "localPrograms": {
+    "writes/limits/subcollection-depth": {
+      "steps": {
+        "observation-0": {
+          "status": 200,
+          "code": "OK",
+          "body": {
+            "createTime": "<now>",
+            "fields": {
+              "v": {
+                "integerValue": "102"
+              }
+            },
+            "name": "projects/demo-firestore-probe/databases/(default)/documents/oracle/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/limits-03/depth-exact/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d",
+            "updateTime": "<now>"
+          }
+        },
+        "observation-1": {
+          "status": 400,
+          "code": "INVALID_ARGUMENT",
+          "message": "Key path is too long. Cannot exceed 100 elements."
+        },
+        "observation-2": {
+          "status": 400,
+          "code": "INVALID_ARGUMENT",
+          "message": "Key path is too long. Cannot exceed 100 elements."
+        },
+        "observation-3": {
+          "status": 200,
+          "code": "OK",
+          "body": {
+            "createTime": "<now>",
+            "fields": {
+              "v": {
+                "integerValue": "102"
+              }
+            },
+            "name": "projects/demo-firestore-probe/databases/(default)/documents/oracle/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/limits-03/depth-exact/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d/c/d",
+            "updateTime": "<now>"
+          }
+        }
+      }
+    }
+  }
+}

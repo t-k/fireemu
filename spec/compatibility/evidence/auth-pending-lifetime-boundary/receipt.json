@@ -1,0 +1,1008 @@
+{
+  "acceptance": "candidate",
+  "corpus": {
+    "cases": [
+      "baseline-fresh-finalize",
+      "age-600s-start",
+      "age-600s-finalize",
+      "age-1800s-start",
+      "age-1800s-finalize",
+      "age-3300s-start",
+      "age-3300s-finalize",
+      "age-3900s-start",
+      "age-3900s-finalize",
+      "final-fresh-finalize"
+    ],
+    "revision": 2,
+    "slice": "auth-pending-lifetime"
+  },
+  "production": {
+    "accountsUsed": 6,
+    "adminTokenAges": [
+      0.1665091251488775,
+      0.8761026249267161,
+      8.332353542093188,
+      8.74552720808424,
+      9.190871333004907,
+      39.626352542079985,
+      40.52894612494856,
+      40.85604091710411,
+      41.23926133313216,
+      41.57184245809913,
+      42.51216533314437,
+      42.83274345798418,
+      43.20261249993928,
+      43.55117075005546,
+      44.42487083305605,
+      44.759778208099306,
+      45.15465158293955,
+      45.48604362504557,
+      46.293321792036295,
+      46.61765404208563,
+      47.03054141695611,
+      47.35262216697447,
+      48.38834687508643,
+      48.72586204204708,
+      49.1067969170399,
+      49.43667645798996,
+      50.32801283313893,
+      50.71017879201099,
+      51.091602416941896,
+      0.10691254213452339,
+      0.5343456249684095,
+      0.9642578749917448,
+      1.3194979580584913,
+      1.6450684170704335,
+      2.1314706669654697,
+      2.4649916670750827,
+      2.7750153329689056,
+      3.112146125175059,
+      3.440643500071019,
+      3.9065192921552807,
+      4.255755624966696,
+      4.601190500194207,
+      4.922388750128448,
+      5.240316292038187,
+      5.7253761671017855,
+      5.971142000053078,
+      6.301446000114083,
+      6.657020542072132,
+      7.006406750064343,
+      7.507841458078474,
+      7.827622458105907,
+      8.17816475010477,
+      8.504031541990116,
+      8.830238958122209,
+      9.317140375031158,
+      9.70328825013712,
+      10.056865458143875,
+      10.361299542011693,
+      10.68160495813936,
+      11.123549125157297,
+      11.454978125169873
+    ],
+    "agingMode": "real-time",
+    "authOperations": [
+      {
+        "operation": "refresh",
+        "phase": "observation",
+        "reserveSeconds": 60,
+        "started": 0.007763041881844401
+      },
+      {
+        "operation": "tokeninfo",
+        "phase": "observation",
+        "reserveSeconds": 20,
+        "started": 1.675862291827798
+      },
+      {
+        "operation": "preflight-command",
+        "phase": "observation",
+        "reserveSeconds": 60,
+        "started": 3.03676512488164
+      },
+      {
+        "operation": "preflight-command",
+        "phase": "observation",
+        "reserveSeconds": 60,
+        "started": 6.495881458977237
+      },
+      {
+        "operation": "preflight-command",
+        "phase": "observation",
+        "reserveSeconds": 60,
+        "started": 8.27763899997808
+      },
+      {
+        "operation": "refresh",
+        "phase": "recovery",
+        "reserveSeconds": 60,
+        "started": 3957.063651749864
+      },
+      {
+        "operation": "tokeninfo",
+        "phase": "recovery",
+        "reserveSeconds": 20,
+        "started": 3958.640570333926
+      }
+    ],
+    "authRefreshAttempts": {
+      "observation": 1,
+      "recovery": 1
+    },
+    "budget": {
+      "adminTokenMaxAgeSeconds": 3000,
+      "cleanupReserveSeconds": 300,
+      "configHoldMaxSeconds": 4800,
+      "maxAccounts": 6,
+      "maxRequests": 300,
+      "recoveryRequestReserve": 60,
+      "totalBudgetSeconds": 4800
+    },
+    "cases": [
+      {
+        "checks": {
+          "claimEmailMatches": true,
+          "claimSubMatches": true,
+          "derivedLookup": true,
+          "idTokenPresent": true,
+          "noError": true,
+          "refreshTokenPresent": true,
+          "secondFactorClaim": true
+        },
+        "elapsedMs": 13000,
+        "httpStatus": 200,
+        "id": "baseline-fresh-finalize",
+        "observedError": null,
+        "outcome": "accepted",
+        "skipped": false,
+        "timing": {
+          "finalizeReceived": 12.70996041689068,
+          "finalizeSent": 12.4299883749336,
+          "pendingAgeAtFinalize": {
+            "lower": 0.2838141249958426,
+            "upper": 0.8797862918581814
+          },
+          "pendingReceived": 12.146174249937758,
+          "pendingSent": 11.8301741250325,
+          "sessionAgeAtFinalize": {
+            "lower": 2.5408808141946793e-06,
+            "upper": 0.5637848749756813
+          },
+          "startReceived": 12.429985834052786,
+          "startSent": 12.146175541915
+        }
+      },
+      {
+        "checks": {},
+        "elapsedMs": 613661,
+        "httpStatus": 400,
+        "id": "age-600s-start",
+        "observedError": "INVALID_MFA_PENDING_CREDENTIAL",
+        "outcome": "refused",
+        "skipped": false,
+        "timing": {
+          "pendingAgeAtStart": {
+            "lower": 600.0100229999516,
+            "upper": 600.6611048749182
+          },
+          "pendingReceived": 13.335883375024423,
+          "pendingSent": 13.000886084046215,
+          "startReceived": 613.6619909589645,
+          "startSent": 613.345906374976
+        }
+      },
+      {
+        "checks": {},
+        "elapsedMs": 613662,
+        "httpStatus": null,
+        "id": "age-600s-finalize",
+        "observedError": null,
+        "outcome": "skipped",
+        "skipped": true,
+        "timing": {}
+      },
+      {
+        "checks": {},
+        "elapsedMs": 1813967,
+        "httpStatus": 400,
+        "id": "age-1800s-start",
+        "observedError": "INVALID_MFA_PENDING_CREDENTIAL",
+        "outcome": "refused",
+        "skipped": false,
+        "timing": {
+          "pendingAgeAtStart": {
+            "lower": 1800.0076130421367,
+            "upper": 1800.631279333029
+          },
+          "pendingReceived": 13.639033499872312,
+          "pendingSent": 13.33588566700928,
+          "startReceived": 1813.9671650000382,
+          "startSent": 1813.646646542009
+        }
+      },
+      {
+        "checks": {},
+        "elapsedMs": 1813967,
+        "httpStatus": null,
+        "id": "age-1800s-finalize",
+        "observedError": null,
+        "outcome": "skipped",
+        "skipped": true,
+        "timing": {}
+      },
+      {
+        "checks": {},
+        "elapsedMs": 3314267,
+        "httpStatus": 400,
+        "id": "age-3300s-start",
+        "observedError": "INVALID_MFA_PENDING_CREDENTIAL",
+        "outcome": "refused",
+        "skipped": false,
+        "timing": {
+          "pendingAgeAtStart": {
+            "lower": 3300.0100262498017,
+            "upper": 3300.628215875011
+          },
+          "pendingReceived": 13.957946500042453,
+          "pendingSent": 13.639034959021956,
+          "startReceived": 3314.267250834033,
+          "startSent": 3313.967972749844
+        }
+      },
+      {
+        "checks": {},
+        "elapsedMs": 3314267,
+        "httpStatus": null,
+        "id": "age-3300s-finalize",
+        "observedError": null,
+        "outcome": "skipped",
+        "skipped": true,
+        "timing": {}
+      },
+      {
+        "checks": {},
+        "elapsedMs": 3914592,
+        "httpStatus": 400,
+        "id": "age-3900s-start",
+        "observedError": "INVALID_MFA_PENDING_CREDENTIAL",
+        "outcome": "refused",
+        "skipped": false,
+        "timing": {
+          "pendingAgeAtStart": {
+            "lower": 3900.0100315001328,
+            "upper": 3900.6344127499033
+          },
+          "pendingReceived": 14.2681607499253,
+          "pendingSent": 13.957948209019378,
+          "startReceived": 3914.5923609589227,
+          "startSent": 3914.278192250058
+        }
+      },
+      {
+        "checks": {},
+        "elapsedMs": 3914592,
+        "httpStatus": null,
+        "id": "age-3900s-finalize",
+        "observedError": null,
+        "outcome": "skipped",
+        "skipped": true,
+        "timing": {}
+      },
+      {
+        "checks": {
+          "claimEmailMatches": true,
+          "claimSubMatches": true,
+          "derivedLookup": true,
+          "idTokenPresent": true,
+          "noError": true,
+          "refreshTokenPresent": true,
+          "secondFactorClaim": true
+        },
+        "elapsedMs": 3915760,
+        "httpStatus": 200,
+        "id": "final-fresh-finalize",
+        "observedError": null,
+        "outcome": "accepted",
+        "skipped": false,
+        "timing": {
+          "finalizeReceived": 3915.463643708965,
+          "finalizeSent": 3915.185640333919,
+          "pendingAgeAtFinalize": {
+            "lower": 0.2759592500515282,
+            "upper": 0.871251542121172
+          },
+          "pendingReceived": 3914.9096810838673,
+          "pendingSent": 3914.5923921668436,
+          "sessionAgeAtFinalize": {
+            "lower": 4.791887477040291e-06,
+            "upper": 0.5539613750297576
+          },
+          "startReceived": 3915.1856355420314,
+          "startSent": 3914.909682333935
+        }
+      }
+    ],
+    "cleanup": {
+      "emailAbsent": true,
+      "uidAbsent": true
+    },
+    "committedCheckout": true,
+    "configDigestMatches": true,
+    "configHoldSeconds": 3949.183432749938,
+    "configRestored": true,
+    "configRestoredReadback": {
+      "mfa": {
+        "state": "DISABLED"
+      },
+      "phoneNumber": {},
+      "smsRegionConfig": {
+        "allowlistOnly": {}
+      }
+    },
+    "configuration": {
+      "adminPasswordPolicyAbsent": true,
+      "blockingTriggersAbsent": true,
+      "emailEnabled": true,
+      "improvedEmailPrivacy": true,
+      "passwordRequired": true,
+      "sha256": "7878eb2600c66f48c82ef55fb8c2443ab15689ea7542a77fbda206da06f817c2"
+    },
+    "lifetimeSummary": {
+      "ageCausedExpiryEstablished": false,
+      "boundaryCandidates": [],
+      "indeterminateAges": [],
+      "lowerBoundSeconds": null,
+      "nonMonotonic": false,
+      "refusalObservations": [
+        {
+          "classification": "cause-unestablished",
+          "error": "INVALID_MFA_PENDING_CREDENTIAL",
+          "pendingAge": {
+            "lower": 600.0100229999516,
+            "upper": 600.6611048749182
+          },
+          "stage": "start",
+          "targetAgeSeconds": 600
+        },
+        {
+          "classification": "cause-unestablished",
+          "error": "INVALID_MFA_PENDING_CREDENTIAL",
+          "pendingAge": {
+            "lower": 1800.0076130421367,
+            "upper": 1800.631279333029
+          },
+          "stage": "start",
+          "targetAgeSeconds": 1800
+        },
+        {
+          "classification": "cause-unestablished",
+          "error": "INVALID_MFA_PENDING_CREDENTIAL",
+          "pendingAge": {
+            "lower": 3300.0100262498017,
+            "upper": 3300.628215875011
+          },
+          "stage": "start",
+          "targetAgeSeconds": 3300
+        },
+        {
+          "classification": "cause-unestablished",
+          "error": "INVALID_MFA_PENDING_CREDENTIAL",
+          "pendingAge": {
+            "lower": 3900.0100315001328,
+            "upper": 3900.6344127499033
+          },
+          "stage": "start",
+          "targetAgeSeconds": 3900
+        }
+      ],
+      "refusalReasons": {
+        "1800": "INVALID_MFA_PENDING_CREDENTIAL",
+        "3300": "INVALID_MFA_PENDING_CREDENTIAL",
+        "3900": "INVALID_MFA_PENDING_CREDENTIAL",
+        "600": "INVALID_MFA_PENDING_CREDENTIAL"
+      },
+      "refusedAges": [
+        600,
+        1800,
+        3300,
+        3900
+      ],
+      "startAcceptedAges": [],
+      "upperBoundEstablished": false,
+      "upperBoundSeconds": null,
+      "usableAges": []
+    },
+    "privateReceiptSha256": "ad6f343f30fa9659045b577558ada55faf6129691781942c14f17f4e68723015",
+    "privilegedRequestCount": {
+      "observation": 29,
+      "recovery": 32
+    },
+    "privilegedRequests": [
+      {
+        "action": "project:read",
+        "phase": "observation",
+        "remainingSeconds": 3596.833498499822,
+        "sequence": 1,
+        "started": 1.8423637920059264,
+        "tokenAgeSeconds": 0.1665091251488775,
+        "verifiedExpiry": 3598.675862291828
+      },
+      {
+        "action": "config:read",
+        "phase": "observation",
+        "remainingSeconds": 3596.123905000044,
+        "sequence": 2,
+        "started": 2.551957291783765,
+        "tokenAgeSeconds": 0.8761026249267161,
+        "verifiedExpiry": 3598.675862291828
+      },
+      {
+        "action": "config:read",
+        "phase": "observation",
+        "remainingSeconds": 3588.6676540828776,
+        "sequence": 3,
+        "started": 10.008208208950236,
+        "tokenAgeSeconds": 8.332353542093188,
+        "verifiedExpiry": 3598.675862291828
+      },
+      {
+        "action": "config:patch",
+        "phase": "observation",
+        "remainingSeconds": 3588.2544804168865,
+        "sequence": 4,
+        "started": 10.42138187494129,
+        "tokenAgeSeconds": 8.74552720808424,
+        "verifiedExpiry": 3598.675862291828
+      },
+      {
+        "action": "config:read",
+        "phase": "observation",
+        "remainingSeconds": 3587.809136291966,
+        "sequence": 5,
+        "started": 10.866725999861956,
+        "tokenAgeSeconds": 9.190871333004907,
+        "verifiedExpiry": 3598.675862291828
+      },
+      {
+        "action": "admin:lookup",
+        "phase": "observation",
+        "remainingSeconds": 3557.3736550828908,
+        "sequence": 6,
+        "started": 41.302207208937034,
+        "tokenAgeSeconds": 39.626352542079985,
+        "verifiedExpiry": 3598.675862291828
+      },
+      {
+        "action": "admin:lookup",
+        "phase": "observation",
+        "remainingSeconds": 3556.471061500022,
+        "sequence": 7,
+        "started": 42.20480079180561,
+        "tokenAgeSeconds": 40.52894612494856,
+        "verifiedExpiry": 3598.675862291828
+      },
+      {
+        "action": "admin:update",
+        "phase": "observation",
+        "remainingSeconds": 3556.1439667078666,
+        "sequence": 8,
+        "started": 42.53189558396116,
+        "tokenAgeSeconds": 40.85604091710411,
+        "verifiedExpiry": 3598.675862291828
+      },
+      {
+        "action": "admin:lookup",
+        "phase": "observation",
+        "remainingSeconds": 3555.7607462918386,
+        "sequence": 9,
+        "started": 42.91511599998921,
+        "tokenAgeSeconds": 41.23926133313216,
+        "verifiedExpiry": 3598.675862291828
+      },
+      {
+        "action": "admin:lookup",
+        "phase": "observation",
+        "remainingSeconds": 3555.4281651668716,
+        "sequence": 10,
+        "started": 43.247697124956176,
+        "tokenAgeSeconds": 41.57184245809913,
+        "verifiedExpiry": 3598.675862291828
+      },
+      {
+        "action": "admin:lookup",
+        "phase": "observation",
+        "remainingSeconds": 3554.4878422918264,
+        "sequence": 11,
+        "started": 44.188020000001416,
+        "tokenAgeSeconds": 42.51216533314437,
+        "verifiedExpiry": 3598.675862291828
+      },
+      {
+        "action": "admin:update",
+        "phase": "observation",
+        "remainingSeconds": 3554.1672641669866,
+        "sequence": 12,
+        "started": 44.50859812484123,
+        "tokenAgeSeconds": 42.83274345798418,
+        "verifiedExpiry": 3598.675862291828
+      },
+      {
+        "action": "admin:lookup",
+        "phase": "observation",
+        "remainingSeconds": 3553.7973951250315,
+        "sequence": 13,
+        "started": 44.87846716679633,
+        "tokenAgeSeconds": 43.20261249993928,
+        "verifiedExpiry": 3598.675862291828
+      },
+      {
+        "action": "admin:lookup",
+        "phase": "observation",
+        "remainingSeconds": 3553.4488368749153,
+        "sequence": 14,
+        "started": 45.22702541691251,
+        "tokenAgeSeconds": 43.55117075005546,
+        "verifiedExpiry": 3598.675862291828
+      },
+      {
+        "action": "admin:lookup",
+        "phase": "observation",
+        "remainingSeconds": 3552.5751367919147,
+        "sequence": 15,
+        "started": 46.100725499913096,
+        "tokenAgeSeconds": 44.42487083305605,
+        "verifiedExpiry": 3598.675862291828
+      },
+      {
+        "action": "admin:update",
+        "phase": "observation",
+        "remainingSeconds": 3552.2402294168714,
+        "sequence": 16,
+        "started": 46.435632874956354,
+        "tokenAgeSeconds": 44.759778208099306,
+        "verifiedExpiry": 3598.675862291828
+      },
+      {
+        "action": "admin:lookup",
+        "phase": "observation",
+        "remainingSeconds": 3551.845356042031,
+        "sequence": 17,
+        "started": 46.8305062497966,
+        "tokenAgeSeconds": 45.15465158293955,
+        "verifiedExpiry": 3598.675862291828
+      },
+      {
+        "action": "admin:lookup",
+        "phase": "observation",
+        "remainingSeconds": 3551.513963999925,
+        "sequence": 18,
+        "started": 47.16189829190262,
+        "tokenAgeSeconds": 45.48604362504557,
+        "verifiedExpiry": 3598.675862291828
+      },
+      {
+        "action": "admin:lookup",
+        "phase": "observation",
+        "remainingSeconds": 3550.7066858329345,
+        "sequence": 19,
+        "started": 47.969176458893344,
+        "tokenAgeSeconds": 46.293321792036295,
+        "verifiedExpiry": 3598.675862291828
+      },
+      {
+        "action": "admin:update",
+        "phase": "observation",
+        "remainingSeconds": 3550.382353582885,
+        "sequence": 20,
+        "started": 48.29350870894268,
+        "tokenAgeSeconds": 46.61765404208563,
+        "verifiedExpiry": 3598.675862291828
+      },
+      {
+        "action": "admin:lookup",
+        "phase": "observation",
+        "remainingSeconds": 3549.9694662080146,
+        "sequence": 21,
+        "started": 48.70639608381316,
+        "tokenAgeSeconds": 47.03054141695611,
+        "verifiedExpiry": 3598.675862291828
+      },
+      {
+        "action": "admin:lookup",
+        "phase": "observation",
+        "remainingSeconds": 3549.6473854579963,
+        "sequence": 22,
+        "started": 49.02847683383152,
+        "tokenAgeSeconds": 47.35262216697447,
+        "verifiedExpiry": 3598.675862291828
+      },
+      {
+        "action": "admin:lookup",
+        "phase": "observation",
+        "remainingSeconds": 3548.6116607498843,
+        "sequence": 23,
+        "started": 50.064201541943476,
+        "tokenAgeSeconds": 48.38834687508643,
+        "verifiedExpiry": 3598.675862291828
+      },
+      {
+        "action": "admin:update",
+        "phase": "observation",
+        "remainingSeconds": 3548.2741455829237,
+        "sequence": 24,
+        "started": 50.40171670890413,
+        "tokenAgeSeconds": 48.72586204204708,
+        "verifiedExpiry": 3598.675862291828
+      },
+      {
+        "action": "admin:lookup",
+        "phase": "observation",
+        "remainingSeconds": 3547.893210707931,
+        "sequence": 25,
+        "started": 50.78265158389695,
+        "tokenAgeSeconds": 49.1067969170399,
+        "verifiedExpiry": 3598.675862291828
+      },
+      {
+        "action": "admin:lookup",
+        "phase": "observation",
+        "remainingSeconds": 3547.563331166981,
+        "sequence": 26,
+        "started": 51.11253112484701,
+        "tokenAgeSeconds": 49.43667645798996,
+        "verifiedExpiry": 3598.675862291828
+      },
+      {
+        "action": "admin:lookup",
+        "phase": "observation",
+        "remainingSeconds": 3546.671994791832,
+        "sequence": 27,
+        "started": 52.00386749999598,
+        "tokenAgeSeconds": 50.32801283313893,
+        "verifiedExpiry": 3598.675862291828
+      },
+      {
+        "action": "admin:update",
+        "phase": "observation",
+        "remainingSeconds": 3546.2898288329598,
+        "sequence": 28,
+        "started": 52.38603345886804,
+        "tokenAgeSeconds": 50.71017879201099,
+        "verifiedExpiry": 3598.675862291828
+      },
+      {
+        "action": "admin:lookup",
+        "phase": "observation",
+        "remainingSeconds": 3545.908405208029,
+        "sequence": 29,
+        "started": 52.767457083798945,
+        "tokenAgeSeconds": 51.091602416941896,
+        "verifiedExpiry": 3598.675862291828
+      },
+      {
+        "action": "config:patch",
+        "phase": "recovery",
+        "remainingSeconds": 3596.893094124971,
+        "sequence": 30,
+        "started": 3958.747476208955,
+        "tokenAgeSeconds": 0.10691254213452339,
+        "verifiedExpiry": 7555.640570333926
+      },
+      {
+        "action": "config:read",
+        "phase": "recovery",
+        "remainingSeconds": 3596.465661042137,
+        "sequence": 31,
+        "started": 3959.174909291789,
+        "tokenAgeSeconds": 0.5343456249684095,
+        "verifiedExpiry": 7555.640570333926
+      },
+      {
+        "action": "admin:lookup",
+        "phase": "recovery",
+        "remainingSeconds": 3596.0357487921137,
+        "sequence": 32,
+        "started": 3959.6048215418123,
+        "tokenAgeSeconds": 0.9642578749917448,
+        "verifiedExpiry": 7555.640570333926
+      },
+      {
+        "action": "admin:lookup",
+        "phase": "recovery",
+        "remainingSeconds": 3595.680508709047,
+        "sequence": 33,
+        "started": 3959.960061624879,
+        "tokenAgeSeconds": 1.3194979580584913,
+        "verifiedExpiry": 7555.640570333926
+      },
+      {
+        "action": "admin:delete",
+        "phase": "recovery",
+        "remainingSeconds": 3595.354938250035,
+        "sequence": 34,
+        "started": 3960.285632083891,
+        "tokenAgeSeconds": 1.6450684170704335,
+        "verifiedExpiry": 7555.640570333926
+      },
+      {
+        "action": "admin:lookup",
+        "phase": "recovery",
+        "remainingSeconds": 3594.86853600014,
+        "sequence": 35,
+        "started": 3960.772034333786,
+        "tokenAgeSeconds": 2.1314706669654697,
+        "verifiedExpiry": 7555.640570333926
+      },
+      {
+        "action": "admin:lookup",
+        "phase": "recovery",
+        "remainingSeconds": 3594.5350150000304,
+        "sequence": 36,
+        "started": 3961.1055553338956,
+        "tokenAgeSeconds": 2.4649916670750827,
+        "verifiedExpiry": 7555.640570333926
+      },
+      {
+        "action": "admin:lookup",
+        "phase": "recovery",
+        "remainingSeconds": 3594.2249913341366,
+        "sequence": 37,
+        "started": 3961.4155789997894,
+        "tokenAgeSeconds": 2.7750153329689056,
+        "verifiedExpiry": 7555.640570333926
+      },
+      {
+        "action": "admin:lookup",
+        "phase": "recovery",
+        "remainingSeconds": 3593.8878605419304,
+        "sequence": 38,
+        "started": 3961.7527097919956,
+        "tokenAgeSeconds": 3.112146125175059,
+        "verifiedExpiry": 7555.640570333926
+      },
+      {
+        "action": "admin:delete",
+        "phase": "recovery",
+        "remainingSeconds": 3593.5593631670345,
+        "sequence": 39,
+        "started": 3962.0812071668915,
+        "tokenAgeSeconds": 3.440643500071019,
+        "verifiedExpiry": 7555.640570333926
+      },
+      {
+        "action": "admin:lookup",
+        "phase": "recovery",
+        "remainingSeconds": 3593.09348737495,
+        "sequence": 40,
+        "started": 3962.547082958976,
+        "tokenAgeSeconds": 3.9065192921552807,
+        "verifiedExpiry": 7555.640570333926
+      },
+      {
+        "action": "admin:lookup",
+        "phase": "recovery",
+        "remainingSeconds": 3592.744251042139,
+        "sequence": 41,
+        "started": 3962.896319291787,
+        "tokenAgeSeconds": 4.255755624966696,
+        "verifiedExpiry": 7555.640570333926
+      },
+      {
+        "action": "admin:lookup",
+        "phase": "recovery",
+        "remainingSeconds": 3592.3988161669113,
+        "sequence": 42,
+        "started": 3963.2417541670147,
+        "tokenAgeSeconds": 4.601190500194207,
+        "verifiedExpiry": 7555.640570333926
+      },
+      {
+        "action": "admin:lookup",
+        "phase": "recovery",
+        "remainingSeconds": 3592.077617916977,
+        "sequence": 43,
+        "started": 3963.562952416949,
+        "tokenAgeSeconds": 4.922388750128448,
+        "verifiedExpiry": 7555.640570333926
+      },
+      {
+        "action": "admin:delete",
+        "phase": "recovery",
+        "remainingSeconds": 3591.7596903750673,
+        "sequence": 44,
+        "started": 3963.8808799588587,
+        "tokenAgeSeconds": 5.240316292038187,
+        "verifiedExpiry": 7555.640570333926
+      },
+      {
+        "action": "admin:lookup",
+        "phase": "recovery",
+        "remainingSeconds": 3591.2746305000037,
+        "sequence": 45,
+        "started": 3964.3659398339223,
+        "tokenAgeSeconds": 5.7253761671017855,
+        "verifiedExpiry": 7555.640570333926
+      },
+      {
+        "action": "admin:lookup",
+        "phase": "recovery",
+        "remainingSeconds": 3591.0288646670524,
+        "sequence": 46,
+        "started": 3964.6117056668736,
+        "tokenAgeSeconds": 5.971142000053078,
+        "verifiedExpiry": 7555.640570333926
+      },
+      {
+        "action": "admin:lookup",
+        "phase": "recovery",
+        "remainingSeconds": 3590.6985606669914,
+        "sequence": 47,
+        "started": 3964.9420096669346,
+        "tokenAgeSeconds": 6.301446000114083,
+        "verifiedExpiry": 7555.640570333926
+      },
+      {
+        "action": "admin:lookup",
+        "phase": "recovery",
+        "remainingSeconds": 3590.3429861250333,
+        "sequence": 48,
+        "started": 3965.2975842088927,
+        "tokenAgeSeconds": 6.657020542072132,
+        "verifiedExpiry": 7555.640570333926
+      },
+      {
+        "action": "admin:delete",
+        "phase": "recovery",
+        "remainingSeconds": 3589.993599917041,
+        "sequence": 49,
+        "started": 3965.646970416885,
+        "tokenAgeSeconds": 7.006406750064343,
+        "verifiedExpiry": 7555.640570333926
+      },
+      {
+        "action": "admin:lookup",
+        "phase": "recovery",
+        "remainingSeconds": 3589.492165209027,
+        "sequence": 50,
+        "started": 3966.148405124899,
+        "tokenAgeSeconds": 7.507841458078474,
+        "verifiedExpiry": 7555.640570333926
+      },
+      {
+        "action": "admin:lookup",
+        "phase": "recovery",
+        "remainingSeconds": 3589.1723842089996,
+        "sequence": 51,
+        "started": 3966.4681861249264,
+        "tokenAgeSeconds": 7.827622458105907,
+        "verifiedExpiry": 7555.640570333926
+      },
+      {
+        "action": "admin:lookup",
+        "phase": "recovery",
+        "remainingSeconds": 3588.8218419170007,
+        "sequence": 52,
+        "started": 3966.8187284169253,
+        "tokenAgeSeconds": 8.17816475010477,
+        "verifiedExpiry": 7555.640570333926
+      },
+      {
+        "action": "admin:lookup",
+        "phase": "recovery",
+        "remainingSeconds": 3588.4959751251154,
+        "sequence": 53,
+        "started": 3967.1445952088106,
+        "tokenAgeSeconds": 8.504031541990116,
+        "verifiedExpiry": 7555.640570333926
+      },
+      {
+        "action": "admin:delete",
+        "phase": "recovery",
+        "remainingSeconds": 3588.1697677089833,
+        "sequence": 54,
+        "started": 3967.4708026249427,
+        "tokenAgeSeconds": 8.830238958122209,
+        "verifiedExpiry": 7555.640570333926
+      },
+      {
+        "action": "admin:lookup",
+        "phase": "recovery",
+        "remainingSeconds": 3587.6828662920743,
+        "sequence": 55,
+        "started": 3967.9577040418517,
+        "tokenAgeSeconds": 9.317140375031158,
+        "verifiedExpiry": 7555.640570333926
+      },
+      {
+        "action": "admin:lookup",
+        "phase": "recovery",
+        "remainingSeconds": 3587.2967184169684,
+        "sequence": 56,
+        "started": 3968.3438519169576,
+        "tokenAgeSeconds": 9.70328825013712,
+        "verifiedExpiry": 7555.640570333926
+      },
+      {
+        "action": "admin:lookup",
+        "phase": "recovery",
+        "remainingSeconds": 3586.9431412089616,
+        "sequence": 57,
+        "started": 3968.6974291249644,
+        "tokenAgeSeconds": 10.056865458143875,
+        "verifiedExpiry": 7555.640570333926
+      },
+      {
+        "action": "admin:lookup",
+        "phase": "recovery",
+        "remainingSeconds": 3586.638707125094,
+        "sequence": 58,
+        "started": 3969.001863208832,
+        "tokenAgeSeconds": 10.361299542011693,
+        "verifiedExpiry": 7555.640570333926
+      },
+      {
+        "action": "admin:delete",
+        "phase": "recovery",
+        "remainingSeconds": 3586.318401708966,
+        "sequence": 59,
+        "started": 3969.32216862496,
+        "tokenAgeSeconds": 10.68160495813936,
+        "verifiedExpiry": 7555.640570333926
+      },
+      {
+        "action": "admin:lookup",
+        "phase": "recovery",
+        "remainingSeconds": 3585.876457541948,
+        "sequence": 60,
+        "started": 3969.764112791978,
+        "tokenAgeSeconds": 11.123549125157297,
+        "verifiedExpiry": 7555.640570333926
+      },
+      {
+        "action": "admin:lookup",
+        "phase": "recovery",
+        "remainingSeconds": 3585.5450285419356,
+        "sequence": 61,
+        "started": 3970.0955417919904,
+        "tokenAgeSeconds": 11.454978125169873,
+        "verifiedExpiry": 7555.640570333926
+      }
+    ],
+    "probeSourceCommit": "267b10f5a1edf70a2da1a7dff7260e9945f2bd05",
+    "publicRequestCount": {
+      "observation": 22,
+      "recovery": 0
+    },
+    "recordedAt": "2026-09-12T09:17:08.450495+00:00",
+    "recordedWith": {
+      "probeSourceCommit": "267b10f5a1edf70a2da1a7dff7260e9945f2bd05",
+      "recorderCommit": "267b10f5a1edf70a2da1a7dff7260e9945f2bd05",
+      "recorderInputs": {
+        "tools/auth-password-maximum/maximum_contract.py": "143b78e082daf4cfa675e228c42c493d452de799ba467508130061e82447ecaf",
+        "tools/auth-password-maximum/maximum_recorder.py": "deacabae79e0ed6ef2084c58d761e25d20f77c6def6d1fe756c231824289c63b",
+        "tools/auth-pending-lifetime-boundary/boundary_contract.py": "0b8c3711ff372001b1670c053157777d436b7c90a2e61773d7fa7b5e364613d1",
+        "tools/auth-pending-lifetime-boundary/boundary_recorder.py": "d2d255efcf917e522420a5ef87bc1033de875c392a643774ed057f00253880e3",
+        "tools/auth-pending-revocation/revocation_contract.py": "068ab00d3c832165a9ffb4a476973eccce0b1b66eb8d09dc24e1bcf3a8453856",
+        "tools/auth-pending-revocation/revocation_recorder.py": "83c65d82b5b3c7ce7de0aee814cea7fefafda48b6bbb5665ea8758f147f4c553"
+      }
+    },
+    "reevaluatedWith": {
+      "commit": "4c1097f4415bd20e30a09d15e787fc662f8f2a88",
+      "contractSha256": "0b8c3711ff372001b1670c053157777d436b7c90a2e61773d7fa7b5e364613d1"
+    },
+    "requestCount": {
+      "config": 6,
+      "observation": 46,
+      "recovery": 30
+    },
+    "setup": true,
+    "stopReason": "completed",
+    "target": "production",
+    "wallElapsedSeconds": 3970.3716924169566
+  },
+  "publicationContractSha256": "ebdedcbf7493aa608b3816e1570f9fd0f0f065547aafa23b327612a3d4210d94",
+  "schemaVersion": 1,
+  "scope": "Ten sequential REST observations in production: fresh phone MFA completion controls surround independent pending credentials held untouched for 600, 1800, 3300 and 3900 seconds, each followed by start and, if accepted, finalize with a fresh SMS session. Six owned accounts, one test phone number, no tenant or blocking function, one recorded configuration and one run. The largest fully verified success is an observed survival lower bound. Refusals retain measured pending-age intervals and separate start/finalize stages; any boundary candidate assumes equivalent account conditions and monotonic usability and does not prove age-caused expiry. No lifetime upper bound, exact TTL, error precedence, universal account guarantee or result approval is asserted. Configuration recovery and account absence are verified. Refresh-token presence is not a refresh exchange. The expired-pending/independently-valid-code residual remains unobserved.",
+  "sourceReviewSha256": "9afbbf733fe1a160cade47d7c781dc6a51ac9c4aa80a6b3354f67eb960d192ad"
+}

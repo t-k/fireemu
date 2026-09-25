@@ -14,7 +14,12 @@ use fireemu_adapter_grpc::serve::serve_multiplexed;
 use fireemu_adapter_grpc::service::GatewayService;
 use fireemu_adapter_http::identity_toolkit::{AuthState, AuthWallClock};
 use fireemu_core_auth::jwt::IdTokenSigner;
-use fireemu_core_auth::store::AuthStore;
+use fireemu_core_auth::signup_quota::{
+    QuotaAlgorithm, QuotaMode, SignupQuotaConfig, TemporaryQuota,
+};
+use fireemu_core_auth::store::{
+    AuthNamespaceConfigPatch, AuthStore, ProjectAuthConfig, ProjectAuthConfigPatch,
+};
 use fireemu_core_firestore::index::{IndexSet, PlanningContext};
 use fireemu_core_rules::runtime::{LoadedRules, RulesetSlot};
 use fireemu_core_session::clock::VirtualClock;
@@ -24,10 +29,11 @@ use fireemu_proto_firestore::google::firestore::v1::firestore_server::FirestoreS
 use super::{
     app_check_state, bind_listeners, child_environment, clock_millis, control, control_state,
     exit_code, functions, hub, hub_emulators, import_export, load_rules, load_storage_rules,
-    logical_system_time, print_banner, print_rules_status, random_secret, runtime_thread_counts,
-    service_admission, session_rsa_cache, spawn_child, start_firestore_config_reload_supervisors,
-    stop_child, storage_state, terminate_signal, ui, wait_child, BoundAddrs, ExecPlan, Exporter,
-    Listeners, Options, RedactedRuntimeConfig, RuntimeConfig, Selection, Verbosity,
+    logical_system_time, print_banner, print_rules_status, random_secret, reportable_exit_code,
+    runtime_thread_counts, service_admission, session_rsa_cache, spawn_child,
+    start_firestore_config_reload_supervisors, stop_child, storage_state, ui, wait_child,
+    BoundAddrs, ExecPlan, Exporter, Listeners, Options, RedactedRuntimeConfig, RuntimeConfig,
+    Selection, ShutdownSignals, Verbosity,
 };
 
 struct BoundStartup {
@@ -88,6 +94,7 @@ struct ServiceAssembly {
     log_bus: fireemu_adapter_logging::LogBus,
     firestore_policy: Option<Arc<fireemu_core_app_check::ServiceAdmission>>,
     auth: Arc<AuthState>,
+    auth_operation_gate: Arc<Mutex<()>>,
     storage: Arc<fireemu_adapter_http::storage::StorageState>,
     control: Arc<fireemu_adapter_http::control::ControlState>,
     pubsub: fireemu_adapter_pubsub::PubSubHandle,
@@ -126,6 +133,305 @@ fn auth_notice_sink(
                 .for_emulator("auth"),
         );
     })
+}
+
+/// Publishes password-policy overrides from the startup configuration without creating any
+/// project or tenant namespace. The registry keeps overrides for namespaces that are registered
+/// later, so a configured project or tenant receives its policy at its normal creation boundary.
+fn apply_auth_password_policy_overrides(
+    cfg: &RuntimeConfig,
+    registry: &fireemu_core_auth::store::AuthRegistry,
+) -> Result<(), String> {
+    for (index, override_config) in cfg.auth_password_policy_overrides.iter().enumerate() {
+        let policy = override_config.password_policy.to_auth_policy();
+        let applied = match override_config.tenant_id.as_deref() {
+            Some(tenant) => registry.register_tenant_password_policy_override(
+                &override_config.project_id,
+                tenant,
+                policy,
+            ),
+            None => registry
+                .register_project_password_policy_override(&override_config.project_id, policy),
+        };
+        if !applied {
+            let namespace = override_config.tenant_id.as_deref().map_or_else(
+                || override_config.project_id.clone(),
+                |tenant| format!("{}/tenants/{tenant}", override_config.project_id),
+            );
+            return Err(format!(
+                "cannot apply auth.passwordPolicyOverrides[{index}] to {namespace}"
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// Converts the canonical Auth configuration into the project-level runtime settings.
+///
+/// These values are applied only to the default project store here. Namespace-specific
+/// `configOverrides` are applied separately after the registry has been created, so a missing
+/// project or tenant is never created as a side effect of reading the configuration.
+fn auth_project_config(cfg: &RuntimeConfig) -> ProjectAuthConfig {
+    ProjectAuthConfig {
+        allow_duplicate_emails: cfg.auth_allow_duplicate_emails,
+        enable_improved_email_privacy: cfg.auth_improved_email_privacy,
+        disabled_user_signup: cfg.auth_client_permissions.disabled_user_signup,
+        disabled_user_deletion: cfg.auth_client_permissions.disabled_user_deletion,
+    }
+}
+
+fn auth_namespace_config_patch(
+    config: crate::config::AuthNamespaceConfig,
+) -> AuthNamespaceConfigPatch {
+    AuthNamespaceConfigPatch {
+        allow_duplicate_emails: None,
+        enable_improved_email_privacy: config.improved_email_privacy,
+        disabled_user_signup: config
+            .client_permissions
+            .map(|permissions| permissions.disabled_user_signup),
+        disabled_user_deletion: config
+            .client_permissions
+            .map(|permissions| permissions.disabled_user_deletion),
+    }
+}
+
+/// Applies explicitly configured non-password settings to namespaces that already exist.
+///
+/// The core registry currently exposes pending publication only for password policies. Keep
+/// absent project/tenant overrides pending at this boundary rather than creating a namespace or
+/// copying settings into an unrelated tenant. Once the registry gains the corresponding pending
+/// config API, this helper is the single daemon seam where it should be called.
+fn apply_auth_config_overrides(
+    cfg: &RuntimeConfig,
+    registry: &fireemu_core_auth::store::AuthRegistry,
+) -> Result<(), String> {
+    for (index, override_config) in cfg.auth_config_overrides.iter().enumerate() {
+        let patch = auth_namespace_config_patch(override_config.config);
+        if patch.is_empty() {
+            continue;
+        }
+        let namespace = override_config.tenant_id.as_deref().map_or_else(
+            || override_config.project_id.clone(),
+            |tenant| format!("{}/tenants/{tenant}", override_config.project_id),
+        );
+        let applied = match override_config.tenant_id.as_deref() {
+            Some(tenant) => {
+                registry.register_tenant_config_override(&override_config.project_id, tenant, patch)
+            }
+            None => registry.register_project_config_override(&override_config.project_id, patch),
+        };
+        if !applied {
+            return Err(format!(
+                "cannot apply auth.configOverrides[{index}] to {namespace}"
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// Applies only root Auth settings explicitly present in the startup file after an import.
+/// Omitted values must remain those restored from the imported namespace.
+fn reapply_explicit_auth_config(
+    cfg: &RuntimeConfig,
+    registry: &fireemu_core_auth::store::AuthRegistry,
+) -> Result<(), String> {
+    let patch = ProjectAuthConfigPatch {
+        allow_duplicate_emails: cfg
+            .auth_allow_duplicate_emails_explicit
+            .then_some(cfg.auth_allow_duplicate_emails),
+        enable_improved_email_privacy: cfg
+            .auth_improved_email_privacy_explicit
+            .then_some(cfg.auth_improved_email_privacy),
+        disabled_user_signup: cfg
+            .auth_client_permissions_explicit
+            .then_some(cfg.auth_client_permissions.disabled_user_signup),
+        disabled_user_deletion: cfg
+            .auth_client_permissions_explicit
+            .then_some(cfg.auth_client_permissions.disabled_user_deletion),
+    };
+    if !patch.is_empty()
+        && registry
+            .patch_project_config(&cfg.auth_project, patch)
+            .is_none()
+    {
+        return Err(format!(
+            "cannot apply explicit root Auth settings to {}",
+            cfg.auth_project
+        ));
+    }
+    apply_auth_config_overrides(cfg, registry)
+}
+
+fn auth_signup_quota_config(cfg: &RuntimeConfig) -> Result<SignupQuotaConfig, String> {
+    let mode = match cfg.auth_quota_simulation.mode {
+        crate::config::AuthQuotaSimulationMode::Off => QuotaMode::Off,
+        crate::config::AuthQuotaSimulationMode::Observe => QuotaMode::Observe,
+        crate::config::AuthQuotaSimulationMode::Enforce => QuotaMode::Enforce,
+    };
+    let temporary = auth_temporary_quota_config(cfg)?;
+    Ok(SignupQuotaConfig {
+        mode,
+        algorithm: QuotaAlgorithm::FixedWindowV1,
+        default_quota_per_hour: cfg.auth_quota_simulation.default_quota_per_hour,
+        max_tracked_buckets: cfg.auth_quota_simulation.max_tracked_buckets,
+        temporary,
+    })
+}
+
+fn auth_temporary_quota_config(cfg: &RuntimeConfig) -> Result<Option<TemporaryQuota>, String> {
+    cfg.auth_signup_quota
+        .as_ref()
+        .map(|value| {
+            let quota = value.quota.parse::<u64>().map_err(|_| {
+                "auth.quota.signUpQuotaConfig.quota is not a valid uint64".to_owned()
+            })?;
+            TemporaryQuota::new(quota, value.start_time, value.quota_duration)
+                .map_err(|error| format!("auth.quota.signUpQuotaConfig: {error:?}"))
+        })
+        .transpose()
+}
+
+fn blocking_auth_selection(
+    selection: Option<&crate::config::BlockingFunctionTrigger>,
+) -> fireemu_core_functions::manifest::BlockingAuthSelection {
+    match selection {
+        None => fireemu_core_functions::manifest::BlockingAuthSelection::Disabled,
+        Some(trigger) => fireemu_core_functions::manifest::BlockingAuthSelection::Explicit {
+            function: trigger.function.clone(),
+            region: trigger.region.clone(),
+        },
+    }
+}
+
+fn configure_blocking_auth_bridge(
+    cfg: &RuntimeConfig,
+    runtime: &fireemu_adapter_functions::runtime::FunctionsRuntime,
+) -> Result<
+    (
+        fireemu_core_functions::manifest::BlockingAuthSelections,
+        bool,
+        Option<fireemu_core_functions::manifest::BlockingAuthTokenPolicy>,
+    ),
+    String,
+> {
+    let Some(config) = cfg.auth_blocking_functions.as_ref() else {
+        return Ok((
+            fireemu_core_functions::manifest::BlockingAuthSelections::default(),
+            cfg.auth_forward_inbound_credentials,
+            None,
+        ));
+    };
+    let selections = match &config.triggers {
+        None => fireemu_core_functions::manifest::BlockingAuthSelections::default(),
+        Some(triggers) => fireemu_core_functions::manifest::BlockingAuthSelections {
+            before_create: blocking_auth_selection(triggers.before_create.as_ref()),
+            before_sign_in: blocking_auth_selection(triggers.before_sign_in.as_ref()),
+        },
+    };
+    for (event, selection) in [
+        (
+            fireemu_core_functions::manifest::BlockingAuthEvent::BeforeCreate,
+            &selections.before_create,
+        ),
+        (
+            fireemu_core_functions::manifest::BlockingAuthEvent::BeforeSignIn,
+            &selections.before_sign_in,
+        ),
+    ] {
+        runtime
+            .manifest()
+            .blocking_auth_target(event, selection)
+            .map_err(|error| format!("auth.blockingFunctions: {error}"))?;
+    }
+    let forwarding_restrictions = config.forward_inbound_credentials.map(|value| {
+        fireemu_core_functions::manifest::BlockingAuthTokenPolicy {
+            id_token: value.id_token,
+            access_token: value.access_token,
+            refresh_token: value.refresh_token,
+        }
+    });
+    Ok((
+        selections,
+        cfg.auth_forward_inbound_credentials,
+        forwarding_restrictions,
+    ))
+}
+
+/// Reapplies every explicitly configured password policy after an import.
+///
+/// An imported sidecar is an input for the namespace it describes, but an explicit startup
+/// configuration has higher precedence. Reapplying through the registry's normal setters keeps
+/// the update at the existing namespace boundary and leaves missing projects or tenants pending
+/// without creating them or inheriting a policy into another namespace.
+fn reapply_explicit_auth_password_policies(
+    cfg: &RuntimeConfig,
+    registry: &fireemu_core_auth::store::AuthRegistry,
+) -> Result<(), String> {
+    if let Some(policy) = &cfg.auth_password_policy {
+        if !registry.set_project_password_policy(&cfg.auth_project, policy.to_auth_policy()) {
+            return Err(format!(
+                "cannot apply auth.passwordPolicy to {}",
+                cfg.auth_project
+            ));
+        }
+    }
+    apply_auth_password_policy_overrides(cfg, registry)
+}
+
+/// Reapplies explicitly configured sign-up quota settings after an import. The quota counters are
+/// runtime state and remain with the imported namespace; only a startup file that explicitly
+/// mentions `auth.quota` or `auth.quotaSimulation` replaces the imported configuration.
+fn reapply_explicit_auth_quota(
+    cfg: &RuntimeConfig,
+    registry: &fireemu_core_auth::store::AuthRegistry,
+) -> Result<(), String> {
+    if !cfg.auth_signup_quota_explicit && !cfg.auth_quota_simulation_explicit {
+        return Ok(());
+    }
+    let applied = registry
+        .patch_project_config_with_current_settings(
+            &cfg.auth_project,
+            ProjectAuthConfigPatch::default(),
+            |_, current| {
+                let mut next = current.clone();
+                if cfg.auth_signup_quota_explicit {
+                    next.temporary = auth_temporary_quota_config(cfg)?;
+                }
+                if cfg.auth_quota_simulation_explicit {
+                    next.mode = match cfg.auth_quota_simulation.mode {
+                        crate::config::AuthQuotaSimulationMode::Off => QuotaMode::Off,
+                        crate::config::AuthQuotaSimulationMode::Observe => QuotaMode::Observe,
+                        crate::config::AuthQuotaSimulationMode::Enforce => QuotaMode::Enforce,
+                    };
+                    if cfg.auth_quota_simulation.algorithm != "fixed-window-v1" {
+                        return Err("auth.quotaSimulation.algorithm is not supported".to_owned());
+                    }
+                    next.algorithm = QuotaAlgorithm::FixedWindowV1;
+                    next.default_quota_per_hour = cfg.auth_quota_simulation.default_quota_per_hour;
+                    next.max_tracked_buckets = cfg.auth_quota_simulation.max_tracked_buckets;
+                }
+                Ok((None, Some(next)))
+            },
+        )
+        .map_err(|error| error.clone())?;
+    if applied.is_none() {
+        return Err(format!(
+            "cannot apply explicit Auth quota settings to {}",
+            cfg.auth_project
+        ));
+    }
+    Ok(())
+}
+
+/// The startup notice for a strict profile without custom-token signers: production accepts only
+/// signed custom tokens, so strict refuses every custom token until `auth.customTokenSigners`
+/// names the service accounts whose keys verify them.
+pub(crate) fn custom_token_signer_note(cfg: &RuntimeConfig) -> Option<&'static str> {
+    (cfg.profile == crate::config::CompatibilityProfile::Strict
+        && cfg.auth_custom_token_signers.is_none())
+    .then_some(
+        "  custom tokens:    refused (strict accepts only signed tokens: set auth.customTokenSigners to the service accounts' public JWK sets, or use profile \"emulator\" for the Admin SDK's unsigned emulator tokens)",
+    )
 }
 
 fn assemble_adapters(bound: BoundStartup) -> Result<ServiceAssembly, String> {
@@ -179,6 +485,19 @@ fn assemble_adapters(bound: BoundStartup) -> Result<ServiceAssembly, String> {
     let pubsub_state = Arc::new(Mutex::new(fireemu_core_pubsub::PubSubState::new(
         cfg.seed ^ 0x5053_5542,
     )));
+    {
+        // Without a retry policy production redelivers as soon as possible, which is the default
+        // here too. `pubsub.pushMinimumRedeliveryIntervalMillis` is the opt-in protection against
+        // re-requesting a failing push endpoint with no interval at all.
+        let mut state = pubsub_state
+            .lock()
+            .map_err(|_| "the Pub/Sub state lock is poisoned".to_owned())?;
+        state.set_push_minimum_redelivery_interval(
+            fireemu_core_types::time::LogicalDuration::from_millis(
+                cfg.pubsub_push_minimum_redelivery_interval_millis,
+            ),
+        );
+    }
     let pubsub_resources = if pubsub_listener.is_some() {
         if let Some(runtime) = &functions_runtime {
             let resources =
@@ -221,6 +540,19 @@ fn assemble_adapters(bound: BoundStartup) -> Result<ServiceAssembly, String> {
     );
     let log_bus = fireemu_adapter_logging::LogBus::new();
     // Auth user events reach the functions runtime after each Auth request.
+    // This adapter-level gate is also shared with the export seam so an Auth export cannot
+    // capture stores and Blocking Functions settings from different logical generations.
+    let auth_operation_gate = Arc::new(Mutex::new(()));
+    // Validated when the configuration was parsed; a failure here is a configuration bug.
+    let custom_token_trust = cfg
+        .auth_custom_token_signers
+        .as_ref()
+        .map(|signers| {
+            fireemu_adapter_http::identity_toolkit::CustomTokenTrust::from_jwks(signers)
+                .map(Arc::new)
+        })
+        .transpose()
+        .map_err(|e| format!("auth.customTokenSigners: {e}"))?;
     let auth = Arc::new(AuthState {
         store: auth_store.clone(),
         clock: clock.clone(),
@@ -230,25 +562,54 @@ fn assemble_adapters(bound: BoundStartup) -> Result<ServiceAssembly, String> {
         events: functions_runtime.as_ref().map(functions::auth_sink),
         notices: (cfg.auth_log_action_codes && !quiet)
             .then(|| auth_notice_sink(log_bus.clone(), clock.clone())),
-        blocking: functions_runtime.as_ref().map(|runtime| {
-            Arc::new(
-                functions::BlockingAuthBridge::new_with_forward_inbound_credentials(
-                    runtime.clone(),
-                    cfg.auth_forward_inbound_credentials,
-                ),
-            ) as Arc<dyn fireemu_adapter_http::identity_toolkit::AuthBlockingHook>
-        }),
-        operation_gate: Arc::new(Mutex::new(())),
+        blocking: match functions_runtime.as_ref() {
+            Some(runtime) => {
+                let (selections, forward, restrictions) =
+                    configure_blocking_auth_bridge(&cfg, runtime)?;
+                Some(Arc::new(
+                    functions::BlockingAuthBridge::try_new_with_selections_and_forwarding_policy(
+                        runtime.clone(),
+                        selections,
+                        forward,
+                        restrictions,
+                    )
+                    .map_err(|error| format!("auth.blockingFunctions: {error}"))?,
+                )
+                    as Arc<
+                        dyn fireemu_adapter_http::identity_toolkit::AuthBlockingHook,
+                    >)
+            }
+            None if cfg.auth_blocking_functions.is_some() => {
+                return Err(
+                    "auth.blockingFunctions requires a running Functions runtime".to_owned(),
+                )
+            }
+            None => None,
+        },
+        operation_gate: auth_operation_gate.clone(),
         control_token: Some(control_token.clone()),
         registry: Some(registry.clone()),
         allow_routed_projects: cfg.profile == crate::config::CompatibilityProfile::Emulator,
         stateless_refresh_tokens: cfg.profile == crate::config::CompatibilityProfile::Emulator,
+        idp_continuations: if cfg.profile == crate::config::CompatibilityProfile::Strict {
+            fireemu_adapter_http::identity_toolkit::IdpContinuationPolicy::LocalBounded
+        } else {
+            fireemu_adapter_http::identity_toolkit::IdpContinuationPolicy::Disabled
+        },
         query_limits: match cfg.profile {
             crate::config::CompatibilityProfile::Emulator => {
                 fireemu_adapter_http::identity_toolkit::AuthQueryLimits::EmulatorUnbounded
             }
             crate::config::CompatibilityProfile::Strict => {
                 fireemu_adapter_http::identity_toolkit::AuthQueryLimits::ProductionBounded
+            }
+        },
+        client_api_key: match cfg.profile {
+            crate::config::CompatibilityProfile::Emulator => {
+                fireemu_adapter_http::identity_toolkit::ClientApiKeyPolicy::Optional
+            }
+            crate::config::CompatibilityProfile::Strict => {
+                fireemu_adapter_http::identity_toolkit::ClientApiKeyPolicy::Required
             }
         },
         fake_custom_token_expiry: match cfg.profile {
@@ -259,6 +620,7 @@ fn assemble_adapters(bound: BoundStartup) -> Result<ServiceAssembly, String> {
                 fireemu_adapter_http::identity_toolkit::FakeCustomTokenExpiry::Reject
             }
         },
+        custom_token_trust,
         tenancy: Some(tenancy.clone()),
         app_check: app_check.clone(),
         app_check_policy: auth_policy,
@@ -286,6 +648,7 @@ fn assemble_adapters(bound: BoundStartup) -> Result<ServiceAssembly, String> {
         clock_observer,
         storage_policy,
         storage_admin_capability.clone(),
+        control_token.clone(),
     )?;
     if let Some(runtime) = &functions_runtime {
         runtime.set_faults(faults.for_project(runtime.project()));
@@ -378,6 +741,7 @@ fn assemble_adapters(bound: BoundStartup) -> Result<ServiceAssembly, String> {
         functions_runtime,
         firestore_policy,
         auth,
+        auth_operation_gate,
         storage,
         control,
         pubsub: pubsub_handle,
@@ -411,6 +775,7 @@ fn assemble_suite(assembly: ServiceAssembly, exec_mode: bool) -> Result<ReadySui
         functions_runtime,
         firestore_policy,
         auth,
+        auth_operation_gate,
         storage,
         control,
         pubsub,
@@ -430,6 +795,8 @@ fn assemble_suite(assembly: ServiceAssembly, exec_mode: bool) -> Result<ReadySui
         clock: clock.clone(),
         project: cfg.auth_project.clone(),
         products: import_export::Products::from(&only),
+        blocking: auth.blocking.clone(),
+        auth_operation_gate,
     });
     // The import happens before the command starts and before the banner claims the
     // suite is ready: a run that cannot install its fixture must not run at all.
@@ -448,6 +815,11 @@ fn assemble_suite(assembly: ServiceAssembly, exec_mode: bool) -> Result<ReadySui
             println!("  imported: {} ({summary})", dir.display());
         }
     }
+    // Startup configuration is the final layer over imported Auth state. The import remains
+    // authoritative when the corresponding setting was not explicitly configured.
+    reapply_explicit_auth_password_policies(&cfg, &registry)?;
+    reapply_explicit_auth_config(&cfg, &registry)?;
+    reapply_explicit_auth_quota(&cfg, &registry)?;
     let hub_state = Arc::new(hub::HubState {
         project: cfg.auth_project.clone(),
         addr: hub_addr.unwrap_or(http_addr),
@@ -537,6 +909,7 @@ fn assemble_suite(assembly: ServiceAssembly, exec_mode: bool) -> Result<ReadySui
         gateway: Arc::new(gateway),
         rules: enforcer,
         app_check: firestore_policy,
+        control_token: Some(control_token.clone()),
     });
     Ok(ReadySuite {
         log_bus,
@@ -591,7 +964,15 @@ struct ReadySuite {
     pubsub: fireemu_adapter_pubsub::PubSubHandle,
 }
 
-async fn serve_suite(ready: ReadySuite, exec: Option<ExecPlan>) -> Result<i32, String> {
+async fn serve_suite(
+    ready: ReadySuite,
+    exec: Option<ExecPlan>,
+    signals: ShutdownSignals,
+) -> Result<i32, String> {
+    let ShutdownSignals {
+        mut interrupt,
+        mut terminate,
+    } = signals;
     let ReadySuite {
         log_bus,
         cfg,
@@ -607,7 +988,7 @@ async fn serve_suite(ready: ReadySuite, exec: Option<ExecPlan>) -> Result<i32, S
         functions_runtime,
         exporter,
         hub_state,
-        locator: _locator,
+        locator,
         addrs,
         control_token,
         storage_admin_capability,
@@ -642,8 +1023,12 @@ async fn serve_suite(ready: ReadySuite, exec: Option<ExecPlan>) -> Result<i32, S
             serve_multiplexed(
                 listener,
                 FirestoreServer::new(firestore_service)
-                    .max_decoding_message_size(10 * 1024 * 1024)
-                    .max_encoding_message_size(10 * 1024 * 1024),
+                    .max_decoding_message_size(fireemu_adapter_grpc::serve::MAX_GRPC_MESSAGE_BYTES,)
+                    // Not a catalog limit: the request bound is FS-LIMIT-API-REQUEST-BYTES,
+                    // the response bound is a local memory guard.
+                    .max_encoding_message_size(
+                        fireemu_adapter_grpc::serve::MAX_GRPC_RESPONSE_BYTES,
+                    ),
                 rest.clone(),
             )
         );
@@ -827,13 +1212,13 @@ async fn serve_suite(ready: ReadySuite, exec: Option<ExecPlan>) -> Result<i32, S
             Ok(status) => Ok(Some(exit_code(status))),
             Err(e) => Err(format!("waiting for the command: {e}")),
         },
-        _ = tokio::signal::ctrl_c() => {
+        () = interrupt.recv() => {
             if !quiet {
                 println!("shutting down");
             }
             Ok::<Option<i32>, String>(None)
         }
-        () = terminate_signal() => {
+        () = terminate.recv() => {
             if !quiet {
                 println!("shutting down (SIGTERM)");
             }
@@ -869,7 +1254,14 @@ async fn serve_suite(ready: ReadySuite, exec: Option<ExecPlan>) -> Result<i32, S
                     println!("exported to {}", dir.display());
                 }
             }
-            Err(e) => eprintln!("error: --export-on-exit {}: {e}", dir.display()),
+            // The command's own status is what `exec` reports, a failed export included. The
+            // official CLI's `exportOnExit` catches the failure and logs "Automatic export to
+            // ... failed, going to exit now" as a warning, leaving the script's exit code
+            // alone, and spec/compatibility/contract.json claims that behaviour.
+            Err(e) => eprintln!(
+                "warning: automatic export to {} failed, going to exit now: {e}",
+                dir.display()
+            ),
         }
     }
     if let Some(runtime) = functions_runtime {
@@ -883,6 +1275,13 @@ async fn serve_suite(ready: ReadySuite, exec: Option<ExecPlan>) -> Result<i32, S
     pubsub.shutdown_push_dispatcher().await;
     servers.abort_all();
     while servers.join_next().await.is_some() {}
+    // Discovery is retired as an explicit, ordered step of shutdown, while the runtime is
+    // still up and every server that answered on the advertised origin has stopped. Dropping
+    // the locator on the way out is kept as a fallback, not as the mechanism: a destructor
+    // cannot be relied on to run at all.
+    if let Some(note) = locator.and_then(hub::Locator::release) {
+        eprintln!("warning: {note}");
+    }
     outcome.map(|_| code)
 }
 
@@ -939,7 +1338,19 @@ pub(super) fn run(options: Options, exec: Option<ExecPlan>) -> ExitCode {
         }
     };
     let result = runtime.block_on(async move {
+        // The stop signals are installed before anything else: everything below this line
+        // can advertise readiness, and a SIGTERM that arrives before its handler exists
+        // terminates the process without running a destructor.
+        let signals = ShutdownSignals::install();
         let clock = Arc::new(Mutex::new(VirtualClock::new(cfg.clock_start)));
+        let created_at = cfg.database_create_time.unwrap_or(cfg.clock_start);
+        if created_at > cfg.clock_start {
+            return Err(format!(
+                "firestore.databaseCreateTime {} is after the clock start {}",
+                created_at.to_rfc3339().unwrap_or_default(),
+                cfg.clock_start.to_rfc3339().unwrap_or_default()
+            ));
+        }
         let gateway = Gateway {
             enforce_limits: cfg.enforce_limits,
             ctx: PlanningContext {
@@ -959,7 +1370,14 @@ pub(super) fn run(options: Options, exec: Option<ExecPlan>) -> ExitCode {
             LocalBackend::new(gateway.clone(), clock.clone(), cfg.seed)
                 .with_contention_wait(fireemu_adapter_grpc::local::DEFAULT_CONTENTION_WAIT)
                 .with_wall_clock_write_time()
-        });
+        }
+        // A database the configuration names exists before anything writes to it. Under the
+        // strict profile every other named database is refused until a create path (an import
+        // or a snapshot restore) materializes it.
+        .with_declared_databases(cfg.firestore_databases.keys().cloned())
+        .with_ttl_sweep_interval(cfg.ttl_sweep_interval)
+        .with_created_at(created_at)
+        .with_implicit_database_creation(cfg.implicit_database_creation));
         for (database, files) in &cfg.firestore_databases {
             if database != fireemu_core_types::ids::DatabaseId::DEFAULT {
                 if let Some(path) = &files.indexes {
@@ -974,9 +1392,10 @@ pub(super) fn run(options: Options, exec: Option<ExecPlan>) -> ExitCode {
             Arc::new(fireemu_core_session::fault::FaultRegistry::new());
         backend.set_faults(faults.clone());
         // Which session owns which project, bucket and API key.
-        let tenancy: fireemu_core_session::tenancy::SharedTenancy = Arc::new(RwLock::new(
-            fireemu_core_session::tenancy::Tenancy::new(&cfg.auth_project),
-        ));
+        let mut default_tenancy = fireemu_core_session::tenancy::Tenancy::new(&cfg.auth_project);
+        default_tenancy.declare_default_api_keys(&cfg.auth_api_keys);
+        let tenancy: fireemu_core_session::tenancy::SharedTenancy =
+            Arc::new(RwLock::new(default_tenancy));
         backend.set_tenancy(tenancy.clone());
         let auth_store = Arc::new(Mutex::new(AuthStore::new(
             &cfg.auth_project,
@@ -984,11 +1403,14 @@ pub(super) fn run(options: Options, exec: Option<ExecPlan>) -> ExitCode {
             cfg.auth_totp.unwrap_or_default(),
         )));
         if let Ok(mut store) = auth_store.lock() {
-            let config = fireemu_core_auth::store::ProjectAuthConfig {
-                enable_improved_email_privacy: cfg.auth_improved_email_privacy,
-                ..store.config()
-            };
+            let config = auth_project_config(&cfg);
             store.set_config(config);
+            if let Some(policy) = &cfg.auth_password_policy {
+                store.set_password_policy(policy.to_auth_policy());
+            }
+            store
+                .set_signup_quota_config(auth_signup_quota_config(&cfg)?)
+                .map_err(|error| format!("auth.quotaSimulation: {error:?}"))?;
         }
         // Both keys are 2048-bit RSA and slow to generate in a debug build; when both are
         // wanted they are generated concurrently on blocking tasks. They are always separate
@@ -1017,10 +1439,16 @@ pub(super) fn run(options: Options, exec: Option<ExecPlan>) -> ExitCode {
         };
         let barrier = backend.barrier();
         // Session projects other than the default get their own Auth store (same signer).
-        let registry = Arc::new(fireemu_core_auth::store::AuthRegistry::new(
-            &cfg.auth_project,
-            auth_store.clone(),
-        ));
+        let registry = Arc::new(
+            fireemu_core_auth::store::AuthRegistry::with_project_numbers_and_lifecycle_incarnation(
+                &cfg.auth_project,
+                auth_store.clone(),
+                cfg.auth_project_numbers.clone(),
+                crate::random_u128()?,
+            ),
+        );
+        apply_auth_password_policy_overrides(&cfg, &registry)?;
+        apply_auth_config_overrides(&cfg, &registry)?;
         let rules = Arc::new(RulesetSlot::new(load_rules(&cfg)?));
         let mut database_rules = std::collections::BTreeMap::new();
         for (database, files) in &cfg.firestore_databases {
@@ -1138,6 +1566,8 @@ pub(super) fn run(options: Options, exec: Option<ExecPlan>) -> ExitCode {
                         eventarc: eventarc_addr.map(|a| a.to_string()),
                         tasks: tasks_addr.map(|a| a.to_string()),
                         logging: logging_addr.map(|a| a.to_string()),
+                        pubsub: pubsub_addr.map(|a| a.to_string()),
+                        hub: hub_addr.map(|a| a.to_string()),
                     },
                     &runner_secret,
                     callable_trusted_protocol,
@@ -1206,10 +1636,10 @@ pub(super) fn run(options: Options, exec: Option<ExecPlan>) -> ExitCode {
                 functions_runtime,
             })?;
         let ready = assemble_suite(assembly, exec.is_some())?;
-        serve_suite(ready, exec).await
+        serve_suite(ready, exec, signals).await
     });
     match result {
-        Ok(code) => ExitCode::from(u8::try_from(code.clamp(0, 255)).unwrap_or(1)),
+        Ok(code) => ExitCode::from(reportable_exit_code(code)),
         Err(e) => {
             eprintln!("error: {e}");
             ExitCode::FAILURE
@@ -1219,8 +1649,431 @@ pub(super) fn run(options: Options, exec: Option<ExecPlan>) -> ExitCode {
 
 #[cfg(test)]
 mod tests {
-    use super::{close_functions_source_admission, function_log_input};
+    use std::sync::{Arc, Mutex};
+
     use fireemu_adapter_logging::wire::build_bundle;
+    use fireemu_core_auth::mfa::TotpPolicy;
+    use fireemu_core_auth::password_policy::{
+        default_allowed_non_alphanumeric, EnforcementState, PasswordPolicy,
+    };
+    use fireemu_core_auth::signup_quota::{
+        QuotaAlgorithm, QuotaMode, SignupQuotaConfig, TemporaryQuota,
+    };
+    use fireemu_core_auth::store::{AuthPrincipal, AuthRegistry, AuthStore, ProjectAuthConfig};
+    use fireemu_core_types::determinism::SplitMix64;
+    use fireemu_core_types::time::LogicalInstant;
+    use serde_json::json;
+
+    use super::{
+        apply_auth_config_overrides, apply_auth_password_policy_overrides, auth_project_config,
+        auth_signup_quota_config, blocking_auth_selection, close_functions_source_admission,
+        function_log_input, reapply_explicit_auth_config, reapply_explicit_auth_password_policies,
+        reapply_explicit_auth_quota,
+    };
+
+    #[test]
+    fn auth_project_config_propagates_all_default_settings() {
+        let cfg = crate::config::RuntimeConfig::from_json(&json!({
+            "schemaVersion": 1,
+            "auth": {
+                "signIn": {"allowDuplicateEmails": true},
+                "client": {"permissions": {
+                    "disabledUserSignup": true,
+                    "disabledUserDeletion": true
+                }},
+                "improvedEmailPrivacy": false
+            }
+        }))
+        .expect("valid Auth settings");
+
+        assert_eq!(
+            auth_project_config(&cfg),
+            ProjectAuthConfig {
+                allow_duplicate_emails: true,
+                enable_improved_email_privacy: false,
+                disabled_user_signup: true,
+                disabled_user_deletion: true,
+            }
+        );
+    }
+
+    #[test]
+    fn auth_quota_config_maps_temporary_override_without_losing_mode() {
+        let cfg = crate::config::RuntimeConfig::from_json(&json!({
+            "schemaVersion": 1,
+            "auth": {
+                "quota": {"signUpQuotaConfig": {
+                    "quota": "2",
+                    "startTime": "2030-01-01T00:00:00Z",
+                    "quotaDuration": "3600s"
+                }},
+                "quotaSimulation": {
+                    "mode": "enforce",
+                    "defaultQuotaPerHour": 17,
+                    "maxTrackedBuckets": 8
+                }
+            }
+        }))
+        .expect("valid quota settings");
+        let quota = auth_signup_quota_config(&cfg).expect("quota conversion");
+
+        assert_eq!(quota.mode, QuotaMode::Enforce);
+        assert_eq!(quota.default_quota_per_hour, 17);
+        assert_eq!(quota.max_tracked_buckets, 8);
+        assert_eq!(quota.temporary.expect("temporary quota").quota, 2);
+    }
+
+    #[test]
+    fn explicit_quota_settings_override_imported_configuration_without_usage_reset() {
+        let cfg = crate::config::RuntimeConfig::from_json(&json!({
+            "schemaVersion": 1,
+            "auth": {
+                "quota": {"signUpQuotaConfig": null},
+                "quotaSimulation": {"mode": "enforce", "defaultQuotaPerHour": 7}
+            }
+        }))
+        .expect("valid explicit quota settings");
+        assert!(cfg.auth_signup_quota_explicit);
+        assert!(cfg.auth_quota_simulation_explicit);
+
+        let registry = AuthRegistry::new(
+            "demo-app",
+            Arc::new(Mutex::new(AuthStore::new(
+                "demo-app",
+                SplitMix64::new(1),
+                TotpPolicy::default(),
+            ))),
+        );
+        let imported = fireemu_core_auth::signup_quota::SignupQuotaConfig {
+            mode: QuotaMode::Observe,
+            default_quota_per_hour: 99,
+            ..Default::default()
+        };
+        registry
+            .default_store()
+            .lock()
+            .unwrap()
+            .set_signup_quota_config(imported)
+            .expect("imported quota is valid");
+        reapply_explicit_auth_quota(&cfg, &registry).expect("explicit quota reapplies");
+
+        let store = registry.default_store();
+        let store = store.lock().unwrap();
+        assert_eq!(store.signup_quota().config().mode, QuotaMode::Enforce);
+        assert_eq!(store.signup_quota().config().default_quota_per_hour, 7);
+        assert_eq!(
+            store.signup_quota().usage(
+                "demo-app",
+                "127.0.0.1",
+                fireemu_core_types::time::LogicalInstant::UNIX_EPOCH,
+            ),
+            (0, 0)
+        );
+    }
+
+    #[test]
+    fn explicit_quota_only_preserves_imported_simulation_and_usage() {
+        let cfg = crate::config::RuntimeConfig::from_json(&json!({
+            "schemaVersion": 1,
+            "auth": {"quota": {"signUpQuotaConfig": {
+                "quota": "2",
+                "startTime": "2030-01-01T00:00:00Z",
+                "quotaDuration": "3600s"
+            }}}
+        }))
+        .expect("valid explicit quota settings");
+        assert!(cfg.auth_signup_quota_explicit);
+        assert!(!cfg.auth_quota_simulation_explicit);
+
+        let imported = SignupQuotaConfig {
+            mode: QuotaMode::Enforce,
+            algorithm: QuotaAlgorithm::FixedWindowV1,
+            default_quota_per_hour: 99,
+            max_tracked_buckets: 16,
+            temporary: Some(
+                TemporaryQuota::new(
+                    7,
+                    LogicalInstant::UNIX_EPOCH,
+                    fireemu_core_types::time::LogicalDuration::from_seconds(60),
+                )
+                .expect("temporary quota is valid"),
+            ),
+        };
+        let registry = AuthRegistry::new(
+            "demo-app",
+            Arc::new(Mutex::new(AuthStore::new(
+                "demo-app",
+                SplitMix64::new(1),
+                TotpPolicy::default(),
+            ))),
+        );
+        let store = registry.default_store();
+        store
+            .lock()
+            .unwrap()
+            .set_signup_quota_config(imported.clone())
+            .expect("imported quota is valid");
+        let reservation = store
+            .lock()
+            .unwrap()
+            .reserve_signup(
+                AuthPrincipal::EndUser,
+                "127.0.0.1",
+                LogicalInstant::UNIX_EPOCH,
+            )
+            .expect("imported quota accepts the first signup");
+        store
+            .lock()
+            .unwrap()
+            .commit_signup(reservation, LogicalInstant::UNIX_EPOCH)
+            .expect("imported quota commits the first signup");
+
+        reapply_explicit_auth_quota(&cfg, &registry).expect("explicit quota reapplies");
+
+        let store = store.lock().unwrap();
+        assert_eq!(store.signup_quota().config().mode, imported.mode);
+        assert_eq!(
+            store.signup_quota().config().default_quota_per_hour,
+            imported.default_quota_per_hour
+        );
+        assert_eq!(
+            store.signup_quota().config().max_tracked_buckets,
+            imported.max_tracked_buckets
+        );
+        assert_eq!(
+            store.signup_quota().config().temporary,
+            Some(
+                TemporaryQuota::new(
+                    2,
+                    LogicalInstant::parse_rfc3339("2030-01-01T00:00:00Z").unwrap(),
+                    fireemu_core_types::time::LogicalDuration::from_seconds(3_600),
+                )
+                .unwrap()
+            )
+        );
+        assert_eq!(
+            store
+                .signup_quota()
+                .usage("demo-app", "127.0.0.1", LogicalInstant::UNIX_EPOCH,),
+            (1, 0)
+        );
+    }
+
+    #[test]
+    fn explicit_quota_simulation_only_preserves_imported_temporary_quota() {
+        let cfg = crate::config::RuntimeConfig::from_json(&json!({
+            "schemaVersion": 1,
+            "auth": {"quotaSimulation": {
+                "mode": "enforce",
+                "defaultQuotaPerHour": 7,
+                "maxTrackedBuckets": 8
+            }}
+        }))
+        .expect("valid explicit quota simulation settings");
+        assert!(!cfg.auth_signup_quota_explicit);
+        assert!(cfg.auth_quota_simulation_explicit);
+
+        let imported_temporary = TemporaryQuota::new(
+            3,
+            LogicalInstant::UNIX_EPOCH,
+            fireemu_core_types::time::LogicalDuration::from_seconds(60),
+        )
+        .expect("temporary quota is valid");
+        let imported = SignupQuotaConfig {
+            mode: QuotaMode::Observe,
+            algorithm: QuotaAlgorithm::FixedWindowV1,
+            default_quota_per_hour: 99,
+            max_tracked_buckets: 16,
+            temporary: Some(imported_temporary),
+        };
+        let registry = AuthRegistry::new(
+            "demo-app",
+            Arc::new(Mutex::new(AuthStore::new(
+                "demo-app",
+                SplitMix64::new(1),
+                TotpPolicy::default(),
+            ))),
+        );
+        let store = registry.default_store();
+        store
+            .lock()
+            .unwrap()
+            .set_signup_quota_config(imported)
+            .expect("imported quota is valid");
+
+        reapply_explicit_auth_quota(&cfg, &registry).expect("explicit simulation reapplies");
+
+        let store = store.lock().unwrap();
+        assert_eq!(store.signup_quota().config().mode, QuotaMode::Enforce);
+        assert_eq!(store.signup_quota().config().default_quota_per_hour, 7);
+        assert_eq!(store.signup_quota().config().max_tracked_buckets, 8);
+        assert_eq!(
+            store.signup_quota().config().temporary,
+            Some(imported_temporary)
+        );
+    }
+
+    #[test]
+    fn explicit_null_quota_only_clears_imported_temporary_quota() {
+        let cfg = crate::config::RuntimeConfig::from_json(&json!({
+            "schemaVersion": 1,
+            "auth": {"quota": {"signUpQuotaConfig": null}}
+        }))
+        .expect("valid explicit quota clear");
+        assert!(cfg.auth_signup_quota_explicit);
+        assert!(!cfg.auth_quota_simulation_explicit);
+
+        let imported = SignupQuotaConfig {
+            mode: QuotaMode::Observe,
+            algorithm: QuotaAlgorithm::FixedWindowV1,
+            default_quota_per_hour: 99,
+            max_tracked_buckets: 16,
+            temporary: Some(
+                TemporaryQuota::new(
+                    3,
+                    LogicalInstant::UNIX_EPOCH,
+                    fireemu_core_types::time::LogicalDuration::from_seconds(60),
+                )
+                .expect("temporary quota is valid"),
+            ),
+        };
+        let registry = AuthRegistry::new(
+            "demo-app",
+            Arc::new(Mutex::new(AuthStore::new(
+                "demo-app",
+                SplitMix64::new(1),
+                TotpPolicy::default(),
+            ))),
+        );
+        let store = registry.default_store();
+        store
+            .lock()
+            .unwrap()
+            .set_signup_quota_config(imported.clone())
+            .expect("imported quota is valid");
+
+        reapply_explicit_auth_quota(&cfg, &registry).expect("explicit quota clear reapplies");
+
+        let store = store.lock().unwrap();
+        assert_eq!(store.signup_quota().config().mode, imported.mode);
+        assert_eq!(store.signup_quota().config().default_quota_per_hour, 99);
+        assert_eq!(store.signup_quota().config().max_tracked_buckets, 16);
+        assert_eq!(store.signup_quota().config().temporary, None);
+    }
+
+    #[test]
+    fn auth_config_overrides_update_existing_namespace_without_creating_missing_one() {
+        let cfg = crate::config::RuntimeConfig::from_json(&json!({
+            "schemaVersion": 1,
+            "auth": {"configOverrides": [
+                {"projectId": "demo-app", "tenantId": "tenant-a", "config": {
+                    "client": {"permissions": {
+                        "disabledUserSignup": true,
+                        "disabledUserDeletion": true
+                    }},
+                    "improvedEmailPrivacy": false
+                }},
+                {"projectId": "future-project", "config": {
+                    "improvedEmailPrivacy": false
+                }}
+            ]}
+        }))
+        .expect("valid namespace overrides");
+        let default_store = Arc::new(Mutex::new(AuthStore::new(
+            "demo-app",
+            SplitMix64::new(4),
+            TotpPolicy::default(),
+        )));
+        let registry = AuthRegistry::new("demo-app", default_store);
+        let tenant = registry
+            .ensure_tenant("demo-app", "tenant-a")
+            .expect("tenant store");
+
+        apply_auth_config_overrides(&cfg, &registry).expect("overrides apply");
+
+        let config = tenant.lock().expect("tenant lock").config();
+        assert!(config.disabled_user_signup);
+        assert!(config.disabled_user_deletion);
+        assert!(!config.enable_improved_email_privacy);
+        assert!(registry.store_for("future-project").is_none());
+    }
+
+    #[test]
+    fn omitted_root_auth_settings_preserve_imported_config_after_startup() {
+        let default_store = Arc::new(Mutex::new(AuthStore::new(
+            "demo-app",
+            SplitMix64::new(4),
+            TotpPolicy::default(),
+        )));
+        default_store.lock().unwrap().set_config(ProjectAuthConfig {
+            allow_duplicate_emails: true,
+            enable_improved_email_privacy: false,
+            disabled_user_signup: true,
+            disabled_user_deletion: true,
+        });
+        let registry = AuthRegistry::new("demo-app", default_store.clone());
+        let omitted = crate::config::RuntimeConfig::from_json(&json!({
+            "schemaVersion": 1
+        }))
+        .expect("omitted Auth settings");
+        reapply_explicit_auth_config(&omitted, &registry).expect("reapply omitted config");
+        assert_eq!(
+            default_store.lock().unwrap().config(),
+            ProjectAuthConfig {
+                allow_duplicate_emails: true,
+                enable_improved_email_privacy: false,
+                disabled_user_signup: true,
+                disabled_user_deletion: true,
+            }
+        );
+
+        let explicit = crate::config::RuntimeConfig::from_json(&json!({
+            "schemaVersion": 1,
+            "auth": {
+                "signIn": {"allowDuplicateEmails": false},
+                "client": {"permissions": {
+                    "disabledUserSignup": false,
+                    "disabledUserDeletion": false
+                }},
+                "improvedEmailPrivacy": true
+            }
+        }))
+        .expect("explicit Auth settings");
+        reapply_explicit_auth_config(&explicit, &registry).expect("reapply explicit config");
+        assert_eq!(
+            default_store.lock().unwrap().config(),
+            ProjectAuthConfig {
+                allow_duplicate_emails: false,
+                enable_improved_email_privacy: true,
+                disabled_user_signup: false,
+                disabled_user_deletion: false,
+            }
+        );
+    }
+
+    #[test]
+    fn explicit_blocking_trigger_maps_to_a_non_discovery_selection() {
+        let cfg = crate::config::RuntimeConfig::from_json(&json!({
+            "schemaVersion": 1,
+            "auth": {"blockingFunctions": {
+                "triggers": {
+                    "beforeCreate": {"function": "checkRegistration", "region": "europe-west1"},
+                    "beforeSignIn": null
+                }
+            }}
+        }))
+        .expect("valid blocking settings");
+        let config = cfg.auth_blocking_functions.expect("blocking settings");
+        let triggers = config.triggers.expect("explicit triggers");
+        assert!(matches!(
+            blocking_auth_selection(triggers.before_create.as_ref()),
+            fireemu_core_functions::manifest::BlockingAuthSelection::Explicit { .. }
+        ));
+        assert!(matches!(
+            blocking_auth_selection(triggers.before_sign_in.as_ref()),
+            fireemu_core_functions::manifest::BlockingAuthSelection::Disabled
+        ));
+    }
 
     #[test]
     fn function_user_logs_keep_the_official_logging_metadata() {
@@ -1269,5 +2122,150 @@ mod tests {
         drop(admitted);
         closed_rx.recv().unwrap();
         closer.join().unwrap();
+    }
+
+    #[test]
+    fn password_policy_overrides_wait_for_namespace_creation() {
+        let cfg = crate::config::RuntimeConfig::from_json(&json!({
+            "schemaVersion": 1,
+            "auth": {
+                "passwordPolicyOverrides": [
+                    {
+                        "projectId": "future-project",
+                        "passwordPolicy": {
+                            "enforcementState": "ENFORCE",
+                            "constraints": {"minLength": 12}
+                        }
+                    },
+                    {
+                        "projectId": "demo-app",
+                        "tenantId": "tenant-a",
+                        "passwordPolicy": {
+                            "enforcementState": "ENFORCE",
+                            "constraints": {"minLength": 13}
+                        }
+                    }
+                ]
+            }
+        }))
+        .expect("valid password-policy overrides");
+        let default_store = Arc::new(Mutex::new(AuthStore::new(
+            "demo-app",
+            SplitMix64::new(1),
+            TotpPolicy::default(),
+        )));
+        let registry = AuthRegistry::new("demo-app", default_store);
+
+        apply_auth_password_policy_overrides(&cfg, &registry).expect("overrides apply");
+
+        assert!(registry.store_for("future-project").is_none());
+        assert!(registry.tenant_store("demo-app", "tenant-a").is_none());
+
+        assert!(registry.register(
+            "future-project",
+            AuthStore::new("future-project", SplitMix64::new(2), TotpPolicy::default(),),
+        ));
+        let project = registry.store_for("future-project").expect("project store");
+        assert_eq!(
+            project
+                .lock()
+                .expect("project store lock")
+                .password_policy()
+                .min_length,
+            12
+        );
+
+        let tenant = registry
+            .ensure_tenant("demo-app", "tenant-a")
+            .expect("tenant store");
+        assert_eq!(
+            tenant
+                .lock()
+                .expect("tenant store lock")
+                .password_policy()
+                .min_length,
+            13
+        );
+    }
+
+    #[test]
+    fn explicit_password_policy_replaces_imported_policy_without_creating_namespaces() {
+        let cfg = crate::config::RuntimeConfig::from_json(&json!({
+            "schemaVersion": 1,
+            "auth": {
+                "passwordPolicy": {
+                    "enforcementState": "ENFORCE",
+                    "constraints": {"minLength": 12}
+                },
+                "passwordPolicyOverrides": [{
+                    "projectId": "demo-app",
+                    "tenantId": "tenant-a",
+                    "passwordPolicy": {
+                        "enforcementState": "ENFORCE",
+                        "constraints": {"minLength": 13}
+                    }
+                }]
+            }
+        }))
+        .expect("valid password-policy configuration");
+        let default_store = Arc::new(Mutex::new(AuthStore::new(
+            "demo-app",
+            SplitMix64::new(3),
+            TotpPolicy::default(),
+        )));
+        let registry = AuthRegistry::new("demo-app", default_store.clone());
+        let tenant = registry
+            .ensure_tenant("demo-app", "tenant-a")
+            .expect("tenant store");
+
+        let imported_policy = |min_length| {
+            PasswordPolicy::try_new(
+                EnforcementState::Enforce,
+                false,
+                min_length,
+                None,
+                false,
+                false,
+                false,
+                false,
+                default_allowed_non_alphanumeric(),
+            )
+            .expect("valid imported policy")
+        };
+
+        // Model an import that installed different policies before the explicit configuration
+        // layer is applied. The tenant already exists, while an unrelated project does not.
+        default_store
+            .lock()
+            .expect("default store lock")
+            .set_password_policy(imported_policy(8));
+        tenant
+            .lock()
+            .expect("tenant store lock")
+            .set_password_policy(imported_policy(9));
+
+        reapply_explicit_auth_password_policies(&cfg, &registry)
+            .expect("explicit policies reapply");
+
+        assert_eq!(
+            default_store
+                .lock()
+                .expect("default store lock")
+                .password_policy()
+                .min_length,
+            12
+        );
+        assert_eq!(
+            tenant
+                .lock()
+                .expect("tenant store lock")
+                .password_policy()
+                .min_length,
+            13
+        );
+        assert!(registry.store_for("unrelated-project").is_none());
+        assert!(registry
+            .tenant_store("demo-app", "unrelated-tenant")
+            .is_none());
     }
 }

@@ -1,0 +1,138 @@
+{
+  "schemaVersion": 1,
+  "confirmedNewRuntimeGaps": 0,
+  "unresolvedExistingGaps": [
+    "GAP-AUTH-007",
+    "AUTH-U03"
+  ],
+  "candidates": [
+    {
+      "id": "BROAD-HARNESS-001",
+      "status": "resolved-configuration-mismatch",
+      "cause": "Strict replay omitted the historical composite index file; not a cursor runtime defect.",
+      "firstDivergentOperation": "firestore:queries/cursors#start-at-prefix-of-order",
+      "impact": "A valid production prefix-cursor request was incorrectly reported as a local mismatch by the initial harness configuration.",
+      "initialExecutionCommit": "9f94d06d9c52ec7f3d8add5fb5ee0716aea25f5c",
+      "fixedExecutionCommit": "a68fab129c206fba08692e97038377ae1d1a50b2",
+      "historicalEvidence": "conformance/firestore-production-matrix.json",
+      "fix": "Load exact historical index bytes via firestore.indexFile; retain strict profile and unchanged expected responses.",
+      "runtimePatchRequired": false,
+      "minimalReproduction": {
+        "artifactSha256": "ad57f853aef6145486f6da60ef91186c246c009ef2f0173cf3a82d78da6b27e5",
+        "executionCommit": "a68fab129c206fba08692e97038377ae1d1a50b2",
+        "sameArtifactBothConfigurations": true,
+        "program": {
+          "id": "minimal/index-prefix-cursor",
+          "area": "queries",
+          "seed": [
+            {
+              "path": "/v1/projects/PROJECT/databases/(default)/documents/cur/c",
+              "fields": {
+                "n": {
+                  "integerValue": "2"
+                },
+                "g": {
+                  "stringValue": "q"
+                }
+              }
+            }
+          ],
+          "steps": [
+            {
+              "id": "start-at-prefix-of-order",
+              "method": "POST",
+              "path": "/v1/projects/PROJECT/databases/(default)/documents:runQuery",
+              "body": {
+                "structuredQuery": {
+                  "from": [
+                    {
+                      "collectionId": "cur"
+                    }
+                  ],
+                  "orderBy": [
+                    {
+                      "field": {
+                        "fieldPath": "g"
+                      },
+                      "direction": "ASCENDING"
+                    },
+                    {
+                      "field": {
+                        "fieldPath": "n"
+                      },
+                      "direction": "ASCENDING"
+                    }
+                  ],
+                  "startAt": {
+                    "values": [
+                      {
+                        "stringValue": "q"
+                      }
+                    ],
+                    "before": true
+                  }
+                }
+              }
+            }
+          ]
+        },
+        "indexSha256": "8a4d4bd7a72c3ce2bed4e0f8c4adc0cdb3a7c428477578295e44a11ae063d01c",
+        "results": [
+          {
+            "indexPresent": false,
+            "actual": {
+              "status": 400,
+              "code": "FAILED_PRECONDITION",
+              "message": "The query requires an index. missing index (g Ascending, n Ascending, __name__ Ascending)\nAdd to firestore.indexes.json:\n{\n  \"collectionGroup\": \"cur\",\n  \"queryScope\": \"COLLECTION\",\n  \"fields\": [\n      {\"fieldPath\": \"g\", \"order\": \"ASCENDING\"},\n      {\"fieldPath\": \"n\", \"order\": \"ASCENDING\"},\n      {\"fieldPath\": \"__name__\", \"order\": \"ASCENDING\"}\n  ]\n}"
+            },
+            "parentStopped": true
+          },
+          {
+            "indexPresent": true,
+            "actual": {
+              "status": 200,
+              "code": "OK",
+              "body": [
+                {
+                  "document": {
+                    "createTime": "<now>",
+                    "fields": {
+                      "g": {
+                        "stringValue": "q"
+                      },
+                      "n": {
+                        "integerValue": "2"
+                      }
+                    },
+                    "name": "projects/demo-firestore-probe/databases/(default)/documents/cur/c",
+                    "updateTime": "<now>"
+                  },
+                  "readTime": "<now>"
+                }
+              ]
+            },
+            "parentStopped": true
+          }
+        ],
+        "runtimePatchRequired": false
+      }
+    }
+  ],
+  "indeterminateGroups": [
+    {
+      "cause": "changed-operation-sequence",
+      "rows": 20,
+      "nextUnit": "Run current transforms with a newly approved production observation; do not join old row IDs."
+    },
+    {
+      "cause": "transaction-write-no-response",
+      "rows": 2,
+      "nextUnit": "Bounded contention/lock study with partial-order constraints; no timeout inference from one history."
+    },
+    {
+      "cause": "non-json-unknown-method",
+      "rows": 1,
+      "nextUnit": "Preserve raw non-JSON response semantics in a separately reviewed adapter; no invented JSON expectation."
+    }
+  ]
+}

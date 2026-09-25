@@ -1,0 +1,549 @@
+{
+  "kind": "second45-runtime-recomparison-v1",
+  "status": "candidate",
+  "productionSource": "774e9d8b-second45-production-candidate.json",
+  "runtimeCommit": "31dee8d06e56075ba7c488c89f740611ebb380d6",
+  "testCommit": "37e4c3967f0ff16670b61d32373df6a39517a5a3",
+  "comparatorChanged": false,
+  "originalComparisonCounts": {
+    "match": 32,
+    "mismatch": 13,
+    "indeterminate": 0
+  },
+  "second45": {
+    "run": {
+      "executionCommit": "2ca689bdd995eb4e3412803b843eb6bc63b02cd7",
+      "artifactSha256": "8800114f49ffaa52a99fb8519c10dbb8b6cc91ec2085d4a7770f615c5609d831",
+      "ownedProcess": {
+        "pid": 22046,
+        "stopped": true,
+        "listenersClosed": true
+      },
+      "exitCode": 0,
+      "manifestFileSha256": "b27e4061e1a0eb57390f8195c4ef3248779af8db93ca3393e69c50b5bc8da105"
+    },
+    "comparison": {
+      "kind": "second45-production-local-comparison-v2",
+      "comparisonContractDigest": "0625bd76c028de64ff0ae9ae595b1c5f44bd48cc5475c63e806a8060cbf742cb",
+      "inputDigests": [
+        "15fc04d515cc71d59719b3934ac5bf47ffff3ca9a4e8034db1c8a6c1dc51a528",
+        "838d7fed6f9593b1bf7871e5383927564e246f26fe5aba7410efe17d77555852"
+      ],
+      "recordingComplete": true,
+      "cleanupComplete": true,
+      "stateValidation": true,
+      "compatibility": "match",
+      "rows": [
+        {
+          "id": "second/auth/01",
+          "compatibility": "match"
+        },
+        {
+          "id": "second/auth/02",
+          "compatibility": "match"
+        },
+        {
+          "id": "second/auth/03",
+          "compatibility": "match"
+        },
+        {
+          "id": "second/auth/04",
+          "compatibility": "match"
+        },
+        {
+          "id": "second/auth/05",
+          "compatibility": "match"
+        },
+        {
+          "id": "second/auth/06",
+          "compatibility": "match"
+        },
+        {
+          "id": "second/auth/07",
+          "compatibility": "match"
+        },
+        {
+          "id": "second/auth/08",
+          "compatibility": "match"
+        },
+        {
+          "id": "second/auth/09",
+          "compatibility": "match"
+        },
+        {
+          "id": "second/auth/10",
+          "compatibility": "match"
+        },
+        {
+          "id": "second/auth/11",
+          "compatibility": "match"
+        },
+        {
+          "id": "second/auth/12",
+          "compatibility": "match"
+        },
+        {
+          "id": "second/auth/13",
+          "compatibility": "match"
+        },
+        {
+          "id": "second/auth/14",
+          "compatibility": "match"
+        },
+        {
+          "id": "second/auth/15",
+          "compatibility": "match"
+        },
+        {
+          "id": "second/auth/16",
+          "compatibility": "match"
+        },
+        {
+          "id": "second/auth/17",
+          "compatibility": "match"
+        },
+        {
+          "id": "second/auth/18",
+          "compatibility": "match"
+        },
+        {
+          "id": "second/auth/19",
+          "compatibility": "match"
+        },
+        {
+          "id": "second/auth/20",
+          "compatibility": "match"
+        },
+        {
+          "id": "second/auth/21",
+          "compatibility": "match"
+        },
+        {
+          "id": "second/auth/22",
+          "compatibility": "match"
+        },
+        {
+          "id": "second/auth/23",
+          "compatibility": "match"
+        },
+        {
+          "id": "second/auth/24",
+          "compatibility": "match"
+        },
+        {
+          "id": "second/auth/25",
+          "compatibility": "match"
+        },
+        {
+          "id": "second/auth/26",
+          "compatibility": "match"
+        },
+        {
+          "id": "second/auth/27",
+          "compatibility": "match"
+        },
+        {
+          "id": "second/auth/28",
+          "compatibility": "match"
+        },
+        {
+          "id": "second/auth/29",
+          "compatibility": "match"
+        },
+        {
+          "id": "second/auth/30",
+          "compatibility": "match"
+        },
+        {
+          "id": "second/auth/31",
+          "compatibility": "match"
+        },
+        {
+          "id": "second/auth/32",
+          "compatibility": "match"
+        },
+        {
+          "id": "second/masks/ancestor-overlap-state/normal",
+          "compatibility": "match"
+        },
+        {
+          "id": "second/masks/ancestor-overlap-state/before",
+          "compatibility": "match"
+        },
+        {
+          "id": "second/masks/ancestor-overlap-state/diagnostic",
+          "compatibility": "match"
+        },
+        {
+          "id": "second/masks/ancestor-overlap-state/after",
+          "compatibility": "match"
+        },
+        {
+          "id": "second/preconditions/stale-delete-state/original",
+          "compatibility": "match"
+        },
+        {
+          "id": "second/preconditions/stale-delete-state/normal",
+          "compatibility": "match"
+        },
+        {
+          "id": "second/preconditions/stale-delete-state/before",
+          "compatibility": "match"
+        },
+        {
+          "id": "second/preconditions/stale-delete-state/diagnostic",
+          "compatibility": "match"
+        },
+        {
+          "id": "second/preconditions/stale-delete-state/after",
+          "compatibility": "match"
+        },
+        {
+          "id": "second/transforms/invalid-path-state/normal",
+          "compatibility": "match"
+        },
+        {
+          "id": "second/transforms/invalid-path-state/before",
+          "compatibility": "match"
+        },
+        {
+          "id": "second/transforms/invalid-path-state/diagnostic",
+          "compatibility": "match"
+        },
+        {
+          "id": "second/transforms/invalid-path-state/after",
+          "compatibility": "match"
+        }
+      ],
+      "errors": []
+    },
+    "counts": {
+      "match": 45,
+      "mismatch": 0,
+      "indeterminate": 0
+    }
+  },
+  "first46": {
+    "run": {
+      "executionCommit": "37e4c3967f0ff16670b61d32373df6a39517a5a3",
+      "artifactSha256": "d19c18c012fcfde13a4602751d7464d12bef36bb152f1d443c417c1feeea7060",
+      "ownedProcess": {
+        "pid": 24614,
+        "stopped": true,
+        "listenersClosed": true
+      },
+      "exitCode": 0,
+      "manifestFileSha256": "cbd91d46d58bed132af00bfd083ff28c3ded2c922585170ca9027fc754c0fcaf"
+    },
+    "comparison": {
+      "mode": "saved-production-versus-local",
+      "source": {
+        "publicationCommit": "ab7bd698",
+        "executionCommit": "bc38f392077784509f7fbb8993d5be66c1a8be14",
+        "observerDigest": "1501aea61749d79d32238b9329f3d75370d9d500322ffab331ec0c8b3505342f",
+        "manifestDigest": "4b6d42bc5acd1a697622b25325ba67620af272d5c44f5d00982dbffe8bb8cc3f",
+        "comparisonContractDigest": "ec0ef13fc77b6edf0f4940f472267b91b117707b36aac15a00c0a6aea96e89dc",
+        "fileSha256": {
+          "bc38f392-paired-observations.json": "a7809362c9c3a69d6a03a4f68e69aea0de34e29771f5bd36b2053359c609114c",
+          "bc38f392-execution-result.json": "5997e5ecc9f3da0addeed6b88c290cfc97c496e317c7625a9175232105953b88"
+        },
+        "originalComparisonCounts": {
+          "match": 35,
+          "mismatch": 11
+        },
+        "limitation": "Uses pinned published normalized observations; previously removed token bytes and absolute times are not recovered. No new production execution."
+      },
+      "localObserverDigest": "93aadfbc697f44f492e2f2a6e2d62f504e7e13f4bae457d4f6d14dc18f5225f7",
+      "evidenceKind": "recorded-observations",
+      "recordingComplete": true,
+      "bindingsValid": true,
+      "bindingErrors": [],
+      "cleanupComplete": true,
+      "compatibility": "match",
+      "rows": [
+        {
+          "id": "firestore:broad/refusal-preserves-state#read-normal",
+          "status": "match",
+          "firstDifference": null
+        },
+        {
+          "id": "firestore:broad/refusal-preserves-state#refused-overwrite",
+          "status": "match",
+          "firstDifference": null
+        },
+        {
+          "id": "firestore:broad/refusal-preserves-state#read-after-refusal",
+          "status": "match",
+          "firstDifference": null
+        },
+        {
+          "id": "firestore:broad/refusal-preserves-state#empty-commit",
+          "status": "match",
+          "firstDifference": null
+        },
+        {
+          "id": "firestore:broad/refusal-preserves-state#zero-limit",
+          "status": "match",
+          "firstDifference": null
+        },
+        {
+          "id": "firestore:broad/refusal-preserves-state#negative-limit",
+          "status": "match",
+          "firstDifference": null
+        },
+        {
+          "id": "firestore:broad/refusal-preserves-state#read-after-query-refusal",
+          "status": "match",
+          "firstDifference": null
+        },
+        {
+          "id": "firestore:writes/transforms#server-timestamp-and-increments",
+          "status": "match",
+          "firstDifference": null
+        },
+        {
+          "id": "firestore:writes/transforms#read-after-increments",
+          "status": "match",
+          "firstDifference": null
+        },
+        {
+          "id": "firestore:writes/transforms#maximum-and-minimum-invalid-field-path",
+          "status": "match",
+          "firstDifference": null
+        },
+        {
+          "id": "firestore:writes/transforms#read-after-invalid-max-min",
+          "status": "match",
+          "firstDifference": null
+        },
+        {
+          "id": "firestore:writes/transforms#maximum-and-minimum",
+          "status": "match",
+          "firstDifference": null
+        },
+        {
+          "id": "firestore:writes/transforms#read-after-max-min",
+          "status": "match",
+          "firstDifference": null
+        },
+        {
+          "id": "firestore:writes/transforms#array-transforms",
+          "status": "match",
+          "firstDifference": null
+        },
+        {
+          "id": "firestore:writes/transforms#read-after-array-transforms",
+          "status": "match",
+          "firstDifference": null
+        },
+        {
+          "id": "firestore:writes/transforms#transform-only-write-creates",
+          "status": "match",
+          "firstDifference": null
+        },
+        {
+          "id": "firestore:writes/transforms#read-transform-created",
+          "status": "match",
+          "firstDifference": null
+        },
+        {
+          "id": "firestore:writes/transforms#transform-write-with-exists-precondition",
+          "status": "match",
+          "firstDifference": null
+        },
+        {
+          "id": "firestore:writes/transforms#increment-with-non-numeric-operand",
+          "status": "match",
+          "firstDifference": null
+        },
+        {
+          "id": "firestore:writes/transforms#server-timestamp-on-a-delete",
+          "status": "match",
+          "firstDifference": null
+        },
+        {
+          "id": "firestore:writes/transforms#set-and-transform-same-field",
+          "status": "match",
+          "firstDifference": null
+        },
+        {
+          "id": "firestore:writes/transforms#read-set-and-transform",
+          "status": "match",
+          "firstDifference": null
+        },
+        {
+          "id": "firestore:writes/transforms#integer-increment-saturates",
+          "status": "match",
+          "firstDifference": null
+        },
+        {
+          "id": "firestore:writes/transforms#read-saturated",
+          "status": "match",
+          "firstDifference": null
+        },
+        {
+          "id": "firestore:writes/transforms#increment-on-nan",
+          "status": "match",
+          "firstDifference": null
+        },
+        {
+          "id": "firestore:writes/transforms#two-transforms-on-one-field-in-one-write",
+          "status": "match",
+          "firstDifference": null
+        },
+        {
+          "id": "firestore:writes/transforms#read-dup",
+          "status": "match",
+          "firstDifference": null
+        },
+        {
+          "id": "auth:broad/create-a",
+          "status": "match",
+          "firstDifference": null
+        },
+        {
+          "id": "auth:broad/create-b",
+          "status": "match",
+          "firstDifference": null
+        },
+        {
+          "id": "auth:broad/short-password-refused",
+          "status": "match",
+          "firstDifference": null
+        },
+        {
+          "id": "auth:broad/refused-create-absent",
+          "status": "match",
+          "firstDifference": null
+        },
+        {
+          "id": "auth:broad/self-admin-field",
+          "status": "match",
+          "firstDifference": null
+        },
+        {
+          "id": "auth:broad/other-user-selector",
+          "status": "match",
+          "firstDifference": null
+        },
+        {
+          "id": "auth:broad/unauthenticated-update",
+          "status": "match",
+          "firstDifference": null
+        },
+        {
+          "id": "auth:broad/refusal-state-a",
+          "status": "match",
+          "firstDifference": null
+        },
+        {
+          "id": "auth:broad/refusal-state-b",
+          "status": "match",
+          "firstDifference": null
+        },
+        {
+          "id": "auth:broad/admin-update",
+          "status": "match",
+          "firstDifference": null
+        },
+        {
+          "id": "auth:broad/self-sees-admin-state",
+          "status": "match",
+          "firstDifference": null
+        },
+        {
+          "id": "auth:broad/password-change",
+          "status": "match",
+          "firstDifference": null
+        },
+        {
+          "id": "auth:broad/old-password",
+          "status": "match",
+          "firstDifference": null
+        },
+        {
+          "id": "auth:broad/new-password",
+          "status": "match",
+          "firstDifference": null
+        },
+        {
+          "id": "auth:broad/refresh-after-change",
+          "status": "match",
+          "firstDifference": null
+        },
+        {
+          "id": "auth:broad/delete-a",
+          "status": "match",
+          "firstDifference": null
+        },
+        {
+          "id": "auth:broad/deleted-absent-a",
+          "status": "match",
+          "firstDifference": null
+        },
+        {
+          "id": "auth:broad/delete-b",
+          "status": "match",
+          "firstDifference": null
+        },
+        {
+          "id": "auth:broad/deleted-absent-b",
+          "status": "match",
+          "firstDifference": null
+        }
+      ],
+      "manifestDigest": "6f0fa73a8fe494709b883c440266c721157d8ec44252fb81c331f2a10642d534",
+      "comparisonContractDigest": "467df4b222eec0b35a800c5cddc434413711c26400668cd4fddb57bdfed09cea"
+    }
+  },
+  "mutations": [
+    {
+      "mutation": "bypass-shape-guard",
+      "exitCode": 100,
+      "killedByAssertion": true
+    },
+    {
+      "mutation": "decode-before-credentials",
+      "exitCode": 100,
+      "killedByAssertion": true
+    },
+    {
+      "mutation": "old-claims-permission-code",
+      "exitCode": 100,
+      "killedByAssertion": true
+    }
+  ],
+  "securityReview": {
+    "method": "independent read-only reviewer applying Security Specialist criteria; requested profile unavailable",
+    "mustFix": [],
+    "shouldFix": "credential-plus-invalid-shape regression added and reviewed",
+    "artifactFileSha256": "c5a7ca184a93f02c6d5236c6064fbe34000a6be25b0a0da86b58997a80c7182e"
+  },
+  "additionalProductionOperations": 0,
+  "limitations": [
+    "Production evidence covers the original closed45 inputs only.",
+    "Other numeric values and malformed combinations do not gain production-parity status.",
+    "Malformed-field plus invalid-token precedence remains a local safety contract.",
+    "Original32/13, first46 original35/11 and previous evidence remain unchanged."
+  ],
+  "verification": {
+    "adapterTests": {
+      "pass": 291,
+      "fail": 0,
+      "skip": 0
+    },
+    "clippy": "pass",
+    "fullWorkspace": "not-run",
+    "failedCachedRun": {
+      "pass": 218,
+      "fail": 2,
+      "notRun": 71,
+      "supersededFirst46ArtifactSha256": "4380ecf5ff4068298e14e0411725f1682c43b31583d51679003fa5787182e807"
+    },
+    "logSha256": {
+      "final-nextest-rebuilt.log": "4bf17d474aeab780bccf0e742ba2857a9c6bdc33fc0d013c696699e2d80dfe32",
+      "final-clippy-rebuilt.log": "41a904b9f80f17da137bcfea88a7119a1b59da5dcc0b87b0113c1c48d2c2debc",
+      "mutation-results.json": "6bf9e04a9875ae6589d0942d8cee00bd7c0fdd9212635516b1fad47ccb289cc8"
+    }
+  }
+}

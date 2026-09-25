@@ -8,6 +8,7 @@
 use core::fmt;
 use std::collections::{BTreeMap, BTreeSet};
 
+use fireemu_core_types::codec::{write_json_string, JsonControlEscape};
 use fireemu_core_types::edition::{FirestoreApiMode, FirestoreEdition};
 use fireemu_core_types::ids::CollectionId;
 
@@ -24,14 +25,28 @@ pub enum IndexFieldMode {
     Descending,
     /// Array contains.
     Contains,
+    /// Vector index with the configured embedding dimension.
+    Vector {
+        /// Number of components accepted by the index.
+        dimension: u32,
+    },
 }
 
 impl IndexFieldMode {
-    fn json(self) -> &'static str {
+    // Only ordered modes provide scalar equality keys. In particular, a vector index
+    // supports FindNearest, not the equality prefix of an ordinary query or index merge.
+    fn is_ordered(self) -> bool {
+        matches!(self, Self::Ascending | Self::Descending)
+    }
+
+    fn json(self) -> String {
         match self {
-            Self::Ascending => "\"order\": \"ASCENDING\"",
-            Self::Descending => "\"order\": \"DESCENDING\"",
-            Self::Contains => "\"arrayConfig\": \"CONTAINS\"",
+            Self::Ascending => "\"order\": \"ASCENDING\"".to_owned(),
+            Self::Descending => "\"order\": \"DESCENDING\"".to_owned(),
+            Self::Contains => "\"arrayConfig\": \"CONTAINS\"".to_owned(),
+            Self::Vector { dimension } => {
+                format!("\"vectorConfig\": {{\"dimension\": {dimension}, \"flat\": {{}}}}")
+            }
         }
     }
 }
@@ -74,15 +89,15 @@ impl IndexDefinition {
             .iter()
             .map(|f| {
                 format!(
-                    "      {{\"fieldPath\": \"{}\", {}}}",
-                    f.path.canonical(),
+                    "      {{\"fieldPath\": {}, {}}}",
+                    index_json_string(&f.path.canonical()),
                     f.mode.json()
                 )
             })
             .collect();
         format!(
-            "{{\n  \"collectionGroup\": \"{}\",\n  \"queryScope\": \"{}\",\n  \"fields\": [\n{}\n  ]\n}}",
-            self.collection_group.as_str(),
+            "{{\n  \"collectionGroup\": {},\n  \"queryScope\": \"{}\",\n  \"fields\": [\n{}\n  ]\n}}",
+            index_json_string(self.collection_group.as_str()),
             match self.query_scope {
                 IndexQueryScope::Collection => "COLLECTION",
                 IndexQueryScope::CollectionGroup => "COLLECTION_GROUP",
@@ -90,6 +105,14 @@ impl IndexDefinition {
             fields.join(",\n")
         )
     }
+}
+
+// FieldPath's backtick escaping is distinct from JSON escaping. Use the existing
+// RFC 8259 codec for both user-controlled strings, retaining their exact identities.
+fn index_json_string(text: &str) -> String {
+    let mut output = String::with_capacity(text.len() + 2);
+    write_json_string(&mut output, text, JsonControlEscape::Unicode);
+    output
 }
 
 /// A single-field index exemption.
@@ -182,6 +205,45 @@ impl IndexSet {
                 },
                 |(_, modes)| modes.clone(),
             )
+    }
+
+    /// The override declared for exactly this field, absent when the field inherits its
+    /// automatic indexes from the collection group default or from the built-in default.
+    ///
+    /// This is what `collectionGroups.fields.get` reports as `usesAncestorConfig`: a field
+    /// with no override of its own is described by an ancestor's configuration.
+    #[must_use]
+    pub fn single_field_override(
+        &self,
+        collection: &CollectionId,
+        field: &FieldPath,
+    ) -> Option<&[(IndexQueryScope, IndexFieldMode)]> {
+        self.single_fields
+            .get(&(collection.as_str().to_owned(), field.segments().to_vec()))
+            .map(Vec::as_slice)
+    }
+
+    /// The collection group's default (`*`) override, absent when it declares none.
+    #[must_use]
+    pub fn default_single_field_override(
+        &self,
+        collection: &CollectionId,
+    ) -> Option<&[(IndexQueryScope, IndexFieldMode)]> {
+        self.single_fields
+            .get(&(collection.as_str().to_owned(), Vec::new()))
+            .map(Vec::as_slice)
+    }
+
+    /// Every explicitly configured single-field override, as collection group, field
+    /// segments and modes. The collection-group default (the unquoted `*`) has no segments.
+    pub fn single_field_overrides(
+        &self,
+    ) -> impl Iterator<Item = (&str, &[String], &[(IndexQueryScope, IndexFieldMode)])> {
+        self.single_fields
+            .iter()
+            .map(|((collection, path), modes)| {
+                (collection.as_str(), path.as_slice(), modes.as_slice())
+            })
     }
 
     /// Composite indexes.
@@ -319,6 +381,10 @@ struct Requirement {
     equality: Vec<FieldPath>,
     contains: Option<FieldPath>,
     order: Vec<OrderClause>,
+    /// Whether an explicit order names an equality field. Production then needs one index
+    /// that carries it: it merges no single-field indexes (FS-QUERY-INDEX
+    /// query-limits/components#equalities-99-and-order).
+    equality_ordered: bool,
 }
 
 fn requirement_for(disjunction: &[FilterExpr], effective_order: &[OrderClause]) -> Requirement {
@@ -350,6 +416,7 @@ fn requirement_for(disjunction: &[FilterExpr], effective_order: &[OrderClause]) 
         }
     }
     // Ordered fields: the effective order minus fields already constrained by equality.
+    let equality_ordered = effective_order.iter().any(|o| equality.contains(&o.field));
     let order: Vec<OrderClause> = effective_order
         .iter()
         .filter(|o| !equality.contains(&o.field))
@@ -359,6 +426,7 @@ fn requirement_for(disjunction: &[FilterExpr], effective_order: &[OrderClause]) 
         equality,
         contains,
         order,
+        equality_ordered,
     }
 }
 
@@ -592,17 +660,25 @@ fn merged_indexes_for(
     collection: &CollectionId,
     group: bool,
 ) -> Option<Vec<IndexDefinition>> {
-    if req.equality.len() < 2 || req.contains.is_some() {
+    // Production merges scalar equalities, and an array-contains with them (FS-QUERY-INDEX
+    // index-selection#equality-and-array-contains-merge), but not when an explicit order
+    // names an equality field.
+    let members = req.equality.len() + usize::from(req.contains.is_some());
+    if members < 2 || req.equality_ordered {
         return None;
     }
-    let wanted: BTreeSet<&FieldPath> = req.equality.iter().collect();
+    let equalities: BTreeSet<&FieldPath> = req.equality.iter().collect();
+    let mut wanted = equalities.clone();
+    if let Some(contains) = &req.contains {
+        wanted.insert(contains);
+    }
     // (equality fields served, index), composites first.
     let mut candidates: Vec<(BTreeSet<&FieldPath>, IndexDefinition)> = Vec::new();
     for index in set.composites() {
         let served: Vec<FieldPath> = index
             .fields
             .iter()
-            .take_while(|f| wanted.contains(&f.path) && f.mode != IndexFieldMode::Contains)
+            .take_while(|f| equalities.contains(&f.path) && f.mode.is_ordered())
             .map(|f| f.path.clone())
             .collect();
         if served.is_empty() {
@@ -612,6 +688,7 @@ fn merged_indexes_for(
             equality: served,
             contains: None,
             order: req.order.clone(),
+            equality_ordered: false,
         };
         if composite_serves(index, &sub, collection, group) {
             let fields: BTreeSet<&FieldPath> = sub
@@ -634,6 +711,25 @@ fn merged_indexes_for(
                 candidates.push((
                     BTreeSet::from([wanted.get(field).copied()?]),
                     single_field_index(collection, group, field, name_mode, name_mode),
+                ));
+            }
+        }
+        // The array field joins through its automatic contains index, whose `__name__` runs
+        // ascending.
+        if let Some(contains) = &req.contains {
+            if name_mode == IndexFieldMode::Ascending
+                && !set.is_exempt(collection, contains, group)
+                && has_single_field_mode(set, collection, contains, group, IndexFieldMode::Contains)
+            {
+                candidates.push((
+                    BTreeSet::from([wanted.get(contains).copied()?]),
+                    single_field_index(
+                        collection,
+                        group,
+                        contains,
+                        IndexFieldMode::Contains,
+                        name_mode,
+                    ),
                 ));
             }
         }
@@ -661,6 +757,9 @@ fn composite_serves(
     if &index.collection_group != collection {
         return false;
     }
+    // A collection-group index serves a collection query too (FS-QUERY-INDEX
+    // index-selection#group-scope-composite-for-collection); a collection index serves only
+    // its collection.
     let scope_ok = match index.query_scope {
         IndexQueryScope::CollectionGroup => true,
         IndexQueryScope::Collection => !group,
@@ -675,11 +774,7 @@ fn composite_serves(
     }
     let prefix: BTreeSet<&FieldPath> = fields[..n_eq].iter().map(|f| &f.path).collect();
     let wanted: BTreeSet<&FieldPath> = req.equality.iter().collect();
-    if prefix != wanted
-        || fields[..n_eq]
-            .iter()
-            .any(|f| f.mode == IndexFieldMode::Contains)
-    {
+    if prefix != wanted || fields[..n_eq].iter().any(|f| !f.mode.is_ordered()) {
         return false;
     }
     let mut pos = n_eq;
@@ -736,6 +831,76 @@ fn composite_serves(
     true
 }
 
+/// How one DNF disjunct of a served query reads its index entries.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum PlannedScan {
+    /// One index (explicit, automatic, the primary key, or a vector index).
+    Index(IndexDefinition),
+    /// Several indexes joined on their shared order suffix, in join order.
+    Merge(Vec<IndexDefinition>),
+}
+
+/// The planner's answer for one DNF disjunct.
+enum DisjunctDecision {
+    Scan(PlannedScan),
+    /// `IndexValidationPolicy::Emulator` on Standard: served as if the index existed.
+    Assumed(IndexDefinition),
+    Missing(IndexDefinition),
+}
+
+fn decide_disjunct(
+    req: &Requirement,
+    indexes: &IndexSet,
+    collection: &CollectionId,
+    group: bool,
+    ctx: PlanningContext,
+) -> DisjunctDecision {
+    if let Some(auto) = automatic_index_for(req, indexes, collection, group) {
+        return DisjunctDecision::Scan(PlannedScan::Index(auto));
+    }
+    if let Some(i) = indexes
+        .composites()
+        .iter()
+        .find(|i| composite_serves(i, req, collection, group))
+    {
+        return DisjunctDecision::Scan(PlannedScan::Index(i.clone()));
+    }
+    if let Some(members) = (ctx.policy == IndexValidationPolicy::Production)
+        .then(|| merged_indexes_for(req, indexes, collection, group))
+        .flatten()
+    {
+        return DisjunctDecision::Scan(PlannedScan::Merge(members));
+    }
+    let requirement = required_index(req, collection, group);
+    if ctx.policy == IndexValidationPolicy::Emulator && ctx.edition == FirestoreEdition::Standard {
+        DisjunctDecision::Assumed(requirement)
+    } else {
+        DisjunctDecision::Missing(requirement)
+    }
+}
+
+fn missing_decision(
+    ctx: PlanningContext,
+    collection: &CollectionId,
+    group: bool,
+    requirement: IndexDefinition,
+) -> IndexDecision {
+    match ctx.edition {
+        FirestoreEdition::Standard => IndexDecision::MissingRequired { requirement },
+        FirestoreEdition::Enterprise => IndexDecision::FullScanAllowed {
+            plan: FullScanPlan {
+                collection_scope: format!(
+                    "{}{}",
+                    collection.as_str(),
+                    if group { " (collection group)" } else { "" }
+                ),
+                diagnostics: vec!["FS_ENT_FULL_COLLECTION_SCAN"],
+                missing_index: requirement,
+            },
+        },
+    }
+}
+
 fn decide_with_requirements(
     query: &Query,
     indexes: &IndexSet,
@@ -752,43 +917,19 @@ fn decide_with_requirements(
     let mut assumed: Option<IndexDefinition> = None;
     for disjunction in query.dnf() {
         let req = requirement_for_query(&disjunction, &effective_order);
-        if let Some(auto) = automatic_index_for(&req, indexes, collection, group) {
-            chosen.get_or_insert(auto);
-            continue;
-        }
-        if let Some(i) = indexes
-            .composites()
-            .iter()
-            .find(|i| composite_serves(i, &req, collection, group))
-        {
-            chosen.get_or_insert(i.clone());
-        } else if let Some(indexes) = (ctx.policy == IndexValidationPolicy::Production)
-            .then(|| merged_indexes_for(&req, indexes, collection, group))
-            .flatten()
-        {
-            merged.get_or_insert(indexes);
-        } else {
-            let requirement = required_index(&req, collection, group);
-            if ctx.policy == IndexValidationPolicy::Emulator
-                && ctx.edition == FirestoreEdition::Standard
-            {
-                assumed.get_or_insert(requirement);
-                continue;
+        match decide_disjunct(&req, indexes, collection, group, ctx) {
+            DisjunctDecision::Scan(PlannedScan::Index(index)) => {
+                chosen.get_or_insert(index);
             }
-            return match ctx.edition {
-                FirestoreEdition::Standard => IndexDecision::MissingRequired { requirement },
-                FirestoreEdition::Enterprise => IndexDecision::FullScanAllowed {
-                    plan: FullScanPlan {
-                        collection_scope: format!(
-                            "{}{}",
-                            collection.as_str(),
-                            if group { " (collection group)" } else { "" }
-                        ),
-                        diagnostics: vec!["FS_ENT_FULL_COLLECTION_SCAN"],
-                        missing_index: requirement,
-                    },
-                },
-            };
+            DisjunctDecision::Scan(PlannedScan::Merge(members)) => {
+                merged.get_or_insert(members);
+            }
+            DisjunctDecision::Assumed(requirement) => {
+                assumed.get_or_insert(requirement);
+            }
+            DisjunctDecision::Missing(requirement) => {
+                return missing_decision(ctx, collection, group, requirement);
+            }
         }
     }
     if let Some(requirement) = assumed {
@@ -805,14 +946,228 @@ fn decide_with_requirements(
     }
 }
 
+fn required_vector_index(
+    disjunction: &[FilterExpr],
+    explicit_order: &[OrderClause],
+    find_nearest: &crate::query::FindNearest,
+    collection: &CollectionId,
+    group: bool,
+) -> IndexDefinition {
+    let req = requirement_for(disjunction, explicit_order);
+    let mut fields = Vec::new();
+    let mut equality = req.equality;
+    equality.sort();
+    for field in equality {
+        if field != find_nearest.vector_field {
+            fields.push(IndexField {
+                path: field,
+                mode: IndexFieldMode::Ascending,
+            });
+        }
+    }
+    if let Some(field) = req.contains {
+        if field != find_nearest.vector_field {
+            fields.push(IndexField {
+                path: field,
+                mode: IndexFieldMode::Contains,
+            });
+        }
+    }
+    for order in req.order {
+        if !order.field.is_document_name() && order.field != find_nearest.vector_field {
+            fields.push(IndexField {
+                path: order.field,
+                mode: mode_for_direction(order.direction),
+            });
+        }
+    }
+    fields.push(IndexField {
+        path: find_nearest.vector_field.clone(),
+        mode: IndexFieldMode::Vector {
+            dimension: u32::try_from(find_nearest.query_vector.len())
+                .expect("validated vector dimension fits u32"),
+        },
+    });
+    IndexDefinition {
+        collection_group: collection.clone(),
+        query_scope: scope_for(group),
+        fields,
+    }
+}
+
+fn vector_index_serves(index: &IndexDefinition, required: &IndexDefinition) -> bool {
+    index.collection_group == required.collection_group
+        && index.query_scope == required.query_scope
+        && index.fields == required.fields
+}
+
+fn decide_nearest_disjunct(
+    disjunction: &[FilterExpr],
+    explicit_order: &[OrderClause],
+    find_nearest: &crate::query::FindNearest,
+    indexes: &IndexSet,
+    collection: &CollectionId,
+    group: bool,
+    ctx: PlanningContext,
+) -> DisjunctDecision {
+    let required =
+        required_vector_index(disjunction, explicit_order, find_nearest, collection, group);
+    if required.fields.len() == 1
+        && matches!(required.fields[0].mode, IndexFieldMode::Vector { .. })
+        && has_single_field_mode(
+            indexes,
+            collection,
+            &required.fields[0].path,
+            group,
+            required.fields[0].mode,
+        )
+    {
+        return DisjunctDecision::Scan(PlannedScan::Index(required));
+    }
+    if let Some(index) = indexes
+        .composites()
+        .iter()
+        .find(|index| vector_index_serves(index, &required))
+    {
+        return DisjunctDecision::Scan(PlannedScan::Index(index.clone()));
+    }
+    if ctx.policy == IndexValidationPolicy::Emulator && ctx.edition == FirestoreEdition::Standard {
+        DisjunctDecision::Assumed(required)
+    } else {
+        DisjunctDecision::Missing(required)
+    }
+}
+
+fn decide_find_nearest(query: &Query, indexes: &IndexSet, ctx: PlanningContext) -> IndexDecision {
+    let Some(collection) = query.scope.collection_id() else {
+        return IndexDecision::Unsupported {
+            feature: "findNearest requires a collection source",
+        };
+    };
+    let Some(find_nearest) = query.find_nearest.as_ref() else {
+        unreachable!("nearest planner requires a findNearest stage");
+    };
+    let group = query.scope.all_descendants();
+    let explicit_order = query.effective_order_by();
+    let mut chosen = None;
+    let mut assumed = None;
+    for disjunction in query.dnf() {
+        match decide_nearest_disjunct(
+            &disjunction,
+            &explicit_order,
+            find_nearest,
+            indexes,
+            collection,
+            group,
+            ctx,
+        ) {
+            DisjunctDecision::Scan(PlannedScan::Index(index)) => {
+                chosen.get_or_insert(index);
+            }
+            DisjunctDecision::Scan(PlannedScan::Merge(_)) => {
+                unreachable!("a vector search reads one index")
+            }
+            DisjunctDecision::Assumed(requirement) => {
+                assumed.get_or_insert(requirement);
+            }
+            DisjunctDecision::Missing(requirement) => {
+                return missing_decision(ctx, collection, group, requirement);
+            }
+        }
+    }
+    if let Some(requirement) = assumed {
+        return IndexDecision::AssumedIndex { requirement };
+    }
+    chosen.map_or(
+        IndexDecision::Unsupported {
+            feature: "empty query plan",
+        },
+        |index| IndexDecision::UseIndex { index },
+    )
+}
+
+/// The index scans of each DNF disjunct of a served query, in [`Query::dnf`] order, as the
+/// planner chose them (an assumed index stands for itself). `None` for a query no index
+/// plan describes (kindless) or one that is not served. `aggregations` is empty for a plain
+/// query; its sum and average fields join the plan as they do in
+/// [`validate_aggregation_query`].
+#[must_use]
+pub fn plan_scans(
+    query: &Query,
+    aggregations: &[Aggregation],
+    indexes: &IndexSet,
+    ctx: &PlanningContext,
+) -> Option<Vec<PlannedScan>> {
+    let collection = query.scope.collection_id()?;
+    let group = query.scope.all_descendants();
+    let scan = |decision| match decision {
+        DisjunctDecision::Scan(scan) => Some(scan),
+        DisjunctDecision::Assumed(requirement) => Some(PlannedScan::Index(requirement)),
+        DisjunctDecision::Missing(_) => None,
+    };
+    if let Some(find_nearest) = query.find_nearest.as_ref() {
+        let with_fields = nearest_with_aggregation_fields(query, aggregations);
+        let explicit_order = with_fields.effective_order_by();
+        return with_fields
+            .dnf()
+            .iter()
+            .map(|disjunction| {
+                scan(decide_nearest_disjunct(
+                    disjunction,
+                    &explicit_order,
+                    find_nearest,
+                    indexes,
+                    collection,
+                    group,
+                    *ctx,
+                ))
+            })
+            .collect();
+    }
+    let effective_order = query.effective_order_by();
+    query
+        .dnf()
+        .iter()
+        .map(|disjunction| {
+            let req = if aggregations.is_empty() {
+                requirement_for(disjunction, &effective_order)
+            } else {
+                requirement_for_aggregation(disjunction, &effective_order, aggregations)
+            };
+            scan(decide_disjunct(&req, indexes, collection, group, *ctx))
+        })
+        .collect()
+}
+
+/// A nearest-neighbour query with each sum or avg field joined as an ascending order before
+/// the vector (FS-QUERY-INDEX vector/with-query-clauses#sum-over-nearest).
+fn nearest_with_aggregation_fields(query: &Query, aggregations: &[Aggregation]) -> Query {
+    let mut with_fields = query.clone();
+    for aggregation in aggregations {
+        if let Aggregation::Sum(field) | Aggregation::Avg(field) = aggregation {
+            if !with_fields.order_by.iter().any(|o| &o.field == field) {
+                with_fields.order_by.push(OrderClause {
+                    field: field.clone(),
+                    direction: Direction::Ascending,
+                });
+            }
+        }
+    }
+    with_fields
+}
+
 /// Decides how a canonical query is served.
 #[must_use]
 pub fn decide(query: &Query, indexes: &IndexSet, ctx: &PlanningContext) -> IndexDecision {
+    if query.find_nearest.is_some() {
+        return decide_find_nearest(query, indexes, *ctx);
+    }
     decide_with_requirements(query, indexes, *ctx, requirement_for)
 }
 
 /// Decides how a canonical aggregation query is served. `sum` and `avg` fields are added to the
-/// index requirement only; the executable query and its document set remain unchanged.
+/// index requirement. Callers validate and normalize aggregation ordering before planning;
+/// this function does not silently repair invalid explicit ordering at the gateway boundary.
 #[must_use]
 pub fn validate_aggregation_query(
     query: &Query,
@@ -820,6 +1175,13 @@ pub fn validate_aggregation_query(
     indexes: &IndexSet,
     ctx: &PlanningContext,
 ) -> IndexDecision {
+    if query.find_nearest.is_some() {
+        return decide_find_nearest(
+            &nearest_with_aggregation_fields(query, aggregations),
+            indexes,
+            *ctx,
+        );
+    }
     decide_with_requirements(query, indexes, *ctx, |disjunction, effective_order| {
         requirement_for_aggregation(disjunction, effective_order, aggregations)
     })

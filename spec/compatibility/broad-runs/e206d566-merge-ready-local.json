@@ -1,0 +1,195 @@
+{
+  "schemaVersion": 1,
+  "kind": "merge-readiness-candidate",
+  "status": "technical-validation-complete-hosted-ci-pending",
+  "technicalSourceCommit": "e206d566049570340369d59176166e89872592f0",
+  "baseCommit": "d987d5ddcc1374cee425f08d6d81915795fc2ab5",
+  "capturedAt": "2026-09-13T17:01:21Z",
+  "productionExecuted": true,
+  "productionScope": "Only the separately authorized, fixed a35f85b4 G0 BatchWrite observation ran during final merge preparation.",
+  "evidenceClasses": {
+    "productionObservation": "The fixed G0 run is candidate evidence from one authorized production execution.",
+    "savedProductionComparison": "Immutable previously captured production responses are compared without re-observation.",
+    "localInvariant": "Owned loopback artifacts and SDKs establish only their named local behavior and safety invariants.",
+    "formalModel": "Quint evidence covers only each model's declared projection and bound inputs."
+  },
+  "validation": {
+    "workspace": {
+      "sourceCommit": "e206d566049570340369d59176166e89872592f0",
+      "command": "cargo nextest run --workspace --profile pr",
+      "runId": "74f22e52-3960-4498-9ecf-b3841344eab7",
+      "passed": 2083,
+      "failed": 0,
+      "skipped": 81,
+      "elapsedSeconds": 37.377
+    },
+    "rust": {
+      "sourceCommit": "e206d566049570340369d59176166e89872592f0",
+      "commands": [
+        "cargo fmt --all -- --check",
+        "cargo clippy --workspace --all-targets --all-features -- -D warnings",
+        "RUSTDOCFLAGS=-D warnings cargo doc --workspace --no-deps",
+        "cargo deny check"
+      ],
+      "result": "passed"
+    },
+    "compatibility": {
+      "validatedSourceCommit": "f15755ca1c24c54d85b161a80ec5b94e99c65d95",
+      "reuseReason": "Changes through e206d566 after this validation affect only the UI-owned-process test harness.",
+      "pytest": {
+        "passed": 441,
+        "failed": 0,
+        "skipped": 12
+      },
+      "historicalArchive": {
+        "passed": 304,
+        "failed": 0,
+        "skipped": 8
+      },
+      "publishers": "passed",
+      "catalogAndAggregationChecks": "passed"
+    },
+    "quint": {
+      "evidenceSourceCommit": "9c54e875133ae921b840083d81d67124197ee684",
+      "models": 14,
+      "mutations": 107,
+      "generator": "verification/quint/run-verification.sh --refresh",
+      "result": "passed",
+      "reuseReason": "No Quint source, bound input or evidence changed between the evidence source and e206d566."
+    },
+    "loom": {
+      "command": "RUSTFLAGS=--cfg loom cargo test -p fireemu-verification-loom --release --target-dir target/merge-ready-loom-final2",
+      "passed": 9,
+      "failed": 0
+    },
+    "ui": {
+      "sourceCommit": "e206d566049570340369d59176166e89872592f0",
+      "unit": 326,
+      "sizeReportTests": 7,
+      "playwright": 67,
+      "processSupervisorTests": 11,
+      "lint": "passed-with-one-existing-nonblocking-no-map-spread-warning",
+      "format": "passed",
+      "build": "passed",
+      "ownedProcessesStopped": true,
+      "listenersClosed": true,
+      "portReservationsReleased": true
+    },
+    "distribution": {
+      "sourceCommit": "e206d566049570340369d59176166e89872592f0",
+      "buildCommand": "cargo build --release --locked -p fireemu",
+      "packageCommand": "node npm/scripts/pack-local.mjs",
+      "verificationCommand": "node npm/scripts/verify-install.mjs --dist npm/dist",
+      "installSmoke": "passed",
+      "processCleanup": "passed",
+      "binarySha256": "5ae34bccb6ecdb351a5861a6d812e4ec5639e8e54ec957e2ffd782fbe5f4462f",
+      "launcherTarballSha256": "96fa62f3682e0a5a8610e74f7077b218846f7027df0f475c22d98baf96df85fd",
+      "platformTarballSha256": "ea68856b6efe74268ca9e20085af3cb87d0fc935c9e6af1017b72aab8a3188b9"
+    },
+    "hostedCi": {
+      "status": "pending",
+      "runs": []
+    }
+  },
+  "productionObservation": {
+    "goal": "G0",
+    "status": "candidate",
+    "executionCommit": "a35f85b464743d62344a3a58763d382b5b3838ce",
+    "startedAtUtc": "2026-09-13T14:52:31.781810+00:00",
+    "endedAtUtc": "2026-09-13T14:53:12.979168+00:00",
+    "elapsedSeconds": 41.19735813140869,
+    "exitCode": 0,
+    "operations": {
+      "total": 34,
+      "http": 33,
+      "credentialCommands": 1,
+      "observation": 18,
+      "recovery": 16,
+      "automaticRetries": 0
+    },
+    "recordingComplete": true,
+    "stateVerified": true,
+    "cleanupComplete": true,
+    "configurationUnchanged": true,
+    "ownedDocuments": 4,
+    "ownedDocumentsConfirmedAbsent": 4,
+    "originalComparison": {
+      "rows": 12,
+      "match": 10,
+      "mismatch": 2
+    },
+    "savedReferenceRuntimeRecomparison": {
+      "runtimeCommit": "68012694f81df504600f8e67301410c63ec9e2e7",
+      "artifactSha256": "7fa832d504a4e3faa7a69c90f7b912074f5a212d6eafec2987110425bbb93fdd",
+      "rows": 12,
+      "match": 12,
+      "mismatch": 0,
+      "productionReexecuted": false
+    },
+    "publicResult": "68012694-g0-runtime-recomparison.json"
+  },
+  "savedComparisons": {
+    "first46": {
+      "referencePublicationCommit": "ab7bd698",
+      "referenceExecutionCommit": "bc38f392077784509f7fbb8993d5be66c1a8be14",
+      "lastVerificationSourceCommit": "743759fd14bbe9f900a2e8ea7d5e67099ac634b5",
+      "localArtifactSha256": "4a5706a74b21f7c9ff839d861a9249c09b3df62485b3cd2b5fc77c48a37373d5",
+      "recordingComplete": true,
+      "cleanupComplete": true,
+      "compatibility": "match",
+      "rows": 46,
+      "originalComparison": {
+        "match": 35,
+        "mismatch": 11
+      }
+    },
+    "second45": {
+      "lastBoundSavedReference": "37e4c396-second45-runtime-recomparison.json",
+      "lastBoundRuntimeCommit": "31dee8d06e56075ba7c488c89f740611ebb380d6",
+      "lastBoundCompatibility": "match",
+      "lastBoundRows": 45,
+      "originalComparison": {
+        "match": 32,
+        "mismatch": 13
+      },
+      "laterObserverPairing": "indeterminate",
+      "reason": "The later local observer digest is not bound to the immutable saved production record. The comparator rejected the pair and its binding was not weakened."
+    }
+  },
+  "skips": {
+    "quintExternalChecker": 48,
+    "functionsSdkAndDiscovery": 24,
+    "releaseLeakFixtureHelpers": 2,
+    "largeOrPerformanceQualification": 7,
+    "note": "The official Quint generator passed separately. The two release leak acceptance tests passed when selected explicitly. Functions SDK discovery is assigned to its dedicated workflow; large performance and capacity qualifications are outside this merge acceptance run."
+  },
+  "reviews": {
+    "fullDiff": "approved after integration with the fixed base",
+    "historyIsolationSecurity": "approved",
+    "distributionFixtureProvenance": "approved after all bypass findings were corrected",
+    "functionsConnectionResetHarness": "approved after self-delimiting framing follow-up",
+    "processSupervisorCorrectness": "approved at 7416a8eb; e206d566 adds only the POSIX test scope",
+    "processSupervisorSecurity": {
+      "sourceCommit": "e206d566049570340369d59176166e89872592f0",
+      "mustFix": 0,
+      "shouldFix": 0
+    }
+  },
+  "limitations": [
+    "This candidate does not claim complete Firebase, Identity Platform, Firestore or Enterprise compatibility.",
+    "The G0 result is candidate evidence from one fixed two-scenario run, not result acceptance or broader BatchWrite coverage.",
+    "The current second45 local record cannot be rebound to the older saved production observer.",
+    "Revision 3, GAP-AUTH-007, AUTH-U03 and the explicitly deferred Auth, Firestore, SDK and Enterprise ranges remain follow-up work.",
+    "The process supervisor controls the trusted owned harness process group; it is not a generic containment boundary against descendants that deliberately create a new session."
+  ],
+  "cleanup": {
+    "ownedDaemons": "stopped",
+    "ownedListeners": "closed",
+    "ownedPortReservations": "released",
+    "g0DetachedCheckout": "retained intentionally as the fixed observation source"
+  },
+  "humanRemaining": [
+    "Review and accept the final base/head, evidence boundaries and known limitations.",
+    "Decide whether to merge the Draft pull request."
+  ]
+}

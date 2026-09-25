@@ -1481,3 +1481,60 @@ fn a_denied_upload_can_never_be_revived() {
     assert!(s.pending_upload(&id, t(0)).is_err());
     assert!(s.get(&b, &name("x.bin")).is_none(), "nothing was published");
 }
+
+/// SCOPY-1: a copy shares the source blob instead of duplicating it and re-hashing it under
+/// the store lock. A copy of a near-limit object is an O(metadata) operation, and the
+/// destination digests are the source's by construction rather than by recomputation.
+#[test]
+fn a_copy_shares_the_source_blob_and_reuses_its_digests() {
+    let mut s = StorageState::new(11);
+    let bytes = b"the bytes a copy must not duplicate".to_vec();
+    let src = s
+        .put(
+            &bucket(),
+            &name("src.bin"),
+            bytes.clone(),
+            NewMetadata {
+                content_type: Some("application/pdf".to_owned()),
+                cache_control: Some("public, max-age=60".to_owned()),
+                ..NewMetadata::default()
+            },
+            Precondition::default(),
+            t(0),
+        )
+        .unwrap();
+    let dst = s
+        .copy(
+            (&bucket(), &name("src.bin")),
+            (&bucket(), &name("dst.bin")),
+            None,
+            Precondition::default(),
+            t(1),
+        )
+        .unwrap();
+
+    assert!(
+        std::sync::Arc::ptr_eq(&s.shared_bytes(&src), &s.shared_bytes(&dst)),
+        "the copy must share the source allocation"
+    );
+    assert_eq!(dst.md5, src.md5);
+    assert_eq!(dst.crc32c, src.crc32c);
+    assert_eq!(dst.size, src.size);
+    assert_eq!(dst.content_type, "application/pdf");
+    assert_eq!(dst.cache_control.as_deref(), Some("public, max-age=60"));
+    assert_eq!(s.bytes(&dst), bytes.as_slice());
+    assert_ne!(dst.blob, src.blob, "the copy is its own blob identity");
+
+    // Overwriting the source leaves the copy's bytes intact.
+    s.put(
+        &bucket(),
+        &name("src.bin"),
+        b"replaced".to_vec(),
+        NewMetadata::default(),
+        Precondition::default(),
+        t(2),
+    )
+    .unwrap();
+    let dst = s.get(&bucket(), &name("dst.bin")).unwrap().clone();
+    assert_eq!(s.bytes(&dst), bytes.as_slice());
+}

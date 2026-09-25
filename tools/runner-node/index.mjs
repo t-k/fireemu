@@ -12,15 +12,54 @@ import { createRequire } from "node:module";
 import { pathToFileURL } from "node:url";
 import { existsSync, readFileSync } from "node:fs";
 import { resolve, join, dirname } from "node:path";
-import { timingSafeEqual } from "node:crypto";
 import { createServer } from "node:http";
 import { url as inspectorUrl } from "node:inspector";
 import { instrumentCallables } from "./callable-app-check.mjs";
 import { blockingFailure } from "./blocking-error.mjs";
 import { blockingResult } from "./blocking-response.mjs";
 import { boundLogMessage, createInvocationLogger } from "./log-context.mjs";
+import { invocationFailure } from "./invocation-error.mjs";
+import { InvocationBudget, readFrames } from "./protocol.mjs";
+import { collectFunctions, exportNamespace } from "./discovery.mjs";
+import { FrameWriter } from "./output.mjs";
+import { installDiagnosticOutput } from "./diagnostic-output.mjs";
+import { trackHttpResponse } from "./http-lifecycle.mjs";
+import { createHttpAdmission } from "./http-admission.mjs";
 
-const frameWrite = process.stdout.write.bind(process.stdout);
+// Keep one best-effort terminal diagnostic available after ordinary output
+// admission closes. It is only used when stderr has no pending data, never to
+// bypass a failed/stalled diagnostic channel or grow its queue.
+const terminalDiagnosticWrite = process.stderr.write.bind(process.stderr);
+let outputFailed = false;
+const diagnosticOutput = installDiagnosticOutput(process.stderr, {
+  onError() {
+    // fd2 may be stalled or broken. Do not recursively log to it or pretend that
+    // already-executed callback side effects were rolled back.
+    outputFailed = true;
+    process.exit(2);
+  },
+});
+const frameOutput = new FrameWriter(process.stdout, {
+  onError(error) {
+    outputFailed = true;
+    // Retire rather than drop frames or let an unbounded stream queue grow.
+    // Callback side effects are not rolled back; native waiters see RunnerGone.
+    try {
+      const state = diagnosticOutput.state;
+      const message = `${error.message}\n`;
+      if (!state.failed && state.pendingWrites === 0 && Buffer.byteLength(message) <= 256) {
+        terminalDiagnosticWrite(message);
+      }
+    } finally { process.exit(2); }
+  },
+});
+let finishingOutput = false;
+function finishOutput() {
+  if (finishingOutput || outputFailed) return;
+  finishingOutput = true;
+  void Promise.all([frameOutput.finish(), diagnosticOutput.finish()])
+    .then(results => process.exit(results.every(Boolean) && !outputFailed ? 0 : 2));
+}
 process.stdout.write = (chunk, encoding, cb) => process.stderr.write(chunk, encoding, cb);
 
 const localSecrets = (() => {
@@ -106,9 +145,7 @@ async function firebaseHttpsErrorConstructors(require) {
 }
 
 function send(msg) {
-  const payload = Buffer.from(JSON.stringify(msg), "utf8");
-  frameWrite(`${payload.length}\n`);
-  frameWrite(payload);
+  return frameOutput.send(msg);
 }
 
 function log(level, message, invocationId, functionName, user = false, fields) {
@@ -148,9 +185,12 @@ process.env.K_SERVICE = process.env.K_SERVICE || "";
 // `getSignatureType` (functionsEmulatorShared.js:292): what the runtime is being asked to
 // speak for one function.
 function signatureType(spec) {
-  if (spec.trigger?.type === "http") return "http";
-  if (spec.trigger?.type === "schedule") return spec.v1 ? "event" : "http";
-  return spec.v1 ? "event" : "cloudevent";
+  // Tasks and Blocking Auth also enter through the HTTP wrapper, regardless
+  // of generation. Generation is the value announced to the daemon, not a
+  // second read of user-owned function metadata at invocation time.
+  if (["http", "tasks", "blockingAuth"].includes(spec.trigger?.type)) return "http";
+  if (spec.trigger?.type === "schedule") return spec.generation === 1 ? "event" : "http";
+  return spec.generation === 1 ? "event" : "cloudevent";
 }
 
 // The official emulator starts one runtime process per trigger, so it can set these three at
@@ -167,6 +207,7 @@ function setFunctionIdentity(spec) {
 
 function withFunctionEnvironment(spec, task, invocationId) {
   const run = async () => {
+    if (finishingOutput || outputFailed) throw new Error("runner is shutting down");
     setFunctionIdentity(spec);
     const saved = new Map();
     for (const [name] of localSecrets) {
@@ -208,62 +249,201 @@ async function loadCodebase() {
   const entry = resolve(sourceDir, main);
   if (!existsSync(entry)) throw new Error(`functions entry point ${entry} does not exist`);
   const mod = await import(pathToFileURL(entry).href);
-  // Export order matters: it is the order the emulator lists functions in, and the official
-  // emulator reads a CommonJS codebase's `module.exports` object, which keeps it. An ES
-  // module namespace object sorts its keys, so `module.exports` -- which Node hands over as
-  // `default` -- goes in first and the namespace only fills in what it did not carry.
-  const ns = {};
-  if (mod.default && typeof mod.default === "object") Object.assign(ns, mod.default);
-  for (const [key, value] of Object.entries(mod)) {
-    if (!(key in ns)) ns[key] = value;
-  }
-  // Node exposes CommonJS exports as `default` and (22+) as "module.exports".
-  delete ns.default;
-  delete ns["module.exports"];
-  return ns;
+  return exportNamespace(mod);
 }
 
-// Flattens nested export groups: exports.api = { users: fn } -> "api-users".
-//
-// `__endpoint` and `__trigger` are getters on the v1 SDK's cloud functions and can throw
-// while they describe themselves (`database.ref(...)` throws when FIREBASE_CONFIG carries no
-// databaseURL). A throwing export is recorded as malformed and named, never allowed to take
-// the whole runner down: the daemon's inventory must be able to say what happened to it.
-function collectFunctions(ns, prefix, out, broken) {
-  for (const [key, value] of Object.entries(ns)) {
-    if (!value) continue;
-    const name = prefix ? `${prefix}-${key}` : key;
-    if (typeof value === "function") {
-      let marked = false;
-      try {
-        marked = Boolean(value.__endpoint || value.__trigger);
-      } catch (e) {
-        broken.set(name, e?.message ? String(e.message).split("\n")[0] : String(e));
-        continue;
+// Unsupported async options may already be rejected. Observe that rejection
+// before isolating the export so it cannot terminate discovery of siblings.
+function observeAsyncValue(value) {
+  try {
+    if (value instanceof Promise) {
+      void Promise.prototype.then.call(value, undefined, () => {});
+      return true;
+    }
+    if ((typeof value === "object" && value !== null) || typeof value === "function") {
+      // Obtain a thenable's accessor once; Promise.resolve(value) would read it
+      // again. The fixed wrapper preserves asynchronous assimilation and the
+      // original receiver without consulting the user object's getter twice.
+      const then = value.then;
+      if (typeof then === "function") {
+        void Promise.resolve({
+          then(resolve, reject) { Reflect.apply(then, value, [resolve, reject]); },
+        }).catch(() => {});
+        return true;
       }
-      if (marked) out.set(name, value);
-    } else if (typeof value === "object" && !Array.isArray(value)) {
-      collectFunctions(value, name, out, broken);
+    }
+  } catch {
+    // Even instanceof/getPrototypeOf or a then getter may throw (e.g. a
+    // revoked Proxy). Error reporting must not throw a second time and kill
+    // healthy sibling discovery. This is not an arbitrary-code sandbox.
+  }
+  return false;
+}
+
+function rejectAsyncOption(value, field) {
+  if (observeAsyncValue(value))
+    throw new Error(`${field} expression returned an asynchronous value`);
+  return value;
+}
+
+// SDK endpoint options keep Expression objects until the local runtime resolves
+// them. JSON/toString encode a deployment expression, not its runtime value.
+// Match the existing numeric-option `.value()` protocol, but never read its
+// accessor twice or coerce an unresolved value into false/true/default.
+function resolvedOption(value, field) {
+  if (value == null) return undefined;
+  if (value?.[Symbol.for("firebase-functions:ResetValue:Tag")] === true) return undefined;
+  if (typeof value === "object") {
+    const evaluate = value.value;
+    if (typeof evaluate === "function") {
+      const resolved = evaluate.call(value);
+      if (resolved == null) throw new Error(`${field} expression did not resolve to a value`);
+      return rejectAsyncOption(resolved, field);
     }
   }
-  return out;
+  return rejectAsyncOption(value, field);
+}
+
+function resolvedBoolean(value, field) {
+  const resolved = resolvedOption(value, field);
+  if (resolved === undefined) return undefined;
+  if (typeof resolved !== "boolean") throw new Error(`${field} did not resolve to a boolean`);
+  return resolved;
 }
 
 function firstRegion(ep) {
-  const r = ep.region;
-  if (Array.isArray(r)) return r[0];
-  return r || undefined;
+  const resolved = resolvedOption(ep.region, "region");
+  if (resolved === undefined) return undefined;
+  // Preserve this runner's existing first-region policy. This is not a new
+  // multi-region deployment implementation. Validate the list rather than
+  // allowing malformed later entries to be silently hidden by selection.
+  const values = Array.isArray(resolved)
+    ? resolved.map(region => resolvedOption(region, "region"))
+    : [resolved];
+  for (const value of values) {
+    if (typeof value !== "string" || value.length === 0) {
+      throw new Error("region did not resolve to a non-empty string");
+    }
+  }
+  return values[0];
 }
 
 function resolvedNonNegativeInteger(value, field) {
-  if (value == null) return undefined;
-  if (value?.[Symbol.for("firebase-functions:ResetValue:Tag")] === true) return undefined;
-  const resolved =
-    typeof value === "object" && typeof value.value === "function" ? value.value() : value;
+  const resolved = resolvedOption(value, field);
+  if (resolved === undefined) return undefined;
   if (!Number.isSafeInteger(resolved) || resolved < 0) {
     throw new Error(`${field} did not resolve to a non-negative integer`);
   }
   return resolved;
+}
+
+// Routing and dispatch options must be concrete before publishing the hello.
+// Do not stringify an Expression (that emits its deployment representation),
+// coerce malformed values, or retain a caller-owned map with a later toJSON.
+function triggerRecord(value, field) {
+  if (value == null || value?.[Symbol.for("firebase-functions:ResetValue:Tag")] === true) {
+    return Object.create(null);
+  }
+  rejectAsyncOption(value, field);
+  if (typeof value !== "object" || Array.isArray(value)) {
+    throw new Error(`${field} must be an object`);
+  }
+  return value;
+}
+
+function triggerString(value, field, { optional = false, allowEmpty = false } = {}) {
+  const resolved = resolvedOption(value, field);
+  if (resolved === undefined && optional) return undefined;
+  if (typeof resolved !== "string" || (!allowEmpty && resolved.length === 0)) {
+    throw new Error(`${field} did not resolve to ${allowEmpty ? "a string" : "a non-empty string"}`);
+  }
+  return resolved;
+}
+
+function triggerFilters(value) {
+  const input = triggerRecord(value, "eventFilters");
+  const output = Object.create(null);
+  for (const key of Object.keys(input)) {
+    // Preserve empty exact-match values and literal __proto__/toJSON keys as
+    // strings, not object hooks. Null is not an instruction to drop a filter.
+    output[key] = triggerString(input[key], `eventFilters.${key}`, { allowEmpty: true });
+  }
+  return Object.freeze(output);
+}
+
+const SCHEDULE_RETRY_FIELDS = new Set([
+  "retryCount", "maxRetrySeconds", "minBackoffSeconds", "maxBackoffSeconds", "maxDoublings",
+]);
+const TASK_RETRY_FIELDS = new Set([
+  "maxAttempts", "maxRetrySeconds", "minBackoffSeconds", "maxBackoffSeconds", "maxDoublings",
+]);
+const TASK_RATE_FIELDS = new Set(["maxConcurrentDispatches", "maxDispatchesPerSecond"]);
+
+const V1_SCHEDULE_DURATIONS = Object.freeze({
+  maxRetryDuration: "maxRetrySeconds",
+  minBackoffDuration: "minBackoffSeconds",
+  maxBackoffDuration: "maxBackoffSeconds",
+});
+
+function triggerNumbers(value, field, allowed, durationAliases = undefined) {
+  const input = triggerRecord(value, field);
+  const output = Object.create(null);
+  const populated = new Set();
+  for (const key of Object.keys(input)) {
+    const durationKey = durationAliases && Object.hasOwn(durationAliases, key)
+      ? durationAliases[key] : undefined;
+    if (!allowed.has(key) && !durationKey) {
+      observeAsyncValue(input[key]);
+      throw new Error(`${field}.${key} is not supported`);
+    }
+    const outputKey = durationKey ?? key;
+    const original = input[key];
+    if (original !== undefined) {
+      if (populated.has(outputKey)) throw new Error(`${field}.${outputKey} is specified twice`);
+      populated.add(outputKey);
+    }
+    let resolved = resolvedOption(original, `${field}.${key}`);
+    if (resolved === undefined) {
+      // Pinned SDKs put null/ResetValue in numeric records for defaults. Keep
+      // that wire meaning; an expression returning null has already failed.
+      if (original !== undefined) output[outputKey] = null;
+      continue;
+    }
+    if (durationKey) {
+      // Gen1's public ScheduleRetryConfig uses protobuf Duration strings,
+      // while this runner's existing native protocol uses numeric seconds.
+      // Accept the non-negative seconds form; never parseFloat a suffix or CEL.
+      if (typeof resolved !== "string" || !/^(?:0|[1-9][0-9]*)(?:\.[0-9]{1,9})?s$/.test(resolved)) {
+        throw new Error(`${field}.${key} did not resolve to a seconds duration`);
+      }
+      resolved = Number(resolved.slice(0, -1));
+    }
+    if (typeof resolved !== "number" || !Number.isFinite(resolved)) {
+      throw new Error(`${field}.${key} did not resolve to a finite number`);
+    }
+    // Preserve fractional seconds and rates. Native range/count conversion is
+    // unchanged: this is not a second implementation of cloud quota policy.
+    output[outputKey] = resolved;
+  }
+  return Object.freeze(output);
+}
+
+function describeSchedule(base, value) {
+  const input = triggerRecord(value, "scheduleTrigger");
+  const schedule = triggerString(input.schedule, "scheduleTrigger.schedule");
+  const timeZone = triggerString(input.timeZone, "scheduleTrigger.timeZone", { optional: true });
+  // Some Gen1 SDK entrypoints already turn an Expression into braced CEL.
+  // This local resolver does not implement CEL: do not announce it as a cron.
+  if (schedule.includes("{{") || timeZone?.includes("{{")) {
+    throw new Error("scheduleTrigger contains an unresolved deployment expression");
+  }
+  const retryConfig = triggerNumbers(input.retryConfig, "scheduleTrigger.retryConfig",
+    SCHEDULE_RETRY_FIELDS, base.generation === 1 ? V1_SCHEDULE_DURATIONS : undefined);
+  return {
+    ...base,
+    retry: (retryConfig.retryCount ?? 0) > 0,
+    trigger: { type: "schedule", schedule, timeZone, retryConfig },
+  };
 }
 
 // Preserve shared Gen1/Gen2 endpoint options. Memory and instance limits shape local
@@ -373,8 +553,16 @@ function describeV1Event(base, type, resource, schedule, retry) {
     /^providers\/cloud\.firestore\/eventTypes\/document\.(create|update|delete|write)$/,
   );
   if (fsMatch) {
-    const docIndex = resource.indexOf("/documents/");
-    const dbMatch = resource.match(/\/databases\/([^/]+)\//);
+    // Resource labels have fixed positions. A project/database can itself be
+    // named "documents" or "databases"; substring searches pick the wrong slash.
+    // Preserve the document pattern verbatim for the native pattern validator.
+    resource = triggerString(resource, "eventTrigger.resource", { optional: true, allowEmpty: true }) ?? "";
+    const match = resource.match(/^projects\/[^/]+\/databases\/([^/]+)\/documents\/(.+)$/s);
+    if (!match) {
+      return ignored(
+        base, "firestore", "unsupported", "v1 Firestore resource has an unsupported shape",
+      );
+    }
     return {
       ...base,
       ...v1,
@@ -382,14 +570,22 @@ function describeV1Event(base, type, resource, schedule, retry) {
       trigger: {
         type: "firestore",
         eventType: `google.cloud.firestore.document.v1.${{ create: "created", update: "updated", delete: "deleted", write: "written" }[fsMatch[1]]}`,
-        database: dbMatch ? dbMatch[1] : "(default)",
-        document: docIndex >= 0 ? resource.slice(docIndex + "/documents/".length) : undefined,
+        database: match[1],
+        document: match[2],
       },
     };
   }
   const stMatch = type.match(/^google\.storage\.object\.(finalize|delete|metadataUpdate|archive)$/);
   if (stMatch) {
-    const bucketMatch = resource.match(/\/buckets\/([^/]+)/);
+    resource = triggerString(resource, "eventTrigger.resource", { optional: true, allowEmpty: true }) ?? "";
+    const match = resource.match(/^projects\/[^/]+\/buckets\/([^/]+)$/);
+    if (!match) {
+      // Missing/unparseable bucket metadata must not become an unfiltered
+      // Storage trigger. Valid SDK v1 resources use projects/_/buckets/<bucket>.
+      return ignored(
+        base, "storage", "unsupported", "v1 Storage resource has an unsupported shape",
+      );
+    }
     return {
       ...base,
       ...v1,
@@ -397,22 +593,12 @@ function describeV1Event(base, type, resource, schedule, retry) {
       trigger: {
         type: "storage",
         eventType: `google.cloud.storage.object.v1.${{ finalize: "finalized", delete: "deleted", metadataUpdate: "metadataUpdated", archive: "archived" }[stMatch[1]]}`,
-        bucket: bucketMatch ? bucketMatch[1] : undefined,
+        bucket: match[1],
       },
     };
   }
   if (schedule) {
-    return {
-      ...base,
-      ...v1,
-      retry: Number(schedule.retryConfig?.retryCount || 0) > 0,
-      trigger: {
-        type: "schedule",
-        schedule: schedule.schedule,
-        timeZone: schedule.timeZone || undefined,
-        retryConfig: schedule.retryConfig || {},
-      },
-    };
+    return describeSchedule({ ...base, ...v1 }, schedule);
   }
   const authMatch = type.match(/^providers\/firebase\.auth\/eventTypes\/user\.(create|delete)$/);
   if (authMatch) {
@@ -430,6 +616,7 @@ function describeV1Event(base, type, resource, schedule, retry) {
     type === "providers/cloud.pubsub/eventTypes/topic.publish" ||
     type === "google.pubsub.topic.publish"
   ) {
+    resource = triggerString(resource, "eventTrigger.resource");
     const topicMatch = resource.match(/\/topics\/([^/]+)$/);
     return {
       ...base,
@@ -445,11 +632,16 @@ function describeV1Event(base, type, resource, schedule, retry) {
   return ignored(base, "unknown", "unsupported", `v1 event type ${type} is not recognised`);
 }
 
-function isV1(fn) {
-  return (
-    fn.__endpoint?.platform === "gcfv1" ||
-    (!(fn.__endpoint && Object.keys(fn.__endpoint).length > 0) && !!fn.__trigger)
-  );
+// Both SDK generations expose a taskQueueTrigger (legacy v1 also exposes it
+// on __trigger). Always call the exported HTTP wrapper, not its testing-only
+// .run callback, so decoding and task context stay in the SDK wrapper.
+function describeTaskQueue(base, queue) {
+  if (!queue || typeof queue !== "object" || Array.isArray(queue)) {
+    throw new Error("taskQueueTrigger must be an object");
+  }
+  const retryConfig = triggerNumbers(queue.retryConfig, "taskQueueTrigger.retryConfig", TASK_RETRY_FIELDS);
+  const rateLimits = triggerNumbers(queue.rateLimits, "taskQueueTrigger.rateLimits", TASK_RATE_FIELDS);
+  return { ...base, trigger: { type: "tasks", retryConfig, rateLimits } };
 }
 
 // The callable App Check options of one function, as the loader instrumentation observed
@@ -479,18 +671,28 @@ function describe(name, fn, instrumentation) {
     ...callableAppCheck(instrumentation, fn),
   });
   const ep = fn.__endpoint;
+  const platform = ep?.platform;
   const base = {
     name,
     entryPoint: name,
-    generation: ep?.platform === "gcfv2" ? 2 : 1,
+    generation: platform === "gcfv2" ? 2 : 1,
   };
-  if (ep?.omit === true) return { ...base, omitted: true };
-  if (ep && ep.platform === "gcfv1") {
+  if (resolvedBoolean(ep?.omit, "omit") === true) return { ...base, omitted: true };
+  if (ep && Object.keys(ep).length > 0 && platform !== "gcfv1" && platform !== "gcfv2") {
+    // A nonempty endpoint without a known platform is not a legacy trigger.
+    // Do not advertise generation 1 while silently invoking the v2 convention.
+    return ignored(base, "unknown", "unsupported", "endpoint platform is not recognised");
+  }
+  if (ep && platform === "gcfv1") {
     const deployment = platformOptions(ep);
     if (deployment) base.platformOptions = deployment;
-    if (ep.timeoutSeconds) base.timeoutSeconds = ep.timeoutSeconds;
+    const timeout = resolvedNonNegativeInteger(ep.timeoutSeconds, "timeoutSeconds");
+    // The pinned SDK uses literal zero for unset/default timeout. Do not turn
+    // an Expression resolving to zero into a zero-length native deadline.
+    if (timeout !== undefined && timeout > 0) base.timeoutSeconds = timeout;
     const region = firstRegion(ep);
     if (region) base.region = region;
+    if (ep.taskQueueTrigger) return describeTaskQueue(base, ep.taskQueueTrigger);
     if (ep.httpsTrigger) return { ...base, trigger: { type: "http", callable: false } };
     if (ep.callableTrigger) return { ...base, trigger: callable() };
     if (ep.blockingTrigger) {
@@ -508,9 +710,9 @@ function describe(name, fn, instrumentation) {
     return describeV1Event(
       base,
       String(et.eventType || ""),
-      String(et.eventFilters?.resource || ""),
+      triggerRecord(et.eventFilters, "eventFilters").resource,
       ep.scheduleTrigger,
-      !!et.retry,
+      resolvedBoolean(et.retry, "eventTrigger.retry") ?? false,
     );
   }
   if (ep && Object.keys(ep).length > 0) {
@@ -518,23 +720,17 @@ function describe(name, fn, instrumentation) {
     if (deployment) base.platformOptions = deployment;
     const region = firstRegion(ep);
     if (region) base.region = region;
-    if (ep.timeoutSeconds) base.timeoutSeconds = ep.timeoutSeconds;
-    if (ep.concurrency != null)
-      base.concurrency = resolvedNonNegativeInteger(ep.concurrency, "concurrency");
+    const timeout = resolvedNonNegativeInteger(ep.timeoutSeconds, "timeoutSeconds");
+    // The pinned SDK uses literal zero for unset/default timeout. Do not turn
+    // an Expression resolving to zero into a zero-length native deadline.
+    if (timeout !== undefined && timeout > 0) base.timeoutSeconds = timeout;
+    const concurrency = resolvedNonNegativeInteger(ep.concurrency, "concurrency");
+    if (concurrency !== undefined) base.concurrency = concurrency;
+    if (ep.taskQueueTrigger) return describeTaskQueue(base, ep.taskQueueTrigger);
     if (ep.httpsTrigger) return { ...base, trigger: { type: "http", callable: false } };
     if (ep.callableTrigger) return { ...base, trigger: callable() };
     if (ep.scheduleTrigger) {
-      const retryCount = Number(ep.scheduleTrigger.retryConfig?.retryCount || 0);
-      return {
-        ...base,
-        retry: retryCount > 0,
-        trigger: {
-          type: "schedule",
-          schedule: ep.scheduleTrigger.schedule,
-          timeZone: ep.scheduleTrigger.timeZone || undefined,
-          retryConfig: ep.scheduleTrigger.retryConfig || {},
-        },
-      };
+      return describeSchedule(base, ep.scheduleTrigger);
     }
     if (ep.blockingTrigger) {
       const eventType = String(ep.blockingTrigger.eventType || "");
@@ -550,17 +746,18 @@ function describe(name, fn, instrumentation) {
     if (ep.eventTrigger) {
       const et = ep.eventTrigger;
       const type = et.eventType || "";
-      base.retry = !!et.retry;
+      base.retry = resolvedBoolean(et.retry, "eventTrigger.retry") ?? false;
       if (type.startsWith("google.cloud.firestore.")) {
-        const filters = et.eventFilters || {};
-        const patterns = et.eventFilterPathPatterns || {};
+        const filters = triggerRecord(et.eventFilters, "eventFilters");
+        const patterns = triggerRecord(et.eventFilterPathPatterns, "eventFilterPathPatterns");
+        const documentPattern = triggerString(patterns.document, "eventFilterPathPatterns.document", { optional: true });
         return {
           ...base,
           trigger: {
             type: "firestore",
             eventType: type,
-            database: filters.database || "(default)",
-            document: patterns.document || filters.document,
+            database: triggerString(filters.database, "eventFilters.database", { optional: true }) ?? "(default)",
+            document: documentPattern ?? triggerString(filters.document, "eventFilters.document"),
           },
         };
       }
@@ -570,15 +767,18 @@ function describe(name, fn, instrumentation) {
           trigger: {
             type: "storage",
             eventType: type,
-            bucket: (et.eventFilters || {}).bucket || undefined,
+            bucket: triggerString(triggerRecord(et.eventFilters, "eventFilters").bucket, "eventFilters.bucket", { optional: true }),
           },
         };
       }
       if (type === "google.cloud.pubsub.topic.v1.messagePublished") {
-        const topic = String((et.eventFilters || {}).topic || "");
-        return { ...base, trigger: { type: "pubsub", topic: topic.replace(/^.*\/topics\//, "") } };
+        const topic = triggerString(triggerRecord(et.eventFilters, "eventFilters").topic, "eventFilters.topic");
+        const projectedTopic = topic.replace(/^.*\/topics\//, "");
+        if (!projectedTopic) throw new Error("eventFilters.topic resolved to an empty topic");
+        return { ...base, trigger: { type: "pubsub", topic: projectedTopic } };
       }
-      if (et.channel) {
+      const channel = triggerString(et.channel, "eventTrigger.channel", { optional: true });
+      if (channel !== undefined) {
         // `onCustomEventPublished`: the channel is `locations/<l>/channels/<c>` and every
         // eventFilter beyond the type is matched against the published event's attributes.
         return {
@@ -586,8 +786,8 @@ function describe(name, fn, instrumentation) {
           trigger: {
             type: "eventarc",
             eventType: type,
-            channel: et.channel,
-            filters: et.eventFilters || {},
+            channel,
+            filters: triggerFilters(et.eventFilters),
           },
         };
       }
@@ -604,28 +804,13 @@ function describe(name, fn, instrumentation) {
             type: "eventarc",
             eventType: type,
             channel: "google",
-            filters: et.eventFilters || {},
+            filters: triggerFilters(et.eventFilters),
           },
         };
       }
       const product = deferredProduct(type);
       if (product) return ignored(base, product.triggerType, product.scope, product.reason);
       return ignored(base, "unknown", "unsupported", `event type ${type} is not recognised`);
-    }
-    if (ep.taskQueueTrigger) {
-      // An `onTaskDispatched` function is an HTTP function that only its queue calls: the
-      // official emulator sets both `httpsTrigger` and `taskQueueTrigger` on the definition
-      // and gives it the ordinary /{project}/{region}/{name} URL, which becomes the queue's
-      // defaultUri. The nulls the manifest carries mean "the default", as the emulator's `??`
-      // reads them.
-      return {
-        ...base,
-        trigger: {
-          type: "tasks",
-          retryConfig: ep.taskQueueTrigger.retryConfig || {},
-          rateLimits: ep.taskQueueTrigger.rateLimits || {},
-        },
-      };
     }
     return ignored(
       base,
@@ -638,6 +823,7 @@ function describe(name, fn, instrumentation) {
   if (t) {
     if (t.timeout) base.timeoutSeconds = Number(String(t.timeout).replace(/s$/, "")) || undefined;
     if (t.regions?.length) base.region = t.regions[0];
+    if (t.taskQueueTrigger) return describeTaskQueue(base, t.taskQueueTrigger);
     if (t.httpsTrigger) {
       return {
         ...base,
@@ -660,7 +846,7 @@ function describe(name, fn, instrumentation) {
       return describeV1Event(
         base,
         String(et.eventType || ""),
-        String(et.resource || ""),
+        et.resource,
         t.schedule,
         !!et.failurePolicy || !!t.failurePolicy,
       );
@@ -775,15 +961,6 @@ function v1Context(msg) {
   }
 }
 
-// Constant-time comparison of the per-runner secret.
-function secretMatches(presented, expected) {
-  if (typeof presented !== "string") return false;
-  const a = Buffer.from(presented, "utf8");
-  const b = Buffer.from(expected, "utf8");
-  // `timingSafeEqual` throws on a length mismatch, which would itself be a length oracle.
-  return a.length === b.length && timingSafeEqual(a, b);
-}
-
 async function makeHttpServer(functions, manifest) {
   const require = createRequire(join(sourceDir, "package.json"));
   let express;
@@ -803,10 +980,15 @@ async function makeHttpServer(functions, manifest) {
   }
   const HttpsErrors = await firebaseHttpsErrorConstructors(require);
   const app = express();
+  const admission = createHttpAdmission({
+    secret: process.env.FIREEMU_RUNNER_SECRET || "",
+    isStopping: () => finishingOutput || outputFailed,
+  });
   app.use(
     express.json({
       limit: "32mb",
       verify: (req, _res, buf) => {
+        admission.verify(req, _res, buf);
         req.rawBody = buf;
       },
     }),
@@ -815,6 +997,7 @@ async function makeHttpServer(functions, manifest) {
     express.text({
       limit: "32mb",
       verify: (req, _res, buf) => {
+        admission.verify(req, _res, buf);
         req.rawBody = buf;
       },
     }),
@@ -824,6 +1007,7 @@ async function makeHttpServer(functions, manifest) {
       extended: true,
       limit: "32mb",
       verify: (req, _res, buf) => {
+        admission.verify(req, _res, buf);
         req.rawBody = buf;
       },
     }),
@@ -833,6 +1017,7 @@ async function makeHttpServer(functions, manifest) {
       type: () => true,
       limit: "32mb",
       verify: (req, _res, buf) => {
+        admission.verify(req, _res, buf);
         req.rawBody = buf;
       },
     }),
@@ -843,25 +1028,14 @@ async function makeHttpServer(functions, manifest) {
   );
   // Express 5 (path-to-regexp 8) and Express 4 spell the optional rest differently.
   const route = major >= 5 ? "/:project/:region/:name{/*rest}" : "/:project/:region/:name*";
-  const secret = process.env.FIREEMU_RUNNER_SECRET || "";
   const project = process.env.GCLOUD_PROJECT || "";
-  app.all(route, (req, res, next) => {
-    // Only the daemon's proxy may reach this server (it carries the per-runner secret and has
-    // already applied timeouts, concurrency and idle accounting). A missing secret refuses
-    // every request instead of waving them through: this server is the one place that decodes
-    // the credentials the daemon prevalidated, and under the trusted callable protocol it also
-    // honours the auth-override headers, so an unguarded runner would be an open
-    // impersonation endpoint for anything else on the loopback interface.
-    if (!secret) {
-      res.status(500).send("FIREEMU_RUNNER_SECRET is required");
+  app.all(route, (req, res) => {
+    if (finishingOutput || outputFailed) {
+      res.status(503).send("runner is shutting down");
       return;
     }
-    if (!secretMatches(req.get("x-fireemu-runner-secret"), secret)) {
-      res.status(403).send("not the fireemu proxy");
-      return;
-    }
-    // The secret is not part of the request the function sees.
-    delete req.headers["x-fireemu-runner-secret"];
+    // Node-level admission authenticated the proxy before body parsing and
+    // removed its capability header. Selection below retains namespace checks.
     const spec = manifest.functions.find(
       (f) =>
         f.name === req.params.name &&
@@ -884,39 +1058,68 @@ async function makeHttpServer(functions, manifest) {
     const query = queryAt >= 0 ? original.slice(queryAt) : "";
     const rest = pathPart.split("/").slice(4).join("/");
     req.url = `/${rest}${query}`;
-    if (spec.trigger?.type === "blockingAuth") {
-      withFunctionEnvironment(spec, () => {
-        const user = req.body?.data?.user;
-        const context = req.body?.data?.context || {};
-        return isV1(fn) ? fn.run(user, context) : fn.run({ ...context, data: user });
-      })
-        .then((value) =>
-          res.status(200).json(blockingResult(value, spec.trigger.eventType, HttpsErrors[0])),
-        )
-        .catch((e) => {
-          log("error", `${spec.name}: ${e?.stack || e}`, undefined, spec.name);
-          const failure = blockingFailure(e, HttpsErrors);
-          res.status(failure.status).json({
-            error: { status: failure.canonicalName, message: failure.message },
-          });
-        });
-      return;
-    }
-    withFunctionEnvironment(spec, async () => {
-      await fn(req, res);
-      if (!res.writableEnded) {
-        await new Promise((resolve) => {
-          res.once("finish", resolve);
-          res.once("close", resolve);
-        });
+    // Capture close/finish while waiting for the per-function environment too.
+    // A completed IncomingMessage is not a disconnected response: do not use
+    // req.close or req.destroyed to cancel a valid, fully received request.
+    const completeAdmission = admission.begin(req);
+    if (!completeAdmission) { if (!res.destroyed && !res.writableEnded) res.destroy(); return; }
+    const lifetime = trackHttpResponse(res);
+    const blocking = spec.trigger?.type === "blockingAuth";
+    const replyFailure = (error) => {
+      const failure = blocking
+        ? blockingFailure(error, HttpsErrors)
+        : invocationFailure(error);
+      try {
+        const diagnostic = blocking ? invocationFailure(error).diagnostic : failure.diagnostic;
+        log("error", `${spec.name}: ${diagnostic}`, undefined, spec.name);
+      } catch {
+        // Diagnostics cannot suppress the already classified response.
       }
-    }).catch((e) => {
-      log("error", `${spec.name}: ${e?.stack || e}`, undefined, spec.name);
-      if (!res.headersSent) res.status(500).send("internal error");
-      next();
-    });
+      // Never try to append a second error body to a partial/finished response,
+      // or send a reply to a peer that has already disconnected.
+      if (res.destroyed || res.writableEnded) return;
+      try {
+        if (res.headersSent) res.destroy();
+        else if (blocking) res.status(failure.status).json({
+          error: { status: failure.canonicalName, message: failure.message },
+        });
+        else res.status(500).send("internal error");
+      } catch {
+        res.destroy();
+      }
+    };
+    void withFunctionEnvironment(spec, async () => {
+      // Do not run queued callbacks whose requesting peer has gone away. This
+      // check never races a running callback against close: its Promise still
+      // owns the environment until it settles, even after the response closes.
+      if (!lifetime.canStart()) return;
+      try {
+        if (blocking) {
+          const user = req.body?.data?.user;
+          const context = req.body?.data?.context || {};
+          const value = await (spec.generation === 1 ? fn.run(user, context) : fn.run({ ...context, data: user }));
+          if (lifetime.canStart()) {
+            // Materialization can call user getters/toJSON. Keep it inside this
+            // function's secret/logger environment, not the next queue entry's.
+            const payload = blockingResult(value, spec.trigger.eventType, HttpsErrors[0]);
+            if (lifetime.canStart()) res.status(200).json(payload);
+          }
+        } else {
+          await fn(req, res);
+        }
+      } catch (error) {
+        replyFailure(error);
+      }
+      // Already-observed close/finish resolves immediately. A callback that
+      // returned before ending its response still retains the environment.
+      await lifetime.wait();
+    })
+      .catch(replyFailure)
+      .finally(() => { lifetime.dispose(); completeAdmission(); });
   });
-  const server = createServer(app);
+  const server = createServer((req, res) => admission.handle(req, res, app));
+  // Do not let Node send 100 Continue before authentication/capacity checks.
+  server.on("checkContinue", (req, res) => admission.handle(req, res, app, true));
   return new Promise((resolveServer, reject) => {
     server.on("error", reject);
     server.listen(0, "127.0.0.1", () => resolveServer(server));
@@ -924,13 +1127,21 @@ async function makeHttpServer(functions, manifest) {
 }
 
 async function invoke(functions, manifest, msg) {
-  const fn = functions.get(msg.entryPoint) || functions.get(msg.function);
-  if (!fn) throw new Error(`unknown function ${msg.function}`);
   const spec = manifest.functions.find((f) => f.name === msg.function);
+  if (!spec) throw new Error("unknown function");
+  if (msg.entryPoint !== undefined && msg.entryPoint !== spec.entryPoint) {
+    throw new Error("entry point does not match the function manifest");
+  }
+  if (msg.trigger !== spec.trigger?.type ||
+      !["schedule", "firestore", "storage", "pubsub", "eventarc", "auth"].includes(msg.trigger)) {
+    throw new Error("trigger does not match the function manifest");
+  }
+  const fn = functions.get(spec.entryPoint);
+  if (typeof fn !== "function") throw new Error("missing function entry point");
   await withFunctionEnvironment(
     spec,
     async () => {
-      if (isV1(fn)) {
+      if (spec.generation === 1) {
         const context = v1Context(msg);
         let data = msg.event.data;
         if (msg.trigger === "schedule") data = {};
@@ -963,30 +1174,6 @@ async function invoke(functions, manifest, msg) {
   );
 }
 
-function readFrames(onFrame, onEnd) {
-  let buffer = Buffer.alloc(0);
-  process.stdin.on("data", (chunk) => {
-    buffer = Buffer.concat([buffer, chunk]);
-    for (;;) {
-      const nl = buffer.indexOf(10);
-      if (nl < 0) return;
-      const len = Number.parseInt(buffer.subarray(0, nl).toString("utf8"), 10);
-      if (!Number.isFinite(len)) {
-        log("error", "malformed frame length");
-        process.exit(2);
-      }
-      if (buffer.length < nl + 1 + len) return;
-      const payload = buffer.subarray(nl + 1, nl + 1 + len).toString("utf8");
-      buffer = buffer.subarray(nl + 1 + len);
-      try {
-        onFrame(JSON.parse(payload));
-      } catch (e) {
-        log("error", `malformed frame: ${e.message}`);
-      }
-    }
-  });
-  process.stdin.on("end", onEnd);
-}
 
 async function main() {
   // Before any user code loads: the callable options are only observable as a callable is
@@ -996,7 +1183,7 @@ async function main() {
   try {
     ns = await loadCodebase();
   } catch (e) {
-    log("error", `cannot load functions from ${sourceDir}: ${e?.stack || e}`);
+    log("error", `cannot load functions from ${sourceDir}: ${invocationFailure(e).diagnostic}`);
     process.exit(1);
   }
   try {
@@ -1014,19 +1201,21 @@ async function main() {
       ...esmOptions.getGlobalOptions(),
     };
   } catch (e) {
-    log("warn", `cannot inspect firebase-functions global options: ${e?.message || e}`);
+    log("warn", `cannot inspect firebase-functions global options: ${invocationFailure(e).message}`);
   }
-  const broken = new Map();
-  const functions = collectFunctions(ns, "", new Map(), broken);
+  const { functions, broken } = collectFunctions(ns);
   const described = [...functions.entries()].map(([name, fn]) => {
     try {
       return describe(name, fn, instrumentation);
     } catch (e) {
+      const failure = observeAsyncValue(e)
+        ? new Error("asynchronous endpoint metadata failure")
+        : e;
       return ignored(
         { name, entryPoint: name },
         "unknown",
         "unsupported",
-        `the export could not be described: ${e?.message || e}`,
+        `the export could not be described: ${invocationFailure(failure).message}`,
       );
     }
   });
@@ -1073,7 +1262,7 @@ async function main() {
           "express is not installed in the functions codebase; HTTP functions are unavailable",
         );
     } catch (e) {
-      log("error", `cannot start the HTTP server: ${e?.stack || e}`);
+      log("error", `cannot start the HTTP server: ${invocationFailure(e).diagnostic}`);
     }
   }
   activeInspectorPort = inspectorPort();
@@ -1094,24 +1283,49 @@ async function main() {
       graphs: instrumentation.graphs,
     },
   });
+  const activeInvocations = new InvocationBudget();
   readFrames(
-    (msg) => {
-      if (msg.type === "shutdown") process.exit(0);
-      if (msg.type !== "invoke") return;
+    process.stdin,
+    (msg, payloadBytes) => {
+      if (msg.type === "shutdown") {
+        finishOutput();
+        return false;
+      }
+      // Includes callbacks waiting for secret/debugger environment selection.
+      // Retire on overflow; never report an unexecuted request as successful or
+      // retry uncertain in-flight side effects inside this runner.
+      const release = activeInvocations.reserve(msg.invocationId, payloadBytes);
       invoke(functions, manifest, msg)
         .then(() => send({ type: "result", invocationId: msg.invocationId, ok: true }))
-        .catch((e) => {
-          log("error", `${msg.function}: ${e?.stack || e}`, msg.invocationId, msg.function);
+        .catch((error) => {
+          const failure = invocationFailure(error);
+          try {
+            log("error", `${msg.function}: ${failure.diagnostic}`, msg.invocationId, msg.function);
+          } catch {
+            // Diagnostic output cannot suppress the invocation's failure result.
+          }
           send({
             type: "result",
             invocationId: msg.invocationId,
             ok: false,
-            error: String(e?.message || e),
+            error: failure.message,
           });
-        });
+        })
+        .finally(release);
     },
-    () => process.exit(0),
+    () => finishOutput(),
+    (error) => {
+      // The pipe cannot be resynchronized safely. Retire the runner so the daemon
+      // resolves outstanding invocations as RunnerGone, rather than timing out.
+      // Do not print JSON.parse diagnostics containing user payload fragments.
+      try { process.stderr.write(`${error.message}\n`); } finally { process.exit(2); }
+    },
   );
 }
 
-main();
+main().catch((error) => {
+  // Failed discovery must not publish a partial hello or rely on Node's
+  // unhandled-rejection formatting of arbitrary thrown user objects.
+  const failure = invocationFailure(error);
+  try { process.stderr.write(`${failure.message}\n`); } finally { process.exit(1); }
+});

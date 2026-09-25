@@ -29,6 +29,9 @@ use std::path::{Path, PathBuf};
 
 use serde_json::Value;
 
+pub mod inventory;
+pub mod production_inventory;
+
 /// Where the contract lives, relative to the repository root.
 pub const CONTRACT_PATH: &str = "spec/compatibility/contract.json";
 /// Where the capability manifest data lives. `crates/fireemu/src/control.rs` embeds this exact
@@ -95,7 +98,14 @@ pub fn check(root: &Path) -> Report {
     check_claims(root, surfaces, &statuses, &index, &mut report);
     check_readme_claim(root, &contract, &mut report.problems);
     check_scope_leakage(root, &contract, surfaces, entries, &mut report.problems);
-    check_contradictions(root, &contract, entries, &statuses, &mut report.problems);
+    check_contradictions(
+        root,
+        &contract,
+        surfaces,
+        entries,
+        &statuses,
+        &mut report.problems,
+    );
     check_profiles(root, &contract, &mut report.problems);
     check_divergence_authorities(root, &contract, &mut report.problems);
     let excluded = excluded_debt_steps(surfaces);
@@ -1109,6 +1119,7 @@ fn check_scope_leakage(
 fn check_contradictions(
     root: &Path,
     contract: &Value,
+    surfaces: &[Value],
     entries: &serde_json::Map<String, Value>,
     statuses: &BTreeMap<&str, &str>,
     problems: &mut Vec<String>,
@@ -1184,6 +1195,67 @@ fn check_contradictions(
                 }
             }
         }
+
+        // (c) A term the manifest describes in detail but no claim mentions.
+        check_term_is_promised(shared, term, &needle, surfaces, problems);
+    }
+}
+
+/// CC-07 (c): a shared term that opts into `mustAppearInClaim` must be promised by a claim that
+/// binds one of its owners.
+///
+/// The manifest is where a capability's behaviour is written and the contract is what the claim
+/// promises, and nothing else makes the two drift together: `expirationOffset` was implemented,
+/// described in the capability entry and absent from the claim that binds it, which every other
+/// rule passed. The opt-in keeps the rule to the terms a claim is meant to carry.
+fn check_term_is_promised(
+    shared: &Value,
+    term: &str,
+    needle: &str,
+    surfaces: &[Value],
+    problems: &mut Vec<String>,
+) {
+    if !shared
+        .get("mustAppearInClaim")
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
+    {
+        return;
+    }
+    let owners: Vec<&str> = strings(shared, "owners").into_iter().collect();
+    let mut bound = 0_usize;
+    let mut promised = false;
+    for surface in surfaces {
+        for claim in claims_of(surface) {
+            let names_owner = claim
+                .get("capabilities")
+                .and_then(Value::as_array)
+                .map(Vec::as_slice)
+                .unwrap_or_default()
+                .iter()
+                .filter_map(|cap| str_field(cap, "id"))
+                .any(|id| owners.contains(&id));
+            if !names_owner {
+                continue;
+            }
+            bound += 1;
+            if str_field(claim, "statement")
+                .unwrap_or_default()
+                .to_lowercase()
+                .contains(needle)
+            {
+                promised = true;
+            }
+        }
+    }
+    if bound == 0 {
+        problems.push(format!(
+            "CC-07: shared term {term:?} must appear in a claim, but no claim of {CONTRACT_PATH} names any of its owners"
+        ));
+    } else if !promised {
+        problems.push(format!(
+            "CC-07: shared term {term:?} must appear in a claim, but no claim that binds {owners:?} mentions it; the manifest describes it and the contract does not promise it"
+        ));
     }
 }
 

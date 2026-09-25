@@ -32,12 +32,20 @@ use std::sync::{Arc, Mutex};
 use fireemu_adapter_grpc::local::{FirestoreSnapshot, LocalBackend};
 use fireemu_core_auth::claims::CustomClaims;
 use fireemu_core_auth::mfa::{PhoneFactor, TotpFactor, TotpSecret};
+use fireemu_core_auth::password_policy::{EnforcementState, PasswordPolicy};
+use fireemu_core_auth::signup_quota::{
+    QuotaAlgorithm, QuotaMode, SignupQuotaConfig, TemporaryQuota,
+};
 use fireemu_core_auth::store::{
-    AuthRegistry, FederatedIdentity, ImportedUser, ProjectAuthConfig, Provider,
+    AuthNamespaceConfigPatch, AuthRegistry, AuthStore, FederatedIdentity, ImportedUser,
+    ProjectAuthConfig, Provider, TenantMetadata,
 };
 use fireemu_core_export::auth::{
-    fake_hash, AccountsFile, AuthConfig, MfaEnrollment, ProviderUserInfo, UserRecord,
-    ACCOUNTS_FILE, CONFIG_FILE,
+    fake_hash, AccountsFile, AuthConfig, AuthSettings, AuthSettingsNamespace, AuthSettingsRecord,
+    BlockingAuthForwardingRecord, BlockingAuthSelectionRecord, BlockingAuthSettingsRecord,
+    MfaEnrollment, PasswordPolicies, PasswordPolicyNamespace, PasswordPolicyRecord,
+    ProviderUserInfo, QuotaSettingsRecord, TemporaryQuotaRecord, TenantMetadataRecord, UserRecord,
+    ACCOUNTS_FILE, AUTH_SETTINGS_FILE, CONFIG_FILE, PASSWORD_POLICIES_FILE,
 };
 use fireemu_core_export::firestore::{
     for_each_output, write_output_to, ExportDocument, OverallMetadata, PartitionMetadata,
@@ -57,7 +65,7 @@ use fireemu_core_storage::name::{BucketName, ObjectName};
 use fireemu_core_storage::store::ImportedObject;
 use fireemu_core_types::determinism::Clock;
 use fireemu_core_types::ids::{DatabaseId, ProjectId};
-use fireemu_core_types::time::{civil_from_days, LogicalInstant};
+use fireemu_core_types::time::{civil_from_days, LogicalDuration, LogicalInstant};
 use fireemu_export_publication::PublicationStage;
 
 use crate::config::Selection;
@@ -77,6 +85,7 @@ pub const COMPATIBLE_FIRESTORE_VERSION: &str = "1.22.0";
 
 /// The default database, which the official Firestore section carries.
 const DEFAULT_DATABASE: &str = DatabaseId::DEFAULT;
+const BLOCKING_DISCOVERY_EVENTS_MEMBER: &str = "__fireemuDiscoveryEvents";
 
 const IMPORT_MANIFEST_BYTES_LIMIT: u64 = 4 * 1024 * 1024;
 const IMPORT_AUTH_FILE_BYTES_LIMIT: u64 = 64 * 1024 * 1024;
@@ -138,6 +147,13 @@ pub struct Endpoints<'a> {
     pub clock: &'a Arc<Mutex<VirtualClock>>,
     /// The project the run serves.
     pub project: &'a str,
+    /// The optional runtime-owned Blocking Auth bridge. Only its logical project settings cross
+    /// the export seam; runner addresses, ports and secrets stay in the live runtime.
+    pub blocking: Option<&'a dyn fireemu_adapter_http::identity_toolkit::AuthBlockingHook>,
+    /// Adapter-level Auth settings gate shared with project configuration and blocking requests.
+    /// Export captures Auth stores and blocking settings while this gate is held, then releases
+    /// it before serializing files.
+    pub auth_operation_gate: Option<&'a Arc<Mutex<()>>>,
 }
 
 impl Endpoints<'_> {
@@ -151,20 +167,59 @@ impl Endpoints<'_> {
 /// The documents of every database, keyed by `(project, database)`.
 type PreparedDatabases = BTreeMap<(String, String), Vec<ImportedDocument>>;
 
+struct FirestorePartition {
+    overall: OverallMetadata,
+    metadata_path: PathBuf,
+    metadata: PartitionMetadata,
+    directory: PathBuf,
+}
+
 /// The default accounts, project configuration and isolated tenant accounts of the Auth
 /// section.
 #[derive(Debug, Default)]
 struct PreparedAuth {
     users: Vec<ImportedUser>,
-    /// `passwordUpdatedAt` per imported account (default store and tenants), restored after
-    /// the account is imported so a lookup answers what the artifact recorded.
-    password_updated_at: BTreeMap<String, LogicalInstant>,
+    /// `passwordUpdatedAt` per imported account and tenant namespace, restored after the account
+    /// is imported so a lookup answers what the artifact recorded.
+    password_updated_at: BTreeMap<(Option<String>, String), LogicalInstant>,
     config: ProjectAuthConfig,
+    /// Whether each client permission was explicitly declared in `config.json`. An old
+    /// official artifact must not turn an already configured runtime switch off.
+    client_permissions_declared: (bool, bool),
     /// Whether the artifact declared `emailPrivacyConfig.enableImprovedEmailPrivacy`. When it
     /// did not (the official emulator's export without the key, or no config.json at all),
     /// the running store's setting is kept: an import must not switch the protection off.
     email_privacy_declared: bool,
+    /// Whether `signIn.allowDuplicateEmails` was explicitly declared in `config.json`.
+    allow_duplicate_emails_declared: bool,
+    /// The optional fireemu-only password policy sidecar. The official Auth export has no
+    /// equivalent, so a missing sidecar leaves the running policy unchanged.
+    password_policies: Option<PasswordPolicies>,
+    /// Optional fireemu-only namespace settings. The sidecar carries quota configuration and
+    /// explicit tenant projections; usage buckets are never serialized.
+    auth_settings: Option<AuthSettings>,
     tenants: BTreeMap<String, Vec<ImportedUser>>,
+}
+
+#[cfg(test)]
+fn preflight_auth_tenant_stores(auth: &AuthRegistry, project: &str) -> Result<(), ArtifactError> {
+    for tenant in auth.tenants(project) {
+        let Some(tenant_store) = auth.tenant_store(project, &tenant) else {
+            return Err(ArtifactError::new(
+                "auth",
+                PathBuf::from(AUTH_PATH),
+                format!("tenant {tenant:?} disappeared during import preflight"),
+            ));
+        };
+        let _tenant_guard = tenant_store.lock().map_err(|_| {
+            ArtifactError::new(
+                "auth",
+                PathBuf::from(AUTH_PATH),
+                format!("tenant {tenant:?} store is poisoned"),
+            )
+        })?;
+    }
+    Ok(())
 }
 
 impl PreparedAuth {
@@ -176,7 +231,21 @@ impl PreparedAuth {
             } else {
                 current.enable_improved_email_privacy
             },
-            ..self.config
+            disabled_user_signup: if self.client_permissions_declared.0 {
+                self.config.disabled_user_signup
+            } else {
+                current.disabled_user_signup
+            },
+            disabled_user_deletion: if self.client_permissions_declared.1 {
+                self.config.disabled_user_deletion
+            } else {
+                current.disabled_user_deletion
+            },
+            allow_duplicate_emails: if self.allow_duplicate_emails_declared {
+                self.config.allow_duplicate_emails
+            } else {
+                current.allow_duplicate_emails
+            },
         }
     }
 }
@@ -193,6 +262,11 @@ pub struct Prepared {
     auth: Option<PreparedAuth>,
     /// The Storage objects and buckets.
     storage: Option<PreparedStorage>,
+    /// The Firestore time-to-live field configuration, from the fireemu-only sidecar. The
+    /// official export format has no equivalent section, so an artifact without the sidecar
+    /// leaves the running configuration unchanged.
+    firestore_field_config:
+        Option<BTreeMap<(String, String), fireemu_core_firestore::ttl::TtlCatalog>>,
     /// What the operator should be told before the run starts.
     pub notices: Vec<String>,
 }
@@ -333,8 +407,9 @@ pub fn prepare(dir: &Path, products: Products, project: &str) -> Result<Prepared
                     )?;
                 }
                 prepared.firestore = Some(databases);
+                prepared.firestore_field_config = read_field_config(dir)?;
             }
-            Product::Auth => prepared.auth = Some(read_auth_section(dir, section)?),
+            Product::Auth => prepared.auth = Some(read_auth_section(dir, section, project)?),
             Product::Storage => prepared.storage = Some(read_storage_section(dir, section)?),
             Product::Database | Product::DataConnect => unreachable!("refused above"),
         }
@@ -385,10 +460,15 @@ pub fn apply(mut prepared: Prepared, endpoints: &Endpoints) -> Result<(), Artifa
                     error.to_string(),
                 )
             })?;
+        if let Some(catalogs) = prepared.firestore_field_config.take() {
+            endpoints
+                .backend
+                .restore_ttl_catalogs(|_project| true, &catalogs);
+        }
     }
 
     if let Some(auth) = prepared.auth.take() {
-        apply_auth(auth, endpoints)?;
+        apply_auth(&auth, endpoints)?;
     }
 
     if let Some((objects, _)) = prepared.storage.take() {
@@ -415,75 +495,382 @@ pub fn apply(mut prepared: Prepared, endpoints: &Endpoints) -> Result<(), Artifa
     Ok(())
 }
 
-fn apply_auth(mut auth: PreparedAuth, endpoints: &Endpoints) -> Result<(), ArtifactError> {
-    let store = endpoints.auth.default_store();
-    let mut store = store.lock().map_err(|_| {
-        ArtifactError::new(
-            "auth",
-            PathBuf::from(AUTH_PATH),
-            "the Auth store is poisoned",
-        )
-    })?;
-    store.clear();
-    let current = store.config();
-    store.set_config(auth.config_over(current));
-    let users = std::mem::take(&mut auth.users);
-    for user in users {
-        let id = user.local_id.clone();
-        let uid = store.import_user(user).map_err(|e| {
-            ArtifactError::new(
-                "auth",
-                PathBuf::from(AUTH_PATH).join(ACCOUNTS_FILE),
-                format!("account {id}: {e}"),
-            )
-        })?;
-        if let Some(at) = auth.password_updated_at.get(&id) {
-            store.set_password_updated_at(&uid, *at);
-        }
-    }
-    // An import restores accounts that already existed; no Auth trigger fires for them.
-    let _ = store.take_user_events();
-    drop(store);
-
+#[allow(clippy::too_many_lines)]
+fn apply_auth(auth: &PreparedAuth, endpoints: &Endpoints) -> Result<(), ArtifactError> {
+    let policy_path = PathBuf::from(AUTH_PATH).join(PASSWORD_POLICIES_FILE);
+    let mut current_tenant_policies = BTreeMap::new();
     for tenant in endpoints.auth.tenants(endpoints.project) {
-        endpoints.auth.delete_tenant(endpoints.project, &tenant);
-    }
-    let tenants = std::mem::take(&mut auth.tenants);
-    for (tenant, users) in tenants {
         let tenant_store = endpoints
             .auth
-            .ensure_tenant(endpoints.project, &tenant)
+            .tenant_store(endpoints.project, &tenant)
+            .ok_or_else(|| {
+                ArtifactError::new(
+                    "auth",
+                    &policy_path,
+                    format!("tenant {tenant:?} disappeared during policy preflight"),
+                )
+            })?;
+        let policy = tenant_store
+            .lock()
+            .map_err(|_| {
+                ArtifactError::new(
+                    "auth",
+                    &policy_path,
+                    format!("tenant {tenant:?} store is poisoned"),
+                )
+            })?
+            .password_policy()
+            .clone();
+        current_tenant_policies.insert(tenant, policy);
+    }
+    let imported_project_policy = auth
+        .password_policies
+        .as_ref()
+        .filter(|policies| policies.project_id == endpoints.project)
+        .map(|policies| imported_password_policy(&policies.project, &policy_path))
+        .transpose()?;
+    let settings_path = PathBuf::from(AUTH_PATH).join(AUTH_SETTINGS_FILE);
+    let imported_project_quota = auth
+        .auth_settings
+        .as_ref()
+        .filter(|settings| settings.project_id == endpoints.project)
+        .and_then(|settings| settings.project.quota.as_ref())
+        .map(|quota| imported_quota_settings(quota, &settings_path))
+        .transpose()?;
+    let imported_project_blocking = auth
+        .auth_settings
+        .as_ref()
+        .filter(|settings| settings.project_id == endpoints.project)
+        .and_then(|settings| settings.project.blocking.as_ref())
+        .map(blocking_settings_json);
+    if let Some(settings) = &imported_project_blocking {
+        let Some(blocking) = endpoints.blocking else {
+            return Err(ArtifactError::new(
+                "auth",
+                &settings_path,
+                "blocking settings require a running owned Functions runtime",
+            ));
+        };
+        blocking
+            .validate_blocking_auth_settings(settings)
+            .map_err(|error| ArtifactError::new("auth", &settings_path, error))?;
+    }
+    // Build the replacement in memory first. `import_user_trusted` can still reject a
+    // syntactically valid record (for example, duplicate IDs or emails); doing this before
+    // clearing the live store keeps the import atomic across all account records.
+    let mut default_candidate = {
+        let store = endpoints.auth.default_store();
+        let store = store.lock().map_err(|_| {
+            ArtifactError::new(
+                "auth",
+                PathBuf::from(AUTH_PATH),
+                "the Auth store is poisoned",
+            )
+        })?;
+        let mut candidate = store.clone();
+        candidate.clear();
+        candidate.set_config(auth.config_over(store.config()));
+        if let Some(policy) = &imported_project_policy {
+            candidate.set_password_policy(policy.clone());
+        }
+        if let Some(quota) = &imported_project_quota {
+            candidate
+                .set_signup_quota_config(quota.clone())
+                .map_err(|error| {
+                    ArtifactError::new(
+                        "auth",
+                        &settings_path,
+                        format!("the Auth settings quota is invalid: {error:?}"),
+                    )
+                })?;
+        }
+        install_auth_users(
+            &mut candidate,
+            &auth.users,
+            &auth.password_updated_at,
+            None,
+            Path::new(ACCOUNTS_FILE),
+        )?;
+        candidate
+    };
+    let default_config = default_candidate.config();
+    let mut tenant_candidates = Vec::with_capacity(auth.tenants.len());
+    let mut imported_tenant_config_overrides = BTreeMap::new();
+    for (tenant, users) in &auth.tenants {
+        let mut candidate = endpoints
+            .auth
+            .tenant_import_candidate(endpoints.project, tenant)
             .ok_or_else(|| {
                 ArtifactError::new(
                     "auth",
                     PathBuf::from(AUTH_PATH),
-                    format!("cannot create tenant {tenant:?}"),
+                    format!("cannot prepare tenant {tenant:?}"),
                 )
             })?;
-        let mut tenant_store = tenant_store.lock().map_err(|_| {
-            ArtifactError::new(
-                "auth",
-                PathBuf::from(AUTH_PATH),
-                format!("tenant {tenant:?} store is poisoned"),
-            )
-        })?;
-        tenant_store.clear();
-        let current = tenant_store.config();
-        tenant_store.set_config(auth.config_over(current));
-        for user in users {
-            let id = user.local_id.clone();
-            let uid = tenant_store.import_user(user).map_err(|e| {
-                ArtifactError::new(
-                    "auth",
-                    PathBuf::from(AUTH_PATH).join(format!("accounts-{tenant}.json")),
-                    format!("account {id}: {e}"),
-                )
-            })?;
-            if let Some(at) = auth.password_updated_at.get(&id) {
-                tenant_store.set_password_updated_at(&uid, *at);
+        candidate.clear();
+        candidate.set_config(tenant_config_from_settings(
+            settings_for_tenant(auth.auth_settings.as_ref(), endpoints.project, tenant),
+            auth.config_over(default_config),
+        ));
+        let mut metadata =
+            settings_for_tenant(auth.auth_settings.as_ref(), endpoints.project, tenant)
+                .and_then(|settings| settings.metadata.as_ref())
+                .map_or_else(
+                    || TenantMetadata {
+                        allow_password_signup: true,
+                        enable_email_link_signin: true,
+                        enable_anonymous_user: true,
+                        ..TenantMetadata::default()
+                    },
+                    imported_tenant_metadata,
+                );
+        if let Some(settings) =
+            settings_for_tenant(auth.auth_settings.as_ref(), endpoints.project, tenant)
+        {
+            if settings.config_is_explicit {
+                if let Some(config) = &settings.settings.config {
+                    let config_patch = auth_namespace_config_patch(config);
+                    if !config_patch.is_empty() {
+                        imported_tenant_config_overrides.insert(tenant.clone(), config_patch);
+                    }
+                    metadata.disabled_user_signup = config
+                        .disabled_user_signup
+                        .unwrap_or(metadata.disabled_user_signup);
+                    metadata.disabled_user_deletion = config
+                        .disabled_user_deletion
+                        .unwrap_or(metadata.disabled_user_deletion);
+                    metadata.enable_improved_email_privacy = config
+                        .enable_improved_email_privacy
+                        .unwrap_or(metadata.enable_improved_email_privacy);
+                }
+            } else {
+                // Version 1 sidecars carried an effective tenant projection without recording
+                // whether it was an explicit override. Migrate that ambiguous projection as
+                // inherited: both the store and metadata must start from the imported project
+                // configuration so they cannot disagree until a later project update.
+                let inherited = candidate.config();
+                metadata.disabled_user_signup = inherited.disabled_user_signup;
+                metadata.disabled_user_deletion = inherited.disabled_user_deletion;
+                metadata.enable_improved_email_privacy = inherited.enable_improved_email_privacy;
+            }
+            if let Some(quota) = &settings.settings.quota {
+                candidate
+                    .set_signup_quota_config(imported_quota_settings(quota, &settings_path)?)
+                    .map_err(|error| {
+                        ArtifactError::new(
+                            "auth",
+                            &settings_path,
+                            format!("the Auth settings quota is invalid: {error:?}"),
+                        )
+                    })?;
             }
         }
-        let _ = tenant_store.take_user_events();
+        let fallback = current_tenant_policies
+            .get(tenant)
+            .cloned()
+            .unwrap_or_default();
+        candidate.set_password_policy(password_policy_for_tenant(
+            auth.password_policies.as_ref(),
+            endpoints.project,
+            tenant,
+            &fallback,
+            &policy_path,
+        )?);
+        install_auth_users(
+            &mut candidate,
+            users,
+            &auth.password_updated_at,
+            Some(tenant),
+            Path::new(&format!("accounts-{tenant}.json")),
+        )?;
+        let _ = candidate.take_user_events();
+        tenant_candidates.push((tenant.clone(), candidate, metadata));
+    }
+    let _ = default_candidate.take_user_events();
+
+    // Blocked Auth settings and imported accounts share one publication boundary. Capture the
+    // bridge state before making either side visible so a failure in either commit can restore
+    // the other side. Updating the bridge first is important: an update failure must leave the
+    // live Auth registry untouched, rather than publishing users and config before discovering
+    // that the Functions target cannot accept the imported settings.
+    let blocking_snapshot = if imported_project_blocking.is_some() {
+        let blocking = endpoints.blocking.ok_or_else(|| {
+            ArtifactError::new(
+                "auth",
+                &settings_path,
+                "blocking settings require a running owned Functions runtime",
+            )
+        })?;
+        let snapshot = blocking
+            .blocking_auth_settings_snapshot()
+            .map_err(|error| ArtifactError::new("auth", &settings_path, error))?
+            .ok_or_else(|| {
+                ArtifactError::new(
+                    "auth",
+                    &settings_path,
+                    "blocking settings cannot be imported without a rollback snapshot",
+                )
+            })?;
+        Some(snapshot)
+    } else {
+        None
+    };
+    if let Some(settings) = imported_project_blocking.as_ref() {
+        let blocking = endpoints.blocking.ok_or_else(|| {
+            ArtifactError::new(
+                "auth",
+                &settings_path,
+                "blocking settings require a running owned Functions runtime",
+            )
+        })?;
+        if let Err(error) = blocking.update_blocking_auth_settings(settings) {
+            let restore_error = blocking_snapshot.as_ref().and_then(|snapshot| {
+                restore_blocking_settings_if_unchanged(blocking, snapshot, settings).err()
+            });
+            let message = match restore_error {
+                Some(restore_error) => {
+                    format!("{error}; restoring previous blocking settings failed: {restore_error}")
+                }
+                None => error,
+            };
+            return Err(ArtifactError::new("auth", &settings_path, message));
+        }
+    }
+
+    if let Err(error) = endpoints.auth.replace_default_scope_with_config_overrides(
+        endpoints.project,
+        default_candidate,
+        tenant_candidates,
+        &imported_tenant_config_overrides,
+    ) {
+        if let (Some(snapshot), Some(blocking)) = (blocking_snapshot.as_ref(), endpoints.blocking) {
+            if let Err(restore_error) = restore_blocking_settings_if_unchanged(
+                blocking,
+                snapshot,
+                imported_project_blocking
+                    .as_ref()
+                    .expect("blocking settings are present when a snapshot is captured"),
+            ) {
+                return Err(ArtifactError::new(
+                    "auth",
+                    PathBuf::from(AUTH_PATH),
+                    format!(
+                        "{error}; restoring previous blocking settings failed: {restore_error}"
+                    ),
+                ));
+            }
+        }
+        return Err(ArtifactError::new("auth", PathBuf::from(AUTH_PATH), error));
+    }
+    Ok(())
+}
+
+/// Restores an import's previous Blocking Auth projection only while the imported projection is
+/// still current. [`AuthBlockingHook`] exposes snapshots and unconditional restore, but no
+/// generation or compare-and-swap operation. The comparison avoids overwriting a concurrent
+/// settings update in the usual interleaving; a hook implementation needs a generation-aware
+/// API to make this boundary fully atomic against a writer that races after the comparison.
+fn restore_blocking_settings_if_unchanged(
+    blocking: &dyn fireemu_adapter_http::identity_toolkit::AuthBlockingHook,
+    snapshot: &serde_json::Value,
+    imported: &serde_json::Value,
+) -> Result<(), String> {
+    let current = blocking
+        .blocking_auth_settings_snapshot()?
+        .ok_or_else(|| "blocking settings have no rollback snapshot".to_owned())?;
+    if current == *snapshot {
+        return Ok(());
+    }
+    if current != *imported {
+        return Err(
+            "blocking settings changed during import; refusing a stale rollback".to_owned(),
+        );
+    }
+    blocking.restore_blocking_auth_settings_snapshot(snapshot)
+}
+
+#[cfg(test)]
+mod blocking_rollback_tests {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::Mutex;
+
+    use fireemu_adapter_http::identity_toolkit::{AuthBlockingHook, BlockingFunctionFailure};
+    use serde_json::Value;
+
+    struct MutableBlockingHook {
+        settings: Mutex<Value>,
+        restore_calls: AtomicUsize,
+    }
+
+    impl AuthBlockingHook for MutableBlockingHook {
+        fn invoke(
+            &self,
+            _event: fireemu_core_functions::manifest::BlockingAuthEvent,
+            _user: &fireemu_core_auth::store::UserRecord,
+        ) -> Result<Value, BlockingFunctionFailure> {
+            Err(BlockingFunctionFailure::unhandled())
+        }
+
+        fn blocking_auth_settings(&self) -> Option<Value> {
+            self.settings.lock().ok().map(|settings| settings.clone())
+        }
+
+        fn blocking_auth_settings_snapshot(&self) -> Result<Option<Value>, String> {
+            Ok(self.blocking_auth_settings())
+        }
+
+        fn restore_blocking_auth_settings_snapshot(&self, snapshot: &Value) -> Result<(), String> {
+            self.restore_calls.fetch_add(1, Ordering::Relaxed);
+            *self
+                .settings
+                .lock()
+                .map_err(|_| "settings poisoned".to_owned())? = snapshot.clone();
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn stale_blocking_rollback_does_not_overwrite_a_concurrent_update() {
+        let hook = MutableBlockingHook {
+            settings: Mutex::new(serde_json::json!({"version": "concurrent"})),
+            restore_calls: AtomicUsize::new(0),
+        };
+        let snapshot = serde_json::json!({"version": "before-import"});
+        let imported = serde_json::json!({"version": "imported"});
+
+        let error = super::restore_blocking_settings_if_unchanged(&hook, &snapshot, &imported)
+            .expect_err("a concurrent update must prevent a stale rollback");
+
+        assert!(error.contains("changed during import"), "{error}");
+        assert_eq!(
+            hook.blocking_auth_settings(),
+            Some(serde_json::json!({
+                "version": "concurrent"
+            }))
+        );
+        assert_eq!(hook.restore_calls.load(Ordering::Relaxed), 0);
+    }
+}
+
+fn install_auth_users(
+    store: &mut AuthStore,
+    users: &[ImportedUser],
+    password_updated_at: &BTreeMap<(Option<String>, String), LogicalInstant>,
+    tenant: Option<&str>,
+    filename: &Path,
+) -> Result<(), ArtifactError> {
+    for user in users {
+        let id = user.local_id.clone();
+        let uid = store.import_user_trusted(user.clone()).map_err(|e| {
+            ArtifactError::new(
+                "auth",
+                PathBuf::from(AUTH_PATH).join(filename),
+                format!("account {id}: {e}"),
+            )
+        })?;
+        if let Some(at) = password_updated_at.get(&(tenant.map(str::to_owned), id)) {
+            store.set_password_updated_at(&uid, *at);
+        }
     }
     Ok(())
 }
@@ -734,6 +1121,7 @@ fn refuse_symlink(product: &'static str, entry: &std::fs::DirEntry) -> Result<()
     Ok(())
 }
 
+#[allow(clippy::too_many_lines)]
 fn read_firestore_section(
     dir: &Path,
     section: &Section,
@@ -750,24 +1138,176 @@ fn read_firestore_section(
     let overall_path = dir.join(&metadata_file);
     let bytes = read_inside_limited(dir, &overall_path, IMPORT_METADATA_FILE_BYTES_LIMIT)
         .map_err(|e| ArtifactError::new("firestore", &overall_path, e))?;
-    let overall = OverallMetadata::parse(&bytes)
+    let overalls = OverallMetadata::parse_all(&bytes)
         .map_err(|e| ArtifactError::new("firestore", &overall_path, e.to_string()))?;
 
     let section_dir = dir.join(&section.path);
-    let partition_path = section_dir.join(&overall.metadata_file);
-    let bytes = read_inside_limited(dir, &partition_path, IMPORT_METADATA_FILE_BYTES_LIMIT)
-        .map_err(|e| ArtifactError::new("firestore", &partition_path, e))?;
-    let partition = PartitionMetadata::parse(&bytes)
-        .map_err(|e| ArtifactError::new("firestore", &partition_path, e.to_string()))?;
+    let mut references = BTreeMap::new();
+    for overall in &overalls {
+        if let Some((entity_count, byte_count)) = references.insert(
+            overall.metadata_file.clone(),
+            (overall.entity_count, overall.byte_count),
+        ) {
+            let description =
+                if entity_count == overall.entity_count && byte_count == overall.byte_count {
+                    "more than once".to_owned()
+                } else {
+                    format!("with conflicting counts ({entity_count} entities, {byte_count} bytes)")
+                };
+            return Err(ArtifactError::new(
+                "firestore",
+                &overall_path,
+                format!(
+                    "the overall export metadata names partition metadata file {:?} {description}",
+                    overall.metadata_file,
+                ),
+            ));
+        }
+    }
 
-    let partition_dir = partition_path
-        .parent()
-        .map_or_else(|| section_dir.clone(), Path::to_path_buf);
+    let mut output_paths = BTreeSet::new();
+    let mut partitions = Vec::with_capacity(overalls.len());
+    for overall in overalls {
+        let metadata_path = section_dir.join(&overall.metadata_file);
+        let bytes = read_inside_limited(dir, &metadata_path, IMPORT_METADATA_FILE_BYTES_LIMIT)
+            .map_err(|e| ArtifactError::new("firestore", &metadata_path, e))?;
+        let metadata = PartitionMetadata::parse(&bytes)
+            .map_err(|e| ArtifactError::new("firestore", &metadata_path, e.to_string()))?;
+        let directory = metadata_path
+            .parent()
+            .map_or_else(|| section_dir.clone(), Path::to_path_buf);
+        for output in &metadata.output_files {
+            let output_path = directory.join(output);
+            let identity = normalized_import_path(dir, &output_path)
+                .map_err(|e| ArtifactError::new("firestore", &output_path, e))?;
+            if !output_paths.insert(identity) {
+                return Err(ArtifactError::new(
+                    "firestore",
+                    &output_path,
+                    "the Firestore export references this output file from more than one partition metadata file",
+                ));
+            }
+        }
+        partitions.push(FirestorePartition {
+            overall,
+            metadata_path,
+            metadata,
+            directory,
+        });
+    }
+
     let mut foreign = BTreeSet::new();
+    let mut declared_entity_count = 0u64;
+    let mut imported_entity_count = 0u64;
+    let mut declared_byte_count = 0u64;
+    let mut imported_byte_count = 0u64;
+    for partition in partitions {
+        let overall = &partition.overall;
+        declared_entity_count = declared_entity_count
+            .checked_add(overall.entity_count)
+            .ok_or_else(|| {
+                ArtifactError::new(
+                    "firestore",
+                    &overall_path,
+                    "the overall export entity count overflows".to_owned(),
+                )
+            })?;
+        declared_byte_count = declared_byte_count
+            .checked_add(overall.byte_count)
+            .ok_or_else(|| {
+                ArtifactError::new(
+                    "firestore",
+                    &overall_path,
+                    "the overall export byte count overflows".to_owned(),
+                )
+            })?;
+
+        let (partition_entity_count, partition_byte_count) = read_firestore_partition(
+            dir,
+            &partition,
+            remaining_bytes,
+            databases,
+            database,
+            &mut foreign,
+            run_project,
+        )?;
+        imported_entity_count = imported_entity_count
+            .checked_add(partition_entity_count)
+            .ok_or_else(|| {
+                ArtifactError::new(
+                    "firestore",
+                    &overall_path,
+                    "the imported entity count overflows",
+                )
+            })?;
+        imported_byte_count = imported_byte_count
+            .checked_add(partition_byte_count)
+            .ok_or_else(|| {
+                ArtifactError::new(
+                    "firestore",
+                    &overall_path,
+                    "the imported byte count overflows",
+                )
+            })?;
+    }
+    if imported_entity_count != declared_entity_count {
+        return Err(ArtifactError::new(
+            "firestore",
+            &overall_path,
+            format!(
+                "the imported entity count is {imported_entity_count}, but overall metadata records {declared_entity_count}"
+            ),
+        ));
+    }
+    if imported_byte_count != declared_byte_count {
+        return Err(ArtifactError::new(
+            "firestore",
+            &overall_path,
+            format!(
+                "the imported byte count is {imported_byte_count}, but overall metadata records {declared_byte_count}"
+            ),
+        ));
+    }
+    for project in foreign {
+        notices.push(format!(
+            "the Firestore export holds documents of the project {project}, not the {run_project} this run serves; they were imported under {project}, so point the SDK at that project to read them"
+        ));
+    }
+    Ok(())
+}
+
+fn normalized_import_path(root: &Path, path: &Path) -> Result<PathBuf, String> {
+    let relative = path
+        .strip_prefix(root)
+        .map_err(|_| "it is outside the export directory".to_owned())?;
+    let mut normalized = PathBuf::new();
+    for component in relative.components() {
+        match component {
+            std::path::Component::Normal(name) => normalized.push(name),
+            std::path::Component::CurDir => {}
+            std::path::Component::ParentDir => {
+                return Err("it contains a parent path component".to_owned());
+            }
+            _ => return Err("it is not a normal path inside the export directory".to_owned()),
+        }
+    }
+    Ok(normalized)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn read_firestore_partition(
+    dir: &Path,
+    partition: &FirestorePartition,
+    remaining_bytes: &mut u64,
+    databases: &mut BTreeMap<(String, String), Vec<ImportedDocument>>,
+    database: &str,
+    foreign: &mut BTreeSet<String>,
+    run_project: &str,
+) -> Result<(u64, u64), ArtifactError> {
     let mut entity_count = 0u64;
     let mut byte_count = 0u64;
-    for output in &partition.output_files {
-        let output_path = partition_dir.join(output);
+    for output in &partition.metadata.output_files {
+        let output_path = partition.directory.join(output);
         let file = open_file_inside(dir, &output_path)
             .map_err(|e| ArtifactError::new("firestore", &output_path, e))?;
         let len = file
@@ -785,7 +1325,7 @@ fn read_firestore_section(
         }
         let mut limited = std::io::Read::take(file, remaining_bytes.saturating_add(1));
         let decoded = for_each_output(&mut limited, |document| {
-            collect_document(databases, document, database, &mut foreign, run_project)?;
+            collect_document(databases, document, database, foreign, run_project)?;
             entity_count = entity_count.saturating_add(1);
             Ok(())
         });
@@ -805,32 +1345,27 @@ fn read_firestore_section(
         byte_count = byte_count.saturating_add(consumed);
         decoded.map_err(|e| ArtifactError::new("firestore", &output_path, e.to_string()))??;
     }
-    if entity_count != overall.entity_count {
+    if entity_count != partition.overall.entity_count {
         return Err(ArtifactError::new(
             "firestore",
-            &overall_path,
+            &partition.metadata_path,
             format!(
                 "the partition entity count is {entity_count}, but its overall metadata records {}",
-                overall.entity_count
+                partition.overall.entity_count
             ),
         ));
     }
-    if byte_count != overall.byte_count {
+    if byte_count != partition.overall.byte_count {
         return Err(ArtifactError::new(
             "firestore",
-            &overall_path,
+            &partition.metadata_path,
             format!(
                 "the partition byte count is {byte_count}, but its overall metadata records {}",
-                overall.byte_count
+                partition.overall.byte_count
             ),
         ));
     }
-    for project in foreign {
-        notices.push(format!(
-            "the Firestore export holds documents of the project {project}, not the {run_project} this run serves; they were imported under {project}, so point the SDK at that project to read them"
-        ));
-    }
-    Ok(())
+    Ok((entity_count, byte_count))
 }
 
 /// Turns one decoded entity into an import document, validating its project and path.
@@ -896,15 +1431,20 @@ fn read_auth_text(
     .map_err(|error| ArtifactError::new("auth", path, error))
 }
 
-/// The optional `config.json` of the Auth section: the project configuration and whether it
-/// declared the email privacy setting.
+/// The optional `config.json` of the Auth section and the declaration state of each setting.
 fn read_auth_config(
     dir: &Path,
     section_dir: &Path,
     remaining_bytes: &mut u64,
-) -> Result<(ProjectAuthConfig, bool), ArtifactError> {
+) -> Result<(ProjectAuthConfig, bool, bool, bool, bool), ArtifactError> {
     let config_path = section_dir.join(CONFIG_FILE);
-    let (config, email_privacy_declared) = match std::fs::symlink_metadata(&config_path) {
+    let (
+        config,
+        allow_duplicate_emails_declared,
+        email_privacy_declared,
+        signup_declared,
+        deletion_declared,
+    ) = match std::fs::symlink_metadata(&config_path) {
         Ok(metadata) => {
             if metadata.file_type().is_symlink() || !metadata.file_type().is_file() {
                 return Err(ArtifactError::new(
@@ -918,15 +1458,22 @@ fn read_auth_config(
                 .map_err(|e| ArtifactError::new("auth", &config_path, e.to_string()))?;
             (
                 ProjectAuthConfig {
-                    allow_duplicate_emails: parsed.allow_duplicate_emails,
+                    allow_duplicate_emails: parsed.allow_duplicate_emails.unwrap_or(false),
                     enable_improved_email_privacy: parsed
                         .enable_improved_email_privacy
                         .unwrap_or(false),
+                    disabled_user_signup: parsed.disabled_user_signup.unwrap_or(false),
+                    disabled_user_deletion: parsed.disabled_user_deletion.unwrap_or(false),
                 },
+                parsed.allow_duplicate_emails.is_some(),
                 parsed.enable_improved_email_privacy.is_some(),
+                parsed.disabled_user_signup.is_some(),
+                parsed.disabled_user_deletion.is_some(),
             )
         }
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => (ProjectAuthConfig::default(), false),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            (ProjectAuthConfig::default(), false, false, false, false)
+        }
         Err(e) => {
             return Err(ArtifactError::new(
                 "auth",
@@ -935,10 +1482,81 @@ fn read_auth_config(
             ))
         }
     };
-    Ok((config, email_privacy_declared))
+    Ok((
+        config,
+        allow_duplicate_emails_declared,
+        email_privacy_declared,
+        signup_declared,
+        deletion_declared,
+    ))
 }
 
-fn read_auth_section(dir: &Path, section: &Section) -> Result<PreparedAuth, ArtifactError> {
+fn read_auth_settings(
+    dir: &Path,
+    section_dir: &Path,
+    remaining_bytes: &mut u64,
+) -> Result<Option<AuthSettings>, ArtifactError> {
+    let path = section_dir.join(AUTH_SETTINGS_FILE);
+    let metadata = match std::fs::symlink_metadata(&path) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => {
+            return Err(ArtifactError::new(
+                "auth",
+                &path,
+                format!("cannot inspect the optional Auth settings sidecar: {error}"),
+            ))
+        }
+    };
+    if metadata.file_type().is_symlink() || !metadata.file_type().is_file() {
+        return Err(ArtifactError::new(
+            "auth",
+            &path,
+            "the optional Auth settings sidecar is not a regular no-symlink file",
+        ));
+    }
+    let text = read_auth_text(dir, &path, remaining_bytes)?;
+    AuthSettings::parse(&text)
+        .map(Some)
+        .map_err(|error| ArtifactError::new("auth", &path, error.to_string()))
+}
+
+fn read_auth_password_policies(
+    dir: &Path,
+    section_dir: &Path,
+    remaining_bytes: &mut u64,
+) -> Result<Option<PasswordPolicies>, ArtifactError> {
+    let path = section_dir.join(PASSWORD_POLICIES_FILE);
+    let metadata = match std::fs::symlink_metadata(&path) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => {
+            return Err(ArtifactError::new(
+                "auth",
+                &path,
+                format!("cannot inspect the optional password policy sidecar: {error}"),
+            ))
+        }
+    };
+    if metadata.file_type().is_symlink() || !metadata.file_type().is_file() {
+        return Err(ArtifactError::new(
+            "auth",
+            &path,
+            "the optional password policy sidecar is not a regular no-symlink file",
+        ));
+    }
+    let text = read_auth_text(dir, &path, remaining_bytes)?;
+    PasswordPolicies::parse(&text)
+        .map(Some)
+        .map_err(|error| ArtifactError::new("auth", &path, error.to_string()))
+}
+
+#[allow(clippy::too_many_lines)]
+fn read_auth_section(
+    dir: &Path,
+    section: &Section,
+    target_project: &str,
+) -> Result<PreparedAuth, ArtifactError> {
     let section_dir = dir.join(&section.path);
     scan_import_tree(
         dir,
@@ -950,8 +1568,15 @@ fn read_auth_section(dir: &Path, section: &Section) -> Result<PreparedAuth, Arti
         Some(IMPORT_AUTH_FILE_BYTES_LIMIT),
     )?;
     let mut remaining_bytes = IMPORT_AUTH_TOTAL_BYTES_LIMIT;
-    let (config, email_privacy_declared) =
-        read_auth_config(dir, &section_dir, &mut remaining_bytes)?;
+    let (
+        config,
+        allow_duplicate_emails_declared,
+        email_privacy_declared,
+        signup_declared,
+        deletion_declared,
+    ) = read_auth_config(dir, &section_dir, &mut remaining_bytes)?;
+    let password_policies = read_auth_password_policies(dir, &section_dir, &mut remaining_bytes)?;
+    let auth_settings = read_auth_settings(dir, &section_dir, &mut remaining_bytes)?;
     let mut tenants = BTreeMap::new();
     let mut password_updated_at = BTreeMap::new();
     let entries = std::fs::read_dir(&section_dir)
@@ -990,7 +1615,7 @@ fn read_auth_section(dir: &Path, section: &Section) -> Result<PreparedAuth, Arti
                     ));
                 }
                 users.push(imported_user(record, &entry.path())?);
-                note_password_updated_at(&mut password_updated_at, record);
+                note_password_updated_at(&mut password_updated_at, Some(tenant), record);
             }
             tenants.insert(tenant.to_owned(), users);
         }
@@ -1003,15 +1628,631 @@ fn read_auth_section(dir: &Path, section: &Section) -> Result<PreparedAuth, Arti
     let mut users = Vec::with_capacity(accounts.users.len());
     for record in &accounts.users {
         users.push(imported_user(record, &accounts_path)?);
-        note_password_updated_at(&mut password_updated_at, record);
+        note_password_updated_at(&mut password_updated_at, None, record);
+    }
+    if let Some(settings) = &auth_settings {
+        if settings.project_id.is_empty() {
+            return Err(ArtifactError::new(
+                "auth",
+                section_dir.join(AUTH_SETTINGS_FILE),
+                "the Auth settings sidecar has an empty projectId",
+            ));
+        }
+        settings
+            .validate_tenant_metadata_project(target_project)
+            .map_err(|error| {
+                ArtifactError::new(
+                    "auth",
+                    section_dir.join(AUTH_SETTINGS_FILE),
+                    error.to_string(),
+                )
+            })?;
+        for namespace in &settings.namespaces {
+            let tenant = namespace.tenant_id.as_deref().unwrap_or_default();
+            if !tenants.contains_key(tenant) {
+                return Err(ArtifactError::new(
+                    "auth",
+                    section_dir.join(AUTH_SETTINGS_FILE),
+                    format!(
+                        "settings name tenant {tenant:?} has no matching accounts-{tenant}.json"
+                    ),
+                ));
+            }
+            if let (Some(metadata), Some(config)) = (
+                namespace.metadata.as_ref(),
+                namespace.settings.config.as_ref(),
+            ) {
+                let conflicts = [
+                    (
+                        "disabledUserSignup",
+                        config.disabled_user_signup,
+                        metadata.disabled_user_signup,
+                    ),
+                    (
+                        "disabledUserDeletion",
+                        config.disabled_user_deletion,
+                        metadata.disabled_user_deletion,
+                    ),
+                    (
+                        "enableImprovedEmailPrivacy",
+                        config.enable_improved_email_privacy,
+                        metadata.enable_improved_email_privacy,
+                    ),
+                ];
+                if conflicts.iter().any(|(_, config_value, metadata_value)| {
+                    config_value.is_some_and(|value| value != *metadata_value)
+                }) {
+                    return Err(ArtifactError::new(
+                        "auth",
+                        section_dir.join(AUTH_SETTINGS_FILE),
+                        format!("tenant metadata conflicts with config for tenant {tenant:?}"),
+                    ));
+                }
+            }
+        }
     }
     Ok(PreparedAuth {
         users,
         password_updated_at,
         config,
+        allow_duplicate_emails_declared,
+        client_permissions_declared: (signup_declared, deletion_declared),
         email_privacy_declared,
+        password_policies,
+        auth_settings,
         tenants,
     })
+}
+
+fn exported_password_policy(policy: &PasswordPolicy) -> PasswordPolicyRecord {
+    PasswordPolicyRecord {
+        enforcement_state: match policy.enforcement_state {
+            EnforcementState::Off => "OFF".to_owned(),
+            EnforcementState::Enforce => "ENFORCE".to_owned(),
+        },
+        force_upgrade_on_signin: policy.force_upgrade_on_signin,
+        #[allow(clippy::cast_possible_wrap)]
+        min_length: policy.min_length as i64,
+        max_length: policy.max_length.map(|value| {
+            #[allow(clippy::cast_possible_wrap)]
+            {
+                value as i64
+            }
+        }),
+        require_uppercase: policy.require_uppercase,
+        require_lowercase: policy.require_lowercase,
+        require_numeric: policy.require_numeric,
+        require_non_alphanumeric: policy.require_non_alphanumeric,
+        allowed_non_alphanumeric_characters: policy.allowed_non_alphanumeric.clone(),
+    }
+}
+
+fn imported_password_policy(
+    record: &PasswordPolicyRecord,
+    path: &Path,
+) -> Result<PasswordPolicy, ArtifactError> {
+    let state = match record.enforcement_state.as_str() {
+        "OFF" => EnforcementState::Off,
+        "ENFORCE" => EnforcementState::Enforce,
+        _ => {
+            return Err(ArtifactError::new(
+                "auth",
+                path,
+                "the password policy sidecar has an invalid enforcementState",
+            ))
+        }
+    };
+    let min_length = usize::try_from(record.min_length).map_err(|_| {
+        ArtifactError::new(
+            "auth",
+            path,
+            "the password policy sidecar has an invalid minLength",
+        )
+    })?;
+    let max_length = record
+        .max_length
+        .map(usize::try_from)
+        .transpose()
+        .map_err(|_| {
+            ArtifactError::new(
+                "auth",
+                path,
+                "the password policy sidecar has an invalid maxLength",
+            )
+        })?;
+    PasswordPolicy::try_new(
+        state,
+        record.force_upgrade_on_signin,
+        min_length,
+        max_length,
+        record.require_uppercase,
+        record.require_lowercase,
+        record.require_numeric,
+        record.require_non_alphanumeric,
+        record.allowed_non_alphanumeric_characters.clone(),
+    )
+    .map_err(|error| {
+        ArtifactError::new(
+            "auth",
+            path,
+            format!("the password policy sidecar is invalid: {error:?}"),
+        )
+    })
+}
+
+fn exported_quota_settings(config: &SignupQuotaConfig) -> QuotaSettingsRecord {
+    let temporary = config.temporary.map(|temporary| TemporaryQuotaRecord {
+        quota: i64::try_from(temporary.quota).unwrap_or(i64::MAX),
+        start_time: rfc3339_text(temporary.start_time),
+        quota_duration: protobuf_duration_text(temporary.duration),
+    });
+    QuotaSettingsRecord {
+        mode: match config.mode {
+            QuotaMode::Off => "off".to_owned(),
+            QuotaMode::Observe => "observe".to_owned(),
+            QuotaMode::Enforce => "enforce".to_owned(),
+        },
+        algorithm: match config.algorithm {
+            QuotaAlgorithm::FixedWindowV1 => "fixed-window-v1".to_owned(),
+        },
+        #[allow(clippy::cast_possible_wrap)]
+        default_quota_per_hour: config.default_quota_per_hour as i64,
+        #[allow(clippy::cast_possible_wrap)]
+        max_tracked_buckets: config.max_tracked_buckets as i64,
+        temporary,
+    }
+}
+
+fn imported_quota_settings(
+    record: &QuotaSettingsRecord,
+    path: &Path,
+) -> Result<SignupQuotaConfig, ArtifactError> {
+    let mode = match record.mode.as_str() {
+        "off" => QuotaMode::Off,
+        "observe" => QuotaMode::Observe,
+        "enforce" => QuotaMode::Enforce,
+        _ => {
+            return Err(ArtifactError::new(
+                "auth",
+                path,
+                "the Auth settings sidecar has an invalid quota mode",
+            ))
+        }
+    };
+    if record.algorithm != "fixed-window-v1" {
+        return Err(ArtifactError::new(
+            "auth",
+            path,
+            "the Auth settings sidecar has an unsupported quota algorithm",
+        ));
+    }
+    let default_quota_per_hour = u64::try_from(record.default_quota_per_hour).map_err(|_| {
+        ArtifactError::new(
+            "auth",
+            path,
+            "the Auth settings sidecar has an invalid defaultQuotaPerHour",
+        )
+    })?;
+    let max_tracked_buckets = usize::try_from(record.max_tracked_buckets).map_err(|_| {
+        ArtifactError::new(
+            "auth",
+            path,
+            "the Auth settings sidecar has an invalid maxTrackedBuckets",
+        )
+    })?;
+    let temporary = record
+        .temporary
+        .as_ref()
+        .map(|temporary| {
+            let quota = u64::try_from(temporary.quota).map_err(|_| {
+                ArtifactError::new(
+                    "auth",
+                    path,
+                    "the Auth settings sidecar has an invalid temporary quota",
+                )
+            })?;
+            let start_time = LogicalInstant::parse_rfc3339(&temporary.start_time).map_err(|e| {
+                ArtifactError::new(
+                    "auth",
+                    path,
+                    format!("the Auth settings sidecar has an invalid temporary startTime: {e}"),
+                )
+            })?;
+            let duration = parse_protobuf_duration_text(&temporary.quota_duration, path)?;
+            TemporaryQuota::new(quota, start_time, duration).map_err(|e| {
+                ArtifactError::new(
+                    "auth",
+                    path,
+                    format!("the Auth settings sidecar has an invalid temporary quota: {e:?}"),
+                )
+            })
+        })
+        .transpose()?;
+    let config = SignupQuotaConfig {
+        mode,
+        algorithm: QuotaAlgorithm::FixedWindowV1,
+        default_quota_per_hour,
+        max_tracked_buckets,
+        temporary,
+    };
+    config.validate().map_err(|e| {
+        ArtifactError::new(
+            "auth",
+            path,
+            format!("the Auth settings sidecar has an invalid quota configuration: {e:?}"),
+        )
+    })?;
+    Ok(config)
+}
+
+fn blocking_discovery_events_from_json(
+    value: &serde_json::Value,
+    path: &Path,
+) -> Result<BTreeSet<String>, ArtifactError> {
+    let events = value.as_array().ok_or_else(|| {
+        ArtifactError::new(
+            "auth",
+            path,
+            format!("blocking settings {BLOCKING_DISCOVERY_EVENTS_MEMBER} is not an array"),
+        )
+    })?;
+    let mut discovery = BTreeSet::new();
+    for event in events {
+        let event = event.as_str().ok_or_else(|| {
+            ArtifactError::new(
+                "auth",
+                path,
+                format!(
+                    "blocking settings {BLOCKING_DISCOVERY_EVENTS_MEMBER} contains a non-string event"
+                ),
+            )
+        })?;
+        if !matches!(event, "beforeCreate" | "beforeSignIn") {
+            return Err(ArtifactError::new(
+                "auth",
+                path,
+                format!(
+                    "blocking settings {BLOCKING_DISCOVERY_EVENTS_MEMBER} contains unsupported event {event:?}"
+                ),
+            ));
+        }
+        if !discovery.insert(event.to_owned()) {
+            return Err(ArtifactError::new(
+                "auth",
+                path,
+                format!(
+                    "blocking settings {BLOCKING_DISCOVERY_EVENTS_MEMBER} contains duplicate event {event:?}"
+                ),
+            ));
+        }
+    }
+    Ok(discovery)
+}
+
+fn blocking_settings_record_from_json(
+    value: &serde_json::Value,
+    path: &Path,
+) -> Result<BlockingAuthSettingsRecord, ArtifactError> {
+    let object = value
+        .as_object()
+        .ok_or_else(|| ArtifactError::new("auth", path, "blocking settings are not an object"))?;
+    let discovery = object.get(BLOCKING_DISCOVERY_EVENTS_MEMBER).map_or_else(
+        || Ok(BTreeSet::new()),
+        |value| blocking_discovery_events_from_json(value, path),
+    )?;
+    if !discovery.is_empty() && object.get("triggers").is_none() {
+        return Err(ArtifactError::new(
+            "auth",
+            path,
+            format!(
+                "blocking settings {BLOCKING_DISCOVERY_EVENTS_MEMBER} requires a triggers object"
+            ),
+        ));
+    }
+    let selection = |event: &str| -> Result<BlockingAuthSelectionRecord, ArtifactError> {
+        let Some(triggers) = object.get("triggers") else {
+            return Ok(BlockingAuthSelectionRecord::Discovery);
+        };
+        let triggers = triggers.as_object().ok_or_else(|| {
+            ArtifactError::new("auth", path, "blocking settings triggers are not an object")
+        })?;
+        if discovery.contains(event) {
+            if triggers.contains_key(event) {
+                return Err(ArtifactError::new(
+                    "auth",
+                    path,
+                    format!(
+                        "blocking settings {BLOCKING_DISCOVERY_EVENTS_MEMBER} conflicts with triggers.{event}"
+                    ),
+                ));
+            }
+            return Ok(BlockingAuthSelectionRecord::Discovery);
+        }
+        let Some(entry) = triggers.get(event) else {
+            return Ok(BlockingAuthSelectionRecord::Disabled);
+        };
+        if entry.is_null() {
+            return Ok(BlockingAuthSelectionRecord::Disabled);
+        }
+        let uri = entry
+            .get("functionUri")
+            .and_then(serde_json::Value::as_str)
+            .filter(|uri| !uri.is_empty())
+            .ok_or_else(|| {
+                ArtifactError::new(
+                    "auth",
+                    path,
+                    format!("blocking settings {event} has no functionUri"),
+                )
+            })?;
+        Ok(BlockingAuthSelectionRecord::Explicit {
+            function_uri: uri.to_owned(),
+        })
+    };
+    let forwarding = match object.get("forwardInboundCredentials") {
+        None | Some(serde_json::Value::Null) => None,
+        Some(value) => {
+            let value = value.as_object().ok_or_else(|| {
+                ArtifactError::new("auth", path, "blocking forwarding is not an object")
+            })?;
+            let boolean = |key: &str| {
+                value
+                    .get(key)
+                    .and_then(serde_json::Value::as_bool)
+                    .ok_or_else(|| {
+                        ArtifactError::new(
+                            "auth",
+                            path,
+                            format!("blocking forwarding {key} is not a boolean"),
+                        )
+                    })
+            };
+            Some(BlockingAuthForwardingRecord {
+                id_token: boolean("idToken")?,
+                access_token: boolean("accessToken")?,
+                refresh_token: boolean("refreshToken")?,
+            })
+        }
+    };
+    Ok(BlockingAuthSettingsRecord {
+        before_create: selection("beforeCreate")?,
+        before_sign_in: selection("beforeSignIn")?,
+        forwarding,
+    })
+}
+
+fn blocking_settings_json(record: &BlockingAuthSettingsRecord) -> serde_json::Value {
+    let mut object = serde_json::Map::new();
+    let mut triggers = serde_json::Map::new();
+    let mut discovery = Vec::new();
+    let mut write_selection =
+        |name: &str,
+         selection: &BlockingAuthSelectionRecord,
+         triggers: &mut serde_json::Map<String, serde_json::Value>| {
+            match selection {
+                BlockingAuthSelectionRecord::Discovery => {
+                    discovery.push(name.to_owned());
+                }
+                BlockingAuthSelectionRecord::Disabled => {
+                    triggers.insert(name.to_owned(), serde_json::Value::Null);
+                }
+                BlockingAuthSelectionRecord::Explicit { function_uri } => {
+                    triggers.insert(
+                        name.to_owned(),
+                        serde_json::json!({"functionUri": function_uri}),
+                    );
+                }
+            }
+        };
+    write_selection("beforeCreate", &record.before_create, &mut triggers);
+    write_selection("beforeSignIn", &record.before_sign_in, &mut triggers);
+    if !triggers.is_empty() {
+        object.insert("triggers".to_owned(), serde_json::Value::Object(triggers));
+        if !discovery.is_empty() {
+            object.insert(
+                BLOCKING_DISCOVERY_EVENTS_MEMBER.to_owned(),
+                serde_json::Value::Array(
+                    discovery
+                        .into_iter()
+                        .map(serde_json::Value::String)
+                        .collect(),
+                ),
+            );
+        }
+    }
+    if let Some(forwarding) = record.forwarding {
+        object.insert(
+            "forwardInboundCredentials".to_owned(),
+            serde_json::json!({
+                "idToken": forwarding.id_token,
+                "accessToken": forwarding.access_token,
+                "refreshToken": forwarding.refresh_token,
+            }),
+        );
+    }
+    serde_json::Value::Object(object)
+}
+
+fn protobuf_duration_text(duration: LogicalDuration) -> String {
+    let nanos = duration.as_nanos();
+    let seconds = nanos.div_euclid(1_000_000_000);
+    let fraction = nanos.rem_euclid(1_000_000_000);
+    if fraction == 0 {
+        format!("{seconds}s")
+    } else {
+        format!("{seconds}.{fraction:09}s")
+            .trim_end_matches('0')
+            .to_owned()
+    }
+}
+
+fn parse_protobuf_duration_text(text: &str, path: &Path) -> Result<LogicalDuration, ArtifactError> {
+    let body = text
+        .strip_suffix('s')
+        .filter(|body| !body.is_empty())
+        .ok_or_else(|| {
+            ArtifactError::new(
+                "auth",
+                path,
+                "the Auth settings sidecar has an invalid quota duration",
+            )
+        })?;
+    if body.starts_with(['+', '-']) {
+        return Err(ArtifactError::new(
+            "auth",
+            path,
+            "the Auth settings sidecar has a negative quota duration",
+        ));
+    }
+    let (seconds, fraction) = body
+        .split_once('.')
+        .map_or((body, None), |(seconds, fraction)| {
+            (seconds, Some(fraction))
+        });
+    let seconds = seconds.parse::<i128>().map_err(|_| {
+        ArtifactError::new(
+            "auth",
+            path,
+            "the Auth settings sidecar has an invalid quota duration seconds value",
+        )
+    })?;
+    let fraction_nanos = match fraction {
+        None => 0,
+        Some(fraction)
+            if !fraction.is_empty()
+                && fraction.len() <= 9
+                && fraction.bytes().all(|byte| byte.is_ascii_digit()) =>
+        {
+            fraction
+                .parse::<i128>()
+                .unwrap_or(0)
+                .saturating_mul(10_i128.pow(u32::try_from(9 - fraction.len()).unwrap_or(0)))
+        }
+        Some(_) => {
+            return Err(ArtifactError::new(
+                "auth",
+                path,
+                "the Auth settings sidecar has an invalid quota duration fraction",
+            ))
+        }
+    };
+    let nanos = seconds
+        .checked_mul(1_000_000_000)
+        .and_then(|value| value.checked_add(fraction_nanos))
+        .ok_or_else(|| {
+            ArtifactError::new(
+                "auth",
+                path,
+                "the Auth settings sidecar quota duration overflows",
+            )
+        })?;
+    Ok(LogicalDuration::from_nanos(nanos))
+}
+
+fn auth_config_from_settings(config: &AuthConfig, current: ProjectAuthConfig) -> ProjectAuthConfig {
+    ProjectAuthConfig {
+        allow_duplicate_emails: config
+            .allow_duplicate_emails
+            .unwrap_or(current.allow_duplicate_emails),
+        enable_improved_email_privacy: config
+            .enable_improved_email_privacy
+            .unwrap_or(current.enable_improved_email_privacy),
+        disabled_user_signup: config
+            .disabled_user_signup
+            .unwrap_or(current.disabled_user_signup),
+        disabled_user_deletion: config
+            .disabled_user_deletion
+            .unwrap_or(current.disabled_user_deletion),
+    }
+}
+
+fn tenant_config_from_settings(
+    settings: Option<&AuthSettingsNamespace>,
+    current: ProjectAuthConfig,
+) -> ProjectAuthConfig {
+    settings
+        .filter(|settings| settings.config_is_explicit)
+        .and_then(|settings| settings.settings.config.as_ref())
+        .map_or(current, |config| auth_config_from_settings(config, current))
+}
+
+fn auth_namespace_config_patch(config: &AuthConfig) -> AuthNamespaceConfigPatch {
+    AuthNamespaceConfigPatch {
+        allow_duplicate_emails: config.allow_duplicate_emails,
+        disabled_user_signup: config.disabled_user_signup,
+        disabled_user_deletion: config.disabled_user_deletion,
+        enable_improved_email_privacy: config.enable_improved_email_privacy,
+    }
+}
+
+fn exported_tenant_config_patch(patch: AuthNamespaceConfigPatch) -> AuthConfig {
+    AuthConfig {
+        allow_duplicate_emails: patch.allow_duplicate_emails,
+        enable_improved_email_privacy: patch.enable_improved_email_privacy,
+        disabled_user_signup: patch.disabled_user_signup,
+        disabled_user_deletion: patch.disabled_user_deletion,
+    }
+}
+
+fn exported_tenant_metadata(metadata: &TenantMetadata) -> TenantMetadataRecord {
+    TenantMetadataRecord {
+        display_name: metadata.display_name.clone(),
+        allow_password_signup: metadata.allow_password_signup,
+        enable_email_link_signin: metadata.enable_email_link_signin,
+        enable_anonymous_user: metadata.enable_anonymous_user,
+        disable_auth: metadata.disable_auth,
+        disabled_user_signup: metadata.disabled_user_signup,
+        disabled_user_deletion: metadata.disabled_user_deletion,
+        enable_improved_email_privacy: metadata.enable_improved_email_privacy,
+    }
+}
+
+fn imported_tenant_metadata(metadata: &TenantMetadataRecord) -> TenantMetadata {
+    TenantMetadata {
+        display_name: metadata.display_name.clone(),
+        allow_password_signup: metadata.allow_password_signup,
+        enable_email_link_signin: metadata.enable_email_link_signin,
+        enable_anonymous_user: metadata.enable_anonymous_user,
+        disable_auth: metadata.disable_auth,
+        disabled_user_signup: metadata.disabled_user_signup,
+        disabled_user_deletion: metadata.disabled_user_deletion,
+        enable_improved_email_privacy: metadata.enable_improved_email_privacy,
+    }
+}
+
+fn settings_for_tenant<'a>(
+    settings: Option<&'a AuthSettings>,
+    target_project: &str,
+    tenant: &str,
+) -> Option<&'a AuthSettingsNamespace> {
+    settings
+        .filter(|settings| settings.project_id == target_project)
+        .and_then(|settings| {
+            settings
+                .namespaces
+                .iter()
+                .find(|namespace| namespace.tenant_id.as_deref() == Some(tenant))
+        })
+}
+
+fn password_policy_for_tenant(
+    policies: Option<&PasswordPolicies>,
+    target_project: &str,
+    tenant: &str,
+    fallback: &PasswordPolicy,
+    path: &Path,
+) -> Result<PasswordPolicy, ArtifactError> {
+    let Some(policies) = policies.filter(|policies| policies.project_id == target_project) else {
+        return Ok(fallback.clone());
+    };
+    let Some(namespace) = policies
+        .namespaces
+        .iter()
+        .find(|namespace| namespace.tenant_id.as_deref() == Some(tenant))
+    else {
+        return Ok(PasswordPolicy::default());
+    };
+    imported_password_policy(&namespace.policy, path)
 }
 
 fn millis_instant(text: Option<&str>) -> Option<LogicalInstant> {
@@ -1024,24 +2265,52 @@ fn seconds_instant(text: Option<&str>) -> Option<LogicalInstant> {
     Some(LogicalInstant::from_unix_seconds(seconds))
 }
 
-/// Remembers the `passwordUpdatedAt` an account record carries (milliseconds), keyed by
-/// account id, for restoration after the account is imported.
-fn note_password_updated_at(into: &mut BTreeMap<String, LogicalInstant>, record: &UserRecord) {
+/// Remembers the `passwordUpdatedAt` an account record carries (milliseconds), keyed by tenant
+/// namespace and account id, for restoration after the account is imported.
+fn note_password_updated_at(
+    into: &mut BTreeMap<(Option<String>, String), LogicalInstant>,
+    tenant_id: Option<&str>,
+    record: &UserRecord,
+) {
     if let Some(millis) = record.password_updated_at {
         if millis.is_finite() && millis.fract() == 0.0 && millis.abs() < 9.007_199_254_740_992e15 {
             // Guarded above: finite, whole and inside the exactly representable range.
             #[allow(clippy::cast_possible_truncation)]
             let millis = millis as i64;
             into.insert(
-                record.local_id.clone(),
+                (tenant_id.map(str::to_owned), record.local_id.clone()),
                 LogicalInstant::from_nanos(i128::from(millis) * 1_000_000),
             );
         }
     }
 }
 
+#[allow(clippy::too_many_lines)]
 fn imported_user(record: &UserRecord, path: &Path) -> Result<ImportedUser, ArtifactError> {
     let refuse = |message: String| ArtifactError::new("auth", path, message);
+    header_safe_account(record, &refuse)?;
+    let mut imported_password = None;
+    for (member, value) in &record.extra {
+        if member == IMPORTED_PASSWORD_MEMBER && imported_password.is_none() {
+            imported_password = Some(imported_password_of(value).ok_or_else(|| {
+                refuse(format!(
+                    "account {}: {IMPORTED_PASSWORD_MEMBER} is not {{spec, hash, salt}}",
+                    record.local_id
+                ))
+            })?);
+            continue;
+        }
+        return Err(refuse(format!(
+            "account {} contains unsupported member {member:?}; fireemu cannot preserve it during import",
+            record.local_id
+        )));
+    }
+    if imported_password.is_some() && record.password_hash.is_some() {
+        return Err(refuse(format!(
+            "account {}: both passwordHash and {IMPORTED_PASSWORD_MEMBER}",
+            record.local_id
+        )));
+    }
     let custom_claims = match &record.custom_attributes {
         Some(text) if !text.is_empty() => CustomClaims::parse_attributes(text).map_err(|e| {
             refuse(format!(
@@ -1059,8 +2328,19 @@ fn imported_user(record: &UserRecord, path: &Path) -> Result<ImportedUser, Artif
             hash.chars().take(24).collect::<String>()
         )));
     }
-    let created_at = millis_instant(record.created_at.as_deref())
-        .unwrap_or(LogicalInstant::from_unix_seconds(0));
+    if let Some(value) = record.password_updated_at {
+        if !(value.is_finite() && value.fract() == 0.0 && value.abs() < 9.007_199_254_740_992e15) {
+            return Err(refuse(format!(
+                "account {}: invalid passwordUpdatedAt",
+                record.local_id
+            )));
+        }
+    }
+    let created_at = match record.created_at.as_deref() {
+        Some(value) => millis_instant(Some(value))
+            .ok_or_else(|| refuse(format!("account {}: invalid createdAt", record.local_id)))?,
+        None => LogicalInstant::from_unix_seconds(0),
+    };
     let mut totp_factors = Vec::new();
     let mut phone_factors = Vec::new();
     for (index, enrollment) in record.mfa_info.iter().enumerate() {
@@ -1069,7 +2349,15 @@ fn imported_user(record: &UserRecord, path: &Path) -> Result<ImportedUser, Artif
         } else {
             enrollment.mfa_enrollment_id.clone()
         };
-        let enrolled_at = rfc3339_instant(enrollment.enrolled_at.as_deref()).unwrap_or(created_at);
+        let enrolled_at = match enrollment.enrolled_at.as_deref() {
+            Some(value) => rfc3339_instant(Some(value)).ok_or_else(|| {
+                refuse(format!(
+                    "account {}: invalid mfaInfo.enrolledAt",
+                    record.local_id
+                ))
+            })?,
+            None => created_at,
+        };
         if let Some(secret) = &enrollment.totp_shared_secret_key {
             let bytes = decode_base32(secret).ok_or_else(|| {
                 refuse(format!(
@@ -1124,8 +2412,24 @@ fn imported_user(record: &UserRecord, path: &Path) -> Result<ImportedUser, Artif
         provider: provider_of(record),
         custom_claims,
         created_at,
-        last_sign_in_at: millis_instant(record.last_login_at.as_deref()),
-        tokens_valid_after: seconds_instant(record.valid_since.as_deref()).unwrap_or(created_at),
+        last_sign_in_at: match record.last_login_at.as_deref() {
+            Some(value) => Some(millis_instant(Some(value)).ok_or_else(|| {
+                refuse(format!("account {}: invalid lastLoginAt", record.local_id))
+            })?),
+            None => None,
+        },
+        last_refresh_at: record
+            .last_refresh_at
+            .as_deref()
+            .map(LogicalInstant::parse_rfc3339)
+            .transpose()
+            .map_err(|e| refuse(format!("invalid lastRefreshAt: {e}")))?,
+        tokens_valid_after: match record.valid_since.as_deref() {
+            Some(value) => seconds_instant(Some(value)).ok_or_else(|| {
+                refuse(format!("account {}: invalid validSince", record.local_id))
+            })?,
+            None => created_at,
+        },
         federated: record
             .provider_user_info
             .iter()
@@ -1133,9 +2437,69 @@ fn imported_user(record: &UserRecord, path: &Path) -> Result<ImportedUser, Artif
             .map(federated_identity)
             .collect(),
         password,
+        imported_password,
+        // A restore reproduces a state the runtime held: accounts batchCreate let share an
+        // address come back without switching duplicate emails on (external review
+        // 2026-09-24).
+        allow_shared_email: true,
         totp_factors,
         phone_factors,
     })
+}
+
+/// Refuses the control characters an account may carry in the strings the Auth store does not
+/// check itself.
+///
+/// `AuthStore::import_user` already rejects them in the local id, the email, the display name,
+/// the photo URL and the phone number. The linked providers and the enrolled second factors go
+/// in unchecked, and every one of those strings is rendered back into an account response, a
+/// log line and a re-exported artifact, so the artifact boundary applies the same rule to them.
+/// The classification is the one predicate both product sections of an artifact use
+/// ([`fireemu_core_storage::store::is_header_safe`]), so Auth and Storage cannot drift apart
+/// on what a control character is. The refusal names the field and never repeats the value.
+fn header_safe_account(
+    record: &UserRecord,
+    refuse: &impl Fn(String) -> ArtifactError,
+) -> Result<(), ArtifactError> {
+    let check = |field: &str, value: &str| -> Result<(), ArtifactError> {
+        if fireemu_core_storage::store::is_header_safe(value) {
+            Ok(())
+        } else {
+            Err(refuse(format!("{field} contains a control character")))
+        }
+    };
+    for provider in &record.provider_user_info {
+        check("providerUserInfo.providerId", &provider.provider_id)?;
+        check("providerUserInfo.rawId", &provider.raw_id)?;
+        for (field, value) in [
+            ("providerUserInfo.federatedId", &provider.federated_id),
+            ("providerUserInfo.email", &provider.email),
+            ("providerUserInfo.displayName", &provider.display_name),
+            ("providerUserInfo.photoUrl", &provider.photo_url),
+            ("providerUserInfo.phoneNumber", &provider.phone_number),
+            ("providerUserInfo.screenName", &provider.screen_name),
+        ] {
+            if let Some(value) = value {
+                check(field, value)?;
+            }
+        }
+    }
+    for enrollment in &record.mfa_info {
+        check("mfaInfo.mfaEnrollmentId", &enrollment.mfa_enrollment_id)?;
+        for (field, value) in [
+            ("mfaInfo.displayName", &enrollment.display_name),
+            ("mfaInfo.phoneInfo", &enrollment.phone_info),
+            (
+                "mfaInfo.unobfuscatedPhoneInfo",
+                &enrollment.unobfuscated_phone_info,
+            ),
+        ] {
+            if let Some(value) = value {
+                check(field, value)?;
+            }
+        }
+    }
+    Ok(())
 }
 
 /// The sign-in provider an account is attributed to, from the providers the export listed.
@@ -1146,6 +2510,9 @@ fn provider_of(record: &UserRecord) -> Provider {
             .iter()
             .any(|p| p.provider_id == id)
     };
+    if record.email_link_signin && record.password_hash.is_none() {
+        return Provider::EmailLink;
+    }
     if record.password_hash.is_some() || has("password") {
         return Provider::Password;
     }
@@ -1368,6 +2735,7 @@ fn enforce_storage_object_count(count: usize, path: &Path) -> Result<(), Artifac
 
 fn imported_object(meta: &ExportedObject, path: &Path) -> Result<ImportedObject, ArtifactError> {
     let refuse = |message: String| ArtifactError::new("storage", path, message);
+    header_safe_metadata(meta, &refuse)?;
     let bucket = BucketName::try_new(meta.bucket.clone())
         .map_err(|e| refuse(format!("bucket {:?}: {e}", meta.bucket)))?;
     let name = ObjectName::try_new(meta.name.clone())
@@ -1405,6 +2773,45 @@ fn imported_object(meta: &ExportedObject, path: &Path) -> Result<ImportedObject,
         crc32c: meta.crc32c.as_deref().and_then(|c| c.parse().ok()),
         size: Some(meta.size),
     })
+}
+
+/// Refuses, before any object is installed, the metadata strings an artifact may carry that
+/// would be served as HTTP header values.
+///
+/// The store applies the same check, but it does so one object at a time after the previous
+/// state has been cleared; refusing here keeps a crafted artifact from clearing the store and
+/// installing a prefix of its objects. The refusal names the field and never repeats the
+/// value, which is by definition untrusted and carries control characters.
+fn header_safe_metadata(
+    meta: &ExportedObject,
+    refuse: &impl Fn(String) -> ArtifactError,
+) -> Result<(), ArtifactError> {
+    let check = |field: &str, value: &str| -> Result<(), ArtifactError> {
+        if fireemu_core_storage::store::is_header_safe(value) {
+            Ok(())
+        } else {
+            Err(refuse(format!("{field} contains a control character")))
+        }
+    };
+    for (field, value) in [
+        ("contentType", &meta.content_type),
+        ("contentDisposition", &meta.content_disposition),
+        ("contentEncoding", &meta.content_encoding),
+        ("contentLanguage", &meta.content_language),
+        ("cacheControl", &meta.cache_control),
+    ] {
+        if let Some(value) = value {
+            check(field, value)?;
+        }
+    }
+    for (key, value) in &meta.custom_metadata {
+        check("metadata key", key)?;
+        check(&format!("metadata.{key}"), value)?;
+    }
+    for token in &meta.download_tokens {
+        check("downloadTokens", token)?;
+    }
+    Ok(())
 }
 
 fn imported_instant(
@@ -1524,6 +2931,192 @@ fn write_export_tree(
     Ok(())
 }
 
+/// One session's Firestore time-to-live catalogs, keyed by project and database.
+type FieldConfigCatalogs = BTreeMap<(String, String), fireemu_core_firestore::ttl::TtlCatalog>;
+
+/// The fireemu-only sidecar carrying the Firestore time-to-live field configuration.
+///
+/// The official export format has no field-configuration section, so this file is additive:
+/// official tooling ignores it, and an artifact written by that tooling simply has none.
+pub const FIELD_CONFIG_FILE: &str = "fireemu-firestore-field-config.json";
+
+/// Largest field-configuration sidecar an import reads. The catalog is bounded per database
+/// by the runtime, so a larger file is a malformed artifact rather than a large session.
+const FIELD_CONFIG_BYTES_LIMIT: u64 = 1 << 20;
+
+/// The sidecar version that carries the collection group and the field alone.
+const FIELD_CONFIG_VERSION_FIELDS_ONLY: u64 = 1;
+
+/// The sidecar version that may also carry `expirationOffset`.
+///
+/// The version is what stops an older reader from restoring a policy whose offset it cannot
+/// see: dropping the offset would sweep every document of that collection group up to one
+/// offset early, silently. A reader that knows only version 1 refuses a version-2 artifact
+/// as an unknown version, which is the loud failure that data loss is not.
+const FIELD_CONFIG_VERSION_WITH_OFFSETS: u64 = 2;
+
+/// Serializes one session's time-to-live catalogs.
+///
+/// The version is the lowest one that can carry the configuration: a session that configured
+/// no `expirationOffset` writes version 1, byte for byte what earlier fireemu versions wrote,
+/// so an artifact only declares the newer format when it actually needs it.
+fn field_config_json(catalogs: &FieldConfigCatalogs) -> String {
+    let carries_offset = catalogs
+        .values()
+        .flat_map(fireemu_core_firestore::ttl::TtlCatalog::iter)
+        .any(|(_, policy)| policy.expiration_offset.is_some());
+    let version = if carries_offset {
+        FIELD_CONFIG_VERSION_WITH_OFFSETS
+    } else {
+        FIELD_CONFIG_VERSION_FIELDS_ONLY
+    };
+    let databases: Vec<serde_json::Value> = catalogs
+        .iter()
+        .filter(|(_, catalog)| !catalog.is_empty())
+        .map(|((project, database), catalog)| {
+            let ttl: Vec<serde_json::Value> = catalog
+                .iter()
+                .map(|(group, policy)| {
+                    let mut entry = serde_json::json!({
+                        "collectionGroup": group.as_str(),
+                        "field": policy.field.canonical(),
+                    });
+                    // An unset offset stays absent, so an artifact written by a session that
+                    // configured no offset is byte-identical to the one earlier fireemu
+                    // versions wrote, and an import of theirs installs the unset offset.
+                    if let Some(offset) = policy.expiration_offset {
+                        entry["expirationOffset"] = serde_json::json!(
+                            fireemu_core_firestore::ttl::format_expiration_offset(offset)
+                        );
+                    }
+                    entry
+                })
+                .collect();
+            serde_json::json!({
+                "project": project,
+                "database": database,
+                "ttlFields": ttl,
+            })
+        })
+        .collect();
+    serde_json::json!({
+        "version": version,
+        "databases": databases,
+    })
+    .to_string()
+}
+
+/// Parses the field-configuration sidecar, refusing anything it cannot install exactly.
+fn parse_field_config(text: &str) -> Result<FieldConfigCatalogs, String> {
+    let value: serde_json::Value =
+        serde_json::from_str(text).map_err(|error| format!("invalid JSON: {error}"))?;
+    // Version 1 promises that no policy carries an offset, which is what lets a reader that
+    // knows only that version install it whole. An artifact that declares 1 and carries one
+    // anyway breaks that promise, so it is refused below rather than read as version 2.
+    let carries_offsets = match value["version"].as_u64() {
+        Some(FIELD_CONFIG_VERSION_FIELDS_ONLY) => false,
+        Some(FIELD_CONFIG_VERSION_WITH_OFFSETS) => true,
+        _ => {
+            return Err("the field configuration sidecar declares an unknown version".to_owned());
+        }
+    };
+    let databases = value["databases"]
+        .as_array()
+        .ok_or_else(|| "databases must be an array".to_owned())?;
+    let mut catalogs = BTreeMap::new();
+    for entry in databases {
+        let project = entry["project"]
+            .as_str()
+            .ok_or_else(|| "a database entry has no project".to_owned())?;
+        let database = entry["database"]
+            .as_str()
+            .ok_or_else(|| "a database entry has no database".to_owned())?;
+        // The identifiers become catalog keys and are written back on the next export, so
+        // they go through the same constructors a request would. An entry the runtime could
+        // never address would otherwise read back as ACTIVE through fields.get while no
+        // sweep could ever reach it.
+        let project = fireemu_core_types::ids::ProjectId::try_new(project)
+            .map_err(|error| format!("project {project:?}: {error}"))?;
+        let database = fireemu_core_types::ids::DatabaseId::try_new(database)
+            .map_err(|error| format!("database {database:?}: {error}"))?;
+        let mut catalog = fireemu_core_firestore::ttl::TtlCatalog::new();
+        let fields = entry["ttlFields"]
+            .as_array()
+            .ok_or_else(|| "ttlFields must be an array".to_owned())?;
+        for field in fields {
+            let group = field["collectionGroup"]
+                .as_str()
+                .ok_or_else(|| "a TTL entry has no collectionGroup".to_owned())?;
+            let path = field["field"]
+                .as_str()
+                .ok_or_else(|| "a TTL entry has no field".to_owned())?;
+            let group = fireemu_core_types::ids::CollectionId::try_new(group)
+                .map_err(|error| format!("collection group {group:?}: {error}"))?;
+            let path = fireemu_core_firestore::field_path::FieldPath::parse(path)
+                .map_err(|error| format!("field path {path:?}: {error}"))?;
+            // The offset goes through the same grammar a fields.patch is held to, so a
+            // sidecar naming a duration the Admin surface would refuse is a malformed
+            // artifact rather than a policy that sweeps at some other instant.
+            if !carries_offsets && !field["expirationOffset"].is_null() {
+                return Err(format!(
+                    "a TTL entry names an expirationOffset, which version \
+                     {FIELD_CONFIG_VERSION_FIELDS_ONLY} of the field configuration sidecar \
+                     does not carry; version {FIELD_CONFIG_VERSION_WITH_OFFSETS} does"
+                ));
+            }
+            let expiration_offset = match &field["expirationOffset"] {
+                serde_json::Value::Null => None,
+                serde_json::Value::String(text) => Some(
+                    fireemu_core_firestore::ttl::parse_expiration_offset(text).map_err(
+                        |error| format!("a TTL entry names an invalid expirationOffset: {error}"),
+                    )?,
+                ),
+                _ => {
+                    return Err(
+                        "a TTL entry's expirationOffset must be a duration in seconds".to_owned(),
+                    )
+                }
+            };
+            catalog
+                .enable_with_offset(group, path, expiration_offset)
+                .map_err(|error| error.to_string())?;
+        }
+        catalogs.insert(
+            (project.as_str().to_owned(), database.as_str().to_owned()),
+            catalog,
+        );
+    }
+    Ok(catalogs)
+}
+
+/// Reads the optional field-configuration sidecar from the export root.
+fn read_field_config(dir: &Path) -> Result<Option<FieldConfigCatalogs>, ArtifactError> {
+    let path = dir.join(FIELD_CONFIG_FILE);
+    let metadata = match std::fs::symlink_metadata(&path) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => {
+            return Err(ArtifactError::new(
+                "firestore",
+                &path,
+                format!("cannot inspect the optional field configuration sidecar: {error}"),
+            ))
+        }
+    };
+    if metadata.file_type().is_symlink() || !metadata.file_type().is_file() {
+        return Err(ArtifactError::new(
+            "firestore",
+            &path,
+            "the optional field configuration sidecar is not a regular no-symlink file",
+        ));
+    }
+    let text = read_text_inside_limited(dir, &path, FIELD_CONFIG_BYTES_LIMIT)
+        .map_err(|error| ArtifactError::new("firestore", &path, error))?;
+    parse_field_config(&text)
+        .map(Some)
+        .map_err(|error| ArtifactError::new("firestore", &path, error))
+}
+
 fn export_firestore(
     dir: &Path,
     endpoints: &Endpoints,
@@ -1607,6 +3200,14 @@ fn export_firestore(
             manifest.set_named_database(env!("CARGO_PKG_VERSION"), database, section);
         }
     }
+    // The field configuration is written only when there is one, so an export of a session
+    // that never configured a policy stays byte-identical to what the official CLI writes.
+    let catalogs = endpoints.backend.ttl_catalogs();
+    if catalogs.values().any(|catalog| !catalog.is_empty()) {
+        let path = dir.join(FIELD_CONFIG_FILE);
+        write_private_file(&path, field_config_json(&catalogs).as_bytes())
+            .map_err(|e| ArtifactError::new("firestore", &path, e))?;
+    }
     Ok(())
 }
 
@@ -1625,6 +3226,7 @@ fn sanitize(database: &str) -> String {
         .collect()
 }
 
+#[allow(clippy::too_many_lines)]
 fn export_auth(
     dir: &Path,
     endpoints: &Endpoints,
@@ -1632,14 +3234,53 @@ fn export_auth(
 ) -> Result<(), ArtifactError> {
     let section_dir = dir.join(AUTH_PATH);
     create_private_dir(&section_dir).map_err(|e| ArtifactError::new("auth", &section_dir, e))?;
-    let store = endpoints.auth.default_store();
-    let store = store
-        .lock()
-        .map_err(|_| ArtifactError::new("auth", &section_dir, "the Auth store is poisoned"))?
-        .clone();
+    // Capture the Auth stores and the logical Blocking Functions projection under the same
+    // adapter-level gate used by project configuration PATCH and blocking Auth requests. This
+    // prevents an export from combining two settings generations. The gate is released before
+    // any file I/O so ordinary Auth requests are not held up by serialization.
+    let (snapshot, project_blocking) = {
+        let _operation = match endpoints.auth_operation_gate {
+            Some(gate) => Some(gate.lock().map_err(|_| {
+                ArtifactError::new("auth", &section_dir, "the Auth settings gate is poisoned")
+            })?),
+            None => None,
+        };
+        let snapshot = endpoints
+            .auth
+            .capture_export_snapshot(endpoints.project)
+            .map_err(|error| ArtifactError::new("auth", &section_dir, error))?
+            .ok_or_else(|| {
+                ArtifactError::new(
+                    "auth",
+                    &section_dir,
+                    format!("Auth project {:?} is not available", endpoints.project),
+                )
+            })?;
+        let project_blocking = if let Some(blocking) = endpoints.blocking {
+            if blocking
+                .blocking_auth_project()
+                .is_some_and(|project| project != endpoints.project)
+            {
+                return Err(ArtifactError::new(
+                    "auth",
+                    &section_dir,
+                    "blocking settings belong to a different project",
+                ));
+            }
+            blocking
+                .blocking_auth_settings_for_export()
+                .map_err(|error| ArtifactError::new("auth", &section_dir, error))?
+                .map(|value| blocking_settings_record_from_json(&value, &section_dir))
+                .transpose()?
+        } else {
+            None
+        };
+        (snapshot, project_blocking)
+    };
+    let store = snapshot.default_store();
     let mut file = AccountsFile::default();
     for user in store.users_by_creation() {
-        file.users.push(exported_account(&store, user, None));
+        file.users.push(exported_account(store, user, None));
     }
     let accounts_path = section_dir.join(ACCOUNTS_FILE);
     write_private_file(&accounts_path, file.to_json().as_bytes())
@@ -1648,39 +3289,86 @@ fn export_auth(
     let config = store.config();
     let config_path = section_dir.join(CONFIG_FILE);
     let document = AuthConfig {
-        allow_duplicate_emails: config.allow_duplicate_emails,
+        allow_duplicate_emails: Some(config.allow_duplicate_emails),
         enable_improved_email_privacy: Some(config.enable_improved_email_privacy),
+        disabled_user_signup: Some(config.disabled_user_signup),
+        disabled_user_deletion: Some(config.disabled_user_deletion),
     };
     write_private_file(&config_path, document.to_json().as_bytes())
         .map_err(|e| ArtifactError::new("auth", &config_path, e))?;
-    for tenant in endpoints.auth.tenants(endpoints.project) {
-        let tenant_store = endpoints
-            .auth
-            .tenant_store(endpoints.project, &tenant)
-            .ok_or_else(|| {
-                ArtifactError::new(
-                    "auth",
-                    &section_dir,
-                    format!("tenant {tenant:?} disappeared during export"),
-                )
-            })?;
-        let tenant_store = tenant_store
-            .lock()
-            .map_err(|_| {
-                ArtifactError::new(
-                    "auth",
-                    &section_dir,
-                    format!("tenant {tenant:?} store is poisoned"),
-                )
-            })?
-            .clone();
+    let project_policy = exported_password_policy(store.password_policy());
+    let project_quota = store.signup_quota().config().clone();
+    let mut tenant_policies = Vec::new();
+    let mut tenant_settings = Vec::new();
+    for (tenant, tenant_store) in snapshot.tenant_stores() {
+        let tenant_metadata = snapshot.tenant_metadata(tenant).ok_or_else(|| {
+            ArtifactError::new(
+                "auth",
+                &section_dir,
+                format!("tenant {tenant:?} has no captured authorization metadata"),
+            )
+        })?;
+        let tenant_policy = exported_password_policy(tenant_store.password_policy());
+        if tenant_policy != exported_password_policy(&PasswordPolicy::default()) {
+            tenant_policies.push(PasswordPolicyNamespace {
+                tenant_id: Some(tenant.to_owned()),
+                policy: tenant_policy,
+            });
+        }
+        let tenant_quota = tenant_store.signup_quota().config().clone();
+        let tenant_config_override = snapshot.tenant_config_override(tenant);
+        tenant_settings.push(AuthSettingsNamespace {
+            tenant_id: Some(tenant.to_owned()),
+            settings: AuthSettingsRecord {
+                config: tenant_config_override.map(exported_tenant_config_patch),
+                quota: (tenant_quota != SignupQuotaConfig::default())
+                    .then(|| exported_quota_settings(&tenant_quota)),
+                blocking: None,
+            },
+            config_is_explicit: tenant_config_override.is_some(),
+            metadata: Some(exported_tenant_metadata(tenant_metadata)),
+        });
         let mut file = AccountsFile::default();
         for user in tenant_store.users_by_creation() {
             file.users
-                .push(exported_account(&tenant_store, user, Some(&tenant)));
+                .push(exported_account(tenant_store, user, Some(tenant)));
         }
         let path = section_dir.join(format!("accounts-{tenant}.json"));
         write_private_file(&path, file.to_json().as_bytes())
+            .map_err(|e| ArtifactError::new("auth", &path, e))?;
+    }
+
+    // The official export format has no password-policy member. Keep this state in an
+    // explicit fireemu sidecar so ordinary config.json fixtures remain byte-compatible and
+    // the official CLI can continue to ignore the extension safely.
+    if project_policy != exported_password_policy(&PasswordPolicy::default())
+        || !tenant_policies.is_empty()
+    {
+        let path = section_dir.join(PASSWORD_POLICIES_FILE);
+        let policies = PasswordPolicies {
+            project_id: endpoints.project.to_owned(),
+            project: project_policy,
+            namespaces: tenant_policies,
+        };
+        write_private_file(&path, policies.to_json().as_bytes())
+            .map_err(|e| ArtifactError::new("auth", &path, e))?;
+    }
+    if project_quota != SignupQuotaConfig::default()
+        || project_blocking.is_some()
+        || !tenant_settings.is_empty()
+    {
+        let path = section_dir.join(AUTH_SETTINGS_FILE);
+        let settings = AuthSettings {
+            project_id: endpoints.project.to_owned(),
+            project: AuthSettingsRecord {
+                config: None,
+                quota: (project_quota != SignupQuotaConfig::default())
+                    .then(|| exported_quota_settings(&project_quota)),
+                blocking: project_blocking,
+            },
+            namespaces: tenant_settings,
+        };
+        write_private_file(&path, settings.to_json().as_bytes())
             .map_err(|e| ArtifactError::new("auth", &path, e))?;
     }
 
@@ -1695,111 +3383,181 @@ fn export_auth(
     Ok(())
 }
 
+/// The fireemu-only account member that carries a foreign hash `accounts:batchCreate`
+/// imported (the Identity Toolkit document has no algorithm field for it), so an export and
+/// restore keep the credential instead of dropping it (external review 2026-09-24).
+const IMPORTED_PASSWORD_MEMBER: &str = "fireemuImportedPassword";
+
+fn imported_password_json(
+    hash: &fireemu_core_auth::store::ImportedPasswordHash,
+) -> fireemu_core_export::json::Json {
+    use fireemu_core_export::json::Json;
+    Json::Object(vec![
+        ("spec".to_owned(), Json::String(hash.spec.clone())),
+        (
+            "hash".to_owned(),
+            Json::String(fireemu_core_types::hash::base64_standard(&hash.hash)),
+        ),
+        (
+            "salt".to_owned(),
+            Json::String(fireemu_core_types::hash::base64_standard(&hash.salt)),
+        ),
+    ])
+}
+
+fn imported_password_of(
+    value: &fireemu_core_export::json::Json,
+) -> Option<fireemu_core_auth::store::ImportedPasswordHash> {
+    use fireemu_core_export::json::Json;
+    let Json::Object(members) = value else {
+        return None;
+    };
+    let text = |key: &str| {
+        members.iter().find_map(|(name, value)| match value {
+            Json::String(text) if name == key => Some(text.as_str()),
+            _ => None,
+        })
+    };
+    if members.len() != 3 {
+        return None;
+    }
+    let hash = fireemu_core_auth::store::ImportedPasswordHash {
+        spec: text("spec")?.to_owned(),
+        hash: decode_base64(text("hash")?)?,
+        salt: decode_base64(text("salt")?)?,
+    };
+    // A restored spec keeps the parameter ranges an import enforces (closure re-review
+    // 2026-09-24): an out-of-range spec is refused rather than installed.
+    fireemu_adapter_http::identity_toolkit::restorable_imported_hash_spec(&hash.spec, &hash.hash)
+        .then_some(hash)
+}
+
 /// One account as the Identity Toolkit document an export carries.
 fn exported_account(
     store: &fireemu_core_auth::store::AuthStore,
     user: &fireemu_core_auth::store::UserRecord,
     tenant_id: Option<&str>,
 ) -> UserRecord {
+    let (password_hash, salt) = match store
+        .password_digest(&user.local_id)
+        .and_then(fireemu_core_auth::store::PasswordDigest::emulator_form)
     {
-        let (password_hash, salt) = match store
-            .password_digest(&user.local_id)
-            .and_then(fireemu_core_auth::store::PasswordDigest::emulator_form)
-        {
-            Some((salt, password)) => (
-                Some(fake_hash::encode(salt, password)),
-                Some(salt.to_owned()),
-            ),
-            None => (None, None),
-        };
-        let mut providers = Vec::new();
-        if let Some(email) = &user.email {
-            providers.push(ProviderUserInfo {
-                provider_id: if password_hash.is_some() || store.has_password(&user.local_id) {
-                    "password".to_owned()
-                } else {
-                    "emailLink".to_owned()
-                },
-                raw_id: email.clone(),
-                federated_id: Some(email.clone()),
-                email: Some(email.clone()),
-                display_name: user.display_name.clone(),
-                photo_url: user.photo_url.clone(),
-                phone_number: None,
-                screen_name: None,
-            });
-        }
-        if let Some(phone) = &user.phone_number {
-            providers.push(ProviderUserInfo {
-                provider_id: "phone".to_owned(),
-                raw_id: phone.clone(),
-                phone_number: Some(phone.clone()),
-                ..ProviderUserInfo::default()
-            });
-        }
-        for identity in &user.federated {
-            providers.push(ProviderUserInfo {
-                provider_id: identity.provider_id.clone(),
-                raw_id: identity.raw_id.clone(),
-                federated_id: Some(identity.raw_id.clone()),
-                email: identity.email.clone(),
-                display_name: identity.display_name.clone(),
-                photo_url: identity.photo_url.clone(),
-                phone_number: None,
-                screen_name: None,
-            });
-        }
-        let mut mfa_info = Vec::new();
-        for factor in user.mfa.phone_factors() {
-            mfa_info.push(MfaEnrollment {
-                mfa_enrollment_id: factor.mfa_enrollment_id.clone(),
-                display_name: factor.display_name.clone(),
-                phone_info: Some(factor.phone_number.clone()),
-                unobfuscated_phone_info: Some(factor.phone_number.clone()),
-                enrolled_at: Some(rfc3339_text(factor.enrolled_at)),
-                totp_shared_secret_key: None,
-            });
-        }
-        for factor in user.mfa.totp_factors() {
-            mfa_info.push(MfaEnrollment {
-                mfa_enrollment_id: factor.mfa_enrollment_id.clone(),
-                display_name: factor.display_name.clone(),
-                phone_info: None,
-                unobfuscated_phone_info: None,
-                enrolled_at: Some(rfc3339_text(factor.enrolled_at)),
-                totp_shared_secret_key: Some(fireemu_core_auth::base32::encode(
-                    factor.secret.expose_for_enrollment(),
-                )),
-            });
-        }
-        let claims = user.custom_claims.canonical_json();
-        UserRecord {
-            local_id: user.local_id.as_str().to_owned(),
-            email: user.email.clone(),
-            email_verified: user.email_verified,
+        Some((salt, password)) => (
+            Some(fake_hash::encode(salt, password)),
+            Some(salt.to_owned()),
+        ),
+        None => (None, None),
+    };
+    // A foreign hash `accounts:batchCreate` imported travels in the fireemu-only member.
+    let imported_extra = store
+        .password_digest(&user.local_id)
+        .filter(|digest| digest.emulator_form().is_none())
+        .and_then(fireemu_core_auth::store::PasswordDigest::imported_hash)
+        .map(|hash| {
+            vec![(
+                IMPORTED_PASSWORD_MEMBER.to_owned(),
+                imported_password_json(hash),
+            )]
+        })
+        .unwrap_or_default();
+    let has_password = password_hash.is_some() || store.has_password(&user.local_id);
+    let email_link_signin =
+        user.provider == fireemu_core_auth::store::Provider::EmailLink && !has_password;
+    let providers = exported_providers(user, has_password, email_link_signin);
+    let mut mfa_info = Vec::new();
+    for factor in user.mfa.phone_factors() {
+        mfa_info.push(MfaEnrollment {
+            mfa_enrollment_id: factor.mfa_enrollment_id.clone(),
+            display_name: factor.display_name.clone(),
+            phone_info: Some(factor.phone_number.clone()),
+            unobfuscated_phone_info: Some(factor.phone_number.clone()),
+            enrolled_at: Some(rfc3339_text(factor.enrolled_at)),
+            totp_shared_secret_key: None,
+        });
+    }
+    for factor in user.mfa.totp_factors() {
+        mfa_info.push(MfaEnrollment {
+            mfa_enrollment_id: factor.mfa_enrollment_id.clone(),
+            display_name: factor.display_name.clone(),
+            phone_info: None,
+            unobfuscated_phone_info: None,
+            enrolled_at: Some(rfc3339_text(factor.enrolled_at)),
+            totp_shared_secret_key: Some(fireemu_core_auth::base32::encode(
+                factor.secret.expose_for_enrollment(),
+            )),
+        });
+    }
+    let claims = user.custom_claims.canonical_json();
+    UserRecord {
+        local_id: user.local_id.as_str().to_owned(),
+        email: user.email.clone(),
+        email_verified: user.email_verified,
+        display_name: user.display_name.clone(),
+        photo_url: user.photo_url.clone(),
+        phone_number: user.phone_number.clone(),
+        disabled: user.disabled,
+        email_link_signin,
+        password_hash,
+        salt,
+        #[allow(clippy::cast_precision_loss)]
+        password_updated_at: store
+            .password_updated_at(&user.local_id)
+            .map(|t| (t.as_nanos() / 1_000_000) as f64),
+        valid_since: Some((user.tokens_valid_after.as_nanos() / 1_000_000_000).to_string()),
+        created_at: Some((user.created_at.as_nanos() / 1_000_000).to_string()),
+        last_login_at: user
+            .last_sign_in_at
+            .map(|t| (t.as_nanos() / 1_000_000).to_string()),
+        last_refresh_at: user
+            .last_refresh_at
+            .and_then(|t| LogicalInstant::to_rfc3339(t).ok()),
+        custom_attributes: (claims != "{}").then_some(claims),
+        tenant_id: tenant_id.map(str::to_owned),
+        provider_user_info: providers,
+        mfa_info,
+        extra: imported_extra,
+    }
+}
+
+fn exported_providers(
+    user: &fireemu_core_auth::store::UserRecord,
+    has_password: bool,
+    email_link_signin: bool,
+) -> Vec<ProviderUserInfo> {
+    let mut providers = Vec::new();
+    if let Some(email) = user.email.as_ref().filter(|_| {
+        matches!(&user.provider, Provider::Password) || has_password || email_link_signin
+    }) {
+        providers.push(ProviderUserInfo {
+            provider_id: "password".to_owned(),
+            raw_id: email.clone(),
+            federated_id: Some(email.clone()),
+            email: Some(email.clone()),
             display_name: user.display_name.clone(),
             photo_url: user.photo_url.clone(),
-            phone_number: user.phone_number.clone(),
-            disabled: user.disabled,
-            password_hash,
-            salt,
-            #[allow(clippy::cast_precision_loss)]
-            password_updated_at: store
-                .password_updated_at(&user.local_id)
-                .map(|t| (t.as_nanos() / 1_000_000) as f64),
-            valid_since: Some((user.tokens_valid_after.as_nanos() / 1_000_000_000).to_string()),
-            created_at: Some((user.created_at.as_nanos() / 1_000_000).to_string()),
-            last_login_at: user
-                .last_sign_in_at
-                .map(|t| (t.as_nanos() / 1_000_000).to_string()),
-            last_refresh_at: None,
-            custom_attributes: (claims != "{}").then_some(claims),
-            tenant_id: tenant_id.map(str::to_owned),
-            provider_user_info: providers,
-            mfa_info,
-            extra: Vec::new(),
-        }
+            phone_number: None,
+            screen_name: None,
+        });
     }
+    if let Some(phone) = &user.phone_number {
+        providers.push(ProviderUserInfo {
+            provider_id: "phone".to_owned(),
+            raw_id: phone.clone(),
+            phone_number: Some(phone.clone()),
+            ..ProviderUserInfo::default()
+        });
+    }
+    providers.extend(user.federated.iter().map(|identity| ProviderUserInfo {
+        provider_id: identity.provider_id.clone(),
+        raw_id: identity.raw_id.clone(),
+        federated_id: Some(identity.raw_id.clone()),
+        email: identity.email.clone(),
+        display_name: identity.display_name.clone(),
+        photo_url: identity.photo_url.clone(),
+        phone_number: None,
+        screen_name: None,
+    }));
+    providers
 }
 
 fn export_storage(
@@ -2337,6 +4095,7 @@ fn set_mode(path: &Path, mode: u32) -> Result<(), String> {
 /// sections (the official names plus the deferred products' sections).
 const EXPORT_OWNED_ENTRIES: &[&str] = &[
     METADATA_FILE_NAME,
+    FIELD_CONFIG_FILE,
     "firestore_export",
     "auth_export",
     "storage_export",
@@ -2348,11 +4107,15 @@ const EXPORT_OWNED_ENTRIES: &[&str] = &[
 mod tests {
     use super::{
         civil_from_days, decode_base32, decode_base64, enforce_storage_object_count,
-        imported_instant, may_overwrite, read_inside_budgeted, read_inside_limited,
-        rfc3339_instant, rfc3339_text, scan_import_tree, UnmanagedCopyBudget,
-        IMPORT_STORAGE_OBJECT_COUNT_LIMIT,
+        field_config_json, imported_instant, may_overwrite, parse_field_config, read_field_config,
+        read_inside_budgeted, read_inside_limited, rfc3339_instant, rfc3339_text, scan_import_tree,
+        tenant_config_from_settings, UnmanagedCopyBudget, FIELD_CONFIG_BYTES_LIMIT,
+        FIELD_CONFIG_FILE, IMPORT_STORAGE_OBJECT_COUNT_LIMIT,
     };
+    use fireemu_core_auth::store::{ProjectAuthConfig, TenantMetadata};
+    use fireemu_core_export::auth::{AuthConfig, AuthSettingsNamespace, AuthSettingsRecord};
     use fireemu_core_types::time::{days_from_civil, LogicalInstant};
+    #[cfg(unix)]
     use fireemu_export_publication::PublicationStage;
 
     #[cfg(unix)]
@@ -2363,14 +4126,13 @@ mod tests {
     #[cfg(windows)]
     #[test]
     fn export_entry_fails_before_creating_a_destination_on_windows() {
-        use std::sync::{Arc, Mutex, RwLock};
+        use std::sync::{Arc, Mutex};
 
         use fireemu_adapter_grpc::gateway::Gateway;
         use fireemu_adapter_grpc::local::LocalBackend;
         use fireemu_core_auth::mfa::TotpPolicy;
         use fireemu_core_auth::store::{AuthRegistry, AuthStore};
         use fireemu_core_firestore::index::{IndexSet, IndexValidationPolicy, PlanningContext};
-        use fireemu_core_rules::runtime::RulesetSlot;
         use fireemu_core_session::clock::VirtualClock;
         use fireemu_core_types::determinism::SplitMix64;
         use fireemu_core_types::edition::{FirestoreApiMode, FirestoreEdition};
@@ -2407,6 +4169,7 @@ mod tests {
             app_check_policy: None,
             admin_capability: None,
             token_acceptance: fireemu_core_auth::jwt::TokenAcceptance::default(),
+            control_token: None,
         });
         let endpoints = super::Endpoints {
             backend: &backend,
@@ -2414,6 +4177,8 @@ mod tests {
             storage: &storage,
             clock: &clock,
             project: "demo-app",
+            blocking: None,
+            auth_operation_gate: None,
         };
         let root = std::env::temp_dir().join(format!(
             "fireemu-windows-export-entry-{}",
@@ -2444,6 +4209,385 @@ mod tests {
     #[cfg(unix)]
     fn budget_dir(name: &str) -> TrustedTempDir {
         TrustedTempDir::new(&format!("import-budget-{name}"))
+    }
+
+    #[test]
+    fn auth_settings_quota_conversion_preserves_the_config_without_usage() {
+        use fireemu_core_auth::signup_quota::{
+            QuotaAlgorithm, QuotaMode, SignupQuotaConfig, TemporaryQuota,
+        };
+        use fireemu_core_types::time::LogicalDuration;
+
+        let config = SignupQuotaConfig {
+            mode: QuotaMode::Enforce,
+            algorithm: QuotaAlgorithm::FixedWindowV1,
+            default_quota_per_hour: 7,
+            max_tracked_buckets: 12,
+            temporary: Some(
+                TemporaryQuota::new(
+                    9,
+                    LogicalInstant::from_unix_seconds(1_893_456_000),
+                    LogicalDuration::from_seconds(90),
+                )
+                .expect("temporary quota is valid"),
+            ),
+        };
+        let record = super::exported_quota_settings(&config);
+        let restored = super::imported_quota_settings(
+            &record,
+            std::path::Path::new("auth_export/fireemu-auth-settings.json"),
+        )
+        .expect("quota sidecar parses");
+        assert_eq!(restored, config);
+    }
+
+    #[test]
+    fn blocking_settings_conversion_preserves_mixed_discovery_events() {
+        let record = super::BlockingAuthSettingsRecord {
+            before_create: super::BlockingAuthSelectionRecord::Discovery,
+            before_sign_in: super::BlockingAuthSelectionRecord::Explicit {
+                function_uri: "fireemu://functions/demo-app/us-central1/checkSignIn".to_owned(),
+            },
+            forwarding: None,
+        };
+        let encoded = super::blocking_settings_json(&record);
+        assert_eq!(
+            super::blocking_settings_record_from_json(
+                &encoded,
+                std::path::Path::new("auth_export/fireemu-auth-settings.json")
+            )
+            .expect("blocking settings parse"),
+            record
+        );
+        assert!(encoded.to_string().contains("__fireemuDiscoveryEvents"));
+        assert!(!encoded.to_string().contains("127.0.0.1"));
+    }
+
+    #[test]
+    fn blocking_settings_conversion_distinguishes_absent_triggers_from_absent_events() {
+        let path = std::path::Path::new("auth_export/fireemu-auth-settings.json");
+
+        let absent = super::blocking_settings_record_from_json(&serde_json::json!({}), path)
+            .expect("absent triggers select discovery");
+        assert_eq!(
+            absent.before_create,
+            super::BlockingAuthSelectionRecord::Discovery
+        );
+        assert_eq!(
+            absent.before_sign_in,
+            super::BlockingAuthSelectionRecord::Discovery
+        );
+
+        let empty =
+            super::blocking_settings_record_from_json(&serde_json::json!({"triggers": {}}), path)
+                .expect("an empty triggers object disables both events");
+        assert_eq!(
+            empty.before_create,
+            super::BlockingAuthSelectionRecord::Disabled
+        );
+        assert_eq!(
+            empty.before_sign_in,
+            super::BlockingAuthSelectionRecord::Disabled
+        );
+    }
+
+    #[test]
+    fn auth_settings_conversion_does_not_drop_destination_namespace_values() {
+        let destination = ProjectAuthConfig {
+            allow_duplicate_emails: true,
+            enable_improved_email_privacy: false,
+            disabled_user_signup: false,
+            disabled_user_deletion: true,
+        };
+        let config = AuthConfig {
+            allow_duplicate_emails: None,
+            enable_improved_email_privacy: None,
+            disabled_user_signup: Some(true),
+            disabled_user_deletion: None,
+        };
+        assert_eq!(
+            super::auth_config_from_settings(&config, destination),
+            ProjectAuthConfig {
+                allow_duplicate_emails: true,
+                enable_improved_email_privacy: false,
+                disabled_user_signup: true,
+                disabled_user_deletion: true,
+            }
+        );
+    }
+
+    #[test]
+    fn legacy_tenant_settings_are_migrated_as_inherited_configuration() {
+        let current = ProjectAuthConfig {
+            allow_duplicate_emails: true,
+            enable_improved_email_privacy: false,
+            disabled_user_signup: false,
+            disabled_user_deletion: true,
+        };
+        let legacy = AuthSettingsNamespace {
+            tenant_id: Some("tenant-a".to_owned()),
+            settings: AuthSettingsRecord {
+                config: Some(AuthConfig {
+                    allow_duplicate_emails: Some(false),
+                    enable_improved_email_privacy: Some(true),
+                    disabled_user_signup: Some(true),
+                    disabled_user_deletion: Some(false),
+                }),
+                quota: None,
+                blocking: None,
+            },
+            config_is_explicit: false,
+            metadata: None,
+        };
+        assert_eq!(
+            tenant_config_from_settings(Some(&legacy), current),
+            current,
+            "an unversioned effective projection must not become a frozen override"
+        );
+
+        let mut explicit = legacy;
+        explicit.config_is_explicit = true;
+        assert_eq!(
+            tenant_config_from_settings(Some(&explicit), current),
+            ProjectAuthConfig {
+                allow_duplicate_emails: false,
+                enable_improved_email_privacy: true,
+                disabled_user_signup: true,
+                disabled_user_deletion: false,
+            }
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    #[allow(clippy::too_many_lines)]
+    fn explicit_tenant_config_equal_to_project_default_survives_export_import() {
+        use fireemu_adapter_grpc::gateway::Gateway;
+        use fireemu_adapter_grpc::local::LocalBackend;
+        use fireemu_core_auth::mfa::TotpPolicy;
+        use fireemu_core_auth::store::{
+            AuthNamespaceConfigPatch, AuthRegistry, AuthStore, ProjectAuthConfigPatch,
+        };
+        use fireemu_core_firestore::index::{IndexSet, IndexValidationPolicy, PlanningContext};
+        use fireemu_core_session::clock::VirtualClock;
+        use fireemu_core_types::determinism::SplitMix64;
+        use fireemu_core_types::edition::{FirestoreApiMode, FirestoreEdition};
+        use std::sync::{Arc, Mutex};
+
+        let make_runtime = |auth: Arc<AuthRegistry>, clock: Arc<Mutex<VirtualClock>>, seed: u64| {
+            let backend = Arc::new(LocalBackend::new(
+                Gateway {
+                    enforce_limits: true,
+                    ctx: PlanningContext {
+                        edition: FirestoreEdition::Standard,
+                        api_mode: FirestoreApiMode::Native,
+                        policy: IndexValidationPolicy::Production,
+                    },
+                    indexes: IndexSet::default(),
+                },
+                clock.clone(),
+                seed,
+            ));
+            let storage = Arc::new(fireemu_adapter_http::storage::StorageState {
+                store: Mutex::new(fireemu_core_storage::store::StorageState::new(seed)),
+                clock,
+                auth,
+                tenancy: None,
+                rules: Arc::new(fireemu_adapter_http::storage::StorageRulesRegistry::default()),
+                project: "demo-app".to_owned(),
+                events: None,
+                barrier: None,
+                firestore: None,
+                faults: None,
+                clock_observer: None,
+                app_check_policy: None,
+                admin_capability: None,
+                token_acceptance: fireemu_core_auth::jwt::TokenAcceptance::default(),
+                control_token: None,
+            });
+            (backend, storage)
+        };
+
+        let source_clock = Arc::new(Mutex::new(VirtualClock::new(LogicalInstant::UNIX_EPOCH)));
+        let source_default = Arc::new(Mutex::new(AuthStore::new(
+            "demo-app",
+            SplitMix64::new(1),
+            TotpPolicy::default(),
+        )));
+        let source_auth = Arc::new(AuthRegistry::new("demo-app", source_default));
+        source_auth
+            .ensure_tenant("demo-app", "tenant-a")
+            .expect("source tenant is created");
+        source_auth
+            .ensure_tenant("demo-app", "tenant-inherited")
+            .expect("inherited source tenant is created");
+        // Every selected value equals the project/default value. The override's presence, not
+        // a value difference, is the state this round trip must preserve.
+        assert!(source_auth.register_tenant_config_override(
+            "demo-app",
+            "tenant-a",
+            AuthNamespaceConfigPatch {
+                allow_duplicate_emails: Some(false),
+                enable_improved_email_privacy: Some(false),
+                disabled_user_signup: Some(false),
+                disabled_user_deletion: Some(false),
+            },
+        ));
+        let (source_backend, source_storage) =
+            make_runtime(source_auth.clone(), source_clock.clone(), 7);
+        let source_endpoints = super::Endpoints {
+            backend: &source_backend,
+            auth: &source_auth,
+            storage: &source_storage,
+            clock: &source_clock,
+            project: "demo-app",
+            blocking: None,
+            auth_operation_gate: None,
+        };
+
+        let export_root = super::trusted_temp::TrustedTempDir::new("tenant-config-roundtrip");
+        let export_dir = export_root.join("export");
+        super::export(
+            &export_dir,
+            super::Products {
+                firestore: false,
+                auth: true,
+                storage: false,
+            },
+            &source_endpoints,
+            "test",
+        )
+        .expect("Auth export succeeds");
+        let sidecar = std::fs::read_to_string(
+            export_dir
+                .join(super::AUTH_PATH)
+                .join(super::AUTH_SETTINGS_FILE),
+        )
+        .expect("Auth settings sidecar exists");
+        assert!(sidecar.contains("\"config\""));
+        assert!(sidecar.contains("\"allowDuplicateEmails\": false"));
+        let sidecar_value: serde_json::Value = serde_json::from_str(&sidecar).unwrap();
+        let inherited_entry = sidecar_value["namespaces"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|entry| entry["tenantId"] == "tenant-inherited")
+            .expect("inherited tenant sidecar entry");
+        assert!(inherited_entry["settings"]["config"].is_null());
+
+        let destination_clock = Arc::new(Mutex::new(VirtualClock::new(LogicalInstant::UNIX_EPOCH)));
+        let destination_default = Arc::new(Mutex::new(AuthStore::new(
+            "demo-app",
+            SplitMix64::new(2),
+            TotpPolicy::default(),
+        )));
+        destination_default
+            .lock()
+            .expect("destination store lock")
+            .set_config(fireemu_core_auth::store::ProjectAuthConfig {
+                allow_duplicate_emails: true,
+                ..fireemu_core_auth::store::ProjectAuthConfig::default()
+            });
+        let destination_auth = Arc::new(AuthRegistry::new("demo-app", destination_default));
+        let (destination_backend, destination_storage) =
+            make_runtime(destination_auth.clone(), destination_clock.clone(), 8);
+        let destination_endpoints = super::Endpoints {
+            backend: &destination_backend,
+            auth: &destination_auth,
+            storage: &destination_storage,
+            clock: &destination_clock,
+            project: "demo-app",
+            blocking: None,
+            auth_operation_gate: None,
+        };
+        let prepared = super::prepare(
+            &export_dir,
+            super::Products {
+                firestore: false,
+                auth: true,
+                storage: false,
+            },
+            "demo-app",
+        )
+        .expect("Auth export is prepared");
+        super::apply(prepared, &destination_endpoints).expect("Auth import succeeds");
+
+        let tenant = destination_auth
+            .tenant_store("demo-app", "tenant-a")
+            .expect("imported tenant exists");
+        let inherited_tenant = destination_auth
+            .tenant_store("demo-app", "tenant-inherited")
+            .expect("imported inherited tenant exists");
+        assert!(
+            !tenant
+                .lock()
+                .expect("imported tenant lock")
+                .config()
+                .allow_duplicate_emails
+        );
+        assert!(
+            !inherited_tenant
+                .lock()
+                .expect("inherited tenant lock")
+                .config()
+                .allow_duplicate_emails
+        );
+
+        assert!(destination_auth
+            .patch_project_config(
+                "demo-app",
+                ProjectAuthConfigPatch {
+                    allow_duplicate_emails: Some(true),
+                    ..ProjectAuthConfigPatch::default()
+                },
+            )
+            .is_some());
+        assert!(
+            !tenant
+                .lock()
+                .expect("restored tenant lock")
+                .config()
+                .allow_duplicate_emails
+        );
+        assert!(
+            inherited_tenant
+                .lock()
+                .expect("restored inherited tenant lock")
+                .config()
+                .allow_duplicate_emails
+        );
+    }
+
+    #[test]
+    fn tenant_metadata_export_conversion_preserves_all_authorization_controls() {
+        let metadata = TenantMetadata {
+            display_name: Some("Tenant A".to_owned()),
+            allow_password_signup: false,
+            enable_email_link_signin: true,
+            enable_anonymous_user: false,
+            disable_auth: true,
+            disabled_user_signup: true,
+            disabled_user_deletion: false,
+            enable_improved_email_privacy: true,
+        };
+        let record = super::exported_tenant_metadata(&metadata);
+        assert_eq!(super::imported_tenant_metadata(&record), metadata);
+    }
+
+    #[test]
+    fn omitted_duplicate_email_setting_preserves_import_destination_value() {
+        let destination = ProjectAuthConfig {
+            allow_duplicate_emails: true,
+            ..ProjectAuthConfig::default()
+        };
+        let mut omitted = super::PreparedAuth::default();
+        omitted.config.allow_duplicate_emails = false;
+        assert!(omitted.config_over(destination).allow_duplicate_emails);
+
+        let mut explicit = super::PreparedAuth::default();
+        explicit.config.allow_duplicate_emails = false;
+        explicit.allow_duplicate_emails_declared = true;
+        assert!(!explicit.config_over(destination).allow_duplicate_emails);
     }
 
     #[cfg(not(unix))]
@@ -2741,5 +4885,878 @@ mod tests {
         );
         assert_eq!(std::fs::read_dir(&base).unwrap().count(), 1);
         let _ = std::fs::remove_dir_all(base);
+    }
+    #[test]
+    #[allow(clippy::too_many_lines)]
+    fn auth_import_blocking_update_failure_preserves_auth_and_blocking_state() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use std::sync::{Arc, Mutex};
+
+        use fireemu_adapter_grpc::gateway::Gateway;
+        use fireemu_adapter_grpc::local::LocalBackend;
+        use fireemu_adapter_http::identity_toolkit::{AuthBlockingHook, BlockingFunctionFailure};
+        use fireemu_core_auth::mfa::TotpPolicy;
+        use fireemu_core_auth::store::{AuthRegistry, AuthStore, NewUser};
+        use fireemu_core_export::auth::{
+            AuthSettings, AuthSettingsRecord, BlockingAuthSelectionRecord,
+            BlockingAuthSettingsRecord,
+        };
+        use fireemu_core_firestore::index::{IndexSet, IndexValidationPolicy, PlanningContext};
+        use fireemu_core_session::clock::VirtualClock;
+        use fireemu_core_types::determinism::SplitMix64;
+        use fireemu_core_types::edition::{FirestoreApiMode, FirestoreEdition};
+        use serde_json::Value;
+
+        struct FailingBlockingHook {
+            settings: Mutex<Value>,
+            update_calls: AtomicUsize,
+            restore_calls: AtomicUsize,
+        }
+
+        impl AuthBlockingHook for FailingBlockingHook {
+            fn invoke(
+                &self,
+                _event: fireemu_core_functions::manifest::BlockingAuthEvent,
+                _user: &fireemu_core_auth::store::UserRecord,
+            ) -> Result<Value, BlockingFunctionFailure> {
+                Err(BlockingFunctionFailure::unhandled())
+            }
+
+            fn blocking_auth_settings(&self) -> Option<Value> {
+                self.settings.lock().ok().map(|settings| settings.clone())
+            }
+
+            fn blocking_auth_settings_snapshot(&self) -> Result<Option<Value>, String> {
+                Ok(self.blocking_auth_settings())
+            }
+
+            fn validate_blocking_auth_settings(&self, _settings: &Value) -> Result<(), String> {
+                Ok(())
+            }
+
+            fn update_blocking_auth_settings(&self, _settings: &Value) -> Result<(), String> {
+                self.update_calls.fetch_add(1, Ordering::Relaxed);
+                Err("injected blocking settings update failure".to_owned())
+            }
+
+            fn restore_blocking_auth_settings_snapshot(
+                &self,
+                snapshot: &Value,
+            ) -> Result<(), String> {
+                self.restore_calls.fetch_add(1, Ordering::Relaxed);
+                *self
+                    .settings
+                    .lock()
+                    .map_err(|_| "settings poisoned".to_owned())? = snapshot.clone();
+                Ok(())
+            }
+        }
+
+        let clock = Arc::new(Mutex::new(VirtualClock::new(LogicalInstant::UNIX_EPOCH)));
+        let backend = Arc::new(LocalBackend::new(
+            Gateway {
+                enforce_limits: true,
+                ctx: PlanningContext {
+                    edition: FirestoreEdition::Standard,
+                    api_mode: FirestoreApiMode::Native,
+                    policy: IndexValidationPolicy::Production,
+                },
+                indexes: IndexSet::default(),
+            },
+            clock.clone(),
+            7,
+        ));
+        let default_store = Arc::new(Mutex::new(AuthStore::new(
+            "demo-app",
+            SplitMix64::new(1),
+            TotpPolicy::default(),
+        )));
+        let auth = Arc::new(AuthRegistry::new("demo-app", default_store.clone()));
+        let original_config = ProjectAuthConfig {
+            allow_duplicate_emails: true,
+            enable_improved_email_privacy: true,
+            disabled_user_signup: false,
+            disabled_user_deletion: true,
+        };
+        let original_uid = {
+            let mut store = default_store.lock().unwrap();
+            store.set_config(original_config);
+            store
+                .create_user(
+                    NewUser::email("before@example.test"),
+                    LogicalInstant::UNIX_EPOCH,
+                )
+                .unwrap()
+        };
+        let tenant_store = auth.ensure_tenant("demo-app", "existing").unwrap();
+        let original_tenant_config = ProjectAuthConfig {
+            allow_duplicate_emails: false,
+            enable_improved_email_privacy: true,
+            disabled_user_signup: true,
+            disabled_user_deletion: false,
+        };
+        let original_tenant_uid = {
+            let mut store = tenant_store.lock().unwrap();
+            store.set_config(original_tenant_config);
+            store
+                .create_user(
+                    NewUser::email("tenant@example.test"),
+                    LogicalInstant::UNIX_EPOCH,
+                )
+                .unwrap()
+        };
+        let original_tenant_metadata = auth.tenant_metadata("demo-app", "existing").unwrap();
+        let blocking = FailingBlockingHook {
+            settings: Mutex::new(serde_json::json!({
+                "triggers": {
+                    "beforeCreate": null,
+                    "beforeSignIn": null
+                }
+            })),
+            update_calls: AtomicUsize::new(0),
+            restore_calls: AtomicUsize::new(0),
+        };
+        let storage = Arc::new(fireemu_adapter_http::storage::StorageState {
+            store: Mutex::new(fireemu_core_storage::store::StorageState::new(9)),
+            clock: clock.clone(),
+            auth: auth.clone(),
+            tenancy: None,
+            rules: Arc::new(fireemu_adapter_http::storage::StorageRulesRegistry::default()),
+            project: "demo-app".to_owned(),
+            events: None,
+            barrier: None,
+            firestore: None,
+            faults: None,
+            clock_observer: None,
+            app_check_policy: None,
+            admin_capability: None,
+            token_acceptance: fireemu_core_auth::jwt::TokenAcceptance::default(),
+            control_token: None,
+        });
+        let endpoints = super::Endpoints {
+            backend: &backend,
+            auth: &auth,
+            storage: &storage,
+            clock: &clock,
+            project: "demo-app",
+            blocking: Some(&blocking),
+            auth_operation_gate: None,
+        };
+        let imported_blocking = BlockingAuthSettingsRecord {
+            before_create: BlockingAuthSelectionRecord::Disabled,
+            before_sign_in: BlockingAuthSelectionRecord::Disabled,
+            forwarding: None,
+        };
+        let prepared = super::PreparedAuth {
+            auth_settings: Some(AuthSettings {
+                project_id: "demo-app".to_owned(),
+                project: AuthSettingsRecord {
+                    config: None,
+                    quota: None,
+                    blocking: Some(imported_blocking),
+                },
+                namespaces: Vec::new(),
+            }),
+            ..super::PreparedAuth::default()
+        };
+
+        let error = super::apply_auth(&prepared, &endpoints).unwrap_err();
+
+        assert!(
+            error
+                .message
+                .contains("injected blocking settings update failure"),
+            "{error:?}"
+        );
+        assert_eq!(blocking.update_calls.load(Ordering::Relaxed), 1);
+        assert_eq!(blocking.restore_calls.load(Ordering::Relaxed), 0);
+        assert_eq!(
+            blocking.blocking_auth_settings(),
+            Some(serde_json::json!({
+                "triggers": {
+                    "beforeCreate": null,
+                    "beforeSignIn": null
+                }
+            }))
+        );
+        let default = default_store.lock().unwrap();
+        assert_eq!(default.config(), original_config);
+        assert!(default.user_by_id(original_uid.as_str()).is_some());
+        assert_eq!(default.user_count(), 1);
+        drop(default);
+        assert_eq!(auth.tenants("demo-app"), vec!["existing".to_owned()]);
+        assert_eq!(
+            auth.tenant_metadata("demo-app", "existing"),
+            Some(original_tenant_metadata)
+        );
+        let tenant = tenant_store.lock().unwrap();
+        assert_eq!(tenant.config(), original_tenant_config);
+        assert!(tenant.user_by_id(original_tenant_uid.as_str()).is_some());
+        assert_eq!(tenant.user_count(), 1);
+    }
+
+    #[test]
+    fn auth_import_preflight_refuses_poisoned_tenant_before_default_mutation() {
+        use fireemu_core_auth::mfa::TotpPolicy;
+        use fireemu_core_auth::store::{AuthRegistry, AuthStore, NewUser};
+        use fireemu_core_types::determinism::SplitMix64;
+
+        let default = std::sync::Arc::new(std::sync::Mutex::new(AuthStore::new(
+            "demo-app",
+            SplitMix64::new(1),
+            TotpPolicy::default(),
+        )));
+        let uid = default
+            .lock()
+            .unwrap()
+            .create_user(NewUser::anonymous(), LogicalInstant::UNIX_EPOCH)
+            .unwrap();
+        let registry = AuthRegistry::new("demo-app", default.clone());
+        let tenant = registry.ensure_tenant("demo-app", "broken").unwrap();
+        let poison = std::thread::spawn(move || {
+            let _guard = tenant.lock().unwrap();
+            panic!("poison tenant for import preflight");
+        });
+        assert!(poison.join().is_err());
+
+        let error = super::preflight_auth_tenant_stores(&registry, "demo-app").unwrap_err();
+        assert!(error
+            .message
+            .contains("tenant \"broken\" store is poisoned"));
+        assert!(default.lock().unwrap().user_by_id(uid.as_str()).is_some());
+    }
+
+    /// Accounts `accounts:batchCreate` let share an address restore from their own export
+    /// without switching duplicate emails on (external review 2026-09-24).
+    #[test]
+    fn imported_accounts_sharing_an_email_restore_from_their_export() {
+        use fireemu_core_auth::{mfa::TotpPolicy, store::AuthStore};
+        use fireemu_core_export::auth::UserRecord;
+        use fireemu_core_types::determinism::SplitMix64;
+        let path = std::path::Path::new("offline.json");
+        let mut store = AuthStore::new("demo-app", SplitMix64::new(1), TotpPolicy::default());
+        for uid in ["a", "b"] {
+            let record = UserRecord {
+                local_id: uid.to_owned(),
+                email: Some("shared@example.com".to_owned()),
+                created_at: Some("100000".to_owned()),
+                ..UserRecord::default()
+            };
+            let mut user = super::imported_user(&record, path).unwrap();
+            user.allow_shared_email = true;
+            store.import_user(user).unwrap();
+        }
+        assert!(!store.config().allow_duplicate_emails);
+        let mut restored = AuthStore::new("demo-app", SplitMix64::new(2), TotpPolicy::default());
+        for uid in ["a", "b"] {
+            let exported = super::exported_account(&store, store.user_by_id(uid).unwrap(), None);
+            let imported = super::imported_user(&exported, path).unwrap();
+            restored.import_user_trusted(imported).unwrap();
+        }
+        assert_eq!(restored.users_by_email("shared@example.com").len(), 2);
+        assert!(!restored.config().allow_duplicate_emails);
+    }
+
+    /// A foreign hash imported through `accounts:batchCreate` survives an export and restore
+    /// instead of being dropped (external review 2026-09-24).
+    #[test]
+    fn an_imported_foreign_hash_round_trips_through_export() {
+        use fireemu_core_auth::{
+            mfa::TotpPolicy,
+            store::{AuthStore, ImportedPasswordHash},
+        };
+        use fireemu_core_export::auth::UserRecord;
+        use fireemu_core_types::determinism::SplitMix64;
+        let path = std::path::Path::new("offline.json");
+        let hash = ImportedPasswordHash {
+            spec: r#"{"algorithm":"SHA","family":"SHA256","order":"SALT_AND_PASSWORD","rounds":1}"#
+                .to_owned(),
+            hash: vec![1, 2, 3, 250],
+            salt: vec![4, 5],
+        };
+        let record = UserRecord {
+            local_id: "h".to_owned(),
+            email: Some("hashed@example.com".to_owned()),
+            created_at: Some("100000".to_owned()),
+            ..UserRecord::default()
+        };
+        let mut user = super::imported_user(&record, path).unwrap();
+        user.imported_password = Some(hash.clone());
+        let mut store = AuthStore::new("demo-app", SplitMix64::new(1), TotpPolicy::default());
+        store.import_user(user).unwrap();
+        let exported = super::exported_account(&store, store.user_by_id("h").unwrap(), None);
+        assert!(exported.password_hash.is_none());
+        let restored_user = super::imported_user(&exported, path).unwrap();
+        assert_eq!(restored_user.imported_password, Some(hash));
+        let mut restored = AuthStore::new("demo-app", SplitMix64::new(2), TotpPolicy::default());
+        restored.import_user_trusted(restored_user).unwrap();
+        let uid = restored.user_by_id("h").unwrap().local_id.clone();
+        assert!(restored.password_digest(&uid).is_some());
+    }
+
+    /// A restored foreign hash keeps the import's parameter ranges: an out-of-range spec in
+    /// `fireemuImportedPassword` refuses the account instead of installing it (closure
+    /// re-review 2026-09-24).
+    #[test]
+    fn a_restored_foreign_hash_outside_the_import_ranges_is_refused() {
+        use fireemu_core_export::{auth::UserRecord, json::Json};
+        let member = |spec: &str| {
+            Json::Object(vec![
+                ("spec".to_owned(), Json::String(spec.to_owned())),
+                ("hash".to_owned(), Json::String("AQID".to_owned())),
+                ("salt".to_owned(), Json::String("BA==".to_owned())),
+            ])
+        };
+        let record = |spec: &str| UserRecord {
+            local_id: "r".to_owned(),
+            email: Some("restored@example.com".to_owned()),
+            created_at: Some("100000".to_owned()),
+            extra: vec![(super::IMPORTED_PASSWORD_MEMBER.to_owned(), member(spec))],
+            ..UserRecord::default()
+        };
+        let path = std::path::Path::new("offline.json");
+        let crashing =
+            r#"{"algorithm":"SCRYPT","key":"AQID","separator":"Bw==","rounds":8,"memoryCost":40}"#;
+        assert!(super::imported_user(&record(crashing), path).is_err());
+        let bounded =
+            r#"{"algorithm":"SCRYPT","key":"AQID","separator":"Bw==","rounds":8,"memoryCost":14}"#;
+        assert!(super::imported_user(&record(bounded), path)
+            .unwrap()
+            .imported_password
+            .is_some());
+    }
+
+    #[test]
+    fn last_token_issuance_round_trips_without_lookup_time_fabrication() {
+        use fireemu_core_auth::{
+            mfa::TotpPolicy,
+            store::{AuthStore, NewUser},
+        };
+        use fireemu_core_types::determinism::SplitMix64;
+        let mut store = AuthStore::new("demo-app", SplitMix64::new(1), TotpPolicy::default());
+        let at = LogicalInstant::from_unix_seconds(100);
+        let uid = store.create_user(NewUser::anonymous(), at).unwrap();
+        let token = store
+            .issue_refresh_session(&uid, at, None, super::CustomClaims::default(), None)
+            .unwrap();
+        store.record_token_issuance(&token, at);
+        let exported = super::exported_account(&store, store.user(&uid).unwrap(), None);
+        assert_eq!(
+            exported.last_refresh_at.as_deref(),
+            Some("1970-01-01T00:01:40Z")
+        );
+        let imported =
+            super::imported_user(&exported, std::path::Path::new("offline.json")).unwrap();
+        let mut restored = AuthStore::new("demo-app", SplitMix64::new(2), TotpPolicy::default());
+        restored.import_user(imported).unwrap();
+        assert_eq!(
+            super::exported_account(&restored, restored.user_by_id(uid.as_str()).unwrap(), None)
+                .last_refresh_at,
+            exported.last_refresh_at
+        );
+    }
+
+    #[test]
+    fn a_hashless_password_provider_with_an_email_stays_password() {
+        use fireemu_core_export::auth::{ProviderUserInfo, UserRecord};
+
+        let record = UserRecord {
+            email: Some("link@example.com".to_owned()),
+            provider_user_info: vec![ProviderUserInfo {
+                provider_id: "password".to_owned(),
+                raw_id: "link@example.com".to_owned(),
+                ..ProviderUserInfo::default()
+            }],
+            ..UserRecord::default()
+        };
+
+        assert_eq!(
+            super::provider_of(&record),
+            fireemu_core_auth::store::Provider::Password
+        );
+    }
+
+    #[test]
+    fn an_email_link_marker_cannot_relabel_a_password_account() {
+        use fireemu_core_export::auth::{ProviderUserInfo, UserRecord};
+
+        let record = UserRecord {
+            email: Some("password@example.com".to_owned()),
+            email_link_signin: true,
+            password_hash: Some("fakeHash:salt=s:password=p".to_owned()),
+            provider_user_info: vec![ProviderUserInfo {
+                provider_id: "password".to_owned(),
+                raw_id: "password@example.com".to_owned(),
+                ..ProviderUserInfo::default()
+            }],
+            ..UserRecord::default()
+        };
+
+        assert_eq!(
+            super::provider_of(&record),
+            fireemu_core_auth::store::Provider::Password
+        );
+    }
+
+    #[test]
+    fn removed_password_provider_is_not_reintroduced_by_export() {
+        use fireemu_core_auth::mfa::TotpPolicy;
+        use fireemu_core_auth::store::{AuthStore, FederatedIdentity, NewUser, Provider};
+        use fireemu_core_types::determinism::SplitMix64;
+
+        let mut store = AuthStore::new("demo-app", SplitMix64::new(7), TotpPolicy::default());
+        let created_at = LogicalInstant::from_unix_seconds(100);
+        let uid = store
+            .create_user(NewUser::email("switch@example.com"), created_at)
+            .expect("the password account is created");
+        store
+            .sign_in_with_idp(
+                FederatedIdentity {
+                    provider_id: "google.com".to_owned(),
+                    raw_id: "google-user".to_owned(),
+                    email: Some("switch@example.com".to_owned()),
+                    display_name: None,
+                    photo_url: None,
+                },
+                true,
+                LogicalInstant::from_unix_seconds(101),
+            )
+            .expect("the verified IdP sign-in succeeds");
+
+        let user = store
+            .user(&uid)
+            .expect("the account remains after recycling");
+        assert_eq!(user.provider, Provider::Federated("google.com".to_owned()));
+        assert!(!store.has_password(&uid));
+        let exported = super::exported_account(&store, user, None);
+        assert!(exported
+            .provider_user_info
+            .iter()
+            .all(|provider| provider.provider_id != "password"));
+        assert!(exported
+            .provider_user_info
+            .iter()
+            .any(|provider| provider.provider_id == "google.com"));
+
+        let imported = super::imported_user(&exported, std::path::Path::new("offline.json"))
+            .expect("the exported account is importable");
+        let mut restored = AuthStore::new("demo-app", SplitMix64::new(8), TotpPolicy::default());
+        let restored_uid = restored.import_user(imported).expect("the account imports");
+        let reexported = super::exported_account(
+            &restored,
+            restored
+                .user_by_id(restored_uid.as_str())
+                .expect("the imported account exists"),
+            None,
+        );
+        assert!(reexported
+            .provider_user_info
+            .iter()
+            .all(|provider| provider.provider_id != "password"));
+    }
+
+    #[test]
+    fn hashless_password_provider_with_federated_identity_is_preserved() {
+        use fireemu_core_auth::mfa::TotpPolicy;
+        use fireemu_core_auth::store::AuthStore;
+        use fireemu_core_export::auth::{ProviderUserInfo, UserRecord};
+        use fireemu_core_types::determinism::SplitMix64;
+
+        let record = UserRecord {
+            local_id: "hashless-linked".to_owned(),
+            email: Some("linked@example.com".to_owned()),
+            provider_user_info: vec![
+                ProviderUserInfo {
+                    provider_id: "password".to_owned(),
+                    raw_id: "linked@example.com".to_owned(),
+                    ..ProviderUserInfo::default()
+                },
+                ProviderUserInfo {
+                    provider_id: "google.com".to_owned(),
+                    raw_id: "google-linked".to_owned(),
+                    ..ProviderUserInfo::default()
+                },
+            ],
+            ..UserRecord::default()
+        };
+        let imported = super::imported_user(&record, std::path::Path::new("offline.json"))
+            .expect("the hashless account imports");
+        let mut store = AuthStore::new("demo-app", SplitMix64::new(10), TotpPolicy::default());
+        let uid = store.import_user(imported).expect("the account imports");
+        let exported = super::exported_account(
+            &store,
+            store.user_by_id(uid.as_str()).expect("the account exists"),
+            None,
+        );
+        assert!(exported
+            .provider_user_info
+            .iter()
+            .any(|provider| provider.provider_id == "password"));
+        assert!(exported
+            .provider_user_info
+            .iter()
+            .any(|provider| provider.provider_id == "google.com"));
+    }
+
+    #[test]
+    fn hashless_password_provider_with_phone_identity_is_preserved() {
+        use fireemu_core_auth::mfa::TotpPolicy;
+        use fireemu_core_auth::store::AuthStore;
+        use fireemu_core_export::auth::{ProviderUserInfo, UserRecord};
+        use fireemu_core_types::determinism::SplitMix64;
+
+        let record = UserRecord {
+            local_id: "hashless-phone".to_owned(),
+            email: Some("phone@example.com".to_owned()),
+            phone_number: Some("+15550000001".to_owned()),
+            provider_user_info: vec![ProviderUserInfo {
+                provider_id: "password".to_owned(),
+                raw_id: "phone@example.com".to_owned(),
+                ..ProviderUserInfo::default()
+            }],
+            ..UserRecord::default()
+        };
+        let imported = super::imported_user(&record, std::path::Path::new("offline.json"))
+            .expect("the hashless account imports");
+        let mut store = AuthStore::new("demo-app", SplitMix64::new(11), TotpPolicy::default());
+        let uid = store.import_user(imported).expect("the account imports");
+        let exported = super::exported_account(
+            &store,
+            store.user_by_id(uid.as_str()).expect("the account exists"),
+            None,
+        );
+        assert!(exported
+            .provider_user_info
+            .iter()
+            .any(|provider| provider.provider_id == "password"));
+        assert!(exported
+            .provider_user_info
+            .iter()
+            .any(|provider| provider.provider_id == "phone"));
+    }
+
+    #[test]
+    fn explicit_email_link_provider_with_linked_identities_is_preserved() {
+        use fireemu_core_auth::mfa::TotpPolicy;
+        use fireemu_core_auth::store::AuthStore;
+        use fireemu_core_export::auth::{ProviderUserInfo, UserRecord};
+        use fireemu_core_types::determinism::SplitMix64;
+
+        let record = UserRecord {
+            local_id: "email-link-linked".to_owned(),
+            email: Some("link-linked@example.com".to_owned()),
+            email_link_signin: true,
+            phone_number: Some("+15550000003".to_owned()),
+            provider_user_info: vec![
+                ProviderUserInfo {
+                    provider_id: "password".to_owned(),
+                    raw_id: "link-linked@example.com".to_owned(),
+                    ..ProviderUserInfo::default()
+                },
+                ProviderUserInfo {
+                    provider_id: "google.com".to_owned(),
+                    raw_id: "google-link-linked".to_owned(),
+                    ..ProviderUserInfo::default()
+                },
+            ],
+            ..UserRecord::default()
+        };
+        let imported = super::imported_user(&record, std::path::Path::new("offline.json"))
+            .expect("the email-link account imports");
+        let mut store = AuthStore::new("demo-app", SplitMix64::new(13), TotpPolicy::default());
+        let uid = store.import_user(imported).expect("the account imports");
+        let exported = super::exported_account(
+            &store,
+            store.user_by_id(uid.as_str()).expect("the account exists"),
+            None,
+        );
+        assert!(exported.email_link_signin);
+        assert!(exported
+            .provider_user_info
+            .iter()
+            .any(|provider| provider.provider_id == "password"));
+        assert!(exported
+            .provider_user_info
+            .iter()
+            .any(|provider| provider.provider_id == "google.com"));
+        assert!(exported
+            .provider_user_info
+            .iter()
+            .any(|provider| provider.provider_id == "phone"));
+    }
+
+    #[test]
+    fn clear_password_retags_phone_provider_for_export() {
+        use fireemu_core_auth::mfa::TotpPolicy;
+        use fireemu_core_auth::store::{AuthStore, NewUser, Provider};
+        use fireemu_core_types::determinism::SplitMix64;
+
+        let mut store = AuthStore::new("demo-app", SplitMix64::new(12), TotpPolicy::default());
+        let uid = store
+            .create_user(
+                NewUser::email("stale-phone@example.com"),
+                LogicalInstant::from_unix_seconds(100),
+            )
+            .expect("the account is created");
+        store
+            .set_phone_number(&uid, Some("+15550000002"))
+            .expect("the phone is linked");
+        store
+            .set_password(&uid, "hunter22", LogicalInstant::from_unix_seconds(101))
+            .expect("the password is set");
+        assert!(store.clear_password(&uid).expect("the password is cleared"));
+
+        let user = store.user(&uid).expect("the account exists");
+        assert_eq!(user.provider, Provider::Phone);
+        let exported = super::exported_account(&store, user, None);
+        assert!(exported
+            .provider_user_info
+            .iter()
+            .all(|provider| provider.provider_id != "password"));
+        assert_eq!(exported.provider_user_info[0].provider_id, "phone");
+    }
+
+    #[test]
+    fn the_field_configuration_sidecar_survives_a_round_trip() {
+        let mut catalog = fireemu_core_firestore::ttl::TtlCatalog::new();
+        catalog
+            .enable(
+                fireemu_core_types::ids::CollectionId::try_new("sessions").expect("collection"),
+                fireemu_core_firestore::field_path::FieldPath::parse("expiresAt").expect("field"),
+            )
+            .expect("enable");
+        let mut catalogs = std::collections::BTreeMap::new();
+        catalogs.insert(("demo-app".to_owned(), "(default)".to_owned()), catalog);
+
+        let parsed = parse_field_config(&field_config_json(&catalogs)).expect("parse");
+        assert_eq!(parsed, catalogs);
+    }
+
+    #[test]
+    fn the_expiration_offset_of_a_policy_survives_a_round_trip() {
+        let group = fireemu_core_types::ids::CollectionId::try_new("sessions").expect("collection");
+        let field =
+            fireemu_core_firestore::field_path::FieldPath::parse("expiresAt").expect("field");
+        for offset in [
+            Some(fireemu_core_types::time::LogicalDuration::from_seconds(
+                604_800,
+            )),
+            // An offset spelled as zero is a configuration of its own, distinct from the
+            // unset one, so the artifact has to tell them apart.
+            Some(fireemu_core_types::time::LogicalDuration::from_seconds(0)),
+            None,
+        ] {
+            let mut catalog = fireemu_core_firestore::ttl::TtlCatalog::new();
+            catalog
+                .enable_with_offset(group.clone(), field.clone(), offset)
+                .expect("enable");
+            let mut catalogs = std::collections::BTreeMap::new();
+            catalogs.insert(("demo-app".to_owned(), "(default)".to_owned()), catalog);
+
+            let text = field_config_json(&catalogs);
+            let parsed = parse_field_config(&text).expect("parse");
+            assert_eq!(parsed, catalogs, "{text}");
+            assert_eq!(
+                parsed[&("demo-app".to_owned(), "(default)".to_owned())]
+                    .policy(&group)
+                    .expect("policy")
+                    .expiration_offset,
+                offset,
+                "{text}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_policy_with_no_offset_is_written_the_way_it_always_was() {
+        let mut catalog = fireemu_core_firestore::ttl::TtlCatalog::new();
+        catalog
+            .enable(
+                fireemu_core_types::ids::CollectionId::try_new("sessions").expect("collection"),
+                fireemu_core_firestore::field_path::FieldPath::parse("expiresAt").expect("field"),
+            )
+            .expect("enable");
+        let mut catalogs = std::collections::BTreeMap::new();
+        catalogs.insert(("demo-app".to_owned(), "(default)".to_owned()), catalog);
+        assert_eq!(
+            field_config_json(&catalogs),
+            r#"{"databases":[{"database":"(default)","project":"demo-app","ttlFields":[{"collectionGroup":"sessions","field":"expiresAt"}]}],"version":1}"#
+        );
+    }
+
+    #[test]
+    fn a_sidecar_naming_an_invalid_expiration_offset_is_refused() {
+        for offset in [
+            r#""1.5s""#,
+            r#""-1s""#,
+            r#""2147483648s""#,
+            r#""604800""#,
+            "7",
+        ] {
+            let text = format!(
+                r#"{{"version":2,"databases":[{{"project":"demo-app","database":"(default)","ttlFields":[{{"collectionGroup":"sessions","field":"expiresAt","expirationOffset":{offset}}}]}}]}}"#
+            );
+            let error = parse_field_config(&text).expect_err("refusal");
+            assert!(error.contains("expirationOffset"), "{offset}: {error}");
+        }
+    }
+
+    #[test]
+    fn an_empty_catalog_is_not_written_into_the_sidecar() {
+        let mut catalogs = std::collections::BTreeMap::new();
+        catalogs.insert(
+            ("demo-app".to_owned(), "(default)".to_owned()),
+            fireemu_core_firestore::ttl::TtlCatalog::new(),
+        );
+        let text = field_config_json(&catalogs);
+        assert_eq!(text, r#"{"databases":[],"version":1}"#);
+    }
+
+    #[test]
+    fn a_sidecar_of_an_unknown_version_is_refused() {
+        for text in [
+            r#"{"version": 3, "databases": []}"#,
+            r#"{"version": 0, "databases": []}"#,
+            r#"{"version": "2", "databases": []}"#,
+            r#"{"databases": []}"#,
+        ] {
+            let error = parse_field_config(text).expect_err("refusal");
+            assert!(error.contains("unknown version"), "{text}: {error}");
+        }
+    }
+
+    #[test]
+    fn a_sidecar_carrying_an_offset_declares_the_version_that_carries_one() {
+        let group = fireemu_core_types::ids::CollectionId::try_new("sessions").expect("collection");
+        let field =
+            fireemu_core_firestore::field_path::FieldPath::parse("expiresAt").expect("field");
+        let mut catalog = fireemu_core_firestore::ttl::TtlCatalog::new();
+        catalog
+            .enable_with_offset(
+                group.clone(),
+                field,
+                Some(fireemu_core_types::time::LogicalDuration::from_seconds(
+                    604_800,
+                )),
+            )
+            .expect("enable");
+        let mut catalogs = std::collections::BTreeMap::new();
+        catalogs.insert(("demo-app".to_owned(), "(default)".to_owned()), catalog);
+
+        let text = field_config_json(&catalogs);
+        assert_eq!(
+            text,
+            r#"{"databases":[{"database":"(default)","project":"demo-app","ttlFields":[{"collectionGroup":"sessions","expirationOffset":"604800s","field":"expiresAt"}]}],"version":2}"#
+        );
+        // The artifact that declares the newer version still round-trips whole.
+        let parsed = parse_field_config(&text).expect("parse");
+        assert_eq!(parsed, catalogs);
+        assert_eq!(
+            parsed[&("demo-app".to_owned(), "(default)".to_owned())]
+                .policy(&group)
+                .expect("policy")
+                .expiration_offset,
+            Some(fireemu_core_types::time::LogicalDuration::from_seconds(
+                604_800
+            ))
+        );
+    }
+
+    #[test]
+    fn a_version_one_sidecar_carrying_an_offset_is_refused_rather_than_read_without_it() {
+        // An older reader would install this policy with no offset and sweep every document
+        // of the collection group up to one week early, without saying so. The version is
+        // the promise that there is nothing here to drop, so breaking it is an error.
+        let text = r#"{"version":1,"databases":[{"project":"demo-app","database":"(default)","ttlFields":[{"collectionGroup":"sessions","field":"expiresAt","expirationOffset":"604800s"}]}]}"#;
+        let error = parse_field_config(text).expect_err("refusal");
+        assert!(error.contains("expirationOffset"), "{error}");
+        assert!(error.contains("version 1"), "{error}");
+    }
+
+    #[test]
+    fn a_version_two_sidecar_that_names_no_offset_is_read_as_it_stands() {
+        let text = r#"{"version":2,"databases":[{"project":"demo-app","database":"(default)","ttlFields":[{"collectionGroup":"sessions","field":"expiresAt"}]}]}"#;
+        let parsed = parse_field_config(text).expect("parse");
+        let group = fireemu_core_types::ids::CollectionId::try_new("sessions").expect("collection");
+        assert_eq!(
+            parsed[&("demo-app".to_owned(), "(default)".to_owned())]
+                .policy(&group)
+                .expect("policy")
+                .expiration_offset,
+            None
+        );
+        // Writing it back drops to the version that can carry it.
+        assert!(field_config_json(&parsed).contains(r#""version":1"#));
+    }
+
+    #[test]
+    fn a_sidecar_naming_an_invalid_field_path_is_refused() {
+        let text = r#"{"version":1,"databases":[{"project":"demo-app","database":"(default)","ttlFields":[{"collectionGroup":"sessions","field":"a..b"}]}]}"#;
+        let error = parse_field_config(text).expect_err("refusal");
+        assert!(error.contains("field path"), "{error}");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_sidecar_larger_than_the_limit_is_refused_and_one_at_the_limit_is_read() {
+        let dir = TrustedTempDir::new("field-config-limit");
+        let path = dir.path().join(FIELD_CONFIG_FILE);
+
+        // One byte past the limit is refused without the content being parsed.
+        let padding = usize::try_from(FIELD_CONFIG_BYTES_LIMIT).expect("a usize limit");
+        let oversized = format!(
+            "{{\"version\":1,\"note\":\"{}\",\"databases\":[]}}",
+            "a".repeat(padding)
+        );
+        std::fs::write(&path, oversized).expect("write the oversized sidecar");
+        let error = read_field_config(dir.path()).expect_err("refusal");
+        assert!(error.to_string().contains(FIELD_CONFIG_FILE), "{error}");
+
+        // A sidecar inside the limit is read.
+        std::fs::write(&path, r#"{"version":1,"databases":[]}"#).expect("write a small sidecar");
+        assert_eq!(
+            read_field_config(dir.path()).expect("read"),
+            Some(std::collections::BTreeMap::new())
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_sidecar_that_is_a_symlink_is_refused() {
+        let dir = TrustedTempDir::new("field-config-symlink");
+        let target = dir.path().join("elsewhere.json");
+        std::fs::write(&target, r#"{"version":1,"databases":[]}"#).expect("write the target");
+        std::os::unix::fs::symlink(&target, dir.path().join(FIELD_CONFIG_FILE))
+            .expect("create the symlink");
+        let error = read_field_config(dir.path()).expect_err("refusal");
+        assert!(error.to_string().contains("no-symlink"), "{error}");
+    }
+
+    #[test]
+    fn a_sidecar_naming_an_invalid_project_is_refused() {
+        let text = r#"{"version":1,"databases":[{"project":"Not A Project","database":"(default)","ttlFields":[]}]}"#;
+        let error = parse_field_config(text).expect_err("refusal");
+        assert!(error.starts_with("project "), "{error}");
+    }
+
+    #[test]
+    fn a_sidecar_naming_an_invalid_database_is_refused() {
+        let text = r#"{"version":1,"databases":[{"project":"demo-app","database":"Invalid_Id","ttlFields":[]}]}"#;
+        let error = parse_field_config(text).expect_err("refusal");
+        assert!(error.starts_with("database "), "{error}");
+    }
+
+    #[test]
+    fn a_sidecar_carrying_a_control_character_in_an_identifier_is_refused() {
+        let text = "{\"version\":1,\"databases\":[{\"project\":\"demo\\u0000app\",\"database\":\"(default)\",\"ttlFields\":[]}]}";
+        let error = parse_field_config(text).expect_err("refusal");
+        assert!(error.starts_with("project "), "{error}");
+    }
+
+    #[test]
+    fn a_sidecar_naming_two_ttl_fields_in_one_collection_group_is_refused() {
+        let text = r#"{"version":1,"databases":[{"project":"demo-app","database":"(default)","ttlFields":[{"collectionGroup":"sessions","field":"a"},{"collectionGroup":"sessions","field":"b"}]}]}"#;
+        let error = parse_field_config(text).expect_err("refusal");
+        assert!(error.contains("at most one TTL field"), "{error}");
     }
 }

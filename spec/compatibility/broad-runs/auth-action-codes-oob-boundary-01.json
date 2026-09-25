@@ -1,0 +1,878 @@
+{
+  "artifactSha256": null,
+  "cases": [
+    {
+      "admission": "accepted",
+      "group": "password-reset",
+      "id": "action-code/password-reset-lifecycle"
+    },
+    {
+      "admission": "accepted",
+      "group": "password-reset",
+      "id": "action-code/password-reset-refused-policy"
+    },
+    {
+      "admission": "accepted",
+      "group": "password-reset",
+      "id": "action-code/password-change-transition"
+    },
+    {
+      "admission": "accepted",
+      "group": "verify-email",
+      "id": "action-code/verify-email-lifecycle"
+    },
+    {
+      "admission": "accepted",
+      "group": "email-link",
+      "id": "action-code/email-link-lifecycle"
+    },
+    {
+      "admission": "accepted",
+      "group": "deleted-user",
+      "id": "action-code/deleted-owner"
+    },
+    {
+      "admission": "outside",
+      "id": "action-code/expiry",
+      "reason": "Expiry needs an out-of-band wait; declared unobserved"
+    },
+    {
+      "admission": "outside",
+      "id": "action-code/delivered-email",
+      "reason": "Delivery is suppressed by the link-return path"
+    },
+    {
+      "admission": "outside",
+      "id": "action-code/tenant",
+      "reason": "Tenant routing is a separate campaign"
+    },
+    {
+      "admission": "outside",
+      "id": "action-code/blocking-function",
+      "reason": "Blocking functions are a separate campaign"
+    },
+    {
+      "admission": "outside",
+      "id": "action-code/continue-url-redirect",
+      "reason": "The hosted action page and continueUrl are a browser boundary"
+    },
+    {
+      "admission": "outside",
+      "id": "action-code/sdk",
+      "reason": "SDK surfaces are compared in their own lanes"
+    },
+    {
+      "admission": "outside",
+      "id": "action-code/verify-and-change-email",
+      "reason": "VERIFY_AND_CHANGE_EMAIL needs a second owned address and its own matrix"
+    }
+  ],
+  "configurationDigest": null,
+  "kind": "production-campaign-auth-action-codes-01-v1",
+  "networkCalls": 0,
+  "planTemplate": {
+    "budget": {
+      "costBasis": "Identity Platform charges monthly active users, not action-code requests. Two ephemeral accounts are created and deleted inside the run; no message is delivered, so no messaging tariff applies.",
+      "deliveredMessages": 0,
+      "expectedMeteredUsd": 0.0,
+      "maxConcurrency": 1,
+      "observationRequests": 26,
+      "ownedAccountsMax": 2,
+      "planningCeilingUsd": 0.02,
+      "recoveryRequests": 4,
+      "recoverySeconds": 180,
+      "requestRateEnforced": true,
+      "requestRatePerSecondMax": 4,
+      "wallSeconds": 300
+    },
+    "campaignId": "AUTH-ACTION-OOB-DELIVERY-BOUNDARY-01",
+    "contract": "auth-action-codes-v1",
+    "deliveryBoundary": {
+      "addressDomain": "example.invalid",
+      "mechanism": "privileged accounts:sendOobCode with returnOobLink true",
+      "messagesDelivered": 0,
+      "rationale": "The reserved .invalid domain cannot receive mail, so a delivery that happened despite the link-return path would still be inert."
+    },
+    "localProject": "demo-auth-action",
+    "nonce": "{freshNonce}",
+    "nonceStatus": "syntax-only; freshness and ownership unverified",
+    "ownedAccounts": {
+      "accountA": {
+        "email": "o1-oob-{freshNonce}-a@example.invalid",
+        "role": "primary owned account"
+      },
+      "accountB": {
+        "email": "o1-oob-{freshNonce}-b@example.invalid",
+        "role": "control owned account deleted mid-run"
+      }
+    },
+    "ownerInputs": {
+      "credentialRole": null,
+      "credentialSource": null,
+      "endsAt": null,
+      "nonce": null,
+      "owner": null,
+      "permissionReference": null,
+      "projectId": null,
+      "startsAt": null
+    },
+    "ownerPreconditions": [
+      "A Google OAuth credential holding roles/firebaseauth.admin on the single approved project, with the identitytoolkit scope rather than cloud-platform.",
+      "Confirmation that the target project has no blocking function or tenant that changes these routes.",
+      "Acceptance that two accounts are created and deleted inside the approved window.",
+      "A fresh, unused 32-character hexadecimal nonce supplied at approval time.",
+      "A source commit and built artifact digest bound before the local side is recorded.",
+      "Acceptance that the reserved example.invalid domain is usable for signUp and sendOobCode on the target project; a refusal stops the run at its first stage and fails closed, consuming the approved window without an observation."
+    ],
+    "permissionEnvelope": {
+      "methods": [
+        "accounts:sendOobCode",
+        "accounts:update",
+        "accounts:lookup",
+        "accounts:delete"
+      ],
+      "notRequired": [
+        "https://www.googleapis.com/auth/cloud-platform",
+        "organization or folder level access",
+        "any Firestore, Storage or Functions permission"
+      ],
+      "projectScope": "the single approved project",
+      "role": "roles/firebaseauth.admin",
+      "scope": "https://www.googleapis.com/auth/identitytoolkit"
+    },
+    "productionExecutable": false,
+    "productionExecuted": false,
+    "recovery": [
+      {
+        "account": null,
+        "body": {
+          "email": [
+            "$binding:accountA.email",
+            "$binding:accountB.email"
+          ]
+        },
+        "id": "recover-discover",
+        "method": "POST",
+        "operationType": "auth-lookup",
+        "path": "/identitytoolkit.googleapis.com/v1/projects/{project}/accounts:lookup",
+        "requires": "the owned identifiers, however they arose",
+        "routeClass": "admin",
+        "selector": "email"
+      },
+      {
+        "account": "accountA",
+        "body": {
+          "localId": "$binding:accountA.localId"
+        },
+        "id": "recover-delete-accountA",
+        "identifierSource": "the discovery readback, or the create response",
+        "method": "POST",
+        "operationType": "auth-delete",
+        "path": "/identitytoolkit.googleapis.com/v1/projects/{project}/accounts:delete",
+        "routeClass": "admin",
+        "selector": "localId",
+        "tolerates": "already absent"
+      },
+      {
+        "account": "accountB",
+        "body": {
+          "localId": "$binding:accountB.localId"
+        },
+        "id": "recover-delete-accountB",
+        "identifierSource": "the discovery readback, or the create response",
+        "method": "POST",
+        "operationType": "auth-delete",
+        "path": "/identitytoolkit.googleapis.com/v1/projects/{project}/accounts:delete",
+        "routeClass": "admin",
+        "selector": "localId",
+        "tolerates": "already absent"
+      },
+      {
+        "account": null,
+        "body": {
+          "email": [
+            "$binding:accountA.email",
+            "$binding:accountB.email"
+          ]
+        },
+        "id": "recover-absence",
+        "method": "POST",
+        "operationType": "auth-lookup",
+        "path": "/identitytoolkit.googleapis.com/v1/projects/{project}/accounts:lookup",
+        "requires": "typed absence of both addresses",
+        "routeClass": "admin",
+        "selector": "email"
+      }
+    ],
+    "secretFields": [
+      "oobCode",
+      "oobLink",
+      "idToken",
+      "refreshToken",
+      "password",
+      "newPassword",
+      "passwordHash",
+      "salt"
+    ],
+    "sourceBinding": {
+      "artifactSha256": null,
+      "commit": null
+    },
+    "stages": [
+      {
+        "basis": "setup",
+        "body": {
+          "email": "$binding:accountA.email",
+          "password": "$binding:accountA.password",
+          "returnSecureToken": true
+        },
+        "delivery": "none",
+        "expectedLocal": {
+          "keys": [
+            "email",
+            "expiresIn",
+            "idToken",
+            "kind",
+            "localId",
+            "refreshToken"
+          ],
+          "status": 200
+        },
+        "group": "setup",
+        "id": "account-a-create",
+        "method": "POST",
+        "note": "Creates the primary owned account for every action-code stage.",
+        "path": "/identitytoolkit.googleapis.com/v1/accounts:signUp",
+        "productionExpectation": "UNOBSERVED",
+        "routeClass": "end-user"
+      },
+      {
+        "basis": "setup",
+        "body": {
+          "email": "$binding:accountB.email",
+          "password": "$binding:accountB.password",
+          "returnSecureToken": true
+        },
+        "delivery": "none",
+        "expectedLocal": {
+          "keys": [
+            "email",
+            "expiresIn",
+            "idToken",
+            "kind",
+            "localId",
+            "refreshToken"
+          ],
+          "status": 200
+        },
+        "group": "setup",
+        "id": "account-b-create",
+        "method": "POST",
+        "note": "Control account for the mismatched-email and deleted-user stages.",
+        "path": "/identitytoolkit.googleapis.com/v1/accounts:signUp",
+        "productionExpectation": "UNOBSERVED",
+        "routeClass": "end-user"
+      },
+      {
+        "basis": "setup",
+        "body": {
+          "email": "$binding:accountA.email",
+          "requestType": "PASSWORD_RESET",
+          "returnOobLink": true
+        },
+        "delivery": "suppressed-by-returnOobLink",
+        "expectedLocal": {
+          "keys": [
+            "email",
+            "kind",
+            "oobCode",
+            "oobLink"
+          ],
+          "oobCodeReturn": "present",
+          "status": 200
+        },
+        "group": "password-reset",
+        "id": "reset-link-generate",
+        "method": "POST",
+        "note": "Privileged link return; the response carries the code and no mail is sent.",
+        "path": "/identitytoolkit.googleapis.com/v1/projects/{project}/accounts:sendOobCode",
+        "productionExpectation": "UNOBSERVED",
+        "routeClass": "admin"
+      },
+      {
+        "basis": "diagnostic",
+        "body": {
+          "oobCode": "$binding:resetCode"
+        },
+        "delivery": "none",
+        "expectedLocal": {
+          "consumed": false,
+          "keys": [
+            "email",
+            "kind",
+            "requestType"
+          ],
+          "requestType": "PASSWORD_RESET",
+          "status": 200
+        },
+        "group": "password-reset",
+        "id": "reset-code-lookup",
+        "method": "POST",
+        "note": "Lookup without newPassword must describe the code without consuming it.",
+        "path": "/identitytoolkit.googleapis.com/v1/accounts:resetPassword",
+        "productionExpectation": "UNOBSERVED",
+        "routeClass": "end-user"
+      },
+      {
+        "basis": "diagnostic",
+        "body": {
+          "newPassword": "$binding:weakPassword",
+          "oobCode": "$binding:resetCode"
+        },
+        "delivery": "none",
+        "expectedLocal": {
+          "errorMessage": "WEAK_PASSWORD",
+          "keys": [
+            "error"
+          ],
+          "status": 400
+        },
+        "group": "password-reset",
+        "id": "reset-weak-password",
+        "method": "POST",
+        "note": "A refused password policy must not consume the code.",
+        "path": "/identitytoolkit.googleapis.com/v1/accounts:resetPassword",
+        "productionExpectation": "UNOBSERVED",
+        "routeClass": "end-user"
+      },
+      {
+        "basis": "control",
+        "body": {
+          "oobCode": "$binding:resetCode"
+        },
+        "delivery": "none",
+        "expectedLocal": {
+          "consumed": false,
+          "keys": [
+            "email",
+            "kind",
+            "requestType"
+          ],
+          "requestType": "PASSWORD_RESET",
+          "status": 200
+        },
+        "group": "password-reset",
+        "id": "reset-weak-password-retry",
+        "method": "POST",
+        "note": "Positive control proving the refused stage left the code usable.",
+        "path": "/identitytoolkit.googleapis.com/v1/accounts:resetPassword",
+        "productionExpectation": "UNOBSERVED",
+        "routeClass": "end-user"
+      },
+      {
+        "basis": "diagnostic",
+        "body": {
+          "newPassword": "$binding:accountA.nextPassword",
+          "oobCode": "$binding:resetCode"
+        },
+        "delivery": "none",
+        "expectedLocal": {
+          "consumed": true,
+          "keys": [
+            "email",
+            "kind",
+            "requestType"
+          ],
+          "requestType": "PASSWORD_RESET",
+          "status": 200
+        },
+        "group": "password-reset",
+        "id": "reset-consume",
+        "method": "POST",
+        "note": "",
+        "path": "/identitytoolkit.googleapis.com/v1/accounts:resetPassword",
+        "productionExpectation": "UNOBSERVED",
+        "routeClass": "end-user"
+      },
+      {
+        "basis": "diagnostic",
+        "body": {
+          "newPassword": "$binding:accountA.thirdPassword",
+          "oobCode": "$binding:resetCode"
+        },
+        "delivery": "none",
+        "expectedLocal": {
+          "errorMessage": "INVALID_OOB_CODE",
+          "keys": [
+            "error"
+          ],
+          "status": 400
+        },
+        "group": "password-reset",
+        "id": "reset-reuse",
+        "method": "POST",
+        "note": "Reuse after consumption is the central ownership transition.",
+        "path": "/identitytoolkit.googleapis.com/v1/accounts:resetPassword",
+        "productionExpectation": "UNOBSERVED",
+        "routeClass": "end-user"
+      },
+      {
+        "basis": "control",
+        "body": {
+          "newPassword": "$binding:accountA.thirdPassword",
+          "oobCode": "$binding:wrongCode"
+        },
+        "delivery": "none",
+        "expectedLocal": {
+          "errorMessage": "INVALID_OOB_CODE",
+          "keys": [
+            "error"
+          ],
+          "status": 400
+        },
+        "group": "password-reset",
+        "id": "reset-wrong-code",
+        "method": "POST",
+        "note": "Negative control: a code that was never issued.",
+        "path": "/identitytoolkit.googleapis.com/v1/accounts:resetPassword",
+        "productionExpectation": "UNOBSERVED",
+        "routeClass": "end-user"
+      },
+      {
+        "basis": "setup",
+        "body": {
+          "email": "$binding:accountA.email",
+          "requestType": "PASSWORD_RESET",
+          "returnOobLink": true
+        },
+        "delivery": "suppressed-by-returnOobLink",
+        "expectedLocal": {
+          "keys": [
+            "email",
+            "kind",
+            "oobCode",
+            "oobLink"
+          ],
+          "oobCodeReturn": "present",
+          "status": 200
+        },
+        "group": "password-reset",
+        "id": "reset-link-generate-second",
+        "method": "POST",
+        "note": "",
+        "path": "/identitytoolkit.googleapis.com/v1/projects/{project}/accounts:sendOobCode",
+        "productionExpectation": "UNOBSERVED",
+        "routeClass": "admin"
+      },
+      {
+        "basis": "setup",
+        "body": {
+          "localId": "$binding:accountA.localId",
+          "password": "$binding:accountA.fourthPassword"
+        },
+        "delivery": "none",
+        "expectedLocal": {
+          "keys": [
+            "email",
+            "emailVerified",
+            "expiresIn",
+            "idToken",
+            "kind",
+            "localId",
+            "passwordHash",
+            "providerUserInfo",
+            "refreshToken"
+          ],
+          "status": 200
+        },
+        "group": "password-reset",
+        "id": "admin-password-update",
+        "method": "POST",
+        "note": "The transition under test: the password changes after the code was issued.",
+        "path": "/identitytoolkit.googleapis.com/v1/projects/{project}/accounts:update",
+        "productionExpectation": "UNOBSERVED",
+        "routeClass": "admin"
+      },
+      {
+        "basis": "diagnostic",
+        "body": {
+          "newPassword": "$binding:accountA.fifthPassword",
+          "oobCode": "$binding:resetCodeSecond"
+        },
+        "delivery": "none",
+        "expectedLocal": {
+          "consumed": true,
+          "keys": [
+            "email",
+            "kind",
+            "requestType"
+          ],
+          "requestType": "PASSWORD_RESET",
+          "status": 200
+        },
+        "group": "password-reset",
+        "id": "reset-after-password-change",
+        "method": "POST",
+        "note": "The local runtime still accepts the outstanding code after the password changed. Whether production invalidates it is the representative unobserved transition.",
+        "path": "/identitytoolkit.googleapis.com/v1/accounts:resetPassword",
+        "productionExpectation": "UNOBSERVED",
+        "routeClass": "end-user"
+      },
+      {
+        "basis": "control",
+        "body": {
+          "localId": "$binding:accountA.localId"
+        },
+        "delivery": "none",
+        "expectedLocal": {
+          "keys": [
+            "kind",
+            "users"
+          ],
+          "status": 200
+        },
+        "group": "password-reset",
+        "id": "account-a-readback",
+        "method": "POST",
+        "note": "Typed post-state readback; no password value is recorded.",
+        "path": "/identitytoolkit.googleapis.com/v1/projects/{project}/accounts:lookup",
+        "productionExpectation": "UNOBSERVED",
+        "routeClass": "admin"
+      },
+      {
+        "basis": "setup",
+        "body": {
+          "email": "$binding:accountA.email",
+          "requestType": "VERIFY_EMAIL",
+          "returnOobLink": true
+        },
+        "delivery": "suppressed-by-returnOobLink",
+        "expectedLocal": {
+          "keys": [
+            "email",
+            "kind",
+            "oobCode",
+            "oobLink"
+          ],
+          "oobCodeReturn": "present",
+          "status": 200
+        },
+        "group": "verify-email",
+        "id": "verify-link-generate",
+        "method": "POST",
+        "note": "",
+        "path": "/identitytoolkit.googleapis.com/v1/projects/{project}/accounts:sendOobCode",
+        "productionExpectation": "UNOBSERVED",
+        "routeClass": "admin"
+      },
+      {
+        "basis": "diagnostic",
+        "body": {
+          "oobCode": "$binding:verifyCode"
+        },
+        "delivery": "none",
+        "expectedLocal": {
+          "emailVerified": true,
+          "keys": [
+            "email",
+            "emailVerified",
+            "kind",
+            "localId"
+          ],
+          "status": 200
+        },
+        "group": "verify-email",
+        "id": "verify-apply",
+        "method": "POST",
+        "note": "",
+        "path": "/identitytoolkit.googleapis.com/v1/accounts:update",
+        "productionExpectation": "UNOBSERVED",
+        "routeClass": "end-user"
+      },
+      {
+        "basis": "diagnostic",
+        "body": {
+          "oobCode": "$binding:verifyCode"
+        },
+        "delivery": "none",
+        "expectedLocal": {
+          "errorMessage": "INVALID_OOB_CODE",
+          "keys": [
+            "error"
+          ],
+          "status": 400
+        },
+        "group": "verify-email",
+        "id": "verify-reuse",
+        "method": "POST",
+        "note": "",
+        "path": "/identitytoolkit.googleapis.com/v1/accounts:update",
+        "productionExpectation": "UNOBSERVED",
+        "routeClass": "end-user"
+      },
+      {
+        "basis": "control",
+        "body": {
+          "oobCode": "$binding:wrongCode"
+        },
+        "delivery": "none",
+        "expectedLocal": {
+          "errorMessage": "INVALID_OOB_CODE",
+          "keys": [
+            "error"
+          ],
+          "status": 400
+        },
+        "group": "verify-email",
+        "id": "verify-wrong-code",
+        "method": "POST",
+        "note": "",
+        "path": "/identitytoolkit.googleapis.com/v1/accounts:update",
+        "productionExpectation": "UNOBSERVED",
+        "routeClass": "end-user"
+      },
+      {
+        "basis": "setup",
+        "body": {
+          "email": "$binding:accountA.email",
+          "requestType": "EMAIL_SIGNIN",
+          "returnOobLink": true
+        },
+        "delivery": "suppressed-by-returnOobLink",
+        "expectedLocal": {
+          "keys": [
+            "email",
+            "kind",
+            "oobCode",
+            "oobLink"
+          ],
+          "oobCodeReturn": "present",
+          "status": 200
+        },
+        "group": "email-link",
+        "id": "email-link-generate",
+        "method": "POST",
+        "note": "",
+        "path": "/identitytoolkit.googleapis.com/v1/projects/{project}/accounts:sendOobCode",
+        "productionExpectation": "UNOBSERVED",
+        "routeClass": "admin"
+      },
+      {
+        "basis": "diagnostic",
+        "body": {
+          "email": "$binding:accountA.email",
+          "oobCode": "$binding:emailLinkCode"
+        },
+        "delivery": "none",
+        "expectedLocal": {
+          "isNewUser": false,
+          "keys": [
+            "email",
+            "expiresIn",
+            "idToken",
+            "isNewUser",
+            "kind",
+            "localId",
+            "refreshToken"
+          ],
+          "status": 200
+        },
+        "group": "email-link",
+        "id": "email-link-signin",
+        "method": "POST",
+        "note": "",
+        "path": "/identitytoolkit.googleapis.com/v1/accounts:signInWithEmailLink",
+        "productionExpectation": "UNOBSERVED",
+        "routeClass": "end-user"
+      },
+      {
+        "basis": "diagnostic",
+        "body": {
+          "email": "$binding:accountA.email",
+          "oobCode": "$binding:emailLinkCode"
+        },
+        "delivery": "none",
+        "expectedLocal": {
+          "errorMessage": "INVALID_OOB_CODE",
+          "keys": [
+            "error"
+          ],
+          "status": 400
+        },
+        "group": "email-link",
+        "id": "email-link-reuse",
+        "method": "POST",
+        "note": "",
+        "path": "/identitytoolkit.googleapis.com/v1/accounts:signInWithEmailLink",
+        "productionExpectation": "UNOBSERVED",
+        "routeClass": "end-user"
+      },
+      {
+        "basis": "setup",
+        "body": {
+          "email": "$binding:accountA.email",
+          "requestType": "EMAIL_SIGNIN",
+          "returnOobLink": true
+        },
+        "delivery": "suppressed-by-returnOobLink",
+        "expectedLocal": {
+          "keys": [
+            "email",
+            "kind",
+            "oobCode",
+            "oobLink"
+          ],
+          "oobCodeReturn": "present",
+          "status": 200
+        },
+        "group": "email-link",
+        "id": "email-link-generate-second",
+        "method": "POST",
+        "note": "",
+        "path": "/identitytoolkit.googleapis.com/v1/projects/{project}/accounts:sendOobCode",
+        "productionExpectation": "UNOBSERVED",
+        "routeClass": "admin"
+      },
+      {
+        "basis": "control",
+        "body": {
+          "email": "$binding:accountB.email",
+          "oobCode": "$binding:emailLinkCodeSecond"
+        },
+        "delivery": "none",
+        "expectedLocal": {
+          "errorMessage": "INVALID_OOB_CODE",
+          "keys": [
+            "error"
+          ],
+          "status": 400
+        },
+        "group": "email-link",
+        "id": "email-link-mismatched-email",
+        "method": "POST",
+        "note": "Negative control: a valid code presented with another owned address.",
+        "path": "/identitytoolkit.googleapis.com/v1/accounts:signInWithEmailLink",
+        "productionExpectation": "UNOBSERVED",
+        "routeClass": "end-user"
+      },
+      {
+        "basis": "setup",
+        "body": {
+          "email": "$binding:accountB.email",
+          "requestType": "PASSWORD_RESET",
+          "returnOobLink": true
+        },
+        "delivery": "suppressed-by-returnOobLink",
+        "expectedLocal": {
+          "keys": [
+            "email",
+            "kind",
+            "oobCode",
+            "oobLink"
+          ],
+          "oobCodeReturn": "present",
+          "status": 200
+        },
+        "group": "deleted-user",
+        "id": "deleted-user-link-generate",
+        "method": "POST",
+        "note": "",
+        "path": "/identitytoolkit.googleapis.com/v1/projects/{project}/accounts:sendOobCode",
+        "productionExpectation": "UNOBSERVED",
+        "routeClass": "admin"
+      },
+      {
+        "basis": "setup",
+        "body": {
+          "localId": "$binding:accountB.localId"
+        },
+        "delivery": "none",
+        "expectedLocal": {
+          "keys": [
+            "kind"
+          ],
+          "status": 200
+        },
+        "group": "deleted-user",
+        "id": "account-b-delete",
+        "method": "POST",
+        "note": "",
+        "path": "/identitytoolkit.googleapis.com/v1/projects/{project}/accounts:delete",
+        "productionExpectation": "UNOBSERVED",
+        "routeClass": "admin"
+      },
+      {
+        "basis": "diagnostic",
+        "body": {
+          "newPassword": "$binding:accountB.nextPassword",
+          "oobCode": "$binding:deletedUserCode"
+        },
+        "delivery": "none",
+        "expectedLocal": {
+          "errorMessage": "USER_DISABLED",
+          "keys": [
+            "error"
+          ],
+          "status": 400
+        },
+        "group": "deleted-user",
+        "id": "reset-after-delete",
+        "method": "POST",
+        "note": "The local runtime reports USER_DISABLED for a code whose owner was deleted. The production error class is unobserved.",
+        "path": "/identitytoolkit.googleapis.com/v1/accounts:resetPassword",
+        "productionExpectation": "UNOBSERVED",
+        "routeClass": "end-user"
+      },
+      {
+        "basis": "diagnostic",
+        "body": {
+          "email": "$binding:unknownEmail",
+          "requestType": "PASSWORD_RESET",
+          "returnOobLink": true
+        },
+        "delivery": "suppressed-by-returnOobLink",
+        "expectedLocal": {
+          "keys": [
+            "email",
+            "kind"
+          ],
+          "oobCodeReturn": "absent",
+          "status": 200
+        },
+        "group": "unknown-email",
+        "id": "link-generate-unknown-email",
+        "method": "POST",
+        "note": "The local runtime answers 200 without a code for an address that never existed. Whether production refuses privileged link generation for an unknown address is unobserved.",
+        "path": "/identitytoolkit.googleapis.com/v1/projects/{project}/accounts:sendOobCode",
+        "productionExpectation": "UNOBSERVED",
+        "routeClass": "admin"
+      }
+    ],
+    "transport": "unbound",
+    "uniqueObligation": "code ownership, consumption, reuse and post-transition validity for PASSWORD_RESET, VERIFY_EMAIL and EMAIL_SIGNIN codes obtained without any message delivery",
+    "unobservedConditions": [
+      {
+        "id": "code-expiry",
+        "reason": "The published lifetime of an action code is measured in hours, so an expiry observation cannot fit a bounded single-iteration run.",
+        "wouldRequire": "an out-of-band wait outside this campaign envelope"
+      },
+      {
+        "id": "delivered-message",
+        "reason": "Every stage uses the privileged link-return path, so no message reaches a delivery network and no mailbox is read.",
+        "wouldRequire": "a mailbox oracle and an accepted delivery cost"
+      },
+      {
+        "id": "action-page-redirect",
+        "reason": "The hosted action page, continueUrl handling and dynamic-link rewriting are a separate browser-facing boundary.",
+        "wouldRequire": "a browser transport and a configured authorized domain"
+      },
+      {
+        "id": "tenant-scoped-codes",
+        "reason": "Tenant routing has its own declared campaign and configuration.",
+        "wouldRequire": "a tenant fixture and tenant configuration approval"
+      }
+    ]
+  },
+  "productionExecuted": false,
+  "status": "prepared-offline"
+}

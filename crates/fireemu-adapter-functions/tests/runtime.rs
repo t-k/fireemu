@@ -15,7 +15,7 @@ use fireemu_core_firestore::path::DocumentPath;
 use fireemu_core_firestore::store::{CommitVersion, Document, DocumentChange};
 use fireemu_core_firestore::value::Value as FsValue;
 use fireemu_core_functions::manifest::{
-    BlockingAuthEvent, TaskRateLimits, TaskRetryConfig, Trigger,
+    BlockingAuthEvent, TaskRateLimits, TaskRetryConfig, Trigger, DEFAULT_TIMEOUT_SECONDS,
 };
 use fireemu_core_functions::manifest::{DocumentEvent, FunctionGeneration, ObjectEvent};
 use fireemu_core_session::clock::VirtualClock;
@@ -26,6 +26,7 @@ use fireemu_core_types::time::{LogicalDuration, LogicalInstant};
 use serde_json::json;
 
 const START: LogicalInstant = LogicalInstant::from_unix_seconds(1_788_004_860);
+const RUNNER_HELLO_TIMEOUT: Duration = Duration::from_secs(60);
 
 #[tokio::test]
 async fn runner_log_frames_preserve_function_and_user_metadata() {
@@ -34,7 +35,7 @@ async fn runner_log_frames_preserve_function_and_user_metadata() {
         command: vec!["python3".to_owned(), script.to_owned()],
         cwd: None,
         env: Vec::new(),
-        hello_timeout: Duration::from_secs(20),
+        hello_timeout: RUNNER_HELLO_TIMEOUT,
     })
     .await
     .unwrap();
@@ -139,7 +140,7 @@ async fn start_with_runtime_options(
         command: vec!["python3".to_owned(), script.to_owned()],
         cwd: None,
         env: Vec::new(),
-        hello_timeout: Duration::from_secs(20),
+        hello_timeout: RUNNER_HELLO_TIMEOUT,
     };
     let runner = Runner::spawn_spec(&spec).await.unwrap();
     let mut manifest = parse_manifest(runner.hello().manifest.as_ref().unwrap()).unwrap();
@@ -169,6 +170,42 @@ async fn start_with_runtime_options(
     (runtime, clock)
 }
 
+async fn wait_for_runner(runtime: &FunctionsRuntime) {
+    let deadline = tokio::time::Instant::now() + RUNNER_HELLO_TIMEOUT + Duration::from_secs(1);
+    while !runtime.runner_alive() {
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "the runner did not restart within its hello timeout"
+        );
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+}
+
+async fn wait_for_ok_since(
+    runtime: &FunctionsRuntime,
+    cursor: fireemu_adapter_functions::runtime::HistoryCursor,
+) {
+    let deadline =
+        tokio::time::Instant::now() + Duration::from_secs(u64::from(DEFAULT_TIMEOUT_SECONDS) + 1);
+    loop {
+        let delta = runtime.history_since(Some(cursor));
+        assert!(!delta.resync, "the current-epoch cursor remains valid");
+        if delta
+            .records
+            .iter()
+            .any(|r| r.record.function == "ok" && r.record.outcome == "ok")
+        {
+            return;
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "the current-epoch completion was not recorded: {:?}",
+            delta.records
+        );
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+}
+
 async fn start_task_runtime(
     probe: &Path,
     configure: impl Fn(&str) -> TaskRateLimits,
@@ -192,15 +229,26 @@ async fn start_task_runtime_with_policy(
     max_running: usize,
     configure: impl Fn(&str) -> (TaskRetryConfig, TaskRateLimits),
 ) -> Arc<FunctionsRuntime> {
+    start_task_runtime_with_policy_and_env(probe, max_running, configure, Vec::new()).await
+}
+
+async fn start_task_runtime_with_policy_and_env(
+    probe: &Path,
+    max_running: usize,
+    configure: impl Fn(&str) -> (TaskRetryConfig, TaskRateLimits),
+    extra_env: Vec<(String, String)>,
+) -> Arc<FunctionsRuntime> {
     let script = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fake_runner.py");
+    let mut env = vec![(
+        "FIREEMU_FAKE_TASK_PROBE".to_owned(),
+        probe.display().to_string(),
+    )];
+    env.extend(extra_env);
     let spec = SpawnSpec {
         command: vec!["python3".to_owned(), script.to_owned()],
         cwd: None,
-        env: vec![(
-            "FIREEMU_FAKE_TASK_PROBE".to_owned(),
-            probe.display().to_string(),
-        )],
-        hello_timeout: Duration::from_secs(20),
+        env,
+        hello_timeout: Duration::from_secs(60),
     };
     let runner = Runner::spawn_spec(&spec).await.unwrap();
     let mut manifest = parse_manifest(runner.hello().manifest.as_ref().unwrap()).unwrap();
@@ -315,10 +363,23 @@ async fn reset_task_completion_cannot_release_a_new_generation_task() {
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
     let probe = dir.join("entries");
-    let runtime = start_task_runtime(&probe, |_| TaskRateLimits {
-        max_concurrent_dispatches: 1,
-        max_dispatches_per_second: 500.0,
-    })
+    let runtime = start_task_runtime_with_policy_and_env(
+        &probe,
+        4,
+        |_| {
+            (
+                TaskRetryConfig {
+                    max_attempts: 1,
+                    ..TaskRetryConfig::default()
+                },
+                TaskRateLimits {
+                    max_concurrent_dispatches: 1,
+                    max_dispatches_per_second: 500.0,
+                },
+            )
+        },
+        vec![("FIREEMU_FAKE_HELLO_DELAY_MS".to_owned(), "3000".to_owned())],
+    )
     .await;
 
     let body = task_body("same");
@@ -332,9 +393,28 @@ async fn reset_task_completion_cannot_release_a_new_generation_task() {
     runtime
         .enqueue_task("demo-app", "us-central1", "taskA", &body)
         .unwrap();
-    let _ = wait_for_task_entries(&probe, 2).await;
+    let restart_deadline =
+        tokio::time::Instant::now() + RUNNER_HELLO_TIMEOUT + Duration::from_secs(1);
+    while !runtime.runner_alive() {
+        assert_eq!(
+            runtime.task_queue_stats()["queue:demo-app-us-central1-taskA"]["numberOfTasks"],
+            1,
+            "a task accepted during reset stays pending without spending a delivery attempt"
+        );
+        assert!(
+            tokio::time::Instant::now() < restart_deadline,
+            "the runner did not restart within its hello timeout"
+        );
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    let entries = wait_for_task_entries(&probe, 2).await;
+    assert_eq!(entries.iter().filter(|entry| *entry == "taskA").count(), 2);
     tokio::time::sleep(Duration::from_millis(100)).await;
     assert_eq!(runtime.status()["tasksInFlight"], 1);
+    assert_eq!(
+        runtime.task_queue_stats()["queue:demo-app-us-central1-taskA"]["failedTasks"],
+        0.0
+    );
 
     std::fs::write(format!("{}.taskA.release", probe.display()), b"").unwrap();
     tokio::time::timeout(Duration::from_secs(4), async {
@@ -560,7 +640,7 @@ async fn multi_codebase_runtime_exposes_and_stops_every_current_runner() {
         command: vec!["python3".to_owned(), script.to_owned()],
         cwd: None,
         env: Vec::new(),
-        hello_timeout: Duration::from_secs(20),
+        hello_timeout: Duration::from_secs(60),
     };
     let first = Arc::new(Runner::spawn_spec(&spec).await.unwrap());
     let second = Arc::new(Runner::spawn_spec(&spec).await.unwrap());
@@ -639,7 +719,7 @@ async fn shutdown_rejects_late_reload_and_reset_runner_installation() {
         command: vec!["python3".to_owned(), script.to_owned()],
         cwd: None,
         env: Vec::new(),
-        hello_timeout: Duration::from_secs(20),
+        hello_timeout: Duration::from_secs(60),
     };
     let replacement = Arc::new(Runner::spawn_spec(&spec).await.unwrap());
     let error = runtime
@@ -672,7 +752,7 @@ async fn rejected_manifest_reload_keeps_the_eventarc_generation_and_table() {
         command: vec!["python3".to_owned(), script.to_owned()],
         cwd: None,
         env: Vec::new(),
-        hello_timeout: Duration::from_secs(20),
+        hello_timeout: Duration::from_secs(60),
     };
     let replacement = Arc::new(Runner::spawn_spec(&spawn).await.unwrap());
     let mut changed = runtime.manifest().clone();
@@ -720,7 +800,7 @@ async fn hot_reload_rejects_a_policy_only_blocking_auth_manifest_change() {
         command: vec!["python3".to_owned(), script.to_owned()],
         cwd: None,
         env: Vec::new(),
-        hello_timeout: Duration::from_secs(20),
+        hello_timeout: Duration::from_secs(60),
     };
     let replacement = Arc::new(Runner::spawn_spec(&spawn).await.unwrap());
     let mut changed = runtime.manifest().clone();
@@ -746,6 +826,56 @@ async fn hot_reload_rejects_a_policy_only_blocking_auth_manifest_change() {
     assert!(error.contains("changed its trigger manifest"), "{error}");
     assert_eq!(runtime.trigger_generation(), generation);
     assert!(!replacement.is_alive());
+    runtime.shutdown().await;
+}
+
+#[tokio::test]
+async fn blocking_auth_token_policy_follows_an_explicit_target() {
+    let (runtime, _clock) = start_with_policies_and_manifest(
+        fireemu_adapter_functions::runtime::OverlapPolicy::Allow,
+        fireemu_adapter_functions::runtime::CatchUpPolicy::All,
+        |manifest| {
+            let mut blocking = parse_manifest(&json!({"functions": [{
+                "name": "policyA",
+                "trigger": {"type": "blockingAuth", "eventType": "beforeCreate"}
+            }, {
+                "name": "policyB",
+                "trigger": {"type": "blockingAuth", "eventType": "beforeCreate", "accessToken": true}
+            }]}))
+            .unwrap();
+            manifest.functions.append(&mut blocking.functions);
+        },
+    )
+    .await;
+
+    assert!(
+        !runtime
+            .blocking_auth_token_policy(BlockingAuthEvent::BeforeCreate)
+            .access_token
+    );
+    assert!(
+        !runtime
+            .blocking_auth_token_policy_for(BlockingAuthEvent::BeforeCreate, Some("policyA"))
+            .access_token
+    );
+    assert!(
+        runtime
+            .blocking_auth_token_policy_for(BlockingAuthEvent::BeforeCreate, Some("policyB"))
+            .access_token
+    );
+    assert!(
+        !runtime
+            .blocking_auth_token_policy_for(BlockingAuthEvent::BeforeCreate, Some("missing"))
+            .access_token
+    );
+
+    let (target, admission) = runtime
+        .try_admit_blocking_auth_for(BlockingAuthEvent::BeforeCreate, Some("policyB"))
+        .unwrap()
+        .unwrap();
+    assert_eq!(target.function, "policyB");
+    assert!(target.token_policy.access_token);
+    drop(admission);
     runtime.shutdown().await;
 }
 
@@ -917,7 +1047,7 @@ async fn a_stuck_blocking_auth_invocation_recycles_its_runner() {
         .try_admit_blocking_auth(BlockingAuthEvent::BeforeCreate)
         .is_err());
 
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(3);
+    let deadline = tokio::time::Instant::now() + RUNNER_HELLO_TIMEOUT + Duration::from_secs(1);
     loop {
         let replacement = runtime.runner();
         if !Arc::ptr_eq(&retired, &replacement) && replacement.is_alive() {
@@ -930,9 +1060,9 @@ async fn a_stuck_blocking_auth_invocation_recycles_its_runner() {
         }
         assert!(
             tokio::time::Instant::now() < deadline,
-            "the stuck runner was not replaced"
+            "the stuck runner was not replaced within its hello contract"
         );
-        tokio::task::yield_now().await;
+        tokio::time::sleep(Duration::from_millis(20)).await;
     }
 }
 
@@ -981,7 +1111,7 @@ async fn a_blocking_restart_cannot_replace_a_newer_hot_reload_generation() {
         command: vec!["python3".to_owned(), script.to_owned()],
         cwd: None,
         env: Vec::new(),
-        hello_timeout: Duration::from_secs(20),
+        hello_timeout: Duration::from_secs(60),
     };
     let mut slow = fast.clone();
     slow.env = vec![("FIREEMU_FAKE_HELLO_DELAY_MS".to_owned(), "500".to_owned())];
@@ -1203,23 +1333,14 @@ async fn reset_discards_in_flight_work() {
     runtime.reset();
     assert!(runtime.is_idle());
     assert_eq!(runtime.status()["epoch"], 1);
-    for _ in 0..100 {
-        if runtime.runner_alive() {
-            break;
-        }
-        tokio::time::sleep(Duration::from_millis(100)).await;
-    }
-    assert!(runtime.runner_alive(), "the runner was restarted");
+    wait_for_runner(&runtime).await;
+    let cursor = runtime.history_since(None).cursor;
     runtime.on_commit(&commit(vec![DocumentChange {
         path: doc("items/c", 1).path,
         before: None,
         after: Some(doc("items/c", 1).into()),
     }]));
-    let _ = runtime.await_idle(Duration::from_secs(5)).await;
-    assert!(runtime
-        .history()
-        .iter()
-        .any(|r| r.function == "ok" && r.outcome == "ok" && r.event_id > 1));
+    wait_for_ok_since(&runtime, cursor).await;
     runtime.runner().shutdown().await;
 }
 
@@ -1230,7 +1351,7 @@ async fn reload_generation_wins_over_an_older_reset_respawn() {
         command: vec!["python3".to_owned(), script.to_owned()],
         cwd: None,
         env: Vec::new(),
-        hello_timeout: Duration::from_secs(20),
+        hello_timeout: Duration::from_secs(60),
     };
     let mut slow = fast.clone();
     slow.env = vec![("FIREEMU_FAKE_HELLO_DELAY_MS".to_owned(), "500".to_owned())];
@@ -1286,7 +1407,7 @@ async fn a_crash_fault_still_kills_a_runner_that_cannot_be_respawned() {
         command: vec!["python3".to_owned(), script.to_owned()],
         cwd: None,
         env: Vec::new(),
-        hello_timeout: Duration::from_secs(20),
+        hello_timeout: Duration::from_secs(60),
     };
     let runner = Runner::spawn_spec(&spec).await.unwrap();
     let manifest = parse_manifest(runner.hello().manifest.as_ref().unwrap()).unwrap();
@@ -2001,11 +2122,36 @@ async fn fault_plans_duplicate_delay_dead_letter_and_crash_the_runner() {
         .iter()
         .any(|r| r.function == "onUser" && r.outcome == "ok"));
     // Crash: the runner dies on the attempt, a fresh one takes over and the event succeeds.
+    let cursor = runtime.history_since(None).cursor;
     store.delete_user_by_id(uid.as_str()).unwrap();
     for e in store.take_user_events() {
         runtime.on_user_event(&e);
     }
-    assert!(runtime.await_idle(Duration::from_secs(20)).await.is_ok());
+    let deadline = tokio::time::Instant::now()
+        + RUNNER_HELLO_TIMEOUT
+        + Duration::from_secs(u64::from(DEFAULT_TIMEOUT_SECONDS) + 1);
+    loop {
+        let delta = runtime.history_since(Some(cursor));
+        assert!(!delta.resync, "the crash-retry cursor remains valid");
+        let outcomes: Vec<&str> = delta
+            .records
+            .iter()
+            .filter(|r| r.record.function == "onGone")
+            .map(|r| r.record.outcome.as_str())
+            .collect();
+        if outcomes.iter().any(|o| o.starts_with("runner gone"))
+            && outcomes.contains(&"ok")
+            && runtime.is_idle()
+        {
+            break;
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "the crash retry did not complete within its spawn and invocation contracts: {outcomes:?}; {}",
+            runtime.status()
+        );
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
     let on_gone: Vec<String> = runtime
         .history()
         .iter()
@@ -2245,28 +2391,14 @@ async fn a_completion_that_resolves_after_a_reset_appends_no_record() {
     );
 
     // FN-EPOCH-03: a current-epoch completion is still recorded.
-    for _ in 0..200 {
-        if runtime.runner_alive() {
-            break;
-        }
-        tokio::time::sleep(Duration::from_millis(50)).await;
-    }
+    wait_for_runner(&runtime).await;
+    let cursor = runtime.history_since(None).cursor;
     runtime.on_commit(&commit(vec![DocumentChange {
         path: doc("items/z", 1).path,
         before: None,
         after: Some(doc("items/z", 1).into()),
     }]));
-    let _ = runtime.await_idle(Duration::from_secs(5)).await;
-    assert!(
-        runtime
-            .history()
-            .iter()
-            .filter(|r| r.function == "ok" && r.outcome == "ok")
-            .count()
-            >= 2,
-        "{:?}",
-        runtime.history()
-    );
+    wait_for_ok_since(&runtime, cursor).await;
     runtime.runner().shutdown().await;
 }
 

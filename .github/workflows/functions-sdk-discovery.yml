@@ -3,6 +3,10 @@ name: functions-sdk-discovery
 on:
   workflow_dispatch:
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 permissions:
   contents: read
 
@@ -13,6 +17,7 @@ env:
 jobs:
   real-sdk-discovery:
     runs-on: ubuntu-latest
+    timeout-minutes: 120
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
@@ -32,7 +37,7 @@ jobs:
         run: cargo test -p fireemu --test functions_discovery -- --ignored --test-threads=1
       - name: run every real SDK multi-codebase scenario
         run: cargo test -p fireemu --test functions_codebases -- --ignored --test-threads=1
-      - name: verify same-size Functions reload and last-known-good retention
-        run: cargo test -p fireemu --test functions_environment a_same_size_rewrite_reloads_and_an_invalid_generation_keeps_the_last_good_one -- --exact --nocapture
+      - name: verify Functions environment, routing, secret isolation and reload
+        run: cargo test -p fireemu --test functions_environment -- --include-ignored
       - name: verify runner trust boundaries and log attribution
-        run: node --test tools/runner-node/blocking-error.test.mjs tools/runner-node/log-context.test.mjs tools/runner-node/inventory.test.mjs
+        run: node --test tools/runner-node/*.test.mjs

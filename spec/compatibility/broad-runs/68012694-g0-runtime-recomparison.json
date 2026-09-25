@@ -1,0 +1,93 @@
+{
+  "kind": "g0-batchwrite-runtime-recomparison-v1",
+  "status": "candidate",
+  "evidenceClass": "one authorized production observation plus saved-reference runtime recomparison",
+  "productionObservation": {
+    "executionCommit": "a35f85b464743d62344a3a58763d382b5b3838ce",
+    "startedAtUtc": "2026-09-13T14:52:31.781810+00:00",
+    "endedAtUtc": "2026-09-13T14:53:12.979168+00:00",
+    "elapsedSeconds": 41.19735813140869,
+    "exitCode": 0,
+    "productionResultFileSha256": "47672f4e3162b4a0ddfb7baaab622007602aeed6c1fa3d6e5e84034bcbb87772",
+    "manifestDigest": "13e97e0146c483ad6ab93f1dc8ecc4a8ea2615eaf481878047aec94f42fcecd1",
+    "observerDigest": "1045d0940439fdcb3d6ac228b1c408a49a98893785cd89ce13851e5096acaee5",
+    "comparisonContractDigest": "e20a4f5d2325a3c88306ca30407a3d5b8f224ce9d95f77490f9d0908ec22eb6c",
+    "recordingComplete": true,
+    "stateVerified": true,
+    "cleanupComplete": true,
+    "configurationUnchanged": true,
+    "operations": {
+      "total": 34,
+      "http": 33,
+      "credentialCommands": 1,
+      "observation": 18,
+      "recovery": 16,
+      "automaticRetries": 0
+    },
+    "ownedResources": {
+      "documents": 4,
+      "documentsConfirmedAbsent": 4,
+      "accounts": 0,
+      "configurationChanges": 0
+    },
+    "originalComparison": {
+      "compatibility": "mismatch",
+      "rows": 12,
+      "match": 10,
+      "mismatch": 2,
+      "causes": [
+        "Successful per-write BatchWrite statuses included default code and message fields locally.",
+        "The local unknown transaction-field rejection omitted the production google.rpc.BadRequest detail."
+      ]
+    }
+  },
+  "repairedLocalRun": {
+    "executionCommit": "68012694f81df504600f8e67301410c63ec9e2e7",
+    "artifactSha256": "7fa832d504a4e3faa7a69c90f7b912074f5a212d6eafec2987110425bbb93fdd",
+    "recordFileSha256": "ccce3036445aa38208238bf56aea62765b377f484dfd08e0a9e80c306f2f35d7",
+    "manifestFileSha256": "fa8db1de968d361fa3add6eef5e24a2512b6ab8b4baf80f21cd98041441a16bd",
+    "exitCode": 0,
+    "ownedProcessStopped": true,
+    "listenersClosed": true,
+    "recordingComplete": true,
+    "stateVerified": true,
+    "cleanupComplete": true,
+    "unrecovered": 0
+  },
+  "recomparison": {
+    "mode": "g0-runtime-recomparison",
+    "comparisonFileSha256": "6faf04d7141f66943c6c9774aba76c3c434bd6501ef7ae3f895153a2677bfdfa",
+    "comparisonContractDigest": "bdd428f4f5783d42906b0238484ab54d3ab95f36d54c22a162e860f2bdf909f2",
+    "baseAdmissionContractDigest": "d25c7d35f23e481bbbcca3e44577111f9af2a05595e177e4cbe9b73d2323dde8",
+    "normalizationVersion": "shared-g0-batchwrite-status-resource-v1",
+    "normalizerImplementationDigest": "5c9eb50d73c57d36cb69f705fc9592613460e07406d7c942b365e3c9399a5ad9",
+    "compatibility": "match",
+    "rows": [
+      {"id": "partial/0", "compatibility": "match"},
+      {"id": "partial/1", "compatibility": "match"},
+      {"id": "partial/2", "compatibility": "match"},
+      {"id": "partial/3", "compatibility": "match"},
+      {"id": "partial/4", "compatibility": "match"},
+      {"id": "partial/5", "compatibility": "match"},
+      {"id": "partial/6", "compatibility": "match"},
+      {"id": "partial/7", "compatibility": "match"},
+      {"id": "transaction-field/0", "compatibility": "match"},
+      {"id": "transaction-field/1", "compatibility": "match"},
+      {"id": "transaction-field/2", "compatibility": "match"},
+      {"id": "transaction-field/3", "compatibility": "match"}
+    ]
+  },
+  "review": {
+    "correctness": "approved after the local safety/state completeness correction",
+    "security": "approved after the same correction",
+    "mustFix": 0,
+    "shouldFix": 0
+  },
+  "limitations": [
+    "The production result is a candidate observation, not a result approval or a claim about every BatchWrite condition.",
+    "The original 10-match/2-mismatch comparison is immutable and remains the observation-time result.",
+    "The runtime recomparison uses the saved production responses; it did not perform another production operation.",
+    "The old local record digest remains provenance and does not authorize the repaired local runtime.",
+    "Private raw receipts, permission inputs, nonces, API-key metadata and ownership journals are not published."
+  ]
+}

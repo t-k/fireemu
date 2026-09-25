@@ -4,20 +4,20 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use fireemu_adapter_http::signing::RsaSigner;
-#[cfg(any(test, target_os = "linux", target_os = "macos"))]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 use fireemu_core_types::hash::{hex_lower, sha256};
-#[cfg(any(test, target_os = "linux", target_os = "macos"))]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 use zeroize::Zeroizing;
 
-#[cfg(any(test, target_os = "linux", target_os = "macos"))]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 const CACHE_MAGIC: &[u8; 16] = b"fireemu-rsa-v1\0\0";
-#[cfg(any(test, target_os = "linux", target_os = "macos"))]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 const CACHE_DOMAIN: &[u8] = b"fireemu/session-rsa/chacha20-rsa2048-e65537/v1\0";
 #[cfg(any(test, target_os = "linux", target_os = "macos"))]
 const CACHE_MAX_BYTES: u64 = 64 * 1024;
-#[cfg(any(test, target_os = "linux", target_os = "macos"))]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 const CACHE_MAX_BYTES_USIZE: usize = 64 * 1024;
-#[cfg(any(test, target_os = "linux", target_os = "macos"))]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 const MANAGED_DIRECTORIES: [&str; 3] = ["fireemu", "session-rsa", "v1"];
 
 /// A session signer and whether it came from a validated cache entry.
@@ -48,7 +48,7 @@ fn secure_file_metadata(metadata: CacheFileMetadata, effective_uid: u32) -> bool
         && metadata.size <= CACHE_MAX_BYTES
 }
 
-#[cfg(any(test, target_os = "linux", target_os = "macos"))]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 fn seed_digest(seed: u64) -> [u8; 32] {
     let mut input = Vec::with_capacity(CACHE_DOMAIN.len() + 8);
     input.extend_from_slice(CACHE_DOMAIN);
@@ -56,12 +56,12 @@ fn seed_digest(seed: u64) -> [u8; 32] {
     sha256(&input)
 }
 
-#[cfg(any(test, target_os = "linux", target_os = "macos"))]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 fn entry_name(seed: u64) -> String {
     format!("{}-rsa2048-e65537.pk8", hex_lower(&seed_digest(seed)))
 }
 
-#[cfg(test)]
+#[cfg(all(test, any(target_os = "linux", target_os = "macos")))]
 fn cache_entry_path(root: &Path, seed: u64) -> PathBuf {
     MANAGED_DIRECTORIES
         .iter()
@@ -155,7 +155,7 @@ fn load_or_generate_at(_root: &Path, seed: u64) -> Result<CachedSessionSigner, S
     generate(seed)
 }
 
-#[cfg(any(test, target_os = "linux", target_os = "macos"))]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 fn encode_envelope(seed: u64, der: &[u8]) -> Zeroizing<Vec<u8>> {
     let digest = seed_digest(seed);
     let Ok(length) = u32::try_from(der.len()) else {
@@ -173,7 +173,7 @@ fn encode_envelope(seed: u64, der: &[u8]) -> Zeroizing<Vec<u8>> {
     envelope
 }
 
-#[cfg(any(test, target_os = "linux", target_os = "macos"))]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 fn decode_envelope(seed: u64, envelope: &[u8]) -> Result<Arc<RsaSigner>, ()> {
     const PREFIX: usize = 16 + 32 + 4;
     const SUFFIX: usize = 32;
@@ -380,12 +380,9 @@ mod tests {
 
     use fireemu_core_auth::jwt::IdTokenSigner as _;
 
-    use super::{
-        cache_base_for, cache_entry_path, load_or_generate_at, secure_file_metadata,
-        CacheFileMetadata,
-    };
+    use super::{cache_base_for, load_or_generate_at, secure_file_metadata, CacheFileMetadata};
     #[cfg(any(target_os = "linux", target_os = "macos"))]
-    use super::{entry_name, load_entry, open_cache_directory, EntryLoad};
+    use super::{cache_entry_path, entry_name, load_entry, open_cache_directory, EntryLoad};
     #[cfg(unix)]
     use crate::import_export::trusted_temp::TrustedTempDir;
 
@@ -411,7 +408,7 @@ mod tests {
     fn cache_base_requires_an_absolute_nonempty_environment_path() {
         let absolute_home =
             std::path::PathBuf::from(std::path::MAIN_SEPARATOR_STR).join("home/test");
-        #[cfg(not(target_os = "macos"))]
+        #[cfg(all(unix, not(target_os = "macos")))]
         let absolute_xdg = std::path::PathBuf::from(std::path::MAIN_SEPARATOR_STR).join("cache");
 
         #[cfg(target_os = "macos")]
@@ -455,6 +452,7 @@ mod tests {
         }
     }
 
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     #[test]
     fn a_cache_miss_publishes_one_owner_only_entry_and_the_next_load_hits_it() {
         let root = scratch("hit");
@@ -471,6 +469,19 @@ mod tests {
             assert_eq!(metadata.permissions().mode() & 0o7777, 0o600);
         }
         let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+    #[test]
+    fn unsupported_cache_platforms_generate_without_publishing_or_claiming_hits() {
+        let root = scratch("no-persistent-cache");
+        let first = load_or_generate_at(&root, 7).unwrap();
+        let second = load_or_generate_at(&root, 7).unwrap();
+        assert!(!first.hit);
+        assert!(!second.hit);
+        assert_eq!(first.signer.kid(), second.signer.kid());
+        assert_eq!(std::fs::read_dir(&root).unwrap().count(), 0);
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[cfg(any(target_os = "linux", target_os = "macos"))]

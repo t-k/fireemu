@@ -1,0 +1,326 @@
+name: compatibility-inventory
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      run_retired:
+        description: Also run the retired suites listed in RETIRED_SUITES and the frozen O7-era history check.
+        type: boolean
+        default: false
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  # Retired from the required compat-broad shards (owner decision 2026-09-25, the
+  # FS-DATA-WRITE CI retirement directive). These are tests of the O7/O8 production
+  # campaigns for fireemu-35fe6 that the 2026-09-23 sandbox directive stopped; the
+  # sandbox corpora replaced them. Code and published records stay; the
+  # compat-broad-retired job runs them on demand (workflow_dispatch, run_retired).
+  # Each entry is one file whose failure was traced to one of:
+  #   - 866bb0634 moving the shared request_bytes_preflight.py to the sandbox project
+  #     (the file passes at 866bb0634^ and fails at 866bb0634);
+  #   - an O7/O8 local shadow or runtime binding that predates later source changes
+  #     (already failing before 866bb0634);
+  #   - an O7/O8 campaign test that fails only on the CI runner;
+  #   - an O7/O8 campaign test that alone runs longer than the 45-minute job limit
+  #     (test_request_bytes_admission.py, about 56 minutes on the CI runner);
+  #   - a lane's O2/O8 campaign for fireemu-35fe6 that the lane now closes on the
+  #     sandbox instead (owner decision 2026-09-25, AUTH-MFA:
+  #     auth-totp-enroll/test_mfa_shadow_binding.py, whose shadow is not re-taken);
+  #   - the FS-RULES O5 production campaign for fireemu-35fe6 (fs-rules-publication), which
+  #     the FS-RULES sandbox harness (conformance/src/fs-rules, fireemu-oracle-idp) replaced
+  #     as the lane's closure evidence (owner decision 2026-09-25). Its collector tests
+  #     predate the 2026-09-22 Rules management session requirement, and
+  #     test_o5_user_token_comparator_v2.py takes about 6 hours, longer than the
+  #     compat-broad-retired job allows: run it by hand, in chunks of tests.
+  # tools/compat-inventory/closure_records.py refuses a closure that cites a path here,
+  # and tools/compat-inventory/broad_shards.py leaves these files out of the shards.
+  RETIRED_SUITES: |
+    tools/compat-broad/auth-credential-tokens/test_credential_bootstrap.py
+    tools/compat-broad/auth-credential-tokens/test_credential_production.py
+    tools/compat-broad/auth-totp-enroll/test_mfa_shadow_binding.py
+    tools/compat-broad/fs-commit-transform-limits/test_commit_wire_archive.py
+    tools/compat-broad/fs-commit-transform-limits/test_owned_transform_runner.py
+    tools/compat-broad/fs-query-partition-cursor/test_partition_cursor_production.py
+    tools/compat-broad/fs-query-partition-cursor/test_partition_cursor_production_abnormal_exit.py
+    tools/compat-broad/fs-request-bytes-boundary/test_request_bytes_admission.py
+    tools/compat-broad/fs-request-bytes-boundary/test_request_bytes_bounded_compare.py
+    tools/compat-broad/fs-request-bytes-boundary/test_request_bytes_deadlines.py
+    tools/compat-broad/fs-request-bytes-boundary/test_request_bytes_evidence.py
+    tools/compat-broad/fs-request-bytes-boundary/test_request_bytes_production.py
+    tools/compat-broad/fs-request-bytes-boundary/test_request_bytes_recovery_campaign.py
+    tools/compat-broad/fs-request-bytes-boundary/test_request_bytes_sentinel.py
+    tools/compat-broad/fs-rules-publication/test_o5_collector_journal_recovery.py
+    tools/compat-broad/fs-rules-publication/test_o5_local_boundary.py
+    tools/compat-broad/fs-rules-publication/test_o5_parent_integrity.py
+    tools/compat-broad/fs-rules-publication/test_o5_recovery_integrity.py
+    tools/compat-broad/fs-rules-publication/test_o5_rules_case.py
+    tools/compat-broad/fs-rules-publication/test_o5_rules_comparator.py
+    tools/compat-broad/fs-rules-publication/test_o5_rules_manifest.py
+    tools/compat-broad/fs-rules-publication/test_o5_rules_shadow.py
+    tools/compat-broad/fs-rules-publication/test_o5_setup_recovery.py
+    tools/compat-broad/fs-rules-publication/test_o5_user_token_campaign.py
+    tools/compat-broad/fs-rules-publication/test_o5_user_token_case.py
+    tools/compat-broad/fs-rules-publication/test_o5_user_token_collector.py
+    tools/compat-broad/fs-rules-publication/test_o5_user_token_collector_bound.py
+    tools/compat-broad/fs-rules-publication/test_o5_user_token_comparator.py
+    tools/compat-broad/fs-rules-publication/test_o5_user_token_comparator_v2.py
+    tools/compat-broad/fs-rules-publication/test_o5_user_token_descriptor.py
+    tools/compat-broad/fs-rules-publication/test_o5_user_token_https_worker.py
+    tools/compat-broad/fs-rules-publication/test_o5_user_token_identity_proof.py
+    tools/compat-broad/fs-rules-publication/test_o5_user_token_production.py
+    tools/compat-broad/fs-rules-publication/test_o5_user_token_production_bridge.py
+    tools/compat-broad/fs-rules-publication/test_o5_user_token_remote_transport.py
+    tools/compat-broad/fs-rules-publication/test_o5_user_token_semantic_admission.py
+    tools/compat-broad/fs-rules-publication/test_o5_user_token_semantics.py
+    tools/compat-broad/fs-rules-publication/test_o5_user_token_shadow.py
+    tools/compat-broad/fs-rules-publication/test_o5_user_token_spec.py
+    tools/compat-broad/fs-write-limits/test_limits_03_baseline_prep.py
+    tools/compat-broad/fs-write-limits/test_limits_03_failed_apply_recovery.py
+    tools/compat-broad/fs-write-limits/test_limits_03_held_recovery.py
+    tools/compat-broad/fs-write-limits/test_limits_03_index_hosting.py
+    tools/compat-broad/fs-write-limits/test_limits_03_o8.py
+    tools/compat-broad/fs-write-limits/test_package_03.py
+    tools/compat-broad/fs-write-txn/test_txn_expiry_evidence.py
+    tools/compat-broad/fs-write-txn/test_txn_expiry_production.py
+    tools/compat-broad/production-admission/test_auth_source_refusal.py
+    tools/compat-broad/production-admission/test_reservations.py
+
+jobs:
+  closure-record-integrity:
+    # Every record a current closure cites must exist and match its pinned digest, and
+    # the closure contracts (saved comparisons, fixtures, recipe digests) must hold.
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - name: Install uv
+        run: python3 -m pip install uv==0.11.28
+      - name: Check cited records and the shard plan
+        run: |
+          uv run --project tools/compat-inventory --locked --python 3.12 tools/compat-inventory/closure_records.py --check
+          uv run --project tools/compat-inventory --locked --python 3.12 -m pytest tools/compat-inventory/test_closure_records.py tools/compat-inventory/test_broad_shards.py -q
+          uv run --project tools/compat-inventory --locked --python 3.12 tools/compat-inventory/broad_shards.py --shards 7
+      - uses: pnpm/action-setup@f40ffcd9367d9f12939873eb1018b921a783ffaa
+        with:
+          version: 10.32.1
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: 24
+      - name: Run the closure contracts
+        run: |
+          pnpm -C conformance install --frozen-lockfile
+          node --test conformance/src/*-closure.test.mjs
+
+  feature-inventory-integrity:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - name: Install the repository-pinned Rust toolchain
+        run: rustup show active-toolchain
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+        with:
+          key: compatibility-inventory
+      - name: Validate requirement references and generated feature tables
+        run: cargo run --locked -p compat-check
+      - name: Test the feature inventory integrity gate
+        run: cargo test --locked -p compat-check
+      - name: Test current update field authorization and maximum boundary
+        run: |
+          cargo test --locked -p fireemu-adapter-http --test identity_toolkit admin_fields
+          cargo test --locked -p fireemu-adapter-http --test identity_toolkit password_maximum_update
+          cargo test --locked -p fireemu-adapter-http --test identity_toolkit disabled_account_preserves
+          cargo test --locked -p fireemu-core-auth --test jwt disabled_user
+          cargo test --locked -p fireemu-core-auth deleted_refresh
+          cargo test --locked -p fireemu-adapter-http --test identity_toolkit deleted_account_credentials
+          cargo test --locked -p fireemu-adapter-http --test identity_toolkit lookup_authorization
+          cargo test --locked -p fireemu-adapter-http --test auth_flows oob_authorization
+          cargo test --locked -p fireemu-adapter-http --test auth_flows two_party
+          cargo test --locked -p fireemu-adapter-http --test auth_flows pending_retry
+          cargo test --locked -p fireemu-core-auth --test mfa pending_retry
+  offline-acquisition-integrity:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Install uv
+        run: python3 -m pip install uv==0.11.28
+      - name: Validate the bounded aggregation evidence bundle
+        run: uv run --project tools/compat-inventory --locked --python 3.12 tools/compat-inventory/aggregation_evidence.py --check
+      - name: Check the pending-revocation recorder contract and its published receipt
+        run: |
+          uv run --project tools/compat-inventory --locked --python 3.12 -m pytest tools/auth-pending-revocation -q
+          uv run --project tools/compat-inventory --locked --python 3.12 tools/publish-auth-pending-revocation.py --check
+          uv run --project tools/compat-inventory --locked --python 3.12 tools/auth-pending-revocation-approval.py --check
+          uv run --project tools/compat-inventory --locked --python 3.12 -m pytest tools/auth-blocking-disable -q
+          uv run --project tools/compat-inventory --locked --python 3.12 tools/publish-auth-blocking-disable.py --check
+          uv run --project tools/compat-inventory --locked --python 3.12 tools/auth-blocking-disable-approval.py --check
+          uv run --project tools/compat-inventory --locked --python 3.12 tools/publish-auth-blocking-disable-comparison.py --check
+          uv run --project tools/compat-inventory --locked --python 3.12 -m pytest tools/auth-disabled-admin-update -q
+          uv run --project tools/compat-inventory --locked --python 3.12 tools/publish-auth-disabled-admin-update.py --check
+          uv run --project tools/compat-inventory --locked --python 3.12 tools/publish-auth-pending-revocation-comparison.py --check
+          uv run --project tools/compat-inventory --locked --python 3.12 -m pytest tools/auth-blocking-create-disable tools/auth-blocking-readback -q
+          uv run --project tools/compat-inventory --locked --python 3.12 -m pytest tools/auth-refusal-precedence -q
+          uv run --project tools/compat-inventory --locked --python 3.12 -m pytest tools/auth-pending-triggers -q
+          uv run --project tools/compat-inventory --locked --python 3.12 -m pytest tools/auth-mfa-start-disabled -q
+          uv run --project tools/compat-inventory --locked --python 3.12 tools/publish-auth-mfa-start-disabled.py --check
+          uv run --project tools/compat-inventory --locked --python 3.12 tools/publish-auth-mfa-start-disabled-comparison.py --check
+          uv run --project tools/compat-inventory --locked --python 3.12 tools/auth-mfa-start-disabled-approval.py --check
+          uv run --project tools/compat-inventory --locked --python 3.12 tools/auth-mfa-start-disabled-comparison-approval.py --check
+          uv run --project tools/compat-inventory --locked --python 3.12 tools/publish-auth-pending-triggers.py --trigger client-password-change --check
+          uv run --project tools/compat-inventory --locked --python 3.12 tools/publish-auth-pending-triggers-comparison.py --trigger client-password-change --check
+          uv run --project tools/compat-inventory --locked --python 3.12 tools/auth-pending-trigger-approval.py --trigger client-password-change --check
+          uv run --project tools/compat-inventory --locked --python 3.12 tools/auth-pending-trigger-comparison-approval.py --trigger client-password-change --check
+          uv run --project tools/compat-inventory --locked --python 3.12 tools/publish-auth-pending-triggers.py --trigger admin-password-update --check
+          uv run --project tools/compat-inventory --locked --python 3.12 tools/publish-auth-pending-triggers-comparison.py --trigger admin-password-update --check
+          uv run --project tools/compat-inventory --locked --python 3.12 tools/auth-pending-trigger-approval.py --trigger admin-password-update --check
+          uv run --project tools/compat-inventory --locked --python 3.12 tools/auth-pending-trigger-comparison-approval.py --trigger admin-password-update --check
+          uv run --project tools/compat-inventory --locked --python 3.12 tools/publish-auth-pending-triggers.py --trigger password-reset --check
+          uv run --project tools/compat-inventory --locked --python 3.12 tools/publish-auth-pending-triggers-comparison.py --trigger password-reset --check
+          uv run --project tools/compat-inventory --locked --python 3.12 tools/auth-pending-trigger-approval.py --trigger password-reset --check
+          uv run --project tools/compat-inventory --locked --python 3.12 tools/auth-pending-trigger-comparison-approval.py --trigger password-reset --check
+          uv run --project tools/compat-inventory --locked --python 3.12 tools/publish-auth-pending-triggers.py --trigger provider-unlink --check
+          uv run --project tools/compat-inventory --locked --python 3.12 tools/publish-auth-pending-triggers-comparison.py --trigger provider-unlink --check
+          uv run --project tools/compat-inventory --locked --python 3.12 tools/auth-pending-trigger-approval.py --trigger provider-unlink --check
+          uv run --project tools/compat-inventory --locked --python 3.12 tools/auth-pending-trigger-comparison-approval.py --trigger provider-unlink --check
+          uv run --project tools/compat-inventory --locked --python 3.12 tools/publish-auth-refusal-precedence.py --check
+          uv run --project tools/compat-inventory --locked --python 3.12 tools/auth-refusal-precedence-approval.py --check
+          uv run --project tools/compat-inventory --locked --python 3.12 tools/publish-auth-refusal-precedence-comparison.py --check
+          uv run --project tools/compat-inventory --locked --python 3.12 tools/auth-refusal-precedence-comparison-approval.py --check
+          uv run --project tools/compat-inventory --locked --python 3.12 tools/publish-auth-blocking-create-disable-r1.py --check
+          uv run --project tools/compat-inventory --locked --python 3.12 tools/publish-auth-blocking-create-disable.py --check
+          uv run --project tools/compat-inventory --locked --python 3.12 tools/publish-auth-blocking-readback.py --check
+          uv run --project tools/compat-inventory --locked --python 3.12 tools/publish-auth-blocking-readback-comparison.py --check
+          uv run --project tools/compat-inventory --locked --python 3.12 tools/publish-auth-blocking-create-disable-comparison.py --check
+          uv run --project tools/compat-inventory --locked --python 3.12 tools/publish-auth-disabled-admin-update-comparison.py --check
+          uv run --project tools/compat-inventory --locked --python 3.12 tools/auth-disabled-admin-update-approval.py --check
+          uv run --project tools/compat-inventory --locked --python 3.12 tools/auth-disabled-admin-update-comparison-approval.py --check
+          uv run --project tools/compat-inventory --locked --python 3.12 tools/auth-blocking-create-disable-approval.py --check
+          uv run --project tools/compat-inventory --locked --python 3.12 tools/auth-blocking-readback-approval.py --check
+          uv run --project tools/compat-inventory --locked --python 3.12 tools/auth-blocking-disable-comparison-approval.py --check
+          uv run --project tools/compat-inventory --locked --python 3.12 tools/auth-blocking-readback-comparison-approval.py --check
+          uv run --project tools/compat-inventory --locked --python 3.12 tools/auth-blocking-create-disable-comparison-approval.py --check
+      - name: Check lifetime corpora and published candidates
+        run: |
+          uv run --project tools/compat-inventory --locked --python 3.12 -m pytest tools/auth-pending-lifetime tools/auth-pending-lifetime-boundary tools/auth-pending-lifetime-window -q
+          for publisher in \
+            publish-auth-pending-lifetime \
+            publish-auth-pending-lifetime-comparison \
+            publish-auth-pending-lifetime-boundary \
+            publish-auth-pending-lifetime-boundary-comparison
+          do
+            uv run --project tools/compat-inventory --locked --python 3.12 "tools/${publisher}.py" --check
+          done
+      # The O7-era frozen-bytes check (history.py) moved to compat-broad-retired: it is
+      # not the basis of any current closure (see RETIRED_SUITES above for the decision).
+      - name: Check later approved observations at their fixed historical source
+        run: uv run --project tools/compat-inventory --locked --python 3.12 tools/compat-history/password_history.py --check
+      - name: Test current historical isolation
+        run: uv run --project tools/compat-inventory --locked --python 3.12 -m pytest tools/compat-history -q
+      - name: Check immutable maximum observations and approval at their recorded source
+        run: uv run --project tools/compat-inventory --locked --python 3.12 tools/compat-history/maximum_history.py --check
+      - name: Check original Unicode mismatch at its fixed historical source
+        run: uv run --project tools/compat-inventory --locked --python 3.12 tools/compat-history/unicode_history.py --check
+      - name: Check pre-disable-fix observations and approvals at their fixed source
+        run: uv run --project tools/compat-inventory --locked --python 3.12 tools/compat-history/disabled_history.py --check
+      - name: Check original deletion mismatch and prior approval at their fixed source
+        run: uv run --project tools/compat-inventory --locked --python 3.12 tools/compat-history/deleted_history.py --check
+      - name: Check approved deletion recheck at its fixed pre-lookup-fix source
+        run: uv run --project tools/compat-inventory --locked --python 3.12 tools/compat-history/lookup_history.py --check
+
+  denominator-catalog-integrity:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Install uv
+        run: python3 -m pip install uv==0.11.28
+      - name: Check protobuf and production denominators
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+        run: |
+          uv run --project tools/compat-inventory --locked --python 3.12 -m pytest tools/compat-inventory/test_protobuf_denominator.py -q
+          uv run --project tools/compat-inventory --locked --python 3.12 tools/compat-inventory/protobuf_denominator.py --check
+          uv run --project tools/compat-inventory --locked --python 3.12 -m pytest tools/compat-inventory/test_production_denominator.py -q
+          if [ -n "$BASE_SHA" ]; then
+            uv run --project tools/compat-inventory --locked --python 3.12 tools/compat-inventory/production_denominator.py --check --check-base "$BASE_SHA"
+          else
+            uv run --project tools/compat-inventory --locked --python 3.12 tools/compat-inventory/production_denominator.py --check
+          fi
+          uv run --project tools/compat-inventory --locked --python 3.12 -m pytest tools/compat-inventory/test_production_denominator_v2.py -q
+          uv run --project tools/compat-inventory --locked --python 3.12 tools/compat-inventory/production_denominator_v2.py --check
+          uv run --project tools/compat-inventory --locked --python 3.12 tools/compat-inventory/production_denominator_v2_auth_time.py --check
+          uv run --project tools/compat-inventory --locked --python 3.12 -m pytest tools/compat-inventory/test_mutation_cargo.py -q
+      - name: Check broad catalog and batch adapter
+        run: |
+          uv run --project tools/compat-inventory --locked --python 3.12 tools/compat-broad/broad.py --check-catalog
+          uv run --project tools/compat-inventory --locked --python 3.12 tools/compat-broad/batch_adapter.py --manifest spec/compatibility/broad-batch-candidate.json
+
+  compat-broad-tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        # Shards are planned from measured per-file durations
+        # (tools/compat-inventory/broad-test-durations.json); broad_shards.py refuses a
+        # plan in which any shard would need more than 35 minutes, and runs a file longer
+        # than 28 minutes as chunks of whole tests. The longest shard is one file that
+        # cannot be split further (about 27 minutes); seven shards leave headroom.
+        shard: [0, 1, 2, 3, 4, 5, 6]
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Install uv
+        run: python3 -m pip install uv==0.11.28
+      - name: Run duration-balanced broad-test shard
+        env:
+          PYTEST_SHARD: ${{ matrix.shard }}
+        run: |
+          uv run --project tools/compat-inventory --locked --python 3.12 tools/compat-inventory/broad_shards.py --shards 7 --shard "$PYTEST_SHARD" > "$RUNNER_TEMP/shard-files.txt"
+          mapfile -t files < "$RUNNER_TEMP/shard-files.txt"
+          echo "shard $PYTEST_SHARD: ${#files[@]} files"
+          uv run --project tools/compat-inventory --locked --python 3.12 -m pytest "${files[@]}" -q
+
+  compat-broad-retired:
+    # On demand only: the retired O7/O8 campaign suites and the frozen O7-era history
+    # check. Not a required check.
+    if: github.event_name == 'workflow_dispatch' && inputs.run_retired
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Install uv
+        run: python3 -m pip install uv==0.11.28
+      - name: Run the retired suites
+        run: |
+          uv run --project tools/compat-inventory --locked --python 3.12 tools/compat-inventory/broad_shards.py --shards 1 --retired > "$RUNNER_TEMP/retired-files.txt"
+          mapfile -t files < "$RUNNER_TEMP/retired-files.txt"
+          uv run --project tools/compat-inventory --locked --python 3.12 -m pytest "${files[@]}" -q
+      - name: Check immutable historical tools, observations and approvals
+        if: always()
+        run: uv run --project tools/compat-inventory --locked --python 3.12 tools/compat-history/history.py --check

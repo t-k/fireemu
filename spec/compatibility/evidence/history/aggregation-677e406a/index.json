@@ -1,0 +1,19 @@
+{
+  "schemaVersion": 1,
+  "scope": {
+    "feature": "FS-AGGREGATIONS",
+    "edition": "STANDARD",
+    "apiMode": "FIRESTORE_NATIVE",
+    "transport": "REST",
+    "profile": "strict",
+    "rules": "admin-bypass"
+  },
+  "approvals": [],
+  "files": {
+    "corpus.json": "88e43393f46276ae390febb9ebd4a04dacaa043d7e6bc040f45c85cba72f27c3",
+    "local.json": "7fcd5bb5f087d4ff78e3b021e9faae86de02cf503750c1f9b8b2f643526b865b",
+    "production.json": "f012ccccfa598bd53beb38d7d3d447fdf22aafe397de36ccaf787e8b11dfad06",
+    "source-review.json": "bf3deb5fc349f28d40abd28fa23e2814b4efbc12b7b3d0e9910ef330b860590f",
+    "source.html.gz": "d4d0ede79ab62a0a7edced0454f85d57852627eafc983d635ef6878d465e060b"
+  }
+}

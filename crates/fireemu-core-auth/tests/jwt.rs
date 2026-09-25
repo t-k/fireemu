@@ -84,8 +84,42 @@ fn unsigned_token_has_three_parts_and_round_trips() {
     assert_eq!(decoded.header_alg, "none");
     assert_eq!(decoded.header_typ, "JWT");
     assert_eq!(decoded.payload_json, claims.canonical_json());
+    assert!(
+        !decoded.payload_json.contains("fireemu_session_epoch"),
+        "ordinary production-shaped Auth stores omit the private control-session claim"
+    );
     assert_eq!(decoded.sub(), Some(uid.as_str()));
     assert_eq!(decoded.exp(), Some(claims.exp));
+}
+
+#[test]
+fn disabled_user_is_distinct_from_revocation_and_does_not_bypass_token_validation() {
+    let mut s = AuthStore::new("demo-app", SplitMix64::new(1), TotpPolicy::default());
+    let uid = s
+        .create_user(NewUser::email("disabled@example.com"), t0())
+        .unwrap();
+    let token = encode_unsigned(&s.id_token_claims(&uid, None, t0()).unwrap());
+    s.user_mut(&uid).unwrap().disabled = true;
+    assert_eq!(
+        verify_id_token(&token, &s, t0()),
+        Err(JwtError::UserDisabled)
+    );
+    assert_eq!(
+        verify_id_token("invalid", &s, t0()),
+        Err(JwtError::Malformed)
+    );
+    let expired = t0()
+        .checked_add(LogicalDuration::from_seconds(3600))
+        .unwrap();
+    assert_eq!(verify_id_token(&token, &s, expired), Err(JwtError::Expired));
+    s.user_mut(&uid).unwrap().disabled = false;
+    assert!(verify_id_token(&token, &s, t0()).is_ok());
+    s.revoke_tokens(
+        &uid,
+        t0().checked_add(LogicalDuration::from_seconds(2)).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(verify_id_token(&token, &s, t0()), Err(JwtError::Revoked));
 }
 
 #[test]

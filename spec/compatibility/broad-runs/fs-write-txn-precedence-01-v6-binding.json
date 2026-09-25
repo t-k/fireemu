@@ -1,0 +1,87 @@
+{
+  "kind": "firestore-write-transaction-oracle-binding-v1",
+  "campaignId": "FS-WRITE-TXN-PRECEDENCE-01-V6",
+  "status": "BLOCKED_OWNER",
+  "productionExecuted": false,
+  "manifest": {
+    "path": "spec/compatibility/broad-runs/fs-write-txn-precedence-01-v6.json",
+    "sha256": "854bdbf4adb8ba6d643129d5c8a2ccc737b7f071a6c078e9147d1f59630d6021"
+  },
+  "source": {
+    "commit": "97ef1d3a8fb52938bbe26b1da9c85b9c5b430dd3",
+    "artifactSha256": "d8b6e59ce625e4593eaf05fed7394f4e2c561a72efdecd39977de4115761d8cc",
+    "codeSourceHead": "97ef1d3a8fb52938bbe26b1da9c85b9c5b430dd3"
+  },
+  "collector": {
+    "sharedGate": {
+      "path": "tools/compat-broad/shared_gate.py",
+      "sha256": "f4724b420f1a2da2db0fec200478f8b78aeaa394b1c1e4194533047fa74c91ea"
+    },
+    "restAdapter": {
+      "path": "tools/compat-broad/batch_adapter.py",
+      "sha256": "5f42ec0ad88d350aff0925a435049cdb05a67f97bc1825888ccfe0c2ebff0d36"
+    },
+    "localWriteStreamHarness": {
+      "path": "crates/fireemu-adapter-grpc/tests/streams.rs",
+      "sha256": "2f780912acb48ae680c12ca2002f74b9fa54f1e871e4053aed4bab06381541bc"
+    },
+    "productionCollector": null,
+    "productionCollectorStatus": "missing; existing REST adapter cannot collect bidirectional gRPC Write observations"
+  },
+  "comparator": {
+    "localTypedComparator": {
+      "path": "tools/compat-broad/shared_production_pair.py",
+      "sha256": "69f668abe7550b1b73edde44e8d7e7892d08f428a3912152b8b2ad638841385a"
+    },
+    "productionComparator": null,
+    "contractStatus": "incomplete for stream event and transaction-token semantics; do not use for production admission"
+  },
+  "gateEnvelope": {
+    "ownerIdentity": null,
+    "permissionReference": null,
+    "projectId": "fireemu-35fe6",
+    "projectNumber": "592603257417",
+    "database": "(default)",
+    "tenant": null,
+    "executionWindow": {
+      "startsAt": null,
+      "endsAt": null
+    },
+    "freshNonce": null,
+    "configurationDigest": null,
+    "recoveryOwner": null,
+    "maxRequests": 42,
+    "maxOwnedDocuments": 6,
+    "maxTimeSeconds": 300,
+    "maxCostUsd": 1.0,
+    "maxRatePerSecond": 2,
+    "maxConcurrency": 1,
+    "recoveryReserveSeconds": 120,
+    "allowedReobservations": 0,
+    "stopConditionsBound": true,
+    "cleanupBound": true,
+    "productionAuthorization": false
+  },
+  "blockingReasons": [
+    "owner identity is absent",
+    "explicit permission reference and execution window are absent",
+    "fresh nonce and current configuration acceptance are absent",
+    "named recovery owner is absent",
+    "production gRPC Write collector is not bound",
+    "stream/transaction comparator contract is not versioned and bound",
+    "the package is preparation-only and productionExecuted remains false"
+  ],
+  "recovery": {
+    "manualRecoveryRequired": true,
+    "maxRetentionHours": 24,
+    "unrecoveredResourcesMustRemainJournaled": true,
+    "noUnconditionalDelete": true,
+    "noNonceReuse": true
+  },
+  "supersedes": "FS-WRITE-TXN-PRECEDENCE-01-V5",
+  "artifactBuild": {
+    "command": "CARGO_TARGET_DIR=target/o3-fs-write-v6 cargo build --locked --release -p fireemu",
+    "relativePath": "target/o3-fs-write-v6/release/fireemu",
+    "sha256": "d8b6e59ce625e4593eaf05fed7394f4e2c561a72efdecd39977de4115761d8cc"
+  }
+}

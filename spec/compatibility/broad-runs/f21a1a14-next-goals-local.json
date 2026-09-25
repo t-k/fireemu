@@ -1,0 +1,585 @@
+{
+  "schemaVersion": 1,
+  "kind": "finite-local-feature-goals",
+  "status": "done-local",
+  "runtimeCommit": "f21a1a1408368195b2d6cc2f6315e91c5ce35058",
+  "productionExecuted": false,
+  "capturedAt": "2026-09-13T08:31:36.403743+00:00",
+  "goals": {
+    "G2-REST-next": {
+      "status": "done-local",
+      "ownerModel": "gpt-5.6-luna",
+      "conditions": [
+        "failed REST two-write Commit publishes neither document",
+        "current local transaction remains usable and retains its lock until explicit rollback",
+        "nearby valid empty-document write and exact post-rollback document readback"
+      ],
+      "checkpoint": "0fe92867-g2-rest-local.json",
+      "integratedVerification": "fixed grpc lib/REST/local suite",
+      "productionBoundary": "Handler-level translation and local transaction policy; no new production error/termination expectation."
+    },
+    "G3-reconnect-next": {
+      "status": "done-local",
+      "ownerModel": "gpt-5.6-luna with coordinator assertion corrections",
+      "conditions": [
+        "actual B permission-denied on a dedicated A-owned document",
+        "full typed protected document is unchanged",
+        "disableNetwork/enableNetwork then own-profile revision2 accepted and read back over REST",
+        "pending writes resolve and listener reports server revision2 without pending metadata",
+        "separate fresh client reads2, writes3 and reads3"
+      ],
+      "checkpoint": "7b359f00-g3-reconnect-local.json",
+      "integratedRun": {
+        "sourceCommit": "f21a1a1408368195b2d6cc2f6315e91c5ce35058",
+        "artifactSha256": "76f0e964bccff7ef77473663115feb3b04fe172e7525b0b9ca25641234778250",
+        "command": [
+          "docs.local/logs/2026-09-13/next-goals/f21a1a14-first46/fireemu",
+          "exec",
+          "--only",
+          "auth,firestore",
+          "--firestore-port",
+          "0",
+          "--http-port",
+          "0",
+          "--hub-port",
+          "0",
+          "--logging-port",
+          "0",
+          "--ui-port",
+          "0",
+          "--project",
+          "demo-app",
+          "--",
+          "npm",
+          "--prefix",
+          "tools/sdk-smoke",
+          "run",
+          "smoke:g3"
+        ],
+        "start": "2026-09-13T08:15:59.061446+00:00",
+        "pid": 78505,
+        "exitCode": 0,
+        "processStopped": true,
+        "end": "2026-09-13T08:15:59.955777+00:00",
+        "listeners": [
+          {
+            "port": 58201,
+            "closed": true
+          },
+          {
+            "port": 58202,
+            "closed": true
+          }
+        ]
+      },
+      "passed": true,
+      "sdkVersion": "12.18.0",
+      "transport": "actual Node Firebase client gRPC",
+      "newConfirmedRuntimeGap": false,
+      "limits": "No browser/WebChannel or production Rules claim. Early incorrect probes are not evidence of a poisoned SDK client."
+    },
+    "G4-scale-next": {
+      "status": "done-local",
+      "ownerModel": "gpt-5.6-luna implementation; gpt-6-astra design and escalated stream/test completion",
+      "conditions": [
+        "existing finite collection/select/limit compiles to shared captured-caller RunQuery paging",
+        "u32 limit is preserved; limit termination drops inner receiver without draining the source",
+        "one explicit empty success, distinct terminal errors with canonical pipeline context",
+        "65-row exact snapshot after later-page update/delete/insertion",
+        "drop before first delivery and during continuation releases snapshot/producer; no third page after cancellation",
+        "17/257-row materialization comparison against legacy full-vector query"
+      ],
+      "newStages": [],
+      "productionBoundary": "Enterprise execution parity remains unobserved. No where, functions, full-text, optimizer or additional selectors."
+    }
+  },
+  "validation": {
+    "grpc": {
+      "commit": "f21a1a1408368195b2d6cc2f6315e91c5ce35058",
+      "command": [
+        "cargo",
+        "nextest",
+        "run",
+        "-p",
+        "fireemu-adapter-grpc",
+        "--lib",
+        "--test",
+        "local",
+        "--test",
+        "rest",
+        "--profile",
+        "pr"
+      ],
+      "start": "2026-09-13T08:12:12.694085+00:00",
+      "exitCode": 0,
+      "end": "2026-09-13T08:12:19.846128+00:00",
+      "passed": 158,
+      "failed": 0,
+      "skipped": 1,
+      "skipReason": "existing large release-mode acceptance check in streams.rs"
+    },
+    "clippy": {
+      "command": [
+        "cargo",
+        "clippy",
+        "-p",
+        "fireemu-adapter-grpc",
+        "--all-targets",
+        "--",
+        "-D",
+        "warnings"
+      ],
+      "start": "2026-09-13T08:11:01.411451+00:00",
+      "exitCode": 0,
+      "end": "2026-09-13T08:11:04.441614+00:00"
+    },
+    "redControl": {
+      "command": "cargo nextest run -p fireemu-adapter-grpc --test local -E test(execute_pipeline_streams_all_pages) --profile pr",
+      "outcome": "one assertion failure before repair: no response versus explicit empty response",
+      "logSha256": "17ec05ba0a48bbc966af636688da76f5c27aa2ceb55183ba285967b1cd2223c2"
+    },
+    "stats": {
+      "command": [
+        "cargo",
+        "test",
+        "-p",
+        "fireemu-adapter-grpc",
+        "execute_pipeline_records_deterministic_small_and_large_page_stats",
+        "--lib",
+        "--",
+        "--nocapture"
+      ],
+      "commit": "f21a1a1408368195b2d6cc2f6315e91c5ce35058",
+      "start": "2026-09-13T08:13:50.044381+00:00",
+      "exitCode": 0,
+      "end": "2026-09-13T08:13:50.799333+00:00"
+    },
+    "fullWorkspaceAndReleaseAcceptance": "not rerun; no claim of complete workspace/formal verification"
+  },
+  "memory": {
+    "rows": [
+      {
+        "documents": 17,
+        "legacyRetainedDocuments": 17,
+        "legacyPeakCandidates": 17,
+        "pagePeakCandidates": 17,
+        "pages": 1,
+        "cumulativeClonedDocuments": 17,
+        "cumulativeFieldBytes": 612,
+        "selectionPaths": 0
+      },
+      {
+        "documents": 257,
+        "legacyRetainedDocuments": 257,
+        "legacyPeakCandidates": 257,
+        "pagePeakCandidates": 32,
+        "pages": 9,
+        "cumulativeClonedDocuments": 257,
+        "cumulativeFieldBytes": 9252,
+        "selectionPaths": 0
+      }
+    ],
+    "interpretation": "Whole-result document/response vectors are removed from the runtime pipeline. Core page candidates are bounded; cumulative core clones/field bytes are unchanged in these fixtures. Existing channel16, one pending response and per-document projection remain.",
+    "unmeasured": [
+      "process RSS/allocator peak",
+      "protobuf and transport allocations",
+      "MVCC history retained during concurrent writes"
+    ],
+    "statsLogSha256": "5ac937dd87ea4c84956908a08e67700b411d2610f13db74dac0b5859fe448b91"
+  },
+  "reviews": {
+    "G2": "Independent coordinator review; nearby control and final identity correction accepted.",
+    "G3": "Independent Luna review and targeted re-review accepted. Owner correction turns were followed by coordinator typed-state/partial-result fixes; independent accepted-write readback finding resolved.",
+    "G4": "Independent gpt-6-astra correctness/security review approved f21a1a14. Initial Should Fix for error metadata resolved and re-reviewed.",
+    "escalation": "G4 partial owner checkpoints were not marked done. Unresolved stream semantics after review returns were completed by coordinator, with strengthened real-entry tests.",
+    "mustFixRemaining": [],
+    "securityRoleFile": "Requested local Security Specialist instructions file was absent; reviewer explicitly used that perspective without claiming to read it.",
+    "G3RemainingNote": "Inherited smoke deletes the current profile explicitly; remaining local in-memory state is reclaimed by owned exec shutdown, not individual production cleanup."
+  },
+  "mutation": {
+    "normalCommit": "f21a1a1408368195b2d6cc2f6315e91c5ce35058",
+    "gate": "tools/compat-inventory/mutation_cargo.py",
+    "normalAndMutationTargetAndBuildDirsDisjoint": true,
+    "results": [
+      {
+        "baseCommit": "f21a1a1408368195b2d6cc2f6315e91c5ce35058",
+        "command": [
+          "cargo",
+          "nextest",
+          "run",
+          "-p",
+          "fireemu-adapter-grpc",
+          "--lib",
+          "-E",
+          "test(execute_pipeline_snapshot_remains)",
+          "--profile",
+          "pr"
+        ],
+        "admission": "tools/compat-inventory/mutation_cargo.py",
+        "outputDirectories": {
+          "CARGO_TARGET_DIR": "docs.local/logs/2026-09-13/next-goals/mutation-output/target",
+          "CARGO_BUILD_TARGET_DIR": "docs.local/logs/2026-09-13/next-goals/mutation-output/target",
+          "CARGO_BUILD_BUILD_DIR": "docs.local/logs/2026-09-13/next-goals/mutation-output/build"
+        },
+        "start": "2026-09-13T08:20:39.592456+00:00",
+        "exitCode": 100,
+        "end": "2026-09-13T08:20:52.577841+00:00",
+        "patchSha256": "334124670f84a9ea483ef0bc25aa618678b7601d4bb485d0339070afa4b072d8",
+        "detectedByAssertionFailure": true,
+        "logSha256": "38d40fee18907ccd64bc380a9a254535c0997cae4df71ef38715b561e4657fe8"
+      },
+      {
+        "baseCommit": "f21a1a1408368195b2d6cc2f6315e91c5ce35058",
+        "patchSha256": "ae5597b0414fd5dbc066d81df1e52707063cbaf263fd2dcf61c535718726cd77",
+        "command": [
+          "cargo",
+          "nextest",
+          "run",
+          "-p",
+          "fireemu-adapter-grpc",
+          "--lib",
+          "-E",
+          "test(execute_pipeline_stream_limit_stops_polling)",
+          "--profile",
+          "pr"
+        ],
+        "mutation": "retain inner receiver after returning the limit-th document",
+        "start": "2026-09-13T08:21:55.099312+00:00",
+        "exitCode": 100,
+        "end": "2026-09-13T08:22:02.811516+00:00",
+        "detectedByAssertionFailure": true,
+        "logSha256": "de965c7bad3519234645a3c6513c73c836d192cdfb12dcade5e3a867bc5e3dfc"
+      }
+    ],
+    "lastMutantArtifact": [
+      {
+        "path": "docs.local/logs/2026-09-13/next-goals/mutation-output/build/debug/deps/fireemu_adapter_grpc-2f51abb9cacc69f4",
+        "sha256": "5383b31f3dca730dcbf2ec52d9bbb0a4cc03526cea27eae751f352e0992cdf88",
+        "capturedAfterRun": true,
+        "role": "last limit mutant only; not a normal artifact"
+      }
+    ],
+    "scope": "Two selected protection removals, not exhaustive mutation or a formal proof."
+  },
+  "regressions": {
+    "commands": [
+      {
+        "name": "first46",
+        "command": [
+          "uv",
+          "run",
+          "--project",
+          "tools/compat-inventory",
+          "--locked",
+          "--python",
+          "3.12",
+          "tools/compat-broad/batch_local.py",
+          "--output",
+          "docs.local/logs/2026-09-13/next-goals/f21a1a14-first46"
+        ],
+        "commit": "f21a1a1408368195b2d6cc2f6315e91c5ce35058",
+        "start": "2026-09-13T08:14:21.925582+00:00",
+        "exitCode": 0,
+        "end": "2026-09-13T08:15:12.442340+00:00"
+      },
+      {
+        "name": "first46-compare",
+        "command": [
+          "uv",
+          "run",
+          "--project",
+          "tools/compat-inventory",
+          "--locked",
+          "--python",
+          "3.12",
+          "tools/compat-broad/batch_pair.py",
+          "--saved-ab7bd698",
+          "--local",
+          "docs.local/logs/2026-09-13/next-goals/f21a1a14-first46/batch/result.json",
+          "--output",
+          "docs.local/logs/2026-09-13/next-goals/f21a1a14-first46-comparison.json",
+          "--check"
+        ],
+        "commit": "f21a1a1408368195b2d6cc2f6315e91c5ce35058",
+        "start": "2026-09-13T08:15:12.450762+00:00",
+        "exitCode": 0,
+        "end": "2026-09-13T08:15:12.661246+00:00"
+      },
+      {
+        "name": "second45",
+        "command": [
+          "uv",
+          "run",
+          "--project",
+          "tools/compat-inventory",
+          "--locked",
+          "--python",
+          "3.12",
+          "tools/compat-broad/second_mapped.py",
+          "--output",
+          "docs.local/logs/2026-09-13/next-goals/f21a1a14-second45"
+        ],
+        "commit": "f21a1a1408368195b2d6cc2f6315e91c5ce35058",
+        "start": "2026-09-13T08:15:12.668271+00:00",
+        "exitCode": 0,
+        "end": "2026-09-13T08:18:09.476545+00:00"
+      }
+    ],
+    "first46": {
+      "artifactSha256": "76f0e964bccff7ef77473663115feb3b04fe172e7525b0b9ca25641234778250",
+      "ownedProcess": {
+        "pid": 76719,
+        "stopped": true,
+        "listenersClosed": true
+      },
+      "recordingComplete": true,
+      "cleanupComplete": true,
+      "compatibility": "match",
+      "rows": 46,
+      "reference": {
+        "publicationCommit": "ab7bd698",
+        "executionCommit": "bc38f392077784509f7fbb8993d5be66c1a8be14",
+        "observerDigest": "1501aea61749d79d32238b9329f3d75370d9d500322ffab331ec0c8b3505342f",
+        "manifestDigest": "4b6d42bc5acd1a697622b25325ba67620af272d5c44f5d00982dbffe8bb8cc3f",
+        "comparisonContractDigest": "ec0ef13fc77b6edf0f4940f472267b91b117707b36aac15a00c0a6aea96e89dc",
+        "fileSha256": {
+          "bc38f392-paired-observations.json": "a7809362c9c3a69d6a03a4f68e69aea0de34e29771f5bd36b2053359c609114c",
+          "bc38f392-execution-result.json": "5997e5ecc9f3da0addeed6b88c290cfc97c496e317c7625a9175232105953b88"
+        },
+        "originalComparisonCounts": {
+          "match": 35,
+          "mismatch": 11
+        },
+        "limitation": "Uses pinned published normalized observations; previously removed token bytes and absolute times are not recovered. No new production execution."
+      },
+      "manifestDigest": "6f0fa73a8fe494709b883c440266c721157d8ec44252fb81c331f2a10642d534",
+      "comparisonContractDigest": "467df4b222eec0b35a800c5cddc434413711c26400668cd4fddb57bdfed09cea"
+    },
+    "second45": {
+      "artifactSha256": "39fe8ea061a7a07744d5b58e24fa9f23f03cad0d4f901b91150abe0611deedd5",
+      "ownedProcess": {
+        "pid": 77602,
+        "stopped": true,
+        "listenersClosed": true
+      },
+      "recordingComplete": true,
+      "cleanupComplete": true,
+      "stateValidation": true,
+      "mapping": "match",
+      "rows": 45,
+      "productionCompatibility": "unobserved",
+      "comparisonContract": "second45-received-json-semantics-v1",
+      "retention": "Existing post-run normal binary copied only after matching its pre-recorded SHA; not rebuilt or substituted."
+    }
+  },
+  "usage": {
+    "windowStart": "2026-09-13T07:28:52.652Z",
+    "sampledAt": "2026-09-13T08:25:22.189328+00:00",
+    "source": "existing local rollout token_count events; no new instrumentation",
+    "method": "Per-session consecutive cumulative differences after this user turn. Repeated totals excluded. Differences checked against last_token_usage; no summation of cumulative snapshots. Cached input and reasoning output remain subsets, not additions. Parent/session accounting is not combined with Goal-tool usage.",
+    "phases": "Coordinator mixed implementation/review/integration cannot be allocated accurately to individual Goals. Child followup phases included in their Goal totals; no per-phase estimate.",
+    "currencyCost": null,
+    "rows": [
+      {
+        "owner": "coordinator",
+        "models": [
+          "gpt-6-astra"
+        ],
+        "firstIncludedEvent": "2026-09-13T07:29:02.820Z",
+        "lastIncludedEvent": "2026-09-13T08:24:53.009Z",
+        "distinctUsageEvents": 149,
+        "repeatedCumulativeEventsExcluded": 10,
+        "incrementVsLastUsageMismatches": 0,
+        "usage": {
+          "input_tokens": 23000898,
+          "cached_input_tokens": 22624128,
+          "cache_write_input_tokens": 0,
+          "output_tokens": 64120,
+          "reasoning_output_tokens": 28127,
+          "total_tokens": 23065018
+        },
+        "inputExcludingCached": 376770,
+        "totalEqualsInputPlusOutput": true,
+        "goal": "shared",
+        "role": "coordination, design, code-review corrections, runtime/test fixes, integration"
+      },
+      {
+        "owner": "reconnect_goal",
+        "models": [
+          "gpt-5.6-luna"
+        ],
+        "firstIncludedEvent": "2026-09-13T07:30:48.748Z",
+        "lastIncludedEvent": "2026-09-13T07:47:07.960Z",
+        "distinctUsageEvents": 74,
+        "repeatedCumulativeEventsExcluded": 0,
+        "incrementVsLastUsageMismatches": 0,
+        "usage": {
+          "input_tokens": 7330657,
+          "cached_input_tokens": 7071232,
+          "cache_write_input_tokens": 0,
+          "output_tokens": 28574,
+          "reasoning_output_tokens": 7783,
+          "total_tokens": 7359231
+        },
+        "inputExcludingCached": 259425,
+        "totalEqualsInputPlusOutput": true,
+        "goal": "G3-reconnect-next",
+        "role": "implementation and owner correction turns"
+      },
+      {
+        "owner": "rest_goal",
+        "models": [
+          "gpt-5.6-luna"
+        ],
+        "firstIncludedEvent": "2026-09-13T07:30:30.757Z",
+        "lastIncludedEvent": "2026-09-13T07:36:50.132Z",
+        "distinctUsageEvents": 45,
+        "repeatedCumulativeEventsExcluded": 0,
+        "incrementVsLastUsageMismatches": 0,
+        "usage": {
+          "input_tokens": 3079959,
+          "cached_input_tokens": 2904832,
+          "cache_write_input_tokens": 0,
+          "output_tokens": 12902,
+          "reasoning_output_tokens": 2761,
+          "total_tokens": 3092861
+        },
+        "inputExcludingCached": 175127,
+        "totalEqualsInputPlusOutput": true,
+        "goal": "G2-REST-next",
+        "role": "implementation and targeted correction"
+      },
+      {
+        "owner": "goal_g1",
+        "models": [
+          "gpt-5.6-luna"
+        ],
+        "firstIncludedEvent": "2026-09-13T07:49:10.105Z",
+        "lastIncludedEvent": "2026-09-13T07:50:49.088Z",
+        "distinctUsageEvents": 8,
+        "repeatedCumulativeEventsExcluded": 0,
+        "incrementVsLastUsageMismatches": 0,
+        "usage": {
+          "input_tokens": 1762180,
+          "cached_input_tokens": 1744896,
+          "cache_write_input_tokens": 0,
+          "output_tokens": 3067,
+          "reasoning_output_tokens": 586,
+          "total_tokens": 1765247
+        },
+        "inputExcludingCached": 17284,
+        "totalEqualsInputPlusOutput": true,
+        "goal": "G3-reconnect-next",
+        "role": "independent review only in this window"
+      },
+      {
+        "owner": "scale_goal",
+        "models": [
+          "gpt-5.6-luna"
+        ],
+        "firstIncludedEvent": "2026-09-13T07:37:15.667Z",
+        "lastIncludedEvent": "2026-09-13T07:54:50.509Z",
+        "distinctUsageEvents": 158,
+        "repeatedCumulativeEventsExcluded": 2,
+        "incrementVsLastUsageMismatches": 0,
+        "usage": {
+          "input_tokens": 13270312,
+          "cached_input_tokens": 13080064,
+          "cache_write_input_tokens": 0,
+          "output_tokens": 33773,
+          "reasoning_output_tokens": 7880,
+          "total_tokens": 13304085
+        },
+        "inputExcludingCached": 190248,
+        "totalEqualsInputPlusOutput": true,
+        "goal": "G4-scale-next",
+        "role": "implementation and owner correction turns"
+      },
+      {
+        "owner": "scale_review",
+        "models": [
+          "gpt-6-astra"
+        ],
+        "firstIncludedEvent": "2026-09-13T08:02:29.548Z",
+        "lastIncludedEvent": "2026-09-13T08:13:05.673Z",
+        "distinctUsageEvents": 22,
+        "repeatedCumulativeEventsExcluded": 0,
+        "incrementVsLastUsageMismatches": 0,
+        "usage": {
+          "input_tokens": 1234261,
+          "cached_input_tokens": 1172224,
+          "cache_write_input_tokens": 0,
+          "output_tokens": 5857,
+          "reasoning_output_tokens": 821,
+          "total_tokens": 1240118
+        },
+        "inputExcludingCached": 62037,
+        "totalEqualsInputPlusOutput": true,
+        "goal": "G4-scale-next",
+        "role": "independent security/correctness review"
+      }
+    ],
+    "crossSessionTotal": {
+      "input_tokens": 49678267,
+      "cached_input_tokens": 48597376,
+      "cache_write_input_tokens": 0,
+      "output_tokens": 148293,
+      "reasoning_output_tokens": 47958,
+      "total_tokens": 49826560
+    },
+    "cutoffLimitation": "Snapshot ends before final publication/cleanup/reporting messages; not a claim of complete billed session usage.",
+    "groups": {
+      "gpt-6-astra": {
+        "input_tokens": 24235159,
+        "cached_input_tokens": 23796352,
+        "cache_write_input_tokens": 0,
+        "output_tokens": 69977,
+        "reasoning_output_tokens": 28948,
+        "total_tokens": 24305136
+      },
+      "gpt-5.6-luna": {
+        "input_tokens": 25443108,
+        "cached_input_tokens": 24801024,
+        "cache_write_input_tokens": 0,
+        "output_tokens": 78316,
+        "reasoning_output_tokens": 19010,
+        "total_tokens": 25521424
+      }
+    }
+  },
+  "cleanup": {
+    "completedAt": "2026-09-13T08:30:03.394590+00:00",
+    "workerWorktreesRemoved": [
+      "g2-rest-next",
+      "g3-reconnect-next",
+      "g4-scale-next"
+    ],
+    "mutationWorktreeRemoved": true,
+    "markedMutationOutputsRemoved": true,
+    "unrecoveredOwnedProcesses": [],
+    "portReservations": "none; owned runners used OS-assigned ports",
+    "retained": "normal runtime artifacts, source commits, raw logs and mutation patches retained privately; G0 fixed checkout remains separate"
+  },
+  "history": "G0 a35f85b4 and its unapproved 2-recipe/36-operation envelope remain unchanged; no owner/window/nonce/settings/cost/recovery acceptance supplied. All prior193/45/46 observations, original mismatches, lifetime evidence and their limitations remain unchanged.",
+  "nextQueue": [
+    "G3-pending-switch-local: finite SDK sign-out or A-to-B switch with one pending local write; distinguish promise/cache/server state before assigning a production expectation.",
+    "G4-select-copy-local: bounded per-page projection byte measurement for wide documents; no new stage or total-RSS claim.",
+    "G2-oracle: production transaction retention and error precedence remain questions for a separately approved minimal observation."
+  ],
+  "sourceFiles": {
+    "crates/fireemu-adapter-grpc/src/service.rs": "aed4da0b3920dfee4f48353185b050161da92f54e6d49f53112cd8c798a46996",
+    "crates/fireemu-adapter-grpc/src/pipeline.rs": "37d291d98ddb8151e7e8b99d5210fcc15de3a07917dca180037023f4680dddb8",
+    "crates/fireemu-adapter-grpc/src/service/tests/query_transaction_tests.rs": "dfd0183ba02ddbfc2aae234ff6b25ffdba7207fc35cf383295a4b2dd8d154ee7",
+    "crates/fireemu-adapter-grpc/tests/local.rs": "682456b7f1a2fb1f92fd6eeaafaf8056f6bf04972c071e4a11d3e940c115db55",
+    "tools/sdk-smoke/g3-sdk.mjs": "305688c243f3e05a161cef6f90bcdee186f874a9a92f0e347e43fd6f46b66320"
+  },
+  "timing": {
+    "userTurnStartedAt": "2026-09-13T07:28:52.652Z",
+    "mutationPreparationStartedAt": "2026-09-13T08:17:17.628Z",
+    "mutationPreparationFinishedAt": "2026-09-13T08:20:39.592456+00:00",
+    "cleanupStartedAt": "2026-09-13T08:24:21.753Z",
+    "cleanupFinishedAt": "2026-09-13T08:30:03.394590+00:00",
+    "source": "existing coordinator tool-call timestamps for phase starts; recorded subprocess/cleanup timestamps for ends",
+    "limits": "Preparation includes admission and copying a broad normal cache; cleanup includes worktree/output deletion. No invented attribution of overlapping reasoning or model cost."
+  }
+}

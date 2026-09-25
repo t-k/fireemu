@@ -1,0 +1,10 @@
+{
+  "name": "fireemu-blocking-disable-local",
+  "private": true,
+  "main": "index.js",
+  "description": "Local blocking-disable fixture for the owned fireemu run; the SDK versions match tools/sdk-smoke's lockfile, which fireemu's runner supports. Dependencies are installed into a private copy by blocking_owned.py.",
+  "dependencies": {
+    "firebase-admin": "14.3.0",
+    "firebase-functions": "7.3.2"
+  }
+}

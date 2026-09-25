@@ -1,0 +1,23 @@
+{
+  "schemaVersion": 1,
+  "subjectSha256": "6c130b97db655709ced0357d700314f9be1bce8a7099dfeb18ceeed51b86ae08",
+  "sourceCommit": "bfe70d7f1bb8d95d1f4a49abfc2f3c09a4da0122",
+  "scope": "Row-by-row comparison of the approved production record of auth-blocking-disable revision 1 with one run of the same corpus on the owned local artifact built after fireemu stopped persisting a hook disable for an existing account's first-factor sign-in: all twelve semantic projections agree, including the immediate readback of the flag that differed on the uncorrected artifact (that earlier comparison stays in history at commit 98be375). Production used the recorded first-generation blocking function; the owned local run used the equivalent second-generation Identity fixture installed with npm ci from the committed lockfile, with the runner, fixture files, lockfile and artifact bound to committed content. Approved as a comparison of these cases on that artifact, profile and recorder; not a claim of Functions SDK generation parity or beyond these cases.",
+  "cases": [
+    "baseline-b-fresh-finalize",
+    "hook-c-first-signin",
+    "hook-c-token-lookup",
+    "hook-c-token-refresh",
+    "hook-c-disabled-readback",
+    "hook-c-second-signin",
+    "hook-a-first-finalize",
+    "hook-a-token-lookup",
+    "hook-a-token-refresh",
+    "hook-a-disabled-readback",
+    "hook-a-second-signin",
+    "final-b-fresh-finalize"
+  ],
+  "reviewer": "github:t-k (id:426779)",
+  "reviewedAt": "2026-09-12",
+  "decision": "approve"
+}

@@ -37,6 +37,24 @@ scripts/local-regression-gate --session compat --report docs.local/gates/compat.
 
 The gate runs `cargo nextest run --profile pr` (choose another profile with `--profile`) through `scripts/cargo-session` and writes a JSON report naming the commit, whether the tree was dirty, the profile, the arguments, the nextest and rustc versions, and the counts of tests run, passed, failed and skipped. It exits non-zero when a test fails, when cargo-nextest is not installed (`missing-dependency`) and when no test ran (`no-tests`), so an empty filter or a missing tool is never recorded as a pass. Cite the report, not the exit status, in work logs and issue closures. `scripts/local-regression-gate.test.sh` is its self-test.
 
+The report path must be new: existing files and symlinks are rejected before tests
+start. A same-directory temporary report is published exclusively, so concurrent
+runs cannot overwrite each other's receipts. A log/write/publication failure is
+not a test pass. Parsed successful runs must account for every executed test as
+passed; malformed or inconsistent summaries are rejected. `exitStatus` is normalized
+before publication to match the process result. The raw summary is retained.
+
+The shell-only fault tests need Python/pytest but do not need Rust:
+
+```sh
+PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python -m pytest scripts/test_local_regression_gate.py
+```
+
+They inject a **fake nextest**, so they validate only the gate's reporting and file
+handling. The native self-test and the real workspace still have to run. Exclusive
+publication is not a power-loss durability guarantee, nor a complete source-tree
+attestation; the report's `commit` and `dirty` fields retain their existing scope.
+
 ## Post-pressure recovery harness
 
 `crates/fireemu/tests/recovery.rs` drives a real daemon through four phases (baseline, saturate, release, reuse) and samples what it retains after each: the logical Firestore charge and version count from `GET /v1/sessions/default/resources`, the retained snapshot bytes, the session count, and the process RSS, open file descriptors and child processes. The verdict is about retention, not speed: every logical gauge must return to its baseline after the release, and the reuse phase must be fully admitted and charge the store again. RSS is recorded but never asserted, because an allocator cache keeps it high after the logical charge is gone. A measurement that fails is recorded as missing with its reason and fails the verdict; it is never written as zero. The test also holds a snapshot across one release on purpose and checks that the verdict names it as a leak.

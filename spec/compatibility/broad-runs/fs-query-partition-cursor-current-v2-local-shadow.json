@@ -1,0 +1,51 @@
+{
+ "artifact": {
+  "byteCount": 69725912,
+  "path": "target/debug/fireemu",
+  "reproducible": false,
+  "sha256": "3c486cee6cd842039f114bc5d154d71e2b242b18381960716f4e1433e134a9e5",
+  "sourceCommit": "905ede564c6d40498b615183db9f4103756585ba",
+  "sourceTreeClean": true
+ },
+ "campaignId": "FS-QUERY-PARTITION-CURSOR-04",
+ "differences": [],
+ "kind": "fs-query-partition-cursor-local-shadow-v1",
+ "productionExecuted": false,
+ "promotionReady": false,
+ "run": {
+  "bundleStatus": "pass",
+  "cleanupComplete": true,
+  "observationRows": 31,
+  "ownedProcess": {
+   "listenersClosed": true,
+   "pid": 60932,
+   "stopped": true
+  },
+  "parentStatus": "pass",
+  "publicationComplete": true,
+  "rawBindings": 37,
+  "rawComplete": true,
+  "reconstruction": {
+   "checked": true,
+   "documents": 12,
+   "matches": true,
+   "ranges": 2,
+   "reason": null
+  },
+  "recoveryRows": 6,
+  "residualDocuments": 0,
+  "validation": "MATCHED"
+ },
+ "schemaVersion": 1,
+ "sourceInputs": {
+  "tools/compat-broad/batch_wire.py": "f9d3a579026135fbf7255c79a241fa668d826b07e48c1352630c762b5b8037e4",
+  "tools/compat-broad/fs-query-partition-cursor/partition_cursor_case.py": "4f2dee90a4fbabcff4370baa972b014425aee524c0aaf5aca176e45e133907bc",
+  "tools/compat-broad/fs-query-partition-cursor/partition_cursor_collector.py": "d94db2d54b7f1c03786312c3bb3e96c7f596d9350e7fbc2b94e64724d9357899",
+  "tools/compat-broad/fs-query-partition-cursor/partition_cursor_comparator.py": "d50a97122aab4d5ffd35448ae03c4d18652ae85fc4a056780084078923b5fb06",
+  "tools/compat-broad/fs-query-partition-cursor/partition_cursor_manifest.py": "953259e9fb10f751460ec96d7702dfc4a76713416615ccee6d2a102a0f027e79",
+  "tools/compat-broad/fs-query-partition-cursor/partition_cursor_offline_fixture.py": "b015e95a172fafcaeef548a7e5b57a0c5b2ac8d8d697ca6b5612bff5132a5729",
+  "tools/compat-broad/fs-query-partition-cursor/partition_cursor_shadow.py": "41a4fa61b3c8f34d0880eaa9cf1d330b66dac29e8f223ce90ed013bfef1db7ad",
+  "tools/compat-broad/fs-query-partition-cursor/partition_cursor_wire.py": "e7a8ddd16c3122adaa95e1e8ecfb74e106152f80fa42bd6b1bcdbe628fca2cfa"
+ },
+ "target": "owned-local-artifact"
+}

@@ -1,0 +1,621 @@
+{
+  "kind": "shared-two-execution-inputs-v1",
+  "status": "reviewed-offline-not-authorized",
+  "frozenCommit": "a35f85b464743d62344a3a58763d382b5b3838ce",
+  "manifest": {
+    "kind": "shared-two-production-v1",
+    "template": {
+      "contract": "shared-local-v1",
+      "nonce": "00000000000000000000000000000000",
+      "jobs": {
+        "partial": {
+          "resources": [
+            "projects/fireemu-35fe6/databases/(default)/documents/shared_runs/00000000000000000000000000000000-partial/docs/first",
+            "projects/fireemu-35fe6/databases/(default)/documents/shared_runs/00000000000000000000000000000000-partial/docs/existing",
+            "projects/fireemu-35fe6/databases/(default)/documents/shared_runs/00000000000000000000000000000000-partial/docs/last"
+          ],
+          "observation": [
+            {
+              "service": "firestore",
+              "path": "/v1/projects/fireemu-35fe6/databases/(default)/documents/shared_runs/00000000000000000000000000000000-partial/docs/first",
+              "method": "GET",
+              "body": null,
+              "privileged": true,
+              "form": false
+            },
+            {
+              "service": "firestore",
+              "path": "/v1/projects/fireemu-35fe6/databases/(default)/documents/shared_runs/00000000000000000000000000000000-partial/docs/existing",
+              "method": "GET",
+              "body": null,
+              "privileged": true,
+              "form": false
+            },
+            {
+              "service": "firestore",
+              "path": "/v1/projects/fireemu-35fe6/databases/(default)/documents/shared_runs/00000000000000000000000000000000-partial/docs/last",
+              "method": "GET",
+              "body": null,
+              "privileged": true,
+              "form": false
+            },
+            {
+              "service": "firestore",
+              "path": "/v1/projects/fireemu-35fe6/databases/(default)/documents/shared_runs/00000000000000000000000000000000-partial/docs/existing?currentDocument.exists=false",
+              "method": "PATCH",
+              "body": {
+                "fields": {
+                  "a": {
+                    "integerValue": "7"
+                  }
+                }
+              },
+              "privileged": true,
+              "form": false
+            },
+            {
+              "service": "firestore",
+              "path": "/v1/projects/fireemu-35fe6/databases/(default)/documents:batchWrite",
+              "method": "POST",
+              "body": {
+                "writes": [
+                  {
+                    "update": {
+                      "name": "projects/fireemu-35fe6/databases/(default)/documents/shared_runs/00000000000000000000000000000000-partial/docs/first",
+                      "fields": {
+                        "a": {
+                          "integerValue": "1"
+                        }
+                      }
+                    }
+                  },
+                  {
+                    "update": {
+                      "name": "projects/fireemu-35fe6/databases/(default)/documents/shared_runs/00000000000000000000000000000000-partial/docs/existing",
+                      "fields": {
+                        "a": {
+                          "integerValue": "8"
+                        }
+                      }
+                    },
+                    "currentDocument": {
+                      "exists": false
+                    }
+                  },
+                  {
+                    "update": {
+                      "name": "projects/fireemu-35fe6/databases/(default)/documents/shared_runs/00000000000000000000000000000000-partial/docs/last",
+                      "fields": {
+                        "a": {
+                          "integerValue": "9"
+                        }
+                      }
+                    }
+                  }
+                ]
+              },
+              "privileged": true,
+              "form": false
+            },
+            {
+              "service": "firestore",
+              "path": "/v1/projects/fireemu-35fe6/databases/(default)/documents/shared_runs/00000000000000000000000000000000-partial/docs/first",
+              "method": "GET",
+              "body": null,
+              "privileged": true,
+              "form": false
+            },
+            {
+              "service": "firestore",
+              "path": "/v1/projects/fireemu-35fe6/databases/(default)/documents/shared_runs/00000000000000000000000000000000-partial/docs/existing",
+              "method": "GET",
+              "body": null,
+              "privileged": true,
+              "form": false
+            },
+            {
+              "service": "firestore",
+              "path": "/v1/projects/fireemu-35fe6/databases/(default)/documents/shared_runs/00000000000000000000000000000000-partial/docs/last",
+              "method": "GET",
+              "body": null,
+              "privileged": true,
+              "form": false
+            }
+          ],
+          "recovery": [
+            {
+              "service": "firestore",
+              "path": "/v1/projects/fireemu-35fe6/databases/(default)/documents/shared_runs/00000000000000000000000000000000-partial/docs/first",
+              "method": "GET",
+              "body": null,
+              "privileged": true,
+              "form": false
+            },
+            {
+              "service": "firestore",
+              "path": "/v1/projects/fireemu-35fe6/databases/(default)/documents/shared_runs/00000000000000000000000000000000-partial/docs/first",
+              "method": "DELETE",
+              "body": null,
+              "privileged": true,
+              "form": false,
+              "versionFrom": 0
+            },
+            {
+              "service": "firestore",
+              "path": "/v1/projects/fireemu-35fe6/databases/(default)/documents/shared_runs/00000000000000000000000000000000-partial/docs/first",
+              "method": "GET",
+              "body": null,
+              "privileged": true,
+              "form": false
+            },
+            {
+              "service": "firestore",
+              "path": "/v1/projects/fireemu-35fe6/databases/(default)/documents/shared_runs/00000000000000000000000000000000-partial/docs/existing",
+              "method": "GET",
+              "body": null,
+              "privileged": true,
+              "form": false
+            },
+            {
+              "service": "firestore",
+              "path": "/v1/projects/fireemu-35fe6/databases/(default)/documents/shared_runs/00000000000000000000000000000000-partial/docs/existing",
+              "method": "DELETE",
+              "body": null,
+              "privileged": true,
+              "form": false,
+              "versionFrom": 3
+            },
+            {
+              "service": "firestore",
+              "path": "/v1/projects/fireemu-35fe6/databases/(default)/documents/shared_runs/00000000000000000000000000000000-partial/docs/existing",
+              "method": "GET",
+              "body": null,
+              "privileged": true,
+              "form": false
+            },
+            {
+              "service": "firestore",
+              "path": "/v1/projects/fireemu-35fe6/databases/(default)/documents/shared_runs/00000000000000000000000000000000-partial/docs/last",
+              "method": "GET",
+              "body": null,
+              "privileged": true,
+              "form": false
+            },
+            {
+              "service": "firestore",
+              "path": "/v1/projects/fireemu-35fe6/databases/(default)/documents/shared_runs/00000000000000000000000000000000-partial/docs/last",
+              "method": "DELETE",
+              "body": null,
+              "privileged": true,
+              "form": false,
+              "versionFrom": 6
+            },
+            {
+              "service": "firestore",
+              "path": "/v1/projects/fireemu-35fe6/databases/(default)/documents/shared_runs/00000000000000000000000000000000-partial/docs/last",
+              "method": "GET",
+              "body": null,
+              "privileged": true,
+              "form": false
+            }
+          ]
+        },
+        "transaction-field": {
+          "resources": [
+            "projects/fireemu-35fe6/databases/(default)/documents/shared_runs/00000000000000000000000000000000-transaction-field/docs/guard"
+          ],
+          "observation": [
+            {
+              "service": "firestore",
+              "path": "/v1/projects/fireemu-35fe6/databases/(default)/documents/shared_runs/00000000000000000000000000000000-transaction-field/docs/guard",
+              "method": "GET",
+              "body": null,
+              "privileged": true,
+              "form": false
+            },
+            {
+              "service": "firestore",
+              "path": "/v1/projects/fireemu-35fe6/databases/(default)/documents/shared_runs/00000000000000000000000000000000-transaction-field/docs/guard?currentDocument.exists=false",
+              "method": "PATCH",
+              "body": {
+                "fields": {
+                  "a": {
+                    "integerValue": "3"
+                  }
+                }
+              },
+              "privileged": true,
+              "form": false
+            },
+            {
+              "service": "firestore",
+              "path": "/v1/projects/fireemu-35fe6/databases/(default)/documents:batchWrite",
+              "method": "POST",
+              "body": {
+                "writes": [
+                  {
+                    "update": {
+                      "name": "projects/fireemu-35fe6/databases/(default)/documents/shared_runs/00000000000000000000000000000000-transaction-field/docs/guard",
+                      "fields": {
+                        "a": {
+                          "integerValue": "4"
+                        }
+                      }
+                    }
+                  }
+                ],
+                "transaction": "AA=="
+              },
+              "privileged": true,
+              "form": false
+            },
+            {
+              "service": "firestore",
+              "path": "/v1/projects/fireemu-35fe6/databases/(default)/documents/shared_runs/00000000000000000000000000000000-transaction-field/docs/guard",
+              "method": "GET",
+              "body": null,
+              "privileged": true,
+              "form": false
+            }
+          ],
+          "recovery": [
+            {
+              "service": "firestore",
+              "path": "/v1/projects/fireemu-35fe6/databases/(default)/documents/shared_runs/00000000000000000000000000000000-transaction-field/docs/guard",
+              "method": "GET",
+              "body": null,
+              "privileged": true,
+              "form": false
+            },
+            {
+              "service": "firestore",
+              "path": "/v1/projects/fireemu-35fe6/databases/(default)/documents/shared_runs/00000000000000000000000000000000-transaction-field/docs/guard",
+              "method": "DELETE",
+              "body": null,
+              "privileged": true,
+              "form": false,
+              "versionFrom": 0
+            },
+            {
+              "service": "firestore",
+              "path": "/v1/projects/fireemu-35fe6/databases/(default)/documents/shared_runs/00000000000000000000000000000000-transaction-field/docs/guard",
+              "method": "GET",
+              "body": null,
+              "privileged": true,
+              "form": false
+            }
+          ]
+        }
+      },
+      "wallSeconds": 1200,
+      "recoverySeconds": 300,
+      "observationRequests": 18,
+      "intervalSeconds": 0.25,
+      "requestCostMicrousd": 100,
+      "costMicrousd": 43600,
+      "fixedCostMicrousd": 40000,
+      "coordinatorRequests": 0,
+      "accounts": 0,
+      "configurationChanges": 0,
+      "metadataRequests": 0,
+      "observerSha256": "1045d0940439fdcb3d6ac228b1c408a49a98893785cd89ce13851e5096acaee5",
+      "transport": "shared-explicit-production-v1",
+      "collector": "existing-batch-adapter-shared-v1",
+      "management": {
+        "observation": [
+          {
+            "id": "access-command",
+            "duration": 86,
+            "timeout": 60
+          },
+          {
+            "id": "tokeninfo",
+            "duration": 12,
+            "timeout": 13
+          },
+          {
+            "id": "project",
+            "duration": 12,
+            "timeout": 13
+          },
+          {
+            "id": "database",
+            "duration": 12,
+            "timeout": 13
+          },
+          {
+            "id": "auth",
+            "duration": 12,
+            "timeout": 13
+          },
+          {
+            "id": "key",
+            "duration": 12,
+            "timeout": 13
+          }
+        ],
+        "recovery": [
+          {
+            "id": "access-command",
+            "duration": 86,
+            "timeout": 60
+          },
+          {
+            "id": "tokeninfo",
+            "duration": 12,
+            "timeout": 13
+          },
+          {
+            "id": "project",
+            "duration": 12,
+            "timeout": 13
+          },
+          {
+            "id": "database",
+            "duration": 12,
+            "timeout": 13
+          },
+          {
+            "id": "auth",
+            "duration": 12,
+            "timeout": 13
+          },
+          {
+            "id": "key",
+            "duration": 12,
+            "timeout": 13
+          }
+        ]
+      }
+    },
+    "nonceMapping": "closed builder substitutes one fresh hexadecimal nonce only",
+    "totalRequests": 36,
+    "observationRequests": 18,
+    "recoveryRequests": 18,
+    "maximumCostUsd": 1,
+    "maximumRetentionHours": 24
+  },
+  "manifestSha256": "13e97e0146c483ad6ab93f1dc8ecc4a8ea2615eaf481878047aec94f42fcecd1",
+  "observerSha256": "1045d0940439fdcb3d6ac228b1c408a49a98893785cd89ce13851e5096acaee5",
+  "comparisonContract": {
+    "kind": "shared-two-production-local-v1",
+    "manifestDigest": "13e97e0146c483ad6ab93f1dc8ecc4a8ea2615eaf481878047aec94f42fcecd1",
+    "normalization": "batch-response-v2 Firestore paths with exact resource mapping",
+    "typedAdmission": "canonical-json-sha256",
+    "requireSameObserver": true
+  },
+  "comparisonContractDigest": "e20a4f5d2325a3c88306ca30407a3d5b8f224ce9d95f77490f9d0908ec22eb6c",
+  "databaseProjectionContract": {
+    "version": "database-settings-v2",
+    "excludedResponseFields": [
+      "earliestVersionTime",
+      "etag"
+    ],
+    "retainedFields": "all other fields, including unknown fields and field presence/types",
+    "requiredIdentityFields": [
+      "name",
+      "uid",
+      "databaseEdition",
+      "type",
+      "locationId"
+    ],
+    "hashEncoding": "canonical typed JSON SHA256"
+  },
+  "databaseProjectionContractDigest": "24b4847314fe67940a1e0e8eb53e34e2bd007ef2e1d942639b51564677d30f18",
+  "localReference": {
+    "path": "spec/compatibility/broad-runs/a35f85b4-shared-local-reference.json",
+    "canonicalJsonSha256": "ca623539a723f8799ef18153c1119ab6c2ed5f1c2d7719e5399b8c5414a3b353",
+    "fileSha256": "eb900134fd25d318f50f3a14f8e6ccc50d55766bc908305cb98c3dcf2e635531",
+    "artifactSha256": "babe0222de91fcbf35993592799196cab7fca37da129dfa8c7adbf8249660f03"
+  },
+  "permissionTemplate": {
+    "kind": "shared-two-owner-permission-v1",
+    "frozenCommit": "a35f85b464743d62344a3a58763d382b5b3838ce",
+    "manifestSha256": "13e97e0146c483ad6ab93f1dc8ecc4a8ea2615eaf481878047aec94f42fcecd1",
+    "observerSha256": "1045d0940439fdcb3d6ac228b1c408a49a98893785cd89ce13851e5096acaee5",
+    "comparisonContractDigest": "e20a4f5d2325a3c88306ca30407a3d5b8f224ce9d95f77490f9d0908ec22eb6c",
+    "localRecordSha256": "ca623539a723f8799ef18153c1119ab6c2ed5f1c2d7719e5399b8c5414a3b353",
+    "project": "fireemu-35fe6",
+    "projectNumber": "592603257417",
+    "quotaProject": "fireemu-35fe6",
+    "databaseProjectionContractDigest": "24b4847314fe67940a1e0e8eb53e34e2bd007ef2e1d942639b51564677d30f18",
+    "databaseProjection": {
+      "name": "projects/fireemu-35fe6/databases/(default)",
+      "uid": "dc7a48b3-ee80-4d2e-964b-0d475c35a47a",
+      "createTime": "2026-09-02T12:56:28.522410Z",
+      "updateTime": "2026-09-02T12:56:28.522410Z",
+      "locationId": "us-central1",
+      "type": "FIRESTORE_NATIVE",
+      "concurrencyMode": "PESSIMISTIC",
+      "versionRetentionPeriod": "3600s",
+      "appEngineIntegrationMode": "DISABLED",
+      "pointInTimeRecoveryEnablement": "POINT_IN_TIME_RECOVERY_DISABLED",
+      "deleteProtectionState": "DELETE_PROTECTION_DISABLED",
+      "databaseEdition": "STANDARD",
+      "freeTier": true,
+      "realtimeUpdatesMode": "REALTIME_UPDATES_MODE_ENABLED",
+      "enhancedTextSearchQueryMode": "ENHANCED_QUERY_MODE_ENABLED"
+    },
+    "databaseProjectionDigest": "31957f98b7ec76e9c2e7a04803772f7270763a8ed62037fbdefa74c2c8f71d33",
+    "authConfigDigest": "7878eb2600c66f48c82ef55fb8c2443ab15689ea7542a77fbda206da06f817c2",
+    "pricingLocation": "us-central1",
+    "pricingCheckedAt": "2026-09-13 public pricing reference only; no current Cloud read",
+    "tariffsConfirmedBelowPlanningCeilings": null,
+    "costAssumptions": {
+      "ownerConfirmed": null,
+      "maximumUsd": 1,
+      "fixedStorageAndNetworkUpperUsd": 0.04,
+      "retentionHours": 24
+    },
+    "ownerIdentity": null,
+    "permissionReference": null,
+    "issuedAt": null,
+    "expiresAt": null,
+    "nonce": null,
+    "recoveryOwner": null
+  },
+  "ownerDecisionProposal": {
+    "scope": "Authorized authentication/read preflight; if all explicit candidate conditions match, execute each of the two mapped scenarios once; recover owned resources, postflight and compare with the bound local reference. No retries or inherited permissions.",
+    "baselineSource": {
+      "path": "spec/compatibility/broad-runs/bc38f392-execution-result.json",
+      "sha256": "5997e5ecc9f3da0addeed6b88c290cfc97c496e317c7625a9175232105953b88",
+      "basis": "Historical saved evidence, not current acquisition or inherited approval"
+    },
+    "baselineStatus": "Historical candidate, neither current acquisition nor accepted baseline",
+    "acceptanceRequired": [
+      "Owner and permission reference",
+      "One period containing1200seconds at start",
+      "Fresh unused32-hex nonce",
+      "Exact proposed Database v2 and Auth digest; no adoption of preflight values",
+      "Location/tariff ceiling and cost assumptions",
+      "Named recovery owner and24-hour manual recovery under separate applicable authority"
+    ],
+    "productionAuthenticationOrReadsPerformed": false,
+    "productionEnabledAfterExplicitPermission": true,
+    "remainingTechnicalActivation": null
+  },
+  "budgetAccounting": {
+    "scenarioSlots": 2,
+    "httpInFlight": 1,
+    "coordinators": 1,
+    "dataObservation": 12,
+    "dataRecovery": 12,
+    "initialCommandAndTokeninfo": 2,
+    "initialMetadata": 4,
+    "optionalRecoveryCommandAndTokeninfo": 2,
+    "postflightMetadata": 4,
+    "maximumTotal": 36,
+    "normalCachedCredentialFixtureTotal": 34,
+    "observationMaximum": 18,
+    "recoveryMaximum": 18,
+    "recoveryIsSubsetOfTotal": true,
+    "requestsPerSecondMaximum": 4,
+    "wallSeconds": 1200,
+    "recoverySeconds": 300,
+    "recoveryReservedCalculation": "12dataHTTP*13.25 +5managementHTTP*13.25 +1command*60.25 =285.5seconds",
+    "recoveryReservedCalculationSeconds": 285.5,
+    "documentsMaximum": 4,
+    "accountsMaximum": 0,
+    "configurationChanges": 0,
+    "reobservations": 0,
+    "automaticRetries": 0,
+    "previous34RequestProposal": "Retained as historical. New36request ceiling includes both project and API-key postflight checks from unchanged four-GET preflight."
+  },
+  "costCalculation": {
+    "units": {
+      "documentReads": 16,
+      "documentWrites": 6,
+      "documentDeletes": 4,
+      "indexEntryReads": 0,
+      "storageGiBMonths": 0.03131103515625,
+      "networkGiB": 0.0032958984375
+    },
+    "planningCeilingRatesUsd": {
+      "documentReads": 1e-05,
+      "documentWrites": 2e-05,
+      "documentDeletes": 1e-05,
+      "indexEntryReads": 1e-05,
+      "storageGiBMonths": 1,
+      "networkGiB": 1
+    },
+    "calculatedCeilingUsd": 0.03492693359375,
+    "fixedReservationUsd": 0.04,
+    "perRequestReservationUsd": 0.0001,
+    "maximumGateReservationUsd": 0.0436,
+    "proposedOwnerBudgetUsd": 1,
+    "actualInvoiceHardCap": false,
+    "freeQuotaDeducted": false,
+    "networkAssumption": "96KiB per reserved request including bounded body, request and header allowance; provider billing is not controlled by this local counter. No unbounded scans.",
+    "storageAssumption": "Four document paths, up to8MiB index data plus16KiB document allowance each, conservatively one month even though manual recovery is required within24hours. Existing index configuration unchanged.",
+    "publicReferenceReadDate": "2026-09-13",
+    "sources": [
+      "https://cloud.google.com/firestore/pricing",
+      "https://firebase.google.com/docs/firestore/quotas"
+    ],
+    "referenceLocation": "us-central1",
+    "referenceRates": {
+      "readsPer100000Usd": 0.03,
+      "writesPer100000Usd": 0.09,
+      "deletesPer100000Usd": 0.01,
+      "storageGiBHourUsd": 0.000205479
+    },
+    "ownerAcceptance": null
+  },
+  "stopAndRecovery": {
+    "authenticationOrDrift": "Stop observation, never adopt current values. No fallback principal/project or repeated command after credential failure.",
+    "uncertainTransport": "Durable in-flight marker blocks all new dispatch; retain ownership and journals.",
+    "ordinaryDiagnosticDifference": "Record actual status/body/state; do not force local expected status.",
+    "unverifiedStateOrIncompleteCleanup": "Stop further observations; retain evidence and unrecovered ownership.",
+    "recovery": "One coordinator credential manager, reserved requests/time, conditional DELETE from same cleanup read, final absence check; no worker refresh.",
+    "afterDeadline": "No extension or automatic re-run. Designated owner handles remaining resources under applicable authority within24hours."
+  },
+  "verification": {
+    "pytest": {
+      "passed": 272,
+      "failed": 0,
+      "skipped": 0,
+      "elapsedSeconds": 70.48
+    },
+    "productionFixtureCases": 27,
+    "typedAdmissionControls": 14,
+    "mutations": [
+      {
+        "name": "typed-equality",
+        "exitCode": 1,
+        "killed": true,
+        "started": "2026-09-13T06:02:24.257656+00:00",
+        "ended": "2026-09-13T06:02:25.710280+00:00"
+      },
+      {
+        "name": "metadata-debit",
+        "exitCode": 1,
+        "killed": true,
+        "started": "2026-09-13T06:02:25.710418+00:00",
+        "ended": "2026-09-13T06:02:26.013725+00:00"
+      },
+      {
+        "name": "cleanup-version",
+        "exitCode": 1,
+        "killed": true,
+        "started": "2026-09-13T06:02:26.013860+00:00",
+        "ended": "2026-09-13T06:02:26.727383+00:00"
+      }
+    ],
+    "independentSecurityReview": {
+      "mustFixRemaining": 0,
+      "shouldFixRemaining": 0,
+      "notes": [
+        "Only the activation delta was reviewed. Configured security_specialist.md was unavailable; independent reviewer used the requested security perspective.",
+        "Production responses remain unobserved."
+      ]
+    },
+    "localShared": {
+      "total": 26,
+      "recovery": 12,
+      "elapsedSeconds": 6.984442542074248,
+      "process": {
+        "pid": 15133,
+        "stopped": true,
+        "listenersClosed": true
+      }
+    },
+    "first46": {
+      "completed": true,
+      "rows": 46,
+      "artifactSha256": "486b434135f54502161d6e55b1dd5b7cebebaa9dc254bba6fe3653704b0e6763",
+      "process": {
+        "pid": 15619,
+        "stopped": true,
+        "listenersClosed": true
+      }
+    },
+    "ruff": "passed",
+    "ty": "passed",
+    "runtimeChanged": false
+  },
+  "commands": {
+    "execute": "uv run --project tools/compat-inventory --locked --python 3.12 tools/compat-broad/shared_production.py --execute --permission <owner-completed-private-permission.json> --local <bound-a35f85b4-shared-local-reference.json> --output <new-private-directory>",
+    "compare": "uv run --project tools/compat-inventory --locked --python 3.12 tools/compat-broad/shared_production_pair.py --production <private-result.json> --local <bound-local-reference.json> --output <new-comparison.json> [--check]",
+    "checkout": "Use frozen a35f85b4 checkout, not the later report publication commit. Existing API key is supplied privately via PRODUCTION_ORACLE_API_KEY only after explicit permission."
+  }
+}

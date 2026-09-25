@@ -1,0 +1,60 @@
+{
+ "artifact": {
+  "byteCount": 67942696,
+  "path": "target/debug/fireemu",
+  "reproducible": false,
+  "sha256": "47b2b5bb3833235704f851c647a85c2343dd92422753593313cbe83c785b4e91",
+  "sourceCommit": "0d1477487b03173fbde60588629158bafc86ef57",
+  "sourceTreeClean": true
+ },
+ "campaignId": "FS-QUERY-PARTITION-CURSOR-04",
+ "differences": [
+  {
+   "kind": "cursor-reference-type-mismatch",
+   "reason": "mismatch",
+   "ticket": "O4-REPAIR-002"
+  },
+  {
+   "kind": "cursor-foreign-reference",
+   "reason": "mismatch",
+   "ticket": "O4-REPAIR-003"
+  }
+ ],
+ "kind": "fs-query-partition-cursor-local-shadow-v1",
+ "productionExecuted": false,
+ "promotionReady": false,
+ "run": {
+  "bundleStatus": "incomplete",
+  "cleanupComplete": true,
+  "observationRows": 31,
+  "ownedProcess": {
+   "listenersClosed": true,
+   "pid": 88599,
+   "stopped": true
+  },
+  "parentStatus": "pass",
+  "publicationComplete": true,
+  "rawBindings": 37,
+  "rawComplete": true,
+  "reconstruction": {
+   "checked": true,
+   "documents": 12,
+   "matches": true,
+   "ranges": 2,
+   "reason": null
+  },
+  "recoveryRows": 6,
+  "residualDocuments": 0,
+  "validation": "DIFFERENT_KNOWN"
+ },
+ "schemaVersion": 1,
+ "sourceInputs": {
+  "tools/compat-broad/fs-query-partition-cursor/partition_cursor_case.py": "4f2dee90a4fbabcff4370baa972b014425aee524c0aaf5aca176e45e133907bc",
+  "tools/compat-broad/fs-query-partition-cursor/partition_cursor_collector.py": "71f66c515a2a0846b39be702d3fe2bedf8b714af95b941c61f1351db07910ea8",
+  "tools/compat-broad/fs-query-partition-cursor/partition_cursor_comparator.py": "6dab93bc33d2928e55a87d3bfa2011a285359d2fee54c923a7d7182385ebb128",
+  "tools/compat-broad/fs-query-partition-cursor/partition_cursor_manifest.py": "b157d11eb6ce86f809c651267ff5130f9234afcbd6a5433612f704ade2f18500",
+  "tools/compat-broad/fs-query-partition-cursor/partition_cursor_offline_fixture.py": "b015e95a172fafcaeef548a7e5b57a0c5b2ac8d8d697ca6b5612bff5132a5729",
+  "tools/compat-broad/fs-query-partition-cursor/partition_cursor_shadow.py": "6f49d9e0a1a9b750c5fb835d02e09e5928177be03bbacb37367f8a11f135ac87"
+ },
+ "target": "owned-local-artifact"
+}

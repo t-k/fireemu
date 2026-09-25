@@ -24,13 +24,14 @@ use fireemu_core_types::hash::Sha256;
 use fireemu_core_types::ids::{CollectionId, DocumentId};
 use fireemu_core_types::time::{LogicalDuration, LogicalInstant};
 
-use crate::field_path::FieldPath;
+use crate::field_path::{FieldPath, MAX_FIELD_PATH_BYTES};
 use crate::limits;
 use crate::path::DocumentPath;
 use crate::query::{
-    Cursor, Direction, FieldOp, FilterExpr, OrderClause, Query, QueryScope, UnaryOp,
+    Cursor, Direction, DistanceMeasure, FieldOp, FilterExpr, OrderClause, Query, QueryScope,
+    UnaryOp,
 };
-use crate::size::{document_size, document_size_bytes};
+use crate::size::{document_size, document_size_bytes, field_value_size};
 use crate::value::{normalize_fields_for_storage, stored_fields_eq, Timestamp, Value, ValueKind};
 
 /// How far back a snapshot selector may reach: the documented Firestore `read_time` window
@@ -281,6 +282,60 @@ pub enum Aggregation {
     Sum(FieldPath),
     /// Average of numeric values (`Null` when none).
     Avg(FieldPath),
+}
+
+/// Derives aggregation ordering without changing ordinary query normalization.
+/// Target fields participate in index order even when constrained by equality. Cursor
+/// values bind to explicit order clauses, not the fields appended for aggregation.
+pub fn normalize_aggregation_query(
+    query: &Query,
+    aggregations: &[Aggregation],
+) -> Result<Query, FirestoreError> {
+    let mut fields = BTreeSet::new();
+    for aggregation in aggregations {
+        if let Aggregation::Sum(field) | Aggregation::Avg(field) = aggregation {
+            if field.is_document_name() {
+                return Err(FirestoreError::InvalidArgument(
+                    "Aggregations are not supported for the property: __key__".into(),
+                ));
+            }
+            fields.insert(field.clone());
+        }
+    }
+    // The gateway owns general filter canonicalization. Keep this lower-level helper
+    // ordering-only, like the ordinary store executor's canonical-input contract.
+    let mut normalized = query.clone();
+    if [&query.start_at, &query.end_at]
+        .into_iter()
+        .flatten()
+        .any(|cursor| cursor.values.len() > query.order_by.len())
+    {
+        return Err(FirestoreError::InvalidArgument(
+            "Cursor has too many values.".into(),
+        ));
+    }
+    let direction = query
+        .order_by
+        .last()
+        .map_or(Direction::Ascending, |order| order.direction);
+    for field in query.inequality_fields().into_iter().chain(fields) {
+        if !field.is_document_name()
+            && !normalized.order_by.iter().any(|order| order.field == field)
+        {
+            normalized.order_by.push(OrderClause { field, direction });
+        }
+    }
+    let order = normalized.effective_order_by();
+    if order
+        .iter()
+        .position(|clause| clause.field.is_document_name())
+        .is_some_and(|position| position + 1 < order.len())
+    {
+        return Err(FirestoreError::InvalidArgument(
+            "order by clause cannot contain more fields after the key".into(),
+        ));
+    }
+    Ok(normalized)
 }
 
 /// Firestore errors (spec 8.12); the wire adapter maps them to gRPC / REST codes.
@@ -550,6 +605,7 @@ struct Transaction {
     /// Estimated bytes retained by the read-set documents and query execution descriptors.
     conflict_ledger_bytes: u64,
     last_activity: LogicalInstant,
+    wall_last_activity: std::time::Instant,
     state: TransactionState,
     /// Bumped on every operation the client drives through this transaction, so a waiter
     /// under a clock that does not move can still tell an idle holder from a busy one.
@@ -616,6 +672,8 @@ pub struct QueryStats {
     /// Largest number of candidate rows held at once. With a finite `offset + limit` this
     /// never exceeds that sum, whatever the size of the matched set.
     pub peak_candidates: u64,
+    /// Largest bounded heap used by a nearest-vector ranking stage.
+    pub nearest_peak_candidates: u64,
     /// Documents cloned into the result. Execution borrows every value it filters and orders
     /// on, so this is the only place where a document's heap-backed fields are copied.
     pub cloned_documents: u64,
@@ -638,6 +696,9 @@ impl QueryStats {
         self.scanned = self.scanned.saturating_add(other.scanned);
         self.matched = self.matched.saturating_add(other.matched);
         self.peak_candidates = self.peak_candidates.max(other.peak_candidates);
+        self.nearest_peak_candidates = self
+            .nearest_peak_candidates
+            .max(other.nearest_peak_candidates);
         self.cloned_documents = self.cloned_documents.saturating_add(other.cloned_documents);
         self.cloned_field_bytes = self
             .cloned_field_bytes
@@ -1056,33 +1117,10 @@ fn document_in_scope(document: &Document, scope: &QueryScope) -> bool {
     path_in_scope(&document.path, scope)
 }
 
-/// Whether a document at `path` belongs to the range `scope` selects.
+/// Whether a document at `path` belongs to the range `scope` selects. One state holds one
+/// database, so the scope's project and database need no comparison here.
 fn path_in_scope(path: &DocumentPath, scope: &QueryScope) -> bool {
-    let parent_len = scope.parent().map_or(0, |parent| parent.pairs().len());
-    match scope {
-        QueryScope::Collection {
-            parent,
-            collection_id,
-        } => {
-            path.pairs().len() == parent_len + 1
-                && path.collection_id() == collection_id
-                && parent
-                    .as_ref()
-                    .is_none_or(|prefix| path.pairs()[..parent_len] == *prefix.pairs())
-        }
-        QueryScope::CollectionGroup {
-            parent,
-            collection_id,
-        } => {
-            path.collection_id() == collection_id
-                && parent.as_ref().is_none_or(|prefix| {
-                    path.pairs().len() > parent_len && path.pairs()[..parent_len] == *prefix.pairs()
-                })
-        }
-        QueryScope::KindlessAllDescendants { parent } => parent.as_ref().is_none_or(|prefix| {
-            path.pairs().len() > parent_len && path.pairs()[..parent_len] == *prefix.pairs()
-        }),
-    }
+    scope.contains(path)
 }
 
 /// Exclusive bounds `(parent, successor)` enclosing exactly the strict descendants of
@@ -1204,7 +1242,9 @@ fn query_retained_bytes(query: &Query) -> u64 {
             parent,
             collection_id,
         } => (parent.as_ref(), Some(collection_id.as_str())),
-        QueryScope::KindlessAllDescendants { parent } => (parent.as_ref(), None),
+        QueryScope::KindlessAllDescendants { parent } | QueryScope::KindlessChildren { parent } => {
+            (parent.as_ref(), None)
+        }
     };
     if let Some(parent) = parent {
         total = total.saturating_add(document_path_retained_bytes(parent));
@@ -1246,6 +1286,18 @@ fn query_retained_bytes(query: &Query) -> u64 {
     }
     if let Some(projection) = &query.projection {
         for field in projection {
+            total = total.saturating_add(field_path_retained_bytes(field));
+        }
+    }
+    if let Some(find_nearest) = &query.find_nearest {
+        total = total
+            .saturating_add(64)
+            .saturating_add(field_path_retained_bytes(&find_nearest.vector_field))
+            .saturating_add(u64::try_from(core::mem::size_of::<Value>()).unwrap_or(u64::MAX))
+            .saturating_add(allocation_bytes::<f64>(
+                find_nearest.query_vector.capacity(),
+            ));
+        if let Some(field) = &find_nearest.distance_result_field {
             total = total.saturating_add(field_path_retained_bytes(field));
         }
     }
@@ -1514,7 +1566,8 @@ impl FirestoreState {
                     Box::new(paths.iter().map(AsRef::as_ref))
                 }
             }
-            QueryScope::KindlessAllDescendants { parent } => {
+            QueryScope::KindlessAllDescendants { parent }
+            | QueryScope::KindlessChildren { parent } => {
                 if version.is_some() {
                     if let Some(parent) = parent {
                         Box::new(
@@ -1597,7 +1650,8 @@ impl FirestoreState {
                     Box::new(paths.iter().rev().map(AsRef::as_ref))
                 }
             }
-            QueryScope::KindlessAllDescendants { parent } => {
+            QueryScope::KindlessAllDescendants { parent }
+            | QueryScope::KindlessChildren { parent } => {
                 if version.is_some() {
                     if let Some(parent) = parent {
                         let (lower, upper) = descendant_bounds(parent);
@@ -1679,7 +1733,8 @@ impl FirestoreState {
                     Box::new(paths)
                 }
             }
-            QueryScope::KindlessAllDescendants { parent } => {
+            QueryScope::KindlessAllDescendants { parent }
+            | QueryScope::KindlessChildren { parent } => {
                 if version.is_some() {
                     if let Some(parent) = parent {
                         Box::new(
@@ -1772,7 +1827,8 @@ impl FirestoreState {
                         .map(AsRef::as_ref),
                 )
             }
-            QueryScope::KindlessAllDescendants { parent } => {
+            QueryScope::KindlessAllDescendants { parent }
+            | QueryScope::KindlessChildren { parent } => {
                 if let Some(parent) = parent {
                     if !is_strict_descendant(before, parent) {
                         return Box::new(core::iter::empty());
@@ -1940,7 +1996,7 @@ impl FirestoreState {
                 update_time: imported.update_time.unwrap_or(commit_time),
                 version: next_version,
             };
-            validate_document(&document)?;
+            validate_document(&document, self.limit_scope)?;
             self.index_catalog
                 .document_index_usage(&document.path, &document.fields)?;
             staged.insert(imported.path, document);
@@ -2094,6 +2150,7 @@ impl FirestoreState {
             queries: Vec::new(),
             conflict_ledger_bytes: 0,
             last_activity: now,
+            wall_last_activity: std::time::Instant::now(),
             state: TransactionState::Active,
             activity: 0,
             waiting_to_commit: false,
@@ -2327,11 +2384,21 @@ impl FirestoreState {
             .remove(&(previous_deadline, id.clone()));
         if let Some(transaction) = self.transactions.get_mut(id) {
             transaction.last_activity = now;
+            transaction.wall_last_activity = std::time::Instant::now();
             transaction.activity = transaction.activity.wrapping_add(1);
             self.active_transaction_deadlines
                 .insert((transaction_deadline(transaction), id.clone()));
         }
         Ok(())
+    }
+
+    /// Whether a transaction has been idle for at least the adapter's wall-clock lease.
+    #[must_use]
+    pub fn transaction_idle_for(&self, id: &TransactionId, lease: std::time::Duration) -> bool {
+        self.transactions
+            .get(id)
+            .filter(|transaction| transaction.state == TransactionState::Active)
+            .is_some_and(|transaction| transaction.wall_last_activity.elapsed() >= lease)
     }
 
     /// How many operations `id` has driven so far; `None` unless the transaction is active.
@@ -3272,7 +3339,7 @@ impl FirestoreState {
             check_precondition(write.precondition.as_ref(), current, &path)?;
             let (next, mut result) = apply_write(write, current, commit_time, next_version)?;
             if let Some(Cow::Owned(doc)) = &next {
-                validate_document(doc)?;
+                validate_document(doc, self.limit_scope)?;
                 self.index_catalog
                     .document_index_usage(&doc.path, &doc.fields)?;
             }
@@ -3538,16 +3605,23 @@ impl FirestoreState {
         }
         for entry in transaction.queries.iter().filter(|entry| entry.complete) {
             let mut current = QueryObservation::default();
-            let required_fields: Vec<&FieldPath> = entry.required_fields.iter().collect();
-            self.select(
-                &entry.query,
-                None,
-                &required_fields,
-                entry.consumption,
-                |document| {
+            if entry.query.find_nearest.is_some() {
+                let (documents, _) = self.run_find_nearest_with_stats(&entry.query, None)?;
+                for document in &documents {
                     current.push(document);
-                },
-            )?;
+                }
+            } else {
+                let required_fields: Vec<&FieldPath> = entry.required_fields.iter().collect();
+                self.select(
+                    &entry.query,
+                    None,
+                    &required_fields,
+                    entry.consumption,
+                    |document| {
+                        current.push(document);
+                    },
+                )?;
+            }
             if current != entry.observation {
                 return Ok(true);
             }
@@ -3969,11 +4043,29 @@ impl FirestoreState {
     /// Collection IDs directly under `parent` (root when `None`), sorted.
     #[must_use]
     pub fn list_collection_ids(&self, parent: Option<&DocumentPath>) -> Vec<String> {
+        self.list_collection_ids_at(parent, None)
+    }
+
+    /// Collection IDs directly under `parent` as of `version` (latest when `None`), sorted.
+    #[must_use]
+    pub fn list_collection_ids_at(
+        &self,
+        parent: Option<&DocumentPath>,
+        version: Option<CommitVersion>,
+    ) -> Vec<String> {
         self.listing_trie
             .collections_under(parent)
             .into_iter()
             .flat_map(|collections| collections.iter())
-            .filter(|(_, collection)| !collection.live_candidates.is_empty())
+            .filter(|(_, collection)| match version {
+                Some(version) => {
+                    let mut checks = 0;
+                    collection.documents.values().any(|document| {
+                        self.listing_node_visible_at(document, version, &mut checks)
+                    })
+                }
+                None => !collection.live_candidates.is_empty(),
+            })
             .map(|(collection_id, _)| collection_id.as_str().to_owned())
             .collect()
     }
@@ -4036,10 +4128,144 @@ impl FirestoreState {
         query: &Query,
         version: Option<CommitVersion>,
     ) -> Result<(Vec<Document>, QueryStats), FirestoreError> {
+        if query.find_nearest.is_some() {
+            return self.run_find_nearest_with_stats(query, version);
+        }
         let mut out: Vec<Document> = Vec::new();
         let mut stats = self.select(query, version, &[], Consumption::Ordered, |doc| {
             out.push(project_document(doc, query.projection.as_deref()));
         })?;
+        stats.cloned_documents = out.len() as u64;
+        stats.cloned_field_bytes = out
+            .iter()
+            .map(|document| fields_retained_bytes(&document.fields))
+            .fold(0u64, u64::saturating_add);
+        Ok((out, stats))
+    }
+
+    #[allow(clippy::too_many_lines)]
+    fn run_find_nearest_with_stats(
+        &self,
+        query: &Query,
+        version: Option<CommitVersion>,
+    ) -> Result<(Vec<Document>, QueryStats), FirestoreError> {
+        // Non-name pre-ranking needs an ordered prefix in memory. Keep that prefix within the
+        // public findNearest result ceiling; name-ordered scans stream any ordinary limit.
+        const MAX_MATERIALIZED_NEAREST_ORDINARY_ROWS: u64 = 1_000;
+        let Some(find_nearest) = query.find_nearest.as_ref() else {
+            unreachable!("nearest execution requires a findNearest stage");
+        };
+        let mut ordinary = query.clone();
+        ordinary.find_nearest = None;
+        ordinary.projection = None;
+        let order = ordinary.effective_order_by();
+        let name_order = matches!(order.as_slice(), [clause] if clause.field.is_document_name());
+        let ordinary_bound = ordinary
+            .limit
+            .map(|limit| u64::from(ordinary.offset).saturating_add(u64::from(limit)));
+        if !name_order {
+            if ordinary.limit.is_none() && ordinary.offset > 0 {
+                return Err(FirestoreError::InvalidArgument(
+                    "findNearest with an unbounded offset requires document-name ordering or a top-level limit".into(),
+                ));
+            }
+            if ordinary_bound.is_some_and(|bound| bound > MAX_MATERIALIZED_NEAREST_ORDINARY_ROWS) {
+                return Err(FirestoreError::InvalidArgument(
+                    "findNearest explicit ordering requires offset + limit no greater than 1000"
+                        .into(),
+                ));
+            }
+        }
+        // Production refuses a cosine search that meets a zero vector, the query's or a
+        // candidate's (FS-QUERY-INDEX vector/measures, recorded 2026-09-24); without
+        // production's refusals such a candidate is left out as a distance that is not finite.
+        let cosine =
+            find_nearest.distance_measure == DistanceMeasure::Cosine && query.production_refusals;
+        if cosine && find_nearest.query_vector.iter().all(|c| *c == 0.0) {
+            return Err(FirestoreError::FailedPrecondition(
+                COSINE_ZERO_VECTOR.into(),
+            ));
+        }
+        let zero_candidate = std::cell::Cell::new(false);
+        let mut candidates = BinaryHeap::new();
+        let nearest_limit = usize::try_from(find_nearest.limit).unwrap_or(usize::MAX);
+        let nearest_peak_candidates = std::cell::Cell::new(0usize);
+        let consumption = if name_order || ordinary.limit.is_none() {
+            Consumption::Unordered
+        } else {
+            Consumption::Ordered
+        };
+        let mut stats = self.select(&ordinary, version, &[], consumption, |document| {
+            let Some(Value::Vector(vector)) =
+                get_field(&document.fields, &find_nearest.vector_field)
+            else {
+                return;
+            };
+            if vector.len() != find_nearest.query_vector.len() {
+                return;
+            }
+            if cosine && vector.iter().all(|c| *c == 0.0) {
+                zero_candidate.set(true);
+                return;
+            }
+            let Some(distance) = vector_distance(
+                vector,
+                &find_nearest.query_vector,
+                find_nearest.distance_measure,
+            ) else {
+                return;
+            };
+            let admitted =
+                find_nearest.distance_threshold.is_none_or(|threshold| {
+                    match find_nearest.distance_measure {
+                        DistanceMeasure::DotProduct => distance >= threshold,
+                        DistanceMeasure::Euclidean | DistanceMeasure::Cosine => {
+                            distance <= threshold
+                        }
+                    }
+                });
+            if admitted {
+                if nearest_limit == 0 {
+                    return;
+                }
+                let candidate = NearestCandidate {
+                    distance,
+                    document,
+                    measure: find_nearest.distance_measure,
+                };
+                if candidates.len() < nearest_limit {
+                    candidates.push(candidate);
+                } else if candidates.peek().is_some_and(|worst| candidate < *worst) {
+                    candidates.pop();
+                    candidates.push(candidate);
+                }
+                nearest_peak_candidates.set(nearest_peak_candidates.get().max(candidates.len()));
+            }
+        })?;
+        if zero_candidate.get() {
+            return Err(FirestoreError::FailedPrecondition(
+                COSINE_ZERO_VECTOR.into(),
+            ));
+        }
+        stats.nearest_peak_candidates =
+            u64::try_from(nearest_peak_candidates.get()).unwrap_or(u64::MAX);
+        let mut out = Vec::new();
+        let candidates = candidates.into_sorted_vec();
+        for candidate in candidates {
+            let distance = candidate.distance;
+            let document = candidate.document;
+            let mut projected = project_document(document, query.projection.as_deref());
+            if let Some(field) = &find_nearest.distance_result_field {
+                let include_distance = query
+                    .projection
+                    .as_ref()
+                    .is_none_or(|projection| projection_includes_field(projection, field));
+                if include_distance {
+                    set_field(&mut projected.fields, field, Value::Double(distance));
+                }
+            }
+            out.push(projected);
+        }
         stats.cloned_documents = out.len() as u64;
         stats.cloned_field_bytes = out
             .iter()
@@ -4058,6 +4284,14 @@ impl FirestoreState {
         query: &Query,
         version: Option<CommitVersion>,
     ) -> Result<(Vec<DocumentPath>, QueryStats), FirestoreError> {
+        if query.find_nearest.is_some() {
+            let (documents, stats) = self.run_find_nearest_with_stats(query, version)?;
+            let paths = documents
+                .into_iter()
+                .map(|document| document.path)
+                .collect();
+            return Ok((paths, stats));
+        }
         let mut paths = Vec::new();
         let stats = self.select(query, version, &[], Consumption::Ordered, |document| {
             paths.push(document.path.clone());
@@ -4109,7 +4343,7 @@ impl FirestoreState {
                 Some(version) => self.get_at(path, version),
                 None => self.get(path),
             })
-            .map(|document| project_document(document, query.projection.as_deref()))
+            .filter_map(|document| project_document_for_query(document, query))
             .collect()
     }
 
@@ -4121,6 +4355,11 @@ impl FirestoreState {
         version: Option<CommitVersion>,
         after: &DocumentPath,
     ) -> Result<(Vec<Document>, QueryStats), FirestoreError> {
+        if query.find_nearest.is_some() {
+            return Err(FirestoreError::InvalidArgument(
+                "document continuation is not supported for findNearest queries".into(),
+            ));
+        }
         let order = query.effective_order_by();
         if order.len() != 1
             || !order[0].field.is_document_name()
@@ -4174,6 +4413,9 @@ impl FirestoreState {
     where
         I: IntoIterator<Item = &'a Document>,
     {
+        if query.find_nearest.is_some() {
+            return Ok(None);
+        }
         if query.limit.is_some()
             || query.offset != 0
             || query.start_at.is_some()
@@ -4274,6 +4516,8 @@ impl FirestoreState {
         aggregations: &[Aggregation],
         version: Option<CommitVersion>,
     ) -> Result<(Vec<Value>, QueryStats), FirestoreError> {
+        let normalized = normalize_aggregation_query(query, aggregations)?;
+        let query = &normalized;
         let mut required_fields = Vec::new();
         for aggregation in aggregations {
             if let Aggregation::Sum(field) | Aggregation::Avg(field) = aggregation {
@@ -4291,6 +4535,22 @@ impl FirestoreState {
             .iter()
             .map(|_| Accumulator::default())
             .collect();
+        // An aggregation over a nearest-neighbour query folds its nearest documents
+        // (FS-QUERY-INDEX vector/with-query-clauses#count-over-nearest).
+        if query.find_nearest.is_some() {
+            let (documents, stats) = self.run_find_nearest_with_stats(query, version)?;
+            for document in &documents {
+                for (aggregation, accumulator) in aggregations.iter().zip(&mut accumulators) {
+                    accumulator.fold(aggregation, document);
+                }
+            }
+            let values = aggregations
+                .iter()
+                .zip(accumulators)
+                .map(|(aggregation, accumulator)| accumulator.finish(aggregation))
+                .collect();
+            return Ok((values, stats));
+        }
         let stats = self.select(
             query,
             version,
@@ -4320,6 +4580,8 @@ impl FirestoreState {
         query: &Query,
         aggregations: &[Aggregation],
     ) -> Result<(Vec<Value>, QueryStats), FirestoreError> {
+        let normalized = normalize_aggregation_query(query, aggregations)?;
+        let query = &normalized;
         let read_only = self.transaction(id)?.read_only;
         let execution_id = self.allocate_query_execution_id();
         let mut required_fields = Vec::new();
@@ -4486,7 +4748,7 @@ fn apply_write<'a>(
         WriteOp::Delete { .. } => {
             if !write.transforms.is_empty() {
                 return Err(FirestoreError::InvalidArgument(
-                    "transforms on a delete".into(),
+                    "a delete must not specify a update transform.".into(),
                 ));
             }
             // Firestore never reports an update time for a delete.
@@ -4602,6 +4864,7 @@ fn take_field_tree_clone_count() -> usize {
     FIELD_TREE_CLONES.with(std::cell::Cell::take)
 }
 
+#[allow(clippy::too_many_lines)]
 fn select_from<'a, I, F>(
     query: &Query,
     documents: I,
@@ -4620,18 +4883,21 @@ where
     let bound = query.limit.map(|limit| {
         usize::try_from(u64::from(query.offset) + u64::from(limit)).unwrap_or(usize::MAX)
     });
-    let streaming = consumption == Consumption::Unordered && bound.is_none() && offset == 0;
     let path_ordered = source_order.is_some_and(|source_direction| {
         order.len() == 1
             && order[0].field.is_document_name()
             && order[0].direction == source_direction
     });
+    let streaming =
+        consumption == Consumption::Unordered && (path_ordered || (bound.is_none() && offset == 0));
     let mut stats = QueryStats::default();
     if bound == Some(0) {
         return Ok(stats);
     }
     let mut heap: BinaryHeap<Candidate<'a, '_>> = BinaryHeap::new();
     let mut rows: Vec<Candidate<'a, '_>> = Vec::new();
+    let mut skipped = 0usize;
+    let mut emitted = 0usize;
     for document in documents {
         stats.scanned += 1;
         if !document_in_scope(document, scope) {
@@ -4657,7 +4923,17 @@ where
         }
         stats.matched += 1;
         if streaming {
+            if skipped < offset {
+                skipped += 1;
+                continue;
+            }
+            if let Some(limit) = query.limit {
+                if emitted >= usize::try_from(limit).unwrap_or(usize::MAX) {
+                    break;
+                }
+            }
             sink(document);
+            emitted += 1;
             continue;
         }
         let candidate = Candidate {
@@ -4723,7 +4999,7 @@ fn validate_stored_field_name(name: &str) -> Result<(), FirestoreError> {
         .map_err(|e| FirestoreError::InvalidArgument(format!("field name {name:?}: {e}")))
 }
 
-fn validate_document(doc: &Document) -> Result<(), FirestoreError> {
+fn validate_document(doc: &Document, scope: LimitScope) -> Result<(), FirestoreError> {
     for (name, value) in &doc.fields {
         validate_stored_field_name(name)?;
         check_limit(
@@ -4731,13 +5007,75 @@ fn validate_document(doc: &Document) -> Result<(), FirestoreError> {
             u64::from(value.nesting_depth()),
         )?;
     }
+    for (name, value) in &doc.fields {
+        let property_path = PropertyPath::root(name);
+        validate_value(value, false, &property_path, scope)?;
+    }
     let size = document_size(&doc.path, &doc.fields)
         .map_err(|e| FirestoreError::InvalidArgument(e.to_string()))?;
     check_limit(limits::DOCUMENT_BYTES, size.total)?;
-    for value in doc.fields.values() {
-        validate_value(value, false)?;
+    // After the document charge, so that an oversized document still reports its size the
+    // way it did before this check existed and the way production was observed reporting it.
+    if scope == LimitScope::Production {
+        for (name, value) in &doc.fields {
+            check_stored_field_paths(value, &PropertyPath::root(name))?;
+        }
     }
     Ok(())
+}
+
+#[derive(Debug, Clone)]
+struct PropertyPath<'a> {
+    /// The path this one extends, borrowed from the caller's stack frame. Descending costs
+    /// one pointer rather than a copy of every name above it: a document is walked once per
+    /// nested value, so copying would make the walk quadratic in its own nesting depth
+    /// before `FS-LIMIT-DOCUMENT-BYTES` ever refused it.
+    parent: Option<&'a PropertyPath<'a>>,
+    /// This path's last segment.
+    name: &'a str,
+    /// Canonical path bytes: the raw segment bytes plus one `.` per separator, the same
+    /// quantity [`FieldPath::from_segments`] bounds (`FS-LIMIT-FIELD-PATH-BYTES`). Backtick
+    /// quoting is a client-side notation and does not count toward the limit.
+    bytes: usize,
+}
+
+impl<'a> PropertyPath<'a> {
+    fn root(name: &'a str) -> Self {
+        Self {
+            parent: None,
+            name,
+            bytes: name.len(),
+        }
+    }
+
+    fn child(&'a self, name: &'a str) -> Self {
+        Self {
+            parent: Some(self),
+            name,
+            bytes: self.bytes.saturating_add(1).saturating_add(name.len()),
+        }
+    }
+
+    /// The dotted canonical form. Only a refusal renders one, so walking back up to the root
+    /// here costs nothing on the path every accepted write takes.
+    fn canonical(&self) -> String {
+        let mut segments = Vec::new();
+        let mut current = Some(self);
+        while let Some(path) = current {
+            segments.push(path.name);
+            current = path.parent;
+        }
+        segments.reverse();
+        segments
+            .into_iter()
+            .map(|segment| {
+                FieldPath::from_segments([segment])
+                    .expect("stored field names are validated before rendering")
+                    .canonical()
+            })
+            .collect::<Vec<_>>()
+            .join(".")
+    }
 }
 
 /// The value rules every stored value obeys: an array never holds an array directly, a
@@ -4745,33 +5083,140 @@ fn validate_document(doc: &Document) -> Result<(), FirestoreError> {
 /// of non-empty segments), and a vector has between one and
 /// [`limits::MAX_VECTOR_DIMENSIONS`] finite-or-infinite dimensions (production refuses NaN
 /// components but stores infinities; observed 2026-09-08 against the oracle project).
-fn validate_value(value: &Value, inside_array: bool) -> Result<(), FirestoreError> {
-    // Production counts the payload, not storage accounting's trailing string byte.
+fn validate_value(
+    value: &Value,
+    inside_array: bool,
+    property_path: &PropertyPath,
+    scope: LimitScope,
+) -> Result<u64, FirestoreError> {
+    // Production counts the payload, not storage accounting's trailing string byte. This
+    // boundary was observed against production on 2026-09-07 (`conformance/
+    // firestore-production-matrix.json`, `errors/rest-shapes` /
+    // `document-over-one-mebibyte`), so it is refused under either scope.
     let payload_bytes = match value {
         Value::String(value) => value.len(),
         Value::Bytes(value) => value.len(),
         _ => 0,
     };
     if payload_bytes > limits::MAX_FIELD_PAYLOAD_BYTES {
-        return Err(FirestoreError::InvalidArgument(
-            "The value of a property is longer than 1048487 bytes.".into(),
-        ));
+        return Err(field_value_too_long(property_path));
     }
-    match value {
+    // Each value is measured once, on the way back up, and a parent reuses what its children
+    // reported: walking the subtree again at every level would let one 10 MiB request cost
+    // the nesting depth times its own size before any limit refused it.
+    let size = match value {
         Value::Array(items) => {
             if inside_array {
                 return Err(FirestoreError::InvalidArgument(
                     "Nested arrays are not allowed".into(),
                 ));
             }
-            items.iter().try_for_each(|v| validate_value(v, true))
+            let mut total = 0u64;
+            for item in items {
+                total = add_size(total, validate_value(item, true, property_path, scope)?)?;
+            }
+            total
         }
+        Value::Map(fields) => {
+            let mut total = 0u64;
+            for (name, value) in fields {
+                validate_stored_field_name(name)?;
+                // Production accepts a direct field of an array-held map at 1,494 UTF-8
+                // bytes and refuses 1,495, even when the full implied path is shorter
+                // than 1,500 bytes. This is distinct from the ordinary field-path limit.
+                if scope == LimitScope::Production && inside_array && name.len() > 1_494 {
+                    return Err(FirestoreError::InvalidArgument(
+                        "Property array contains an invalid nested entity.".into(),
+                    ));
+                }
+                let nested_path = property_path.child(name);
+                total = add_size(total, string_size(name)?)?;
+                total = add_size(total, validate_value(value, false, &nested_path, scope)?)?;
+            }
+            total
+        }
+        Value::Reference(name) => {
+            validate_reference(name)?;
+            scalar_size(value)?
+        }
+        Value::Vector(dimensions) => {
+            validate_vector(dimensions)?;
+            scalar_size(value)?
+        }
+        _ => scalar_size(value)?,
+    };
+    // `FS-LIMIT-FIELD-VALUE-BYTES` on an aggregate. The catalog's unit is logical bytes, so
+    // a map or an array is measured with the official storage-size formula; a string or a
+    // bytes payload keeps the raw-payload metric observed above. The saved aggregate-map
+    // observations establish that map accounting does not add 32 bytes. The aggregate
+    // threshold itself is not bracketed, so only the strict profile refuses one: the
+    // compatibility contract forbids adding a refusal to the `emulator` profile. The check
+    // runs after the recursion so that the innermost violation is the one reported.
+    if scope == LimitScope::Production
+        && matches!(value, Value::Array(_) | Value::Map(_))
+        && size > limits::MAX_FIELD_PAYLOAD_BYTES as u64
+    {
+        return Err(field_value_too_long(property_path));
+    }
+    Ok(size)
+}
+
+fn add_size(a: u64, b: u64) -> Result<u64, FirestoreError> {
+    a.checked_add(b)
+        .ok_or_else(|| FirestoreError::InvalidArgument("size calculation overflow".into()))
+}
+
+fn string_size(s: &str) -> Result<u64, FirestoreError> {
+    add_size(
+        u64::try_from(s.len())
+            .map_err(|_| FirestoreError::InvalidArgument("size calculation overflow".into()))?,
+        1,
+    )
+}
+
+/// The storage size of a value that has no children, deferred to the one size model.
+fn scalar_size(value: &Value) -> Result<u64, FirestoreError> {
+    debug_assert!(!matches!(value, Value::Array(_) | Value::Map(_)));
+    field_value_size(value).map_err(|e| FirestoreError::InvalidArgument(e.to_string()))
+}
+
+/// The production wording for a field value over `FS-LIMIT-FIELD-VALUE-BYTES`.
+fn field_value_too_long(property_path: &PropertyPath) -> FirestoreError {
+    FirestoreError::InvalidArgument(format!(
+        "The value of property \"{}\" is longer than {} bytes.",
+        property_path.canonical(),
+        limits::MAX_FIELD_PAYLOAD_BYTES
+    ))
+}
+
+/// `FS-LIMIT-FIELD-PATH-BYTES` on every path a document implies by nesting.
+///
+/// A path a client names -- an update mask, a field transform, an order or a filter -- is
+/// bounded by [`FieldPath::from_segments`] when it is parsed. A path that exists only
+/// because a document nests values is bounded here, with the same wording.
+///
+/// This is strict-profile only. Automatic index accounting already refused the same path at
+/// the same boundary, but only where it walks: `automatic_usage` recurses into a map held
+/// directly by a field and never into the elements of an array
+/// (`crate::index_usage::IndexSet::automatic_usage`). A map inside an array therefore had an
+/// unbounded implied path, and bounding it under `OfficialEmulator` would add a refusal the
+/// compatibility contract does not allow.
+fn check_stored_field_paths(
+    value: &Value,
+    property_path: &PropertyPath,
+) -> Result<(), FirestoreError> {
+    if property_path.bytes > MAX_FIELD_PATH_BYTES {
+        return Err(FirestoreError::InvalidArgument(
+            crate::field_path::implied_path_too_long_message(&property_path.canonical()),
+        ));
+    }
+    match value {
+        Value::Array(items) => items
+            .iter()
+            .try_for_each(|item| check_stored_field_paths(item, property_path)),
         Value::Map(fields) => fields.iter().try_for_each(|(name, value)| {
-            validate_stored_field_name(name)?;
-            validate_value(value, false)
+            check_stored_field_paths(value, &property_path.child(name))
         }),
-        Value::Reference(name) => validate_reference(name),
-        Value::Vector(dimensions) => validate_vector(dimensions),
         _ => Ok(()),
     }
 }
@@ -4920,7 +5365,7 @@ fn apply_transform(
         TransformKind::Increment(delta) => {
             if !is_number(delta) {
                 return Err(FirestoreError::InvalidArgument(
-                    "increment operand must be numeric".into(),
+                    "Input must be a number.".into(),
                 ));
             }
             match current {
@@ -5065,6 +5510,48 @@ struct Candidate<'d, 'o> {
     order: &'o [OrderClause],
 }
 
+/// Production's refusal of a cosine search that meets a zero vector.
+const COSINE_ZERO_VECTOR: &str =
+    "Cannot compute cosine distance against a vector with a magnitude of zero.";
+
+/// One nearest-vector row retained by the bounded top-K heap. The heap root is the worst
+/// retained distance, allowing every admitted candidate to be considered without retaining the
+/// complete matching set.
+struct NearestCandidate<'d> {
+    distance: f64,
+    document: &'d Document,
+    measure: DistanceMeasure,
+}
+
+impl PartialEq for NearestCandidate<'_> {
+    fn eq(&self, other: &Self) -> bool {
+        self.cmp(other) == Ordering::Equal
+    }
+}
+
+impl Eq for NearestCandidate<'_> {}
+
+impl PartialOrd for NearestCandidate<'_> {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for NearestCandidate<'_> {
+    fn cmp(&self, other: &Self) -> Ordering {
+        let ordering = self
+            .distance
+            .partial_cmp(&other.distance)
+            .unwrap_or(Ordering::Equal);
+        match self.measure {
+            DistanceMeasure::DotProduct => ordering.reverse(),
+            DistanceMeasure::Euclidean | DistanceMeasure::Cosine => ordering,
+        }
+        // Equal distances rank by document name, ascending (FS-QUERY-INDEX vector/measures).
+        .then_with(|| self.document.path.cmp(&other.document.path))
+    }
+}
+
 impl PartialEq for Candidate<'_, '_> {
     fn eq(&self, other: &Self) -> bool {
         self.cmp(other) == Ordering::Equal
@@ -5139,7 +5626,9 @@ fn eval_filter(filter: &FilterExpr, doc: &Document) -> Result<bool, FirestoreErr
                 UnaryOp::IsNull => matches!(v, Some(x) if x.is_null()),
                 UnaryOp::IsNotNull => matches!(v, Some(x) if !x.is_null()),
                 UnaryOp::IsNan => matches!(v, Some(x) if x.is_nan()),
-                UnaryOp::IsNotNan => matches!(v, Some(x) if !x.is_nan()),
+                // Production's IS_NOT_NAN excludes null as well as NaN (FS-QUERY-INDEX
+                // unary-filters#is-not-nan).
+                UnaryOp::IsNotNan => matches!(v, Some(x) if !x.is_nan() && !x.is_null()),
             }
         }
         FilterExpr::Field { field, op, value } => {
@@ -5161,7 +5650,12 @@ fn eval_filter(filter: &FilterExpr, doc: &Document) -> Result<bool, FirestoreErr
                 | FieldOp::LessThanOrEqual
                 | FieldOp::GreaterThan
                 | FieldOp::GreaterThanOrEqual => {
-                    if !same_type_as(v, value) || v.is_nan() {
+                    // A range against NaN matches nothing, whichever side holds it
+                    // (FS-QUERY-INDEX field-filters/range#gt-nan).
+                    if !same_type_as(v, value)
+                        || v.is_nan()
+                        || matches!(value, Value::Double(d) if d.is_nan())
+                    {
                         return Ok(false);
                     }
                     let ord = v.cmp_value(value);
@@ -5282,6 +5776,12 @@ pub fn project(
     out
 }
 
+fn projection_includes_field(projection: &[FieldPath], field: &FieldPath) -> bool {
+    projection
+        .iter()
+        .any(|selected| field.segments().starts_with(selected.segments()))
+}
+
 fn project_document(document: &Document, projection: Option<&[FieldPath]>) -> Document {
     Document {
         path: document.path.clone(),
@@ -5292,6 +5792,145 @@ fn project_document(document: &Document, projection: Option<&[FieldPath]>) -> Do
         create_time: document.create_time,
         update_time: document.update_time,
         version: document.version,
+    }
+}
+
+fn project_document_for_query(document: &Document, query: &Query) -> Option<Document> {
+    if let Some(find_nearest) = &query.find_nearest {
+        let Value::Vector(vector) = get_field(&document.fields, &find_nearest.vector_field)? else {
+            return None;
+        };
+        if vector.len() != find_nearest.query_vector.len() {
+            return None;
+        }
+        let distance = vector_distance(
+            vector,
+            &find_nearest.query_vector,
+            find_nearest.distance_measure,
+        )?;
+        if !find_nearest.distance_threshold.is_none_or(|threshold| {
+            match find_nearest.distance_measure {
+                DistanceMeasure::DotProduct => distance >= threshold,
+                DistanceMeasure::Euclidean | DistanceMeasure::Cosine => distance <= threshold,
+            }
+        }) {
+            return None;
+        }
+        let mut projected = project_document(document, query.projection.as_deref());
+        if let Some(field) = &find_nearest.distance_result_field {
+            let include_distance = query
+                .projection
+                .as_ref()
+                .is_none_or(|projection| projection_includes_field(projection, field));
+            if include_distance {
+                set_field(&mut projected.fields, field, Value::Double(distance));
+            }
+        }
+        Some(projected)
+    } else {
+        Some(project_document(document, query.projection.as_deref()))
+    }
+}
+
+fn scaled_norm(values: &[f64]) -> Option<f64> {
+    let mut scale = 0.0;
+    let mut sum = 0.0;
+    for value in values {
+        if !value.is_finite() {
+            return None;
+        }
+        let absolute = value.abs();
+        if absolute == 0.0 {
+            continue;
+        }
+        if scale == 0.0 {
+            scale = absolute;
+            sum = 1.0;
+        } else if absolute > scale {
+            let ratio = scale / absolute;
+            sum = 1.0 + sum * ratio * ratio;
+            scale = absolute;
+        } else {
+            let ratio = absolute / scale;
+            sum += ratio * ratio;
+        }
+        if !sum.is_finite() {
+            return None;
+        }
+    }
+    let norm = scale * sum.sqrt();
+    norm.is_finite().then_some(norm)
+}
+
+fn normalized_components(values: &[f64]) -> Option<Vec<f64>> {
+    if values.iter().any(|value| !value.is_finite()) {
+        return None;
+    }
+    let scale = values.iter().map(|value| value.abs()).fold(0.0, f64::max);
+    if scale == 0.0 {
+        return None;
+    }
+    let norm = values
+        .iter()
+        .map(|value| {
+            let scaled = value / scale;
+            scaled * scaled
+        })
+        .sum::<f64>()
+        .sqrt();
+    if !norm.is_finite() || norm == 0.0 {
+        return None;
+    }
+    values
+        .iter()
+        .map(|value| {
+            let component = (value / scale) / norm;
+            component.is_finite().then_some(component)
+        })
+        .collect()
+}
+
+fn checked_dot(left: &[f64], right: &[f64]) -> Option<f64> {
+    let mut dot = 0.0;
+    for (left, right) in left.iter().zip(right) {
+        if !left.is_finite() || !right.is_finite() {
+            return None;
+        }
+        let product = left * right;
+        if !product.is_finite() {
+            return None;
+        }
+        dot += product;
+        if !dot.is_finite() {
+            return None;
+        }
+    }
+    Some(dot)
+}
+
+fn vector_distance(vector: &[f64], query: &[f64], measure: DistanceMeasure) -> Option<f64> {
+    if vector.len() != query.len() {
+        return None;
+    }
+    match measure {
+        DistanceMeasure::Euclidean => {
+            let differences: Option<Vec<f64>> = vector
+                .iter()
+                .zip(query)
+                .map(|(left, right)| {
+                    let difference = left - right;
+                    difference.is_finite().then_some(difference)
+                })
+                .collect();
+            scaled_norm(&differences?)
+        }
+        DistanceMeasure::Cosine => {
+            let left = normalized_components(vector)?;
+            let right = normalized_components(query)?;
+            let similarity = checked_dot(&left, &right)?;
+            Some((1.0 - similarity.clamp(-1.0, 1.0)).clamp(0.0, 2.0))
+        }
+        DistanceMeasure::DotProduct => checked_dot(vector, query),
     }
 }
 
@@ -5608,6 +6247,152 @@ mod scope_index_tests {
         );
     }
 
+    /// `validate_value` accumulates the storage size itself instead of calling
+    /// [`crate::size::field_value_size`] at every level. That is a second implementation of
+    /// the same formula, so this pins the two together: every value's validated total is its
+    /// `field_value_size`, and the document's total is `document_size`.
+    #[test]
+    fn the_validated_size_is_the_size_model_for_every_shape() {
+        let nested = |depth: usize| {
+            let mut value = Value::String("leaf".to_owned());
+            for level in 0..depth {
+                value = Value::Map(BTreeMap::from([
+                    (format!("n{level}"), value),
+                    (format!("b{level}"), Value::Bytes(vec![7; level])),
+                ]));
+            }
+            value
+        };
+        let cases: Vec<(&str, Value)> = vec![
+            ("null", Value::Null),
+            ("boolean", Value::Boolean(true)),
+            ("integer", Value::Integer(-1)),
+            ("double", Value::Double(1.5)),
+            ("timestamp", Value::Timestamp(Timestamp::new(7, 8).unwrap())),
+            (
+                "geo point",
+                Value::GeoPoint(crate::value::GeoPoint::new(1.0, 2.0).unwrap()),
+            ),
+            ("empty string", Value::String(String::new())),
+            ("unicode string", Value::String("名前".repeat(9))),
+            ("empty bytes", Value::Bytes(Vec::new())),
+            ("bytes", Value::Bytes(vec![0; 300])),
+            (
+                "reference",
+                Value::Reference(path("other/doc").resource_name()),
+            ),
+            ("vector", Value::Vector(vec![1.0, 2.0, 3.0])),
+            ("empty array", Value::Array(Vec::new())),
+            ("empty map", Value::Map(BTreeMap::new())),
+            (
+                "array of scalars",
+                Value::Array(vec![Value::Null, Value::Integer(1), Value::Boolean(false)]),
+            ),
+            (
+                "array of maps",
+                Value::Array(vec![
+                    Value::Map(BTreeMap::from([("a".to_owned(), Value::Integer(1))])),
+                    Value::Map(BTreeMap::new()),
+                ]),
+            ),
+            (
+                "map of mixed values",
+                Value::Map(BTreeMap::from([
+                    ("s".to_owned(), Value::String("x".repeat(40))),
+                    ("a".to_owned(), Value::Array(vec![Value::Double(0.5)])),
+                    ("e".to_owned(), Value::Map(BTreeMap::new())),
+                ])),
+            ),
+            ("one deep map", nested(1)),
+            ("deeply nested maps", nested(19)),
+        ];
+
+        for scope in [LimitScope::Production, LimitScope::OfficialEmulator] {
+            for (label, value) in &cases {
+                let property_path = PropertyPath::root("v");
+                let validated = validate_value(value, false, &property_path, scope)
+                    .unwrap_or_else(|e| panic!("{scope:?} {label}: {e}"));
+                assert_eq!(
+                    validated,
+                    crate::size::field_value_size(value).unwrap(),
+                    "{scope:?} {label}: validation and the size model disagree"
+                );
+            }
+
+            // The same agreement holds for a whole document, where the field names and the
+            // document name join the total.
+            let document = Document {
+                path: path("sizes/doc"),
+                fields: cases
+                    .iter()
+                    .map(|(label, value)| ((*label).to_owned(), value.clone()))
+                    .collect(),
+                create_time: LogicalInstant::UNIX_EPOCH,
+                update_time: LogicalInstant::UNIX_EPOCH,
+                version: CommitVersion::default(),
+            };
+            validate_document(&document, scope).expect("every case is inside every limit");
+            let modelled = document_size(&document.path, &document.fields)
+                .unwrap()
+                .total;
+            let summed = document_size_bytes(&document.path, &document.fields).unwrap();
+            assert_eq!(
+                modelled, summed,
+                "{scope:?}: the two document charges differ"
+            );
+
+            // The total validation itself accumulates, assembled the way `document_size`
+            // assembles one: the document name, the fixed charge, and every field name and
+            // validated value. This is the end-to-end tie between the two implementations.
+            let mut validated_total = crate::size::document_name_size(&document.path).unwrap() + 32;
+            for (name, value) in &document.fields {
+                let property_path = PropertyPath::root(name);
+                validated_total += u64::try_from(name.len()).unwrap() + 1;
+                validated_total += validate_value(value, false, &property_path, scope).unwrap();
+            }
+            assert_eq!(
+                validated_total, modelled,
+                "{scope:?}: the validated document total is not the size model's"
+            );
+        }
+    }
+
+    /// `FS-LIMIT-FIELD-VALUE-BYTES` on an aggregate is measured on the way back up, reusing
+    /// what each child reported. Measuring top-down instead would walk every subtree once
+    /// per enclosing level, so one request bounded only by `FS-LIMIT-API-REQUEST-BYTES`
+    /// would cost its nesting depth times its own size before any limit refused it.
+    #[test]
+    fn validating_a_deep_document_measures_each_value_a_bounded_number_of_times() {
+        // 20 nested maps, each holding one scalar besides the next level: 41 values.
+        const DEPTH: usize = 20;
+        const VALUES: usize = DEPTH * 2 + 1;
+        let mut value = Value::Integer(1);
+        for level in 0..DEPTH {
+            value = Value::Map(BTreeMap::from([
+                (format!("n{level}"), value),
+                (format!("s{level}"), Value::String("x".repeat(64))),
+            ]));
+        }
+        let document = Document {
+            path: path("deep/doc"),
+            fields: BTreeMap::from([("root".to_owned(), value)]),
+            create_time: LogicalInstant::UNIX_EPOCH,
+            update_time: LogicalInstant::UNIX_EPOCH,
+            version: CommitVersion::default(),
+        };
+        for scope in [LimitScope::Production, LimitScope::OfficialEmulator] {
+            crate::size::FIELD_VALUE_SIZE_CALLS.with(|count| count.set(0));
+            validate_document(&document, scope).expect("the document is inside every limit");
+            let calls = crate::size::FIELD_VALUE_SIZE_CALLS.with(std::cell::Cell::get);
+            // One pass for the document charge plus at most one call per value from
+            // validation itself. Quadratic behaviour would need DEPTH times this.
+            assert!(
+                calls <= VALUES * 3,
+                "{scope:?}: field_value_size ran {calls} times for {VALUES} values"
+            );
+        }
+    }
+
     #[test]
     fn owned_visible_state_moves_documents_without_cloning_fields() {
         let mut fields = BTreeMap::new();
@@ -5714,5 +6499,25 @@ mod scope_index_tests {
             &raw const next.as_ref().unwrap().fields,
             &raw const current.fields
         ));
+    }
+
+    #[test]
+    fn retained_query_bytes_include_nearest_vector_and_result_paths() {
+        let scope = QueryScope::collection(None, CollectionId::try_new("items").unwrap());
+        let ordinary = Query::new(scope.clone());
+        let nearest = ordinary
+            .clone()
+            .with_find_nearest(crate::query::FindNearest {
+                vector_field: FieldPath::parse("embedding").unwrap(),
+                query_vector: vec![0.0; 2048],
+                distance_measure: DistanceMeasure::Euclidean,
+                limit: 1,
+                distance_result_field: Some(FieldPath::parse("meta.distance").unwrap()),
+                distance_threshold: None,
+            });
+        let delta = query_retained_bytes(&nearest).saturating_sub(query_retained_bytes(&ordinary));
+        assert!(delta >= allocation_bytes::<f64>(2048));
+        assert!(delta >= field_path_retained_bytes(&FieldPath::parse("embedding").unwrap()));
+        assert!(delta >= field_path_retained_bytes(&FieldPath::parse("meta.distance").unwrap()));
     }
 }

@@ -37,6 +37,7 @@ use fireemu_core_rules::eval::{
 use fireemu_core_rules::runtime::{LoadedRules, RulesetSlot};
 use fireemu_core_rules::value::{AuthContext, RulesValue};
 use fireemu_core_session::clock::VirtualClock;
+use fireemu_core_session::loopback::PrivilegedAdmission;
 use fireemu_core_storage::name::{BucketName, ObjectName};
 use fireemu_core_storage::store::{
     CustomMetadataPatch, MetadataPatch, NewMetadata, ObjectMetadata, Precondition, PreparedObject,
@@ -506,6 +507,12 @@ pub struct StorageState {
     /// profile decides (`emulator` admits the official emulator's mock tokens, `strict`
     /// does not).
     pub token_acceptance: TokenAcceptance,
+    /// The run's control token, as [`crate::control::ControlState::control_token`] holds it.
+    /// `PUT /internal/setRules` is the one privileged route on this port, and a browser
+    /// request (one carrying `Origin` or any `Sec-Fetch-*` field) has to present it, exactly
+    /// as [`crate::control::browser_guard`] requires it of the equivalent control route.
+    /// `None` is a run with no control surface, and then no browser request may set rules.
+    pub control_token: Option<String>,
 }
 
 impl StorageState {
@@ -814,6 +821,46 @@ fn set_rules_error(message: &str) -> StorageResponse {
     StorageResponse::json(400, &json!({"message": message}))
 }
 
+/// The longest accepted `PUT /internal/setRules` body, the control port's limit
+/// ([`crate::server::MAX_BODY_BYTES`]): the route is the same privileged rules replacement,
+/// and a rules file is orders of magnitude smaller than the object-upload limit this port
+/// otherwise buffers.
+pub const MAX_SET_RULES_BODY_BYTES: usize = crate::server::MAX_BODY_BYTES;
+
+/// The browser policy of `PUT /internal/setRules`, the one privileged route on the Storage
+/// port: it replaces the authorization policy of every bucket in the run, so a browser
+/// request is held to exactly what [`crate::control::browser_guard`] holds the equivalent
+/// `PUT /v1/storage/rules` control route to -- a loopback origin and the control token. A
+/// request with none of [`fireemu_core_session::loopback::BROWSER_METADATA_HEADERS`] is not a
+/// browser request and keeps its unauthenticated access, so the compatibility surface is
+/// unchanged. `@firebase/rules-unit-testing` calls this route through Node's built-in `fetch`,
+/// which attaches `sec-fetch-mode: cors` and nothing else a browser would; that header alone
+/// is therefore not browser evidence (see the doc comment on the header set).
+fn set_rules_browser_guard(state: &StorageState, req: &StorageRequest) -> Option<StorageResponse> {
+    let presented = req
+        .header("authorization")
+        .and_then(|a| a.strip_prefix("Bearer "))
+        .map(str::trim);
+    // No control surface means no token can be presented, and a browser request then has no
+    // way to prove it is not a page on another loopback port: it is refused.
+    let token_ok = state
+        .control_token
+        .as_deref()
+        .is_some_and(|expected| crate::control::token_matches(presented, expected));
+    let forbidden = |message: &str| Some(StorageResponse::json(403, &json!({"message": message})));
+    match fireemu_core_session::loopback::privileged_route_admission(
+        fireemu_core_session::loopback::carries_browser_metadata(|name| req.header(name)),
+        req.header("origin"),
+        token_ok,
+    ) {
+        PrivilegedAdmission::Admit => None,
+        PrivilegedAdmission::ForeignOrigin => forbidden("FORBIDDEN_ORIGIN"),
+        PrivilegedAdmission::ControlTokenRequired => forbidden(
+            "CONTROL_TOKEN_REQUIRED : browser requests need Authorization: Bearer <control token>",
+        ),
+    }
+}
+
 fn set_rules(state: &StorageState, body: &[u8]) -> StorageResponse {
     let parsed: Value = match serde_json::from_slice(body) {
         Ok(value) => value,
@@ -921,6 +968,7 @@ fn core_err(e: StorageError) -> (u16, String, &'static str) {
         StorageError::InvalidImportedIdentity(m) => {
             (400, format!("invalid imported identity: {m}"), "invalid")
         }
+        StorageError::InvalidMetadata(m) => (400, m, "invalid"),
         StorageError::IdentityExhausted => (
             507,
             "storage identity space exhausted".to_owned(),
@@ -1269,10 +1317,11 @@ fn coerce_custom_value(v: &Value) -> Option<String> {
 /// object name is already held to the same rule (`name.rs`), so this closes the gap for
 /// metadata.
 fn header_safe(field: &str, value: &str) -> Result<(), String> {
-    if value.bytes().any(|b| b < 0x20 || b == 0x7f) {
-        return Err(format!("{field} contains a control character"));
+    if fireemu_core_storage::store::is_header_safe(value) {
+        Ok(())
+    } else {
+        Err(format!("{field} contains a control character"))
     }
-    Ok(())
 }
 
 /// Custom metadata whose keys and values are all control-character-free.
@@ -1714,7 +1763,17 @@ impl StorageState {
             .snapshot()
             .map_err(|_| error_response(Dialect::Firebase, 500, "rules poisoned"))?;
         let Some(ruleset) = &rules.ruleset else {
-            return Ok(());
+            // A slot with no parsed ruleset is a run started without `storage.rules`, or one
+            // whose rules the control API explicitly dropped. Production has no such state,
+            // and the rules a project is created with admit no anonymous access, so the
+            // end-user surface fails closed here rather than publishing every object; the
+            // owner credential returned above keeps its documented bypass. The official
+            // emulator refuses an SDK request with no loaded ruleset in the same way.
+            return Err(error_response(
+                Dialect::Firebase,
+                403,
+                "Permission denied. Storage Emulator has no loaded ruleset.",
+            ));
         };
         if method == Method::List && ruleset.version.as_deref() != Some("2") {
             // Storage list requests exist only under rules_version = '2'; a v1 `read` never
@@ -2251,11 +2310,11 @@ fn admin_storage_authenticated(state: &StorageState, req: &StorageRequest) -> bo
     ) else {
         return false;
     };
-    if req.header("origin").is_some()
-        || req.header("sec-fetch-site").is_some()
-        || req.header("sec-fetch-mode").is_some()
-        || req.header("sec-fetch-dest").is_some()
-    {
+    // Same evidence rule as `set_rules_browser_guard`: `Sec-Fetch-Mode` alone is not browser
+    // evidence (Node's built-in `fetch` always sends it), so it must not fall out of this
+    // capability's reach the way it did before this guard shared
+    // [`fireemu_core_session::loopback::BROWSER_METADATA_HEADERS`] with the privileged route.
+    if fireemu_core_session::loopback::carries_browser_metadata(|name| req.header(name)) {
         return false;
     }
     let expected = format!(
@@ -2288,6 +2347,12 @@ pub fn handle(state: &StorageState, req: StorageRequest) -> StorageResponse {
     // client App Check, Auth and fault plans.
     let _admitted = state.barrier.as_ref().map(|b| b.admit());
     if matches!(route, Route::SetRules) {
+        if let Some(refusal) = set_rules_browser_guard(state, &req) {
+            return refusal;
+        }
+        if req.body.len() > MAX_SET_RULES_BODY_BYTES {
+            return StorageResponse::json(413, &json!({"message": "Request body is too large"}));
+        }
         return set_rules(state, &req.body);
     }
     let dialect = match &route {
@@ -3591,17 +3656,10 @@ fn gcs_resumable_put(
             return Ok(foreign_session(Dialect::Gcs));
         }
     }
-    match store.upload_phase(&id, now) {
-        Err(StorageError::UploadNotFound) => return Ok(plain_status(404)),
-        Err(e) => return Ok(gcs_core_err(e)),
-        Ok(UploadPhase::Finalized(_) | UploadPhase::Denied(_) | UploadPhase::Cancelled(_)) => {
-            return Ok(plain_status(400));
-        }
-        Ok(UploadPhase::Active(_)) => {}
-    }
-    if store.upload_bucket(&id, now).is_ok_and(|b| b != bucket) {
-        return Ok(plain_status(404));
-    }
+    // The Content-Range is read before the phase is judged: a status check
+    // (`bytes */...`) of a finalized session is the documented way to recover a lost final
+    // response, and the `@google-cloud/storage` client always retries that way, so it must
+    // reach `upload_status` and be answered with the committed object rather than refused.
     let range = match req.header("content-range") {
         Some(cr) => parse_content_range(cr).ok_or_else(|| {
             gcs_json_error(400, &format!("invalid Content-Range {cr:?}"), "invalid")
@@ -3612,6 +3670,21 @@ fn gcs_resumable_put(
             total: Some(chunk.len() as u64),
         },
     };
+    let status_check = matches!(range, ContentRange::Status);
+    match store.upload_phase(&id, now) {
+        Err(StorageError::UploadNotFound) => return Ok(plain_status(404)),
+        Err(e) => return Ok(gcs_core_err(e)),
+        // Only a finalized session has an object to report; a refused or cancelled session
+        // never published one, and a chunk sent into any terminal session is still a 400.
+        Ok(UploadPhase::Finalized(_)) if status_check => {}
+        Ok(UploadPhase::Finalized(_) | UploadPhase::Denied(_) | UploadPhase::Cancelled(_)) => {
+            return Ok(plain_status(400));
+        }
+        Ok(UploadPhase::Active(_)) => {}
+    }
+    if store.upload_bucket(&id, now).is_ok_and(|b| b != bucket) {
+        return Ok(plain_status(404));
+    }
     let (start, end, total) = match range {
         ContentRange::Status => {
             let (received, committed) = store.upload_status(&id, now).map_err(gcs_core_err)?;
@@ -3793,10 +3866,12 @@ fn form_upload(state: &StorageState, bucket: &str, req: &StorageRequest) -> Outc
         header_safe(&format!("metadata key {k:?}"), k).map_err(|e| html_text(400, &e))?;
         header_safe(&format!("metadata.{k}"), v).map_err(|e| html_text(400, &e))?;
     }
-    let bytes = req.body[data].to_vec();
+    // The digests are computed before the store lock is taken: hashing a near-limit body is
+    // the expensive part of this route and it holds nothing back for every other bucket.
+    let prepared = PreparedObject::new(req.body[data].to_vec());
     let mut store = state.store()?;
     store
-        .put(&b, &n, bytes, meta, Precondition::default(), now)
+        .put_prepared(&b, &n, prepared, meta, Precondition::default(), now)
         .map_err(gcs_core_err)?;
     Ok(StorageResponse::empty(204))
 }

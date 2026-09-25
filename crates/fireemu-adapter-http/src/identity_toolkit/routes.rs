@@ -59,6 +59,20 @@ pub(crate) enum Pattern {
         /// Everything after the tenant segment.
         suffix: &'static str,
     },
+    /// `{prefix}{project}{collection}/{resource}`.
+    ProjectResource {
+        /// Everything before the project segment.
+        prefix: &'static str,
+        /// Collection name including its leading slash.
+        collection: &'static str,
+    },
+    /// `{prefix}{project}/tenants/{tenant}{collection}/{resource}`.
+    TenantResource {
+        /// Everything before the project segment.
+        prefix: &'static str,
+        /// Collection name including its leading slash.
+        collection: &'static str,
+    },
 }
 
 /// How a path matched a pattern.
@@ -72,6 +86,10 @@ enum Match<'a> {
     Project(&'a str),
     /// A project and tenant pattern matched.
     Tenant(&'a str, &'a str),
+    /// A project and resource ID matched.
+    ProjectResource(&'a str, &'a str),
+    /// A project, tenant and resource ID matched.
+    TenantResource(&'a str, &'a str, &'a str),
 }
 
 impl Match<'_> {
@@ -124,6 +142,51 @@ impl Pattern {
                     Match::Tenant(project, tenant)
                 }
             }
+            Self::ProjectResource { prefix, collection } => {
+                let Some(rest) = path.strip_prefix(prefix) else {
+                    return Match::No;
+                };
+                let Some((project, resource)) = rest.split_once(collection) else {
+                    return Match::No;
+                };
+                let Some(resource) = resource.strip_prefix('/') else {
+                    return Match::No;
+                };
+                if project.is_empty()
+                    || project.contains('/')
+                    || resource.is_empty()
+                    || resource.contains('/')
+                {
+                    Match::No
+                } else {
+                    Match::ProjectResource(project, resource)
+                }
+            }
+            Self::TenantResource { prefix, collection } => {
+                let Some(rest) = path.strip_prefix(prefix) else {
+                    return Match::No;
+                };
+                let Some((project, rest)) = rest.split_once("/tenants/") else {
+                    return Match::No;
+                };
+                let Some((tenant, resource)) = rest.split_once(collection) else {
+                    return Match::No;
+                };
+                let Some(resource) = resource.strip_prefix('/') else {
+                    return Match::No;
+                };
+                if project.is_empty()
+                    || project.contains('/')
+                    || tenant.is_empty()
+                    || tenant.contains('/')
+                    || resource.is_empty()
+                    || resource.contains('/')
+                {
+                    Match::No
+                } else {
+                    Match::TenantResource(project, tenant, resource)
+                }
+            }
         }
     }
 }
@@ -148,6 +211,7 @@ pub(crate) enum Handler {
     CreateAuthUri,
     Projects,
     RecaptchaParams,
+    PasswordPolicy,
     MfaEnrollmentStart,
     MfaEnrollmentFinalize,
     MfaEnrollmentWithdraw,
@@ -169,6 +233,11 @@ pub(crate) enum Handler {
     TenantGet,
     TenantUpdate,
     TenantDelete,
+    ProviderCreate,
+    ProviderList,
+    ProviderGet,
+    ProviderUpdate,
+    ProviderDelete,
     AdminGetProjectConfig,
     AdminUpdateProjectConfig,
     EmulatorOobCodes,
@@ -199,6 +268,7 @@ impl Handler {
         Self::CreateAuthUri,
         Self::Projects,
         Self::RecaptchaParams,
+        Self::PasswordPolicy,
         Self::MfaEnrollmentStart,
         Self::MfaEnrollmentFinalize,
         Self::MfaEnrollmentWithdraw,
@@ -220,6 +290,11 @@ impl Handler {
         Self::TenantGet,
         Self::TenantUpdate,
         Self::TenantDelete,
+        Self::ProviderCreate,
+        Self::ProviderList,
+        Self::ProviderGet,
+        Self::ProviderUpdate,
+        Self::ProviderDelete,
         Self::AdminGetProjectConfig,
         Self::AdminUpdateProjectConfig,
         Self::EmulatorOobCodes,
@@ -347,6 +422,78 @@ const fn tenant_v2(
         pattern: Pattern::Tenant {
             prefix: ADMIN_V2,
             suffix,
+        },
+        class: RouteClass::Admin,
+        operation,
+        handler,
+    }
+}
+
+const fn admin_resource(
+    method: &'static str,
+    collection: &'static str,
+    operation: &'static str,
+    handler: Handler,
+) -> Route {
+    Route {
+        method,
+        pattern: Pattern::ProjectResource {
+            prefix: ADMIN_CONFIG,
+            collection,
+        },
+        class: RouteClass::Admin,
+        operation,
+        handler,
+    }
+}
+
+const fn project_v2_resource(
+    method: &'static str,
+    collection: &'static str,
+    operation: &'static str,
+    handler: Handler,
+) -> Route {
+    Route {
+        method,
+        pattern: Pattern::ProjectResource {
+            prefix: ADMIN_V2,
+            collection,
+        },
+        class: RouteClass::Admin,
+        operation,
+        handler,
+    }
+}
+
+const fn admin_collection(
+    method: &'static str,
+    collection: &'static str,
+    operation: &'static str,
+    handler: Handler,
+) -> Route {
+    Route {
+        method,
+        pattern: Pattern::Project {
+            prefix: ADMIN_CONFIG,
+            suffix: collection,
+        },
+        class: RouteClass::Admin,
+        operation,
+        handler,
+    }
+}
+
+const fn tenant_v2_resource(
+    method: &'static str,
+    collection: &'static str,
+    operation: &'static str,
+    handler: Handler,
+) -> Route {
+    Route {
+        method,
+        pattern: Pattern::TenantResource {
+            prefix: ADMIN_V2,
+            collection,
         },
         class: RouteClass::Admin,
         operation,
@@ -499,6 +646,12 @@ pub(crate) const ROUTES: &[Route] = &[
         Handler::RecaptchaParams,
     ),
     end_user(
+        "GET",
+        "/identitytoolkit.googleapis.com/v2/passwordPolicy",
+        "passwordPolicy",
+        Handler::PasswordPolicy,
+    ),
+    end_user(
         "POST",
         concat_v2!("accounts/mfaEnrollment:start"),
         "mfaEnrollment:start",
@@ -578,6 +731,13 @@ pub(crate) const ROUTES: &[Route] = &[
         "admin/accounts:query",
         Handler::AdminQuery,
     ),
+    // The documented project-level spelling shares the same admission/handler/label.
+    admin(
+        "POST",
+        ":queryAccounts",
+        "admin/accounts:query",
+        Handler::AdminQuery,
+    ),
     admin(
         "POST",
         "/accounts:sendOobCode",
@@ -650,6 +810,186 @@ pub(crate) const ROUTES: &[Route] = &[
     tenant_v2("GET", "", "tenants:get", Handler::TenantGet),
     tenant_v2("PATCH", "", "tenants:update", Handler::TenantUpdate),
     tenant_v2("DELETE", "", "tenants:delete", Handler::TenantDelete),
+    admin_collection(
+        "POST",
+        "/oauthIdpConfigs",
+        "oauthIdpConfigs:create",
+        Handler::ProviderCreate,
+    ),
+    admin_collection(
+        "GET",
+        "/oauthIdpConfigs",
+        "oauthIdpConfigs:list",
+        Handler::ProviderList,
+    ),
+    admin_resource(
+        "GET",
+        "/oauthIdpConfigs",
+        "oauthIdpConfigs:get",
+        Handler::ProviderGet,
+    ),
+    admin_resource(
+        "PATCH",
+        "/oauthIdpConfigs",
+        "oauthIdpConfigs:update",
+        Handler::ProviderUpdate,
+    ),
+    admin_resource(
+        "DELETE",
+        "/oauthIdpConfigs",
+        "oauthIdpConfigs:delete",
+        Handler::ProviderDelete,
+    ),
+    admin_v2(
+        "POST",
+        "/oauthIdpConfigs",
+        "oauthIdpConfigs:create",
+        Handler::ProviderCreate,
+    ),
+    admin_v2(
+        "GET",
+        "/oauthIdpConfigs",
+        "oauthIdpConfigs:list",
+        Handler::ProviderList,
+    ),
+    project_v2_resource(
+        "GET",
+        "/oauthIdpConfigs",
+        "oauthIdpConfigs:get",
+        Handler::ProviderGet,
+    ),
+    project_v2_resource(
+        "PATCH",
+        "/oauthIdpConfigs",
+        "oauthIdpConfigs:update",
+        Handler::ProviderUpdate,
+    ),
+    project_v2_resource(
+        "DELETE",
+        "/oauthIdpConfigs",
+        "oauthIdpConfigs:delete",
+        Handler::ProviderDelete,
+    ),
+    admin_collection(
+        "POST",
+        "/inboundSamlConfigs",
+        "inboundSamlConfigs:create",
+        Handler::ProviderCreate,
+    ),
+    admin_collection(
+        "GET",
+        "/inboundSamlConfigs",
+        "inboundSamlConfigs:list",
+        Handler::ProviderList,
+    ),
+    admin_resource(
+        "GET",
+        "/inboundSamlConfigs",
+        "inboundSamlConfigs:get",
+        Handler::ProviderGet,
+    ),
+    admin_resource(
+        "PATCH",
+        "/inboundSamlConfigs",
+        "inboundSamlConfigs:update",
+        Handler::ProviderUpdate,
+    ),
+    admin_resource(
+        "DELETE",
+        "/inboundSamlConfigs",
+        "inboundSamlConfigs:delete",
+        Handler::ProviderDelete,
+    ),
+    admin_v2(
+        "POST",
+        "/inboundSamlConfigs",
+        "inboundSamlConfigs:create",
+        Handler::ProviderCreate,
+    ),
+    admin_v2(
+        "GET",
+        "/inboundSamlConfigs",
+        "inboundSamlConfigs:list",
+        Handler::ProviderList,
+    ),
+    project_v2_resource(
+        "GET",
+        "/inboundSamlConfigs",
+        "inboundSamlConfigs:get",
+        Handler::ProviderGet,
+    ),
+    project_v2_resource(
+        "PATCH",
+        "/inboundSamlConfigs",
+        "inboundSamlConfigs:update",
+        Handler::ProviderUpdate,
+    ),
+    project_v2_resource(
+        "DELETE",
+        "/inboundSamlConfigs",
+        "inboundSamlConfigs:delete",
+        Handler::ProviderDelete,
+    ),
+    tenant_v2(
+        "POST",
+        "/oauthIdpConfigs",
+        "tenant/oauthIdpConfigs:create",
+        Handler::ProviderCreate,
+    ),
+    tenant_v2(
+        "GET",
+        "/oauthIdpConfigs",
+        "tenant/oauthIdpConfigs:list",
+        Handler::ProviderList,
+    ),
+    tenant_v2_resource(
+        "GET",
+        "/oauthIdpConfigs",
+        "tenant/oauthIdpConfigs:get",
+        Handler::ProviderGet,
+    ),
+    tenant_v2_resource(
+        "PATCH",
+        "/oauthIdpConfigs",
+        "tenant/oauthIdpConfigs:update",
+        Handler::ProviderUpdate,
+    ),
+    tenant_v2_resource(
+        "DELETE",
+        "/oauthIdpConfigs",
+        "tenant/oauthIdpConfigs:delete",
+        Handler::ProviderDelete,
+    ),
+    tenant_v2(
+        "POST",
+        "/inboundSamlConfigs",
+        "tenant/inboundSamlConfigs:create",
+        Handler::ProviderCreate,
+    ),
+    tenant_v2(
+        "GET",
+        "/inboundSamlConfigs",
+        "tenant/inboundSamlConfigs:list",
+        Handler::ProviderList,
+    ),
+    tenant_v2_resource(
+        "GET",
+        "/inboundSamlConfigs",
+        "tenant/inboundSamlConfigs:get",
+        Handler::ProviderGet,
+    ),
+    tenant_v2_resource(
+        "PATCH",
+        "/inboundSamlConfigs",
+        "tenant/inboundSamlConfigs:update",
+        Handler::ProviderUpdate,
+    ),
+    tenant_v2_resource(
+        "DELETE",
+        "/inboundSamlConfigs",
+        "tenant/inboundSamlConfigs:delete",
+        Handler::ProviderDelete,
+    ),
     admin_config("GET", "config:get", Handler::AdminGetProjectConfig),
     admin_config("PATCH", "config:update", Handler::AdminUpdateProjectConfig),
     // Emulator inspection routes.
@@ -722,6 +1062,8 @@ pub(crate) enum Resolution<'a> {
         project: Option<&'a str>,
         /// Tenant segment for a tenant-scoped route.
         tenant: Option<&'a str>,
+        /// Provider configuration ID for a resource route.
+        resource: Option<&'a str>,
     },
     /// The path is known but not with this method.
     MethodNotAllowed {
@@ -731,37 +1073,50 @@ pub(crate) enum Resolution<'a> {
         project: Option<&'a str>,
         /// Tenant segment for a tenant-scoped route.
         tenant: Option<&'a str>,
+        /// Provider configuration ID for a resource route.
+        resource: Option<&'a str>,
     },
     /// No row matches the path.
     NotFound,
 }
 
+type KnownRoute<'a> = (
+    RouteClass,
+    Option<&'a str>,
+    Option<&'a str>,
+    Option<&'a str>,
+);
+
 /// Resolves `method` and `path` (without its query) against the table.
 pub(crate) fn resolve<'a>(method: &str, path: &'a str) -> Resolution<'a> {
-    let mut known: Option<(RouteClass, Option<&'a str>, Option<&'a str>)> = None;
+    let mut known: Option<KnownRoute<'a>> = None;
     for route in ROUTES {
         let hit = route.pattern.matches(path);
         if hit.is_hit() {
-            let (project, tenant) = match hit {
-                Match::Project(p) => (Some(p), None),
-                Match::Tenant(p, t) => (Some(p), Some(t)),
-                Match::No | Match::Exact => (None, None),
+            let (project, tenant, resource) = match hit {
+                Match::Project(p) => (Some(p), None, None),
+                Match::Tenant(p, t) => (Some(p), Some(t), None),
+                Match::ProjectResource(p, id) => (Some(p), None, Some(id)),
+                Match::TenantResource(p, t, id) => (Some(p), Some(t), Some(id)),
+                Match::No | Match::Exact => (None, None, None),
             };
             if route.method == method {
                 return Resolution::Matched {
                     route,
                     project,
                     tenant,
+                    resource,
                 };
             }
-            known.get_or_insert((route.class, project, tenant));
+            known.get_or_insert((route.class, project, tenant, resource));
         }
     }
     match known {
-        Some((class, project, tenant)) => Resolution::MethodNotAllowed {
+        Some((class, project, tenant, resource)) => Resolution::MethodNotAllowed {
             class,
             project,
             tenant,
+            resource,
         },
         None => Resolution::NotFound,
     }
@@ -774,7 +1129,10 @@ pub(crate) fn class_of(path: &str) -> Option<(RouteClass, Option<&str>)> {
     ROUTES.iter().find_map(|r| match r.pattern.matches(path) {
         Match::No => None,
         Match::Exact => Some((r.class, None)),
-        Match::Project(p) | Match::Tenant(p, _) => Some((r.class, Some(p))),
+        Match::Project(p)
+        | Match::Tenant(p, _)
+        | Match::ProjectResource(p, _)
+        | Match::TenantResource(p, _, _) => Some((r.class, Some(p))),
     })
 }
 
@@ -790,8 +1148,10 @@ pub(crate) fn operation_of(path: &str) -> &'static str {
 /// Project and optional tenant named by a scoped route.
 pub(crate) fn scoped_target(path: &str) -> Option<(&str, Option<&str>)> {
     ROUTES.iter().find_map(|r| match r.pattern.matches(path) {
-        Match::Project(project) => Some((project, None)),
-        Match::Tenant(project, tenant) => Some((project, Some(tenant))),
+        Match::Project(project) | Match::ProjectResource(project, _) => Some((project, None)),
+        Match::Tenant(project, tenant) | Match::TenantResource(project, tenant, _) => {
+            Some((project, Some(tenant)))
+        }
         Match::No | Match::Exact => None,
     })
 }
@@ -837,8 +1197,46 @@ mod tests {
                     assert!(prefix.ends_with('/') && !suffix.is_empty(), "{route:?}");
                 }
                 Pattern::Tenant { prefix, .. } => assert!(prefix.ends_with('/'), "{route:?}"),
+                Pattern::ProjectResource { prefix, collection }
+                | Pattern::TenantResource { prefix, collection } => {
+                    assert!(
+                        prefix.ends_with('/') && collection.starts_with('/'),
+                        "{route:?}"
+                    );
+                }
                 Pattern::Exact(_) => {}
             }
+        }
+    }
+
+    #[test]
+    fn project_query_accounts_alias_keeps_admin_admission_and_scoped_dispatch() {
+        let path = "/identitytoolkit.googleapis.com/v1/projects/demo-app:queryAccounts";
+        assert!(matches!(
+            resolve("POST", path),
+            Resolution::Matched {
+                route,
+                project: Some("demo-app"),
+                tenant: None,
+                ..
+            } if route.handler == Handler::AdminQuery && route.class == RouteClass::Admin
+        ));
+        assert_eq!(operation_of(path), "admin/accounts:query");
+        assert_eq!(class_of(path), Some((RouteClass::Admin, Some("demo-app"))));
+        assert!(matches!(
+            resolve("GET", path),
+            Resolution::MethodNotAllowed {
+                class: RouteClass::Admin,
+                project: Some("demo-app"),
+                tenant: None,
+                ..
+            }
+        ));
+        for invalid in [
+            "/identitytoolkit.googleapis.com/v1/projects/:queryAccounts",
+            "/identitytoolkit.googleapis.com/v1/projects/demo-app/extra:queryAccounts",
+        ] {
+            assert_eq!(resolve("POST", invalid), Resolution::NotFound);
         }
     }
 
@@ -865,6 +1263,11 @@ mod tests {
 
     #[test]
     fn unknown_paths_and_wrong_methods_resolve_distinctly() {
+        assert!(matches!(
+            resolve("GET", "/identitytoolkit.googleapis.com/v2/passwordPolicy"),
+            Resolution::Matched { route, project: None, tenant: None, .. }
+                if route.handler == Handler::PasswordPolicy
+        ));
         assert_eq!(
             resolve(
                 "POST",
@@ -882,7 +1285,8 @@ mod tests {
             Resolution::MethodNotAllowed {
                 class: RouteClass::EndUser,
                 project: None,
-                tenant: None
+                tenant: None,
+                ..
             }
         ));
         assert!(matches!(
@@ -893,16 +1297,23 @@ mod tests {
             Resolution::MethodNotAllowed {
                 class: RouteClass::Admin,
                 project: Some("demo-app"),
-                tenant: None
+                tenant: None,
+                ..
             }
         ));
         assert!(matches!(
             resolve("POST", "/identitytoolkit.googleapis.com/v1/projects/demo-app:createSessionCookie"),
-            Resolution::Matched { route, project: Some("demo-app"), tenant: None } if route.handler == Handler::AdminCreateSessionCookie
+            Resolution::Matched { route,
+                project: Some("demo-app"),
+                tenant: None,
+                .. } if route.handler == Handler::AdminCreateSessionCookie
         ));
         assert!(matches!(
             resolve("PATCH", "/emulator/v1/projects/demo-app/config"),
-            Resolution::Matched { route, project: Some("demo-app"), tenant: None } if route.handler == Handler::EmulatorPatchConfig
+            Resolution::Matched { route,
+                project: Some("demo-app"),
+                tenant: None,
+                .. } if route.handler == Handler::EmulatorPatchConfig
         ));
         assert!(matches!(
             resolve(
@@ -912,7 +1323,8 @@ mod tests {
             Resolution::Matched {
                 route,
                 project: Some("demo-app"),
-                tenant: Some("customer-a")
+                tenant: Some("customer-a"),
+                ..
             } if route.handler == Handler::AdminLookup
         ));
         // A project segment is exactly one segment.

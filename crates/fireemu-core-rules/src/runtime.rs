@@ -3,7 +3,7 @@
 use std::ops::Deref;
 use std::sync::{Arc, Mutex, RwLock};
 
-use crate::ast::Ruleset;
+use crate::ast::{Item, PathSegment, Ruleset, Span};
 use crate::coverage::RulesDiagnostics;
 use crate::lint::{lint_source, DiagnosticLevel, LintOptions};
 use crate::parse::{parse_ruleset, ParseError};
@@ -70,6 +70,7 @@ impl LoadedRules {
     /// `recursion-depth-chain-21-calls`), and the messages are its messages.
     pub fn from_source(source: &str) -> Result<Self, ParseError> {
         let ruleset = parse_ruleset(source)?;
+        validate_ruleset(&ruleset)?;
         let report = lint_source(source, &LintOptions::default());
         for diagnostic in &report.diagnostics {
             if diagnostic.level != DiagnosticLevel::Error {
@@ -82,7 +83,7 @@ impl LoadedRules {
                     diagnostic.maximum,
                     diagnostic.subject.as_deref().unwrap_or("the call chain")
                 ),
-                _ => continue,
+                _ => format!("{}: {}", diagnostic.limit_id, diagnostic.message),
             };
             let span = diagnostic.span.unwrap_or_default();
             return Err(ParseError {
@@ -104,6 +105,76 @@ impl LoadedRules {
     pub const fn is_loaded(&self) -> bool {
         self.ruleset.is_some()
     }
+}
+
+fn validation_error(span: Span, message: impl Into<String>) -> ParseError {
+    ParseError {
+        message: message.into(),
+        line: span.line.max(1),
+        column: span.column.max(1),
+        offset: span.offset,
+    }
+}
+
+fn validate_ruleset(ruleset: &Ruleset) -> Result<(), ParseError> {
+    if let Some(version) = ruleset.version.as_deref() {
+        if !matches!(version, "1" | "2") {
+            return Err(validation_error(
+                Span::default(),
+                format!("unsupported rules_version `{version}`"),
+            ));
+        }
+    }
+    let version = ruleset.version.as_deref();
+    for service in &ruleset.services {
+        validate_items(&service.items, version)?;
+    }
+    Ok(())
+}
+
+fn validate_items(items: &[Item], version: Option<&str>) -> Result<(), ParseError> {
+    for item in items {
+        let Item::Match(block) = item else {
+            continue;
+        };
+        let recursive = block
+            .path
+            .iter()
+            .filter_map(|segment| match segment {
+                PathSegment::RecursiveWildcard { span, .. } => Some(*span),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        if let Some(span) = recursive.get(1) {
+            return Err(validation_error(
+                *span,
+                "a match may contain at most one recursive wildcard",
+            ));
+        }
+        if version != Some("2") {
+            if let Some((_, span)) =
+                block
+                    .path
+                    .iter()
+                    .enumerate()
+                    .find_map(|(index, segment)| match segment {
+                        PathSegment::RecursiveWildcard { span, .. }
+                            if index + 1 != block.path.len() =>
+                        {
+                            Some((index, *span))
+                        }
+                        _ => None,
+                    })
+            {
+                return Err(validation_error(
+                    span,
+                    "in rules_version 1 a recursive wildcard must be the final path segment",
+                ));
+            }
+        }
+        validate_items(&block.items, version)?;
+    }
+    Ok(())
 }
 
 #[derive(Debug)]

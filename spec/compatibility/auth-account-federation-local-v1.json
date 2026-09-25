@@ -1,0 +1,1676 @@
+{
+  "account": {
+    "cases": [
+      {
+        "expected": {
+          "count": "4",
+          "ids": [
+            "a",
+            "b",
+            "c",
+            "d"
+          ],
+          "status": 200
+        },
+        "id": "unfiltered",
+        "request": {}
+      },
+      {
+        "expected": {
+          "count": "4",
+          "ids": [
+            "a",
+            "b",
+            "c",
+            "d"
+          ],
+          "status": 200
+        },
+        "id": "null-expression",
+        "request": {
+          "expression": null
+        }
+      },
+      {
+        "expected": {
+          "count": "4",
+          "ids": [
+            "a",
+            "b",
+            "c",
+            "d"
+          ],
+          "status": 200
+        },
+        "id": "empty-expression",
+        "request": {
+          "expression": []
+        }
+      },
+      {
+        "expected": {
+          "count": "1",
+          "ids": [
+            "a"
+          ],
+          "status": 200
+        },
+        "id": "email-case",
+        "request": {
+          "expression": [
+            {
+              "email": "A@EXAMPLE.COM"
+            }
+          ]
+        }
+      },
+      {
+        "expected": {
+          "count": "1",
+          "ids": [
+            "b"
+          ],
+          "status": 200
+        },
+        "id": "phone",
+        "request": {
+          "expression": [
+            {
+              "phoneNumber": "+15550000002"
+            }
+          ]
+        }
+      },
+      {
+        "expected": {
+          "count": "1",
+          "ids": [
+            "c"
+          ],
+          "status": 200
+        },
+        "id": "uid",
+        "request": {
+          "expression": [
+            {
+              "userId": "c"
+            }
+          ]
+        }
+      },
+      {
+        "expected": {
+          "count": "1",
+          "ids": [
+            "a"
+          ],
+          "status": 200
+        },
+        "id": "email-precedes-phone-and-uid",
+        "request": {
+          "expression": [
+            {
+              "email": "a@example.com",
+              "phoneNumber": "+15550000002",
+              "userId": "c"
+            }
+          ]
+        }
+      },
+      {
+        "expected": {
+          "count": "1",
+          "ids": [
+            "b"
+          ],
+          "status": 200
+        },
+        "id": "phone-precedes-uid",
+        "request": {
+          "expression": [
+            {
+              "email": null,
+              "phoneNumber": "+15550000002",
+              "userId": "c"
+            }
+          ]
+        }
+      },
+      {
+        "expected": {
+          "count": "1",
+          "ids": [
+            "a"
+          ],
+          "status": 200
+        },
+        "id": "empty-email-falls-through",
+        "request": {
+          "expression": [
+            {
+              "email": "",
+              "userId": "a"
+            }
+          ]
+        }
+      },
+      {
+        "expected": {
+          "count": "0",
+          "ids": [],
+          "status": 200
+        },
+        "id": "wildcards-are-literal",
+        "request": {
+          "expression": [
+            {
+              "email": "%@example.com"
+            }
+          ]
+        }
+      },
+      {
+        "expected": {
+          "count": "0",
+          "ids": [],
+          "status": 200
+        },
+        "id": "prefix-not-claimed",
+        "request": {
+          "expression": [
+            {
+              "email": "a@"
+            }
+          ]
+        }
+      },
+      {
+        "expected": {
+          "count": "0",
+          "ids": [],
+          "status": 200
+        },
+        "id": "uid-case-sensitive",
+        "request": {
+          "expression": [
+            {
+              "userId": "A"
+            }
+          ]
+        }
+      },
+      {
+        "expected": {
+          "count": "0",
+          "ids": [],
+          "status": 200
+        },
+        "id": "phone-exact",
+        "request": {
+          "expression": [
+            {
+              "phoneNumber": "15550000002"
+            }
+          ]
+        }
+      },
+      {
+        "expected": {
+          "count": "1",
+          "ids": [
+            "a"
+          ],
+          "status": 200
+        },
+        "id": "only-the-first-expression",
+        "request": {
+          "expression": [
+            {
+              "userId": "a"
+            },
+            {
+              "email": "a@example.com"
+            },
+            {
+              "userId": "c"
+            },
+            {
+              "userId": "d"
+            }
+          ]
+        }
+      },
+      {
+        "expected": {
+          "count": "1",
+          "ids": [
+            "a"
+          ],
+          "status": 200
+        },
+        "id": "filter-sort-page-asc",
+        "request": {
+          "expression": [
+            {
+              "userId": "a"
+            },
+            {
+              "email": "a@example.com"
+            },
+            {
+              "userId": "c"
+            },
+            {
+              "userId": "d"
+            }
+          ],
+          "limit": 2,
+          "offset": 0,
+          "sortBy": "NAME"
+        }
+      },
+      {
+        "expected": {
+          "count": "0",
+          "ids": [],
+          "status": 200
+        },
+        "id": "filter-sort-page-desc",
+        "request": {
+          "expression": [
+            {
+              "userId": "a"
+            },
+            {
+              "email": "a@example.com"
+            },
+            {
+              "userId": "c"
+            },
+            {
+              "userId": "d"
+            }
+          ],
+          "limit": 2,
+          "offset": 1,
+          "order": "DESC",
+          "sortBy": "NAME"
+        }
+      },
+      {
+        "expected": {
+          "count": "1",
+          "ids": null,
+          "status": 200
+        },
+        "id": "filtered-count",
+        "request": {
+          "expression": [
+            {
+              "userId": "a"
+            },
+            {
+              "email": "a@example.com"
+            },
+            {
+              "userId": "c"
+            },
+            {
+              "userId": "d"
+            }
+          ],
+          "returnUserInfo": false
+        }
+      },
+      {
+        "expected": {
+          "count": "0",
+          "ids": null,
+          "status": 200
+        },
+        "id": "empty-count",
+        "request": {
+          "expression": [
+            {
+              "userId": "none"
+            }
+          ],
+          "returnUserInfo": false
+        }
+      },
+      {
+        "expected": {
+          "count": "0",
+          "ids": [],
+          "status": 200
+        },
+        "id": "zero-limit",
+        "request": {
+          "expression": [
+            {
+              "userId": "a"
+            },
+            {
+              "email": "a@example.com"
+            },
+            {
+              "userId": "c"
+            },
+            {
+              "userId": "d"
+            }
+          ],
+          "limit": 0
+        }
+      },
+      {
+        "expected": {
+          "count": "0",
+          "ids": [],
+          "status": 200
+        },
+        "id": "max-offset",
+        "request": {
+          "expression": [
+            {
+              "userId": "a"
+            },
+            {
+              "email": "a@example.com"
+            },
+            {
+              "userId": "c"
+            },
+            {
+              "userId": "d"
+            }
+          ],
+          "offset": "9223372036854775807"
+        }
+      },
+      {
+        "expected": {
+          "count": null,
+          "ids": null,
+          "status": 400
+        },
+        "id": "object-array",
+        "request": {
+          "expression": {}
+        }
+      },
+      {
+        "expected": {
+          "count": null,
+          "ids": null,
+          "status": 400
+        },
+        "id": "sql-string",
+        "request": {
+          "expression": "SELECT *"
+        }
+      },
+      {
+        "expected": {
+          "count": null,
+          "ids": null,
+          "status": 400
+        },
+        "id": "bool-array",
+        "request": {
+          "expression": false
+        }
+      },
+      {
+        "expected": {
+          "count": null,
+          "ids": null,
+          "status": 400
+        },
+        "id": "null-item",
+        "request": {
+          "expression": [
+            null
+          ]
+        }
+      },
+      {
+        "expected": {
+          "count": null,
+          "ids": null,
+          "status": 400
+        },
+        "id": "list-item",
+        "request": {
+          "expression": [
+            []
+          ]
+        }
+      },
+      {
+        "expected": {
+          "count": null,
+          "ids": null,
+          "status": 400
+        },
+        "id": "bool-selector",
+        "request": {
+          "expression": [
+            {
+              "email": true
+            }
+          ]
+        }
+      },
+      {
+        "expected": {
+          "count": null,
+          "ids": null,
+          "status": 400
+        },
+        "id": "number-selector",
+        "request": {
+          "expression": [
+            {
+              "userId": 1
+            }
+          ]
+        }
+      },
+      {
+        "expected": {
+          "count": null,
+          "ids": null,
+          "status": 400
+        },
+        "id": "object-selector",
+        "request": {
+          "expression": [
+            {
+              "phoneNumber": {}
+            }
+          ]
+        }
+      },
+      {
+        "expected": {
+          "count": null,
+          "ids": null,
+          "status": 400
+        },
+        "id": "unknown-selector",
+        "request": {
+          "expression": [
+            {
+              "name": "A"
+            }
+          ]
+        }
+      },
+      {
+        "expected": {
+          "count": null,
+          "ids": null,
+          "status": 400
+        },
+        "id": "malformed-lower-priority",
+        "request": {
+          "expression": [
+            {
+              "email": "a@example.com",
+              "userId": false
+            }
+          ]
+        }
+      },
+      {
+        "expected": {
+          "count": null,
+          "ids": null,
+          "status": 400
+        },
+        "id": "unknown-lower-priority",
+        "request": {
+          "expression": [
+            {
+              "anything": null,
+              "email": "a@example.com"
+            }
+          ]
+        }
+      },
+      {
+        "expected": {
+          "count": null,
+          "ids": null,
+          "status": 400
+        },
+        "id": "control-character",
+        "request": {
+          "expression": [
+            {
+              "userId": "a\n"
+            }
+          ]
+        }
+      },
+      {
+        "expected": {
+          "count": "4",
+          "ids": [
+            "a",
+            "b",
+            "c",
+            "d"
+          ],
+          "status": 200
+        },
+        "id": "empty-item-is-unconstrained",
+        "request": {
+          "expression": [
+            {}
+          ]
+        }
+      },
+      {
+        "expected": {
+          "count": "4",
+          "ids": [
+            "a",
+            "b",
+            "c",
+            "d"
+          ],
+          "status": 200
+        },
+        "id": "null-selector-is-unconstrained",
+        "request": {
+          "expression": [
+            {
+              "userId": null
+            }
+          ]
+        }
+      },
+      {
+        "expected": {
+          "count": "1",
+          "ids": [
+            "a"
+          ],
+          "status": 200
+        },
+        "id": "later-empty-item-is-ignored",
+        "request": {
+          "expression": [
+            {
+              "userId": "a"
+            },
+            {}
+          ]
+        }
+      },
+      {
+        "expected": {
+          "count": "1",
+          "ids": [
+            "a"
+          ],
+          "status": 200
+        },
+        "id": "predicate-count-exact",
+        "request": {
+          "expression": [
+            {
+              "userId": "a"
+            },
+            {
+              "userId": "a"
+            },
+            {
+              "userId": "a"
+            },
+            {
+              "userId": "a"
+            },
+            {
+              "userId": "a"
+            },
+            {
+              "userId": "a"
+            },
+            {
+              "userId": "a"
+            },
+            {
+              "userId": "a"
+            },
+            {
+              "userId": "a"
+            },
+            {
+              "userId": "a"
+            },
+            {
+              "userId": "a"
+            },
+            {
+              "userId": "a"
+            },
+            {
+              "userId": "a"
+            },
+            {
+              "userId": "a"
+            },
+            {
+              "userId": "a"
+            },
+            {
+              "userId": "a"
+            },
+            {
+              "userId": "a"
+            },
+            {
+              "userId": "a"
+            },
+            {
+              "userId": "a"
+            },
+            {
+              "userId": "a"
+            },
+            {
+              "userId": "a"
+            },
+            {
+              "userId": "a"
+            },
+            {
+              "userId": "a"
+            },
+            {
+              "userId": "a"
+            },
+            {
+              "userId": "a"
+            },
+            {
+              "userId": "a"
+            },
+            {
+              "userId": "a"
+            },
+            {
+              "userId": "a"
+            },
+            {
+              "userId": "a"
+            },
+            {
+              "userId": "a"
+            },
+            {
+              "userId": "a"
+            },
+            {
+              "userId": "a"
+            },
+            {
+              "userId": "a"
+            },
+            {
+              "userId": "a"
+            },
+            {
+              "userId": "a"
+            },
+            {
+              "userId": "a"
+            },
+            {
+              "userId": "a"
+            },
+            {
+              "userId": "a"
+            },
+            {
+              "userId": "a"
+            },
+            {
+              "userId": "a"
+            },
+            {
+              "userId": "a"
+            },
+            {
+              "userId": "a"
+            },
+            {
+              "userId": "a"
+            },
+            {
+              "userId": "a"
+            },
+            {
+              "userId": "a"
+            },
+            {
+              "userId": "a"
+            },
+            {
+              "userId": "a"
+            },
+            {
+              "userId": "a"
+            },
+            {
+              "userId": "a"
+            },
+            {
+              "userId": "a"
+            },
+            {
+              "userId": "a"
+            },
+            {
+              "userId": "a"
+            },
+            {
+              "userId": "a"
+            },
+            {
+              "userId": "a"
+            },
+            {
+              "userId": "a"
+            },
+            {
+              "userId": "a"
+            },
+            {
+              "userId": "a"
+            },
+            {
+              "userId": "a"
+            },
+            {
+              "userId": "a"
+            },
+            {
+              "userId": "a"
+            },
+            {
+              "userId": "a"
+            },
+            {
+              "userId": "a"
+            },
+            {
+              "userId": "a"
+            },
+            {
+              "userId": "a"
+            },
+            {
+              "userId": "a"
+            },
+            {
+              "userId": "a"
+            },
+            {
+              "userId": "a"
+            },
+            {
+              "userId": "a"
+            },
+            {
+              "userId": "a"
+            },
+            {
+              "userId": "a"
+            },
+            {
+              "userId": "a"
+            },
+            {
+              "userId": "a"
+            },
+            {
+              "userId": "a"
+            },
+            {
+              "userId": "a"
+            },
+            {
+              "userId": "a"
+            },
+            {
+              "userId": "a"
+            },
+            {
+              "userId": "a"
+            },
+            {
+              "userId": "a"
+            },
+            {
+              "userId": "a"
+            },
+            {
+              "userId": "a"
+            },
+            {
+              "userId": "a"
+            },
+            {
+              "userId": "a"
+            },
+            {
+              "userId": "a"
+            },
+            {
+              "userId": "a"
+            },
+            {
+              "userId": "a"
+            },
+            {
+              "userId": "a"
+            },
+            {
+              "userId": "a"
+            },
+            {
+              "userId": "a"
+            },
+            {
+              "userId": "a"
+            },
+            {
+              "userId": "a"
+            },
+            {
+              "userId": "a"
+            },
+            {
+              "userId": "a"
+            },
+            {
+              "userId": "a"
+            },
+            {
+              "userId": "a"
+            },
+            {
+              "userId": "a"
+            },
+            {
+              "userId": "a"
+            },
+            {
+              "userId": "a"
+            },
+            {
+              "userId": "a"
+            },
+            {
+              "userId": "a"
+            },
+            {
+              "userId": "a"
+            },
+            {
+              "userId": "a"
+            },
+            {
+              "userId": "a"
+            },
+            {
+              "userId": "a"
+            },
+            {
+              "userId": "a"
+            },
+            {
+              "userId": "a"
+            },
+            {
+              "userId": "a"
+            },
+            {
+              "userId": "a"
+            },
+            {
+              "userId": "a"
+            },
+            {
+              "userId": "a"
+            },
+            {
+              "userId": "a"
+            },
+            {
+              "userId": "a"
+            },
+            {
+              "userId": "a"
+            },
+            {
+              "userId": "a"
+            },
+            {
+              "userId": "a"
+            },
+            {
+              "userId": "a"
+            },
+            {
+              "userId": "a"
+            },
+            {
+              "userId": "a"
+            },
+            {
+              "userId": "a"
+            },
+            {
+              "userId": "a"
+            },
+            {
+              "userId": "a"
+            },
+            {
+              "userId": "a"
+            },
+            {
+              "userId": "a"
+            },
+            {
+              "userId": "a"
+            },
+            {
+              "userId": "a"
+            },
+            {
+              "userId": "a"
+            },
+            {
+              "userId": "a"
+            },
+            {
+              "userId": "a"
+            },
+            {
+              "userId": "a"
+            }
+          ]
+        }
+      },
+      {
+        "expected": {
+          "count": null,
+          "ids": [],
+          "status": 400
+        },
+        "id": "predicate-count-over",
+        "request": {
+          "expression": [
+            {
+              "userId": "a"
+            },
+            {
+              "userId": "a"
+            },
+            {
+              "userId": "a"
+            },
+            {
+              "userId": "a"
+            },
+            {
+              "userId": "a"
+            },
+            {
+              "userId": "a"
+            },
+            {
+              "userId": "a"
+            },
+            {
+              "userId": "a"
+            },
+            {
+              "userId": "a"
+            },
+            {
+              "userId": "a"
+            },
+            {
+              "userId": "a"
+            },
+            {
+              "userId": "a"
+            },
+            {
+              "userId": "a"
+            },
+            {
+              "userId": "a"
+            },
+            {
+              "userId": "a"
+            },
+            {
+              "userId": "a"
+            },
+            {
+              "userId": "a"
+            },
+            {
+              "userId": "a"
+            },
+            {
+              "userId": "a"
+            },
+            {
+              "userId": "a"
+            },
+            {
+              "userId": "a"
+            },
+            {
+              "userId": "a"
+            },
+            {
+              "userId": "a"
+            },
+            {
+              "userId": "a"
+            },
+            {
+              "userId": "a"
+            },
+            {
+              "userId": "a"
+            },
+            {
+              "userId": "a"
+            },
+            {
+              "userId": "a"
+            },
+            {
+              "userId": "a"
+            },
+            {
+              "userId": "a"
+            },
+            {
+              "userId": "a"
+            },
+            {
+              "userId": "a"
+            },
+            {
+              "userId": "a"
+            },
+            {
+              "userId": "a"
+            },
+            {
+              "userId": "a"
+            },
+            {
+              "userId": "a"
+            },
+            {
+              "userId": "a"
+            },
+            {
+              "userId": "a"
+            },
+            {
+              "userId": "a"
+            },
+            {
+              "userId": "a"
+            },
+            {
+              "userId": "a"
+            },
+            {
+              "userId": "a"
+            },
+            {
+              "userId": "a"
+            },
+            {
+              "userId": "a"
+            },
+            {
+              "userId": "a"
+            },
+            {
+              "userId": "a"
+            },
+            {
+              "userId": "a"
+            },
+            {
+              "userId": "a"
+            },
+            {
+              "userId": "a"
+            },
+            {
+              "userId": "a"
+            },
+            {
+              "userId": "a"
+            },
+            {
+              "userId": "a"
+            },
+            {
+              "userId": "a"
+            },
+            {
+              "userId": "a"
+            },
+            {
+              "userId": "a"
+            },
+            {
+              "userId": "a"
+            },
+            {
+              "userId": "a"
+            },
+            {
+              "userId": "a"
+            },
+            {
+              "userId": "a"
+            },
+            {
+              "userId": "a"
+            },
+            {
+              "userId": "a"
+            },
+            {
+              "userId": "a"
+            },
+            {
+              "userId": "a"
+            },
+            {
+              "userId": "a"
+            },
+            {
+              "userId": "a"
+            },
+            {
+              "userId": "a"
+            },
+            {
+              "userId": "a"
+            },
+            {
+              "userId": "a"
+            },
+            {
+              "userId": "a"
+            },
+            {
+              "userId": "a"
+            },
+            {
+              "userId": "a"
+            },
+            {
+              "userId": "a"
+            },
+            {
+              "userId": "a"
+            },
+            {
+              "userId": "a"
+            },
+            {
+              "userId": "a"
+            },
+            {
+              "userId": "a"
+            },
+            {
+              "userId": "a"
+            },
+            {
+              "userId": "a"
+            },
+            {
+              "userId": "a"
+            },
+            {
+              "userId": "a"
+            },
+            {
+              "userId": "a"
+            },
+            {
+              "userId": "a"
+            },
+            {
+              "userId": "a"
+            },
+            {
+              "userId": "a"
+            },
+            {
+              "userId": "a"
+            },
+            {
+              "userId": "a"
+            },
+            {
+              "userId": "a"
+            },
+            {
+              "userId": "a"
+            },
+            {
+              "userId": "a"
+            },
+            {
+              "userId": "a"
+            },
+            {
+              "userId": "a"
+            },
+            {
+              "userId": "a"
+            },
+            {
+              "userId": "a"
+            },
+            {
+              "userId": "a"
+            },
+            {
+              "userId": "a"
+            },
+            {
+              "userId": "a"
+            },
+            {
+              "userId": "a"
+            },
+            {
+              "userId": "a"
+            },
+            {
+              "userId": "a"
+            },
+            {
+              "userId": "a"
+            },
+            {
+              "userId": "a"
+            },
+            {
+              "userId": "a"
+            },
+            {
+              "userId": "a"
+            },
+            {
+              "userId": "a"
+            },
+            {
+              "userId": "a"
+            },
+            {
+              "userId": "a"
+            },
+            {
+              "userId": "a"
+            },
+            {
+              "userId": "a"
+            },
+            {
+              "userId": "a"
+            },
+            {
+              "userId": "a"
+            },
+            {
+              "userId": "a"
+            },
+            {
+              "userId": "a"
+            },
+            {
+              "userId": "a"
+            },
+            {
+              "userId": "a"
+            },
+            {
+              "userId": "a"
+            },
+            {
+              "userId": "a"
+            },
+            {
+              "userId": "a"
+            },
+            {
+              "userId": "a"
+            },
+            {
+              "userId": "a"
+            },
+            {
+              "userId": "a"
+            },
+            {
+              "userId": "a"
+            },
+            {
+              "userId": "a"
+            },
+            {
+              "userId": "a"
+            },
+            {
+              "userId": "a"
+            },
+            {
+              "userId": "a"
+            },
+            {
+              "userId": "a"
+            },
+            {
+              "userId": "a"
+            },
+            {
+              "userId": "a"
+            },
+            {
+              "userId": "a"
+            }
+          ]
+        }
+      },
+      {
+        "expected": {
+          "count": "0",
+          "ids": [],
+          "status": 200
+        },
+        "id": "selector-bytes-exact",
+        "request": {
+          "expression": [
+            {
+              "userId": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+            }
+          ]
+        }
+      },
+      {
+        "expected": {
+          "count": null,
+          "ids": [],
+          "status": 400
+        },
+        "id": "selector-bytes-over",
+        "request": {
+          "expression": [
+            {
+              "userId": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+            }
+          ]
+        }
+      },
+      {
+        "expected": {
+          "count": "0",
+          "ids": [],
+          "status": 200
+        },
+        "id": "selector-unicode-below",
+        "request": {
+          "expression": [
+            {
+              "userId": "あああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああ"
+            }
+          ]
+        }
+      },
+      {
+        "expected": {
+          "count": null,
+          "ids": [],
+          "status": 400
+        },
+        "id": "selector-unicode-over",
+        "request": {
+          "expression": [
+            {
+              "userId": "ああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああ"
+            }
+          ]
+        }
+      },
+      {
+        "expected": {
+          "count": null,
+          "ids": null,
+          "status": 400
+        },
+        "id": "count-offset-refused",
+        "request": {
+          "expression": [
+            {
+              "userId": "a"
+            },
+            {
+              "email": "a@example.com"
+            },
+            {
+              "userId": "c"
+            },
+            {
+              "userId": "d"
+            }
+          ],
+          "offset": 1,
+          "returnUserInfo": false
+        }
+      }
+    ],
+    "caveats": [
+      "OR/exact matching are local policy; not verified production search semantics",
+      "128 predicates and 4096 UTF-8 bytes are local parser bounds, not service quotas"
+    ],
+    "fixture": [
+      {
+        "displayName": "B",
+        "email": "a@example.com",
+        "localId": "a"
+      },
+      {
+        "displayName": "A",
+        "email": "b@example.com",
+        "localId": "b",
+        "phoneNumber": "+15550000002"
+      },
+      {
+        "displayName": "Z",
+        "email": "z@example.com",
+        "localId": "c"
+      },
+      {
+        "displayName": "C",
+        "email": "d@example.com",
+        "localId": "d"
+      }
+    ],
+    "policy": "local-exact-union-v1"
+  },
+  "federation": {
+    "localTtlSeconds": 300,
+    "maxAggregateBytes": 1048576,
+    "maxEntryBytes": 65536,
+    "maxHandles": 256,
+    "nativeSequenceObligations": [
+      "reusable-before-expiry-without-extension",
+      "signed-assertion-expiry-rechecked",
+      "namespace-and-reset-generation-bound",
+      "never-cache-link-id-token",
+      "different-validation-authorities-refused",
+      "changed-pin-refused",
+      "current-provider-config-rechecked",
+      "current-blocking-hooks-applied",
+      "snapshot-does-not-export-or-resurrect",
+      "malformed-token-no-fallback",
+      "no-live-eviction",
+      "bounded-logical-bytes",
+      "fixture-mode-explicit"
+    ],
+    "policy": "local-pending-token-v1",
+    "samlFixtureCases": [
+      {
+        "id": "saml-name-empty",
+        "response": {
+          "assertion": {
+            "subject": {
+              "nameId": ""
+            }
+          }
+        },
+        "status": 400
+      },
+      {
+        "id": "saml-name-boolean",
+        "response": {
+          "assertion": {
+            "subject": {
+              "nameId": false
+            }
+          }
+        },
+        "status": 400
+      },
+      {
+        "id": "saml-name-integer",
+        "response": {
+          "assertion": {
+            "subject": {
+              "nameId": 1
+            }
+          }
+        },
+        "status": 400
+      },
+      {
+        "id": "saml-name-array",
+        "response": {
+          "assertion": {
+            "subject": {
+              "nameId": []
+            }
+          }
+        },
+        "status": 400
+      },
+      {
+        "id": "saml-name-object",
+        "response": {
+          "assertion": {
+            "subject": {
+              "nameId": {}
+            }
+          }
+        },
+        "status": 400
+      },
+      {
+        "id": "saml-name-null",
+        "response": {
+          "assertion": {
+            "subject": {
+              "nameId": null
+            }
+          }
+        },
+        "status": 400
+      },
+      {
+        "id": "saml-name-control",
+        "response": {
+          "assertion": {
+            "subject": {
+              "nameId": "bad\nname"
+            }
+          }
+        },
+        "status": 400
+      },
+      {
+        "id": "saml-assertion-type",
+        "response": {
+          "assertion": false
+        },
+        "status": 400
+      },
+      {
+        "id": "saml-subject-type",
+        "response": {
+          "assertion": {
+            "subject": 1
+          }
+        },
+        "status": 400
+      },
+      {
+        "id": "saml-attributes-type",
+        "response": {
+          "assertion": {
+            "attributeStatements": [],
+            "subject": {
+              "nameId": "person@example.test"
+            }
+          }
+        },
+        "status": 400
+      },
+      {
+        "id": "saml-valid-json-fixture",
+        "response": {
+          "assertion": {
+            "subject": {
+              "nameId": "person@example.test"
+            }
+          }
+        },
+        "status": 200
+      }
+    ],
+    "unimplemented": [
+      "signed-XML-SAML",
+      "redirect-authorization-code-exchange",
+      "legacy-deprecated-pendingIdToken"
+    ]
+  },
+  "kind": "auth-account-federation-local-v1",
+  "nativeExecuted": false,
+  "productionAllowed": false,
+  "productionExecuted": false,
+  "schemaVersion": 1
+}

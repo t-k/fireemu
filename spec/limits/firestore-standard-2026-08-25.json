@@ -112,9 +112,9 @@
       "maximum": 1500,
       "precision": "boundary-conformance",
       "enforcementStage": "request",
-      "implemented": "unsupported",
+      "implemented": "implemented",
       "officialText": "Maximum size of a field path: 1,500 bytes",
-      "notes": "Measured on the canonical field path representation."
+      "notes": "Measured on the canonical field path: the raw segment bytes plus one separator per join, with backtick quoting excluded as a client-side notation. Every path a client names is bounded by FieldPath::from_segments. Every path a document implies by nesting is bounded by fireemu_core_firestore::store::check_stored_field_paths, after the document charge so that an oversized document still reports its size. A path implied by nested maps was already refused at the same boundary through automatic index accounting and stays refused under both profiles; a path implied through an array element was not, because index_usage::automatic_usage does not walk into arrays, so that case is refused in the strict profile only. Production has not been observed on this boundary."
     },
     {
       "id": "FS-LIMIT-FIELD-VALUE-BYTES",
@@ -124,9 +124,9 @@
       "maximum": 1048487,
       "precision": "boundary-conformance",
       "enforcementStage": "commit",
-      "implemented": "unsupported",
+      "implemented": "implemented",
       "officialText": "Maximum size of a field value: 1 MiB - 89 bytes (1,048,487 bytes)",
-      "notes": "String and bytes payloads are limited to 1,048,487 bytes on every stored write, including nested values. The string boundary was verified against production on 2026-09-07. Aggregate value accounting remains unverified, so this entry does not yet claim full implementation."
+      "notes": "A string or bytes payload is limited to 1,048,487 raw payload bytes on every stored write, including nested values; that boundary and its message were verified against production on 2026-09-07 (conformance/firestore-production-matrix.json, errors/rest-shapes / document-over-one-mebibyte) and are refused under either profile. A map or array value is measured with the official storage-size formula, the catalog's logical-bytes unit, and is refused only in the strict profile: production has not been observed on an aggregate value, and the compatibility contract forbids adding a refusal to the emulator profile. Documented, production observation pending for the aggregate metric."
     },
     {
       "id": "FS-LIMIT-NESTED-MAP-ARRAY-DEPTH",
@@ -148,9 +148,9 @@
       "maximum": 10485760,
       "precision": "boundary-conformance",
       "enforcementStage": "request",
-      "implemented": "unsupported",
+      "implemented": "implemented",
       "officialText": "Maximum API request size: 10 MiB",
-      "notes": "Measured on the message payload before protocol decode."
+      "notes": "The official 10 MiB quota remains declared, but its unit must not be inferred from serialized REST JSON size. Local non-Commit REST and WebChannel requests use the 10 MiB bounded body collector, and local gRPC unary and streamed requests use tonic's 10 MiB decoding bound; their production parity remains PENDING_RECORDING under FS-DATA-WRITE. Strict REST documents:commit has a separately observed 11 MiB raw JSON allowance: two 2026-09-23 sandbox recordings accepted a compact 11,534,336-byte body and refused 11,534,337 bytes with 400 INVALID_ARGUMENT and 'Request payload size exceeds the limit: 11534336 bytes.'. A 16 MiB + 1 byte Commit was likewise refused with typed absence of its targets. Four concrete Commit JSON samples at 10,485,759, 10,485,760, 10,485,761 and 11,441,443 bytes were accepted in production and by the current strict artifact with successful readbacks. These observations do not establish a decoded-protobuf size boundary, a universal REST threshold, or WebChannel/gRPC production behavior. The emulator profile retains its legacy local refusal shape outside the strict Commit exception."
     },
     {
       "id": "FS-LIMIT-TRANSACTION-TOTAL-TIME",
@@ -274,9 +274,9 @@
       "maximum": 1500,
       "precision": "boundary-conformance",
       "enforcementStage": "commit",
-      "implemented": "unsupported",
+      "implemented": "implemented",
       "officialText": "Maximum size of an indexed field value: 1,500 bytes; values over 1,500 bytes are truncated in the index",
-      "notes": "Production truncates the indexed representation; do not replace with a plain rejection."
+      "notes": "The published rule says indexed field values over 1,500 bytes are truncated, but the FS-DATA-WRITE sandbox recording shows that a long reference value is charged at its full document-name size for index-entry limits. fireemu_core_firestore::size::indexed_value_size therefore truncates non-reference values to 1,500 bytes and retains the full reference charge. This is an index-size charge, not a refusal by the indexed-value limit itself. Local queries scan documents rather than stored index entries, so truncation does not alter local ordering or selection. The recording establishes the long-reference exception for its observed path shapes, not every possible reference form."
     },
     {
       "id": "FS-LIMIT-EXPORT-IMPORT-RATE",

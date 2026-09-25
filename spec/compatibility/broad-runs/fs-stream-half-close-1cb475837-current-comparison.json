@@ -1,0 +1,101 @@
+{
+  "conditionId": "FS-DATA-WRITE/write-stream-half-close",
+  "recipeIds": ["writes/write-stream-terminal/half-close"],
+  "productionRecordingDigests": [
+    "ba880dc6feb56588256298deba48c9cbfd53de115e2f9381968867a28279d56f",
+    "ba880dc6feb56588256298deba48c9cbfd53de115e2f9381968867a28279d56f"
+  ],
+  "productionRecordingTimes": ["2026-09-23T14:36:34.641Z", "2026-09-23T14:46:18.932Z"],
+  "productionFixturePath": "conformance/fs-data-write-production-matrix.json",
+  "artifactSha256": "2af3f08c4d453459af86c9258f2283cb38fc7e74d83d388018cbdbb29e892a6a",
+  "artifactSourceCommit": "1cb4758372f21a467306a0a701994b7c1a02a8bb",
+  "localConfigSha256": "0f15f02dbfef3f0ee5cd6302684e8bb547b8c49dea5a825deeb57b2938545f0b",
+  "recipeSha256": "e4c9363c00d2df590b4723fb7960292e947a29c435a0c6f137c8236667dfbde3",
+  "comparisonMode": "sandbox-stream-comparator",
+  "normalizationApproval": "docs.local/instructions/2026-09-24-fs-data-write-directive-addendum-4.md#5",
+  "localRunPath": "conformance/.runs/fs-data-write-local-ePbOM9",
+  "sourceBinding": {
+    "sourceHead": "1cb4758372f21a467306a0a701994b7c1a02a8bb",
+    "executableSha256": "2af3f08c4d453459af86c9258f2283cb38fc7e74d83d388018cbdbb29e892a6a",
+    "executableSha256After": "2af3f08c4d453459af86c9258f2283cb38fc7e74d83d388018cbdbb29e892a6a",
+    "bindingFileSha256": "ea1c8bf15deb90fb70723e7a9a0ca3e1854779da79fb3473c6f8ab6451f7d37d",
+    "streamResultsSha256": "552b434a93f637be61d4d1ac5d8e22ecc682bad60958603bb29029b8e305fa80",
+    "corpusSha256": "407099fc6bb3137fdf2ca5294f0b8ef347e819bead6ab3085e804842bdb20450"
+  },
+  "result": {
+    "comparableRecipes": 1,
+    "mismatchedRecipes": 0,
+    "wholeRunComparableRestPrograms": 39,
+    "wholeRunComparableStreams": 2,
+    "wholeRunKnownMismatchRows": 9,
+    "wholeRunPendingRestPrograms": 39,
+    "wholeRunPendingStreams": 5
+  },
+  "productionStreams": {
+    "writes/write-stream-terminal/half-close": {
+      "events": [
+        {
+          "type": "data",
+          "value": {
+            "commitTime": null,
+            "streamId": "nonempty-string",
+            "streamToken": "nonempty-bytes",
+            "writeResults": []
+          }
+        },
+        {
+          "type": "status",
+          "value": {
+            "code": 0,
+            "details": "",
+            "trailers": [
+              { "key": "content-disposition", "kind": "ascii", "value": "attachment" },
+              { "key": "x-debug-tracking-id", "kind": "ascii", "value": "nonempty-volatile-id" }
+            ]
+          }
+        },
+        { "type": "end" }
+      ],
+      "sentFrames": 1,
+      "status": {
+        "code": 0,
+        "details": "",
+        "trailers": [
+          { "key": "content-disposition", "kind": "ascii", "value": "attachment" },
+          { "key": "x-debug-tracking-id", "kind": "ascii", "value": "nonempty-volatile-id" }
+        ]
+      }
+    }
+  },
+  "localStreams": {
+    "writes/write-stream-terminal/half-close": {
+      "events": [
+        {
+          "type": "data",
+          "value": {
+            "commitTime": null,
+            "streamId": "nonempty-string",
+            "streamToken": "nonempty-bytes",
+            "writeResults": []
+          }
+        },
+        {
+          "type": "status",
+          "value": {
+            "code": 0,
+            "details": "",
+            "trailers": [{ "key": "content-disposition", "kind": "ascii", "value": "attachment" }]
+          }
+        },
+        { "type": "end" }
+      ],
+      "sentFrames": 1,
+      "status": {
+        "code": 0,
+        "details": "",
+        "trailers": [{ "key": "content-disposition", "kind": "ascii", "value": "attachment" }]
+      }
+    }
+  },
+  "differences": []
+}

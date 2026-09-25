@@ -1,0 +1,49 @@
+{
+  "kind": "fs-write-transaction-saved-comparison-v2",
+  "campaignId": "FS-WRITE-TXN-PRECEDENCE-01",
+  "evidenceCategory": "saved-production-reference-comparison",
+  "productionSourceCommit": "dee737c14e68eb4f546b7ca4c827871fc48a2503",
+  "repairedArtifactSourceCommit": "567565bdd654cab00dbb84101edcc7bdc628e230",
+  "repairedArtifactSha256": "e792e0bc1947bbd227b3ee9778eca093cda94fbde767911dd6139a6cbfd90be4",
+  "comparatorSourceCommit": "6dff3192a6b8b23ea462730bfc105747849a7788",
+  "independentlyReviewedComparatorCommit": "bed441bd4b3af17710326107f3e85a62aaf20fc3",
+  "acquisitionValidated": true,
+  "originalClassification": "SEMANTIC_MISMATCH",
+  "preFixClassificationWithV2": "SEMANTIC_MISMATCH",
+  "repairedClassification": "EXPECTED_NONDETERMINISM",
+  "promotionReady": false,
+  "newProductionRequests": 0,
+  "privateEvidenceSha256": {
+    "originalProductionReceipt": "12956fbe82acefc106093eb2cd913ede9092f74aa98bd29f39e795492754b3f3",
+    "repairedLocalReceipt": "34724f3881f0920c6a3afc14cd735066d5f07e0b25411684e4552c284da142ab",
+    "independentlyReproducedComparison": "1ee6c470a5847f02c4b26f5ca7e87d9b2e798a856b955f054776dfb7dd27826e",
+    "integratedComparison": "9c4af3b89364d86cb8b374bf6619d4936b3cbd58695c0b4025fe8cd248b7d9db"
+  },
+  "validation": {
+    "nodeTestsPassed": 92,
+    "nodeTestsSkipped": 0,
+    "actualSavedInputIntegrationTestsPassed": 1,
+    "independentReviewApproved": true,
+    "originalReceiptAndV1Preserved": true,
+    "repairedLocalCleanupComplete": true,
+    "repairedLocalReservationReleased": true,
+    "repairedLocalProcessesClosed": true
+  },
+  "closure": {
+    "parents": ["FS-DATA-WRITE", "FS-TRANSACTION"],
+    "repairedMismatchClusters": 1,
+    "newlyObservedFiniteCaseGroups": 0,
+    "compatVerifiedParents": 0,
+    "targetParents": 14,
+    "remaining": [
+      "Other declared Commit, BatchWrite, transaction and catalog-limit conditions remain open.",
+      "Parent promotion still requires final-artifact regression, complete declared evidence and independent closure review."
+    ]
+  },
+  "limitations": [
+    "The comparison covers one finite stream/transaction case group, not all Write or transaction behavior.",
+    "Only exact request-bound resource identity is normalized; diagnostic grammar, punctuation and prefixes remain significant.",
+    "The integrated comparison hash differs from the independently reproduced candidate because source file paths are bound; the reviewed file contents and classifications match.",
+    "No production permission or nonce was reused for a new execution."
+  ]
+}

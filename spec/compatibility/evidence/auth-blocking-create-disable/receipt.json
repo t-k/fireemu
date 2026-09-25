@@ -1,0 +1,211 @@
+{
+  "acceptance": "candidate",
+  "corpus": {
+    "cases": [
+      "control-c-signup",
+      "control-c-signup-readback",
+      "control-c-signin",
+      "target-t-signup",
+      "target-t-token-lookup",
+      "target-t-token-refresh",
+      "target-t-record-readback",
+      "target-t-signin",
+      "target-t-second-signup",
+      "control-c-final-signin"
+    ],
+    "revision": 2,
+    "slice": "auth-blocking-create-disable"
+  },
+  "production": {
+    "cases": [
+      {
+        "checks": {
+          "derivedLookup": true,
+          "emailMatches": true,
+          "expiryIsPositiveInteger": true,
+          "expiryMatchesOneHour": true,
+          "idTokenPresent": true,
+          "noError": true,
+          "refreshTokenPresent": true,
+          "uidMatches": true
+        },
+        "elapsedMs": 2186,
+        "httpStatus": 200,
+        "id": "control-c-signup",
+        "observedError": null,
+        "outcome": "accepted",
+        "skipped": false
+      },
+      {
+        "checks": {
+          "notDisabled": true,
+          "photoUrlPersisted": false,
+          "recordExists": true
+        },
+        "elapsedMs": 2535,
+        "httpStatus": 200,
+        "id": "control-c-signup-readback",
+        "observedError": null,
+        "outcome": "accepted",
+        "skipped": false
+      },
+      {
+        "checks": {
+          "derivedLookup": true,
+          "emailMatches": true,
+          "expiryIsPositiveInteger": true,
+          "expiryMatchesOneHour": true,
+          "idTokenPresent": true,
+          "noError": true,
+          "refreshTokenPresent": true,
+          "uidMatches": true
+        },
+        "elapsedMs": 3142,
+        "httpStatus": 200,
+        "id": "control-c-signin",
+        "observedError": null,
+        "outcome": "accepted",
+        "skipped": false
+      },
+      {
+        "checks": {},
+        "elapsedMs": 4484,
+        "httpStatus": 400,
+        "id": "target-t-signup",
+        "observedError": "USER_DISABLED",
+        "outcome": "refused",
+        "skipped": false
+      },
+      {
+        "checks": {},
+        "elapsedMs": 4484,
+        "httpStatus": null,
+        "id": "target-t-token-lookup",
+        "observedError": null,
+        "outcome": "skipped",
+        "skipped": true
+      },
+      {
+        "checks": {},
+        "elapsedMs": 4484,
+        "httpStatus": null,
+        "id": "target-t-token-refresh",
+        "observedError": null,
+        "outcome": "skipped",
+        "skipped": true
+      },
+      {
+        "checks": {
+          "disabledPersisted": true,
+          "recordExists": true
+        },
+        "elapsedMs": 4794,
+        "httpStatus": 200,
+        "id": "target-t-record-readback",
+        "observedError": null,
+        "outcome": "accepted",
+        "skipped": false
+      },
+      {
+        "checks": {},
+        "elapsedMs": 5083,
+        "httpStatus": 400,
+        "id": "target-t-signin",
+        "observedError": "USER_DISABLED",
+        "outcome": "refused",
+        "skipped": false
+      },
+      {
+        "checks": {},
+        "elapsedMs": 5471,
+        "httpStatus": 400,
+        "id": "target-t-second-signup",
+        "observedError": "EMAIL_EXISTS",
+        "outcome": "refused",
+        "skipped": false
+      },
+      {
+        "checks": {
+          "derivedLookup": true,
+          "emailMatches": true,
+          "expiryIsPositiveInteger": true,
+          "expiryMatchesOneHour": true,
+          "idTokenPresent": true,
+          "noError": true,
+          "refreshTokenPresent": true,
+          "uidMatches": true
+        },
+        "elapsedMs": 6098,
+        "httpStatus": 200,
+        "id": "control-c-final-signin",
+        "observedError": null,
+        "outcome": "accepted",
+        "skipped": false
+      }
+    ],
+    "cleanup": {
+      "c": {
+        "emailAbsent": true,
+        "uidAbsent": true
+      },
+      "t": {
+        "emailAbsent": true,
+        "uidAbsent": true
+      }
+    },
+    "configDigestMatches": true,
+    "configRestored": true,
+    "configRestoredReadback": {
+      "blockingFunctions": {
+        "forwardInboundCredentials": {}
+      },
+      "mfa": {
+        "state": "DISABLED"
+      },
+      "phoneNumber": {},
+      "smsRegionConfig": {
+        "allowlistOnly": {}
+      }
+    },
+    "configuration": {
+      "adminPasswordPolicyAbsent": true,
+      "blockingTriggersAbsent": true,
+      "emailEnabled": true,
+      "improvedEmailPrivacy": true,
+      "passwordRequired": true,
+      "sha256": "7878eb2600c66f48c82ef55fb8c2443ab15689ea7542a77fbda206da06f817c2"
+    },
+    "functionRemoved": true,
+    "hook": {
+      "deployed": true,
+      "triggerReadback": true
+    },
+    "privateReceiptSha256": "ba635296450941a290ef17849264eb74e7e08121d7d9e5dead1757db150c0978",
+    "probeSourceCommit": "f828b4b5d3737857aa4559b4e41d434f7fd2dca4",
+    "recordedAt": "2026-09-11T16:04:45.310979+00:00",
+    "recordedWith": {
+      "probeSourceCommit": "f828b4b5d3737857aa4559b4e41d434f7fd2dca4",
+      "recorderCommit": "4806cb3670c28fdcbed920516cb8781165393618",
+      "recorderInputs": {
+        "tools/auth-blocking-create-disable/create_contract.py": "bf12630cef3e94da2b216737c28a6225f83a71fd5e2296d48c16b22cfd63a455",
+        "tools/auth-blocking-create-disable/create_recorder.py": "daff158a963f499e8d4046daf76c1b185c90bad581fa36bc3d83f8b04befda14",
+        "tools/auth-blocking-create-disable/function/firebase.json": "1162419d88532e775539e60dd20e0d4698b635a45e9436f37d9966768b7de316",
+        "tools/auth-blocking-create-disable/function/index.js": "17b8133f2c17661fb001e70f6b005ac428c80d61000b39a7be1fda8cc5f2f47f",
+        "tools/auth-blocking-create-disable/function/package.json": "e1e33acd8dfea28725b4eb420e06344f0aca4f5339fbbe6dcf4e230fc26a065e"
+      }
+    },
+    "reevaluatedWith": {
+      "commit": "483e157937a267e6be07ae800badb390406d7d56",
+      "contractSha256": "bf12630cef3e94da2b216737c28a6225f83a71fd5e2296d48c16b22cfd63a455"
+    },
+    "setup": {
+      "c": true
+    },
+    "target": "production",
+    "targetRecordExists": true
+  },
+  "publicationContractSha256": "941013476ee6409aa322e25c7e4737eac6d873f8d7f4637a2e7820951688314d",
+  "schemaVersion": 1,
+  "scope": "Ten sequential REST observations in production only with a first-generation beforeSignIn function deployed for the run that answers disabled: true when the signing-in email's local part starts with a dedicated prefix. Target T signs up with that prefix, so the request that creates the account is the request the function disables; control C signs up with a random local part. Whether T's sign-up is accepted or refused, whether tokens are returned and serve lookup and refresh, whether a record for T exists afterwards and is disabled, what T's own sign-in and a second sign-up do, and C's sign-up, sign-in and photo URL readback are recorded. The function was removed and the trigger registration restored with a digest comparison; accounts were deleted with absence confirmation (or, for a refused creation with no record, the email re-read as absent). No MFA, phone or SMS configuration was touched. No human approval and no local artifact comparison in this record.",
+  "sourceReviewSha256": "e210926d18fab6c8efd7b54e2a6365846f4dbd9d73198a2d5f194f56f3930ee7"
+}

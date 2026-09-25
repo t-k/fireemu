@@ -1,0 +1,81 @@
+{
+  "conditionId": "FS-DATA-WRITE/write-stream-half-close",
+  "recipeIds": ["writes/write-stream-terminal/half-close"],
+  "productionRecordingDigests": [
+    "ba880dc6feb56588256298deba48c9cbfd53de115e2f9381968867a28279d56f",
+    "ba880dc6feb56588256298deba48c9cbfd53de115e2f9381968867a28279d56f"
+  ],
+  "artifactSha256": "f73f33dde5cc70e02629b7bda25ad893c722b868aca417b42a5357d2efd50a7b",
+  "artifactSourceCommit": "542b868b7be65c8f9b4b706cc4b6edfaa1365c94",
+  "localConfigSha256": "0f15f02dbfef3f0ee5cd6302684e8bb547b8c49dea5a825deeb57b2938545f0b",
+  "recipeSha256": "e4c9363c00d2df590b4723fb7960292e947a29c435a0c6f137c8236667dfbde3",
+  "comparisonMode": "sandbox-stream-comparator",
+  "normalizationApproval": "docs.local/instructions/2026-09-24-fs-data-write-directive-addendum-3.md#2",
+  "result": {
+    "comparableRecipes": 1,
+    "mismatchedRecipes": 0,
+    "wholeRunComparableRestPrograms": 39,
+    "wholeRunComparableStreams": 2,
+    "wholeRunKnownMismatchRows": 9,
+    "wholeRunPendingRestPrograms": 39,
+    "wholeRunPendingStreams": 5
+  },
+  "productionStreams": {
+    "writes/write-stream-terminal/half-close": {
+      "events": [
+        {
+          "type": "data",
+          "value": {
+            "commitTime": null,
+            "streamId": "nonempty-string",
+            "streamToken": "nonempty-bytes",
+            "writeResults": []
+          }
+        },
+        {
+          "type": "status",
+          "value": {
+            "code": 0,
+            "details": "",
+            "trailers": [
+              { "key": "content-disposition", "kind": "ascii", "value": "attachment" },
+              { "key": "x-debug-tracking-id", "kind": "ascii", "value": "nonempty-volatile-id" }
+            ]
+          }
+        },
+        { "type": "end" }
+      ],
+      "sentFrames": 1,
+      "status": {
+        "code": 0,
+        "details": "",
+        "trailers": [
+          { "key": "content-disposition", "kind": "ascii", "value": "attachment" },
+          { "key": "x-debug-tracking-id", "kind": "ascii", "value": "nonempty-volatile-id" }
+        ]
+      }
+    }
+  },
+  "localStreams": {
+    "writes/write-stream-terminal/half-close": {
+      "events": [
+        {
+          "type": "data",
+          "value": {
+            "commitTime": null,
+            "streamId": "nonempty-string",
+            "streamToken": "nonempty-bytes",
+            "writeResults": []
+          }
+        },
+        {
+          "type": "status",
+          "value": { "code": 0, "details": "", "trailers": [] }
+        },
+        { "type": "end" }
+      ],
+      "sentFrames": 1,
+      "status": { "code": 0, "details": "", "trailers": [] }
+    }
+  }
+}

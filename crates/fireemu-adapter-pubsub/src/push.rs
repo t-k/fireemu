@@ -9,11 +9,42 @@ use std::fmt::Write as _;
 use std::time::Duration;
 
 use fireemu_core_pubsub::{ReceivedMessage, SubscriptionName};
+use fireemu_core_types::time::LogicalDuration;
 use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
 use tokio::net::lookup_host;
 
 const PUSH_TIMEOUT: Duration = Duration::from_secs(5);
 const MAX_RESPONSE_BYTES: usize = 256 * 1024;
+
+/// Shortest wait the push backoff imposes on a subscription after one failed push attempt.
+///
+/// Push delivery carries a subscription-level backoff of its own, separate from the per-message
+/// retry policy: the service slows a subscription down while its endpoint keeps failing, and it
+/// cannot be turned off. The documented bounds are 100 ms to 60 s
+/// (<https://docs.cloud.google.com/pubsub/docs/push>).
+pub(crate) const PUSH_BACKOFF_MINIMUM_MILLIS: i64 = 100;
+/// Longest wait the push backoff imposes, the documented ceiling of the production backoff.
+pub(crate) const PUSH_BACKOFF_MAXIMUM_MILLIS: i64 = 60_000;
+/// Doubling steps beyond which the wait is already clamped to the maximum. It only keeps the
+/// shift below the width of the type; the `min` decides the result.
+const MAX_BACKOFF_DOUBLINGS: u32 = 20;
+
+/// The wait a subscription owes after `consecutive_failures` failed push attempts in a row.
+///
+/// The progression doubles from [`PUSH_BACKOFF_MINIMUM_MILLIS`] and clamps at
+/// [`PUSH_BACKOFF_MAXIMUM_MILLIS`]. The documentation states those two bounds but not the curve
+/// between them, so exponential growth is this emulator's choice and is recorded as unobserved
+/// in the capability notes. A subscription with no failure owes nothing.
+pub(crate) fn push_backoff_after(consecutive_failures: u32) -> LogicalDuration {
+    if consecutive_failures == 0 {
+        return LogicalDuration::ZERO;
+    }
+    let doublings = (consecutive_failures - 1).min(MAX_BACKOFF_DOUBLINGS);
+    let millis = PUSH_BACKOFF_MINIMUM_MILLIS
+        .saturating_mul(1_i64 << doublings)
+        .min(PUSH_BACKOFF_MAXIMUM_MILLIS);
+    LogicalDuration::from_millis(millis)
+}
 
 #[derive(Debug, Clone)]
 struct Endpoint {
@@ -88,22 +119,33 @@ pub(crate) fn validate_endpoint(value: &str) -> Result<(), String> {
     parse_endpoint(value).map(|_| ())
 }
 
+/// Delivers one message to a push endpoint. `report_delivery_attempt` carries the attempt count
+/// in the payload, which the service does only for a subscription with a dead-letter policy.
 pub(crate) async fn deliver(
     endpoint: &str,
     subscription: &SubscriptionName,
     received: &ReceivedMessage,
+    report_delivery_attempt: bool,
 ) -> Result<(), String> {
-    deliver_with_timeout(endpoint, subscription, received, PUSH_TIMEOUT).await
+    deliver_with_timeout(
+        endpoint,
+        subscription,
+        received,
+        report_delivery_attempt,
+        PUSH_TIMEOUT,
+    )
+    .await
 }
 
 async fn deliver_with_timeout(
     endpoint: &str,
     subscription: &SubscriptionName,
     received: &ReceivedMessage,
+    report_delivery_attempt: bool,
     timeout: Duration,
 ) -> Result<(), String> {
     let endpoint = parse_endpoint(endpoint)?;
-    let body = push_body(subscription, received);
+    let body = push_body(subscription, received, report_delivery_attempt);
     tokio::time::timeout(timeout, deliver_async(&endpoint, &body))
         .await
         .map_err(|_| "push endpoint deadline exceeded".to_owned())?
@@ -159,7 +201,11 @@ async fn deliver_async(endpoint: &Endpoint, body: &str) -> Result<(), String> {
     }
 }
 
-fn push_body(subscription: &SubscriptionName, received: &ReceivedMessage) -> String {
+fn push_body(
+    subscription: &SubscriptionName,
+    received: &ReceivedMessage,
+    report_delivery_attempt: bool,
+) -> String {
     let stored = &received.message;
     let mut attributes = String::from("{");
     for (index, (key, value)) in stored.message.attributes.iter().enumerate() {
@@ -185,14 +231,20 @@ fn push_body(subscription: &SubscriptionName, received: &ReceivedMessage) -> Str
             json_escape(&stored.message.ordering_key)
         )
     };
+    let delivery_attempt = if report_delivery_attempt {
+        format!(",\"deliveryAttempt\":{}", received.delivery_attempt)
+    } else {
+        String::new()
+    };
     format!(
-        "{{\"message\":{{\"data\":\"{}\",\"messageId\":\"{}\",\"publishTime\":\"{}\",\"attributes\":{}{}}},\"subscription\":\"{}\"}}",
+        "{{\"message\":{{\"data\":\"{}\",\"messageId\":\"{}\",\"publishTime\":\"{}\",\"attributes\":{}{}}},\"subscription\":\"{}\"{}}}",
         base64(&stored.message.data),
         json_escape(&stored.message_id),
         json_escape(&publish_time),
         attributes,
         ordering_key,
         json_escape(&subscription.to_full()),
+        delivery_attempt,
     )
 }
 
@@ -301,6 +353,7 @@ mod tests {
             &endpoint,
             &subscription,
             &received(),
+            false,
             Duration::from_millis(250),
         )
         .await;
@@ -331,6 +384,7 @@ mod tests {
             &endpoint,
             &subscription,
             &received(),
+            false,
             Duration::from_secs(1),
         )
         .await
@@ -353,9 +407,23 @@ mod tests {
     #[test]
     fn push_body_uses_pubsub_base64_and_subscription_shape() {
         let subscription = SubscriptionName::new("demo-app", "push").unwrap();
-        let body = push_body(&subscription, &received());
+        let body = push_body(&subscription, &received(), false);
         assert!(body.contains("\"data\":\"aGVsbG8=\""));
         assert!(body.contains("projects/demo-app/subscriptions/push"));
+        assert!(
+            !body.contains("deliveryAttempt"),
+            "without a dead-letter policy the payload reports no attempt: {body}"
+        );
         assert_eq!(base64(b""), "");
+    }
+
+    #[test]
+    fn push_body_reports_the_delivery_attempt_for_a_dead_letter_subscription() {
+        let subscription = SubscriptionName::new("demo-app", "push").unwrap();
+        let mut received = received();
+        received.delivery_attempt = 4;
+        let body = push_body(&subscription, &received, true);
+        assert!(body.contains("\"deliveryAttempt\":4"), "{body}");
+        assert!(body.ends_with('}'), "{body}");
     }
 }

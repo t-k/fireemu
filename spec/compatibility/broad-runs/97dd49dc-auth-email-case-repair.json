@@ -1,0 +1,93 @@
+{
+  "kind": "auth-email-case-canonicalization-candidate",
+  "acceptance": "candidate",
+  "runtimeFixCommit": "97dd49dc4d7a505dc01610151f91c570e3703b1d",
+  "productionSourceCommit": "b69eab245308a0e82e945c0d85e1da0ae14e47ea",
+  "project": "fireemu-35fe6",
+  "probeInputSha256": "72da25cc389c0fdabca7f783f9bdcba7aa90219859c7397954a5d68f4333bfb1",
+  "productionReceiptSha256": "8be8aadd2e43cba810528ce6687a318b8fff2e15a3eaf11a16654f6966e38c13",
+  "localReceiptSha256": "fc0903858547a3be787ef6eae71708e6c8d263fa3a8c9ecbd72fa477979c7673",
+  "localArtifactSha256": "617e5bf2e13d3e3d0b1603ee174e1a2661766b8b018b68f561d3f48052199447",
+  "operationCount": 4,
+  "resourceMutations": 1,
+  "cleanupComplete": true,
+  "recordingComplete": true,
+  "compatibility": "match",
+  "rows": [
+    {
+      "id": "sign-up-mixed",
+      "production": {
+        "httpStatus": 200,
+        "code": "OK",
+        "email": "<canonical-email>"
+      },
+      "local": {
+        "httpStatus": 200,
+        "code": "OK",
+        "email": "<canonical-email>"
+      }
+    },
+    {
+      "id": "sign-in-lower",
+      "production": {
+        "httpStatus": 200,
+        "code": "OK",
+        "sameLocalId": true,
+        "email": "<canonical-email>"
+      },
+      "local": {
+        "httpStatus": 200,
+        "code": "OK",
+        "sameLocalId": true,
+        "email": "<canonical-email>"
+      }
+    },
+    {
+      "id": "duplicate-lower",
+      "production": {
+        "httpStatus": 400,
+        "code": "EMAIL_EXISTS"
+      },
+      "local": {
+        "httpStatus": 400,
+        "code": "EMAIL_EXISTS"
+      }
+    },
+    {
+      "id": "delete-original",
+      "production": {
+        "httpStatus": 200,
+        "code": "OK"
+      },
+      "local": {
+        "httpStatus": 200,
+        "code": "OK"
+      }
+    }
+  ],
+  "preFixLocalMismatch": {
+    "sourceCommit": "b69eab245308a0e82e945c0d85e1da0ae14e47ea",
+    "signUpMixed": {
+      "httpStatus": 200,
+      "storedEmail": "<mixed-case-email>"
+    },
+    "signInLower": {
+      "httpStatus": 400,
+      "code": "INVALID_LOGIN_CREDENTIALS"
+    },
+    "duplicateLower": {
+      "httpStatus": 200
+    },
+    "deleteOriginal": {
+      "httpStatus": 200
+    }
+  },
+  "limitations": [
+    "The probe covers password email ownership and does not establish the complete Auth account, OOB, MFA, tenant or federation parent groups.",
+    "The production result is immutable candidate evidence; no invoice amount was measured."
+  ],
+  "securityFollowupCommit": "7d50ad959c076cce1c00a158b73599af67c5997a",
+  "finalLocalSourceCommit": "7d50ad959c076cce1c00a158b73599af67c5997a",
+  "finalLocalArtifactSha256": "d88adb0f86b8b6e9687d586bf10f5bf69d90dcbfbc64e6acf3143fd2df8a078c",
+  "finalLocalReceiptSha256": "fc0903858547a3be787ef6eae71708e6c8d263fa3a8c9ecbd72fa477979c7673"
+}

@@ -6,6 +6,10 @@ on:
     branches: [main]
   workflow_dispatch:
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 env:
   CARGO_TERM_COLOR: always
 
@@ -13,6 +17,7 @@ jobs:
   lint:
     if: ${{ github.event_name == 'workflow_dispatch' }}
     runs-on: ubuntu-latest
+    timeout-minutes: 120
     env:
       CARGO_TARGET_DIR: target/normal
     steps:
@@ -51,6 +56,7 @@ jobs:
   test:
     if: ${{ github.event_name == 'workflow_dispatch' }}
     runs-on: ubuntu-latest
+    timeout-minutes: 120
     env:
       CARGO_TARGET_DIR: target/normal
     steps:
@@ -81,6 +87,7 @@ jobs:
   verify:
     if: ${{ github.event_name == 'workflow_dispatch' }}
     runs-on: ubuntu-latest
+    timeout-minutes: 120
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -107,6 +114,7 @@ jobs:
 
   pr:
     runs-on: ubuntu-latest
+    timeout-minutes: 60
     env:
       CARGO_TARGET_DIR: target/minimal
     steps:
@@ -138,6 +146,7 @@ jobs:
     if: ${{ github.event_name == 'workflow_dispatch' }}
     name: tests (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 180
     strategy:
       fail-fast: false
       matrix:
@@ -151,6 +160,11 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           key: ${{ matrix.os }}
+      # Cargo authority resolves the locked Linux projection with `--offline`. A host build does
+      # not populate another target's registry sources, so fetch the whole locked graph first.
+      - name: fetch locked dependency graph for offline authority checks
+        if: runner.os == 'macOS'
+        run: cargo fetch --locked
       # The process-census integration suites shell out to `ps` and `kill` to prove that a
       # daemon leaves nothing running; they are POSIX-only by construction, so Windows runs the
       # in-crate unit tests. Making them portable is tracked in the distribution issue.
@@ -158,7 +172,10 @@ jobs:
         shell: bash
         run: |
           if [ "${{ runner.os }}" = "Windows" ]; then
-            cargo nextest run --workspace --lib --profile pr
+            # The private Quint authority and its traceability CLI supervise Unix process groups;
+            # production libraries remain in this native Windows test run.
+            cargo nextest run --workspace --exclude fireemu-verification-quint --exclude traceability-check --lib --profile pr
+            cargo nextest run -p fireemu --bin fireemu --test exec_windows --profile pr
           else
             cargo nextest run --workspace --profile pr
           fi
@@ -170,6 +187,7 @@ jobs:
   package:
     if: ${{ github.event_name == 'workflow_dispatch' }}
     runs-on: ubuntu-latest
+    timeout-minutes: 120
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -197,6 +215,7 @@ jobs:
   ui:
     if: ${{ github.event_name == 'workflow_dispatch' }}
     runs-on: ubuntu-latest
+    timeout-minutes: 120
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
@@ -209,6 +228,8 @@ jobs:
           cache-dependency-path: ui/pnpm-lock.yaml
       - name: install UI dependencies
         run: pnpm -C ui install --frozen-lockfile
+      - name: install Functions fixture dependencies
+        run: npm ci --prefix tools/sdk-smoke --ignore-scripts
       - name: lint
         run: pnpm -C ui lint
       - name: format

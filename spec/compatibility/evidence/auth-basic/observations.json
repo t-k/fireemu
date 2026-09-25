@@ -1,0 +1,250 @@
+{
+  "acceptance": "candidate",
+  "corpus": {
+    "cases": [
+      "signup",
+      "signin",
+      "lookup",
+      "wrong-password",
+      "unchanged-state",
+      "refresh",
+      "refreshed-lookup",
+      "delete",
+      "deleted-account-absent"
+    ],
+    "revision": 1
+  },
+  "local": {
+    "artifactSha256": "5cd95e3759e62b55d4b1de47425ce94031e48d8e45c365ec2a2a0d6285db2a77",
+    "cases": [
+      {
+        "checks": {
+          "emailMatches": true,
+          "expiryValid": true,
+          "httpOk": true,
+          "idTokenPresent": true,
+          "noError": true,
+          "refreshTokenPresent": true,
+          "uidMatches": true
+        },
+        "httpStatus": 200,
+        "id": "signup",
+        "passed": true
+      },
+      {
+        "checks": {
+          "emailMatches": true,
+          "expiryValid": true,
+          "httpOk": true,
+          "idTokenPresent": true,
+          "noError": true,
+          "refreshTokenPresent": true,
+          "uidMatches": true
+        },
+        "httpStatus": 200,
+        "id": "signin",
+        "passed": true
+      },
+      {
+        "checks": {
+          "ownedIdentity": true
+        },
+        "httpStatus": 200,
+        "id": "lookup",
+        "passed": true
+      },
+      {
+        "checks": {
+          "expectedError": true,
+          "rejected": true
+        },
+        "httpStatus": 400,
+        "id": "wrong-password",
+        "passed": true
+      },
+      {
+        "checks": {
+          "selectedStableFieldsUnchanged": true
+        },
+        "httpStatus": 200,
+        "id": "unchanged-state",
+        "passed": true
+      },
+      {
+        "checks": {
+          "bearerType": true,
+          "expiryValid": true,
+          "httpOk": true,
+          "idTokenPresent": true,
+          "noError": true,
+          "refreshTokenPresent": true,
+          "uidMatches": true
+        },
+        "httpStatus": 200,
+        "id": "refresh",
+        "passed": true
+      },
+      {
+        "checks": {
+          "ownedIdentity": true
+        },
+        "httpStatus": 200,
+        "id": "refreshed-lookup",
+        "passed": true
+      },
+      {
+        "checks": {
+          "httpOk": true,
+          "noError": true
+        },
+        "httpStatus": 200,
+        "id": "delete",
+        "passed": true
+      },
+      {
+        "checks": {
+          "bothSelectorsAbsent": true
+        },
+        "httpStatus": 200,
+        "id": "deleted-account-absent",
+        "passed": true
+      }
+    ],
+    "cleanup": {
+      "emailAbsent": true,
+      "uidAbsent": true
+    },
+    "configurationSha256": "dc4466f0080ac58a25e2df92b765d1d666052fef735e94f4fe697a2a2507ada4",
+    "ownedProcessVerified": true,
+    "privateReceiptSha256": "3746aed79b7f400915c00db154d6bbe2b9b358da57e660538b063988de3cde46",
+    "probeSourceCommit": "c8fcdb0351c1622d3b73ea4009f2d288c3f1833a",
+    "recordedAt": "2026-09-10T02:39:46.623986+00:00",
+    "runtimeInputsSha256": "ab7f1eefd370fb2c5f37c252b75c0a83b6adeaffd333748f7939a3633cecf368",
+    "runtimeSourceCommit": "c8fcdb0351c1622d3b73ea4009f2d288c3f1833a",
+    "target": "local"
+  },
+  "probeInputs": {
+    "tools/auth-basic/contract.py": "b0c4f1bdf21e078b6014e13cb6017b7a7c3ef7321081a0b3ce08c76225d1f63b",
+    "tools/auth-basic/owned.py": "314182aaaa619e7673bdde97c78f9c444c0bf1b26449905c7951007ce30f2ec6",
+    "tools/auth-basic/recorder.py": "1e1be679ec84320e18b64bffd844063ed0c49ea8b5461f3cc1af16a3071c0687",
+    "tools/compat-inventory/aggregation_corpus.py": "d33b7e358aac69d69548ca4b8d166454ee108b7042ffa257c8acc2e82e39dce0",
+    "tools/compat-inventory/aggregation_evidence.py": "e196c75e2f9678fe5ee3b5e684def42d93a1ab6143c3e5b39e89805ce5a215ba",
+    "tools/compat-inventory/aggregation_index.py": "0a24bfc2de926b98018c64a3689d3cc0aecf3113a0192414ca6cd7141080b818",
+    "tools/compat-inventory/aggregation_package.py": "9ae81c9af268c80cf3a3c08fdf0b24903c56bcbb246c93c8bfdf01133859eb8b",
+    "tools/compat-inventory/aggregation_probe.py": "917d9600008d7ef509c6c40084cad4755e9016f0e8cefafd784b85114d4a641e",
+    "tools/compat-inventory/aggregation_response.py": "976f60525c988020bfd8d51fad5b2bb618a510b4ef00d09a887b831ad6048cfa",
+    "tools/compat-inventory/auth_probe.py": "097ead80880d23fe74902601578ee8250efcc06218b7cd0588e54004ad027122",
+    "tools/compat-inventory/capture.py": "955b8af8f4efa0a884479c9db495cde37be7f535541c639a49487c8893c24848",
+    "tools/compat-inventory/evidence_common.py": "054f8dcba3652ae905d489f100eda3bc4528dc6c497ec94c3938b03102dc8750",
+    "tools/compat-inventory/owned_runner.py": "ceb7dab2ab9bd4878e21e28da475d1156e6948aae07de13384cbbe56aff1deed",
+    "tools/compat-inventory/probe.py": "38383f9705f553edce413ac1a544e0ed39c200b10a0a5c2170d33fb889f19a94",
+    "tools/compat-inventory/protobuf_inventory.py": "d1218f5a411770f98b3d87c7c308af887b65cc2385db931e2f77389a0f5ce76b",
+    "tools/compat-inventory/publish.py": "57d932b37fca87ee840925abf2680e347d89c3d6a7e0f2b5eb36739f9a46275b"
+  },
+  "production": {
+    "cases": [
+      {
+        "checks": {
+          "emailMatches": true,
+          "expiryValid": true,
+          "httpOk": true,
+          "idTokenPresent": true,
+          "noError": true,
+          "refreshTokenPresent": true,
+          "uidMatches": true
+        },
+        "httpStatus": 200,
+        "id": "signup",
+        "passed": true
+      },
+      {
+        "checks": {
+          "emailMatches": true,
+          "expiryValid": true,
+          "httpOk": true,
+          "idTokenPresent": true,
+          "noError": true,
+          "refreshTokenPresent": true,
+          "uidMatches": true
+        },
+        "httpStatus": 200,
+        "id": "signin",
+        "passed": true
+      },
+      {
+        "checks": {
+          "ownedIdentity": true
+        },
+        "httpStatus": 200,
+        "id": "lookup",
+        "passed": true
+      },
+      {
+        "checks": {
+          "expectedError": true,
+          "rejected": true
+        },
+        "httpStatus": 400,
+        "id": "wrong-password",
+        "passed": true
+      },
+      {
+        "checks": {
+          "selectedStableFieldsUnchanged": true
+        },
+        "httpStatus": 200,
+        "id": "unchanged-state",
+        "passed": true
+      },
+      {
+        "checks": {
+          "bearerType": true,
+          "expiryValid": true,
+          "httpOk": true,
+          "idTokenPresent": true,
+          "noError": true,
+          "refreshTokenPresent": true,
+          "uidMatches": true
+        },
+        "httpStatus": 200,
+        "id": "refresh",
+        "passed": true
+      },
+      {
+        "checks": {
+          "ownedIdentity": true
+        },
+        "httpStatus": 200,
+        "id": "refreshed-lookup",
+        "passed": true
+      },
+      {
+        "checks": {
+          "httpOk": true,
+          "noError": true
+        },
+        "httpStatus": 200,
+        "id": "delete",
+        "passed": true
+      },
+      {
+        "checks": {
+          "bothSelectorsAbsent": true
+        },
+        "httpStatus": 200,
+        "id": "deleted-account-absent",
+        "passed": true
+      }
+    ],
+    "cleanup": {
+      "emailAbsent": true,
+      "uidAbsent": true
+    },
+    "configurationSha256": "901acc9e8fad556673061056698b04d9fa544e539fab4bbb6b4f8b3bd4fdcbdf",
+    "privateReceiptSha256": "e197c251dce9e236126cd071226c7d8a37a6fd73735f06200fcfb5036105803c",
+    "probeSourceCommit": "c8fcdb0351c1622d3b73ea4009f2d288c3f1833a",
+    "recordedAt": "2026-09-10T02:39:44.313470+00:00",
+    "target": "production"
+  },
+  "schemaVersion": 1
+}

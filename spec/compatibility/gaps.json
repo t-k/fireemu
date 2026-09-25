@@ -1,0 +1,869 @@
+{
+  "schemaVersion": 1,
+  "policy": "Each record keeps independent axes: implementation, local tests, production observation, comparison. Filing a record is not closure. A mismatch closes only after reproduction, an evidence-based expectation, a fix, regression tests and a re-comparison on a new artifact; an unobserved item closes only after a production observation that either matches (evidence attached) or leads to a fix on this branch. Closed records stay in the file.",
+  "gaps": [
+    {
+      "id": "GAP-AUTH-FIXED-001",
+      "feature": "AUTH-SMS-MFA",
+      "kind": "mismatch",
+      "scope": "An account disabled after its MFA pending credential was issued could complete mfaSignIn:finalize and receive tokens; mfaSignIn:start issued a code for it.",
+      "implementationStatus": "fixed",
+      "localTestStatus": "passing",
+      "productionObservationStatus": "none",
+      "comparisonStatus": "none",
+      "evidenceRefs": [
+        "tools/auth-pending-retry/README.md",
+        "crates/fireemu-adapter-http/tests/auth_flows.rs"
+      ],
+      "nextAction": "Production error precedence for USER_DISABLED at this endpoint and retention of the pending credential across disable/re-enable are unobserved; observe if a corpus is planned.",
+      "blockedReason": "",
+      "requiresProductionChange": false
+    },
+    {
+      "id": "GAP-AUTH-FIXED-002",
+      "feature": "AUTH-BLOCKING",
+      "kind": "mismatch",
+      "scope": "A beforeSignIn response setting disabled: true was applied and tokens were still issued on the same request. Production (recorded, scoped approval) refuses the same request with USER_DISABLED.",
+      "implementationStatus": "fixed",
+      "localTestStatus": "passing",
+      "productionObservationStatus": "approved",
+      "comparisonStatus": "mismatch",
+      "evidenceRefs": [
+        "docs/compatibility/auth-blocking-disable-comparison.md",
+        "tools/auth-blocking-disable/README.md"
+      ],
+      "nextAction": "Local comparison recorded: the refusal on the same request matches; the immediate readback of the flag differs on one path and is tracked as GAP-AUTH-001.",
+      "blockedReason": "",
+      "requiresProductionChange": false
+    },
+    {
+      "id": "GAP-AUTH-001",
+      "feature": "AUTH-BLOCKING",
+      "kind": "mismatch",
+      "scope": "Persistence of a hook-applied disable. Production (recorded 2026-09-11 and 2026-09-12): an MFA finalize persists the flag; a sign-up keeps a created, disabled record; a first-factor password sign-in of an existing account persists nothing (false before, immediately after, 5 s and ~31 s after, and 30 s after with no earlier read) while sign-ins stay refused only under the registered function. fireemu persisted on every path; it now persists for sign-up and MFA finalize only.",
+      "implementationStatus": "fixed",
+      "localTestStatus": "passing",
+      "productionObservationStatus": "approved",
+      "comparisonStatus": "matches-in-scope",
+      "evidenceRefs": [
+        "docs/compatibility/auth-blocking-readback-comparison.md",
+        "docs/compatibility/auth-blocking-readback.md",
+        "tools/auth-blocking-readback/README.md"
+      ],
+      "nextAction": "Closed for the recorded conditions: production candidate and the local comparison on the corrected artifact each carry a scoped approval; other first-factor paths (email link, IdP, custom token, phone) follow the existing-account rule unobserved.",
+      "blockedReason": "",
+      "requiresProductionChange": true
+    },
+    {
+      "id": "GAP-FS-001",
+      "feature": "FS-PIPELINE",
+      "kind": "unimplemented",
+      "scope": "Enterprise / Native general pipeline execution remains unsupported beyond the owner-authorized local latest-read collection / optional single where(equal(top-level field, scalar literal)) / optional select / optional non-negative int32 offset / optional limit subset. The finite subset has tonic tests; production execution, ordering and exact production error parity remain unobserved.",
+      "implementationStatus": "unimplemented",
+      "localTestStatus": "passing",
+      "productionObservationStatus": "none",
+      "comparisonStatus": "none",
+      "evidenceRefs": [
+        "docs/compatibility/firestore-enterprise-native.md"
+      ],
+      "nextAction": "Observe the finite subset against Enterprise production before claiming parity; decompose and implement remaining functions and stages separately with scoped oracle corpora.",
+      "blockedReason": "",
+      "requiresProductionChange": false
+    },
+    {
+      "id": "GAP-FS-002",
+      "feature": "FS-TEXT",
+      "kind": "unimplemented",
+      "scope": "Enterprise full-text search: text index definitions are validated only; backfill, posting data, search execution and scoring are not implemented.",
+      "implementationStatus": "unimplemented",
+      "localTestStatus": "none",
+      "productionObservationStatus": "none",
+      "comparisonStatus": "none",
+      "evidenceRefs": [
+        "docs/compatibility/firestore-enterprise-native.md"
+      ],
+      "nextAction": "Implement definition, build state, update tracking and search execution separately, each compared against an oracle.",
+      "blockedReason": "",
+      "requiresProductionChange": false
+    },
+    {
+      "id": "AUTH-U01",
+      "feature": "AUTH-USERS",
+      "kind": "mismatch",
+      "scope": "Administrative accounts:update of an already disabled account. Production (recorded 2026-09-12): password replacement and photo update are accepted and applied, no tokens are returned, the account's own sign-in stays USER_DISABLED, and the new password signs in after re-enablement. fireemu returned tokens for the password change; fixed so tokens follow a credential change only for an account enabled after the update.",
+      "implementationStatus": "fixed",
+      "localTestStatus": "passing",
+      "productionObservationStatus": "approved",
+      "comparisonStatus": "matches-in-scope",
+      "evidenceRefs": [
+        "docs/compatibility/auth-disabled-admin-update.md",
+        "docs/compatibility/auth-disabled-admin-update-comparison.md",
+        "tools/auth-disabled-admin-update/README.md"
+      ],
+      "nextAction": "Closed: production candidate and local comparison each carry a scoped approval.",
+      "blockedReason": "",
+      "requiresProductionChange": true
+    },
+    {
+      "id": "AUTH-U02",
+      "feature": "AUTH-BLOCKING",
+      "kind": "mismatch",
+      "scope": "An account created by the request that a blocking function disables. Production (recorded 2026-09-12, revision 2 with an email-prefix selector): the creating sign-up is refused with USER_DISABLED, the record exists and is disabled, a second sign-up is EMAIL_EXISTS; the local artifact showed the same rows before the run.",
+      "implementationStatus": "implemented",
+      "localTestStatus": "passing",
+      "productionObservationStatus": "approved",
+      "comparisonStatus": "matches-in-scope",
+      "evidenceRefs": [
+        "docs/compatibility/auth-blocking-create-disable-comparison.md",
+        "docs/compatibility/auth-blocking-create-disable.md",
+        "tools/auth-blocking-create-disable/README.md"
+      ],
+      "nextAction": "Closed for the recorded sign-up path: production candidate and local comparison each carry a scoped approval. Other auto-creating methods stay unobserved.",
+      "blockedReason": "",
+      "requiresProductionChange": true
+    },
+    {
+      "id": "AUTH-U03",
+      "feature": "AUTH-SMS-MFA",
+      "kind": "unobserved",
+      "scope": "MFA finalize refusal precedence. Production (recorded and approved 2026-09-12, auth-refusal-precedence revision 1): a disabled account holding an SMS session is refused INVALID_CODE with a wrong code and USER_DISABLED with the correct code, so the verification code is checked before the account state, and the same held pending credential and session complete after re-enablement, so neither refusal consumes them. fireemu already matched on these rows. The remaining precedence is unobserved: an expired pending credential against a code valid on its own, and mfaSignIn:start on a disabled account.",
+      "implementationStatus": "unknown",
+      "localTestStatus": "none",
+      "productionObservationStatus": "none",
+      "comparisonStatus": "none",
+      "evidenceRefs": [
+        "docs/compatibility/auth-mfa-start-disabled.md",
+        "docs/compatibility/auth-refusal-precedence-approval.md",
+        "tools/auth-mfa-start-disabled/README.md",
+        "tools/auth-pending-lifetime/README.md",
+        "docs/compatibility/auth-pending-lifetime-boundary.md",
+        "docs/compatibility/auth-pending-lifetime-boundary-comparison.md"
+      ],
+      "nextAction": "The expired-pending credential against an independently verified valid code remains unobserved. Completed precursors are separate: revision 1 (GAP-AUTH-006) observed successful MFA at 2/120/300 seconds, while revision 2 (GAP-AUTH-007) observed INVALID_MFA_PENDING_CREDENTIAL at start for 600/1800/3300/3900 seconds with successful fresh controls. Revision 2 differs from the saved local artifact at 600/1800/3300 seconds. Both lifetime records remain candidate; neither proves age causality, a common TTL or an upper bound, and the separate runs must not be merged into a certified (300, 600] interval. Next design should investigate the observed start divergence with shorter ages and same-account fresh-pending controls before testing expired pending against an independently verified valid code. New production experiments require their own approval. Preserve the already approved finalize-precedence and disabled-start observations; do not infer new expiry precedence from this precursor.",
+      "blockedReason": "",
+      "requiresProductionChange": true
+    },
+    {
+      "id": "AUTH-U04",
+      "feature": "AUTH-SMS-MFA",
+      "kind": "mismatch",
+      "scope": "Other revocation triggers against an existing MFA pending credential: client password change, administrative password update, password reset, provider unlink. Observed and approved at revision 2 (2026-09-12): the held pending credential and SMS session survive every one of these transitions in production, matching fireemu. The explicit validSince update is covered separately by auth-pending-revocation.",
+      "implementationStatus": "unknown",
+      "localTestStatus": "none",
+      "productionObservationStatus": "approved",
+      "comparisonStatus": "matches-in-scope",
+      "evidenceRefs": [
+        "docs/compatibility/auth-pending-trigger-client-password-change-approval.md",
+        "docs/compatibility/auth-pending-trigger-admin-password-update-approval.md",
+        "docs/compatibility/auth-pending-trigger-password-reset-approval.md",
+        "docs/compatibility/auth-pending-trigger-provider-unlink-approval.md",
+        "tools/auth-pending-triggers/README.md"
+      ],
+      "nextAction": "Closed in scope at revision 2: all four triggers re-observed with per-field token checks and re-published with the full execution-dependency manifest (production and local-comparison dependency sets, each bound to the recorder commit, per-file negative test). In production the held MFA pending credential survived every transition, matching fireemu; each production candidate and local comparison carries a scoped approval (all seven rows agree). Revision 1 is retained as history. Not covered: the explicit-validSince trigger (auth-pending-revocation), token/session expiry, tenants, blocking functions.",
+      "blockedReason": "",
+      "requiresProductionChange": true
+    },
+    {
+      "id": "AUTH-U05",
+      "feature": "AUTH-SMS-MFA",
+      "kind": "unobserved",
+      "scope": "Credentials after re-enablement: pending credential, SMS code, used TOTP step and pre-disable refresh token, distinguishing administrative disable from hook disable and from natural expiry.",
+      "implementationStatus": "unknown",
+      "localTestStatus": "none",
+      "productionObservationStatus": "none",
+      "comparisonStatus": "none",
+      "evidenceRefs": [
+        "tools/auth-pending-retry/README.md"
+      ],
+      "nextAction": "Local regressions exist for the administrative path; observe in production per credential kind.",
+      "blockedReason": "",
+      "requiresProductionChange": true
+    },
+    {
+      "id": "AUTH-U06",
+      "feature": "AUTH-SMS-MFA",
+      "kind": "unobserved",
+      "scope": "Production lifetimes and boundaries of SMS codes, pending credentials and TOTP windows, including resend behavior and reuse limits. Local VirtualClock tests cover the emulator only.",
+      "implementationStatus": "unknown",
+      "localTestStatus": "none",
+      "productionObservationStatus": "none",
+      "comparisonStatus": "none",
+      "evidenceRefs": [
+        "tools/auth-pending-retry/README.md"
+      ],
+      "nextAction": "Observe with waits bounded to the documented lifetimes; record exact-boundary behavior separately.",
+      "blockedReason": "",
+      "requiresProductionChange": true
+    },
+    {
+      "id": "AUTH-U07",
+      "feature": "AUTH-TOTP",
+      "kind": "unobserved",
+      "scope": "TOTP and tenant behavior in production: enrollment conditions, unenrollment, two-party ownership, per-tenant settings and cross-namespace refusal. Local two-party and tenant tests are not production evidence.",
+      "implementationStatus": "unknown",
+      "localTestStatus": "none",
+      "productionObservationStatus": "none",
+      "comparisonStatus": "none",
+      "evidenceRefs": [
+        "tools/auth-pending-retry/README.md"
+      ],
+      "nextAction": "Plan TOTP enablement on the oracle (a configuration change) and a tenant corpus.",
+      "blockedReason": "",
+      "requiresProductionChange": true
+    },
+    {
+      "id": "AUTH-U08",
+      "feature": "AUTH-BLOCKING",
+      "kind": "unobserved",
+      "scope": "Other blocking response fields and events: fields other than disabled, customClaims versus sessionClaims, beforeCreate, explicit rejection, timeout, multiple events. sessionClaims stay non-persistent locally.",
+      "implementationStatus": "unknown",
+      "localTestStatus": "none",
+      "productionObservationStatus": "none",
+      "comparisonStatus": "none",
+      "evidenceRefs": [
+        "docs/compatibility/auth-blocking-disable-approval.md"
+      ],
+      "nextAction": "One corpus per response shape; keep the disabling-response approval separate.",
+      "blockedReason": "",
+      "requiresProductionChange": true
+    },
+    {
+      "id": "AUTH-U09",
+      "feature": "AUTH-BLOCKING",
+      "kind": "unobserved",
+      "scope": "Which sign-in methods invoke blocking functions: first IdP sign-in, linking to an existing account, anonymous and custom-token sign-in (documented as not triggering). No uniform expectation across methods.",
+      "implementationStatus": "unknown",
+      "localTestStatus": "none",
+      "productionObservationStatus": "none",
+      "comparisonStatus": "none",
+      "evidenceRefs": [
+        "docs/compatibility/auth-blocking-disable-approval.md"
+      ],
+      "nextAction": "Check the local handler set against the documentation; observe methods whose documentation is ambiguous.",
+      "blockedReason": "",
+      "requiresProductionChange": true
+    },
+    {
+      "id": "AUTH-U10",
+      "feature": "AUTH-SMS-MFA",
+      "kind": "unobserved",
+      "scope": "Concurrency and changes during a hook: real concurrent requests, deletion, revocation or factor change while the hook runs, sweeps by another adapter, failures after finalization (signing, response). The eight-thread test does not enumerate interleavings.",
+      "implementationStatus": "unknown",
+      "localTestStatus": "none",
+      "productionObservationStatus": "none",
+      "comparisonStatus": "none",
+      "evidenceRefs": [
+        "tools/auth-pending-retry/README.md"
+      ],
+      "nextAction": "Split into separately testable cases; local first, production where observable.",
+      "blockedReason": "",
+      "requiresProductionChange": false
+    },
+    {
+      "id": "AUTH-U11",
+      "feature": "AUTH-USERS",
+      "kind": "unobserved",
+      "scope": "Duplicate email owners and UID reuse: owner switching on user_mut is a local model; production compatibility of owner resolution and of credentials after re-creation is unobserved.",
+      "implementationStatus": "unknown",
+      "localTestStatus": "none",
+      "productionObservationStatus": "none",
+      "comparisonStatus": "none",
+      "evidenceRefs": [
+        "tools/auth-pending-retry/README.md"
+      ],
+      "nextAction": "Observe with allowDuplicateEmails where applicable; compare ID and refresh token outcomes separately.",
+      "blockedReason": "",
+      "requiresProductionChange": true
+    },
+    {
+      "id": "AUTH-U12",
+      "feature": "AUTH-USERS",
+      "kind": "unobserved",
+      "scope": "Password rules on other routes: signUp, reset, administrative update, import; minimum length, normalization, truncation, custom policies. The 4095/4096/4097 approval covers one route and ASCII/astral inputs.",
+      "implementationStatus": "unknown",
+      "localTestStatus": "passing",
+      "productionObservationStatus": "none",
+      "comparisonStatus": "none",
+      "evidenceRefs": [
+        "docs/compatibility/auth-password-unicode-boundary-approval.md",
+        "docs/compatibility/auth-password-route-policy-local.md",
+        "crates/fireemu-adapter-http/tests/identity_toolkit.rs"
+      ],
+      "nextAction": "The local route matrix now covers Admin create alongside the existing sign-up, client update, resetPassword and batch import checks for the recorded boundary and invalid-input classes. Production comparison for these routes, custom policies, normalization/truncation and tenant settings remains required.",
+      "blockedReason": "",
+      "requiresProductionChange": true
+    },
+    {
+      "id": "AUTH-U13",
+      "feature": "AUTH-USERS",
+      "kind": "unobserved",
+      "scope": "Production error details for the authorization fixes (lookup identifier search, update administrator-only fields, OOB link return): input types, null and empty values, multiple invalid conditions.",
+      "implementationStatus": "unknown",
+      "localTestStatus": "passing",
+      "productionObservationStatus": "none",
+      "comparisonStatus": "none",
+      "evidenceRefs": [
+        "tools/auth-lookup-authorization/README.md",
+        "tools/auth-oob-authorization/README.md",
+        "tools/auth-update-authorization/README.md"
+      ],
+      "nextAction": "Local regressions cover the recorded malformed and null OOB link flag conditions without side effects; observe production error classes for lookup, administrator-only fields and remaining empty/multiple-invalid combinations.",
+      "blockedReason": "",
+      "requiresProductionChange": true
+    },
+    {
+      "id": "AUTH-U14",
+      "feature": "AUTH-TOKENS",
+      "kind": "unobserved",
+      "scope": "Token validity across verification paths: REST lookup and refresh, Admin SDK checkRevoked, Rules, other services, project and tenant boundaries, actual expiry. expiresIn=3600 is not an expiry test.",
+      "implementationStatus": "unknown",
+      "localTestStatus": "none",
+      "productionObservationStatus": "none",
+      "comparisonStatus": "none",
+      "evidenceRefs": [
+        "docs/compatibility/auth-session-v2-approval.md"
+      ],
+      "nextAction": "Design a bounded actual-expiry observation and per-path verification cases.",
+      "blockedReason": "",
+      "requiresProductionChange": true
+    },
+    {
+      "id": "FS-U01",
+      "feature": "FS-DATA",
+      "kind": "unmapped",
+      "scope": "The broad REST and gRPC read, write and query denominator remains incomplete for per-method fields, oneofs and type boundaries. The existing local Standard/Native gRPC data slice is now decomposed into atomic obligations for FS-COMMIT (ordered results and atomic refusal), FS-BATCHWRITE (positional partial results and suffix continuation), FS-WRITE (handshake, acknowledgement/order, metadata and no-mutation refusals), and FS-FILTER-ENUM (ten executable operators plus unknown-value refusal). A bounded first46 saved-reference replay matches the pinned production observations under its recorded comparison contract, but this does not cover the remaining denominator or promote the parent group.",
+      "implementationStatus": "implemented",
+      "localTestStatus": "passing",
+      "productionObservationStatus": "none",
+      "comparisonStatus": "none",
+      "evidenceRefs": [
+        "docs/compatibility/fs-data-grpc-local.md",
+        "crates/fireemu-adapter-grpc/tests/local.rs",
+        "crates/fireemu-adapter-grpc/tests/streams.rs",
+        "crates/fireemu-adapter-grpc/tests/gateway.rs",
+        "spec/compatibility/broad-runs/7fbb3e85-first46-saved-recomparison.json"
+      ],
+      "nextAction": "Expand the inventory from this finite local gRPC slice to the remaining protobuf fields, oneofs, value boundaries, REST and SDK transports, then observe each accepted scope against production before making a parity claim.",
+      "blockedReason": "",
+      "requiresProductionChange": false
+    },
+    {
+      "id": "FS-U02",
+      "feature": "FS-AGGREGATIONS",
+      "kind": "unmapped",
+      "scope": "Aggregations outside the approved 14 cases: gRPC, SDK and Rules paths, other numeric, index and concurrency conditions.",
+      "implementationStatus": "unknown",
+      "localTestStatus": "none",
+      "productionObservationStatus": "none",
+      "comparisonStatus": "none",
+      "evidenceRefs": [
+        "docs/compatibility/README.md"
+      ],
+      "nextAction": "Attach evidence per path; do not extend the REST approval.",
+      "blockedReason": "",
+      "requiresProductionChange": false
+    },
+    {
+      "id": "FS-U03",
+      "feature": "FS-TRANSACTIONS",
+      "kind": "unobserved",
+      "scope": "Transactions and contention: concurrency mode of the real database, retry, timeout, ordering, state and resources after failure. Local REST and gRPC coverage now exercises rollback state retention, lock contention, lease expiry, BatchWrite per-item continuation and write-stream recovery; production concurrency and SDK behavior remain open.",
+      "implementationStatus": "implemented",
+      "localTestStatus": "passing",
+      "productionObservationStatus": "none",
+      "comparisonStatus": "none",
+      "evidenceRefs": [
+        "crates/fireemu-adapter-grpc/src/rest/transaction_tests.rs",
+        "crates/fireemu-adapter-grpc/src/service/tests/query_transaction_tests.rs",
+        "crates/fireemu-adapter-grpc/tests/local.rs",
+        "crates/fireemu-adapter-grpc/tests/streams.rs"
+      ],
+      "nextAction": "Compare the covered rollback, contention and recovery conditions against production, then add bounded SDK retry and timeout observations; do not infer mode from the edition.",
+      "blockedReason": "",
+      "requiresProductionChange": false
+    },
+    {
+      "id": "FS-U04",
+      "feature": "FS-LISTEN",
+      "kind": "unmapped",
+      "scope": "Listen and WebChannel: event completeness and order, disconnect, reconnect, resume, interaction with SDK cache and auth switches.",
+      "implementationStatus": "unknown",
+      "localTestStatus": "none",
+      "productionObservationStatus": "none",
+      "comparisonStatus": "none",
+      "evidenceRefs": [
+        "docs/compatibility/README.md"
+      ],
+      "nextAction": "Separate resource-limit tests from semantics; observe production per scenario.",
+      "blockedReason": "",
+      "requiresProductionChange": false
+    },
+    {
+      "id": "GAP-FS-RULES-001",
+      "feature": "FS-RULES-INDEXES",
+      "kind": "mismatch",
+      "scope": "Rules user-defined functions could resolve same-named declarations from the call-site match and retain caller match bindings instead of the function definition scope, which could change an authorization decision for nested Firestore or Storage matches.",
+      "implementationStatus": "fixed",
+      "localTestStatus": "passing",
+      "productionObservationStatus": "none",
+      "comparisonStatus": "none",
+      "evidenceRefs": [
+        "docs/compatibility/firestore-rules-runtime-repairs.md",
+        "crates/fireemu-core-rules/src/eval.rs",
+        "crates/fireemu-core-rules/tests/eval.rs"
+      ],
+      "nextAction": "Local lexical function and binding regressions pass for Firestore and Storage; production Rules parity and additional provider-specific scopes remain unobserved.",
+      "blockedReason": "",
+      "requiresProductionChange": false
+    },
+    {
+      "id": "GAP-FS-RULES-002",
+      "feature": "FS-RULES-INDEXES",
+      "kind": "mismatch",
+      "scope": "Rules activation ignored static linter diagnostics other than recursion and call-depth errors, allowing parseable candidates that exceeded a catalog limit to replace the active generation.",
+      "implementationStatus": "fixed",
+      "localTestStatus": "passing",
+      "productionObservationStatus": "none",
+      "comparisonStatus": "none",
+      "evidenceRefs": [
+        "docs/compatibility/firestore-rules-runtime-repairs.md",
+        "crates/fireemu-core-rules/src/runtime.rs",
+        "crates/fireemu-core-rules/tests/activation.rs"
+      ],
+      "nextAction": "All linter Error diagnostics now reject activation locally; production limit/error parity and reload race coverage remain unobserved.",
+      "blockedReason": "",
+      "requiresProductionChange": false
+    },
+    {
+      "id": "GAP-FS-RULES-003",
+      "feature": "FS-RULES-INDEXES",
+      "kind": "mismatch",
+      "scope": "Rules activation accepted unknown rules_version values and invalid recursive-wildcard structure, including multiple recursive wildcards in one match and non-terminal wildcards under rules_version 1.",
+      "implementationStatus": "fixed",
+      "localTestStatus": "passing",
+      "productionObservationStatus": "none",
+      "comparisonStatus": "none",
+      "evidenceRefs": [
+        "docs/compatibility/firestore-rules-runtime-repairs.md",
+        "crates/fireemu-core-rules/src/runtime.rs",
+        "crates/fireemu-core-rules/tests/activation.rs"
+      ],
+      "nextAction": "Local activation rejects unknown versions and invalid wildcard structure; production compiler error parity remains unobserved.",
+      "blockedReason": "",
+      "requiresProductionChange": false
+    },
+    {
+      "id": "GAP-FS-RULES-004",
+      "feature": "FS-RULES-INDEXES",
+      "kind": "mismatch",
+      "scope": "Rules file reload could miss a file that changed before supervisor startup or a same-size, same-mtime replacement when metadata alone was unchanged.",
+      "implementationStatus": "fixed",
+      "localTestStatus": "passing",
+      "productionObservationStatus": "none",
+      "comparisonStatus": "none",
+      "evidenceRefs": [
+        "docs/compatibility/firestore-rules-runtime-repairs.md",
+        "crates/fireemu/src/main.rs"
+      ],
+      "nextAction": "Reload startup reconciliation and content-signature checks pass locally; production watcher parity remains unobserved.",
+      "blockedReason": "",
+      "requiresProductionChange": false
+    },
+    {
+      "id": "GAP-FS-RULES-005",
+      "feature": "FS-RULES-INDEXES",
+      "kind": "mismatch",
+      "scope": "Nested recursive-wildcard matching enumerated all prefix splits before evaluating rules, leaving matcher work outside the expression budget and allowing combinatorial CPU and allocation growth.",
+      "implementationStatus": "fixed",
+      "localTestStatus": "passing",
+      "productionObservationStatus": "none",
+      "comparisonStatus": "none",
+      "evidenceRefs": [
+        "docs/compatibility/firestore-rules-runtime-repairs.md",
+        "crates/fireemu-core-rules/src/eval.rs",
+        "crates/fireemu-core-rules/tests/eval.rs"
+      ],
+      "nextAction": "Local matcher work is visited incrementally and fails closed at an explicit evaluator safety bound; production matcher work and error parity remain unobserved.",
+      "blockedReason": "",
+      "requiresProductionChange": false
+    },
+    {
+      "id": "GAP-FS-RULES-006",
+      "feature": "FS-RULES-INDEXES",
+      "kind": "mismatch",
+      "scope": "Rules evaluation built a separate copy of the visible function declarations for every declaration during each request, causing avoidable quadratic reference retention and per-call cloning.",
+      "implementationStatus": "fixed",
+      "localTestStatus": "passing",
+      "productionObservationStatus": "none",
+      "comparisonStatus": "none",
+      "evidenceRefs": [
+        "docs/compatibility/firestore-rules-runtime-repairs.md",
+        "crates/fireemu-core-rules/src/eval.rs",
+        "crates/fireemu-core-rules/tests/eval.rs"
+      ],
+      "nextAction": "Lexical function environments are shared by declaration scope and call_user switches the shared environment without cloning; production memory and performance parity remain unobserved.",
+      "blockedReason": "",
+      "requiresProductionChange": false
+    },
+    {
+      "id": "FS-U05",
+      "feature": "FS-RULES-INDEXES",
+      "kind": "unmapped",
+      "scope": "Rules and indexes: authorization, evaluation budget, invariance after denial, index direction and merging, Standard versus Enterprise differences, reload.",
+      "implementationStatus": "unknown",
+      "localTestStatus": "none",
+      "productionObservationStatus": "none",
+      "comparisonStatus": "none",
+      "evidenceRefs": [
+        "docs/compatibility/README.md"
+      ],
+      "nextAction": "Do not reuse admin-bypass production observations as Rules evidence.",
+      "blockedReason": "",
+      "requiresProductionChange": false
+    },
+    {
+      "id": "FS-U06",
+      "feature": "FS-ADMIN-INVENTORY",
+      "kind": "unmapped",
+      "scope": "Administrative API: database and index lifecycle, TTL, backup, restore, PITR, import, export, long-running operations.",
+      "implementationStatus": "unknown",
+      "localTestStatus": "none",
+      "productionObservationStatus": "none",
+      "comparisonStatus": "none",
+      "evidenceRefs": [
+        "docs/compatibility/README.md"
+      ],
+      "nextAction": "Distinguish input acceptance, local state transitions and real cloud operation.",
+      "blockedReason": "",
+      "requiresProductionChange": false
+    },
+    {
+      "id": "FS-U07",
+      "feature": "FS-MONGO-INVENTORY",
+      "kind": "unmapped",
+      "scope": "MongoDB compatibility: inventory of APIs, types and drivers, and per-item implementation and test status.",
+      "implementationStatus": "unknown",
+      "localTestStatus": "none",
+      "productionObservationStatus": "none",
+      "comparisonStatus": "none",
+      "evidenceRefs": [
+        "docs/compatibility/README.md"
+      ],
+      "nextAction": "Inventory first; do not transfer Native evidence.",
+      "blockedReason": "",
+      "requiresProductionChange": false
+    },
+    {
+      "id": "FS-U08",
+      "feature": "SDK-INTEGRATION",
+      "kind": "unmapped",
+      "scope": "SDKs and platforms: Web and Node clients, Admin, mobile; lockfile binding, offline cache, pending writes, listeners with Auth handoff. Declared dependencies are not execution evidence.",
+      "implementationStatus": "unknown",
+      "localTestStatus": "none",
+      "productionObservationStatus": "none",
+      "comparisonStatus": "none",
+      "evidenceRefs": [
+        "docs/compatibility/README.md"
+      ],
+      "nextAction": "Per-SDK execution receipts bound to lockfiles.",
+      "blockedReason": "",
+      "requiresProductionChange": false
+    },
+    {
+      "id": "EVID-U01",
+      "feature": "MANAGED-BOUNDARIES",
+      "kind": "untested",
+      "scope": "Denominator of the official specification: URL enumeration, fetch, section extraction and semantic review are separate steps; the 2026-09-09 snapshot count is not coverage.",
+      "implementationStatus": "unknown",
+      "localTestStatus": "none",
+      "productionObservationStatus": "none",
+      "comparisonStatus": "none",
+      "evidenceRefs": [
+        "docs/compatibility/README.md"
+      ],
+      "nextAction": "Keep the acquisition steps separate in the inventory pages.",
+      "blockedReason": "",
+      "requiresProductionChange": false
+    },
+    {
+      "id": "EVID-U02",
+      "feature": "MANAGED-BOUNDARIES",
+      "kind": "untested",
+      "scope": "Decomposition into atomic requirements: API and field enumerations are not yet connected to per-condition requirements and cases; unmapped is not unsupported.",
+      "implementationStatus": "unknown",
+      "localTestStatus": "none",
+      "productionObservationStatus": "none",
+      "comparisonStatus": "none",
+      "evidenceRefs": [
+        "docs/compatibility/README.md"
+      ],
+      "nextAction": "Extend the requirement ledger per surface.",
+      "blockedReason": "",
+      "requiresProductionChange": false
+    },
+    {
+      "id": "EVID-U03",
+      "feature": "MANAGED-BOUNDARIES",
+      "kind": "untested",
+      "scope": "Re-comparison on the current artifact: preserved historical receipts do not show the latest binary passes the same cases.",
+      "implementationStatus": "unknown",
+      "localTestStatus": "none",
+      "productionObservationStatus": "none",
+      "comparisonStatus": "none",
+      "evidenceRefs": [
+        "docs/compatibility/README.md"
+      ],
+      "nextAction": "Run current corpora in priority order with recorded source, profile and configuration.",
+      "blockedReason": "",
+      "requiresProductionChange": false
+    },
+    {
+      "id": "EVID-U04",
+      "feature": "AUTH-BLOCKING",
+      "kind": "untested",
+      "scope": "Local side of production-only receipts: every production candidate or approved record is paired with a local run of the same corpus and a published comparison record. As of 2026-09-12 all five corpora (blocking disable, pending revocation, readback timing, revision 2 created-then-disabled, disabled-account administrative update) have comparison records bound to their build commits and fixture digests.",
+      "implementationStatus": "implemented",
+      "localTestStatus": "passing",
+      "productionObservationStatus": "recorded",
+      "comparisonStatus": "none",
+      "evidenceRefs": [
+        "docs/compatibility/auth-blocking-disable-comparison.md",
+        "docs/compatibility/auth-pending-revocation-comparison.md",
+        "docs/compatibility/auth-blocking-readback-comparison.md",
+        "docs/compatibility/auth-blocking-create-disable-comparison.md",
+        "docs/compatibility/auth-disabled-admin-update-comparison.md"
+      ],
+      "nextAction": "Keep pairing future production records with a local comparison; results are tracked per corpus.",
+      "blockedReason": "",
+      "requiresProductionChange": false
+    },
+    {
+      "id": "EVID-U04A",
+      "feature": "AUTH-BLOCKING",
+      "kind": "mismatch",
+      "scope": "Comparison result of the original blocking-disable corpus. On the artifact recorded at the time (comparison record at commit 98be375, kept in history), the immediate readback of the flag for the password-sign-in account read true locally and false in production while the other eleven rows agreed. The current comparison record, regenerated from a run on the corrected artifact with fixture digests, agrees on all twelve rows; the correction is the one made under GAP-AUTH-001.",
+      "implementationStatus": "fixed",
+      "localTestStatus": "passing",
+      "productionObservationStatus": "approved",
+      "comparisonStatus": "matches-in-scope",
+      "evidenceRefs": [
+        "docs/compatibility/auth-blocking-disable-comparison.md",
+        "docs/compatibility/auth-blocking-readback-comparison.md"
+      ],
+      "nextAction": "Closed: the corrected comparison carries a scoped approval; the original mismatch stays in history at commit 98be375.",
+      "blockedReason": "",
+      "requiresProductionChange": false
+    },
+    {
+      "id": "EVID-U04B",
+      "feature": "AUTH-SMS-MFA",
+      "kind": "untested",
+      "scope": "Comparison result of the pending-revocation corpus: all eight rows agree in scope between the owned local artifact and the approved production record.",
+      "implementationStatus": "implemented",
+      "localTestStatus": "passing",
+      "productionObservationStatus": "approved",
+      "comparisonStatus": "matches-in-scope",
+      "evidenceRefs": [
+        "docs/compatibility/auth-pending-revocation-comparison.md"
+      ],
+      "nextAction": "None; other revocation triggers stay under AUTH-U04.",
+      "blockedReason": "",
+      "requiresProductionChange": false
+    },
+    {
+      "id": "EVID-U05",
+      "feature": "SDK-INTEGRATION",
+      "kind": "untested",
+      "scope": "SDK and release evidence: lockfiles, platforms and distribution artifacts are not bound to the source-tree checks.",
+      "implementationStatus": "unknown",
+      "localTestStatus": "none",
+      "productionObservationStatus": "none",
+      "comparisonStatus": "none",
+      "evidenceRefs": [
+        "docs/compatibility/README.md"
+      ],
+      "nextAction": "Bind receipts to lockfiles and published artifacts.",
+      "blockedReason": "",
+      "requiresProductionChange": false
+    },
+    {
+      "id": "EVID-U06",
+      "feature": "MANAGED-BOUNDARIES",
+      "kind": "untested",
+      "scope": "Upstream change monitoring and release snapshots are not implemented; old evidence is not automatically invalidated when dependencies, settings or expectations change.",
+      "implementationStatus": "unknown",
+      "localTestStatus": "none",
+      "productionObservationStatus": "none",
+      "comparisonStatus": "none",
+      "evidenceRefs": [
+        "docs/compatibility/README.md"
+      ],
+      "nextAction": "Implement release snapshots and change monitoring in the inventory.",
+      "blockedReason": "",
+      "requiresProductionChange": false
+    },
+    {
+      "id": "EVID-U07",
+      "feature": "MANAGED-BOUNDARIES",
+      "kind": "untested",
+      "scope": "A public source of truth for open work: GitHub issues were empty and private issues are not visible; this ledger is the public record and keeps closed history.",
+      "implementationStatus": "unknown",
+      "localTestStatus": "none",
+      "productionObservationStatus": "none",
+      "comparisonStatus": "none",
+      "evidenceRefs": [
+        "docs/compatibility/README.md"
+      ],
+      "nextAction": "Keep this file current; do not treat filing alone as closure.",
+      "blockedReason": "",
+      "requiresProductionChange": false
+    },
+    {
+      "id": "GAP-AUTH-002",
+      "feature": "AUTH-USERS",
+      "kind": "mismatch",
+      "scope": "accounts:signUp and photoUrl: the REST reference lists the field, but production does not persist it (recorded 2026-09-12, control row of tools/auth-blocking-create-disable revision 1: absent on lookup, invisible to a blocking hook). fireemu had ignored it; a same-day change to store it was reverted and the regression now pins that it stays ignored.",
+      "implementationStatus": "fixed",
+      "localTestStatus": "passing",
+      "productionObservationStatus": "recorded",
+      "comparisonStatus": "matches-in-scope",
+      "evidenceRefs": [
+        "docs/compatibility/auth-blocking-create-disable-r1.md",
+        "tools/auth-blocking-create-disable/README.md",
+        "crates/fireemu-adapter-http/tests/auth_flows.rs"
+      ],
+      "nextAction": "None; the revision 1 production record is published (auth-blocking-create-disable-r1) and fireemu keeps ignoring photoUrl at sign-up.",
+      "blockedReason": "",
+      "requiresProductionChange": true
+    },
+    {
+      "id": "GAP-AUTH-003",
+      "feature": "AUTH-USERS",
+      "kind": "mismatch",
+      "scope": "Authentication versus authorization order on the end-user accounts:update route. Production (recorded and approved 2026-09-12, auth-refusal-precedence revision 1): a client accounts:update carrying a tampered ID token and an administrator-only field is refused INVALID_ID_TOKEN with nothing applied, so the session is verified before the administrator-only field is judged. fireemu refused OPERATION_NOT_ALLOWED, rejecting the field before verifying the session; it now verifies the session first on the end-user route. A valid session carrying such a field is still refused OPERATION_NOT_ALLOWED (local policy, unobserved for a valid token), the OOB route still rejects the field before consuming the code, and the localId selector is still refused.",
+      "implementationStatus": "fixed",
+      "localTestStatus": "passing",
+      "productionObservationStatus": "approved",
+      "comparisonStatus": "matches-in-scope",
+      "evidenceRefs": [
+        "docs/compatibility/auth-refusal-precedence-comparison-approval.md",
+        "docs/compatibility/auth-refusal-precedence-comparison.md",
+        "docs/compatibility/auth-refusal-precedence-approval.md",
+        "docs/compatibility/auth-refusal-precedence.md",
+        "crates/fireemu-adapter-http/tests/identity_toolkit.rs"
+      ],
+      "nextAction": "Closed for the recorded conditions: the production candidate and the local comparison on the corrected artifact (bound to commit c3a7973b, all nine rows agree) each carry a scoped approval, and regressions fence authenticate-before-authorize across expired, revoked, disabled and deleted sessions. Exact production precedence is established for the recorded tampered-signature case only; other invalid-token overlaps and a valid token with an administrator-only field remain unobserved (see AUTH-U13).",
+      "blockedReason": "",
+      "requiresProductionChange": true
+    },
+    {
+      "id": "GAP-AUTH-004",
+      "feature": "AUTH-USERS",
+      "kind": "mismatch",
+      "scope": "Token issuance on a privileged (administrative) accounts:update that changes the password. Production (recorded 2026-09-12, auth-pending-trigger admin-password-update): an administrative password update of an enabled account returns no ID or refresh token (tokensReturned false). fireemu issues tokens for it, because a password change sets the session provider even on the localId (admin) path where there is no session. The self-service password change over a session still returns tokens on both sides (auth-pending-trigger client-password-change matched). The earlier disabled-account fix only suppressed tokens when the account was disabled after the update; the enabled administrative case was unobserved until now.",
+      "implementationStatus": "fixed",
+      "localTestStatus": "passing",
+      "productionObservationStatus": "approved",
+      "comparisonStatus": "matches-in-scope",
+      "evidenceRefs": [
+        "docs/compatibility/auth-pending-trigger-admin-password-update-approval.md",
+        "docs/compatibility/auth-pending-trigger-admin-password-update-comparison-approval.md",
+        "crates/fireemu-adapter-http/tests/auth_flows.rs"
+      ],
+      "nextAction": "Closed for the recorded conditions: a privileged administrative accounts:update that changes the password issues no ID token, refresh token or expiry, matching production for an enabled account as for a disabled one; the self-service password change still returns all three. The revision-2 production candidate and local comparison each carry a scoped approval (all seven rows agree, every token field false on both sides), and the auth_flows regression fences both directions. Not established for a valid token with an administrator-only field or other privileged update fields (see AUTH-U13).",
+      "blockedReason": "",
+      "requiresProductionChange": true
+    },
+    {
+      "id": "GAP-AUTH-005",
+      "feature": "AUTH-SMS-MFA",
+      "kind": "mismatch",
+      "scope": "Where the disabled-account check falls on the MFA sign-in. Production (recorded 2026-09-12, auth-mfa-start-disabled): mfaSignIn:start on an account disabled after its pending credential was issued is accepted and returns a session; the disabled state is enforced at mfaSignIn:finalize (USER_DISABLED). fireemu refuses at mfaSignIn:start with USER_DISABLED (identity_toolkit.rs mfa_sign_in_start), on the assumption that no code is issued for a disabled account. The held pending credential survives disable and re-enablement on both sides. The finalize-time USER_DISABLED enforcement already matches (GAP-AUTH-FIXED-001).",
+      "implementationStatus": "fixed",
+      "localTestStatus": "passing",
+      "productionObservationStatus": "approved",
+      "comparisonStatus": "matches-in-scope",
+      "evidenceRefs": [
+        "docs/compatibility/auth-mfa-start-disabled-approval.md",
+        "docs/compatibility/auth-mfa-start-disabled-comparison-approval.md",
+        "crates/fireemu-adapter-http/tests/auth_flows.rs"
+      ],
+      "nextAction": "Closed for the recorded conditions: mfaSignIn:start on an account disabled after its pending credential is accepted and the disabled state is enforced at finalize (USER_DISABLED), matching production; the held pending survives re-enablement. fireemu's start-time refusal was removed; the finalize enforcement is unchanged. A security review found no Must/Should Fix (the emulator sends no SMS; finalize still issues no tokens). The production candidate and the corrected comparison each carry a scoped approval (all six rows agree), and the auth_flows regression fences accept-at-start / refuse-at-finalize. Not established for TOTP start (which has no start step), tenants, blocking functions, SDK or the credential's expiry.",
+      "blockedReason": "",
+      "requiresProductionChange": true
+    },
+    {
+      "id": "GAP-AUTH-006",
+      "feature": "AUTH-SMS-MFA",
+      "kind": "observed",
+      "scope": "MFA pending credential lifetime lower bound (the precursor for the AUTH-U03 expired-pending residual, not that residual). Production (recorded 2026-09-12, auth-pending-lifetime revision 1, fireemu-35fe6 with its recorded configuration and one test phone number): a single REST observation in which a pending credential held untouched for at least 2, 120 and 300 seconds after acquisition still opens a fresh SMS session and completes MFA with identity verification (idToken and refresh token present, sub/email claims and the phone second-factor claim match, derived lookup succeeds), with the pending age and the fresh session age recorded as separate intervals. A 300-second survival lower bound was confirmed for this configuration, method and single run; the lifetime upper bound, the exact TTL and the refusal error precedence are undetermined. This is an observation record, not a divergence: fireemu already matched (no fix), and the owned local run (strict profile, --only auth, virtual-clock aging) agrees on all eight rows' semantic projection. Refresh token is a presence check, not a refresh exchange.",
+      "implementationStatus": "unknown",
+      "localTestStatus": "none",
+      "productionObservationStatus": "recorded",
+      "comparisonStatus": "matches-in-scope",
+      "evidenceRefs": [
+        "docs/compatibility/auth-pending-lifetime.md",
+        "docs/compatibility/auth-pending-lifetime-comparison.md",
+        "tools/auth-pending-lifetime/README.md"
+      ],
+      "nextAction": "Candidate, recorded not approved: the production receipt, the local comparison and this entry are all candidate; the observation and comparison results are not result-approved, and this agent review is not a project owner's human approval. matches-in-scope covers this lifetime revision 1 only -- a semantic match on the eight rows (same outcomes, errors and non-age checks), not an equal TTL. Do not read this as 'the production pending TTL is 300 s' or 'every pending is valid for at least 300 s'; it is a lower bound for one configuration, method and single run. The expired-pending-versus-independently-valid-code behaviour (AUTH-U03) remains unobserved; this entry does not close or approve it. Later revisions extend the sampled ages toward the boundary under a larger budget.",
+      "blockedReason": "",
+      "requiresProductionChange": false
+    },
+    {
+      "id": "GAP-AUTH-007",
+      "feature": "AUTH-SMS-MFA",
+      "kind": "mismatch",
+      "scope": "Pending credential usability at extended ages (auth-pending-lifetime boundary revision 2). Production on 2026-09-12, one configuration/method/run and six independent accounts: start refused at measured pending-age intervals [600.0100229999516, 600.6611048749182], [1800.0076130421367, 1800.631279333029], [3300.0100262498017, 3300.628215875011] and [3900.0100315001328, 3900.6344127499033] seconds, each with INVALID_MFA_PENDING_CREDENTIAL; corresponding finalizes were skipped. Fresh MFA completion controls before and after succeeded with identity checks. The owned strict local artifact at the same execution commit accepted and fully verified 600/1800/3300 seconds, then refused 3900 seconds. Six of ten semantic rows differ. No aged success, lower bound or boundary candidate is established by this production run; age-caused expiry and a shared upper bound remain unproven. Configuration was restored with matching digest and all accounts were confirmed absent.",
+      "implementationStatus": "unknown",
+      "localTestStatus": "none",
+      "productionObservationStatus": "recorded",
+      "comparisonStatus": "mismatch",
+      "evidenceRefs": [
+        "docs/compatibility/auth-pending-lifetime-boundary.md",
+        "docs/compatibility/auth-pending-lifetime-boundary-comparison.md",
+        "tools/auth-pending-lifetime-boundary/README.md"
+      ],
+      "nextAction": "Candidate observation and comparison, not result-approved and not a runtime fix. Investigate the production/local start difference at 600/1800/3300 seconds without pinning a production TTL from the error name. A follow-up may sample shorter ages and confirm the same account/enrollment and fresh-pending success after refusal; any new production run requires separate approval. Keep revision 1 and its 300-second survival observation unchanged, and do not combine independent runs into a proven upper bound. AUTH-U03's expired-pending/independently-valid-code residual remains unobserved.",
+      "blockedReason": "",
+      "requiresProductionChange": false
+    },
+    {
+      "id": "GAP-AUTH-008",
+      "feature": "AUTH-USERS",
+      "kind": "mismatch",
+      "scope": "Provider metadata could retain a stale Password classification after a verified IdP account-recycling transition or an explicit password credential removal. Export then reintroduced password provider metadata even though the live password credential was gone, while hashless API-created password accounts still need to retain their password classification.",
+      "implementationStatus": "fixed",
+      "localTestStatus": "passing",
+      "productionObservationStatus": "none",
+      "comparisonStatus": "none",
+      "evidenceRefs": [
+        "docs/compatibility/auth-account-lifecycle.md",
+        "crates/fireemu-core-auth/tests/store.rs",
+        "crates/fireemu/src/import_export.rs",
+        "crates/fireemu/tests/import_export.rs"
+      ],
+      "nextAction": "Closed as a local provider-lifecycle repair for the covered transitions: verified IdP recycling and actual password removal retag the surviving provider, while hashless password export/import remains Password. Production lookup/export parity for these transitions is not claimed and remains outside this record.",
+      "blockedReason": "",
+      "requiresProductionChange": false
+    },
+    {
+      "id": "GAP-FS-RULES-007",
+      "feature": "FS-RULES-INDEXES",
+      "kind": "mismatch",
+      "scope": "A successful Rules allow could be overturned when unrelated sibling or nested match-path exploration later exhausted the independent matcher-work budget, even though the request already had a valid allow. Structurally impossible sibling patterns could also consume that budget before a valid allow rule placed later.",
+      "implementationStatus": "fixed",
+      "localTestStatus": "passing",
+      "productionObservationStatus": "none",
+      "comparisonStatus": "none",
+      "evidenceRefs": [
+        "docs/compatibility/firestore-rules-runtime-repairs.md",
+        "crates/fireemu-core-rules/src/eval.rs",
+        "crates/fireemu-core-rules/tests/eval.rs"
+      ],
+      "nextAction": "The evaluator prefilters matcher-aligned unreachable patterns and preserves an established allow across FIREEMU-RULES-MATCH-WORK exhaustion; expression, call-depth, unsupported-operation and other budget failures remain fail-closed. Firestore and Storage local regressions pass; production matcher-budget and allow-short-circuit parity remain unobserved.",
+      "blockedReason": "",
+      "requiresProductionChange": false
+    }
+  ]
+}

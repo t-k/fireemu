@@ -1,0 +1,328 @@
+{
+  "acceptance": "candidate",
+  "corpus": {
+    "cases": [
+      "baseline-fresh-finalize",
+      "age-2s-start",
+      "age-2s-finalize",
+      "age-120s-start",
+      "age-120s-finalize",
+      "age-300s-start",
+      "age-300s-finalize",
+      "final-fresh-finalize"
+    ],
+    "revision": 1,
+    "slice": "auth-pending-lifetime"
+  },
+  "production": {
+    "accountsUsed": 5,
+    "agingMode": "real-time",
+    "budget": {
+      "cleanupReserveSeconds": 120,
+      "configHoldMaxSeconds": 600,
+      "maxAccounts": 5,
+      "maxRequests": 200,
+      "recoveryRequestReserve": 40,
+      "totalBudgetSeconds": 600
+    },
+    "cases": [
+      {
+        "checks": {
+          "claimEmailMatches": true,
+          "claimSubMatches": true,
+          "derivedLookup": true,
+          "idTokenPresent": true,
+          "noError": true,
+          "refreshTokenPresent": true,
+          "secondFactorClaim": true
+        },
+        "elapsedMs": 11270,
+        "httpStatus": 200,
+        "id": "baseline-fresh-finalize",
+        "observedError": null,
+        "outcome": "accepted",
+        "skipped": false,
+        "timing": {
+          "finalizeReceived": 10.960257540922612,
+          "finalizeSent": 10.638894333038479,
+          "pendingAgeAtFinalize": {
+            "lower": 0.3221028749831021,
+            "upper": 0.9497621250338852
+          },
+          "pendingReceived": 10.316791458055377,
+          "pendingSent": 10.010495415888727,
+          "sessionAgeAtFinalize": {
+            "lower": 5.332985892891884e-06,
+            "upper": 0.6434646658599377
+          },
+          "startReceived": 10.638889000052586,
+          "startSent": 10.316792875062674
+        }
+      },
+      {
+        "checks": {
+          "sessionInfoPresent": true
+        },
+        "elapsedMs": 13872,
+        "httpStatus": 200,
+        "id": "age-2s-start",
+        "observedError": null,
+        "outcome": "accepted",
+        "skipped": false,
+        "timing": {
+          "pendingAgeAtStart": {
+            "lower": 2.008472500136122,
+            "upper": 2.601750083034858
+          },
+          "pendingReceived": 11.577467374969274,
+          "pendingSent": 11.270908874925226,
+          "startReceived": 13.872658957960084,
+          "startSent": 13.585939875105396
+        }
+      },
+      {
+        "checks": {
+          "claimEmailMatches": true,
+          "claimSubMatches": true,
+          "derivedLookup": true,
+          "idTokenPresent": true,
+          "noError": true,
+          "refreshTokenPresent": true,
+          "secondFactorClaim": true
+        },
+        "elapsedMs": 14473,
+        "httpStatus": 200,
+        "id": "age-2s-finalize",
+        "observedError": null,
+        "outcome": "accepted",
+        "skipped": false,
+        "timing": {
+          "finalizeReceived": 14.179073041072115,
+          "finalizeSent": 13.872689583105966,
+          "pendingAgeAtFinalize": {
+            "lower": 2.2952222081366926,
+            "upper": 2.9081641661468893
+          },
+          "pendingReceived": 11.577467374969274,
+          "pendingSent": 11.270908874925226,
+          "sessionAgeAtFinalize": {
+            "lower": 3.062514588236809e-05,
+            "upper": 0.5931331659667194
+          },
+          "startReceived": 13.872658957960084,
+          "startSent": 13.585939875105396
+        }
+      },
+      {
+        "checks": {
+          "sessionInfoPresent": true
+        },
+        "elapsedMs": 132254,
+        "httpStatus": 200,
+        "id": "age-120s-start",
+        "observedError": null,
+        "outcome": "accepted",
+        "skipped": false,
+        "timing": {
+          "pendingAgeAtStart": {
+            "lower": 120.01002345886081,
+            "upper": 120.67711670789868
+          },
+          "pendingReceived": 11.919036416104063,
+          "pendingSent": 11.577469458105043,
+          "startReceived": 132.25458616600372,
+          "startSent": 131.92905987496488
+        }
+      },
+      {
+        "checks": {
+          "claimEmailMatches": true,
+          "claimSubMatches": true,
+          "derivedLookup": true,
+          "idTokenPresent": true,
+          "noError": true,
+          "refreshTokenPresent": true,
+          "secondFactorClaim": true
+        },
+        "elapsedMs": 132893,
+        "httpStatus": 200,
+        "id": "age-120s-finalize",
+        "observedError": null,
+        "outcome": "accepted",
+        "skipped": false,
+        "timing": {
+          "finalizeReceived": 132.55691366596147,
+          "finalizeSent": 132.25461379089393,
+          "pendingAgeAtFinalize": {
+            "lower": 120.33557737478986,
+            "upper": 120.97944420785643
+          },
+          "pendingReceived": 11.919036416104063,
+          "pendingSent": 11.577469458105043,
+          "sessionAgeAtFinalize": {
+            "lower": 2.7624890208244324e-05,
+            "upper": 0.6278537909965962
+          },
+          "startReceived": 132.25458616600372,
+          "startSent": 131.92905987496488
+        }
+      },
+      {
+        "checks": {
+          "sessionInfoPresent": true
+        },
+        "elapsedMs": 312591,
+        "httpStatus": 200,
+        "id": "age-300s-start",
+        "observedError": null,
+        "outcome": "accepted",
+        "skipped": false,
+        "timing": {
+          "pendingAgeAtStart": {
+            "lower": 300.0017988339532,
+            "upper": 300.6720423749648
+          },
+          "pendingReceived": 12.24698754097335,
+          "pendingSent": 11.919038000050932,
+          "startReceived": 312.59108037501574,
+          "startSent": 312.24878637492657
+        }
+      },
+      {
+        "checks": {
+          "claimEmailMatches": true,
+          "claimSubMatches": true,
+          "derivedLookup": true,
+          "idTokenPresent": true,
+          "noError": true,
+          "refreshTokenPresent": true,
+          "secondFactorClaim": true
+        },
+        "elapsedMs": 313546,
+        "httpStatus": 200,
+        "id": "age-300s-finalize",
+        "observedError": null,
+        "outcome": "accepted",
+        "skipped": false,
+        "timing": {
+          "finalizeReceived": 313.2396893328987,
+          "finalizeSent": 312.5911086660344,
+          "pendingAgeAtFinalize": {
+            "lower": 300.34412112506106,
+            "upper": 301.3206513328478
+          },
+          "pendingReceived": 12.24698754097335,
+          "pendingSent": 11.919038000050932,
+          "sessionAgeAtFinalize": {
+            "lower": 2.8291018679738045e-05,
+            "upper": 0.9909029579721391
+          },
+          "startReceived": 312.59108037501574,
+          "startSent": 312.24878637492657
+        }
+      },
+      {
+        "checks": {
+          "claimEmailMatches": true,
+          "claimSubMatches": true,
+          "derivedLookup": true,
+          "idTokenPresent": true,
+          "noError": true,
+          "refreshTokenPresent": true,
+          "secondFactorClaim": true
+        },
+        "elapsedMs": 314774,
+        "httpStatus": 200,
+        "id": "final-fresh-finalize",
+        "observedError": null,
+        "outcome": "accepted",
+        "skipped": false,
+        "timing": {
+          "finalizeReceived": 314.4760600000154,
+          "finalizeSent": 314.1843350410927,
+          "pendingAgeAtFinalize": {
+            "lower": 0.30769570800475776,
+            "upper": 0.9291323339566588
+          },
+          "pendingReceived": 313.87663933308795,
+          "pendingSent": 313.54692766605876,
+          "sessionAgeAtFinalize": {
+            "lower": 8.291099220514297e-06,
+            "upper": 0.5994194590020925
+          },
+          "startReceived": 314.1843267499935,
+          "startSent": 313.87664054101333
+        }
+      }
+    ],
+    "cleanup": {
+      "emailAbsent": true,
+      "uidAbsent": true
+    },
+    "committedCheckout": true,
+    "configDigestMatches": true,
+    "configHoldSeconds": 346.5095150421839,
+    "configRestored": true,
+    "configRestoredReadback": {
+      "mfa": {
+        "state": "DISABLED"
+      },
+      "phoneNumber": {},
+      "smsRegionConfig": {
+        "allowlistOnly": {}
+      }
+    },
+    "configuration": {
+      "adminPasswordPolicyAbsent": true,
+      "blockingTriggersAbsent": true,
+      "emailEnabled": true,
+      "improvedEmailPrivacy": true,
+      "passwordRequired": true,
+      "sha256": "7878eb2600c66f48c82ef55fb8c2443ab15689ea7542a77fbda206da06f817c2"
+    },
+    "lifetimeSummary": {
+      "indeterminateAges": [],
+      "lowerBoundSeconds": 300,
+      "refusalReasons": {},
+      "refusedAges": [],
+      "upperBoundEstablished": false,
+      "usableAges": [
+        2,
+        120,
+        300
+      ]
+    },
+    "privateReceiptSha256": "161d1f8c87692d12386e5cc0e70fa06ab5674e6bcb72437f3a7e9f1b1812f04c",
+    "probeSourceCommit": "e5a52414c3c6307a9b6a670bfc3574411bb624b7",
+    "recordedAt": "2026-09-12T07:42:10.298698+00:00",
+    "recordedWith": {
+      "probeSourceCommit": "e5a52414c3c6307a9b6a670bfc3574411bb624b7",
+      "recorderCommit": "e5a52414c3c6307a9b6a670bfc3574411bb624b7",
+      "recorderInputs": {
+        "tools/auth-password-maximum/maximum_contract.py": "143b78e082daf4cfa675e228c42c493d452de799ba467508130061e82447ecaf",
+        "tools/auth-password-maximum/maximum_recorder.py": "deacabae79e0ed6ef2084c58d761e25d20f77c6def6d1fe756c231824289c63b",
+        "tools/auth-pending-lifetime/lifetime_contract.py": "7c82b546ab36dfae19c63a4d9fb91f5eb394984313be0ca2b418278b9ce0cc97",
+        "tools/auth-pending-lifetime/lifetime_recorder.py": "ea7f8cd3a208653c0eb6cd706def7102ceb55c45da5063b0c408a221ae0c6589",
+        "tools/auth-pending-revocation/revocation_contract.py": "068ab00d3c832165a9ffb4a476973eccce0b1b66eb8d09dc24e1bcf3a8453856",
+        "tools/auth-pending-revocation/revocation_recorder.py": "83c65d82b5b3c7ce7de0aee814cea7fefafda48b6bbb5665ea8758f147f4c553"
+      }
+    },
+    "reevaluatedWith": {
+      "commit": "e5a52414c3c6307a9b6a670bfc3574411bb624b7",
+      "contractSha256": "7c82b546ab36dfae19c63a4d9fb91f5eb394984313be0ca2b418278b9ce0cc97"
+    },
+    "requestCount": {
+      "config": 5,
+      "observation": 45,
+      "recovery": 25
+    },
+    "setup": true,
+    "stopReason": "completed",
+    "target": "production",
+    "wallElapsedSeconds": 366.833954666974
+  },
+  "publicationContractSha256": "c3b6b05f8337bab381f8121545a25ee2ab4534d827735ad6d5bf76243c2b50b9",
+  "schemaVersion": 1,
+  "scope": "Eight sequential REST observations in production only: a fresh phone MFA completion (control); then, for each of three pending credentials held untouched from a common origin and aged by real waiting to about 2, 120 and 300 seconds, mfaSignIn:start with a freshly opened SMS session (so only the pending age is large) and, on an acceptance, a finalize of that fresh session; a fresh completion (control) closes the run. One independent account per age, phone MFA with one test phone number, no tenant, no blocking function, one run. The oracle configuration was changed for the run and restored with a digest comparison. This establishes a lower bound on the pending lifetime; a refused age records its error but does not, in this revision, establish an upper bound, because the corpus does not prove a refusal is due to expiry; it pins no exact TTL and no error precedence. No human approval, no local artifact comparison, no claim about tenants, SDK or Rules, and no separation of pending-versus-session expiry.",
+  "sourceReviewSha256": "1e796e157e67515c696c636146f8f889fdb5137199a377820976d0d528190262"
+}

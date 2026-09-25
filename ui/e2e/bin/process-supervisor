@@ -1,0 +1,86 @@
+#!/usr/bin/python3 -I
+"""Own one command's POSIX process group until every member is terminated."""
+
+from __future__ import annotations
+
+import os
+import signal
+import subprocess
+import sys
+import time
+
+ACK_FD = 3
+READY = b"supervisor-ready\n"
+ACK = b"cleanup-ready\n"
+GRACE_SECONDS = 2.0
+POLL_SECONDS = 0.01
+
+
+def main() -> int:
+    command = sys.argv[1:]
+    if not command:
+        print("error: process-supervisor requires a command", file=sys.stderr)
+        return 126
+    if os.getpid() != os.getpgrp():
+        print("error: process-supervisor must be launched as a process-group leader", file=sys.stderr)
+        return 126
+    try:
+        os.fstat(ACK_FD)
+    except OSError as error:
+        print(f"error: cleanup acknowledgement descriptor is unavailable: {error}", file=sys.stderr)
+        return 126
+
+    pending_signal = 0
+
+    def remember_signal(signum: int, _frame: object) -> None:
+        nonlocal pending_signal
+        if pending_signal == 0:
+            pending_signal = signum
+
+    for supervised_signal in (signal.SIGHUP, signal.SIGINT, signal.SIGTERM):
+        signal.signal(supervised_signal, remember_signal)
+
+    try:
+        os.write(ACK_FD, READY)
+    except OSError as error:
+        print(f"error: cannot acknowledge supervisor readiness: {error}", file=sys.stderr)
+        return 126
+
+    try:
+        child = subprocess.Popen(command, close_fds=True)
+    except (OSError, ValueError) as error:
+        print(f"error: cannot launch supervised command: {error}", file=sys.stderr)
+        return 126
+
+    def terminate_group(requested_signal: int) -> None:
+        try:
+            os.killpg(os.getpgrp(), requested_signal)
+        except OSError as error:
+            print(f"error: cannot signal supervised process group: {error}", file=sys.stderr)
+
+        deadline = time.monotonic() + GRACE_SECONDS
+        while child.poll() is None and time.monotonic() < deadline:
+            time.sleep(POLL_SECONDS)
+
+        try:
+            os.write(ACK_FD, ACK)
+        except OSError as error:
+            print(f"error: cannot acknowledge supervised cleanup: {error}", file=sys.stderr)
+        os.killpg(os.getpgrp(), signal.SIGKILL)
+        raise RuntimeError("SIGKILL unexpectedly returned")
+
+    while True:
+        if pending_signal:
+            terminate_group(pending_signal)
+        return_code = child.poll()
+        if return_code is not None:
+            print(
+                f"error: supervised command exited before teardown: {return_code}",
+                file=sys.stderr,
+            )
+            terminate_group(signal.SIGTERM)
+        time.sleep(POLL_SECONDS)
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

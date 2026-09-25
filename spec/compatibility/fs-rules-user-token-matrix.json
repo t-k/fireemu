@@ -1,0 +1,1449 @@
+{
+  "blockers": [
+    "owner-permission",
+    "nonce-reservation",
+    "ruleset-release-authority",
+    "tenant-provisioning",
+    "cost-and-retention"
+  ],
+  "budget": {
+    "authRequests": 17,
+    "billedDocumentReads": 54,
+    "billedDocumentWrites": 28,
+    "concurrencyUpperBound": 1,
+    "costCeilingUsd": 1.0,
+    "estimateBasis": "public Firestore Standard list prices; not a quoted tariff",
+    "estimatedCostUsd": 8.3e-05,
+    "fixtureRequests": 10,
+    "observationRequests": 33,
+    "perRequestTimeoutSeconds": 12.0,
+    "recoveryDeadlineSeconds": 900.0,
+    "recoveryRequests": 63,
+    "requestUpperBound": 146,
+    "rulesRequests": 23,
+    "wallClockDeadlineSeconds": 600.0
+  },
+  "campaignId": "FS-RULES-USER-TOKEN-MATRIX-01",
+  "contract": "fs-rules-user-token-campaign-v1",
+  "frozenInputs": {
+    "caseDigest": "94b1c949678d1d68805a41b42c2950b746e8c65a77d23eb185953d5d0cfe68a7",
+    "rulesetDigests": {
+      "A": "c1f662182f56e3476994fd91344d195eae186181fb1b817580087b7f52537d30",
+      "B": "65d6299b939d2a669335b99e732add35f9f3c1bbc9c767431063e4463d11b745"
+    },
+    "sources": {
+      "o5_user_token_campaign.py": "761c73fbbb325f0f3dde2b14cef91586e65e92aefdfd3ad105e5919e4a4ad379",
+      "o5_user_token_case.py": "1524aac3d40f78ba8688ecd574784dd8c0cdf63d26e2ff7289d421825a981a0d",
+      "o5_user_token_collector.py": "30f93b389d03bbffa38744dd73a8bf15e9cbb6e47129bc632974b012bde12583",
+      "o5_user_token_comparator.py": "d17e7c85ec7eb113c724c4d3767dfff63c80dc9fd3ff90c76838531391fc0424",
+      "o5_user_token_comparator_v2.py": "040cf98c4ba23fe9a97c09bbcee842787afca6f17b045fc2bf49c1c5877efcfe",
+      "o5_user_token_descriptor.py": "cb0ce4aea1d38aea8e584fefcb6c64cc6a257cfc087efe824f980955ca5d9fa9",
+      "o5_user_token_local_run.py": "2c8e199a8d0b82737c13301c2bf54304fef06a1c77ec1dd36bd9d7834f0f307c",
+      "o5_user_token_semantics.py": "589b8e995d49ea918bdc8b8d52ff5deaf85a6c05a1571bbd1a86b48936a8d59d",
+      "o5_user_token_shadow.py": "f84ca68a1d954aa5dd14fa8fe1f756f32e4a173ed885e623ef2ccf7ac752ebe4"
+    }
+  },
+  "manifestDigest": "44ec125d631f4d4c41109e5df07e4cd83f128b6e29b791ab630a47a3864cae4a",
+  "note": "Frozen template of the FS-RULES user-token observation matrix. The project, database, nonce and tenant are placeholders; a real run recompiles the matrix with owner-confirmed identities, and the tenant identifier in particular is assigned by Identity Platform.",
+  "observationCase": {
+    "campaignId": "FS-RULES-USER-TOKEN-MATRIX-01",
+    "conditions": [
+      "atomic-multiwrite",
+      "credential-refusal",
+      "credential-revocation",
+      "custom-claim",
+      "exists",
+      "get",
+      "getAfter",
+      "principal-separation",
+      "request-auth-null",
+      "ruleset-transition",
+      "tenant"
+    ],
+    "contract": "fs-rules-user-token-case-v2",
+    "database": "(default)",
+    "evidenceBoundary": "administrator-rest-evidence-cannot-substitute-for-a-user-token-rules-decision",
+    "fieldResolution": {
+      "$principal": "resolves to the uid of the account this campaign created for that principal reference",
+      "ownerField": "ownerUid"
+    },
+    "fixtures": [
+      {
+        "createdBy": "administrator-setup",
+        "document": "owned-a",
+        "fields": {
+          "document": "owned-a",
+          "nonce": "00000000000000000000000000000000",
+          "ownerUid": {
+            "$principal": "owner-a"
+          }
+        },
+        "resource": "projects/template-project/databases/(default)/documents/o5-user-token/n00000000000000000000000000000000/cases/owned-a"
+      },
+      {
+        "createdBy": "administrator-setup",
+        "document": "owned-b",
+        "fields": {
+          "document": "owned-b",
+          "nonce": "00000000000000000000000000000000",
+          "ownerUid": {
+            "$principal": "other-b"
+          }
+        },
+        "resource": "projects/template-project/databases/(default)/documents/o5-user-token/n00000000000000000000000000000000/cases/owned-b"
+      },
+      {
+        "createdBy": "administrator-setup",
+        "document": "public-open",
+        "fields": {
+          "document": "public-open",
+          "nonce": "00000000000000000000000000000000"
+        },
+        "resource": "projects/template-project/databases/(default)/documents/o5-user-token/n00000000000000000000000000000000/cases/public-open"
+      },
+      {
+        "createdBy": "administrator-setup",
+        "document": "claim-gated",
+        "fields": {
+          "document": "claim-gated",
+          "nonce": "00000000000000000000000000000000"
+        },
+        "resource": "projects/template-project/databases/(default)/documents/o5-user-token/n00000000000000000000000000000000/cases/claim-gated"
+      },
+      {
+        "createdBy": "administrator-setup",
+        "document": "tenant-gated",
+        "fields": {
+          "document": "tenant-gated",
+          "nonce": "00000000000000000000000000000000"
+        },
+        "resource": "projects/template-project/databases/(default)/documents/o5-user-token/n00000000000000000000000000000000/cases/tenant-gated"
+      },
+      {
+        "createdBy": "administrator-setup",
+        "document": "exists-guard-present",
+        "fields": {
+          "document": "exists-guard-present",
+          "nonce": "00000000000000000000000000000000"
+        },
+        "resource": "projects/template-project/databases/(default)/documents/o5-user-token/n00000000000000000000000000000000/cases/exists-guard-present"
+      },
+      {
+        "createdBy": "administrator-setup",
+        "document": "exists-guarded",
+        "fields": {
+          "document": "exists-guarded",
+          "nonce": "00000000000000000000000000000000"
+        },
+        "resource": "projects/template-project/databases/(default)/documents/o5-user-token/n00000000000000000000000000000000/cases/exists-guarded"
+      },
+      {
+        "createdBy": "administrator-setup",
+        "document": "exists-guarded-missing",
+        "fields": {
+          "document": "exists-guarded-missing",
+          "nonce": "00000000000000000000000000000000"
+        },
+        "resource": "projects/template-project/databases/(default)/documents/o5-user-token/n00000000000000000000000000000000/cases/exists-guarded-missing"
+      },
+      {
+        "createdBy": "administrator-setup",
+        "document": "get-guarded",
+        "fields": {
+          "document": "get-guarded",
+          "nonce": "00000000000000000000000000000000",
+          "ownerUid": {
+            "$principal": "owner-a"
+          }
+        },
+        "resource": "projects/template-project/databases/(default)/documents/o5-user-token/n00000000000000000000000000000000/cases/get-guarded"
+      },
+      {
+        "createdBy": "administrator-setup",
+        "document": "multiwrite-x",
+        "fields": {
+          "document": "multiwrite-x",
+          "generation": "initial",
+          "nonce": "00000000000000000000000000000000",
+          "ownerUid": {
+            "$principal": "owner-a"
+          }
+        },
+        "resource": "projects/template-project/databases/(default)/documents/o5-user-token/n00000000000000000000000000000000/cases/multiwrite-x"
+      }
+    ],
+    "neverCreatedDocuments": [
+      "projects/template-project/databases/(default)/documents/o5-user-token/n00000000000000000000000000000000/cases/exists-guard-absent",
+      "projects/template-project/databases/(default)/documents/o5-user-token/n00000000000000000000000000000000/cases/getafter-control-guard"
+    ],
+    "nonce": "00000000000000000000000000000000",
+    "observation": [
+      {
+        "caseId": "a-owner-reads-own-document",
+        "condition": "principal-separation",
+        "createdDocuments": [],
+        "credential": {
+          "class": "user-id-token",
+          "ref": "owner-a"
+        },
+        "expect": {
+          "detail": "owner-uid-matches-resource-owner",
+          "fields": {
+            "document": "owned-a",
+            "nonce": "00000000000000000000000000000000",
+            "ownerUid": {
+              "$principal": "owner-a"
+            }
+          },
+          "status": "OK"
+        },
+        "index": 0,
+        "method": "get",
+        "principal": "owner-a",
+        "resources": [
+          "projects/template-project/databases/(default)/documents/o5-user-token/n00000000000000000000000000000000/cases/owned-a"
+        ],
+        "role": "primary",
+        "ruleset": "A",
+        "targets": [
+          "owned-a"
+        ],
+        "transport": "firestore-rest-v1",
+        "writes": []
+      },
+      {
+        "caseId": "a-second-user-denied-on-foreign-document",
+        "condition": "principal-separation",
+        "createdDocuments": [],
+        "credential": {
+          "class": "user-id-token",
+          "ref": "other-b"
+        },
+        "expect": {
+          "detail": "uid-mismatch",
+          "status": "PERMISSION_DENIED"
+        },
+        "index": 1,
+        "method": "get",
+        "principal": "other-b",
+        "resources": [
+          "projects/template-project/databases/(default)/documents/o5-user-token/n00000000000000000000000000000000/cases/owned-a"
+        ],
+        "role": "primary",
+        "ruleset": "A",
+        "targets": [
+          "owned-a"
+        ],
+        "transport": "firestore-rest-v1",
+        "writes": []
+      },
+      {
+        "caseId": "a-second-user-reads-own-document",
+        "condition": "principal-separation",
+        "createdDocuments": [],
+        "credential": {
+          "class": "user-id-token",
+          "ref": "other-b"
+        },
+        "expect": {
+          "detail": "second-principal-is-authenticated-and-owns-its-document",
+          "fields": {
+            "document": "owned-b",
+            "nonce": "00000000000000000000000000000000",
+            "ownerUid": {
+              "$principal": "other-b"
+            }
+          },
+          "status": "OK"
+        },
+        "index": 2,
+        "method": "get",
+        "principal": "other-b",
+        "resources": [
+          "projects/template-project/databases/(default)/documents/o5-user-token/n00000000000000000000000000000000/cases/owned-b"
+        ],
+        "role": "control",
+        "ruleset": "A",
+        "targets": [
+          "owned-b"
+        ],
+        "transport": "firestore-rest-v1",
+        "writes": []
+      },
+      {
+        "caseId": "a-anonymous-principal-denied-on-owned-document",
+        "condition": "principal-separation",
+        "createdDocuments": [],
+        "credential": {
+          "class": "user-id-token",
+          "ref": "anonymous-c"
+        },
+        "expect": {
+          "detail": "anonymous-provider-user-has-a-uid-but-not-the-owner-uid",
+          "status": "PERMISSION_DENIED"
+        },
+        "index": 3,
+        "method": "get",
+        "principal": "anonymous-c",
+        "resources": [
+          "projects/template-project/databases/(default)/documents/o5-user-token/n00000000000000000000000000000000/cases/owned-a"
+        ],
+        "role": "primary",
+        "ruleset": "A",
+        "targets": [
+          "owned-a"
+        ],
+        "transport": "firestore-rest-v1",
+        "writes": []
+      },
+      {
+        "caseId": "a-unauthenticated-denied-on-owned-document",
+        "condition": "request-auth-null",
+        "createdDocuments": [],
+        "credential": {
+          "class": "absent",
+          "ref": "unauthenticated"
+        },
+        "expect": {
+          "detail": "request-auth-is-null-so-the-owner-clause-is-false",
+          "status": "PERMISSION_DENIED"
+        },
+        "index": 4,
+        "method": "get",
+        "principal": "unauthenticated",
+        "resources": [
+          "projects/template-project/databases/(default)/documents/o5-user-token/n00000000000000000000000000000000/cases/owned-a"
+        ],
+        "role": "primary",
+        "ruleset": "A",
+        "targets": [
+          "owned-a"
+        ],
+        "transport": "firestore-rest-v1",
+        "writes": []
+      },
+      {
+        "caseId": "a-unauthenticated-allowed-by-explicit-null-clause",
+        "condition": "request-auth-null",
+        "createdDocuments": [],
+        "credential": {
+          "class": "absent",
+          "ref": "unauthenticated"
+        },
+        "expect": {
+          "detail": "rule-requires-request-auth-to-be-explicitly-null",
+          "fields": {
+            "document": "public-open",
+            "nonce": "00000000000000000000000000000000"
+          },
+          "status": "OK"
+        },
+        "index": 5,
+        "method": "get",
+        "principal": "unauthenticated",
+        "resources": [
+          "projects/template-project/databases/(default)/documents/o5-user-token/n00000000000000000000000000000000/cases/public-open"
+        ],
+        "role": "primary",
+        "ruleset": "A",
+        "targets": [
+          "public-open"
+        ],
+        "transport": "firestore-rest-v1",
+        "writes": []
+      },
+      {
+        "caseId": "a-anonymous-denied-by-explicit-null-clause",
+        "condition": "request-auth-null",
+        "createdDocuments": [],
+        "credential": {
+          "class": "user-id-token",
+          "ref": "anonymous-c"
+        },
+        "expect": {
+          "detail": "an-anonymous-provider-principal-is-not-an-absent-principal",
+          "status": "PERMISSION_DENIED"
+        },
+        "index": 6,
+        "method": "get",
+        "principal": "anonymous-c",
+        "resources": [
+          "projects/template-project/databases/(default)/documents/o5-user-token/n00000000000000000000000000000000/cases/public-open"
+        ],
+        "role": "control",
+        "ruleset": "A",
+        "targets": [
+          "public-open"
+        ],
+        "transport": "firestore-rest-v1",
+        "writes": []
+      },
+      {
+        "caseId": "a-authenticated-denied-by-explicit-null-clause",
+        "condition": "request-auth-null",
+        "createdDocuments": [],
+        "credential": {
+          "class": "user-id-token",
+          "ref": "owner-a"
+        },
+        "expect": {
+          "detail": "an-authenticated-principal-must-not-satisfy-request-auth-null",
+          "status": "PERMISSION_DENIED"
+        },
+        "index": 7,
+        "method": "get",
+        "principal": "owner-a",
+        "resources": [
+          "projects/template-project/databases/(default)/documents/o5-user-token/n00000000000000000000000000000000/cases/public-open"
+        ],
+        "role": "control",
+        "ruleset": "A",
+        "targets": [
+          "public-open"
+        ],
+        "transport": "firestore-rest-v1",
+        "writes": []
+      },
+      {
+        "caseId": "a-custom-claim-principal-allowed",
+        "condition": "custom-claim",
+        "createdDocuments": [],
+        "credential": {
+          "class": "user-id-token",
+          "ref": "owner-a"
+        },
+        "expect": {
+          "detail": "token-carries-o5role-editor",
+          "fields": {
+            "document": "claim-gated",
+            "nonce": "00000000000000000000000000000000"
+          },
+          "status": "OK"
+        },
+        "index": 8,
+        "method": "get",
+        "principal": "owner-a",
+        "resources": [
+          "projects/template-project/databases/(default)/documents/o5-user-token/n00000000000000000000000000000000/cases/claim-gated"
+        ],
+        "role": "primary",
+        "ruleset": "A",
+        "targets": [
+          "claim-gated"
+        ],
+        "transport": "firestore-rest-v1",
+        "writes": []
+      },
+      {
+        "caseId": "a-principal-without-custom-claim-denied",
+        "condition": "custom-claim",
+        "createdDocuments": [],
+        "credential": {
+          "class": "user-id-token",
+          "ref": "other-b"
+        },
+        "expect": {
+          "detail": "claim-absent-from-token",
+          "status": "PERMISSION_DENIED"
+        },
+        "index": 9,
+        "method": "get",
+        "principal": "other-b",
+        "resources": [
+          "projects/template-project/databases/(default)/documents/o5-user-token/n00000000000000000000000000000000/cases/claim-gated"
+        ],
+        "role": "control",
+        "ruleset": "A",
+        "targets": [
+          "claim-gated"
+        ],
+        "transport": "firestore-rest-v1",
+        "writes": []
+      },
+      {
+        "caseId": "a-tenant-principal-allowed",
+        "condition": "tenant",
+        "createdDocuments": [],
+        "credential": {
+          "class": "user-id-token",
+          "ref": "tenant-d"
+        },
+        "expect": {
+          "detail": "token-firebase-tenant-equals-o5-user-token-tenant",
+          "fields": {
+            "document": "tenant-gated",
+            "nonce": "00000000000000000000000000000000"
+          },
+          "status": "OK"
+        },
+        "index": 10,
+        "method": "get",
+        "principal": "tenant-d",
+        "resources": [
+          "projects/template-project/databases/(default)/documents/o5-user-token/n00000000000000000000000000000000/cases/tenant-gated"
+        ],
+        "role": "primary",
+        "ruleset": "A",
+        "targets": [
+          "tenant-gated"
+        ],
+        "transport": "firestore-rest-v1",
+        "writes": []
+      },
+      {
+        "caseId": "a-non-tenant-principal-denied",
+        "condition": "tenant",
+        "createdDocuments": [],
+        "credential": {
+          "class": "user-id-token",
+          "ref": "owner-a"
+        },
+        "expect": {
+          "detail": "project-level-principal-has-no-tenant-member",
+          "status": "PERMISSION_DENIED"
+        },
+        "index": 11,
+        "method": "get",
+        "principal": "owner-a",
+        "resources": [
+          "projects/template-project/databases/(default)/documents/o5-user-token/n00000000000000000000000000000000/cases/tenant-gated"
+        ],
+        "role": "control",
+        "ruleset": "A",
+        "targets": [
+          "tenant-gated"
+        ],
+        "transport": "firestore-rest-v1",
+        "writes": []
+      },
+      {
+        "caseId": "a-exists-guard-present-allows-read",
+        "condition": "exists",
+        "createdDocuments": [],
+        "credential": {
+          "class": "user-id-token",
+          "ref": "owner-a"
+        },
+        "expect": {
+          "detail": "guard-document-exists",
+          "fields": {
+            "document": "exists-guarded",
+            "nonce": "00000000000000000000000000000000"
+          },
+          "status": "OK"
+        },
+        "index": 12,
+        "method": "get",
+        "principal": "owner-a",
+        "resources": [
+          "projects/template-project/databases/(default)/documents/o5-user-token/n00000000000000000000000000000000/cases/exists-guarded"
+        ],
+        "role": "primary",
+        "ruleset": "A",
+        "targets": [
+          "exists-guarded"
+        ],
+        "transport": "firestore-rest-v1",
+        "writes": []
+      },
+      {
+        "caseId": "a-exists-guard-absent-denies-read",
+        "condition": "exists",
+        "createdDocuments": [],
+        "credential": {
+          "class": "user-id-token",
+          "ref": "owner-a"
+        },
+        "expect": {
+          "detail": "guard-document-exists-guard-absent-is-never-created",
+          "status": "PERMISSION_DENIED"
+        },
+        "index": 13,
+        "method": "get",
+        "principal": "owner-a",
+        "resources": [
+          "projects/template-project/databases/(default)/documents/o5-user-token/n00000000000000000000000000000000/cases/exists-guarded-missing"
+        ],
+        "role": "control",
+        "ruleset": "A",
+        "targets": [
+          "exists-guarded-missing"
+        ],
+        "transport": "firestore-rest-v1",
+        "writes": []
+      },
+      {
+        "caseId": "a-get-guard-matches-principal",
+        "condition": "get",
+        "createdDocuments": [],
+        "credential": {
+          "class": "user-id-token",
+          "ref": "owner-a"
+        },
+        "expect": {
+          "detail": "guard-document-owner-equals-request-auth-uid",
+          "fields": {
+            "document": "get-guarded",
+            "nonce": "00000000000000000000000000000000",
+            "ownerUid": {
+              "$principal": "owner-a"
+            }
+          },
+          "status": "OK"
+        },
+        "index": 14,
+        "method": "get",
+        "principal": "owner-a",
+        "resources": [
+          "projects/template-project/databases/(default)/documents/o5-user-token/n00000000000000000000000000000000/cases/get-guarded"
+        ],
+        "role": "primary",
+        "ruleset": "A",
+        "targets": [
+          "get-guarded"
+        ],
+        "transport": "firestore-rest-v1",
+        "writes": []
+      },
+      {
+        "caseId": "a-get-guard-rejects-other-principal",
+        "condition": "get",
+        "createdDocuments": [],
+        "credential": {
+          "class": "user-id-token",
+          "ref": "other-b"
+        },
+        "expect": {
+          "detail": "guard-document-owner-differs-from-request-auth-uid",
+          "status": "PERMISSION_DENIED"
+        },
+        "index": 15,
+        "method": "get",
+        "principal": "other-b",
+        "resources": [
+          "projects/template-project/databases/(default)/documents/o5-user-token/n00000000000000000000000000000000/cases/get-guarded"
+        ],
+        "role": "control",
+        "ruleset": "A",
+        "targets": [
+          "get-guarded"
+        ],
+        "transport": "firestore-rest-v1",
+        "writes": []
+      },
+      {
+        "caseId": "a-getafter-satisfied-by-same-commit-write",
+        "condition": "getAfter",
+        "createdDocuments": [
+          "getafter-target",
+          "getafter-guard"
+        ],
+        "credential": {
+          "class": "user-id-token",
+          "ref": "owner-a"
+        },
+        "expect": {
+          "detail": "partner-write-in-the-same-atomic-commit-satisfies-getAfter",
+          "status": "OK"
+        },
+        "index": 16,
+        "method": "commit",
+        "principal": "owner-a",
+        "resources": [
+          "projects/template-project/databases/(default)/documents/o5-user-token/n00000000000000000000000000000000/cases/getafter-target",
+          "projects/template-project/databases/(default)/documents/o5-user-token/n00000000000000000000000000000000/cases/getafter-guard"
+        ],
+        "role": "primary",
+        "ruleset": "A",
+        "targets": [
+          "getafter-target",
+          "getafter-guard"
+        ],
+        "transport": "firestore-rest-v1",
+        "writes": [
+          {
+            "document": "getafter-target",
+            "fields": {
+              "document": "getafter-target",
+              "nonce": "00000000000000000000000000000000",
+              "ownerUid": {
+                "$principal": "owner-a"
+              }
+            },
+            "operation": "create"
+          },
+          {
+            "document": "getafter-guard",
+            "fields": {
+              "document": "getafter-guard",
+              "nonce": "00000000000000000000000000000000",
+              "ownerUid": {
+                "$principal": "owner-a"
+              }
+            },
+            "operation": "create"
+          }
+        ]
+      },
+      {
+        "caseId": "a-getafter-unsatisfied-without-partner-write",
+        "condition": "getAfter",
+        "createdDocuments": [
+          "getafter-control-target"
+        ],
+        "credential": {
+          "class": "user-id-token",
+          "ref": "owner-a"
+        },
+        "expect": {
+          "detail": "getafter-control-guard-is-never-created-by-any-row-so-the-guard-is-absent-after-this-commit",
+          "status": "PERMISSION_DENIED"
+        },
+        "index": 17,
+        "method": "commit",
+        "principal": "owner-a",
+        "resources": [
+          "projects/template-project/databases/(default)/documents/o5-user-token/n00000000000000000000000000000000/cases/getafter-control-target"
+        ],
+        "role": "control",
+        "ruleset": "A",
+        "targets": [
+          "getafter-control-target"
+        ],
+        "transport": "firestore-rest-v1",
+        "writes": [
+          {
+            "document": "getafter-control-target",
+            "fields": {
+              "document": "getafter-control-target",
+              "nonce": "00000000000000000000000000000000",
+              "ownerUid": {
+                "$principal": "owner-a"
+              }
+            },
+            "operation": "create"
+          }
+        ]
+      },
+      {
+        "caseId": "a-atomic-multiwrite-refused-as-a-whole",
+        "condition": "atomic-multiwrite",
+        "createdDocuments": [
+          "multiwrite-y"
+        ],
+        "credential": {
+          "class": "user-id-token",
+          "ref": "owner-a"
+        },
+        "expect": {
+          "detail": "one-denied-write-refuses-the-whole-commit",
+          "status": "PERMISSION_DENIED"
+        },
+        "index": 18,
+        "method": "commit",
+        "principal": "owner-a",
+        "resources": [
+          "projects/template-project/databases/(default)/documents/o5-user-token/n00000000000000000000000000000000/cases/multiwrite-x",
+          "projects/template-project/databases/(default)/documents/o5-user-token/n00000000000000000000000000000000/cases/multiwrite-y"
+        ],
+        "role": "primary",
+        "ruleset": "A",
+        "targets": [
+          "multiwrite-x",
+          "multiwrite-y"
+        ],
+        "transport": "firestore-rest-v1",
+        "writes": [
+          {
+            "document": "multiwrite-x",
+            "fields": {
+              "generation": "updated"
+            },
+            "operation": "update"
+          },
+          {
+            "document": "multiwrite-y",
+            "fields": {
+              "document": "multiwrite-y",
+              "nonce": "00000000000000000000000000000000"
+            },
+            "operation": "create"
+          }
+        ]
+      },
+      {
+        "caseId": "a-multiwrite-poststate-is-unchanged",
+        "condition": "atomic-multiwrite",
+        "createdDocuments": [],
+        "credential": {
+          "class": "user-id-token",
+          "ref": "owner-a"
+        },
+        "expect": {
+          "detail": "allowed-half-of-the-refused-commit-was-not-applied",
+          "fields": {
+            "document": "multiwrite-x",
+            "generation": "initial",
+            "nonce": "00000000000000000000000000000000",
+            "ownerUid": {
+              "$principal": "owner-a"
+            }
+          },
+          "status": "OK"
+        },
+        "index": 19,
+        "method": "get",
+        "principal": "owner-a",
+        "resources": [
+          "projects/template-project/databases/(default)/documents/o5-user-token/n00000000000000000000000000000000/cases/multiwrite-x"
+        ],
+        "role": "poststate",
+        "ruleset": "A",
+        "targets": [
+          "multiwrite-x"
+        ],
+        "transport": "firestore-rest-v1",
+        "writes": []
+      },
+      {
+        "caseId": "a-expired-token-is-unauthenticated",
+        "condition": "credential-refusal",
+        "createdDocuments": [],
+        "credential": {
+          "class": "user-id-token",
+          "ref": "expired-token"
+        },
+        "expect": {
+          "detail": "authentication-refusal-precedes-rules-evaluation",
+          "status": "UNAUTHENTICATED"
+        },
+        "index": 20,
+        "method": "get",
+        "principal": "expired-token",
+        "resources": [
+          "projects/template-project/databases/(default)/documents/o5-user-token/n00000000000000000000000000000000/cases/owned-a"
+        ],
+        "role": "negative",
+        "ruleset": "A",
+        "targets": [
+          "owned-a"
+        ],
+        "transport": "firestore-rest-v1",
+        "writes": []
+      },
+      {
+        "caseId": "a-malformed-bearer-is-unauthenticated",
+        "condition": "credential-refusal",
+        "createdDocuments": [],
+        "credential": {
+          "class": "malformed",
+          "ref": "malformed-bearer"
+        },
+        "expect": {
+          "detail": "authentication-refusal-precedes-rules-evaluation",
+          "status": "UNAUTHENTICATED"
+        },
+        "index": 21,
+        "method": "get",
+        "principal": "malformed-bearer",
+        "resources": [
+          "projects/template-project/databases/(default)/documents/o5-user-token/n00000000000000000000000000000000/cases/owned-a"
+        ],
+        "role": "negative",
+        "ruleset": "A",
+        "targets": [
+          "owned-a"
+        ],
+        "transport": "firestore-rest-v1",
+        "writes": []
+      },
+      {
+        "caseId": "a-empty-bearer-is-unauthenticated",
+        "condition": "credential-refusal",
+        "createdDocuments": [],
+        "credential": {
+          "class": "empty",
+          "ref": "empty-bearer"
+        },
+        "expect": {
+          "detail": "authentication-refusal-precedes-rules-evaluation",
+          "status": "UNAUTHENTICATED"
+        },
+        "index": 22,
+        "method": "get",
+        "principal": "empty-bearer",
+        "resources": [
+          "projects/template-project/databases/(default)/documents/o5-user-token/n00000000000000000000000000000000/cases/owned-a"
+        ],
+        "role": "negative",
+        "ruleset": "A",
+        "targets": [
+          "owned-a"
+        ],
+        "transport": "firestore-rest-v1",
+        "writes": []
+      },
+      {
+        "caseId": "a-revoked-refresh-tokens-accepted-before-the-action",
+        "condition": "credential-revocation",
+        "createdDocuments": [],
+        "credential": {
+          "class": "user-id-token",
+          "ref": "revoked-e"
+        },
+        "expect": {
+          "detail": "the-same-token-is-accepted-before-the-administrator-action",
+          "fields": {
+            "document": "exists-guarded",
+            "nonce": "00000000000000000000000000000000"
+          },
+          "productionHypothesis": {
+            "basis": "an unrevoked, unexpired ID token is accepted",
+            "status": "OK"
+          },
+          "status": "OK"
+        },
+        "index": 23,
+        "method": "get",
+        "principal": "revoked-e",
+        "resources": [
+          "projects/template-project/databases/(default)/documents/o5-user-token/n00000000000000000000000000000000/cases/exists-guarded"
+        ],
+        "role": "control",
+        "ruleset": "A",
+        "targets": [
+          "exists-guarded"
+        ],
+        "transport": "firestore-rest-v1",
+        "writes": []
+      },
+      {
+        "caseId": "a-revoked-refresh-tokens-within-exp",
+        "condition": "credential-revocation",
+        "createdDocuments": [],
+        "credential": {
+          "class": "user-id-token",
+          "ref": "revoked-e"
+        },
+        "expect": {
+          "detail": "local-refuses-a-token-issued-before-validSince",
+          "productionHypothesis": {
+            "basis": "Firebase documentation, Manage user sessions / Detect ID token revocation: an ID token stays valid until exp unless the verifier checks revocation; Rules evaluation is not documented to check it",
+            "status": "OK"
+          },
+          "status": "UNAUTHENTICATED"
+        },
+        "index": 24,
+        "method": "get",
+        "principal": "revoked-e",
+        "principalAction": {
+          "action": "revoke",
+          "ref": "revoked-e"
+        },
+        "resources": [
+          "projects/template-project/databases/(default)/documents/o5-user-token/n00000000000000000000000000000000/cases/exists-guarded"
+        ],
+        "role": "primary",
+        "ruleset": "A",
+        "targets": [
+          "exists-guarded"
+        ],
+        "transport": "firestore-rest-v1",
+        "writes": []
+      },
+      {
+        "caseId": "a-disabled-account-accepted-before-the-action",
+        "condition": "credential-revocation",
+        "createdDocuments": [],
+        "credential": {
+          "class": "user-id-token",
+          "ref": "disabled-f"
+        },
+        "expect": {
+          "detail": "the-same-token-is-accepted-before-the-administrator-action",
+          "fields": {
+            "document": "exists-guarded",
+            "nonce": "00000000000000000000000000000000"
+          },
+          "productionHypothesis": {
+            "basis": "an unrevoked, unexpired ID token is accepted",
+            "status": "OK"
+          },
+          "status": "OK"
+        },
+        "index": 25,
+        "method": "get",
+        "principal": "disabled-f",
+        "resources": [
+          "projects/template-project/databases/(default)/documents/o5-user-token/n00000000000000000000000000000000/cases/exists-guarded"
+        ],
+        "role": "control",
+        "ruleset": "A",
+        "targets": [
+          "exists-guarded"
+        ],
+        "transport": "firestore-rest-v1",
+        "writes": []
+      },
+      {
+        "caseId": "a-disabled-account-within-exp",
+        "condition": "credential-revocation",
+        "createdDocuments": [],
+        "credential": {
+          "class": "user-id-token",
+          "ref": "disabled-f"
+        },
+        "expect": {
+          "detail": "local-refuses-a-token-of-a-disabled-account",
+          "productionHypothesis": {
+            "basis": "Firebase documentation, Manage user sessions / Detect ID token revocation: an ID token stays valid until exp unless the verifier checks revocation; Rules evaluation is not documented to check it",
+            "status": "OK"
+          },
+          "status": "UNAUTHENTICATED"
+        },
+        "index": 26,
+        "method": "get",
+        "principal": "disabled-f",
+        "principalAction": {
+          "action": "disable",
+          "ref": "disabled-f"
+        },
+        "resources": [
+          "projects/template-project/databases/(default)/documents/o5-user-token/n00000000000000000000000000000000/cases/exists-guarded"
+        ],
+        "role": "primary",
+        "ruleset": "A",
+        "targets": [
+          "exists-guarded"
+        ],
+        "transport": "firestore-rest-v1",
+        "writes": []
+      },
+      {
+        "caseId": "a-deleted-account-accepted-before-the-action",
+        "condition": "credential-revocation",
+        "createdDocuments": [],
+        "credential": {
+          "class": "user-id-token",
+          "ref": "deleted-g"
+        },
+        "expect": {
+          "detail": "the-same-token-is-accepted-before-the-administrator-action",
+          "fields": {
+            "document": "exists-guarded",
+            "nonce": "00000000000000000000000000000000"
+          },
+          "productionHypothesis": {
+            "basis": "an unrevoked, unexpired ID token is accepted",
+            "status": "OK"
+          },
+          "status": "OK"
+        },
+        "index": 27,
+        "method": "get",
+        "principal": "deleted-g",
+        "resources": [
+          "projects/template-project/databases/(default)/documents/o5-user-token/n00000000000000000000000000000000/cases/exists-guarded"
+        ],
+        "role": "control",
+        "ruleset": "A",
+        "targets": [
+          "exists-guarded"
+        ],
+        "transport": "firestore-rest-v1",
+        "writes": []
+      },
+      {
+        "caseId": "a-deleted-account-within-exp",
+        "condition": "credential-revocation",
+        "createdDocuments": [],
+        "credential": {
+          "class": "user-id-token",
+          "ref": "deleted-g"
+        },
+        "expect": {
+          "detail": "local-refuses-a-token-of-a-deleted-account",
+          "productionHypothesis": {
+            "basis": "Firebase documentation, Manage user sessions / Detect ID token revocation: an ID token stays valid until exp unless the verifier checks revocation; Rules evaluation is not documented to check it",
+            "status": "OK"
+          },
+          "status": "UNAUTHENTICATED"
+        },
+        "index": 28,
+        "method": "get",
+        "principal": "deleted-g",
+        "principalAction": {
+          "action": "delete",
+          "ref": "deleted-g"
+        },
+        "resources": [
+          "projects/template-project/databases/(default)/documents/o5-user-token/n00000000000000000000000000000000/cases/exists-guarded"
+        ],
+        "role": "primary",
+        "ruleset": "A",
+        "targets": [
+          "exists-guarded"
+        ],
+        "transport": "firestore-rest-v1",
+        "writes": []
+      },
+      {
+        "caseId": "a-revoked-account-expired-token-control",
+        "condition": "credential-revocation",
+        "createdDocuments": [],
+        "credential": {
+          "class": "user-id-token",
+          "ref": "revoked-expired-token"
+        },
+        "expect": {
+          "detail": "an-expired-token-is-refused-regardless-of-revocation",
+          "productionHypothesis": {
+            "basis": "an expired ID token is refused before Rules evaluation",
+            "status": "UNAUTHENTICATED"
+          },
+          "status": "UNAUTHENTICATED"
+        },
+        "index": 29,
+        "method": "get",
+        "principal": "revoked-expired-token",
+        "resources": [
+          "projects/template-project/databases/(default)/documents/o5-user-token/n00000000000000000000000000000000/cases/exists-guarded"
+        ],
+        "role": "control",
+        "ruleset": "A",
+        "targets": [
+          "exists-guarded"
+        ],
+        "transport": "firestore-rest-v1",
+        "writes": []
+      },
+      {
+        "caseId": "b-owner-denied-after-ruleset-transition",
+        "condition": "ruleset-transition",
+        "createdDocuments": [],
+        "credential": {
+          "class": "user-id-token",
+          "ref": "owner-a"
+        },
+        "expect": {
+          "detail": "same-principal-same-resource-decision-changes-with-the-ruleset",
+          "status": "PERMISSION_DENIED"
+        },
+        "index": 30,
+        "method": "get",
+        "principal": "owner-a",
+        "resources": [
+          "projects/template-project/databases/(default)/documents/o5-user-token/n00000000000000000000000000000000/cases/owned-a"
+        ],
+        "role": "primary",
+        "ruleset": "B",
+        "targets": [
+          "owned-a"
+        ],
+        "transport": "firestore-rest-v1",
+        "writes": []
+      },
+      {
+        "caseId": "b-unchanged-null-clause-still-allows-unauthenticated",
+        "condition": "ruleset-transition",
+        "createdDocuments": [],
+        "credential": {
+          "class": "absent",
+          "ref": "unauthenticated"
+        },
+        "expect": {
+          "detail": "clauses-outside-the-transition-are-unaffected",
+          "fields": {
+            "document": "public-open",
+            "nonce": "00000000000000000000000000000000"
+          },
+          "status": "OK"
+        },
+        "index": 31,
+        "method": "get",
+        "principal": "unauthenticated",
+        "resources": [
+          "projects/template-project/databases/(default)/documents/o5-user-token/n00000000000000000000000000000000/cases/public-open"
+        ],
+        "role": "control",
+        "ruleset": "B",
+        "targets": [
+          "public-open"
+        ],
+        "transport": "firestore-rest-v1",
+        "writes": []
+      },
+      {
+        "caseId": "b-unchanged-claim-clause-still-allows-owner",
+        "condition": "ruleset-transition",
+        "createdDocuments": [],
+        "credential": {
+          "class": "user-id-token",
+          "ref": "owner-a"
+        },
+        "expect": {
+          "detail": "the-denied-principal-is-still-authenticated-under-ruleset-B",
+          "fields": {
+            "document": "claim-gated",
+            "nonce": "00000000000000000000000000000000"
+          },
+          "status": "OK"
+        },
+        "index": 32,
+        "method": "get",
+        "principal": "owner-a",
+        "resources": [
+          "projects/template-project/databases/(default)/documents/o5-user-token/n00000000000000000000000000000000/cases/claim-gated"
+        ],
+        "role": "control",
+        "ruleset": "B",
+        "targets": [
+          "claim-gated"
+        ],
+        "transport": "firestore-rest-v1",
+        "writes": []
+      }
+    ],
+    "observationCreatedDocuments": [
+      {
+        "createdBy": "user-token-observation",
+        "document": "getafter-target",
+        "resource": "projects/template-project/databases/(default)/documents/o5-user-token/n00000000000000000000000000000000/cases/getafter-target"
+      },
+      {
+        "createdBy": "user-token-observation",
+        "document": "getafter-guard",
+        "resource": "projects/template-project/databases/(default)/documents/o5-user-token/n00000000000000000000000000000000/cases/getafter-guard"
+      },
+      {
+        "createdBy": "user-token-observation",
+        "document": "getafter-control-target",
+        "resource": "projects/template-project/databases/(default)/documents/o5-user-token/n00000000000000000000000000000000/cases/getafter-control-target"
+      },
+      {
+        "createdBy": "user-token-observation",
+        "document": "multiwrite-y",
+        "resource": "projects/template-project/databases/(default)/documents/o5-user-token/n00000000000000000000000000000000/cases/multiwrite-y"
+      }
+    ],
+    "ownedAccounts": [
+      {
+        "claims": {
+          "o5role": "editor"
+        },
+        "email": "o5a-00000000000000000000000000000000@o5-user-token.invalid",
+        "kind": "email-password",
+        "ref": "owner-a",
+        "tenant": null
+      },
+      {
+        "claims": {},
+        "email": "o5b-00000000000000000000000000000000@o5-user-token.invalid",
+        "kind": "email-password",
+        "ref": "other-b",
+        "tenant": null
+      },
+      {
+        "claims": {},
+        "email": null,
+        "kind": "anonymous",
+        "ref": "anonymous-c",
+        "tenant": null
+      },
+      {
+        "claims": {},
+        "email": "o5d-00000000000000000000000000000000@o5-user-token.invalid",
+        "kind": "email-password",
+        "ref": "tenant-d",
+        "tenant": "o5-user-token-tenant"
+      },
+      {
+        "claims": {},
+        "email": "o5e-00000000000000000000000000000000@o5-user-token.invalid",
+        "kind": "email-password",
+        "postSignIn": "revoke",
+        "ref": "revoked-e",
+        "tenant": null
+      },
+      {
+        "claims": {},
+        "email": "o5f-00000000000000000000000000000000@o5-user-token.invalid",
+        "kind": "email-password",
+        "postSignIn": "disable",
+        "ref": "disabled-f",
+        "tenant": null
+      },
+      {
+        "claims": {},
+        "email": "o5g-00000000000000000000000000000000@o5-user-token.invalid",
+        "kind": "email-password",
+        "postSignIn": "delete",
+        "ref": "deleted-g",
+        "tenant": null
+      }
+    ],
+    "ownedResources": [
+      "projects/template-project/databases/(default)/documents/o5-user-token/n00000000000000000000000000000000/cases/owned-a",
+      "projects/template-project/databases/(default)/documents/o5-user-token/n00000000000000000000000000000000/cases/owned-b",
+      "projects/template-project/databases/(default)/documents/o5-user-token/n00000000000000000000000000000000/cases/public-open",
+      "projects/template-project/databases/(default)/documents/o5-user-token/n00000000000000000000000000000000/cases/claim-gated",
+      "projects/template-project/databases/(default)/documents/o5-user-token/n00000000000000000000000000000000/cases/tenant-gated",
+      "projects/template-project/databases/(default)/documents/o5-user-token/n00000000000000000000000000000000/cases/exists-guard-present",
+      "projects/template-project/databases/(default)/documents/o5-user-token/n00000000000000000000000000000000/cases/exists-guarded",
+      "projects/template-project/databases/(default)/documents/o5-user-token/n00000000000000000000000000000000/cases/exists-guarded-missing",
+      "projects/template-project/databases/(default)/documents/o5-user-token/n00000000000000000000000000000000/cases/get-guarded",
+      "projects/template-project/databases/(default)/documents/o5-user-token/n00000000000000000000000000000000/cases/multiwrite-x",
+      "projects/template-project/databases/(default)/documents/o5-user-token/n00000000000000000000000000000000/cases/getafter-target",
+      "projects/template-project/databases/(default)/documents/o5-user-token/n00000000000000000000000000000000/cases/getafter-guard",
+      "projects/template-project/databases/(default)/documents/o5-user-token/n00000000000000000000000000000000/cases/getafter-control-target",
+      "projects/template-project/databases/(default)/documents/o5-user-token/n00000000000000000000000000000000/cases/multiwrite-y"
+    ],
+    "ownedScope": "projects/template-project/databases/(default)/documents/o5-user-token/n00000000000000000000000000000000/cases",
+    "planDigest": "94b1c949678d1d68805a41b42c2950b746e8c65a77d23eb185953d5d0cfe68a7",
+    "principals": [
+      {
+        "account": true,
+        "claims": {
+          "o5role": "editor"
+        },
+        "kind": "email-password",
+        "postSignIn": null,
+        "ref": "owner-a",
+        "tenant": null
+      },
+      {
+        "account": true,
+        "claims": {},
+        "kind": "email-password",
+        "postSignIn": null,
+        "ref": "other-b",
+        "tenant": null
+      },
+      {
+        "account": true,
+        "claims": {},
+        "kind": "anonymous",
+        "postSignIn": null,
+        "ref": "anonymous-c",
+        "tenant": null
+      },
+      {
+        "account": true,
+        "claims": {},
+        "kind": "email-password",
+        "postSignIn": null,
+        "ref": "tenant-d",
+        "tenant": "o5-user-token-tenant"
+      },
+      {
+        "account": true,
+        "claims": {},
+        "kind": "email-password",
+        "postSignIn": "revoke",
+        "ref": "revoked-e",
+        "tenant": null
+      },
+      {
+        "account": true,
+        "claims": {},
+        "kind": "email-password",
+        "postSignIn": "disable",
+        "ref": "disabled-f",
+        "tenant": null
+      },
+      {
+        "account": true,
+        "claims": {},
+        "kind": "email-password",
+        "postSignIn": "delete",
+        "ref": "deleted-g",
+        "tenant": null
+      },
+      {
+        "account": false,
+        "claims": {},
+        "kind": "absent",
+        "ref": "unauthenticated",
+        "tenant": null
+      },
+      {
+        "account": false,
+        "claims": {},
+        "kind": "expired-id-token",
+        "ref": "expired-token",
+        "tenant": null
+      },
+      {
+        "account": false,
+        "claims": {},
+        "kind": "expired-id-token",
+        "ref": "revoked-expired-token",
+        "tenant": null
+      },
+      {
+        "account": false,
+        "claims": {},
+        "kind": "malformed",
+        "ref": "malformed-bearer",
+        "tenant": null
+      },
+      {
+        "account": false,
+        "claims": {},
+        "kind": "empty",
+        "ref": "empty-bearer",
+        "tenant": null
+      }
+    ],
+    "productionExecuted": false,
+    "productionReady": false,
+    "project": "template-project",
+    "rulesets": {
+      "A": {
+        "label": "A",
+        "ownerClause": "allow",
+        "source": "rules_version = '2';\nservice cloud.firestore {\n  match /databases/{database}/documents {\n    match /o5-user-token/n00000000000000000000000000000000/cases/{document} {\n      allow read, write: if false;\n    }\n    match /o5-user-token/n00000000000000000000000000000000/cases/owned-a {\n      allow get: if request.auth != null && request.auth.uid == resource.data.ownerUid;\n    }\n    match /o5-user-token/n00000000000000000000000000000000/cases/owned-b {\n      allow get: if request.auth != null && request.auth.uid == resource.data.ownerUid;\n    }\n    match /o5-user-token/n00000000000000000000000000000000/cases/public-open {\n      allow get: if request.auth == null;\n    }\n    match /o5-user-token/n00000000000000000000000000000000/cases/claim-gated {\n      allow get: if request.auth != null && request.auth.token.o5role == 'editor';\n    }\n    match /o5-user-token/n00000000000000000000000000000000/cases/tenant-gated {\n      allow get: if request.auth != null && request.auth.token.firebase.tenant == 'o5-user-token-tenant';\n    }\n    match /o5-user-token/n00000000000000000000000000000000/cases/exists-guarded {\n      allow get: if request.auth != null && exists(/databases/$(database)/documents/o5-user-token/n00000000000000000000000000000000/cases/exists-guard-present);\n    }\n    match /o5-user-token/n00000000000000000000000000000000/cases/exists-guarded-missing {\n      allow get: if request.auth != null && exists(/databases/$(database)/documents/o5-user-token/n00000000000000000000000000000000/cases/exists-guard-absent);\n    }\n    match /o5-user-token/n00000000000000000000000000000000/cases/get-guarded {\n      allow get: if request.auth != null && get(/databases/$(database)/documents/o5-user-token/n00000000000000000000000000000000/cases/owned-a).data.ownerUid == request.auth.uid;\n    }\n    match /o5-user-token/n00000000000000000000000000000000/cases/getafter-target {\n      allow create: if request.auth != null && getAfter(/databases/$(database)/documents/o5-user-token/n00000000000000000000000000000000/cases/getafter-guard).data.ownerUid == request.auth.uid;\n    }\n    match /o5-user-token/n00000000000000000000000000000000/cases/getafter-control-target {\n      allow create: if request.auth != null && getAfter(/databases/$(database)/documents/o5-user-token/n00000000000000000000000000000000/cases/getafter-control-guard).data.ownerUid == request.auth.uid;\n    }\n    match /o5-user-token/n00000000000000000000000000000000/cases/getafter-guard {\n      allow create: if request.auth != null && request.resource.data.ownerUid == request.auth.uid;\n    }\n    match /o5-user-token/n00000000000000000000000000000000/cases/multiwrite-x {\n      allow get, update: if request.auth != null && request.auth.uid == resource.data.ownerUid;\n    }\n    match /o5-user-token/n00000000000000000000000000000000/cases/multiwrite-y {\n      allow create: if false;\n    }\n  }\n}"
+      },
+      "B": {
+        "label": "B",
+        "ownerClause": "deny",
+        "source": "rules_version = '2';\nservice cloud.firestore {\n  match /databases/{database}/documents {\n    match /o5-user-token/n00000000000000000000000000000000/cases/{document} {\n      allow read, write: if false;\n    }\n    match /o5-user-token/n00000000000000000000000000000000/cases/owned-a {\n      allow get: if false;\n    }\n    match /o5-user-token/n00000000000000000000000000000000/cases/owned-b {\n      allow get: if request.auth != null && request.auth.uid == resource.data.ownerUid;\n    }\n    match /o5-user-token/n00000000000000000000000000000000/cases/public-open {\n      allow get: if request.auth == null;\n    }\n    match /o5-user-token/n00000000000000000000000000000000/cases/claim-gated {\n      allow get: if request.auth != null && request.auth.token.o5role == 'editor';\n    }\n    match /o5-user-token/n00000000000000000000000000000000/cases/tenant-gated {\n      allow get: if request.auth != null && request.auth.token.firebase.tenant == 'o5-user-token-tenant';\n    }\n    match /o5-user-token/n00000000000000000000000000000000/cases/exists-guarded {\n      allow get: if request.auth != null && exists(/databases/$(database)/documents/o5-user-token/n00000000000000000000000000000000/cases/exists-guard-present);\n    }\n    match /o5-user-token/n00000000000000000000000000000000/cases/exists-guarded-missing {\n      allow get: if request.auth != null && exists(/databases/$(database)/documents/o5-user-token/n00000000000000000000000000000000/cases/exists-guard-absent);\n    }\n    match /o5-user-token/n00000000000000000000000000000000/cases/get-guarded {\n      allow get: if request.auth != null && get(/databases/$(database)/documents/o5-user-token/n00000000000000000000000000000000/cases/owned-a).data.ownerUid == request.auth.uid;\n    }\n    match /o5-user-token/n00000000000000000000000000000000/cases/getafter-target {\n      allow create: if request.auth != null && getAfter(/databases/$(database)/documents/o5-user-token/n00000000000000000000000000000000/cases/getafter-guard).data.ownerUid == request.auth.uid;\n    }\n    match /o5-user-token/n00000000000000000000000000000000/cases/getafter-control-target {\n      allow create: if request.auth != null && getAfter(/databases/$(database)/documents/o5-user-token/n00000000000000000000000000000000/cases/getafter-control-guard).data.ownerUid == request.auth.uid;\n    }\n    match /o5-user-token/n00000000000000000000000000000000/cases/getafter-guard {\n      allow create: if request.auth != null && request.resource.data.ownerUid == request.auth.uid;\n    }\n    match /o5-user-token/n00000000000000000000000000000000/cases/multiwrite-x {\n      allow get, update: if request.auth != null && request.auth.uid == resource.data.ownerUid;\n    }\n    match /o5-user-token/n00000000000000000000000000000000/cases/multiwrite-y {\n      allow create: if false;\n    }\n  }\n}"
+      }
+    },
+    "schemaVersion": 2,
+    "status": "PREPARATION_ONLY",
+    "tenant": "o5-user-token-tenant",
+    "tenantIsPlaceholder": true
+  },
+  "ownerPreconditions": [
+    "project and database identity confirmed by the owner",
+    "a fresh nonce reserved for this campaign only",
+    "an execution window with a named owner present for the whole window",
+    "an administrator credential for fixture setup, custom-claim minting and cleanup",
+    "Identity Platform multi-tenancy enabled with the named tenant already created",
+    "the two Rulesets already released by the owner, or an owner-held publication lock plus the captured bytes and version of the preexisting release",
+    "a recovery owner who restores the preexisting release if the window ends early",
+    "accepted cost ceiling and data-retention decision for the run directory"
+  ],
+  "permissionEnvelope": {
+    "authScope": "seven throwaway accounts created by this campaign only, three of which are revoked, disabled or deleted by the administrator credential after sign-in",
+    "concurrency": 1,
+    "firestoreScope": "the campaign nonce subtree only",
+    "forbidden": [
+      "any document outside the nonce subtree",
+      "any preexisting Auth account",
+      "database, index, TTL or backup configuration changes",
+      "concurrent execution with any other campaign in the same database"
+    ],
+    "networkEgress": "the two listed Google APIs only",
+    "rulesScope": "read the active release; publish only the two campaign Rulesets",
+    "services": [
+      "identitytoolkit.googleapis.com",
+      "firestore.googleapis.com"
+    ]
+  },
+  "productionExecuted": false,
+  "productionReady": false,
+  "schemaVersion": 1,
+  "status": "PREPARATION_ONLY"
+}

@@ -55,6 +55,7 @@
         "registry+https://github.com/rust-lang/crates.io-index#hyper-util@0.1.20",
         "registry+https://github.com/rust-lang/crates.io-index#hyper@1.11.0",
         "registry+https://github.com/rust-lang/crates.io-index#prost-types@0.13.5",
+        "registry+https://github.com/rust-lang/crates.io-index#prost@0.13.5",
         "registry+https://github.com/rust-lang/crates.io-index#serde_json@1.0.151",
         "registry+https://github.com/rust-lang/crates.io-index#tokio-stream@0.1.19",
         "registry+https://github.com/rust-lang/crates.io-index#tokio@1.53.1",
@@ -70,6 +71,7 @@
       "features": [],
       "dependencies": [
         "registry+https://github.com/rust-lang/crates.io-index#bytes@1.12.1",
+        "registry+https://github.com/rust-lang/crates.io-index#getrandom@0.3.4",
         "registry+https://github.com/rust-lang/crates.io-index#http-body-util@0.1.5",
         "registry+https://github.com/rust-lang/crates.io-index#http-body@1.1.0",
         "registry+https://github.com/rust-lang/crates.io-index#serde_json@1.0.151",
@@ -675,13 +677,16 @@
         "const-oid",
         "core-api",
         "default",
+        "mac",
         "oid",
-        "std"
+        "std",
+        "subtle"
       ],
       "dependencies": [
         "registry+https://github.com/rust-lang/crates.io-index#block-buffer@0.10.4",
         "registry+https://github.com/rust-lang/crates.io-index#const-oid@0.9.6",
-        "registry+https://github.com/rust-lang/crates.io-index#crypto-common@0.1.7"
+        "registry+https://github.com/rust-lang/crates.io-index#crypto-common@0.1.7",
+        "registry+https://github.com/rust-lang/crates.io-index#subtle@2.6.1"
       ]
     },
     {

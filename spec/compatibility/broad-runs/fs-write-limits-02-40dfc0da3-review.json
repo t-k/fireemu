@@ -1,0 +1,81 @@
+{
+  "artifactSha256": "11c7f71225dad2cba9e2c8636256d36b51c8b3ed59dee1a6fb79c639f40e98b1",
+  "budget": {
+    "accounts": 0,
+    "concurrency": 1,
+    "costMicrousd": 44000,
+    "recoverySeconds": 360,
+    "requests": 40,
+    "resources": 4,
+    "seconds": 960
+  },
+  "campaignId": "FS-DATA-WRITE-LIMITS-02",
+  "caseOwnership": {
+    "FS-LIMIT-DOCUMENT-BYTES": "FS-DATA-WRITE-LIMITS-02",
+    "FS-LIMIT-NESTING": "FS-DATA-WRITE-LIMITS-02"
+  },
+  "collectorSourceDigest": "a9c1a67252189f70b4e766f9d4200466e4d92cd65095b7bd8a0e47fb7d501c99",
+  "comparisonContract": {
+    "acquisitionSha256": "2e08a3051c67f5b27e67a7cf277d54f6cbe6aa4e8d33b1572478feb2d632a1b9",
+    "completeMismatchEligible": true,
+    "databaseProjectionContractDigest": "24b4847314fe67940a1e0e8eb53e34e2bd007ef2e1d942639b51564677d30f18",
+    "kind": "fs-write-limits-acquisition-comparison-v1",
+    "parentPromotion": false,
+    "semanticKernelSha256": "2c770f32aab5cedd16982b9a796db17c33ac2308a491bb5564f66d12d78fcae9"
+  },
+  "comparisonContractDigest": "0d22482c53ec3c17660e704bfce1053c8d2f9471ff95ab6350b9ba1d23684840",
+  "excluded": [
+    "Write stream / transaction precedence",
+    "operation count and request-size boundaries",
+    "configuration mutation",
+    "Auth account creation",
+    "existing non-owned resources"
+  ],
+  "historicalBaselineCandidate": {
+    "authConfigDigest": "7878eb2600c66f48c82ef55fb8c2443ab15689ea7542a77fbda206da06f817c2",
+    "basis": "Historical saved response projection only; not current environment confirmation or permission reuse.",
+    "databaseIdentity": {
+      "databaseEdition": "STANDARD",
+      "locationId": "us-central1",
+      "name": "projects/fireemu-35fe6/databases/(default)",
+      "type": "FIRESTORE_NATIVE"
+    },
+    "databaseProjectionDigest": "31957f98b7ec76e9c2e7a04803772f7270763a8ed62037fbdefa74c2c8f71d33",
+    "fileSha256": "219a3d6d67a23e4a13a6e16d66895f74aa79a006d1da46a3e48bbe9bbcc982f4",
+    "freshPreflightRequired": true,
+    "ownerAccepted": false,
+    "path": "spec/compatibility/broad-runs/bc38f392-owner-decision.json"
+  },
+  "kind": "fs-write-limits-o7-review-candidate-v1",
+  "ledgerIdentityDigest": "6c27bd69a7bcb9ea850554ca7b3a6d0d0ae0645f6a6d2c3ab0ef8235cd7bfc96",
+  "localBundleDigest": "b44c9decee1d1ea4927b9265ebf27afb8a4253a8ee5d665e321de2c455551eb5",
+  "localEvidence": {
+    "cleanupComplete": true,
+    "exactArtifactRetained": true,
+    "listenersClosed": true,
+    "observations": 16,
+    "ownedProcessStopped": true
+  },
+  "manifestDigest": "4c8d5707f10720b0476582637acd739557e5f232f597050754a1ab33493e8a40",
+  "newProductionObservedConditions": 0,
+  "nonceDigest": "e4dcedbe8c4728355e8470df0bd9e5d6c8473ed608cac388dce9c27ce1f8d3f8",
+  "nonceStatus": "fresh-prepared-not-admitted",
+  "parentPromotions": 0,
+  "productionApproved": false,
+  "productionExecuted": false,
+  "remainingOwnerInputs": [
+    "fixed-scope permission and reference",
+    "owner/recovery identity",
+    "execution window",
+    "configuration baseline and cost acceptance"
+  ],
+  "remainingTechnicalInputs": [
+    "actual API-key digest",
+    "owner-approved baseline projection",
+    "final approval validation",
+    "fresh preflight matching all frozen inputs"
+  ],
+  "sourceCommit": "40dfc0da3a03968928fa1906cdee409b703a0bb1",
+  "status": "BLOCKED_OWNER",
+  "technicalStatus": "BLOCKED_TECHNICAL"
+}

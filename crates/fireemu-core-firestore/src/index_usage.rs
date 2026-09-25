@@ -2,10 +2,10 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use crate::field_path::FieldPath;
+use crate::field_path::{implied_path_too_long_message, FieldPath, FieldPathError};
 use crate::index::{IndexFieldMode, IndexQueryScope, IndexSet};
 use crate::path::DocumentPath;
-use crate::size::{index_entry_size, IndexEntryScope};
+use crate::size::{document_name_size, index_entry_size, IndexEntryScope};
 use crate::store::{get_field, FirestoreError};
 use crate::value::{IndexValue, Value};
 
@@ -21,7 +21,12 @@ pub struct IndexUsage {
 }
 
 impl IndexUsage {
-    fn add(&mut self, bytes: u64, count: u64) -> Result<(), FirestoreError> {
+    fn add(
+        &mut self,
+        bytes: u64,
+        count: u64,
+        document: &DocumentPath,
+    ) -> Result<(), FirestoreError> {
         self.entries = self.entries.saturating_add(count);
         self.total_bytes = self.total_bytes.saturating_add(bytes.saturating_mul(count));
         self.maximum_entry_bytes = self.maximum_entry_bytes.max(bytes);
@@ -43,6 +48,17 @@ impl IndexUsage {
             ),
         ] {
             if current > maximum {
+                if id == crate::limits::INDEX_ENTRIES_PER_DOCUMENT {
+                    return Err(FirestoreError::InvalidArgument(format!(
+                        "too many index entries for entity /{}",
+                        document.relative()
+                    )));
+                }
+                if id == crate::limits::INDEX_ENTRY_SUM_PER_DOCUMENT {
+                    return Err(FirestoreError::InvalidArgument(
+                        "Transaction too big. Decrease transaction size.".into(),
+                    ));
+                }
                 return Err(FirestoreError::InvalidArgument(format!(
                     "{id}: {current} exceeds {maximum}"
                 )));
@@ -60,8 +76,19 @@ impl IndexSet {
         fields: &BTreeMap<String, Value>,
     ) -> Result<IndexUsage, FirestoreError> {
         let mut usage = IndexUsage::default();
-        self.automatic_usage(document, fields, &mut Vec::new(), &mut usage)?;
         let parent = document.parent_document();
+        // The saved production corpus accepts a 4,622-byte relative name and rejects
+        // 5,000 bytes, even for an empty document. The exact transition is not yet
+        // recorded; avoid rejecting the unobserved interval until it is bracketed.
+        // document_name_size includes 17 bytes beyond the relative name length.
+        let name_bytes = document_name_size(document)
+            .map_err(|error| FirestoreError::InvalidArgument(error.to_string()))?;
+        if name_bytes >= 5_017 {
+            return Err(FirestoreError::InvalidArgument(
+                "Index entry is too large.".into(),
+            ));
+        }
+        self.automatic_usage(document, fields, &mut Vec::new(), &mut usage)?;
         for index in self
             .composites()
             .iter()
@@ -114,10 +141,18 @@ impl IndexSet {
             if let Some((position, items)) = array {
                 for IndexValue(value) in items.iter().map(IndexValue).collect::<BTreeSet<_>>() {
                     values[position].1 = value;
-                    usage.add(entry_size(scope, document, parent.as_ref(), &values)?, 1)?;
+                    usage.add(
+                        entry_size(scope, document, parent.as_ref(), &values)?,
+                        1,
+                        document,
+                    )?;
                 }
             } else {
-                usage.add(entry_size(scope, document, parent.as_ref(), &values)?, 1)?;
+                usage.add(
+                    entry_size(scope, document, parent.as_ref(), &values)?,
+                    1,
+                    document,
+                )?;
             }
         }
         Ok(usage)
@@ -133,14 +168,36 @@ impl IndexSet {
         let parent = document.parent_document();
         for (name, value) in fields {
             path.push(name.clone());
-            let field = FieldPath::from_segments(path.iter().map(String::as_str))
-                .map_err(|e| FirestoreError::InvalidArgument(e.to_string()))?;
+            let field =
+                FieldPath::from_segments(path.iter().map(String::as_str)).map_err(|error| {
+                    let message = if matches!(error, FieldPathError::PathTooLong { .. }) {
+                        implied_path_too_long_message(&path.join("."))
+                    } else {
+                        error.to_string()
+                    };
+                    FirestoreError::InvalidArgument(message)
+                })?;
             let canonical = field.canonical();
             for (scope, mode) in self.single_field_modes(document.collection_id(), &field) {
                 let scope = match scope {
                     IndexQueryScope::Collection => IndexEntryScope::SingleFieldCollection,
                     IndexQueryScope::CollectionGroup => IndexEntryScope::SingleFieldCollectionGroup,
                 };
+                // The saved production corpus accepts an indexed 1,500-byte string with
+                // a 2,600-byte relative name and refuses the same shape at 2,642 bytes.
+                // The transition inside that interval remains unobserved, so only guard
+                // the recorded refusal range for this indexed string shape.
+                if scope == IndexEntryScope::SingleFieldCollection
+                    && matches!(mode, IndexFieldMode::Ascending | IndexFieldMode::Descending)
+                    && matches!(value, Value::String(text) if text.len() >= 1_500)
+                    && document_name_size(document)
+                        .map_err(|error| FirestoreError::InvalidArgument(error.to_string()))?
+                        >= 2_659
+                {
+                    return Err(FirestoreError::InvalidArgument(
+                        "Index entry is too large.".into(),
+                    ));
+                }
                 if mode == IndexFieldMode::Contains {
                     let Value::Array(items) = value else {
                         continue;
@@ -152,12 +209,14 @@ impl IndexSet {
                             // directions. Production accepts 19,999 distinct elements
                             // plus two ordered entries, but rejects 20,000 elements.
                             2,
+                            document,
                         )?;
                     }
                 } else {
                     usage.add(
                         entry_size(scope, document, parent.as_ref(), &[(&canonical, value)])?,
                         1,
+                        document,
                     )?;
                 }
             }
@@ -183,16 +242,28 @@ fn entry_size(
 #[cfg(test)]
 mod tests {
     use super::IndexUsage;
+    use crate::path::DocumentPath;
+    use fireemu_core_types::ids::{DatabaseId, ProjectId};
 
     #[test]
     fn every_index_budget_accepts_equality_and_rejects_one_more() {
+        let document = DocumentPath::parse(
+            &ProjectId::try_new("demo-app").unwrap(),
+            &DatabaseId::default_database(),
+            "tasks/a",
+        )
+        .unwrap();
         let mut count = IndexUsage::default();
-        assert!(count.add(1, 40_000).is_ok());
-        assert!(count.add(1, 1).is_err());
-        assert!(IndexUsage::default().add(7_680, 1).is_ok());
-        assert!(IndexUsage::default().add(7_681, 1).is_err());
+        assert!(count.add(1, 40_000, &document).is_ok());
+        assert!(count.add(1, 1, &document).is_err());
+        assert!(IndexUsage::default().add(7_680, 1, &document).is_ok());
+        assert!(IndexUsage::default().add(7_681, 1, &document).is_err());
         let mut sum = IndexUsage::default();
-        assert!(sum.add(4_096, 2_048).is_ok());
-        assert!(sum.add(1, 1).is_err());
+        assert!(sum.add(4_096, 2_048, &document).is_ok());
+        assert!(matches!(
+            sum.add(1, 1, &document),
+            Err(crate::store::FirestoreError::InvalidArgument(message))
+                if message == "Transaction too big. Decrease transaction size."
+        ));
     }
 }

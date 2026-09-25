@@ -1,0 +1,145 @@
+{
+  "campaignId": "FS-WRITE-LIMITS-03",
+  "campaignSources": {
+    "spec/limits/firestore-standard-2026-08-25.json": "f12ab3686e197be53b14880beec8c6bc72970ca55a72e780fa9d4e99c7abd625",
+    "tools/compat-broad/fs-write-limits/collector.py": "3e7615cad40aa403d9a845fe36276ee1d4c222d996d0834b48dae02506ade0bf",
+    "tools/compat-broad/fs-write-limits/collector_03.py": "ed194e2da565395c703531af5ea47e3368a3549ab22d47c765cbacaaddc46600",
+    "tools/compat-broad/fs-write-limits/comparator.py": "2c770f32aab5cedd16982b9a796db17c33ac2308a491bb5564f66d12d78fcae9",
+    "tools/compat-broad/fs-write-limits/comparator_03.py": "741452930a7905157b3253194ee1bd94dabbd677f757c0ee8edaa5a00bc95fe7",
+    "tools/compat-broad/fs-write-limits/compiler.py": "55c747dde6e8bceb0e0fa4f998af68d72fe11fa26856277ea97772cfcd970bf2",
+    "tools/compat-broad/fs-write-limits/compiler_03.py": "b7e5cf193afdc954b1d1bff0cc3c11ec0264b3a5597ce7956f6ad7275ccd7faf",
+    "tools/compat-broad/fs-write-limits/conftest.py": "3e66bc2c2bc6b353d4d6069ab61176a1a5a8470730d81b5851b1870943492f8c",
+    "tools/compat-broad/fs-write-limits/expectations_03.py": "2886ee4db700a9afd56c48f2661728003c7c08bb0941a438ea2d0cc079f7e540",
+    "tools/compat-broad/fs-write-limits/limits_03_admission.py": "e4f48eb4057950696ccb169b9ff7546c11d8cf2312a5471cf1f52bab7722bc7b",
+    "tools/compat-broad/fs-write-limits/limits_03_baseline_prep.py": "0267e12cdc3df980131551b7ee6100c94bf1eb8d9d8076c35df3cd9dbf0717bf",
+    "tools/compat-broad/fs-write-limits/limits_03_descriptor.py": "41dc396a3a227f7f78ae1df5c358da60ee7738ff603f35df0d91144cbba9698f",
+    "tools/compat-broad/fs-write-limits/limits_03_https_worker.py": "cca47769c29929485eb0decb3e27f6fbef5b8f95ebf6bfaa76de4abc35d80499",
+    "tools/compat-broad/fs-write-limits/limits_03_index_lifecycle.py": "daef7af5593317f0d87fc66c6aa2f99748b3558fd1142bc3f6f00da1b5f185d5",
+    "tools/compat-broad/fs-write-limits/limits_03_indexes.py": "6b24bd41fe4e7151c2ea423cacbf7cba8bf9c0a2c430474c0bb505bcab36aeab",
+    "tools/compat-broad/fs-write-limits/limits_03_o8.py": "005c64bebdaf04f568189665eed3ca63f6d6bb06dd4315b658cf0e6e5d79231b",
+    "tools/compat-broad/fs-write-limits/limits_03_preflight.py": "b417ce8bb987ea3ae3aabfbafe79539cd329fc6f3c7cb48cab2e36e068a0f9ca",
+    "tools/compat-broad/fs-write-limits/limits_03_production.py": "25b80b32059c6686dd1377dc208638729e948ad00e99003b934020eff7096e53",
+    "tools/compat-broad/fs-write-limits/limits_03_remote_transport.py": "7b2836b21ea07905c0647640e3962ecfe249173453b43f281ce6ed7936666a45",
+    "tools/compat-broad/fs-write-limits/package_03.py": "20096726e8a4be79d4ffdaaba3ab168e76fd1cba70f72e74969655fc2f4a985d",
+    "tools/compat-broad/fs-write-limits/production.py": "a1e1b2c2cf39fdc244aa174e1d23b0625025787b38d5b919cd32b0406348774b",
+    "tools/compat-broad/fs-write-limits/production_bridge.py": "6780a04c346b5a445916f9457146cf582e9a552eecc8000df0afc373f37370df",
+    "tools/compat-broad/fs-write-limits/production_plan.py": "26f4d606a677b4418e7dd44947a410cde08b46ac06e6cfecaf1054ee5a2a8bda",
+    "tools/compat-broad/fs-write-limits/rehearsal.py": "0b7f8e41e0350a09edb0383f3e3864f07fae2c5c50ef28447cd696ed0a7f76e2",
+    "tools/compat-broad/fs-write-limits/remote_transport.py": "367901d2b020ca15a35042a8609843270216bf0b3e50ee3367926bedf89069c2",
+    "tools/compat-broad/fs-write-limits/shadow.py": "3f7405386baafa151fc2b8e89e15b0a153d054c9efc6bb66103ccc4ff1f9a68d",
+    "tools/compat-broad/fs-write-limits/shadow_03.py": "f8d7ee37b8815ea1e53c64418f4e5d8ace5198923176d4b4996ddab534080102",
+    "tools/compat-broad/fs-write-limits/shadow_03a.py": "fad133caf73535688ce428e0abebe15c4c745045fb03a8236bf7d36a7b3d3d47",
+    "tools/compat-broad/fs-write-limits/shadow_03b.py": "87924f501a6c5a6173eb887bf12e44c75a61e89084f2be8b2e37c10b43684899",
+    "tools/compat-broad/fs-write-limits/test_campaign_03.py": "4f3b40f85127402eb4f3c51285739fa4b40c0c543b0bc2af6057da5a6422538d",
+    "tools/compat-broad/fs-write-limits/test_collection_recording_recovery.py": "d0f39bd17c55232e4df304713d523e7cb5f8d2be1d34d0197a500709cedcaa5c",
+    "tools/compat-broad/fs-write-limits/test_collector.py": "e3e3a70cf20d4d5a381cb8817f9980ebdbd281ca385a3f169de6b83f011e8980",
+    "tools/compat-broad/fs-write-limits/test_comparator.py": "ea9e03cf969d273d20dfe8a7cee4eec4126f726ca19bce04f6fa91f235d62c4b",
+    "tools/compat-broad/fs-write-limits/test_compiler.py": "5a8802beeac08818afe48af9602a5e1364cb424a95c39095a0bd5f54192bf0c3",
+    "tools/compat-broad/fs-write-limits/test_json_wire_integrity.py": "1fc185c1d1908c7b2b2ac6daae1f4155bcb20f3d03d94c88553ad64ab916da08",
+    "tools/compat-broad/fs-write-limits/test_limits03_comparison_pair.py": "fd3226ff856e361a289badeadd80a258caad90ab7be4fae4778999491286dfa3",
+    "tools/compat-broad/fs-write-limits/test_limits03_comparison_pair_compiler.py": "86f799bf7f2b03a301fbfea03fa2d9ab71dbeb5bd8c570ed0acd83c8418c6041",
+    "tools/compat-broad/fs-write-limits/test_limits03_https_response_framing.py": "30586a362a9444db393b5ae28f51ef9bc24ee7d6066fa0e80ee66aaf9d88c44b",
+    "tools/compat-broad/fs-write-limits/test_limits03_remote_json_evidence.py": "300efb1ff364890e0c54f6b2bbc569b6ae8f18e9701bcdbdb269b9469e2d4241",
+    "tools/compat-broad/fs-write-limits/test_limits03_shadow_part_dispatch.py": "a154a1b51e58c692a89131c2b4833fe2bdd90b1b8953ec64ba92fa34abe1a6e0",
+    "tools/compat-broad/fs-write-limits/test_limits_03_baseline_prep.py": "2b27ff9411ad481778b4888af22eb605d7f71a368471f82a895a38a9e0618710",
+    "tools/compat-broad/fs-write-limits/test_limits_03_failed_apply_recovery.py": "c30b6d979b424dcadb7c420c0c9b7f3966f1e699f9777bd9a8c619a2d43da48f",
+    "tools/compat-broad/fs-write-limits/test_limits_03_index_hosting.py": "a7f318ef08df0d73a515e189b52545a8921663c8ec66aaf8aab5a0a457ac5e00",
+    "tools/compat-broad/fs-write-limits/test_limits_03_index_lifecycle.py": "4063f6d4dbe5672175632ffb62ac6d0e244df6bb3b1bd68cf178a751763ce518",
+    "tools/compat-broad/fs-write-limits/test_limits_03_o8.py": "5692452c4f8317e88fa49e289122924651cde936f95c4c722cc04a4ffbe6b0e3",
+    "tools/compat-broad/fs-write-limits/test_limits_03_recording_gate.py": "0b5cf0697d7cb15648a846c8e6b6ace5ad980319dd449456da9cfbf0125c5a19",
+    "tools/compat-broad/fs-write-limits/test_limits_03_recording_unit.py": "993ca9c5b6d4ccdbe7ef3c4c03a19d7153c3ef508dbfb05f71b7a869f8928c80",
+    "tools/compat-broad/fs-write-limits/test_namespace_sizes.py": "dbb8df349490168d6f8ac55b392356c23f0a3b0ac24ab120cdb791c9ac65041b",
+    "tools/compat-broad/fs-write-limits/test_package_03.py": "8a9fe0ce5a8bf0cd03f3f868d51458ae9a2b6827ab10793def18201465ac1324",
+    "tools/compat-broad/fs-write-limits/test_production.py": "e4e2b568b4d285c501a67e1689d742f3e98e25a706a66525e428aaa297cc6ff4",
+    "tools/compat-broad/fs-write-limits/test_production_bridge.py": "0524cac790abe161649e10e8aa517943e14c8e0e1443496bf6fc0d83a89b63e4",
+    "tools/compat-broad/fs-write-limits/test_production_plan.py": "fef8e6e786da5f3ef1336b4edb66e1acc177dafa2856f16bd800f664ac04ad5d",
+    "tools/compat-broad/fs-write-limits/test_rehearsal.py": "61f4bde46cbfc4116ed3c058e0e90633d8fd0d8e3d744e02d3df42006a2541ac",
+    "tools/compat-broad/fs-write-limits/test_remote_transport.py": "847208e741dc63e8087e8a989e3f41c2f107d05a36c20dad1b4f4a0763c4dcab",
+    "tools/compat-broad/fs-write-limits/test_reservation_bridge.py": "cf0498ec8cddaf50fb98fc79ea55aadc4f93a28d33cef3d1b7f606a51c920843",
+    "tools/compat-broad/fs-write-limits/test_response_envelope_wire.py": "b014e77b1da79491f3b199f3794b1ca999680b82ba88f2d5ef27e50bd6ee30b3",
+    "tools/compat-broad/fs-write-limits/test_shadow.py": "83fa0d485ea74f463460a4710e9d1df4dd607135f8c946824c157a026d059e82",
+    "tools/compat-broad/fs-write-limits/test_shadow_integrity.py": "2cbd2a55f077f508bbe91e7a09bbc783672a39e616acf3bb0792fb7ea058229d",
+    "tools/compat-broad/fs-write-limits/test_transport.py": "8c8a6330ad9ea8abe862613cb6253a0a355f97174e256c87b43e623fd7bf2b29",
+    "tools/compat-broad/fs-write-limits/transport.py": "5269b07da605919edf4016c0d108175487d97474ddb07f969e56b9b19fd25688"
+  },
+  "execution": {
+    "ALL": {
+      "artifact": {
+        "buildCommand": [
+          "cargo",
+          "build",
+          "--locked",
+          "-p",
+          "fireemu",
+          "--message-format=json"
+        ],
+        "runtimeInputCount": 434,
+        "runtimeInputsDigest": "024c164483a874aad309b131dadf19e1921582cea6100af35b1f228697fc1818",
+        "rustc": "rustc 1.94.0 (4a4ef493e 2026-03-02)",
+        "sha256": "617c3f381f49ba600f076f14bc8a2cc066b647062825ba07c7a21b8069102a86"
+      },
+      "campaignId": "FS-WRITE-LIMITS-03",
+      "digests": {
+        "parentManifestSha256": "6fc50b0113f17e6c29ceed58c207e12f83b88395ed19ed26c4b83ade5a5177d6",
+        "sourceInputsBound": true,
+        "supervisorManifestSha256": "6fc50b0113f17e6c29ceed58c207e12f83b88395ed19ed26c4b83ade5a5177d6"
+      },
+      "execution": {
+        "allOwnedResourcesAbsentAfterRecovery": true,
+        "cleanupComplete": true,
+        "cleanupValidated": true,
+        "completed": true,
+        "configurationDigest": "24642172e40095d5111a9818b199174e75d7a17485251ef70f9a2cf57d20779d",
+        "database": "(default)",
+        "gateCloseRefused": false,
+        "indexConfiguration": {
+          "sha256": "8a4d4bd7a72c3ce2bed4e0f8c4adc0cdb3a7c428477578295e44a11ae063d01c",
+          "sourceCommit": "2526c61eda5fc53ac91250307786127ae3c601be"
+        },
+        "infrastructureFailures": [],
+        "observationRequests": 89,
+        "ownedDocuments": 29,
+        "ownedProcess": {
+          "listenersClosed": true,
+          "pid": 78158,
+          "stopped": true
+        },
+        "pendingDifferences": [
+          {
+            "basis": "exact typed document/version not returned",
+            "index": 47,
+            "pending": true,
+            "reason": "the local shadow supervisor pins the historical index configuration and cannot apply the declared exemption, so the local run shows the index-entry refusal the exemption exists to remove"
+          },
+          {
+            "basis": "exact typed document/version not returned",
+            "index": 50,
+            "pending": true,
+            "reason": "the local shadow supervisor pins the historical index configuration and cannot apply the declared exemption, so the local run shows the index-entry refusal the exemption exists to remove"
+          }
+        ],
+        "pendingRows": [
+          47,
+          48,
+          49,
+          50
+        ],
+        "project": "demo-firestore-probe",
+        "receiptValidated": true,
+        "recordingComplete": true,
+        "recoveryRequests": 87,
+        "semanticMismatches": [],
+        "stateValidation": true,
+        "supervisorStatus": "completed",
+        "target": "owned-local-artifact-on-loopback"
+      },
+      "executionCommit": "16a37e8379c289297b305c88add4a62fdbf588f8"
+    }
+  },
+  "formalCompatibilityClaim": false,
+  "kind": "fs-write-limits-03-local-shadow-v2",
+  "note": "Local artifact evidence only. The executed nonces, the owned resource names and the retained binaries live in private output directories and are not published here. This is not a production observation and promotes nothing. The local shadow supervisor records the closed historical index profile and verifies its digest. The historical profile cannot apply the declared exemption; the nx-local profile applies the exact local after-state and does not carry those pending rows.",
+  "productionExecuted": false,
+  "sourceCommit": "16a37e8379c289297b305c88add4a62fdbf588f8",
+  "status": "completed-local-only"
+}

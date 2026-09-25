@@ -1,0 +1,754 @@
+{
+  "schemaVersion": 1,
+  "parent": "FS-DATA-WRITE",
+  "parentStatus": "WAITING_ORACLE",
+  "oracleTrack": "disposable-sandbox",
+  "closureReview": {
+    "decision": "PENDING"
+  },
+  "conditions": [
+    {
+      "conditionId": "FS-WRITE-LIMITS-03/batch-malformed-middle",
+      "source": "spec/compatibility/broad-runs/fs-write-limits-03.json#batch-malformed-middle",
+      "recipeIds": [
+        "writes/batch-write-malformed/missing-operation",
+        "writes/batch-write-malformed/no-operation",
+        "writes/batch-write-malformed/collection-name",
+        "writes/batch-write-malformed/empty-field-name",
+        "writes/batch-write-malformed/reserved-field-name",
+        "writes/batch-write-malformed/bad-mask-path",
+        "writes/batch-write-malformed/exists-precondition-fails"
+      ],
+      "boundaryStatus": "NOT_APPLICABLE",
+      "status": "VERIFIED",
+      "evidence": {
+        "productionRecordings": [
+          "7c794af67119e745072ceae3d742bd463df28c0aa804998c2155b1333b1625d9",
+          "7c794af67119e745072ceae3d742bd463df28c0aa804998c2155b1333b1625d9"
+        ],
+        "finalArtifactSha256": "242248dd5d1119c1ef72724efda21f19caf1411b344a884106ff4258e5cfb15e",
+        "comparisonPath": "spec/compatibility/broad-runs/fs-batch-malformed-middle-8a0f205-current-comparison.json",
+        "comparisonSha256": "b53a0b912cd4275c3b913f47d1e5180765ca9a26f09b9d8901bc562cf77aeb6a",
+        "sourceCommit": "8a0f20599bab98bb094a74e00d6b2df9f6cd60e8",
+        "sourceBindingSha256": "73b823461ad2933db06acd5fd9d5bf6f933ba4fb713e63042ab27a21b5d3f15a"
+      },
+      "historicalEvidence": {
+        "productionRecordings": [
+          "7c794af67119e745072ceae3d742bd463df28c0aa804998c2155b1333b1625d9",
+          "7c794af67119e745072ceae3d742bd463df28c0aa804998c2155b1333b1625d9"
+        ],
+        "finalArtifactSha256": "d6db62596e71c152883dc5b83bf8dc48b79b703777d49bab10874c1fae6dfc6d",
+        "comparisonPath": "spec/compatibility/broad-runs/fs-batch-malformed-middle-3d7ceabb8-saved-comparison.json"
+      }
+    },
+    {
+      "conditionId": "FS-WRITE-LIMITS-03/batch-undecodable-value",
+      "source": "spec/compatibility/broad-runs/fs-write-limits-03.json#batch-undecodable-value",
+      "recipeIds": [
+        "writes/batch-write-malformed/undecodable-value",
+        "writes/batch-write-malformed/bad-integer",
+        "writes/batch-write-malformed/two-fields-bad-integer",
+        "writes/batch-write-malformed/unknown-value-kind",
+        "writes/batch-write-malformed/bad-timestamp"
+      ],
+      "boundaryStatus": "NOT_APPLICABLE",
+      "status": "PENDING_RECORDING"
+    },
+    {
+      "conditionId": "FS-DATA-WRITE/map-value-key-validation",
+      "source": "crates/fireemu-adapter-grpc/src/decode.rs",
+      "recipeIds": [
+        "writes/map-key-validation/reserved/write",
+        "writes/map-key-validation/reserved/query",
+        "writes/map-key-validation/empty/write",
+        "writes/map-key-validation/empty/query",
+        "writes/map-key-validation/overlong/write",
+        "writes/map-key-validation/overlong/query",
+        "writes/map-key-validation/type-tag/query"
+      ],
+      "boundaryStatus": "NOT_APPLICABLE",
+      "status": "PENDING_RECORDING"
+    },
+    {
+      "conditionId": "FS-WRITE-LIMITS-03/batch-duplicate-document",
+      "source": "docs/compatibility/ip-fs-production-compatibility.md#feature-group-status",
+      "recipeIds": [
+        "writes/batch-write-malformed/duplicate-document"
+      ],
+      "boundaryStatus": "NOT_APPLICABLE",
+      "status": "VERIFIED",
+      "evidence": {
+        "productionRecordings": [
+          "7c794af67119e745072ceae3d742bd463df28c0aa804998c2155b1333b1625d9",
+          "7c794af67119e745072ceae3d742bd463df28c0aa804998c2155b1333b1625d9"
+        ],
+        "finalArtifactSha256": "d6db62596e71c152883dc5b83bf8dc48b79b703777d49bab10874c1fae6dfc6d",
+        "comparisonPath": "spec/compatibility/broad-runs/fs-batch-duplicate-document-3d7ceabb8-saved-comparison.json"
+      }
+    },
+    {
+      "conditionId": "FS-LIMIT-COLLECTION-ID",
+      "source": "spec/limits/firestore-standard-2026-08-25.json#FS-LIMIT-COLLECTION-ID",
+      "recipeIds": [
+        "writes/limits/collection-id-boundary",
+        "writes/limits/collection-id-slash",
+        "writes/limits/collection-id-dot",
+        "writes/limits/collection-id-dot-dot",
+        "writes/limits/collection-id-reserved"
+      ],
+      "boundaryStatus": "BRACKETED",
+      "boundaryEvidence": [
+        "writes/limits/collection-id-boundary#observation-0",
+        "writes/limits/collection-id-boundary#observation-1"
+      ],
+      "status": "VERIFIED",
+      "evidence": {
+        "productionRecordings": [
+          "7c794af67119e745072ceae3d742bd463df28c0aa804998c2155b1333b1625d9",
+          "7c794af67119e745072ceae3d742bd463df28c0aa804998c2155b1333b1625d9"
+        ],
+        "finalArtifactSha256": "d6db62596e71c152883dc5b83bf8dc48b79b703777d49bab10874c1fae6dfc6d",
+        "comparisonPath": "spec/compatibility/broad-runs/fs-collection-id-3d7ceabb8-saved-comparison.json"
+      }
+    },
+    {
+      "conditionId": "FS-LIMIT-SUBCOLLECTION-DEPTH",
+      "source": "spec/limits/firestore-standard-2026-08-25.json#FS-LIMIT-SUBCOLLECTION-DEPTH",
+      "recipeIds": [
+        "writes/limits/subcollection-depth"
+      ],
+      "boundaryStatus": "BRACKETED",
+      "boundaryEvidence": [
+        "writes/limits/subcollection-depth#observation-0",
+        "writes/limits/subcollection-depth#observation-1"
+      ],
+      "status": "VERIFIED",
+      "evidence": {
+        "productionRecordings": [
+          "7c794af67119e745072ceae3d742bd463df28c0aa804998c2155b1333b1625d9",
+          "7c794af67119e745072ceae3d742bd463df28c0aa804998c2155b1333b1625d9"
+        ],
+        "finalArtifactSha256": "d6db62596e71c152883dc5b83bf8dc48b79b703777d49bab10874c1fae6dfc6d",
+        "comparisonPath": "spec/compatibility/broad-runs/fs-subcollection-depth-3d7ceabb8-saved-comparison.json"
+      }
+    },
+    {
+      "conditionId": "FS-LIMIT-DOCUMENT-NAME-BYTES",
+      "source": "spec/limits/firestore-standard-2026-08-25.json#FS-LIMIT-DOCUMENT-NAME-BYTES",
+      "recipeIds": [
+        "writes/limits/empty-document-name/6127",
+        "writes/limits/empty-document-name/6128"
+      ],
+      "boundaryStatus": "RULE_TRANSITION",
+      "boundaryEvidence": [
+        "writes/limits/empty-document-name/6127#write",
+        "writes/limits/empty-document-name/6128#write"
+      ],
+      "status": "VERIFIED",
+      "evidence": {
+        "productionRecordings": [
+          "7c794af67119e745072ceae3d742bd463df28c0aa804998c2155b1333b1625d9",
+          "7c794af67119e745072ceae3d742bd463df28c0aa804998c2155b1333b1625d9"
+        ],
+        "finalArtifactSha256": "d6db62596e71c152883dc5b83bf8dc48b79b703777d49bab10874c1fae6dfc6d",
+        "comparisonPath": "spec/compatibility/broad-runs/fs-document-name-bytes-3d7ceabb8-saved-comparison.json"
+      }
+    },
+    {
+      "conditionId": "FS-LIMIT-INDEX-ENTRIES-PER-DOCUMENT",
+      "source": "spec/limits/firestore-standard-2026-08-25.json#FS-LIMIT-INDEX-ENTRIES-PER-DOCUMENT",
+      "recipeIds": [
+        "writes/limits/index-entries-per-document",
+        "writes/limits/index-entry-sum/adjacent"
+      ],
+      "boundaryStatus": "PENDING_RECORDING",
+      "status": "PENDING_RECORDING"
+    },
+    {
+      "conditionId": "FS-LIMIT-INDEX-ENTRY-BYTES",
+      "source": "spec/limits/firestore-standard-2026-08-25.json#FS-LIMIT-INDEX-ENTRY-BYTES",
+      "recipeIds": [
+        "writes/limits/index-entry-bytes",
+        "writes/limits/index-entry-string-name/2641",
+        "writes/limits/index-entry-string-name/2642",
+        "writes/limits/document-name-bytes",
+        "writes/limits/empty-document-name/4627",
+        "writes/limits/empty-document-name/4628",
+        "writes/limits/indexed-field-value-bytes",
+        "writes/limits/index-entry-sum-per-document"
+      ],
+      "boundaryStatus": "PENDING_RECORDING",
+      "status": "MISMATCH"
+    },
+    {
+      "conditionId": "FS-LIMIT-INDEX-ENTRY-SUM-PER-DOCUMENT",
+      "source": "spec/limits/firestore-standard-2026-08-25.json#FS-LIMIT-INDEX-ENTRY-SUM-PER-DOCUMENT",
+      "recipeIds": [
+        "writes/limits/index-entry-sum-per-document",
+        "writes/limits/index-entry-sum/adjacent"
+      ],
+      "boundaryStatus": "PENDING_RECORDING",
+      "status": "MISMATCH"
+    },
+    {
+      "conditionId": "FS-DATA-WRITE/near-limit-delete-refusal",
+      "source": "docs/compatibility/ip-fs-production-compatibility.md#feature-group-status",
+      "recipeIds": [
+        "writes/limits/near-limit-delete-refusal"
+      ],
+      "boundaryStatus": "PENDING_RECORDING",
+      "status": "PENDING_CORPUS",
+      "ownerDecision": "The owner added this 29th condition on 2026-09-24 after production refused deletion of accepted near-index-limit documents. Acceptance requires a one-unit accepted/refused pair, two production recordings, readback, and matching REST DELETE, Commit DELETE and BatchWrite DELETE paths where observed."
+    },
+    {
+      "conditionId": "FS-LIMIT-FIELD-PATH-BYTES",
+      "source": "docs/compatibility/ip-fs-production-compatibility.md#feature-group-status",
+      "recipeIds": [
+        "writes/limits/implied-map",
+        "writes/limits/implied-array",
+        "writes/limits/field-path-direct-mask",
+        "writes/limits/field-path-mask/1499",
+        "writes/limits/field-path-mask/1500"
+      ],
+      "boundaryStatus": "PENDING_RECORDING",
+      "status": "PENDING_RECORDING"
+    },
+    {
+      "conditionId": "FS-LIMIT-FIELD-VALUE-BYTES/scalar-refusal",
+      "source": "spec/compatibility/broad-runs/fs-write-limits-03.json#field-value",
+      "recipeIds": [
+        "writes/limits/field-value-scalar-refusal"
+      ],
+      "boundaryStatus": "RULE_TRANSITION",
+      "boundaryEvidence": [
+        "writes/limits/aggregate-string#observation-0",
+        "writes/limits/aggregate-string#observation-2"
+      ],
+      "status": "VERIFIED",
+      "evidence": {
+        "productionRecordings": [
+          "7c794af67119e745072ceae3d742bd463df28c0aa804998c2155b1333b1625d9",
+          "7c794af67119e745072ceae3d742bd463df28c0aa804998c2155b1333b1625d9"
+        ],
+        "finalArtifactSha256": "d6db62596e71c152883dc5b83bf8dc48b79b703777d49bab10874c1fae6dfc6d",
+        "comparisonPath": "spec/compatibility/broad-runs/fs-scalar-refusal-3d7ceabb8-saved-comparison.json"
+      }
+    },
+    {
+      "conditionId": "FS-LIMIT-FIELD-VALUE-BYTES/aggregate-string",
+      "source": "spec/compatibility/broad-runs/fs-write-limits-03.json#agg-string",
+      "recipeIds": [
+        "writes/limits/aggregate-string"
+      ],
+      "boundaryStatus": "RULE_TRANSITION",
+      "boundaryEvidence": [
+        "writes/limits/aggregate-string#observation-0",
+        "writes/limits/aggregate-string#observation-2"
+      ],
+      "status": "VERIFIED",
+      "evidence": {
+        "productionRecordings": [
+          "7c794af67119e745072ceae3d742bd463df28c0aa804998c2155b1333b1625d9",
+          "7c794af67119e745072ceae3d742bd463df28c0aa804998c2155b1333b1625d9"
+        ],
+        "finalArtifactSha256": "d6db62596e71c152883dc5b83bf8dc48b79b703777d49bab10874c1fae6dfc6d",
+        "comparisonPath": "spec/compatibility/broad-runs/fs-aggregate-string-3d7ceabb8-saved-comparison.json"
+      }
+    },
+    {
+      "conditionId": "FS-LIMIT-FIELD-VALUE-BYTES/aggregate-map",
+      "source": "spec/compatibility/broad-runs/fs-write-limits-03.json#agg-map",
+      "recipeIds": [
+        "writes/limits/aggregate-map",
+        "writes/limits/aggregate-map/strict-only"
+      ],
+      "boundaryStatus": "UNBRACKETED",
+      "status": "PENDING_RECORDING"
+    },
+    {
+      "conditionId": "FS-LIMIT-INDEXED-FIELD-VALUE-BYTES",
+      "source": "spec/limits/firestore-standard-2026-08-25.json#FS-LIMIT-INDEXED-FIELD-VALUE-BYTES",
+      "recipeIds": [
+        "writes/limits/indexed-field-value-bytes"
+      ],
+      "boundaryStatus": "UNBRACKETED",
+      "status": "PENDING_RECORDING"
+    },
+    {
+      "conditionId": "FS-WRITE-LIMITS-03/implied-map",
+      "source": "spec/compatibility/broad-runs/fs-write-limits-03.json#implied-map",
+      "recipeIds": [
+        "writes/limits/implied-map"
+      ],
+      "boundaryStatus": "BRACKETED",
+      "boundaryEvidence": [
+        "writes/limits/implied-map#observation-0",
+        "writes/limits/implied-map#observation-1"
+      ],
+      "status": "VERIFIED",
+      "evidence": {
+        "productionRecordings": [
+          "7c794af67119e745072ceae3d742bd463df28c0aa804998c2155b1333b1625d9",
+          "7c794af67119e745072ceae3d742bd463df28c0aa804998c2155b1333b1625d9"
+        ],
+        "finalArtifactSha256": "d6db62596e71c152883dc5b83bf8dc48b79b703777d49bab10874c1fae6dfc6d",
+        "comparisonPath": "spec/compatibility/broad-runs/fs-implied-map-3d7ceabb8-saved-comparison.json"
+      }
+    },
+    {
+      "conditionId": "FS-WRITE-LIMITS-03/implied-array",
+      "source": "spec/compatibility/broad-runs/fs-write-limits-03.json#implied-array",
+      "recipeIds": [
+        "writes/limits/implied-array",
+        "writes/limits/implied-array-key/1494",
+        "writes/limits/implied-array-key/1495"
+      ],
+      "boundaryStatus": "BRACKETED",
+      "boundaryEvidence": [
+        "writes/limits/implied-array-key/1494#write",
+        "writes/limits/implied-array-key/1495#write"
+      ],
+      "status": "VERIFIED",
+      "evidence": {
+        "productionRecordings": [
+          "7c794af67119e745072ceae3d742bd463df28c0aa804998c2155b1333b1625d9",
+          "7c794af67119e745072ceae3d742bd463df28c0aa804998c2155b1333b1625d9"
+        ],
+        "finalArtifactSha256": "d6db62596e71c152883dc5b83bf8dc48b79b703777d49bab10874c1fae6dfc6d",
+        "comparisonPath": "spec/compatibility/broad-runs/fs-implied-array-3d7ceabb8-saved-comparison.json"
+      }
+    },
+    {
+      "conditionId": "FS-LIMIT-API-REQUEST-BYTES/rest-commit-json-accepted-samples",
+      "source": "spec/limits/firestore-standard-2026-08-25.json#FS-LIMIT-API-REQUEST-BYTES",
+      "recipeIds": [
+        "writes/limits/decoded-request-bytes/under",
+        "writes/limits/decoded-request-bytes/exact",
+        "writes/limits/decoded-request-bytes/over",
+        "writes/limits/decoded-11x1040000"
+      ],
+      "boundaryStatus": "NOT_APPLICABLE",
+      "scopeNote": "Concrete REST documents:commit JSON acceptance samples only; the nominal 10 MiB decoded-protobuf threshold and other transport surfaces are not inferred.",
+      "status": "VERIFIED",
+      "evidence": {
+        "productionRecordings": [
+          "7c794af67119e745072ceae3d742bd463df28c0aa804998c2155b1333b1625d9",
+          "7c794af67119e745072ceae3d742bd463df28c0aa804998c2155b1333b1625d9"
+        ],
+        "finalArtifactSha256": "d6db62596e71c152883dc5b83bf8dc48b79b703777d49bab10874c1fae6dfc6d",
+        "comparisonPath": "spec/compatibility/broad-runs/fs-rest-commit-json-samples-3d7ceabb8-saved-comparison.json"
+      }
+    },
+    {
+      "conditionId": "FS-LIMIT-API-REQUEST-BYTES/raw-16mib-over",
+      "source": "docs/compatibility/ip-fs-production-compatibility.md#feature-group-status",
+      "recipeIds": [
+        "writes/limits/raw-request-bytes",
+        "writes/limits/raw-11mib/11534336",
+        "writes/limits/raw-11mib/11534337"
+      ],
+      "boundaryStatus": "BRACKETED",
+      "boundaryEvidence": [
+        "writes/limits/raw-11mib/11534336#write",
+        "writes/limits/raw-11mib/11534337#write"
+      ],
+      "status": "VERIFIED",
+      "evidence": {
+        "productionRecordings": [
+          "7c794af67119e745072ceae3d742bd463df28c0aa804998c2155b1333b1625d9",
+          "7c794af67119e745072ceae3d742bd463df28c0aa804998c2155b1333b1625d9"
+        ],
+        "finalArtifactSha256": "d6db62596e71c152883dc5b83bf8dc48b79b703777d49bab10874c1fae6dfc6d",
+        "comparisonPath": "spec/compatibility/broad-runs/fs-raw-request-bytes-3d7ceabb8-saved-comparison.json"
+      }
+    },
+    {
+      "conditionId": "FS-LIMIT-API-REQUEST-BYTES/non-commit-rest",
+      "source": "crates/fireemu-adapter-grpc/src/serve.rs#MAX_REST_BODY_BYTES",
+      "recipeIds": [
+        "writes/limits/non-commit-rest-request-bytes"
+      ],
+      "boundaryStatus": "PENDING_RECORDING",
+      "status": "PENDING_RECORDING"
+    },
+    {
+      "conditionId": "FS-LIMIT-API-REQUEST-BYTES/webchannel",
+      "source": "crates/fireemu-adapter-grpc/src/webchannel.rs#MAX_FORM_BYTES",
+      "recipeIds": [
+        "writes/limits/webchannel-request-bytes"
+      ],
+      "boundaryStatus": "PENDING_RECORDING",
+      "status": "PENDING_RECORDING"
+    },
+    {
+      "conditionId": "FS-LIMIT-API-REQUEST-BYTES/grpc",
+      "source": "crates/fireemu-adapter-grpc/src/serve.rs#MAX_GRPC_MESSAGE_BYTES",
+      "recipeIds": [
+        "writes/limits/grpc-unary-request-bytes",
+        "writes/limits/grpc-stream-request-bytes"
+      ],
+      "boundaryStatus": "PENDING_RECORDING",
+      "status": "PENDING_RECORDING"
+    },
+    {
+      "conditionId": "FS-DATA-WRITE/stream-transaction-precedence",
+      "source": "docs/compatibility/feature-goals.md#evidence-and-limitations",
+      "recipeIds": [
+        "writes/write-stream-transaction"
+      ],
+      "boundaryStatus": "NOT_APPLICABLE",
+      "status": "SAVED_REFERENCE_PENDING_FINAL"
+    },
+    {
+      "conditionId": "FS-DATA-WRITE/write-stream-trailing-metadata",
+      "source": "docs/compatibility/ip-fs-production-compatibility.md#feature-group-status",
+      "recipeIds": [
+        "writes/write-stream-terminal/trailing-metadata"
+      ],
+      "boundaryStatus": "NOT_APPLICABLE",
+      "status": "MISMATCH"
+    },
+    {
+      "conditionId": "FS-DATA-WRITE/write-stream-half-close",
+      "source": "docs/compatibility/ip-fs-production-compatibility.md#feature-group-status",
+      "recipeIds": [
+        "writes/write-stream-terminal/half-close"
+      ],
+      "boundaryStatus": "NOT_APPLICABLE",
+      "comparisonNormalizationApproval": "Owner directive 2026-09-24 FS-DATA-WRITE addendum 4 section 5: content-disposition is stable and must remain in comparison; only volatile x-debug-tracking-id is excluded. The earlier two-key comparison is superseded, while its raw evidence is retained.",
+      "status": "VERIFIED",
+      "historicalComparison": {
+        "productionRecordings": [
+          "ba880dc6feb56588256298deba48c9cbfd53de115e2f9381968867a28279d56f",
+          "ba880dc6feb56588256298deba48c9cbfd53de115e2f9381968867a28279d56f"
+        ],
+        "finalArtifactSha256": "f73f33dde5cc70e02629b7bda25ad893c722b868aca417b42a5357d2efd50a7b",
+        "comparisonPath": "spec/compatibility/broad-runs/fs-stream-half-close-542b868b7-saved-comparison.json"
+      },
+      "evidence": {
+        "productionRecordings": [
+          "ba880dc6feb56588256298deba48c9cbfd53de115e2f9381968867a28279d56f",
+          "ba880dc6feb56588256298deba48c9cbfd53de115e2f9381968867a28279d56f"
+        ],
+        "finalArtifactSha256": "2af3f08c4d453459af86c9258f2283cb38fc7e74d83d388018cbdbb29e892a6a",
+        "comparisonPath": "spec/compatibility/broad-runs/fs-stream-half-close-1cb475837-current-comparison.json"
+      }
+    },
+    {
+      "conditionId": "FS-DATA-WRITE/write-stream-empty-write-response",
+      "source": "docs/compatibility/ip-fs-production-compatibility.md#feature-group-status",
+      "recipeIds": [
+        "writes/write-stream-terminal/response-before-half-close"
+      ],
+      "boundaryStatus": "NOT_APPLICABLE",
+      "status": "PENDING_RECORDING"
+    },
+    {
+      "conditionId": "FS-DATA-WRITE/final-artifact-regression",
+      "source": "docs/compatibility/ip-fs-production-compatibility.md#feature-group-status",
+      "recipeIds": [
+        "firestore/historical-324",
+        "writes/batch-write-malformed",
+        "writes/limits",
+        "writes/write-stream-transaction",
+        "writes/write-stream-terminal"
+      ],
+      "regressionCommands": [
+        "pnpm -C conformance firestore:check-production",
+        "pnpm -C conformance fs-data-write:check"
+      ],
+      "boundaryStatus": "NOT_APPLICABLE",
+      "status": "PENDING_REVIEW"
+    },
+    {
+      "conditionId": "FS-DATA-WRITE/closure-review",
+      "source": "docs/compatibility/ip-fs-production-compatibility.md#feature-group-status",
+      "recipeIds": [
+        "FS-DATA-WRITE"
+      ],
+      "boundaryStatus": "NOT_APPLICABLE",
+      "status": "PENDING_REVIEW"
+    },
+    {
+      "conditionId": "FS-DATA-WRITE-LIST/list-documents-rest",
+      "source": "REST ListDocuments (GET v1/{parent}/{collectionId}): paging, page-size cap, tokens, order and mask, showMissing, scope, read times, paging under writes, missing documents between present ones, parameter binding and value refusals",
+      "recipeIds": [
+        "fs-data-write-list/list-documents/paging-under-writes#page-1",
+        "fs-data-write-list/list-documents/paging-under-writes#order-page-1",
+        "fs-data-write-list/list-documents/paging-under-writes#missing-page-1",
+        "fs-data-write-list/list-documents/paging-under-writes#page-2-after-change",
+        "fs-data-write-list/list-documents/paging-under-writes#page-3-after-change",
+        "fs-data-write-list/list-documents/paging-under-writes#page-2-token-reused",
+        "fs-data-write-list/list-documents/paging-under-writes#order-page-2-after-change",
+        "fs-data-write-list/list-documents/paging-under-writes#missing-page-2-after-change",
+        "fs-data-write-list/list-documents/missing-interleaved#page-size-1",
+        "fs-data-write-list/list-documents/missing-interleaved#page-size-1-next",
+        "fs-data-write-list/list-documents/missing-interleaved#page-size-1-next-2",
+        "fs-data-write-list/list-documents/missing-interleaved#page-size-1-next-3",
+        "fs-data-write-list/list-documents/missing-interleaved#page-size-2",
+        "fs-data-write-list/list-documents/missing-interleaved#page-size-2-next",
+        "fs-data-write-list/list-documents/missing-interleaved#page-size-2-next-2",
+        "fs-data-write-list/list-documents/missing-interleaved#show-missing-page-size-2",
+        "fs-data-write-list/list-documents/missing-interleaved#show-missing-page-size-2-next",
+        "fs-data-write-list/list-documents/missing-interleaved#show-missing-page-size-2-next-2",
+        "fs-data-write-list/list-documents/missing-interleaved#order-by-name-page-size-1",
+        "fs-data-write-list/list-documents/missing-interleaved#order-by-field-page-size-1",
+        "fs-data-write-list/list-documents/missing-interleaved#only-missing",
+        "fs-data-write-list/list-documents/missing-interleaved#only-missing-page-size-1",
+        "fs-data-write-list/list-documents/missing-interleaved#only-missing-show-missing-page-size-1",
+        "fs-data-write-list/list-documents/large#default",
+        "fs-data-write-list/list-documents/large#page-size-1000",
+        "fs-data-write-list/list-documents/large#page-size-300",
+        "fs-data-write-list/list-documents/paging#default",
+        "fs-data-write-list/list-documents/paging#page-size-2",
+        "fs-data-write-list/list-documents/paging#page-2",
+        "fs-data-write-list/list-documents/paging#page-3",
+        "fs-data-write-list/list-documents/paging#page-4",
+        "fs-data-write-list/list-documents/paging#page-size-5",
+        "fs-data-write-list/list-documents/paging#page-size-5-then-other-size",
+        "fs-data-write-list/list-documents/paging#token-with-other-collection",
+        "fs-data-write-list/list-documents/paging#token-with-order-by",
+        "fs-data-write-list/list-documents/paging#page-size-0",
+        "fs-data-write-list/list-documents/paging#page-size-negative",
+        "fs-data-write-list/list-documents/paging#page-size-max-int32",
+        "fs-data-write-list/list-documents/paging#page-size-overflow",
+        "fs-data-write-list/list-documents/paging#page-size-not-a-number",
+        "fs-data-write-list/list-documents/paging#page-size-fraction",
+        "fs-data-write-list/list-documents/paging#page-size-twice",
+        "fs-data-write-list/list-documents/paging#page-token-garbage",
+        "fs-data-write-list/list-documents/paging#page-token-base64",
+        "fs-data-write-list/list-documents/paging#page-token-empty",
+        "fs-data-write-list/list-documents/paging#token-with-mask",
+        "fs-data-write-list/list-documents/paging#page-size-plus-sign",
+        "fs-data-write-list/list-documents/paging#page-size-leading-zero",
+        "fs-data-write-list/list-documents/paging#page-size-exponent",
+        "fs-data-write-list/list-documents/paging#page-size-empty",
+        "fs-data-write-list/list-documents/order-and-mask#order-by-field",
+        "fs-data-write-list/list-documents/order-and-mask#order-by-field-asc",
+        "fs-data-write-list/list-documents/order-and-mask#order-by-field-desc",
+        "fs-data-write-list/list-documents/order-and-mask#order-by-field-desc-upper",
+        "fs-data-write-list/list-documents/order-and-mask#order-by-two-fields",
+        "fs-data-write-list/list-documents/order-and-mask#order-by-two-fields-no-space",
+        "fs-data-write-list/list-documents/order-and-mask#order-by-name",
+        "fs-data-write-list/list-documents/order-and-mask#order-by-name-desc",
+        "fs-data-write-list/list-documents/order-and-mask#order-by-field-then-name-desc",
+        "fs-data-write-list/list-documents/order-and-mask#order-by-nested",
+        "fs-data-write-list/list-documents/order-and-mask#order-by-quoted",
+        "fs-data-write-list/list-documents/order-and-mask#order-by-missing-field",
+        "fs-data-write-list/list-documents/order-and-mask#order-by-invalid-path",
+        "fs-data-write-list/list-documents/order-and-mask#order-by-invalid-direction",
+        "fs-data-write-list/list-documents/order-and-mask#order-by-trailing-comma",
+        "fs-data-write-list/list-documents/order-and-mask#order-by-duplicate",
+        "fs-data-write-list/list-documents/order-and-mask#order-by-empty",
+        "fs-data-write-list/list-documents/order-and-mask#order-by-paged",
+        "fs-data-write-list/list-documents/order-and-mask#order-by-paged-next",
+        "fs-data-write-list/list-documents/order-and-mask#mask-one",
+        "fs-data-write-list/list-documents/order-and-mask#mask-two",
+        "fs-data-write-list/list-documents/order-and-mask#mask-map",
+        "fs-data-write-list/list-documents/order-and-mask#mask-name",
+        "fs-data-write-list/list-documents/order-and-mask#mask-missing",
+        "fs-data-write-list/list-documents/order-and-mask#mask-invalid",
+        "fs-data-write-list/list-documents/order-and-mask#mask-empty",
+        "fs-data-write-list/list-documents/order-and-mask#mask-and-order",
+        "fs-data-write-list/list-documents/order-and-mask#mask-comma-separated",
+        "fs-data-write-list/list-documents/order-and-mask#mask-quoted",
+        "fs-data-write-list/list-documents/show-missing#show-missing",
+        "fs-data-write-list/list-documents/show-missing#show-missing-false",
+        "fs-data-write-list/list-documents/show-missing#show-missing-not-a-bool",
+        "fs-data-write-list/list-documents/show-missing#show-missing-number",
+        "fs-data-write-list/list-documents/show-missing#show-missing-paged",
+        "fs-data-write-list/list-documents/show-missing#show-missing-paged-next",
+        "fs-data-write-list/list-documents/show-missing#show-missing-paged-next-2",
+        "fs-data-write-list/list-documents/show-missing#show-missing-with-order-by",
+        "fs-data-write-list/list-documents/show-missing#show-missing-with-order-by-name",
+        "fs-data-write-list/list-documents/show-missing#show-missing-with-mask",
+        "fs-data-write-list/list-documents/show-missing#show-missing-deep",
+        "fs-data-write-list/list-documents/show-missing#show-missing-empty-collection",
+        "fs-data-write-list/list-documents/show-missing#show-missing-capitalized",
+        "fs-data-write-list/list-documents/show-missing#show-missing-empty",
+        "fs-data-write-list/list-documents/show-missing#token-with-show-missing-dropped",
+        "fs-data-write-list/list-documents/scope#subcollection",
+        "fs-data-write-list/list-documents/scope#subcollection-of-missing-document",
+        "fs-data-write-list/list-documents/scope#subcollection-of-absent-document",
+        "fs-data-write-list/list-documents/scope#deep-subcollection",
+        "fs-data-write-list/list-documents/scope#empty-collection",
+        "fs-data-write-list/list-documents/scope#case-differs",
+        "fs-data-write-list/list-documents/scope#reserved-collection-id",
+        "fs-data-write-list/list-documents/scope#dotted-collection-id",
+        "fs-data-write-list/list-documents/scope#unknown-parameter",
+        "fs-data-write-list/list-documents/scope#transaction-invalid",
+        "fs-data-write-list/list-documents/scope#transaction-and-read-time",
+        "fs-data-write-list/list-documents/scope#snake-page-size",
+        "fs-data-write-list/list-documents/scope#snake-order-by",
+        "fs-data-write-list/list-documents/scope#snake-mask",
+        "fs-data-write-list/list-documents/scope#snake-show-missing",
+        "fs-data-write-list/list-documents/scope#snake-and-camel-page-size",
+        "fs-data-write-list/list-documents/read-time#current",
+        "fs-data-write-list/list-documents/read-time#at-write-1",
+        "fs-data-write-list/list-documents/read-time#at-write-2",
+        "fs-data-write-list/list-documents/read-time#nanosecond-before-write-1",
+        "fs-data-write-list/list-documents/read-time#microsecond-before-write-1",
+        "fs-data-write-list/list-documents/read-time#microsecond-before-write-2",
+        "fs-data-write-list/list-documents/read-time#61-minutes-before-write-1",
+        "fs-data-write-list/list-documents/read-time#future",
+        "fs-data-write-list/list-documents/read-time#not-a-time",
+        "fs-data-write-list/list-documents/read-time#paged-at-write-1",
+        "fs-data-write-list/list-documents/read-time#paged-at-write-1-next",
+        "fs-data-write-list/list-documents/read-time#paged-at-write-1-next-without-read-time",
+        "fs-data-write-list/list-documents/read-time#show-missing-at-write-1",
+        "fs-data-write-list/list-documents/read-time#snake-read-time",
+        "fs-data-write-list/list-documents/read-time#read-time-offset",
+        "fs-data-write-list/list-documents/read-time#read-time-ten-digits",
+        "fs-data-write-list/list-documents/read-time#read-time-empty"
+      ],
+      "boundaryStatus": "OBSERVED (page size 300)",
+      "status": "PENDING_INTEGRATION",
+      "evidence": {
+        "productionRecordings": [
+          "e6bcc4b467e48d8a285d1cb754ce37bc3decf56dd5e822ef7f1e77abb089ed33",
+          "5ef3ad1593391e2948f980cfde0b39747406c56d14597cbe7950158aafac3637"
+        ],
+        "proposalPath": "docs.local/instructions/2026-09-24-fs-data-write-list-condition-proposal.md",
+        "fixturePath": "conformance/fs-data-write-list-production.json",
+        "fixtureSha256": "1d70589d2ffc50b837dc92574ea0daf502677f08804d6227a4b5cbe4641f87f4",
+        "proposedArtifactSha256": "32e58e92a56f1063c1feb01c09080787cfd147e183c2fde5e0b026867d9697d2",
+        "sourceCommit": "c7d9e1213",
+        "comparisonPath": "spec/compatibility/closure/evidence/FS-DATA-WRITE-LIST-comparison.json"
+      }
+    },
+    {
+      "conditionId": "FS-DATA-WRITE-LIST/list-collection-ids-rest",
+      "source": "REST ListCollectionIds (POST :listCollectionIds): root, document, missing and absent parents, paging, tokens across parents and read times, read times, body refusals",
+      "recipeIds": [
+        "fs-data-write-list/list-documents/paging-under-writes#root-page-1",
+        "fs-data-write-list/list-documents/paging-under-writes#root-page-2-after-change",
+        "fs-data-write-list/list-documents/paging-under-writes#root-page-3-after-change",
+        "fs-data-write-list/list-documents/read-time#collection-ids-at-write-1",
+        "fs-data-write-list/list-documents/read-time#collection-ids-nanosecond-before-write-1",
+        "fs-data-write-list/list-documents/read-time#collection-ids-future",
+        "fs-data-write-list/list-documents/read-time#collection-ids-not-a-time",
+        "fs-data-write-list/list-documents/read-time#collection-ids-current",
+        "fs-data-write-list/list-documents/read-time#collection-ids-microsecond-before-write-2",
+        "fs-data-write-list/list-documents/read-time#collection-ids-paged-at-write-1",
+        "fs-data-write-list/list-documents/read-time#collection-ids-paged-at-write-1-next-without-read-time",
+        "fs-data-write-list/list-collection-ids/rest#root",
+        "fs-data-write-list/list-collection-ids/rest#document",
+        "fs-data-write-list/list-collection-ids/rest#missing-document",
+        "fs-data-write-list/list-collection-ids/rest#absent-document",
+        "fs-data-write-list/list-collection-ids/rest#deep-missing-document",
+        "fs-data-write-list/list-collection-ids/rest#root-page-size-2",
+        "fs-data-write-list/list-collection-ids/rest#root-page-2",
+        "fs-data-write-list/list-collection-ids/rest#root-page-3",
+        "fs-data-write-list/list-collection-ids/rest#root-page-size-2-as-text",
+        "fs-data-write-list/list-collection-ids/rest#page-size-0",
+        "fs-data-write-list/list-collection-ids/rest#page-size-negative",
+        "fs-data-write-list/list-collection-ids/rest#page-size-not-a-number",
+        "fs-data-write-list/list-collection-ids/rest#page-token-garbage",
+        "fs-data-write-list/list-collection-ids/rest#page-token-from-other-parent",
+        "fs-data-write-list/list-collection-ids/rest#unknown-field",
+        "fs-data-write-list/list-collection-ids/rest#collection-parent",
+        "fs-data-write-list/list-collection-ids/rest#empty-body-text",
+        "fs-data-write-list/list-collection-ids/rest#root-page-size-5",
+        "fs-data-write-list/list-collection-ids/rest#page-size-fraction",
+        "fs-data-write-list/list-collection-ids/rest#page-size-overflow",
+        "fs-data-write-list/list-collection-ids/rest#page-size-float-text",
+        "fs-data-write-list/list-collection-ids/rest#page-size-null",
+        "fs-data-write-list/list-collection-ids/rest#page-token-empty",
+        "fs-data-write-list/list-collection-ids/rest#read-time-empty"
+      ],
+      "boundaryStatus": "NOT_APPLICABLE",
+      "status": "PENDING_INTEGRATION",
+      "evidence": {
+        "productionRecordings": [
+          "e6bcc4b467e48d8a285d1cb754ce37bc3decf56dd5e822ef7f1e77abb089ed33",
+          "5ef3ad1593391e2948f980cfde0b39747406c56d14597cbe7950158aafac3637"
+        ],
+        "proposalPath": "docs.local/instructions/2026-09-24-fs-data-write-list-condition-proposal.md",
+        "fixturePath": "conformance/fs-data-write-list-production.json",
+        "fixtureSha256": "1d70589d2ffc50b837dc92574ea0daf502677f08804d6227a4b5cbe4641f87f4",
+        "proposedArtifactSha256": "32e58e92a56f1063c1feb01c09080787cfd147e183c2fde5e0b026867d9697d2",
+        "sourceCommit": "c7d9e1213",
+        "comparisonPath": "spec/compatibility/closure/evidence/FS-DATA-WRITE-LIST-comparison.json"
+      }
+    },
+    {
+      "conditionId": "FS-DATA-WRITE-LIST/list-grpc",
+      "source": "gRPC google.firestore.v1 ListDocuments and ListCollectionIds: representative cases, the request shapes REST cannot send (no collection id), read times and a REST token over gRPC",
+      "recipeIds": [
+        "fs-data-write-list/list-documents/paging-under-writes#grpc-page-1",
+        "fs-data-write-list/list-documents/paging-under-writes#grpc-page-2-with-rest-token",
+        "fs-data-write-list/list-documents/missing-interleaved#grpc-page-size-1",
+        "fs-data-write-list/list-documents/read-time#grpc-at-write-1",
+        "fs-data-write-list/list-documents/read-time#grpc-paged-at-write-1",
+        "fs-data-write-list/list-documents/read-time#grpc-collection-ids-at-write-1",
+        "fs-data-write-list/grpc/list-documents#default",
+        "fs-data-write-list/grpc/list-documents#page-size-2",
+        "fs-data-write-list/grpc/list-documents#page-2",
+        "fs-data-write-list/grpc/list-documents#order-by-desc",
+        "fs-data-write-list/grpc/list-documents#order-by-invalid",
+        "fs-data-write-list/grpc/list-documents#mask",
+        "fs-data-write-list/grpc/list-documents#show-missing",
+        "fs-data-write-list/grpc/list-documents#show-missing-with-order-by",
+        "fs-data-write-list/grpc/list-documents#page-size-negative",
+        "fs-data-write-list/grpc/list-documents#page-token-garbage",
+        "fs-data-write-list/grpc/list-documents#subcollection",
+        "fs-data-write-list/grpc/list-documents#every-collection-of-document",
+        "fs-data-write-list/grpc/list-documents#every-collection-of-missing-document",
+        "fs-data-write-list/grpc/list-documents#every-collection-at-root",
+        "fs-data-write-list/grpc/list-documents#collection-id-with-slash",
+        "fs-data-write-list/grpc/list-documents#read-time-future",
+        "fs-data-write-list/grpc/list-documents#collection-parent",
+        "fs-data-write-list/grpc/list-documents#every-collection-of-document-paged",
+        "fs-data-write-list/grpc/list-documents#every-collection-of-document-paged-next",
+        "fs-data-write-list/grpc/list-documents#every-collection-with-order-by",
+        "fs-data-write-list/grpc/list-documents#mask-invalid",
+        "fs-data-write-list/grpc/list-documents#page-size-0",
+        "fs-data-write-list/grpc/list-collection-ids#root",
+        "fs-data-write-list/grpc/list-collection-ids#document",
+        "fs-data-write-list/grpc/list-collection-ids#missing-document",
+        "fs-data-write-list/grpc/list-collection-ids#page-size-2",
+        "fs-data-write-list/grpc/list-collection-ids#page-2",
+        "fs-data-write-list/grpc/list-collection-ids#page-size-negative",
+        "fs-data-write-list/grpc/list-collection-ids#page-token-garbage",
+        "fs-data-write-list/grpc/list-collection-ids#collection-parent"
+      ],
+      "boundaryStatus": "NOT_APPLICABLE",
+      "status": "PENDING_INTEGRATION",
+      "evidence": {
+        "productionRecordings": [
+          "e6bcc4b467e48d8a285d1cb754ce37bc3decf56dd5e822ef7f1e77abb089ed33",
+          "5ef3ad1593391e2948f980cfde0b39747406c56d14597cbe7950158aafac3637"
+        ],
+        "proposalPath": "docs.local/instructions/2026-09-24-fs-data-write-list-condition-proposal.md",
+        "fixturePath": "conformance/fs-data-write-list-production.json",
+        "fixtureSha256": "1d70589d2ffc50b837dc92574ea0daf502677f08804d6227a4b5cbe4641f87f4",
+        "proposedArtifactSha256": "32e58e92a56f1063c1feb01c09080787cfd147e183c2fde5e0b026867d9697d2",
+        "sourceCommit": "c7d9e1213",
+        "comparisonPath": "spec/compatibility/closure/evidence/FS-DATA-WRITE-LIST-comparison.json"
+      }
+    },
+    {
+      "conditionId": "FS-DATA-WRITE-LIST/setup-writes",
+      "source": "Commits inside the list programs that set up read-time and paging-under-writes rows (recorded and compared like any row)",
+      "recipeIds": [
+        "fs-data-write-list/list-documents/paging-under-writes#change",
+        "fs-data-write-list/list-documents/read-time#write-1",
+        "fs-data-write-list/list-documents/read-time#write-2"
+      ],
+      "boundaryStatus": "NOT_APPLICABLE",
+      "status": "PENDING_INTEGRATION",
+      "evidence": {
+        "productionRecordings": [
+          "e6bcc4b467e48d8a285d1cb754ce37bc3decf56dd5e822ef7f1e77abb089ed33",
+          "5ef3ad1593391e2948f980cfde0b39747406c56d14597cbe7950158aafac3637"
+        ],
+        "proposalPath": "docs.local/instructions/2026-09-24-fs-data-write-list-condition-proposal.md",
+        "fixturePath": "conformance/fs-data-write-list-production.json",
+        "fixtureSha256": "1d70589d2ffc50b837dc92574ea0daf502677f08804d6227a4b5cbe4641f87f4",
+        "proposedArtifactSha256": "32e58e92a56f1063c1feb01c09080787cfd147e183c2fde5e0b026867d9697d2",
+        "sourceCommit": "c7d9e1213",
+        "comparisonPath": "spec/compatibility/closure/evidence/FS-DATA-WRITE-LIST-comparison.json"
+      }
+    }
+  ]
+}

@@ -77,6 +77,18 @@
         "indexFile": { "type": "string" },
         "textIndexDefinitionFile": { "type": "string" },
         "enforceLimits": { "type": "boolean" },
+        "databaseCreateTime": {
+          "type": "string",
+          "format": "date-time",
+          "description": "When the daemon's databases were created: the createTime they report and the instant before which a read_time is refused with INVALID_ARGUMENT. Defaults to the daemon's start; a run compared with a production database names that database's createTime. It must not be after the clock start."
+        },
+        "ttlSweepIntervalSeconds": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 259200,
+          "default": 86400,
+          "description": "How long a document whose time-to-live field has expired stays readable before the expiry sweep deletes it. Production deletes an expired document typically within 24 hours and within 72 hours at worst, so the default is 86400 and the maximum is the documented outer bound of 259200."
+        },
         "explain": { "type": "boolean" },
         "pipeline": {
           "type": "object",
@@ -153,6 +165,38 @@
         "enabled": { "type": "boolean" },
         "projectIssuer": { "type": "string", "pattern": "^https://securetoken\\.google\\.com/[a-z0-9-]+$" },
         "idTokenSigning": { "enum": ["session-rsa", "unsigned-emulator"] },
+        "apiKeys": {
+          "type": "array",
+          "minItems": 1,
+          "description": "The default project's Web API keys. When present, a client request with any other key is refused with production's 400 API_KEY_INVALID before the service reads it; when absent, any key is accepted, as by the official emulator.",
+          "items": { "type": "string", "pattern": "^[A-Za-z0-9._-]+$" }
+        },
+        "customTokenSigners": {
+          "type": "object",
+          "description": "Service accounts whose signed custom tokens are accepted, each mapped to its public JWK set (the document Google publishes at https://www.googleapis.com/service_accounts/v1/jwk/<service account>). When present, signInWithCustomToken accepts only RS256 tokens these keys verify and refuses a verifying token of another project's service account with CREDENTIAL_MISMATCH, as production does. When absent, the unsigned tokens the Admin SDK mints in emulator mode are accepted.",
+          "propertyNames": { "pattern": "^[^@\\s]+@([a-z0-9-]+\\.iam|appspot)\\.gserviceaccount\\.com$" },
+          "additionalProperties": {
+            "type": "object",
+            "required": ["keys"],
+            "properties": {
+              "keys": {
+                "type": "array",
+                "minItems": 1,
+                "items": {
+                  "type": "object",
+                  "required": ["kty", "n", "e"],
+                  "properties": {
+                    "kty": { "const": "RSA" },
+                    "alg": { "const": "RS256" },
+                    "kid": { "type": "string" },
+                    "n": { "type": "string" },
+                    "e": { "type": "string" }
+                  }
+                }
+              }
+            }
+          }
+        },
         "totp": {
           "type": "object",
           "description": "Explicitly enables fireemu's TOTP extension. When absent, TOTP enrollment matches the official Auth emulator and is rejected.",
@@ -173,9 +217,45 @@
           "type": "boolean",
           "description": "Email enumeration protection, as production enables it for every new project: wrong-password and unknown-address sign-ins answer INVALID_LOGIN_CREDENTIALS and a password reset for an unknown address is acknowledged. Defaults to true; false restores the official Auth emulator's EMAIL_NOT_FOUND and INVALID_PASSWORD answers."
         },
+        "signIn": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "allowDuplicateEmails": { "type": "boolean", "default": false }
+          }
+        },
+        "client": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "permissions": { "$ref": "#/$defs/authClientPermissions" }
+          }
+        },
+        "configOverrides": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/authConfigOverride" },
+          "description": "Explicit project/tenant overrides for client.permissions and improvedEmailPrivacy. Password policies use passwordPolicyOverrides."
+        },
+        "blockingFunctions": { "$ref": "#/$defs/blockingFunctions" },
+        "quota": { "$ref": "#/$defs/authQuota" },
+        "quotaSimulation": { "$ref": "#/$defs/authQuotaSimulation" },
         "logActionCodes": {
           "type": "boolean",
           "description": "Print every email action link and SMS verification code to the daemon's standard output (and the Logging emulator) as the official Auth emulator does. Defaults to true. These lines carry credentials: set false where the console is shared or captured, and read the codes from /emulator/v1/projects/{project}/oobCodes and verificationCodes instead. --log-verbosity quiet also silences them."
+        },
+        "passwordPolicy": { "$ref": "#/$defs/passwordPolicy" },
+        "passwordPolicyOverrides": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["projectId", "passwordPolicy"],
+            "properties": {
+              "projectId": { "type": "string", "minLength": 1 },
+              "tenantId": { "type": "string", "minLength": 1 },
+              "passwordPolicy": { "$ref": "#/$defs/passwordPolicy" }
+            }
+          }
         }
       }
     },
@@ -233,7 +313,8 @@
         "loggingPort": { "type": "integer", "minimum": 0, "maximum": 65535 },
         "clockStart": { "type": "string", "format": "date-time" },
         "seed": { "type": "integer", "minimum": 0 },
-        "authProject": { "type": "string", "pattern": "^[a-z0-9-]+$" }
+        "authProject": { "type": "string", "pattern": "^[a-z0-9-]+$" },
+        "authProjectNumbers": { "type": "object", "propertyNames": { "pattern": "^[a-z0-9-]+$" }, "additionalProperties": { "$ref": "#/$defs/authProjectNumber" } }
       }
     },
     "storage": {
@@ -252,6 +333,20 @@
       "properties": {
         "delivery": { "enum": ["exactly-once-test", "at-least-once", "chaos"] },
         "maxAttempts": { "type": "integer", "minimum": 1 }
+      }
+    },
+    "pubsub": {
+      "type": "object",
+      "description": "Pub/Sub emulator behaviour that the service configuration has no counterpart for.",
+      "additionalProperties": false,
+      "properties": {
+        "pushMinimumRedeliveryIntervalMillis": {
+          "description": "Minimum interval kept between two push deliveries of the same message while the subscription has no retry policy. The default 0 follows production, which redelivers as soon as possible without a retry policy; a non-zero interval is an opt-in emulator protection against re-requesting a failing push endpoint with no interval at all. A retry policy always decides its own backoff.",
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 600000,
+          "default": 0
+        }
       }
     },
     "scheduler": {
@@ -286,7 +381,152 @@
     }
   },
   "$defs": {
+    "passwordPolicy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["enforcementState"],
+      "properties": {
+        "enforcementState": { "enum": ["OFF", "ENFORCE"] },
+        "forceUpgradeOnSignin": { "type": "boolean", "default": false },
+        "constraints": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "minLength": { "type": "integer", "minimum": 6, "maximum": 30, "default": 6 },
+            "maxLength": { "oneOf": [{ "type": "null" }, { "type": "integer", "minimum": 6, "maximum": 4096 }] },
+            "requireUppercase": { "type": "boolean", "default": false },
+            "requireLowercase": { "type": "boolean", "default": false },
+            "requireNumeric": { "type": "boolean", "default": false },
+            "requireNonAlphanumeric": { "type": "boolean", "default": false }
+          }
+        }
+      }
+    },
+    "authClientPermissions": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "disabledUserSignup": { "type": "boolean", "default": false },
+        "disabledUserDeletion": { "type": "boolean", "default": false }
+      }
+    },
+    "authConfigOverride": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["projectId", "config"],
+      "properties": {
+        "projectId": { "type": "string", "minLength": 1 },
+        "tenantId": { "type": "string", "minLength": 1 },
+        "config": {
+          "type": "object",
+          "additionalProperties": false,
+          "minProperties": 1,
+          "properties": {
+            "client": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "permissions": { "$ref": "#/$defs/authClientPermissions" }
+              }
+            },
+            "improvedEmailPrivacy": { "type": "boolean" }
+          }
+        }
+      }
+    },
+    "blockingFunctionTrigger": {
+      "oneOf": [
+        { "type": "null" },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["function"],
+          "properties": {
+            "function": { "type": "string", "minLength": 1 },
+            "region": { "type": "string", "minLength": 1 }
+          }
+        }
+      ]
+    },
+    "blockingFunctions": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "triggers": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "beforeCreate": { "$ref": "#/$defs/blockingFunctionTrigger" },
+            "beforeSignIn": { "$ref": "#/$defs/blockingFunctionTrigger" }
+          }
+        },
+        "forwardInboundCredentials": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "idToken": { "type": "boolean", "default": false },
+            "accessToken": { "type": "boolean", "default": false },
+            "refreshToken": { "type": "boolean", "default": false }
+          }
+        }
+      }
+    },
+    "authQuota": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "signUpQuotaConfig": {
+          "oneOf": [
+            { "type": "null" },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["quota", "startTime", "quotaDuration"],
+              "properties": {
+                "quota": { "type": "string", "pattern": "^[0-9]+$" },
+                "startTime": { "type": "string", "format": "date-time" },
+                "quotaDuration": { "type": "string", "pattern": "^[0-9]+(\\.[0-9]{1,9})?s$" }
+              }
+            }
+          ]
+        }
+      }
+    },
+    "authQuotaSimulation": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "mode": { "enum": ["off", "observe", "enforce"], "default": "off" },
+        "algorithm": { "enum": ["fixed-window-v1"], "default": "fixed-window-v1" },
+        "defaultQuotaPerHour": { "type": "integer", "minimum": 0, "maximum": 1000000, "default": 100 },
+        "maxTrackedBuckets": { "type": "integer", "minimum": 1, "maximum": 65536, "default": 4096 }
+      }
+    },
     "appCheckMode": { "enum": ["off", "unenforced", "enforced"], "default": "off" },
+    "authProjectNumber": {
+      "type": "string",
+      "description": "A positive decimal project number that fits the u64 runtime representation.",
+      "oneOf": [
+        { "pattern": "^[1-9][0-9]{0,18}$" },
+        { "pattern": "^1[0-7][0-9]{18}$" },
+        { "pattern": "^18[0-3][0-9]{17}$" },
+        { "pattern": "^184[0-3][0-9]{16}$" },
+        { "pattern": "^1844[0-5][0-9]{15}$" },
+        { "pattern": "^18446[0-6][0-9]{14}$" },
+        { "pattern": "^184467[0-3][0-9]{13}$" },
+        { "pattern": "^1844674[0-3][0-9]{12}$" },
+        { "pattern": "^184467440[0-6][0-9]{10}$" },
+        { "pattern": "^1844674407[0-2][0-9]{9}$" },
+        { "pattern": "^18446744073[0-6][0-9]{8}$" },
+        { "pattern": "^1844674407370[0-8][0-9]{6}$" },
+        { "pattern": "^18446744073709[0-4][0-9]{5}$" },
+        { "pattern": "^184467440737095[0-4][0-9]{4}$" },
+        { "pattern": "^18446744073709550[0-9]{3}$" },
+        { "pattern": "^18446744073709551[0-5][0-9]{2}$" },
+        { "pattern": "^1844674407370955160[0-9]$" },
+        { "pattern": "^1844674407370955161[0-5]$" }
+      ]
+    },
     "optionalCount": { "oneOf": [ { "type": "null" }, { "type": "integer", "minimum": 0 } ] },
     "thresholds": {
       "type": "array",

@@ -1,0 +1,114 @@
+{
+  "kind": "firestore-read-time-saved-production-recomparison-v1",
+  "status": "complete",
+  "mode": "saved-production-versus-local",
+  "productionExecuted": false,
+  "source": {
+    "executionCommit": "c9201bf66ad506c2c69966307449304839d86985",
+    "artifactSha256": "9e749a040c92cbee590bd668d1c0159ade46af147b0f4fb28edb1151bbf225dc",
+    "savedRecordPath": "spec/compatibility/broad-runs/a12183a0-second-current.json",
+    "savedRecordSha256": "613376ceac1ae5126803efe55f32f01ae8fcf27b20f8ded3d5cbbf23d102add9",
+    "historicalMatrixPath": "conformance/firestore-production-matrix.json",
+    "historicalMatrixSha256": "4bcb04ac9427e73bfe89aab5bc9916f318b2ea60efbf156d79cdf47632d58f56",
+    "historicalExecutionCommit": "2526c61eda5fc53ac91250307786127ae3c601be",
+    "historicalCorpusDigest": "d4ae37c1b35ec7dcd162015f170c9da36a926ca5eb646177471d966e3a12bf2b",
+    "historicalNormalizer": "conformance/src/firestore-probe/session.mjs",
+    "historicalNormalizerSha256": "af4e664ac4d1efe9cfa5de445c2ee8833ee91d1c0c515283133e8e0a8c5b4823",
+    "selectedProgram": "reads/read-time",
+    "programDigest": "adf956497d20db3a8bb48f036886b169b033a3883b4d2e3371152accf111100a",
+    "observerSourceSha256": "b8db2cb0914b4a1c5905160319aff300d07781c320448b3bd5557bed11f0da1d",
+    "runnerSourceSha256": "d8cdaa88fb7f2af55200b00bb9f95975788b6a570712178e5d7bc0a3da47b64e",
+    "comparatorSourceSha256": "43ab6ea10dbb5fc3e774d43624799be4fc741bf2c1a6f19681006f5af9602356",
+    "configurationDigest": "54f628de5da6a1af83edee46d8d67f12c331325622dd929569f655df834b3f82",
+    "localRecordSha256": "e6a8770e8286de1bedcd4b5d893abe7a57419cf7f0f21f1d8b5fc3bb1e293777",
+    "replayManifestSha256": "a86b6b3629db43b9fd022d79d9199432f20e2d607ef6c487237f250595309ec7",
+    "replayMetadataSha256": "4e5c89c61dd160a3f78c66e84f6c4722ef487a2a4bb879c5006817c436f44e13"
+  },
+  "target": "owned-local-artifact",
+  "edition": "Standard Native",
+  "profile": "strict",
+  "recordingComplete": true,
+  "stateVerified": true,
+  "cleanupComplete": true,
+  "configurationUnchanged": true,
+  "ownedProcessStopped": true,
+  "listenersClosed": true,
+  "requestStats": {
+    "firestore": {
+      "requests": 12,
+      "elapsedMs": 24.752792000000003
+    }
+  },
+  "observedRows": 10,
+  "counts": {
+    "match": 10,
+    "mismatch": 0,
+    "indeterminate": 0
+  },
+  "compatibility": "match",
+  "formalCompatibilityClaim": false,
+  "rows": [
+    {
+      "id": "firestore:reads/read-time#read-current",
+      "status": "match",
+      "firstDifference": null
+    },
+    {
+      "id": "firestore:reads/read-time#write-v2",
+      "status": "match",
+      "firstDifference": null
+    },
+    {
+      "id": "firestore:reads/read-time#read-at-the-first-update-time",
+      "status": "match",
+      "firstDifference": null
+    },
+    {
+      "id": "firestore:reads/read-time#read-at-the-second-update-time",
+      "status": "match",
+      "firstDifference": null
+    },
+    {
+      "id": "firestore:reads/read-time#query-at-the-first-update-time",
+      "status": "match",
+      "firstDifference": null
+    },
+    {
+      "id": "firestore:reads/read-time#batch-get-at-the-first-update-time",
+      "status": "match",
+      "firstDifference": null
+    },
+    {
+      "id": "firestore:reads/read-time#list-at-the-first-update-time",
+      "status": "match",
+      "firstDifference": null
+    },
+    {
+      "id": "firestore:reads/read-time#count-at-the-first-update-time",
+      "status": "match",
+      "firstDifference": null
+    },
+    {
+      "id": "firestore:reads/read-time#begin-read-only-at-the-first-update-time",
+      "status": "match",
+      "firstDifference": null
+    },
+    {
+      "id": "firestore:reads/read-time#read-in-the-read-only-transaction",
+      "status": "match",
+      "firstDifference": null
+    }
+  ],
+  "scope": [
+    "One bounded Firestore Standard/Native reads/read-time program was replayed against the current local artifact.",
+    "The comparison reuses the immutable saved production reference and its historical observer bindings; no production request was made.",
+    "The program covers current read, commit, historical readTime reads, query, batchGet, list, count and a read-only transaction read.",
+    "Setup, post-state readback, process shutdown and listener closure were observed by the local runner."
+  ],
+  "limitations": [
+    "This is saved-production-reference evidence for one finite program, not a new production observation or whole Firestore compatibility claim.",
+    "Historical normalization removed some token and absolute-time values, so ownership and TTL are not established.",
+    "Production index, Rules, SDK and transaction conflict behavior remain outside this replay.",
+    "The parent FS-DATA-WRITE, FS-QUERY-INDEX and FS-TRANSACTION groups remain open."
+  ]
+}

@@ -1,0 +1,24 @@
+{
+  "kind": "query-explain-frozen-reference-inputs-v2",
+  "collectorCommit": "109a9b459b94d59eec541be579e305437cdfaa30",
+  "collectorSourceSha256": "6c04ca038bbad3de282ab54dae69014a7decd6099dbb28b9620f76a3e63b0895",
+  "observerSha256": "11681a270d37b64631b94dce76a16aec044af138e5a9ead2658fb77151cab64f",
+  "manifestDigest": "f6a58269703ca0e1bf17ea9615cbe47af8a55efecbe4a5cc9c48eb6b03a68feb",
+  "comparisonContractDigest": "a504ce1025925e6296bf1d6be194b164fa7f3d86575bbd258bad19b781b02bf7",
+  "files": {
+    "production": "14907c82669c0390c81f7c502d87062972584fed36e90f3ed9ed56bce31ee8db",
+    "originalComparison": "83cc22cd1bb8c8b702ae838422256705c685b97ee72737454594119697f0f909",
+    "executionInputs": "e891efc58730d589ecd35c107580a42976f0a8e44173a5237ec08865d752d1ee",
+    "local": "3022b23f483dd9d4cebdb31386c5a4d4c2dac7cac603df34ca30e7ad770b5ca0"
+  },
+  "schemaBasis": {
+    "protoUrl": "https://raw.githubusercontent.com/googleapis/googleapis/efc9e8f560a5f1b9b08b62823bfa7955c656cb74/google/firestore/v1/query_profile.proto",
+    "protoSha256": "0bafd463bc608c5c5396665f9b1cd45227eeb79419f63ed6f054307680cb834d",
+    "protojsonUrl": "https://protobuf.dev/programming-guides/json/#presence-and-default-values",
+    "checkedDate": "2026-09-14",
+    "scope": [
+      "PlanSummary.indexes_used: repeated google.protobuf.Struct",
+      "ExecutionStats.results_returned: implicit-presence int64"
+    ]
+  }
+}

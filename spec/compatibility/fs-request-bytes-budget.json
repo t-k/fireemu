@@ -1,0 +1,124 @@
+{
+  "accounting": {
+    "dataRequests": 258,
+    "documentDeletes": 34,
+    "documentReads": 204,
+    "documentWrites": 34,
+    "httpRequests": 265,
+    "managementRequests": 7,
+    "uploadedBytes": 34603008
+  },
+  "boundSources": [
+    "tools/compat-broad/fs-request-bytes-boundary/request_bytes_compiler.py",
+    "tools/compat-broad/fs-request-bytes-boundary/request_bytes_collector.py",
+    "tools/compat-broad/fs-request-bytes-boundary/request_bytes_campaign.py",
+    "tools/compat-broad/fs-request-bytes-boundary/request_bytes_local_transport.py",
+    "tools/compat-broad/fs-request-bytes-boundary/request_bytes_remote_transport.py",
+    "tools/compat-broad/fs-request-bytes-boundary/request_bytes_https_worker.py",
+    "tools/compat-broad/fs-request-bytes-boundary/request_bytes_process_exchange.py",
+    "tools/compat-broad/fs-request-bytes-boundary/request_bytes_preflight.py",
+    "tools/compat-broad/fs-write-txn/credential_prep.py",
+    "tools/compat-broad/batch_adapter.py",
+    "tools/compat-broad/batch_wire.py",
+    "tools/compat-broad/batch_contract.py"
+  ],
+  "budget": {
+    "budgetBasis": "maxima cover every probe being accepted; expectedWrites and expectedDeletes are the forecast under the expected outcome and bind nothing",
+    "expectedDeletes": 34,
+    "expectedWrites": 34,
+    "maxAccounts": 1,
+    "maxConcurrency": 1,
+    "maxDataRequests": 258,
+    "maxDeletes": 51,
+    "maxDistinctResources": 51,
+    "maxDocuments": 51,
+    "maxDurationSeconds": 1150,
+    "maxHttpRequests": 265,
+    "maxInFlightRequests": 1,
+    "maxManagementRequests": 7,
+    "maxPeakLiveDocuments": 17,
+    "maxReads": 204,
+    "maxRequestBytes": 11534337,
+    "maxResponseBytes": 2097152,
+    "maxRuns": 1,
+    "maxWrites": 51,
+    "observationWindowSeconds": 600,
+    "perRequestTimeoutSeconds": 60.0,
+    "recoveryWindow": {
+      "authority": "read-only unless the same run holds a conditional-creation proof and a matching version-bound ownership read",
+      "exitCondition": "typed NOT_FOUND for every one of the 51 owned resources",
+      "onExhaustion": "stop, leave the remaining resources recorded as unresolved, and escalate to the owner; never widen the scope or retry a Commit",
+      "reserveDeletes": 51,
+      "reserveReads": 102,
+      "reserveSeconds": 550,
+      "trigger": "any probe that reaches an observation failure, an uncertain Commit or an interrupted run"
+    },
+    "schedulingReservation": {
+      "basis": "Computed by calling shared_gate's own charging helpers on this campaign's schedule, so a Gate change that alters the charge fails this artifact's tests rather than the campaign's admission.",
+      "boundaryCommitSeconds": 60.0,
+      "chargedBy": "shared_gate",
+      "enforcement": "smallRequestSeconds is the 3.0-second Gate reservation for a small read or delete. The enforced transport cap is 2.5 seconds total, including plan preparation, worker startup and network exchange; the runner uses a conservative pre-dispatch slot and clamps each phase deadline before dispatch. Boundary Commits keep the 60-second transport deadline, which the Gate's ceiling check requires them to reserve.",
+      "gateWallCapSeconds": 1200,
+      "intervalSeconds": 0.25,
+      "observationCommitSlots": 3,
+      "observationSeconds": 512.25,
+      "observationSmallSlots": 102,
+      "recoverySeconds": 497.25,
+      "recoverySlots": 153,
+      "smallRequestSeconds": 3.0,
+      "totalSeconds": 1009.5
+    },
+    "smallRequestTimeoutSeconds": 2.5
+  },
+  "campaignId": "FS-LIMIT-API-REQUEST-BYTES",
+  "cost": {
+    "basis": "Firestore Native published unit prices; a planning bound, not a billing record.",
+    "estimatedCostUsd": 0.00019,
+    "hardCostCeilingUsd": 0.5,
+    "maximumCostUsd": 0.000224,
+    "networkCostUsd": 0.0,
+    "networkNote": "About 33 MiB is uploaded across the three Commits and under 1 MiB is returned. Ingress is not billed and the returned volume is negligible, so the network component of this campaign is zero to the published precision.",
+    "unitPricesUsd": {
+      "documentDelete": 2e-07,
+      "documentRead": 6e-07,
+      "documentWrite": 1.8e-06
+    }
+  },
+  "maximumUsage": {
+    "basis": "every probe accepted, which is the outcome the campaign exists to detect",
+    "dataRequests": 258,
+    "distinctResources": 51,
+    "documentDeletes": 51,
+    "documentReads": 204,
+    "documentWrites": 51,
+    "httpRequests": 265,
+    "managementRequests": 7,
+    "peakLiveDocuments": 17,
+    "uploadedBytes": 34603008
+  },
+  "note": "The local shadow is data-only; production adds seven separately charged management requests. Request-count, document, cost and execution windows remain independently bounded. The strict REST Commit body ceiling is scoped to the 11 MiB adjacent-pair campaign; the general catalog maximum remains 10 MiB.",
+  "schema": "fs-request-bytes-budget-v1",
+  "transportDeadline": {
+    "consequenceIfMissed": "The receipt is incomplete, the Commit is uncertain, and the run holds no conditional-creation proof. The version-bound delete is then a zero-wire skip by design, so cleanup detects the residue as `cleanup-not-absent` but cannot remove it: up to 17 documents stay in the project pending manual owner action.",
+    "covers": "connection setup, TLS, the request upload, server processing and the bounded response read",
+    "derivation": {
+      "assumedSustainedBitsPerSecond": 5000000,
+      "connectionSetupSeconds": 1.5,
+      "derivedRequirementSeconds": 28.455,
+      "marginNote": "The published ceiling is that requirement with roughly a 2x margin.",
+      "responseReadSeconds": 0.5,
+      "serverProcessingSeconds": 8.0,
+      "uploadBits": 92274696,
+      "uploadSeconds": 18.455
+    },
+    "detection": "Detected, never silent. The absence proofs are only recorded on a typed NOT_FOUND, so an unremovable residue fails the run rather than passing it.",
+    "enforcedBy": [
+      "request_bytes_remote_transport.TIMEOUT, rejecting any larger timeout argument",
+      "request_bytes_https_worker, re-checking the same ceiling independently"
+    ],
+    "nonUploadReserveSeconds": 10.0,
+    "ownerAction": "Run from a link that sustains the rate above. If a probe times out or cleanup cannot complete, the owner removes the residue under the recorded owned scope; ownership remains retained and fail-closed, and the campaign never retries a Commit to compensate.",
+    "perRequestSeconds": 60.0,
+    "slowestUsableUpstreamBitsPerSecond": 1845494
+  }
+}

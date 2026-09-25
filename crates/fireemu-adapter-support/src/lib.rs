@@ -5,4 +5,5 @@
 
 pub mod api_error;
 pub mod body;
+pub mod entropy;
 pub mod secret;

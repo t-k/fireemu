@@ -1,0 +1,132 @@
+{
+  "schemaVersion": 1,
+  "scope": "local-sdk-harness",
+  "sdkVersions": {
+    "firebase": "12.18.0",
+    "firebase-admin": "14.3.0",
+    "firebase-functions": "7.3.2",
+    "@firebase/rules-unit-testing": "5.0.2"
+  },
+  "production": "unobserved",
+  "scenarios": [
+    {
+      "id": "FS-LISTEN-SDK.node-pending-auth-switch",
+      "runner": "pending-switch.mjs",
+      "transport": "node-grpc",
+      "obligations": [
+        "offline cache metadata",
+        "pending write promise remains distinguishable",
+        "Auth A to B switch terminates the former listener",
+        "unsubscribe and terminal callback silence",
+        "A and B Rules authorization remains isolated",
+        "reconnect control resolves a B write"
+      ]
+    },
+    {
+      "id": "FS-LISTEN-SDK.browser-webchannel-reconnect",
+      "runner": "web/listen-reconnect.html",
+      "transport": "browser-webchannel",
+      "obligations": [
+        "initial and pending snapshot ordering",
+        "WebChannel disable and enable network reconnect",
+        "server acknowledgement clears pending metadata",
+        "unsubscribe suppresses later callbacks",
+        "sign-out denies the former user's server read"
+      ],
+      "automatedRunner": "../sdk-smoke-browser/run-browser.mjs",
+      "evidence": "spec/compatibility/fs-listen-sdk-browser-smoke-pages.json"
+    },
+    {
+      "id": "FS-LISTEN-SDK.browser-listener-lifecycle",
+      "runner": "web/listener-lifecycle.html",
+      "automatedRunner": "../sdk-smoke-browser/run-browser.mjs",
+      "transport": "browser-webchannel",
+      "evidence": "spec/compatibility/fs-listen-sdk-browser-smoke-pages.json",
+      "obligations": [
+        "unauthenticated and cross-user reads and writes are denied",
+        "one Write session per denied write",
+        "overlapping listeners on one document",
+        "route replacement leaves no callback to an unsubscribed listener",
+        "replacement listener observes the live write"
+      ]
+    },
+    {
+      "id": "FS-LISTEN-SDK.browser-webchannel-catalog",
+      "runner": "web/listen-catalog.html",
+      "automatedRunner": "../compat-broad/fs-listen-resume/listen_browser_adapter.mjs",
+      "transport": "browser-webchannel",
+      "webchannelModes": [
+        "long-polling",
+        "streaming"
+      ],
+      "evidence": "spec/compatibility/fs-listen-sdk-browser-local-shadow.json",
+      "obligations": [
+        "the fourteen frozen FS-LISTEN-SDK cases through the browser SDK build",
+        "forced long polling and streamed backchannel both exercised",
+        "WebChannel request log captured from the page",
+        "same normalized event rows as the Node receipt",
+        "document and account cleanup proven absent per mode"
+      ]
+    },
+    {
+      "id": "FS-LISTEN-SDK.listener-sequence-and-reset",
+      "runner": "conformance/src/corpus/firestore.mjs",
+      "transport": "node-grpc",
+      "obligations": [
+        "create update delete event ordering",
+        "resume observes current state",
+        "query document change ordering",
+        "RESET and stale resume token behavior"
+      ],
+      "resetControl": "crates/fireemu-adapter-grpc/tests/streams.rs"
+    },
+    {
+      "id": "AUTH-CONFIG-SDK.client-admin-policy",
+      "runner": "auth-config-sdk.mjs",
+      "transport": "firebase-auth-and-admin",
+      "obligations": [
+        "project email privacy configuration update",
+        "configuration dependent client error mapping",
+        "configuration restoration",
+        "Admin and client paths share the selected project"
+      ],
+      "adminControl": "crates/fireemu-adapter-http/tests/auth_flows.rs"
+    },
+    {
+      "id": "AUTH-CONFIG-SDK.password-policy-validation",
+      "runner": "password-policy-sdk.mjs",
+      "transport": "firebase-auth-client-sdk",
+      "obligations": [
+        "fixed local fireemu artifact and SHA-256 binding",
+        "password policy projection shape and schema version",
+        "weak and compliant password validation status",
+        "tenant selection remains explicit",
+        "local-only evidence is separated from production compatibility"
+      ]
+    },
+    {
+      "id": "AUTH-CONFIG-SDK.integrated-settings-oracle-shadow",
+      "runner": "auth-settings-sdk-oracle.mjs",
+      "transport": "firebase-auth-client-sdk-local-shadow",
+      "obligations": [
+        "duplicate email linking collision and no mutation on refusal",
+        "client/Admin permission boundary and email privacy projection",
+        "blocking selection and token forwarding principal binding",
+        "bounded signup quota simulation with complete cleanup",
+        "production and saved-reference evidence remain unobserved"
+      ]
+    },
+    {
+      "id": "AUTH-FS-CROSS.auth-switch-rules-listen",
+      "runner": "pending-switch.mjs",
+      "transport": "firebase-auth-and-firestore",
+      "obligations": [
+        "Auth token switch changes Firestore Rules principal",
+        "former user's document remains unchanged after denied write",
+        "listener lifecycle follows the Auth transition",
+        "transaction retry control remains Admin SDK covered"
+      ],
+      "transactionControl": "conformance/src/corpus/firestore.mjs"
+    }
+  ]
+}

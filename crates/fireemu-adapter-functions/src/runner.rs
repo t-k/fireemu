@@ -1111,7 +1111,7 @@ mod tests {
                 "FIREEMU_SANDBOX_PROBE".to_owned(),
                 probe.display().to_string(),
             )],
-            Duration::from_secs(20),
+            Duration::from_secs(60),
         )
         .await
         .expect("runner starts");

@@ -1,0 +1,23 @@
+{
+  "schemaVersion": 1,
+  "subjectSha256": "aaa9cf7bd198aa7ca6c9215718323539c50ff339d02ab0392f8d26ba85eaa9fb",
+  "sourceCommit": "af96e971d500c132a57a2a0ef44e7eebaf61795f",
+  "scope": "Password change through REST using fresh end-user tokens; no tenant; local strict profile and recorded production authentication/password-policy configuration; only the recorded artifact, configuration and auth-password corpus revision 1 twelve cases; approved as redacted semantic observations matching the published checks.",
+  "cases": [
+    "signup",
+    "baseline-signin",
+    "change-password",
+    "changed-token-lookup",
+    "old-password-rejected",
+    "unchanged-state",
+    "new-password-signin",
+    "new-password-lookup",
+    "changed-token-refresh",
+    "refreshed-lookup",
+    "delete",
+    "deleted-account-absent"
+  ],
+  "reviewer": "github:t-k (id:426779)",
+  "reviewedAt": "2026-09-10",
+  "decision": "approve"
+}

@@ -1,0 +1,8 @@
+Task: find existing tests that are candidates for the question.
+
+For each candidate, the finding is:
+- "claim": one sentence naming the test (its function name) and what it checks with respect to the question.
+- "path", "startLine", "endLine": where the test lives inside the given excerpt (the range should cover the test signature and the key assertion, not the whole file).
+- "evidence": the quoted lines that show the test exercises the behavior in the question.
+
+Only list tests whose body is visible in the excerpts. If the question mentions a positive control and a refusal, say in the claim which of the two the test covers.

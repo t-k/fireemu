@@ -1,0 +1,11 @@
+{
+  "kind": "query-explain-reference-evaluator-anchor-v2",
+  "evaluatorSourceCommit": "65f573286f21f69660057ca7094d48580b21778d",
+  "sourceFiles": {
+    "tools/compat-explain-reference/evaluate.py": "298f4084f3d1318c038c77cf24ef4de8b79c90f67535d2d2bfbb90212ae13742",
+    "tools/compat-explain-reference/test_evaluate.py": "6f0b4345d45501af75335fa0dc94372a7adcd259387292f540fbd8d3880382b9",
+    "docs/compatibility/query-explain-saved-reference-v2.md": "26fd87af54e289376099584d6d8a5076d03ee783bfb6caeab0850ec2eea0aa17",
+    "spec/compatibility/broad-runs/query-explain-reference-inputs-v2.json": "8393086ffcf41fb97851442229d1a69f4ab09558d654a650ce7956d2d1924469"
+  },
+  "contractDigest": "5f125f6b65502297de8029c6c108c0eae9c25c3fe0c39cacccf9646a36f7d122"
+}

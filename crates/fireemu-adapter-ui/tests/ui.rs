@@ -44,7 +44,13 @@ fn state_with(app_check: Option<Arc<AppCheckState>>) -> Arc<UiState> {
     let clock = Arc::new(Mutex::new(VirtualClock::new(
         LogicalInstant::from_unix_seconds(1_788_004_860),
     )));
-    let backend = Arc::new(LocalBackend::new(gateway.clone(), clock.clone(), 7));
+    // `other` is the second database the commit-stream filter tests are written against, so
+    // it is declared the way a configuration declares it: a database nothing created is
+    // refused, as production refuses one `databases.create` was never called for.
+    let backend = Arc::new(
+        LocalBackend::new(gateway.clone(), clock.clone(), 7)
+            .with_declared_databases(["other".to_owned()]),
+    );
     let auth_store = Arc::new(Mutex::new(AuthStore::new(
         "demo-app",
         SplitMix64::new(5),
@@ -70,6 +76,7 @@ fn state_with(app_check: Option<Arc<AppCheckState>>) -> Arc<UiState> {
         app_check_policy: None,
         admin_capability: None,
         token_acceptance: fireemu_core_auth::jwt::TokenAcceptance::default(),
+        control_token: None,
     });
     let control = Arc::new(ControlState {
         clock: clock.clone(),
@@ -128,6 +135,7 @@ fn state_with(app_check: Option<Arc<AppCheckState>>) -> Arc<UiState> {
             local: backend.clone(),
             gateway: Arc::new(gateway),
             rules: None,
+            control_token: None,
             app_check: None,
         }),
         backend,
@@ -145,10 +153,14 @@ fn state_with(app_check: Option<Arc<AppCheckState>>) -> Arc<UiState> {
             registry: None,
             allow_routed_projects: false,
             stateless_refresh_tokens: true,
+            idp_continuations:
+                fireemu_adapter_http::identity_toolkit::IdpContinuationPolicy::Disabled,
             query_limits:
                 fireemu_adapter_http::identity_toolkit::AuthQueryLimits::EmulatorUnbounded,
+            client_api_key: fireemu_adapter_http::identity_toolkit::ClientApiKeyPolicy::Optional,
             fake_custom_token_expiry:
                 fireemu_adapter_http::identity_toolkit::FakeCustomTokenExpiry::Ignore,
+            custom_token_trust: None,
             app_check: None,
             app_check_policy: None,
             tenancy: None,
@@ -691,7 +703,7 @@ async fn state_with_functions() -> (
         ],
         cwd: None,
         env: Vec::new(),
-        hello_timeout: std::time::Duration::from_secs(20),
+        hello_timeout: std::time::Duration::from_secs(60),
     };
     let runner = Runner::spawn_spec(&spec).await.unwrap();
     let manifest = fireemu_adapter_functions::manifest_json::parse_manifest(
@@ -820,7 +832,7 @@ async fn state_with_http_functions() -> (
             "FIREEMU_UI_TASK_PROBE".to_owned(),
             probe.display().to_string(),
         )],
-        hello_timeout: std::time::Duration::from_secs(20),
+        hello_timeout: std::time::Duration::from_secs(60),
     };
     let runner = Runner::spawn_spec(&spec).await.unwrap();
     let mut manifest = fireemu_adapter_functions::manifest_json::parse_manifest(

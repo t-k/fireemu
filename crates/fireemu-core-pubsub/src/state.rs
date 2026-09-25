@@ -18,7 +18,10 @@ use crate::message::{PubsubMessage, StoredMessage};
 use crate::name::{
     validate_project, validate_resource_id, SubscriptionName, TopicName, DELETED_TOPIC,
 };
-use crate::subscription::{PushConfig, ReceivedMessage, SubscriptionConfig, SubscriptionState};
+use crate::subscription::{
+    PushConfig, ReceivedMessage, SubscriptionConfig, SubscriptionState,
+    DEFAULT_PUSH_MINIMUM_REDELIVERY_INTERVAL_MILLIS,
+};
 
 /// Upper bound on the number of topics one project session keeps.
 pub const MAX_TOPICS: usize = 10_000;
@@ -129,6 +132,7 @@ pub struct PubSubState {
     ack_rng: SplitMix64,
     snapshot_counter: u64,
     snapshot_retained_bytes: usize,
+    push_minimum_redelivery_interval: LogicalDuration,
 }
 
 impl PubSubState {
@@ -150,7 +154,31 @@ impl PubSubState {
             ack_rng: SplitMix64::new(seed ^ 0x5053_5542_4143_4b5f),
             snapshot_counter: 0,
             snapshot_retained_bytes: 0,
+            push_minimum_redelivery_interval: LogicalDuration::from_millis(
+                DEFAULT_PUSH_MINIMUM_REDELIVERY_INTERVAL_MILLIS,
+            ),
         }
+    }
+
+    /// Sets the minimum interval kept between two push deliveries of the same message on a
+    /// subscription that has no retry policy. A negative interval is read as zero, which restores
+    /// unthrottled redelivery. Existing subscriptions adopt the new interval immediately.
+    pub fn set_push_minimum_redelivery_interval(&mut self, interval: LogicalDuration) {
+        let interval = if interval.as_nanos() < 0 {
+            LogicalDuration::ZERO
+        } else {
+            interval
+        };
+        self.push_minimum_redelivery_interval = interval;
+        for subscription in self.subscriptions.values_mut() {
+            subscription.set_push_minimum_redelivery_interval(interval);
+        }
+    }
+
+    /// The minimum push redelivery interval new subscriptions inherit.
+    #[must_use]
+    pub const fn push_minimum_redelivery_interval(&self) -> LogicalDuration {
+        self.push_minimum_redelivery_interval
     }
 
     /// The retention report of the topics, subscriptions and snapshots of the projects `owns`
@@ -446,8 +474,9 @@ impl PubSubState {
             .entry(topic_key)
             .or_default()
             .insert(key.clone());
-        self.subscriptions
-            .insert(key, SubscriptionState::new(config));
+        let mut subscription = SubscriptionState::new(config);
+        subscription.set_push_minimum_redelivery_interval(self.push_minimum_redelivery_interval);
+        self.subscriptions.insert(key, subscription);
         Ok(())
     }
 
@@ -1305,6 +1334,14 @@ impl PubSubState {
     }
 
     /// Returns every source message waiting for dead-letter destination admission.
+    ///
+    /// The emulator's retention policy for these transfers: a message whose destination refuses
+    /// admission, including a destination topic that does not exist or was deleted, stays owned by
+    /// the source subscription. It is neither delivered to the source subscriber again nor
+    /// dropped, and a later retry forwards it once the destination accepts it. A seek supersedes a
+    /// pending transfer: it rewrites the entry like any other, so the reservation is released and
+    /// a superseded retry cannot complete the replayed entry. Production semantics for a missing
+    /// dead-letter topic are not asserted here; this is the local transfer state machine.
     #[must_use]
     pub fn pending_dead_letters(&self) -> Vec<DeadLetterForward> {
         self.subscriptions
@@ -2481,5 +2518,120 @@ mod tests {
             .iter()
             .any(|g| g.id == "snapshots.retained_bytes"
                 && g.limit == Some(MAX_SNAPSHOT_RETAINED_BYTES as u64)));
+    }
+
+    /// The registry-wide minimum push redelivery interval reaches subscriptions created before
+    /// and after it is set, and a nacked push message waits exactly that interval.
+    #[test]
+    fn the_minimum_push_redelivery_interval_applies_to_existing_and_new_push_subscriptions() {
+        let mut state = PubSubState::new(42);
+        let now = LogicalInstant::from_unix_seconds(1000);
+        let interval = LogicalDuration::from_millis(250);
+        let push_config = || PushConfig {
+            push_endpoint: "http://127.0.0.1:1/push".to_owned(),
+        };
+        state
+            .create_topic(topic("demo-app", "push"), BTreeMap::new())
+            .unwrap();
+        let mut existing = sub_cfg("demo-app", "existing", "push", Filter::always());
+        existing.push_config = push_config();
+        state.create_subscription(existing).unwrap();
+
+        state.set_push_minimum_redelivery_interval(interval);
+        let mut created_after = sub_cfg("demo-app", "created-after", "push", Filter::always());
+        created_after.push_config = push_config();
+        state.create_subscription(created_after).unwrap();
+
+        state
+            .publish(&topic("demo-app", "push"), vec![data(b"hello")], now)
+            .unwrap();
+        for name in ["existing", "created-after"] {
+            let subscription = SubscriptionName::new("demo-app", name).unwrap();
+            let received = state.pull(&subscription, 1, now).unwrap();
+            state
+                .modify_ack_deadline(&subscription, &[received[0].ack_id.clone()], 0, now)
+                .unwrap();
+            assert_eq!(
+                state.next_delivery_at(&subscription).unwrap(),
+                Some(now.checked_add(interval).unwrap()),
+                "{name} must wait the configured interval"
+            );
+        }
+    }
+
+    /// The configured interval is daemon configuration, not session state: a reset keeps it.
+    #[test]
+    fn a_session_reset_keeps_the_configured_minimum_push_redelivery_interval() {
+        let mut state = PubSubState::new(42);
+        let interval = LogicalDuration::from_millis(250);
+        state.set_push_minimum_redelivery_interval(interval);
+        state.clear();
+
+        let now = LogicalInstant::from_unix_seconds(1000);
+        state
+            .create_topic(topic("demo-app", "push"), BTreeMap::new())
+            .unwrap();
+        let mut config = sub_cfg("demo-app", "after-reset", "push", Filter::always());
+        config.push_config = PushConfig {
+            push_endpoint: "http://127.0.0.1:1/push".to_owned(),
+        };
+        state.create_subscription(config).unwrap();
+        state
+            .publish(&topic("demo-app", "push"), vec![data(b"hello")], now)
+            .unwrap();
+        let subscription = SubscriptionName::new("demo-app", "after-reset").unwrap();
+        let received = state.pull(&subscription, 1, now).unwrap();
+        state
+            .modify_ack_deadline(&subscription, &[received[0].ack_id.clone()], 0, now)
+            .unwrap();
+
+        assert_eq!(
+            state.next_delivery_at(&subscription).unwrap(),
+            Some(now.checked_add(interval).unwrap())
+        );
+    }
+
+    /// An unconfigured registry redelivers a nacked push message as soon as possible, which is
+    /// what production does for a subscription without a retry policy.
+    #[test]
+    fn an_unconfigured_registry_redelivers_a_nacked_push_message_immediately() {
+        let mut state = PubSubState::new(42);
+        assert_eq!(
+            state.push_minimum_redelivery_interval(),
+            LogicalDuration::ZERO,
+            "the default must follow production"
+        );
+
+        let now = LogicalInstant::from_unix_seconds(1000);
+        state
+            .create_topic(topic("demo-app", "push"), BTreeMap::new())
+            .unwrap();
+        let mut config = sub_cfg("demo-app", "immediate", "push", Filter::always());
+        config.push_config = PushConfig {
+            push_endpoint: "http://127.0.0.1:1/push".to_owned(),
+        };
+        state.create_subscription(config).unwrap();
+        state
+            .publish(&topic("demo-app", "push"), vec![data(b"hello")], now)
+            .unwrap();
+        let subscription = SubscriptionName::new("demo-app", "immediate").unwrap();
+        let received = state.pull(&subscription, 1, now).unwrap();
+        state
+            .modify_ack_deadline(&subscription, &[received[0].ack_id.clone()], 0, now)
+            .unwrap();
+
+        assert_eq!(state.next_delivery_at(&subscription).unwrap(), Some(now));
+        assert_eq!(state.pull(&subscription, 1, now).unwrap().len(), 1);
+    }
+
+    /// A negative interval is read as zero rather than moving redelivery into the past.
+    #[test]
+    fn a_negative_minimum_push_redelivery_interval_is_read_as_zero() {
+        let mut state = PubSubState::new(42);
+        state.set_push_minimum_redelivery_interval(LogicalDuration::from_millis(-5));
+        assert_eq!(
+            state.push_minimum_redelivery_interval(),
+            LogicalDuration::ZERO
+        );
     }
 }

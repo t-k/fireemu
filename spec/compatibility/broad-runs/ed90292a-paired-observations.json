@@ -1,0 +1,3964 @@
+{
+  "kind": "runtime-fix-paired-observations-candidate",
+  "localExecutionCommit": "ed90292a067866999a308f5c9bf029e0846c17b0",
+  "source": {
+    "publicationCommit": "ab7bd698",
+    "executionCommit": "bc38f392077784509f7fbb8993d5be66c1a8be14",
+    "observerDigest": "1501aea61749d79d32238b9329f3d75370d9d500322ffab331ec0c8b3505342f",
+    "manifestDigest": "4b6d42bc5acd1a697622b25325ba67620af272d5c44f5d00982dbffe8bb8cc3f",
+    "comparisonContractDigest": "ec0ef13fc77b6edf0f4940f472267b91b117707b36aac15a00c0a6aea96e89dc",
+    "fileSha256": {
+      "bc38f392-paired-observations.json": "a7809362c9c3a69d6a03a4f68e69aea0de34e29771f5bd36b2053359c609114c",
+      "bc38f392-execution-result.json": "5997e5ecc9f3da0addeed6b88c290cfc97c496e317c7625a9175232105953b88"
+    },
+    "originalComparisonCounts": {
+      "match": 35,
+      "mismatch": 11
+    },
+    "limitation": "Uses pinned published normalized observations; previously removed token bytes and absolute times are not recovered. No new production execution."
+  },
+  "localObserverSha256": "3a7001525e2580ab6e0654794fd9c3ab0556d06238163960c700f23816a8c0d7",
+  "localManifestDigest": "6f0fa73a8fe494709b883c440266c721157d8ec44252fb81c331f2a10642d534",
+  "comparisonContractDigest": "467df4b222eec0b35a800c5cddc434413711c26400668cd4fddb57bdfed09cea",
+  "newProductionExecuted": false,
+  "rows": [
+    {
+      "id": "firestore:broad/refusal-preserves-state#read-normal",
+      "principal": "administrator",
+      "operation": {
+        "path": "/v1/documents/broad/refusal-preserves-state/broad/one",
+        "query": [],
+        "method": "GET",
+        "body": null,
+        "service": "firestore"
+      },
+      "originalComparison": "match",
+      "comparison": "match",
+      "savedProductionBeforeNewTimeNormalization": {
+        "httpStatus": 200,
+        "mediaType": "application/json",
+        "body": {
+          "name": "documents/broad/refusal-preserves-state/broad/one",
+          "fields": {
+            "n": {
+              "integerValue": "8"
+            }
+          },
+          "createTime": {
+            "$absoluteTime": true,
+            "jsonType": "string",
+            "formatValid": true
+          },
+          "updateTime": {
+            "$absoluteTime": true,
+            "jsonType": "string",
+            "formatValid": true
+          }
+        }
+      },
+      "local": {
+        "httpStatus": 200,
+        "mediaType": "application/json",
+        "body": {
+          "createTime": {
+            "$absoluteTime": true,
+            "jsonType": "string",
+            "formatValid": true
+          },
+          "fields": {
+            "n": {
+              "integerValue": "8"
+            }
+          },
+          "name": "documents/broad/refusal-preserves-state/broad/one",
+          "updateTime": {
+            "$absoluteTime": true,
+            "jsonType": "string",
+            "formatValid": true
+          }
+        }
+      }
+    },
+    {
+      "id": "firestore:broad/refusal-preserves-state#refused-overwrite",
+      "principal": "administrator",
+      "operation": {
+        "path": "/v1/documents/broad/refusal-preserves-state/broad/one",
+        "query": [
+          [
+            "currentDocument.exists",
+            "false"
+          ]
+        ],
+        "method": "PATCH",
+        "body": {
+          "fields": {
+            "n": {
+              "integerValue": "9"
+            }
+          }
+        },
+        "service": "firestore"
+      },
+      "originalComparison": "match",
+      "comparison": "match",
+      "savedProductionBeforeNewTimeNormalization": {
+        "httpStatus": 409,
+        "mediaType": "application/json",
+        "body": {
+          "error": {
+            "code": 409,
+            "message": {
+              "$errorProse": true,
+              "machineCode": null,
+              "empty": false
+            },
+            "status": "ALREADY_EXISTS"
+          }
+        }
+      },
+      "local": {
+        "httpStatus": 409,
+        "mediaType": "application/json",
+        "body": {
+          "error": {
+            "code": 409,
+            "message": {
+              "$errorProse": true,
+              "machineCode": null,
+              "empty": false
+            },
+            "status": "ALREADY_EXISTS"
+          }
+        }
+      }
+    },
+    {
+      "id": "firestore:broad/refusal-preserves-state#read-after-refusal",
+      "principal": "administrator",
+      "operation": {
+        "path": "/v1/documents/broad/refusal-preserves-state/broad/one",
+        "query": [],
+        "method": "GET",
+        "body": null,
+        "service": "firestore"
+      },
+      "originalComparison": "match",
+      "comparison": "match",
+      "savedProductionBeforeNewTimeNormalization": {
+        "httpStatus": 200,
+        "mediaType": "application/json",
+        "body": {
+          "name": "documents/broad/refusal-preserves-state/broad/one",
+          "fields": {
+            "n": {
+              "integerValue": "8"
+            }
+          },
+          "createTime": {
+            "$absoluteTime": true,
+            "jsonType": "string",
+            "formatValid": true
+          },
+          "updateTime": {
+            "$absoluteTime": true,
+            "jsonType": "string",
+            "formatValid": true
+          }
+        }
+      },
+      "local": {
+        "httpStatus": 200,
+        "mediaType": "application/json",
+        "body": {
+          "createTime": {
+            "$absoluteTime": true,
+            "jsonType": "string",
+            "formatValid": true
+          },
+          "fields": {
+            "n": {
+              "integerValue": "8"
+            }
+          },
+          "name": "documents/broad/refusal-preserves-state/broad/one",
+          "updateTime": {
+            "$absoluteTime": true,
+            "jsonType": "string",
+            "formatValid": true
+          }
+        }
+      }
+    },
+    {
+      "id": "firestore:broad/refusal-preserves-state#empty-commit",
+      "principal": "administrator",
+      "operation": {
+        "path": "/v1/projects/fireemu-35fe6/databases/(default)/documents:commit",
+        "query": [],
+        "method": "POST",
+        "body": {
+          "writes": []
+        },
+        "service": "firestore"
+      },
+      "originalComparison": "match",
+      "comparison": "match",
+      "savedProductionBeforeNewTimeNormalization": {
+        "httpStatus": 200,
+        "mediaType": "application/json",
+        "body": {}
+      },
+      "local": {
+        "httpStatus": 200,
+        "mediaType": "application/json",
+        "body": {}
+      }
+    },
+    {
+      "id": "firestore:broad/refusal-preserves-state#zero-limit",
+      "principal": "administrator",
+      "operation": {
+        "path": "/v1/documents/broad/refusal-preserves-state:runQuery",
+        "query": [],
+        "method": "POST",
+        "body": {
+          "structuredQuery": {
+            "from": [
+              {
+                "collectionId": "broad"
+              }
+            ],
+            "limit": 0
+          }
+        },
+        "service": "firestore"
+      },
+      "originalComparison": "match",
+      "comparison": "match",
+      "savedProductionBeforeNewTimeNormalization": {
+        "httpStatus": 200,
+        "mediaType": "application/json",
+        "body": [
+          {
+            "readTime": {
+              "$absoluteTime": true,
+              "jsonType": "string",
+              "formatValid": true
+            }
+          }
+        ]
+      },
+      "local": {
+        "httpStatus": 200,
+        "mediaType": "application/json",
+        "body": [
+          {
+            "readTime": {
+              "$absoluteTime": true,
+              "jsonType": "string",
+              "formatValid": true
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": "firestore:broad/refusal-preserves-state#negative-limit",
+      "principal": "administrator",
+      "operation": {
+        "path": "/v1/documents/broad/refusal-preserves-state:runQuery",
+        "query": [],
+        "method": "POST",
+        "body": {
+          "structuredQuery": {
+            "from": [
+              {
+                "collectionId": "broad"
+              }
+            ],
+            "limit": -1
+          }
+        },
+        "service": "firestore"
+      },
+      "originalComparison": "mismatch",
+      "comparison": "match",
+      "savedProductionBeforeNewTimeNormalization": {
+        "httpStatus": 400,
+        "mediaType": "application/json",
+        "body": [
+          {
+            "error": {
+              "code": 400,
+              "message": {
+                "$errorProse": true,
+                "machineCode": null,
+                "empty": false
+              },
+              "status": "INVALID_ARGUMENT"
+            }
+          }
+        ]
+      },
+      "local": {
+        "httpStatus": 400,
+        "mediaType": "application/json",
+        "body": [
+          {
+            "error": {
+              "code": 400,
+              "message": {
+                "$errorProse": true,
+                "machineCode": null,
+                "empty": false
+              },
+              "status": "INVALID_ARGUMENT"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": "firestore:broad/refusal-preserves-state#read-after-query-refusal",
+      "principal": "administrator",
+      "operation": {
+        "path": "/v1/documents/broad/refusal-preserves-state/broad/one",
+        "query": [],
+        "method": "GET",
+        "body": null,
+        "service": "firestore"
+      },
+      "originalComparison": "match",
+      "comparison": "match",
+      "savedProductionBeforeNewTimeNormalization": {
+        "httpStatus": 200,
+        "mediaType": "application/json",
+        "body": {
+          "name": "documents/broad/refusal-preserves-state/broad/one",
+          "fields": {
+            "n": {
+              "integerValue": "8"
+            }
+          },
+          "createTime": {
+            "$absoluteTime": true,
+            "jsonType": "string",
+            "formatValid": true
+          },
+          "updateTime": {
+            "$absoluteTime": true,
+            "jsonType": "string",
+            "formatValid": true
+          }
+        }
+      },
+      "local": {
+        "httpStatus": 200,
+        "mediaType": "application/json",
+        "body": {
+          "createTime": {
+            "$absoluteTime": true,
+            "jsonType": "string",
+            "formatValid": true
+          },
+          "fields": {
+            "n": {
+              "integerValue": "8"
+            }
+          },
+          "name": "documents/broad/refusal-preserves-state/broad/one",
+          "updateTime": {
+            "$absoluteTime": true,
+            "jsonType": "string",
+            "formatValid": true
+          }
+        }
+      }
+    },
+    {
+      "id": "firestore:writes/transforms#server-timestamp-and-increments",
+      "principal": "administrator",
+      "operation": {
+        "path": "/v1/projects/fireemu-35fe6/databases/(default)/documents:commit",
+        "query": [],
+        "method": "POST",
+        "body": {
+          "writes": [
+            {
+              "update": {
+                "name": "documents/writes/transforms/tf/doc",
+                "fields": {}
+              },
+              "updateMask": {
+                "fieldPaths": []
+              },
+              "updateTransforms": [
+                {
+                  "fieldPath": "at",
+                  "setToServerValue": "REQUEST_TIME"
+                },
+                {
+                  "fieldPath": "n",
+                  "increment": {
+                    "integerValue": "2"
+                  }
+                },
+                {
+                  "fieldPath": "d",
+                  "increment": {
+                    "integerValue": "1"
+                  }
+                },
+                {
+                  "fieldPath": "s",
+                  "increment": {
+                    "integerValue": "1"
+                  }
+                },
+                {
+                  "fieldPath": "missing",
+                  "increment": {
+                    "doubleValue": 0.5
+                  }
+                },
+                {
+                  "fieldPath": "m.inner",
+                  "increment": {
+                    "integerValue": "-10"
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "service": "firestore"
+      },
+      "originalComparison": "match",
+      "comparison": "match",
+      "savedProductionBeforeNewTimeNormalization": {
+        "httpStatus": 200,
+        "mediaType": "application/json",
+        "body": {
+          "writeResults": [
+            {
+              "updateTime": {
+                "$absoluteTime": true,
+                "jsonType": "string",
+                "formatValid": true
+              },
+              "transformResults": [
+                {
+                  "timestampValue": {
+                    "$absoluteTime": true,
+                    "jsonType": "string",
+                    "formatValid": true
+                  }
+                },
+                {
+                  "integerValue": "3"
+                },
+                {
+                  "doubleValue": 2.5
+                },
+                {
+                  "integerValue": "1"
+                },
+                {
+                  "doubleValue": 0.5
+                },
+                {
+                  "integerValue": "-5"
+                }
+              ]
+            }
+          ],
+          "commitTime": {
+            "$absoluteTime": true,
+            "jsonType": "string",
+            "formatValid": true
+          }
+        }
+      },
+      "local": {
+        "httpStatus": 200,
+        "mediaType": "application/json",
+        "body": {
+          "commitTime": {
+            "$absoluteTime": true,
+            "jsonType": "string",
+            "formatValid": true
+          },
+          "writeResults": [
+            {
+              "transformResults": [
+                {
+                  "timestampValue": {
+                    "$absoluteTime": true,
+                    "jsonType": "string",
+                    "formatValid": true
+                  }
+                },
+                {
+                  "integerValue": "3"
+                },
+                {
+                  "doubleValue": 2.5
+                },
+                {
+                  "integerValue": "1"
+                },
+                {
+                  "doubleValue": 0.5
+                },
+                {
+                  "integerValue": "-5"
+                }
+              ],
+              "updateTime": {
+                "$absoluteTime": true,
+                "jsonType": "string",
+                "formatValid": true
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "firestore:writes/transforms#read-after-increments",
+      "principal": "administrator",
+      "operation": {
+        "path": "/v1/documents/writes/transforms/tf/doc",
+        "query": [],
+        "method": "GET",
+        "body": null,
+        "service": "firestore"
+      },
+      "originalComparison": "match",
+      "comparison": "match",
+      "savedProductionBeforeNewTimeNormalization": {
+        "httpStatus": 200,
+        "mediaType": "application/json",
+        "body": {
+          "name": "documents/writes/transforms/tf/doc",
+          "fields": {
+            "missing": {
+              "doubleValue": 0.5
+            },
+            "n": {
+              "integerValue": "3"
+            },
+            "m": {
+              "mapValue": {
+                "fields": {
+                  "inner": {
+                    "integerValue": "-5"
+                  }
+                }
+              }
+            },
+            "s": {
+              "integerValue": "1"
+            },
+            "d": {
+              "doubleValue": 2.5
+            },
+            "tags": {
+              "arrayValue": {
+                "values": [
+                  {
+                    "stringValue": "a"
+                  },
+                  {
+                    "integerValue": "1"
+                  }
+                ]
+              }
+            },
+            "at": {
+              "timestampValue": {
+                "$absoluteTime": true,
+                "jsonType": "string",
+                "formatValid": true
+              }
+            }
+          },
+          "createTime": {
+            "$absoluteTime": true,
+            "jsonType": "string",
+            "formatValid": true
+          },
+          "updateTime": {
+            "$absoluteTime": true,
+            "jsonType": "string",
+            "formatValid": true
+          }
+        }
+      },
+      "local": {
+        "httpStatus": 200,
+        "mediaType": "application/json",
+        "body": {
+          "createTime": {
+            "$absoluteTime": true,
+            "jsonType": "string",
+            "formatValid": true
+          },
+          "fields": {
+            "at": {
+              "timestampValue": {
+                "$absoluteTime": true,
+                "jsonType": "string",
+                "formatValid": true
+              }
+            },
+            "d": {
+              "doubleValue": 2.5
+            },
+            "m": {
+              "mapValue": {
+                "fields": {
+                  "inner": {
+                    "integerValue": "-5"
+                  }
+                }
+              }
+            },
+            "missing": {
+              "doubleValue": 0.5
+            },
+            "n": {
+              "integerValue": "3"
+            },
+            "s": {
+              "integerValue": "1"
+            },
+            "tags": {
+              "arrayValue": {
+                "values": [
+                  {
+                    "stringValue": "a"
+                  },
+                  {
+                    "integerValue": "1"
+                  }
+                ]
+              }
+            }
+          },
+          "name": "documents/writes/transforms/tf/doc",
+          "updateTime": {
+            "$absoluteTime": true,
+            "jsonType": "string",
+            "formatValid": true
+          }
+        }
+      }
+    },
+    {
+      "id": "firestore:writes/transforms#maximum-and-minimum-invalid-field-path",
+      "principal": "administrator",
+      "operation": {
+        "path": "/v1/projects/fireemu-35fe6/databases/(default)/documents:commit",
+        "query": [],
+        "method": "POST",
+        "body": {
+          "writes": [
+            {
+              "update": {
+                "name": "documents/writes/transforms/tf/doc",
+                "fields": {}
+              },
+              "updateMask": {
+                "fieldPaths": []
+              },
+              "updateTransforms": [
+                {
+                  "fieldPath": "n",
+                  "maximum": {
+                    "integerValue": "100"
+                  }
+                },
+                {
+                  "fieldPath": "d",
+                  "minimum": {
+                    "doubleValue": -1
+                  }
+                },
+                {
+                  "fieldPath": "s",
+                  "maximum": {
+                    "integerValue": "7"
+                  }
+                },
+                {
+                  "fieldPath": "max-missing",
+                  "maximum": {
+                    "integerValue": "3"
+                  }
+                },
+                {
+                  "fieldPath": "n",
+                  "minimum": {
+                    "doubleValue": 50.5
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "service": "firestore"
+      },
+      "originalComparison": "match",
+      "comparison": "match",
+      "savedProductionBeforeNewTimeNormalization": {
+        "httpStatus": 400,
+        "mediaType": "application/json",
+        "body": {
+          "error": {
+            "code": 400,
+            "message": {
+              "$errorProse": true,
+              "machineCode": null,
+              "empty": false
+            },
+            "status": "INVALID_ARGUMENT"
+          }
+        }
+      },
+      "local": {
+        "httpStatus": 400,
+        "mediaType": "application/json",
+        "body": {
+          "error": {
+            "code": 400,
+            "message": {
+              "$errorProse": true,
+              "machineCode": null,
+              "empty": false
+            },
+            "status": "INVALID_ARGUMENT"
+          }
+        }
+      }
+    },
+    {
+      "id": "firestore:writes/transforms#read-after-invalid-max-min",
+      "principal": "administrator",
+      "operation": {
+        "path": "/v1/documents/writes/transforms/tf/doc",
+        "query": [],
+        "method": "GET",
+        "body": null,
+        "service": "firestore"
+      },
+      "originalComparison": "match",
+      "comparison": "match",
+      "savedProductionBeforeNewTimeNormalization": {
+        "httpStatus": 200,
+        "mediaType": "application/json",
+        "body": {
+          "name": "documents/writes/transforms/tf/doc",
+          "fields": {
+            "at": {
+              "timestampValue": {
+                "$absoluteTime": true,
+                "jsonType": "string",
+                "formatValid": true
+              }
+            },
+            "tags": {
+              "arrayValue": {
+                "values": [
+                  {
+                    "stringValue": "a"
+                  },
+                  {
+                    "integerValue": "1"
+                  }
+                ]
+              }
+            },
+            "missing": {
+              "doubleValue": 0.5
+            },
+            "n": {
+              "integerValue": "3"
+            },
+            "m": {
+              "mapValue": {
+                "fields": {
+                  "inner": {
+                    "integerValue": "-5"
+                  }
+                }
+              }
+            },
+            "s": {
+              "integerValue": "1"
+            },
+            "d": {
+              "doubleValue": 2.5
+            }
+          },
+          "createTime": {
+            "$absoluteTime": true,
+            "jsonType": "string",
+            "formatValid": true
+          },
+          "updateTime": {
+            "$absoluteTime": true,
+            "jsonType": "string",
+            "formatValid": true
+          }
+        }
+      },
+      "local": {
+        "httpStatus": 200,
+        "mediaType": "application/json",
+        "body": {
+          "createTime": {
+            "$absoluteTime": true,
+            "jsonType": "string",
+            "formatValid": true
+          },
+          "fields": {
+            "at": {
+              "timestampValue": {
+                "$absoluteTime": true,
+                "jsonType": "string",
+                "formatValid": true
+              }
+            },
+            "d": {
+              "doubleValue": 2.5
+            },
+            "m": {
+              "mapValue": {
+                "fields": {
+                  "inner": {
+                    "integerValue": "-5"
+                  }
+                }
+              }
+            },
+            "missing": {
+              "doubleValue": 0.5
+            },
+            "n": {
+              "integerValue": "3"
+            },
+            "s": {
+              "integerValue": "1"
+            },
+            "tags": {
+              "arrayValue": {
+                "values": [
+                  {
+                    "stringValue": "a"
+                  },
+                  {
+                    "integerValue": "1"
+                  }
+                ]
+              }
+            }
+          },
+          "name": "documents/writes/transforms/tf/doc",
+          "updateTime": {
+            "$absoluteTime": true,
+            "jsonType": "string",
+            "formatValid": true
+          }
+        }
+      }
+    },
+    {
+      "id": "firestore:writes/transforms#maximum-and-minimum",
+      "principal": "administrator",
+      "operation": {
+        "path": "/v1/projects/fireemu-35fe6/databases/(default)/documents:commit",
+        "query": [],
+        "method": "POST",
+        "body": {
+          "writes": [
+            {
+              "update": {
+                "name": "documents/writes/transforms/tf/extrema",
+                "fields": {
+                  "finite": {
+                    "integerValue": "5"
+                  },
+                  "nan": {
+                    "doubleValue": "NaN"
+                  },
+                  "equal": {
+                    "integerValue": "5"
+                  },
+                  "zero": {
+                    "doubleValue": 0
+                  },
+                  "text": {
+                    "stringValue": "text"
+                  }
+                }
+              },
+              "updateTransforms": [
+                {
+                  "fieldPath": "finite",
+                  "maximum": {
+                    "doubleValue": "NaN"
+                  }
+                },
+                {
+                  "fieldPath": "nan",
+                  "maximum": {
+                    "integerValue": "5"
+                  }
+                },
+                {
+                  "fieldPath": "equal",
+                  "maximum": {
+                    "doubleValue": 5
+                  }
+                },
+                {
+                  "fieldPath": "zero",
+                  "minimum": {
+                    "integerValue": "0"
+                  }
+                },
+                {
+                  "fieldPath": "text",
+                  "maximum": {
+                    "integerValue": "7"
+                  }
+                },
+                {
+                  "fieldPath": "max_missing",
+                  "maximum": {
+                    "integerValue": "3"
+                  }
+                },
+                {
+                  "fieldPath": "min_missing",
+                  "minimum": {
+                    "doubleValue": -1
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "service": "firestore"
+      },
+      "originalComparison": "match",
+      "comparison": "match",
+      "savedProductionBeforeNewTimeNormalization": {
+        "httpStatus": 200,
+        "mediaType": "application/json",
+        "body": {
+          "writeResults": [
+            {
+              "updateTime": {
+                "$absoluteTime": true,
+                "jsonType": "string",
+                "formatValid": true
+              },
+              "transformResults": [
+                {
+                  "doubleValue": "NaN"
+                },
+                {
+                  "doubleValue": "NaN"
+                },
+                {
+                  "integerValue": "5"
+                },
+                {
+                  "doubleValue": 0
+                },
+                {
+                  "integerValue": "7"
+                },
+                {
+                  "integerValue": "3"
+                },
+                {
+                  "doubleValue": -1
+                }
+              ]
+            }
+          ],
+          "commitTime": {
+            "$absoluteTime": true,
+            "jsonType": "string",
+            "formatValid": true
+          }
+        }
+      },
+      "local": {
+        "httpStatus": 200,
+        "mediaType": "application/json",
+        "body": {
+          "commitTime": {
+            "$absoluteTime": true,
+            "jsonType": "string",
+            "formatValid": true
+          },
+          "writeResults": [
+            {
+              "transformResults": [
+                {
+                  "doubleValue": "NaN"
+                },
+                {
+                  "doubleValue": "NaN"
+                },
+                {
+                  "integerValue": "5"
+                },
+                {
+                  "doubleValue": 0.0
+                },
+                {
+                  "integerValue": "7"
+                },
+                {
+                  "integerValue": "3"
+                },
+                {
+                  "doubleValue": -1.0
+                }
+              ],
+              "updateTime": {
+                "$absoluteTime": true,
+                "jsonType": "string",
+                "formatValid": true
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "firestore:writes/transforms#read-after-max-min",
+      "principal": "administrator",
+      "operation": {
+        "path": "/v1/documents/writes/transforms/tf/extrema",
+        "query": [],
+        "method": "GET",
+        "body": null,
+        "service": "firestore"
+      },
+      "originalComparison": "match",
+      "comparison": "match",
+      "savedProductionBeforeNewTimeNormalization": {
+        "httpStatus": 200,
+        "mediaType": "application/json",
+        "body": {
+          "name": "documents/writes/transforms/tf/extrema",
+          "fields": {
+            "equal": {
+              "integerValue": "5"
+            },
+            "text": {
+              "integerValue": "7"
+            },
+            "zero": {
+              "doubleValue": 0
+            },
+            "min_missing": {
+              "doubleValue": -1
+            },
+            "finite": {
+              "doubleValue": "NaN"
+            },
+            "max_missing": {
+              "integerValue": "3"
+            },
+            "nan": {
+              "doubleValue": "NaN"
+            }
+          },
+          "createTime": {
+            "$absoluteTime": true,
+            "jsonType": "string",
+            "formatValid": true
+          },
+          "updateTime": {
+            "$absoluteTime": true,
+            "jsonType": "string",
+            "formatValid": true
+          }
+        }
+      },
+      "local": {
+        "httpStatus": 200,
+        "mediaType": "application/json",
+        "body": {
+          "createTime": {
+            "$absoluteTime": true,
+            "jsonType": "string",
+            "formatValid": true
+          },
+          "fields": {
+            "equal": {
+              "integerValue": "5"
+            },
+            "finite": {
+              "doubleValue": "NaN"
+            },
+            "max_missing": {
+              "integerValue": "3"
+            },
+            "min_missing": {
+              "doubleValue": -1.0
+            },
+            "nan": {
+              "doubleValue": "NaN"
+            },
+            "text": {
+              "integerValue": "7"
+            },
+            "zero": {
+              "doubleValue": 0.0
+            }
+          },
+          "name": "documents/writes/transforms/tf/extrema",
+          "updateTime": {
+            "$absoluteTime": true,
+            "jsonType": "string",
+            "formatValid": true
+          }
+        }
+      }
+    },
+    {
+      "id": "firestore:writes/transforms#array-transforms",
+      "principal": "administrator",
+      "operation": {
+        "path": "/v1/projects/fireemu-35fe6/databases/(default)/documents:commit",
+        "query": [],
+        "method": "POST",
+        "body": {
+          "writes": [
+            {
+              "update": {
+                "name": "documents/writes/transforms/tf/doc",
+                "fields": {}
+              },
+              "updateMask": {
+                "fieldPaths": []
+              },
+              "updateTransforms": [
+                {
+                  "fieldPath": "tags",
+                  "appendMissingElements": {
+                    "values": [
+                      {
+                        "stringValue": "a"
+                      },
+                      {
+                        "stringValue": "b"
+                      },
+                      {
+                        "doubleValue": 1
+                      },
+                      {
+                        "integerValue": "1"
+                      }
+                    ]
+                  }
+                },
+                {
+                  "fieldPath": "s",
+                  "appendMissingElements": {
+                    "values": [
+                      {
+                        "stringValue": "x"
+                      }
+                    ]
+                  }
+                },
+                {
+                  "fieldPath": "tags",
+                  "removeAllFromArray": {
+                    "values": [
+                      {
+                        "integerValue": "1"
+                      }
+                    ]
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "service": "firestore"
+      },
+      "originalComparison": "match",
+      "comparison": "match",
+      "savedProductionBeforeNewTimeNormalization": {
+        "httpStatus": 200,
+        "mediaType": "application/json",
+        "body": {
+          "writeResults": [
+            {
+              "updateTime": {
+                "$absoluteTime": true,
+                "jsonType": "string",
+                "formatValid": true
+              },
+              "transformResults": [
+                {
+                  "nullValue": null
+                },
+                {
+                  "nullValue": null
+                },
+                {
+                  "nullValue": null
+                }
+              ]
+            }
+          ],
+          "commitTime": {
+            "$absoluteTime": true,
+            "jsonType": "string",
+            "formatValid": true
+          }
+        }
+      },
+      "local": {
+        "httpStatus": 200,
+        "mediaType": "application/json",
+        "body": {
+          "commitTime": {
+            "$absoluteTime": true,
+            "jsonType": "string",
+            "formatValid": true
+          },
+          "writeResults": [
+            {
+              "transformResults": [
+                {
+                  "nullValue": null
+                },
+                {
+                  "nullValue": null
+                },
+                {
+                  "nullValue": null
+                }
+              ],
+              "updateTime": {
+                "$absoluteTime": true,
+                "jsonType": "string",
+                "formatValid": true
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "firestore:writes/transforms#read-after-array-transforms",
+      "principal": "administrator",
+      "operation": {
+        "path": "/v1/documents/writes/transforms/tf/doc",
+        "query": [],
+        "method": "GET",
+        "body": null,
+        "service": "firestore"
+      },
+      "originalComparison": "match",
+      "comparison": "match",
+      "savedProductionBeforeNewTimeNormalization": {
+        "httpStatus": 200,
+        "mediaType": "application/json",
+        "body": {
+          "name": "documents/writes/transforms/tf/doc",
+          "fields": {
+            "s": {
+              "arrayValue": {
+                "values": [
+                  {
+                    "stringValue": "x"
+                  }
+                ]
+              }
+            },
+            "at": {
+              "timestampValue": {
+                "$absoluteTime": true,
+                "jsonType": "string",
+                "formatValid": true
+              }
+            },
+            "d": {
+              "doubleValue": 2.5
+            },
+            "m": {
+              "mapValue": {
+                "fields": {
+                  "inner": {
+                    "integerValue": "-5"
+                  }
+                }
+              }
+            },
+            "n": {
+              "integerValue": "3"
+            },
+            "missing": {
+              "doubleValue": 0.5
+            },
+            "tags": {
+              "arrayValue": {
+                "values": [
+                  {
+                    "stringValue": "a"
+                  },
+                  {
+                    "stringValue": "b"
+                  }
+                ]
+              }
+            }
+          },
+          "createTime": {
+            "$absoluteTime": true,
+            "jsonType": "string",
+            "formatValid": true
+          },
+          "updateTime": {
+            "$absoluteTime": true,
+            "jsonType": "string",
+            "formatValid": true
+          }
+        }
+      },
+      "local": {
+        "httpStatus": 200,
+        "mediaType": "application/json",
+        "body": {
+          "createTime": {
+            "$absoluteTime": true,
+            "jsonType": "string",
+            "formatValid": true
+          },
+          "fields": {
+            "at": {
+              "timestampValue": {
+                "$absoluteTime": true,
+                "jsonType": "string",
+                "formatValid": true
+              }
+            },
+            "d": {
+              "doubleValue": 2.5
+            },
+            "m": {
+              "mapValue": {
+                "fields": {
+                  "inner": {
+                    "integerValue": "-5"
+                  }
+                }
+              }
+            },
+            "missing": {
+              "doubleValue": 0.5
+            },
+            "n": {
+              "integerValue": "3"
+            },
+            "s": {
+              "arrayValue": {
+                "values": [
+                  {
+                    "stringValue": "x"
+                  }
+                ]
+              }
+            },
+            "tags": {
+              "arrayValue": {
+                "values": [
+                  {
+                    "stringValue": "a"
+                  },
+                  {
+                    "stringValue": "b"
+                  }
+                ]
+              }
+            }
+          },
+          "name": "documents/writes/transforms/tf/doc",
+          "updateTime": {
+            "$absoluteTime": true,
+            "jsonType": "string",
+            "formatValid": true
+          }
+        }
+      }
+    },
+    {
+      "id": "firestore:writes/transforms#transform-only-write-creates",
+      "principal": "administrator",
+      "operation": {
+        "path": "/v1/projects/fireemu-35fe6/databases/(default)/documents:commit",
+        "query": [],
+        "method": "POST",
+        "body": {
+          "writes": [
+            {
+              "transform": {
+                "document": "documents/writes/transforms/tf/created",
+                "fieldTransforms": [
+                  {
+                    "fieldPath": "count",
+                    "increment": {
+                      "integerValue": "1"
+                    }
+                  },
+                  {
+                    "fieldPath": "at",
+                    "setToServerValue": "REQUEST_TIME"
+                  }
+                ]
+              }
+            }
+          ]
+        },
+        "service": "firestore"
+      },
+      "originalComparison": "match",
+      "comparison": "match",
+      "savedProductionBeforeNewTimeNormalization": {
+        "httpStatus": 200,
+        "mediaType": "application/json",
+        "body": {
+          "writeResults": [
+            {
+              "updateTime": {
+                "$absoluteTime": true,
+                "jsonType": "string",
+                "formatValid": true
+              },
+              "transformResults": [
+                {
+                  "integerValue": "1"
+                },
+                {
+                  "timestampValue": {
+                    "$absoluteTime": true,
+                    "jsonType": "string",
+                    "formatValid": true
+                  }
+                }
+              ]
+            }
+          ],
+          "commitTime": {
+            "$absoluteTime": true,
+            "jsonType": "string",
+            "formatValid": true
+          }
+        }
+      },
+      "local": {
+        "httpStatus": 200,
+        "mediaType": "application/json",
+        "body": {
+          "commitTime": {
+            "$absoluteTime": true,
+            "jsonType": "string",
+            "formatValid": true
+          },
+          "writeResults": [
+            {
+              "transformResults": [
+                {
+                  "integerValue": "1"
+                },
+                {
+                  "timestampValue": {
+                    "$absoluteTime": true,
+                    "jsonType": "string",
+                    "formatValid": true
+                  }
+                }
+              ],
+              "updateTime": {
+                "$absoluteTime": true,
+                "jsonType": "string",
+                "formatValid": true
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "firestore:writes/transforms#read-transform-created",
+      "principal": "administrator",
+      "operation": {
+        "path": "/v1/documents/writes/transforms/tf/created",
+        "query": [],
+        "method": "GET",
+        "body": null,
+        "service": "firestore"
+      },
+      "originalComparison": "match",
+      "comparison": "match",
+      "savedProductionBeforeNewTimeNormalization": {
+        "httpStatus": 200,
+        "mediaType": "application/json",
+        "body": {
+          "name": "documents/writes/transforms/tf/created",
+          "fields": {
+            "at": {
+              "timestampValue": {
+                "$absoluteTime": true,
+                "jsonType": "string",
+                "formatValid": true
+              }
+            },
+            "count": {
+              "integerValue": "1"
+            }
+          },
+          "createTime": {
+            "$absoluteTime": true,
+            "jsonType": "string",
+            "formatValid": true
+          },
+          "updateTime": {
+            "$absoluteTime": true,
+            "jsonType": "string",
+            "formatValid": true
+          }
+        }
+      },
+      "local": {
+        "httpStatus": 200,
+        "mediaType": "application/json",
+        "body": {
+          "createTime": {
+            "$absoluteTime": true,
+            "jsonType": "string",
+            "formatValid": true
+          },
+          "fields": {
+            "at": {
+              "timestampValue": {
+                "$absoluteTime": true,
+                "jsonType": "string",
+                "formatValid": true
+              }
+            },
+            "count": {
+              "integerValue": "1"
+            }
+          },
+          "name": "documents/writes/transforms/tf/created",
+          "updateTime": {
+            "$absoluteTime": true,
+            "jsonType": "string",
+            "formatValid": true
+          }
+        }
+      }
+    },
+    {
+      "id": "firestore:writes/transforms#transform-write-with-exists-precondition",
+      "principal": "administrator",
+      "operation": {
+        "path": "/v1/projects/fireemu-35fe6/databases/(default)/documents:commit",
+        "query": [],
+        "method": "POST",
+        "body": {
+          "writes": [
+            {
+              "transform": {
+                "document": "documents/writes/transforms/tf/none",
+                "fieldTransforms": [
+                  {
+                    "fieldPath": "count",
+                    "increment": {
+                      "integerValue": "1"
+                    }
+                  }
+                ]
+              },
+              "currentDocument": {
+                "exists": true
+              }
+            }
+          ]
+        },
+        "service": "firestore"
+      },
+      "originalComparison": "match",
+      "comparison": "match",
+      "savedProductionBeforeNewTimeNormalization": {
+        "httpStatus": 404,
+        "mediaType": "application/json",
+        "body": {
+          "error": {
+            "code": 404,
+            "message": {
+              "$errorProse": true,
+              "machineCode": null,
+              "empty": false
+            },
+            "status": "NOT_FOUND"
+          }
+        }
+      },
+      "local": {
+        "httpStatus": 404,
+        "mediaType": "application/json",
+        "body": {
+          "error": {
+            "code": 404,
+            "message": {
+              "$errorProse": true,
+              "machineCode": null,
+              "empty": false
+            },
+            "status": "NOT_FOUND"
+          }
+        }
+      }
+    },
+    {
+      "id": "firestore:writes/transforms#increment-with-non-numeric-operand",
+      "principal": "administrator",
+      "operation": {
+        "path": "/v1/projects/fireemu-35fe6/databases/(default)/documents:commit",
+        "query": [],
+        "method": "POST",
+        "body": {
+          "writes": [
+            {
+              "update": {
+                "name": "documents/writes/transforms/tf/doc",
+                "fields": {}
+              },
+              "updateMask": {
+                "fieldPaths": []
+              },
+              "updateTransforms": [
+                {
+                  "fieldPath": "n",
+                  "increment": {
+                    "stringValue": "1"
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "service": "firestore"
+      },
+      "originalComparison": "match",
+      "comparison": "match",
+      "savedProductionBeforeNewTimeNormalization": {
+        "httpStatus": 400,
+        "mediaType": "application/json",
+        "body": {
+          "error": {
+            "code": 400,
+            "message": {
+              "$errorProse": true,
+              "machineCode": null,
+              "empty": false
+            },
+            "status": "INVALID_ARGUMENT"
+          }
+        }
+      },
+      "local": {
+        "httpStatus": 400,
+        "mediaType": "application/json",
+        "body": {
+          "error": {
+            "code": 400,
+            "message": {
+              "$errorProse": true,
+              "machineCode": null,
+              "empty": false
+            },
+            "status": "INVALID_ARGUMENT"
+          }
+        }
+      }
+    },
+    {
+      "id": "firestore:writes/transforms#server-timestamp-on-a-delete",
+      "principal": "administrator",
+      "operation": {
+        "path": "/v1/projects/fireemu-35fe6/databases/(default)/documents:commit",
+        "query": [],
+        "method": "POST",
+        "body": {
+          "writes": [
+            {
+              "delete": "documents/writes/transforms/tf/doc",
+              "updateTransforms": [
+                {
+                  "fieldPath": "at",
+                  "setToServerValue": "REQUEST_TIME"
+                }
+              ]
+            }
+          ]
+        },
+        "service": "firestore"
+      },
+      "originalComparison": "match",
+      "comparison": "match",
+      "savedProductionBeforeNewTimeNormalization": {
+        "httpStatus": 400,
+        "mediaType": "application/json",
+        "body": {
+          "error": {
+            "code": 400,
+            "message": {
+              "$errorProse": true,
+              "machineCode": null,
+              "empty": false
+            },
+            "status": "INVALID_ARGUMENT"
+          }
+        }
+      },
+      "local": {
+        "httpStatus": 400,
+        "mediaType": "application/json",
+        "body": {
+          "error": {
+            "code": 400,
+            "message": {
+              "$errorProse": true,
+              "machineCode": null,
+              "empty": false
+            },
+            "status": "INVALID_ARGUMENT"
+          }
+        }
+      }
+    },
+    {
+      "id": "firestore:writes/transforms#set-and-transform-same-field",
+      "principal": "administrator",
+      "operation": {
+        "path": "/v1/projects/fireemu-35fe6/databases/(default)/documents:commit",
+        "query": [],
+        "method": "POST",
+        "body": {
+          "writes": [
+            {
+              "update": {
+                "name": "documents/writes/transforms/tf/doc",
+                "fields": {
+                  "n": {
+                    "integerValue": "1000"
+                  }
+                }
+              },
+              "updateMask": {
+                "fieldPaths": [
+                  "n"
+                ]
+              },
+              "updateTransforms": [
+                {
+                  "fieldPath": "n",
+                  "increment": {
+                    "integerValue": "1"
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "service": "firestore"
+      },
+      "originalComparison": "match",
+      "comparison": "match",
+      "savedProductionBeforeNewTimeNormalization": {
+        "httpStatus": 200,
+        "mediaType": "application/json",
+        "body": {
+          "writeResults": [
+            {
+              "updateTime": {
+                "$absoluteTime": true,
+                "jsonType": "string",
+                "formatValid": true
+              },
+              "transformResults": [
+                {
+                  "integerValue": "1001"
+                }
+              ]
+            }
+          ],
+          "commitTime": {
+            "$absoluteTime": true,
+            "jsonType": "string",
+            "formatValid": true
+          }
+        }
+      },
+      "local": {
+        "httpStatus": 200,
+        "mediaType": "application/json",
+        "body": {
+          "commitTime": {
+            "$absoluteTime": true,
+            "jsonType": "string",
+            "formatValid": true
+          },
+          "writeResults": [
+            {
+              "transformResults": [
+                {
+                  "integerValue": "1001"
+                }
+              ],
+              "updateTime": {
+                "$absoluteTime": true,
+                "jsonType": "string",
+                "formatValid": true
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "firestore:writes/transforms#read-set-and-transform",
+      "principal": "administrator",
+      "operation": {
+        "path": "/v1/documents/writes/transforms/tf/doc",
+        "query": [],
+        "method": "GET",
+        "body": null,
+        "service": "firestore"
+      },
+      "originalComparison": "match",
+      "comparison": "match",
+      "savedProductionBeforeNewTimeNormalization": {
+        "httpStatus": 200,
+        "mediaType": "application/json",
+        "body": {
+          "name": "documents/writes/transforms/tf/doc",
+          "fields": {
+            "tags": {
+              "arrayValue": {
+                "values": [
+                  {
+                    "stringValue": "a"
+                  },
+                  {
+                    "stringValue": "b"
+                  }
+                ]
+              }
+            },
+            "m": {
+              "mapValue": {
+                "fields": {
+                  "inner": {
+                    "integerValue": "-5"
+                  }
+                }
+              }
+            },
+            "at": {
+              "timestampValue": {
+                "$absoluteTime": true,
+                "jsonType": "string",
+                "formatValid": true
+              }
+            },
+            "s": {
+              "arrayValue": {
+                "values": [
+                  {
+                    "stringValue": "x"
+                  }
+                ]
+              }
+            },
+            "d": {
+              "doubleValue": 2.5
+            },
+            "missing": {
+              "doubleValue": 0.5
+            },
+            "n": {
+              "integerValue": "1001"
+            }
+          },
+          "createTime": {
+            "$absoluteTime": true,
+            "jsonType": "string",
+            "formatValid": true
+          },
+          "updateTime": {
+            "$absoluteTime": true,
+            "jsonType": "string",
+            "formatValid": true
+          }
+        }
+      },
+      "local": {
+        "httpStatus": 200,
+        "mediaType": "application/json",
+        "body": {
+          "createTime": {
+            "$absoluteTime": true,
+            "jsonType": "string",
+            "formatValid": true
+          },
+          "fields": {
+            "at": {
+              "timestampValue": {
+                "$absoluteTime": true,
+                "jsonType": "string",
+                "formatValid": true
+              }
+            },
+            "d": {
+              "doubleValue": 2.5
+            },
+            "m": {
+              "mapValue": {
+                "fields": {
+                  "inner": {
+                    "integerValue": "-5"
+                  }
+                }
+              }
+            },
+            "missing": {
+              "doubleValue": 0.5
+            },
+            "n": {
+              "integerValue": "1001"
+            },
+            "s": {
+              "arrayValue": {
+                "values": [
+                  {
+                    "stringValue": "x"
+                  }
+                ]
+              }
+            },
+            "tags": {
+              "arrayValue": {
+                "values": [
+                  {
+                    "stringValue": "a"
+                  },
+                  {
+                    "stringValue": "b"
+                  }
+                ]
+              }
+            }
+          },
+          "name": "documents/writes/transforms/tf/doc",
+          "updateTime": {
+            "$absoluteTime": true,
+            "jsonType": "string",
+            "formatValid": true
+          }
+        }
+      }
+    },
+    {
+      "id": "firestore:writes/transforms#integer-increment-saturates",
+      "principal": "administrator",
+      "operation": {
+        "path": "/v1/projects/fireemu-35fe6/databases/(default)/documents:commit",
+        "query": [],
+        "method": "POST",
+        "body": {
+          "writes": [
+            {
+              "update": {
+                "name": "documents/writes/transforms/tf/sat",
+                "fields": {
+                  "n": {
+                    "integerValue": "9223372036854775807"
+                  }
+                }
+              },
+              "updateTransforms": [
+                {
+                  "fieldPath": "n",
+                  "increment": {
+                    "integerValue": "1"
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "service": "firestore"
+      },
+      "originalComparison": "match",
+      "comparison": "match",
+      "savedProductionBeforeNewTimeNormalization": {
+        "httpStatus": 200,
+        "mediaType": "application/json",
+        "body": {
+          "writeResults": [
+            {
+              "updateTime": {
+                "$absoluteTime": true,
+                "jsonType": "string",
+                "formatValid": true
+              },
+              "transformResults": [
+                {
+                  "integerValue": "9223372036854775807"
+                }
+              ]
+            }
+          ],
+          "commitTime": {
+            "$absoluteTime": true,
+            "jsonType": "string",
+            "formatValid": true
+          }
+        }
+      },
+      "local": {
+        "httpStatus": 200,
+        "mediaType": "application/json",
+        "body": {
+          "commitTime": {
+            "$absoluteTime": true,
+            "jsonType": "string",
+            "formatValid": true
+          },
+          "writeResults": [
+            {
+              "transformResults": [
+                {
+                  "integerValue": "9223372036854775807"
+                }
+              ],
+              "updateTime": {
+                "$absoluteTime": true,
+                "jsonType": "string",
+                "formatValid": true
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "firestore:writes/transforms#read-saturated",
+      "principal": "administrator",
+      "operation": {
+        "path": "/v1/documents/writes/transforms/tf/sat",
+        "query": [],
+        "method": "GET",
+        "body": null,
+        "service": "firestore"
+      },
+      "originalComparison": "match",
+      "comparison": "match",
+      "savedProductionBeforeNewTimeNormalization": {
+        "httpStatus": 200,
+        "mediaType": "application/json",
+        "body": {
+          "name": "documents/writes/transforms/tf/sat",
+          "fields": {
+            "n": {
+              "integerValue": "9223372036854775807"
+            }
+          },
+          "createTime": {
+            "$absoluteTime": true,
+            "jsonType": "string",
+            "formatValid": true
+          },
+          "updateTime": {
+            "$absoluteTime": true,
+            "jsonType": "string",
+            "formatValid": true
+          }
+        }
+      },
+      "local": {
+        "httpStatus": 200,
+        "mediaType": "application/json",
+        "body": {
+          "createTime": {
+            "$absoluteTime": true,
+            "jsonType": "string",
+            "formatValid": true
+          },
+          "fields": {
+            "n": {
+              "integerValue": "9223372036854775807"
+            }
+          },
+          "name": "documents/writes/transforms/tf/sat",
+          "updateTime": {
+            "$absoluteTime": true,
+            "jsonType": "string",
+            "formatValid": true
+          }
+        }
+      }
+    },
+    {
+      "id": "firestore:writes/transforms#increment-on-nan",
+      "principal": "administrator",
+      "operation": {
+        "path": "/v1/projects/fireemu-35fe6/databases/(default)/documents:commit",
+        "query": [],
+        "method": "POST",
+        "body": {
+          "writes": [
+            {
+              "update": {
+                "name": "documents/writes/transforms/tf/nan",
+                "fields": {
+                  "n": {
+                    "doubleValue": "NaN"
+                  }
+                }
+              },
+              "updateTransforms": [
+                {
+                  "fieldPath": "n",
+                  "increment": {
+                    "integerValue": "1"
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "service": "firestore"
+      },
+      "originalComparison": "match",
+      "comparison": "match",
+      "savedProductionBeforeNewTimeNormalization": {
+        "httpStatus": 200,
+        "mediaType": "application/json",
+        "body": {
+          "writeResults": [
+            {
+              "updateTime": {
+                "$absoluteTime": true,
+                "jsonType": "string",
+                "formatValid": true
+              },
+              "transformResults": [
+                {
+                  "doubleValue": "NaN"
+                }
+              ]
+            }
+          ],
+          "commitTime": {
+            "$absoluteTime": true,
+            "jsonType": "string",
+            "formatValid": true
+          }
+        }
+      },
+      "local": {
+        "httpStatus": 200,
+        "mediaType": "application/json",
+        "body": {
+          "commitTime": {
+            "$absoluteTime": true,
+            "jsonType": "string",
+            "formatValid": true
+          },
+          "writeResults": [
+            {
+              "transformResults": [
+                {
+                  "doubleValue": "NaN"
+                }
+              ],
+              "updateTime": {
+                "$absoluteTime": true,
+                "jsonType": "string",
+                "formatValid": true
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "firestore:writes/transforms#two-transforms-on-one-field-in-one-write",
+      "principal": "administrator",
+      "operation": {
+        "path": "/v1/projects/fireemu-35fe6/databases/(default)/documents:commit",
+        "query": [],
+        "method": "POST",
+        "body": {
+          "writes": [
+            {
+              "update": {
+                "name": "documents/writes/transforms/tf/dup",
+                "fields": {
+                  "n": {
+                    "integerValue": "1"
+                  }
+                }
+              },
+              "updateTransforms": [
+                {
+                  "fieldPath": "n",
+                  "increment": {
+                    "integerValue": "1"
+                  }
+                },
+                {
+                  "fieldPath": "n",
+                  "increment": {
+                    "integerValue": "1"
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "service": "firestore"
+      },
+      "originalComparison": "match",
+      "comparison": "match",
+      "savedProductionBeforeNewTimeNormalization": {
+        "httpStatus": 200,
+        "mediaType": "application/json",
+        "body": {
+          "writeResults": [
+            {
+              "updateTime": {
+                "$absoluteTime": true,
+                "jsonType": "string",
+                "formatValid": true
+              },
+              "transformResults": [
+                {
+                  "integerValue": "2"
+                },
+                {
+                  "integerValue": "3"
+                }
+              ]
+            }
+          ],
+          "commitTime": {
+            "$absoluteTime": true,
+            "jsonType": "string",
+            "formatValid": true
+          }
+        }
+      },
+      "local": {
+        "httpStatus": 200,
+        "mediaType": "application/json",
+        "body": {
+          "commitTime": {
+            "$absoluteTime": true,
+            "jsonType": "string",
+            "formatValid": true
+          },
+          "writeResults": [
+            {
+              "transformResults": [
+                {
+                  "integerValue": "2"
+                },
+                {
+                  "integerValue": "3"
+                }
+              ],
+              "updateTime": {
+                "$absoluteTime": true,
+                "jsonType": "string",
+                "formatValid": true
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "firestore:writes/transforms#read-dup",
+      "principal": "administrator",
+      "operation": {
+        "path": "/v1/documents/writes/transforms/tf/dup",
+        "query": [],
+        "method": "GET",
+        "body": null,
+        "service": "firestore"
+      },
+      "originalComparison": "match",
+      "comparison": "match",
+      "savedProductionBeforeNewTimeNormalization": {
+        "httpStatus": 200,
+        "mediaType": "application/json",
+        "body": {
+          "name": "documents/writes/transforms/tf/dup",
+          "fields": {
+            "n": {
+              "integerValue": "3"
+            }
+          },
+          "createTime": {
+            "$absoluteTime": true,
+            "jsonType": "string",
+            "formatValid": true
+          },
+          "updateTime": {
+            "$absoluteTime": true,
+            "jsonType": "string",
+            "formatValid": true
+          }
+        }
+      },
+      "local": {
+        "httpStatus": 200,
+        "mediaType": "application/json",
+        "body": {
+          "createTime": {
+            "$absoluteTime": true,
+            "jsonType": "string",
+            "formatValid": true
+          },
+          "fields": {
+            "n": {
+              "integerValue": "3"
+            }
+          },
+          "name": "documents/writes/transforms/tf/dup",
+          "updateTime": {
+            "$absoluteTime": true,
+            "jsonType": "string",
+            "formatValid": true
+          }
+        }
+      }
+    },
+    {
+      "id": "auth:broad/create-a",
+      "principal": "anonymous",
+      "operation": {
+        "path": "identitytoolkit.googleapis.com/v1/accounts:signUp",
+        "query": [
+          [
+            "key",
+            {
+              "$apiKey": "approved-project"
+            }
+          ]
+        ],
+        "method": "POST",
+        "body": {
+          "email": {
+            "$email": "a"
+          },
+          "password": "abc123",
+          "returnSecureToken": true
+        },
+        "service": "auth"
+      },
+      "originalComparison": "match",
+      "comparison": "match",
+      "savedProductionBeforeNewTimeNormalization": {
+        "httpStatus": 200,
+        "mediaType": "application/json",
+        "body": {
+          "kind": "identitytoolkit#SignupNewUserResponse",
+          "idToken": {
+            "$opaque": "idToken",
+            "jsonType": "string",
+            "nonempty": true
+          },
+          "email": {
+            "$email": "a"
+          },
+          "refreshToken": {
+            "$opaque": "refreshToken",
+            "jsonType": "string",
+            "nonempty": true
+          },
+          "expiresIn": "3600",
+          "localId": {
+            "$account": "a"
+          }
+        }
+      },
+      "local": {
+        "httpStatus": 200,
+        "mediaType": "application/json",
+        "body": {
+          "email": {
+            "$email": "a"
+          },
+          "expiresIn": "3600",
+          "idToken": {
+            "$opaque": "idToken",
+            "jsonType": "string",
+            "nonempty": true
+          },
+          "kind": "identitytoolkit#SignupNewUserResponse",
+          "localId": {
+            "$account": "a"
+          },
+          "refreshToken": {
+            "$opaque": "refreshToken",
+            "jsonType": "string",
+            "nonempty": true
+          }
+        }
+      },
+      "localAssertions": {
+        "sixCharacterPasswordAccepted": true
+      }
+    },
+    {
+      "id": "auth:broad/create-b",
+      "principal": "anonymous",
+      "operation": {
+        "path": "identitytoolkit.googleapis.com/v1/accounts:signUp",
+        "query": [
+          [
+            "key",
+            {
+              "$apiKey": "approved-project"
+            }
+          ]
+        ],
+        "method": "POST",
+        "body": {
+          "email": {
+            "$email": "b"
+          },
+          "password": "abc123",
+          "returnSecureToken": true
+        },
+        "service": "auth"
+      },
+      "originalComparison": "match",
+      "comparison": "match",
+      "savedProductionBeforeNewTimeNormalization": {
+        "httpStatus": 200,
+        "mediaType": "application/json",
+        "body": {
+          "kind": "identitytoolkit#SignupNewUserResponse",
+          "idToken": {
+            "$opaque": "idToken",
+            "jsonType": "string",
+            "nonempty": true
+          },
+          "email": {
+            "$email": "b"
+          },
+          "refreshToken": {
+            "$opaque": "refreshToken",
+            "jsonType": "string",
+            "nonempty": true
+          },
+          "expiresIn": "3600",
+          "localId": {
+            "$account": "b"
+          }
+        }
+      },
+      "local": {
+        "httpStatus": 200,
+        "mediaType": "application/json",
+        "body": {
+          "email": {
+            "$email": "b"
+          },
+          "expiresIn": "3600",
+          "idToken": {
+            "$opaque": "idToken",
+            "jsonType": "string",
+            "nonempty": true
+          },
+          "kind": "identitytoolkit#SignupNewUserResponse",
+          "localId": {
+            "$account": "b"
+          },
+          "refreshToken": {
+            "$opaque": "refreshToken",
+            "jsonType": "string",
+            "nonempty": true
+          }
+        }
+      },
+      "localAssertions": {
+        "sixCharacterPasswordAccepted": true
+      }
+    },
+    {
+      "id": "auth:broad/short-password-refused",
+      "principal": "anonymous",
+      "operation": {
+        "path": "identitytoolkit.googleapis.com/v1/accounts:signUp",
+        "query": [
+          [
+            "key",
+            {
+              "$apiKey": "approved-project"
+            }
+          ]
+        ],
+        "method": "POST",
+        "body": {
+          "email": {
+            "$email": "weak"
+          },
+          "password": "12345",
+          "returnSecureToken": true
+        },
+        "service": "auth"
+      },
+      "originalComparison": "match",
+      "comparison": "match",
+      "savedProductionBeforeNewTimeNormalization": {
+        "httpStatus": 400,
+        "mediaType": "application/json",
+        "body": {
+          "error": {
+            "code": 400,
+            "message": {
+              "$errorProse": true,
+              "machineCode": "WEAK_PASSWORD",
+              "empty": false
+            },
+            "errors": [
+              {
+                "message": {
+                  "$errorProse": true,
+                  "machineCode": "WEAK_PASSWORD",
+                  "empty": false
+                },
+                "domain": "global",
+                "reason": "invalid"
+              }
+            ]
+          }
+        }
+      },
+      "local": {
+        "httpStatus": 400,
+        "mediaType": "application/json",
+        "body": {
+          "error": {
+            "code": 400,
+            "errors": [
+              {
+                "domain": "global",
+                "message": {
+                  "$errorProse": true,
+                  "machineCode": "WEAK_PASSWORD",
+                  "empty": false
+                },
+                "reason": "invalid"
+              }
+            ],
+            "message": {
+              "$errorProse": true,
+              "machineCode": "WEAK_PASSWORD",
+              "empty": false
+            }
+          }
+        }
+      },
+      "localAssertions": {
+        "singleBoundaryRefusal": true
+      }
+    },
+    {
+      "id": "auth:broad/refused-create-absent",
+      "principal": "administrator",
+      "operation": {
+        "path": "identitytoolkit.googleapis.com/v1/projects/fireemu-35fe6/accounts:lookup",
+        "query": [],
+        "method": "POST",
+        "body": {
+          "email": [
+            {
+              "$email": "weak"
+            }
+          ]
+        },
+        "service": "auth"
+      },
+      "originalComparison": "match",
+      "comparison": "match",
+      "savedProductionBeforeNewTimeNormalization": {
+        "httpStatus": 200,
+        "mediaType": "application/json",
+        "body": {
+          "kind": "identitytoolkit#GetAccountInfoResponse"
+        }
+      },
+      "local": {
+        "httpStatus": 200,
+        "mediaType": "application/json",
+        "body": {
+          "kind": "identitytoolkit#GetAccountInfoResponse"
+        }
+      },
+      "localAssertions": {
+        "noAccountCreated": true
+      }
+    },
+    {
+      "id": "auth:broad/self-admin-field",
+      "principal": "self:a",
+      "operation": {
+        "path": "identitytoolkit.googleapis.com/v1/accounts:update",
+        "query": [
+          [
+            "key",
+            {
+              "$apiKey": "approved-project"
+            }
+          ]
+        ],
+        "method": "POST",
+        "body": {
+          "idToken": {
+            "$credential": "self:a"
+          },
+          "emailVerified": true,
+          "displayName": "must-not-apply"
+        },
+        "service": "auth"
+      },
+      "originalComparison": "mismatch",
+      "comparison": "match",
+      "savedProductionBeforeNewTimeNormalization": {
+        "httpStatus": 200,
+        "mediaType": "application/json",
+        "body": {
+          "kind": "identitytoolkit#SetAccountInfoResponse",
+          "localId": {
+            "$account": "a"
+          },
+          "email": {
+            "$email": "a"
+          },
+          "displayName": "must-not-apply",
+          "providerUserInfo": [
+            {
+              "providerId": "password",
+              "displayName": "must-not-apply",
+              "federatedId": {
+                "$email": "a"
+              },
+              "email": {
+                "$email": "a"
+              },
+              "rawId": {
+                "$email": "a"
+              }
+            }
+          ],
+          "passwordHash": {
+            "$opaque": "passwordHash",
+            "jsonType": "string",
+            "nonempty": true
+          },
+          "emailVerified": false
+        }
+      },
+      "local": {
+        "httpStatus": 200,
+        "mediaType": "application/json",
+        "body": {
+          "displayName": "must-not-apply",
+          "email": {
+            "$email": "a"
+          },
+          "emailVerified": false,
+          "kind": "identitytoolkit#SetAccountInfoResponse",
+          "localId": {
+            "$account": "a"
+          },
+          "passwordHash": {
+            "$opaque": "passwordHash",
+            "jsonType": "string",
+            "nonempty": true
+          },
+          "providerUserInfo": [
+            {
+              "displayName": "must-not-apply",
+              "email": {
+                "$email": "a"
+              },
+              "federatedId": {
+                "$email": "a"
+              },
+              "providerId": "password",
+              "rawId": {
+                "$email": "a"
+              }
+            }
+          ]
+        }
+      },
+      "localAssertions": {
+        "tokenOwner": true,
+        "displayNameApplied": true,
+        "notVerified": true
+      }
+    },
+    {
+      "id": "auth:broad/other-user-selector",
+      "principal": "self:b",
+      "operation": {
+        "path": "identitytoolkit.googleapis.com/v1/accounts:update",
+        "query": [
+          [
+            "key",
+            {
+              "$apiKey": "approved-project"
+            }
+          ]
+        ],
+        "method": "POST",
+        "body": {
+          "idToken": {
+            "$credential": "self:b"
+          },
+          "localId": {
+            "$account": "a"
+          },
+          "displayName": "must-not-apply"
+        },
+        "service": "auth"
+      },
+      "originalComparison": "mismatch",
+      "comparison": "match",
+      "savedProductionBeforeNewTimeNormalization": {
+        "httpStatus": 200,
+        "mediaType": "application/json",
+        "body": {
+          "kind": "identitytoolkit#SetAccountInfoResponse",
+          "localId": {
+            "$account": "b"
+          },
+          "email": {
+            "$email": "b"
+          },
+          "displayName": "must-not-apply",
+          "providerUserInfo": [
+            {
+              "providerId": "password",
+              "displayName": "must-not-apply",
+              "federatedId": {
+                "$email": "b"
+              },
+              "email": {
+                "$email": "b"
+              },
+              "rawId": {
+                "$email": "b"
+              }
+            }
+          ],
+          "passwordHash": {
+            "$opaque": "passwordHash",
+            "jsonType": "string",
+            "nonempty": true
+          },
+          "emailVerified": false
+        }
+      },
+      "local": {
+        "httpStatus": 200,
+        "mediaType": "application/json",
+        "body": {
+          "displayName": "must-not-apply",
+          "email": {
+            "$email": "b"
+          },
+          "emailVerified": false,
+          "kind": "identitytoolkit#SetAccountInfoResponse",
+          "localId": {
+            "$account": "b"
+          },
+          "passwordHash": {
+            "$opaque": "passwordHash",
+            "jsonType": "string",
+            "nonempty": true
+          },
+          "providerUserInfo": [
+            {
+              "displayName": "must-not-apply",
+              "email": {
+                "$email": "b"
+              },
+              "federatedId": {
+                "$email": "b"
+              },
+              "providerId": "password",
+              "rawId": {
+                "$email": "b"
+              }
+            }
+          ]
+        }
+      },
+      "localAssertions": {
+        "tokenOwner": true,
+        "displayNameApplied": true,
+        "notVerified": true
+      }
+    },
+    {
+      "id": "auth:broad/unauthenticated-update",
+      "principal": "anonymous",
+      "operation": {
+        "path": "identitytoolkit.googleapis.com/v1/accounts:update",
+        "query": [
+          [
+            "key",
+            {
+              "$apiKey": "approved-project"
+            }
+          ]
+        ],
+        "method": "POST",
+        "body": {
+          "displayName": "must-not-apply"
+        },
+        "service": "auth"
+      },
+      "originalComparison": "mismatch",
+      "comparison": "match",
+      "savedProductionBeforeNewTimeNormalization": {
+        "httpStatus": 400,
+        "mediaType": "application/json",
+        "body": {
+          "error": {
+            "code": 400,
+            "message": {
+              "$errorProse": true,
+              "machineCode": "INVALID_REQ_TYPE",
+              "empty": false
+            },
+            "errors": [
+              {
+                "message": {
+                  "$errorProse": true,
+                  "machineCode": "INVALID_REQ_TYPE",
+                  "empty": false
+                },
+                "domain": "global",
+                "reason": "invalid"
+              }
+            ]
+          }
+        }
+      },
+      "local": {
+        "httpStatus": 400,
+        "mediaType": "application/json",
+        "body": {
+          "error": {
+            "code": 400,
+            "errors": [
+              {
+                "domain": "global",
+                "message": {
+                  "$errorProse": true,
+                  "machineCode": "INVALID_REQ_TYPE",
+                  "empty": false
+                },
+                "reason": "invalid"
+              }
+            ],
+            "message": {
+              "$errorProse": true,
+              "machineCode": "INVALID_REQ_TYPE",
+              "empty": false
+            }
+          }
+        }
+      },
+      "localAssertions": {
+        "rejected": true,
+        "errorCode": true
+      }
+    },
+    {
+      "id": "auth:broad/refusal-state-a",
+      "principal": "administrator",
+      "operation": {
+        "path": "identitytoolkit.googleapis.com/v1/projects/fireemu-35fe6/accounts:lookup",
+        "query": [],
+        "method": "POST",
+        "body": {
+          "localId": [
+            {
+              "$account": "a"
+            }
+          ]
+        },
+        "service": "auth"
+      },
+      "originalComparison": "mismatch",
+      "comparison": "match",
+      "savedProductionBeforeNewTimeNormalization": {
+        "httpStatus": 200,
+        "mediaType": "application/json",
+        "body": {
+          "kind": "identitytoolkit#GetAccountInfoResponse",
+          "users": [
+            {
+              "localId": {
+                "$account": "a"
+              },
+              "email": {
+                "$email": "a"
+              },
+              "displayName": "must-not-apply",
+              "passwordHash": {
+                "$opaque": "passwordHash",
+                "jsonType": "string",
+                "nonempty": true
+              },
+              "emailVerified": false,
+              "passwordUpdatedAt": {
+                "$absoluteTime": true,
+                "jsonType": "number",
+                "formatValid": true
+              },
+              "providerUserInfo": [
+                {
+                  "providerId": "password",
+                  "displayName": "must-not-apply",
+                  "federatedId": {
+                    "$email": "a"
+                  },
+                  "email": {
+                    "$email": "a"
+                  },
+                  "rawId": {
+                    "$email": "a"
+                  }
+                }
+              ],
+              "validSince": {
+                "$absoluteTime": true,
+                "jsonType": "string",
+                "formatValid": true
+              },
+              "lastLoginAt": {
+                "$absoluteTime": true,
+                "jsonType": "string",
+                "formatValid": true
+              },
+              "createdAt": {
+                "$absoluteTime": true,
+                "jsonType": "string",
+                "formatValid": true
+              },
+              "lastRefreshAt": "2026-09-12T14:51:45.723Z"
+            }
+          ]
+        }
+      },
+      "local": {
+        "httpStatus": 200,
+        "mediaType": "application/json",
+        "body": {
+          "kind": "identitytoolkit#GetAccountInfoResponse",
+          "users": [
+            {
+              "createdAt": {
+                "$absoluteTime": true,
+                "jsonType": "string",
+                "formatValid": true
+              },
+              "displayName": "must-not-apply",
+              "email": {
+                "$email": "a"
+              },
+              "emailVerified": false,
+              "lastLoginAt": {
+                "$absoluteTime": true,
+                "jsonType": "string",
+                "formatValid": true
+              },
+              "lastRefreshAt": {
+                "$absoluteTime": true,
+                "jsonType": "string",
+                "formatValid": true,
+                "format": "RFC3339"
+              },
+              "localId": {
+                "$account": "a"
+              },
+              "passwordHash": {
+                "$opaque": "passwordHash",
+                "jsonType": "string",
+                "nonempty": true
+              },
+              "passwordUpdatedAt": {
+                "$absoluteTime": true,
+                "jsonType": "number",
+                "formatValid": true
+              },
+              "providerUserInfo": [
+                {
+                  "displayName": "must-not-apply",
+                  "email": {
+                    "$email": "a"
+                  },
+                  "federatedId": {
+                    "$email": "a"
+                  },
+                  "providerId": "password",
+                  "rawId": {
+                    "$email": "a"
+                  }
+                }
+              ],
+              "validSince": {
+                "$absoluteTime": true,
+                "jsonType": "string",
+                "formatValid": true
+              }
+            }
+          ]
+        }
+      },
+      "localAssertions": {
+        "sameUid": true,
+        "sameOwnerEmail": true,
+        "displayNameApplied": true,
+        "notVerified": true
+      }
+    },
+    {
+      "id": "auth:broad/refusal-state-b",
+      "principal": "administrator",
+      "operation": {
+        "path": "identitytoolkit.googleapis.com/v1/projects/fireemu-35fe6/accounts:lookup",
+        "query": [],
+        "method": "POST",
+        "body": {
+          "localId": [
+            {
+              "$account": "b"
+            }
+          ]
+        },
+        "service": "auth"
+      },
+      "originalComparison": "mismatch",
+      "comparison": "match",
+      "savedProductionBeforeNewTimeNormalization": {
+        "httpStatus": 200,
+        "mediaType": "application/json",
+        "body": {
+          "kind": "identitytoolkit#GetAccountInfoResponse",
+          "users": [
+            {
+              "localId": {
+                "$account": "b"
+              },
+              "email": {
+                "$email": "b"
+              },
+              "displayName": "must-not-apply",
+              "passwordHash": {
+                "$opaque": "passwordHash",
+                "jsonType": "string",
+                "nonempty": true
+              },
+              "emailVerified": false,
+              "passwordUpdatedAt": {
+                "$absoluteTime": true,
+                "jsonType": "number",
+                "formatValid": true
+              },
+              "providerUserInfo": [
+                {
+                  "providerId": "password",
+                  "displayName": "must-not-apply",
+                  "federatedId": {
+                    "$email": "b"
+                  },
+                  "email": {
+                    "$email": "b"
+                  },
+                  "rawId": {
+                    "$email": "b"
+                  }
+                }
+              ],
+              "validSince": {
+                "$absoluteTime": true,
+                "jsonType": "string",
+                "formatValid": true
+              },
+              "lastLoginAt": {
+                "$absoluteTime": true,
+                "jsonType": "string",
+                "formatValid": true
+              },
+              "createdAt": {
+                "$absoluteTime": true,
+                "jsonType": "string",
+                "formatValid": true
+              },
+              "lastRefreshAt": "2026-09-12T14:51:46.729Z"
+            }
+          ]
+        }
+      },
+      "local": {
+        "httpStatus": 200,
+        "mediaType": "application/json",
+        "body": {
+          "kind": "identitytoolkit#GetAccountInfoResponse",
+          "users": [
+            {
+              "createdAt": {
+                "$absoluteTime": true,
+                "jsonType": "string",
+                "formatValid": true
+              },
+              "displayName": "must-not-apply",
+              "email": {
+                "$email": "b"
+              },
+              "emailVerified": false,
+              "lastLoginAt": {
+                "$absoluteTime": true,
+                "jsonType": "string",
+                "formatValid": true
+              },
+              "lastRefreshAt": {
+                "$absoluteTime": true,
+                "jsonType": "string",
+                "formatValid": true,
+                "format": "RFC3339"
+              },
+              "localId": {
+                "$account": "b"
+              },
+              "passwordHash": {
+                "$opaque": "passwordHash",
+                "jsonType": "string",
+                "nonempty": true
+              },
+              "passwordUpdatedAt": {
+                "$absoluteTime": true,
+                "jsonType": "number",
+                "formatValid": true
+              },
+              "providerUserInfo": [
+                {
+                  "displayName": "must-not-apply",
+                  "email": {
+                    "$email": "b"
+                  },
+                  "federatedId": {
+                    "$email": "b"
+                  },
+                  "providerId": "password",
+                  "rawId": {
+                    "$email": "b"
+                  }
+                }
+              ],
+              "validSince": {
+                "$absoluteTime": true,
+                "jsonType": "string",
+                "formatValid": true
+              }
+            }
+          ]
+        }
+      },
+      "localAssertions": {
+        "sameUid": true,
+        "sameOwnerEmail": true,
+        "displayNameApplied": true,
+        "notVerified": true
+      }
+    },
+    {
+      "id": "auth:broad/admin-update",
+      "principal": "administrator",
+      "operation": {
+        "path": "identitytoolkit.googleapis.com/v1/projects/fireemu-35fe6/accounts:update",
+        "query": [],
+        "method": "POST",
+        "body": {
+          "localId": {
+            "$account": "a"
+          },
+          "emailVerified": true
+        },
+        "service": "auth"
+      },
+      "originalComparison": "mismatch",
+      "comparison": "match",
+      "savedProductionBeforeNewTimeNormalization": {
+        "httpStatus": 200,
+        "mediaType": "application/json",
+        "body": {
+          "kind": "identitytoolkit#SetAccountInfoResponse",
+          "localId": {
+            "$account": "a"
+          },
+          "email": {
+            "$email": "a"
+          },
+          "displayName": "must-not-apply",
+          "providerUserInfo": [
+            {
+              "providerId": "password",
+              "displayName": "must-not-apply",
+              "federatedId": {
+                "$email": "a"
+              },
+              "email": {
+                "$email": "a"
+              },
+              "rawId": {
+                "$email": "a"
+              }
+            }
+          ],
+          "passwordHash": {
+            "$opaque": "passwordHash",
+            "jsonType": "string",
+            "nonempty": true
+          },
+          "emailVerified": true
+        }
+      },
+      "local": {
+        "httpStatus": 200,
+        "mediaType": "application/json",
+        "body": {
+          "displayName": "must-not-apply",
+          "email": {
+            "$email": "a"
+          },
+          "emailVerified": true,
+          "kind": "identitytoolkit#SetAccountInfoResponse",
+          "localId": {
+            "$account": "a"
+          },
+          "passwordHash": {
+            "$opaque": "passwordHash",
+            "jsonType": "string",
+            "nonempty": true
+          },
+          "providerUserInfo": [
+            {
+              "displayName": "must-not-apply",
+              "email": {
+                "$email": "a"
+              },
+              "federatedId": {
+                "$email": "a"
+              },
+              "providerId": "password",
+              "rawId": {
+                "$email": "a"
+              }
+            }
+          ]
+        }
+      },
+      "localAssertions": {
+        "adminAccepted": true
+      }
+    },
+    {
+      "id": "auth:broad/self-sees-admin-state",
+      "principal": "self:a",
+      "operation": {
+        "path": "identitytoolkit.googleapis.com/v1/accounts:lookup",
+        "query": [
+          [
+            "key",
+            {
+              "$apiKey": "approved-project"
+            }
+          ]
+        ],
+        "method": "POST",
+        "body": {
+          "idToken": {
+            "$credential": "self:a"
+          }
+        },
+        "service": "auth"
+      },
+      "originalComparison": "mismatch",
+      "comparison": "match",
+      "savedProductionBeforeNewTimeNormalization": {
+        "httpStatus": 200,
+        "mediaType": "application/json",
+        "body": {
+          "kind": "identitytoolkit#GetAccountInfoResponse",
+          "users": [
+            {
+              "localId": {
+                "$account": "a"
+              },
+              "email": {
+                "$email": "a"
+              },
+              "displayName": "must-not-apply",
+              "passwordHash": {
+                "$opaque": "passwordHash",
+                "jsonType": "string",
+                "nonempty": true
+              },
+              "emailVerified": true,
+              "passwordUpdatedAt": {
+                "$absoluteTime": true,
+                "jsonType": "number",
+                "formatValid": true
+              },
+              "providerUserInfo": [
+                {
+                  "providerId": "password",
+                  "displayName": "must-not-apply",
+                  "federatedId": {
+                    "$email": "a"
+                  },
+                  "email": {
+                    "$email": "a"
+                  },
+                  "rawId": {
+                    "$email": "a"
+                  }
+                }
+              ],
+              "validSince": {
+                "$absoluteTime": true,
+                "jsonType": "string",
+                "formatValid": true
+              },
+              "lastLoginAt": {
+                "$absoluteTime": true,
+                "jsonType": "string",
+                "formatValid": true
+              },
+              "createdAt": {
+                "$absoluteTime": true,
+                "jsonType": "string",
+                "formatValid": true
+              },
+              "lastRefreshAt": "2026-09-12T14:51:45.723Z"
+            }
+          ]
+        }
+      },
+      "local": {
+        "httpStatus": 200,
+        "mediaType": "application/json",
+        "body": {
+          "kind": "identitytoolkit#GetAccountInfoResponse",
+          "users": [
+            {
+              "createdAt": {
+                "$absoluteTime": true,
+                "jsonType": "string",
+                "formatValid": true
+              },
+              "displayName": "must-not-apply",
+              "email": {
+                "$email": "a"
+              },
+              "emailVerified": true,
+              "lastLoginAt": {
+                "$absoluteTime": true,
+                "jsonType": "string",
+                "formatValid": true
+              },
+              "lastRefreshAt": {
+                "$absoluteTime": true,
+                "jsonType": "string",
+                "formatValid": true,
+                "format": "RFC3339"
+              },
+              "localId": {
+                "$account": "a"
+              },
+              "passwordHash": {
+                "$opaque": "passwordHash",
+                "jsonType": "string",
+                "nonempty": true
+              },
+              "passwordUpdatedAt": {
+                "$absoluteTime": true,
+                "jsonType": "number",
+                "formatValid": true
+              },
+              "providerUserInfo": [
+                {
+                  "displayName": "must-not-apply",
+                  "email": {
+                    "$email": "a"
+                  },
+                  "federatedId": {
+                    "$email": "a"
+                  },
+                  "providerId": "password",
+                  "rawId": {
+                    "$email": "a"
+                  }
+                }
+              ],
+              "validSince": {
+                "$absoluteTime": true,
+                "jsonType": "string",
+                "formatValid": true
+              }
+            }
+          ]
+        }
+      },
+      "localAssertions": {
+        "verifiedState": true
+      }
+    },
+    {
+      "id": "auth:broad/password-change",
+      "principal": "self:a",
+      "operation": {
+        "path": "identitytoolkit.googleapis.com/v1/accounts:update",
+        "query": [
+          [
+            "key",
+            {
+              "$apiKey": "approved-project"
+            }
+          ]
+        ],
+        "method": "POST",
+        "body": {
+          "idToken": {
+            "$credential": "self:a"
+          },
+          "password": "newpass7",
+          "returnSecureToken": true
+        },
+        "service": "auth"
+      },
+      "originalComparison": "mismatch",
+      "comparison": "match",
+      "savedProductionBeforeNewTimeNormalization": {
+        "httpStatus": 200,
+        "mediaType": "application/json",
+        "body": {
+          "kind": "identitytoolkit#SetAccountInfoResponse",
+          "localId": {
+            "$account": "a"
+          },
+          "email": {
+            "$email": "a"
+          },
+          "displayName": "must-not-apply",
+          "idToken": {
+            "$opaque": "idToken",
+            "jsonType": "string",
+            "nonempty": true
+          },
+          "providerUserInfo": [
+            {
+              "providerId": "password",
+              "displayName": "must-not-apply",
+              "federatedId": {
+                "$email": "a"
+              },
+              "email": {
+                "$email": "a"
+              },
+              "rawId": {
+                "$email": "a"
+              }
+            }
+          ],
+          "refreshToken": {
+            "$opaque": "refreshToken",
+            "jsonType": "string",
+            "nonempty": true
+          },
+          "expiresIn": "3600",
+          "passwordHash": {
+            "$opaque": "passwordHash",
+            "jsonType": "string",
+            "nonempty": true
+          },
+          "emailVerified": true
+        }
+      },
+      "local": {
+        "httpStatus": 200,
+        "mediaType": "application/json",
+        "body": {
+          "displayName": "must-not-apply",
+          "email": {
+            "$email": "a"
+          },
+          "emailVerified": true,
+          "expiresIn": "3600",
+          "idToken": {
+            "$opaque": "idToken",
+            "jsonType": "string",
+            "nonempty": true
+          },
+          "kind": "identitytoolkit#SetAccountInfoResponse",
+          "localId": {
+            "$account": "a"
+          },
+          "passwordHash": {
+            "$opaque": "passwordHash",
+            "jsonType": "string",
+            "nonempty": true
+          },
+          "providerUserInfo": [
+            {
+              "displayName": "must-not-apply",
+              "email": {
+                "$email": "a"
+              },
+              "federatedId": {
+                "$email": "a"
+              },
+              "providerId": "password",
+              "rawId": {
+                "$email": "a"
+              }
+            }
+          ],
+          "refreshToken": {
+            "$opaque": "refreshToken",
+            "jsonType": "string",
+            "nonempty": true
+          }
+        }
+      },
+      "localAssertions": {
+        "sameUid": true
+      }
+    },
+    {
+      "id": "auth:broad/old-password",
+      "principal": "password:a",
+      "operation": {
+        "path": "identitytoolkit.googleapis.com/v1/accounts:signInWithPassword",
+        "query": [
+          [
+            "key",
+            {
+              "$apiKey": "approved-project"
+            }
+          ]
+        ],
+        "method": "POST",
+        "body": {
+          "email": {
+            "$email": "a"
+          },
+          "password": "abc123",
+          "returnSecureToken": true
+        },
+        "service": "auth"
+      },
+      "originalComparison": "match",
+      "comparison": "match",
+      "savedProductionBeforeNewTimeNormalization": {
+        "httpStatus": 400,
+        "mediaType": "application/json",
+        "body": {
+          "error": {
+            "code": 400,
+            "message": {
+              "$errorProse": true,
+              "machineCode": "INVALID_LOGIN_CREDENTIALS",
+              "empty": false
+            },
+            "errors": [
+              {
+                "message": {
+                  "$errorProse": true,
+                  "machineCode": "INVALID_LOGIN_CREDENTIALS",
+                  "empty": false
+                },
+                "domain": "global",
+                "reason": "invalid"
+              }
+            ]
+          }
+        }
+      },
+      "local": {
+        "httpStatus": 400,
+        "mediaType": "application/json",
+        "body": {
+          "error": {
+            "code": 400,
+            "errors": [
+              {
+                "domain": "global",
+                "message": {
+                  "$errorProse": true,
+                  "machineCode": "INVALID_LOGIN_CREDENTIALS",
+                  "empty": false
+                },
+                "reason": "invalid"
+              }
+            ],
+            "message": {
+              "$errorProse": true,
+              "machineCode": "INVALID_LOGIN_CREDENTIALS",
+              "empty": false
+            }
+          }
+        }
+      },
+      "localAssertions": {
+        "oldPasswordRefused": true
+      }
+    },
+    {
+      "id": "auth:broad/new-password",
+      "principal": "password:a",
+      "operation": {
+        "path": "identitytoolkit.googleapis.com/v1/accounts:signInWithPassword",
+        "query": [
+          [
+            "key",
+            {
+              "$apiKey": "approved-project"
+            }
+          ]
+        ],
+        "method": "POST",
+        "body": {
+          "email": {
+            "$email": "a"
+          },
+          "password": "newpass7",
+          "returnSecureToken": true
+        },
+        "service": "auth"
+      },
+      "originalComparison": "mismatch",
+      "comparison": "match",
+      "savedProductionBeforeNewTimeNormalization": {
+        "httpStatus": 200,
+        "mediaType": "application/json",
+        "body": {
+          "kind": "identitytoolkit#VerifyPasswordResponse",
+          "localId": {
+            "$account": "a"
+          },
+          "email": {
+            "$email": "a"
+          },
+          "displayName": "must-not-apply",
+          "idToken": {
+            "$opaque": "idToken",
+            "jsonType": "string",
+            "nonempty": true
+          },
+          "registered": true,
+          "refreshToken": {
+            "$opaque": "refreshToken",
+            "jsonType": "string",
+            "nonempty": true
+          },
+          "expiresIn": "3600"
+        }
+      },
+      "local": {
+        "httpStatus": 200,
+        "mediaType": "application/json",
+        "body": {
+          "displayName": "must-not-apply",
+          "email": {
+            "$email": "a"
+          },
+          "expiresIn": "3600",
+          "idToken": {
+            "$opaque": "idToken",
+            "jsonType": "string",
+            "nonempty": true
+          },
+          "kind": "identitytoolkit#VerifyPasswordResponse",
+          "localId": {
+            "$account": "a"
+          },
+          "refreshToken": {
+            "$opaque": "refreshToken",
+            "jsonType": "string",
+            "nonempty": true
+          },
+          "registered": true
+        }
+      },
+      "localAssertions": {
+        "sameUid": true
+      }
+    },
+    {
+      "id": "auth:broad/refresh-after-change",
+      "principal": "refresh:a",
+      "operation": {
+        "path": "securetoken.googleapis.com/v1/token",
+        "query": [
+          [
+            "key",
+            {
+              "$apiKey": "approved-project"
+            }
+          ]
+        ],
+        "method": "POST",
+        "body": {
+          "grant_type": "refresh_token",
+          "refresh_token": {
+            "$credential": "refresh:a"
+          }
+        },
+        "service": "auth"
+      },
+      "originalComparison": "mismatch",
+      "comparison": "match",
+      "savedProductionBeforeNewTimeNormalization": {
+        "httpStatus": 200,
+        "mediaType": "application/json",
+        "body": {
+          "access_token": {
+            "$opaque": "access_token",
+            "jsonType": "string",
+            "nonempty": true
+          },
+          "expires_in": "3600",
+          "token_type": "Bearer",
+          "refresh_token": {
+            "$opaque": "refresh_token",
+            "jsonType": "string",
+            "nonempty": true
+          },
+          "id_token": {
+            "$opaque": "id_token",
+            "jsonType": "string",
+            "nonempty": true
+          },
+          "user_id": {
+            "$account": "a"
+          },
+          "project_id": "592603257417"
+        }
+      },
+      "local": {
+        "httpStatus": 200,
+        "mediaType": "application/json",
+        "body": {
+          "access_token": {
+            "$opaque": "access_token",
+            "jsonType": "string",
+            "nonempty": true
+          },
+          "expires_in": "3600",
+          "id_token": {
+            "$opaque": "id_token",
+            "jsonType": "string",
+            "nonempty": true
+          },
+          "project_id": "592603257417",
+          "refresh_token": {
+            "$opaque": "refresh_token",
+            "jsonType": "string",
+            "nonempty": true
+          },
+          "token_type": "Bearer",
+          "user_id": {
+            "$account": "a"
+          }
+        }
+      },
+      "localAssertions": {
+        "sameUid": true,
+        "tokenPresent": true
+      }
+    },
+    {
+      "id": "auth:broad/delete-a",
+      "principal": "administrator",
+      "operation": {
+        "path": "identitytoolkit.googleapis.com/v1/projects/fireemu-35fe6/accounts:delete",
+        "query": [],
+        "method": "POST",
+        "body": {
+          "localId": {
+            "$account": "a"
+          }
+        },
+        "service": "auth"
+      },
+      "originalComparison": "match",
+      "comparison": "match",
+      "savedProductionBeforeNewTimeNormalization": {
+        "httpStatus": 200,
+        "mediaType": "application/json",
+        "body": {
+          "kind": "identitytoolkit#DeleteAccountResponse"
+        }
+      },
+      "local": {
+        "httpStatus": 200,
+        "mediaType": "application/json",
+        "body": {
+          "kind": "identitytoolkit#DeleteAccountResponse"
+        }
+      },
+      "localAssertions": {
+        "deleted": true
+      }
+    },
+    {
+      "id": "auth:broad/deleted-absent-a",
+      "principal": "administrator",
+      "operation": {
+        "path": "identitytoolkit.googleapis.com/v1/projects/fireemu-35fe6/accounts:lookup",
+        "query": [],
+        "method": "POST",
+        "body": {
+          "localId": [
+            {
+              "$account": "a"
+            }
+          ]
+        },
+        "service": "auth"
+      },
+      "originalComparison": "match",
+      "comparison": "match",
+      "savedProductionBeforeNewTimeNormalization": {
+        "httpStatus": 200,
+        "mediaType": "application/json",
+        "body": {
+          "kind": "identitytoolkit#GetAccountInfoResponse"
+        }
+      },
+      "local": {
+        "httpStatus": 200,
+        "mediaType": "application/json",
+        "body": {
+          "kind": "identitytoolkit#GetAccountInfoResponse"
+        }
+      },
+      "localAssertions": {
+        "absent": true
+      }
+    },
+    {
+      "id": "auth:broad/delete-b",
+      "principal": "administrator",
+      "operation": {
+        "path": "identitytoolkit.googleapis.com/v1/projects/fireemu-35fe6/accounts:delete",
+        "query": [],
+        "method": "POST",
+        "body": {
+          "localId": {
+            "$account": "b"
+          }
+        },
+        "service": "auth"
+      },
+      "originalComparison": "match",
+      "comparison": "match",
+      "savedProductionBeforeNewTimeNormalization": {
+        "httpStatus": 200,
+        "mediaType": "application/json",
+        "body": {
+          "kind": "identitytoolkit#DeleteAccountResponse"
+        }
+      },
+      "local": {
+        "httpStatus": 200,
+        "mediaType": "application/json",
+        "body": {
+          "kind": "identitytoolkit#DeleteAccountResponse"
+        }
+      },
+      "localAssertions": {
+        "deleted": true
+      }
+    },
+    {
+      "id": "auth:broad/deleted-absent-b",
+      "principal": "administrator",
+      "operation": {
+        "path": "identitytoolkit.googleapis.com/v1/projects/fireemu-35fe6/accounts:lookup",
+        "query": [],
+        "method": "POST",
+        "body": {
+          "localId": [
+            {
+              "$account": "b"
+            }
+          ]
+        },
+        "service": "auth"
+      },
+      "originalComparison": "match",
+      "comparison": "match",
+      "savedProductionBeforeNewTimeNormalization": {
+        "httpStatus": 200,
+        "mediaType": "application/json",
+        "body": {
+          "kind": "identitytoolkit#GetAccountInfoResponse"
+        }
+      },
+      "local": {
+        "httpStatus": 200,
+        "mediaType": "application/json",
+        "body": {
+          "kind": "identitytoolkit#GetAccountInfoResponse"
+        }
+      },
+      "localAssertions": {
+        "absent": true
+      }
+    }
+  ]
+}

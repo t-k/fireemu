@@ -12,4 +12,5 @@ pub mod query;
 pub mod size;
 pub mod store;
 pub mod text_index;
+pub mod ttl;
 pub mod value;

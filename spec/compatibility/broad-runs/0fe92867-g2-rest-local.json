@@ -1,0 +1,56 @@
+{
+  "schemaVersion": 1,
+  "goal": "G2-REST-next",
+  "status": "done-local",
+  "sourceCommit": "0fe92867bef980bfef453205ef953e01a7e1d589",
+  "ownerModel": "gpt-5.6-luna",
+  "evidenceLevel": "local REST handler translation, atomicity and transaction-policy characterization",
+  "transportLimit": "RestState.handle with a real LocalBackend; not socket parsing or a production comparison",
+  "conditions": [
+    "failed two-write Commit publishes neither document",
+    "original transaction can still read its snapshot under the current local policy",
+    "a nearby empty-document Commit succeeds and readback identity is verified",
+    "competing write is rejected under the current local locking policy",
+    "explicit rollback permits the subsequent write and exact document identity/fields are verified"
+  ],
+  "validation": {
+    "commit": "0fe92867bef980bfef453205ef953e01a7e1d589",
+    "command": [
+      "cargo",
+      "nextest",
+      "run",
+      "-p",
+      "fireemu-adapter-grpc",
+      "--lib",
+      "--test",
+      "rest",
+      "--profile",
+      "pr"
+    ],
+    "start": "2026-09-13T07:38:25.656123+00:00",
+    "end": "2026-09-13T07:38:30.184669+00:00",
+    "exitCode": 0,
+    "passed": 80,
+    "skipped": 1,
+    "failed": 0,
+    "artifactSha256": null,
+    "artifactLimitation": "No test-binary hash was captured for this checkpoint; do not substitute a later artifact."
+  },
+  "review": {
+    "reviewer": "coordinator, independent of implementing owner",
+    "result": "accepted after targeted correction",
+    "mustFix": [],
+    "resolved": [
+      "add nearby successful control",
+      "check final document identity"
+    ],
+    "notes": [
+      "Omitted empty fields is a local serializer assertion, not a new production observation.",
+      "Transaction retention and error precedence remain production-unobserved."
+    ]
+  },
+  "newConfirmedProductionGaps": [],
+  "runtimeChanges": false,
+  "productionOperations": 0,
+  "priorEvidence": "All existing production and local reports remain unchanged."
+}

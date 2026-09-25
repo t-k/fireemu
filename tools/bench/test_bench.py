@@ -88,7 +88,7 @@ class ReportingTests(unittest.TestCase):
         dump(p/'run-status.json',{'failures':int(failed),'asset_hashes_unchanged':True})
         for name in ['official','fireemu']:
             q=p/f'block-00-{name}';q.mkdir()
-            dump(q/'trial.json',dict(block=0,engine=name,discard=False,profile='emulator',ok=not(failed and name=='fireemu'),
+            dump(q/'trial.json',dict(block=0,engine=name,discard=False,profile='firebase',ok=not(failed and name=='fireemu'),
                  usable_ready_ms=10 if name=='official' else 5,cases=[],phases=[],pre_stop={}))
             (q/'samples.jsonl').write_text('')
     def test_valid_pair(self):
@@ -97,6 +97,12 @@ class ReportingTests(unittest.TestCase):
             rows=json.loads((p/'summary.json').read_text())['rows']
             x=next(r for r in rows if r['metric']=='startup/sdk-usable-ms')
             self.assertEqual(x['benefit_ratio'],2)
+    def test_profile_mismatch_suppresses_claim(self):
+        with tempfile.TemporaryDirectory() as d:
+            p=Path(d);self.create(p)
+            path=p/'block-00-fireemu/trial.json'
+            value=json.loads(path.read_text());value['profile']='strict';dump(path,value)
+            self.assertFalse(render(p))
     def test_failed_trial_suppresses_claim(self):
         with tempfile.TemporaryDirectory() as d:
             p=Path(d);self.create(p,True);self.assertFalse(render(p))

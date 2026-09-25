@@ -1,0 +1,182 @@
+{
+  "completed": true,
+  "productionExecuted": false,
+  "rows": [
+    {
+      "operationType": "firestore-document-create",
+      "principal": "owned-firestore-admin",
+      "status": 200,
+      "bodyKeys": [
+        "fields",
+        "name",
+        "updateTime"
+      ]
+    },
+    {
+      "operationType": "firestore-document-create",
+      "principal": "owned-firestore-admin",
+      "status": 200,
+      "bodyKeys": [
+        "fields",
+        "name",
+        "updateTime"
+      ]
+    },
+    {
+      "operationType": "firestore-document-create",
+      "principal": "owned-firestore-admin",
+      "status": 200,
+      "bodyKeys": [
+        "fields",
+        "name",
+        "updateTime"
+      ]
+    },
+    {
+      "operationType": "firestore-document-create",
+      "principal": "owned-firestore-admin",
+      "status": 200,
+      "bodyKeys": [
+        "fields",
+        "name",
+        "updateTime"
+      ]
+    },
+    {
+      "operationType": "auth-sign-up",
+      "principal": "owned-auth-bootstrap",
+      "status": 200,
+      "bodyKeys": [
+        "idToken",
+        "localId",
+        "refreshToken"
+      ]
+    },
+    {
+      "operationType": "auth-sign-in",
+      "principal": "owned-account:uid-1",
+      "status": 200,
+      "bodyKeys": [
+        "idToken",
+        "localId",
+        "refreshToken"
+      ]
+    },
+    {
+      "operationType": "auth-refresh",
+      "principal": "owned-account:uid-1",
+      "status": 200,
+      "bodyKeys": [
+        "expires_in",
+        "id_token",
+        "refresh_token",
+        "token_type",
+        "user_id"
+      ]
+    },
+    {
+      "operationType": "auth-lookup",
+      "principal": "owned-account:uid-1",
+      "status": 200,
+      "bodyKeys": [
+        "users"
+      ]
+    },
+    {
+      "operationType": "auth-sign-up",
+      "principal": "owned-auth-bootstrap",
+      "status": 200,
+      "bodyKeys": [
+        "idToken",
+        "localId",
+        "refreshToken"
+      ]
+    },
+    {
+      "operationType": "auth-sign-in",
+      "principal": "owned-account:uid-3",
+      "status": 200,
+      "bodyKeys": [
+        "idToken",
+        "localId",
+        "refreshToken"
+      ]
+    },
+    {
+      "operationType": "auth-refresh",
+      "principal": "owned-account:uid-3",
+      "status": 200,
+      "bodyKeys": [
+        "expires_in",
+        "id_token",
+        "refresh_token",
+        "token_type",
+        "user_id"
+      ]
+    },
+    {
+      "operationType": "auth-lookup",
+      "principal": "owned-account:uid-3",
+      "status": 200,
+      "bodyKeys": [
+        "users"
+      ]
+    },
+    {
+      "operationType": "firestore-list-collection-ids",
+      "principal": "owned-firestore-admin",
+      "status": 200,
+      "bodyKeys": [
+        "collectionIds",
+        "nextPageToken"
+      ]
+    },
+    {
+      "operationType": "firestore-list-collection-ids",
+      "principal": "owned-firestore-admin",
+      "status": 200,
+      "bodyKeys": [
+        "collectionIds",
+        "nextPageToken"
+      ]
+    },
+    {
+      "operationType": "firestore-list-collection-ids",
+      "principal": "owned-firestore-admin",
+      "status": 200,
+      "bodyKeys": [
+        "collectionIds",
+        "nextPageToken"
+      ]
+    },
+    {
+      "operationType": "firestore-list-collection-ids",
+      "principal": "owned-firestore-admin",
+      "status": 200,
+      "bodyKeys": [
+        "collectionIds"
+      ]
+    }
+  ],
+  "gate": {
+    "total": 34,
+    "recovery": 16,
+    "bindings": [
+      "changed-ccccccccccccccccccccccccccccccccIdToken",
+      "changed-ccccccccccccccccccccccccccccccccPrincipal",
+      "changed-ccccccccccccccccccccccccccccccccRefresh",
+      "changed-ccccccccccccccccccccccccccccccccUid",
+      "pagedToken",
+      "reference-ccccccccccccccccccccccccccccccccIdToken",
+      "reference-ccccccccccccccccccccccccccccccccPrincipal",
+      "reference-ccccccccccccccccccccccccccccccccRefresh",
+      "reference-ccccccccccccccccccccccccccccccccUid"
+    ]
+  },
+  "processCleanup": true,
+  "sourceCommit": "aad1a41de926fae244b42ac1bd2baa57bf2bcdde",
+  "artifactSha256": "afad8f18453ce35beda9c2d94e4b211a21c7556bd7843b82c00c3a1cfea26f38",
+  "sourceSha256": "16b86fae1f3ddaa15f2621ec8d6767379cb701b854703aedc2b5d51757de460a",
+  "observerSha256": "f4724b420f1a2da2db0fec200478f8b78aeaa394b1c1e4194533047fa74c91ea",
+  "manifestSha256": "2977a494e2ef15ea91644ab33052e282404b44553375e3418d2ddf34fc44b32c"
+}

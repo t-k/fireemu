@@ -88,6 +88,8 @@ impl fmt::Display for JsonError {
 impl std::error::Error for JsonError {}
 
 struct Parser<'a> {
+    // Keep the original, already UTF-8-validated string for constant-time slicing.
+    text: &'a str,
     src: &'a [u8],
     pos: usize,
 }
@@ -95,6 +97,7 @@ struct Parser<'a> {
 /// Parses a complete JSON document.
 pub fn parse(text: &str) -> Result<JsonValue, JsonError> {
     let mut p = Parser {
+        text,
         src: text.as_bytes(),
         pos: 0,
     };
@@ -221,6 +224,11 @@ impl Parser<'_> {
             .src
             .get(self.pos..self.pos + 4)
             .ok_or_else(|| self.err("4 hex digits"))?;
+        // Integer parsing admits a leading '+', but JSON requires exactly four
+        // hexadecimal digits (RFC 8259 section 7), including in object keys.
+        if !slice.iter().all(u8::is_ascii_hexdigit) {
+            return Err(self.err("4 hex digits"));
+        }
         let text = core::str::from_utf8(slice).map_err(|_| self.err("4 hex digits"))?;
         let v = u32::from_str_radix(text, 16).map_err(|_| self.err("4 hex digits"))?;
         self.pos += 4;
@@ -275,9 +283,14 @@ impl Parser<'_> {
                 }
                 0x00..=0x1F => return Err(self.err("no control characters in strings")),
                 _ => {
-                    // Copy one UTF-8 scalar.
-                    let rest = core::str::from_utf8(&self.src[self.pos..])
-                        .map_err(|_| self.err("valid UTF-8"))?;
+                    // `parse` receives a valid &str, so there is no need to validate
+                    // the entire remaining input for every scalar (quadratic work).
+                    // `get` still checks that the cursor is on a UTF-8 boundary;
+                    // no unchecked conversion or loss replacement is needed.
+                    let rest = self
+                        .text
+                        .get(self.pos..)
+                        .ok_or_else(|| self.err("valid UTF-8"))?;
                     let c = rest.chars().next().ok_or_else(|| self.err("a character"))?;
                     out.push(c);
                     self.pos += c.len_utf8();

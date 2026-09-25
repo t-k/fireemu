@@ -1,0 +1,1084 @@
+{
+  "schemaVersion": 1,
+  "parent": "AUTH-ACCOUNT",
+  "parentStatus": "IMPLEMENTING",
+  "oracleTrack": "disposable-sandbox",
+  "closureReview": {
+    "decision": "PENDING_REVIEW",
+    "decidedOn": "2026-09-24",
+    "reviewer": "independent clean-context closure and security review (round 3)",
+    "reviewedCommit": "3eb68306a",
+    "finalArtifactSha256": "db8cafcd1c4dc8d56113a9b6b4c7dbd255154071f1a5c95dd27db2b43537ede4",
+    "followUps": "Non-blocking Should items are tracked outside the closure (security hardening of hash verification under the store lock, duplicate-email password reset, export restorability of out-of-bound hashes, standard scrypt parallelism bound, handwritten figures).",
+    "previousDecision": "APPROVED",
+    "previousFinalArtifactSha256": "db8cafcd1c4dc8d56113a9b6b4c7dbd255154071f1a5c95dd27db2b43537ede4",
+    "nextReviewRequired": "Independent review of the current source-bound artifact and all declared AUTH-ACCOUNT conditions."
+  },
+  "scopeDecisions": [
+    {
+      "id": "A1",
+      "decision": "Closure is defined by these behavioral acceptance conditions, as for FS-DATA-WRITE. Denominator surfaces with no account behavior are not enumerated here; surfaces that are account behavior are covered by the recipe of the condition that exercises them.",
+      "decidedBy": "owner (t-k)",
+      "decidedOn": "2026-09-23"
+    },
+    {
+      "id": "A2",
+      "decision": "All 14 production import hash algorithms are in scope; none is a documented divergence. fireemu implements verification for each.",
+      "decidedBy": "owner (t-k)",
+      "decidedOn": "2026-09-23"
+    },
+    {
+      "id": "A3",
+      "decision": "AUTH-ACCOUNT owns the effect of configured policies on account operations (duplicate emails, email privacy, password policy, client permissions). Config field parity, SDK policy projection and tenant inheritance belong to AUTH-CONFIG-SDK.",
+      "decidedBy": "owner (t-k)",
+      "decidedOn": "2026-09-23",
+      "movedTo": "AUTH-CONFIG-SDK"
+    },
+    {
+      "id": "A4",
+      "decision": "Client IdP sign-in and linking through signInWithIdp needs a real external IdP and belongs to AUTH-FEDERATION. AUTH-ACCOUNT covers Admin link/unlink and client deleteProvider.",
+      "decidedBy": "owner (t-k)",
+      "decidedOn": "2026-09-23",
+      "movedTo": "AUTH-FEDERATION"
+    },
+    {
+      "id": "A5",
+      "decision": "AUTH-ACCOUNT is observed through the REST surface. Client and Admin SDK end-to-end paths belong to AUTH-CONFIG-SDK.",
+      "decidedBy": "owner (t-k)",
+      "decidedOn": "2026-09-23",
+      "movedTo": "AUTH-CONFIG-SDK"
+    },
+    {
+      "id": "A6",
+      "decision": "Token refusal codes after disable or delete are counted once, here, and referenced from AUTH-CREDENTIAL.",
+      "decidedBy": "owner (t-k)",
+      "decidedOn": "2026-09-23"
+    },
+    {
+      "id": "A7",
+      "decision": "Sign-up quota and abuse limits are production behavior and are not excluded; they are observed with the other project-level limits in AUTH-CONFIG-SDK. Any HTTP 429 in this corpus is classified INDETERMINATE.",
+      "decidedBy": "owner (t-k)",
+      "decidedOn": "2026-09-23",
+      "movedTo": "AUTH-CONFIG-SDK"
+    },
+    {
+      "id": "A8",
+      "decision": "Tenant-scoped account routes belong to AUTH-TENANT-BLOCKING.",
+      "decidedBy": "owner (t-k)",
+      "decidedOn": "2026-09-23",
+      "movedTo": "AUTH-TENANT-BLOCKING"
+    },
+    {
+      "id": "A9",
+      "decision": "Custom-token account creation belongs to AUTH-CREDENTIAL; email-link accounts belong to AUTH-ACTION.",
+      "decidedBy": "owner (t-k)",
+      "decidedOn": "2026-09-23",
+      "movedTo": "AUTH-CREDENTIAL"
+    },
+    {
+      "id": "A10",
+      "decision": "MFA factors in imported accounts belong to AUTH-MFA; AUTH-ACCOUNT imports without factors.",
+      "decidedBy": "owner (t-k)",
+      "decidedOn": "2026-09-23",
+      "movedTo": "AUTH-MFA"
+    },
+    {
+      "id": "A11",
+      "decision": "Multi-expression query semantics are decided by production observation in auth-account/admin/query, not by documentation.",
+      "decidedBy": "owner (t-k)",
+      "decidedOn": "2026-09-23"
+    },
+    {
+      "id": "A12",
+      "decision": "Historical owner decision: the gson parser message for malformed customAttributes JSON was accepted as a message-text divergence. The source-bound replay against artifact a8bfc5dc1737dee01bae028b2e3dd421f04326e12640cb4936d896ebfcfa358a now matches this exact input, including the two app-visible message fields. The historical decision is retained; no claim is made about unobserved malformed Gson inputs.",
+      "decidedBy": "owner",
+      "decidedOn": "2026-09-24",
+      "supersededForClosure": true
+    }
+  ],
+  "conditions": [
+    {
+      "conditionId": "AUTH-ACCOUNT/client-password-lifecycle",
+      "source": "docs/compatibility/ip-fs-production-compatibility.md#feature-group-status",
+      "recipeIds": [
+        "auth-account/client/lifecycle"
+      ],
+      "configProjections": [
+        "default"
+      ],
+      "status": "VERIFIED",
+      "note": "Historical fireemu-35fe6 production receipts corroborate this row; the sandbox re-record is the closure evidence.",
+      "evidence": {
+        "productionRecordings": [
+          {
+            "recordedAt": "2026-09-23T11:52:22.579Z",
+            "gitSha": "2f9128f45f0d5aeb4aea9bdfaaa0f1e1c105e31f",
+            "recordings": 2,
+            "project": "fireemu-oracle-idp"
+          }
+        ],
+        "finalArtifactSha256": "a8bfc5dc1737dee01bae028b2e3dd421f04326e12640cb4936d896ebfcfa358a",
+        "sourceCommit": "c86b8490c1717bce2881eac051bef94388a84001",
+        "comparisonPath": "spec/compatibility/closure/evidence/AUTH-ACCOUNT-comparison.json",
+        "rows": {
+          "MATCH": 10
+        }
+      }
+    },
+    {
+      "conditionId": "AUTH-ACCOUNT/client-profile-attributes",
+      "source": "docs/compatibility/ip-fs-production-compatibility.md#feature-group-status",
+      "recipeIds": [
+        "auth-account/client/profile"
+      ],
+      "configProjections": [
+        "default"
+      ],
+      "status": "VERIFIED",
+      "note": "Historical fireemu-35fe6 production receipts corroborate this row; the sandbox re-record is the closure evidence.",
+      "evidence": {
+        "productionRecordings": [
+          {
+            "recordedAt": "2026-09-23T11:52:22.579Z",
+            "gitSha": "2f9128f45f0d5aeb4aea9bdfaaa0f1e1c105e31f",
+            "recordings": 2,
+            "project": "fireemu-oracle-idp"
+          }
+        ],
+        "finalArtifactSha256": "a8bfc5dc1737dee01bae028b2e3dd421f04326e12640cb4936d896ebfcfa358a",
+        "sourceCommit": "c86b8490c1717bce2881eac051bef94388a84001",
+        "comparisonPath": "spec/compatibility/closure/evidence/AUTH-ACCOUNT-comparison.json",
+        "rows": {
+          "MATCH": 11
+        }
+      }
+    },
+    {
+      "conditionId": "AUTH-ACCOUNT/client-password-change",
+      "source": "docs/compatibility/ip-fs-production-compatibility.md#feature-group-status",
+      "recipeIds": [
+        "auth-account/client/password-change"
+      ],
+      "configProjections": [
+        "default"
+      ],
+      "status": "VERIFIED",
+      "note": "Historical fireemu-35fe6 production receipts corroborate this row; the sandbox re-record is the closure evidence.",
+      "evidence": {
+        "productionRecordings": [
+          {
+            "recordedAt": "2026-09-23T15:29:14.879Z",
+            "gitSha": "81ba4d60f0faf5268a8b6b9eacb1ef34b03e5315",
+            "recordings": 2,
+            "project": "fireemu-oracle-idp"
+          }
+        ],
+        "finalArtifactSha256": "a8bfc5dc1737dee01bae028b2e3dd421f04326e12640cb4936d896ebfcfa358a",
+        "sourceCommit": "c86b8490c1717bce2881eac051bef94388a84001",
+        "comparisonPath": "spec/compatibility/closure/evidence/AUTH-ACCOUNT-comparison.json",
+        "rows": {
+          "MATCH": 10
+        }
+      }
+    },
+    {
+      "conditionId": "AUTH-ACCOUNT/input-validation-basic",
+      "source": "docs/compatibility/emulator-scope.md#in-scope-application-facing-contracts",
+      "recipeIds": [
+        "auth-account/client/validation"
+      ],
+      "configProjections": [
+        "default"
+      ],
+      "status": "VERIFIED",
+      "note": "Historical fireemu-35fe6 production receipts corroborate this row; the sandbox re-record is the closure evidence.",
+      "evidence": {
+        "productionRecordings": [
+          {
+            "recordedAt": "2026-09-23T11:52:22.579Z",
+            "gitSha": "2f9128f45f0d5aeb4aea9bdfaaa0f1e1c105e31f",
+            "recordings": 2,
+            "project": "fireemu-oracle-idp"
+          }
+        ],
+        "finalArtifactSha256": "a8bfc5dc1737dee01bae028b2e3dd421f04326e12640cb4936d896ebfcfa358a",
+        "sourceCommit": "c86b8490c1717bce2881eac051bef94388a84001",
+        "comparisonPath": "spec/compatibility/closure/evidence/AUTH-ACCOUNT-comparison.json",
+        "rows": {
+          "MATCH": 7
+        }
+      }
+    },
+    {
+      "conditionId": "AUTH-ACCOUNT/anonymous-basic",
+      "source": "docs/compatibility/ip-fs-production-compatibility.md#feature-group-status",
+      "recipeIds": [
+        "auth-account/client/anonymous"
+      ],
+      "configProjections": [
+        "default"
+      ],
+      "status": "VERIFIED",
+      "note": "Historical fireemu-35fe6 production receipts corroborate this row; the sandbox re-record is the closure evidence.",
+      "evidence": {
+        "productionRecordings": [
+          {
+            "recordedAt": "2026-09-23T11:52:22.579Z",
+            "gitSha": "2f9128f45f0d5aeb4aea9bdfaaa0f1e1c105e31f",
+            "recordings": 2,
+            "project": "fireemu-oracle-idp"
+          }
+        ],
+        "finalArtifactSha256": "a8bfc5dc1737dee01bae028b2e3dd421f04326e12640cb4936d896ebfcfa358a",
+        "sourceCommit": "c86b8490c1717bce2881eac051bef94388a84001",
+        "comparisonPath": "spec/compatibility/closure/evidence/AUTH-ACCOUNT-comparison.json",
+        "rows": {
+          "MATCH": 5
+        }
+      }
+    },
+    {
+      "conditionId": "AUTH-ACCOUNT/email-canonical-and-duplicate",
+      "source": "docs/compatibility/emulator-scope.md#in-scope-application-facing-contracts",
+      "recipeIds": [
+        "auth-account/client/email-case"
+      ],
+      "configProjections": [
+        "default"
+      ],
+      "status": "VERIFIED",
+      "note": "Historical fireemu-35fe6 production receipts corroborate this row; the sandbox re-record is the closure evidence.",
+      "evidence": {
+        "productionRecordings": [
+          {
+            "recordedAt": "2026-09-23T11:52:22.579Z",
+            "gitSha": "2f9128f45f0d5aeb4aea9bdfaaa0f1e1c105e31f",
+            "recordings": 2,
+            "project": "fireemu-oracle-idp"
+          }
+        ],
+        "finalArtifactSha256": "a8bfc5dc1737dee01bae028b2e3dd421f04326e12640cb4936d896ebfcfa358a",
+        "sourceCommit": "c86b8490c1717bce2881eac051bef94388a84001",
+        "comparisonPath": "spec/compatibility/closure/evidence/AUTH-ACCOUNT-comparison.json",
+        "rows": {
+          "MATCH": 6
+        }
+      }
+    },
+    {
+      "conditionId": "AUTH-ACCOUNT/disable-reenable",
+      "source": "spec/compatibility/gaps.json#AUTH-U01",
+      "recipeIds": [
+        "auth-account/admin/disable"
+      ],
+      "configProjections": [
+        "default"
+      ],
+      "status": "VERIFIED",
+      "note": "Historical fireemu-35fe6 production receipts corroborate this row; the sandbox re-record is the closure evidence.",
+      "evidence": {
+        "productionRecordings": [
+          {
+            "recordedAt": "2026-09-23T12:44:15.390Z",
+            "gitSha": "3fdcb7f5350bfc24257fe448ea72be5417be26c7",
+            "recordings": 2,
+            "project": "fireemu-oracle-idp"
+          }
+        ],
+        "finalArtifactSha256": "a8bfc5dc1737dee01bae028b2e3dd421f04326e12640cb4936d896ebfcfa358a",
+        "sourceCommit": "c86b8490c1717bce2881eac051bef94388a84001",
+        "comparisonPath": "spec/compatibility/closure/evidence/AUTH-ACCOUNT-comparison.json",
+        "rows": {
+          "MATCH": 16
+        }
+      }
+    },
+    {
+      "conditionId": "AUTH-ACCOUNT/delete-effects",
+      "source": "docs/compatibility/ip-fs-production-compatibility.md#feature-group-status",
+      "recipeIds": [
+        "auth-account/client/delete-effects",
+        "auth-account/admin/delete-effects"
+      ],
+      "configProjections": [
+        "default"
+      ],
+      "status": "VERIFIED",
+      "note": "Historical fireemu-35fe6 production receipts corroborate this row; the sandbox re-record is the closure evidence.",
+      "evidence": {
+        "productionRecordings": [
+          {
+            "recordedAt": "2026-09-23T11:52:22.579Z",
+            "gitSha": "2f9128f45f0d5aeb4aea9bdfaaa0f1e1c105e31f",
+            "recordings": 2,
+            "project": "fireemu-oracle-idp"
+          }
+        ],
+        "finalArtifactSha256": "a8bfc5dc1737dee01bae028b2e3dd421f04326e12640cb4936d896ebfcfa358a",
+        "sourceCommit": "c86b8490c1717bce2881eac051bef94388a84001",
+        "comparisonPath": "spec/compatibility/closure/evidence/AUTH-ACCOUNT-comparison.json",
+        "rows": {
+          "MATCH": 13
+        }
+      }
+    },
+    {
+      "conditionId": "AUTH-ACCOUNT/default-policy-client-update",
+      "source": "spec/compatibility/gaps.json#AUTH-U12",
+      "recipeIds": [
+        "auth-account/policy/default/client-update"
+      ],
+      "configProjections": [
+        "default"
+      ],
+      "status": "VERIFIED",
+      "note": "Historical fireemu-35fe6 production receipts corroborate this row; the sandbox re-record is the closure evidence.",
+      "evidence": {
+        "productionRecordings": [
+          {
+            "recordedAt": "2026-09-23T12:44:15.390Z",
+            "gitSha": "3fdcb7f5350bfc24257fe448ea72be5417be26c7",
+            "recordings": 2,
+            "project": "fireemu-oracle-idp"
+          }
+        ],
+        "finalArtifactSha256": "a8bfc5dc1737dee01bae028b2e3dd421f04326e12640cb4936d896ebfcfa358a",
+        "sourceCommit": "c86b8490c1717bce2881eac051bef94388a84001",
+        "comparisonPath": "spec/compatibility/closure/evidence/AUTH-ACCOUNT-comparison.json",
+        "rows": {
+          "MATCH": 31
+        }
+      }
+    },
+    {
+      "conditionId": "AUTH-ACCOUNT/tampered-token-privileged-update",
+      "source": "spec/compatibility/gaps.json#GAP-AUTH-003",
+      "recipeIds": [
+        "auth-account/privilege/tampered-token"
+      ],
+      "configProjections": [
+        "default"
+      ],
+      "status": "VERIFIED",
+      "note": "Historical fireemu-35fe6 production receipts corroborate this row; the sandbox re-record is the closure evidence.",
+      "evidence": {
+        "productionRecordings": [
+          {
+            "recordedAt": "2026-09-23T11:52:22.579Z",
+            "gitSha": "2f9128f45f0d5aeb4aea9bdfaaa0f1e1c105e31f",
+            "recordings": 2,
+            "project": "fireemu-oracle-idp"
+          }
+        ],
+        "finalArtifactSha256": "a8bfc5dc1737dee01bae028b2e3dd421f04326e12640cb4936d896ebfcfa358a",
+        "sourceCommit": "c86b8490c1717bce2881eac051bef94388a84001",
+        "comparisonPath": "spec/compatibility/closure/evidence/AUTH-ACCOUNT-comparison.json",
+        "rows": {
+          "MATCH": 4
+        }
+      }
+    },
+    {
+      "conditionId": "AUTH-ACCOUNT/anonymous-upgrade",
+      "source": "docs/compatibility/ip-fs-production-compatibility.md#feature-group-status",
+      "recipeIds": [
+        "auth-account/client/anonymous-upgrade"
+      ],
+      "configProjections": [
+        "default"
+      ],
+      "status": "VERIFIED",
+      "evidence": {
+        "productionRecordings": [
+          {
+            "recordedAt": "2026-09-23T11:52:22.579Z",
+            "gitSha": "2f9128f45f0d5aeb4aea9bdfaaa0f1e1c105e31f",
+            "recordings": 2,
+            "project": "fireemu-oracle-idp"
+          }
+        ],
+        "finalArtifactSha256": "a8bfc5dc1737dee01bae028b2e3dd421f04326e12640cb4936d896ebfcfa358a",
+        "sourceCommit": "c86b8490c1717bce2881eac051bef94388a84001",
+        "comparisonPath": "spec/compatibility/closure/evidence/AUTH-ACCOUNT-comparison.json",
+        "rows": {
+          "MATCH": 10
+        }
+      }
+    },
+    {
+      "conditionId": "AUTH-ACCOUNT/client-email-change",
+      "source": "docs/compatibility/ip-fs-production-compatibility.md#feature-group-status",
+      "recipeIds": [
+        "auth-account/client/email-change"
+      ],
+      "configProjections": [
+        "default"
+      ],
+      "status": "VERIFIED",
+      "evidence": {
+        "productionRecordings": [
+          {
+            "recordedAt": "2026-09-23T11:52:22.579Z",
+            "gitSha": "2f9128f45f0d5aeb4aea9bdfaaa0f1e1c105e31f",
+            "recordings": 2,
+            "project": "fireemu-oracle-idp"
+          }
+        ],
+        "finalArtifactSha256": "a8bfc5dc1737dee01bae028b2e3dd421f04326e12640cb4936d896ebfcfa358a",
+        "sourceCommit": "c86b8490c1717bce2881eac051bef94388a84001",
+        "comparisonPath": "spec/compatibility/closure/evidence/AUTH-ACCOUNT-comparison.json",
+        "rows": {
+          "MATCH": 9
+        }
+      }
+    },
+    {
+      "conditionId": "AUTH-ACCOUNT/admin-create",
+      "source": "docs/compatibility/ip-fs-production-compatibility.md#feature-group-status",
+      "recipeIds": [
+        "auth-account/admin/create"
+      ],
+      "configProjections": [
+        "default"
+      ],
+      "status": "VERIFIED",
+      "evidence": {
+        "productionRecordings": [
+          {
+            "recordedAt": "2026-09-23T11:52:22.579Z",
+            "gitSha": "2f9128f45f0d5aeb4aea9bdfaaa0f1e1c105e31f",
+            "recordings": 2,
+            "project": "fireemu-oracle-idp"
+          }
+        ],
+        "finalArtifactSha256": "a8bfc5dc1737dee01bae028b2e3dd421f04326e12640cb4936d896ebfcfa358a",
+        "sourceCommit": "c86b8490c1717bce2881eac051bef94388a84001",
+        "comparisonPath": "spec/compatibility/closure/evidence/AUTH-ACCOUNT-comparison.json",
+        "rows": {
+          "MATCH": 16
+        }
+      }
+    },
+    {
+      "conditionId": "AUTH-ACCOUNT/admin-lookup-selectors",
+      "source": "docs/compatibility/ip-fs-production-compatibility.md#feature-group-status",
+      "recipeIds": [
+        "auth-account/admin/lookup"
+      ],
+      "configProjections": [
+        "default"
+      ],
+      "status": "VERIFIED",
+      "evidence": {
+        "productionRecordings": [
+          {
+            "recordedAt": "2026-09-23T11:52:22.579Z",
+            "gitSha": "2f9128f45f0d5aeb4aea9bdfaaa0f1e1c105e31f",
+            "recordings": 2,
+            "project": "fireemu-oracle-idp"
+          }
+        ],
+        "finalArtifactSha256": "a8bfc5dc1737dee01bae028b2e3dd421f04326e12640cb4936d896ebfcfa358a",
+        "sourceCommit": "c86b8490c1717bce2881eac051bef94388a84001",
+        "comparisonPath": "spec/compatibility/closure/evidence/AUTH-ACCOUNT-comparison.json",
+        "rows": {
+          "MATCH": 14
+        }
+      }
+    },
+    {
+      "conditionId": "AUTH-ACCOUNT/admin-update-fields",
+      "source": "spec/compatibility/gaps.json#GAP-AUTH-004",
+      "recipeIds": [
+        "auth-account/admin/update"
+      ],
+      "configProjections": [
+        "default"
+      ],
+      "status": "VERIFIED",
+      "evidence": {
+        "productionRecordings": [
+          {
+            "recordedAt": "2026-09-23T11:52:22.579Z",
+            "gitSha": "2f9128f45f0d5aeb4aea9bdfaaa0f1e1c105e31f",
+            "recordings": 2,
+            "project": "fireemu-oracle-idp"
+          }
+        ],
+        "finalArtifactSha256": "a8bfc5dc1737dee01bae028b2e3dd421f04326e12640cb4936d896ebfcfa358a",
+        "sourceCommit": "c86b8490c1717bce2881eac051bef94388a84001",
+        "comparisonPath": "spec/compatibility/closure/evidence/AUTH-ACCOUNT-comparison.json",
+        "rows": {
+          "MATCH": 19
+        }
+      }
+    },
+    {
+      "conditionId": "AUTH-ACCOUNT/custom-attributes",
+      "source": "docs/compatibility/ip-fs-production-compatibility.md#feature-group-status",
+      "recipeIds": [
+        "auth-account/admin/custom-attributes"
+      ],
+      "configProjections": [
+        "default"
+      ],
+      "status": "VERIFIED",
+      "evidence": {
+        "productionRecordings": [
+          {
+            "recordedAt": "2026-09-23T15:29:14.879Z",
+            "gitSha": "81ba4d60f0faf5268a8b6b9eacb1ef34b03e5315",
+            "recordings": 2,
+            "project": "fireemu-oracle-idp"
+          }
+        ],
+        "finalArtifactSha256": "a8bfc5dc1737dee01bae028b2e3dd421f04326e12640cb4936d896ebfcfa358a",
+        "sourceCommit": "c86b8490c1717bce2881eac051bef94388a84001",
+        "comparisonPath": "spec/compatibility/closure/evidence/AUTH-ACCOUNT-comparison.json",
+        "rows": {
+          "MATCH": 31
+        }
+      }
+    },
+    {
+      "conditionId": "AUTH-ACCOUNT/privilege-boundary",
+      "source": "spec/compatibility/gaps.json#AUTH-U13",
+      "recipeIds": [
+        "auth-account/privilege/valid-token-admin-fields",
+        "auth-account/privilege/credentials"
+      ],
+      "configProjections": [
+        "default"
+      ],
+      "status": "VERIFIED",
+      "evidence": {
+        "productionRecordings": [
+          {
+            "recordedAt": "2026-09-23T11:52:22.579Z",
+            "gitSha": "2f9128f45f0d5aeb4aea9bdfaaa0f1e1c105e31f",
+            "recordings": 2,
+            "project": "fireemu-oracle-idp"
+          },
+          {
+            "recordedAt": "2026-09-23T12:44:15.390Z",
+            "gitSha": "3fdcb7f5350bfc24257fe448ea72be5417be26c7",
+            "recordings": 2,
+            "project": "fireemu-oracle-idp"
+          }
+        ],
+        "finalArtifactSha256": "a8bfc5dc1737dee01bae028b2e3dd421f04326e12640cb4936d896ebfcfa358a",
+        "sourceCommit": "c86b8490c1717bce2881eac051bef94388a84001",
+        "comparisonPath": "spec/compatibility/closure/evidence/AUTH-ACCOUNT-comparison.json",
+        "rows": {
+          "MATCH": 43
+        }
+      }
+    },
+    {
+      "conditionId": "AUTH-ACCOUNT/admin-delete-and-batch-delete",
+      "source": "docs/compatibility/ip-fs-production-compatibility.md#feature-group-status",
+      "recipeIds": [
+        "auth-account/admin/delete",
+        "auth-account/admin/batch-delete"
+      ],
+      "configProjections": [
+        "default"
+      ],
+      "status": "VERIFIED",
+      "evidence": {
+        "productionRecordings": [
+          {
+            "recordedAt": "2026-09-23T11:52:22.579Z",
+            "gitSha": "2f9128f45f0d5aeb4aea9bdfaaa0f1e1c105e31f",
+            "recordings": 2,
+            "project": "fireemu-oracle-idp"
+          }
+        ],
+        "finalArtifactSha256": "a8bfc5dc1737dee01bae028b2e3dd421f04326e12640cb4936d896ebfcfa358a",
+        "sourceCommit": "c86b8490c1717bce2881eac051bef94388a84001",
+        "comparisonPath": "spec/compatibility/closure/evidence/AUTH-ACCOUNT-comparison.json",
+        "rows": {
+          "MATCH": 17
+        }
+      }
+    },
+    {
+      "conditionId": "AUTH-ACCOUNT/admin-list-export",
+      "source": "docs/compatibility/ip-fs-production-compatibility.md#feature-group-status",
+      "recipeIds": [
+        "auth-account/admin/batch-get"
+      ],
+      "configProjections": [
+        "default"
+      ],
+      "status": "VERIFIED",
+      "evidence": {
+        "productionRecordings": [
+          {
+            "recordedAt": "2026-09-23T11:52:22.579Z",
+            "gitSha": "2f9128f45f0d5aeb4aea9bdfaaa0f1e1c105e31f",
+            "recordings": 2,
+            "project": "fireemu-oracle-idp"
+          }
+        ],
+        "finalArtifactSha256": "a8bfc5dc1737dee01bae028b2e3dd421f04326e12640cb4936d896ebfcfa358a",
+        "sourceCommit": "c86b8490c1717bce2881eac051bef94388a84001",
+        "comparisonPath": "spec/compatibility/closure/evidence/AUTH-ACCOUNT-comparison.json",
+        "rows": {
+          "MATCH": 11
+        }
+      }
+    },
+    {
+      "conditionId": "AUTH-ACCOUNT/admin-query",
+      "source": "docs/compatibility/emulator-scope.md#in-scope-application-facing-contracts",
+      "recipeIds": [
+        "auth-account/admin/query"
+      ],
+      "configProjections": [
+        "default"
+      ],
+      "status": "VERIFIED",
+      "evidence": {
+        "productionRecordings": [
+          {
+            "recordedAt": "2026-09-23T15:29:14.879Z",
+            "gitSha": "81ba4d60f0faf5268a8b6b9eacb1ef34b03e5315",
+            "recordings": 2,
+            "project": "fireemu-oracle-idp"
+          }
+        ],
+        "finalArtifactSha256": "a8bfc5dc1737dee01bae028b2e3dd421f04326e12640cb4936d896ebfcfa358a",
+        "sourceCommit": "c86b8490c1717bce2881eac051bef94388a84001",
+        "comparisonPath": "spec/compatibility/closure/evidence/AUTH-ACCOUNT-comparison.json",
+        "rows": {
+          "MATCH": 32
+        }
+      }
+    },
+    {
+      "conditionId": "AUTH-ACCOUNT/import-basic",
+      "source": "docs/compatibility/ip-fs-production-compatibility.md#feature-group-status",
+      "recipeIds": [
+        "auth-account/admin/import"
+      ],
+      "configProjections": [
+        "default"
+      ],
+      "status": "VERIFIED",
+      "evidence": {
+        "productionRecordings": [
+          {
+            "recordedAt": "2026-09-23T15:29:14.879Z",
+            "gitSha": "81ba4d60f0faf5268a8b6b9eacb1ef34b03e5315",
+            "recordings": 2,
+            "project": "fireemu-oracle-idp"
+          }
+        ],
+        "finalArtifactSha256": "a8bfc5dc1737dee01bae028b2e3dd421f04326e12640cb4936d896ebfcfa358a",
+        "sourceCommit": "c86b8490c1717bce2881eac051bef94388a84001",
+        "comparisonPath": "spec/compatibility/closure/evidence/AUTH-ACCOUNT-comparison.json",
+        "rows": {
+          "MATCH": 15
+        }
+      }
+    },
+    {
+      "conditionId": "AUTH-ACCOUNT/import-hash-formats",
+      "source": "docs/compatibility/emulator-scope.md#in-scope-application-facing-contracts",
+      "recipeIds": [
+        "auth-account/admin/import-hash/HMAC_SHA512",
+        "auth-account/admin/import-hash/HMAC_SHA256",
+        "auth-account/admin/import-hash/HMAC_SHA1",
+        "auth-account/admin/import-hash/HMAC_MD5",
+        "auth-account/admin/import-hash/MD5",
+        "auth-account/admin/import-hash/SHA1",
+        "auth-account/admin/import-hash/SHA256",
+        "auth-account/admin/import-hash/SHA512",
+        "auth-account/admin/import-hash/PBKDF_SHA1",
+        "auth-account/admin/import-hash/PBKDF2_SHA256",
+        "auth-account/admin/import-hash/SCRYPT",
+        "auth-account/admin/import-hash/STANDARD_SCRYPT",
+        "auth-account/admin/import-hash/BCRYPT",
+        "auth-account/admin/import-hash/ARGON2",
+        "auth-account/admin/import-hash/errors"
+      ],
+      "configProjections": [
+        "default"
+      ],
+      "status": "VERIFIED",
+      "note": "All 14 algorithms of the Identity Toolkit v1 discovery document (read 2026-09-23) are in scope. fireemu must verify every one, including Firebase SCRYPT with a configurable project hashConfig.",
+      "evidence": {
+        "productionRecordings": [
+          {
+            "recordedAt": "2026-09-23T11:52:22.579Z",
+            "gitSha": "2f9128f45f0d5aeb4aea9bdfaaa0f1e1c105e31f",
+            "recordings": 2,
+            "project": "fireemu-oracle-idp"
+          }
+        ],
+        "finalArtifactSha256": "a8bfc5dc1737dee01bae028b2e3dd421f04326e12640cb4936d896ebfcfa358a",
+        "sourceCommit": "c86b8490c1717bce2881eac051bef94388a84001",
+        "comparisonPath": "spec/compatibility/closure/evidence/AUTH-ACCOUNT-comparison.json",
+        "rows": {
+          "MATCH": 159
+        }
+      }
+    },
+    {
+      "conditionId": "AUTH-ACCOUNT/phone-accounts",
+      "source": "docs/compatibility/ip-fs-production-compatibility.md#feature-group-status",
+      "recipeIds": [
+        "auth-account/phone"
+      ],
+      "configProjections": [
+        "default"
+      ],
+      "status": "VERIFIED",
+      "evidence": {
+        "productionRecordings": [
+          {
+            "recordedAt": "2026-09-23T15:29:14.879Z",
+            "gitSha": "81ba4d60f0faf5268a8b6b9eacb1ef34b03e5315",
+            "recordings": 2,
+            "project": "fireemu-oracle-idp"
+          }
+        ],
+        "finalArtifactSha256": "a8bfc5dc1737dee01bae028b2e3dd421f04326e12640cb4936d896ebfcfa358a",
+        "sourceCommit": "c86b8490c1717bce2881eac051bef94388a84001",
+        "comparisonPath": "spec/compatibility/closure/evidence/AUTH-ACCOUNT-comparison.json",
+        "rows": {
+          "MATCH": 22
+        }
+      }
+    },
+    {
+      "conditionId": "AUTH-ACCOUNT/provider-link-unlink",
+      "source": "spec/compatibility/gaps.json#GAP-AUTH-008",
+      "recipeIds": [
+        "auth-account/provider"
+      ],
+      "configProjections": [
+        "default"
+      ],
+      "status": "VERIFIED",
+      "evidence": {
+        "productionRecordings": [
+          {
+            "recordedAt": "2026-09-23T11:52:22.579Z",
+            "gitSha": "2f9128f45f0d5aeb4aea9bdfaaa0f1e1c105e31f",
+            "recordings": 2,
+            "project": "fireemu-oracle-idp"
+          }
+        ],
+        "finalArtifactSha256": "a8bfc5dc1737dee01bae028b2e3dd421f04326e12640cb4936d896ebfcfa358a",
+        "sourceCommit": "c86b8490c1717bce2881eac051bef94388a84001",
+        "comparisonPath": "spec/compatibility/closure/evidence/AUTH-ACCOUNT-comparison.json",
+        "rows": {
+          "MATCH": 17
+        }
+      }
+    },
+    {
+      "conditionId": "AUTH-ACCOUNT/uid-reuse-after-delete",
+      "source": "spec/compatibility/gaps.json#AUTH-U11",
+      "recipeIds": [
+        "auth-account/admin/uid-reuse"
+      ],
+      "configProjections": [
+        "default"
+      ],
+      "status": "VERIFIED",
+      "evidence": {
+        "productionRecordings": [
+          {
+            "recordedAt": "2026-09-23T12:44:15.390Z",
+            "gitSha": "3fdcb7f5350bfc24257fe448ea72be5417be26c7",
+            "recordings": 2,
+            "project": "fireemu-oracle-idp"
+          }
+        ],
+        "finalArtifactSha256": "a8bfc5dc1737dee01bae028b2e3dd421f04326e12640cb4936d896ebfcfa358a",
+        "sourceCommit": "c86b8490c1717bce2881eac051bef94388a84001",
+        "comparisonPath": "spec/compatibility/closure/evidence/AUTH-ACCOUNT-comparison.json",
+        "rows": {
+          "MATCH": 9
+        }
+      }
+    },
+    {
+      "conditionId": "AUTH-ACCOUNT/duplicate-email-mode",
+      "source": "docs/compatibility/emulator-scope.md#in-scope-application-facing-contracts",
+      "recipeIds": [
+        "auth-account/config/duplicate-email"
+      ],
+      "configProjections": [
+        "dup-email",
+        "default"
+      ],
+      "status": "VERIFIED",
+      "evidence": {
+        "productionRecordings": [
+          {
+            "recordedAt": "2026-09-23T11:52:22.579Z",
+            "gitSha": "2f9128f45f0d5aeb4aea9bdfaaa0f1e1c105e31f",
+            "recordings": 2,
+            "project": "fireemu-oracle-idp"
+          }
+        ],
+        "finalArtifactSha256": "a8bfc5dc1737dee01bae028b2e3dd421f04326e12640cb4936d896ebfcfa358a",
+        "sourceCommit": "c86b8490c1717bce2881eac051bef94388a84001",
+        "comparisonPath": "spec/compatibility/closure/evidence/AUTH-ACCOUNT-comparison.json",
+        "rows": {
+          "MATCH": 9
+        }
+      }
+    },
+    {
+      "conditionId": "AUTH-ACCOUNT/email-privacy-off",
+      "source": "docs/compatibility/ip-fs-production-compatibility.md#feature-group-status",
+      "recipeIds": [
+        "auth-account/config/email-privacy"
+      ],
+      "configProjections": [
+        "privacy-off",
+        "default"
+      ],
+      "status": "VERIFIED",
+      "evidence": {
+        "productionRecordings": [
+          {
+            "recordedAt": "2026-09-23T11:52:22.579Z",
+            "gitSha": "2f9128f45f0d5aeb4aea9bdfaaa0f1e1c105e31f",
+            "recordings": 2,
+            "project": "fireemu-oracle-idp"
+          }
+        ],
+        "finalArtifactSha256": "a8bfc5dc1737dee01bae028b2e3dd421f04326e12640cb4936d896ebfcfa358a",
+        "sourceCommit": "c86b8490c1717bce2881eac051bef94388a84001",
+        "comparisonPath": "spec/compatibility/closure/evidence/AUTH-ACCOUNT-comparison.json",
+        "rows": {
+          "MATCH": 10
+        }
+      }
+    },
+    {
+      "conditionId": "AUTH-ACCOUNT/password-policy-routes-and-custom",
+      "source": "spec/compatibility/gaps.json#AUTH-U12",
+      "recipeIds": [
+        "auth-account/policy/default/routes",
+        "auth-account/policy/enforce-custom",
+        "auth-account/policy/not-enforce"
+      ],
+      "configProjections": [
+        "default",
+        "policy-enforce-custom",
+        "policy-not-enforce"
+      ],
+      "status": "VERIFIED",
+      "evidence": {
+        "productionRecordings": [
+          {
+            "recordedAt": "2026-09-23T11:52:22.579Z",
+            "gitSha": "2f9128f45f0d5aeb4aea9bdfaaa0f1e1c105e31f",
+            "recordings": 2,
+            "project": "fireemu-oracle-idp"
+          },
+          {
+            "recordedAt": "2026-09-23T15:29:14.879Z",
+            "gitSha": "81ba4d60f0faf5268a8b6b9eacb1ef34b03e5315",
+            "recordings": 2,
+            "project": "fireemu-oracle-idp"
+          }
+        ],
+        "finalArtifactSha256": "a8bfc5dc1737dee01bae028b2e3dd421f04326e12640cb4936d896ebfcfa358a",
+        "sourceCommit": "c86b8490c1717bce2881eac051bef94388a84001",
+        "comparisonPath": "spec/compatibility/closure/evidence/AUTH-ACCOUNT-comparison.json",
+        "rows": {
+          "MATCH": 35
+        }
+      }
+    },
+    {
+      "conditionId": "AUTH-ACCOUNT/client-permissions",
+      "source": "docs/compatibility/ip-fs-production-compatibility.md#feature-group-status",
+      "recipeIds": [
+        "auth-account/config/client-permissions"
+      ],
+      "configProjections": [
+        "client-permissions",
+        "default"
+      ],
+      "status": "VERIFIED",
+      "evidence": {
+        "productionRecordings": [
+          {
+            "recordedAt": "2026-09-23T11:52:22.579Z",
+            "gitSha": "2f9128f45f0d5aeb4aea9bdfaaa0f1e1c105e31f",
+            "recordings": 2,
+            "project": "fireemu-oracle-idp"
+          }
+        ],
+        "finalArtifactSha256": "a8bfc5dc1737dee01bae028b2e3dd421f04326e12640cb4936d896ebfcfa358a",
+        "sourceCommit": "c86b8490c1717bce2881eac051bef94388a84001",
+        "comparisonPath": "spec/compatibility/closure/evidence/AUTH-ACCOUNT-comparison.json",
+        "rows": {
+          "MATCH": 7
+        }
+      }
+    },
+    {
+      "conditionId": "AUTH-ACCOUNT/value-classes",
+      "source": "spec/compatibility/gaps.json#AUTH-U13",
+      "recipeIds": [
+        "auth-account/values"
+      ],
+      "configProjections": [
+        "default"
+      ],
+      "status": "VERIFIED",
+      "evidence": {
+        "productionRecordings": [
+          {
+            "recordedAt": "2026-09-23T15:29:14.879Z",
+            "gitSha": "81ba4d60f0faf5268a8b6b9eacb1ef34b03e5315",
+            "recordings": 2,
+            "project": "fireemu-oracle-idp"
+          }
+        ],
+        "finalArtifactSha256": "a8bfc5dc1737dee01bae028b2e3dd421f04326e12640cb4936d896ebfcfa358a",
+        "sourceCommit": "c86b8490c1717bce2881eac051bef94388a84001",
+        "comparisonPath": "spec/compatibility/closure/evidence/AUTH-ACCOUNT-comparison.json",
+        "rows": {
+          "MATCH": 33
+        }
+      }
+    },
+    {
+      "conditionId": "AUTH-ACCOUNT/final-artifact-regression",
+      "source": "docs/compatibility/ip-fs-production-compatibility.md#feature-group-status",
+      "recipeIds": [
+        "auth-account",
+        "auth/historical-23",
+        "auth-saved-reference/4-corpora",
+        "cargo:fireemu-core-auth+fireemu-adapter-http"
+      ],
+      "configProjections": [
+        "default"
+      ],
+      "status": "VERIFIED",
+      "evidence": {
+        "productionRecordings": [
+          {
+            "recordedAt": "2026-09-23T11:52:22.579Z",
+            "gitSha": "2f9128f45f0d5aeb4aea9bdfaaa0f1e1c105e31f",
+            "recordings": 2,
+            "project": "fireemu-oracle-idp"
+          },
+          {
+            "recordedAt": "2026-09-23T12:44:15.390Z",
+            "gitSha": "3fdcb7f5350bfc24257fe448ea72be5417be26c7",
+            "recordings": 2,
+            "project": "fireemu-oracle-idp"
+          },
+          {
+            "recordedAt": "2026-09-23T15:29:14.879Z",
+            "gitSha": "81ba4d60f0faf5268a8b6b9eacb1ef34b03e5315",
+            "recordings": 2,
+            "project": "fireemu-oracle-idp"
+          }
+        ],
+        "finalArtifactSha256": "a8bfc5dc1737dee01bae028b2e3dd421f04326e12640cb4936d896ebfcfa358a",
+        "sourceCommit": "c86b8490c1717bce2881eac051bef94388a84001",
+        "comparisonPath": "spec/compatibility/closure/evidence/AUTH-ACCOUNT-comparison.json",
+        "authAccount": {
+          "MATCH": 631
+        },
+        "historical23": {
+          "command": "node conformance/src/auth-probe/run.mjs check",
+          "result": "23 rows agree with conformance/auth-production-matrix.json"
+        },
+        "savedReference": {
+          "path": "spec/compatibility/closure/evidence/AUTH-ACCOUNT-saved-replay.json",
+          "result": "48/48 MATCH across auth-basic-v2, auth-display-name, auth-password, auth-profile",
+          "artifactSha256": "db8cafcd1c4dc8d56113a9b6b4c7dbd255154071f1a5c95dd27db2b43537ede4",
+          "sourceCommit": "b25d7499290d4321000cb8ba99d975274a20daed",
+          "note": "Historical 48-row replay against the previous artifact; not part of the current source-bound 631-row run."
+        },
+        "execution": {
+          "runId": "auth-a12-attested-recompare-20260924T124006Z",
+          "receiptSha256": "b1432c7f38beab191a756fb4d805aff86db459d07f8ad9dd2cc8c7b7fb433b85",
+          "buildReceiptSha256": "45f3aece5f4303cf5ed4ea099872dab0e6e21ac9b8d2dbb5bb466777ad81c976",
+          "runtimeInputMapSha256": "dbe45128dc806dc439c70f1f09d7bd669868ce737e5272445bdc2df03c605e4",
+          "artifactSha256": "a8bfc5dc1737dee01bae028b2e3dd421f04326e12640cb4936d896ebfcfa358a",
+          "accountRows": {
+            "MATCH": 631
+          }
+        },
+        "historicalNative": {
+          "nextest": "cargo nextest run --workspace --profile pr: 3290 passed",
+          "federationCorpus": "tools/compat-broad/auth-account-federation/test_corpus.py: 63 passed",
+          "clippy": "cargo clippy --workspace --all-targets -- -D warnings: clean"
+        },
+        "historicalArtifactCopy": "docs.local/runs/auth-account-final-20260924b/fireemu (private; debug builds are not reproducible)"
+      },
+      "note": "Historical result was 630/631. Current source-bound saved-production comparison on the retained c86 artifact is 631/631 MATCH, including the malformed customAttributes JSON case. The earlier A12 owner decision is retained as history. This evidence makes no broader claim about Gson parser syntax."
+    },
+    {
+      "conditionId": "AUTH-ACCOUNT/closure-review",
+      "source": "docs/compatibility/ip-fs-production-compatibility.md#feature-group-status",
+      "recipeIds": [
+        "AUTH-ACCOUNT",
+        "auth-account"
+      ],
+      "configProjections": [
+        "default"
+      ],
+      "status": "PENDING_REVIEW",
+      "evidence": {
+        "productionRecordings": [
+          {
+            "recordedAt": "2026-09-23T11:52:22.579Z",
+            "gitSha": "2f9128f45f0d5aeb4aea9bdfaaa0f1e1c105e31f",
+            "recordings": 2,
+            "project": "fireemu-oracle-idp"
+          },
+          {
+            "recordedAt": "2026-09-23T12:44:15.390Z",
+            "gitSha": "3fdcb7f5350bfc24257fe448ea72be5417be26c7",
+            "recordings": 2,
+            "project": "fireemu-oracle-idp"
+          },
+          {
+            "recordedAt": "2026-09-23T15:29:14.879Z",
+            "gitSha": "81ba4d60f0faf5268a8b6b9eacb1ef34b03e5315",
+            "recordings": 2,
+            "project": "fireemu-oracle-idp"
+          }
+        ],
+        "finalArtifactSha256": "db8cafcd1c4dc8d56113a9b6b4c7dbd255154071f1a5c95dd27db2b43537ede4",
+        "sourceCommit": "b25d7499290d4321000cb8ba99d975274a20daed",
+        "comparisonPath": "spec/compatibility/closure/evidence/AUTH-ACCOUNT-comparison.json",
+        "reviews": [
+          {
+            "round": 1,
+            "verdict": "CONDITIONAL_APPROVE",
+            "on": "7be532ad9"
+          },
+          {
+            "round": 2,
+            "verdict": "REJECT",
+            "on": "061853092",
+            "mustFix": "restored imported-hash specs bypassed parameter ranges"
+          },
+          {
+            "round": 3,
+            "verdict": "APPROVE",
+            "on": "3eb68306a"
+          }
+        ]
+      },
+      "note": "The prior approval remains historical and is bound to the previous artifact; this source-bound artifact needs a fresh full closure review."
+    }
+  ]
+}

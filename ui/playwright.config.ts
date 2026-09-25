@@ -13,9 +13,7 @@ export default defineConfig({
   retries: 0,
   timeout: 60_000,
   reporter: [["list"]],
-  ...(process.env.FIREEMU_UI_URL
-    ? {}
-    : { globalSetup: "./e2e/global-setup.ts", globalTeardown: "./e2e/global-teardown.ts" }),
+  ...(process.env.FIREEMU_UI_URL ? {} : { globalSetup: "./e2e/global-setup.ts" }),
   use: {
     baseURL: uiUrl,
     trace: "retain-on-failure",

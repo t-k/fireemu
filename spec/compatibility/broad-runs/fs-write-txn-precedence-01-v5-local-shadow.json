@@ -1,0 +1,85 @@
+{
+  "kind": "firestore-write-transaction-local-shadow-plan-v1",
+  "campaignId": "FS-WRITE-TXN-PRECEDENCE-01-V5",
+  "status": "prepared-local-only",
+  "productionExecuted": false,
+  "sourceCommit": "dcd58cea79b1571da082c9d3cceb06afb91b1865",
+  "artifactSha256": "a1d2e1bf202183ab0f37ad01eb6d374bae602a04b4e2ceff0493bfc80f7ab64b",
+  "manifestSha256": "16128caadec4998510a66a8f2a4761fe6dc65492a2454fb7581bb1c608db574d",
+  "execution": {
+    "runner": "existing shared gate plus current-head Rust gRPC/REST integration harnesses",
+    "commands": [
+      "cargo nextest run --locked -p fireemu-adapter-grpc --test streams --profile pr",
+      "cargo nextest run --locked -p fireemu-adapter-grpc --test rest --profile pr",
+      "cargo nextest run --locked -p fireemu-adapter-grpc --test local --profile pr"
+    ],
+    "network": "loopback only",
+    "productionCredentials": false,
+    "portLifecycle": "owned dynamic ports; stop the process and release the gate before completion"
+  },
+  "casePlans": [
+    {
+      "id": "stream-transaction-contention",
+      "localTests": [
+        "write_stream_refuses_active_transaction_contention_without_mutation",
+        "write_stream_handshake_then_sequential_commits"
+      ],
+      "controls": [
+        "uncontended stream write succeeds",
+        "contended stream request contains a locked write followed by an owned tail write",
+        "refusal is read from the stream and the stream is fully drained",
+        "guard remains at the pre-contention value and tail is absent",
+        "rollback releases the lock and a fresh stream write succeeds"
+      ],
+      "failureRehearsal": [
+        "inject incomplete stream response and classify as indeterminate",
+        "inject cleanup read failure and retain the ownership journal without DELETE",
+        "inject configuration drift before setup and stop before data mutation"
+      ],
+      "cleanupRehearsal": [
+        "bind updateTime from a typed readback",
+        "conditional DELETE only for the owned version",
+        "final absence readback for guard and tail",
+        "assert no owned process or gate remains"
+      ]
+    },
+    {
+      "id": "document-limit-boundaries",
+      "localTests": [
+        "rest_document_size_and_nesting_boundaries_refuse_without_publishing",
+        "rest_oversized_nested_values_report_canonical_paths_without_publishing"
+      ],
+      "controls": [
+        "exact document boundary is accepted",
+        "one-byte-over boundary is refused",
+        "nested over-boundary document is absent after refusal",
+        "valid nested control remains readable"
+      ],
+      "failureRehearsal": [
+        "inject a malformed body and ensure no document attempt is recorded as owned",
+        "inject a refusal readback failure and retain the recovery journal",
+        "inject an unexpected success and classify it as semantic mismatch rather than cleanup authority"
+      ],
+      "cleanupRehearsal": [
+        "read each present target and bind its updateTime",
+        "delete only owned versions",
+        "verify all targets absent"
+      ]
+    }
+  ],
+  "expectedLocalEvidence": {
+    "collectionComplete": true,
+    "stateValidation": true,
+    "cleanupComplete": true,
+    "compatibility": "not-observed",
+    "productionComparison": "not-run"
+  },
+  "evidenceBoundary": "local invariant and official-emulator-independent runtime evidence only; no production comparison",
+  "notAProductionReceipt": true,
+  "supersedes": "FS-WRITE-TXN-PRECEDENCE-01-V4",
+  "artifactBuild": {
+    "command": "CARGO_TARGET_DIR=target/o3-fs-write-v5 cargo build --locked --release -p fireemu",
+    "relativePath": "target/o3-fs-write-v5/release/fireemu",
+    "sha256": "a1d2e1bf202183ab0f37ad01eb6d374bae602a04b4e2ceff0493bfc80f7ab64b"
+  }
+}

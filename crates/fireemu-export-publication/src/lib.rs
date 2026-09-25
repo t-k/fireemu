@@ -47,6 +47,11 @@ impl PublicationStage {
         target: &Path,
         validate_target: impl FnOnce(&Path) -> Result<(), String>,
     ) -> Result<Self, String> {
+        // A one-element relative name such as `out` has the empty path as its parent, and
+        // every operation on "" fails with ENOENT. Resolving against the working directory
+        // here means no caller can lose an export by passing a bare directory name.
+        let target = &std::path::absolute(target)
+            .map_err(|error| format!("cannot resolve the export path: {error}"))?;
         let parent = target
             .parent()
             .ok_or_else(|| "the export path has no parent directory".to_owned())?;

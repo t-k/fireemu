@@ -24,6 +24,7 @@ async fn respond(
     state: Arc<AuthState>,
     control: Option<Arc<ControlState>>,
     blocking_auth_slots: Option<Arc<Semaphore>>,
+    peer_ip: Option<String>,
     req: Request<Incoming>,
 ) -> Result<Response<Full<Bytes>>, hyper::Error> {
     let method = req.method().as_str().to_owned();
@@ -123,6 +124,7 @@ async fn respond(
             .iter()
             .map(|v| v.to_str().unwrap_or_default().to_owned())
             .collect(),
+        peer_ip,
     };
     // Bound the body before reading it (spec 33.3): oversized payloads never allocate fully.
     let collected =
@@ -300,24 +302,7 @@ fn finish(
 /// `k=v&k=v` (percent-encoded) → JSON object of strings.
 fn form_to_json(text: &str) -> serde_json::Value {
     fn decode(s: &str) -> String {
-        let bytes = s.as_bytes();
-        let mut out = Vec::with_capacity(bytes.len());
-        let mut i = 0;
-        while i < bytes.len() {
-            if bytes[i] == b'%' && i + 2 < bytes.len() {
-                if let Some(b) = s
-                    .get(i + 1..i + 3)
-                    .and_then(|h| u8::from_str_radix(h, 16).ok())
-                {
-                    out.push(b);
-                    i += 3;
-                    continue;
-                }
-            }
-            out.push(if bytes[i] == b'+' { b' ' } else { bytes[i] });
-            i += 1;
-        }
-        String::from_utf8_lossy(&out).into_owned()
+        fireemu_core_types::codec::percent_decode(s, fireemu_core_types::codec::PlusMode::Space)
     }
     let mut map = serde_json::Map::new();
     for kv in text.split('&').filter(|s| !s.is_empty()) {
@@ -373,7 +358,8 @@ async fn serve_inner(
         ))
     });
     loop {
-        let (stream, _) = listener.accept().await?;
+        let (stream, peer_addr) = listener.accept().await?;
+        let peer_ip = Some(peer_addr.ip().to_string());
         let state = state.clone();
         let control = control.clone();
         let blocking_auth_slots = blocking_auth_slots.clone();
@@ -384,6 +370,7 @@ async fn serve_inner(
                     state.clone(),
                     control.clone(),
                     blocking_auth_slots.clone(),
+                    peer_ip.clone(),
                     req,
                 )
             });

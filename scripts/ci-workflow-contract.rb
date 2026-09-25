@@ -33,6 +33,16 @@ assert(pr_runs.include?("cargo check --workspace --all-targets"), "the minimal p
   assert(!pr_runs.include?(expensive), "the automatic pr job must not run #{expensive}")
 end
 
+platform_runs = jobs.fetch("platforms").fetch("steps").map { |step| step["run"] }.compact.join("\n")
+windows_runs = platform_runs.split('= "Windows" ]; then', 2).last.to_s.split("else", 2).first
+assert(windows_runs.include?("--exclude fireemu-verification-quint"), "Windows must exclude the Unix-only Quint supervisor")
+assert(windows_runs.include?("--exclude traceability-check"), "Windows must exclude the Unix-only traceability supervisor")
+assert(windows_runs.include?("cargo nextest run -p fireemu --bin fireemu --test exec_windows --profile pr"), "Windows must execute fireemu binary unit tests and native lifecycle tests")
+
+sdk_runs = load_workflow("functions-sdk-discovery.yml").dig("jobs", "real-sdk-discovery", "steps").map { |step| step["run"] }.compact.join("\n")
+assert(sdk_runs.include?("npm ci --prefix tools/sdk-smoke --ignore-scripts"), "SDK environment regressions require installed real dependencies")
+assert(sdk_runs.include?("cargo test -p fireemu --test functions_environment -- --include-ignored"), "the manual SDK job must execute every environment regression including opt-in cases")
+
 release = load_workflow("release.yml")
 release_source = File.read(File.join(ROOT, ".github", "workflows", "release.yml"))
 assert(!release_source.match?(/uses:\s+[^\s]+@(v\d+|stable)\b/), "release actions must be pinned to immutable commits")
@@ -114,5 +124,26 @@ assert(measure_runs.include?("node --test tools/bench/client.test.mjs"), "benchm
 assert(measure_runs.include?("tools/bench/report.py"), "benchmark measure must render the report")
 benchmark_report = benchmark.dig("jobs", "measure", "steps").find { |step| step["run"]&.include?("tools/bench/report.py") }
 assert(benchmark_report["if"] == "always()", "benchmark report must run on failed trials too")
+
+%w[ci.yml compatibility-inventory.yml conformance.yml functions-sdk-discovery.yml quint.yml].each do |name|
+  bounded = load_workflow(name)
+  assert(bounded.dig("concurrency", "group") == "${{ github.workflow }}-${{ github.ref }}", "#{name} must cancel stale runs for the same ref")
+  assert(bounded.dig("concurrency", "cancel-in-progress") == true, "#{name} must enable stale-run cancellation")
+end
+assert(load_workflow("compatibility-inventory.yml").dig("jobs", "offline-acquisition-integrity", "timeout-minutes") == 120, "offline acquisition must have a two-hour timeout")
+assert(load_workflow("functions-sdk-discovery.yml").dig("jobs", "real-sdk-discovery", "timeout-minutes") == 120, "manual SDK discovery must have a two-hour timeout")
+{
+  "ci.yml" => %w[lint test verify pr platforms package ui],
+  "compatibility-inventory.yml" => %w[feature-inventory-integrity offline-acquisition-integrity],
+  "conformance.yml" => %w[conformance],
+  "functions-sdk-discovery.yml" => %w[real-sdk-discovery],
+  "quint.yml" => %w[quint],
+}.each do |name, jobs|
+  workflow = load_workflow(name)
+  jobs.each do |job|
+    timeout = workflow.dig("jobs", job, "timeout-minutes")
+    assert(timeout.is_a?(Integer) && timeout.positive? && timeout <= 180, "#{name}/#{job} must have a timeout of at most three hours")
+  end
+end
 
 puts "CI workflow contract passed"

@@ -1,0 +1,18 @@
+{
+  "durationProjection": {
+    "invalidValues": "rejected by the envelope validator",
+    "marker": {
+      "nondeterministic": true,
+      "type": "google.protobuf.Duration"
+    },
+    "path": "explainMetrics.executionStats.executionDuration",
+    "scope": "successful analyze runQuery and runAggregationQuery responses"
+  },
+  "indeterminateOnIncompleteLifecycle": true,
+  "kind": "production-campaign-explain-01-comparison-v3",
+  "manifestDigest": "95d7dd9590fe65653be1c10fe723c8a9d83cf87c7265cf8ad3765ea49912e1ed",
+  "normalization": "shared-campaign-typed-json-v2",
+  "observerSha256": "6830494a632595c835e82357d070ab51685010fce481cc6ea23e2c6b0f811180",
+  "requireSameObserver": true,
+  "retainMismatch": true
+}

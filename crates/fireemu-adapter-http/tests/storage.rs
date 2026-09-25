@@ -26,6 +26,9 @@ use serde_json::{json, Value};
 
 const START: LogicalInstant = LogicalInstant::from_unix_seconds(1_788_004_860);
 const BUCKET: &str = "demo-app.appspot.com";
+/// A ruleset that admits every end-user request, for the fixtures whose subject is not the
+/// authorization decision. A run with no loaded ruleset denies them all.
+const ALLOW_ALL_RULES: &str = "rules_version = '2'; service firebase.storage { match /b/{bucket}/o { match /{path=**} { allow read, write: if true; } } }";
 
 struct RefusingStorageEvents;
 
@@ -38,6 +41,9 @@ impl AtomicStorageEventSink for RefusingStorageEvents {
         Err(fireemu_core_types::admission::EventAdmissionError::Capacity("outbox full".to_owned()))
     }
 }
+
+/// The control token `state` gives every fixture, as a run's control surface holds it.
+const CONTROL_TOKEN: &str = "storage-test-control-token";
 
 fn state(rules: Option<&str>) -> StorageState {
     state_with(rules, TokenAcceptance::Verified)
@@ -70,6 +76,7 @@ fn state_with(rules: Option<&str>, token_acceptance: TokenAcceptance) -> Storage
         app_check_policy: None,
         admin_capability: None,
         token_acceptance,
+        control_token: Some(CONTROL_TOKEN.to_owned()),
     }
 }
 
@@ -2030,7 +2037,7 @@ fn fault_plans_fail_storage_operations() {
 
 #[test]
 fn storage_tokens_are_bound_to_the_buckets_project() {
-    let mut s = state(None);
+    let mut s = state(Some(ALLOW_ALL_RULES));
     let mut tenancy = fireemu_core_session::tenancy::Tenancy::new("demo-app");
     tenancy.register("demo-b", &[], &[]).unwrap();
     s.tenancy = Some(Arc::new(RwLock::new(tenancy)));
@@ -3084,5 +3091,505 @@ async fn a_stored_object_always_answers_media_with_its_bytes() {
         "nosniff missing: {head_text}"
     );
     assert_eq!(returned_body, body, "the object bytes must come back");
+    server.abort();
+}
+
+/// Rules source used by the `/internal/setRules` browser-policy tests.
+const SETR_DENY_ALL: &str = "rules_version = '2'; service firebase.storage { match /b/{bucket}/o { match /{path=**} { allow read, write: if false; } } }";
+const SETR_ALLOW_ALL: &str = "rules_version = '2'; service firebase.storage { match /b/{bucket}/o { match /{path=**} { allow read, write: if true; } } }";
+
+fn set_rules_body() -> Vec<u8> {
+    serde_json::to_vec(
+        &json!({"rules": {"files": [{"name": "storage.rules", "content": SETR_ALLOW_ALL}]}}),
+    )
+    .unwrap()
+}
+
+/// SETR-1: `PUT /internal/setRules` replaces the authorization policy of the whole run, so a
+/// page on a loopback origin must present the control token, exactly as the equivalent
+/// control route requires. A foreign origin never reaches it, and the `@firebase/rules-unit-testing`
+/// shape (no `Origin`, no `Sec-Fetch-Site`/`Sec-Fetch-Dest`; Node's built-in `fetch` does
+/// attach `sec-fetch-mode: cors`) keeps working unauthenticated.
+#[test]
+fn set_rules_from_a_browser_needs_the_control_token() {
+    let update = set_rules_body();
+    let bearer = format!("Bearer {CONTROL_TOKEN}");
+
+    for (label, headers) in [
+        (
+            "loopback origin without a token",
+            vec![("origin", "http://localhost:5173")],
+        ),
+        (
+            "loopback origin with the wrong token",
+            vec![
+                ("origin", "http://localhost:5173"),
+                ("authorization", "Bearer not-the-control-token"),
+            ],
+        ),
+        ("sec-fetch-site only", vec![("sec-fetch-site", "same-site")]),
+        ("sec-fetch-dest only", vec![("sec-fetch-dest", "empty")]),
+        (
+            "foreign origin with the control token",
+            vec![
+                ("origin", "https://evil.example"),
+                ("authorization", "Bearer storage-test-control-token"),
+            ],
+        ),
+    ] {
+        let s = state(Some(SETR_DENY_ALL));
+        let mut headers = headers;
+        headers.push(("content-type", "application/json"));
+        let response = handle(&s, req("PUT", "/internal/setRules", &headers, &update));
+        assert_eq!(
+            response.status,
+            403,
+            "{label}: {}",
+            String::from_utf8_lossy(&response.body)
+        );
+        assert!(
+            json_body(&response)["message"]
+                .as_str()
+                .is_some_and(|m| !m.is_empty()),
+            "{label}"
+        );
+        assert_eq!(
+            anonymous_multipart_upload(&s, &format!("{label}.txt")).status,
+            403,
+            "{label}: the refused update must not have replaced the rules"
+        );
+    }
+
+    let s = state(Some(SETR_DENY_ALL));
+    let response = handle(
+        &s,
+        req(
+            "PUT",
+            "/internal/setRules",
+            &[
+                ("content-type", "application/json"),
+                ("origin", "http://localhost:5173"),
+                ("authorization", bearer.as_str()),
+            ],
+            &update,
+        ),
+    );
+    assert_eq!(
+        response.status,
+        200,
+        "{}",
+        String::from_utf8_lossy(&response.body)
+    );
+    assert_eq!(anonymous_multipart_upload(&s, "browser.txt").status, 200);
+
+    let s = state(Some(SETR_DENY_ALL));
+    assert_eq!(
+        handle(
+            &s,
+            req(
+                "PUT",
+                "/internal/setRules",
+                &[("content-type", "application/json")],
+                &update,
+            ),
+        )
+        .status,
+        200
+    );
+    assert_eq!(anonymous_multipart_upload(&s, "sdk.txt").status, 200);
+
+    // The header set Node 24's built-in `fetch` (undici) attaches when a script sets only
+    // `Content-Type`: `sec-fetch-mode: cors` is among them and cannot be removed by the script.
+    // This is what `@firebase/rules-unit-testing` 5.0.2's `loadStorageRules` sends, and it is
+    // a process, not a page, so it is admitted without a token.
+    let s = state(Some(SETR_DENY_ALL));
+    let response = handle(
+        &s,
+        req(
+            "PUT",
+            "/internal/setRules",
+            &[
+                ("host", "127.0.0.1:9199"),
+                ("connection", "keep-alive"),
+                ("content-type", "application/json"),
+                ("accept", "*/*"),
+                ("accept-language", "*"),
+                ("sec-fetch-mode", "cors"),
+                ("user-agent", "node"),
+                ("accept-encoding", "gzip, deflate"),
+            ],
+            &update,
+        ),
+    );
+    assert_eq!(
+        response.status,
+        200,
+        "undici shape: {}",
+        String::from_utf8_lossy(&response.body)
+    );
+    assert_eq!(anonymous_multipart_upload(&s, "undici.txt").status, 200);
+}
+
+/// SETR-2: the rules body is bounded like the control port's (256 KiB), before it is parsed.
+#[test]
+fn set_rules_refuses_a_body_beyond_the_control_port_limit() {
+    let s = state(Some(SETR_DENY_ALL));
+    let mut oversized = set_rules_body();
+    oversized.resize(256 * 1024 + 1, b' ');
+    let response = handle(
+        &s,
+        req(
+            "PUT",
+            "/internal/setRules",
+            &[("content-type", "application/json")],
+            &oversized,
+        ),
+    );
+    assert_eq!(response.status, 413);
+    assert_eq!(anonymous_multipart_upload(&s, "oversized.txt").status, 403);
+}
+
+/// RESST-1: a `Content-Range: bytes */...` status check of a finalized resumable upload is
+/// answered with the committed object, as the resumable protocol documents it. The Node
+/// `@google-cloud/storage` client sends exactly this after losing the final response, so a
+/// 400 here reports a successful upload as a failure. A data-bearing PUT into a finalized
+/// session stays a 400.
+#[test]
+fn a_status_check_of_a_finalized_resumable_upload_answers_the_committed_object() {
+    let s = state(None);
+    let start = handle(
+        &s,
+        req(
+            "POST",
+            &format!("/upload/storage/v1/b/{BUCKET}/o?uploadType=resumable&name=recovered.bin"),
+            &[
+                ("authorization", "Bearer owner"),
+                ("content-type", "application/json"),
+                ("x-upload-content-type", "application/pdf"),
+            ],
+            b"{}",
+        ),
+    );
+    assert_eq!(start.status, 200);
+    let location = header(&start, "location")
+        .unwrap()
+        .strip_prefix("http://127.0.0.1:9199")
+        .unwrap()
+        .to_owned();
+
+    let first = handle(
+        &s,
+        req(
+            "PUT",
+            &location,
+            &[
+                ("authorization", "Bearer owner"),
+                ("content-range", "bytes 0-2/6"),
+            ],
+            b"abc",
+        ),
+    );
+    assert_eq!(first.status, 308);
+    let commit = handle(
+        &s,
+        req(
+            "PUT",
+            &location,
+            &[
+                ("authorization", "Bearer owner"),
+                ("content-range", "bytes 3-5/6"),
+            ],
+            b"def",
+        ),
+    );
+    assert_eq!(
+        commit.status,
+        200,
+        "{}",
+        String::from_utf8_lossy(&commit.body)
+    );
+
+    for range in ["bytes */6", "bytes */*"] {
+        let status = handle(
+            &s,
+            req(
+                "PUT",
+                &location,
+                &[("authorization", "Bearer owner"), ("content-range", range)],
+                b"",
+            ),
+        );
+        assert_eq!(
+            status.status,
+            200,
+            "{range}: {}",
+            String::from_utf8_lossy(&status.body)
+        );
+        let body = json_body(&status);
+        assert_eq!(body["name"], "recovered.bin", "{range}");
+        assert_eq!(body["size"], "6", "{range}");
+        assert_eq!(body["contentType"], "application/pdf", "{range}");
+        assert_eq!(body, json_body(&commit), "{range}");
+    }
+
+    // A chunk sent into the finalized session is still a 400.
+    assert_eq!(
+        handle(
+            &s,
+            req(
+                "PUT",
+                &location,
+                &[
+                    ("authorization", "Bearer owner"),
+                    ("content-range", "bytes 3-5/6"),
+                ],
+                b"def",
+            ),
+        )
+        .status,
+        400
+    );
+}
+
+/// SNORULE-1: a run with no loaded Storage ruleset denies every end-user request instead of
+/// admitting it. Production has no rules-absent state and its default rules admit no
+/// anonymous access, and the official emulator refuses an SDK request with no loaded ruleset
+/// as well, so the open default was the one configuration where forgetting `storage.rules`
+/// silently published every object. The owner credential keeps its documented Rules bypass.
+#[test]
+fn a_run_with_no_loaded_ruleset_denies_every_end_user_request() {
+    let s = state(None);
+
+    // Seed an object through the privileged JSON API, on which rules never run.
+    let seeded = handle(
+        &s,
+        req(
+            "POST",
+            &format!("/upload/storage/v1/b/{BUCKET}/o?uploadType=media&name=seeded.txt"),
+            &[
+                ("authorization", "Bearer owner"),
+                ("content-type", "text/plain"),
+            ],
+            b"seeded",
+        ),
+    );
+    assert_eq!(
+        seeded.status,
+        200,
+        "{}",
+        String::from_utf8_lossy(&seeded.body)
+    );
+
+    assert_eq!(anonymous_multipart_upload(&s, "anon.txt").status, 403);
+    assert_eq!(
+        handle(
+            &s,
+            req("GET", &format!("/v0/b/{BUCKET}/o/seeded.txt"), &[], b"")
+        )
+        .status,
+        403
+    );
+    assert_eq!(
+        handle(
+            &s,
+            req(
+                "GET",
+                &format!("/v0/b/{BUCKET}/o/seeded.txt?alt=media"),
+                &[],
+                b"",
+            ),
+        )
+        .status,
+        403
+    );
+    assert_eq!(
+        handle(&s, req("GET", &format!("/v0/b/{BUCKET}/o"), &[], b"")).status,
+        403
+    );
+    assert_eq!(
+        handle(
+            &s,
+            req("DELETE", &format!("/v0/b/{BUCKET}/o/seeded.txt"), &[], b""),
+        )
+        .status,
+        403
+    );
+
+    // The owner credential is unaffected on the Firebase dialect.
+    for (method, path) in [
+        ("GET", format!("/v0/b/{BUCKET}/o/seeded.txt")),
+        ("GET", format!("/v0/b/{BUCKET}/o")),
+    ] {
+        let r = handle(
+            &s,
+            req(method, &path, &[("authorization", "Bearer owner")], b""),
+        );
+        assert_eq!(
+            r.status,
+            200,
+            "{method} {path}: {}",
+            String::from_utf8_lossy(&r.body)
+        );
+    }
+
+    // The object survived every refusal.
+    let r = handle(
+        &s,
+        req(
+            "GET",
+            &format!("/v0/b/{BUCKET}/o/seeded.txt"),
+            &[("authorization", "Bearer owner")],
+            b"",
+        ),
+    );
+    assert_eq!(r.status, 200);
+}
+
+/// The browser-metadata set must not hinge on one header an old or unusual browser may omit:
+/// `Referer` and `Cookie` mark a page-issued request just as `Origin` and `Sec-Fetch-*` do.
+#[test]
+fn set_rules_treats_every_browser_metadata_field_as_a_browser_request() {
+    let update = set_rules_body();
+    for field in ["referer", "cookie"] {
+        let s = state(Some(SETR_DENY_ALL));
+        let response = handle(
+            &s,
+            req(
+                "PUT",
+                "/internal/setRules",
+                &[
+                    ("content-type", "application/json"),
+                    (field, "http://localhost:5173/index.html"),
+                ],
+                &update,
+            ),
+        );
+        assert_eq!(
+            response.status,
+            403,
+            "{field}: {}",
+            String::from_utf8_lossy(&response.body)
+        );
+        assert_eq!(
+            anonymous_multipart_upload(&s, &format!("{field}.txt")).status,
+            403,
+            "{field}: the refused update must not have replaced the rules"
+        );
+    }
+}
+
+/// Defence that does not depend on reading any request header: the CORS preflight of the
+/// privileged rules route never admits `PUT`, so a compliant browser cannot issue the request
+/// at all, whichever request metadata it would have attached.
+#[tokio::test]
+async fn the_preflight_of_the_privileged_rules_route_never_admits_put() {
+    use tokio::io::AsyncWriteExt;
+    static BUDGET: BodyBudget = BodyBudget::new(1_572_864);
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let shared = Arc::new(state(Some(SETR_DENY_ALL)));
+    let server = tokio::spawn(serve_storage_with_budget(listener, shared, &BUDGET));
+
+    let preflight = |path: &'static str| async move {
+        let head = format!(
+            "OPTIONS {path} HTTP/1.1\r\nHost: 127.0.0.1\r\nOrigin: http://localhost:5173\r\nAccess-Control-Request-Method: PUT\r\nAccess-Control-Request-Headers: authorization,content-type\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+        );
+        let mut stream = tokio::net::TcpStream::connect(addr).await.unwrap();
+        stream.write_all(head.as_bytes()).await.unwrap();
+        read_response(&mut stream).await
+    };
+
+    let refused = preflight("/internal/setRules").await;
+    assert!(
+        !refused.to_ascii_lowercase().contains("put"),
+        "the rules route must not be advertised to a browser: {refused}"
+    );
+
+    // Every other route keeps the official preflight, PUT included (resumable uploads use it).
+    let ordinary = preflight("/v0/b/demo-app.appspot.com/o").await;
+    assert!(
+        ordinary.to_ascii_lowercase().contains("put"),
+        "ordinary routes keep the official method list: {ordinary}"
+    );
+    server.abort();
+}
+
+/// SETR-2, streaming half: the 256 KiB bound holds for a body that declares no length. The
+/// refusal has to arrive while the body is still being written, so the Storage port never
+/// buffers a rules body up to the object limit just because the client withheld a length.
+#[tokio::test]
+async fn an_undeclared_set_rules_body_is_cut_off_at_the_control_port_limit() {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    static BUDGET: BodyBudget = BodyBudget::new(32 * 1024 * 1024);
+    /// 16 KiB chunks to 8 MiB: far past the 256 KiB bound and far past any socket buffer, so
+    /// a server that read the whole body would accept every chunk.
+    const CHUNKS: usize = 512;
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let shared = Arc::new(state(Some(SETR_DENY_ALL)));
+    let server = tokio::spawn(serve_storage_with_budget(listener, shared.clone(), &BUDGET));
+
+    // A declared oversized body is refused cleanly, before the budget is touched.
+    let mut declared = tokio::net::TcpStream::connect(addr).await.unwrap();
+    declared
+        .write_all(
+            format!(
+                "PUT /internal/setRules HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                256 * 1024 + 1
+            )
+            .as_bytes(),
+        )
+        .await
+        .unwrap();
+    let mut refused = Vec::new();
+    let _ = declared.read_to_end(&mut refused).await;
+    let refused = String::from_utf8_lossy(&refused).into_owned();
+    assert!(
+        refused.starts_with("HTTP/1.1 413"),
+        "a declared oversized rules body must be refused: {refused}"
+    );
+
+    // An undeclared one is cut off as it streams: the server stops reading long before the
+    // 8 MiB the client is willing to send.
+    let mut stream = tokio::net::TcpStream::connect(addr).await.unwrap();
+    stream
+        .write_all(
+            b"PUT /internal/setRules HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Type: application/json\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n",
+        )
+        .await
+        .unwrap();
+    let chunk = vec![b' '; 16 * 1024];
+    let header = format!("{:x}\r\n", chunk.len());
+    let mut written = 0usize;
+    for _ in 0..CHUNKS {
+        if stream.write_all(header.as_bytes()).await.is_err()
+            || stream.write_all(&chunk).await.is_err()
+            || stream.write_all(b"\r\n").await.is_err()
+        {
+            break;
+        }
+        written += 1;
+    }
+    let _ = stream.write_all(b"0\r\n\r\n").await;
+    // The refusal closes the connection with the request body still arriving, so the client
+    // may see the response or a reset; what must hold is that the server stopped reading.
+    let mut answer = Vec::new();
+    let _ = stream.read_to_end(&mut answer).await;
+    let answer = String::from_utf8_lossy(&answer).into_owned();
+    assert!(
+        answer.is_empty() || answer.starts_with("HTTP/1.1 413"),
+        "an undeclared oversized rules body must be refused: {answer}"
+    );
+    assert!(
+        written < 128,
+        "the refusal must arrive while the body is still arriving, not after 8 MiB was buffered (wrote {written} of {CHUNKS} chunks)"
+    );
+    assert_eq!(
+        anonymous_multipart_upload(&shared, "chunked.txt").status,
+        403,
+        "the refused body must not have replaced the rules"
+    );
     server.abort();
 }

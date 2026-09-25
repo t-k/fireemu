@@ -1,0 +1,526 @@
+{
+  "productionExecuted": false,
+  "evaluator": {
+    "executionCommit": "6f3d27a068933fe7f90270f7dc29ccbaaffda05b",
+    "sourceCommit": "33dd069ea9590727164c45381f8b427247ecd56b",
+    "sourceDigest": "5a34deafc320c52f7cb0037ccae1d7ec20d96b93fbf9e98dbaa0fb1a7670a2d3",
+    "anchorFileSha256": "37eccdb4ba38f84a73e8d45eb77ab84134bdc56b1a2950a55def3ccf173d5a94",
+    "contractDigest": "dafe4b80196a357ceaf448ed642de69c5cfa54dc0e3a2b57e5a8cb7403ccde14"
+  },
+  "comparisonContract": {
+    "kind": "query-explain-saved-reference-comparison-v3",
+    "historicalCollectorCommit": "109a9b459b94d59eec541be579e305437cdfaa30",
+    "repairedCollectorCommit": "aad1a41de926fae244b42ac1bd2baa57bf2bcdde",
+    "repositoryImports": "Compile source bytes directly for v2 and every repository-local collector dependency; ignore bytecode caches and refuse sourceless repository imports.",
+    "historicalValidation": "Unchanged v2 frozen-input verification, default projection and exact completion bridge; exact historical collector validates original production and original local.",
+    "repairedValidation": "Unmodified exact repaired collector validates its own local envelope, source/runtime/build/artifact/configuration/observer/manifest/principal/operation/state/cleanup bindings and saved files.",
+    "normalization": [
+      "Frozen collector absolute-time, nonce and existing error-prose normalization; raw body digests retain prose",
+      "Unchanged v2 scoped absent ProtoJSON defaults",
+      "Successful analyze response executionDuration must exist and parse as nonnegative protobuf Duration; replace only that field with a typed nondeterminism marker"
+    ],
+    "durationMarker": {
+      "type": "google.protobuf.Duration",
+      "nondeterministic": true
+    },
+    "exact": [
+      "operation and row identity",
+      "administrator and quota project",
+      "status",
+      "all other body fields, index plans, stats, debug and read counts",
+      "post-state and cleanup responses"
+    ],
+    "provenance": "The original production permission authorizes the original collection only. The repaired local is independently validated and never substituted into that permission or receipt."
+  },
+  "frozenInputDirectories": {
+    "production": {
+      "comparison.json": "83cc22cd1bb8c8b702ae838422256705c685b97ee72737454594119697f0f909",
+      "coordinator/metadata-evidence.json": "cb8715d6065f4dbf0848838fd964a0d7174f25f4f81cbe5d675526d927b1ef76",
+      "coordinator/responses.jsonl": "c64123bac7d31ee03cc2c45c19742903f120baafe08b9d543f4c81c70714272d",
+      "execution-inputs.json": "e891efc58730d589ecd35c107580a42976f0a8e44173a5237ec08865d752d1ee",
+      "gate/lock": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "gate/state.json": "4de01938c3ab91598d7f5bf3eab6a48de205171a2d31452c347cdbee6ec30fd9",
+      "original-hashes.json": "b518dd90ac1452810b8d88ef501e61cd57b8b6aa328e6a2b21d61752908e0bb5",
+      "query-explain/cleanup.json": "41f5b3333379d4bb843ed6defd5be578c251ec160fdc0951da5b17abb9006bd7",
+      "query-explain/ownership.jsonl": "6a6df759cc324362d6fabff672fb618d512a9d8d1c8d02c2ca2ea444846c3457",
+      "query-explain/partial.json": "6da3b44132e7c07c216ea3ab275f3a0ac4331af701458999f7071c174105175f",
+      "query-explain/responses.jsonl": "c832b22bfd9d91b196cb0e3306433bf75010c124448600a7646b7256b359a721",
+      "query-explain/result.json": "d2b68fc8927bb5a14554b910c2d06a9254883931186202e96855fc55a5f0b4ed",
+      "result.json": "14907c82669c0390c81f7c502d87062972584fed36e90f3ed9ed56bce31ee8db"
+    },
+    "originalLocal": {
+      "artifact.json": "531536f275aecf840c5051d79c969e8a706735790331cf7f267150c7cfa53ad4",
+      "batch/result.json": "d9a11bd352882015c31dc250460cc14da86ffae0b393e43922904e782876fb23",
+      "cases.json": "571c0b76eade7b0551875200cbd6e9c1d431fb7d0550754fa629690a48edf3ab",
+      "gate/lock": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "gate/state.json": "50c90253174f8e8f28c4d82a3d69b289d85cf0a8d995cb74f1fe803eae7af852",
+      "instance.json": "932d847ecbdf48b69520f8366696a5b1597700376ce933a4c9057071482904d3",
+      "manifest.json": "ee96f7a0153de661aa33123735cdf066e606975473234a8b376f1acdd9b839a8",
+      "owned-stderr.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "process.json": "727d33fb6badec2f4398be51c7891aabf20b0e9340dc97c11abd127a91d6a695",
+      "result.json": "3022b23f483dd9d4cebdb31386c5a4d4c2dac7cac603df34ca30e7ad770b5ca0",
+      "shadow-hashes.json": "32291a1d515751665c7e704cf6ea7c1300629fac26c0948e5991518f74237f2b",
+      "worker/cleanup.json": "fd82642839623b86c5d6b20840e16284653160b8671a7b40ef12787b75889de1",
+      "worker/ownership.jsonl": "878a3853ac062827f1e656ac43ac42373d798b318dff9f12b7f2fab0b781cdb4",
+      "worker/partial.json": "3bdb1d14e0fd622212b4f3b6ce9b049b6282034dfbbeeea4ec0015e5fd8d9fe5",
+      "worker/responses.jsonl": "45b3d564b06b80daa7cadb57886ea4576017e17b401291e9cf05fcfa672986a2",
+      "worker/result.json": "d9a11bd352882015c31dc250460cc14da86ffae0b393e43922904e782876fb23"
+    },
+    "repairedLocal": {
+      "artifact.json": "7043febf4c303e27a271d5b036b5ca0b22327f40e51e0ab3c05be278e0b9e3c8",
+      "batch/result.json": "940c3b126c7a50e06843eb7e53e6f3b789b9e44126b280b768719b780a76d603",
+      "cases.json": "571c0b76eade7b0551875200cbd6e9c1d431fb7d0550754fa629690a48edf3ab",
+      "gate/lock": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "gate/state.json": "f8a2a461393856c96352ed1ad0408ad471a693ab4a7c6bf94c868ca2c411863f",
+      "instance.json": "3d26d5a817c650e60328cabee69d47b78fef1f70710addf9d6e771f3b2cd92b4",
+      "manifest.json": "d6cf8bc9792dad3500b143cdcf707ab5633ade5ff8515f9f77827a5eb66fb1d4",
+      "owned-stderr.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "process.json": "2c69efe7ff3e78ce5002c8d33c65a73191f7e5c54f5a2acef10d4ab02094a3bc",
+      "result.json": "cf33b01fd3f3e7aed3fdd843a4cb0d6d3f3167e11f9bcc6ecf627e4e4ce2f7e2",
+      "shadow-hashes.json": "30b3bd0db71cce14f661e4844806d93ae3d8296fcc980e1125c39f909a496769",
+      "worker/cleanup.json": "06cc082493c02af72d52c3b456d87565d0fc7d45cd5f48bb39341baa9c96015b",
+      "worker/ownership.jsonl": "a186f4705dbe3ddb851af182146bb736d378cabbc1ae22769f7b34971060dc8e",
+      "worker/partial.json": "6139ab622bca8521124506494617817ffad6c3af6e4bfb0f540900cff257f146",
+      "worker/responses.jsonl": "0d9d0934aa4e5bbca3bff2e52361681379b849d22825aea29e82cc6d611cbd91",
+      "worker/result.json": "940c3b126c7a50e06843eb7e53e6f3b789b9e44126b280b768719b780a76d603"
+    }
+  },
+  "historical": {
+    "collectionComplete": true,
+    "collector": {
+      "collectorCommit": "109a9b459b94d59eec541be579e305437cdfaa30",
+      "collectorSourceSha256": "6c04ca038bbad3de282ab54dae69014a7decd6099dbb28b9620f76a3e63b0895",
+      "observerSha256": "11681a270d37b64631b94dce76a16aec044af138e5a9ead2658fb77151cab64f",
+      "manifestDigest": "f6a58269703ca0e1bf17ea9615cbe47af8a55efecbe4a5cc9c48eb6b03a68feb",
+      "comparisonContractDigest": "a504ce1025925e6296bf1d6be194b164fa7f3d86575bbd258bad19b781b02bf7",
+      "configurationDigest": "cf2b716aa3ecc5bbb5dfc248980d05d05401f49897d39ffb3d0159ad8a63db80"
+    },
+    "originalComparison": {
+      "compatibility": "indeterminate",
+      "rows": [],
+      "cleanupComplete": false,
+      "reason": "campaign envelope: typed Explain response incomplete"
+    },
+    "originalProductionCompleted": false,
+    "originalV2Compatibility": "mismatch",
+    "originalV2Rows": [
+      {
+        "id": "setup/absence/item-a",
+        "compatibility": "match",
+        "defaultEquivalencesApplied": {
+          "production": [],
+          "local": []
+        },
+        "rawProductionBodyDigest": "912bada9c08aa12cb2364341544652bfbc22a33a78a334047bfcda917d47031c",
+        "rawLocalBodyDigest": "f760954e47b8db55021207ef01ea5ac4337a761806b96f5ca4e9ef1574e24d9e"
+      },
+      {
+        "id": "setup/absence/item-b",
+        "compatibility": "match",
+        "defaultEquivalencesApplied": {
+          "production": [],
+          "local": []
+        },
+        "rawProductionBodyDigest": "927b64972ffe7cad19541d3dc791dd4a50258f925f3d5b1cf26d7379dce4e86e",
+        "rawLocalBodyDigest": "fc7d023a8119a4a1a7d09d52e5a797e9afdc83bbe63ddec073a03738ddeca898"
+      },
+      {
+        "id": "setup/create/item-a",
+        "compatibility": "match",
+        "defaultEquivalencesApplied": {
+          "production": [],
+          "local": []
+        },
+        "rawProductionBodyDigest": "0baf2e1ab24280956f1c68ba0b6e1a473fcb2642459253dfe44c2b540d448abf",
+        "rawLocalBodyDigest": "f7f5f8067b40b546d378b9c76fc2df54f420b92700824516aadb46c8adc891ea"
+      },
+      {
+        "id": "setup/create/item-b",
+        "compatibility": "match",
+        "defaultEquivalencesApplied": {
+          "production": [],
+          "local": []
+        },
+        "rawProductionBodyDigest": "7efd6db8f35bfd022cb62c6412f070061a6c5f684960948a4500c2ef6c730691",
+        "rawLocalBodyDigest": "0050ddb0c51a01d641090892d6b4633a9e5bbb6a52b9ced259b2a75f66c04011"
+      },
+      {
+        "id": "explain/query/plan-only",
+        "compatibility": "mismatch",
+        "defaultEquivalencesApplied": {
+          "production": [],
+          "local": []
+        },
+        "rawProductionBodyDigest": "1f9caf899960fafbb703aa994c78cdc9d096a4546ee287116f5d7af8a62ad2f4",
+        "rawLocalBodyDigest": "3a90c9625c6c95555307b9e45537e30a3b5ef3477e7dc3c11faa673de6b9da86"
+      },
+      {
+        "id": "explain/query/analyze",
+        "compatibility": "mismatch",
+        "defaultEquivalencesApplied": {
+          "production": [],
+          "local": []
+        },
+        "rawProductionBodyDigest": "90ef6a792b6b840c3935126469219a52913fc16b087c150515b3f69f164717f4",
+        "rawLocalBodyDigest": "1ea3e2f2094e3ef46f7ec6889c26b4b6971879862096bcac4f4a4e86da28877d"
+      },
+      {
+        "id": "explain/query/empty-analyze",
+        "compatibility": "mismatch",
+        "defaultEquivalencesApplied": {
+          "production": [
+            "/0/explainMetrics/planSummary/indexesUsed",
+            "/0/explainMetrics/executionStats/resultsReturned"
+          ],
+          "local": []
+        },
+        "rawProductionBodyDigest": "528fe25778ea7f48396809d34ff10872290ca9fd78a68c107e28e2dde427d4ac",
+        "rawLocalBodyDigest": "089c27c24042bf57a145a0ec2de24d13c0c4889a0ef2799f0bdef7952905a322"
+      },
+      {
+        "id": "explain/aggregation/plan-only",
+        "compatibility": "mismatch",
+        "defaultEquivalencesApplied": {
+          "production": [],
+          "local": []
+        },
+        "rawProductionBodyDigest": "1f9caf899960fafbb703aa994c78cdc9d096a4546ee287116f5d7af8a62ad2f4",
+        "rawLocalBodyDigest": "3a90c9625c6c95555307b9e45537e30a3b5ef3477e7dc3c11faa673de6b9da86"
+      },
+      {
+        "id": "explain/aggregation/analyze",
+        "compatibility": "mismatch",
+        "defaultEquivalencesApplied": {
+          "production": [],
+          "local": []
+        },
+        "rawProductionBodyDigest": "ba2c3a5c0bc0d71ab7167a5aa746bbb8a1d15b28342e60843e8d6831c465cc53",
+        "rawLocalBodyDigest": "cb2d253fcd87c383edce68b940d78681820061eedf25a6e352ef8190eee68208"
+      },
+      {
+        "id": "explain/aggregation/empty-analyze",
+        "compatibility": "mismatch",
+        "defaultEquivalencesApplied": {
+          "production": [],
+          "local": []
+        },
+        "rawProductionBodyDigest": "7020a0f9d51e4dcfa611890463d22f18b0a341438e4e1bdada5f3eff4ce801f5",
+        "rawLocalBodyDigest": "9fea2f3b79cbfe2fdb745dfd4a9286d745fd31397b4de4bd686cc39ce89adb6a"
+      },
+      {
+        "id": "readback/item-a",
+        "compatibility": "match",
+        "defaultEquivalencesApplied": {
+          "production": [],
+          "local": []
+        },
+        "rawProductionBodyDigest": "0baf2e1ab24280956f1c68ba0b6e1a473fcb2642459253dfe44c2b540d448abf",
+        "rawLocalBodyDigest": "f7f5f8067b40b546d378b9c76fc2df54f420b92700824516aadb46c8adc891ea"
+      },
+      {
+        "id": "readback/item-b",
+        "compatibility": "match",
+        "defaultEquivalencesApplied": {
+          "production": [],
+          "local": []
+        },
+        "rawProductionBodyDigest": "7efd6db8f35bfd022cb62c6412f070061a6c5f684960948a4500c2ef6c730691",
+        "rawLocalBodyDigest": "0050ddb0c51a01d641090892d6b4633a9e5bbb6a52b9ced259b2a75f66c04011"
+      }
+    ],
+    "originalV2SummarySha256": "22e035d29a61801ee97258c10dd2832a544974853f6e212c2cfeea4cf9e3e2cd"
+  },
+  "repaired": {
+    "collectionComplete": true,
+    "collector": {
+      "collectorCommit": "aad1a41de926fae244b42ac1bd2baa57bf2bcdde",
+      "collectorSourceSha256": "9be7b9318790245af53dc07527cd5304bd22ab83fd038a84c9dc35e9efade4bb",
+      "observerSha256": "5c19995f167474442356e4bbe381c5f823f101ebe83557982ea12666c0a9a571",
+      "manifestDigest": "7937d8b106276c7d4f0197bf8a92b1b3c7fcd7c72c34029b22f606b508d0e466",
+      "comparisonContractDigest": "dfe6aea6a18c7eedf33a439fcd72b347064d800ab966111c44f4ccc1974b4e94",
+      "configurationDigest": "cf2b716aa3ecc5bbb5dfc248980d05d05401f49897d39ffb3d0159ad8a63db80"
+    },
+    "artifactSha256": "a372d74aa99c319019bca992ac9248cc48cfd0a27b04f337353a56b70a34e657",
+    "runtimeInputsDigest": "4ed1b06233d69d4e33489daa34534016962c9ab623508c27c64e44cefb53491c",
+    "sourceInputsDigest": "0ce4533942cd132fea1466fa1f2a1cd51894ac0ab1ba9f12f53a426c787f8106",
+    "runtimeConfigurationDigest": "9abd9b20b4572027970484fea88885055e061c006c5e7c7c682a098c1183785a",
+    "indexSha256": "8a4d4bd7a72c3ce2bed4e0f8c4adc0cdb3a7c428477578295e44a11ae063d01c"
+  },
+  "collectionComplete": true,
+  "cleanupComplete": true,
+  "stateVerified": true,
+  "compatibility": "match",
+  "kind": "query-explain-saved-reference-summary-v3",
+  "comparisonArtifactSha256": "7f5c0db5bdbb8406f1d7604f4e4d6c791675a4e9bccef3b23b180e9290f6dcc6",
+  "rows": [
+    {
+      "id": "setup/absence/item-a",
+      "compatibility": "match",
+      "rawProductionBodyDigest": "912bada9c08aa12cb2364341544652bfbc22a33a78a334047bfcda917d47031c",
+      "rawLocalBodyDigest": "f4b02991baa98ba0cfffdb4a9a735f15a5dcb5294d70fdc7fb2f5eaf9ed6cd86",
+      "equivalencesApplied": {
+        "production": {
+          "defaults": [],
+          "duration": []
+        },
+        "local": {
+          "defaults": [],
+          "duration": []
+        }
+      },
+      "productionStatus": 404,
+      "localStatus": 404,
+      "normalizedProductionBodyDigest": "add5bbbfc4f0e89736f00448540b9fa7070b9255da86864a7a3da7b326caa3e0",
+      "normalizedLocalBodyDigest": "add5bbbfc4f0e89736f00448540b9fa7070b9255da86864a7a3da7b326caa3e0"
+    },
+    {
+      "id": "setup/absence/item-b",
+      "compatibility": "match",
+      "rawProductionBodyDigest": "927b64972ffe7cad19541d3dc791dd4a50258f925f3d5b1cf26d7379dce4e86e",
+      "rawLocalBodyDigest": "6714564c1da459d8e2bc150f708df8908a468e984664430856030dda71f43cd7",
+      "equivalencesApplied": {
+        "production": {
+          "defaults": [],
+          "duration": []
+        },
+        "local": {
+          "defaults": [],
+          "duration": []
+        }
+      },
+      "productionStatus": 404,
+      "localStatus": 404,
+      "normalizedProductionBodyDigest": "add5bbbfc4f0e89736f00448540b9fa7070b9255da86864a7a3da7b326caa3e0",
+      "normalizedLocalBodyDigest": "add5bbbfc4f0e89736f00448540b9fa7070b9255da86864a7a3da7b326caa3e0"
+    },
+    {
+      "id": "setup/create/item-a",
+      "compatibility": "match",
+      "rawProductionBodyDigest": "0baf2e1ab24280956f1c68ba0b6e1a473fcb2642459253dfe44c2b540d448abf",
+      "rawLocalBodyDigest": "6034fc021e1088ffc0e2c8aaba6da26da3b3c8f6bb3d6052d5b3c6d2b5adbb1d",
+      "equivalencesApplied": {
+        "production": {
+          "defaults": [],
+          "duration": []
+        },
+        "local": {
+          "defaults": [],
+          "duration": []
+        }
+      },
+      "productionStatus": 200,
+      "localStatus": 200,
+      "normalizedProductionBodyDigest": "b56db930b8d2789c8324c4a75a47c2986f372b6d6d4d4ec9fbbb0e4cb399cbce",
+      "normalizedLocalBodyDigest": "b56db930b8d2789c8324c4a75a47c2986f372b6d6d4d4ec9fbbb0e4cb399cbce"
+    },
+    {
+      "id": "setup/create/item-b",
+      "compatibility": "match",
+      "rawProductionBodyDigest": "7efd6db8f35bfd022cb62c6412f070061a6c5f684960948a4500c2ef6c730691",
+      "rawLocalBodyDigest": "8ef1d7a6e520bc9e7b44501d29fa8d7b66a555723a5e4239265320960b6df003",
+      "equivalencesApplied": {
+        "production": {
+          "defaults": [],
+          "duration": []
+        },
+        "local": {
+          "defaults": [],
+          "duration": []
+        }
+      },
+      "productionStatus": 200,
+      "localStatus": 200,
+      "normalizedProductionBodyDigest": "eab836feb173dc49dd7f8d2783cf7cf3715da0ef43a02736993b045cae79af36",
+      "normalizedLocalBodyDigest": "eab836feb173dc49dd7f8d2783cf7cf3715da0ef43a02736993b045cae79af36"
+    },
+    {
+      "id": "explain/query/plan-only",
+      "compatibility": "match",
+      "rawProductionBodyDigest": "1f9caf899960fafbb703aa994c78cdc9d096a4546ee287116f5d7af8a62ad2f4",
+      "rawLocalBodyDigest": "1f9caf899960fafbb703aa994c78cdc9d096a4546ee287116f5d7af8a62ad2f4",
+      "equivalencesApplied": {
+        "production": {
+          "defaults": [],
+          "duration": []
+        },
+        "local": {
+          "defaults": [],
+          "duration": []
+        }
+      },
+      "productionStatus": 200,
+      "localStatus": 200,
+      "normalizedProductionBodyDigest": "1f9caf899960fafbb703aa994c78cdc9d096a4546ee287116f5d7af8a62ad2f4",
+      "normalizedLocalBodyDigest": "1f9caf899960fafbb703aa994c78cdc9d096a4546ee287116f5d7af8a62ad2f4"
+    },
+    {
+      "id": "explain/query/analyze",
+      "compatibility": "match",
+      "rawProductionBodyDigest": "90ef6a792b6b840c3935126469219a52913fc16b087c150515b3f69f164717f4",
+      "rawLocalBodyDigest": "1814156a5f2ce40ab42e68eecabecc4d8e4e56c71acd2f0cc1cbd39bccf3354f",
+      "equivalencesApplied": {
+        "production": {
+          "defaults": [],
+          "duration": [
+            "/1/explainMetrics/executionStats/executionDuration"
+          ]
+        },
+        "local": {
+          "defaults": [],
+          "duration": [
+            "/1/explainMetrics/executionStats/executionDuration"
+          ]
+        }
+      },
+      "productionStatus": 200,
+      "localStatus": 200,
+      "normalizedProductionBodyDigest": "30c987b894c1738901387c9e32f1802e25d080a11ccf6fd2a4651943f456c4ee",
+      "normalizedLocalBodyDigest": "30c987b894c1738901387c9e32f1802e25d080a11ccf6fd2a4651943f456c4ee"
+    },
+    {
+      "id": "explain/query/empty-analyze",
+      "compatibility": "match",
+      "rawProductionBodyDigest": "528fe25778ea7f48396809d34ff10872290ca9fd78a68c107e28e2dde427d4ac",
+      "rawLocalBodyDigest": "5653ac7d9502f9b7ab562efe19a29fef18268fcfbdc393286d536e84716184b5",
+      "equivalencesApplied": {
+        "production": {
+          "defaults": [
+            "/0/explainMetrics/planSummary/indexesUsed",
+            "/0/explainMetrics/executionStats/resultsReturned"
+          ],
+          "duration": [
+            "/0/explainMetrics/executionStats/executionDuration"
+          ]
+        },
+        "local": {
+          "defaults": [
+            "/0/explainMetrics/planSummary/indexesUsed",
+            "/0/explainMetrics/executionStats/resultsReturned"
+          ],
+          "duration": [
+            "/0/explainMetrics/executionStats/executionDuration"
+          ]
+        }
+      },
+      "productionStatus": 200,
+      "localStatus": 200,
+      "normalizedProductionBodyDigest": "29b77515e2e7439d5532c91bc450295fc29ac532d4706a605222ff1e8e1556c9",
+      "normalizedLocalBodyDigest": "29b77515e2e7439d5532c91bc450295fc29ac532d4706a605222ff1e8e1556c9"
+    },
+    {
+      "id": "explain/aggregation/plan-only",
+      "compatibility": "match",
+      "rawProductionBodyDigest": "1f9caf899960fafbb703aa994c78cdc9d096a4546ee287116f5d7af8a62ad2f4",
+      "rawLocalBodyDigest": "1f9caf899960fafbb703aa994c78cdc9d096a4546ee287116f5d7af8a62ad2f4",
+      "equivalencesApplied": {
+        "production": {
+          "defaults": [],
+          "duration": []
+        },
+        "local": {
+          "defaults": [],
+          "duration": []
+        }
+      },
+      "productionStatus": 200,
+      "localStatus": 200,
+      "normalizedProductionBodyDigest": "1f9caf899960fafbb703aa994c78cdc9d096a4546ee287116f5d7af8a62ad2f4",
+      "normalizedLocalBodyDigest": "1f9caf899960fafbb703aa994c78cdc9d096a4546ee287116f5d7af8a62ad2f4"
+    },
+    {
+      "id": "explain/aggregation/analyze",
+      "compatibility": "match",
+      "rawProductionBodyDigest": "ba2c3a5c0bc0d71ab7167a5aa746bbb8a1d15b28342e60843e8d6831c465cc53",
+      "rawLocalBodyDigest": "cbb50ca7c592f47a5d0227c51d5057086f64a3cc3385478968588f87263d15c9",
+      "equivalencesApplied": {
+        "production": {
+          "defaults": [],
+          "duration": [
+            "/0/explainMetrics/executionStats/executionDuration"
+          ]
+        },
+        "local": {
+          "defaults": [],
+          "duration": [
+            "/0/explainMetrics/executionStats/executionDuration"
+          ]
+        }
+      },
+      "productionStatus": 200,
+      "localStatus": 200,
+      "normalizedProductionBodyDigest": "51e568b1dea6b8cb888218138a68ba71fea1f05796acabf66c89687d8afbf690",
+      "normalizedLocalBodyDigest": "51e568b1dea6b8cb888218138a68ba71fea1f05796acabf66c89687d8afbf690"
+    },
+    {
+      "id": "explain/aggregation/empty-analyze",
+      "compatibility": "match",
+      "rawProductionBodyDigest": "7020a0f9d51e4dcfa611890463d22f18b0a341438e4e1bdada5f3eff4ce801f5",
+      "rawLocalBodyDigest": "40346451e4d9c6eefd14c2abaadc2eea61d338805fe45bf0d7ea59382dacb91b",
+      "equivalencesApplied": {
+        "production": {
+          "defaults": [],
+          "duration": [
+            "/0/explainMetrics/executionStats/executionDuration"
+          ]
+        },
+        "local": {
+          "defaults": [],
+          "duration": [
+            "/0/explainMetrics/executionStats/executionDuration"
+          ]
+        }
+      },
+      "productionStatus": 200,
+      "localStatus": 200,
+      "normalizedProductionBodyDigest": "6ed17b90149b4f1add0da6e6cbd838304e2441529b79d9408a8e3fd2b354535e",
+      "normalizedLocalBodyDigest": "6ed17b90149b4f1add0da6e6cbd838304e2441529b79d9408a8e3fd2b354535e"
+    },
+    {
+      "id": "readback/item-a",
+      "compatibility": "match",
+      "rawProductionBodyDigest": "0baf2e1ab24280956f1c68ba0b6e1a473fcb2642459253dfe44c2b540d448abf",
+      "rawLocalBodyDigest": "6034fc021e1088ffc0e2c8aaba6da26da3b3c8f6bb3d6052d5b3c6d2b5adbb1d",
+      "equivalencesApplied": {
+        "production": {
+          "defaults": [],
+          "duration": []
+        },
+        "local": {
+          "defaults": [],
+          "duration": []
+        }
+      },
+      "productionStatus": 200,
+      "localStatus": 200,
+      "normalizedProductionBodyDigest": "b56db930b8d2789c8324c4a75a47c2986f372b6d6d4d4ec9fbbb0e4cb399cbce",
+      "normalizedLocalBodyDigest": "b56db930b8d2789c8324c4a75a47c2986f372b6d6d4d4ec9fbbb0e4cb399cbce"
+    },
+    {
+      "id": "readback/item-b",
+      "compatibility": "match",
+      "rawProductionBodyDigest": "7efd6db8f35bfd022cb62c6412f070061a6c5f684960948a4500c2ef6c730691",
+      "rawLocalBodyDigest": "8ef1d7a6e520bc9e7b44501d29fa8d7b66a555723a5e4239265320960b6df003",
+      "equivalencesApplied": {
+        "production": {
+          "defaults": [],
+          "duration": []
+        },
+        "local": {
+          "defaults": [],
+          "duration": []
+        }
+      },
+      "productionStatus": 200,
+      "localStatus": 200,
+      "normalizedProductionBodyDigest": "eab836feb173dc49dd7f8d2783cf7cf3715da0ef43a02736993b045cae79af36",
+      "normalizedLocalBodyDigest": "eab836feb173dc49dd7f8d2783cf7cf3715da0ef43a02736993b045cae79af36"
+    }
+  ],
+  "scope": [
+    "Offline reuse of immutable production collection; no new Cloud execution.",
+    "Six Explain cases, four setup observations, two post-state readbacks; independently validated six-operation cleanup.",
+    "Original indeterminate and v2 mismatch retained; repaired match uses validated duration nondeterminism and established v2 projections.",
+    "Recorded build artifact digest is bound; owned temporary executable was removed during collection cleanup.",
+    "No claim for other query/index shapes, IAM users or subsequent production changes."
+  ]
+}

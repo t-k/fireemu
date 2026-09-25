@@ -1,0 +1,1018 @@
+{
+  "caseId": "FS-CONFIG-LIFECYCLE-01",
+  "classes": [
+    "data-plane-contract",
+    "local-safety-extension",
+    "managed-infrastructure"
+  ],
+  "databaseFields": [
+    {
+      "class": "data-plane-contract",
+      "dataPlaneConsequence": "A mismatched name routes requests to a different database.",
+      "field": "name",
+      "local": {
+        "citations": [
+          "crates/fireemu-adapter-grpc/src/rest/mod.rs:316"
+        ],
+        "status": "implemented"
+      },
+      "presentInPinnedDiscovery": true,
+      "rationale": "The resource name identifies the project and database every data-plane request addresses."
+    },
+    {
+      "class": "data-plane-contract",
+      "dataPlaneConsequence": "A caller that trusts this field picks the wrong API surface.",
+      "field": "type",
+      "local": {
+        "citations": [
+          "crates/fireemu-adapter-grpc/src/rest/mod.rs:321"
+        ],
+        "status": "partial"
+      },
+      "presentInPinnedDiscovery": true,
+      "rationale": "FIRESTORE_NATIVE and DATASTORE_MODE expose different APIs entirely."
+    },
+    {
+      "class": "data-plane-contract",
+      "dataPlaneConsequence": "The projection reports the configured edition in the API's upper-case spelling; only Standard reaches the route because every other edition is refused above it (fixed at 62d8a1d22).",
+      "field": "databaseEdition",
+      "local": {
+        "citations": [
+          "crates/fireemu-adapter-grpc/src/rest/mod.rs:332",
+          "crates/fireemu-adapter-grpc/src/rest/mod.rs:862",
+          "crates/fireemu-core-types/src/edition.rs:12"
+        ],
+        "status": "implemented"
+      },
+      "presentInPinnedDiscovery": true,
+      "rationale": "Edition decides which methods are served at all; the local inventory route already refuses non-Standard Native combinations."
+    },
+    {
+      "class": "data-plane-contract",
+      "dataPlaneConsequence": "Transaction contention and retry behavior depend on this value.",
+      "field": "concurrencyMode",
+      "local": {
+        "citations": [
+          "crates/fireemu-adapter-grpc/src/rest/mod.rs:322"
+        ],
+        "status": "partial"
+      },
+      "presentInPinnedDiscovery": true,
+      "rationale": "PESSIMISTIC and OPTIMISTIC change when a transaction blocks and when it aborts."
+    },
+    {
+      "class": "data-plane-contract",
+      "dataPlaneConsequence": "A read_time older than the retention window must be refused; a wrong period moves that boundary.",
+      "field": "versionRetentionPeriod",
+      "local": {
+        "citations": [
+          "crates/fireemu-adapter-grpc/src/rest/mod.rs:323"
+        ],
+        "status": "partial"
+      },
+      "presentInPinnedDiscovery": true,
+      "rationale": "Retention bounds how far back a read_time query may address."
+    },
+    {
+      "class": "data-plane-contract",
+      "dataPlaneConsequence": "It is excluded from settings equality by the database projection because it moves on its own, but the data-plane bound it expresses is still a contract. The local projection derives it from the retention window floored at the database's creation, the bound read_time is checked against (62d8a1d22).",
+      "field": "earliestVersionTime",
+      "local": {
+        "citations": [
+          "crates/fireemu-adapter-grpc/src/rest/mod.rs:324"
+        ],
+        "status": "implemented"
+      },
+      "presentInPinnedDiscovery": true,
+      "rationale": "The earliest addressable version time is the concrete lower bound a read_time request is checked against, and it advances continuously."
+    },
+    {
+      "class": "data-plane-contract",
+      "dataPlaneConsequence": "The accepted read_time range changes with this setting.",
+      "field": "pointInTimeRecoveryEnablement",
+      "local": {
+        "citations": [
+          "crates/fireemu-adapter-grpc/src/rest/mod.rs:326"
+        ],
+        "status": "partial"
+      },
+      "presentInPinnedDiscovery": true,
+      "rationale": "Enabling point-in-time recovery extends the retention window, which widens the range of accepted read_time values."
+    },
+    {
+      "class": "data-plane-contract",
+      "dataPlaneConsequence": "A disabled mode must refuse Listen; the local projection reports enabled unconditionally.",
+      "field": "realtimeUpdatesMode",
+      "local": {
+        "citations": [
+          "crates/fireemu-adapter-grpc/src/rest/mod.rs:333"
+        ],
+        "status": "partial"
+      },
+      "presentInPinnedDiscovery": true,
+      "rationale": "Realtime updates decide whether Listen is served for the database."
+    },
+    {
+      "class": "data-plane-contract",
+      "dataPlaneConsequence": "A disabled mode must refuse data-plane requests; the local projection omits the field.",
+      "field": "firestoreDataAccessMode",
+      "local": {
+        "citations": [],
+        "status": "not-implemented"
+      },
+      "presentInPinnedDiscovery": true,
+      "rationale": "The Firestore data access mode gates whether the Firestore data API is served for the database at all."
+    },
+    {
+      "class": "data-plane-contract",
+      "dataPlaneConsequence": "A caller cannot learn from the local projection whether that API is available.",
+      "field": "mongodbCompatibleDataAccessMode",
+      "local": {
+        "citations": [],
+        "status": "not-implemented"
+      },
+      "presentInPinnedDiscovery": true,
+      "rationale": "The MongoDB-compatible access mode gates a second data API on the same database."
+    },
+    {
+      "class": "managed-infrastructure",
+      "dataPlaneConsequence": "It is echoed to callers, so a hardcoded value must be recognised as declared rather than observed; the local value is a constant.",
+      "field": "locationId",
+      "local": {
+        "citations": [
+          "crates/fireemu-adapter-grpc/src/rest/mod.rs:320"
+        ],
+        "status": "partial"
+      },
+      "presentInPinnedDiscovery": true,
+      "rationale": "The region is fixed by provisioning and cannot be chosen by a local process."
+    },
+    {
+      "class": "managed-infrastructure",
+      "dataPlaneConsequence": "None; the local projection reports DISABLED as a declared constant.",
+      "field": "appEngineIntegrationMode",
+      "local": {
+        "citations": [
+          "crates/fireemu-adapter-grpc/src/rest/mod.rs:325"
+        ],
+        "status": "partial"
+      },
+      "presentInPinnedDiscovery": true,
+      "rationale": "App Engine integration is a legacy managed binding with no local analogue."
+    },
+    {
+      "class": "managed-infrastructure",
+      "dataPlaneConsequence": "None; no data-plane request observes it. It is an abort precondition for any campaign that creates and deletes a database.",
+      "field": "deleteProtectionState",
+      "local": {
+        "citations": [
+          "crates/fireemu-adapter-grpc/src/rest/mod.rs:327"
+        ],
+        "status": "partial"
+      },
+      "presentInPinnedDiscovery": true,
+      "rationale": "Delete protection only gates the managed databases.delete call."
+    },
+    {
+      "class": "managed-infrastructure",
+      "dataPlaneConsequence": "None, but it is an identity field the database projection requires, so a change must stop a campaign rather than be normalized away. The local value is derived deterministically from the project and database ids (62d8a1d22).",
+      "field": "uid",
+      "local": {
+        "citations": [
+          "crates/fireemu-adapter-grpc/src/rest/mod.rs:317"
+        ],
+        "status": "implemented"
+      },
+      "presentInPinnedDiscovery": true,
+      "rationale": "The server-assigned unique id identifies one provisioning instance."
+    },
+    {
+      "class": "managed-infrastructure",
+      "dataPlaneConsequence": "None; it is excluded from settings equality by the database projection. The local value is a digest of the projected resource (62d8a1d22).",
+      "field": "etag",
+      "local": {
+        "citations": [
+          "crates/fireemu-adapter-grpc/src/rest/mod.rs:342"
+        ],
+        "status": "implemented"
+      },
+      "presentInPinnedDiscovery": true,
+      "rationale": "The etag supports optimistic concurrency on managed patch calls."
+    },
+    {
+      "class": "managed-infrastructure",
+      "dataPlaneConsequence": "None, but it is the precondition that decides whether a second named database costs anything. The local projection reports true for the default database and omits the field for any other, as production does (62d8a1d22).",
+      "field": "freeTier",
+      "local": {
+        "citations": [
+          "crates/fireemu-adapter-grpc/src/rest/mod.rs:339"
+        ],
+        "status": "implemented"
+      },
+      "presentInPinnedDiscovery": true,
+      "rationale": "Free tier eligibility is a billing attribute of the managed resource."
+    },
+    {
+      "class": "managed-infrastructure",
+      "dataPlaneConsequence": "None; no data-plane result depends on it. The local value is the database's creation instant on the logical clock (62d8a1d22).",
+      "field": "createTime",
+      "local": {
+        "citations": [
+          "crates/fireemu-adapter-grpc/src/rest/mod.rs:318"
+        ],
+        "status": "implemented"
+      },
+      "presentInPinnedDiscovery": true,
+      "rationale": "Provisioning timestamps describe the managed resource lifecycle."
+    },
+    {
+      "class": "managed-infrastructure",
+      "dataPlaneConsequence": "None; no data-plane result depends on it. The local value equals createTime because no local call updates the resource (62d8a1d22).",
+      "field": "updateTime",
+      "local": {
+        "citations": [
+          "crates/fireemu-adapter-grpc/src/rest/mod.rs:319"
+        ],
+        "status": "implemented"
+      },
+      "presentInPinnedDiscovery": true,
+      "rationale": "Provisioning timestamps describe the managed resource lifecycle."
+    },
+    {
+      "class": "managed-infrastructure",
+      "dataPlaneConsequence": "It is the field that makes showDeleted meaningful; the local inventory accepts showDeleted but has no deleted state to report.",
+      "field": "deleteTime",
+      "local": {
+        "citations": [],
+        "status": "not-implemented"
+      },
+      "presentInPinnedDiscovery": true,
+      "rationale": "The deletion timestamp appears only for soft-deleted managed databases."
+    },
+    {
+      "class": "managed-infrastructure",
+      "dataPlaneConsequence": "None; no data-plane result depends on it.",
+      "field": "keyPrefix",
+      "local": {
+        "citations": [],
+        "status": "not-implemented"
+      },
+      "presentInPinnedDiscovery": true,
+      "rationale": "The key prefix is a Datastore-era managed identifier."
+    },
+    {
+      "class": "managed-infrastructure",
+      "dataPlaneConsequence": "None; encryption is transparent to the data plane.",
+      "field": "cmekConfig",
+      "local": {
+        "citations": [],
+        "status": "not-implemented"
+      },
+      "presentInPinnedDiscovery": true,
+      "rationale": "Customer-managed encryption keys are a managed KMS binding."
+    },
+    {
+      "class": "managed-infrastructure",
+      "dataPlaneConsequence": "None; no data-plane result depends on them.",
+      "field": "tags",
+      "local": {
+        "citations": [],
+        "status": "not-implemented"
+      },
+      "presentInPinnedDiscovery": true,
+      "rationale": "Resource tags are a Cloud Resource Manager concern."
+    },
+    {
+      "class": "managed-infrastructure",
+      "dataPlaneConsequence": "None; no data-plane result depends on it.",
+      "field": "previousId",
+      "local": {
+        "citations": [],
+        "status": "not-implemented"
+      },
+      "presentInPinnedDiscovery": true,
+      "rationale": "The previous id records a managed rename or restore lineage."
+    },
+    {
+      "class": "managed-infrastructure",
+      "dataPlaneConsequence": "None; no data-plane result depends on it.",
+      "field": "sourceInfo",
+      "local": {
+        "citations": [],
+        "status": "not-implemented"
+      },
+      "presentInPinnedDiscovery": true,
+      "rationale": "Source info records the backup or clone a managed database came from."
+    },
+    {
+      "class": "data-plane-contract",
+      "dataPlaneConsequence": "It reports whether the enhanced text search query mode is available, which changes which queries a caller may issue.",
+      "field": "enhancedTextSearchQueryMode",
+      "local": {
+        "citations": [
+          "crates/fireemu-adapter-grpc/src/rest/mod.rs:334"
+        ],
+        "status": "partial"
+      },
+      "presentInPinnedDiscovery": false,
+      "rationale": "This field is absent from the pinned discovery document but is present in the saved production database response and is emitted by the local projection, so it is an undocumented surface that must be carried rather than dropped."
+    }
+  ],
+  "discovery": {
+    "id": "firestore-v1",
+    "methodListDigest": "e622c0847a5a655d39dd3b988625d4c4a402cb39cfc67c6f27f4fec9a81839e9",
+    "path": "spec/compatibility/upstream/2026-09-09-retry/discovery.json",
+    "revision": "20260826",
+    "sha256": "1efd1c81aba1cd530d39565a97b3e719cdf48b2518e8e9905d1fc4367bcca40b"
+  },
+  "excluded": [
+    "firestore.projects.databases.documents.batchGet",
+    "firestore.projects.databases.documents.batchWrite",
+    "firestore.projects.databases.documents.beginTransaction",
+    "firestore.projects.databases.documents.commit",
+    "firestore.projects.databases.documents.createDocument",
+    "firestore.projects.databases.documents.delete",
+    "firestore.projects.databases.documents.executePipeline",
+    "firestore.projects.databases.documents.get",
+    "firestore.projects.databases.documents.list",
+    "firestore.projects.databases.documents.listCollectionIds",
+    "firestore.projects.databases.documents.listDocuments",
+    "firestore.projects.databases.documents.listen",
+    "firestore.projects.databases.documents.partitionQuery",
+    "firestore.projects.databases.documents.patch",
+    "firestore.projects.databases.documents.rollback",
+    "firestore.projects.databases.documents.runAggregationQuery",
+    "firestore.projects.databases.documents.runQuery",
+    "firestore.projects.databases.documents.write"
+  ],
+  "excludedPrefix": "firestore.projects.databases.documents.",
+  "excludedRationale": "Document methods are the Firestore data plane itself and are owned by the FS-DATA-WRITE, FS-QUERY-INDEX, FS-TRANSACTION and FS-LISTEN-SDK rows. They are listed here so the management denominator is provably the complement of a published set rather than an unstated selection.",
+  "localSurfaces": [
+    {
+      "class": "local-safety-extension",
+      "dataPlaneConsequence": "Its post-state is ordinary document absence, which the data-plane lanes already cover; the route itself must never be reachable against production.",
+      "id": "emulator.clearFirestoreData",
+      "local": {
+        "citations": [
+          "crates/fireemu-adapter-grpc/src/rest/mod.rs:667",
+          "crates/fireemu-adapter-grpc/src/rest/mod.rs:698"
+        ],
+        "status": "implemented"
+      },
+      "rationale": "The emulator-only wipe route gives a test suite a synchronous reset that no production API offers; it exists to keep local runs isolated, not to imitate bulkDeleteDocuments."
+    },
+    {
+      "class": "local-safety-extension",
+      "dataPlaneConsequence": "Query acceptance and refusal are decided from this catalog, so a configuration loaded differently from production's index set changes data-plane results.",
+      "id": "config.firestoreIndexes",
+      "local": {
+        "citations": [
+          "crates/fireemu/src/control.rs:48",
+          "crates/fireemu/src/control.rs:88",
+          "crates/fireemu/src/control.rs:148"
+        ],
+        "status": "implemented"
+      },
+      "rationale": "Composite indexes and field overrides are loaded from the project's index configuration at startup because the Admin index methods are not served; this substitutes configuration for a control-plane call."
+    },
+    {
+      "class": "local-safety-extension",
+      "dataPlaneConsequence": "An exemption changes which single-field queries are refused, so the two paths must agree on the resulting refusal even though the transition differs.",
+      "id": "config.singleFieldExemption",
+      "local": {
+        "citations": [
+          "crates/fireemu/src/control.rs:148",
+          "crates/fireemu/src/control.rs:215",
+          "crates/fireemu-core-firestore/src/index.rs:133",
+          "crates/fireemu-core-firestore/src/index.rs:157"
+        ],
+        "status": "implemented"
+      },
+      "rationale": "Single-field exemptions, including the wildcard field path, are honored from configuration; the production equivalent is a fields.patch call."
+    },
+    {
+      "class": "local-safety-extension",
+      "dataPlaneConsequence": "The on-disk format must match what official tooling writes, otherwise a real export cannot be loaded locally.",
+      "id": "cli.exportImport",
+      "local": {
+        "citations": [
+          "crates/fireemu/src/import_export.rs:2891",
+          "crates/fireemu/src/import_export.rs:353",
+          "crates/fireemu-core-export/src/metadata.rs:142"
+        ],
+        "status": "implemented"
+      },
+      "rationale": "Export and import run as local commands over a directory tree rather than as long-running operations over Cloud Storage, so a developer can snapshot and restore a local run without any managed dependency."
+    },
+    {
+      "class": "local-safety-extension",
+      "dataPlaneConsequence": "Cross-database reference values must survive a round trip and a malformed database identity must be refused before any document is published.",
+      "id": "cli.namedDatabaseExportExtension",
+      "local": {
+        "citations": [
+          "crates/fireemu-core-export/src/metadata.rs:133",
+          "crates/fireemu-core-export/src/metadata.rs:195",
+          "crates/fireemu/src/import_export.rs:1378"
+        ],
+        "status": "implemented"
+      },
+      "rationale": "The named-database export extension records databases beyond the default one in a metadata extension block; the official format has no such section, so this is an additive local convenience."
+    },
+    {
+      "class": "local-safety-extension",
+      "dataPlaneConsequence": "A request against an uncreated named database succeeds locally and fails in production, which is recorded as an open repair ticket rather than a fix here.",
+      "id": "runtime.lazyDatabaseCreation",
+      "local": {
+        "citations": [
+          "crates/fireemu-adapter-grpc/src/local.rs:2629",
+          "crates/fireemu-core-types/src/ids.rs:183"
+        ],
+        "status": "implemented"
+      },
+      "rationale": "Any syntactically valid database id is materialized on first touch so that a test does not need a provisioning step; production requires databases.create first and answers NOT_FOUND until then."
+    },
+    {
+      "class": "local-safety-extension",
+      "dataPlaneConsequence": "It must stay Enterprise-gated so a Standard Native run cannot reach a surface production would not serve.",
+      "id": "control.textIndexLifecycle",
+      "local": {
+        "citations": [
+          "crates/fireemu-adapter-http/src/control.rs:1346"
+        ],
+        "status": "implemented"
+      },
+      "rationale": "fireemu's own control API exposes an Enterprise text-index resource that has no Firestore Admin v1 counterpart in the pinned discovery input."
+    }
+  ],
+  "methods": [
+    {
+      "class": "managed-infrastructure",
+      "dataPlaneConsequence": "None; scheduled backups are never readable through the data plane.",
+      "local": {
+        "citations": [],
+        "status": "not-implemented"
+      },
+      "locator": "firestore.projects.databases.backupSchedules.create",
+      "rationale": "Backup schedules allocate managed retention with a billed storage footprint."
+    },
+    {
+      "class": "managed-infrastructure",
+      "dataPlaneConsequence": "None; no data-plane result depends on it.",
+      "local": {
+        "citations": [],
+        "status": "not-implemented"
+      },
+      "locator": "firestore.projects.databases.backupSchedules.delete",
+      "rationale": "Removing a schedule changes managed retention only."
+    },
+    {
+      "class": "managed-infrastructure",
+      "dataPlaneConsequence": "None; no data-plane result depends on it.",
+      "local": {
+        "citations": [],
+        "status": "not-implemented"
+      },
+      "locator": "firestore.projects.databases.backupSchedules.get",
+      "rationale": "Schedule readback describes managed retention policy only."
+    },
+    {
+      "class": "managed-infrastructure",
+      "dataPlaneConsequence": "None; no data-plane result depends on it.",
+      "local": {
+        "citations": [],
+        "status": "not-implemented"
+      },
+      "locator": "firestore.projects.databases.backupSchedules.list",
+      "rationale": "Schedule enumeration describes managed retention policy only."
+    },
+    {
+      "class": "managed-infrastructure",
+      "dataPlaneConsequence": "None; no data-plane result depends on it.",
+      "local": {
+        "citations": [],
+        "status": "not-implemented"
+      },
+      "locator": "firestore.projects.databases.backupSchedules.patch",
+      "rationale": "Changing retention changes a billed managed policy."
+    },
+    {
+      "class": "managed-infrastructure",
+      "dataPlaneConsequence": "The final post-state, absence of the deleted documents, is observable from the data plane; the local emulator wipe route is the local-safety counterpart.",
+      "local": {
+        "citations": [
+          "crates/fireemu-adapter-grpc/src/rest/mod.rs:667",
+          "crates/fireemu-adapter-grpc/src/rest/mod.rs:698"
+        ],
+        "status": "local-extension-only"
+      },
+      "locator": "firestore.projects.databases.bulkDeleteDocuments",
+      "rationale": "Bulk delete is an eventually consistent long-running operation whose progress, partial completion and quota behavior are properties of managed infrastructure."
+    },
+    {
+      "class": "managed-infrastructure",
+      "dataPlaneConsequence": "The delivered changes overlap the Listen contract, which the listen lane owns.",
+      "local": {
+        "citations": [],
+        "status": "not-implemented"
+      },
+      "locator": "firestore.projects.databases.changeStreams.create",
+      "rationale": "Change streams provision managed retention for a change feed with its own billing and lifecycle."
+    },
+    {
+      "class": "managed-infrastructure",
+      "dataPlaneConsequence": "None directly; delivered changes are owned by the listen lane.",
+      "local": {
+        "citations": [],
+        "status": "not-implemented"
+      },
+      "locator": "firestore.projects.databases.changeStreams.delete",
+      "rationale": "Deleting a change stream releases managed retention."
+    },
+    {
+      "class": "managed-infrastructure",
+      "dataPlaneConsequence": "None directly; delivered changes are owned by the listen lane.",
+      "local": {
+        "citations": [],
+        "status": "not-implemented"
+      },
+      "locator": "firestore.projects.databases.changeStreams.get",
+      "rationale": "Change stream readback describes managed retention state."
+    },
+    {
+      "class": "managed-infrastructure",
+      "dataPlaneConsequence": "None directly; delivered changes are owned by the listen lane.",
+      "local": {
+        "citations": [],
+        "status": "not-implemented"
+      },
+      "locator": "firestore.projects.databases.changeStreams.list",
+      "rationale": "Change stream enumeration describes managed retention state."
+    },
+    {
+      "class": "managed-infrastructure",
+      "dataPlaneConsequence": "The cloned database's data plane is covered by the ordinary data-plane rows.",
+      "local": {
+        "citations": [],
+        "status": "not-implemented"
+      },
+      "locator": "firestore.projects.databases.clone",
+      "rationale": "Clone depends on point-in-time recovery retention held by the managed service."
+    },
+    {
+      "class": "data-plane-contract",
+      "dataPlaneConsequence": "A caller can read back the TTL policy and the single-field index configuration, so the expiry and refusal behavior each implies is observable locally.",
+      "local": {
+        "citations": [
+          "crates/fireemu-adapter-grpc/src/rest/admin_fields.rs:218",
+          "crates/fireemu-adapter-grpc/src/rest/admin_fields.rs:314",
+          "crates/fireemu-adapter-grpc/src/rest/admin_fields.rs:189",
+          "crates/fireemu-core-firestore/src/ttl.rs:226"
+        ],
+        "status": "implemented"
+      },
+      "locator": "firestore.projects.databases.collectionGroups.fields.get",
+      "rationale": "Field configuration carries the TTL policy and the single-field index exemption, both of which change document lifetime and query acceptance."
+    },
+    {
+      "class": "data-plane-contract",
+      "dataPlaneConsequence": "Both documented filters are served and any other filter is refused, so an exemption set and a TTL policy set are each discoverable through a read path.",
+      "local": {
+        "citations": [
+          "crates/fireemu-adapter-grpc/src/rest/admin_fields.rs:441",
+          "crates/fireemu-adapter-grpc/src/rest/admin_fields.rs:140",
+          "crates/fireemu-core-firestore/src/index.rs:239"
+        ],
+        "status": "implemented"
+      },
+      "locator": "firestore.projects.databases.collectionGroups.fields.list",
+      "rationale": "Enumeration with the ttlConfig and indexConfig filters is how tooling discovers every non-default field policy affecting the data plane."
+    },
+    {
+      "class": "data-plane-contract",
+      "dataPlaneConsequence": "The ttlConfig transition is driven at runtime and an expiry sweep applies it. The indexConfig transition is refused with UNIMPLEMENTED: the local runtime still accepts exemptions only from static configuration, so that half of the surface cannot be driven at runtime.",
+      "local": {
+        "citations": [
+          "crates/fireemu-adapter-grpc/src/rest/admin_fields.rs:345",
+          "crates/fireemu-core-firestore/src/ttl.rs:242",
+          "crates/fireemu-adapter-grpc/src/local.rs:3037",
+          "crates/fireemu/src/control.rs:148"
+        ],
+        "status": "partial"
+      },
+      "locator": "firestore.projects.databases.collectionGroups.fields.patch",
+      "rationale": "Patching ttlConfig schedules server-side document deletion and patching indexConfig exempts a field from single-field indexing; both change what later reads and queries return."
+    },
+    {
+      "class": "data-plane-contract",
+      "dataPlaneConsequence": "Without this method an index can only be declared through configuration, so a caller cannot reach the accepted state a production query depends on.",
+      "local": {
+        "citations": [
+          "crates/fireemu/src/control.rs:48",
+          "crates/fireemu/src/control.rs:88"
+        ],
+        "status": "local-extension-only"
+      },
+      "locator": "firestore.projects.databases.collectionGroups.indexes.create",
+      "rationale": "Composite index existence decides whether a query is accepted or refused with FAILED_PRECONDITION, so index creation directly determines data-plane results."
+    },
+    {
+      "class": "data-plane-contract",
+      "dataPlaneConsequence": "Without deletion the refusal direction of the transition cannot be reached at runtime.",
+      "local": {
+        "citations": [],
+        "status": "not-implemented"
+      },
+      "locator": "firestore.projects.databases.collectionGroups.indexes.delete",
+      "rationale": "Deleting an index flips previously accepted queries back to refusal, which is a data-plane observable transition."
+    },
+    {
+      "class": "data-plane-contract",
+      "dataPlaneConsequence": "A missing readback leaves index-dependent query acceptance untestable against the same contract production exposes.",
+      "local": {
+        "citations": [],
+        "status": "not-implemented"
+      },
+      "locator": "firestore.projects.databases.collectionGroups.indexes.get",
+      "rationale": "Index state is how a caller learns that a query will now be accepted; the CREATING to READY transition is observable from the data plane."
+    },
+    {
+      "class": "data-plane-contract",
+      "dataPlaneConsequence": "Local index selection is driven by configuration instead, so the two catalogs can diverge without any request revealing it.",
+      "local": {
+        "citations": [
+          "crates/fireemu-core-firestore/src/index.rs:949",
+          "crates/fireemu-core-firestore/src/index.rs:597"
+        ],
+        "status": "local-extension-only"
+      },
+      "locator": "firestore.projects.databases.collectionGroups.indexes.list",
+      "rationale": "Enumeration is the denominator for index-merge and index-selection decisions that the query planner then makes on the data plane."
+    },
+    {
+      "class": "managed-infrastructure",
+      "dataPlaneConsequence": "Existence and non-existence remain observable from the data plane, so the NOT_FOUND boundary for an uncreated database stays a contract obligation even though the provisioning call itself does not.",
+      "local": {
+        "citations": [],
+        "status": "not-implemented"
+      },
+      "locator": "firestore.projects.databases.create",
+      "rationale": "Creation allocates a regional, billed, quota-limited resource with an edition, location and CMEK binding that no local process can reproduce or account for."
+    },
+    {
+      "class": "managed-infrastructure",
+      "dataPlaneConsequence": "Post-deletion NOT_FOUND on the data plane remains a contract obligation.",
+      "local": {
+        "citations": [],
+        "status": "not-implemented"
+      },
+      "locator": "firestore.projects.databases.delete",
+      "rationale": "Deletion destroys a managed resource, is gated by delete protection and produces a long-running operation with no local analogue."
+    },
+    {
+      "class": "managed-infrastructure",
+      "dataPlaneConsequence": "The written export format is a contract: fireemu's own export and import must read and write what the official tooling produces, which is already covered by local format evidence.",
+      "local": {
+        "citations": [
+          "crates/fireemu/src/import_export.rs:2891",
+          "crates/fireemu-core-export/src/firestore.rs:480",
+          "crates/fireemu-core-export/src/metadata.rs:142"
+        ],
+        "status": "local-extension-only"
+      },
+      "locator": "firestore.projects.databases.exportDocuments",
+      "rationale": "Export writes to Cloud Storage under a long-running operation with managed quota, retries and object lifecycle; none of that exists locally."
+    },
+    {
+      "class": "data-plane-contract",
+      "dataPlaneConsequence": "A wrong concurrencyMode, databaseEdition or versionRetentionPeriod makes a caller choose transaction, edition and read-time behavior the local runtime will then refuse or accept differently from production.",
+      "local": {
+        "citations": [
+          "crates/fireemu-adapter-grpc/src/rest/mod.rs:847",
+          "crates/fireemu-adapter-grpc/src/rest/mod.rs:922",
+          "crates/fireemu-adapter-grpc/src/rest/mod.rs:303"
+        ],
+        "status": "partial"
+      },
+      "locator": "firestore.projects.databases.get",
+      "rationale": "Client tooling and the emulator suite read database settings before choosing a data-plane code path, and several returned fields change what the data plane accepts, so the projection is part of the contract rather than provisioning."
+    },
+    {
+      "class": "managed-infrastructure",
+      "dataPlaneConsequence": "The accepted on-disk format, partition enumeration and refusal of corrupt or duplicated output references are a contract the local importer already holds.",
+      "local": {
+        "citations": [
+          "crates/fireemu/src/import_export.rs:353",
+          "crates/fireemu/src/import_export.rs:1136",
+          "crates/fireemu/src/import_export.rs:1168"
+        ],
+        "status": "local-extension-only"
+      },
+      "locator": "firestore.projects.databases.importDocuments",
+      "rationale": "Import is a long-running operation reading managed Cloud Storage objects, with server-side validation and quota behavior that is not locally reproducible."
+    },
+    {
+      "class": "data-plane-contract",
+      "dataPlaneConsequence": "A database absent in production but present locally lets a caller address a database that would return NOT_FOUND against the real service.",
+      "local": {
+        "citations": [
+          "crates/fireemu-adapter-grpc/src/rest/mod.rs:847",
+          "crates/fireemu-adapter-grpc/src/rest/mod.rs:911",
+          "crates/fireemu-adapter-grpc/src/rest/mod.rs:890"
+        ],
+        "status": "partial"
+      },
+      "locator": "firestore.projects.databases.list",
+      "rationale": "Enumeration decides whether a named database exists at all, which is the precondition every data-plane request on that database depends on."
+    },
+    {
+      "class": "managed-infrastructure",
+      "dataPlaneConsequence": "Cancellation is part of the abort path of a management campaign, not of any local data-plane behavior.",
+      "local": {
+        "citations": [],
+        "status": "not-implemented"
+      },
+      "locator": "firestore.projects.databases.operations.cancel",
+      "rationale": "Cancellation is best-effort against managed work already in flight."
+    },
+    {
+      "class": "managed-infrastructure",
+      "dataPlaneConsequence": "None; no data-plane result depends on operation record retention.",
+      "local": {
+        "citations": [],
+        "status": "not-implemented"
+      },
+      "locator": "firestore.projects.databases.operations.delete",
+      "rationale": "Deleting an operation record only prunes managed bookkeeping."
+    },
+    {
+      "class": "managed-infrastructure",
+      "dataPlaneConsequence": "A campaign that drives fields.patch can poll the operation it was handed, and it is always already done; every other long-running operation of the Admin API remains managed infrastructure the runtime does not hold. A campaign must still bound its own polling, which the collector contract handles.",
+      "local": {
+        "citations": [
+          "crates/fireemu-adapter-grpc/src/rest/admin_fields.rs:548",
+          "crates/fireemu-adapter-grpc/src/local.rs:2873",
+          "crates/fireemu-adapter-grpc/src/local.rs:2915"
+        ],
+        "status": "partial"
+      },
+      "locator": "firestore.projects.databases.operations.get",
+      "rationale": "Long-running operation state belongs to the managed control plane; the local runtime applies a field configuration synchronously and records the resulting operation only so the name its patch returned can still be polled."
+    },
+    {
+      "class": "managed-infrastructure",
+      "dataPlaneConsequence": "Enumeration is how an interrupted campaign resumes its cleanup. Locally it enumerates the field-configuration operations alone, and the record is bounded, so a campaign must not treat it as the managed operation history.",
+      "local": {
+        "citations": [
+          "crates/fireemu-adapter-grpc/src/rest/admin_fields.rs:548",
+          "crates/fireemu-adapter-grpc/src/local.rs:2927"
+        ],
+        "status": "partial"
+      },
+      "locator": "firestore.projects.databases.operations.list",
+      "rationale": "Operation enumeration reflects managed scheduling and retention, not any behavior a local emulator can hold; the local listing reports only the bounded tail of field-configuration operations this runtime produced."
+    },
+    {
+      "class": "managed-infrastructure",
+      "dataPlaneConsequence": "The patched values are readable through databases.get, so the resulting projection stays inside the data-plane contract row above.",
+      "local": {
+        "citations": [],
+        "status": "not-implemented"
+      },
+      "locator": "firestore.projects.databases.patch",
+      "rationale": "Updating delete protection, point-in-time recovery or CMEK changes a billed managed configuration and runs as a long-running operation."
+    },
+    {
+      "class": "managed-infrastructure",
+      "dataPlaneConsequence": "A restored database must still serve the ordinary data plane, which is covered by the existing data-plane rows rather than by this method.",
+      "local": {
+        "citations": [],
+        "status": "not-implemented"
+      },
+      "locator": "firestore.projects.databases.restore",
+      "rationale": "Restore reads a managed backup artifact that only Google retains; the local runtime has no backup store to restore from."
+    },
+    {
+      "class": "managed-infrastructure",
+      "dataPlaneConsequence": "The resulting principal is visible to Security Rules, so principal shape stays a contract obligation of the Rules lane rather than of this method.",
+      "local": {
+        "citations": [],
+        "status": "not-implemented"
+      },
+      "locator": "firestore.projects.databases.userCreds.create",
+      "rationale": "User credentials mint a managed password bound to an IAM-adjacent identity; issuing real credentials from an emulator would be a local security hazard."
+    },
+    {
+      "class": "managed-infrastructure",
+      "dataPlaneConsequence": "Revocation is observable through Rules evaluation, which the Rules lane owns.",
+      "local": {
+        "citations": [],
+        "status": "not-implemented"
+      },
+      "locator": "firestore.projects.databases.userCreds.delete",
+      "rationale": "Credential deletion revokes a managed identity."
+    },
+    {
+      "class": "managed-infrastructure",
+      "dataPlaneConsequence": "The disabled principal is observable through Rules, owned by the Rules lane.",
+      "local": {
+        "citations": [],
+        "status": "not-implemented"
+      },
+      "locator": "firestore.projects.databases.userCreds.disable",
+      "rationale": "Disabling a credential toggles managed identity state."
+    },
+    {
+      "class": "managed-infrastructure",
+      "dataPlaneConsequence": "The enabled principal is observable through Rules, owned by the Rules lane.",
+      "local": {
+        "citations": [],
+        "status": "not-implemented"
+      },
+      "locator": "firestore.projects.databases.userCreds.enable",
+      "rationale": "Enabling a credential toggles managed identity state."
+    },
+    {
+      "class": "managed-infrastructure",
+      "dataPlaneConsequence": "None directly; the principal it names is covered by the Rules lane.",
+      "local": {
+        "citations": [],
+        "status": "not-implemented"
+      },
+      "locator": "firestore.projects.databases.userCreds.get",
+      "rationale": "Reading a managed credential record describes control-plane state only."
+    },
+    {
+      "class": "managed-infrastructure",
+      "dataPlaneConsequence": "None directly; the principals it names are covered by the Rules lane.",
+      "local": {
+        "citations": [],
+        "status": "not-implemented"
+      },
+      "locator": "firestore.projects.databases.userCreds.list",
+      "rationale": "Credential enumeration is managed control-plane state."
+    },
+    {
+      "class": "managed-infrastructure",
+      "dataPlaneConsequence": "None directly; secret material must never be emitted by a local emulator.",
+      "local": {
+        "citations": [],
+        "status": "not-implemented"
+      },
+      "locator": "firestore.projects.databases.userCreds.resetPassword",
+      "rationale": "Password reset mints new managed secret material."
+    },
+    {
+      "class": "managed-infrastructure",
+      "dataPlaneConsequence": "None; backup content is never readable through the data plane.",
+      "local": {
+        "citations": [],
+        "status": "not-implemented"
+      },
+      "locator": "firestore.projects.locations.backups.delete",
+      "rationale": "Backup deletion releases managed storage."
+    },
+    {
+      "class": "managed-infrastructure",
+      "dataPlaneConsequence": "None; backup content is never readable through the data plane.",
+      "local": {
+        "citations": [],
+        "status": "not-implemented"
+      },
+      "locator": "firestore.projects.locations.backups.get",
+      "rationale": "Backups are managed artifacts retained by Google with their own storage cost."
+    },
+    {
+      "class": "managed-infrastructure",
+      "dataPlaneConsequence": "None; backup content is never readable through the data plane.",
+      "local": {
+        "citations": [],
+        "status": "not-implemented"
+      },
+      "locator": "firestore.projects.locations.backups.list",
+      "rationale": "Backup enumeration describes managed artifacts."
+    },
+    {
+      "class": "managed-infrastructure",
+      "dataPlaneConsequence": "The location a database was created in is echoed by databases.get, so only that projection field carries a contract.",
+      "local": {
+        "citations": [],
+        "status": "not-implemented"
+      },
+      "locator": "firestore.projects.locations.get",
+      "rationale": "Locations describe Google's regional footprint, which no local process defines."
+    },
+    {
+      "class": "managed-infrastructure",
+      "dataPlaneConsequence": "None beyond the locationId field echoed by databases.get.",
+      "local": {
+        "citations": [],
+        "status": "not-implemented"
+      },
+      "locator": "firestore.projects.locations.list",
+      "rationale": "Location enumeration describes Google's regional footprint."
+    }
+  ],
+  "productionExecuted": false,
+  "repairTickets": [
+    {
+      "citations": [
+        "crates/fireemu-adapter-grpc/src/local.rs:1682",
+        "crates/fireemu-adapter-grpc/src/local.rs:1439",
+        "crates/fireemu-core-types/src/ids.rs:183"
+      ],
+      "class": "local-safety-extension",
+      "fixApplied": true,
+      "fixedAt": "cb429f2c4d4ad4065c37c68b5e4f4dcb37679ff7",
+      "id": "FS-CONFIG-RT-001",
+      "reproduction": "Start fireemu with only the default database configured, then issue any Firestore REST read against projects/{project}/databases/never-created/documents/c/d. The local runtime creates the database and answers NOT_FOUND for the document; production answers NOT_FOUND for the database before the document is considered.",
+      "resolution": "The strict profile answers NOT_FOUND for a database nothing created and does not materialize it on the refusal; the emulator profile keeps materializing any database on first touch, as the official emulator does. Fixed for the strict profile only, by design.",
+      "status": "FIXED",
+      "summary": "Any syntactically valid database id becomes usable without a create call, so a request that production refuses with NOT_FOUND succeeds locally.",
+      "title": "A named database is materialized on first touch instead of returning NOT_FOUND"
+    },
+    {
+      "citations": [
+        "crates/fireemu-adapter-grpc/src/rest/mod.rs:332",
+        "crates/fireemu-adapter-grpc/src/rest/mod.rs:862",
+        "crates/fireemu-adapter-grpc/src/rest/mod.rs:320"
+      ],
+      "class": "data-plane-contract",
+      "fixApplied": false,
+      "fixedAt": "62d8a1d22deedd33b793fa5a160f8bc5fcac4c83",
+      "id": "FS-CONFIG-RT-002",
+      "reproduction": "Start fireemu configured for the Enterprise edition and read projects/{project}/databases/(default) on the Firestore REST port. The response still reports STANDARD while the same route refuses non-Standard Native traffic a few lines earlier.",
+      "resolution": "databaseEdition now comes from the configuration; locationId is still the constant us-central1. The remaining half is FS-LIFE-003 (database projection completeness).",
+      "status": "PARTIALLY_FIXED",
+      "summary": "databaseEdition is hardcoded to STANDARD and locationId to us-central1, so the projection reflects neither the configured edition enum nor any configured location.",
+      "title": "The database projection reports a constant edition and location"
+    },
+    {
+      "citations": [
+        "crates/fireemu-adapter-grpc/src/rest/mod.rs:303",
+        "tools/compat-broad/batch_contract.py:230",
+        "tools/compat-broad/fixtures/database-settings-7be6cf08.json:1"
+      ],
+      "class": "data-plane-contract",
+      "fixApplied": true,
+      "fixedAt": "62d8a1d22deedd33b793fa5a160f8bc5fcac4c83",
+      "id": "FS-CONFIG-RT-003",
+      "reproduction": "Compare the local response of projects/{project}/databases/(default) with the saved offline fixture at tools/compat-broad/fixtures/database-settings-7be6cf08.json. The local body is a strict subset and would fail the identity check the batch contract applies.",
+      "resolution": "uid, createTime, updateTime, earliestVersionTime, freeTier and etag are emitted; the local rehearsal record of 2026-09-21 shows the local projection carrying the same field set as the saved production response, with local values for uid and the timestamps.",
+      "status": "FIXED",
+      "summary": "uid, freeTier, etag, createTime, updateTime and earliestVersionTime are absent from the local projection although the saved production response contains them and the database projection contract requires uid as an identity field.",
+      "title": "The database projection omits fields the saved production response carries"
+    },
+    {
+      "citations": [
+        "crates/fireemu-adapter-grpc/src/rest/admin_fields.rs:345",
+        "crates/fireemu/src/control.rs:148",
+        "crates/fireemu-core-firestore/src/index.rs:216"
+      ],
+      "class": "data-plane-contract",
+      "fixApplied": false,
+      "fixedAt": null,
+      "id": "FS-CONFIG-RT-004",
+      "reproduction": "Issue PATCH on projects/{project}/databases/(default)/collectionGroups/{group}/fields/{field} with updateMask=indexConfig and observe UNIMPLEMENTED, while production applies the exemption and reports usesAncestorConfig false on the next get.",
+      "resolution": null,
+      "status": "OPEN",
+      "summary": "The field configuration surface is served and the ttlConfig half is complete: the policy is stored per database, read back as ACTIVE, and an expiry sweep on the virtual clock deletes documents whose TTL field has elapsed. Patching indexConfig is refused with UNIMPLEMENTED, because single-field exemptions are still taken from the project's index configuration at startup and there is no runtime path that changes them.",
+      "title": "The indexConfig half of fields.patch has no runtime transition"
+    },
+    {
+      "citations": [
+        "crates/fireemu-adapter-grpc/src/decode.rs:169",
+        "crates/fireemu-core-types/src/ids.rs:183"
+      ],
+      "class": "data-plane-contract",
+      "fixApplied": false,
+      "fixedAt": null,
+      "id": "FS-CONFIG-RT-005",
+      "reproduction": "Issue a Firestore REST read against projects/{project}/databases/Invalid_Id/documents/c/d and observe NOT_FOUND with the message naming the database.",
+      "resolution": null,
+      "status": "OPEN",
+      "summary": "A syntactically invalid database id is deliberately mapped to NOT_FOUND on the data plane. Whether production agrees is exactly one of the error shapes this lane's campaign is prepared to compare.",
+      "title": "An invalid database id is answered NOT_FOUND rather than INVALID_ARGUMENT"
+    }
+  ],
+  "schema": "fs-config-lifecycle-surface-classification-v1",
+  "status": "PREPARATION_ONLY",
+  "summary": {
+    "classifiedManagementMethods": 42,
+    "databaseFieldsByClass": {
+      "data-plane-contract": 11,
+      "managed-infrastructure": 14
+    },
+    "discoveryMethods": 60,
+    "excludedDataPlaneMethods": 18,
+    "localSurfacesByClass": {
+      "local-safety-extension": 7
+    },
+    "methodsByClass": {
+      "data-plane-contract": 9,
+      "managed-infrastructure": 33
+    },
+    "openRepairTickets": 2,
+    "productionUnobservedConditionsReduced": 0,
+    "repairTickets": 5
+  }
+}

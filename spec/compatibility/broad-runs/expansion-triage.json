@@ -1,0 +1,93 @@
+{
+  "schemaVersion": 1,
+  "confirmedNewRuntimeGaps": 0,
+  "historicalMatchesAdded": 87,
+  "addedPrograms": {
+    "writes/transforms (historical)": 18,
+    "values/type-order": 6,
+    "values/numeric-ties": 10,
+    "queries/filters": 30,
+    "queries/aggregations": 23
+  },
+  "adapterCorrection": {
+    "id": "BROAD-ADAPTER-001",
+    "priority": "P1",
+    "cause": "Privileged HTTP401/403 did not invalidate credentials before later privileged requests",
+    "fixedCommit": "0a7a55ce8531b696658ac9c17b5ab26ab10273e1",
+    "runtimeGap": false,
+    "regression": "Real local HTTP401/403; one request, no refresh, incomplete result and retained unconfirmed resources"
+  },
+  "indeterminateGroups": [
+    {
+      "rows": 20,
+      "unit": "current-transform-production-candidate",
+      "reason": "Current operation sequence has no matching production reference; separate historical18steps now match"
+    },
+    {
+      "rows": 2,
+      "unit": "transaction-contention-investigation",
+      "reason": "No usable write responses; excluded from production batch; schedule dedicated contention traces"
+    },
+    {
+      "rows": 1,
+      "unit": "auth-non-json-response-recording",
+      "reason": "Keep bounded non-JSON recording as a separate extension; no assumed agreement"
+    }
+  ],
+  "mutations": [
+    {
+      "name": "baseline",
+      "exitCode": 0,
+      "expectedResult": true,
+      "summary": "13 passed in 3.10s"
+    },
+    {
+      "name": "admin-refusal-latch-removed",
+      "exitCode": 1,
+      "expectedResult": true,
+      "summary": "2 failed, 11 passed in 3.15s"
+    },
+    {
+      "name": "failed-credential-reused",
+      "exitCode": 1,
+      "expectedResult": true,
+      "summary": "2 failed, 11 passed in 3.96s"
+    },
+    {
+      "name": "expiry-reservation-erased",
+      "exitCode": 1,
+      "expectedResult": true,
+      "summary": "1 failed, 12 passed in 3.12s"
+    },
+    {
+      "name": "recovery-deadline-erased",
+      "exitCode": 1,
+      "expectedResult": true,
+      "summary": "2 failed, 11 passed in 3.13s"
+    },
+    {
+      "name": "candidate-input-binding-erased",
+      "exitCode": 1,
+      "expectedResult": true,
+      "summary": "1 failed, 12 passed in 2.19s"
+    },
+    {
+      "name": "whole-operation-watchdog-erased",
+      "exitCode": 1,
+      "expectedResult": true,
+      "summary": "1 failed, 12 passed in 4.12s"
+    },
+    {
+      "name": "response-size-bound-erased",
+      "exitCode": 1,
+      "expectedResult": true,
+      "summary": "1 failed, 12 passed in 3.09s"
+    }
+  ],
+  "productionExecuted": false,
+  "unresolvedExisting": [
+    "GAP-AUTH-007",
+    "AUTH-U03"
+  ],
+  "revision3": "prepared, offline validated, production unobserved"
+}

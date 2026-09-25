@@ -1,0 +1,19 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Firestore WebChannel listen catalog</title>
+    <script type="importmap">
+      {
+        "imports": {
+          "node:crypto": "./listen-catalog-sha256.js"
+        }
+      }
+    </script>
+  </head>
+  <body>
+    <pre id="result">idle: the browser runner calls window.__o6RunCatalog(config)</pre>
+    <script type="module" src="./listen-catalog.js"></script>
+  </body>
+</html>

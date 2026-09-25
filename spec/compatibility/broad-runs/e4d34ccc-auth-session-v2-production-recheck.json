@@ -1,0 +1,693 @@
+{
+  "acceptance": "candidate",
+  "comparison": {
+    "contract": "tools/publish-auth-session-v2.py::comparison",
+    "rows": [
+      {
+        "comparison": "Same observed result",
+        "id": "signup",
+        "local": {
+          "error": null,
+          "followup": null,
+          "outcome": "accepted",
+          "quality": "observed"
+        },
+        "production": {
+          "error": null,
+          "followup": null,
+          "outcome": "accepted",
+          "quality": "observed"
+        }
+      },
+      {
+        "comparison": "Same observed result",
+        "id": "signin-a",
+        "local": {
+          "error": null,
+          "followup": null,
+          "outcome": "accepted",
+          "quality": "observed"
+        },
+        "production": {
+          "error": null,
+          "followup": null,
+          "outcome": "accepted",
+          "quality": "observed"
+        }
+      },
+      {
+        "comparison": "Same observed result",
+        "id": "signin-b",
+        "local": {
+          "error": null,
+          "followup": null,
+          "outcome": "accepted",
+          "quality": "observed"
+        },
+        "production": {
+          "error": null,
+          "followup": null,
+          "outcome": "accepted",
+          "quality": "observed"
+        }
+      },
+      {
+        "comparison": "Same observed result",
+        "id": "a-id-baseline",
+        "local": {
+          "error": null,
+          "followup": null,
+          "outcome": "accepted",
+          "quality": "observed"
+        },
+        "production": {
+          "error": null,
+          "followup": null,
+          "outcome": "accepted",
+          "quality": "observed"
+        }
+      },
+      {
+        "comparison": "Same observed result",
+        "id": "a-refresh-baseline-1",
+        "local": {
+          "error": null,
+          "followup": {
+            "error": null,
+            "outcome": "accepted"
+          },
+          "outcome": "accepted",
+          "quality": "observed"
+        },
+        "production": {
+          "error": null,
+          "followup": {
+            "error": null,
+            "outcome": "accepted"
+          },
+          "outcome": "accepted",
+          "quality": "observed"
+        }
+      },
+      {
+        "comparison": "Same observed result",
+        "id": "a-refresh-baseline-2",
+        "local": {
+          "error": null,
+          "followup": {
+            "error": null,
+            "outcome": "accepted"
+          },
+          "outcome": "accepted",
+          "quality": "observed"
+        },
+        "production": {
+          "error": null,
+          "followup": {
+            "error": null,
+            "outcome": "accepted"
+          },
+          "outcome": "accepted",
+          "quality": "observed"
+        }
+      },
+      {
+        "comparison": "Same observed result",
+        "id": "b-id-baseline",
+        "local": {
+          "error": null,
+          "followup": null,
+          "outcome": "accepted",
+          "quality": "observed"
+        },
+        "production": {
+          "error": null,
+          "followup": null,
+          "outcome": "accepted",
+          "quality": "observed"
+        }
+      },
+      {
+        "comparison": "Same observed result",
+        "id": "b-refresh-baseline-1",
+        "local": {
+          "error": null,
+          "followup": {
+            "error": null,
+            "outcome": "accepted"
+          },
+          "outcome": "accepted",
+          "quality": "observed"
+        },
+        "production": {
+          "error": null,
+          "followup": {
+            "error": null,
+            "outcome": "accepted"
+          },
+          "outcome": "accepted",
+          "quality": "observed"
+        }
+      },
+      {
+        "comparison": "Same observed result",
+        "id": "b-refresh-baseline-2",
+        "local": {
+          "error": null,
+          "followup": {
+            "error": null,
+            "outcome": "accepted"
+          },
+          "outcome": "accepted",
+          "quality": "observed"
+        },
+        "production": {
+          "error": null,
+          "followup": {
+            "error": null,
+            "outcome": "accepted"
+          },
+          "outcome": "accepted",
+          "quality": "observed"
+        }
+      },
+      {
+        "comparison": "Same observed result",
+        "id": "change-password",
+        "local": {
+          "error": null,
+          "followup": null,
+          "outcome": "accepted",
+          "quality": "observed"
+        },
+        "production": {
+          "error": null,
+          "followup": null,
+          "outcome": "accepted",
+          "quality": "observed"
+        }
+      },
+      {
+        "comparison": "Same observed result",
+        "id": "a-id@0",
+        "local": {
+          "error": "TOKEN_EXPIRED",
+          "followup": null,
+          "outcome": "auth-rejected",
+          "quality": "observed"
+        },
+        "production": {
+          "error": "TOKEN_EXPIRED",
+          "followup": null,
+          "outcome": "auth-rejected",
+          "quality": "observed"
+        }
+      },
+      {
+        "comparison": "Same observed result",
+        "id": "a-refresh@0",
+        "local": {
+          "error": "TOKEN_EXPIRED",
+          "followup": null,
+          "outcome": "auth-rejected",
+          "quality": "observed"
+        },
+        "production": {
+          "error": "TOKEN_EXPIRED",
+          "followup": null,
+          "outcome": "auth-rejected",
+          "quality": "observed"
+        }
+      },
+      {
+        "comparison": "Same observed result",
+        "id": "b-id@0",
+        "local": {
+          "error": "TOKEN_EXPIRED",
+          "followup": null,
+          "outcome": "auth-rejected",
+          "quality": "observed"
+        },
+        "production": {
+          "error": "TOKEN_EXPIRED",
+          "followup": null,
+          "outcome": "auth-rejected",
+          "quality": "observed"
+        }
+      },
+      {
+        "comparison": "Same observed result",
+        "id": "b-refresh@0",
+        "local": {
+          "error": "TOKEN_EXPIRED",
+          "followup": null,
+          "outcome": "auth-rejected",
+          "quality": "observed"
+        },
+        "production": {
+          "error": "TOKEN_EXPIRED",
+          "followup": null,
+          "outcome": "auth-rejected",
+          "quality": "observed"
+        }
+      },
+      {
+        "comparison": "Same observed result",
+        "id": "changed-id@0",
+        "local": {
+          "error": null,
+          "followup": null,
+          "outcome": "accepted",
+          "quality": "observed"
+        },
+        "production": {
+          "error": null,
+          "followup": null,
+          "outcome": "accepted",
+          "quality": "observed"
+        }
+      },
+      {
+        "comparison": "Same observed result",
+        "id": "changed-refresh@0",
+        "local": {
+          "error": null,
+          "followup": {
+            "error": null,
+            "outcome": "accepted"
+          },
+          "outcome": "accepted",
+          "quality": "observed"
+        },
+        "production": {
+          "error": null,
+          "followup": {
+            "error": null,
+            "outcome": "accepted"
+          },
+          "outcome": "accepted",
+          "quality": "observed"
+        }
+      },
+      {
+        "comparison": "Same observed result",
+        "id": "a-id@10000",
+        "local": {
+          "error": "TOKEN_EXPIRED",
+          "followup": null,
+          "outcome": "auth-rejected",
+          "quality": "observed"
+        },
+        "production": {
+          "error": "TOKEN_EXPIRED",
+          "followup": null,
+          "outcome": "auth-rejected",
+          "quality": "observed"
+        }
+      },
+      {
+        "comparison": "Same observed result",
+        "id": "a-refresh@10000",
+        "local": {
+          "error": "TOKEN_EXPIRED",
+          "followup": null,
+          "outcome": "auth-rejected",
+          "quality": "observed"
+        },
+        "production": {
+          "error": "TOKEN_EXPIRED",
+          "followup": null,
+          "outcome": "auth-rejected",
+          "quality": "observed"
+        }
+      },
+      {
+        "comparison": "Same observed result",
+        "id": "b-id@10000",
+        "local": {
+          "error": "TOKEN_EXPIRED",
+          "followup": null,
+          "outcome": "auth-rejected",
+          "quality": "observed"
+        },
+        "production": {
+          "error": "TOKEN_EXPIRED",
+          "followup": null,
+          "outcome": "auth-rejected",
+          "quality": "observed"
+        }
+      },
+      {
+        "comparison": "Same observed result",
+        "id": "b-refresh@10000",
+        "local": {
+          "error": "TOKEN_EXPIRED",
+          "followup": null,
+          "outcome": "auth-rejected",
+          "quality": "observed"
+        },
+        "production": {
+          "error": "TOKEN_EXPIRED",
+          "followup": null,
+          "outcome": "auth-rejected",
+          "quality": "observed"
+        }
+      },
+      {
+        "comparison": "Same observed result",
+        "id": "changed-id@10000",
+        "local": {
+          "error": null,
+          "followup": null,
+          "outcome": "accepted",
+          "quality": "observed"
+        },
+        "production": {
+          "error": null,
+          "followup": null,
+          "outcome": "accepted",
+          "quality": "observed"
+        }
+      },
+      {
+        "comparison": "Same observed result",
+        "id": "changed-refresh@10000",
+        "local": {
+          "error": null,
+          "followup": {
+            "error": null,
+            "outcome": "accepted"
+          },
+          "outcome": "accepted",
+          "quality": "observed"
+        },
+        "production": {
+          "error": null,
+          "followup": {
+            "error": null,
+            "outcome": "accepted"
+          },
+          "outcome": "accepted",
+          "quality": "observed"
+        }
+      },
+      {
+        "comparison": "Same observed result",
+        "id": "a-id@30000",
+        "local": {
+          "error": "TOKEN_EXPIRED",
+          "followup": null,
+          "outcome": "auth-rejected",
+          "quality": "observed"
+        },
+        "production": {
+          "error": "TOKEN_EXPIRED",
+          "followup": null,
+          "outcome": "auth-rejected",
+          "quality": "observed"
+        }
+      },
+      {
+        "comparison": "Same observed result",
+        "id": "a-refresh@30000",
+        "local": {
+          "error": "TOKEN_EXPIRED",
+          "followup": null,
+          "outcome": "auth-rejected",
+          "quality": "observed"
+        },
+        "production": {
+          "error": "TOKEN_EXPIRED",
+          "followup": null,
+          "outcome": "auth-rejected",
+          "quality": "observed"
+        }
+      },
+      {
+        "comparison": "Same observed result",
+        "id": "b-id@30000",
+        "local": {
+          "error": "TOKEN_EXPIRED",
+          "followup": null,
+          "outcome": "auth-rejected",
+          "quality": "observed"
+        },
+        "production": {
+          "error": "TOKEN_EXPIRED",
+          "followup": null,
+          "outcome": "auth-rejected",
+          "quality": "observed"
+        }
+      },
+      {
+        "comparison": "Same observed result",
+        "id": "b-refresh@30000",
+        "local": {
+          "error": "TOKEN_EXPIRED",
+          "followup": null,
+          "outcome": "auth-rejected",
+          "quality": "observed"
+        },
+        "production": {
+          "error": "TOKEN_EXPIRED",
+          "followup": null,
+          "outcome": "auth-rejected",
+          "quality": "observed"
+        }
+      },
+      {
+        "comparison": "Same observed result",
+        "id": "changed-id@30000",
+        "local": {
+          "error": null,
+          "followup": null,
+          "outcome": "accepted",
+          "quality": "observed"
+        },
+        "production": {
+          "error": null,
+          "followup": null,
+          "outcome": "accepted",
+          "quality": "observed"
+        }
+      },
+      {
+        "comparison": "Same observed result",
+        "id": "changed-refresh@30000",
+        "local": {
+          "error": null,
+          "followup": {
+            "error": null,
+            "outcome": "accepted"
+          },
+          "outcome": "accepted",
+          "quality": "observed"
+        },
+        "production": {
+          "error": null,
+          "followup": {
+            "error": null,
+            "outcome": "accepted"
+          },
+          "outcome": "accepted",
+          "quality": "observed"
+        }
+      },
+      {
+        "comparison": "Same observed result",
+        "id": "new-password-signin",
+        "local": {
+          "error": null,
+          "followup": null,
+          "outcome": "accepted",
+          "quality": "observed"
+        },
+        "production": {
+          "error": null,
+          "followup": null,
+          "outcome": "accepted",
+          "quality": "observed"
+        }
+      },
+      {
+        "comparison": "Same observed result",
+        "id": "new-password-lookup",
+        "local": {
+          "error": null,
+          "followup": null,
+          "outcome": "accepted",
+          "quality": "observed"
+        },
+        "production": {
+          "error": null,
+          "followup": null,
+          "outcome": "accepted",
+          "quality": "observed"
+        }
+      },
+      {
+        "comparison": "Same observed result",
+        "id": "malformed-refresh",
+        "local": {
+          "error": "INVALID_REFRESH_TOKEN",
+          "followup": null,
+          "outcome": "auth-rejected",
+          "quality": "observed"
+        },
+        "production": {
+          "error": "INVALID_REFRESH_TOKEN",
+          "followup": null,
+          "outcome": "auth-rejected",
+          "quality": "observed"
+        }
+      },
+      {
+        "comparison": "Same observed result",
+        "id": "unknown-refresh",
+        "local": {
+          "error": "INVALID_REFRESH_TOKEN",
+          "followup": null,
+          "outcome": "auth-rejected",
+          "quality": "observed"
+        },
+        "production": {
+          "error": "INVALID_REFRESH_TOKEN",
+          "followup": null,
+          "outcome": "auth-rejected",
+          "quality": "observed"
+        }
+      },
+      {
+        "comparison": "Same observed result",
+        "id": "delete",
+        "local": {
+          "error": null,
+          "followup": null,
+          "outcome": "accepted",
+          "quality": "observed"
+        },
+        "production": {
+          "error": null,
+          "followup": null,
+          "outcome": "accepted",
+          "quality": "observed"
+        }
+      },
+      {
+        "comparison": "Same observed result",
+        "id": "deleted-account-absent",
+        "local": {
+          "error": null,
+          "followup": null,
+          "outcome": "accepted",
+          "quality": "observed"
+        },
+        "production": {
+          "error": null,
+          "followup": null,
+          "outcome": "accepted",
+          "quality": "observed"
+        }
+      }
+    ],
+    "summary": {
+      "different": 0,
+      "inconclusive": 0,
+      "same": 34
+    }
+  },
+  "corpus": {
+    "cases": [
+      "signup",
+      "signin-a",
+      "signin-b",
+      "a-id-baseline",
+      "a-refresh-baseline-1",
+      "a-refresh-baseline-2",
+      "b-id-baseline",
+      "b-refresh-baseline-1",
+      "b-refresh-baseline-2",
+      "change-password",
+      "a-id@0",
+      "a-refresh@0",
+      "b-id@0",
+      "b-refresh@0",
+      "changed-id@0",
+      "changed-refresh@0",
+      "a-id@10000",
+      "a-refresh@10000",
+      "b-id@10000",
+      "b-refresh@10000",
+      "changed-id@10000",
+      "changed-refresh@10000",
+      "a-id@30000",
+      "a-refresh@30000",
+      "b-id@30000",
+      "b-refresh@30000",
+      "changed-id@30000",
+      "changed-refresh@30000",
+      "new-password-signin",
+      "new-password-lookup",
+      "malformed-refresh",
+      "unknown-refresh",
+      "delete",
+      "deleted-account-absent"
+    ],
+    "deadlineMs": 45000,
+    "lateAfterMs": 2000,
+    "offsetsMs": [
+      0,
+      10000,
+      30000
+    ],
+    "requestBudgetMs": 5000,
+    "revision": 2,
+    "slice": "auth-session-v2"
+  },
+  "corpusSha256": "3bde09e72a4f5d323b088625ed3ef21397b192e8c2963e904ae9424102dfd5f5",
+  "kind": "auth-session-v2-production-recheck",
+  "limitations": [
+    "Candidate evidence; no owner result approval is inferred.",
+    "This bounded revision covers one account, REST credentials and 0/10/30 second samples; it does not establish universal revocation or exact expiry.",
+    "SDK, Rules, same-second timing and broader tenant/provider conditions remain separate.",
+    "Original auth-session-v2 receipt and prior observations are immutable."
+  ],
+  "local": {
+    "artifact": {
+      "kind": "local-build",
+      "sha256": "d88adb0f86b8b6e9687d586bf10f5bf69d90dcbfbc64e6acf3143fd2df8a078c",
+      "version": "0.7.1"
+    },
+    "caseCount": 34,
+    "cleanup": {
+      "emailAbsent": true,
+      "uidAbsent": true
+    },
+    "configuration": {
+      "fileSha256": "57214114009a6bc113c3acfd10e2fe27613bde8aaa72a1807c38a275883fb230",
+      "sha256": "dc4466f0080ac58a25e2df92b765d1d666052fef735e94f4fe697a2a2507ada4",
+      "value": {
+        "profile": "strict",
+        "schemaVersion": 1
+      }
+    },
+    "receiptSha256": "54b88ee9fd3d36a483675df2817fb977995c7528c2f031eba55301dbba5ed801",
+    "sourceCommit": "e4d34ccca39652ad91e39b603cbd6806ee93e743",
+    "status": "observed"
+  },
+  "production": {
+    "caseCount": 34,
+    "cleanup": {
+      "emailAbsent": true,
+      "uidAbsent": true
+    },
+    "configurationUnchanged": true,
+    "receiptSha256": "dbca10893ae1409c68db87ddf5652f19637252d52064f74d37cd7e3713a56343",
+    "sourceCommit": "e4d34ccca39652ad91e39b603cbd6806ee93e743",
+    "status": "observed"
+  },
+  "project": "fireemu-35fe6",
+  "projectNumber": "592603257417",
+  "recordedAt": "2026-09-14T22:49:19.292956+00:00",
+  "schemaVersion": 1
+}

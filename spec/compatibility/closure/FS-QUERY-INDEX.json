@@ -1,0 +1,952 @@
+{
+  "schemaVersion": 1,
+  "parent": "FS-QUERY-INDEX",
+  "parentStatus": "COMPAT_VERIFIED",
+  "oracleTrack": "disposable-sandbox",
+  "oracle": {
+    "project": "fireemu-oracle-query",
+    "database": "(default)",
+    "edition": "STANDARD",
+    "location": "us-central1",
+    "indexes": "conformance/fs-query-index.indexes.json"
+  },
+  "closureReview": {
+    "decision": "APPROVED",
+    "decidedOn": "2026-09-24",
+    "reviewer": "independent clean-context confirmation review of the follow-up directive fixes (round 2 APPROVE, after round 1 REQUEST_CHANGES; closure rounds 1-4 before)",
+    "reviewedCommit": "b25c1f3f9",
+    "finalArtifactSha256": "9efb81bb90334471d66c347f24c8dd0aee273969274ea4d969f70b05f573439c",
+    "followUps": "Non-blocking items that need a production observation are tracked outside the closure: echo length and check order of property-path refusals, Explain entry counts for multi-range composites, the equality-ordered merge rule, root-collection routing of other methods, the JSON context window and legacy escapes, several transcoder violations and their key order, map and scalar type labels, and the array wrap of probe-only refusals.",
+    "note": "Round 2 approved de8e7ac8a; 1b4220339 answers its non-blocking items and this evidence names its release build (9efb81bb), with the comparison unchanged. The owner decided on 2026-09-24 (ledger) that S4/S5 close the parent as known differences, withdrawing the row that reverted the parent, and approved keeping the refusal of a read time before database creation in both profiles."
+  },
+  "scopeDecisions": [
+    {
+      "id": "Q1",
+      "decision": "The whole corpus is observed over REST v1; representative cases of every surface are also observed over gRPC google.firestore.v1. Client SDK paths (limitToLast reversal, listeners, caches) belong to FS-LISTEN-SDK.",
+      "decidedBy": "owner",
+      "decidedOn": "2026-09-24",
+      "movedTo": "FS-LISTEN-SDK"
+    },
+    {
+      "id": "Q2",
+      "decision": "The sandbox (default) database carries the lane superset conformance/fs-query-index.indexes.json (the shared conformance/firestore.indexes.json plus lane-only collection groups). The shared file stays unchanged because other campaigns bind its digest.",
+      "decidedBy": "owner",
+      "decidedOn": "2026-09-24"
+    },
+    {
+      "id": "Q3",
+      "decision": "Under the strict profile a missing-index refusal matches production exactly, console link and encoded index included. The emulator profile keeps its firestore.indexes.json fragment hint and is not closure evidence.",
+      "decidedBy": "owner",
+      "decidedOn": "2026-09-24"
+    },
+    {
+      "id": "Q4a",
+      "decision": "Vector search (findNearest) on the Standard edition is in scope.",
+      "decidedBy": "owner",
+      "decidedOn": "2026-09-24"
+    },
+    {
+      "id": "Q4b",
+      "decision": "Pipeline execution semantics stay FS-ENTERPRISE-EXCLUDED; the Standard-edition refusal of ExecutePipeline is production behavior and is in scope.",
+      "decidedBy": "owner",
+      "decidedOn": "2026-09-24",
+      "movedTo": "FS-ENTERPRISE-EXCLUDED"
+    },
+    {
+      "id": "Q4c",
+      "decision": "Index and field administration methods (collectionGroups.indexes.*, collectionGroups.fields.*) that the API denominator assigns here belong to FS-CONFIG-LIFECYCLE; Listen target types (QueryTarget, BloomFilter, ExistenceFilter) belong to FS-LISTEN-SDK.",
+      "decidedBy": "owner",
+      "decidedOn": "2026-09-24",
+      "movedTo": "FS-CONFIG-LIFECYCLE"
+    },
+    {
+      "id": "Q4d",
+      "decision": "Read times on runQuery, runAggregationQuery and partitionQuery are observed here; queries inside transactions and transaction options stay in FS-TRANSACTION.",
+      "decidedBy": "owner",
+      "decidedOn": "2026-09-24",
+      "movedTo": "FS-TRANSACTION"
+    },
+    {
+      "id": "S1",
+      "decision": "Closure evidence is the sandbox re-record. Historical production evidence (the 2026-09-07 matrix query rows, the aggregation corpora, the Explain v5 receipt and the 2026-09-08 index-merge check) corroborates it and stays immutable. The historical 324-row regression belongs to FS-DATA-WRITE, as do listDocuments, listCollectionIds and the index-entry write limits.",
+      "decidedBy": "lane agent, following the parent table and the AUTH-ACCOUNT precedent; confirmed at closure review",
+      "decidedOn": "2026-09-24",
+      "movedTo": "FS-DATA-WRITE"
+    },
+    {
+      "id": "S2",
+      "decision": "Zero gap: response bodies, including error message text, must equal production after normalization. A documented divergence needs an owner decision naming the row.",
+      "decidedBy": "owner (standing zero-gap directive of 2026-09-18)",
+      "decidedOn": "2026-09-18"
+    },
+    {
+      "id": "S3",
+      "decision": "Rules-based query authorization belongs to FS-RULES; this corpus runs with owner credentials.",
+      "decidedBy": "lane agent, following the parent table and the AUTH-ACCOUNT precedent; confirmed at closure review",
+      "decidedOn": "2026-09-24",
+      "movedTo": "FS-RULES"
+    },
+    {
+      "id": "S4",
+      "decision": "Known difference, accepted into the closure (owner, 2026-09-24): production answers deterministically (both recordings agree), but it orders a set of field paths by an internal hash set that fireemu cannot reproduce: the 'distinct inequality fields: [...]' refusal, and the member order of an Explain index merge, which also sets the order the merge walks its members and so index_entries_scanned. About 45 container and hash families were tested and linear hashes are ruled out by proof. fireemu lists inequality fields in field-path order and merge members in planning order. The comparison approves only the named rows (conformance/src/fs-query-index/divergences.mjs): the lists are compared as multisets, and on an analyzed merge row both entry counts must lie between what any join order reads (every returned document once per member) and every entry of every member, computed from the corpus seed. Everything else in those rows is compared strictly, the closure test keeps each row's differences to these paths, and the raw recordings are unchanged. Reproducing the order is a follow-up.",
+      "decidedBy": "owner (t-k)",
+      "decidedOn": "2026-09-24"
+    },
+    {
+      "id": "S5",
+      "decision": "Known difference, accepted into the closure (owner, 2026-09-24): production answers deterministically, but it chooses PartitionQuery cursors at keys sampled by an internal hash that could not be recovered (candidate tournament, GF(2) proof against linear and CRC families). fireemu reproduces the structure: about one key in 141 is a sample, partition_count cursors (every sample when there are fewer) nested across counts, in key order, without before, with production's paging, tokens and refusals; it samples with its own stable hash, so the keys differ. The comparison masks only the sampled document of each cursor (count, shape and group stay strict), accepts on the count-64 row a number of cursors a 2,000-document group plausibly samples at that rate (the binomial mean within 3.5 standard deviations, at least the largest count answered in full; 8 to 27, production 14, fireemu 20), requires fireemu's cursors to be in key order and nested across counts, and masks the four range counts while requiring that they add up to the same total on both sides. Reproducing the sampled keys is a follow-up.",
+      "decidedBy": "owner (t-k)",
+      "decidedOn": "2026-09-24"
+    }
+  ],
+  "conditions": [
+    {
+      "conditionId": "FS-QUERY-INDEX/field-filters",
+      "source": "docs/compatibility/ip-fs-production-compatibility.md#feature-group-status",
+      "recipeIds": [
+        "fs-query-index/field-filters"
+      ],
+      "status": "VERIFIED",
+      "note": "EQUAL, NOT_EQUAL, ranges, ARRAY_CONTAINS, ARRAY_CONTAINS_ANY, IN and NOT_IN over every value class, including null, NaN, numeric int/double equivalence, type-restricted ranges, nested and quoted field paths and __name__ filters.",
+      "evidence": {
+        "productionRecordings": [
+          {
+            "recordedAt": "2026-09-24T00:54:33.874Z",
+            "gitSha": "c66f4d8aeeea5baa2ca50b6f2e0863df51dadb46",
+            "recordings": 2,
+            "project": "fireemu-oracle-query"
+          }
+        ],
+        "finalArtifactSha256": "9efb81bb90334471d66c347f24c8dd0aee273969274ea4d969f70b05f573439c",
+        "sourceCommit": "1b4220339365972621569f4e0c9f6f71bf3c400e",
+        "comparisonPath": "spec/compatibility/closure/evidence/FS-QUERY-INDEX-comparison.json",
+        "rows": {
+          "MATCH": 83
+        }
+      }
+    },
+    {
+      "conditionId": "FS-QUERY-INDEX/unary-filters",
+      "source": "docs/compatibility/ip-fs-production-compatibility.md#feature-group-status",
+      "recipeIds": [
+        "fs-query-index/unary-filters"
+      ],
+      "status": "VERIFIED",
+      "note": "IS_NULL, IS_NOT_NULL, IS_NAN and IS_NOT_NAN on present, missing, nested and __name__ fields, with and without ordering.",
+      "evidence": {
+        "productionRecordings": [
+          {
+            "recordedAt": "2026-09-24T00:54:33.874Z",
+            "gitSha": "c66f4d8aeeea5baa2ca50b6f2e0863df51dadb46",
+            "recordings": 2,
+            "project": "fireemu-oracle-query"
+          }
+        ],
+        "finalArtifactSha256": "9efb81bb90334471d66c347f24c8dd0aee273969274ea4d969f70b05f573439c",
+        "sourceCommit": "1b4220339365972621569f4e0c9f6f71bf3c400e",
+        "comparisonPath": "spec/compatibility/closure/evidence/FS-QUERY-INDEX-comparison.json",
+        "rows": {
+          "MATCH": 12
+        }
+      }
+    },
+    {
+      "conditionId": "FS-QUERY-INDEX/composite-filters",
+      "source": "docs/compatibility/ip-fs-production-compatibility.md#feature-group-status",
+      "recipeIds": [
+        "fs-query-index/composite-filters"
+      ],
+      "status": "VERIFIED",
+      "note": "AND and OR composites, nesting, single-child and duplicate filters, disjunctive expansion and result deduplication, ordered and limited disjunctions.",
+      "evidence": {
+        "productionRecordings": [
+          {
+            "recordedAt": "2026-09-24T00:54:33.874Z",
+            "gitSha": "c66f4d8aeeea5baa2ca50b6f2e0863df51dadb46",
+            "recordings": 2,
+            "project": "fireemu-oracle-query"
+          }
+        ],
+        "finalArtifactSha256": "9efb81bb90334471d66c347f24c8dd0aee273969274ea4d969f70b05f573439c",
+        "sourceCommit": "1b4220339365972621569f4e0c9f6f71bf3c400e",
+        "comparisonPath": "spec/compatibility/closure/evidence/FS-QUERY-INDEX-comparison.json",
+        "rows": {
+          "MATCH": 19
+        }
+      }
+    },
+    {
+      "conditionId": "FS-QUERY-INDEX/filter-validation",
+      "source": "docs/compatibility/ip-fs-production-compatibility.md#feature-group-status",
+      "recipeIds": [
+        "fs-query-index/filter-validation"
+      ],
+      "status": "VERIFIED",
+      "note": "Refusals of malformed operators, values, field paths and __name__ values, and of forbidden filter combinations (negation, not-in, array-contains families, key equality with other inequalities).",
+      "evidence": {
+        "productionRecordings": [
+          {
+            "recordedAt": "2026-09-24T00:54:33.874Z",
+            "gitSha": "c66f4d8aeeea5baa2ca50b6f2e0863df51dadb46",
+            "recordings": 2,
+            "project": "fireemu-oracle-query"
+          },
+          {
+            "recordedAt": "2026-09-24T01:46:37.110Z",
+            "gitSha": "faa6d4e06ebe5c96e43948f26f6bfd99c527845e",
+            "recordings": 2,
+            "project": "fireemu-oracle-query"
+          }
+        ],
+        "finalArtifactSha256": "9efb81bb90334471d66c347f24c8dd0aee273969274ea4d969f70b05f573439c",
+        "sourceCommit": "1b4220339365972621569f4e0c9f6f71bf3c400e",
+        "comparisonPath": "spec/compatibility/closure/evidence/FS-QUERY-INDEX-comparison.json",
+        "rows": {
+          "MATCH": 67
+        }
+      }
+    },
+    {
+      "conditionId": "FS-QUERY-INDEX/query-limits",
+      "source": "docs/compatibility/ip-fs-production-compatibility.md#feature-group-status",
+      "recipeIds": [
+        "fs-query-index/query-limits"
+      ],
+      "status": "VERIFIED",
+      "note": "Every query-plan limit as an accepted/refused pair one unit apart: 30 disjunctions (IN, ARRAY_CONTAINS_ANY, __name__ IN, OR and products), 10 NOT_IN values, 10 inequality fields, 100 components (root, subcollection, orders, disjunctions). The IN × IN and IN × ARRAY_CONTAINS_ANY product pairs (30/32, 30/33) cannot land on 31; the one-unit disjunction boundary is carried by the IN-29-or-one / IN-30-or-one and OR-30 / OR-31 pairs.",
+      "evidence": {
+        "productionRecordings": [
+          {
+            "recordedAt": "2026-09-24T00:54:33.874Z",
+            "gitSha": "c66f4d8aeeea5baa2ca50b6f2e0863df51dadb46",
+            "recordings": 2,
+            "project": "fireemu-oracle-query"
+          },
+          {
+            "recordedAt": "2026-09-24T01:46:37.110Z",
+            "gitSha": "faa6d4e06ebe5c96e43948f26f6bfd99c527845e",
+            "recordings": 2,
+            "project": "fireemu-oracle-query"
+          }
+        ],
+        "finalArtifactSha256": "9efb81bb90334471d66c347f24c8dd0aee273969274ea4d969f70b05f573439c",
+        "sourceCommit": "1b4220339365972621569f4e0c9f6f71bf3c400e",
+        "comparisonPath": "spec/compatibility/closure/evidence/FS-QUERY-INDEX-comparison.json",
+        "rows": {
+          "MATCH": 28,
+          "DIVERGENCE_APPROVED": 4
+        },
+        "documentedDivergences": [
+          {
+            "row": "fs-query-index/query-limits/not-in-and-inequalities#inequality-fields-11-letters",
+            "scopeDecision": "S4",
+            "decidedBy": "owner",
+            "decidedOn": "2026-09-24",
+            "reason": "Known difference (owner, 2026-09-24): production orders this field-path set by an internal hash set that fireemu cannot reproduce; the row matches with the order of the listed fields removed."
+          },
+          {
+            "row": "fs-query-index/query-limits/not-in-and-inequalities#inequality-fields-12-reversed",
+            "scopeDecision": "S4",
+            "decidedBy": "owner",
+            "decidedOn": "2026-09-24",
+            "reason": "Known difference (owner, 2026-09-24): production orders this field-path set by an internal hash set that fireemu cannot reproduce; the row matches with the order of the listed fields removed."
+          },
+          {
+            "row": "fs-query-index/query-limits/not-in-and-inequalities#inequality-fields-11",
+            "scopeDecision": "S4",
+            "decidedBy": "owner",
+            "decidedOn": "2026-09-24",
+            "reason": "Known difference (owner, 2026-09-24): production orders this field-path set by an internal hash set that fireemu cannot reproduce; the row matches with the order of the listed fields removed."
+          },
+          {
+            "row": "fs-query-index/query-limits/not-in-and-inequalities#inequality-fields-10-and-not-equal",
+            "scopeDecision": "S4",
+            "decidedBy": "owner",
+            "decidedOn": "2026-09-24",
+            "reason": "Known difference (owner, 2026-09-24): production orders this field-path set by an internal hash set that fireemu cannot reproduce; the row matches with the order of the listed fields removed."
+          }
+        ]
+      }
+    },
+    {
+      "conditionId": "FS-QUERY-INDEX/order-by",
+      "source": "docs/compatibility/ip-fs-production-compatibility.md#feature-group-status",
+      "recipeIds": [
+        "fs-query-index/order-by"
+      ],
+      "status": "VERIFIED",
+      "note": "Default, explicit, multi-field, nested, map/array and cross-type ordering, missing-field exclusion, implied orders from inequalities, __name__ directions and order-clause refusals.",
+      "evidence": {
+        "productionRecordings": [
+          {
+            "recordedAt": "2026-09-24T00:54:33.874Z",
+            "gitSha": "c66f4d8aeeea5baa2ca50b6f2e0863df51dadb46",
+            "recordings": 2,
+            "project": "fireemu-oracle-query"
+          }
+        ],
+        "finalArtifactSha256": "9efb81bb90334471d66c347f24c8dd0aee273969274ea4d969f70b05f573439c",
+        "sourceCommit": "1b4220339365972621569f4e0c9f6f71bf3c400e",
+        "comparisonPath": "spec/compatibility/closure/evidence/FS-QUERY-INDEX-comparison.json",
+        "rows": {
+          "MATCH": 40
+        }
+      }
+    },
+    {
+      "conditionId": "FS-QUERY-INDEX/cursors",
+      "source": "docs/compatibility/ip-fs-production-compatibility.md#feature-group-status",
+      "recipeIds": [
+        "fs-query-index/cursors"
+      ],
+      "status": "VERIFIED",
+      "note": "startAt/endAt with before true, false and omitted, prefixes, name tiebreaks, descending order, type-mismatched and empty cursors, __name__ reference validation and cursor refusals.",
+      "evidence": {
+        "productionRecordings": [
+          {
+            "recordedAt": "2026-09-24T00:54:33.874Z",
+            "gitSha": "c66f4d8aeeea5baa2ca50b6f2e0863df51dadb46",
+            "recordings": 2,
+            "project": "fireemu-oracle-query"
+          }
+        ],
+        "finalArtifactSha256": "9efb81bb90334471d66c347f24c8dd0aee273969274ea4d969f70b05f573439c",
+        "sourceCommit": "1b4220339365972621569f4e0c9f6f71bf3c400e",
+        "comparisonPath": "spec/compatibility/closure/evidence/FS-QUERY-INDEX-comparison.json",
+        "rows": {
+          "MATCH": 35
+        }
+      }
+    },
+    {
+      "conditionId": "FS-QUERY-INDEX/offset-limit",
+      "source": "docs/compatibility/ip-fs-production-compatibility.md#feature-group-status",
+      "recipeIds": [
+        "fs-query-index/offset-limit"
+      ],
+      "status": "VERIFIED",
+      "note": "limit and offset values and wire forms, int32 bounds, negative values, skippedResults, offset past the end and the limitToLast wire form.",
+      "evidence": {
+        "productionRecordings": [
+          {
+            "recordedAt": "2026-09-24T00:54:33.874Z",
+            "gitSha": "c66f4d8aeeea5baa2ca50b6f2e0863df51dadb46",
+            "recordings": 2,
+            "project": "fireemu-oracle-query"
+          }
+        ],
+        "finalArtifactSha256": "9efb81bb90334471d66c347f24c8dd0aee273969274ea4d969f70b05f573439c",
+        "sourceCommit": "1b4220339365972621569f4e0c9f6f71bf3c400e",
+        "comparisonPath": "spec/compatibility/closure/evidence/FS-QUERY-INDEX-comparison.json",
+        "rows": {
+          "MATCH": 20
+        }
+      }
+    },
+    {
+      "conditionId": "FS-QUERY-INDEX/projection",
+      "source": "docs/compatibility/ip-fs-production-compatibility.md#feature-group-status",
+      "recipeIds": [
+        "fs-query-index/projection"
+      ],
+      "status": "VERIFIED",
+      "note": "select with fields, nested leaves and maps, missing fields, empty lists, __name__, duplicates, invalid paths and unselected filter/order fields.",
+      "evidence": {
+        "productionRecordings": [
+          {
+            "recordedAt": "2026-09-24T00:54:33.874Z",
+            "gitSha": "c66f4d8aeeea5baa2ca50b6f2e0863df51dadb46",
+            "recordings": 2,
+            "project": "fireemu-oracle-query"
+          }
+        ],
+        "finalArtifactSha256": "9efb81bb90334471d66c347f24c8dd0aee273969274ea4d969f70b05f573439c",
+        "sourceCommit": "1b4220339365972621569f4e0c9f6f71bf3c400e",
+        "comparisonPath": "spec/compatibility/closure/evidence/FS-QUERY-INDEX-comparison.json",
+        "rows": {
+          "MATCH": 17
+        }
+      }
+    },
+    {
+      "conditionId": "FS-QUERY-INDEX/collection-group",
+      "source": "docs/compatibility/ip-fs-production-compatibility.md#feature-group-status",
+      "recipeIds": [
+        "fs-query-index/collection-group"
+      ],
+      "status": "VERIFIED",
+      "note": "Collection and collection-group scopes from the root, existing, missing and absent parents, kindless queries, group-scoped filters and orders, __name__ ranges and cursors, and group counts.",
+      "evidence": {
+        "productionRecordings": [
+          {
+            "recordedAt": "2026-09-24T00:54:33.874Z",
+            "gitSha": "c66f4d8aeeea5baa2ca50b6f2e0863df51dadb46",
+            "recordings": 2,
+            "project": "fireemu-oracle-query"
+          }
+        ],
+        "finalArtifactSha256": "9efb81bb90334471d66c347f24c8dd0aee273969274ea4d969f70b05f573439c",
+        "sourceCommit": "1b4220339365972621569f4e0c9f6f71bf3c400e",
+        "comparisonPath": "spec/compatibility/closure/evidence/FS-QUERY-INDEX-comparison.json",
+        "rows": {
+          "MATCH": 32
+        }
+      }
+    },
+    {
+      "conditionId": "FS-QUERY-INDEX/aggregation",
+      "source": "docs/compatibility/ip-fs-production-compatibility.md#feature-group-status",
+      "recipeIds": [
+        "fs-query-index/aggregation"
+      ],
+      "status": "VERIFIED",
+      "note": "count, sum and avg semantics over every numeric class and non-numeric values, upTo, limit/offset/cursor/order interplay, default and explicit aliases and every aggregation refusal.",
+      "evidence": {
+        "productionRecordings": [
+          {
+            "recordedAt": "2026-09-24T00:54:33.874Z",
+            "gitSha": "c66f4d8aeeea5baa2ca50b6f2e0863df51dadb46",
+            "recordings": 2,
+            "project": "fireemu-oracle-query"
+          }
+        ],
+        "finalArtifactSha256": "9efb81bb90334471d66c347f24c8dd0aee273969274ea4d969f70b05f573439c",
+        "sourceCommit": "1b4220339365972621569f4e0c9f6f71bf3c400e",
+        "comparisonPath": "spec/compatibility/closure/evidence/FS-QUERY-INDEX-comparison.json",
+        "rows": {
+          "MATCH": 64
+        }
+      }
+    },
+    {
+      "conditionId": "FS-QUERY-INDEX/vector",
+      "source": "docs/compatibility/ip-fs-production-compatibility.md#feature-group-status",
+      "recipeIds": [
+        "fs-query-index/vector"
+      ],
+      "status": "VERIFIED",
+      "note": "findNearest with EUCLIDEAN, COSINE and DOT_PRODUCT, distance result fields and thresholds, the 1000 limit pair, malformed vectors and options, missing vector indexes, prefilters and other query clauses.",
+      "evidence": {
+        "productionRecordings": [
+          {
+            "recordedAt": "2026-09-24T00:54:33.874Z",
+            "gitSha": "c66f4d8aeeea5baa2ca50b6f2e0863df51dadb46",
+            "recordings": 2,
+            "project": "fireemu-oracle-query"
+          },
+          {
+            "recordedAt": "2026-09-24T01:46:37.110Z",
+            "gitSha": "faa6d4e06ebe5c96e43948f26f6bfd99c527845e",
+            "recordings": 2,
+            "project": "fireemu-oracle-query"
+          }
+        ],
+        "finalArtifactSha256": "9efb81bb90334471d66c347f24c8dd0aee273969274ea4d969f70b05f573439c",
+        "sourceCommit": "1b4220339365972621569f4e0c9f6f71bf3c400e",
+        "comparisonPath": "spec/compatibility/closure/evidence/FS-QUERY-INDEX-comparison.json",
+        "rows": {
+          "MATCH": 49
+        }
+      }
+    },
+    {
+      "conditionId": "FS-QUERY-INDEX/partition-query",
+      "source": "docs/compatibility/ip-fs-production-compatibility.md#feature-group-status",
+      "recipeIds": [
+        "fs-query-index/partition-query"
+      ],
+      "status": "VERIFIED",
+      "note": "PartitionQuery on small and 2,000-document groups: partition counts, page size and tokens, range reconstruction, parents and every refusal.",
+      "evidence": {
+        "productionRecordings": [
+          {
+            "recordedAt": "2026-09-24T00:54:33.874Z",
+            "gitSha": "c66f4d8aeeea5baa2ca50b6f2e0863df51dadb46",
+            "recordings": 2,
+            "project": "fireemu-oracle-query"
+          }
+        ],
+        "finalArtifactSha256": "9efb81bb90334471d66c347f24c8dd0aee273969274ea4d969f70b05f573439c",
+        "sourceCommit": "1b4220339365972621569f4e0c9f6f71bf3c400e",
+        "comparisonPath": "spec/compatibility/closure/evidence/FS-QUERY-INDEX-comparison.json",
+        "rows": {
+          "MATCH": 26,
+          "DIVERGENCE_APPROVED": 14
+        },
+        "documentedDivergences": [
+          {
+            "row": "fs-query-index/partition-query/large-group#count-1",
+            "scopeDecision": "S5",
+            "decidedBy": "owner",
+            "decidedOn": "2026-09-24",
+            "reason": "Known difference (owner, 2026-09-24): production samples PartitionQuery keys with an internal hash that fireemu cannot reproduce; the row matches with the sampled document masked."
+          },
+          {
+            "row": "fs-query-index/partition-query/large-group#count-2",
+            "scopeDecision": "S5",
+            "decidedBy": "owner",
+            "decidedOn": "2026-09-24",
+            "reason": "Known difference (owner, 2026-09-24): production samples PartitionQuery keys with an internal hash that fireemu cannot reproduce; the row matches with the sampled document masked."
+          },
+          {
+            "row": "fs-query-index/partition-query/large-group#count-3",
+            "scopeDecision": "S5",
+            "decidedBy": "owner",
+            "decidedOn": "2026-09-24",
+            "reason": "Known difference (owner, 2026-09-24): production samples PartitionQuery keys with an internal hash that fireemu cannot reproduce; the row matches with the sampled document masked."
+          },
+          {
+            "row": "fs-query-index/partition-query/large-group#count-8",
+            "scopeDecision": "S5",
+            "decidedBy": "owner",
+            "decidedOn": "2026-09-24",
+            "reason": "Known difference (owner, 2026-09-24): production samples PartitionQuery keys with an internal hash that fireemu cannot reproduce; the row matches with the sampled document masked."
+          },
+          {
+            "row": "fs-query-index/partition-query/large-group#count-64",
+            "scopeDecision": "S5",
+            "decidedBy": "owner",
+            "decidedOn": "2026-09-24",
+            "reason": "Known difference (owner, 2026-09-24): production samples PartitionQuery keys with an internal hash that fireemu cannot reproduce; the row matches with the sampled document masked."
+          },
+          {
+            "row": "fs-query-index/partition-query/large-group#count-8-repeat",
+            "scopeDecision": "S5",
+            "decidedBy": "owner",
+            "decidedOn": "2026-09-24",
+            "reason": "Known difference (owner, 2026-09-24): production samples PartitionQuery keys with an internal hash that fireemu cannot reproduce; the row matches with the sampled document masked."
+          },
+          {
+            "row": "fs-query-index/partition-query/large-group#count-4-page-1",
+            "scopeDecision": "S5",
+            "decidedBy": "owner",
+            "decidedOn": "2026-09-24",
+            "reason": "Known difference (owner, 2026-09-24): production samples PartitionQuery keys with an internal hash that fireemu cannot reproduce; the row matches with the sampled document masked."
+          },
+          {
+            "row": "fs-query-index/partition-query/large-group#count-4-page-2",
+            "scopeDecision": "S5",
+            "decidedBy": "owner",
+            "decidedOn": "2026-09-24",
+            "reason": "Known difference (owner, 2026-09-24): production samples PartitionQuery keys with an internal hash that fireemu cannot reproduce; the row matches with the sampled document masked."
+          },
+          {
+            "row": "fs-query-index/partition-query/large-group#count-4-page-size-3",
+            "scopeDecision": "S5",
+            "decidedBy": "owner",
+            "decidedOn": "2026-09-24",
+            "reason": "Known difference (owner, 2026-09-24): production samples PartitionQuery keys with an internal hash that fireemu cannot reproduce; the row matches with the sampled document masked."
+          },
+          {
+            "row": "fs-query-index/partition-query/large-group#count-4-page-size-3-next",
+            "scopeDecision": "S5",
+            "decidedBy": "owner",
+            "decidedOn": "2026-09-24",
+            "reason": "Known difference (owner, 2026-09-24): production samples PartitionQuery keys with an internal hash that fireemu cannot reproduce; the row matches with the sampled document masked."
+          },
+          {
+            "row": "fs-query-index/partition-query/large-group#range-0",
+            "scopeDecision": "S5",
+            "decidedBy": "owner",
+            "decidedOn": "2026-09-24",
+            "reason": "Known difference (owner, 2026-09-24): production samples PartitionQuery keys with an internal hash that fireemu cannot reproduce; the row matches with the sampled document masked."
+          },
+          {
+            "row": "fs-query-index/partition-query/large-group#range-1",
+            "scopeDecision": "S5",
+            "decidedBy": "owner",
+            "decidedOn": "2026-09-24",
+            "reason": "Known difference (owner, 2026-09-24): production samples PartitionQuery keys with an internal hash that fireemu cannot reproduce; the row matches with the sampled document masked."
+          },
+          {
+            "row": "fs-query-index/partition-query/large-group#range-2",
+            "scopeDecision": "S5",
+            "decidedBy": "owner",
+            "decidedOn": "2026-09-24",
+            "reason": "Known difference (owner, 2026-09-24): production samples PartitionQuery keys with an internal hash that fireemu cannot reproduce; the row matches with the sampled document masked."
+          },
+          {
+            "row": "fs-query-index/partition-query/large-group#range-3",
+            "scopeDecision": "S5",
+            "decidedBy": "owner",
+            "decidedOn": "2026-09-24",
+            "reason": "Known difference (owner, 2026-09-24): production samples PartitionQuery keys with an internal hash that fireemu cannot reproduce; the row matches with the sampled document masked."
+          }
+        ]
+      }
+    },
+    {
+      "conditionId": "FS-QUERY-INDEX/explain",
+      "source": "docs/compatibility/ip-fs-production-compatibility.md#feature-group-status",
+      "recipeIds": [
+        "fs-query-index/explain"
+      ],
+      "status": "VERIFIED",
+      "note": "Plan-only and analyzed Explain for queries, aggregations and findNearest over automatic, composite, merged and collection-group indexes, and Explain of refused queries.",
+      "evidence": {
+        "productionRecordings": [
+          {
+            "recordedAt": "2026-09-24T00:54:33.874Z",
+            "gitSha": "c66f4d8aeeea5baa2ca50b6f2e0863df51dadb46",
+            "recordings": 2,
+            "project": "fireemu-oracle-query"
+          },
+          {
+            "recordedAt": "2026-09-24T02:59:40.983Z",
+            "gitSha": "665e5e63afb571eaf5ed973c73d8571881924ab0",
+            "recordings": 2,
+            "project": "fireemu-oracle-query"
+          }
+        ],
+        "finalArtifactSha256": "9efb81bb90334471d66c347f24c8dd0aee273969274ea4d969f70b05f573439c",
+        "sourceCommit": "1b4220339365972621569f4e0c9f6f71bf3c400e",
+        "comparisonPath": "spec/compatibility/closure/evidence/FS-QUERY-INDEX-comparison.json",
+        "rows": {
+          "MATCH": 60,
+          "DIVERGENCE_APPROVED": 14
+        },
+        "documentedDivergences": [
+          {
+            "row": "fs-query-index/explain/queries#merge-with-order-plan",
+            "scopeDecision": "S4",
+            "decidedBy": "owner",
+            "decidedOn": "2026-09-24",
+            "reason": "Known difference (owner, 2026-09-24): production orders this field-path set by an internal hash set that fireemu cannot reproduce; the row matches with the order removed and the merge walk's entry count within the bounds every join order keeps to."
+          },
+          {
+            "row": "fs-query-index/explain/queries#merge-with-order-analyze",
+            "scopeDecision": "S4",
+            "decidedBy": "owner",
+            "decidedOn": "2026-09-24",
+            "reason": "Known difference (owner, 2026-09-24): production orders this field-path set by an internal hash set that fireemu cannot reproduce; the row matches with the order removed and the merge walk's entry count within the bounds every join order keeps to."
+          },
+          {
+            "row": "fs-query-index/explain/merge-order#larger-later-field-plan",
+            "scopeDecision": "S4",
+            "decidedBy": "owner",
+            "decidedOn": "2026-09-24",
+            "reason": "Known difference (owner, 2026-09-24): production orders this field-path set by an internal hash set that fireemu cannot reproduce; the row matches with the order removed and the merge walk's entry count within the bounds every join order keeps to."
+          },
+          {
+            "row": "fs-query-index/explain/merge-order#larger-later-field-analyze",
+            "scopeDecision": "S4",
+            "decidedBy": "owner",
+            "decidedOn": "2026-09-24",
+            "reason": "Known difference (owner, 2026-09-24): production orders this field-path set by an internal hash set that fireemu cannot reproduce; the row matches with the order removed and the merge walk's entry count within the bounds every join order keeps to."
+          },
+          {
+            "row": "fs-query-index/explain/merge-order#larger-earlier-field-plan",
+            "scopeDecision": "S4",
+            "decidedBy": "owner",
+            "decidedOn": "2026-09-24",
+            "reason": "Known difference (owner, 2026-09-24): production orders this field-path set by an internal hash set that fireemu cannot reproduce; the row matches with the order removed and the merge walk's entry count within the bounds every join order keeps to."
+          },
+          {
+            "row": "fs-query-index/explain/merge-order#larger-earlier-field-analyze",
+            "scopeDecision": "S4",
+            "decidedBy": "owner",
+            "decidedOn": "2026-09-24",
+            "reason": "Known difference (owner, 2026-09-24): production orders this field-path set by an internal hash set that fireemu cannot reproduce; the row matches with the order removed and the merge walk's entry count within the bounds every join order keeps to."
+          },
+          {
+            "row": "fs-query-index/explain/merge-order#filters-reversed-plan",
+            "scopeDecision": "S4",
+            "decidedBy": "owner",
+            "decidedOn": "2026-09-24",
+            "reason": "Known difference (owner, 2026-09-24): production orders this field-path set by an internal hash set that fireemu cannot reproduce; the row matches with the order removed and the merge walk's entry count within the bounds every join order keeps to."
+          },
+          {
+            "row": "fs-query-index/explain/merge-order#filters-reversed-analyze",
+            "scopeDecision": "S4",
+            "decidedBy": "owner",
+            "decidedOn": "2026-09-24",
+            "reason": "Known difference (owner, 2026-09-24): production orders this field-path set by an internal hash set that fireemu cannot reproduce; the row matches with the order removed and the merge walk's entry count within the bounds every join order keeps to."
+          },
+          {
+            "row": "fs-query-index/explain/merge-order#automatic-members-plan",
+            "scopeDecision": "S4",
+            "decidedBy": "owner",
+            "decidedOn": "2026-09-24",
+            "reason": "Known difference (owner, 2026-09-24): production orders this field-path set by an internal hash set that fireemu cannot reproduce; the row matches with the order removed and the merge walk's entry count within the bounds every join order keeps to."
+          },
+          {
+            "row": "fs-query-index/explain/merge-order#automatic-members-analyze",
+            "scopeDecision": "S4",
+            "decidedBy": "owner",
+            "decidedOn": "2026-09-24",
+            "reason": "Known difference (owner, 2026-09-24): production orders this field-path set by an internal hash set that fireemu cannot reproduce; the row matches with the order removed and the merge walk's entry count within the bounds every join order keeps to."
+          },
+          {
+            "row": "fs-query-index/explain/merge-order#automatic-members-reversed-plan",
+            "scopeDecision": "S4",
+            "decidedBy": "owner",
+            "decidedOn": "2026-09-24",
+            "reason": "Known difference (owner, 2026-09-24): production orders this field-path set by an internal hash set that fireemu cannot reproduce; the row matches with the order removed and the merge walk's entry count within the bounds every join order keeps to."
+          },
+          {
+            "row": "fs-query-index/explain/merge-order#automatic-members-reversed-analyze",
+            "scopeDecision": "S4",
+            "decidedBy": "owner",
+            "decidedOn": "2026-09-24",
+            "reason": "Known difference (owner, 2026-09-24): production orders this field-path set by an internal hash set that fireemu cannot reproduce; the row matches with the order removed and the merge walk's entry count within the bounds every join order keeps to."
+          },
+          {
+            "row": "fs-query-index/explain/merge-order#three-automatic-members-plan",
+            "scopeDecision": "S4",
+            "decidedBy": "owner",
+            "decidedOn": "2026-09-24",
+            "reason": "Known difference (owner, 2026-09-24): production orders this field-path set by an internal hash set that fireemu cannot reproduce; the row matches with the order removed and the merge walk's entry count within the bounds every join order keeps to."
+          },
+          {
+            "row": "fs-query-index/explain/merge-order#three-automatic-members-analyze",
+            "scopeDecision": "S4",
+            "decidedBy": "owner",
+            "decidedOn": "2026-09-24",
+            "reason": "Known difference (owner, 2026-09-24): production orders this field-path set by an internal hash set that fireemu cannot reproduce; the row matches with the order removed and the merge walk's entry count within the bounds every join order keeps to."
+          }
+        ]
+      }
+    },
+    {
+      "conditionId": "FS-QUERY-INDEX/index-selection",
+      "source": "docs/compatibility/ip-fs-production-compatibility.md#feature-group-status",
+      "recipeIds": [
+        "fs-query-index/index-selection"
+      ],
+      "status": "VERIFIED",
+      "note": "Which queries automatic single-field indexes, composites, merges, collection-group scopes and exemptions serve, and the exact missing-index refusal (message and console link) when none does.",
+      "evidence": {
+        "productionRecordings": [
+          {
+            "recordedAt": "2026-09-24T00:54:33.874Z",
+            "gitSha": "c66f4d8aeeea5baa2ca50b6f2e0863df51dadb46",
+            "recordings": 2,
+            "project": "fireemu-oracle-query"
+          }
+        ],
+        "finalArtifactSha256": "9efb81bb90334471d66c347f24c8dd0aee273969274ea4d969f70b05f573439c",
+        "sourceCommit": "1b4220339365972621569f4e0c9f6f71bf3c400e",
+        "comparisonPath": "spec/compatibility/closure/evidence/FS-QUERY-INDEX-comparison.json",
+        "rows": {
+          "MATCH": 44
+        }
+      }
+    },
+    {
+      "conditionId": "FS-QUERY-INDEX/read-time",
+      "source": "docs/compatibility/ip-fs-production-compatibility.md#feature-group-status",
+      "recipeIds": [
+        "fs-query-index/read-time"
+      ],
+      "status": "VERIFIED",
+      "note": "runQuery, runAggregationQuery and partitionQuery at a read time between writes, one microsecond before and one nanosecond after a commit, the one-hour retention boundary as a 59/61-minute pair (point-in-time recovery is disabled on the sandbox), and refusals of future, too-old and malformed read times.",
+      "evidence": {
+        "productionRecordings": [
+          {
+            "recordedAt": "2026-09-24T00:54:33.874Z",
+            "gitSha": "c66f4d8aeeea5baa2ca50b6f2e0863df51dadb46",
+            "recordings": 2,
+            "project": "fireemu-oracle-query"
+          }
+        ],
+        "finalArtifactSha256": "9efb81bb90334471d66c347f24c8dd0aee273969274ea4d969f70b05f573439c",
+        "sourceCommit": "1b4220339365972621569f4e0c9f6f71bf3c400e",
+        "comparisonPath": "spec/compatibility/closure/evidence/FS-QUERY-INDEX-comparison.json",
+        "rows": {
+          "MATCH": 16
+        }
+      }
+    },
+    {
+      "conditionId": "FS-QUERY-INDEX/request-shape",
+      "source": "docs/compatibility/ip-fs-production-compatibility.md#feature-group-status",
+      "recipeIds": [
+        "fs-query-index/request-shape"
+      ],
+      "status": "VERIFIED",
+      "note": "REST request bodies and parents: empty, non-JSON and unknown fields, enum and integer encodings, from-clause collection ids including the 1500-byte pair, and collection or odd-depth parents.",
+      "evidence": {
+        "productionRecordings": [
+          {
+            "recordedAt": "2026-09-24T01:46:37.110Z",
+            "gitSha": "faa6d4e06ebe5c96e43948f26f6bfd99c527845e",
+            "recordings": 2,
+            "project": "fireemu-oracle-query"
+          }
+        ],
+        "finalArtifactSha256": "9efb81bb90334471d66c347f24c8dd0aee273969274ea4d969f70b05f573439c",
+        "sourceCommit": "1b4220339365972621569f4e0c9f6f71bf3c400e",
+        "comparisonPath": "spec/compatibility/closure/evidence/FS-QUERY-INDEX-comparison.json",
+        "rows": {
+          "MATCH": 28
+        }
+      }
+    },
+    {
+      "conditionId": "FS-QUERY-INDEX/pipeline-standard-refusal",
+      "source": "docs/compatibility/ip-fs-production-compatibility.md#feature-group-status",
+      "recipeIds": [
+        "fs-query-index/pipeline"
+      ],
+      "status": "VERIFIED",
+      "note": "ExecutePipeline on a Standard-edition database is refused over REST and gRPC; pipeline semantics themselves are FS-ENTERPRISE-EXCLUDED (scope decision Q4).",
+      "evidence": {
+        "productionRecordings": [
+          {
+            "recordedAt": "2026-09-24T00:54:33.874Z",
+            "gitSha": "c66f4d8aeeea5baa2ca50b6f2e0863df51dadb46",
+            "recordings": 2,
+            "project": "fireemu-oracle-query"
+          }
+        ],
+        "finalArtifactSha256": "9efb81bb90334471d66c347f24c8dd0aee273969274ea4d969f70b05f573439c",
+        "sourceCommit": "1b4220339365972621569f4e0c9f6f71bf3c400e",
+        "comparisonPath": "spec/compatibility/closure/evidence/FS-QUERY-INDEX-comparison.json",
+        "rows": {
+          "MATCH": 4
+        }
+      }
+    },
+    {
+      "conditionId": "FS-QUERY-INDEX/grpc-transport",
+      "source": "docs/compatibility/ip-fs-production-compatibility.md#feature-group-status",
+      "recipeIds": [
+        "fs-query-index/grpc"
+      ],
+      "status": "VERIFIED",
+      "note": "Representative queries, aggregations, refusals, Explain, findNearest, read times and partitions through google.firestore.v1 gRPC (scope decision Q1).",
+      "evidence": {
+        "productionRecordings": [
+          {
+            "recordedAt": "2026-09-24T00:54:33.874Z",
+            "gitSha": "c66f4d8aeeea5baa2ca50b6f2e0863df51dadb46",
+            "recordings": 2,
+            "project": "fireemu-oracle-query"
+          }
+        ],
+        "finalArtifactSha256": "9efb81bb90334471d66c347f24c8dd0aee273969274ea4d969f70b05f573439c",
+        "sourceCommit": "1b4220339365972621569f4e0c9f6f71bf3c400e",
+        "comparisonPath": "spec/compatibility/closure/evidence/FS-QUERY-INDEX-comparison.json",
+        "rows": {
+          "MATCH": 31,
+          "DIVERGENCE_APPROVED": 3
+        },
+        "documentedDivergences": [
+          {
+            "row": "fs-query-index/grpc/partitions#count-2",
+            "scopeDecision": "S5",
+            "decidedBy": "owner",
+            "decidedOn": "2026-09-24",
+            "reason": "Known difference (owner, 2026-09-24): production samples PartitionQuery keys with an internal hash that fireemu cannot reproduce; the row matches with the sampled document masked."
+          },
+          {
+            "row": "fs-query-index/grpc/partitions#count-4-page-1",
+            "scopeDecision": "S5",
+            "decidedBy": "owner",
+            "decidedOn": "2026-09-24",
+            "reason": "Known difference (owner, 2026-09-24): production samples PartitionQuery keys with an internal hash that fireemu cannot reproduce; the row matches with the sampled document masked."
+          },
+          {
+            "row": "fs-query-index/grpc/partitions#count-4-page-2",
+            "scopeDecision": "S5",
+            "decidedBy": "owner",
+            "decidedOn": "2026-09-24",
+            "reason": "Known difference (owner, 2026-09-24): production samples PartitionQuery keys with an internal hash that fireemu cannot reproduce; the row matches with the sampled document masked."
+          }
+        ]
+      }
+    },
+    {
+      "conditionId": "FS-QUERY-INDEX/final-artifact-regression",
+      "source": "docs/compatibility/ip-fs-production-compatibility.md#feature-group-status",
+      "recipeIds": [
+        "fs-query-index"
+      ],
+      "status": "VERIFIED",
+      "note": "The whole corpus compared on one saved release artifact.",
+      "evidence": {
+        "productionRecordings": [
+          {
+            "recordedAt": "2026-09-24T00:54:33.874Z",
+            "gitSha": "c66f4d8aeeea5baa2ca50b6f2e0863df51dadb46",
+            "recordings": 2,
+            "project": "fireemu-oracle-query"
+          },
+          {
+            "recordedAt": "2026-09-24T01:46:37.110Z",
+            "gitSha": "faa6d4e06ebe5c96e43948f26f6bfd99c527845e",
+            "recordings": 2,
+            "project": "fireemu-oracle-query"
+          },
+          {
+            "recordedAt": "2026-09-24T02:59:40.983Z",
+            "gitSha": "665e5e63afb571eaf5ed973c73d8571881924ab0",
+            "recordings": 2,
+            "project": "fireemu-oracle-query"
+          }
+        ],
+        "finalArtifactSha256": "9efb81bb90334471d66c347f24c8dd0aee273969274ea4d969f70b05f573439c",
+        "sourceCommit": "1b4220339365972621569f4e0c9f6f71bf3c400e",
+        "comparisonPath": "spec/compatibility/closure/evidence/FS-QUERY-INDEX-comparison.json",
+        "rows": {
+          "MATCH": 675,
+          "DIVERGENCE_APPROVED": 35
+        },
+        "regressionCommands": [
+          "node conformance/src/fs-query-index/run.mjs check",
+          "cargo nextest run --workspace --profile pr"
+        ],
+        "build": {
+          "command": "cargo build --release -p fireemu",
+          "rustc": "rustc 1.94.0 (4a4ef493e 2026-03-02)",
+          "cargo": "cargo 1.94.0 (85eff7c80 2026-01-15)"
+        },
+        "rangeTotals": {
+          "production": "2000",
+          "fireemu": "2000"
+        }
+      }
+    },
+    {
+      "conditionId": "FS-QUERY-INDEX/closure-review",
+      "source": "docs/compatibility/ip-fs-production-compatibility.md#feature-group-status",
+      "recipeIds": [
+        "FS-QUERY-INDEX"
+      ],
+      "status": "VERIFIED",
+      "note": "Independent clean-context closure and safety review of the final evidence.",
+      "evidence": {
+        "productionRecordings": [
+          {
+            "recordedAt": "2026-09-24T00:54:33.874Z",
+            "gitSha": "c66f4d8aeeea5baa2ca50b6f2e0863df51dadb46",
+            "recordings": 2,
+            "project": "fireemu-oracle-query"
+          },
+          {
+            "recordedAt": "2026-09-24T01:46:37.110Z",
+            "gitSha": "faa6d4e06ebe5c96e43948f26f6bfd99c527845e",
+            "recordings": 2,
+            "project": "fireemu-oracle-query"
+          },
+          {
+            "recordedAt": "2026-09-24T02:59:40.983Z",
+            "gitSha": "665e5e63afb571eaf5ed973c73d8571881924ab0",
+            "recordings": 2,
+            "project": "fireemu-oracle-query"
+          }
+        ],
+        "finalArtifactSha256": "9efb81bb90334471d66c347f24c8dd0aee273969274ea4d969f70b05f573439c",
+        "sourceCommit": "1b4220339365972621569f4e0c9f6f71bf3c400e",
+        "comparisonPath": "spec/compatibility/closure/evidence/FS-QUERY-INDEX-comparison.json",
+        "rows": {
+          "MATCH": 675,
+          "DIVERGENCE_APPROVED": 35
+        },
+        "reviews": [
+          "docs.local review rounds 1-4 (closure, safety, re-review 2, re-review 3 APPROVE, confirmation 4 APPROVE) and the follow-up confirmation review (round 1 REQUEST_CHANGES, round 2 APPROVE); reports kept privately"
+        ]
+      }
+    }
+  ]
+}

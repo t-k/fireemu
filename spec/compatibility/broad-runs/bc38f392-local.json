@@ -1,0 +1,48 @@
+{
+  "kind": "frozen-local46-execution-not-production",
+  "executionCommit": "bc38f392077784509f7fbb8993d5be66c1a8be14",
+  "observerSha256": "1501aea61749d79d32238b9329f3d75370d9d500322ffab331ec0c8b3505342f",
+  "manifestSha256": "4b6d42bc5acd1a697622b25325ba67620af272d5c44f5d00982dbffe8bb8cc3f",
+  "comparisonContractDigest": "ec0ef13fc77b6edf0f4940f472267b91b117707b36aac15a00c0a6aea96e89dc",
+  "artifactSha256": "198eeb6543fe7396869aeca48b48acf7a5ffedb6557c89c15925d0262faba0b3",
+  "recordingComplete": true,
+  "cleanupComplete": true,
+  "rows": 46,
+  "counts": {
+    "total": 91,
+    "auth": 31,
+    "firestore": 60,
+    "metadata": 0,
+    "recovery": 29
+  },
+  "ownedProcess": {
+    "pid": 68501,
+    "stopped": true,
+    "listenersClosed": true
+  },
+  "exitCode": 0,
+  "productionExecuted": false,
+  "productionCompatibility": "unobserved for new contract",
+  "privateManifestSha256": "40622df336eeb791d798d0c44283702e54a5a9f0b7acc495cee999a6c242c2ca",
+  "privateBatchSha256": "07285ef50aa8002d6f9906f79e30f38786debaf85cf65faa9cc02b4fe90723bc",
+  "tests": {
+    "broadPassed": 61,
+    "ruff": "passed",
+    "ty": "passed",
+    "limitedMutations": [
+      {
+        "mutation": "retain-etag",
+        "killed": true
+      },
+      {
+        "mutation": "ignore-updateTime",
+        "killed": true
+      }
+    ]
+  },
+  "securityReview": {
+    "mustFix": [],
+    "shouldFix": [],
+    "scope": "Database projection v2 and saved fixture provenance; no production approval"
+  }
+}

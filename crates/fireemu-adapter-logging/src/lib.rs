@@ -24,6 +24,21 @@
 //! - **Loopback-only bind.** The handshake is refused unless the `Host` header names loopback,
 //!   the same DNS-rebinding guard every other fireemu listener applies. The official server has
 //!   none.
+//! - **Loopback-only browser `Origin`.** A handshake carrying an `Origin` that is not an HTTP(S)
+//!   loopback origin is refused with 403 before any frame is written, the same policy the
+//!   Auth/control listener and the Hub apply to browser requests. WebSocket handshakes are
+//!   exempt from the same-origin policy, so without this any web page could read the stream,
+//!   which carries the Auth out-of-band links and SMS codes the official emulator also prints.
+//!   A request with no `Origin` is a non-browser client and still connects. The official server
+//!   has no such guard; the official UI's Logs page connects from a loopback origin, so the
+//!   compatibility cost is nil. The stream's *contents* stay at parity: out-of-band links and
+//!   codes are streamed as the official emulator streams them (`auth.logActionCodes = false`
+//!   silences them at the source).
+//! - **Bounded handshake.** The request head must arrive whole inside a ten-second deadline and
+//!   within 8 KiB, otherwise the connection is answered 408 or 431 and dropped. The official
+//!   server has no such bound, so one peer can hold a connection open indefinitely by stalling.
+//!   A well-formed client is nowhere near either limit: a handshake is a few hundred bytes sent
+//!   in one write.
 //! - **Bounded history.** The official transport keeps every line in memory forever. This one
 //!   retains the most recent [`LogBus`] cap (default [`DEFAULT_HISTORY_CAP`]) and drops the
 //!   oldest, so an unbounded producer cannot exhaust memory.
@@ -41,4 +56,4 @@ pub mod server;
 pub mod wire;
 
 pub use bus::{LogBus, LogInput, DEFAULT_HISTORY_CAP};
-pub use server::serve_logging;
+pub use server::{serve_logging, serve_logging_with_limits, HandshakeLimits};

@@ -1,0 +1,222 @@
+{
+  "artifactSha256": "f60429291f02d6608adfc2f4da7a1d3698c77a96519079e1d09d5112a1be780a",
+  "campaignDigest": "6bc480a4c0a478f524cc0a4e08fea781a42f01c87a9983d1222d37ef678fed2b",
+  "campaignId": "FS-LIMIT-API-REQUEST-BYTES",
+  "cases": [
+    {
+      "basis": "Local typed state invariants and version-bound cleanup; no production comparison.",
+      "family": "firestore",
+      "id": "FS-LIMIT-API-REQUEST-BYTES-UNDER",
+      "localObserved": "accepted",
+      "productionExpectation": "accepted",
+      "requestBytes": 11534335,
+      "status": "local-only"
+    },
+    {
+      "basis": "Local typed state invariants and version-bound cleanup; no production comparison.",
+      "family": "firestore",
+      "id": "FS-LIMIT-API-REQUEST-BYTES-EXACT",
+      "localObserved": "accepted",
+      "productionExpectation": "accepted",
+      "requestBytes": 11534336,
+      "status": "local-only"
+    },
+    {
+      "basis": "Local typed state invariants and version-bound cleanup; no production comparison.",
+      "family": "firestore",
+      "id": "FS-LIMIT-API-REQUEST-BYTES-OVER",
+      "localObserved": "refused",
+      "productionExpectation": "refused",
+      "requestBytes": 11534337,
+      "status": "local-only"
+    }
+  ],
+  "complete": true,
+  "database": "(default)",
+  "formalCompatibilityClaim": false,
+  "kind": "fs-request-bytes-local-shadow-v1",
+  "nonce": "232d7c54140c40209ee0330a4400dc3c",
+  "note": "Owned local artifact shadow. No production request was sent, no credential was used and no parent group is promoted. The raw REST body byte count remains an observation hypothesis about production's enforcement metric.",
+  "observation": {
+    "canonicalRequestBytesMeasuredLocally": true,
+    "cleanupComplete": true,
+    "cleanupSafetyComplete": true,
+    "completed": true,
+    "failures": [],
+    "formalCompatibilityClaim": false,
+    "localJournal": {
+      "captureComplete": true,
+      "entryDigest": "bf2ea251d4a1b9cc10ba5c65483f15a47096ea526ecd2c92fbc6c4f9a828eaf1",
+      "planDigest": "a9c438c4c1fa79c3aa7f6df8f1a05b177ab8ecb74fe17a29c24ed003443a75f4",
+      "requestBindings": {
+        "exact": {
+          "bytes": 11534336,
+          "sha256": "bf375c8997af3735f5710b45e73fadd730b4caf8b3bd28d21482580da5456d22"
+        },
+        "over": {
+          "bytes": 11534337,
+          "sha256": "37f98d316c43a38345fc5ce45f67eaf00437a9b7608a21be31ec8bc42b179bed"
+        },
+        "under": {
+          "bytes": 11534335,
+          "sha256": "326df8adb71c1a85f68acb8e61472382e505914603a0c9aadfd7b4a9cb7b3e80"
+        }
+      },
+      "rowCount": 258,
+      "schemaVersion": 1,
+      "sidecarCount": 241,
+      "skippedCount": 17,
+      "skippedSummary": [
+        {
+          "count": 17,
+          "kind": "cleanup-version-bound-delete",
+          "probe": "over",
+          "reason": "creation-and-current-version-not-proven"
+        }
+      ]
+    },
+    "localOnly": true,
+    "overRefusal": {
+      "classification": "expected",
+      "errorCode": 400,
+      "errorStatus": "INVALID_ARGUMENT",
+      "httpStatus": 400,
+      "message": "Request payload size exceeds the limit: 11534336 bytes.",
+      "messageBytes": 55,
+      "messageSha256": "7fa3a2b819f0899a9bc424aabeb564f3776400d6baba8e9ea44a0b219ec95729",
+      "messageTruncated": false,
+      "responseBodyFile": "response-189.body",
+      "responseBytes": 118,
+      "responseSha256": "6828d90a4721065442e41c677c2ea3832d0747a3ab40559d4c1f9fddeaf7c1b6"
+    },
+    "planDigest": "a9c438c4c1fa79c3aa7f6df8f1a05b177ab8ecb74fe17a29c24ed003443a75f4",
+    "productionExecuted": false,
+    "rawHttpMetricStatus": "observation hypothesis",
+    "recoveryRowCount": 153,
+    "requestCount": 241,
+    "resourceAbsence": true,
+    "rowCount": 105,
+    "semanticOutcome": "typed-over-refusal"
+  },
+  "planDigest": "a9c438c4c1fa79c3aa7f6df8f1a05b177ab8ecb74fe17a29c24ed003443a75f4",
+  "probeOutcomes": [
+    {
+      "complete": true,
+      "errorCode": null,
+      "errorMessage": null,
+      "errorStatus": null,
+      "httpStatus": 200,
+      "probe": "under",
+      "requestBytes": 11534335,
+      "responseBody": null,
+      "responseBytes": 826,
+      "responseSha256": "78bb8b903cca46072a33149d1231a12caa6998806ef54704ed43455065c1361e"
+    },
+    {
+      "complete": true,
+      "errorCode": null,
+      "errorMessage": null,
+      "errorStatus": null,
+      "httpStatus": 200,
+      "probe": "exact",
+      "requestBytes": 11534336,
+      "responseBody": null,
+      "responseBytes": 826,
+      "responseSha256": "d39e4010d4c965323c4445b9134f83dce64cfcb5e532adcbf890cdfde11e9991"
+    },
+    {
+      "complete": true,
+      "errorCode": 400,
+      "errorMessage": "Request payload size exceeds the limit: 11534336 bytes.",
+      "errorStatus": "INVALID_ARGUMENT",
+      "httpStatus": 400,
+      "probe": "over",
+      "requestBytes": 11534337,
+      "responseBody": "{\"error\":{\"code\":400,\"message\":\"Request payload size exceeds the limit: 11534336 bytes.\",\"status\":\"INVALID_ARGUMENT\"}}",
+      "responseBytes": 118,
+      "responseSha256": "6828d90a4721065442e41c677c2ea3832d0747a3ab40559d4c1f9fddeaf7c1b6"
+    }
+  ],
+  "productionExecuted": false,
+  "project": "demo-firestore-probe",
+  "rawHttpMetricStatus": "observation hypothesis",
+  "recordingComplete": true,
+  "runtime": {
+    "artifactSha256": "f60429291f02d6608adfc2f4da7a1d3698c77a96519079e1d09d5112a1be780a",
+    "runtimeInputCount": 437,
+    "runtimeInputsClean": true,
+    "runtimeInputsDigest": "d9befba6a8a956bd8bdacee77d78e51209ad03ffa88e9b9d6936f8e3364ed1db",
+    "sourceCommit": "db925e4cf6ac974cd5558bde40c48e6380133c8d",
+    "sourceRoot": "repository-root"
+  },
+  "shadow": {
+    "classification": "local-shape-matches-production-expectation",
+    "comparedFields": [
+      "httpStatus",
+      "errorCode",
+      "errorStatus",
+      "message"
+    ],
+    "differenceMasked": false,
+    "enforcementSource": "crates/fireemu-adapter-grpc/src/serve.rs, MAX_STRICT_COMMIT_RAW_BYTES = 11 * 1024 * 1024 for REST :commit; API_REQUEST_BYTES = 10 * 1024 * 1024 remains in force on other surfaces",
+    "expectedClassification": "local-shape-matches-production-expectation",
+    "expectedRefusal": {
+      "classification": "expected",
+      "errorCode": 400,
+      "errorStatus": "INVALID_ARGUMENT",
+      "httpStatus": 400,
+      "message": "Request payload size exceeds the limit: 11534336 bytes."
+    },
+    "formalCompatibilityClaim": false,
+    "localEnforcement": "strict profile REST Commit decode boundary",
+    "matchesBaseline": true,
+    "observedFailures": [],
+    "overRefusal": {
+      "classification": "expected",
+      "errorCode": 400,
+      "errorStatus": "INVALID_ARGUMENT",
+      "httpStatus": 400,
+      "message": "Request payload size exceeds the limit: 11534336 bytes.",
+      "messageBytes": 55,
+      "messageSha256": "7fa3a2b819f0899a9bc424aabeb564f3776400d6baba8e9ea44a0b219ec95729",
+      "messageTruncated": false,
+      "responseBodyFile": "response-189.body",
+      "responseBytes": 118,
+      "responseSha256": "6828d90a4721065442e41c677c2ea3832d0747a3ab40559d4c1f9fddeaf7c1b6"
+    },
+    "productionExecuted": false,
+    "productionRefusalExpectation": "400 INVALID_ARGUMENT",
+    "refusalFieldMismatches": [],
+    "resourceAbsence": true,
+    "summary": "The strict REST Commit path refused the over-boundary body at the 11 MiB boundary with the status, code and message recorded in the saved production comparison. The evidence remains limited to its concrete REST recipes.",
+    "untypedOverRefusal": null
+  },
+  "slotTimings": {
+    "classes": {
+      "boundaryCommit": {
+        "count": 3,
+        "maxSeconds": 0.043358,
+        "medianSeconds": 0.037496,
+        "p95Seconds": 0.043358,
+        "p99Seconds": 0.043358,
+        "totalSeconds": 0.084332
+      },
+      "smallRequest": {
+        "count": 238,
+        "maxSeconds": 0.021964,
+        "medianSeconds": 0.001415,
+        "p95Seconds": 0.019477,
+        "p99Seconds": 0.021162,
+        "totalSeconds": 1.371148
+      }
+    },
+    "disclaimer": "Loopback service time against an owned local emulator on the same machine. It excludes the network round trip, TLS and production server time, so it is a floor for a production per-slot figure and never an estimate of one. A production reservation needs a production measurement; the production transport now records elapsed time per request so one can be taken.",
+    "dispatchedCount": 241,
+    "isProductionEstimate": false,
+    "measurement": "loopback-floor"
+  },
+  "sourceDigestAfter": "7c5f21ed733f4276d5163b2065ebf93b9e017b75c81d25d0b1b533ce503c6318",
+  "sourceDigestBefore": "7c5f21ed733f4276d5163b2065ebf93b9e017b75c81d25d0b1b533ce503c6318",
+  "stateValidation": true,
+  "target": "owned-local-artifact"
+}

@@ -3,11 +3,11 @@
 use core::fmt;
 
 use fireemu_core_firestore::index::{
-    decide, validate_aggregation_query as validate_aggregation_index_query, IndexDecision,
-    IndexSet, PlanningContext,
+    decide, plan_scans, validate_aggregation_query as validate_aggregation_index_query,
+    IndexDecision, IndexDefinition, IndexSet, IndexValidationPolicy, PlannedScan, PlanningContext,
 };
 use fireemu_core_firestore::query::{Query, QueryLimitViolation};
-use fireemu_core_firestore::store::Aggregation;
+use fireemu_core_firestore::store::{normalize_aggregation_query, Aggregation};
 use fireemu_core_types::edition::FirestoreEdition;
 
 use crate::decode::DecodeError;
@@ -27,6 +27,10 @@ pub enum Rejection {
         fragment: String,
         /// Human-readable description.
         description: String,
+        /// The index the query needs.
+        requirement: IndexDefinition,
+        /// Whether the query has inequality filters on more than one field.
+        multiple_inequalities: bool,
     },
     /// The validator cannot model the query; fail closed.
     Unsupported(String),
@@ -40,22 +44,12 @@ impl Rejection {
         let mut status = match self {
             Self::Decode(e) => tonic::Status::new(e.grpc_code(), e.to_string()),
             Self::InvalidQuery(m) => tonic::Status::invalid_argument(m.clone()),
-            Self::QueryLimits(v) => {
-                let lines: Vec<String> = v.iter().map(|x| format!("{}: {} ({} > {})", x.limit_id, x.detail, x.current, x.maximum)).collect();
-                let message = format!("query limit violation: {}", lines.join("; "));
-                // A second array-contains clause is INVALID_ARGUMENT with production's own
-                // wording (conformance/firestore-production-matrix.json,
-                // errors/rest-shapes#two-array-contains); the official emulator answers
-                // FAILED_PRECONDITION. Every other limit is INVALID_ARGUMENT.
-                if v.iter().all(|x| x.limit_id == "FS-QUERY-LIMIT-ARRAY-CONTAINS-PER-DISJUNCTION") {
-                    tonic::Status::invalid_argument(
-                        "A maximum of 1 'ARRAY_CONTAINS' filter is allowed per disjunction.",
-                    )
-                } else {
-                    tonic::Status::invalid_argument(message)
-                }
-            }
-            Self::MissingIndex { fragment, description } => tonic::Status::failed_precondition(format!(
+            // Production refuses with the first limit it checks, in its own words
+            // (FS-QUERY-INDEX query-limits, recorded 2026-09-24).
+            Self::QueryLimits(v) => tonic::Status::invalid_argument(
+                v.first().map_or_else(String::new, |x| x.message.clone()),
+            ),
+            Self::MissingIndex { fragment, description, .. } => tonic::Status::failed_precondition(format!(
                 "The query requires an index. {description}\nAdd to firestore.indexes.json:\n{fragment}"
             )),
             Self::Unsupported(m) => tonic::Status::unimplemented(m.clone()),
@@ -68,6 +62,43 @@ impl Rejection {
             Self::Unsupported(_) => "FS_GW_UNSUPPORTED",
         };
         if let Ok(v) = code.parse() {
+            status.metadata_mut().insert("fireemu-reason", v);
+        }
+        status
+    }
+}
+
+/// `projects/<p>/databases/<d>` of a query parent.
+#[must_use]
+pub fn database_name(parent: &crate::decode::Parent) -> String {
+    format!(
+        "projects/{}/databases/{}",
+        parent.project.as_str(),
+        parent.database.as_str()
+    )
+}
+
+impl Rejection {
+    /// The status for a rejection of a query on `database` (`projects/<p>/databases/<d>`).
+    /// A missing index is refused in production's words, with the console link that names
+    /// the database; every other rejection is [`Rejection::to_status`].
+    #[must_use]
+    pub fn to_status_in(&self, database: &str) -> tonic::Status {
+        let Self::MissingIndex {
+            requirement,
+            multiple_inequalities,
+            ..
+        } = self
+        else {
+            return self.to_status();
+        };
+        let mut status =
+            tonic::Status::failed_precondition(crate::index_messages::missing_index_message(
+                database,
+                requirement,
+                *multiple_inequalities,
+            ));
+        if let Ok(v) = "FS_GW_MISSING_INDEX".parse() {
             status.metadata_mut().insert("fireemu-reason", v);
         }
         status
@@ -87,6 +118,9 @@ pub struct AcceptedQuery {
     pub query: Query,
     /// Index decision (never `MissingRequired`).
     pub decision: IndexDecision,
+    /// The index scans of each DNF disjunct, for Explain; `None` when no index plan
+    /// describes the query (kindless, or a full scan on Enterprise).
+    pub scans: Option<Vec<PlannedScan>>,
     /// Diagnostics such as `FS_ENT_FULL_COLLECTION_SCAN`.
     pub warnings: Vec<String>,
 }
@@ -117,6 +151,13 @@ pub struct Gateway {
 }
 
 impl Gateway {
+    /// Whether requests get the refusals only production makes: the strict profile's index
+    /// policy. The emulator profile may add no rejection (`spec/compatibility/contract.json`).
+    #[must_use]
+    pub fn production_refusals(&self) -> bool {
+        self.ctx.policy == IndexValidationPolicy::Production
+    }
+
     /// Runs every strict check on a decoded query.
     pub fn validate_query(&self, query: &Query) -> Result<AcceptedQuery, Rejection> {
         self.validate_query_with_indexes(query, &self.indexes)
@@ -139,31 +180,29 @@ impl Gateway {
         query: &Query,
         indexes: &IndexSet,
     ) -> Result<AcceptedQuery, Rejection> {
-        self.validate_canonical_query(
-            query
-                .canonicalize()
-                .map_err(|e| Rejection::InvalidQuery(e.to_string()))?,
-            indexes,
-            None,
-        )
+        self.validate_canonical_query(self.canonicalize(query)?, indexes, None)
     }
 
     /// Runs every strict check for an aggregation query with a borrowed database-specific index
-    /// catalog. Sum and average fields participate in index validation only; the accepted query
-    /// remains the original executable query.
+    /// catalog. Preserve caller ordering for Rules metadata; index planning and the store
+    /// executor derive the same aggregation ordering with the shared normalizer.
     pub fn validate_aggregation_query_with_indexes(
         &self,
         query: &Query,
         aggregations: &[Aggregation],
         indexes: &IndexSet,
     ) -> Result<AcceptedQuery, Rejection> {
-        self.validate_canonical_query(
-            query
-                .canonicalize()
-                .map_err(|e| Rejection::InvalidQuery(e.to_string()))?,
-            indexes,
-            Some(aggregations),
-        )
+        self.validate_canonical_query(self.canonicalize(query)?, indexes, Some(aggregations))
+    }
+
+    /// The canonical query, with the refusals of the profile's policy: production's under
+    /// the strict profile, the official emulator's under the emulator profile.
+    fn canonicalize(&self, query: &Query) -> Result<Query, Rejection> {
+        match self.ctx.policy {
+            IndexValidationPolicy::Production => query.canonicalize(),
+            IndexValidationPolicy::Emulator => query.canonicalize_emulator(),
+        }
+        .map_err(|e| Rejection::InvalidQuery(e.to_string()))
     }
 
     fn validate_canonical_query(
@@ -172,6 +211,15 @@ impl Gateway {
         indexes: &IndexSet,
         aggregations: Option<&[Aggregation]>,
     ) -> Result<AcceptedQuery, Rejection> {
+        // Production refuses a cursor whose `__name__` value is not a document reference,
+        // or whose reference names a document the query does not select. The compatibility
+        // contract keeps production-only refusals out of the `emulator` profile, and the
+        // production index policy is exactly what the strict profile selects.
+        if self.ctx.policy == IndexValidationPolicy::Production {
+            canonical
+                .check_production_cursor_constraints()
+                .map_err(|error| Rejection::InvalidQuery(error.to_string()))?;
+        }
         let disjunctions = canonical.dnf_disjunction_count();
         if disjunctions > fireemu_core_firestore::query::MAX_MATERIALIZED_DISJUNCTIONS {
             return Err(Rejection::InvalidQuery(format!(
@@ -200,10 +248,22 @@ impl Gateway {
                 );
             }
         }
+        // Limits above count the caller's clauses, not implicit aggregation orders.
+        let execution_query = match aggregations {
+            Some(aggregations) => {
+                normalize_aggregation_query(&canonical, aggregations).map_err(|error| {
+                    Rejection::InvalidQuery(match error {
+                        fireemu_core_firestore::store::FirestoreError::InvalidArgument(m) => m,
+                        other => other.to_string(),
+                    })
+                })?
+            }
+            None => canonical.clone(),
+        };
         let decision = aggregations.map_or_else(
             || decide(&canonical, indexes, &self.ctx),
             |aggregations| {
-                validate_aggregation_index_query(&canonical, aggregations, indexes, &self.ctx)
+                validate_aggregation_index_query(&execution_query, aggregations, indexes, &self.ctx)
             },
         );
         match &decision {
@@ -221,15 +281,33 @@ impl Gateway {
                 return Err(Rejection::MissingIndex {
                     fragment: requirement.indexes_json_fragment(),
                     description: decision.to_string(),
+                    requirement: requirement.clone(),
+                    multiple_inequalities: canonical.inequality_fields().len() > 1,
                 });
             }
             IndexDecision::Unsupported { feature } => {
                 return Err(Rejection::Unsupported((*feature).to_owned()));
             }
         }
+        let scans = matches!(
+            decision,
+            IndexDecision::UseIndex { .. }
+                | IndexDecision::MergeIndexes { .. }
+                | IndexDecision::AssumedIndex { .. }
+        )
+        .then(|| {
+            plan_scans(
+                &execution_query,
+                aggregations.unwrap_or_default(),
+                indexes,
+                &self.ctx,
+            )
+        })
+        .flatten();
         Ok(AcceptedQuery {
             query: canonical,
             decision,
+            scans,
             warnings,
         })
     }
@@ -237,16 +315,22 @@ impl Gateway {
 
 /// Says once per distinct index which composite index production would need for a query
 /// the emulator policy served without it (every surface: unary, REST, Listen, aggregations).
+/// The fragment names client field paths, so it is cut at the shared echo bound, and a stderr
+/// that cannot take the line (a full non-blocking pipe) never fails the request.
 fn note_assumed_index(fragment: &str) {
+    use std::io::Write as _;
     static NOTED: std::sync::OnceLock<std::sync::Mutex<std::collections::BTreeSet<String>>> =
         std::sync::OnceLock::new();
+    let fragment = fireemu_core_types::codec::echo(fragment);
+    let fragment = fragment.as_ref();
     let noted = NOTED.get_or_init(|| std::sync::Mutex::new(std::collections::BTreeSet::new()));
     let first = noted
         .lock()
         .map(|mut set| set.insert(fragment.to_owned()))
         .unwrap_or(false);
     if first {
-        eprintln!(
+        let _ = writeln!(
+            std::io::stderr(),
             "[firestore] served without a configured composite index (emulator profile); production needs: {fragment}"
         );
     }

@@ -247,3 +247,39 @@ fn symlinked_parent_is_refused_without_creating_a_stage() {
     assert!(error.contains("parent is a symlink"), "{error}");
     assert!(std::fs::read_dir(&real).unwrap().next().is_none());
 }
+
+/// EXPREL-2: a one-element relative target has the empty path as its parent.
+///
+/// `Path::new("out").parent()` is `Some("")`, `lstat("")` is ENOENT, and although
+/// `DirBuilder::create("")` succeeds, restricting the permissions of "" fails with ENOENT. A
+/// caller that passed a bare directory name therefore lost the export at the last moment. The
+/// stage resolves the target against the working directory before looking at its parent.
+///
+/// The working directory is process-global; nextest runs each test in its own process.
+#[test]
+fn a_bare_relative_target_is_resolved_against_the_working_directory() {
+    let root = TestRoot::new("bare-relative");
+    let previous = std::env::current_dir().expect("the working directory is readable");
+    std::env::set_current_dir(root.0.path()).expect("enter the scratch directory");
+
+    let stage = PublicationStage::create(Path::new("out"), |_| Ok(()));
+
+    let stage = match stage {
+        Ok(stage) => stage,
+        Err(error) => {
+            std::env::set_current_dir(&previous).expect("restore the working directory");
+            panic!("a bare relative target must be publishable: {error}");
+        }
+    };
+    assert!(!stage.target_was_present());
+    write(stage.root(), "marker", "published");
+    let published = stage.complete().publish();
+    std::env::set_current_dir(&previous).expect("restore the working directory");
+    published.expect("the stage publishes");
+
+    assert_eq!(
+        std::fs::read_to_string(root.0.path().join("out").join("marker"))
+            .expect("the published marker is readable"),
+        "published"
+    );
+}

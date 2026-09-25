@@ -1,0 +1,1496 @@
+{
+  "acquisitionValidated": false,
+  "artifactSha256": "e064a7722f93f1f182e8de6d592e3f84b4b5bb420a27e3173c7a7418b016c32c",
+  "campaign": "FS-TRANSACTION-EXPIRY-RETRY-04",
+  "casesDigest": "c0731c5add47c487a520817d094fc0208d1e135dc31ea45885da5d5d861856fe",
+  "child": {
+    "exitCode": 0,
+    "signal": null,
+    "stopped": true
+  },
+  "complete": true,
+  "elapsedSeconds": 17.897,
+  "kind": "txn-expiry-local-shadow-v1",
+  "nonce": "o3expiry-c7d9e3d4661a4174",
+  "note": "Owned local rehearsal only. The elapsed time was produced by advancing the emulator's virtual clock, not by waiting. No production request was sent and no parent group is promoted.",
+  "ownerId": "dbfc275e8cddd04a66986ef2ab0ed86f",
+  "productionExecuted": false,
+  "promotionReady": false,
+  "publication": {
+    "contract": "txn-local-publication-v1",
+    "failures": [],
+    "inputDigests": {
+      "receipt.json": "d11ed5b8babc0f7fe10b7edcb8ee93df6ace3adf67b3c4352524a1c1b2f92988",
+      "self-contract.json": "5147911589c458419bd7aff3ec6505f290119cb248673209f4a920981161213b"
+    }
+  },
+  "receipt": {
+    "authorityRefusal": null,
+    "campaign": "FS-TRANSACTION-EXPIRY-RETRY-04",
+    "casesDigest": "c0731c5add47c487a520817d094fc0208d1e135dc31ea45885da5d5d861856fe",
+    "checkpoints": [],
+    "cleanup": [
+      {
+        "absence": {
+          "code": 5,
+          "incomplete": null
+        },
+        "absent": true,
+        "complete": true,
+        "createdByThisRun": true,
+        "creationEvidence": {
+          "role": "control",
+          "slot": "setup/create/control",
+          "updateTime": "2026-09-18T00:00:00Z"
+        },
+        "delete": {
+          "code": 0,
+          "status": "OK"
+        },
+        "failure": null,
+        "ownedRead": {
+          "code": 0,
+          "status": "OK"
+        },
+        "ownershipUnconfirmed": false,
+        "path": "oracle/o3expiry-c7d9e3d4661a4174/txn-expiry-04/control",
+        "resourceState": "creation-confirmed",
+        "role": "control",
+        "skipped": false
+      },
+      {
+        "absence": {
+          "code": 5,
+          "incomplete": null
+        },
+        "absent": true,
+        "complete": true,
+        "createdByThisRun": true,
+        "creationEvidence": {
+          "role": "locked-a",
+          "slot": "setup/create/locked-a",
+          "updateTime": "2026-09-18T00:00:00.000001Z"
+        },
+        "delete": {
+          "code": 0,
+          "status": "OK"
+        },
+        "failure": null,
+        "ownedRead": {
+          "code": 0,
+          "status": "OK"
+        },
+        "ownershipUnconfirmed": false,
+        "path": "oracle/o3expiry-c7d9e3d4661a4174/txn-expiry-04/locked-a",
+        "resourceState": "creation-confirmed",
+        "role": "locked-a",
+        "skipped": false
+      },
+      {
+        "absence": {
+          "code": 5,
+          "incomplete": null
+        },
+        "absent": true,
+        "complete": true,
+        "createdByThisRun": true,
+        "creationEvidence": {
+          "role": "locked-b",
+          "slot": "setup/create/locked-b",
+          "updateTime": "2026-09-18T00:00:00.000002Z"
+        },
+        "delete": {
+          "code": 0,
+          "status": "OK"
+        },
+        "failure": null,
+        "ownedRead": {
+          "code": 0,
+          "status": "OK"
+        },
+        "ownershipUnconfirmed": false,
+        "path": "oracle/o3expiry-c7d9e3d4661a4174/txn-expiry-04/locked-b",
+        "resourceState": "creation-confirmed",
+        "role": "locked-b",
+        "skipped": false
+      },
+      {
+        "absence": {
+          "code": 5,
+          "incomplete": null
+        },
+        "absent": true,
+        "complete": true,
+        "createdByThisRun": true,
+        "creationEvidence": {
+          "role": "locked-c",
+          "slot": "setup/create/locked-c",
+          "updateTime": "2026-09-18T00:00:00.000003Z"
+        },
+        "delete": {
+          "code": 0,
+          "status": "OK"
+        },
+        "failure": null,
+        "ownedRead": {
+          "code": 0,
+          "status": "OK"
+        },
+        "ownershipUnconfirmed": false,
+        "path": "oracle/o3expiry-c7d9e3d4661a4174/txn-expiry-04/locked-c",
+        "resourceState": "creation-confirmed",
+        "role": "locked-c",
+        "skipped": false
+      },
+      {
+        "absence": {
+          "code": 5,
+          "incomplete": null
+        },
+        "absent": true,
+        "complete": true,
+        "createdByThisRun": true,
+        "creationEvidence": {
+          "role": "locked-d",
+          "slot": "setup/create/locked-d",
+          "updateTime": "2026-09-18T00:00:00.000004Z"
+        },
+        "delete": {
+          "code": 0,
+          "status": "OK"
+        },
+        "failure": null,
+        "ownedRead": {
+          "code": 0,
+          "status": "OK"
+        },
+        "ownershipUnconfirmed": false,
+        "path": "oracle/o3expiry-c7d9e3d4661a4174/txn-expiry-04/locked-d",
+        "resourceState": "creation-confirmed",
+        "role": "locked-d",
+        "skipped": false
+      }
+    ],
+    "clockIntegrityFailure": null,
+    "complete": true,
+    "database": "(default)",
+    "documentPrefix": "oracle/o3expiry-c7d9e3d4661a4174/txn-expiry-04",
+    "failure": null,
+    "failureSites": [],
+    "finishedAt": "2026-09-21T17:57:29.893583Z",
+    "instance": {
+      "artifactName": "fireemu",
+      "artifactSha256": "e064a7722f93f1f182e8de6d592e3f84b4b5bb420a27e3173c7a7418b016c32c",
+      "controlOrigin": "http://127.0.0.1:54491",
+      "firestoreOrigin": "http://127.0.0.1:54490",
+      "parentPid": 12971,
+      "pid": 12972,
+      "wrongTokenStatus": 403
+    },
+    "kind": "txn-expiry-collector-v1",
+    "localControlRequestCount": 4,
+    "missingCases": [],
+    "nonce": "o3expiry-c7d9e3d4661a4174",
+    "openTransactions": [],
+    "preconditions": [
+      {
+        "absence": true,
+        "created": true,
+        "role": "control"
+      },
+      {
+        "absence": true,
+        "created": true,
+        "role": "locked-a"
+      },
+      {
+        "absence": true,
+        "created": true,
+        "role": "locked-b"
+      },
+      {
+        "absence": true,
+        "created": true,
+        "role": "locked-c"
+      },
+      {
+        "absence": true,
+        "created": true,
+        "role": "locked-d"
+      }
+    ],
+    "projectId": "fireemu-test",
+    "requestCount": 68,
+    "resourceStates": {
+      "control": "creation-confirmed",
+      "locked-a": "creation-confirmed",
+      "locked-b": "creation-confirmed",
+      "locked-c": "creation-confirmed",
+      "locked-d": "creation-confirmed"
+    },
+    "responsibility": [],
+    "rows": [
+      {
+        "caseId": null,
+        "complete": true,
+        "detail": null,
+        "document": {
+          "code": 5,
+          "exists": false
+        },
+        "observed": {
+          "code": 5,
+          "message": "Document \"projects/fireemu-test/databases/(default)/documents/oracle/o3expiry-c7d9e3d4661a4174/txn-expiry-04/control\" not found.",
+          "status": "NOT_FOUND"
+        },
+        "phase": "preflight",
+        "role": "control",
+        "rpc": "GetDocument",
+        "slot": "preflight/absence/control",
+        "waited": null
+      },
+      {
+        "caseId": null,
+        "complete": true,
+        "detail": null,
+        "document": {
+          "code": 5,
+          "exists": false
+        },
+        "observed": {
+          "code": 5,
+          "message": "Document \"projects/fireemu-test/databases/(default)/documents/oracle/o3expiry-c7d9e3d4661a4174/txn-expiry-04/locked-a\" not found.",
+          "status": "NOT_FOUND"
+        },
+        "phase": "preflight",
+        "role": "locked-a",
+        "rpc": "GetDocument",
+        "slot": "preflight/absence/locked-a",
+        "waited": null
+      },
+      {
+        "caseId": null,
+        "complete": true,
+        "detail": null,
+        "document": {
+          "code": 5,
+          "exists": false
+        },
+        "observed": {
+          "code": 5,
+          "message": "Document \"projects/fireemu-test/databases/(default)/documents/oracle/o3expiry-c7d9e3d4661a4174/txn-expiry-04/locked-b\" not found.",
+          "status": "NOT_FOUND"
+        },
+        "phase": "preflight",
+        "role": "locked-b",
+        "rpc": "GetDocument",
+        "slot": "preflight/absence/locked-b",
+        "waited": null
+      },
+      {
+        "caseId": null,
+        "complete": true,
+        "detail": null,
+        "document": {
+          "code": 5,
+          "exists": false
+        },
+        "observed": {
+          "code": 5,
+          "message": "Document \"projects/fireemu-test/databases/(default)/documents/oracle/o3expiry-c7d9e3d4661a4174/txn-expiry-04/locked-c\" not found.",
+          "status": "NOT_FOUND"
+        },
+        "phase": "preflight",
+        "role": "locked-c",
+        "rpc": "GetDocument",
+        "slot": "preflight/absence/locked-c",
+        "waited": null
+      },
+      {
+        "caseId": null,
+        "complete": true,
+        "detail": null,
+        "document": {
+          "code": 5,
+          "exists": false
+        },
+        "observed": {
+          "code": 5,
+          "message": "Document \"projects/fireemu-test/databases/(default)/documents/oracle/o3expiry-c7d9e3d4661a4174/txn-expiry-04/locked-d\" not found.",
+          "status": "NOT_FOUND"
+        },
+        "phase": "preflight",
+        "role": "locked-d",
+        "rpc": "GetDocument",
+        "slot": "preflight/absence/locked-d",
+        "waited": null
+      },
+      {
+        "caseId": null,
+        "complete": true,
+        "detail": null,
+        "observed": {
+          "code": 0,
+          "message": null,
+          "status": "OK"
+        },
+        "phase": "setup",
+        "role": "control",
+        "rpc": "Commit",
+        "slot": "setup/create/control",
+        "waited": null
+      },
+      {
+        "caseId": null,
+        "complete": true,
+        "detail": null,
+        "observed": {
+          "code": 0,
+          "message": null,
+          "status": "OK"
+        },
+        "phase": "setup",
+        "role": "locked-a",
+        "rpc": "Commit",
+        "slot": "setup/create/locked-a",
+        "waited": null
+      },
+      {
+        "caseId": null,
+        "complete": true,
+        "detail": null,
+        "observed": {
+          "code": 0,
+          "message": null,
+          "status": "OK"
+        },
+        "phase": "setup",
+        "role": "locked-b",
+        "rpc": "Commit",
+        "slot": "setup/create/locked-b",
+        "waited": null
+      },
+      {
+        "caseId": null,
+        "complete": true,
+        "detail": null,
+        "observed": {
+          "code": 0,
+          "message": null,
+          "status": "OK"
+        },
+        "phase": "setup",
+        "role": "locked-c",
+        "rpc": "Commit",
+        "slot": "setup/create/locked-c",
+        "waited": null
+      },
+      {
+        "caseId": null,
+        "complete": true,
+        "detail": null,
+        "observed": {
+          "code": 0,
+          "message": null,
+          "status": "OK"
+        },
+        "phase": "setup",
+        "role": "locked-d",
+        "rpc": "Commit",
+        "slot": "setup/create/locked-d",
+        "waited": null
+      },
+      {
+        "acquisition": {
+          "expected": true,
+          "planned": true,
+          "tokenRegistered": true,
+          "transaction": "a"
+        },
+        "caseId": null,
+        "complete": true,
+        "detail": null,
+        "observed": {
+          "code": 0,
+          "message": null,
+          "status": "OK"
+        },
+        "phase": "idle-expiry",
+        "role": null,
+        "rpc": "BeginTransaction",
+        "slot": "idle/begin/a",
+        "waited": null
+      },
+      {
+        "caseId": null,
+        "complete": true,
+        "detail": null,
+        "document": {
+          "code": 0,
+          "exists": true,
+          "fields": {
+            "nonce": {
+              "stringValue": "<fireemu:o3-txn-expiry:token>"
+            },
+            "owner": {
+              "stringValue": "<fireemu:o3-txn-expiry:owner>"
+            },
+            "role": {
+              "stringValue": "locked-a"
+            },
+            "state": {
+              "stringValue": "created"
+            }
+          },
+          "name": "<fireemu:o3-txn-expiry:resource>",
+          "updateTime": "<fireemu:o3-txn-expiry:token>",
+          "updateTimeOrdinal": 0
+        },
+        "observed": {
+          "code": 0,
+          "message": null,
+          "status": "OK"
+        },
+        "phase": "idle-expiry",
+        "role": "locked-a",
+        "rpc": "GetDocument",
+        "slot": "idle/read/a",
+        "waited": null
+      },
+      {
+        "acquisition": {
+          "expected": true,
+          "planned": true,
+          "tokenRegistered": true,
+          "transaction": "b"
+        },
+        "caseId": null,
+        "complete": true,
+        "detail": null,
+        "observed": {
+          "code": 0,
+          "message": null,
+          "status": "OK"
+        },
+        "phase": "idle-expiry",
+        "role": null,
+        "rpc": "BeginTransaction",
+        "slot": "idle/begin/b",
+        "waited": null
+      },
+      {
+        "caseId": null,
+        "complete": true,
+        "detail": null,
+        "document": {
+          "code": 0,
+          "exists": true,
+          "fields": {
+            "nonce": {
+              "stringValue": "<fireemu:o3-txn-expiry:token>"
+            },
+            "owner": {
+              "stringValue": "<fireemu:o3-txn-expiry:owner>"
+            },
+            "role": {
+              "stringValue": "locked-b"
+            },
+            "state": {
+              "stringValue": "created"
+            }
+          },
+          "name": "<fireemu:o3-txn-expiry:resource>",
+          "updateTime": "<fireemu:o3-txn-expiry:token>",
+          "updateTimeOrdinal": 0
+        },
+        "observed": {
+          "code": 0,
+          "message": null,
+          "status": "OK"
+        },
+        "phase": "idle-expiry",
+        "role": "locked-b",
+        "rpc": "GetDocument",
+        "slot": "idle/read/b",
+        "waited": null
+      },
+      {
+        "acquisition": {
+          "expected": true,
+          "planned": true,
+          "tokenRegistered": true,
+          "transaction": "c"
+        },
+        "caseId": null,
+        "complete": true,
+        "detail": null,
+        "observed": {
+          "code": 0,
+          "message": null,
+          "status": "OK"
+        },
+        "phase": "idle-expiry",
+        "role": null,
+        "rpc": "BeginTransaction",
+        "slot": "idle/begin/c",
+        "waited": null
+      },
+      {
+        "caseId": null,
+        "complete": true,
+        "detail": null,
+        "document": {
+          "code": 0,
+          "exists": true,
+          "fields": {
+            "nonce": {
+              "stringValue": "<fireemu:o3-txn-expiry:token>"
+            },
+            "owner": {
+              "stringValue": "<fireemu:o3-txn-expiry:owner>"
+            },
+            "role": {
+              "stringValue": "locked-c"
+            },
+            "state": {
+              "stringValue": "created"
+            }
+          },
+          "name": "<fireemu:o3-txn-expiry:resource>",
+          "updateTime": "<fireemu:o3-txn-expiry:token>",
+          "updateTimeOrdinal": 0
+        },
+        "observed": {
+          "code": 0,
+          "message": null,
+          "status": "OK"
+        },
+        "phase": "idle-expiry",
+        "role": "locked-c",
+        "rpc": "GetDocument",
+        "slot": "idle/read/c",
+        "waited": null
+      },
+      {
+        "acquisition": {
+          "expected": true,
+          "planned": true,
+          "tokenRegistered": true,
+          "transaction": "d"
+        },
+        "caseId": null,
+        "complete": true,
+        "detail": null,
+        "observed": {
+          "code": 0,
+          "message": null,
+          "status": "OK"
+        },
+        "phase": "idle-expiry",
+        "role": null,
+        "rpc": "BeginTransaction",
+        "slot": "idle/begin/d",
+        "waited": null
+      },
+      {
+        "caseId": null,
+        "complete": true,
+        "detail": null,
+        "document": {
+          "code": 0,
+          "exists": true,
+          "fields": {
+            "nonce": {
+              "stringValue": "<fireemu:o3-txn-expiry:token>"
+            },
+            "owner": {
+              "stringValue": "<fireemu:o3-txn-expiry:owner>"
+            },
+            "role": {
+              "stringValue": "locked-d"
+            },
+            "state": {
+              "stringValue": "created"
+            }
+          },
+          "name": "<fireemu:o3-txn-expiry:resource>",
+          "updateTime": "<fireemu:o3-txn-expiry:token>",
+          "updateTimeOrdinal": 0
+        },
+        "observed": {
+          "code": 0,
+          "message": null,
+          "status": "OK"
+        },
+        "phase": "idle-expiry",
+        "role": "locked-d",
+        "rpc": "GetDocument",
+        "slot": "idle/read/d",
+        "waited": null
+      },
+      {
+        "caseId": "idle-expiry/lock-held-before-idle",
+        "complete": true,
+        "detail": null,
+        "expectedLocal": {
+          "code": 10,
+          "message": "Too much contention on these documents. Please try again.",
+          "rpc": "Commit",
+          "status": "ABORTED"
+        },
+        "observed": {
+          "code": 10,
+          "message": "Too much contention on these documents. Please try again.",
+          "status": "ABORTED"
+        },
+        "phase": "idle-expiry",
+        "role": "locked-c",
+        "rpc": "Commit",
+        "slot": "idle/lock-held",
+        "waited": null
+      },
+      {
+        "caseId": null,
+        "complete": true,
+        "detail": null,
+        "document": {
+          "code": 0,
+          "exists": true,
+          "fields": {
+            "nonce": {
+              "stringValue": "<fireemu:o3-txn-expiry:token>"
+            },
+            "owner": {
+              "stringValue": "<fireemu:o3-txn-expiry:owner>"
+            },
+            "role": {
+              "stringValue": "locked-c"
+            },
+            "state": {
+              "stringValue": "created"
+            }
+          },
+          "name": "<fireemu:o3-txn-expiry:resource>",
+          "updateTime": "<fireemu:o3-txn-expiry:token>",
+          "updateTimeOrdinal": 0
+        },
+        "observed": {
+          "code": 0,
+          "message": null,
+          "status": "OK"
+        },
+        "phase": "readback",
+        "role": "locked-c",
+        "rpc": "GetDocument",
+        "slot": "verify/idle/lock-held",
+        "verifiesCase": "idle-expiry/lock-held-before-idle",
+        "waited": null
+      },
+      {
+        "caseId": "idle-expiry/commit-before-idle",
+        "complete": true,
+        "detail": null,
+        "expectedLocal": {
+          "code": 0,
+          "message": null,
+          "rpc": "Commit",
+          "status": "OK"
+        },
+        "idleOfTransaction": "d",
+        "idleSeconds": 20.0,
+        "observed": {
+          "code": 0,
+          "message": null,
+          "status": "OK"
+        },
+        "phase": "idle-expiry",
+        "role": "locked-d",
+        "rpc": "Commit",
+        "slot": "idle/commit-before",
+        "waited": {
+          "checkpoints": 1,
+          "endedAt": "2026-09-21T17:57:28.050331Z",
+          "measuredSeconds": 20.0,
+          "mode": "control-clock",
+          "requestedSeconds": 20,
+          "startedAt": "2026-09-21T17:57:27.980769Z",
+          "wallSeconds": 0.0695641040802002
+        }
+      },
+      {
+        "caseId": null,
+        "complete": true,
+        "detail": null,
+        "document": {
+          "code": 0,
+          "exists": true,
+          "fields": {
+            "nonce": {
+              "stringValue": "<fireemu:o3-txn-expiry:token>"
+            },
+            "owner": {
+              "stringValue": "<fireemu:o3-txn-expiry:owner>"
+            },
+            "role": {
+              "stringValue": "locked-d"
+            },
+            "state": {
+              "stringValue": "committed-before-idle"
+            }
+          },
+          "name": "<fireemu:o3-txn-expiry:resource>",
+          "updateTime": "<fireemu:o3-txn-expiry:token>",
+          "updateTimeOrdinal": 1
+        },
+        "observed": {
+          "code": 0,
+          "message": null,
+          "status": "OK"
+        },
+        "phase": "readback",
+        "role": "locked-d",
+        "rpc": "GetDocument",
+        "slot": "verify/idle/commit-before",
+        "verifiesCase": "idle-expiry/commit-before-idle",
+        "waited": null
+      },
+      {
+        "caseId": "idle-expiry/commit-after-idle",
+        "complete": true,
+        "detail": null,
+        "expectedLocal": {
+          "code": 10,
+          "message": "The referenced transaction has expired or is no longer valid.",
+          "rpc": "Commit",
+          "status": "ABORTED"
+        },
+        "idleOfTransaction": "a",
+        "idleSeconds": 90.0,
+        "observed": {
+          "code": 10,
+          "message": "The referenced transaction has expired or is no longer valid.",
+          "status": "ABORTED"
+        },
+        "phase": "idle-expiry",
+        "role": "locked-a",
+        "rpc": "Commit",
+        "slot": "idle/commit-after",
+        "waited": {
+          "checkpoints": 1,
+          "endedAt": "2026-09-21T17:57:28.189356Z",
+          "measuredSeconds": 70.0,
+          "mode": "control-clock",
+          "requestedSeconds": 70,
+          "startedAt": "2026-09-21T17:57:28.119760Z",
+          "wallSeconds": 0.06959819793701172
+        }
+      },
+      {
+        "caseId": null,
+        "complete": true,
+        "detail": null,
+        "document": {
+          "code": 0,
+          "exists": true,
+          "fields": {
+            "nonce": {
+              "stringValue": "<fireemu:o3-txn-expiry:token>"
+            },
+            "owner": {
+              "stringValue": "<fireemu:o3-txn-expiry:owner>"
+            },
+            "role": {
+              "stringValue": "locked-a"
+            },
+            "state": {
+              "stringValue": "created"
+            }
+          },
+          "name": "<fireemu:o3-txn-expiry:resource>",
+          "updateTime": "<fireemu:o3-txn-expiry:token>",
+          "updateTimeOrdinal": 0
+        },
+        "observed": {
+          "code": 0,
+          "message": null,
+          "status": "OK"
+        },
+        "phase": "readback",
+        "role": "locked-a",
+        "rpc": "GetDocument",
+        "slot": "verify/idle/commit-after",
+        "verifiesCase": "idle-expiry/commit-after-idle",
+        "waited": null
+      },
+      {
+        "caseId": "idle-expiry/rollback-after-idle",
+        "complete": true,
+        "detail": null,
+        "expectedLocal": {
+          "code": 10,
+          "message": "The referenced transaction has expired or is no longer valid.",
+          "rpc": "Rollback",
+          "status": "ABORTED"
+        },
+        "idleOfTransaction": "b",
+        "idleSeconds": 90.0,
+        "observed": {
+          "code": 10,
+          "message": "The referenced transaction has expired or is no longer valid.",
+          "status": "ABORTED"
+        },
+        "phase": "idle-expiry",
+        "role": "locked-b",
+        "rpc": "Rollback",
+        "slot": "idle/rollback-after",
+        "waited": null
+      },
+      {
+        "caseId": null,
+        "complete": true,
+        "detail": null,
+        "document": {
+          "code": 0,
+          "exists": true,
+          "fields": {
+            "nonce": {
+              "stringValue": "<fireemu:o3-txn-expiry:token>"
+            },
+            "owner": {
+              "stringValue": "<fireemu:o3-txn-expiry:owner>"
+            },
+            "role": {
+              "stringValue": "locked-b"
+            },
+            "state": {
+              "stringValue": "created"
+            }
+          },
+          "name": "<fireemu:o3-txn-expiry:resource>",
+          "updateTime": "<fireemu:o3-txn-expiry:token>",
+          "updateTimeOrdinal": 0
+        },
+        "observed": {
+          "code": 0,
+          "message": null,
+          "status": "OK"
+        },
+        "phase": "readback",
+        "role": "locked-b",
+        "rpc": "GetDocument",
+        "slot": "verify/idle/rollback-after",
+        "verifiesCase": "idle-expiry/rollback-after-idle",
+        "waited": null
+      },
+      {
+        "caseId": "idle-expiry/lock-released-after-idle",
+        "complete": true,
+        "detail": null,
+        "expectedLocal": {
+          "code": 0,
+          "message": null,
+          "rpc": "Commit",
+          "status": "OK"
+        },
+        "idleOfTransaction": "a",
+        "idleSeconds": 90.0,
+        "observed": {
+          "code": 0,
+          "message": null,
+          "status": "OK"
+        },
+        "phase": "idle-expiry",
+        "role": "locked-a",
+        "rpc": "Commit",
+        "slot": "idle/lock-released",
+        "waited": null
+      },
+      {
+        "caseId": null,
+        "complete": true,
+        "detail": null,
+        "document": {
+          "code": 0,
+          "exists": true,
+          "fields": {
+            "nonce": {
+              "stringValue": "<fireemu:o3-txn-expiry:token>"
+            },
+            "owner": {
+              "stringValue": "<fireemu:o3-txn-expiry:owner>"
+            },
+            "role": {
+              "stringValue": "locked-a"
+            },
+            "state": {
+              "stringValue": "written-after-expiry"
+            }
+          },
+          "name": "<fireemu:o3-txn-expiry:resource>",
+          "updateTime": "<fireemu:o3-txn-expiry:token>",
+          "updateTimeOrdinal": 1
+        },
+        "observed": {
+          "code": 0,
+          "message": null,
+          "status": "OK"
+        },
+        "phase": "readback",
+        "role": "locked-a",
+        "rpc": "GetDocument",
+        "slot": "verify/idle/lock-released",
+        "verifiesCase": "idle-expiry/lock-released-after-idle",
+        "waited": null
+      },
+      {
+        "caseId": null,
+        "complete": true,
+        "detail": null,
+        "observed": {
+          "code": 10,
+          "message": "The referenced transaction has expired or is no longer valid.",
+          "status": "ABORTED"
+        },
+        "phase": "idle-expiry",
+        "role": null,
+        "rpc": "Rollback",
+        "slot": "idle/release/c",
+        "waited": null
+      },
+      {
+        "acquisition": {
+          "expected": true,
+          "planned": true,
+          "tokenRegistered": true,
+          "transaction": "e"
+        },
+        "caseId": null,
+        "complete": true,
+        "detail": null,
+        "observed": {
+          "code": 0,
+          "message": null,
+          "status": "OK"
+        },
+        "phase": "finished-token",
+        "role": null,
+        "rpc": "BeginTransaction",
+        "slot": "finished/begin/e",
+        "waited": null
+      },
+      {
+        "caseId": "finished-token/rollback-after-begin",
+        "complete": true,
+        "detail": null,
+        "expectedLocal": {
+          "code": 0,
+          "message": null,
+          "rpc": "Rollback",
+          "status": "OK"
+        },
+        "observed": {
+          "code": 0,
+          "message": null,
+          "status": "OK"
+        },
+        "phase": "finished-token",
+        "role": null,
+        "rpc": "Rollback",
+        "slot": "finished/rollback-after-begin",
+        "waited": null
+      },
+      {
+        "caseId": "finished-token/rollback-after-rollback",
+        "complete": true,
+        "detail": null,
+        "expectedLocal": {
+          "code": 10,
+          "message": "The referenced transaction has expired or is no longer valid.",
+          "rpc": "Rollback",
+          "status": "ABORTED"
+        },
+        "observed": {
+          "code": 10,
+          "message": "The referenced transaction has expired or is no longer valid.",
+          "status": "ABORTED"
+        },
+        "phase": "finished-token",
+        "role": null,
+        "rpc": "Rollback",
+        "slot": "finished/rollback-after-rollback",
+        "waited": null
+      },
+      {
+        "acquisition": {
+          "expected": true,
+          "planned": true,
+          "tokenRegistered": true,
+          "transaction": "f"
+        },
+        "caseId": null,
+        "complete": true,
+        "detail": null,
+        "observed": {
+          "code": 0,
+          "message": null,
+          "status": "OK"
+        },
+        "phase": "finished-token",
+        "role": null,
+        "rpc": "BeginTransaction",
+        "slot": "finished/begin/f",
+        "waited": null
+      },
+      {
+        "caseId": null,
+        "complete": true,
+        "detail": null,
+        "observed": {
+          "code": 0,
+          "message": null,
+          "status": "OK"
+        },
+        "phase": "finished-token",
+        "role": "control",
+        "rpc": "Commit",
+        "slot": "finished/commit/f",
+        "waited": null
+      },
+      {
+        "caseId": "finished-token/rollback-after-commit",
+        "complete": true,
+        "detail": null,
+        "expectedLocal": {
+          "code": 10,
+          "message": "The referenced transaction has expired or is no longer valid.",
+          "rpc": "Rollback",
+          "status": "ABORTED"
+        },
+        "observed": {
+          "code": 10,
+          "message": "The referenced transaction has expired or is no longer valid.",
+          "status": "ABORTED"
+        },
+        "phase": "finished-token",
+        "role": null,
+        "rpc": "Rollback",
+        "slot": "finished/rollback-after-commit",
+        "waited": null
+      },
+      {
+        "acquisition": {
+          "expected": true,
+          "planned": true,
+          "tokenRegistered": true,
+          "transaction": "g"
+        },
+        "caseId": null,
+        "complete": true,
+        "detail": null,
+        "observed": {
+          "code": 0,
+          "message": null,
+          "status": "OK"
+        },
+        "phase": "retry-token",
+        "role": null,
+        "rpc": "BeginTransaction",
+        "slot": "retry/begin/g",
+        "waited": null
+      },
+      {
+        "caseId": null,
+        "complete": true,
+        "detail": null,
+        "observed": {
+          "code": 0,
+          "message": null,
+          "status": "OK"
+        },
+        "phase": "retry-token",
+        "role": null,
+        "rpc": "Rollback",
+        "slot": "retry/rollback/g",
+        "waited": null
+      },
+      {
+        "acquisition": {
+          "expected": true,
+          "planned": true,
+          "tokenRegistered": true,
+          "transaction": "h"
+        },
+        "caseId": "retry-token/retry-with-rolled-back-previous",
+        "complete": true,
+        "detail": null,
+        "expectedLocal": {
+          "code": 0,
+          "message": null,
+          "rpc": "BeginTransaction",
+          "status": "OK"
+        },
+        "observed": {
+          "code": 0,
+          "message": null,
+          "status": "OK"
+        },
+        "phase": "retry-token",
+        "role": null,
+        "rpc": "BeginTransaction",
+        "slot": "retry/rolled-back-previous",
+        "waited": null
+      },
+      {
+        "caseId": null,
+        "complete": true,
+        "detail": null,
+        "observed": {
+          "code": 0,
+          "message": null,
+          "status": "OK"
+        },
+        "phase": "retry-token",
+        "role": null,
+        "rpc": "Rollback",
+        "slot": "retry/rollback/h",
+        "waited": null
+      },
+      {
+        "acquisition": {
+          "expected": true,
+          "planned": true,
+          "tokenRegistered": true,
+          "transaction": "i"
+        },
+        "caseId": null,
+        "complete": true,
+        "detail": null,
+        "observed": {
+          "code": 0,
+          "message": null,
+          "status": "OK"
+        },
+        "phase": "retry-token",
+        "role": null,
+        "rpc": "BeginTransaction",
+        "slot": "retry/begin/i",
+        "waited": null
+      },
+      {
+        "caseId": null,
+        "complete": true,
+        "detail": null,
+        "observed": {
+          "code": 0,
+          "message": null,
+          "status": "OK"
+        },
+        "phase": "retry-token",
+        "role": "control",
+        "rpc": "Commit",
+        "slot": "retry/commit/i",
+        "waited": null
+      },
+      {
+        "caseId": "retry-token/retry-with-committed-previous",
+        "complete": true,
+        "detail": null,
+        "expectedLocal": {
+          "code": 3,
+          "message": "Invalid retry transaction.",
+          "rpc": "BeginTransaction",
+          "status": "INVALID_ARGUMENT"
+        },
+        "observed": {
+          "code": 3,
+          "message": "Invalid retry transaction.",
+          "status": "INVALID_ARGUMENT"
+        },
+        "phase": "retry-token",
+        "role": null,
+        "rpc": "BeginTransaction",
+        "slot": "retry/committed-previous",
+        "waited": null
+      },
+      {
+        "acquisition": {
+          "expected": true,
+          "planned": true,
+          "tokenRegistered": true,
+          "transaction": "j"
+        },
+        "caseId": null,
+        "complete": true,
+        "detail": null,
+        "observed": {
+          "code": 0,
+          "message": null,
+          "status": "OK"
+        },
+        "phase": "retry-token",
+        "role": null,
+        "rpc": "BeginTransaction",
+        "slot": "retry/begin/j",
+        "waited": null
+      },
+      {
+        "caseId": "retry-token/retry-with-read-only-previous",
+        "complete": true,
+        "detail": null,
+        "expectedLocal": {
+          "code": 3,
+          "message": "read-only transaction cannot be retried as read-write",
+          "rpc": "BeginTransaction",
+          "status": "INVALID_ARGUMENT"
+        },
+        "observed": {
+          "code": 3,
+          "message": "read-only transaction cannot be retried as read-write",
+          "status": "INVALID_ARGUMENT"
+        },
+        "phase": "retry-token",
+        "role": null,
+        "rpc": "BeginTransaction",
+        "slot": "retry/read-only-previous",
+        "waited": null
+      },
+      {
+        "caseId": null,
+        "complete": true,
+        "detail": null,
+        "observed": {
+          "code": 0,
+          "message": null,
+          "status": "OK"
+        },
+        "phase": "retry-token",
+        "role": null,
+        "rpc": "Rollback",
+        "slot": "retry/rollback/j",
+        "waited": null
+      },
+      {
+        "caseId": "retry-token/retry-with-unissued-previous",
+        "complete": true,
+        "detail": null,
+        "expectedLocal": {
+          "code": 3,
+          "message": "Invalid transaction.",
+          "rpc": "BeginTransaction",
+          "status": "INVALID_ARGUMENT"
+        },
+        "observed": {
+          "code": 3,
+          "message": "Invalid transaction.",
+          "status": "INVALID_ARGUMENT"
+        },
+        "phase": "retry-token",
+        "role": null,
+        "rpc": "BeginTransaction",
+        "slot": "retry/unissued-previous",
+        "waited": null
+      },
+      {
+        "caseId": "retry-token/retry-with-malformed-previous",
+        "complete": true,
+        "detail": null,
+        "expectedLocal": {
+          "code": 3,
+          "message": "Invalid value at 'options.read_write.retry_transaction' (TYPE_BYTES), Base64 decoding failed for \"not base64!\"",
+          "rpc": "BeginTransaction",
+          "status": "INVALID_ARGUMENT"
+        },
+        "observed": {
+          "code": 3,
+          "message": "Invalid value at 'options.read_write.retry_transaction' (TYPE_BYTES), Base64 decoding failed for \"not base64!\"",
+          "status": "INVALID_ARGUMENT"
+        },
+        "phase": "retry-token",
+        "role": null,
+        "rpc": "BeginTransaction",
+        "slot": "retry/malformed-previous",
+        "waited": null
+      },
+      {
+        "caseId": null,
+        "complete": true,
+        "detail": null,
+        "document": {
+          "code": 0,
+          "exists": true,
+          "fields": {
+            "nonce": {
+              "stringValue": "<fireemu:o3-txn-expiry:token>"
+            },
+            "owner": {
+              "stringValue": "<fireemu:o3-txn-expiry:owner>"
+            },
+            "role": {
+              "stringValue": "locked-a"
+            },
+            "state": {
+              "stringValue": "written-after-expiry"
+            }
+          },
+          "name": "<fireemu:o3-txn-expiry:resource>",
+          "updateTime": "<fireemu:o3-txn-expiry:token>",
+          "updateTimeOrdinal": 1
+        },
+        "observed": {
+          "code": 0,
+          "message": null,
+          "status": "OK"
+        },
+        "phase": "readback",
+        "role": "locked-a",
+        "rpc": "GetDocument",
+        "slot": "readback/locked-a",
+        "waited": null
+      },
+      {
+        "caseId": null,
+        "complete": true,
+        "detail": null,
+        "document": {
+          "code": 0,
+          "exists": true,
+          "fields": {
+            "nonce": {
+              "stringValue": "<fireemu:o3-txn-expiry:token>"
+            },
+            "owner": {
+              "stringValue": "<fireemu:o3-txn-expiry:owner>"
+            },
+            "role": {
+              "stringValue": "locked-d"
+            },
+            "state": {
+              "stringValue": "committed-before-idle"
+            }
+          },
+          "name": "<fireemu:o3-txn-expiry:resource>",
+          "updateTime": "<fireemu:o3-txn-expiry:token>",
+          "updateTimeOrdinal": 1
+        },
+        "observed": {
+          "code": 0,
+          "message": null,
+          "status": "OK"
+        },
+        "phase": "readback",
+        "role": "locked-d",
+        "rpc": "GetDocument",
+        "slot": "readback/locked-d",
+        "waited": null
+      },
+      {
+        "caseId": null,
+        "complete": true,
+        "detail": null,
+        "document": {
+          "code": 0,
+          "exists": true,
+          "fields": {
+            "nonce": {
+              "stringValue": "<fireemu:o3-txn-expiry:token>"
+            },
+            "owner": {
+              "stringValue": "<fireemu:o3-txn-expiry:owner>"
+            },
+            "role": {
+              "stringValue": "control"
+            },
+            "state": {
+              "stringValue": "finished-i"
+            }
+          },
+          "name": "<fireemu:o3-txn-expiry:resource>",
+          "updateTime": "<fireemu:o3-txn-expiry:token>",
+          "updateTimeOrdinal": 1
+        },
+        "observed": {
+          "code": 0,
+          "message": null,
+          "status": "OK"
+        },
+        "phase": "readback",
+        "role": "control",
+        "rpc": "GetDocument",
+        "slot": "readback/control",
+        "waited": null
+      }
+    ],
+    "sourceDigest": "ad36bea2b5b73b82ba610f5964e1b59d41bb5fb2ee54ad6e2d9b71c7a57798e6",
+    "startedAt": "2026-09-21T17:57:12.209744Z",
+    "target": "local",
+    "timing": "control-clock",
+    "transactionReleases": [
+      {
+        "code": 10,
+        "expiryProven": true,
+        "idleSeconds": 90.0,
+        "message": "The referenced transaction has expired or is no longer valid.",
+        "released": true,
+        "skipped": false,
+        "status": "ABORTED",
+        "transaction": "a"
+      },
+      {
+        "code": 10,
+        "expiryProven": true,
+        "idleSeconds": 90.0,
+        "message": "The referenced transaction has expired or is no longer valid.",
+        "released": true,
+        "skipped": false,
+        "status": "ABORTED",
+        "transaction": "b"
+      },
+      {
+        "code": 10,
+        "expiryProven": true,
+        "idleSeconds": 90.0,
+        "message": "The referenced transaction has expired or is no longer valid.",
+        "released": true,
+        "skipped": false,
+        "status": "ABORTED",
+        "transaction": "c"
+      }
+    ],
+    "unconfirmedTransactionStarts": [],
+    "unrecovered": [],
+    "virtualClockConfirmed": true
+  },
+  "runtime": {
+    "artifactSha256": "e064a7722f93f1f182e8de6d592e3f84b4b5bb420a27e3173c7a7418b016c32c",
+    "childObservedArtifactSha256": "e064a7722f93f1f182e8de6d592e3f84b4b5bb420a27e3173c7a7418b016c32c",
+    "runtimeInputCount": 427,
+    "runtimeInputsClean": true,
+    "runtimeInputsDigest": "51356e6e058173c11156a7ac86a3be92633a3857f673c34914368247e6c7fb1d",
+    "sourceCommit": "1157aebca3014ed68ab48000a98c1cf59b293f01",
+    "sourceRoot": "repository-root",
+    "version": "fireemu 0.7.1",
+    "wrongControlTokenStatus": 403
+  },
+  "selfContract": {
+    "casesChecked": [
+      "finished-token/rollback-after-begin",
+      "finished-token/rollback-after-commit",
+      "finished-token/rollback-after-rollback",
+      "idle-expiry/commit-after-idle",
+      "idle-expiry/commit-before-idle",
+      "idle-expiry/lock-held-before-idle",
+      "idle-expiry/lock-released-after-idle",
+      "idle-expiry/rollback-after-idle",
+      "retry-token/retry-with-committed-previous",
+      "retry-token/retry-with-malformed-previous",
+      "retry-token/retry-with-read-only-previous",
+      "retry-token/retry-with-rolled-back-previous",
+      "retry-token/retry-with-unissued-previous"
+    ],
+    "classification": "MATCH",
+    "disagreements": {},
+    "kind": "txn-expiry-local-self-contract-v1"
+  },
+  "sourceDigestAfter": "ad36bea2b5b73b82ba610f5964e1b59d41bb5fb2ee54ad6e2d9b71c7a57798e6",
+  "sourceDigestBefore": "ad36bea2b5b73b82ba610f5964e1b59d41bb5fb2ee54ad6e2d9b71c7a57798e6"
+}

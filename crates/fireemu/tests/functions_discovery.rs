@@ -43,7 +43,7 @@ async fn concurrent_real_sdk_logs_keep_their_function_identity() {
         ],
         cwd: None,
         env: vec![("GCLOUD_PROJECT".to_owned(), "demo-logs".to_owned())],
-        hello_timeout: Duration::from_secs(20),
+        hello_timeout: Duration::from_secs(60),
     })
     .await
     .unwrap();
@@ -134,7 +134,7 @@ async fn a_dynamic_inspector_port_is_reported_active_and_released_on_shutdown() 
         ],
         cwd: None,
         env: vec![("GCLOUD_PROJECT".to_owned(), "demo-inspect".to_owned())],
-        hello_timeout: Duration::from_secs(20),
+        hello_timeout: Duration::from_secs(60),
     })
     .await
     .unwrap();
@@ -1131,7 +1131,7 @@ async fn blocking_identity_exports_have_a_synchronous_runner_endpoint() {
             ("GCLOUD_PROJECT".to_owned(), "demo-blocking".to_owned()),
             ("FIREEMU_RUNNER_SECRET".to_owned(), "test-secret".to_owned()),
         ],
-        hello_timeout: Duration::from_secs(20),
+        hello_timeout: Duration::from_secs(60),
     };
     let runner = Runner::spawn_spec(&spec).await.unwrap();
     let manifest = runner.hello().manifest.as_ref().expect("runner manifest");
@@ -1237,7 +1237,7 @@ async fn global_and_schedule_options_reach_the_runtime_manifest() {
             ("FIREEMU_RUNNER_SECRET".to_owned(), "test-secret".to_owned()),
             ("GLOBAL_CONCURRENCY".to_owned(), "3".to_owned()),
         ],
-        hello_timeout: Duration::from_secs(20),
+        hello_timeout: Duration::from_secs(60),
     };
     let runner = Runner::spawn_spec(&spec).await.unwrap();
     let manifest = runner.hello().manifest.as_ref().unwrap();
@@ -1326,7 +1326,7 @@ async fn second_generation_omitted_concurrency_remains_defaultable() {
             ("GCLOUD_PROJECT".to_owned(), "demo-options".to_owned()),
             ("FIREEMU_RUNNER_SECRET".to_owned(), "test-secret".to_owned()),
         ],
-        hello_timeout: Duration::from_secs(20),
+        hello_timeout: Duration::from_secs(60),
     })
     .await
     .unwrap();
@@ -1378,7 +1378,7 @@ async fn first_generation_capacity_matches_an_equivalent_configured_manifest() {
             ("GEN1_MIN_INSTANCES".to_owned(), "1".to_owned()),
             ("GEN1_MAX_INSTANCES".to_owned(), "3".to_owned()),
         ],
-        hello_timeout: Duration::from_secs(20),
+        hello_timeout: Duration::from_secs(60),
     })
     .await
     .unwrap();
@@ -1444,7 +1444,7 @@ async fn esm_callable_app_check_options_are_observed_by_the_loaded_module_graph(
                 r#"{"skipTokenVerification":true}"#.to_owned(),
             ),
         ],
-        hello_timeout: Duration::from_secs(20),
+        hello_timeout: Duration::from_secs(60),
     };
     let runner = Runner::spawn_spec(&spec).await.unwrap();
     let manifest = runner.hello().manifest.as_ref().unwrap();

@@ -391,3 +391,209 @@ fn a_dotenv_file_the_official_parser_refuses_stops_the_run_with_its_message() {
         let _ = std::fs::remove_dir_all(&dir);
     }
 }
+
+#[test]
+#[ignore = "requires tools/sdk-smoke dependencies; the manual SDK workflow runs this test"]
+fn selected_pubsub_and_hub_reach_the_runner_and_sdk_publish_triggers_delivery() {
+    assert!(
+        have_sdk(),
+        "install tools/sdk-smoke dependencies before running this test"
+    );
+    let dir = scratch_codebase("pubsub-hub-routing");
+    write(
+        &dir,
+        "index.js",
+        r"
+const { onRequest } = require('firebase-functions/v2/https');
+const { onMessagePublished } = require('firebase-functions/v2/pubsub');
+const { PubSub } = require('@google-cloud/pubsub');
+let received = null;
+exports.fxReceive = onMessagePublished('priority-routing', (event) => {
+  received = event.data.message.json;
+});
+exports.fxRouting = onRequest(async (req, res) => {
+  if (req.method === 'POST') {
+    const client = new PubSub({ projectId: process.env.GCLOUD_PROJECT });
+    try { await client.topic('priority-routing').publishMessage({ json: { marker: 'delivered' } }); }
+    finally { await client.close(); }
+  }
+  res.json({ pubsub: process.env.PUBSUB_EMULATOR_HOST ?? null, hub: process.env.FIREBASE_EMULATOR_HUB ?? null, received });
+});
+",
+    );
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let hub_port = listener.local_addr().unwrap().port();
+    drop(listener);
+    let output = fireemu_exec(&dir, "demo-priority-routing")
+        .args(["--only", "functions,pubsub", "--pubsub-port", "0", "--hub-port", &hub_port.to_string(), "--", "node", "-e", r"
+const assert = require('node:assert/strict');
+(async () => {
+  const url = `http://${process.env.FIREEMU_FUNCTIONS_HOST}/demo-priority-routing/us-central1/fxRouting`;
+  const get = async () => { const r = await fetch(url); assert.equal(r.status, 200); return r.json(); };
+  const env = await get();
+  assert.equal(env.pubsub, process.env.PUBSUB_EMULATOR_HOST);
+  assert.equal(env.hub, process.env.FIREBASE_EMULATOR_HUB);
+  assert.match(env.pubsub, /^127\.0\.0\.1:\d+$/);
+  assert.match(env.hub, /^127\.0\.0\.1:\d+$/);
+  assert.equal((await fetch(url, { method: 'POST' })).status, 200);
+  const deadline = Date.now() + 10000;
+  while (Date.now() < deadline) {
+    if ((await get()).received?.marker === 'delivered') return;
+    await new Promise(resolve => setTimeout(resolve, 50));
+  }
+  throw new Error('published message did not reach the function');
+})().catch(error => { console.error(error); process.exitCode = 1; });
+"])
+        .env("PUBSUB_EMULATOR_HOST", "127.0.0.1:1")
+        .env("FIREBASE_EMULATOR_HUB", "127.0.0.1:1")
+        .output().unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+#[ignore = "requires tools/sdk-smoke dependencies; the manual SDK workflow runs this test"]
+fn unbound_pubsub_and_hub_are_absent_from_the_runner() {
+    assert!(
+        have_sdk(),
+        "install tools/sdk-smoke dependencies before running this test"
+    );
+    let dir = scratch_codebase("unbound-routing");
+    write(
+        &dir,
+        "index.js",
+        r"
+const { onRequest } = require('firebase-functions/v2/https');
+exports.fxRouting = onRequest((req, res) => res.json({ pubsub: process.env.PUBSUB_EMULATOR_HOST ?? null, hub: process.env.FIREBASE_EMULATOR_HUB ?? null }));
+",
+    );
+    let output = fireemu_exec(&dir, "demo-unbound-routing")
+        .env_remove("PUBSUB_EMULATOR_HOST")
+        .env_remove("FIREBASE_EMULATOR_HUB")
+        .args([
+            "--only",
+            "functions",
+            "--",
+            "node",
+            "-e",
+            r"
+const assert = require('node:assert/strict');
+fetch(`http://${process.env.FIREEMU_FUNCTIONS_HOST}/demo-unbound-routing/us-central1/fxRouting`)
+ .then(r => r.json()).then(value => assert.deepEqual(value, { pubsub: null, hub: null }))
+ .catch(error => { console.error(error); process.exitCode = 1; });
+",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+#[ignore = "requires tools/sdk-smoke dependencies; the manual SDK workflow runs this test"]
+fn default_deploy_ignores_preserve_local_environment_and_secret_isolation_after_reload() {
+    assert!(
+        have_sdk(),
+        "install tools/sdk-smoke dependencies before running this test"
+    );
+    let dir = scratch_codebase("default-ignore-reload");
+    write(&dir, ".env", "FX_LOCAL=base\n");
+    write(&dir, ".env.local", "FX_LOCAL=local\n");
+    write(&dir, ".secret.local", "FX_SECRET=local-fixture-value\n");
+    write(
+        &dir,
+        "index.js",
+        r"
+const { onRequest } = require('firebase-functions/v2/https');
+const { defineSecret } = require('firebase-functions/params');
+const secret = defineSecret('FX_SECRET');
+const marker = 'before';
+exports.fxReload = onRequest({ secrets: [secret] }, (req, res) => res.json({ marker, local: process.env.FX_LOCAL, secret: secret.value() }));
+exports.fxUndeclared = onRequest((req, res) => res.json({ marker, secret: process.env.FX_SECRET ?? null }));
+",
+    );
+    write(
+        &dir,
+        "firebase.json",
+        r#"{"functions":{"source":".","ignore":["node_modules",".git","firebase-debug.log","firebase-debug.*.log","*.local"]}}"#,
+    );
+    let output = Command::new(env!("CARGO_BIN_EXE_fireemu"))
+        .args(["exec", "--project", "demo-default-ignore", "--only", "functions", "--http-port", "0", "--functions-port", "0", "--logging-port", "0", "--hub-port", "0", "--ui-port", "0", "--firebase-json"])
+        .arg(dir.join("firebase.json"))
+        .args(["--", "node", "-e", r#"
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+(async () => {
+  const base = `http://${process.env.FIREEMU_FUNCTIONS_HOST}/demo-default-ignore/us-central1/`;
+  const get = async name => { const r = await fetch(base + name); assert.equal(r.status, 200); return r.json(); };
+  assert.deepEqual(await get('fxReload'), { marker: 'before', local: 'local', secret: 'local-fixture-value' });
+  assert.deepEqual(await get('fxUndeclared'), { marker: 'before', secret: null });
+  const path = process.argv[1];
+  fs.writeFileSync(path, fs.readFileSync(path, 'utf8').replace("'before'", "'after'"));
+  const deadline = Date.now() + 15000;
+  while (Date.now() < deadline) {
+    const value = await get('fxReload');
+    if (value.marker === 'after') {
+      assert.deepEqual(value, { marker: 'after', local: 'local', secret: 'local-fixture-value' });
+      assert.deepEqual(await get('fxUndeclared'), { marker: 'after', secret: null });
+      return;
+    }
+    await new Promise(resolve => setTimeout(resolve, 100));
+  }
+  throw new Error('updated source generation did not become available');
+})().catch(error => { console.error(error); process.exitCode = 1; });
+"#]).arg(dir.join("index.js")).output().unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+#[ignore = "requires tools/sdk-smoke dependencies; the manual SDK workflow runs this test"]
+fn exec_preserves_an_external_pubsub_emulator_for_the_real_sdk() {
+    assert!(
+        have_sdk(),
+        "install tools/sdk-smoke dependencies before running this test"
+    );
+    let output = Command::new(env!("CARGO_BIN_EXE_fireemu"))
+        .args(["exec", "--project", "demo-inherited-pubsub", "--only", "pubsub", "--pubsub-port", "0", "--http-port", "0", "--hub-port", "0", "--logging-port", "0", "--", "node", "-e", r"
+const assert = require('node:assert/strict');
+const { spawnSync } = require('node:child_process');
+const script = `
+const assert = require('node:assert/strict');
+const { PubSub } = require(process.argv[1]);
+(async () => {
+  assert.equal(process.env.PUBSUB_EMULATOR_HOST, process.argv[2]);
+  assert.match(process.env.PUBSUB_EMULATOR_HOST, /^127\\.0\\.0\\.1:\\d+$/);
+  const client = new PubSub({ projectId: 'demo-inherited-pubsub' });
+  try {
+    const [topic] = await client.createTopic('inherited-routing');
+    const id = await topic.publishMessage({ data: Buffer.from('local-only') });
+    assert.ok(id);
+  } finally { await client.close(); }
+})().catch(error => { console.error(error); process.exitCode = 1; });
+`;
+const child = spawnSync(process.argv[1], ['exec', '--project', 'demo-inherited-pubsub', '--only', 'auth', '--http-port', '0', '--hub-port', '0', '--logging-port', '0', '--', process.execPath, '-e', script, process.argv[2], process.env.PUBSUB_EMULATOR_HOST], { env: process.env, stdio: 'inherit', timeout: 20000 });
+assert.ifError(child.error);
+assert.equal(child.status, 0, `nested exec failed: ${child.signal}`);
+"])
+        .arg(env!("CARGO_BIN_EXE_fireemu"))
+        .arg(sdk_root().join("node_modules/@google-cloud/pubsub"))
+        .output().unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}

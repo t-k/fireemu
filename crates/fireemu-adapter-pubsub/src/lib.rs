@@ -45,8 +45,6 @@ pub use subscriber::SubscriberService;
 /// Maximum gRPC message size accepted or produced (10 MiB), matching Pub/Sub's message bound.
 pub const MAX_MESSAGE_BYTES: usize = 10 * 1024 * 1024;
 const MAX_PUSH_WORKERS: usize = 256;
-const MAX_PUSH_ATTEMPTS: usize = 3;
-const PUSH_RETRY_DELAY: std::time::Duration = std::time::Duration::from_millis(10);
 
 struct PushDispatcherCancellationGuard(PubSubHandle);
 
@@ -69,6 +67,36 @@ enum PushQuantumResult {
     Defer(LogicalInstant),
 }
 
+/// How one batch of push deliveries ended, which is what decides the subscription's backoff.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PushAttemptOutcome {
+    /// Every message in the batch was delivered and acknowledged.
+    Delivered,
+    /// A push request failed, so it and every message behind it were nacked.
+    Failed,
+    /// The subscription's push generation changed; this worker owns nothing any more.
+    Invalidated,
+}
+
+/// The subscription-level push backoff: how many push attempts have failed in a row and the
+/// instant push delivery may resume. It is separate from the per-message retry policy, which
+/// schedules one message, and it throttles the whole subscription.
+#[derive(Debug, Clone, Copy)]
+struct PushBackoff {
+    consecutive_failures: u32,
+    resume_at: LogicalInstant,
+}
+
+/// When push delivery may resume after a failed attempt. The subscription-level push backoff and
+/// whatever the retry policy scheduled for the next message are separate waits, so the later one
+/// decides. A subscription with nothing left to deliver owes only its backoff.
+fn push_resume_after_failure(
+    backoff_resume_at: LogicalInstant,
+    next_delivery_at: Option<LogicalInstant>,
+) -> LogicalInstant {
+    next_delivery_at.map_or(backoff_resume_at, |next| next.max(backoff_resume_at))
+}
+
 #[derive(Debug, Default)]
 struct PushDispatchState {
     ready: VecDeque<PushWork>,
@@ -76,6 +104,9 @@ struct PushDispatchState {
     queued: BTreeSet<String>,
     active: BTreeMap<String, u64>,
     generations: BTreeMap<String, u64>,
+    /// Push backoff per subscription. Absent means the subscription's last push attempt
+    /// succeeded, or it has not attempted one yet.
+    backoff: BTreeMap<String, PushBackoff>,
     next_generation: u64,
     spawned: u64,
     shutting_down: bool,
@@ -104,11 +135,34 @@ impl PushDispatchState {
         generation
     }
 
-    fn enqueue(&mut self, subscription: fireemu_core_pubsub::SubscriptionName) {
+    /// Makes a subscription's push work runnable, unless its push backoff is still in force. A
+    /// new publication never shortens the backoff: while an endpoint is failing, every message on
+    /// that subscription waits, exactly as the whole subscription is throttled in production.
+    fn enqueue(
+        &mut self,
+        subscription: fireemu_core_pubsub::SubscriptionName,
+        now: LogicalInstant,
+    ) {
         if self.shutting_down {
             return;
         }
         let key = subscription.to_full();
+        if let Some(resume_at) = self.backoff_resume_at(&key).filter(|resume| *resume > now) {
+            if !self.queued.contains(&key) {
+                let generation = self.generation_for(&key);
+                self.deferred.insert(
+                    key,
+                    (
+                        PushWork {
+                            subscription,
+                            generation,
+                        },
+                        resume_at,
+                    ),
+                );
+            }
+            return;
+        }
         self.deferred.remove(&key);
         if self.queued.insert(key.clone()) {
             let generation = self.generation_for(&key);
@@ -117,6 +171,63 @@ impl PushDispatchState {
                 generation,
             });
         }
+    }
+
+    /// The instant a subscription's push delivery may resume, when a backoff is in force.
+    fn backoff_resume_at(&self, key: &str) -> Option<LogicalInstant> {
+        self.backoff.get(key).map(|backoff| backoff.resume_at)
+    }
+
+    /// Whether `generation` is still the incarnation this dispatcher serves for `key`. A worker
+    /// that no longer owns its subscription must not touch any of its state.
+    fn owns(&self, key: &str, generation: u64) -> bool {
+        !self.shutting_down && self.generations.get(key).copied() == Some(generation)
+    }
+
+    /// Records one failed push attempt and returns the instant delivery may resume, or `None`
+    /// when `generation` no longer owns the subscription. Consecutive failures lengthen the wait;
+    /// the progression is [`push::push_backoff_after`].
+    ///
+    /// The ownership check and the update share this one borrow, which is the dispatch lock: a
+    /// caller that checked first and updated afterwards would leave the window where the
+    /// subscription is deleted and recreated in between.
+    fn record_push_failure(
+        &mut self,
+        key: &str,
+        generation: u64,
+        now: LogicalInstant,
+    ) -> Option<LogicalInstant> {
+        if !self.owns(key, generation) {
+            return None;
+        }
+        let consecutive_failures = self
+            .backoff
+            .get(key)
+            .map_or(0, |backoff| backoff.consecutive_failures)
+            .saturating_add(1);
+        let resume_at = now
+            .checked_add(push::push_backoff_after(consecutive_failures))
+            .unwrap_or(LogicalInstant::MAX);
+        self.backoff.insert(
+            key.to_owned(),
+            PushBackoff {
+                consecutive_failures,
+                resume_at,
+            },
+        );
+        Some(resume_at)
+    }
+
+    /// Clears a subscription's push backoff after a successful delivery.
+    /// Clears a subscription's push backoff after a delivery its endpoint accepted. Returns
+    /// whether `generation` still owned the subscription; a stale worker changes nothing. The
+    /// check and the removal share this borrow for the reason given on [`Self::record_push_failure`].
+    fn clear_push_backoff(&mut self, key: &str, generation: u64) -> bool {
+        if !self.owns(key, generation) {
+            return false;
+        }
+        self.backoff.remove(key);
+        true
     }
 
     fn claim(&mut self) -> Option<PushWork> {
@@ -153,17 +264,34 @@ impl PushDispatchState {
         }
     }
 
-    fn defer(&mut self, work: PushWork, eligible_at: LogicalInstant) {
+    fn defer(&mut self, work: PushWork, eligible_at: LogicalInstant, now: LogicalInstant) {
         let key = work.subscription.to_full();
         if self.active.get(&key).copied() == Some(work.generation) {
             self.active.remove(&key);
         }
-        if !self.shutting_down && self.generations.get(&key).copied() == Some(work.generation) {
-            if self.queued.contains(&key) {
-                return;
-            }
-            self.deferred.insert(key, (work, eligible_at));
+        if self.shutting_down || self.generations.get(&key).copied() != Some(work.generation) {
+            return;
         }
+        // A backoff counts only while it is still running. It is cleared by a successful delivery
+        // or by invalidation, so an elapsed one can still be recorded here, and it must hold
+        // nothing. `enqueue` and the delivery gate read it the same way.
+        if let Some(resume_at) = self.backoff_resume_at(&key).filter(|resume| *resume > now) {
+            // A live push backoff throttles the subscription itself. Work enqueued while the
+            // failing attempt was in flight was admitted before the failure was known, so it
+            // waits with the subscription instead of running at once.
+            self.queued.remove(&key);
+            self.ready
+                .retain(|queued| queued.subscription.to_full() != key);
+            self.deferred
+                .insert(key, (work, eligible_at.max(resume_at)));
+            return;
+        }
+        // No live backoff: a publication that arrived during the attempt is deliverable now, and
+        // its queued work must not be turned back into a deferral.
+        if self.queued.contains(&key) {
+            return;
+        }
+        self.deferred.insert(key, (work, eligible_at));
     }
 
     fn promote_due(&mut self, now: LogicalInstant) {
@@ -190,6 +318,7 @@ impl PushDispatchState {
         self.deferred.remove(key);
         self.queued.remove(key);
         self.active.remove(key);
+        self.backoff.remove(key);
         self.ready.retain(|work| work.subscription.to_full() != key);
     }
 
@@ -199,6 +328,7 @@ impl PushDispatchState {
         self.queued.clear();
         self.ready.clear();
         self.active.clear();
+        self.backoff.clear();
     }
 
     fn invalidate_projects_where(&mut self, matches: impl Fn(&str) -> bool) {
@@ -317,10 +447,17 @@ impl PubSubHandle {
 
     /// Locks the publication coordinator. Reset and snapshot restore paths use this same lock so
     /// a Functions reservation cannot be invalidated between admission and commit.
-    pub fn lock_publication(&self) -> std::sync::MutexGuard<'_, ()> {
+    ///
+    /// # Errors
+    ///
+    /// Returns the refusal when the gate is poisoned. A panic here would be the second one:
+    /// the gate is held across the control-plane transitions that publish and reset Pub/Sub
+    /// state, so panicking on a poisoned gate turns one earlier failure into a permanent one
+    /// for every caller that needs it.
+    pub fn lock_publication(&self) -> Result<std::sync::MutexGuard<'_, ()>, String> {
         self.publication_gate
             .lock()
-            .expect("Pub/Sub publication lock")
+            .map_err(|_| "the Pub/Sub publication gate is poisoned".to_owned())
     }
 
     /// Shares the publication coordinator with session reset and snapshot hooks.
@@ -504,6 +641,51 @@ impl PubSubHandle {
         self.commit_dead_letters_locked(&pending);
     }
 
+    /// Seeks a subscription to a point in time.
+    ///
+    /// The seek is serialized with dead-letter forwarding: a transfer that has already published
+    /// to the destination completes its source before the seek rewrites the delivery states, so a
+    /// replay cannot duplicate a committed transfer. A seek also republishes the resulting backlog
+    /// to an idle push subscriber, which would otherwise wait for an unrelated operation.
+    pub fn seek_to_time(
+        &self,
+        subscription: &SubscriptionName,
+        time: LogicalInstant,
+    ) -> Result<(), PubSubError> {
+        let now = self.now();
+        self.seek_locked(subscription, |state| {
+            state.seek_to_time(subscription, time, now)
+        })
+    }
+
+    /// Seeks a subscription to a snapshot. See [`PubSubHandle::seek_to_time`] for the ordering
+    /// guarantees this shares with dead-letter forwarding and push delivery.
+    pub fn seek_to_snapshot(
+        &self,
+        subscription: &SubscriptionName,
+        snapshot: &str,
+    ) -> Result<(), PubSubError> {
+        let now = self.now();
+        self.seek_locked(subscription, |state| {
+            state.seek_to_snapshot(subscription, snapshot, now)
+        })
+    }
+
+    fn seek_locked(
+        &self,
+        subscription: &SubscriptionName,
+        seek: impl FnOnce(&mut PubSubState) -> Result<(), PubSubError>,
+    ) -> Result<(), PubSubError> {
+        let topic = {
+            let _dead_letter = self.lock_dead_letter();
+            let mut state = self.state();
+            seek(&mut state)?;
+            state.subscription_config(subscription)?.topic.clone()
+        };
+        self.schedule_push(&topic);
+        Ok(())
+    }
+
     pub(crate) fn acknowledge(
         &self,
         subscription: &SubscriptionName,
@@ -569,9 +751,10 @@ impl PubSubHandle {
     /// core delivery state, so a successful push acknowledges the same record a pull would see.
     fn schedule_push(&self, topic: &fireemu_core_pubsub::TopicName) {
         let subscriptions = self.state().push_subscriptions(topic);
+        let now = self.now();
         let mut dispatch = self.push_dispatch.lock().expect("push dispatch lock");
         for (subscription, _) in subscriptions {
-            dispatch.enqueue(subscription);
+            dispatch.enqueue(subscription, now);
         }
         drop(dispatch);
         self.push_ready_notify.notify_one();
@@ -651,13 +834,15 @@ impl PubSubHandle {
                     match completed {
                         Some(Ok((task_id, work, result))) => {
                             work_by_task.remove(&task_id);
+                            // Read the clock before the dispatch lock, as every other caller does.
+                            let now = self.now();
                             let mut dispatch =
                                 self.push_dispatch.lock().expect("push dispatch lock");
                             match result {
                                 PushQuantumResult::Continue => dispatch.complete(&work, true),
                                 PushQuantumResult::Stop => dispatch.complete(&work, false),
                                 PushQuantumResult::Defer(eligible_at) => {
-                                    dispatch.defer(work, eligible_at);
+                                    dispatch.defer(work, eligible_at, now);
                                 }
                             }
                         }
@@ -681,22 +866,92 @@ impl PubSubHandle {
         if !self.is_current_push_generation(&key, work.generation) {
             return PushQuantumResult::Stop;
         }
+        // The gate every delivering path passes: while the subscription owes a push backoff, no
+        // request reaches its endpoint, however the work came to be claimed.
+        let now = self.now();
+        if let Some(resume_at) = self
+            .push_backoff_for_key(&key)
+            .filter(|resume| *resume > now)
+        {
+            return PushQuantumResult::Defer(push_resume_after_failure(
+                resume_at,
+                self.next_push_delivery_at(&work.subscription),
+            ));
+        }
         let received = self.pull(&work.subscription, 100).unwrap_or_default();
         if received.is_empty() {
+            // Nothing is deliverable yet. The retry policy schedules the next message; whether it
+            // or an elapsing backoff decides, the subscription is looked at again then.
             return match self.next_push_delivery_at(&work.subscription) {
-                Some(next) if next > self.now() => PushQuantumResult::Defer(next),
+                Some(next) if next > now => PushQuantumResult::Defer(next),
                 Some(_) => PushQuantumResult::Continue,
                 None => PushQuantumResult::Stop,
             };
         }
-        if self
+        match self
             .deliver_push_messages(&work.subscription, &key, work.generation, received)
             .await
         {
-            PushQuantumResult::Continue
-        } else {
-            PushQuantumResult::Stop
+            // The backoff belongs to the incarnation that delivered, not to the name. The
+            // subscription may have been deleted and recreated while the endpoint was being
+            // awaited, and then this worker owns nothing and stops without touching it.
+            PushAttemptOutcome::Delivered => {
+                if self.clear_push_backoff(&key, work.generation) {
+                    PushQuantumResult::Continue
+                } else {
+                    PushQuantumResult::Stop
+                }
+            }
+            // The endpoint failed, so the subscription owes its push backoff before the next
+            // attempt. The retry policy may ask for longer, and then it decides.
+            PushAttemptOutcome::Failed => match self.record_push_failure(&key, work.generation) {
+                Some(resume_at) => PushQuantumResult::Defer(push_resume_after_failure(
+                    resume_at,
+                    self.next_push_delivery_at(&work.subscription),
+                )),
+                None => PushQuantumResult::Stop,
+            },
+            PushAttemptOutcome::Invalidated => PushQuantumResult::Stop,
         }
+    }
+
+    /// The instant this subscription's push delivery may resume, when a backoff is in force.
+    fn push_backoff_for_key(&self, key: &str) -> Option<LogicalInstant> {
+        self.push_dispatch
+            .lock()
+            .expect("push dispatch lock")
+            .backoff_resume_at(key)
+    }
+
+    /// The instant push delivery may resume on a subscription its push backoff is holding, or
+    /// `None` when its endpoint is not failing. Push delivery throttles the whole subscription
+    /// after a failed attempt, independently of any per-message retry policy, so this is the
+    /// observable state of that throttle.
+    #[must_use]
+    pub fn push_backoff_resume_at(
+        &self,
+        subscription: &fireemu_core_pubsub::SubscriptionName,
+    ) -> Option<LogicalInstant> {
+        self.push_backoff_for_key(&subscription.to_full())
+    }
+
+    /// Records a failed push attempt on the virtual clock and returns when delivery may resume,
+    /// or `None` when the delivering incarnation is no longer the current one.
+    fn record_push_failure(&self, key: &str, generation: u64) -> Option<LogicalInstant> {
+        let now = self.now();
+        self.push_dispatch
+            .lock()
+            .expect("push dispatch lock")
+            .record_push_failure(key, generation, now)
+    }
+
+    /// Releases a subscription's push backoff after a delivery the endpoint accepted. Returns
+    /// whether the delivering incarnation still owned the subscription.
+    fn clear_push_backoff(&self, key: &str, generation: u64) -> bool {
+        self.push_dispatch
+            .lock()
+            .expect("push dispatch lock")
+            .clear_push_backoff(key, generation)
     }
 
     async fn wait_until_push_invalidated(&self, key: &str, generation: u64) {
@@ -709,12 +964,14 @@ impl PubSubHandle {
         }
     }
 
+    /// Returns the current push endpoint and whether the subscription has a dead-letter policy,
+    /// which decides whether the payload reports the delivery attempt.
     fn push_endpoint_if_current(
         &self,
         subscription: &fireemu_core_pubsub::SubscriptionName,
         key: &str,
         generation: u64,
-    ) -> Option<String> {
+    ) -> Option<(String, bool)> {
         let dispatch = self.push_dispatch.lock().expect("push dispatch lock");
         if dispatch.shutting_down || dispatch.generations.get(key).copied() != Some(generation) {
             return None;
@@ -723,7 +980,12 @@ impl PubSubHandle {
             .subscription_config(subscription)
             .ok()
             .filter(|config| config.is_push())
-            .map(|config| config.push_config.push_endpoint.clone())
+            .map(|config| {
+                (
+                    config.push_config.push_endpoint.clone(),
+                    config.dead_letter_policy.is_some(),
+                )
+            })
     }
 
     fn acknowledge_push_if_current(
@@ -773,49 +1035,42 @@ impl PubSubHandle {
         key: &str,
         generation: u64,
         received: Vec<fireemu_core_pubsub::ReceivedMessage>,
-    ) -> bool {
+    ) -> PushAttemptOutcome {
         for (index, message) in received.iter().enumerate() {
             if !self.is_current_push_generation(key, generation) {
-                return false;
+                return PushAttemptOutcome::Invalidated;
             }
-            let mut delivered = false;
-            for attempt in 0..MAX_PUSH_ATTEMPTS {
-                if !self.is_current_push_generation(key, generation) {
-                    return false;
+            // One request per delivery attempt: a failed push is nacked rather than retried inside
+            // the worker, so the attempt the endpoint sees, the attempt the retry policy schedules
+            // and the attempt the dead-letter budget counts are the same attempt.
+            let Some((endpoint, report_delivery_attempt)) =
+                self.push_endpoint_if_current(subscription, key, generation)
+            else {
+                return PushAttemptOutcome::Invalidated;
+            };
+            let delivered = tokio::select! {
+                result = push::deliver(&endpoint, subscription, message, report_delivery_attempt) => {
+                    result.is_ok()
                 }
-                let Some(endpoint) = self.push_endpoint_if_current(subscription, key, generation)
-                else {
-                    return false;
-                };
-                tokio::select! {
-                    result = push::deliver(&endpoint, subscription, message) => {
-                        if result.is_ok() {
-                            delivered = true;
-                            break;
-                        }
-                    }
-                    () = self.wait_until_push_invalidated(key, generation) => return false,
+                () = self.wait_until_push_invalidated(key, generation) => {
+                    return PushAttemptOutcome::Invalidated;
                 }
-                if attempt + 1 < MAX_PUSH_ATTEMPTS {
-                    tokio::select! {
-                        () = tokio::time::sleep(PUSH_RETRY_DELAY) => {},
-                        () = self.wait_until_push_invalidated(key, generation) => return false,
-                    }
-                }
-            }
+            };
             if delivered {
                 if !self.acknowledge_push_if_current(subscription, key, generation, &message.ack_id)
                 {
-                    return false;
+                    return PushAttemptOutcome::Invalidated;
                 }
                 continue;
             }
             if !self.nack_push_if_current(subscription, key, generation, &received[index..]) {
-                return false;
+                return PushAttemptOutcome::Invalidated;
             }
-            return true;
+            // A batch that fails part-way through is a failed attempt: the endpoint is refusing
+            // work, which is what the subscription-level backoff answers.
+            return PushAttemptOutcome::Failed;
         }
-        true
+        PushAttemptOutcome::Delivered
     }
 
     /// Cancels all dispatcher-owned push I/O and waits for every worker to finish.
@@ -911,6 +1166,10 @@ mod dispatch_tests {
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
     use std::sync::{Arc, Barrier};
 
+    /// The virtual instant the dispatch-queue tests enqueue at. These tests exercise the queue,
+    /// not the push backoff, so any instant serves as long as it is the same one throughout.
+    const TEST_NOW: LogicalInstant = LogicalInstant::UNIX_EPOCH;
+
     struct BlockingDeadLetterDelivery {
         destination: String,
         block_first_commit: Arc<AtomicBool>,
@@ -963,16 +1222,352 @@ mod dispatch_tests {
         name
     }
 
+    /// Records a failed attempt the way the dispatcher does, for the incarnation the dispatcher
+    /// currently serves, registering one when the subscription has none yet.
+    fn record_failure_for_current(
+        dispatch: &mut PushDispatchState,
+        name: &SubscriptionName,
+        now: LogicalInstant,
+    ) -> LogicalInstant {
+        let key = name.to_full();
+        let generation = dispatch.generation_for(&key);
+        dispatch
+            .record_push_failure(&key, generation, now)
+            .expect("the current incarnation records its own failure")
+    }
+
+    /// The push backoff doubles from the documented minimum and stops at the documented maximum.
+    /// The curve between the two bounds is this emulator's choice; the bounds are production's.
+    #[test]
+    fn the_push_backoff_doubles_from_the_minimum_and_clamps_at_the_maximum() {
+        assert_eq!(push::push_backoff_after(0), LogicalDuration::ZERO);
+        for (failures, millis) in [
+            (1_u32, 100_i64),
+            (2, 200),
+            (3, 400),
+            (4, 800),
+            (5, 1_600),
+            (6, 3_200),
+            (7, 6_400),
+            (8, 12_800),
+            (9, 25_600),
+            (10, 51_200),
+        ] {
+            assert_eq!(
+                push::push_backoff_after(failures),
+                LogicalDuration::from_millis(millis),
+                "{failures} consecutive failures"
+            );
+        }
+        // The eleventh doubling would pass the ceiling, so every later failure owes the ceiling.
+        for failures in [11_u32, 12, 64, u32::MAX] {
+            assert_eq!(
+                push::push_backoff_after(failures),
+                LogicalDuration::from_millis(push::PUSH_BACKOFF_MAXIMUM_MILLIS),
+                "{failures} consecutive failures"
+            );
+        }
+        assert_eq!(
+            push::push_backoff_after(1),
+            LogicalDuration::from_millis(push::PUSH_BACKOFF_MINIMUM_MILLIS)
+        );
+    }
+
+    /// The wait a failed attempt owes composes the two mechanisms at the failure point itself,
+    /// rather than leaving the longer of the two to be discovered by a later empty pull.
+    #[test]
+    fn the_wait_after_a_failure_is_the_later_of_the_backoff_and_the_retry_policy() {
+        let backoff = TEST_NOW
+            .checked_add(LogicalDuration::from_millis(100))
+            .unwrap();
+        let retry_is_longer = TEST_NOW
+            .checked_add(LogicalDuration::from_seconds(30))
+            .unwrap();
+        let retry_is_shorter = TEST_NOW
+            .checked_add(LogicalDuration::from_millis(10))
+            .unwrap();
+
+        assert_eq!(
+            push_resume_after_failure(backoff, Some(retry_is_longer)),
+            retry_is_longer,
+            "a retry policy longer than the backoff decides"
+        );
+        assert_eq!(
+            push_resume_after_failure(backoff, Some(retry_is_shorter)),
+            backoff,
+            "a retry policy shorter than the backoff never shortens it"
+        );
+        assert_eq!(
+            push_resume_after_failure(backoff, Some(backoff)),
+            backoff,
+            "equal waits leave one instant"
+        );
+        assert_eq!(
+            push_resume_after_failure(backoff, None),
+            backoff,
+            "a subscription with nothing left to deliver owes only its backoff"
+        );
+    }
+
+    /// Consecutive failures lengthen one subscription's wait, and a delivery the endpoint accepts
+    /// puts it back to the minimum.
+    #[test]
+    fn recording_push_failures_lengthens_the_wait_until_a_success_clears_it() {
+        let topic = TopicName::new("demo-project", "backoff").unwrap();
+        let name = subscription(0, &topic);
+        let key = name.to_full();
+        let mut dispatch = PushDispatchState::default();
+        assert_eq!(dispatch.backoff_resume_at(&key), None);
+
+        for failures in 1..=3_u32 {
+            let resume_at = record_failure_for_current(&mut dispatch, &name, TEST_NOW);
+            assert_eq!(
+                resume_at,
+                TEST_NOW
+                    .checked_add(push::push_backoff_after(failures))
+                    .unwrap()
+            );
+            assert_eq!(dispatch.backoff_resume_at(&key), Some(resume_at));
+        }
+
+        let generation = dispatch.generation_for(&key);
+        assert!(dispatch.clear_push_backoff(&key, generation));
+        assert_eq!(dispatch.backoff_resume_at(&key), None);
+        assert_eq!(
+            record_failure_for_current(&mut dispatch, &name, TEST_NOW),
+            TEST_NOW.checked_add(push::push_backoff_after(1)).unwrap(),
+            "a success must reset the streak, not merely pause it"
+        );
+    }
+
+    /// A worker delivers for one incarnation of a subscription. If that incarnation is deleted
+    /// and a new one takes its name, the old worker's outcome must not reach the new one's
+    /// backoff: a stale success would release a throttle the new incarnation just earned.
+    #[test]
+    fn a_stale_success_does_not_clear_the_backoff_of_a_recreated_subscription() {
+        let topic = TopicName::new("demo-project", "backoff").unwrap();
+        let name = subscription(0, &topic);
+        let key = name.to_full();
+        let mut dispatch = PushDispatchState::default();
+
+        dispatch.enqueue(name.clone(), TEST_NOW);
+        let first = dispatch.claim().expect("the first incarnation is claimed");
+
+        // The subscription is deleted and recreated while that worker is still delivering.
+        dispatch.invalidate(&key);
+        dispatch.enqueue(name.clone(), TEST_NOW);
+        let second = dispatch.claim().expect("the new incarnation is claimed");
+        assert_ne!(first.generation, second.generation);
+        let resume_at = dispatch.record_push_failure(&key, second.generation, TEST_NOW);
+        assert!(resume_at.is_some(), "the new incarnation earned a backoff");
+
+        // The stale worker's delivery completes only now.
+        assert!(
+            !dispatch.clear_push_backoff(&key, first.generation),
+            "a stale worker owns nothing"
+        );
+        assert_eq!(
+            dispatch.backoff_resume_at(&key),
+            resume_at,
+            "the new incarnation keeps the backoff it earned"
+        );
+    }
+
+    /// The other direction: a stale failure must not throttle a healthy new incarnation.
+    #[test]
+    fn a_stale_failure_does_not_back_off_a_recreated_subscription() {
+        let topic = TopicName::new("demo-project", "backoff").unwrap();
+        let name = subscription(0, &topic);
+        let key = name.to_full();
+        let mut dispatch = PushDispatchState::default();
+
+        dispatch.enqueue(name.clone(), TEST_NOW);
+        let first = dispatch.claim().expect("the first incarnation is claimed");
+        dispatch.invalidate(&key);
+        dispatch.enqueue(name.clone(), TEST_NOW);
+        let second = dispatch.claim().expect("the new incarnation is claimed");
+        assert_ne!(first.generation, second.generation);
+
+        assert_eq!(
+            dispatch.record_push_failure(&key, first.generation, TEST_NOW),
+            None,
+            "a stale worker owns nothing"
+        );
+        assert_eq!(
+            dispatch.backoff_resume_at(&key),
+            None,
+            "the healthy new incarnation must not inherit a throttle"
+        );
+    }
+
+    /// The controls: the worker that owns the current incarnation does update the backoff.
+    #[test]
+    fn the_current_incarnation_clears_and_extends_its_own_backoff() {
+        let topic = TopicName::new("demo-project", "backoff").unwrap();
+        let name = subscription(0, &topic);
+        let key = name.to_full();
+        let mut dispatch = PushDispatchState::default();
+        dispatch.enqueue(name, TEST_NOW);
+        let work = dispatch.claim().expect("the incarnation is claimed");
+
+        let first = dispatch
+            .record_push_failure(&key, work.generation, TEST_NOW)
+            .expect("the owner records its failure");
+        let second = dispatch
+            .record_push_failure(&key, work.generation, TEST_NOW)
+            .expect("the owner records its second failure");
+        assert!(second > first, "consecutive failures extend the wait");
+
+        assert!(
+            dispatch.clear_push_backoff(&key, work.generation),
+            "the owner clears its own backoff"
+        );
+        assert_eq!(dispatch.backoff_resume_at(&key), None);
+    }
+
+    /// A failing subscription's backoff never reaches another subscription's queue.
+    #[test]
+    fn a_push_backoff_holds_only_its_own_subscription() {
+        let topic = TopicName::new("demo-project", "backoff").unwrap();
+        let failing = subscription(0, &topic);
+        let healthy = subscription(1, &topic);
+        let mut dispatch = PushDispatchState::default();
+        let resume_at = record_failure_for_current(&mut dispatch, &failing, TEST_NOW);
+
+        dispatch.enqueue(failing.clone(), TEST_NOW);
+        dispatch.enqueue(healthy.clone(), TEST_NOW);
+
+        // The healthy subscription is the only claimable work.
+        let claimed = dispatch.claim().expect("the healthy subscription is ready");
+        assert_eq!(claimed.subscription.to_full(), healthy.to_full());
+        assert!(dispatch.claim().is_none());
+        assert_eq!(
+            dispatch.deferred.get(&failing.to_full()).map(|(_, at)| *at),
+            Some(resume_at)
+        );
+
+        // It becomes claimable again only once the clock reaches the backoff.
+        dispatch.promote_due(resume_at);
+        let claimed = dispatch.claim().expect("the backoff has elapsed");
+        assert_eq!(claimed.subscription.to_full(), failing.to_full());
+    }
+
+    /// A new publication must not shorten a backoff: it is the subscription that is throttled.
+    #[test]
+    fn a_new_publication_does_not_shorten_an_active_push_backoff() {
+        let topic = TopicName::new("demo-project", "backoff").unwrap();
+        let name = subscription(0, &topic);
+        let key = name.to_full();
+        let mut dispatch = PushDispatchState::default();
+        let resume_at = record_failure_for_current(&mut dispatch, &name, TEST_NOW);
+
+        for _ in 0..3 {
+            dispatch.enqueue(name.clone(), TEST_NOW);
+        }
+        assert!(dispatch.claim().is_none(), "the subscription stays held");
+        assert_eq!(
+            dispatch.deferred.get(&key).map(|(_, at)| *at),
+            Some(resume_at),
+            "republishing must not move the backoff"
+        );
+    }
+
+    /// A publication that arrives while a failing attempt is still in flight must not cancel the
+    /// backoff that attempt is about to record. The enqueue happens before the failure is known,
+    /// so the deferral has to win over the work it queued.
+    #[test]
+    fn a_publication_during_a_failing_attempt_does_not_reopen_the_immediate_loop() {
+        let topic = TopicName::new("demo-project", "backoff").unwrap();
+        let name = subscription(0, &topic);
+        let key = name.to_full();
+        let mut dispatch = PushDispatchState::default();
+
+        dispatch.enqueue(name.clone(), TEST_NOW);
+        let work = dispatch.claim().expect("the worker claims the work");
+        // The endpoint is still being awaited, so no failure is recorded yet.
+        dispatch.enqueue(name.clone(), TEST_NOW);
+        let resume_at = dispatch
+            .record_push_failure(&key, work.generation, TEST_NOW)
+            .expect("the delivering incarnation records its failure");
+        dispatch.defer(work, resume_at, TEST_NOW);
+
+        assert!(
+            dispatch.claim().is_none(),
+            "the subscription owes a backoff until {resume_at}, so nothing may be claimable yet"
+        );
+        dispatch.promote_due(resume_at);
+        assert!(
+            dispatch.claim().is_some(),
+            "the work returns once the backoff elapses"
+        );
+    }
+
+    /// A backoff that has already elapsed must not hold anything. It is cleared only by a
+    /// successful delivery or by invalidation, so an expired one can still be recorded when an
+    /// unrelated retry-policy deferral arrives: that deferral must not withdraw work a
+    /// publication made deliverable now and fold it into the retry instant.
+    #[test]
+    fn an_elapsed_backoff_does_not_fold_a_mid_attempt_publication_into_a_retry_deferral() {
+        let topic = TopicName::new("demo-project", "backoff").unwrap();
+        let name = subscription(0, &topic);
+        let key = name.to_full();
+        let mut dispatch = PushDispatchState::default();
+
+        let resume_at = record_failure_for_current(&mut dispatch, &name, TEST_NOW);
+        let now = resume_at
+            .checked_add(LogicalDuration::from_millis(1))
+            .unwrap();
+        assert!(
+            dispatch.backoff_resume_at(&key).is_some(),
+            "the streak is still recorded after it elapses"
+        );
+
+        dispatch.enqueue(name.clone(), now);
+        let work = dispatch.claim().expect("the worker claims the work");
+        // A publication lands while the worker holds the key.
+        dispatch.enqueue(name.clone(), now);
+        // The worker found nothing deliverable and defers to what the retry policy scheduled.
+        let retry_at = now.checked_add(LogicalDuration::from_seconds(30)).unwrap();
+        dispatch.defer(work, retry_at, now);
+
+        assert!(
+            dispatch.claim().is_some(),
+            "the elapsed backoff holds nothing, so the publication is deliverable now"
+        );
+    }
+
+    /// Invalidating a subscription drops its backoff with the rest of its dispatch state, so a
+    /// recreated subscription starts clean.
+    #[test]
+    fn invalidating_a_subscription_clears_its_push_backoff() {
+        let topic = TopicName::new("demo-project", "backoff").unwrap();
+        let name = subscription(0, &topic);
+        let key = name.to_full();
+        let mut dispatch = PushDispatchState::default();
+        record_failure_for_current(&mut dispatch, &name, TEST_NOW);
+        dispatch.enqueue(name.clone(), TEST_NOW);
+
+        dispatch.invalidate(&key);
+        assert_eq!(dispatch.backoff_resume_at(&key), None);
+
+        dispatch.enqueue(name.clone(), TEST_NOW);
+        assert!(dispatch.claim().is_some(), "a clean subscription is ready");
+
+        record_failure_for_current(&mut dispatch, &name, TEST_NOW);
+        dispatch.invalidate_all();
+        assert_eq!(dispatch.backoff_resume_at(&key), None);
+    }
+
     #[test]
     fn ready_queue_is_fifo_across_topics_after_worker_saturation() {
         let first_topic = TopicName::new("demo-project", "first").unwrap();
         let second_topic = TopicName::new("demo-project", "second").unwrap();
         let mut dispatch = PushDispatchState::default();
         for index in 0..MAX_PUSH_WORKERS {
-            dispatch.enqueue(subscription(index, &first_topic));
+            dispatch.enqueue(subscription(index, &first_topic), TEST_NOW);
         }
         let other_topic = subscription(MAX_PUSH_WORKERS, &second_topic);
-        dispatch.enqueue(other_topic.clone());
+        dispatch.enqueue(other_topic.clone(), TEST_NOW);
 
         let claimed = (0..MAX_PUSH_WORKERS)
             .map(|_| dispatch.claim().expect("worker capacity remains"))
@@ -993,11 +1588,11 @@ mod dispatch_tests {
         let topic = TopicName::new("demo-project", "topic").unwrap();
         let subscription = subscription(0, &topic);
         let mut dispatch = PushDispatchState::default();
-        dispatch.enqueue(subscription.clone());
-        dispatch.enqueue(subscription.clone());
+        dispatch.enqueue(subscription.clone(), TEST_NOW);
+        dispatch.enqueue(subscription.clone(), TEST_NOW);
         let active = dispatch.claim().unwrap();
-        dispatch.enqueue(subscription.clone());
-        dispatch.enqueue(subscription);
+        dispatch.enqueue(subscription.clone(), TEST_NOW);
+        dispatch.enqueue(subscription, TEST_NOW);
 
         assert_eq!(dispatch.ready.len(), 1);
         dispatch.complete(&active, true);
@@ -1011,22 +1606,23 @@ mod dispatch_tests {
         let second = subscription(1, &topic);
         let now = LogicalInstant::from_unix_seconds(100);
         let mut dispatch = PushDispatchState::default();
-        dispatch.enqueue(first.clone());
+        dispatch.enqueue(first.clone(), TEST_NOW);
         let first_work = dispatch.claim().unwrap();
         dispatch.defer(
             first_work,
             now.checked_add(fireemu_core_types::time::LogicalDuration::from_seconds(10))
                 .unwrap(),
+            now,
         );
         assert!(dispatch.active.is_empty());
         assert!(dispatch.ready.is_empty());
         assert!(dispatch.deferred.contains_key(&first.to_full()));
 
-        dispatch.enqueue(first.clone());
+        dispatch.enqueue(first.clone(), TEST_NOW);
         assert!(dispatch.deferred.is_empty());
         assert_eq!(dispatch.ready.len(), 1);
         let second_work = {
-            dispatch.enqueue(second.clone());
+            dispatch.enqueue(second.clone(), TEST_NOW);
             dispatch.claim().unwrap()
         };
         dispatch.invalidate(&second.to_full());
@@ -1042,14 +1638,15 @@ mod dispatch_tests {
         let second = subscription(1, &second_topic);
         let now = LogicalInstant::from_unix_seconds(100);
         let mut dispatch = PushDispatchState::default();
-        dispatch.enqueue(first.clone());
-        dispatch.enqueue(second.clone());
+        dispatch.enqueue(first.clone(), TEST_NOW);
+        dispatch.enqueue(second.clone(), TEST_NOW);
         let first_work = dispatch.claim().unwrap();
         let second_work = dispatch.claim().unwrap();
         dispatch.defer(
             first_work,
             now.checked_add(fireemu_core_types::time::LogicalDuration::from_seconds(10))
                 .unwrap(),
+            now,
         );
         dispatch.invalidate(&second.to_full());
 
@@ -1260,7 +1857,7 @@ mod dispatch_tests {
         let old_message = publish_and_pull(&mut state.lock().unwrap());
         let old_work = {
             let mut dispatch = handle.push_dispatch.lock().unwrap();
-            dispatch.enqueue(subscription.clone());
+            dispatch.enqueue(subscription.clone(), TEST_NOW);
             dispatch.claim().unwrap()
         };
         handle.invalidate_all_push_workers();
@@ -1270,7 +1867,7 @@ mod dispatch_tests {
 
         let new_work = {
             let mut dispatch = handle.push_dispatch.lock().unwrap();
-            dispatch.enqueue(subscription.clone());
+            dispatch.enqueue(subscription.clone(), TEST_NOW);
             dispatch.claim().unwrap()
         };
         assert_ne!(old_work.generation, new_work.generation);
@@ -1294,13 +1891,13 @@ mod dispatch_tests {
         let first = SubscriptionName::new("project-a", "push-sub").unwrap();
         let second = SubscriptionName::new("project-b", "push-sub").unwrap();
         let mut dispatch = PushDispatchState::default();
-        dispatch.enqueue(first.clone());
-        dispatch.enqueue(second.clone());
+        dispatch.enqueue(first.clone(), TEST_NOW);
+        dispatch.enqueue(second.clone(), TEST_NOW);
         let old_first = dispatch.claim().unwrap();
         let old_second = dispatch.claim().unwrap();
 
         dispatch.invalidate_projects_where(|project| project == "project-a");
-        dispatch.enqueue(first.clone());
+        dispatch.enqueue(first.clone(), TEST_NOW);
         let new_first = dispatch.claim().unwrap();
 
         assert_ne!(old_first.generation, new_first.generation);
@@ -1315,8 +1912,15 @@ mod dispatch_tests {
         );
     }
 
-    #[test]
-    fn concurrent_dead_letter_retries_forward_a_pending_message_once() {
+    /// Builds a registry whose source subscription holds one exhausted message waiting for
+    /// dead-letter destination admission. Returns the state, the destination topic, the source
+    /// subscription and the instant the exhaustion happened at.
+    fn pending_dead_letter_fixture() -> (
+        Arc<Mutex<PubSubState>>,
+        TopicName,
+        SubscriptionName,
+        LogicalInstant,
+    ) {
         let source_topic = TopicName::new("demo-project", "source").unwrap();
         let destination_topic = TopicName::new("demo-project", "dead-letter").unwrap();
         let source_subscription =
@@ -1374,6 +1978,12 @@ mod dispatch_tests {
             assert!(outcome.received.is_empty());
             assert_eq!(outcome.dead_lettered.len(), 1);
         }
+        (state, destination_topic, source_subscription, now)
+    }
+
+    #[test]
+    fn concurrent_dead_letter_retries_forward_a_pending_message_once() {
+        let (state, destination_topic, _source_subscription, now) = pending_dead_letter_fixture();
 
         let entered = Arc::new(Barrier::new(2));
         let release = Arc::new(Barrier::new(2));
@@ -1419,6 +2029,73 @@ mod dispatch_tests {
         assert!(state.lock().unwrap().pending_dead_letters().is_empty());
     }
 
+    #[test]
+    fn a_seek_cannot_interleave_with_an_in_flight_dead_letter_transfer() {
+        let (state, destination_topic, source_subscription, now) = pending_dead_letter_fixture();
+
+        let entered = Arc::new(Barrier::new(2));
+        let release = Arc::new(Barrier::new(2));
+        let destination_commits = Arc::new(AtomicUsize::new(0));
+        let handle = PubSubHandle::new(
+            state.clone(),
+            Arc::new(Mutex::new(VirtualClock::new(now))),
+            Some(Arc::new(BlockingDeadLetterDelivery {
+                destination: destination_topic.to_full(),
+                block_first_commit: Arc::new(AtomicBool::new(true)),
+                entered: entered.clone(),
+                release: release.clone(),
+                destination_commits: destination_commits.clone(),
+            })),
+        );
+
+        // The transfer has published to the destination and has not completed its source yet.
+        let transfer_handle = handle.clone();
+        let transfer = std::thread::spawn(move || transfer_handle.retry_pending_dead_letters());
+        entered.wait();
+
+        let seek_handle = handle.clone();
+        let seek_subscription = source_subscription.clone();
+        let (finished_sender, finished_receiver) = std::sync::mpsc::channel();
+        let seek = std::thread::spawn(move || {
+            loop {
+                match seek_handle.dead_letter_gate.try_lock() {
+                    Ok(gate) => drop(gate),
+                    Err(std::sync::TryLockError::WouldBlock) => break,
+                    Err(std::sync::TryLockError::Poisoned(_)) => {
+                        panic!("dead-letter gate was poisoned")
+                    }
+                }
+                std::thread::yield_now();
+            }
+            seek_handle
+                .seek_to_time(&seek_subscription, LogicalInstant::UNIX_EPOCH)
+                .unwrap();
+            finished_sender.send(()).unwrap();
+        });
+
+        // A seek that rewrote the delivery states here would strand the published transfer with
+        // no source completion, so it waits for the transfer instead.
+        assert!(
+            matches!(
+                finished_receiver.recv_timeout(std::time::Duration::from_millis(200)),
+                Err(std::sync::mpsc::RecvTimeoutError::Timeout)
+            ),
+            "a seek must not run inside an in-flight dead-letter transfer"
+        );
+
+        release.wait();
+        transfer.join().unwrap();
+        seek.join().unwrap();
+        finished_receiver.recv().unwrap();
+
+        assert_eq!(destination_commits.load(Ordering::SeqCst), 1);
+        let mut state = state.lock().unwrap();
+        assert!(state.pending_dead_letters().is_empty());
+        // The seek replayed the backlog, so the source holds one deliverable copy and the
+        // destination still holds exactly the one message the completed transfer published.
+        assert_eq!(state.pull(&source_subscription, 10, now).unwrap().len(), 1);
+    }
+
     #[tokio::test]
     async fn shutdown_state_refuses_to_resurrect_the_dispatcher() {
         let state = Arc::new(Mutex::new(PubSubState::new(42)));
@@ -1434,5 +2111,54 @@ mod dispatch_tests {
             assert!(lifecycle.task.is_none());
         }
         handle.shutdown_push_dispatcher().await;
+    }
+}
+
+#[cfg(test)]
+mod publication_gate_tests {
+    use std::sync::{Arc, Mutex};
+
+    use fireemu_core_pubsub::PubSubState;
+    use fireemu_core_session::clock::VirtualClock;
+    use fireemu_core_types::time::LogicalInstant;
+
+    use super::PubSubHandle;
+
+    fn handle() -> PubSubHandle {
+        PubSubHandle::new(
+            Arc::new(Mutex::new(PubSubState::new(5))),
+            Arc::new(Mutex::new(VirtualClock::new(
+                LogicalInstant::from_unix_seconds(1_788_004_860),
+            ))),
+            None,
+        )
+    }
+
+    /// PUBGATE-1: the publication gate is held across the control-plane transitions that
+    /// publish and reset Pub/Sub state, so panicking on a poisoned gate would turn one earlier
+    /// failure into a permanent one for every later caller. The refusal is returned instead.
+    #[test]
+    fn a_poisoned_publication_gate_is_reported_rather_than_panicked_on() {
+        let handle = handle();
+        assert!(
+            handle.lock_publication().is_ok(),
+            "a fresh gate must be lockable"
+        );
+
+        let gate = handle.publication_gate();
+        let poisoner = std::thread::spawn(move || {
+            let _held = gate.lock().expect("the gate is not yet poisoned");
+            panic!("the holder fails while the gate is held");
+        });
+        assert!(
+            poisoner.join().is_err(),
+            "the poisoning thread must have panicked"
+        );
+
+        let refusal = handle
+            .lock_publication()
+            .expect_err("a poisoned gate must be reported");
+        assert!(refusal.contains("publication gate"), "{refusal}");
+        assert!(refusal.contains("poisoned"), "{refusal}");
     }
 }

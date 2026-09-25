@@ -1,0 +1,97 @@
+{
+  "comparison": {
+    "caseOrderBound": true,
+    "cleanupBound": true,
+    "configurationComparison": "separate-evidence",
+    "tool": "tools/auth-saved-reference-replay/replay.py",
+    "toolSha256": "acdd3aac4b9e8d8b4c57f096a8509ed71ba2edc6d4517e71e523e53e6880de30",
+    "typedScalarComparison": true
+  },
+  "corpora": [
+    {
+      "caseCount": 12,
+      "contract": "tools/auth-basic-v2/auth_v2_contract.py",
+      "contractSha256": "8ae94f035c2e7069e86a63b90cba7e5faa245ed02c633652e25820f55e3f2174",
+      "id": "auth-basic-v2",
+      "probe": "tools/auth-basic-v2/auth_v2_recorder.py",
+      "probeSha256": "d0dfb39458f292db39db8cc3820a77aa190273ce3b2bc032a346cc549c1cc186",
+      "receipt": "spec/compatibility/evidence/auth-basic-v2/receipt.json",
+      "receiptSha256": "0fb1648416ad615a7f18bcb79b2abad7c26b7ced6e202276cdb3a2eeb409304a",
+      "validator": "tools/publish-auth-v2.py",
+      "validatorSha256": "e63cfe55acdff8a9bc891b596efcb9d8a8815f155d0eaf5ba2ae0f436d0058b9"
+    },
+    {
+      "caseCount": 12,
+      "contract": "tools/auth-profile/profile_contract.py",
+      "contractSha256": "40b8384ac67ac1bba221115016e419d621e6783b4759367b5a3df12ec7be81aa",
+      "id": "auth-profile",
+      "probe": "tools/auth-profile/profile_recorder.py",
+      "probeSha256": "33da08987c3e7e5bf33c3595297ba8195c630d56560a30bafe3416ca3f885e6d",
+      "receipt": "spec/compatibility/evidence/auth-profile/receipt.json",
+      "receiptSha256": "75a58259e1dc8e26665e955bcea1b32bc008acc2bdb50e42430f9563500c7f87",
+      "validator": "tools/auth-profile/profile_contract.py",
+      "validatorSha256": "40b8384ac67ac1bba221115016e419d621e6783b4759367b5a3df12ec7be81aa"
+    },
+    {
+      "caseCount": 12,
+      "contract": "tools/auth-display-name/display_name_contract.py",
+      "contractSha256": "fbb73994cea454700e97c6d49697a52b39259b8fa602a2be348106f28b19a9c0",
+      "id": "auth-display-name",
+      "probe": "tools/auth-display-name/display_name_recorder.py",
+      "probeSha256": "a3fca0a38c00f528a3fcf3e75ef6e56c797679090dbc71f445b034d27d16f573",
+      "receipt": "spec/compatibility/evidence/auth-display-name/receipt.json",
+      "receiptSha256": "1c1a1aba0bd2cadc0cba6f80e5fbd1266163f73242c9d90ce652b6e0cce02f47",
+      "validator": "tools/auth-display-name/display_name_contract.py",
+      "validatorSha256": "fbb73994cea454700e97c6d49697a52b39259b8fa602a2be348106f28b19a9c0"
+    },
+    {
+      "caseCount": 12,
+      "contract": "tools/auth-password/password_contract.py",
+      "contractSha256": "57f349eb644437aae4380c3a74e661adda4dcbe00fdaec0c76d97680ff8bc23c",
+      "id": "auth-password",
+      "probe": "tools/auth-password/password_recorder.py",
+      "probeSha256": "ba72beac083a82c8a4f6fe16ffec94289bb6e26b2d1015a8d94adec54e061b61",
+      "receipt": "spec/compatibility/evidence/auth-password/receipt.json",
+      "receiptSha256": "2054ac0ede30d54e91e59f3e6c5454714e97118dc6845fd22a34f86e70255d2f",
+      "validator": "tools/auth-password/password_contract.py",
+      "validatorSha256": "57f349eb644437aae4380c3a74e661adda4dcbe00fdaec0c76d97680ff8bc23c"
+    }
+  ],
+  "kind": "auth-saved-reference-replay-v2",
+  "localMode": "owned-strict-artifact",
+  "productionMode": "immutable-saved-reference",
+  "runner": {
+    "productionCommunication": false,
+    "singleArtifactRequired": true,
+    "tool": "tools/auth-saved-reference-replay/run_replay.py",
+    "toolSha256": "124b6cc4b6bfd8b7826f347ae5ba68f33356c2190d76c14a84c5af5e03c76449",
+    "ownedRunnerHelper": {
+      "tool": "tools/compat-inventory/owned_runner.py",
+      "toolSha256": "8a59b2d08b9ec9d65c7bd70a01a6ccd71b4f091e726b68c24cf6e9e7d5822c2d"
+    },
+    "ownedRunners": [
+      {
+        "id": "auth-basic-v2",
+        "tool": "tools/auth-basic-v2/auth_v2_owned.py",
+        "toolSha256": "7b764ce5e373ccba1eeae88de175d3335c3ca0186cfa378b6c11e39f687563e8"
+      },
+      {
+        "id": "auth-profile",
+        "tool": "tools/auth-profile/profile_owned.py",
+        "toolSha256": "9b3398dd224bcda80bad085e2dac673851e11856c039af49fec8e76cca069c29"
+      },
+      {
+        "id": "auth-display-name",
+        "tool": "tools/auth-display-name/display_name_owned.py",
+        "toolSha256": "a26f366718bbb46ea9188b03915209d6b97e9deedbf72375cf7317729ee1aa49"
+      },
+      {
+        "id": "auth-password",
+        "tool": "tools/auth-password/password_owned.py",
+        "toolSha256": "e05d43d41289321d79e4e06d7fd5258e7528afeee126c6cbe48a433032b0b959"
+      }
+    ]
+  },
+  "runtimeSourceBinding": "run-manifest.sourceCommit",
+  "schemaVersion": 2
+}

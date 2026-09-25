@@ -72,6 +72,7 @@ fn hub_and_local(rules: Option<&str>, acceptance: TokenAcceptance) -> (Hub, Arc<
         gateway: Arc::new(gateway),
         rules,
         app_check: None,
+        control_token: None,
     }));
     (hub, local)
 }
@@ -194,6 +195,30 @@ fn listen_target(id: i32, collection: &str) -> String {
 
 fn remove_target(id: i32) -> String {
     json!({"database": DB, "removeTarget": id}).to_string()
+}
+fn nearest_listen_target(id: i32) -> String {
+    json!({
+        "database": DB,
+        "addTarget": {
+            "targetId": id,
+            "query": {
+                "parent": format!("{DB}/documents"),
+                "structuredQuery": {
+                    "from": [{"collectionId": "items"}],
+                    "findNearest": {
+                        "vectorField": {"fieldPath": "embedding"},
+                        "queryVector": {"mapValue": {"fields": {
+                            "__type__": {"stringValue": "__vector__"},
+                            "value": {"arrayValue": {"values": [{"doubleValue": 0.0}, {"doubleValue": 1.0}]}}
+                        }}},
+                        "distanceMeasure": "COSINE",
+                        "limit": 1
+                    }
+                }
+            }
+        }
+    })
+    .to_string()
 }
 
 fn set_write(name: &str, revision: i64) -> pb::Write {
@@ -1145,6 +1170,7 @@ fn indexed_hub() -> Hub {
         gateway: Arc::new(gateway),
         rules: None,
         app_check: None,
+        control_token: None,
     }))
 }
 
@@ -1176,6 +1202,63 @@ fn owner_ordered_target(id: i32, order_field: &str) -> String {
 /// stay open long enough for the browser to attach its first back channel and read the
 /// cause there. Closing the session instead answers the back channel with `Unknown SID`,
 /// which the SDK reports as `unavailable` rather than `failed-precondition`.
+#[tokio::test]
+async fn webchannel_rejects_find_nearest_listen_targets() {
+    let hub = hub(None);
+    let opening = nearest_listen_target(41);
+    let (status, headers, _) = full(hub.handle(&ChannelRequest {
+        kind: StreamKind::Listen,
+        method: "POST".to_owned(),
+        params: params(&[("database", DB), ("VER", "8"), ("RID", "1")]),
+        authorization: None,
+        app_check: Vec::new(),
+        origin: None,
+        body: form(&[("count", "1"), ("ofs", "0"), ("req0___data__", &opening)]),
+    }));
+    assert_eq!(status, 200);
+    let sid = headers
+        .iter()
+        .find(|(key, _)| *key == "x-http-session-id")
+        .map(|(_, value)| value.clone())
+        .unwrap();
+    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    let response = hub.handle(&ChannelRequest {
+        kind: StreamKind::Listen,
+        method: "GET".to_owned(),
+        params: params(&[
+            ("SID", &sid),
+            ("RID", "rpc"),
+            ("AID", "0"),
+            ("CI", "1"),
+            ("TYPE", "xmlhttp"),
+        ]),
+        authorization: None,
+        app_check: Vec::new(),
+        origin: None,
+        body: String::new(),
+    });
+    let ChannelResponse::Stream { mut body, .. } = response else {
+        panic!("the session remains open while the target is rejected");
+    };
+    let chunk = tokio::time::timeout(std::time::Duration::from_secs(2), body.next())
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    let arrays = chunks(std::str::from_utf8(&chunk).unwrap());
+    let payloads = response_payloads(&arrays[0]);
+    let removal = payloads
+        .iter()
+        .find(|payload| payload["targetChange"]["targetChangeType"] == "REMOVE")
+        .expect("findNearest target is removed with a cause");
+    assert_eq!(removal["targetChange"]["targetIds"][0], 41);
+    assert_eq!(removal["targetChange"]["cause"]["code"], 12, "{removal:?}");
+    assert!(removal["targetChange"]["cause"]["message"]
+        .as_str()
+        .unwrap()
+        .contains("findNearest"));
+}
+
 #[tokio::test]
 async fn a_missing_index_on_the_opening_target_reaches_the_first_back_channel() {
     let hub = indexed_hub();
@@ -1237,7 +1320,8 @@ async fn a_missing_index_on_the_opening_target_reaches_the_first_back_channel() 
         .as_str()
         .unwrap();
     assert!(
-        message.contains("The query requires an index.") && message.contains("updatedAt"),
+        message.starts_with("The query requires an index. You can create it here: ")
+            && message.contains("create_composite="),
         "the actionable diagnostic reaches the browser: {message}"
     );
     assert!(

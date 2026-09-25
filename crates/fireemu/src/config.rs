@@ -4,11 +4,12 @@
 //! that typos never silently change behaviour (the JSON schema in `spec/config` is the
 //! authority; this loader enforces the same rule on the subset it understands).
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use fireemu_core_auth::jwt::TokenAcceptance;
 use fireemu_core_auth::mfa::TotpPolicy;
 use fireemu_core_firestore::index::IndexValidationPolicy;
+use fireemu_core_pubsub::subscription::MAX_PUSH_MINIMUM_REDELIVERY_INTERVAL_MILLIS;
 use fireemu_core_types::edition::{FirestoreApiMode, FirestoreEdition};
 use fireemu_core_types::time::{LogicalDuration, LogicalInstant};
 use serde_json::{Map, Value};
@@ -18,9 +19,10 @@ use serde_json::{Map, Value};
 ///
 /// The two profiles are declared in `spec/compatibility/contract.json`; this enum is the
 /// half the daemon executes. The keys a profile only *declares* stay declared: what the
-/// runtime derives from it is [`Self::index_policy`], [`Self::enforce_limits`] and
-/// [`Self::token_acceptance`]. The index policy has no configuration key of its own and
-/// follows the profile; `firestore.enforceLimits` may still override its default.
+/// runtime derives from it is [`Self::index_policy`], [`Self::enforce_limits`],
+/// [`Self::token_acceptance`] and [`Self::implicit_database_creation`]. The index policy has
+/// no configuration key of its own and follows the profile; `firestore.enforceLimits` may
+/// still override its default.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum CompatibilityProfile {
     /// Reproduce the behaviour the pinned Local Emulator Suite ships, including its
@@ -45,6 +47,176 @@ pub struct FirestoreDatabaseFiles {
     pub rules: Option<String>,
     /// Composite and single-field index configuration.
     pub indexes: Option<String>,
+}
+
+/// Password policy configured for one Auth namespace. This is a local configuration
+/// contract; the Identity Toolkit adapter projects it into its public API separately.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PasswordPolicyConfig {
+    /// `OFF` or `ENFORCE`.
+    pub enforcement_state: String,
+    /// Whether a non-compliant existing password must be upgraded at sign-in.
+    pub force_upgrade_on_signin: bool,
+    /// Password strength constraints.
+    pub constraints: PasswordPolicyConstraints,
+}
+
+/// Password strength constraints from `auth.passwordPolicy.constraints`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[allow(clippy::struct_excessive_bools)]
+pub struct PasswordPolicyConstraints {
+    /// Minimum UTF-16 code units accepted by the local policy evaluator.
+    pub min_length: u32,
+    /// Optional custom maximum. `None` is distinct from an explicit maximum.
+    pub max_length: Option<u32>,
+    pub require_uppercase: bool,
+    pub require_lowercase: bool,
+    pub require_numeric: bool,
+    pub require_non_alphanumeric: bool,
+}
+
+/// An explicit project/tenant password policy override.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PasswordPolicyOverride {
+    pub project_id: String,
+    pub tenant_id: Option<String>,
+    pub password_policy: PasswordPolicyConfig,
+}
+
+/// End-user account creation and deletion switches from `auth.client.permissions`.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct AuthClientPermissions {
+    /// When true, end-user account creation is refused. Administrative creation remains
+    /// available; the runtime owner for this switch is tracked separately from this loader.
+    pub disabled_user_signup: bool,
+    /// When true, end-user account deletion is refused. Administrative deletion remains
+    /// available; the runtime owner for this switch is tracked separately from this loader.
+    pub disabled_user_deletion: bool,
+}
+
+/// Settings that may be overridden for one project/tenant namespace.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct AuthNamespaceConfig {
+    /// An explicitly configured client permission group.
+    pub client_permissions: Option<AuthClientPermissions>,
+    /// An explicitly configured email privacy switch.
+    pub improved_email_privacy: Option<bool>,
+}
+
+/// An explicit project/tenant Auth configuration override. Password policies use their own
+/// override list because their public and local schemas are different.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AuthConfigOverride {
+    pub project_id: String,
+    pub tenant_id: Option<String>,
+    pub config: AuthNamespaceConfig,
+}
+
+/// One locally selected blocking Auth function.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BlockingFunctionTrigger {
+    pub function: String,
+    pub region: Option<String>,
+}
+
+/// Explicit trigger selection. `None` for a trigger means it is disabled when `triggers` was
+/// explicitly supplied; an omitted `triggers` object is represented by `None` on the parent.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct BlockingFunctionTriggers {
+    pub before_create: Option<BlockingFunctionTrigger>,
+    pub before_sign_in: Option<BlockingFunctionTrigger>,
+}
+
+/// Per-token forwarding switches for blocking functions.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct BlockingInboundCredentials {
+    pub id_token: bool,
+    pub access_token: bool,
+    pub refresh_token: bool,
+}
+
+/// Local blocking-function selection and forwarding policy. This is intentionally a typed
+/// local contract; resolving a function to a running Functions instance belongs to the
+/// Functions/Auth adapter owner.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct BlockingFunctionsConfig {
+    /// `None` means discovery-based selection; `Some` means the two trigger names are the
+    /// complete explicit selection, including explicit null/omission as disabled.
+    pub triggers: Option<BlockingFunctionTriggers>,
+    /// `None` preserves the legacy global switch plus per-function policy behavior.
+    pub forward_inbound_credentials: Option<BlockingInboundCredentials>,
+}
+
+/// The official-shaped temporary sign-up quota configuration. `quota` remains a decimal
+/// string so the local representation cannot accidentally lose int64 precision.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AuthSignUpQuotaConfig {
+    pub quota: String,
+    pub start_time: LogicalInstant,
+    pub quota_duration: LogicalDuration,
+}
+
+/// Local deterministic quota simulation. It is not a claim about Google's private abuse
+/// controls or production's complete quota algorithm.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AuthQuotaSimulationMode {
+    Off,
+    Observe,
+    Enforce,
+}
+
+impl AuthQuotaSimulationMode {
+    fn parse(value: &str) -> Option<Self> {
+        match value {
+            "off" => Some(Self::Off),
+            "observe" => Some(Self::Observe),
+            "enforce" => Some(Self::Enforce),
+            _ => None,
+        }
+    }
+}
+
+/// Bounded fixed-window quota simulation settings.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AuthQuotaSimulationConfig {
+    pub mode: AuthQuotaSimulationMode,
+    pub algorithm: String,
+    pub default_quota_per_hour: u64,
+    pub max_tracked_buckets: usize,
+}
+
+impl Default for AuthQuotaSimulationConfig {
+    fn default() -> Self {
+        Self {
+            mode: AuthQuotaSimulationMode::Off,
+            algorithm: "fixed-window-v1".to_owned(),
+            default_quota_per_hour: 100,
+            max_tracked_buckets: 4096,
+        }
+    }
+}
+
+impl PasswordPolicyConfig {
+    /// Converts the validated file representation into the Auth runtime representation.
+    #[must_use]
+    pub fn to_auth_policy(&self) -> fireemu_core_auth::password_policy::PasswordPolicy {
+        let state = match self.enforcement_state.as_str() {
+            "ENFORCE" => fireemu_core_auth::password_policy::EnforcementState::Enforce,
+            _ => fireemu_core_auth::password_policy::EnforcementState::Off,
+        };
+        fireemu_core_auth::password_policy::PasswordPolicy::try_new(
+            state,
+            self.force_upgrade_on_signin,
+            self.constraints.min_length as usize,
+            self.constraints.max_length.map(|value| value as usize),
+            self.constraints.require_uppercase,
+            self.constraints.require_lowercase,
+            self.constraints.require_numeric,
+            self.constraints.require_non_alphanumeric,
+            fireemu_core_auth::password_policy::default_allowed_non_alphanumeric(),
+        )
+        .expect("validated password policy configuration")
+    }
 }
 
 impl CompatibilityProfile {
@@ -97,6 +269,16 @@ impl CompatibilityProfile {
             Self::Strict => TokenAcceptance::Verified,
         }
     }
+
+    /// Whether a Firestore data-plane request against a database nothing created materializes
+    /// it. The official emulator serves any syntactically valid database id without a
+    /// `databases.create`, so the profile that reproduces it does too; production answers
+    /// `NOT_FOUND` until the database is created, which is what `strict` answers. The default
+    /// database and the databases the configuration declares exist under both.
+    #[must_use]
+    pub const fn implicit_database_creation(self) -> bool {
+        matches!(self, Self::Emulator)
+    }
 }
 
 /// The Emulator Hub's official default port (`firebase-tools` `Constants.getDefaultPort`).
@@ -133,12 +315,607 @@ const FIRESTORE_PLAN_OVERRIDE_KEYS: [&str; 3] = [
     "enterpriseIndexLimitOverride",
 ];
 
+const PASSWORD_POLICY_KEYS: [&str; 3] = ["enforcementState", "forceUpgradeOnSignin", "constraints"];
+const PASSWORD_CONSTRAINT_KEYS: [&str; 6] = [
+    "minLength",
+    "maxLength",
+    "requireUppercase",
+    "requireLowercase",
+    "requireNumeric",
+    "requireNonAlphanumeric",
+];
+
+fn parse_password_policy(value: &Value, path: &str) -> Result<PasswordPolicyConfig, ConfigError> {
+    let object = value
+        .as_object()
+        .ok_or_else(|| ConfigError(format!("{path} must be an object")))?;
+    for key in object.keys() {
+        if !PASSWORD_POLICY_KEYS.contains(&key.as_str()) {
+            return Err(ConfigError(format!("unknown config key {path}.{key}")));
+        }
+    }
+    let enforcement_state = object
+        .get("enforcementState")
+        .and_then(Value::as_str)
+        .ok_or_else(|| ConfigError(format!("{path}.enforcementState must be OFF or ENFORCE")))?;
+    if !matches!(enforcement_state, "OFF" | "ENFORCE") {
+        return Err(ConfigError(format!(
+            "{path}.enforcementState must be OFF or ENFORCE"
+        )));
+    }
+    let force_upgrade_on_signin = match object.get("forceUpgradeOnSignin") {
+        None => false,
+        Some(value) => value
+            .as_bool()
+            .ok_or_else(|| ConfigError(format!("{path}.forceUpgradeOnSignin must be a boolean")))?,
+    };
+    let constraints = match object.get("constraints") {
+        None => PasswordPolicyConstraints::default(),
+        Some(value) => parse_password_constraints(value, &format!("{path}.constraints"))?,
+    };
+    Ok(PasswordPolicyConfig {
+        enforcement_state: enforcement_state.to_owned(),
+        force_upgrade_on_signin,
+        constraints,
+    })
+}
+
+fn parse_password_constraints(
+    value: &Value,
+    path: &str,
+) -> Result<PasswordPolicyConstraints, ConfigError> {
+    let object = value
+        .as_object()
+        .ok_or_else(|| ConfigError(format!("{path} must be an object")))?;
+    for key in object.keys() {
+        if !PASSWORD_CONSTRAINT_KEYS.contains(&key.as_str()) {
+            return Err(ConfigError(format!("unknown config key {path}.{key}")));
+        }
+    }
+    let integer = |key: &str, default: u32| -> Result<u32, ConfigError> {
+        match object.get(key) {
+            None => Ok(default),
+            Some(value) => value
+                .as_u64()
+                .and_then(|n| u32::try_from(n).ok())
+                .ok_or_else(|| ConfigError(format!("{path}.{key} must be an integer"))),
+        }
+    };
+    let boolean = |key: &str| -> Result<bool, ConfigError> {
+        match object.get(key) {
+            None => Ok(false),
+            Some(value) => value
+                .as_bool()
+                .ok_or_else(|| ConfigError(format!("{path}.{key} must be a boolean"))),
+        }
+    };
+    let min_length = integer("minLength", 6)?;
+    if !(6..=30).contains(&min_length) {
+        return Err(ConfigError(format!(
+            "{path}.minLength must be between 6 and 30"
+        )));
+    }
+    let max_length = match object.get("maxLength") {
+        None | Some(Value::Null) => None,
+        Some(value) => Some(
+            value
+                .as_u64()
+                .and_then(|n| u32::try_from(n).ok())
+                .ok_or_else(|| {
+                    ConfigError(format!("{path}.maxLength must be an integer or null"))
+                })?,
+        ),
+    };
+    if let Some(max) = max_length {
+        if !(min_length..=4096).contains(&max) {
+            return Err(ConfigError(format!(
+                "{path}.maxLength must be between minLength and 4096"
+            )));
+        }
+    }
+    Ok(PasswordPolicyConstraints {
+        min_length,
+        max_length,
+        require_uppercase: boolean("requireUppercase")?,
+        require_lowercase: boolean("requireLowercase")?,
+        require_numeric: boolean("requireNumeric")?,
+        require_non_alphanumeric: boolean("requireNonAlphanumeric")?,
+    })
+}
+
+impl Default for PasswordPolicyConstraints {
+    fn default() -> Self {
+        Self {
+            min_length: 6,
+            max_length: None,
+            require_uppercase: false,
+            require_lowercase: false,
+            require_numeric: false,
+            require_non_alphanumeric: false,
+        }
+    }
+}
+
+fn valid_policy_namespace_id(value: &str, path: &str) -> Result<String, ConfigError> {
+    if value.is_empty() || value.contains('/') {
+        return Err(ConfigError(format!(
+            "{path} must be a non-empty project or tenant ID"
+        )));
+    }
+    Ok(value.to_owned())
+}
+
+fn parse_strict_bool(
+    object: &Map<String, Value>,
+    key: &str,
+    path: &str,
+    default: bool,
+) -> Result<bool, ConfigError> {
+    match object.get(key) {
+        None => Ok(default),
+        Some(value) => value
+            .as_bool()
+            .ok_or_else(|| ConfigError(format!("{path}.{key} must be a boolean"))),
+    }
+}
+
+fn parse_auth_client_permissions(
+    value: &Value,
+    path: &str,
+) -> Result<AuthClientPermissions, ConfigError> {
+    let object = value
+        .as_object()
+        .ok_or_else(|| ConfigError(format!("{path} must be an object")))?;
+    for key in object.keys() {
+        if !["disabledUserSignup", "disabledUserDeletion"].contains(&key.as_str()) {
+            return Err(ConfigError(format!("unknown config key {path}.{key}")));
+        }
+    }
+    Ok(AuthClientPermissions {
+        disabled_user_signup: parse_strict_bool(object, "disabledUserSignup", path, false)?,
+        disabled_user_deletion: parse_strict_bool(object, "disabledUserDeletion", path, false)?,
+    })
+}
+
+fn parse_auth_config_override_value(
+    value: &Value,
+    path: &str,
+) -> Result<AuthNamespaceConfig, ConfigError> {
+    let object = value
+        .as_object()
+        .ok_or_else(|| ConfigError(format!("{path} must be an object")))?;
+    for key in object.keys() {
+        if !["client", "improvedEmailPrivacy"].contains(&key.as_str()) {
+            return Err(ConfigError(format!("unknown config key {path}.{key}")));
+        }
+    }
+    let client_permissions = match object.get("client") {
+        None => None,
+        Some(value) => {
+            let client = value
+                .as_object()
+                .ok_or_else(|| ConfigError(format!("{path}.client must be an object")))?;
+            for key in client.keys() {
+                if key != "permissions" {
+                    return Err(ConfigError(format!(
+                        "unknown config key {path}.client.{key}"
+                    )));
+                }
+            }
+            match client.get("permissions") {
+                None => None,
+                Some(value) => Some(parse_auth_client_permissions(
+                    value,
+                    &format!("{path}.client.permissions"),
+                )?),
+            }
+        }
+    };
+    let improved_email_privacy = match object.get("improvedEmailPrivacy") {
+        None => None,
+        Some(value) => Some(value.as_bool().ok_or_else(|| {
+            ConfigError(format!("{path}.improvedEmailPrivacy must be a boolean"))
+        })?),
+    };
+    if client_permissions.is_none() && improved_email_privacy.is_none() {
+        return Err(ConfigError(format!(
+            "{path} must specify client.permissions or improvedEmailPrivacy"
+        )));
+    }
+    Ok(AuthNamespaceConfig {
+        client_permissions,
+        improved_email_privacy,
+    })
+}
+
+fn parse_auth_config_overrides(
+    value: &Value,
+    path: &str,
+    default_project: &str,
+    root_client_configured: bool,
+    root_privacy_configured: bool,
+) -> Result<Vec<AuthConfigOverride>, ConfigError> {
+    let entries = value
+        .as_array()
+        .ok_or_else(|| ConfigError(format!("{path} must be an array")))?;
+    let mut seen = BTreeSet::new();
+    let mut overrides = Vec::with_capacity(entries.len());
+    for (index, entry) in entries.iter().enumerate() {
+        let entry_path = format!("{path}[{index}]");
+        let object = entry
+            .as_object()
+            .ok_or_else(|| ConfigError(format!("{entry_path} must be an object")))?;
+        for key in object.keys() {
+            if !["projectId", "tenantId", "config"].contains(&key.as_str()) {
+                return Err(ConfigError(format!(
+                    "unknown config key {entry_path}.{key}"
+                )));
+            }
+        }
+        let project_id = object
+            .get("projectId")
+            .and_then(Value::as_str)
+            .ok_or_else(|| ConfigError(format!("{entry_path}.projectId must be a string")))
+            .and_then(|id| valid_policy_namespace_id(id, &format!("{entry_path}.projectId")))?;
+        let tenant_id = match object.get("tenantId") {
+            None => None,
+            Some(value) => Some(valid_policy_namespace_id(
+                value.as_str().ok_or_else(|| {
+                    ConfigError(format!("{entry_path}.tenantId must be a non-empty string"))
+                })?,
+                &format!("{entry_path}.tenantId"),
+            )?),
+        };
+        let namespace = (project_id.clone(), tenant_id.clone());
+        if !seen.insert(namespace) {
+            return Err(ConfigError(format!(
+                "duplicate Auth config namespace at {entry_path}"
+            )));
+        }
+        let config_value = object
+            .get("config")
+            .ok_or_else(|| ConfigError(format!("{entry_path}.config is required")))?;
+        let config =
+            parse_auth_config_override_value(config_value, &format!("{entry_path}.config"))?;
+        if tenant_id.is_none()
+            && project_id == default_project
+            && ((root_client_configured && config.client_permissions.is_some())
+                || (root_privacy_configured && config.improved_email_privacy.is_some()))
+        {
+            return Err(ConfigError(format!(
+                "auth config override at {entry_path} duplicates explicitly configured default-project settings"
+            )));
+        }
+        overrides.push(AuthConfigOverride {
+            project_id,
+            tenant_id,
+            config,
+        });
+    }
+    Ok(overrides)
+}
+
+fn parse_blocking_trigger(
+    value: &Value,
+    path: &str,
+) -> Result<Option<BlockingFunctionTrigger>, ConfigError> {
+    if value.is_null() {
+        return Ok(None);
+    }
+    let object = value
+        .as_object()
+        .ok_or_else(|| ConfigError(format!("{path} must be an object or null")))?;
+    for key in object.keys() {
+        if !["function", "region"].contains(&key.as_str()) {
+            return Err(ConfigError(format!("unknown config key {path}.{key}")));
+        }
+    }
+    let function = object
+        .get("function")
+        .and_then(Value::as_str)
+        .filter(|name| !name.is_empty())
+        .ok_or_else(|| ConfigError(format!("{path}.function must be a non-empty string")))?
+        .to_owned();
+    let region = match object.get("region") {
+        None => None,
+        Some(value) => Some(
+            value
+                .as_str()
+                .filter(|region| !region.is_empty())
+                .ok_or_else(|| ConfigError(format!("{path}.region must be a non-empty string")))?
+                .to_owned(),
+        ),
+    };
+    Ok(Some(BlockingFunctionTrigger { function, region }))
+}
+
+fn parse_blocking_functions(
+    value: &Value,
+    path: &str,
+    global_forwarding: bool,
+) -> Result<BlockingFunctionsConfig, ConfigError> {
+    let object = value
+        .as_object()
+        .ok_or_else(|| ConfigError(format!("{path} must be an object")))?;
+    for key in object.keys() {
+        if !["triggers", "forwardInboundCredentials"].contains(&key.as_str()) {
+            return Err(ConfigError(format!("unknown config key {path}.{key}")));
+        }
+    }
+    let triggers = match object.get("triggers") {
+        None => None,
+        Some(value) => {
+            let trigger_object = value
+                .as_object()
+                .ok_or_else(|| ConfigError(format!("{path}.triggers must be an object")))?;
+            for key in trigger_object.keys() {
+                if !["beforeCreate", "beforeSignIn"].contains(&key.as_str()) {
+                    return Err(ConfigError(format!(
+                        "unknown config key {path}.triggers.{key}"
+                    )));
+                }
+            }
+            Some(BlockingFunctionTriggers {
+                before_create: trigger_object
+                    .get("beforeCreate")
+                    .map(|value| {
+                        parse_blocking_trigger(value, &format!("{path}.triggers.beforeCreate"))
+                    })
+                    .transpose()?
+                    .flatten(),
+                before_sign_in: trigger_object
+                    .get("beforeSignIn")
+                    .map(|value| {
+                        parse_blocking_trigger(value, &format!("{path}.triggers.beforeSignIn"))
+                    })
+                    .transpose()?
+                    .flatten(),
+            })
+        }
+    };
+    let forward_inbound_credentials = match object.get("forwardInboundCredentials") {
+        None => None,
+        Some(value) => {
+            let forwarding = value.as_object().ok_or_else(|| {
+                ConfigError(format!(
+                    "{path}.forwardInboundCredentials must be an object"
+                ))
+            })?;
+            for key in forwarding.keys() {
+                if !["idToken", "accessToken", "refreshToken"].contains(&key.as_str()) {
+                    return Err(ConfigError(format!(
+                        "unknown config key {path}.forwardInboundCredentials.{key}"
+                    )));
+                }
+            }
+            let forwarding_path = format!("{path}.forwardInboundCredentials");
+            let config = BlockingInboundCredentials {
+                id_token: parse_strict_bool(forwarding, "idToken", &forwarding_path, false)?,
+                access_token: parse_strict_bool(
+                    forwarding,
+                    "accessToken",
+                    &forwarding_path,
+                    false,
+                )?,
+                refresh_token: parse_strict_bool(
+                    forwarding,
+                    "refreshToken",
+                    &forwarding_path,
+                    false,
+                )?,
+            };
+            if !global_forwarding
+                && (config.id_token || config.access_token || config.refresh_token)
+            {
+                return Err(ConfigError(format!(
+                    "{path}.forwardInboundCredentials cannot enable a token while auth.forwardInboundCredentials is false"
+                )));
+            }
+            Some(config)
+        }
+    };
+    Ok(BlockingFunctionsConfig {
+        triggers,
+        forward_inbound_credentials,
+    })
+}
+
+fn parse_protobuf_duration(value: &Value, path: &str) -> Result<LogicalDuration, ConfigError> {
+    let text = value
+        .as_str()
+        .ok_or_else(|| ConfigError(format!("{path} must be a protobuf duration string")))?;
+    let body = text
+        .strip_suffix('s')
+        .filter(|body| !body.is_empty() && !body.starts_with(['+', '-']))
+        .ok_or_else(|| ConfigError(format!("{path} must be a positive protobuf duration")))?;
+    let (seconds_text, fraction_text) = match body.split_once('.') {
+        Some((seconds, fraction)) if !fraction.is_empty() => (seconds, fraction),
+        Some(_) => {
+            return Err(ConfigError(format!(
+                "{path} must use a decimal protobuf duration such as 86400s"
+            )));
+        }
+        None => (body, ""),
+    };
+    if seconds_text.is_empty()
+        || !seconds_text.bytes().all(|byte| byte.is_ascii_digit())
+        || !fraction_text.bytes().all(|byte| byte.is_ascii_digit())
+        || fraction_text.len() > 9
+    {
+        return Err(ConfigError(format!(
+            "{path} must use a decimal protobuf duration such as 86400s"
+        )));
+    }
+    let seconds = seconds_text
+        .parse::<i128>()
+        .map_err(|_| ConfigError(format!("{path} seconds are outside the supported range")))?;
+    let fraction = if fraction_text.is_empty() {
+        0
+    } else {
+        let nanos = fraction_text
+            .parse::<i128>()
+            .map_err(|_| ConfigError(format!("{path} fraction is outside the supported range")))?;
+        let exponent = u32::try_from(9 - fraction_text.len())
+            .expect("validated protobuf fraction length is at most nine");
+        nanos * 10_i128.pow(exponent)
+    };
+    let nanos = seconds
+        .checked_mul(1_000_000_000)
+        .and_then(|value| value.checked_add(fraction))
+        .ok_or_else(|| ConfigError(format!("{path} is outside the supported range")))?;
+    if nanos <= 0 {
+        return Err(ConfigError(format!("{path} must be positive")));
+    }
+    Ok(LogicalDuration::from_nanos(nanos))
+}
+
+fn parse_auth_quota(
+    value: &Value,
+    path: &str,
+) -> Result<Option<AuthSignUpQuotaConfig>, ConfigError> {
+    let object = value
+        .as_object()
+        .ok_or_else(|| ConfigError(format!("{path} must be an object")))?;
+    for key in object.keys() {
+        if key != "signUpQuotaConfig" {
+            return Err(ConfigError(format!("unknown config key {path}.{key}")));
+        }
+    }
+    let Some(value) = object.get("signUpQuotaConfig") else {
+        return Ok(None);
+    };
+    if value.is_null() {
+        return Ok(None);
+    }
+    let quota_path = format!("{path}.signUpQuotaConfig");
+    let quota = value
+        .as_object()
+        .ok_or_else(|| ConfigError(format!("{quota_path} must be an object or null")))?;
+    for key in quota.keys() {
+        if !["quota", "startTime", "quotaDuration"].contains(&key.as_str()) {
+            return Err(ConfigError(format!(
+                "unknown config key {quota_path}.{key}"
+            )));
+        }
+    }
+    let quota_value = quota
+        .get("quota")
+        .and_then(Value::as_str)
+        .filter(|value| {
+            !value.is_empty()
+                && value.bytes().all(|byte| byte.is_ascii_digit())
+                && value
+                    .parse::<u64>()
+                    .is_ok_and(|number| i64::try_from(number).is_ok())
+        })
+        .ok_or_else(|| {
+            ConfigError(format!(
+                "{quota_path}.quota must be a non-negative decimal int64 string"
+            ))
+        })?
+        .to_owned();
+    let start_text = quota
+        .get("startTime")
+        .and_then(Value::as_str)
+        .ok_or_else(|| ConfigError(format!("{quota_path}.startTime must be an RFC3339 string")))?;
+    let start_time = LogicalInstant::parse_rfc3339(start_text)
+        .map_err(|error| ConfigError(format!("{quota_path}.startTime: {error}")))?;
+    let quota_duration = parse_protobuf_duration(
+        quota
+            .get("quotaDuration")
+            .ok_or_else(|| ConfigError(format!("{quota_path}.quotaDuration is required")))?,
+        &format!("{quota_path}.quotaDuration"),
+    )?;
+    Ok(Some(AuthSignUpQuotaConfig {
+        quota: quota_value,
+        start_time,
+        quota_duration,
+    }))
+}
+
+fn parse_auth_quota_simulation(
+    value: &Value,
+    path: &str,
+) -> Result<AuthQuotaSimulationConfig, ConfigError> {
+    let object = value
+        .as_object()
+        .ok_or_else(|| ConfigError(format!("{path} must be an object")))?;
+    for key in object.keys() {
+        if ![
+            "mode",
+            "algorithm",
+            "defaultQuotaPerHour",
+            "maxTrackedBuckets",
+        ]
+        .contains(&key.as_str())
+        {
+            return Err(ConfigError(format!("unknown config key {path}.{key}")));
+        }
+    }
+    let defaults = AuthQuotaSimulationConfig::default();
+    let mode = match object.get("mode") {
+        None => defaults.mode,
+        Some(value) => {
+            let text = value
+                .as_str()
+                .ok_or_else(|| ConfigError(format!("{path}.mode must be a string")))?;
+            AuthQuotaSimulationMode::parse(text).ok_or_else(|| {
+                ConfigError(format!("{path}.mode must be off, observe, or enforce"))
+            })?
+        }
+    };
+    let algorithm = match object.get("algorithm") {
+        None => defaults.algorithm,
+        Some(value) => {
+            let text = value
+                .as_str()
+                .ok_or_else(|| ConfigError(format!("{path}.algorithm must be a string")))?;
+            if text != "fixed-window-v1" {
+                return Err(ConfigError(format!(
+                    "{path}.algorithm must be \"fixed-window-v1\""
+                )));
+            }
+            text.to_owned()
+        }
+    };
+    let default_quota_per_hour = match object.get("defaultQuotaPerHour") {
+        None => defaults.default_quota_per_hour,
+        Some(value) => value
+            .as_u64()
+            .filter(|value| *value <= 1_000_000)
+            .ok_or_else(|| {
+                ConfigError(format!(
+                    "{path}.defaultQuotaPerHour must be an integer from 0 through 1000000"
+                ))
+            })?,
+    };
+    let max_tracked_buckets = match object.get("maxTrackedBuckets") {
+        None => defaults.max_tracked_buckets,
+        Some(value) => value
+            .as_u64()
+            .filter(|value| (1..=65_536).contains(value))
+            .and_then(|value| usize::try_from(value).ok())
+            .ok_or_else(|| {
+                ConfigError(format!(
+                    "{path}.maxTrackedBuckets must be an integer from 1 through 65536"
+                ))
+            })?,
+    };
+    Ok(AuthQuotaSimulationConfig {
+        mode,
+        algorithm,
+        default_quota_per_hour,
+        max_tracked_buckets,
+    })
+}
+
 /// Effective daemon configuration.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[allow(clippy::struct_excessive_bools)] // independent switches, each read on its own
 pub struct RuntimeConfig {
     /// Compatibility profile (`profile`). It sets the defaults of [`Self::index_policy`],
-    /// [`Self::enforce_limits`] and [`Self::token_acceptance`]; an explicit key wins.
+    /// [`Self::enforce_limits`], [`Self::token_acceptance`] and
+    /// [`Self::implicit_database_creation`]; an explicit key wins.
     pub profile: CompatibilityProfile,
     /// Firestore gRPC bind address.
     pub firestore_addr: String,
@@ -159,6 +936,20 @@ pub struct RuntimeConfig {
     /// How a caller's ID token is verified on the Firestore and Storage Rules surfaces
     /// (profile-derived; there is no key of its own).
     pub token_acceptance: TokenAcceptance,
+    /// Whether a Firestore data-plane request materializes a database nothing created, the
+    /// way the official emulator does, or is refused with production's `NOT_FOUND`
+    /// (profile-derived; there is no key of its own).
+    pub implicit_database_creation: bool,
+    /// How long a document whose time-to-live field has expired stays readable before the
+    /// expiry sweep deletes it (`firestore.ttlSweepIntervalSeconds`). Production deletes
+    /// typically within 24 hours and within 72 hours at worst, so the default is 24 hours
+    /// and the accepted range ends at the documented outer bound.
+    pub ttl_sweep_interval: LogicalDuration,
+    /// When the daemon's databases were created (`firestore.databaseCreateTime`): the
+    /// `createTime` they report and the instant before which a `read_time` is refused. Unset,
+    /// it is the daemon's start; a run compared with a production database names that
+    /// database's creation time.
+    pub database_create_time: Option<LogicalInstant>,
     /// Only `demo-` project IDs are accepted.
     pub require_demo_prefix: bool,
     /// Initial virtual clock instant.
@@ -172,6 +963,8 @@ pub struct RuntimeConfig {
     pub seed: u64,
     /// Project ID used for Auth token issuance.
     pub auth_project: String,
+    /// Explicit project ID to number mappings for Auth response metadata.
+    pub auth_project_numbers: BTreeMap<String, u64>,
     /// fireemu-only TOTP policy. Absence preserves the official Auth emulator's rejection
     /// of TOTP enrollment; declaring `auth.totp` explicitly enables the extension.
     pub auth_totp: Option<TotpPolicy>,
@@ -184,10 +977,38 @@ pub struct RuntimeConfig {
     /// answers `INVALID_LOGIN_CREDENTIALS`, and a password reset for an unknown address is
     /// acknowledged. `false` restores the official Auth emulator's revealing answers.
     pub auth_improved_email_privacy: bool,
+    /// Whether auth.improvedEmailPrivacy was explicitly present in the input.
+    pub auth_improved_email_privacy_explicit: bool,
     /// `auth.logActionCodes`: print every email action link and SMS code to the daemon's
     /// standard output as the official Auth emulator does, on by default. `false` keeps the
     /// codes off the console; they stay readable from the emulator inspection routes.
     pub auth_log_action_codes: bool,
+    /// Optional default-project password policy from `auth.passwordPolicy`.
+    pub auth_password_policy: Option<PasswordPolicyConfig>,
+    /// Explicit project/tenant password policy overrides.
+    pub auth_password_policy_overrides: Vec<PasswordPolicyOverride>,
+    /// `auth.signIn.allowDuplicateEmails`, with the existing Auth default preserved when the
+    /// section is omitted.
+    pub auth_allow_duplicate_emails: bool,
+    /// Whether auth.signIn.allowDuplicateEmails was explicitly present in the input.
+    pub auth_allow_duplicate_emails_explicit: bool,
+    /// `auth.client.permissions` for the default Auth namespace.
+    pub auth_client_permissions: AuthClientPermissions,
+    /// Whether auth.client.permissions was explicitly present in the input.
+    pub auth_client_permissions_explicit: bool,
+    /// Explicit project/tenant overrides for the non-password Auth settings.
+    pub auth_config_overrides: Vec<AuthConfigOverride>,
+    /// Explicit blocking function selection and per-token forwarding settings.
+    pub auth_blocking_functions: Option<BlockingFunctionsConfig>,
+    /// Official-shaped temporary sign-up quota configuration.
+    pub auth_signup_quota: Option<AuthSignUpQuotaConfig>,
+    /// Whether `auth.quota` was explicitly present in the startup file, including an explicit
+    /// null `signUpQuotaConfig` that clears an imported temporary override.
+    pub auth_signup_quota_explicit: bool,
+    /// fireemu-local deterministic sign-up quota simulation.
+    pub auth_quota_simulation: AuthQuotaSimulationConfig,
+    /// Whether `auth.quotaSimulation` was explicitly present in the startup file.
+    pub auth_quota_simulation_explicit: bool,
     /// Path of `firestore.indexes.json`, if configured.
     pub index_file: Option<String>,
     /// Path of `firestore.text-indexes.json`, if configured.
@@ -283,6 +1104,13 @@ pub struct RuntimeConfig {
     pub functions_project_alias: Option<String>,
     /// Attempts per event for functions declared with `retry` (`events.maxAttempts`).
     pub events_max_attempts: u32,
+    /// Minimum interval kept between two push deliveries of the same Pub/Sub message while the
+    /// subscription has no retry policy (`pubsub.pushMinimumRedeliveryIntervalMillis`). The
+    /// default is `0`, which follows production: without a retry policy the service redelivers as
+    /// soon as possible. A non-zero interval is an opt-in emulator protection against re-requesting
+    /// a failing push endpoint with no interval at all. A retry policy always decides its own
+    /// backoff.
+    pub pubsub_push_minimum_redelivery_interval_millis: i64,
     /// Schedule runs enqueued per clock change and job (`scheduler.maxCatchUpRuns`).
     pub scheduler_max_catch_up_runs: usize,
     /// Default time zone of schedules without one (`scheduler.defaultTimeZone`).
@@ -293,6 +1121,14 @@ pub struct RuntimeConfig {
     pub scheduler_overlap: String,
     /// ID token signing (`auth.idTokenSigning`): `unsigned-emulator` or `session-rsa`.
     pub id_token_signing: fireemu_core_auth::jwt::SigningMode,
+    /// Service accounts whose signed custom tokens are accepted, each with its public JWK set
+    /// (`auth.customTokenSigners`). When set, only tokens they signed are accepted, as in
+    /// production; when absent, the unsigned tokens of the Admin SDK's emulator mode are.
+    pub auth_custom_token_signers: Option<serde_json::Map<String, Value>>,
+    /// The default project's API keys (`auth.apiKeys`). When any is declared, client requests
+    /// with another key are refused as production's API front end refuses them; when none is,
+    /// any key is accepted, as by the official emulator.
+    pub auth_api_keys: Vec<String>,
     /// App Check (`appCheck`); disabled by default.
     pub app_check: AppCheckConfig,
 }
@@ -433,15 +1269,32 @@ impl Default for RuntimeConfig {
             index_policy: profile.index_policy(),
             enforce_limits: profile.enforce_limits(),
             token_acceptance: profile.token_acceptance(),
+            implicit_database_creation: profile.implicit_database_creation(),
+            ttl_sweep_interval: fireemu_core_firestore::ttl::DEFAULT_SWEEP_INTERVAL,
+            database_create_time: None,
             require_demo_prefix: true,
             clock_start: LogicalInstant::from_unix_seconds(1_788_004_860),
             clock_start_pinned: false,
             seed: 42,
             auth_project: "demo-app".to_owned(),
+            auth_project_numbers: BTreeMap::new(),
             auth_totp: None,
             auth_forward_inbound_credentials: false,
             auth_improved_email_privacy: true,
+            auth_improved_email_privacy_explicit: false,
             auth_log_action_codes: true,
+            auth_password_policy: None,
+            auth_password_policy_overrides: Vec::new(),
+            auth_allow_duplicate_emails: false,
+            auth_allow_duplicate_emails_explicit: false,
+            auth_client_permissions: AuthClientPermissions::default(),
+            auth_client_permissions_explicit: false,
+            auth_config_overrides: Vec::new(),
+            auth_blocking_functions: None,
+            auth_signup_quota: None,
+            auth_signup_quota_explicit: false,
+            auth_quota_simulation: AuthQuotaSimulationConfig::default(),
+            auth_quota_simulation_explicit: false,
             index_file: None,
             text_index_file: None,
             rules_file: None,
@@ -480,26 +1333,40 @@ impl Default for RuntimeConfig {
             functions_unserved_triggers: "refuse".to_owned(),
             functions_project_alias: None,
             events_max_attempts: 4,
+            pubsub_push_minimum_redelivery_interval_millis:
+                fireemu_core_pubsub::subscription::DEFAULT_PUSH_MINIMUM_REDELIVERY_INTERVAL_MILLIS,
             scheduler_max_catch_up_runs: 1000,
             scheduler_default_time_zone: None,
             scheduler_overlap: "allow".to_owned(),
             scheduler_catch_up: "all".to_owned(),
             id_token_signing: fireemu_core_auth::jwt::SigningMode::UnsignedEmulator,
+            auth_custom_token_signers: None,
+            auth_api_keys: Vec::new(),
             app_check: AppCheckConfig::disabled(),
         }
     }
 }
 
 /// The keys of the `auth` section (spec/config/fireemu.schema.json).
-pub(crate) const AUTH_KEYS: [&str; 8] = [
+pub(crate) const AUTH_KEYS: [&str; 18] = [
     "enabled",
+    "apiKeys",
     "projectIssuer",
     "idTokenSigning",
+    "customTokenSigners",
     "totp",
     "secretMaterialization",
     "forwardInboundCredentials",
     "improvedEmailPrivacy",
     "logActionCodes",
+    "passwordPolicy",
+    "passwordPolicyOverrides",
+    "signIn",
+    "client",
+    "configOverrides",
+    "blockingFunctions",
+    "quota",
+    "quotaSimulation",
 ];
 
 /// Configuration errors.
@@ -1725,6 +2592,7 @@ const KNOWN_TOP_LEVEL: &[&str] = &[
     "appCheck",
     "storage",
     "events",
+    "pubsub",
     "scheduler",
     "functions",
     "trace",
@@ -1753,6 +2621,7 @@ impl RuntimeConfig {
         self.index_policy = profile.index_policy();
         self.enforce_limits = profile.enforce_limits();
         self.token_acceptance = profile.token_acceptance();
+        self.implicit_database_creation = profile.implicit_database_creation();
     }
 
     fn parse_daemon(d: &serde_json::Map<String, Value>, cfg: &mut Self) -> Result<(), ConfigError> {
@@ -1771,6 +2640,7 @@ impl RuntimeConfig {
                 "clockStart",
                 "seed",
                 "authProject",
+                "authProjectNumbers",
             ]
             .contains(&key.as_str())
             {
@@ -1828,7 +2698,42 @@ impl RuntimeConfig {
         if let Some(p) = d.get("authProject").and_then(Value::as_str) {
             p.clone_into(&mut cfg.auth_project);
         }
+        if let Some(value) = d.get("authProjectNumbers") {
+            Self::parse_auth_project_numbers(value, &mut cfg.auth_project_numbers)?;
+        }
 
+        Ok(())
+    }
+
+    fn parse_auth_project_numbers(
+        value: &Value,
+        numbers: &mut BTreeMap<String, u64>,
+    ) -> Result<(), ConfigError> {
+        let mappings = value
+            .as_object()
+            .ok_or_else(|| ConfigError("daemon.authProjectNumbers must be an object".into()))?;
+        for (project, value) in mappings {
+            if project.is_empty()
+                || !project
+                    .bytes()
+                    .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
+            {
+                return Err(ConfigError(
+                    "invalid Auth project ID in number mapping".into(),
+                ));
+            }
+            let number = value
+                .as_str()
+                .filter(|s| !s.starts_with('0') && s.bytes().all(|b| b.is_ascii_digit()))
+                .and_then(|s| s.parse::<u64>().ok())
+                .filter(|n| *n != 0)
+                .ok_or_else(|| {
+                    ConfigError(
+                        "Auth project number must be a positive decimal string within u64".into(),
+                    )
+                })?;
+            numbers.insert(project.clone(), number);
+        }
         Ok(())
     }
 
@@ -1867,6 +2772,32 @@ impl RuntimeConfig {
         }
         if let Some(n) = e.get("maxAttempts").and_then(Value::as_u64) {
             cfg.events_max_attempts = u32::try_from(n).unwrap_or(u32::MAX).max(1);
+        }
+        Ok(())
+    }
+
+    fn parse_pubsub(p: &serde_json::Map<String, Value>, cfg: &mut Self) -> Result<(), ConfigError> {
+        for key in p.keys() {
+            if !["pushMinimumRedeliveryIntervalMillis"].contains(&key.as_str()) {
+                return Err(ConfigError(format!("unknown config key pubsub.{key}")));
+            }
+        }
+        if let Some(value) = p.get("pushMinimumRedeliveryIntervalMillis") {
+            let millis = value
+                .as_i64()
+                .filter(|millis| *millis >= 0)
+                .ok_or_else(|| {
+                    ConfigError(
+                        "pubsub.pushMinimumRedeliveryIntervalMillis must be a non-negative integer"
+                            .to_owned(),
+                    )
+                })?;
+            if millis > MAX_PUSH_MINIMUM_REDELIVERY_INTERVAL_MILLIS {
+                return Err(ConfigError(format!(
+                    "pubsub.pushMinimumRedeliveryIntervalMillis must not exceed {MAX_PUSH_MINIMUM_REDELIVERY_INTERVAL_MILLIS}"
+                )));
+            }
+            cfg.pubsub_push_minimum_redelivery_interval_millis = millis;
         }
         Ok(())
     }
@@ -2238,6 +3169,39 @@ impl RuntimeConfig {
             if let Some(b) = fs.get("enforceLimits").and_then(Value::as_bool) {
                 cfg.enforce_limits = b;
             }
+            if let Some(value) = fs.get("databaseCreateTime") {
+                let text = value.as_str().ok_or_else(|| {
+                    ConfigError(
+                        "firestore.databaseCreateTime must be an RFC 3339 string".to_owned(),
+                    )
+                })?;
+                cfg.database_create_time = Some(
+                    LogicalInstant::parse_rfc3339(text)
+                        .map_err(|e| ConfigError(format!("firestore.databaseCreateTime: {e}")))?,
+                );
+            }
+            if let Some(value) = fs.get("ttlSweepIntervalSeconds") {
+                let seconds = value.as_u64().ok_or_else(|| {
+                    ConfigError(
+                        "firestore.ttlSweepIntervalSeconds must be a whole number of seconds"
+                            .to_owned(),
+                    )
+                })?;
+                let maximum = u64::try_from(
+                    fireemu_core_firestore::ttl::MAX_SWEEP_INTERVAL
+                        .as_nanos()
+                        .div_euclid(1_000_000_000),
+                )
+                .unwrap_or(u64::MAX);
+                if seconds == 0 || seconds > maximum {
+                    return Err(ConfigError(format!(
+                        "firestore.ttlSweepIntervalSeconds must be between 1 and {maximum}, \
+                         the documented outer bound on how long an expired document survives"
+                    )));
+                }
+                cfg.ttl_sweep_interval =
+                    LogicalDuration::from_seconds(i64::try_from(seconds).unwrap_or(i64::MAX));
+            }
         }
         if cfg.edition == FirestoreEdition::Standard
             && cfg.api_mode == FirestoreApiMode::MongoDbCompatible
@@ -2268,6 +3232,9 @@ impl RuntimeConfig {
         if let Some(events) = obj.get("events").and_then(Value::as_object) {
             Self::parse_events(events, &mut cfg)?;
         }
+        if let Some(pubsub) = obj.get("pubsub").and_then(Value::as_object) {
+            Self::parse_pubsub(pubsub, &mut cfg)?;
+        }
         if let Some(scheduler) = obj.get("scheduler").and_then(Value::as_object) {
             Self::parse_scheduler(scheduler, &mut cfg)?;
         }
@@ -2293,6 +3260,39 @@ impl RuntimeConfig {
                 }
                 cfg.id_token_signing = m;
             }
+            if let Some(keys) = auth.get("apiKeys") {
+                let keys = keys
+                    .as_array()
+                    .filter(|keys| !keys.is_empty())
+                    .ok_or_else(|| {
+                        ConfigError("auth.apiKeys must be a non-empty array of keys".to_owned())
+                    })?;
+                cfg.auth_api_keys = keys
+                    .iter()
+                    .map(|key| {
+                        key.as_str()
+                            .filter(|key| {
+                                !key.is_empty()
+                                    && key.bytes().all(|b| b.is_ascii_alphanumeric() || b"._-".contains(&b))
+                            })
+                            .map(str::to_owned)
+                            .ok_or_else(|| {
+                                ConfigError(
+                                    "auth.apiKeys entries must be non-empty strings of [A-Za-z0-9._-]"
+                                        .to_owned(),
+                                )
+                            })
+                    })
+                    .collect::<Result<_, _>>()?;
+            }
+            if let Some(signers) = auth.get("customTokenSigners") {
+                let signers = signers.as_object().ok_or_else(|| {
+                    ConfigError("auth.customTokenSigners must be an object".to_owned())
+                })?;
+                fireemu_adapter_http::identity_toolkit::CustomTokenTrust::from_jwks(signers)
+                    .map_err(|e| ConfigError(format!("auth.customTokenSigners: {e}")))?;
+                cfg.auth_custom_token_signers = Some(signers.clone());
+            }
             if let Some(forward) = auth.get("forwardInboundCredentials") {
                 cfg.auth_forward_inbound_credentials = forward.as_bool().ok_or_else(|| {
                     ConfigError("auth.forwardInboundCredentials must be a boolean".to_owned())
@@ -2302,11 +3302,141 @@ impl RuntimeConfig {
                 cfg.auth_improved_email_privacy = privacy.as_bool().ok_or_else(|| {
                     ConfigError("auth.improvedEmailPrivacy must be a boolean".to_owned())
                 })?;
+                cfg.auth_improved_email_privacy_explicit = true;
             }
             if let Some(log) = auth.get("logActionCodes") {
                 cfg.auth_log_action_codes = log.as_bool().ok_or_else(|| {
                     ConfigError("auth.logActionCodes must be a boolean".to_owned())
                 })?;
+            }
+            let root_client_configured = if let Some(client) = auth.get("client") {
+                let client = client
+                    .as_object()
+                    .ok_or_else(|| ConfigError("auth.client must be an object".to_owned()))?;
+                for key in client.keys() {
+                    if key != "permissions" {
+                        return Err(ConfigError(format!("unknown config key auth.client.{key}")));
+                    }
+                }
+                match client.get("permissions") {
+                    None => false,
+                    Some(value) => {
+                        cfg.auth_client_permissions =
+                            parse_auth_client_permissions(value, "auth.client.permissions")?;
+                        cfg.auth_client_permissions_explicit = true;
+                        true
+                    }
+                }
+            } else {
+                false
+            };
+            if let Some(sign_in) = auth.get("signIn") {
+                let sign_in = sign_in
+                    .as_object()
+                    .ok_or_else(|| ConfigError("auth.signIn must be an object".to_owned()))?;
+                for key in sign_in.keys() {
+                    if key != "allowDuplicateEmails" {
+                        return Err(ConfigError(format!("unknown config key auth.signIn.{key}")));
+                    }
+                }
+                cfg.auth_allow_duplicate_emails =
+                    parse_strict_bool(sign_in, "allowDuplicateEmails", "auth.signIn", false)?;
+                cfg.auth_allow_duplicate_emails_explicit =
+                    sign_in.contains_key("allowDuplicateEmails");
+            }
+            if let Some(overrides) = auth.get("configOverrides") {
+                cfg.auth_config_overrides = parse_auth_config_overrides(
+                    overrides,
+                    "auth.configOverrides",
+                    &cfg.auth_project,
+                    root_client_configured,
+                    auth.contains_key("improvedEmailPrivacy"),
+                )?;
+            }
+            if let Some(blocking) = auth.get("blockingFunctions") {
+                cfg.auth_blocking_functions = Some(parse_blocking_functions(
+                    blocking,
+                    "auth.blockingFunctions",
+                    cfg.auth_forward_inbound_credentials,
+                )?);
+            }
+            if let Some(quota) = auth.get("quota") {
+                cfg.auth_signup_quota_explicit = true;
+                cfg.auth_signup_quota = parse_auth_quota(quota, "auth.quota")?;
+            }
+            if let Some(simulation) = auth.get("quotaSimulation") {
+                cfg.auth_quota_simulation_explicit = true;
+                cfg.auth_quota_simulation =
+                    parse_auth_quota_simulation(simulation, "auth.quotaSimulation")?;
+            }
+            if let Some(policy) = auth.get("passwordPolicy") {
+                if policy.is_null() {
+                    return Err(ConfigError(
+                        "auth.passwordPolicy must be an object when specified".to_owned(),
+                    ));
+                }
+                cfg.auth_password_policy =
+                    Some(parse_password_policy(policy, "auth.passwordPolicy")?);
+            }
+            if let Some(overrides) = auth.get("passwordPolicyOverrides") {
+                let overrides = overrides.as_array().ok_or_else(|| {
+                    ConfigError("auth.passwordPolicyOverrides must be an array".to_owned())
+                })?;
+                let mut seen = BTreeSet::new();
+                for (index, item) in overrides.iter().enumerate() {
+                    let path = format!("auth.passwordPolicyOverrides[{index}]");
+                    let item = item
+                        .as_object()
+                        .ok_or_else(|| ConfigError(format!("{path} must be an object")))?;
+                    for key in item.keys() {
+                        if !["projectId", "tenantId", "passwordPolicy"].contains(&key.as_str()) {
+                            return Err(ConfigError(format!("unknown config key {path}.{key}")));
+                        }
+                    }
+                    let project_id = item
+                        .get("projectId")
+                        .and_then(Value::as_str)
+                        .ok_or_else(|| ConfigError(format!("{path}.projectId must be a string")))
+                        .and_then(|id| {
+                            valid_policy_namespace_id(id, &format!("{path}.projectId"))
+                        })?;
+                    let tenant_id = match item.get("tenantId") {
+                        None => None,
+                        Some(value) => Some(valid_policy_namespace_id(
+                            value.as_str().ok_or_else(|| {
+                                ConfigError(format!("{path}.tenantId must be a non-empty string"))
+                            })?,
+                            &format!("{path}.tenantId"),
+                        )?),
+                    };
+                    let key = (project_id.clone(), tenant_id.clone());
+                    if !seen.insert(key) {
+                        return Err(ConfigError(format!(
+                            "duplicate password policy namespace at {path}"
+                        )));
+                    }
+                    if tenant_id.is_none()
+                        && cfg.auth_password_policy.is_some()
+                        && project_id == cfg.auth_project
+                    {
+                        return Err(ConfigError(
+                            "auth.passwordPolicy and a default-project passwordPolicyOverrides entry are ambiguous"
+                                .to_owned(),
+                        ));
+                    }
+                    let policy = item
+                        .get("passwordPolicy")
+                        .ok_or_else(|| ConfigError(format!("{path}.passwordPolicy is required")))?;
+                    cfg.auth_password_policy_overrides
+                        .push(PasswordPolicyOverride {
+                            project_id,
+                            tenant_id,
+                            password_policy: parse_password_policy(
+                                policy,
+                                &format!("{path}.passwordPolicy"),
+                            )?,
+                        });
+                }
             }
             if let Some(totp) = auth.get("totp") {
                 const TOTP_KEYS: [&str; 4] = [
@@ -2424,6 +3554,31 @@ mod tests {
     }
 
     #[test]
+    fn the_database_creation_time_is_configurable_and_defaults_to_the_daemon_start() {
+        let parse = |firestore: Value| {
+            RuntimeConfig::from_json(&json!({"schemaVersion": 1, "firestore": firestore}))
+        };
+        assert_eq!(
+            parse(json!({})).unwrap().database_create_time,
+            None,
+            "unset: the databases come into being when the daemon starts"
+        );
+        assert_eq!(
+            parse(json!({"databaseCreateTime": "2026-09-23T23:01:49.496838Z"}))
+                .unwrap()
+                .database_create_time,
+            Some(LogicalInstant::parse_rfc3339("2026-09-23T23:01:49.496838Z").unwrap())
+        );
+        for bad in [json!("yesterday"), json!(1_788_000_000), json!(null)] {
+            let error = parse(json!({"databaseCreateTime": bad})).unwrap_err();
+            assert!(
+                error.0.starts_with("firestore.databaseCreateTime"),
+                "{bad}: {error:?}"
+            );
+        }
+    }
+
+    #[test]
     fn the_profile_sets_the_defaults_it_owns_and_strict_is_the_default_profile() {
         // fireemu exists to match production, so a configuration that names no profile at
         // all runs under the strict validation, the same profile `fireemu init` recommends.
@@ -2432,19 +3587,22 @@ mod tests {
         assert_eq!(RuntimeConfig::default().profile, default.profile);
 
         // emulator: the pinned official Firestore emulator checks no composite index, does
-        // not refuse a query over a Standard limit, and admits the mock tokens
-        // @firebase/rules-unit-testing mints.
+        // not refuse a query over a Standard limit, admits the mock tokens
+        // @firebase/rules-unit-testing mints, and serves any syntactically valid database id
+        // without a create.
         let emulator = with_profile(json!({"profile": "emulator"})).unwrap();
         assert_eq!(emulator.profile, CompatibilityProfile::Emulator);
         assert_eq!(emulator.index_policy, IndexValidationPolicy::Emulator);
         assert!(!emulator.enforce_limits);
         assert_eq!(emulator.token_acceptance, TokenAcceptance::EmulatorMock);
+        assert!(emulator.implicit_database_creation);
 
         // strict: every one of those becomes production's refusal.
         let strict = with_profile(json!({"profile": "strict"})).unwrap();
         assert_eq!(strict.index_policy, IndexValidationPolicy::Production);
         assert!(strict.enforce_limits);
         assert_eq!(strict.token_acceptance, TokenAcceptance::Verified);
+        assert!(!strict.implicit_database_creation);
     }
 
     #[test]
@@ -2553,6 +3711,63 @@ mod tests {
         // The token semantics and the index policy have no key of their own: the profile is
         // the only way to ask for them, so an explicit limit switch never quietly loosens them.
         assert_eq!(cfg.token_acceptance, TokenAcceptance::Verified);
+    }
+
+    /// The minimum push redelivery interval is configurable and bounded, and it defaults to zero
+    /// so an unconfigured emulator redelivers as soon as possible, as production does.
+    #[test]
+    fn pubsub_push_minimum_redelivery_interval_is_parsed_bounded_and_defaults_to_immediate() {
+        let default = with_profile(json!({})).expect("a config without a pubsub section");
+        assert_eq!(
+            default.pubsub_push_minimum_redelivery_interval_millis, 0,
+            "the default must follow production, which redelivers as soon as possible"
+        );
+        assert_eq!(
+            fireemu_core_pubsub::subscription::DEFAULT_PUSH_MINIMUM_REDELIVERY_INTERVAL_MILLIS,
+            0
+        );
+
+        let configured = with_profile(json!({
+            "pubsub": {"pushMinimumRedeliveryIntervalMillis": 0}
+        }))
+        .expect("zero restores unthrottled redelivery");
+        assert_eq!(configured.pubsub_push_minimum_redelivery_interval_millis, 0);
+
+        let configured = with_profile(json!({
+            "pubsub": {"pushMinimumRedeliveryIntervalMillis": 2_500}
+        }))
+        .expect("an explicit interval");
+        assert_eq!(
+            configured.pubsub_push_minimum_redelivery_interval_millis,
+            2_500
+        );
+
+        for (pubsub, expected) in [
+            (
+                json!({"pushMinimumRedeliveryIntervalMillis": -1}),
+                "pubsub.pushMinimumRedeliveryIntervalMillis must be a non-negative integer",
+            ),
+            (
+                json!({"pushMinimumRedeliveryIntervalMillis": "100"}),
+                "pubsub.pushMinimumRedeliveryIntervalMillis must be a non-negative integer",
+            ),
+            (
+                json!({"pushMinimumRedeliveryIntervalMillis":
+                    MAX_PUSH_MINIMUM_REDELIVERY_INTERVAL_MILLIS + 1}),
+                "pubsub.pushMinimumRedeliveryIntervalMillis must not exceed",
+            ),
+            (
+                json!({"pushMinRedeliveryIntervalMillis": 100}),
+                "unknown config key pubsub.pushMinRedeliveryIntervalMillis",
+            ),
+        ] {
+            let error = with_profile(json!({"pubsub": pubsub})).expect_err("malformed pubsub");
+            assert!(
+                error.0.contains(expected),
+                "expected {expected}, got {}",
+                error.0
+            );
+        }
     }
 
     #[test]
@@ -3587,6 +4802,47 @@ mod tests {
     }
 
     #[test]
+    fn custom_token_signers_are_validated_when_the_configuration_is_read() {
+        // A public 2048-bit modulus; the key it belongs to was discarded.
+        let modulus = "0lwNtQWMVy0QqgEvrBmoFqwky_dcMx8CgS-o2rTesEV7QbG4cvNigTcDV7b_u0twRkJdonkMPjbUs0b8NKe_0_UOZ5vE_kILFG4TtPdeZWub8xnqhETc7WifXhEfqcB8xFbRyIxU9V0d_epsuNnQ-Nd7NlnFsH-aaq6f1HKp55_BVNxudwmHwT49P6JhNDDh7FWyoYBBBFtQ0St8dky4MFQTd2swZP4pEA8xGp-q-1mxbn0g9gfbq5voYWtOaDW9a2lsC_S_d6DecsrNWn4YYJ7Qc5xcx4pI70a23zftkVBj_I-Eip2hcvNUEsZJA4LlR4BgDLsNWu3ZWQxe08fOew";
+        let jwks = json!({"keys": [{"kty": "RSA", "alg": "RS256", "kid": "k", "n": modulus, "e": "AQAB"}]});
+        let account = "firebase-adminsdk-x@demo-project.iam.gserviceaccount.com";
+        let parsed = parse(&json!({"customTokenSigners": {account: jwks.clone()}})).unwrap();
+        assert_eq!(
+            parsed.auth_custom_token_signers,
+            Some(json!({account: jwks}).as_object().unwrap().clone())
+        );
+        assert_eq!(parse(&json!({})).unwrap().auth_custom_token_signers, None);
+        assert_eq!(
+            parse(&json!({"customTokenSigners": []})),
+            Err(ConfigError(
+                "auth.customTokenSigners must be an object".to_owned()
+            ))
+        );
+        assert_eq!(
+            parse(&json!({"apiKeys": ["fake-api-key", "AIza.x_y"]}))
+                .unwrap()
+                .auth_api_keys,
+            ["fake-api-key", "AIza.x_y"]
+        );
+        assert!(parse(&json!({})).unwrap().auth_api_keys.is_empty());
+        for bad in [
+            json!([]),
+            json!("k"),
+            json!([""]),
+            json!(["a b"]),
+            json!([1]),
+        ] {
+            assert!(parse(&json!({"apiKeys": bad})).is_err(), "{bad}");
+        }
+        let refused = parse(&json!({"customTokenSigners": {"a@example.com": {"keys": []}}}));
+        assert!(
+            matches!(&refused, Err(ConfigError(m)) if m.contains("not a service-account address")),
+            "{refused:?}"
+        );
+    }
+
+    #[test]
     fn raw_auth_credentials_require_an_explicit_forwarding_flag() {
         assert!(!parse(&json!({})).unwrap().auth_forward_inbound_credentials);
         assert!(
@@ -3663,5 +4919,315 @@ mod tests {
                 "accepted invalid Auth config: {invalid}"
             );
         }
+    }
+    #[test]
+    fn auth_project_numbers_are_explicit_validated_namespace_mappings() {
+        let cfg = RuntimeConfig::from_json(&json!({"schemaVersion":1,"daemon":{"authProjectNumbers":{"demo-one":"111111111111","demo-two":"222222222222","demo-max":"18446744073709551615"}}})).unwrap();
+        assert_eq!(
+            cfg.auth_project_numbers.get("demo-one"),
+            Some(&111_111_111_111)
+        );
+        assert_eq!(
+            cfg.auth_project_numbers.get("demo-two"),
+            Some(&222_222_222_222)
+        );
+        assert_eq!(cfg.auth_project_numbers.get("demo-max"), Some(&u64::MAX));
+        assert_eq!(cfg.auth_project_numbers.get("demo-unset"), None);
+        for invalid in [
+            json!(0),
+            json!("0"),
+            json!("-1"),
+            json!("x"),
+            json!("18446744073709551616"),
+        ] {
+            assert!(RuntimeConfig::from_json(
+                &json!({"schemaVersion":1,"daemon":{"authProjectNumbers":{"demo-one":invalid}}})
+            )
+            .is_err());
+        }
+    }
+
+    #[test]
+    fn password_policy_config_is_strict_and_preserves_unset_maximum() {
+        let cfg = RuntimeConfig::from_json(&json!({
+            "schemaVersion": 1,
+            "auth": {
+                "passwordPolicy": {
+                    "enforcementState": "ENFORCE",
+                    "forceUpgradeOnSignin": true,
+                    "constraints": {
+                        "minLength": 12,
+                        "requireUppercase": true,
+                        "requireNumeric": true
+                    }
+                },
+                "passwordPolicyOverrides": [{
+                    "projectId": "demo-other",
+                    "tenantId": "tenant-a",
+                    "passwordPolicy": {"enforcementState": "OFF"}
+                }]
+            }
+        }))
+        .unwrap();
+        let policy = cfg.auth_password_policy.unwrap();
+        assert_eq!(policy.enforcement_state, "ENFORCE");
+        assert!(policy.force_upgrade_on_signin);
+        assert_eq!(policy.constraints.min_length, 12);
+        assert_eq!(policy.constraints.max_length, None);
+        assert_eq!(cfg.auth_password_policy_overrides.len(), 1);
+        assert_eq!(
+            cfg.auth_password_policy_overrides[0].tenant_id.as_deref(),
+            Some("tenant-a")
+        );
+
+        for invalid in [
+            json!({"enforcementState":"NOTIFY"}),
+            json!({"enforcementState":"ENFORCE","constraints":{"minLength":5}}),
+            json!({"enforcementState":"ENFORCE","constraints":{"maxLength":5}}),
+            json!({"enforcementState":"ENFORCE","forceUpgradeOnSignin":"true"}),
+            json!({"enforcementState":"ENFORCE","constraints":{"requireNumeric":null}}),
+            json!({"enforcementState":"ENFORCE","unknown":true}),
+        ] {
+            assert!(
+                RuntimeConfig::from_json(&json!({
+                    "schemaVersion": 1,
+                    "auth": {"passwordPolicy": invalid}
+                }))
+                .is_err(),
+                "accepted invalid password policy: {invalid}"
+            );
+        }
+    }
+
+    #[test]
+    fn password_policy_overrides_reject_duplicate_or_ambiguous_namespaces() {
+        let duplicate = json!({
+            "schemaVersion": 1,
+            "auth": {"passwordPolicyOverrides": [
+                {"projectId":"demo-app","passwordPolicy":{"enforcementState":"OFF"}},
+                {"projectId":"demo-app","passwordPolicy":{"enforcementState":"ENFORCE"}}
+            ]}
+        });
+        assert!(RuntimeConfig::from_json(&duplicate).is_err());
+        let ambiguous = json!({
+            "schemaVersion": 1,
+            "auth": {
+                "passwordPolicy": {"enforcementState":"OFF"},
+                "passwordPolicyOverrides": [{"projectId":"demo-app","passwordPolicy":{"enforcementState":"OFF"}}]
+            }
+        });
+        assert!(RuntimeConfig::from_json(&ambiguous).is_err());
+        let null_tenant = json!({
+            "schemaVersion": 1,
+            "auth": {"passwordPolicyOverrides": [{"projectId":"demo-app","tenantId":null,"passwordPolicy":{"enforcementState":"OFF"}}]}
+        });
+        assert!(RuntimeConfig::from_json(&null_tenant).is_err());
+    }
+
+    #[test]
+    fn auth_client_settings_are_strict_and_keep_legacy_defaults() {
+        let defaults = parse(&json!({})).unwrap();
+        assert!(!defaults.auth_allow_duplicate_emails);
+        assert_eq!(
+            defaults.auth_client_permissions,
+            AuthClientPermissions::default()
+        );
+        assert!(defaults.auth_improved_email_privacy);
+
+        let configured = parse(&json!({
+            "signIn": {"allowDuplicateEmails": true},
+            "client": {"permissions": {
+                "disabledUserSignup": true,
+                "disabledUserDeletion": false
+            }},
+            "improvedEmailPrivacy": false
+        }))
+        .unwrap();
+        assert!(configured.auth_allow_duplicate_emails);
+        assert_eq!(
+            configured.auth_client_permissions,
+            AuthClientPermissions {
+                disabled_user_signup: true,
+                disabled_user_deletion: false,
+            }
+        );
+        assert!(!configured.auth_improved_email_privacy);
+
+        for invalid in [
+            json!({"signIn": {"allowDuplicateEmails": "true"}}),
+            json!({"signIn": {"allowDuplicateEmails": null}}),
+            json!({"client": {"permissions": {"disabledUserSignup": 1}}}),
+            json!({"client": {"permissions": {"disabledUserDeletion": null}}}),
+            json!({"improvedEmailPrivacy": null}),
+            json!({"client": {"unknown": false}}),
+            json!({"signIn": {"unknown": false}}),
+        ] {
+            assert!(
+                parse(&invalid).is_err(),
+                "accepted invalid Auth config: {invalid}"
+            );
+        }
+    }
+
+    #[test]
+    fn auth_config_overrides_are_namespace_scoped_and_strict() {
+        let cfg = parse(&json!({
+            "configOverrides": [
+                {
+                    "projectId": "demo-other",
+                    "config": {
+                        "client": {"permissions": {"disabledUserSignup": true}}
+                    }
+                },
+                {
+                    "projectId": "demo-app",
+                    "tenantId": "tenant-a",
+                    "config": {"improvedEmailPrivacy": false}
+                }
+            ]
+        }))
+        .unwrap();
+        assert_eq!(cfg.auth_config_overrides.len(), 2);
+        assert_eq!(
+            cfg.auth_config_overrides[0].config.client_permissions,
+            Some(AuthClientPermissions {
+                disabled_user_signup: true,
+                disabled_user_deletion: false,
+            })
+        );
+        assert_eq!(
+            cfg.auth_config_overrides[1].tenant_id.as_deref(),
+            Some("tenant-a")
+        );
+        assert_eq!(
+            cfg.auth_config_overrides[1].config.improved_email_privacy,
+            Some(false)
+        );
+
+        let duplicate = json!({
+            "configOverrides": [
+                {"projectId": "demo-other", "config": {"improvedEmailPrivacy": true}},
+                {"projectId": "demo-other", "config": {"improvedEmailPrivacy": false}}
+            ]
+        });
+        assert!(parse(&duplicate).is_err());
+        let ambiguous = json!({
+            "client": {"permissions": {"disabledUserSignup": true}},
+            "configOverrides": [{
+                "projectId": "demo-app",
+                "config": {"client": {"permissions": {"disabledUserSignup": false}}}
+            }]
+        });
+        assert!(parse(&ambiguous).is_err());
+        for invalid in [
+            json!({"configOverrides": true}),
+            json!({"configOverrides": [{"tenantId": "tenant-a", "config": {}}]}),
+            json!({"configOverrides": [{"projectId": "demo-app", "tenantId": "", "config": {"improvedEmailPrivacy": true}}]}),
+            json!({"configOverrides": [{"projectId": "demo-app", "tenantId": null, "config": {"improvedEmailPrivacy": true}}]}),
+            json!({"configOverrides": [{"projectId": "demo-app", "config": {"client": {"permissions": {"disabledUserSignup": "yes"}}}}]}),
+            json!({"configOverrides": [{"projectId": "demo-app", "config": {"unknown": true}}]}),
+        ] {
+            assert!(
+                parse(&invalid).is_err(),
+                "accepted invalid override: {invalid}"
+            );
+        }
+    }
+
+    #[test]
+    fn blocking_function_and_forwarding_settings_have_explicit_defaults_and_guards() {
+        assert!(parse(&json!({})).unwrap().auth_blocking_functions.is_none());
+        let cfg = parse(&json!({
+            "forwardInboundCredentials": true,
+            "blockingFunctions": {
+                "triggers": {
+                    "beforeCreate": {"function": "checkRegistration", "region": "us-central1"},
+                    "beforeSignIn": null
+                },
+                "forwardInboundCredentials": {
+                    "idToken": true,
+                    "accessToken": false,
+                    "refreshToken": true
+                }
+            }
+        }))
+        .unwrap();
+        let blocking = cfg.auth_blocking_functions.unwrap();
+        assert_eq!(
+            blocking.triggers.unwrap().before_create,
+            Some(BlockingFunctionTrigger {
+                function: "checkRegistration".to_owned(),
+                region: Some("us-central1".to_owned())
+            })
+        );
+        assert!(blocking.forward_inbound_credentials.unwrap().id_token);
+
+        for invalid in [
+            json!({"blockingFunctions": true}),
+            json!({"blockingFunctions": {"triggers": []}}),
+            json!({"blockingFunctions": {"triggers": {"beforeCreate": {"function": ""}}}}),
+            json!({"blockingFunctions": {"triggers": {"beforeCreate": {"function": "f", "unknown": true}}}}),
+            json!({"blockingFunctions": {"forwardInboundCredentials": {"idToken": true}}}),
+            json!({"forwardInboundCredentials": false, "blockingFunctions": {"forwardInboundCredentials": {"idToken": true}}}),
+        ] {
+            assert!(
+                parse(&invalid).is_err(),
+                "accepted invalid blocking config: {invalid}"
+            );
+        }
+    }
+
+    #[test]
+    fn auth_quota_config_and_simulation_are_strictly_typed_and_bounded() {
+        let cfg = parse(&json!({
+            "quota": {
+                "signUpQuotaConfig": {
+                    "quota": "200",
+                    "startTime": "2030-01-01T00:00:00Z",
+                    "quotaDuration": "86400s"
+                }
+            },
+            "quotaSimulation": {
+                "mode": "enforce",
+                "algorithm": "fixed-window-v1",
+                "defaultQuotaPerHour": 1000,
+                "maxTrackedBuckets": 16
+            }
+        }))
+        .unwrap();
+        let quota = cfg.auth_signup_quota.unwrap();
+        assert_eq!(quota.quota, "200");
+        assert_eq!(
+            quota.start_time.to_rfc3339().unwrap(),
+            "2030-01-01T00:00:00Z"
+        );
+        assert_eq!(quota.quota_duration.as_seconds(), 86_400);
+        assert_eq!(
+            cfg.auth_quota_simulation.mode,
+            AuthQuotaSimulationMode::Enforce
+        );
+        assert_eq!(cfg.auth_quota_simulation.default_quota_per_hour, 1000);
+        assert_eq!(cfg.auth_quota_simulation.max_tracked_buckets, 16);
+
+        for invalid in [
+            json!({"quota": {"signUpQuotaConfig": {"quota": 200, "startTime": "2030-01-01T00:00:00Z", "quotaDuration": "1s"}}}),
+            json!({"quota": {"signUpQuotaConfig": {"quota": "1", "startTime": "bad", "quotaDuration": "1s"}}}),
+            json!({"quota": {"signUpQuotaConfig": {"quota": "1", "startTime": "2030-01-01T00:00:00Z", "quotaDuration": "0s"}}}),
+            json!({"quota": {"signUpQuotaConfig": {"quota": "1", "startTime": "2030-01-01T00:00:00Z", "quotaDuration": "1m"}}}),
+            json!({"quota": {"signUpQuotaConfig": {"quota": "9223372036854775808", "startTime": "2030-01-01T00:00:00Z", "quotaDuration": "1s"}}}),
+            json!({"quotaSimulation": {"mode": "strict"}}),
+            json!({"quotaSimulation": {"algorithm": "sliding-window-v1"}}),
+            json!({"quotaSimulation": {"defaultQuotaPerHour": -1}}),
+            json!({"quotaSimulation": {"maxTrackedBuckets": 0}}),
+        ] {
+            assert!(
+                parse(&invalid).is_err(),
+                "accepted invalid quota config: {invalid}"
+            );
+        }
+        assert!(parse(&json!({"quota": {"signUpQuotaConfig": null}}))
+            .unwrap()
+            .auth_signup_quota
+            .is_none());
     }
 }

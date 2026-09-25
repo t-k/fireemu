@@ -1,0 +1,117 @@
+{
+  "schemaVersion": 1,
+  "kind": "pending-lifetime-boundary-case-mapping",
+  "reviewer": "Codex (agent-authored source interpretation, not human result approval)",
+  "reviewedAt": "2026-09-12",
+  "executionApproval": "not-conferred-by-source-review",
+  "sources": [
+    {
+      "id": "mfa-start",
+      "url": "https://docs.cloud.google.com/identity-platform/docs/reference/rest/v2/accounts.mfaSignIn/start",
+      "locators": [
+        "request-body",
+        "response-body"
+      ]
+    },
+    {
+      "id": "mfa-finalize",
+      "url": "https://docs.cloud.google.com/identity-platform/docs/reference/rest/v2/accounts.mfaSignIn/finalize",
+      "locators": [
+        "request-body",
+        "response-body"
+      ]
+    },
+    {
+      "id": "admin-update",
+      "url": "https://docs.cloud.google.com/identity-platform/docs/reference/rest/v1/projects.accounts/update",
+      "locators": [
+        "request-body"
+      ]
+    },
+    {
+      "id": "auth-rest",
+      "url": "https://firebase.google.com/docs/reference/rest/auth",
+      "locators": [
+        "section-sign-in-email-password",
+        "section-get-account-info"
+      ]
+    },
+    {
+      "id": "adc-expiry",
+      "url": "https://docs.cloud.google.com/sdk/gcloud/reference/auth/application-default/print-access-token",
+      "locators": [
+        "description"
+      ]
+    }
+  ],
+  "obligations": [
+    {
+      "case": "baseline-fresh-finalize",
+      "source": "mfa-finalize",
+      "basis": "control",
+      "condition": "A fresh pending credential completes phone MFA before aging; claims and derived lookup confirm the returned identity."
+    },
+    {
+      "case": "age-600s-start",
+      "source": "mfa-start",
+      "basis": "diagnostic",
+      "condition": "An independent pending credential remains untouched until at least 600 seconds after its acquisition response. Request a fresh SMS session and retain the start response plus measured pending-age interval. Acceptance and classified refusal are observations; neither establishes expiry causality."
+    },
+    {
+      "case": "age-600s-finalize",
+      "source": "mfa-finalize",
+      "basis": "diagnostic",
+      "condition": "If the 600-second start returned a session, finalize that fresh session and record token presence, claims and derived lookup checks. Otherwise skip. Keep start acceptance separate from full MFA completion; measure pending and session ages independently."
+    },
+    {
+      "case": "age-1800s-start",
+      "source": "mfa-start",
+      "basis": "diagnostic",
+      "condition": "An independent pending credential remains untouched until at least 1800 seconds after its acquisition response. Request a fresh SMS session and retain the start response plus measured pending-age interval. Acceptance and classified refusal are observations; neither establishes expiry causality."
+    },
+    {
+      "case": "age-1800s-finalize",
+      "source": "mfa-finalize",
+      "basis": "diagnostic",
+      "condition": "If the 1800-second start returned a session, finalize that fresh session and record token presence, claims and derived lookup checks. Otherwise skip. Keep start acceptance separate from full MFA completion; measure pending and session ages independently."
+    },
+    {
+      "case": "age-3300s-start",
+      "source": "mfa-start",
+      "basis": "diagnostic",
+      "condition": "An independent pending credential remains untouched until at least 3300 seconds after its acquisition response. Request a fresh SMS session and retain the start response plus measured pending-age interval. Acceptance and classified refusal are observations; neither establishes expiry causality."
+    },
+    {
+      "case": "age-3300s-finalize",
+      "source": "mfa-finalize",
+      "basis": "diagnostic",
+      "condition": "If the 3300-second start returned a session, finalize that fresh session and record token presence, claims and derived lookup checks. Otherwise skip. Keep start acceptance separate from full MFA completion; measure pending and session ages independently."
+    },
+    {
+      "case": "age-3900s-start",
+      "source": "mfa-start",
+      "basis": "diagnostic",
+      "condition": "An independent pending credential remains untouched until at least 3900 seconds after its acquisition response. Request a fresh SMS session and retain the start response plus measured pending-age interval. Acceptance and classified refusal are observations; neither establishes expiry causality."
+    },
+    {
+      "case": "age-3900s-finalize",
+      "source": "mfa-finalize",
+      "basis": "diagnostic",
+      "condition": "If the 3900-second start returned a session, finalize that fresh session and record token presence, claims and derived lookup checks. Otherwise skip. Keep start acceptance separate from full MFA completion; measure pending and session ages independently."
+    },
+    {
+      "case": "final-fresh-finalize",
+      "source": "mfa-finalize",
+      "basis": "control",
+      "condition": "A fresh pending completes MFA after aging. It confirms the control account flow works at the end; it does not prove why a different account pending was refused."
+    }
+  ],
+  "limitations": [
+    "A fully verified completion is a survival observation for the recorded configuration, method and single run, not a guarantee for every account.",
+    "A later invalid-pending refusal may supply a stage-specific boundary candidate using its measured age interval, never an established lifetime upper bound. Account equivalence, unchanged input/enrollment and monotonicity remain assumptions.",
+    "Missing pending and missing enrollment errors are possible input/account-state anomalies. Refusal followed by later success is nonmonotonic evidence, not a single-boundary proof.",
+    "The independently-valid-code versus expired-pending residual remains unobserved. No exact TTL, error precedence, tenant, blocking-function, SDK or Rules claim is made.",
+    "Administrative token expiry is checked through tokeninfo; acquisition age is only an additional refresh trigger. Privileged operations and refresh commands are phase-budgeted.",
+    "This source mapping does not grant execution permission or approve results. The project owner authorized the recorded production run separately; the receipt and comparison remain candidate."
+  ]
+}

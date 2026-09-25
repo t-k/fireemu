@@ -1,0 +1,97 @@
+{
+  "schemaVersion": 1,
+  "kind": "refusal-precedence-case-mapping",
+  "reviewer": "Claude (agent-authored interpretation, not human approval)",
+  "reviewedAt": "2026-09-12",
+  "executionApproval": "not-granted",
+  "sources": [
+    {
+      "id": "mfa-finalize",
+      "url": "https://docs.cloud.google.com/identity-platform/docs/reference/rest/v2/accounts.mfaSignIn/finalize",
+      "locators": ["request-body", "response-body"]
+    },
+    {
+      "id": "mfa-start",
+      "url": "https://docs.cloud.google.com/identity-platform/docs/reference/rest/v2/accounts.mfaSignIn/start",
+      "locators": ["request-body", "response-body"]
+    },
+    {
+      "id": "client-update",
+      "url": "https://docs.cloud.google.com/identity-platform/docs/reference/rest/v1/accounts/update",
+      "locators": ["request-body", "authorization-scopes"]
+    },
+    {
+      "id": "admin-update",
+      "url": "https://docs.cloud.google.com/identity-platform/docs/reference/rest/v1/projects.accounts/update",
+      "locators": ["request-body"]
+    },
+    {
+      "id": "auth-rest",
+      "url": "https://firebase.google.com/docs/reference/rest/auth",
+      "locators": ["section-sign-in-email-password", "section-get-account-info", "section-error-format"]
+    }
+  ],
+  "obligations": [
+    {
+      "case": "baseline-a-fresh-finalize",
+      "source": "mfa-finalize",
+      "basis": "harness-control",
+      "condition": "A fresh pending credential of A completes the phone second factor with the test number's fixed code before any overlap; the ID token names A through its claims and a derived lookup. Its ID token is the token the tampered row alters."
+    },
+    {
+      "case": "baseline-b-fresh-finalize",
+      "source": "mfa-finalize",
+      "basis": "harness-control",
+      "condition": "A fresh pending credential of B completes the phone second factor before any overlap."
+    },
+    {
+      "case": "invalid-token-admin-field-update",
+      "source": "client-update",
+      "basis": "diagnostic",
+      "condition": "Client accounts:update carrying A's baseline ID token with one signature character changed, a sentinel custom claim (an administrator-only field) and a sentinel photo URL, sent before any account is disabled. Which refusal class answers, or an acceptance with the fields it applied, is the observation; a privileged readback of A before and after projects whether anything changed."
+    },
+    {
+      "case": "disabled-a-wrong-code-finalize",
+      "source": "mfa-finalize",
+      "basis": "diagnostic",
+      "condition": "A's pending credential and SMS session were obtained while A was enabled; A is then disabled through privileged accounts:update and read back; the same credential and session are finalized with a fixed wrong code. Which refusal wins, or an acceptance with its token checks, is the observation."
+    },
+    {
+      "case": "disabled-b-correct-code-finalize",
+      "source": "mfa-finalize",
+      "basis": "diagnostic",
+      "condition": "B's pending credential and SMS session were obtained while B was enabled; B is disabled and read back at the same time as A; the same credential and session are finalized with the correct code. Compared with A's row this isolates whether the code or the account state is checked first."
+    },
+    {
+      "case": "reenabled-a-held-finalize",
+      "source": "mfa-finalize",
+      "basis": "diagnostic",
+      "condition": "After both accounts are re-enabled and read back, A's same pending credential and session are finalized with the correct code, showing whether the wrong-code refusal consumed them."
+    },
+    {
+      "case": "reenabled-b-held-finalize",
+      "source": "mfa-finalize",
+      "basis": "diagnostic",
+      "condition": "After re-enablement, B's same pending credential and session are finalized with the correct code, showing whether the account-state refusal consumed them."
+    },
+    {
+      "case": "final-a-fresh-finalize",
+      "source": "mfa-finalize",
+      "basis": "harness-control",
+      "condition": "A fresh sign-in of A completes the second factor after the run, bounding the run against a broken account."
+    },
+    {
+      "case": "final-b-fresh-finalize",
+      "source": "mfa-finalize",
+      "basis": "harness-control",
+      "condition": "A fresh sign-in of B completes the second factor after the run, bounding the run against an environment-wide failure."
+    }
+  ],
+  "limitations": [
+    "URLs were read during design; no new frozen full-body source snapshot or completed page-review claim is made by this mapping.",
+    "The sources define the operations, the error format and the fields; none of them states the order in which an invalid credential, a wrong code, a disabled account or a privileged field is checked. The observation, not the sources, answers that for the recorded conditions.",
+    "One SMS session per account, a fixed wrong code that differs from the test code in every position, phone MFA with test phone numbers, no tenant, no blocking function, one run. The pending credential's own expiry, refusals on mfaSignIn:start for a disabled account, TOTP and a valid token with a privileged field are not covered.",
+    "The oracle project's MFA, phone sign-in and SMS region configuration were changed for the run and restored; the restore readback and whole-configuration digest comparison are part of the receipt, not a claim about production defaults.",
+    "No execution approval, independent signature verification, SDK, Rules or expiry claim follows from this mapping."
+  ]
+}

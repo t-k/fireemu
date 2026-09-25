@@ -1,0 +1,84 @@
+{
+  "schemaVersion": 1,
+  "kind": "pending-lifetime-case-mapping",
+  "reviewer": "Claude (agent-authored interpretation, not human approval)",
+  "reviewedAt": "2026-09-12",
+  "executionApproval": "not-granted",
+  "sources": [
+    {
+      "id": "mfa-start",
+      "url": "https://docs.cloud.google.com/identity-platform/docs/reference/rest/v2/accounts.mfaSignIn/start",
+      "locators": ["request-body", "response-body"]
+    },
+    {
+      "id": "mfa-finalize",
+      "url": "https://docs.cloud.google.com/identity-platform/docs/reference/rest/v2/accounts.mfaSignIn/finalize",
+      "locators": ["request-body", "response-body"]
+    },
+    {
+      "id": "admin-update",
+      "url": "https://docs.cloud.google.com/identity-platform/docs/reference/rest/v1/projects.accounts/update",
+      "locators": ["request-body"]
+    },
+    {
+      "id": "auth-rest",
+      "url": "https://firebase.google.com/docs/reference/rest/auth",
+      "locators": ["section-sign-in-email-password", "section-get-account-info"]
+    }
+  ],
+  "obligations": [
+    {
+      "case": "baseline-fresh-finalize",
+      "source": "mfa-finalize",
+      "basis": "control",
+      "condition": "A fresh pending credential completes the phone second factor at the start of the run; identity confirmed by claims and a derived lookup. Establishes that the machinery works before any aging."
+    },
+    {
+      "case": "age-2s-start",
+      "source": "mfa-start",
+      "basis": "diagnostic",
+      "condition": "A pending credential held untouched for about 2 seconds is presented to mfaSignIn:start with a freshly opened SMS session. Accepted or refused are both valid observations; no TTL is pinned. The pending age and the session age are recorded separately."
+    },
+    {
+      "case": "age-2s-finalize",
+      "source": "mfa-finalize",
+      "basis": "diagnostic",
+      "condition": "If the 2-second start returned a session, that fresh session is finalized; skipped otherwise. Token checks are recorded as booleans, not required."
+    },
+    {
+      "case": "age-120s-start",
+      "source": "mfa-start",
+      "basis": "diagnostic",
+      "condition": "A pending credential held untouched for about 120 seconds is presented to mfaSignIn:start with a freshly opened SMS session. Accepted or refused are both valid observations."
+    },
+    {
+      "case": "age-120s-finalize",
+      "source": "mfa-finalize",
+      "basis": "diagnostic",
+      "condition": "If the 120-second start returned a session, that fresh session is finalized; skipped otherwise."
+    },
+    {
+      "case": "age-300s-start",
+      "source": "mfa-start",
+      "basis": "diagnostic",
+      "condition": "A pending credential held untouched for about 300 seconds is presented to mfaSignIn:start with a freshly opened SMS session. Accepted or refused are both valid observations."
+    },
+    {
+      "case": "age-300s-finalize",
+      "source": "mfa-finalize",
+      "basis": "diagnostic",
+      "condition": "If the 300-second start returned a session, that fresh session is finalized; skipped otherwise."
+    },
+    {
+      "case": "final-fresh-finalize",
+      "source": "mfa-finalize",
+      "basis": "control",
+      "condition": "A fresh pending credential completes the phone second factor after all aging; confirms the flow still works at the end, so a refused aged row reflects the pending age and not a broken run or exhausted quota."
+    }
+  ],
+  "limitations": [
+    "Revision 1 samples only 2, 120 and 300 seconds; every sampled age is below the 3600-second fireemu-local pending lifetime, so a fully-usable run establishes a lower bound on the lifetime, never an infinite lifetime or an exact TTL.",
+    "The corpus does not separate which of the pending credential or the SMS session expires first, and does not test an expired pending combined with an independently valid code; those are later corpora once feasibility is established.",
+    "No claim about tenants, blocking functions, SDKs, Security Rules, or the exact error precedence."
+  ]
+}

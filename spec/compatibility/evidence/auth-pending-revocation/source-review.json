@@ -1,0 +1,91 @@
+{
+  "schemaVersion": 1,
+  "kind": "mfa-pending-revocation-case-mapping",
+  "reviewer": "Claude (agent-authored interpretation, not human approval)",
+  "reviewedAt": "2026-09-11",
+  "executionApproval": "not-granted",
+  "sources": [
+    {
+      "id": "mfa-finalize",
+      "url": "https://docs.cloud.google.com/identity-platform/docs/reference/rest/v2/accounts.mfaSignIn/finalize",
+      "locators": ["request-body", "response-body"]
+    },
+    {
+      "id": "mfa-start",
+      "url": "https://docs.cloud.google.com/identity-platform/docs/reference/rest/v2/accounts.mfaSignIn/start",
+      "locators": ["request-body", "response-body"]
+    },
+    {
+      "id": "admin-update",
+      "url": "https://docs.cloud.google.com/identity-platform/docs/reference/rest/v1/projects.accounts/update",
+      "locators": ["request-body"]
+    },
+    {
+      "id": "sessions",
+      "url": "https://firebase.google.com/docs/auth/admin/manage-sessions",
+      "locators": ["manage_user_sessions"]
+    },
+    {
+      "id": "auth-rest",
+      "url": "https://firebase.google.com/docs/reference/rest/auth",
+      "locators": ["section-sign-in-email-password", "section-get-account-info", "section-refresh-token"]
+    }
+  ],
+  "obligations": [
+    {
+      "case": "baseline-a-fresh-finalize",
+      "source": "mfa-finalize",
+      "basis": "harness-control",
+      "condition": "A fresh pending credential of the target completes the phone second factor with the test number's fixed code before any revocation; the ID token names the target through its claims and a derived lookup."
+    },
+    {
+      "case": "baseline-b-fresh-finalize",
+      "source": "mfa-finalize",
+      "basis": "harness-control",
+      "condition": "A fresh pending credential of the control completes the phone second factor before any revocation."
+    },
+    {
+      "case": "revoked-a-held-start",
+      "source": "mfa-start",
+      "basis": "diagnostic",
+      "condition": "The pending credential issued before the validSince update is presented to mfaSignIn:start after the update and its readback. Accepted and refused are both valid observations; the row is always executed."
+    },
+    {
+      "case": "revoked-a-held-finalize",
+      "source": "mfa-finalize",
+      "basis": "diagnostic",
+      "condition": "If start was accepted, the same held credential is finalized with the fixed code. If accepted, the ID token's auth_time is compared with the set validSince and the identity is confirmed by claims and lookup; if refused, the later held rows are skipped."
+    },
+    {
+      "case": "revoked-a-held-lookup",
+      "source": "auth-rest",
+      "basis": "diagnostic",
+      "condition": "If finalize was accepted, accounts:lookup with the returned ID token names the target; executed exactly when finalize was accepted."
+    },
+    {
+      "case": "revoked-a-held-refresh",
+      "source": "auth-rest",
+      "basis": "diagnostic",
+      "condition": "If finalize was accepted, the returned refresh token is redeemed and the derived ID token names the target; executed exactly when finalize was accepted."
+    },
+    {
+      "case": "revoked-a-fresh-finalize",
+      "source": "mfa-finalize",
+      "basis": "harness-control",
+      "condition": "After the held observation, a fresh sign-in of the target completes the second factor, bounding the run against a broken account."
+    },
+    {
+      "case": "revoked-b-fresh-finalize",
+      "source": "mfa-finalize",
+      "basis": "harness-control",
+      "condition": "After the held observation, a fresh sign-in of the unaffected control completes the second factor, bounding the run against an environment-wide failure."
+    }
+  ],
+  "limitations": [
+    "URLs were read during design; no new frozen full-body source snapshot or completed page-review claim is made by this mapping.",
+    "The sources define the operations and the validSince semantics for refresh tokens; none of them states whether an MFA pending credential issued before a validSince update remains usable. The observation, not the sources, answers that for the recorded conditions.",
+    "Explicit validSince update only: no password change, no tenant, no blocking function, phone MFA with test phone numbers, one run. The interval between the update and the retry was not measured, and the refusal of a pre-update refresh token was not checked as a control.",
+    "The oracle project's MFA, phone sign-in and SMS region configuration were changed for the run and restored; the restore readback and whole-configuration digest comparison are part of the receipt, not a claim about production defaults.",
+    "No execution approval, independent signature verification, SDK checkRevoked, Rules or expiry claim follows from this mapping."
+  ]
+}

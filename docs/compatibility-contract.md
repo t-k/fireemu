@@ -9,6 +9,8 @@ The rule the gate enforces is the same one the requirement ledger enforces
 (`docs/verification-ledger.md`): **a statement that claims to hold names artifacts that exist**.
 A claim nothing executes is not a claim, it is marketing.
 
+The [generated compatibility inventory](compatibility/README.md) adds a separate source-to-requirement view for Auth and Firestore. Existing artifact references establish traceability; they do not establish that a particular release, configuration or SDK run succeeded. The normal `compat-check` CLI also validates the inventory and its generated pages. Regenerate them with `cargo run -p compat-check -- --write-inventory`; schema 1 accepts discovery pointers and mappings, but cannot accept completed source reviews or feature execution receipts. Unknown and deferred scope remains visible.
+
 ## Why a contract at all
 
 The Local Emulator Suite is a moving target. `firebase-tools` ships fifteen emulators today and

@@ -1,0 +1,500 @@
+{
+  "schemaVersion": 1,
+  "kind": "feature-goals-local-integration-v1",
+  "status": "candidate",
+  "runtimeCommit": "de8a14b87218cca78b8bc48db0890f678085f96e",
+  "productionExecuted": false,
+  "goals": [
+    {
+      "id": "G0",
+      "state": "waiting-owner",
+      "fixedCommit": "a35f85b464743d62344a3a58763d382b5b3838ce",
+      "unchanged": true,
+      "remaining": [
+        "owner",
+        "permission window",
+        "new nonce",
+        "settings and pricing acceptance",
+        "recovery owner"
+      ]
+    },
+    {
+      "id": "G1-local",
+      "state": "done",
+      "model": "gpt-5.6-luna",
+      "evidence": "4d4bd2a0-g1-local.json",
+      "productionParity": "unobserved for the added combinations"
+    },
+    {
+      "id": "G2-local",
+      "state": "done",
+      "model": "gpt-5.6-luna",
+      "evidence": "2367e203-goals-local.json",
+      "productionParity": "unobserved for the added conditions"
+    },
+    {
+      "id": "G3-local",
+      "state": "done",
+      "model": null,
+      "modelLimitation": "reused agent model not exposed",
+      "evidence": "2367e203-goals-local.json",
+      "productionParity": "unobserved; Node SDK Auth and Firestore gRPC only"
+    },
+    {
+      "id": "G4-read",
+      "state": "done-local",
+      "owner": "gpt-5.6-luna runtime owner; coordinator completed missing controls after review escalation",
+      "evidenceLevel": "public-specification-guided finite local execution, not production comparison",
+      "included": [
+        "Enterprise owner-authorized gRPC latest collection reads, including nested collections",
+        "Optional single top-level field-reference select alias stage followed by optional single nonnegative limit",
+        "Populated, empty, zero-limit, full multi-response drain and EOF, sibling/root namespace separation",
+        "Reject unsupported consistency, auto-commit, duplicate/out-of-order stages, nested and metadata expressions before read",
+        "Captured caller epoch checked inside guarded blocking read; current-epoch positive control"
+      ],
+      "excluded": [
+        "where and other stages/functions",
+        "nested field extraction and metadata expressions",
+        "transactions/read_time",
+        "production parity",
+        "total-memory and scan bounds"
+      ],
+      "newCapability": "Stored documents now produce projected pipeline results instead of all valid pipelines being refused as validation-only.",
+      "fixedDuringDevelopment": [
+        "silent consistency downgrade",
+        "overwritten repeated stages",
+        "silently omitted nested or document-name references",
+        "unrequested response metadata",
+        "missing captured-epoch read guard and collection-wide response batching"
+      ],
+      "newConfirmedProductionGaps": 0,
+      "review": [
+        {
+          "artifact": "g4-runtime-review-closure.md",
+          "sha256": "6b4f382d5422b4ef1ab97faf8cea4fab7d58af2bf27f2764001fb928b177294a",
+          "independent": true
+        },
+        {
+          "artifact": "g4-final-review.md",
+          "sha256": "d4244274542ee05e5f5b995ebaf5b42914dc1488a73a3f24c932ceb15fc2ed6e",
+          "independent": true
+        },
+        {
+          "artifact": "g4-catalog-review.md",
+          "sha256": "cd34ac8acd1ed4098c75ffd91301f43fbce368c855a67ab05bdd895a35ebea49",
+          "independent": true
+        }
+      ],
+      "parentEnterpriseState": "partial / waiting-oracle"
+    }
+  ],
+  "integratedSuites": [
+    {
+      "name": "grpc",
+      "commit": "ba38767b",
+      "passed": 131,
+      "failed": 0,
+      "skipped": 1,
+      "logSha256": "4e4dae752e1098c27e3393d79d496888cc60473b54755afa19e2842827373098"
+    },
+    {
+      "name": "auth",
+      "commit": "ba38767b",
+      "passed": 143,
+      "failed": 0,
+      "skipped": 0,
+      "logSha256": "c96e60c70bb547ce3d0e3d2ac73258cb4ec826f7598d1f60305246efa222345c"
+    },
+    {
+      "name": "store",
+      "commit": "ba38767b",
+      "passed": 46,
+      "failed": 0,
+      "skipped": 0,
+      "logSha256": "7b4d86dfaa11d60e327aae202bf8d36ff453c439c3890c8714adc8039b375cc0"
+    },
+    {
+      "name": "catalog-tests",
+      "commit": "ba38767b",
+      "passed": 14,
+      "failed": 0,
+      "skipped": 0,
+      "logSha256": "ca18cb7103ded5c544a107ac969f4748b7845ec4a2a8ab0377d581516a381034"
+    }
+  ],
+  "finalTargeted": {
+    "commit": "de8a14b8",
+    "passed": 4,
+    "failed": 0,
+    "skipped": 128
+  },
+  "verificationCommands": [
+    {
+      "name": "grpc",
+      "command": [
+        "cargo",
+        "nextest",
+        "run",
+        "-p",
+        "fireemu-adapter-grpc",
+        "--lib",
+        "--test",
+        "local",
+        "--profile",
+        "pr"
+      ],
+      "commit": "ba38767bdce0045f9860c40b9d55e3c026fa8d48",
+      "start": "2026-09-13T07:06:45.593096+00:00",
+      "end": "2026-09-13T07:06:52.986402+00:00",
+      "exitCode": 0
+    },
+    {
+      "name": "auth",
+      "command": [
+        "cargo",
+        "nextest",
+        "run",
+        "-p",
+        "fireemu-adapter-http",
+        "--test",
+        "auth_flows",
+        "--test",
+        "identity_toolkit",
+        "--profile",
+        "pr"
+      ],
+      "commit": "ba38767bdce0045f9860c40b9d55e3c026fa8d48",
+      "start": "2026-09-13T07:06:52.986842+00:00",
+      "end": "2026-09-13T07:06:55.031301+00:00",
+      "exitCode": 0
+    },
+    {
+      "name": "store",
+      "command": [
+        "cargo",
+        "nextest",
+        "run",
+        "-p",
+        "fireemu-core-firestore",
+        "--test",
+        "store",
+        "--profile",
+        "pr"
+      ],
+      "commit": "ba38767bdce0045f9860c40b9d55e3c026fa8d48",
+      "start": "2026-09-13T07:06:55.031823+00:00",
+      "end": "2026-09-13T07:06:56.349851+00:00",
+      "exitCode": 0
+    },
+    {
+      "name": "catalog-tests",
+      "command": [
+        "cargo",
+        "nextest",
+        "run",
+        "-p",
+        "compat-check",
+        "--profile",
+        "pr"
+      ],
+      "commit": "ba38767bdce0045f9860c40b9d55e3c026fa8d48",
+      "start": "2026-09-13T07:06:56.350175+00:00",
+      "end": "2026-09-13T07:07:00.104530+00:00",
+      "exitCode": 0
+    },
+    {
+      "name": "catalog-check",
+      "command": [
+        "cargo",
+        "run",
+        "--locked",
+        "-p",
+        "compat-check"
+      ],
+      "commit": "ba38767bdce0045f9860c40b9d55e3c026fa8d48",
+      "start": "2026-09-13T07:07:00.104868+00:00",
+      "end": "2026-09-13T07:07:01.058882+00:00",
+      "exitCode": 0
+    },
+    {
+      "name": "clippy",
+      "command": [
+        "cargo",
+        "clippy",
+        "-p",
+        "fireemu-adapter-grpc",
+        "--all-targets",
+        "--",
+        "-D",
+        "warnings"
+      ],
+      "commit": "ba38767bdce0045f9860c40b9d55e3c026fa8d48",
+      "start": "2026-09-13T07:07:01.059199+00:00",
+      "end": "2026-09-13T07:07:06.830348+00:00",
+      "exitCode": 101
+    },
+    {
+      "name": "targeted",
+      "command": [
+        "cargo",
+        "nextest",
+        "run",
+        "-p",
+        "fireemu-adapter-grpc",
+        "--lib",
+        "--test",
+        "local",
+        "-E",
+        "test(execute_pipeline) | test(failed_commit_keeps_transaction)",
+        "--profile",
+        "pr"
+      ],
+      "commit": "de8a14b87218cca78b8bc48db0890f678085f96e",
+      "start": "2026-09-13T07:08:40.174448+00:00",
+      "end": "2026-09-13T07:08:41.739986+00:00",
+      "exitCode": 0
+    },
+    {
+      "name": "first46",
+      "command": [
+        "uv",
+        "run",
+        "--project",
+        "tools/compat-inventory",
+        "--locked",
+        "--python",
+        "3.12",
+        "tools/compat-broad/batch_local.py",
+        "--output",
+        "docs.local/logs/2026-09-13/goals/de8a14b8-first46"
+      ],
+      "commit": "de8a14b87218cca78b8bc48db0890f678085f96e",
+      "start": "2026-09-13T07:08:41.740402+00:00",
+      "end": "2026-09-13T07:09:11.596181+00:00",
+      "exitCode": 0
+    },
+    {
+      "name": "second45",
+      "command": [
+        "uv",
+        "run",
+        "--project",
+        "tools/compat-inventory",
+        "--locked",
+        "--python",
+        "3.12",
+        "tools/compat-broad/second_mapped.py",
+        "--output",
+        "docs.local/logs/2026-09-13/goals/de8a14b8-second45"
+      ],
+      "commit": "de8a14b87218cca78b8bc48db0890f678085f96e",
+      "start": "2026-09-13T07:09:11.596636+00:00",
+      "end": "2026-09-13T07:12:03.024153+00:00",
+      "exitCode": 0
+    }
+  ],
+  "lint": {
+    "initialIntegrated": "ba38767b failed only the G2 scenario length lint",
+    "correctionCommit": "de8a14b8",
+    "corrected": "cargo clippy -p fireemu-adapter-grpc --all-targets -- -D warnings passed before the correction commit",
+    "runtimeBehaviorChangedByLintCorrection": false
+  },
+  "mutation": {
+    "normalCommit": "7d4d5df6",
+    "normalAndMutationOutputsDisjoint": true,
+    "gate": "tools/compat-inventory/mutation_cargo.py",
+    "results": [
+      {
+        "mutation": "name-refusal",
+        "patchSha256": "a99b20fe67484fa462dd42bb825e4e37c4d244d962b0ab8b4e2170b4f48c8966",
+        "baseCommit": "7d4d5df6",
+        "command": [
+          "cargo",
+          "nextest",
+          "run",
+          "-p",
+          "fireemu-adapter-grpc",
+          "--lib",
+          "--test",
+          "local",
+          "execute_pipeline",
+          "--profile",
+          "pr"
+        ],
+        "start": "2026-09-13T07:05:10.427412+00:00",
+        "end": "2026-09-13T07:05:17.142648+00:00",
+        "exitCode": 100,
+        "detectedByTestFailure": true,
+        "comparisonWithNormal": "normal selected tests pass; one named test fails per mutant; no compiler failure"
+      },
+      {
+        "mutation": "epoch-guard",
+        "patchSha256": "68e070f55c79044d3d1f4dabc70b4c0efe1b1a602015878e0fdc9888a424cd1f",
+        "baseCommit": "7d4d5df6",
+        "command": [
+          "cargo",
+          "nextest",
+          "run",
+          "-p",
+          "fireemu-adapter-grpc",
+          "--lib",
+          "--test",
+          "local",
+          "execute_pipeline",
+          "--profile",
+          "pr"
+        ],
+        "start": "2026-09-13T07:05:17.288568+00:00",
+        "end": "2026-09-13T07:05:18.642088+00:00",
+        "exitCode": 100,
+        "detectedByTestFailure": true,
+        "comparisonWithNormal": "normal selected tests pass; one named test fails per mutant; no compiler failure"
+      }
+    ],
+    "limitedScope": "two selected protection deletions, not exhaustive mutation or formal verification"
+  },
+  "regressions": {
+    "first46": {
+      "executionCommit": "de8a14b87218cca78b8bc48db0890f678085f96e",
+      "artifactSha256": "7e75d72032a453bd736c45e7f13436077eece0c1b687a1bd1c6e637c7829a4f6",
+      "ownedProcess": {
+        "pid": 35182,
+        "stopped": true,
+        "listenersClosed": true
+      },
+      "recordingComplete": true,
+      "unrecovered": [],
+      "rows": 46,
+      "savedProductionComparison": {
+        "mode": "saved-production-versus-local",
+        "source": {
+          "publicationCommit": "ab7bd698",
+          "executionCommit": "bc38f392077784509f7fbb8993d5be66c1a8be14",
+          "observerDigest": "1501aea61749d79d32238b9329f3d75370d9d500322ffab331ec0c8b3505342f",
+          "manifestDigest": "4b6d42bc5acd1a697622b25325ba67620af272d5c44f5d00982dbffe8bb8cc3f",
+          "comparisonContractDigest": "ec0ef13fc77b6edf0f4940f472267b91b117707b36aac15a00c0a6aea96e89dc",
+          "fileSha256": {
+            "bc38f392-paired-observations.json": "a7809362c9c3a69d6a03a4f68e69aea0de34e29771f5bd36b2053359c609114c",
+            "bc38f392-execution-result.json": "5997e5ecc9f3da0addeed6b88c290cfc97c496e317c7625a9175232105953b88"
+          },
+          "originalComparisonCounts": {
+            "match": 35,
+            "mismatch": 11
+          },
+          "limitation": "Uses pinned published normalized observations; previously removed token bytes and absolute times are not recovered. No new production execution."
+        },
+        "localObserverDigest": "1045d0940439fdcb3d6ac228b1c408a49a98893785cd89ce13851e5096acaee5",
+        "evidenceKind": "recorded-observations",
+        "recordingComplete": true,
+        "bindingsValid": true,
+        "bindingErrors": [],
+        "cleanupComplete": true,
+        "compatibility": "match",
+        "manifestDigest": "6f0fa73a8fe494709b883c440266c721157d8ec44252fb81c331f2a10642d534",
+        "comparisonContractDigest": "467df4b222eec0b35a800c5cddc434413711c26400668cd4fddb57bdfed09cea"
+      },
+      "comparedRows": 46,
+      "comparisonCommand": "uv run --project tools/compat-inventory --locked --python 3.12 tools/compat-broad/batch_pair.py --saved-ab7bd698 --local <private-first46>/batch/result.json --output <new-private-comparison.json> --check"
+    },
+    "second45": {
+      "executionCommit": "de8a14b87218cca78b8bc48db0890f678085f96e",
+      "artifactSha256": "6a1292eccd6f35773f74244f558e9a1791482949cb0fb228af20c29a6d449733",
+      "ownedProcess": {
+        "pid": 35447,
+        "stopped": true,
+        "listenersClosed": true
+      },
+      "recordingComplete": true,
+      "cleanupComplete": true,
+      "stateValidation": true,
+      "mapping": "match",
+      "rows": 45,
+      "productionCompatibility": "unobserved in this local mapping run; historical32/13 and corrected45 matches remain unchanged",
+      "comparisonContract": "second45-received-json-semantics-v1"
+    }
+  },
+  "testArtifacts": [
+    {
+      "suite": "fireemu-adapter-grpc",
+      "sha256": "5dcbae9e598743b305994cdd5a34df4feecd9e7f02b1bf89c291c8ddcac2f76b",
+      "timing": "hashed and copied after successful targeted run on unchanged de8a14b8 checkout"
+    },
+    {
+      "suite": "fireemu-adapter-grpc::local",
+      "sha256": "35c854a074693bfe823d543835a639735fee2e9a193d0a52cf447e79db272c0a",
+      "timing": "hashed and copied after successful targeted run on unchanged de8a14b8 checkout"
+    }
+  ],
+  "sourceReferences": [
+    "https://firebase.google.com/docs/firestore/pipelines/stages/input/collection",
+    "https://firebase.google.com/docs/firestore/pipelines/stages/transformation/select",
+    "https://firebase.google.com/docs/firestore/pipelines/stages/transformation/limit",
+    "crates/fireemu-proto-firestore/proto/google/firestore/v1/firestore.proto"
+  ],
+  "measurement": {
+    "recordedAt": "2026-09-13T07:15:11.114264+00:00",
+    "modelTokenCost": null,
+    "categoryTiming": "command start/end timestamps are recorded; unmeasured preparation/review/analysis time is not estimated",
+    "ownerReportLimitation": "Early G4 author timings and test completeness were not relied on; root selected/integrated checks and independent closure are recorded here."
+  },
+  "limitations": [
+    "Historical193 comparisons and all old45/46 receipts, contracts and artifacts are retained, not reclassified.",
+    "Original worker G2 and superseded G3 binaries were not retained after worktree cleanup; their reported hashes/logs are not replaced. Integrated G2/G1 and final G3/G4 artifacts are retained separately.",
+    "The first46 and second45 wrappers made separate normal builds with distinct hashes from the same fixed source; neither mutation build was adopted.",
+    "No new production read, authentication check or data operation was performed.",
+    "The full workspace suite and browser/WebChannel/Enterprise production paths were not run."
+  ],
+  "cleanup": {
+    "start": "2026-09-13T07:15:58.831415+00:00",
+    "worktrees": [
+      {
+        "name": "goal-g1",
+        "commit": "3c9f0befeefca244c08763cff4df741ebf10e155",
+        "readyToRemove": true,
+        "sourceChangesPreserved": true,
+        "removed": true
+      },
+      {
+        "name": "goal-g4",
+        "commit": "3dcfb84145b7e0884734adf20b0239cb1f5a624d",
+        "readyToRemove": true,
+        "sourceChangesPreserved": true,
+        "removed": true
+      },
+      {
+        "name": "goal-g4-finish",
+        "commit": "7d4d5df696c925e0dc74b79e0c9afef1332dc4d5",
+        "readyToRemove": true,
+        "sourceChangesPreserved": true,
+        "removed": true
+      },
+      {
+        "name": "goal-g4-mutation",
+        "commit": "7d4d5df696c925e0dc74b79e0c9afef1332dc4d5",
+        "readyToRemove": true,
+        "sourceChangesPreserved": true,
+        "removed": true
+      }
+    ],
+    "mutationOutputRemoved": true,
+    "ownedProcesses": [
+      {
+        "pid": 35182,
+        "pidAbsent": true,
+        "sameTaskStillRunning": false
+      },
+      {
+        "pid": 35447,
+        "pidAbsent": true,
+        "sameTaskStillRunning": false
+      },
+      {
+        "pid": 31280,
+        "pidAbsent": true,
+        "sameTaskStillRunning": false
+      }
+    ],
+    "end": "2026-09-13T07:16:31.290848+00:00",
+    "unrecoveredOwnedResources": []
+  }
+}

@@ -1,0 +1,19 @@
+{
+  "schemaVersion": 1,
+  "subjectSha256": "5f13dcc611017940756158cbf225cc2efd85ffeed4d40fca4445039d7088a885",
+  "sourceCommit": "6618d9365402f9d05e6f390ca1ef623052dac4ae",
+  "scope": "Eight recorded input patterns rechecked on the corrected local artifact against unchanged saved production observations. End-user token REST routes, no tenant, local strict profile and the recorded minimum 6 / maximum 4096 password policy. Approval covers acceptance/refusal, branch-specific credential use, selected account-state checks and recorded account deletion/process termination. This is not a new production run; random prefixes and accounts differ between runs. It does not cover all Unicode strings, normalization, length limits on other routes, elapsed expiry, SDK, Rules or fault recovery.",
+  "cases": [
+    "ascii-at",
+    "ascii-over",
+    "bmp-byte-at",
+    "bmp-byte-over",
+    "astral-unit-at",
+    "astral-unit-over",
+    "bmp-scalar-at",
+    "bmp-scalar-over"
+  ],
+  "reviewer": "github:t-k (id:426779)",
+  "reviewedAt": "2026-09-10",
+  "decision": "approve"
+}

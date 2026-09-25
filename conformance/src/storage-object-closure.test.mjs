@@ -104,6 +104,32 @@ test("scope decisions remain visible until the owner decides them", () => {
   }
 });
 
+test("frozen scope cites the owner decision and discloses the large-object limit", () => {
+  const closure = load();
+  assert.equal(closure.inventoryState, "FROZEN");
+  for (const decision of closure.scopeDecisions) {
+    assert.equal(decision.status, "APPROVED", decision.id);
+    assert.equal(decision.decidedBy, "owner", decision.id);
+    assert.equal(decision.decidedOn, "2026-09-25", decision.id);
+    assert.equal(
+      decision.ownerDecisionRef,
+      "docs.local/instructions/owner-decisions.md (2026-09-25, STORAGE-OBJECT S1-S7)",
+      decision.id,
+    );
+  }
+  const contract = JSON.parse(
+    readFileSync(new URL("spec/compatibility/contract.json", root), "utf8"),
+  );
+  const objects = contract.surfaces.find(({ id }) => id === "storage")?.claims.find(
+    ({ id }) => id === "ST-CLAIM-OBJECTS",
+  );
+  assert.ok(
+    objects.fireemuOnly.some(({ behaviour }) =>
+      /STORAGE-OBJECT S6.*known limitation.*256 MiB/.test(behaviour),
+    ),
+  );
+});
+
 test("parent promotion requires frozen scope, two recordings, final comparison and review", () => {
   const closure = load();
   const allVerified = closure.conditions.every(({ status }) => status === "VERIFIED");

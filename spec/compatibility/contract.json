@@ -1424,7 +1424,7 @@
           ],
           "fireemuOnly": [
             {
-              "behaviour": "a 256 MiB object cap, a 260 MiB body cap and a process-wide 1 GiB buffered-body budget answered with 503 and Retry-After",
+              "behaviour": "STORAGE-OBJECT S6 known limitation: fireemu has a 256 MiB object cap, a 260 MiB body cap and a process-wide 1 GiB buffered-body budget answered with 503 and Retry-After. The STORAGE-OBJECT production closure does not claim parity for objects larger than 256 MiB; the cap is tracked as a separate issue.",
               "precision": "conservative"
             },
             {

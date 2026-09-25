@@ -30,7 +30,7 @@ use fireemu_core_types::resources::{
 };
 use fireemu_core_types::time::{LogicalDuration, LogicalInstant};
 use serde_json::{json, Value};
-use tokio::sync::Notify;
+use tokio::sync::{Mutex as AsyncMutex, Notify, OwnedMutexGuard};
 
 use crate::events::{
     auth_event, change_kind, firestore_event, pubsub_event, schedule_event, storage_event,
@@ -73,6 +73,8 @@ pub const MAX_ACTIVE_EVENTARC_RECORDS: usize = 3072;
 pub const MAX_ACTIVE_EVENTARC_BYTES: usize = 48 * 1024 * 1024;
 /// Maximum deliveries one Eventarc publication may add after duplicate fault expansion.
 pub const MAX_EVENTARC_DELIVERIES_PER_PUBLISH: usize = 256;
+const RUNNER_RESTART_ATTEMPTS: u32 = 5;
+const RUNNER_RESTART_WINDOW: Duration = Duration::from_secs(30);
 
 async fn forward_with_debug_deadline(
     debug_mode: bool,
@@ -109,13 +111,22 @@ fn runner_headers(headers: &[(String, String)], secret: &str) -> Vec<(String, St
 }
 
 /// One HTTP function the proxy can reach.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone)]
 pub struct HttpTarget {
     /// Function name.
     pub function: String,
     /// Runner HTTP address.
     pub addr: String,
+    origin_runner: std::sync::Weak<Runner>,
 }
+
+impl PartialEq for HttpTarget {
+    fn eq(&self, other: &Self) -> bool {
+        self.function == other.function && self.addr == other.addr
+    }
+}
+
+impl Eq for HttpTarget {}
 
 /// The two response shapes an SSE-capable HTTP invocation can produce.
 pub enum HttpStreamStart {
@@ -752,6 +763,58 @@ struct Codebase {
     name: String,
     manifest: FunctionManifest,
     generation: std::sync::RwLock<CodebaseGeneration>,
+    restart_gate: Arc<AsyncMutex<()>>,
+    restart_budget: Mutex<RestartBudget>,
+    restart_wake_scheduled: std::sync::atomic::AtomicBool,
+}
+
+#[derive(Default)]
+struct RestartBudget {
+    attempts: u32,
+    window_started: Option<std::time::Instant>,
+}
+
+impl RestartBudget {
+    fn cooldown_remaining(&self) -> Option<Duration> {
+        (self.attempts >= RUNNER_RESTART_ATTEMPTS)
+            .then_some(self.window_started?)
+            .map(|started| RUNNER_RESTART_WINDOW.saturating_sub(started.elapsed()))
+    }
+
+    fn next_delay(&mut self) -> Result<Duration, String> {
+        let now = std::time::Instant::now();
+        if self
+            .window_started
+            .is_none_or(|started| now.duration_since(started) >= RUNNER_RESTART_WINDOW)
+        {
+            self.attempts = 0;
+            self.window_started = Some(now);
+        }
+        if self.attempts >= RUNNER_RESTART_ATTEMPTS {
+            return Err("functions runner restart limit reached".to_owned());
+        }
+        let delay = if self.attempts == 0 {
+            Duration::ZERO
+        } else {
+            Duration::from_millis(100 * (1 << (self.attempts - 1)))
+        };
+        self.attempts += 1;
+        Ok(delay)
+    }
+}
+
+impl Codebase {
+    fn exhaust_restart_budget(&self) {
+        if let Ok(mut budget) = self.restart_budget.lock() {
+            if budget
+                .window_started
+                .is_none_or(|started| started.elapsed() >= RUNNER_RESTART_WINDOW)
+            {
+                budget.attempts = RUNNER_RESTART_ATTEMPTS;
+                budget.window_started = Some(std::time::Instant::now());
+            }
+        }
+    }
 }
 
 struct CodebaseGeneration {
@@ -1028,6 +1091,9 @@ impl FunctionsRuntime {
                 .map(|c| Codebase {
                     name: c.name,
                     manifest: c.manifest,
+                    restart_gate: Arc::new(AsyncMutex::new(())),
+                    restart_budget: Mutex::new(RestartBudget::default()),
+                    restart_wake_scheduled: std::sync::atomic::AtomicBool::new(false),
                     generation: std::sync::RwLock::new(CodebaseGeneration {
                         revision: 0,
                         runner: c.runner,
@@ -1288,6 +1354,9 @@ impl FunctionsRuntime {
         };
         self.trigger_generation
             .store(generation, std::sync::atomic::Ordering::SeqCst);
+        if let Ok(mut budget) = codebase.restart_budget.lock() {
+            *budget = RestartBudget::default();
+        }
         *eventarc_registry = next_eventarc_registry;
         drop(eventarc_registry);
         // In-flight invocations retain their `Arc`; killing after publication prevents any
@@ -2776,6 +2845,9 @@ impl FunctionsRuntime {
     /// supersedes it).
     fn respawn_runner(self: &Arc<Self>, generation: Option<Epoch>) {
         for index in 0..self.codebases.len() {
+            if let Ok(mut budget) = self.codebases[index].restart_budget.lock() {
+                *budget = RestartBudget::default();
+            }
             self.respawn_one(index, generation);
         }
     }
@@ -2796,6 +2868,233 @@ impl FunctionsRuntime {
         };
         respawn.runner.kill_now();
         self.spawn_captured(index, generation, respawn);
+    }
+
+    /// Starts a replacement only when queued work needs a dead codebase. The gate prevents
+    /// simultaneous dispatch passes from launching a separate runner for the same generation.
+    fn schedule_dead_runner_recovery(self: &Arc<Self>, index: usize) {
+        let Some(codebase) = self.codebases.get(index) else {
+            return;
+        };
+        if codebase.generation().runner.is_alive() {
+            return;
+        }
+        if let Ok(gate) = codebase.restart_gate.clone().try_lock_owned() {
+            let runtime = self.clone();
+            tokio::spawn(async move {
+                if let Err(error) = runtime.recover_dead_runner_locked(index, gate).await {
+                    eprintln!("[functions] runner recovery failed: {error}");
+                    let codebase = &runtime.codebases[index];
+                    let remaining = codebase
+                        .restart_budget
+                        .lock()
+                        .ok()
+                        .and_then(|budget| budget.cooldown_remaining());
+                    if let Some(remaining) = remaining {
+                        if !codebase
+                            .restart_wake_scheduled
+                            .swap(true, std::sync::atomic::Ordering::SeqCst)
+                        {
+                            tokio::time::sleep(remaining).await;
+                            codebase
+                                .restart_wake_scheduled
+                                .store(false, std::sync::atomic::Ordering::SeqCst);
+                            runtime.wake.notify_one();
+                        }
+                    }
+                }
+            });
+        }
+    }
+
+    async fn recover_dead_runner(self: &Arc<Self>, index: usize) -> Result<Arc<Runner>, String> {
+        let codebase = self
+            .codebases
+            .get(index)
+            .ok_or_else(|| "function has no codebase owner".to_owned())?;
+        let gate = codebase.restart_gate.clone().lock_owned().await;
+        self.recover_dead_runner_locked(index, gate).await
+    }
+
+    async fn recover_dead_runner_locked(
+        self: &Arc<Self>,
+        index: usize,
+        _gate: OwnedMutexGuard<()>,
+    ) -> Result<Arc<Runner>, String> {
+        let codebase = &self.codebases[index];
+        let mut attempts_this_call = 0;
+        loop {
+            if self.shutting_down.load(std::sync::atomic::Ordering::SeqCst) {
+                return Err("the Functions runtime is shutting down".to_owned());
+            }
+            let (epoch, respawn, blocking_restart) = {
+                let inner = self
+                    .inner
+                    .lock()
+                    .map_err(|_| "runtime poisoned".to_owned())?;
+                let current = codebase.generation();
+                (
+                    inner.epoch,
+                    RespawnGeneration {
+                        runner: current.runner.clone(),
+                        spawn: current.spawn.clone(),
+                        revision: current.revision,
+                        cleanup_dir: current.cleanup_dir.clone(),
+                    },
+                    current.blocking_restart_ticket.is_some(),
+                )
+            };
+            if blocking_restart {
+                let timeout = respawn
+                    .spawn
+                    .as_ref()
+                    .map_or(Duration::from_secs(60), |spawn| spawn.hello_timeout);
+                tokio::time::timeout(timeout, async {
+                    while codebase.generation().blocking_restart_ticket.is_some() {
+                        if self.shutting_down.load(std::sync::atomic::Ordering::SeqCst) {
+                            break;
+                        }
+                        tokio::time::sleep(Duration::from_millis(20)).await;
+                    }
+                })
+                .await
+                .map_err(|_| "Blocking Auth runner restart did not finish".to_owned())?;
+                continue;
+            }
+            if respawn.runner.is_alive() {
+                return Ok(respawn.runner);
+            }
+            let spawn = respawn
+                .spawn
+                .as_ref()
+                .ok_or_else(|| "functions runner cannot be restarted".to_owned())?;
+            if attempts_this_call >= RUNNER_RESTART_ATTEMPTS {
+                codebase.exhaust_restart_budget();
+                return Err("functions runner restart limit reached".to_owned());
+            }
+            let delay = codebase
+                .restart_budget
+                .lock()
+                .map_err(|_| "runner restart budget poisoned".to_owned())?
+                .next_delay()?;
+            attempts_this_call += 1;
+            if !delay.is_zero() {
+                tokio::time::sleep(delay).await;
+            }
+            // A reset or reload may have replaced the source while backoff elapsed.
+            let still_current = self.inner.lock().is_ok_and(|inner| {
+                inner.epoch == epoch && {
+                    let current = codebase.generation();
+                    current.revision == respawn.revision
+                        && Arc::ptr_eq(&current.runner, &respawn.runner)
+                }
+            });
+            if !still_current || self.shutting_down.load(std::sync::atomic::Ordering::SeqCst) {
+                return Err("runner recovery was superseded".to_owned());
+            }
+            let _source_generation = respawn.cleanup_dir;
+            let runner = match Runner::spawn_spec(spawn).await {
+                Ok(runner) => Arc::new(runner),
+                Err(error) => {
+                    eprintln!("[functions] runner restart attempt failed: {error}");
+                    continue;
+                }
+            };
+            let old = self.inner.lock().ok().and_then(|inner| {
+                let mut current = codebase.generation_mut();
+                (inner.epoch == epoch
+                    && !self.shutting_down.load(std::sync::atomic::Ordering::SeqCst)
+                    && current.revision == respawn.revision
+                    && Arc::ptr_eq(&current.runner, &respawn.runner))
+                .then(|| std::mem::replace(&mut current.runner, runner.clone()))
+            });
+            if let Some(old) = old {
+                old.kill_now();
+                self.wake.notify_one();
+                return Ok(runner);
+            }
+            runner.kill_now();
+            return Err("runner recovery was superseded".to_owned());
+        }
+    }
+
+    async fn current_http_addr(self: &Arc<Self>, target: &HttpTarget) -> Result<String, String> {
+        let index = self
+            .owner
+            .get(&target.function)
+            .copied()
+            .ok_or_else(|| format!("function {} has no codebase owner", target.function))?;
+        let current = self.runner_at(index);
+        if current.is_alive() && target.origin_runner.ptr_eq(&Arc::downgrade(&current)) {
+            return Ok(target.addr.clone());
+        }
+        let runner = self.recover_dead_runner(index).await?;
+        let port = runner
+            .hello()
+            .http_port
+            .ok_or_else(|| format!("function {} has no HTTP runner", target.function))?;
+        Ok(format!("127.0.0.1:{port}"))
+    }
+
+    async fn current_http_addr_before(
+        self: &Arc<Self>,
+        target: &HttpTarget,
+        deadline: Option<tokio::time::Instant>,
+    ) -> Result<String, StreamStartError> {
+        match deadline {
+            Some(deadline) => tokio::time::timeout_at(deadline, self.current_http_addr(target))
+                .await
+                .map_err(|_| StreamStartError::TimedOut)?,
+            None => self.current_http_addr(target).await,
+        }
+        .map_err(StreamStartError::Upstream)
+    }
+
+    async fn http_addr_or_response(
+        self: &Arc<Self>,
+        target: &HttpTarget,
+        deadline: Option<tokio::time::Instant>,
+        epoch: Epoch,
+        id: EventId,
+        timeout: u64,
+    ) -> Result<String, Result<ProxiedResponse, String>> {
+        match self.current_http_addr_before(target, deadline).await {
+            Ok(addr) => Ok(addr),
+            Err(StreamStartError::TimedOut) => {
+                self.record_http_invocation(
+                    epoch,
+                    id,
+                    target.function.clone(),
+                    "timeout".to_owned(),
+                );
+                log_http_timeout(timeout);
+                Err(Ok(ProxiedResponse {
+                    status: 500,
+                    headers: Vec::new(),
+                    body: br#"{"code":"ECONNRESET"}"#.to_vec(),
+                }))
+            }
+            Err(StreamStartError::Upstream(error)) => {
+                self.record_http_invocation(
+                    epoch,
+                    id,
+                    target.function.clone(),
+                    format!("failed: {error}"),
+                );
+                Err(Err(error))
+            }
+        }
+    }
+
+    fn http_limits(&self, target: &HttpTarget) -> (u64, usize) {
+        self.manifest
+            .get(&target.function)
+            .map_or((60, self.config.max_running), |function| {
+                (
+                    u64::from(function.timeout_seconds),
+                    function.http_capacity(self.config.max_running),
+                )
+            })
     }
 
     fn spawn_captured(
@@ -3347,10 +3646,12 @@ impl FunctionsRuntime {
         }
         // Each codebase hosts its own HTTP server, so the route resolves to the runner of the
         // codebase that exported this function.
-        let port = self.runner_for(function).hello().http_port?;
+        let runner = self.runner_for(function);
+        let port = runner.hello().http_port?;
         Some(HttpTarget {
             function: function.to_owned(),
             addr: format!("127.0.0.1:{port}"),
+            origin_runner: Arc::downgrade(&runner),
         })
     }
 
@@ -3449,7 +3750,15 @@ impl FunctionsRuntime {
             ));
         };
         let current = codebase.generation();
-        if current.blocking_restart_ticket.is_some() || !current.runner.is_alive() {
+        if current.blocking_restart_ticket.is_some() {
+            return Err(format!(
+                "Blocking Auth function {function} is unavailable while its runner restarts"
+            ));
+        }
+        if !current.runner.is_alive() {
+            drop(current);
+            drop(inner);
+            self.schedule_dead_runner_recovery(owner);
             return Err(format!(
                 "Blocking Auth function {function} is unavailable while its runner restarts"
             ));
@@ -3646,15 +3955,7 @@ impl FunctionsRuntime {
         if self.shutting_down.load(std::sync::atomic::Ordering::SeqCst) {
             return Err("the Functions runtime is shutting down".to_owned());
         }
-        let (timeout, function_capacity) =
-            self.manifest
-                .get(&target.function)
-                .map_or((60, self.config.max_running), |function| {
-                    (
-                        u64::from(function.timeout_seconds),
-                        function.http_capacity(self.config.max_running),
-                    )
-                });
+        let (timeout, function_capacity) = self.http_limits(target);
         let fault_epoch = self
             .inner
             .lock()
@@ -3681,20 +3982,18 @@ impl FunctionsRuntime {
                 .map_err(HttpInvokeError::Message)
                 .map_err(HttpInvokeError::into_message);
         }
-        let (id, epoch, admission) = self.admit_http_stream(target, function_capacity)?;
-        let forwarded = runner_headers(headers, &self.config.runner_secret);
         let deadline = (!self.config.debug_mode)
             .then(|| tokio::time::Instant::now() + Duration::from_secs(timeout));
-        match forward_stream(
-            &target.addr,
-            method,
-            path_and_query,
-            &forwarded,
-            body,
-            deadline,
-        )
-        .await
+        let (id, epoch, admission) = self.admit_http_stream(target, function_capacity)?;
+        let addr = match self
+            .http_addr_or_response(target, deadline, epoch, id, timeout)
+            .await
         {
+            Ok(addr) => addr,
+            Err(response) => return response.map(HttpStreamStart::Buffered),
+        };
+        let forwarded = runner_headers(headers, &self.config.runner_secret);
+        match forward_stream(&addr, method, path_and_query, &forwarded, body, deadline).await {
             Ok(started) => {
                 let status = started.response.status;
                 self.retain_stream_lifecycle(
@@ -3748,15 +4047,7 @@ impl FunctionsRuntime {
                 "the Functions runtime is shutting down".to_owned(),
             ));
         }
-        let (timeout, function_capacity) =
-            self.manifest
-                .get(&target.function)
-                .map_or((60, self.config.max_running), |function| {
-                    (
-                        u64::from(function.timeout_seconds),
-                        function.http_capacity(self.config.max_running),
-                    )
-                });
+        let (timeout, function_capacity) = self.http_limits(target);
         let fault_epoch = self
             .inner
             .lock()
@@ -3783,6 +4074,8 @@ impl FunctionsRuntime {
             }
             return faulted.map_err(HttpInvokeError::Message);
         }
+        let deadline = (!self.config.debug_mode)
+            .then(|| tokio::time::Instant::now() + Duration::from_secs(timeout));
         let (id, key, epoch) = {
             let Ok(mut inner) = self.inner.lock() else {
                 return Err(HttpInvokeError::Message("runtime poisoned".into()));
@@ -3810,6 +4103,13 @@ impl FunctionsRuntime {
             runtime: self.clone(),
             key,
         };
+        let addr = match self
+            .http_addr_or_response(target, deadline, epoch, id, timeout)
+            .await
+        {
+            Ok(addr) => addr,
+            Err(response) => return response.map_err(HttpInvokeError::Message),
+        };
         // The runner secret is ours to add; a caller-supplied copy never passes through. The
         // same goes for the emulator-internal fields `firebase-functions` honours under
         // `skipTokenVerification` to override v1 callable auth context: no client legitimately
@@ -3817,8 +4117,10 @@ impl FunctionsRuntime {
         let forwarded = runner_headers(headers, &self.config.runner_secret);
         let result = forward_with_debug_deadline(
             self.config.debug_mode,
-            Duration::from_secs(timeout),
-            &target.addr,
+            deadline.map_or(Duration::from_secs(timeout), |deadline| {
+                deadline.saturating_duration_since(tokio::time::Instant::now())
+            }),
+            &addr,
             method,
             path_and_query,
             &forwarded,
@@ -3972,10 +4274,12 @@ impl FunctionsRuntime {
                 |function| {
                     let spec = self.manifest.get(function)?;
                     let owner = self.owner.get(function).copied().unwrap_or(0);
-                    runners
-                        .get(owner)
-                        .filter(|runner| runner.is_alive())
-                        .map(|_| spec.region.clone())
+                    let runner = runners.get(owner)?;
+                    if !runner.is_alive() {
+                        self.schedule_dead_runner_recovery(owner);
+                        return None;
+                    }
+                    Some(spec.region.clone())
                 },
                 room,
             );
@@ -4016,11 +4320,6 @@ impl FunctionsRuntime {
         let runners: Vec<Arc<Runner>> = (0..self.codebases.len())
             .map(|i| self.runner_at(i))
             .collect();
-        if runners.iter().all(|r| !r.is_alive()) {
-            // Queued work stays pending and visible in the status; nothing is retried
-            // against a dead process.
-            return;
-        }
         let now = self.now();
         let faults = self.faults();
         let Ok(mut inner) = self.inner.lock() else {
@@ -4041,8 +4340,8 @@ impl FunctionsRuntime {
             };
             let index = self.owner.get(&function_name).copied().unwrap_or(0);
             let Some(runner) = runners.get(index).filter(|r| r.is_alive()) else {
-                // This codebase's runner is down: its work stays pending, and the other
-                // codebases keep going.
+                // The pending delivery asks for a replacement. Healthy codebases keep going.
+                self.schedule_dead_runner_recovery(index);
                 continue;
             };
             let running_here = inner
@@ -4441,6 +4740,24 @@ impl Drop for Admission {
 }
 
 #[cfg(test)]
+mod restart_budget_tests {
+    use super::{RestartBudget, RUNNER_RESTART_WINDOW};
+    use std::time::{Duration, Instant};
+
+    #[test]
+    fn rapid_restart_attempts_back_off_and_stop_until_the_window_expires() {
+        let mut budget = RestartBudget::default();
+        for delay in [0, 100, 200, 400, 800] {
+            assert_eq!(budget.next_delay().unwrap(), Duration::from_millis(delay));
+        }
+        assert!(budget.next_delay().is_err());
+        budget.window_started = Some(Instant::now().checked_sub(RUNNER_RESTART_WINDOW).unwrap());
+        assert_eq!(budget.cooldown_remaining(), Some(Duration::ZERO));
+        assert_eq!(budget.next_delay().unwrap(), Duration::ZERO);
+    }
+}
+
+#[cfg(test)]
 mod task_completion_tests {
     use super::{
         FunctionsConfig, FunctionsRuntime, SourceEventAdmissionError, TaskCompletion,
@@ -4505,6 +4822,36 @@ mod task_completion_tests {
             Arc::new(runner),
             Some(spec),
         )
+    }
+
+    #[tokio::test]
+    async fn queued_event_retries_after_restart_budget_window_expires() {
+        let runtime = runtime().await;
+        {
+            let mut budget = runtime.codebases[0].restart_budget.lock().unwrap();
+            budget.attempts = super::RUNNER_RESTART_ATTEMPTS;
+            budget.window_started = Some(
+                Instant::now()
+                    .checked_sub(
+                        super::RUNNER_RESTART_WINDOW
+                            .checked_sub(Duration::from_millis(200))
+                            .unwrap(),
+                    )
+                    .unwrap(),
+            );
+        }
+        runtime.runner().kill_now();
+        tokio::spawn(runtime.clone().dispatch_loop());
+        runtime.publish("jobs", &[json!({"data": "YQ=="})]);
+        runtime
+            .await_idle(Duration::from_secs(3))
+            .await
+            .expect("the queued event resumes when the restart budget resets");
+        assert!(runtime
+            .history()
+            .iter()
+            .any(|record| record.function == "onJob" && record.outcome == "ok"));
+        runtime.shutdown().await;
     }
 
     fn body(id: &str) -> serde_json::Value {

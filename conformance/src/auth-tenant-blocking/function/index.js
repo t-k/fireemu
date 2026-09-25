@@ -14,6 +14,8 @@
 //   cprofile                                   set displayName, photoURL, emailVerified
 //   cbig, sbig                                 claims over the 1000-character limit
 //   creserved, sreserved                       a reserved claim name
+//   cbadtype                                   displayName of the wrong type
+//   cunknown                                   a member Identity Platform does not know
 //   eblock                                     recaptchaActionOverride BLOCK
 //
 // Without a refusing directive, beforeCreate saves an echo of its event in customClaims.atbC and
@@ -108,6 +110,8 @@ exports.atbBeforeCreate = beforeUserCreated(OPTIONS, async (event) => {
   if (words.has("cdisable")) return { disabled: true };
   if (words.has("cbig")) return { customClaims: { atbBig: "x".repeat(1001) } };
   if (words.has("creserved")) return { customClaims: { aud: "atb" } };
+  if (words.has("cbadtype")) return { displayName: 42 };
+  if (words.has("cunknown")) return { notAField: true };
   const answer = { customClaims: { atbC: echo(event) } };
   if (words.has("cprofile")) {
     answer.displayName = "ATB Profile";

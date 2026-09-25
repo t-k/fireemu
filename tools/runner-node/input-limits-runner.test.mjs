@@ -23,7 +23,8 @@ const task=async data=>{
   if(data.sleep)await new Promise(resolve=>setTimeout(resolve,data.sleep));
 };
 task.run=task;task.__endpoint={platform:'gcfv2',scheduleTrigger:{schedule:'every 5 minutes'},secretEnvironmentVariables:[{key:'TEST_ONLY'}]};
-module.exports={task};
+const plain=async data=>task(data);plain.run=plain;plain.__endpoint={platform:'gcfv2',scheduleTrigger:{schedule:'every 5 minutes'}};
+module.exports={task,plain};
 `;
 function invoke(id,data={},extra={}) {
   return {type:'invoke',invocationId:id,function:'task',entryPoint:'task',trigger:'schedule',
@@ -132,11 +133,11 @@ test('4,096 pending callbacks are admitted; 4,097th is retired before callback e
     assert.equal(f.messages.some(x=>x.type==='result'),false);
   });
 
-test('callbacks waiting in the secret environment queue are also counted',
+test('callbacks waiting for a different secret environment group are also counted',
   {timeout:15000},async t=>{
     const f=await start(t,{secrets:true});
-    f.send(invoke('first',{action:'hold',tag:'first'}));
-    await f.wait(async()=>(await f.calls()).length===1,'first secret callback');
+    f.send(invoke('first',{action:'hold',tag:'first'},{function:'plain',entryPoint:'plain'}));
+    await f.wait(async()=>(await f.calls()).length===1,'first undeclared callback');
     const queued=Array.from({length:MAX_COUNT},(_,i)=>frame(invoke(`queued-${i}`,{tag:i})));
     f.child.stdin.write(Buffer.concat(queued),()=>{});
     assert.equal((await f.exited()).code,2);assert.match(f.stderr,/active invocation count/);

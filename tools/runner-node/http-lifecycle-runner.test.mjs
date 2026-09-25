@@ -39,19 +39,22 @@ const gate=tag=>new Promise(resolve=>{const timer=setInterval(()=>{
 },5);});
 async function http(req,res){
  const {tag='',mode='normal'}=req.body;
- record({event:'started',tag,secret:process.env.ALPHA_SECRET||null,requestComplete:req.complete});
+ record({event:'started',tag,secret:process.env.ALPHA_SECRET||null,betaSecret:process.env.BETA_SECRET||null,requestComplete:req.complete});
  if(mode==='destroy'){res.destroy();await sleep(30);record({event:'returned',tag});return;}
  if(mode==='wait-close'){await new Promise(r=>res.once('close',r));await sleep(30);record({event:'returned',tag});return;}
- if(mode==='hold'||mode==='hold-reject'){await gate(tag);record({event:'released',tag,secret:process.env.ALPHA_SECRET||null});}
+ if(mode==='hold'||mode==='hold-reject'){await gate(tag);record({event:'released',tag,secret:process.env.ALPHA_SECRET||null,betaSecret:process.env.BETA_SECRET||null});}
  if(mode==='hold-reject')throw new Error('fixture failure');
  if(mode==='end-hold'){res.end('early-end');await gate(tag);record({event:'returned',tag,secret:process.env.ALPHA_SECRET||null});return;}
  if(mode==='async-response'){setTimeout(()=>res.end('late-response'),60);return;}
  if(mode==='partial-throw'){res.writeHead(200);res.write('prefix');await sleep(20);throw new Error('partial failure');}
  if(mode==='throw')throw new Error('expected failure');
- res.json({tag,secret:process.env.ALPHA_SECRET||null,requestComplete:req.complete,requestDestroyed:req.destroyed});
+ res.json({tag,secret:process.env.ALPHA_SECRET||null,betaSecret:process.env.BETA_SECRET||null,requestComplete:req.complete,requestDestroyed:req.destroyed});
 }
 http.__endpoint={platform:'gcfv2',httpsTrigger:{},secretEnvironmentVariables:[{key:'ALPHA_SECRET'}]};
 async function plain(req,res){return http(req,res)};plain.__endpoint={platform:'gcfv2',httpsTrigger:{}};
+async function beta(req,res){return http(req,res)};beta.__endpoint={platform:'gcfv2',httpsTrigger:{},secretEnvironmentVariables:[{key:'BETA_SECRET'}]};
+async function both(req,res){return http(req,res)};both.__endpoint={platform:'gcfv2',httpsTrigger:{},secretEnvironmentVariables:[{key:'ALPHA_SECRET'},{key:'BETA_SECRET'}]};
+async function bothReverse(req,res){return http(req,res)};bothReverse.__endpoint={platform:'gcfv2',httpsTrigger:{},secretEnvironmentVariables:[{key:'BETA_SECRET'},{key:'ALPHA_SECRET'}]};
 async function task(req,res){return http(req,res)};task.__endpoint={platform:'gcfv2',taskQueueTrigger:{},secretEnvironmentVariables:[{key:'ALPHA_SECRET'}]};
 function blocking(){};blocking.__endpoint={platform:'gcfv2',blockingTrigger:{eventType:'beforeSignIn'},secretEnvironmentVariables:[{key:'ALPHA_SECRET'}]};
 blocking.run=async event=>{
@@ -61,9 +64,11 @@ blocking.run=async event=>{
  if(mode==='serialize'||mode==='hold-serialize')return {customClaims:{toJSON(){record({event:'serialize',tag});return {secret:process.env.ALPHA_SECRET||null};}}};
  return {displayName:tag};
 };
-const probe=async data=>{record({event:'probe',tag:data.tag,secret:process.env.ALPHA_SECRET||null});};
+const probe=async data=>{record({event:'probe',tag:data.tag,secret:process.env.ALPHA_SECRET||null,betaSecret:process.env.BETA_SECRET||null});};
 probe.run=probe;probe.__endpoint={platform:'gcfv2',scheduleTrigger:{schedule:'every 1 minutes'}};
-module.exports={http,plain,task,blocking,probe};
+const secretProbe=async data=>probe(data);secretProbe.run=secretProbe;
+secretProbe.__endpoint={platform:'gcfv2',scheduleTrigger:{schedule:'every 1 minutes'},secretEnvironmentVariables:[{key:'ALPHA_SECRET'}]};
+module.exports={http,plain,beta,both,bothReverse,task,blocking,probe,secretProbe};
 `;
 async function start(t,{serialize=true}={}){
  const dir=await mkdtemp(join(tmpdir(),'fireemu-http-lifecycle-'));
@@ -75,7 +80,7 @@ async function start(t,{serialize=true}={}){
  await put('node_modules/firebase-functions/index.cjs','module.exports={};');
  await put('node_modules/firebase-functions/options.cjs','exports.getGlobalOptions=()=>({});');
  await put('node_modules/firebase-functions/https.cjs',`exports.HttpsError=class extends Error{constructor(code,message){super(message);this.code=code;this.httpErrorCode={canonicalName:'INVALID_ARGUMENT',status:400};}};`);
- const child=spawn(process.execPath,[runner,'--source',dir],{stdio:['pipe','pipe','pipe'],env:{PATH:process.env.PATH,GCLOUD_PROJECT:project,FIREEMU_RUNNER_SECRET:secret,...(serialize?{FIREEMU_LOCAL_SECRETS_JSON:'{"ALPHA_SECRET":"only-alpha"}'}:{})}});
+ const child=spawn(process.execPath,[runner,'--source',dir],{stdio:['pipe','pipe','pipe'],env:{PATH:process.env.PATH,GCLOUD_PROJECT:project,FIREEMU_RUNNER_SECRET:secret,...(serialize?{FIREEMU_LOCAL_SECRETS_JSON:'{"ALPHA_SECRET":"only-alpha","BETA_SECRET":"only-beta"}'}:{})}});
  const messages=[];let buffer=Buffer.alloc(0),stderr='',exit=null;
  const exited=new Promise((resolve,reject)=>{child.once('error',reject);child.once('exit',(code,signal)=>{exit={code,signal};resolve(exit);});});
  child.stdin.on('error',()=>{});child.stderr.on('data',b=>{if(stderr.length<65536)stderr+=b.toString();});
@@ -91,7 +96,7 @@ async function start(t,{serialize=true}={}){
   const req=request({host:'127.0.0.1',port,path:'/'+project+'/us-central1/'+name,method:'POST',agent:false,headers:{'content-type':'application/json','x-fireemu-runner-secret':key}},res=>{let text='';res.on('data',b=>text+=b);res.on('end',()=>done({status:res.statusCode,text,complete:res.complete}));res.on('error',e=>done({error:e.code,text,complete:false}));res.on('close',()=>{if(!res.complete)done({error:'closed',text,complete:false});});});
   req.on('error',e=>done({error:e.code,complete:false}));req.setTimeout(2000,()=>req.destroy(Error('fixture request timeout')));req.end(JSON.stringify(body));clients.push(req);return {req,result};
  }
- function probe(tag){const b=Buffer.from(JSON.stringify({type:'invoke',invocationId:tag,function:'probe',trigger:'schedule',event:{data:{tag}}}));child.stdin.write(Buffer.concat([Buffer.from(b.length+'\n'),b]));}
+ function probe(tag,name='probe'){const b=Buffer.from(JSON.stringify({type:'invoke',invocationId:tag,function:name,trigger:'schedule',event:{data:{tag}}}));child.stdin.write(Buffer.concat([Buffer.from(b.length+'\n'),b]));}
  async function seen(event,tag){return (await events()).some(e=>e.event===event&&e.tag===tag);}
  return {dir,child,messages,events,wait,call,probe,seen,release:tag=>writeFile(join(dir,'release-'+tag),'1'),get stderr(){return stderr;}};
 }
@@ -105,7 +110,7 @@ for(const mode of ['destroy','wait-close'])test(`closed response before callback
  assert.equal((await f.events()).find(e=>e.event==='probe').secret,null);
 });
 for(const name of ['http','task','blocking'])test(`queued disconnected ${name} request is not invoked after earlier request releases`,{timeout:8000},async t=>{
- const f=await start(t),first=f.call('http',{tag:'held',mode:'hold'});
+ const f=await start(t),first=f.call('beta',{tag:'held',mode:'hold'});
  await f.wait(()=>f.seen('started','held'),'held start');
  const next=f.call(name,name==='blocking'?{data:{user:{tag:'cancelled'},context:{}}}:{tag:'cancelled'});
  await f.wait(()=>f.seen('routed','cancelled'),'queued routing');next.req.destroy();await next.result;
@@ -146,6 +151,74 @@ test('without local secrets distinct requests still run concurrently',{timeout:8
  const f=await start(t,{serialize:false}),a=f.call('http',{tag:'a',mode:'hold'});await f.wait(()=>f.seen('started','a'),'a');
  const b=await f.call('http',{tag:'b'}).result;assert.equal(b.status,200);assert.equal(await f.seen('released','a'),false);
  await f.release('a');assert.equal((await a.result).status,200);
+});
+test('identical declared secret sets overlap while a different set waits',{timeout:8000},async t=>{
+ const f=await start(t),a=f.call('http',{tag:'same-a',mode:'hold'});
+ let b;
+ try{
+  await f.wait(()=>f.seen('started','same-a'),'first declared request');
+  b=f.call('task',{tag:'same-b',mode:'hold'});
+  await f.wait(()=>f.seen('started','same-b'),'same secret set overlaps',600);
+  const beta=f.call('beta',{tag:'different'});
+  await f.wait(()=>f.seen('routed','different'),'different set routed');
+  await delay(60);assert.equal(await f.seen('started','different'),false);
+  await f.release('same-a');assert.equal((await a.result).status,200);
+  await delay(60);assert.equal(await f.seen('started','different'),false,'one active peer retains the group');
+  await f.release('same-b');assert.equal((await b.result).status,200);
+  const reply=await beta.result;assert.equal(reply.status,200);
+  assert.equal(JSON.parse(reply.text).secret,null);assert.equal(JSON.parse(reply.text).betaSecret,'only-beta');
+  const events=await f.events();
+  for(const tag of ['same-a','same-b']){
+   assert.equal(events.find(e=>e.event==='started'&&e.tag===tag).secret,'only-alpha');
+   assert.equal(events.find(e=>e.event==='released'&&e.tag===tag).betaSecret,null);
+  }
+  const plain=await f.call('plain',{tag:'after-groups'}).result;
+  assert.equal(JSON.parse(plain.text).secret,null);assert.equal(JSON.parse(plain.text).betaSecret,null);
+ }finally{await f.release('same-a');await f.release('same-b');}
+});
+test('a declared event overlaps a held HTTP callback with the same secret set',{timeout:8000},async t=>{
+ const f=await start(t),held=f.call('http',{tag:'held-declared',mode:'hold'});
+ try{
+  await f.wait(()=>f.seen('started','held-declared'),'held declared HTTP');
+  f.probe('same-set-event','secretProbe');
+  await f.wait(()=>f.messages.some(m=>m.type==='result'&&m.invocationId==='same-set-event'),'declared event overlaps',600);
+  const event=(await f.events()).find(e=>e.event==='probe'&&e.tag==='same-set-event');
+  assert.equal(event.secret,'only-alpha');assert.equal(event.betaSecret,null);
+  assert.equal(await f.seen('released','held-declared'),false);
+ }finally{await f.release('held-declared');await held.result;}
+});
+test('the order of declared names does not split a shared secret set',{timeout:8000},async t=>{
+ const f=await start(t),first=f.call('both',{tag:'both-held',mode:'hold'});
+ try{
+  await f.wait(()=>f.seen('started','both-held'),'first combined set');
+  const second=await f.call('bothReverse',{tag:'both-reversed'}).result;
+  assert.equal(second.status,200);
+  assert.equal(JSON.parse(second.text).secret,'only-alpha');
+  assert.equal(JSON.parse(second.text).betaSecret,'only-beta');
+  const alpha=f.call('http',{tag:'alpha-after-both'});
+  await f.wait(()=>f.seen('routed','alpha-after-both'),'subset routed');
+  await delay(60);assert.equal(await f.seen('started','alpha-after-both'),false);
+  await f.release('both-held');assert.equal((await first.result).status,200);
+  const reply=await alpha.result;
+  assert.equal(JSON.parse(reply.text).secret,'only-alpha');assert.equal(JSON.parse(reply.text).betaSecret,null);
+ }finally{await f.release('both-held');}
+});
+test('a rejected peer keeps its declared secrets until every same-set callback settles',{timeout:8000},async t=>{
+ const f=await start(t),failed=f.call('http',{tag:'will-reject',mode:'hold-reject'});
+ let held;
+ try{
+  await f.wait(()=>f.seen('started','will-reject'),'rejecting callback');
+  held=f.call('http',{tag:'still-active',mode:'hold'});
+  await f.wait(()=>f.seen('started','still-active'),'same-set peer overlaps',600);
+  await f.release('will-reject');assert.equal((await failed.result).status,500);
+  const other=f.call('beta',{tag:'after-rejection'});
+  await f.wait(()=>f.seen('routed','after-rejection'),'different set routed');
+  await delay(60);assert.equal(await f.seen('started','after-rejection'),false);
+  await f.release('still-active');assert.equal((await held.result).status,200);
+  assert.equal((await f.events()).find(e=>e.event==='released'&&e.tag==='still-active').secret,'only-alpha');
+  const reply=await other.result;assert.equal(reply.status,200);
+  assert.equal(JSON.parse(reply.text).secret,null);assert.equal(JSON.parse(reply.text).betaSecret,'only-beta');
+ }finally{await f.release('will-reject');await f.release('still-active');}
 });
 test('with local secrets, undeclared HTTP requests still run concurrently',{timeout:8000},async t=>{
  const f=await start(t),held=f.call('plain',{tag:'plain-held',mode:'hold'});

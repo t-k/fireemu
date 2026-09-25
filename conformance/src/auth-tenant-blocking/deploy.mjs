@@ -121,6 +121,7 @@ export function createDeployer({
   let uploadsBefore;
   let deployStarted;
   let adopted = false;
+  let repositoryChange;
 
   async function call(method, url, body) {
     requests += 1;
@@ -218,12 +219,14 @@ export function createDeployer({
       );
       if (created.status !== 200) throw new Error(`repository create: HTTP ${created.status}`);
       change = "created with the cleanup policy";
+      repositoryChange = change;
     } else if (status === 200) {
       const patched = await call("PATCH", `${repository}?updateMask=cleanupPolicies`, {
         cleanupPolicies: { ...json.cleanupPolicies, [CLEANUP_POLICY.id]: CLEANUP_POLICY },
       });
       if (patched.status !== 200) throw new Error(`repository policy: HTTP ${patched.status}`);
       change = "cleanup policy added";
+      repositoryChange = change;
     } else throw new Error(`repository read: HTTP ${status}`);
     // Creation is a long-running operation: read back until the repository carries the policy.
     for (let attempt = 0; attempt < 12; attempt += 1) {
@@ -375,6 +378,8 @@ export function createDeployer({
    */
   async function remove(buildDir) {
     if (deployStarted === undefined) return { removed: "nothing deployed" };
+    // The CLI runs in the build copy; a restore has none yet (confirmation SF-C1).
+    await mkdir(buildDir, { recursive: true, mode: 0o700 });
     const problems = [];
     const step = async (name, action) => {
       try {
@@ -498,6 +503,8 @@ export function createDeployer({
     remove,
     cliVersion,
     deployStarted: () => deployStarted,
+    /** What the preflight changed on gcf-artifacts, also when it failed afterwards (SF-C3). */
+    repositoryChange: () => repositoryChange,
     requests: () => requests,
   };
 }

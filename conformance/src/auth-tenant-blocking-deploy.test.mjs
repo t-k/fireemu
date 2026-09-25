@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { existsSync } from "node:fs";
 import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -91,7 +92,10 @@ function fakeCloud({
     return json(404, {});
   };
   const runs = [];
-  const run = async (file, args) => {
+  const run = async (file, args, options = {}) => {
+    // As execFile: a missing working directory fails the spawn.
+    if (options.cwd && !existsSync(options.cwd))
+      throw Object.assign(new Error("spawn ENOENT"), { code: "ENOENT" });
     runs.push([file.split("/").at(-1), ...args].join(" "));
     if (args[0] === "deploy") {
       state.functions.push(...Object.values(FIXTURE_FUNCTIONS));
@@ -237,4 +241,20 @@ test("a restore leaves upload objects alone while another function exists", asyn
   deployer.adoptLeftovers();
   await assert.rejects(deployer.remove(await buildDir()), /another function exists/);
   assert.deepEqual(state.uploads, ["someone.zip"]);
+});
+
+test("a restore removal works without a build copy (confirmation SF-C1)", async () => {
+  const { deployer, state } = fakeCloud({
+    functions: Object.values(FIXTURE_FUNCTIONS),
+    blocking: {
+      triggers: Object.fromEntries(
+        Object.entries(FIXTURE_FUNCTIONS).map(([event, name]) => [event, fn(name)]),
+      ),
+    },
+  });
+  deployer.adoptLeftovers();
+  const dir = join(await mkdtemp(join(tmpdir(), "atb-restore-")), "missing", "build");
+  await deployer.remove(dir);
+  assert.deepEqual(state.functions, []);
+  assert.deepEqual(state.blocking, {});
 });

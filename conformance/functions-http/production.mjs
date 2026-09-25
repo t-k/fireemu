@@ -139,9 +139,10 @@ function packageId(target) {
   return [PROJECT, REGION, expectedFunctionName(target)].map(encodePart).join("__");
 }
 
-export function assertPublicReadback(policy, expectedPublic) {
-  if (!policy || !Array.isArray(policy.bindings)) throw new Error("IAM policy readback is invalid");
-  const roles = policy.bindings
+export function assertPublicReadback(readbackPolicy, expectedPublic) {
+  if (!readbackPolicy || !Array.isArray(readbackPolicy.bindings))
+    throw new Error("IAM policy readback is invalid");
+  const roles = readbackPolicy.bindings
     .filter(({ members }) => members?.includes("allUsers"))
     .map(({ role }) => role);
   if (roles.some((role) => role !== "roles/run.invoker"))
@@ -279,6 +280,7 @@ function createControl(adc, budget) {
       throw new Error("unreviewed REST host");
     }
     if (!token || Date.now() >= token.expiresAt) token = await acquireToken(adc, budget, kind);
+    if (method === "GET" && body !== undefined) throw new Error("GET request cannot have a body");
     budget.take(kind);
     const response = await fetch(url, {
       method,
@@ -287,7 +289,7 @@ function createControl(adc, budget) {
         "x-goog-user-project": PROJECT,
         ...(body === undefined ? {} : { "content-type": "application/json" }),
       },
-      body: body === undefined ? undefined : JSON.stringify(body),
+      ...(body === undefined ? {} : { body: JSON.stringify(body) }),
       redirect: "manual",
       signal: AbortSignal.timeout(60_000),
     });

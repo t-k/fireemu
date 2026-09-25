@@ -2377,6 +2377,10 @@
               "precision": "exact-for-local-semantics"
             },
             {
+              "behaviour": "a failed push imposes a subscription-wide backoff on the virtual clock before another delivery; the pinned official emulator retries within the matrix's 1.5-second observation window without a clock advance (conformance pubsub-probe/push-backoff#subscriptionThrottle). Production Pub/Sub documents an independent push backoff from 100 milliseconds to 60 seconds at https://docs.cloud.google.com/pubsub/docs/push; the exact production progression remains unobserved",
+              "precision": "exact-for-local-semantics"
+            },
+            {
               "behaviour": "a subscription seeked to a timestamp before a message was published replays that message even after it was acknowledged and even when retainAckedMessages is false; the official emulator replays it only when retainAckedMessages is set (conformance pubsub-probe/seek-to-time#replayed). A seek therefore never returns fewer messages than the official emulator",
               "precision": "conservative"
             },

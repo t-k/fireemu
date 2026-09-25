@@ -5,6 +5,9 @@
 // and errors record the gRPC status code name. A step whose value differs between the two
 // emulators becomes a `debt` row unless it is documented in divergences.json.
 
+import { once } from "node:events";
+import { createServer } from "node:http";
+
 /** Maps a gRPC error to its status-code name (`NOT_FOUND`, `INVALID_ARGUMENT`, ...). */
 function codeName(err) {
   // @google-cloud/pubsub surfaces the numeric gRPC code; map the ones the probe expects.
@@ -289,6 +292,107 @@ export const PROGRAMS = [
       const replayed = await ctx.receive(sub, 1, "ack");
       steps.replayed = { received: replayed.length >= 1 };
       return steps;
+    },
+  },
+  {
+    id: "push-backoff",
+    area: "delivery",
+    async run(ctx) {
+      const deliveries = [];
+      const waiters = new Set();
+      let requests = 0;
+      const sink = createServer(async (request, response) => {
+        const attempt = ++requests;
+        try {
+          const chunks = [];
+          for await (const chunk of request) chunks.push(chunk);
+          const body = JSON.parse(Buffer.concat(chunks).toString());
+          response.writeHead(attempt === 1 ? 503 : 204);
+          response.end(() => {
+            deliveries.push({
+              method: request.method,
+              body,
+              payload: Buffer.from(body.message?.data ?? "", "base64").toString(),
+            });
+            for (const notify of waiters) notify();
+          });
+        } catch {
+          response.writeHead(500);
+          response.end();
+        }
+      });
+      const waitFor = (predicate, timeoutMs) => {
+        if (predicate()) return Promise.resolve(true);
+        return new Promise((resolve) => {
+          const finish = (arrived) => {
+            clearTimeout(timer);
+            waiters.delete(check);
+            resolve(arrived);
+          };
+          const check = () => {
+            if (predicate()) finish(true);
+          };
+          const timer = setTimeout(() => finish(false), timeoutMs);
+          waiters.add(check);
+        });
+      };
+      let topic;
+      let subscription;
+      try {
+        sink.listen(0, "127.0.0.1");
+        await once(sink, "listening");
+        const endpoint = `http://127.0.0.1:${sink.address().port}/push`;
+        [topic] = await ctx.pubsub.createTopic("probe-push-backoff");
+        [subscription] = await topic.createSubscription("probe-push-backoff-sub", {
+          pushEndpoint: endpoint,
+          ackDeadlineSeconds: 10,
+        });
+        await topic.publishMessage({ data: Buffer.from("push-payload") });
+        if (!(await waitFor(() => deliveries.length >= 1, 8000))) {
+          throw new Error("push endpoint received no delivery");
+        }
+        const first = deliveries[0];
+        await topic.publishMessage({ data: Buffer.from("push-fresh") });
+        // This bounded wall-clock window observes both message paths without advancing fireemu's logical clock.
+        const [retryWithinWindow, newMessageWithinWindow] = await Promise.all([
+          waitFor(
+            () => deliveries.filter((delivery) => delivery.payload === "push-payload").length >= 2,
+            1500,
+          ),
+          waitFor(() => deliveries.some((delivery) => delivery.payload === "push-fresh"), 1500),
+        ]);
+        await ctx.advanceClock(60);
+        if (
+          !(await waitFor(
+            () => deliveries.filter((delivery) => delivery.payload === "push-payload").length >= 2,
+            8000,
+          ))
+        ) {
+          throw new Error("failed push did not recover after clock advance");
+        }
+        if (
+          !(await waitFor(
+            () => deliveries.some((delivery) => delivery.payload === "push-fresh"),
+            8000,
+          ))
+        ) {
+          throw new Error("queued push did not recover after clock advance");
+        }
+        return {
+          delivered: {
+            method: first.method,
+            payload: first.payload,
+            subscription: first.body.subscription?.split("/").at(-1),
+          },
+          subscriptionThrottle: { retryWithinWindow, newMessageWithinWindow },
+          recovered: { failedMessageRetried: true, queuedMessageDelivered: true },
+        };
+      } finally {
+        await subscription?.delete().catch(() => {});
+        await topic?.delete().catch(() => {});
+        sink.closeAllConnections();
+        if (sink.listening) await new Promise((resolve) => sink.close(resolve));
+      }
     },
   },
   {

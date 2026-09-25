@@ -647,6 +647,24 @@
         "approvalRecord": "README.md, \"Functions\""
       }
     },
+    "pubsub-probe/push-backoff#subscriptionThrottle": {
+      "documents": "Google Cloud Pub/Sub Push subscriptions, 'Push backoff'; capability manifest PUBSUB-WIRE-1 (crates/fireemu/src/capabilities.json)",
+      "reason": "The pinned official emulator retries a failed push within this program's 1.5-second observation window. fireemu holds all deliveries on the failing subscription until its subscription-wide push backoff expires on the virtual clock, which this program does not advance. Production Pub/Sub applies an independent, subscription-wide push backoff after negative acknowledgments; the documented wait ranges from 100 milliseconds to 60 seconds.",
+      "authority": {
+        "kind": "production-spec",
+        "sourceUrls": [
+          "https://docs.cloud.google.com/pubsub/docs/push",
+          "https://github.com/firebase/firebase-tools/tree/v15.28.2"
+        ],
+        "checkedOn": "2026-09-25",
+        "officialBaseline": {
+          "package": "firebase-tools",
+          "version": "15.28.2"
+        },
+        "fixture": "conformance/pubsub-matrix.json#push-backoff#subscriptionThrottle",
+        "approvalRecord": "Google Cloud Pub/Sub Push subscriptions, 'Push backoff'; capability manifest PUBSUB-WIRE-1 (crates/fireemu/src/capabilities.json)"
+      }
+    },
     "pubsub-probe/seek-to-time#replayed": {
       "documents": "README.md, \"Pub/Sub\"; capability manifest PUBSUB-WIRE-1 (crates/fireemu/src/capabilities.json)",
       "reason": "After a subscription is seeked to a timestamp before a message was published, fireemu redelivers that message even though it was already acknowledged and the subscription did not set retainAckedMessages. fireemu retains acked messages for seek unconditionally; the official emulator retains them only when retainAckedMessages is true, so it does not replay here. This is a fireemu superset: a seek never sees fewer messages than the official emulator returns.",

@@ -216,6 +216,10 @@ const MAX_FUNCTIONS_SOURCE_WATCH_BYTES_PER_SECOND: u64 = 64 * 1024 * 1024;
 const MAX_FUNCTIONS_SOURCE_WATCH_FILES_PER_SECOND: u64 = 20_000;
 /// Maximum number of directory entries one source tree may enumerate per operation.
 const MAX_FUNCTIONS_SOURCE_ENTRIES: u64 = 100_000;
+/// Maximum bytes one Functions source tree may read or copy per operation.
+const MAX_FUNCTIONS_SOURCE_BYTES: u64 = 256 * 1024 * 1024;
+const SOURCE_BYTE_BUDGET_ERROR_PREFIX: &str =
+    "Functions source tree exceeds the 256 MiB byte budget";
 /// Maximum supported source-tree nesting, excluding the source root.
 const MAX_FUNCTIONS_SOURCE_DEPTH: usize = 128;
 
@@ -270,6 +274,35 @@ fn stream_source_chunks(
 #[derive(Default)]
 struct FunctionsSourceEntryBudget {
     entries: u64,
+}
+
+#[derive(Default)]
+struct FunctionsSourceByteBudget {
+    bytes: u64,
+    largest: Option<(PathBuf, u64)>,
+}
+
+impl FunctionsSourceByteBudget {
+    fn claim(&mut self, path: &Path, bytes: u64) -> Result<(), String> {
+        if self
+            .largest
+            .as_ref()
+            .is_none_or(|(_, largest)| bytes > *largest)
+        {
+            self.largest = Some((path.to_path_buf(), bytes));
+        }
+        self.bytes = self.bytes.saturating_add(bytes);
+        if self.bytes > MAX_FUNCTIONS_SOURCE_BYTES {
+            let (largest_path, largest_bytes) = self.largest.as_ref().unwrap();
+            return Err(format!(
+                "{SOURCE_BYTE_BUDGET_ERROR_PREFIX} at {} ({} bytes counted); largest file is {} ({largest_bytes} bytes). Narrow functions.source or move generated files outside it; functions.ignore affects watcher scans but not runtime snapshots",
+                path.display(),
+                self.bytes,
+                largest_path.display()
+            ));
+        }
+        Ok(())
+    }
 }
 
 impl FunctionsSourceEntryBudget {
@@ -418,6 +451,7 @@ fn hash_source_file(
     }
     let mut file = std::fs::File::open(child)
         .map_err(|error| format!("watch {}: {error}", child.display()))?;
+    let mut read_bytes = 0_u64;
     stream_source_chunks(
         &mut file,
         |bytes| {
@@ -427,7 +461,13 @@ fn hash_source_file(
             }
             Ok(())
         },
-        |bytes| charge(0, bytes).map_err(std::io::Error::other),
+        |bytes| {
+            read_bytes = read_bytes.saturating_add(bytes);
+            if read_bytes > version.len {
+                return Err(std::io::Error::other("source file grew during the scan"));
+            }
+            charge(0, bytes).map_err(std::io::Error::other)
+        },
         cancelled,
     )
     .map_err(|error| format!("watch {}: {error}", child.display()))?;
@@ -460,6 +500,7 @@ struct FunctionsSourceTraversal<'a> {
     root: &'a Path,
     ignores: &'a [String],
     entry_budget: FunctionsSourceEntryBudget,
+    byte_budget: FunctionsSourceByteBudget,
     charge: &'a mut dyn FnMut(u64, u64) -> Result<(), String>,
     cancelled: &'a AtomicBool,
 }
@@ -528,6 +569,7 @@ impl FunctionsSourceTraversal<'_> {
         let metadata = entry
             .metadata()
             .map_err(|error| format!("watch {}: {error}", child.display()))?;
+        self.byte_budget.claim(child, metadata.len())?;
         hash_source_file(
             child,
             relative,
@@ -579,12 +621,26 @@ impl FunctionsSourceTraversal<'_> {
         }
         let mut source_file = std::fs::File::open(source)
             .map_err(|error| format!("snapshot {}: {error}", source.display()))?;
+        let expected_len = source_file
+            .metadata()
+            .map_err(|error| format!("snapshot {}: {error}", source.display()))?
+            .len();
+        self.byte_budget.claim(source, expected_len)?;
         let mut target_file = std::fs::File::create(target)
             .map_err(|error| format!("snapshot {}: {error}", target.display()))?;
+        let mut read_bytes = 0_u64;
         stream_source_chunks(
             &mut source_file,
             |bytes| target_file.write_all(bytes),
-            |bytes| (self.charge)(0, bytes).map_err(std::io::Error::other),
+            |bytes| {
+                read_bytes = read_bytes.saturating_add(bytes);
+                if read_bytes > expected_len {
+                    return Err(std::io::Error::other(
+                        "source file grew during the snapshot",
+                    ));
+                }
+                (self.charge)(0, bytes).map_err(std::io::Error::other)
+            },
             self.cancelled,
         )
         .map_err(|error| format!("snapshot {}: {error}", source.display()))?;
@@ -625,6 +681,7 @@ fn functions_source_stamp_with_charge_and_file_version(
         root,
         ignores,
         entry_budget: FunctionsSourceEntryBudget::default(),
+        byte_budget: FunctionsSourceByteBudget::default(),
         charge,
         cancelled,
     }
@@ -733,6 +790,136 @@ impl FunctionsSourceScanBudget {
     }
 }
 
+#[cfg(unix)]
+fn snapshot_directory_name(pid: u32, sequence: u64) -> String {
+    let base = format!("fireemu-functions-{pid}-{sequence}");
+    #[cfg(target_os = "linux")]
+    if let Some(namespace) = pid_namespace_inode() {
+        return format!("{base}-n{namespace}");
+    }
+    base
+}
+
+#[cfg(target_os = "linux")]
+fn pid_namespace_inode() -> Option<u64> {
+    use std::os::unix::fs::MetadataExt as _;
+
+    std::fs::metadata("/proc/self/ns/pid")
+        .ok()
+        .map(|metadata| metadata.ino())
+}
+
+#[cfg(unix)]
+fn snapshot_owner_pid(name: &str) -> Option<rustix::process::Pid> {
+    let suffix = name.strip_prefix("fireemu-functions-")?;
+    let (pid, sequence) = suffix.split_once('-')?;
+    #[cfg(target_os = "linux")]
+    let (sequence, namespace) = sequence.split_once("-n")?;
+    if pid.is_empty()
+        || sequence.is_empty()
+        || (pid.len() > 1 && pid.starts_with('0'))
+        || (sequence.len() > 1 && sequence.starts_with('0'))
+        || !pid.bytes().all(|byte| byte.is_ascii_digit())
+        || !sequence.bytes().all(|byte| byte.is_ascii_digit())
+    {
+        return None;
+    }
+    let sequence = sequence.parse::<u64>().ok()?;
+    let pid = pid.parse::<i32>().ok().filter(|pid| *pid > 0)?;
+    #[cfg(target_os = "linux")]
+    if namespace != pid_namespace_inode()?.to_string() {
+        return None;
+    }
+    if name != snapshot_directory_name(u32::try_from(pid).ok()?, sequence) {
+        return None;
+    }
+    rustix::process::Pid::from_raw(pid)
+}
+
+#[cfg(unix)]
+fn snapshot_owned_directory(metadata: &std::fs::Metadata, uid: u32) -> bool {
+    use std::os::unix::fs::MetadataExt as _;
+
+    metadata.is_dir() && metadata.uid() == uid && metadata.mode() & 0o7777 == 0o700
+}
+
+#[cfg(unix)]
+fn snapshot_owner_is_dead(pid: rustix::process::Pid) -> bool {
+    matches!(
+        rustix::process::test_kill_process(pid),
+        Err(rustix::io::Errno::SRCH)
+    )
+}
+
+#[cfg(unix)]
+fn sweep_orphan_function_snapshots(root: &Path) -> Result<usize, String> {
+    use std::os::unix::fs::MetadataExt as _;
+
+    // Shared temp directories can contain many unrelated entries; the scan stays bounded.
+    const MAX_ENTRIES: usize = 1_000_000;
+    const MAX_REMOVAL_ATTEMPTS: usize = 64;
+    let uid = rustix::process::geteuid().as_raw();
+    let entries = std::fs::read_dir(root)
+        .map_err(|error| format!("orphan snapshot scan {}: {error}", root.display()))?;
+    let mut removed = 0;
+    let mut removal_attempts = 0;
+    let mut failed = 0;
+    for entry in entries.take(MAX_ENTRIES) {
+        if removal_attempts == MAX_REMOVAL_ATTEMPTS {
+            break;
+        }
+        let Ok(entry) = entry else {
+            failed += 1;
+            continue;
+        };
+        let name = entry.file_name();
+        let Some(pid) = name.to_str().and_then(snapshot_owner_pid) else {
+            continue;
+        };
+        if i32::try_from(std::process::id()).ok() == Some(pid.as_raw_pid()) {
+            continue;
+        }
+        let path = entry.path();
+        let Ok(before) = std::fs::symlink_metadata(&path) else {
+            continue;
+        };
+        if !snapshot_owned_directory(&before, uid) || !snapshot_owner_is_dead(pid) {
+            continue;
+        }
+        let Ok(now) = std::fs::symlink_metadata(&path) else {
+            continue;
+        };
+        if !snapshot_owned_directory(&now, uid)
+            || before.dev() != now.dev()
+            || before.ino() != now.ino()
+            || !snapshot_owner_is_dead(pid)
+        {
+            continue;
+        }
+        removal_attempts += 1;
+        if std::fs::remove_dir_all(&path).is_ok() {
+            removed += 1;
+        } else {
+            failed += 1;
+        }
+    }
+    if failed > 0 {
+        return Err(format!(
+            "orphan snapshot sweep could not inspect or remove {failed} entries"
+        ));
+    }
+    Ok(removed)
+}
+
+#[cfg(unix)]
+fn schedule_orphan_function_snapshot_sweep(root: PathBuf) -> tokio::task::JoinHandle<()> {
+    tokio::task::spawn_blocking(move || {
+        if let Err(reason) = sweep_orphan_function_snapshots(&root) {
+            eprintln!("warning: {reason}");
+        }
+    })
+}
+
 #[derive(Debug)]
 struct FunctionsSourceSnapshot {
     cleanup_root: Option<PathBuf>,
@@ -813,10 +1000,11 @@ fn snapshot_functions_source_with_charge(
     let before =
         functions_source_stamp_with_charge(&source_root, &[], charge, cancelled)?.content_signature;
     let sequence = NEXT_SNAPSHOT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-    let destination = std::env::temp_dir().join(format!(
-        "fireemu-functions-{}-{sequence}",
-        std::process::id()
-    ));
+    #[cfg(unix)]
+    let name = snapshot_directory_name(std::process::id(), sequence);
+    #[cfg(windows)]
+    let name = format!("fireemu-functions-{}-{sequence}", std::process::id());
+    let destination = std::env::temp_dir().join(name);
     std::fs::create_dir(&destination)
         .map_err(|e| format!("snapshot {}: {e}", destination.display()))?;
     let dependencies: Vec<_> = source_root
@@ -842,6 +1030,7 @@ fn snapshot_functions_source_with_charge(
         root: &source_root,
         ignores,
         entry_budget: FunctionsSourceEntryBudget::default(),
+        byte_budget: FunctionsSourceByteBudget::default(),
         charge,
         cancelled,
     }
@@ -945,6 +1134,23 @@ async fn discard_reload_snapshot(snapshot: FunctionsSourceSnapshot, codebase: &s
     }
 }
 
+fn warn_reload_once(last: &mut bool, codebase: &str, operation: &str, reason: &str) -> bool {
+    let first = !*last;
+    if first {
+        eprintln!("warning: functions[{codebase}] reload {operation} failed: {reason}");
+    }
+    *last = true;
+    first
+}
+
+fn source_scan_retry_delay(reason: Option<&str>) -> Duration {
+    if reason.is_some_and(|reason| reason.starts_with(SOURCE_BYTE_BUDGET_ERROR_PREFIX)) {
+        Duration::from_secs(30)
+    } else {
+        Duration::from_millis(750)
+    }
+}
+
 async fn supervise_codebase_reloads(
     weak_runtime: std::sync::Weak<FunctionsRuntime>,
     cfg: RuntimeConfig,
@@ -955,23 +1161,28 @@ async fn supervise_codebase_reloads(
     resources: ReloadResources,
 ) {
     let root = PathBuf::from(&codebase.source);
-    let mut observed_stamp = resources
-        .scan_budget
-        .scan(&root, &codebase.ignore)
-        .await
-        .ok();
+    let initial_stamp = resources.scan_budget.scan(&root, &codebase.ignore).await;
+    let mut observed_stamp = initial_stamp.as_ref().ok().copied();
+    let mut last_scan_error = false;
+    let mut last_snapshot_error = false;
+    let mut retry_delay = source_scan_retry_delay(initial_stamp.as_ref().err().map(String::as_str));
+    if let Err(reason) = initial_stamp {
+        warn_reload_once(&mut last_scan_error, &codebase.codebase, "scan", &reason);
+    }
     loop {
-        tokio::time::sleep(Duration::from_millis(750)).await;
+        tokio::time::sleep(retry_delay).await;
         let Some(runtime) = weak_runtime.upgrade() else {
             return;
         };
         let next_stamp = match resources.scan_budget.scan(&root, &codebase.ignore).await {
-            Ok(stamp) => stamp,
+            Ok(stamp) => {
+                last_scan_error = false;
+                retry_delay = source_scan_retry_delay(None);
+                stamp
+            }
             Err(reason) => {
-                eprintln!(
-                    "warning: functions[{}] reload scan failed: {reason}",
-                    codebase.codebase
-                );
+                retry_delay = source_scan_retry_delay(Some(&reason));
+                warn_reload_once(&mut last_scan_error, &codebase.codebase, "scan", &reason);
                 continue;
             }
         };
@@ -997,11 +1208,17 @@ async fn supervise_codebase_reloads(
             .snapshot(&root, &codebase.ignore)
             .await
         {
-            Ok(snapshot) => snapshot,
+            Ok(snapshot) => {
+                last_snapshot_error = false;
+                snapshot
+            }
             Err(reason) => {
-                eprintln!(
-                    "warning: functions[{}] reload snapshot failed: {reason}",
-                    codebase.codebase
+                retry_delay = source_scan_retry_delay(Some(&reason));
+                warn_reload_once(
+                    &mut last_snapshot_error,
+                    &codebase.codebase,
+                    "snapshot",
+                    &reason,
                 );
                 continue;
             }
@@ -2141,6 +2358,8 @@ pub async fn start(
         ));
     }
     let node_probe_cache = Arc::new(NodeProbeCache::default());
+    #[cfg(unix)]
+    drop(schedule_orphan_function_snapshot_sweep(std::env::temp_dir()));
     let starts = codebases
         .iter()
         .map(|codebase| {
@@ -4269,14 +4488,16 @@ mod tests {
     use super::{
         blocking_auth_io_failure, blocking_auth_read_response, blocking_auth_response_failure,
         blocking_auth_write_request, check_callable_app_check, function_pubsub_resources,
-        functions_source_stamp, functions_source_stamp_with_file_version, hash_source_file,
-        hash_source_stamp_entry, node_engine_matches, owned_pubsub_topic, package_node_engine,
-        parse_node_version, provision_function_pubsub_resources, select_node_installation,
-        snapshot_functions_source, source_scan_pacing_delay, stream_source_chunks,
-        update_watch_hash, validate_functions_codebase_budget, BlockingAuthBridge,
-        FunctionsSourceEntryBudget, FunctionsSourceFileVersion, FunctionsSourceScanBudget,
-        FunctionsSourceSnapshot, FunctionsSourceStamp, NodeInstallation, PubSubBridge,
-        BLOCKING_AUTH_DEADLINE, MAX_BLOCKING_AUTH_RESPONSE_BYTES, MAX_FUNCTIONS_SOURCE_ENTRIES,
+        functions_source_stamp, functions_source_stamp_with_charge,
+        functions_source_stamp_with_file_version, hash_source_file, hash_source_stamp_entry,
+        node_engine_matches, owned_pubsub_topic, package_node_engine, parse_node_version,
+        provision_function_pubsub_resources, select_node_installation, snapshot_functions_source,
+        source_scan_pacing_delay, source_scan_retry_delay, stream_source_chunks, update_watch_hash,
+        validate_functions_codebase_budget, warn_reload_once, BlockingAuthBridge,
+        FunctionsSourceByteBudget, FunctionsSourceEntryBudget, FunctionsSourceFileVersion,
+        FunctionsSourceScanBudget, FunctionsSourceSnapshot, FunctionsSourceStamp,
+        FunctionsSourceTraversal, NodeInstallation, PubSubBridge, BLOCKING_AUTH_DEADLINE,
+        MAX_BLOCKING_AUTH_RESPONSE_BYTES, MAX_FUNCTIONS_SOURCE_BYTES, MAX_FUNCTIONS_SOURCE_ENTRIES,
         MAX_FUNCTIONS_SOURCE_WATCH_BYTES_PER_SECOND, MAX_FUNCTIONS_SOURCE_WATCH_FILES_PER_SECOND,
         SOURCE_IO_BUFFER_BYTES,
     };
@@ -4284,6 +4505,11 @@ mod tests {
     use super::{
         push_node_candidate, run_node_probe, run_node_selection_blocking, NodeProbeCache,
         NodeProbeKey,
+    };
+    #[cfg(unix)]
+    use super::{
+        schedule_orphan_function_snapshot_sweep, snapshot_directory_name, snapshot_owned_directory,
+        snapshot_owner_pid, sweep_orphan_function_snapshots,
     };
     use fireemu_adapter_functions::manifest_json::parse_manifest;
     use fireemu_core_pubsub::{
@@ -4338,6 +4564,281 @@ mod tests {
         assert!(error.contains("100000 entries"), "{error}");
     }
 
+    #[test]
+    fn oversized_sparse_source_is_rejected_before_reading_its_contents() {
+        let root = std::env::temp_dir().join(format!(
+            "fireemu-functions-byte-budget-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir(&root).unwrap();
+        std::fs::File::create(root.join("oversized.bin"))
+            .unwrap()
+            .set_len(300 * 1024 * 1024)
+            .unwrap();
+        let mut charged = 0_u64;
+        let error = functions_source_stamp_with_charge(
+            &root,
+            &[],
+            &mut |_, bytes| {
+                charged = charged.saturating_add(bytes);
+                if charged >= u64::try_from(SOURCE_IO_BUFFER_BYTES).unwrap() {
+                    return Err("test stopped an unbounded read".to_owned());
+                }
+                Ok(())
+            },
+            &AtomicBool::new(false),
+        )
+        .unwrap_err();
+
+        assert!(error.contains("256 MiB byte budget"), "{error}");
+        assert!(error.contains("oversized.bin"), "{error}");
+        assert_eq!(charged, 0, "the oversized file was read before rejection");
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn source_byte_budget_counts_the_whole_tree_and_names_the_largest_file() {
+        let mut budget = FunctionsSourceByteBudget::default();
+        budget
+            .claim(std::path::Path::new("large.bin"), 200 * 1024 * 1024)
+            .unwrap();
+        budget
+            .claim(std::path::Path::new("small.bin"), 56 * 1024 * 1024)
+            .unwrap();
+
+        let error = budget
+            .claim(std::path::Path::new("overflow.bin"), 1)
+            .unwrap_err();
+
+        assert!(error.contains("256 MiB byte budget"), "{error}");
+        assert!(error.contains("large.bin"), "{error}");
+        assert!(error.contains("overflow.bin"), "{error}");
+    }
+
+    #[test]
+    fn reload_warning_is_emitted_once_until_a_successful_scan() {
+        let mut warned = false;
+        assert!(warn_reload_once(
+            &mut warned,
+            "alpha",
+            "scan",
+            "256 MiB exceeded at 300 MiB"
+        ));
+        assert!(!warn_reload_once(
+            &mut warned,
+            "alpha",
+            "scan",
+            "256 MiB exceeded at 301 MiB"
+        ));
+        warned = false;
+        assert!(warn_reload_once(
+            &mut warned,
+            "alpha",
+            "scan",
+            "256 MiB exceeded again"
+        ));
+    }
+
+    #[test]
+    fn source_scan_waits_before_retrying_a_budget_exceeded_tree() {
+        let mut budget = FunctionsSourceByteBudget::default();
+        let reason = budget
+            .claim(
+                std::path::Path::new("too-large.bin"),
+                MAX_FUNCTIONS_SOURCE_BYTES + 1,
+            )
+            .unwrap_err();
+        assert_eq!(
+            source_scan_retry_delay(Some(&reason)),
+            Duration::from_secs(30)
+        );
+        assert_eq!(
+            source_scan_retry_delay(Some("permission denied")),
+            Duration::from_millis(750)
+        );
+        assert_eq!(source_scan_retry_delay(None), Duration::from_millis(750));
+    }
+
+    #[test]
+    fn oversized_snapshot_input_is_rejected_before_creating_its_copy() {
+        let root = std::env::temp_dir().join(format!(
+            "fireemu-functions-snapshot-byte-budget-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir(&root).unwrap();
+        let source = root.join("large.bin");
+        let target = root.join("copy.bin");
+        std::fs::File::create(&source)
+            .unwrap()
+            .set_len(300 * 1024 * 1024)
+            .unwrap();
+        let mut charged = 0_u64;
+        let mut charge = |_: u64, bytes: u64| {
+            charged = charged.saturating_add(bytes);
+            Ok(())
+        };
+        let cancelled = AtomicBool::new(false);
+        let mut traversal = FunctionsSourceTraversal {
+            root: &root,
+            ignores: &[],
+            entry_budget: FunctionsSourceEntryBudget::default(),
+            byte_budget: FunctionsSourceByteBudget::default(),
+            charge: &mut charge,
+            cancelled: &cancelled,
+        };
+
+        let error = traversal.copy_file(&source, &target).unwrap_err();
+
+        assert!(error.contains("256 MiB byte budget"), "{error}");
+        assert!(!target.exists());
+        assert_eq!(charged, 0);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn orphan_sweep_removes_only_owned_dead_pid_snapshot_directories() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let root = std::env::temp_dir().join(format!(
+            "fireemu-orphan-sweep-fixture-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir(&root).unwrap();
+        let dead = root.join(snapshot_directory_name(u32::try_from(i32::MAX).unwrap(), 0));
+        let live = root.join(snapshot_directory_name(std::process::id(), 1));
+        let parent_pid = rustix::process::getppid().unwrap();
+        let other_live = root.join(snapshot_directory_name(
+            u32::try_from(parent_pid.as_raw_pid()).unwrap(),
+            5,
+        ));
+        let malformed = root.join(format!("fireemu-functions-{}-bad", i32::MAX));
+        let permissive = root.join(snapshot_directory_name(u32::try_from(i32::MAX).unwrap(), 3));
+        let outside = root.join("outside");
+        for path in [&dead, &live, &other_live, &malformed, &permissive, &outside] {
+            std::fs::create_dir(path).unwrap();
+        }
+        for path in [&dead, &live, &other_live, &malformed] {
+            std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o700)).unwrap();
+        }
+        std::fs::set_permissions(&permissive, std::fs::Permissions::from_mode(0o755)).unwrap();
+        std::fs::write(outside.join("sentinel"), "keep").unwrap();
+        std::os::unix::fs::symlink(&outside, dead.join("node_modules")).unwrap();
+        let direct_link = root.join(snapshot_directory_name(u32::try_from(i32::MAX).unwrap(), 2));
+        std::os::unix::fs::symlink(&outside, &direct_link).unwrap();
+        let regular = root.join(snapshot_directory_name(u32::try_from(i32::MAX).unwrap(), 4));
+        std::fs::write(&regular, "keep").unwrap();
+
+        let removed = sweep_orphan_function_snapshots(&root).unwrap();
+
+        assert_eq!(removed, 1);
+        assert!(!dead.exists());
+        for path in [
+            &live,
+            &other_live,
+            &malformed,
+            &permissive,
+            &direct_link,
+            &regular,
+        ] {
+            assert!(
+                path.symlink_metadata().is_ok(),
+                "{} was removed",
+                path.display()
+            );
+        }
+        let owner = rustix::process::geteuid().as_raw();
+        let metadata = std::fs::symlink_metadata(&live).unwrap();
+        assert!(snapshot_owned_directory(&metadata, owner));
+        assert!(!snapshot_owned_directory(&metadata, owner.wrapping_add(1)));
+        assert_eq!(
+            std::fs::read_to_string(outside.join("sentinel")).unwrap(),
+            "keep"
+        );
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn orphan_snapshot_names_require_exact_decimal_pid_and_sequence() {
+        assert!(snapshot_owner_pid(&snapshot_directory_name(1, 0)).is_some());
+        for invalid in [
+            "fireemu-functions-0-0",
+            "fireemu-functions-01-0",
+            "fireemu-functions-1-00",
+            "fireemu-functions-1--1",
+            "fireemu-functions-1-0-extra",
+            "fireemu-functions-2147483648-0",
+            "fireemu-functions-1-18446744073709551616",
+            "fireemu-functions-cancelled-snapshot-source-1-0",
+        ] {
+            assert!(snapshot_owner_pid(invalid).is_none(), "{invalid}");
+        }
+        #[cfg(target_os = "linux")]
+        {
+            let other_namespace = format!(
+                "fireemu-functions-1-0-n{}",
+                super::pid_namespace_inode().unwrap().wrapping_add(1)
+            );
+            assert!(snapshot_owner_pid(&other_namespace).is_none());
+            assert!(snapshot_owner_pid("fireemu-functions-1-0").is_none());
+        }
+    }
+
+    #[cfg(unix)]
+    #[tokio::test(flavor = "current_thread")]
+    async fn startup_schedules_orphan_snapshot_cleanup_off_the_runtime_worker() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let root = std::env::temp_dir().join(format!(
+            "fireemu-startup-sweep-fixture-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir(&root).unwrap();
+        let orphan = root.join(snapshot_directory_name(u32::try_from(i32::MAX).unwrap(), 0));
+        std::fs::create_dir(&orphan).unwrap();
+        std::fs::set_permissions(&orphan, std::fs::Permissions::from_mode(0o700)).unwrap();
+
+        schedule_orphan_function_snapshot_sweep(root.clone())
+            .await
+            .unwrap();
+
+        assert!(!orphan.exists());
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn oversized_codebase_does_not_hold_the_shared_scan_gate() {
+        let root = std::env::temp_dir().join(format!(
+            "fireemu-functions-scan-gate-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        let oversized = root.join("oversized");
+        let small = root.join("small");
+        std::fs::create_dir_all(&oversized).unwrap();
+        std::fs::create_dir(&small).unwrap();
+        std::fs::File::create(oversized.join("large.bin"))
+            .unwrap()
+            .set_len(300 * 1024 * 1024)
+            .unwrap();
+        std::fs::write(small.join("index.js"), "module.exports = 1;").unwrap();
+
+        let budget = FunctionsSourceScanBudget::new();
+        let (large_result, small_result) = tokio::time::timeout(Duration::from_secs(2), async {
+            tokio::join!(budget.scan(&oversized, &[]), budget.scan(&small, &[]))
+        })
+        .await
+        .expect("an oversized codebase held the shared scan gate");
+        assert!(large_result.unwrap_err().contains("256 MiB byte budget"));
+        assert_eq!(small_result.unwrap().tracked_files, 1);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
     #[tokio::test]
     async fn cancelling_a_budgeted_snapshot_removes_the_partial_copy() {
         static NEXT_FIXTURE: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
@@ -4351,7 +4852,7 @@ mod tests {
         let marker = format!("cancel-{fixture}.js");
         std::fs::File::create(root.join(&marker))
             .unwrap()
-            .set_len(512 * 1024 * 1024)
+            .set_len(128 * 1024 * 1024)
             .unwrap();
         let prefix = format!("fireemu-functions-{}-", std::process::id());
         let snapshots = || {
@@ -4395,7 +4896,7 @@ mod tests {
         .await;
         assert!(
             cleaned.is_ok(),
-            "cancelling a paced 512 MiB snapshot did not stop and clean up within one second"
+            "cancelling a paced 128 MiB snapshot did not stop and clean up within one second"
         );
         assert!(
             matches!(ready, Ok(true)),

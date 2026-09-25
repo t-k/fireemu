@@ -1,0 +1,296 @@
+{
+  "schemaVersion": 1,
+  "parent": "AUTH-TENANT-BLOCKING",
+  "parentStatus": "IMPLEMENTING",
+  "oracleTrack": "disposable-sandbox",
+  "scopeDecisions": [
+    {
+      "id": "TB1",
+      "decision": "Blocking functions are observed on the Identity Platform sandbox: Cloud Functions (2nd gen), Cloud Build, Artifact Registry, Cloud Run and Eventarc are enabled there; per recording one blocking-function fixture is deployed and registered, and at the end and on every stop path it is unregistered and its function, image and source are deleted and read back. allUsers invoker only for a fixture without side effects or secrets, about an hour per recording, removed afterwards and read back in the pre-send review. Budget US$10 per observation task.",
+      "decidedBy": "owner (t-k)",
+      "decidedOn": "2026-09-25"
+    },
+    {
+      "id": "TB2",
+      "decision": "Per program the sandbox's multiTenant.allowTenants is switched on, the program's tenants (unique display names) are created and their settings switched, and at the end and on every stop path the tenants are deleted, allowTenants is switched off, and both are read back. Project settings a program changes to compare inheritance (T7) are restored and read back the same way. No overlap with FS-RULES on the sandbox.",
+      "decidedBy": "owner (t-k); the T7 project settings confirmed in scope by Claude under the owner's delegation",
+      "decidedOn": "2026-09-25"
+    },
+    {
+      "id": "TB3",
+      "decision": "beforeSendEmail and beforeSendSms are in scope. Whether beforeSendSms fires for a configured test phone number is checked once; if it does not, it is recorded as unobserved.",
+      "decidedBy": "owner (t-k)",
+      "decidedOn": "2026-09-25"
+    },
+    {
+      "id": "TB4",
+      "decision": "Out of scope: the content of OIDC and SAML providers and identity-provider sign-in in a tenant (AUTH-FEDERATION; provider configurations staying inside their tenant is in scope), the SDK paths (AUTH-CONFIG-SDK), reCAPTCHA enforcement, the delivery of real mail and SMS, and the effect of monitoring settings (they are only read and written).",
+      "decidedBy": "owner (t-k)",
+      "decidedOn": "2026-09-25",
+      "movedTo": "AUTH-FEDERATION"
+    },
+    {
+      "id": "TB5",
+      "decision": "A blocking event is compared as the decoded event the function receives. The event JWT itself (signed with Google's keys) is a documented divergence: fireemu delivers the decoded event to its runner.",
+      "decidedBy": "owner (t-k)",
+      "decidedOn": "2026-09-25"
+    },
+    {
+      "id": "TB6",
+      "decision": "Blocking functions are observed with 2nd gen functions and the current firebase-functions; only if production refuses the 2nd gen event audience again is the observation switched to 1st gen, after telling the coordinator, and the 2nd gen refusal is recorded as an observation.",
+      "decidedBy": "Claude under the owner's delegation (agent decision)",
+      "decidedOn": "2026-09-25"
+    },
+    {
+      "id": "TB7",
+      "decision": "Custom tokens with a tenant_id are minted through the time-limited signJwt-only binding already approved for AUTH-CREDENTIAL, AUTH-MFA (M5) and FS-RULES, only while a recording runs and never overlapping another lane's binding; granting and removing it is recorded and read back in the pre-send review.",
+      "decidedBy": "Claude under the owner's delegation",
+      "decidedOn": "2026-09-25"
+    },
+    {
+      "id": "TB8",
+      "decision": "The project config shape, multiTenant included, is AUTH-CONFIG-SDK's. After AUTH-CONFIG-SDK closes, work/auth-config-sdk is merged here and the allowTenants enforcement is added on top (strict refuses tenant operations while it is off, as production does; the emulator profile adds no refusal). Until then local rows that need the switch are pending integration.",
+      "decidedBy": "Claude under the owner's delegation",
+      "decidedOn": "2026-09-25"
+    },
+    {
+      "id": "M2",
+      "decision": "Multi-factor configuration per tenant and every tenant/MFA interaction moved here from AUTH-MFA.",
+      "decidedBy": "owner (t-k)",
+      "decidedOn": "2026-09-25"
+    },
+    {
+      "id": "M6",
+      "decision": "Blocking functions that see a second factor moved here from AUTH-MFA.",
+      "decidedBy": "owner (t-k)",
+      "decidedOn": "2026-09-25"
+    },
+    {
+      "id": "E4",
+      "decision": "Action codes in tenants and around blocking functions moved here from AUTH-ACTION.",
+      "decidedBy": "owner (t-k)",
+      "decidedOn": "2026-09-24"
+    }
+  ],
+  "conditions": [
+    {
+      "conditionId": "AUTH-TENANT-BLOCKING/tenant-management",
+      "source": "docs/compatibility/ip-fs-production-compatibility.md#feature-group-status",
+      "recipeIds": ["atb/tenant/manage"],
+      "configProjections": ["default"],
+      "status": "PENDING_CORPUS",
+      "note": "T1: tenant create (minimal, every documented field, unknown and mistyped fields, display-name forms), get, list and its paging, PATCH with and without a mask, delete and the unknown tenant; the answer's members and the tenant id's shape."
+    },
+    {
+      "conditionId": "AUTH-TENANT-BLOCKING/multi-tenant-switch",
+      "source": "docs/compatibility/ip-fs-production-compatibility.md#feature-group-status",
+      "recipeIds": ["atb/tenant/switch-off"],
+      "configProjections": ["default"],
+      "status": "PENDING_CORPUS",
+      "note": "T2: the answers to tenant management and tenant-scoped requests while multiTenant.allowTenants is off, and the config's multiTenant member."
+    },
+    {
+      "conditionId": "AUTH-TENANT-BLOCKING/tenant-selection",
+      "source": "docs/compatibility/ip-fs-production-compatibility.md#feature-group-status",
+      "recipeIds": ["atb/tenant/selection", "atb/tenant/custom-token"],
+      "configProjections": ["default"],
+      "status": "PENDING_CORPUS",
+      "note": "T3: an unknown, empty or mistyped tenant id, and a body tenant that contradicts the ID token, the refresh token, the custom token's tenant_id or the Admin path, on client and Admin routes."
+    },
+    {
+      "conditionId": "AUTH-TENANT-BLOCKING/credential-isolation",
+      "source": "docs/compatibility/ip-fs-production-compatibility.md#feature-group-status",
+      "recipeIds": ["atb/tenant/credentials"],
+      "configProjections": ["default"],
+      "status": "PENDING_CORPUS",
+      "note": "T4: a tenant's ID token, session cookie and action code used in another tenant and in the project are refused without changing anything; the firebase.tenant claim."
+    },
+    {
+      "conditionId": "AUTH-TENANT-BLOCKING/admin-accounts",
+      "source": "docs/compatibility/ip-fs-production-compatibility.md#feature-group-status",
+      "recipeIds": ["atb/tenant/admin-accounts"],
+      "configProjections": ["default"],
+      "status": "PENDING_CORPUS",
+      "note": "T5: Admin account routes under a tenant path; the same uid and address in two tenants and the project; project-level Admin reads do not see tenant accounts."
+    },
+    {
+      "conditionId": "AUTH-TENANT-BLOCKING/tenant-sign-in-settings",
+      "source": "docs/compatibility/ip-fs-production-compatibility.md#feature-group-status",
+      "recipeIds": ["atb/tenant/settings"],
+      "configProjections": ["default"],
+      "status": "PENDING_CORPUS",
+      "note": "T6: which operations allowPasswordSignup, enableEmailLinkSignin, enableAnonymousUser, disableAuth, client permissions, email privacy and tenant test phone numbers refuse, and how."
+    },
+    {
+      "conditionId": "AUTH-TENANT-BLOCKING/inheritance",
+      "source": "docs/compatibility/ip-fs-production-compatibility.md#feature-group-status",
+      "recipeIds": ["atb/tenant/inheritance"],
+      "configProjections": ["default"],
+      "status": "PENDING_CORPUS",
+      "note": "T7: whether a tenant follows project settings changed after it was created (email privacy, sign-up permission, duplicate addresses, MFA), and what a tenant created afterwards gets."
+    },
+    {
+      "conditionId": "AUTH-TENANT-BLOCKING/tenant-password-policy",
+      "source": "docs/compatibility/ip-fs-production-compatibility.md#feature-group-status",
+      "recipeIds": ["atb/tenant/password-policy"],
+      "configProjections": ["default"],
+      "status": "PENDING_CORPUS",
+      "note": "T8: a tenant password policy read by clients and enforced on sign-up, update and reset, independently of the project and of another tenant."
+    },
+    {
+      "conditionId": "AUTH-TENANT-BLOCKING/tenant-mfa",
+      "source": "docs/compatibility/ip-fs-production-compatibility.md#feature-group-status",
+      "recipeIds": ["atb/tenant/mfa"],
+      "configProjections": ["default"],
+      "status": "PENDING_CORPUS",
+      "note": "T9 (M2): a tenant's mfaConfig written and read back; enrollment and second-factor sign-in with it on and off; a pending credential used in another tenant; second-factor claims of a tenant session."
+    },
+    {
+      "conditionId": "AUTH-TENANT-BLOCKING/tenant-deletion",
+      "source": "docs/compatibility/ip-fs-production-compatibility.md#feature-group-status",
+      "recipeIds": ["atb/tenant/deletion"],
+      "configProjections": ["default"],
+      "status": "PENDING_CORPUS",
+      "note": "T10: tokens, action codes and Admin reads of a deleted tenant; a tenant created again under the same display name."
+    },
+    {
+      "conditionId": "AUTH-TENANT-BLOCKING/tenant-actions",
+      "source": "docs/compatibility/ip-fs-production-compatibility.md#feature-group-status",
+      "recipeIds": ["atb/tenant/actions"],
+      "configProjections": ["default"],
+      "status": "PENDING_CORPUS",
+      "note": "T11 (E4): verification, reset and sign-in codes issued in a tenant and applied in another tenant, in the project and in their own tenant; client action-code requests in a tenant."
+    },
+    {
+      "conditionId": "AUTH-TENANT-BLOCKING/provider-isolation",
+      "source": "docs/compatibility/ip-fs-production-compatibility.md#feature-group-status",
+      "recipeIds": ["atb/tenant/providers"],
+      "configProjections": ["default"],
+      "status": "PENDING_CORPUS",
+      "note": "T12: an OIDC provider configuration created in one tenant is not visible or deletable from another tenant or the project (its content and sign-in are AUTH-FEDERATION, TB4)."
+    },
+    {
+      "conditionId": "AUTH-TENANT-BLOCKING/event-selection",
+      "source": "docs/compatibility/ip-fs-production-compatibility.md#feature-group-status",
+      "recipeIds": ["atb/blocking/events"],
+      "configProjections": ["default"],
+      "status": "PENDING_CORPUS",
+      "note": "B1: which of beforeCreate and beforeSignIn fire, in which order and with which isNewUser, for password and anonymous sign-up, password, custom-token, email-link and phone sign-in and the MFA finalize (M6); none for Admin creation, account updates, lookups and token refresh."
+    },
+    {
+      "conditionId": "AUTH-TENANT-BLOCKING/ordering-and-visibility",
+      "source": "docs/compatibility/ip-fs-production-compatibility.md#feature-group-status",
+      "recipeIds": ["atb/blocking/ordering"],
+      "configProjections": ["default"],
+      "status": "PENDING_CORPUS",
+      "note": "B2: beforeCreate's changes as beforeSignIn sees them; eventType and signInMethod per method."
+    },
+    {
+      "conditionId": "AUTH-TENANT-BLOCKING/refusal",
+      "source": "docs/compatibility/ip-fs-production-compatibility.md#feature-group-status",
+      "recipeIds": ["atb/blocking/refusal"],
+      "configProjections": ["default"],
+      "status": "PENDING_CORPUS",
+      "note": "B3: the client answer to each HttpsError class and to an unhandled error, for each event; nothing is committed."
+    },
+    {
+      "conditionId": "AUTH-TENANT-BLOCKING/rollback",
+      "source": "docs/compatibility/ip-fs-production-compatibility.md#feature-group-status",
+      "recipeIds": ["atb/blocking/rollback"],
+      "configProjections": ["default"],
+      "status": "PENDING_CORPUS",
+      "note": "B4: whether an account survives a beforeSignIn refusal after beforeCreate accepted it, a sign-up after a beforeCreate refusal, and disabled:true from each event."
+    },
+    {
+      "conditionId": "AUTH-TENANT-BLOCKING/timeout",
+      "source": "docs/compatibility/ip-fs-production-compatibility.md#feature-group-status",
+      "recipeIds": ["atb/blocking/timeout"],
+      "configProjections": ["default"],
+      "status": "PENDING_CORPUS",
+      "note": "B5: a function past the deadline, for each event, and whether the account exists afterwards."
+    },
+    {
+      "conditionId": "AUTH-TENANT-BLOCKING/claims",
+      "source": "docs/compatibility/ip-fs-production-compatibility.md#feature-group-status",
+      "recipeIds": ["atb/blocking/claims"],
+      "configProjections": ["default"],
+      "status": "PENDING_CORPUS",
+      "note": "B6: customClaims saved and in the ID token; sessionClaims only in the session's tokens and after a refresh; sessionClaims from beforeCreate; the size limits; reserved names; precedence."
+    },
+    {
+      "conditionId": "AUTH-TENANT-BLOCKING/response-validation",
+      "source": "docs/compatibility/ip-fs-production-compatibility.md#feature-group-status",
+      "recipeIds": ["atb/blocking/response"],
+      "configProjections": ["default"],
+      "status": "PENDING_CORPUS",
+      "note": "B7: the answer to a response without updateMask, a userRecord of the wrong type, unknown members and mistyped values."
+    },
+    {
+      "conditionId": "AUTH-TENANT-BLOCKING/blocking-config",
+      "source": "docs/compatibility/ip-fs-production-compatibility.md#feature-group-status",
+      "recipeIds": ["atb/blocking/config"],
+      "configProjections": ["default"],
+      "status": "PENDING_CORPUS",
+      "note": "B8: blockingFunctions.triggers and forwardInboundCredentials read and written, masks, an unknown event, a request after a trigger is removed, and whether a tenant carries its own blocking configuration."
+    },
+    {
+      "conditionId": "AUTH-TENANT-BLOCKING/event-payload",
+      "source": "docs/compatibility/ip-fs-production-compatibility.md#feature-group-status",
+      "recipeIds": ["atb/blocking/payload"],
+      "configProjections": ["default"],
+      "status": "PENDING_CORPUS",
+      "note": "B9 (TB5): the decoded event a function receives: user record members including multiFactor and tenantId, eventType, resource, the request-derived members (presence and shape), credential and additionalUserInfo."
+    },
+    {
+      "conditionId": "AUTH-TENANT-BLOCKING/tenant-events",
+      "source": "docs/compatibility/ip-fs-production-compatibility.md#feature-group-status",
+      "recipeIds": ["atb/blocking/tenant"],
+      "configProjections": ["default"],
+      "status": "PENDING_CORPUS",
+      "note": "B10: blocking events of a tenant's accounts: tenantId and the resource name."
+    },
+    {
+      "conditionId": "AUTH-TENANT-BLOCKING/send-email-sms",
+      "source": "docs/compatibility/ip-fs-production-compatibility.md#feature-group-status",
+      "recipeIds": ["atb/blocking/send"],
+      "configProjections": ["default"],
+      "status": "PENDING_CORPUS",
+      "note": "B11 (TB3): beforeSendEmail for each action-code request, its refusal and recaptchaActionOverride; whether beforeSendSms fires for a test phone number."
+    },
+    {
+      "conditionId": "AUTH-TENANT-BLOCKING/session-isolation",
+      "source": "docs.local/issues/open/session-reset-and-snapshots-ignore-auth-tenant-stores.md",
+      "recipeIds": ["local/session-isolation"],
+      "configProjections": ["default"],
+      "status": "PENDING_REVIEW",
+      "note": "L1 (local only; production has no session reset): a project reset, a snapshot restore and its rollback, and the resource report include the session project's tenants (sessions.rs project_reset_removes_tenant_state_and_invalidates_held_credentials; snapshots.rs a_restore_rolls_the_scopes_tenant_namespaces_back_to_the_capture and a_rollback_puts_the_tenant_namespaces_back_as_they_were_before_the_restore; resources.rs the_auth_report_counts_tenant_users_and_tenants; core-auth tenants.rs a_tenant_restore_with_a_poisoned_store_changes_nothing)."
+    },
+    {
+      "conditionId": "AUTH-TENANT-BLOCKING/hook-concurrency",
+      "source": "docs.local/issues/open/blocking-hook-commit-refuses-sign-ins-after-concurrent-rng-draw.md",
+      "recipeIds": ["local/hook-concurrency"],
+      "configProjections": ["default"],
+      "status": "PENDING_CORPUS",
+      "note": "L2 (local only): requests running while a blocking function runs do not make a sign-in fail, and the emulator profile adds no refusal of fireemu's own around blocking functions."
+    },
+    {
+      "conditionId": "AUTH-TENANT-BLOCKING/final-artifact-regression",
+      "source": "docs.local/instructions/2026-09-23-fs-data-write-sandbox-directive.md#4",
+      "recipeIds": ["atb", "auth-mfa", "auth-action", "auth-credential", "auth-account"],
+      "configProjections": ["default"],
+      "status": "PENDING_CORPUS",
+      "note": "This parent's comparison and the AUTH-ACCOUNT, AUTH-CREDENTIAL, AUTH-ACTION and AUTH-MFA regressions on one artifact."
+    },
+    {
+      "conditionId": "AUTH-TENANT-BLOCKING/closure-review",
+      "source": "docs.local/instructions/2026-09-23-fs-data-write-sandbox-directive.md#4",
+      "recipeIds": ["atb"],
+      "configProjections": ["default"],
+      "status": "PENDING_REVIEW",
+      "note": "Independent closure and safety review of the final artifact."
+    }
+  ],
+  "closureReview": {
+    "decision": "PENDING"
+  }
+}

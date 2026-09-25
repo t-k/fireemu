@@ -377,8 +377,9 @@ pub trait DocumentAccess {
     fn get(&self, segments: &[String]) -> Option<RulesValue>;
 
     /// `getAfter()`: the document as it will be once the current write (every write of the
-    /// batch or transaction) has completed. `None` = not available (reads, query proofs:
-    /// `getAfter()` then fails closed); `Some(None)` = it will not exist.
+    /// batch or transaction) has completed. `None` = no write applies (reads, query proofs):
+    /// Firestore rules then read the current state, Storage rules refuse the call;
+    /// `Some(None)` = it will not exist.
     fn get_after(&self, _segments: &[String]) -> Option<Option<RulesValue>> {
         None
     }
@@ -628,7 +629,7 @@ fn evaluate_prepared(
             projected_member_reads: 0,
             doc_reads_max: limit_max(match ctx.service {
                 // A query's rule may read as many documents as a multi-document request
-                // (20; production allows 11, the official emulator 20 and not 21).
+                // (20: production and the official emulator allow 20 and refuse 21, FS-RULES).
                 RulesService::Firestore if ctx.method == Method::List => {
                     "RULES-DOC-ACCESS-MULTI-TOTAL"
                 }

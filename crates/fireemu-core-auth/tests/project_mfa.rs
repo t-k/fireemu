@@ -282,11 +282,13 @@ fn a_production_phone_enrollment_session_does_not_expire() {
     }
 }
 
-/// At the cap on outstanding phone codes, a phone enrollment session older than the observed
-/// ages makes room, oldest first; younger codes still fill the cap.
+/// Each account holds at most [`MAX_PENDING_PER_USER`] phone enrollment sessions: at that
+/// number its own oldest session older than the observed ages makes room, and until one is
+/// that old the next send is refused (follow-up directive, Should 2).
 #[test]
-fn at_the_code_cap_the_oldest_unobserved_enrollment_session_makes_room() {
-    use fireemu_core_auth::store::{AuthError, VerificationPurpose, MAX_OUTSTANDING_CODES};
+fn an_account_holds_a_bounded_number_of_phone_enrollment_sessions() {
+    use fireemu_core_auth::mfa::MAX_PENDING_PER_USER;
+    use fireemu_core_auth::store::{AuthError, VerificationPurpose};
     let mut s = AuthStore::new("demo-app", SplitMix64::new(3), TotpPolicy::default());
     s.set_production_mfa(true);
     s.set_mfa_config(enabled(Some(5)));
@@ -297,32 +299,93 @@ fn at_the_code_cap_the_oldest_unobserved_enrollment_session_makes_room() {
     let oldest = s
         .send_verification_code("+16505550101", enroll(), t0())
         .unwrap();
-    for _ in 1..MAX_OUTSTANDING_CODES {
+    for _ in 1..MAX_PENDING_PER_USER {
         s.send_verification_code("+16505550101", enroll(), seconds(1))
             .unwrap();
     }
     assert_eq!(
         s.send_verification_code("+16505550101", enroll(), seconds(1_805)),
         Err(AuthError::TooManyOutstandingCodes),
-        "no session is older than the observed ages yet"
+        "no own session is older than the observed ages yet"
     );
     s.send_verification_code("+16505550101", enroll(), seconds(1_806))
         .unwrap();
     assert_eq!(
         s.check_phone_code(&oldest.session_info, &oldest.code, seconds(1_806)),
         Err(AuthError::InvalidSessionInfo),
-        "the oldest session made room"
+        "the account's oldest session made room"
     );
 }
 
-/// The emulator profile keeps the ten minutes of every phone code.
+/// At the project's cap on outstanding phone codes an account makes room only from its own old
+/// sessions; another account's sessions are never dropped, and an account without one is
+/// refused (follow-up directive, Should 2).
 #[test]
-fn an_emulator_phone_enrollment_session_lives_ten_minutes() {
-    assert!(phone_enrollment_at(false, 600).is_ok());
+fn at_the_code_cap_no_account_drops_another_accounts_session() {
+    use fireemu_core_auth::mfa::MAX_PENDING_PER_USER;
+    use fireemu_core_auth::store::{AuthError, VerificationPurpose, MAX_OUTSTANDING_CODES};
+    let mut s = AuthStore::new("demo-app", SplitMix64::new(3), TotpPolicy::default());
+    s.set_production_mfa(true);
+    s.set_mfa_config(enabled(Some(5)));
+    let accounts = MAX_OUTSTANDING_CODES.div_ceil(MAX_PENDING_PER_USER - 1) + 1;
+    let uids: Vec<_> = (0..accounts)
+        .map(|n| {
+            s.create_user_with_id(
+                NewUser::email(&format!("u{n}@example.com")),
+                Some(&format!("u{n}")),
+                t0(),
+            )
+            .unwrap()
+        })
+        .collect();
+    let mut first = Vec::new();
+    'fill: for uid in &uids[..accounts - 1] {
+        for k in 0..MAX_PENDING_PER_USER - 1 {
+            if s.verification_codes().len() >= MAX_OUTSTANDING_CODES {
+                break 'fill;
+            }
+            let sent = s
+                .send_verification_code(
+                    "+16505550101",
+                    VerificationPurpose::Enrollment { uid: uid.clone() },
+                    t0(),
+                )
+                .unwrap();
+            if k == 0 {
+                first.push(sent);
+            }
+        }
+    }
+    let late = seconds(1_806);
+    let newcomer = uids.last().unwrap().clone();
     assert_eq!(
-        phone_enrollment_at(false, 601),
-        Err(fireemu_core_auth::store::AuthError::InvalidSessionInfo)
+        s.send_verification_code(
+            "+16505550101",
+            VerificationPurpose::Enrollment { uid: newcomer },
+            late
+        ),
+        Err(AuthError::TooManyOutstandingCodes)
     );
+    s.send_verification_code(
+        "+16505550101",
+        VerificationPurpose::Enrollment {
+            uid: uids[0].clone(),
+        },
+        late,
+    )
+    .unwrap();
+    assert_eq!(
+        s.check_phone_code(&first[0].session_info, &first[0].code, late),
+        Err(AuthError::InvalidSessionInfo),
+        "the sender's own oldest session made room"
+    );
+    for other in &first[1..] {
+        assert!(
+            s.check_phone_code(&other.session_info, &other.code, late)
+                .is_ok(),
+            "another account's session stays"
+        );
+    }
 }
 
 /// The project's `mfa` config is control-plane state of its namespace: a snapshot restored into

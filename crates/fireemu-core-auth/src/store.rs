@@ -1368,7 +1368,7 @@ pub const SMS_CODE_TTL_SECONDS: i64 = 600;
 /// (sandbox recording 2026-09-24, `auth-mfa/lifetime#aged-session-s1800`, both recordings; the
 /// run waits 1800 seconds and a 3-second margin), and never refused one. Its lifetime is
 /// unobserved, so it is not refused as expired (owner decision M12, as AUTH-ACTION's long
-/// codes). At [`MAX_OUTSTANDING_CODES`] the oldest one older than this makes room.
+/// codes). An account holds a bounded number of them (`bound_phone_enrollment_sessions`).
 pub const OBSERVED_MFA_PHONE_ENROLLMENT_SECONDS: i64 = 1_805;
 /// Under production's second-factor rules a TOTP sign-in whose pending credential is at least
 /// this old is `TOTP_CHALLENGE_TIMEOUT`: production accepted one 293 seconds old and refused
@@ -3418,6 +3418,40 @@ impl AuthStore {
         }
     }
 
+    /// Under production's rules a phone enrollment session never leaves by age, so `uid` holds
+    /// at most [`crate::mfa::MAX_PENDING_PER_USER`] of them. At that number, or at the
+    /// project's [`MAX_OUTSTANDING_CODES`], its own oldest session older than production's
+    /// observed ages makes room; another account's sessions are never dropped. Refused when
+    /// the account is at its bound with no session that old.
+    fn bound_phone_enrollment_sessions(
+        &mut self,
+        uid: &LocalId,
+        now: LogicalInstant,
+    ) -> Result<(), AuthError> {
+        let own = |code: &&VerificationCode| matches!(&code.purpose, VerificationPurpose::Enrollment { uid: owner } if owner == uid);
+        let held = self.verification_codes.values().filter(own).count();
+        let full = held >= crate::mfa::MAX_PENDING_PER_USER;
+        if full || self.verification_codes.len() >= MAX_OUTSTANDING_CODES {
+            let oldest = self
+                .verification_codes
+                .values()
+                .filter(own)
+                .filter(|code| {
+                    Self::expired(code.created_at, OBSERVED_MFA_PHONE_ENROLLMENT_SECONDS, now)
+                })
+                .min_by_key(|code| (code.created_at, code.sequence))
+                .map(|code| code.session_info.clone());
+            match oldest {
+                Some(oldest) => {
+                    Arc::make_mut(&mut self.verification_codes).remove(&oldest);
+                }
+                None if full => return Err(AuthError::TooManyOutstandingCodes),
+                None => {}
+            }
+        }
+        Ok(())
+    }
+
     /// Creates a phone verification code for `phone` (a deterministic six-digit code).
     /// Expired codes are swept first; at [`MAX_OUTSTANDING_CODES`] outstanding codes the
     /// request is refused and creates nothing.
@@ -3429,26 +3463,9 @@ impl AuthStore {
     ) -> Result<VerificationCode, AuthError> {
         Self::validate_phone_number(phone)?;
         self.sweep_transient_credentials(now);
-        // A phone enrollment session never leaves by age under production's rules, so at the
-        // cap the oldest one older than production's observed ages makes room.
-        if self.verification_codes.len() >= MAX_OUTSTANDING_CODES
-            && self.second_factor_rules_are_production()
-        {
-            let oldest = self
-                .verification_codes
-                .values()
-                .filter(|code| {
-                    matches!(code.purpose, VerificationPurpose::Enrollment { .. })
-                        && Self::expired(
-                            code.created_at,
-                            OBSERVED_MFA_PHONE_ENROLLMENT_SECONDS,
-                            now,
-                        )
-                })
-                .min_by_key(|code| (code.created_at, code.sequence))
-                .map(|code| code.session_info.clone());
-            if let Some(oldest) = oldest {
-                Arc::make_mut(&mut self.verification_codes).remove(&oldest);
+        if let VerificationPurpose::Enrollment { uid } = &purpose {
+            if self.second_factor_rules_are_production() {
+                self.bound_phone_enrollment_sessions(uid, now)?;
             }
         }
         if self.verification_codes.len() >= MAX_OUTSTANDING_CODES {

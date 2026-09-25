@@ -516,6 +516,20 @@ test("delta-v3 recovery resumes only its reserved six-name journal with the rema
     assert.equal(env.FIRESTORE_PROBE_RECOVERY_MODE, "recover-delta-v3");
     assert.equal(env.FIRESTORE_PROBE_MAX_REQUESTS, "400");
     assert.equal(env.FIRESTORE_PROBE_DELTA_JOURNAL, journalPath);
+    // Cancelling the journaled bulk delete is an explicit, per-use choice.
+    assert.equal(env.FIRESTORE_PROBE_DELTA_V3_CANCEL_BULK_DELETE, undefined);
+    const cancelling = deltaV3RecoveryEnvironment({
+      token: "private",
+      meta: join(runDir, "recovery.json"),
+      journal: journalPath,
+      names: runtimeNames,
+      runId,
+      corpusDigest,
+      sourceGitSha: gitSha,
+      remainingHttp: 400,
+      cancelBulkDelete: true,
+    });
+    assert.equal(cancelling.FIRESTORE_PROBE_DELTA_V3_CANCEL_BULK_DELETE, "1");
     assert.throws(
       () =>
         deltaV3RecoveryEnvironment({

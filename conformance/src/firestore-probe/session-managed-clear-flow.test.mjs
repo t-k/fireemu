@@ -167,6 +167,9 @@ async function observeCollector({
   partial = false,
   operationPendingPolls = 0,
   pendingFromOperation = 1,
+  cancelBulkDelete = false,
+  operationCancelledAtStart = false,
+  cancelledErrorCode = 1,
   managedPollMs = "1",
   corpusDigest = "c".repeat(64),
   hostOverride,
@@ -196,6 +199,7 @@ async function observeCollector({
   const requests = [];
   let operationPolls = 0;
   let operationsStarted = 0;
+  let operationCancelled = operationCancelledAtStart;
   const journalAtDeleteRequests = [];
   const journalAtSeedRequests = [];
   const probeSeededNames = new Set();
@@ -272,13 +276,18 @@ async function observeCollector({
       operationsStarted += 1;
       operationPolls = 0;
       send(200, { name: "projects/fireemu-oracle-sbx/databases/(default)/operations/delta-test" });
+    } else if (pathname.endsWith("/operations/delta-test:cancel")) {
+      operationCancelled = true;
+      send(200, {});
     } else if (pathname.endsWith("/operations/delta-test")) {
       operationPolls += 1;
       send(200, {
         name: "projects/fireemu-oracle-sbx/databases/(default)/operations/delta-test",
-        ...(operationsStarted < pendingFromOperation || operationPolls > operationPendingPolls
-          ? { done: true }
-          : {}),
+        ...(operationCancelled
+          ? { done: true, error: { code: cancelledErrorCode, message: "Operation was cancelled." } }
+          : operationsStarted < pendingFromOperation || operationPolls > operationPendingPolls
+            ? { done: true }
+            : {}),
       });
     } else if (pathname.endsWith("/documents:listCollectionIds")) {
       send(200, {
@@ -637,6 +646,7 @@ async function observeCollector({
           ? { FIRESTORE_PROBE_PARTIAL: "1", FIRESTORE_PROBE_PARTIAL_LOCK_HELD: "1" }
           : {}),
         FIRESTORE_PROBE_MANAGED_POLL_MS: managedPollMs,
+        ...(cancelBulkDelete ? { FIRESTORE_PROBE_DELTA_V3_CANCEL_BULK_DELETE: "1" } : {}),
         ...(recoveryMode || recoveryOnly
           ? { FIRESTORE_PROBE_RECOVERY_MODE: recoveryMode ?? "recover-legacy" }
           : {}),
@@ -1628,6 +1638,154 @@ test("delta-v3 recovery re-entry polls the journaled LRO without starting anothe
     assert.equal(kept.bulkDeleteOperation, journal.bulkDeleteOperation);
   } finally {
     await rm(stuck.directory, { recursive: true, force: true });
+  }
+});
+
+test("delta-v3 recovery can cancel a stalled journaled LRO and then shrink and delete what remains", async () => {
+  const runId = "e".repeat(32);
+  const deltaNames = allV3Names.slice(6).map((name) => name.replaceAll("DELETE_RUN_ID", runId));
+  const collectionIds = deltaNames.map((name) => name.split("/documents/")[1].split("/")[0]);
+  const journal = {
+    schemaVersion: 1,
+    mode: "cleanup-delta-v3",
+    status: "bulk-delete-active",
+    project: "fireemu-oracle-sbx",
+    database: "(default)",
+    runId,
+    corpusDigest: "c".repeat(64),
+    sourceGitSha: "d".repeat(40),
+    writerExclusivity: "task-lock-held; run-specific six collection groups have no external writer",
+    names: deltaNames,
+    httpRequestCount: 118,
+    managedRequestCount: 88,
+    bulkDeleteIntent: { collectionIds, names: deltaNames },
+    bulkDeleteOperation: "projects/fireemu-oracle-sbx/databases/(default)/operations/delta-test",
+    pendingMutation: null,
+  };
+  // Five documents are still present, as in the stalled production operation; the
+  // first was deleted by its own recipe.
+  const present = deltaNames.slice(1);
+  const counts = [12_112, 12_113, 12_112, 12_113, 12_112, 12_113];
+  const cancelled = await observeCollector({
+    scopeNames: deltaNames,
+    visibleNames: present,
+    arrayLength: counts,
+    deleteRunId: runId,
+    deltaV3: true,
+    recoveryMode: "recover-delta-v3",
+    initialDeltaJournal: journal,
+    corpusDigest: journal.corpusDigest,
+    operationPendingPolls: 100_000,
+    pendingFromOperation: 0,
+    cancelBulkDelete: true,
+  });
+  try {
+    assert.ifError(cancelled.failure);
+    const paths = cancelled.requests.map((request) => request.pathname);
+    const cancels = paths.filter((path) => path.endsWith("/operations/delta-test:cancel"));
+    assert.equal(cancels.length, 1);
+    const cancelAt = paths.findIndex((path) => path.endsWith(":cancel"));
+    const firstCommit = paths.findIndex((path) => path.endsWith("/documents:commit"));
+    assert.ok(cancelAt >= 0 && firstCommit > cancelAt, "nothing is written before the cancel");
+    // The cancel is only trusted once the operation reads back as terminal.
+    assert.ok(
+      paths
+        .slice(cancelAt + 1, firstCommit)
+        .some((path) => path.endsWith("/operations/delta-test")),
+    );
+    assert.equal(paths.filter((path) => path.endsWith(":bulkDeleteDocuments")).length, 0);
+    const writes = cancelled.requests
+      .filter((request) => request.pathname.endsWith("/documents:commit"))
+      .map((request) => JSON.parse(request.body).writes[0]);
+    for (const name of present) {
+      assert.ok(
+        writes.some(
+          (write) => write.delete === name && typeof write.currentDocument?.updateTime === "string",
+        ),
+        name,
+      );
+    }
+    assert.ok(!writes.some((write) => write.delete === deltaNames[0]));
+    for (const name of present) assert.equal(cancelled.snapshot.get(name)?.deleted, true, name);
+    const recovered = JSON.parse(
+      await readFile(join(cancelled.directory, "delta-cleanup.json"), "utf8"),
+    );
+    assert.equal(recovered.status, "complete");
+    assert.equal(recovered.bulkDeleteOperation, null);
+    assert.equal(recovered.bulkDeleteCancelled, journal.bulkDeleteOperation);
+  } finally {
+    await rm(cancelled.directory, { recursive: true, force: true });
+  }
+
+  // Without the explicit cancel, a cancelled operation is not a successful delete.
+  const unrequested = await observeCollector({
+    scopeNames: deltaNames,
+    visibleNames: present,
+    arrayLength: counts,
+    deleteRunId: runId,
+    deltaV3: true,
+    recoveryMode: "recover-delta-v3",
+    initialDeltaJournal: journal,
+    corpusDigest: journal.corpusDigest,
+    operationPendingPolls: 100_000,
+    pendingFromOperation: 0,
+  });
+  try {
+    assert.match(String(unrequested.failure?.stderr), /remains nonterminal/);
+    assert.equal(unrequested.requests.filter((r) => r.pathname.endsWith(":cancel")).length, 0);
+    assert.equal(unrequested.requests.filter((r) => r.pathname.endsWith(":commit")).length, 0);
+  } finally {
+    await rm(unrequested.directory, { recursive: true, force: true });
+  }
+
+  // Only this recovery's own cancel makes a cancelled operation acceptable, and only
+  // with the CANCELLED code.
+  for (const [label, options] of [
+    ["cancelled elsewhere", { operationCancelledAtStart: true }],
+    ["other error", { cancelBulkDelete: true, cancelledErrorCode: 13 }],
+  ]) {
+    const refused = await observeCollector({
+      scopeNames: deltaNames,
+      visibleNames: present,
+      arrayLength: counts,
+      deleteRunId: runId,
+      deltaV3: true,
+      recoveryMode: "recover-delta-v3",
+      initialDeltaJournal: journal,
+      corpusDigest: journal.corpusDigest,
+      operationPendingPolls: 100_000,
+      pendingFromOperation: 0,
+      ...options,
+    });
+    try {
+      assert.ok(refused.failure, label);
+      assert.equal(refused.requests.filter((r) => r.pathname.endsWith(":commit")).length, 0, label);
+      const kept = JSON.parse(
+        await readFile(join(refused.directory, "delta-cleanup.json"), "utf8"),
+      );
+      assert.equal(kept.bulkDeleteOperation, journal.bulkDeleteOperation, label);
+    } finally {
+      await rm(refused.directory, { recursive: true, force: true });
+    }
+  }
+
+  // A cancel needs a journaled operation; it never names one of its own.
+  const nothing = await observeCollector({
+    scopeNames: deltaNames,
+    visibleNames: present,
+    arrayLength: counts,
+    deleteRunId: runId,
+    deltaV3: true,
+    recoveryMode: "recover-delta-v3",
+    initialDeltaJournal: { ...journal, bulkDeleteIntent: null, bulkDeleteOperation: null },
+    corpusDigest: journal.corpusDigest,
+    cancelBulkDelete: true,
+  });
+  try {
+    assert.match(String(nothing.failure?.stderr), /no journaled bulk-delete operation to cancel/);
+    assert.equal(nothing.requests.length, 0);
+  } finally {
+    await rm(nothing.directory, { recursive: true, force: true });
   }
 });
 

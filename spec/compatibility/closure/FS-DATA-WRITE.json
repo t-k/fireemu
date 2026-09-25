@@ -370,10 +370,32 @@
         "writes/limits/near-limit-delete-refusal/batch-write/12112",
         "writes/limits/near-limit-delete-refusal/batch-write/12113"
       ],
-      "boundaryStatus": "UNBRACKETED",
-      "status": "PRODUCTION_RECORDED",
-      "ownerDecision": "The owner added this 29th condition on 2026-09-24 after production refused deletion of accepted near-index-limit documents. Acceptance requires a one-unit accepted/refused pair, two production recordings, readback, and matching REST DELETE, Commit DELETE and BatchWrite DELETE paths where observed.",
-      "boundaryNote": "The 12,112-delete REST and BatchWrite observations are nondeterministic; the recorded band is not a deterministic boundary across all routes."
+      "boundaryStatus": "NONDETERMINISTIC_BAND",
+      "status": "VERIFIED",
+      "ownerDecision": "The owner added this condition on 2026-09-24. Decision A on 2026-09-25 accepts the two non-deterministic 12,112-delete rows as a band and sets strict refusal at the first deterministic count for each route.",
+      "boundaryNote": "The 12,112-delete REST and BatchWrite rows are not a deterministic accepted boundary. REST and BatchWrite refuse at 12,113; Commit refuses at 12,112. BatchWrite returns HTTP 200 with nested status code 3 for refusal; its typed readback is found, while its limited group query does not independently prove the deletion outcome.",
+      "evidence": {
+        "productionRecordings": [
+          "2522c51a52ca00b46b92dc7ac776029dc93e6c6ffcfbeac588ac1b62ae30575f",
+          "74f98b04241975ffe4b0f3a20da4c7b90a679eb761fc0b18d4f919b6ea07b106"
+        ],
+        "fixturePath": "conformance/fs-data-write-production-supplements/delta-v3-a14f265fea575003423c7ebd.json",
+        "fixtureSha256": "9b41137069ca71393659e5ff8e5bc8f867d6ca33eaaaf3594275d6e2ce1c1788",
+        "finalArtifactSha256": "5c92dbc39f1b9bd5d78ff9cf37e3717e5295c64c7277d918d174bc340ab93aa3",
+        "sourceHead": "a2aec9fbc12c3bd6e35547c6239e46527fb55cd2",
+        "comparisonPath": "spec/compatibility/closure/evidence/FS-DATA-WRITE-terminal-local-digests.json",
+        "comparisonSha256": "983a93b1dee065289b1b3ec9e2c9ab07efb9ec162a4db1db02b5bb1c373ec567"
+      },
+      "terminalOwnerDecision": "2026-09-25 FS-DATA-WRITE A",
+      "deterministicRefusalCounts": {
+        "rest": 12113,
+        "commit": 12112,
+        "batch-write": 12113
+      },
+      "nondeterministicRows": [
+        "writes/limits/near-limit-delete-refusal/rest/12112",
+        "writes/limits/near-limit-delete-refusal/batch-write/12112"
+      ]
     },
     {
       "conditionId": "FS-LIMIT-FIELD-PATH-BYTES",
@@ -577,11 +599,23 @@
       "recipeIds": [
         "writes/limits/non-commit-rest-request-bytes"
       ],
-      "boundaryStatus": "UNBRACKETED",
+      "boundaryStatus": "INFERRED_UPPER_BOUND",
       "status": "PRODUCTION_RECORDED",
       "strictLimitEstimateBytes": 11534336,
       "estimateOwnerDecision": "2026-09-25 FS-DATA-WRITE D4",
-      "scopeNote": "The strict 11 MiB (11,534,336-byte) upper bound is an unobserved estimate from the observed raw REST Commit boundary under owner decision D4; this transport's production upper boundary remains unresolved."
+      "scopeNote": "The strict 11 MiB (11,534,336-byte) upper bound is an unobserved estimate from the observed raw REST Commit boundary under owner decision D4; this transport's production upper boundary remains unresolved.",
+      "evidence": {
+        "productionRecordings": [
+          "aee842159a37e001bcab5710eb49be8d0804dd53fa7b79521aa05a018048fee1",
+          "aee842159a37e001bcab5710eb49be8d0804dd53fa7b79521aa05a018048fee1"
+        ],
+        "fixturePath": "conformance/fs-data-write-production-supplements/partial-7bfd51026a2ac56617d81504.json",
+        "fixtureSha256": "975d1f9775373c4704707c7b5bcc7c97067bcf5267911b9a38cc4c02f541f70c",
+        "finalArtifactSha256": "5c92dbc39f1b9bd5d78ff9cf37e3717e5295c64c7277d918d174bc340ab93aa3",
+        "sourceHead": "a2aec9fbc12c3bd6e35547c6239e46527fb55cd2",
+        "comparisonPath": "spec/compatibility/closure/evidence/FS-DATA-WRITE-terminal-local-digests.json",
+        "comparisonSha256": "983a93b1dee065289b1b3ec9e2c9ab07efb9ec162a4db1db02b5bb1c373ec567"
+      }
     },
     {
       "conditionId": "FS-LIMIT-API-REQUEST-BYTES/webchannel",
@@ -589,11 +623,23 @@
       "recipeIds": [
         "writes/limits/webchannel-request-bytes"
       ],
-      "boundaryStatus": "UNBRACKETED",
+      "boundaryStatus": "INFERRED_UPPER_BOUND",
       "status": "PRODUCTION_RECORDED",
       "strictLimitEstimateBytes": 11534336,
       "estimateOwnerDecision": "2026-09-25 FS-DATA-WRITE D4",
-      "scopeNote": "The strict 11 MiB (11,534,336-byte) upper bound is an unobserved estimate from the observed raw REST Commit boundary under owner decision D4; this transport's production upper boundary remains unresolved."
+      "scopeNote": "The strict 11 MiB (11,534,336-byte) upper bound is an unobserved estimate from the observed raw REST Commit boundary under owner decision D4; this transport's production upper boundary remains unresolved.",
+      "evidence": {
+        "productionRecordings": [
+          "aee842159a37e001bcab5710eb49be8d0804dd53fa7b79521aa05a018048fee1",
+          "aee842159a37e001bcab5710eb49be8d0804dd53fa7b79521aa05a018048fee1"
+        ],
+        "fixturePath": "conformance/fs-data-write-production-supplements/partial-7bfd51026a2ac56617d81504.json",
+        "fixtureSha256": "975d1f9775373c4704707c7b5bcc7c97067bcf5267911b9a38cc4c02f541f70c",
+        "finalArtifactSha256": "5c92dbc39f1b9bd5d78ff9cf37e3717e5295c64c7277d918d174bc340ab93aa3",
+        "sourceHead": "a2aec9fbc12c3bd6e35547c6239e46527fb55cd2",
+        "comparisonPath": "spec/compatibility/closure/evidence/FS-DATA-WRITE-terminal-local-digests.json",
+        "comparisonSha256": "983a93b1dee065289b1b3ec9e2c9ab07efb9ec162a4db1db02b5bb1c373ec567"
+      }
     },
     {
       "conditionId": "FS-LIMIT-API-REQUEST-BYTES/grpc",

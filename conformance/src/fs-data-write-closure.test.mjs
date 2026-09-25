@@ -50,6 +50,12 @@ const listComparisonPath = fileURLToPath(
     import.meta.url,
   ),
 );
+const terminalConditionPath = fileURLToPath(
+  new URL(
+    "../../spec/compatibility/closure/evidence/FS-DATA-WRITE-terminal-local-digests.json",
+    import.meta.url,
+  ),
+);
 const supplements = [
   "partial-7bfd51026a2ac56617d81504.json",
   "delta-v3-a14f265fea575003423c7ebd.json",
@@ -540,11 +546,19 @@ function verifyAcceptedCondition(condition) {
   const observedListCap =
     condition.conditionId === "FS-DATA-WRITE-LIST/list-documents-rest" &&
     condition.boundaryStatus === "OBSERVED (page size 300)";
+  const terminalBoundary = new Map([
+    ["FS-DATA-WRITE/near-limit-delete-refusal", "NONDETERMINISTIC_BAND"],
+  ]).get(condition.conditionId);
+  const approvedTerminal = terminalBoundary === condition.boundaryStatus;
   assert.ok(
     observedListCap ||
+      approvedTerminal ||
       ["BRACKETED", "RULE_TRANSITION", "NOT_APPLICABLE"].includes(condition.boundaryStatus),
     `${condition.conditionId}: unresolved boundary cannot be VERIFIED`,
   );
+  if (approvedTerminal && terminalBoundary === "NONDETERMINISTIC_BAND") {
+    assert.equal(condition.terminalOwnerDecision, "2026-09-25 FS-DATA-WRITE A");
+  }
   if (condition.conditionId === "FS-DATA-WRITE/stream-transaction-precedence") {
     assert.equal(condition.boundaryStatus, "NOT_APPLICABLE");
     assert.match(condition.evidence?.productionReceiptSha256 ?? "", /^[0-9a-f]{64}$/);
@@ -572,6 +586,9 @@ test("VERIFIED requires a resolved production boundary classification", () => {
     },
   };
   for (const boundaryStatus of ["UNBRACKETED", "PENDING_RECORDING"]) {
+    assert.throws(() => verifyAcceptedCondition({ ...condition, boundaryStatus }), /boundary/);
+  }
+  for (const boundaryStatus of ["NONDETERMINISTIC_BAND", "INFERRED_UPPER_BOUND"]) {
     assert.throws(() => verifyAcceptedCondition({ ...condition, boundaryStatus }), /boundary/);
   }
   for (const boundaryStatus of ["BRACKETED", "RULE_TRANSITION", "NOT_APPLICABLE"]) {
@@ -712,6 +729,16 @@ test("verified conditions are bound to their saved comparisons", async () => {
         ),
         new Set(condition.recipeIds),
       );
+      continue;
+    }
+    if (comparisonPath === terminalConditionPath) {
+      assert.ok(comparison.conditions[condition.conditionId]);
+      assert.equal(
+        condition.evidence.comparisonSha256,
+        createHash("sha256").update(readFileSync(comparisonPath)).digest("hex"),
+      );
+      assert.equal(condition.evidence.finalArtifactSha256, comparison.binarySha256);
+      assert.equal(condition.evidence.sourceHead, comparison.sourceHead);
       continue;
     }
     assert.equal(comparison.conditionId, condition.conditionId);
@@ -900,7 +927,7 @@ test("final artifact closure names both saved production regression commands", (
   assert.notEqual(condition.status, "VERIFIED");
 });
 
-test("request-byte transports retain observed boundaries and the unresolved gRPC token mismatch", () => {
+test("request-byte transports distinguish inferred bounds from the unresolved gRPC token mismatch", () => {
   const closure = JSON.parse(readFileSync(closurePath, "utf8"));
   const commit = closure.conditions.find(
     (row) => row.conditionId === "FS-LIMIT-API-REQUEST-BYTES/rest-commit-json-accepted-samples",
@@ -911,7 +938,11 @@ test("request-byte transports retain observed boundaries and the unresolved gRPC
     (row) => row.conditionId === "FS-LIMIT-API-REQUEST-BYTES/non-commit-rest",
   );
   assert.equal(nonCommitRest.status, "PRODUCTION_RECORDED");
-  assert.equal(nonCommitRest.boundaryStatus, "UNBRACKETED");
+  assert.equal(nonCommitRest.boundaryStatus, "INFERRED_UPPER_BOUND");
+  assert.throws(
+    () => verifyAcceptedCondition({ ...nonCommitRest, status: "VERIFIED" }),
+    /boundary/,
+  );
   const grpc = closure.conditions.find(
     (row) => row.conditionId === "FS-LIMIT-API-REQUEST-BYTES/grpc",
   );
@@ -921,7 +952,8 @@ test("request-byte transports retain observed boundaries and the unresolved gRPC
     (row) => row.conditionId === "FS-LIMIT-API-REQUEST-BYTES/webchannel",
   );
   assert.equal(webchannel.status, "PRODUCTION_RECORDED");
-  assert.equal(webchannel.boundaryStatus, "UNBRACKETED");
+  assert.equal(webchannel.boundaryStatus, "INFERRED_UPPER_BOUND");
+  assert.throws(() => verifyAcceptedCondition({ ...webchannel, status: "VERIFIED" }), /boundary/);
   for (const condition of [nonCommitRest, webchannel, grpc]) {
     assert.equal(condition.strictLimitEstimateBytes, 11 * 1024 * 1024);
     assert.equal(condition.estimateOwnerDecision, "2026-09-25 FS-DATA-WRITE D4");
@@ -933,7 +965,7 @@ test("request-byte transports retain observed boundaries and the unresolved gRPC
 test("VERIFIED evidence never depends on a private path", () => {
   const closure = JSON.parse(readFileSync(closurePath, "utf8"));
   const verified = closure.conditions.filter(({ status }) => status === "VERIFIED");
-  assert.equal(verified.length, 23);
+  assert.equal(verified.length, 24);
   for (const condition of verified) {
     assert.ok(
       !JSON.stringify(condition.evidence ?? {}).includes("docs.local/"),
@@ -960,8 +992,8 @@ test("near-limit deletion names all six recorded route and size combinations", (
     [12112, 12113].map((count) => `writes/limits/near-limit-delete-refusal/${route}/${count}`),
   );
   assert.deepEqual(new Set(condition.recipeIds), new Set(expected));
-  assert.equal(condition.status, "PRODUCTION_RECORDED");
-  assert.equal(condition.boundaryStatus, "UNBRACKETED");
+  assert.equal(condition.status, "VERIFIED");
+  assert.equal(condition.boundaryStatus, "NONDETERMINISTIC_BAND");
   const delta = supplements.find(({ name }) => name.startsWith("delta-v3"));
   assert.deepEqual(new Set(Object.keys(delta.fixture.programs)), new Set(expected));
   assert.deepEqual(
@@ -1179,6 +1211,8 @@ test("FS-DATA-WRITE closure inventory cannot silently omit a declared condition"
         "BRACKETED",
         "RULE_TRANSITION",
         "UNBRACKETED",
+        "NONDETERMINISTIC_BAND",
+        "INFERRED_UPPER_BOUND",
         "NOT_APPLICABLE",
         "PENDING_RECORDING",
         "OBSERVED (page size 300)",

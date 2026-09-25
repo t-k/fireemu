@@ -1,0 +1,147 @@
+{
+  "schemaVersion": 1,
+  "kind": "fs-data-write-terminal-local-digests",
+  "sourceHead": "a2aec9fbc12c3bd6e35547c6239e46527fb55cd2",
+  "binarySha256": "5c92dbc39f1b9bd5d78ff9cf37e3717e5295c64c7277d918d174bc340ab93aa3",
+  "sourceResultSha256": "763d734307808e4d1095a0115d8122547dddb44ff286eb0f205ed00f6de55248",
+  "conditions": {
+    "FS-DATA-WRITE/near-limit-delete-refusal": {
+      "programs": {
+        "writes/limits/near-limit-delete-refusal/rest/12112": {
+          "steps": {
+            "seed": "babe82abc55e34dc6a27a285a0babaa4832ae91ce80a7892c9df7a8090ca56da",
+            "before-delete": "103a2c8305b3a474aa06ea55ea5a38e5c9e58727a96fa4f166ea4549d3299f7d",
+            "delete": "169e793351c62d69f1f5500b03a236a50e7eca79f685080ac00f467efdb2d35b",
+            "after-delete": "c05c36a500f81ab193dcd69ec6c76aa58cc0161e9aeca86d7c42e8b5022a7762",
+            "group-after-delete": "ef27b9e31dad66f799d18c1c158a6c3be04b666e77679196cf8c311e29123c01"
+          }
+        },
+        "writes/limits/near-limit-delete-refusal/rest/12113": {
+          "steps": {
+            "seed": "babe82abc55e34dc6a27a285a0babaa4832ae91ce80a7892c9df7a8090ca56da",
+            "before-delete": "1e5955422856fb99bdec3998a5f21a912826a79fa9c3c0ca443d080d7f41df65",
+            "delete": "0f99687e110640d5b7907cf8eec40c3ac73f88947cb08501a44c2736ebdb6ee7",
+            "after-delete": "6a9921c49f40f01ce1a49429c226f60994c768571205ca9804cf8cb726a055c0",
+            "group-after-delete": "92a47313e8fbc023bbe5a842950d0a4d410338014442f8ca61792a5aaf132131"
+          }
+        },
+        "writes/limits/near-limit-delete-refusal/commit/12112": {
+          "steps": {
+            "seed": "babe82abc55e34dc6a27a285a0babaa4832ae91ce80a7892c9df7a8090ca56da",
+            "before-delete": "80ba32625ff9e90c7f1ca1b4a32f286564250b4b021a60887a48669e17ae5042",
+            "delete": "0f99687e110640d5b7907cf8eec40c3ac73f88947cb08501a44c2736ebdb6ee7",
+            "after-delete": "ff71e9ae91b2ac37b02c1cc8fdb774016ef031ea51033ec82cd69dc6a2475e07",
+            "group-after-delete": "8201877ddf393c24361089c238f0ae6ee035974e16afdcd87f3c137fb96faf8a"
+          }
+        },
+        "writes/limits/near-limit-delete-refusal/commit/12113": {
+          "steps": {
+            "seed": "babe82abc55e34dc6a27a285a0babaa4832ae91ce80a7892c9df7a8090ca56da",
+            "before-delete": "61a1f64ac671eafbc2d3b28b974f1fcfeeffd66c8dcdb1c664cf5191259e76dc",
+            "delete": "0f99687e110640d5b7907cf8eec40c3ac73f88947cb08501a44c2736ebdb6ee7",
+            "after-delete": "e89690a04dc688d41ab8bf2cb5fe8141447431e5273541766b94d5e73a3d83f6",
+            "group-after-delete": "7111b7fa5447c6e615e307f67bcd578675c062f5942072ef18f3822445fe9a7d"
+          }
+        },
+        "writes/limits/near-limit-delete-refusal/batch-write/12112": {
+          "steps": {
+            "seed": "babe82abc55e34dc6a27a285a0babaa4832ae91ce80a7892c9df7a8090ca56da",
+            "before-delete": "896c9ae6a0a7b06a447c6a3a32e7295d61d45c45731fa2b209c8fcf9ac7e014f",
+            "delete": "447d5d255cecde9475c0c78f8daebb74e36d1e940d2daa5c7bc7439a4eb114d3",
+            "after-delete": "8203e7853b83ba85e0e5d01d1844b62845b1b2bb7a546fab0d13fc370a8fa08c",
+            "group-after-delete": "ef27b9e31dad66f799d18c1c158a6c3be04b666e77679196cf8c311e29123c01"
+          }
+        },
+        "writes/limits/near-limit-delete-refusal/batch-write/12113": {
+          "steps": {
+            "seed": "babe82abc55e34dc6a27a285a0babaa4832ae91ce80a7892c9df7a8090ca56da",
+            "before-delete": "147dd4397bfe8ea5e9c8ba2587d9ed370ffad7fc6a7b5e2825b3174aea88d157",
+            "delete": "a52016763acf6aefacaff85ceb62ef80a6a54755049a2bc2f134e7440676679a",
+            "after-delete": "0cab8f5c67d1940b0cc20c0b3645b7379c48105f687941224d73bd1139f4a606",
+            "group-after-delete": "92639f708cf36df6f61c17be32fa7e1f572b3c3201b2126cdd39dd7a59ff2886"
+          }
+        }
+      }
+    },
+    "FS-LIMIT-API-REQUEST-BYTES/non-commit-rest": {
+      "programs": {
+        "writes/limits/non-commit-rest-request-bytes/batch-write/10485760": {
+          "steps": {
+            "write": "c2e23bdd1d85ee9564461c1ea28bd5b068ef71b3f45e297ded191b6842fe1a73",
+            "readback": "a3e04ad345f824018a2fe56d7a92291ec85b99a15e1952cf58bfaac8d30875c9"
+          }
+        },
+        "writes/limits/non-commit-rest-request-bytes/batch-write/10485761": {
+          "steps": {
+            "write": "c2e23bdd1d85ee9564461c1ea28bd5b068ef71b3f45e297ded191b6842fe1a73",
+            "readback": "9844d024178285659448a02e3db953832d77c01d9d62b92084d5153d5adebd4c"
+          }
+        },
+        "writes/limits/non-commit-rest-request-bytes/batch-get/10485760": {
+          "steps": {
+            "seed": "babe82abc55e34dc6a27a285a0babaa4832ae91ce80a7892c9df7a8090ca56da",
+            "probe": "191660b4f782faa1a586315c376c74f6099368d603079d5cd9dfff786f0019ec"
+          }
+        },
+        "writes/limits/non-commit-rest-request-bytes/batch-get/10485761": {
+          "steps": {
+            "seed": "babe82abc55e34dc6a27a285a0babaa4832ae91ce80a7892c9df7a8090ca56da",
+            "probe": "ae439a723692fa5f1ad1b638d85f10e71b3601ed4c01d093a6f0eadc9883fc6f"
+          }
+        },
+        "writes/limits/non-commit-rest-request-bytes/run-query/10485760": {
+          "steps": {
+            "seed": "babe82abc55e34dc6a27a285a0babaa4832ae91ce80a7892c9df7a8090ca56da",
+            "probe": "d5835275fe394c633af1be833aff7638aee2f2bf5ce4bc4ea76602fa8854351b"
+          }
+        },
+        "writes/limits/non-commit-rest-request-bytes/run-query/10485761": {
+          "steps": {
+            "seed": "babe82abc55e34dc6a27a285a0babaa4832ae91ce80a7892c9df7a8090ca56da",
+            "probe": "7f7af3c9e9ff9a1ce8bac4ad6822b92299d8086d52ebc94c1bf9c056f5f73afc"
+          }
+        },
+        "writes/limits/non-commit-rest-request-bytes/create/10485760": {
+          "steps": {
+            "probe": "4f07dd29fae0d3b26c40b524bb54ac0cd260bfb61ed39bd42837845c3bb7db6e",
+            "readback": "4f07dd29fae0d3b26c40b524bb54ac0cd260bfb61ed39bd42837845c3bb7db6e"
+          }
+        },
+        "writes/limits/non-commit-rest-request-bytes/create/10485761": {
+          "steps": {
+            "probe": "f9cf3e76efe7e35e8aaf709932a45c303a7c734e39c232def149daecfa4bde6c",
+            "readback": "f9cf3e76efe7e35e8aaf709932a45c303a7c734e39c232def149daecfa4bde6c"
+          }
+        },
+        "writes/limits/non-commit-rest-request-bytes/patch/10485760": {
+          "steps": {
+            "seed": "babe82abc55e34dc6a27a285a0babaa4832ae91ce80a7892c9df7a8090ca56da",
+            "probe": "bc258d739347031fa23a488edbbd55a35296451df7dbe7e35f842a66efa565eb",
+            "readback": "bc258d739347031fa23a488edbbd55a35296451df7dbe7e35f842a66efa565eb"
+          }
+        },
+        "writes/limits/non-commit-rest-request-bytes/patch/10485761": {
+          "steps": {
+            "seed": "babe82abc55e34dc6a27a285a0babaa4832ae91ce80a7892c9df7a8090ca56da",
+            "probe": "216bcf93f3bfee40032dd586f969670bc16934ef5886507c1537bcf85db73b46",
+            "readback": "216bcf93f3bfee40032dd586f969670bc16934ef5886507c1537bcf85db73b46"
+          }
+        }
+      }
+    },
+    "FS-LIMIT-API-REQUEST-BYTES/webchannel": {
+      "programs": {
+        "writes/limits/webchannel-request-bytes/10485760": {
+          "steps": {
+            "unknown-session": "832190b6738fe358703e2c1ba0f526dc5c8de0ba7cef815c1ab810f5a6ed21af"
+          }
+        },
+        "writes/limits/webchannel-request-bytes/10485761": {
+          "steps": {
+            "unknown-session": "832190b6738fe358703e2c1ba0f526dc5c8de0ba7cef815c1ab810f5a6ed21af"
+          }
+        }
+      }
+    }
+  }
+}

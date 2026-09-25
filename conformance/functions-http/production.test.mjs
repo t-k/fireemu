@@ -13,7 +13,9 @@ import {
   expiredAt,
   preflightCliSideEffects,
   readPrivateProjectIdentity,
+  readRecoveryReadback,
   readServiceAgentGrants,
+  retryAccounting,
   serviceAgentGrantChanges,
   summarizeCliOutput,
   writeCliDiagnostic,
@@ -48,7 +50,8 @@ test("stage 3 approval accepts only one authoritative decision block", () => {
   );
 });
 
-test("stage 3 admission requires terminal stage 2, a quiet shared project and a 30-minute gap", () => {
+test("stage 3 retry admission requires a recovered first attempt, quiet project and 30-minute gap", () => {
+  const firstRunDir = "/private/functions-http-first";
   const lines = [
     {
       ts: "2026-09-25T09:00:00Z",
@@ -77,14 +80,66 @@ test("stage 3 admission requires terminal stage 2, a quiet shared project and a 
       event: "finished",
       outcome: { e1omit: { state: "SUCCESSFUL" } },
     },
+    {
+      ts: "2026-09-25T09:20:00Z",
+      project: "fireemu-oracle-query",
+      taskId: "FUNCTIONS-HTTP-SANDBOX",
+      stage: 3,
+      event: "started",
+      gitSha: "50f3625e3d2eb1b5f85879eb6210e2cf8b212649",
+      corpusDigest: "836c138ba213546428e700e7ecb51644089bb5b0cdc91946eb9904a648106bea",
+      runDir: firstRunDir,
+    },
+    {
+      ts: "2026-09-25T09:20:19Z",
+      project: "fireemu-oracle-query",
+      taskId: "FUNCTIONS-HTTP-SANDBOX",
+      stage: 3,
+      event: "change",
+      action: "service-identity-generation-possible",
+    },
+    {
+      ts: "2026-09-25T09:20:20Z",
+      project: "fireemu-oracle-query",
+      taskId: "FUNCTIONS-HTTP-SANDBOX",
+      stage: 3,
+      event: "needs-recovery",
+      gitSha: "50f3625e3d2eb1b5f85879eb6210e2cf8b212649",
+      corpusDigest: "836c138ba213546428e700e7ecb51644089bb5b0cdc91946eb9904a648106bea",
+      runDir: firstRunDir,
+      requests: { invocation: 0, cliDeploy: 1 },
+    },
+    {
+      ts: "2026-09-25T09:50:00Z",
+      project: "fireemu-oracle-query",
+      taskId: "FUNCTIONS-HTTP-SANDBOX",
+      stage: 3,
+      event: "finished",
+      gitSha: "50f3625e3d2eb1b5f85879eb6210e2cf8b212649",
+      corpusDigest: "836c138ba213546428e700e7ecb51644089bb5b0cdc91946eb9904a648106bea",
+      outcome: "recovered-no-observation",
+      recoveryReadbackSha256: "50817abfe8246b7c3b7ea85d96f79ba6015d14ee75d1076cb700fd728e8031e5",
+      recoveryRequests: 5,
+      runDir: firstRunDir,
+    },
   ];
-  assert.doesNotThrow(() => assertAdmission(lines, "2026-09-25T09:41:00Z"));
-  assert.throws(() => assertAdmission(lines, "2026-09-25T09:39:59Z"), /30 minutes/);
+  assert.doesNotThrow(() => assertAdmission(lines, "2026-09-25T10:21:00Z", firstRunDir));
+  assert.throws(() => assertAdmission(lines, "2026-09-25T10:19:59Z", firstRunDir), /30 minutes/);
+  assert.throws(
+    () =>
+      assertAdmission(
+        lines.filter((line) => line.event !== "finished" || line.stage !== 3),
+        "2026-09-25T10:21:00Z",
+        firstRunDir,
+      ),
+    /recovered/,
+  );
   assert.throws(
     () =>
       assertAdmission(
         lines.filter((line) => line.taskId !== "FUNCTIONS-HTTP-SANDBOX"),
         "2026-09-25T10:00:00Z",
+        firstRunDir,
       ),
     /stage 2/,
   );
@@ -95,7 +150,8 @@ test("stage 3 admission requires terminal stage 2, a quiet shared project and a 
           ...lines,
           { ts: "2026-09-25T09:20:00Z", project: "fireemu-oracle-query", event: "started" },
         ],
-        "2026-09-25T10:00:00Z",
+        "2026-09-25T10:21:00Z",
+        firstRunDir,
       ),
     /active/,
   );
@@ -112,7 +168,8 @@ test("stage 3 admission requires terminal stage 2, a quiet shared project and a 
             event: "started",
           },
         ],
-        "2026-09-25T10:00:00Z",
+        "2026-09-25T10:21:00Z",
+        firstRunDir,
       ),
     /stage 3 attempt/,
   );
@@ -341,4 +398,41 @@ test("project number is loaded only from a private identity file for the reviewe
   } finally {
     await rm(runDir, { recursive: true, force: true });
   }
+});
+
+test("retry reads the exact private absence result before production requests", async () => {
+  const runDir = await mkdtemp(join(tmpdir(), "functions-http-recovery-readback-"));
+  const file = join(runDir, "readback.json");
+  const firstRunDir = "/private/functions-http-first";
+  const result = {
+    project: "fireemu-oracle-query",
+    runDir: firstRunDir,
+    requests: 5,
+    outcome: "no-function-service-package-or-build-observed",
+    readbacks: { function: "absent", service: "absent", package: "absent", builds: [] },
+  };
+  try {
+    const content = JSON.stringify(result);
+    const sha = createHash("sha256").update(content).digest("hex");
+    await writeFile(file, content, { mode: 0o600 });
+    assert.deepEqual(await readRecoveryReadback(file, sha, firstRunDir), result);
+    const changed = JSON.stringify({ ...result, readbacks: { ...result.readbacks, builds: [{}] } });
+    await writeFile(file, changed);
+    const changedSha = createHash("sha256").update(changed).digest("hex");
+    await assert.rejects(
+      () => readRecoveryReadback(file, changedSha, firstRunDir),
+      /recovery readback/,
+    );
+  } finally {
+    await rm(runDir, { recursive: true, force: true });
+  }
+});
+
+test("retry reuses the stage 3 reservation within the task budget", () => {
+  assert.deepEqual(retryAccounting({ cliDeploy: 16, invocation: 136 }), {
+    estimatedUsd: 8.95,
+    priorAttemptResidualAllowanceUsd: 0.02,
+    cumulativeEstimatedUsd: 8.97,
+  });
+  assert.throws(() => retryAccounting({ cliDeploy: 17, invocation: 136 }), /stage 3 budget/);
 });

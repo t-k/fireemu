@@ -1187,6 +1187,10 @@
             {
               "behaviour": "the strict profile applies production's action-code rules (AUTH-ACTION sandbox recording 2026-09-24): a newer reset, change or sign-in code retires the older one, a deleted account's codes are void, a reset or verification finds its account by the code's address, a disabled account refuses a code (a refused reset spends it), an applied change voids the replaced address's verification codes and records it as initialEmail, an update with an ID token ignores oobCode, a reset code expires after an hour as EXPIRED_OOB_CODE while the other kinds outlive it, and production's refusal codes; the emulator profile keeps the official emulator's codes and answers and its one-hour local code lifetime",
               "precision": "documented-divergence"
+            },
+            {
+              "behaviour": "a tenant created with a display name of the documented form (4-20 letters, digits and hyphens, beginning with a letter) is named after it as production names it, the display name, a hyphen and five characters of [a-z0-9] drawn reproducibly from the creation sequence, in both profiles; the official emulator draws a random 28-character ID, and a tenant without such a display name keeps fireemu's generated name",
+              "precision": "documented-divergence"
             }
           ],
           "productionOnly": [

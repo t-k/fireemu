@@ -97,13 +97,14 @@
       "conditionId": "AUTH-MFA/totp-sign-in",
       "source": "docs/compatibility/ip-fs-production-compatibility.md#feature-group-status",
       "recipeIds": [
-        "auth-mfa/totp/sign-in"
+        "auth-mfa/totp/sign-in",
+        "auth-mfa/totp/quota-free"
       ],
       "configProjections": [
         "default"
       ],
       "status": "PENDING_CORPUS",
-      "note": "The first-factor answer that asks for a second factor, mfaSignIn:start for a TOTP factor, mfaSignIn:finalize with missing and unknown pending credentials, codes and factors, wrong codes, the code window at sign-in, the accepted code, the pending credential offered again after success, a code already used at sign-in or at enrollment, an unused code older than the last accepted one, the factor id left out, and phone verification offered for a TOTP factor."
+      "note": "The first-factor answer that asks for a second factor, mfaSignIn:start for a TOTP factor, mfaSignIn:finalize with missing and unknown pending credentials, codes and factors, wrong codes, the code window at sign-in, the accepted code, the pending credential offered again after success, a code already used at sign-in or at enrollment, an unused code older than the last accepted one, the factor id left out, and phone verification offered for a TOTP factor. Production's per-account attempt quota answered QUOTA_EXCEEDED to the two used-code checks after the program's earlier wrong codes, so auth-mfa/totp/quota-free repeats them as the only wrong code of a new account (owner decision M10)."
     },
     {
       "conditionId": "AUTH-MFA/withdrawal-and-revocation",

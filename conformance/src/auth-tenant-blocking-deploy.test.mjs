@@ -234,6 +234,18 @@ test("a same-named Run service in another project is not removed", async () => {
   assert.ok(!calls.some((call) => call.startsWith("PATCH identitytoolkit.googleapis.com")));
 });
 
+test("every trigger is checked before any warm-up request", async () => {
+  const { deployer, state, calls } = fakeCloud();
+  const dir = await buildDir();
+  await deployer.preflight();
+  await deployer.deploy(source, dir);
+  state.blocking.triggers.beforeSendSms = {
+    functionUri: "https://atbbeforesendsms-def456-uc.a.run.app",
+  };
+  await assert.rejects(deployer.verifyRegistered(), /beforeSendSms/);
+  assert.ok(!calls.some((call) => call.startsWith("POST ")));
+});
+
 test("a restore cannot claim a Run trigger without its live fixture service", async () => {
   const trigger = fn("atbBeforeCreate");
   const { deployer, state, calls } = fakeCloud({

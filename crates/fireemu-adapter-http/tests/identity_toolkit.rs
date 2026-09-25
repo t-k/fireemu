@@ -11566,6 +11566,14 @@ fn strict_action_links_carry_mobile_settings_as_production_does() {
         } else {
             assert_eq!(continued.as_deref(), Some(FINISH), "{plain}");
         }
+        // An empty bundle or package names no app.
+        let (status, answer) =
+            link(json!({"continueUrl": FINISH, "iOSBundleId": "", "androidPackageName": ""}));
+        assert_eq!(status, 200, "{answer}");
+        assert_eq!(
+            param(answer["oobLink"].as_str().unwrap(), "continueUrl").as_deref(),
+            Some(FINISH)
+        );
         let (status, answer) = link(json!({"continueUrl": FINISH, "androidInstallApp": true}));
         assert_eq!(status, 200, "{answer}");
         assert_eq!(
@@ -12497,6 +12505,21 @@ fn a_disabled_sign_up_refuses_codes_for_new_accounts_as_production_does() {
             ("existing address", link("link-existing@example.com")),
         ] {
             assert_eq!(status, 200, "strict {strict} {label}: {answer}");
+        }
+        // A null ID token is no session: the code is still one for a new account.
+        let (status, answer) = post(
+            &s,
+            &format!("{V1}/accounts:sendVerificationCode"),
+            &json!({"phoneNumber": "+16505550103", "recaptchaToken": "x", "idToken": null}),
+        );
+        if strict {
+            assert_eq!(
+                (status, answer["error"]["message"].as_str()),
+                (400, Some("ADMIN_ONLY_OPERATION")),
+                "{answer}"
+            );
+        } else {
+            assert_eq!(status, 200, "{answer}");
         }
     }
 }

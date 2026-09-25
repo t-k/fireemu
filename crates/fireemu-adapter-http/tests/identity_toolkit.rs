@@ -10228,11 +10228,12 @@ fn admin_v2_project_quota_settings_patch_and_readback_are_atomic() {
         &s,
         "PATCH",
         &format!(
-            "{path}?updateMask=passwordPolicyConfig.passwordPolicyEnforcementState,client.permissions.disabledUserSignup,quota.quotaSimulation.mode"
+            "{path}?updateMask=passwordPolicyConfig,client.permissions.disabledUserSignup,quota.quotaSimulation.mode"
         ),
         &json!({
             "passwordPolicyConfig": {
-                "passwordPolicyEnforcementState": "ENFORCE"
+                "passwordPolicyEnforcementState": "ENFORCE",
+                "passwordPolicyVersions": [{"customStrengthOptions": {"minPasswordLength": 6}}]
             },
             "client": {"permissions": {"disabledUserSignup": true}},
             "quota": {"quotaSimulation": {"mode": "observe"}}
@@ -10303,6 +10304,21 @@ fn admin_v2_project_quota_settings_patch_and_readback_are_atomic() {
     assert_eq!(after_unsupported_mask.1["quota"], quota_after_mixed);
 }
 
+/// Gives the project a whole password policy, so a later leaf update merges into it
+/// (production refuses a leaf update of a project without one).
+fn configure_password_policy(s: &AuthState) {
+    let (status, answer) = admin(
+        s,
+        "PATCH",
+        "/identitytoolkit.googleapis.com/admin/v2/projects/demo-app/config?updateMask=passwordPolicyConfig",
+        &json!({"passwordPolicyConfig": {
+            "passwordPolicyEnforcementState": "OFF",
+            "passwordPolicyVersions": [{"customStrengthOptions": {"minPasswordLength": 6}}],
+        }}),
+    );
+    assert_eq!(status, 200, "{answer}");
+}
+
 #[test]
 fn admin_v2_password_policy_and_quota_patches_preserve_disjoint_updates() {
     let mut base = state();
@@ -10311,6 +10327,7 @@ fn admin_v2_password_policy_and_quota_patches_preserve_disjoint_updates() {
         base.store.clone(),
     ));
     base.registry = Some(registry);
+    configure_password_policy(&base);
     let state = Arc::new(base);
     let start = Arc::new(std::sync::Barrier::new(3));
     let path = "/identitytoolkit.googleapis.com/admin/v2/projects/demo-app/config";
@@ -10366,6 +10383,7 @@ fn admin_v2_concurrent_password_policy_leaf_patches_preserve_disjoint_updates() 
         base.store.clone(),
     ));
     base.registry = Some(registry);
+    configure_password_policy(&base);
     let state = Arc::new(base);
     let start = Arc::new(std::sync::Barrier::new(3));
     let path = "/identitytoolkit.googleapis.com/admin/v2/projects/demo-app/config";
@@ -11156,19 +11174,13 @@ fn test_phone_numbers_sign_in_with_their_fixed_code() {
     );
     assert_eq!(status, 400);
 
-    // Invalid test numbers are refused and change nothing.
-    for numbers in [
-        json!({"6505550101": "123456"}),
-        json!({"+16505550101": "12345"}),
-        json!({"+16505550101": 123_456}),
-    ] {
-        let (status, refused) = patch_sign_in(
-            &s,
-            "signIn.phoneNumber.testPhoneNumbers",
-            &json!({"signIn": {"phoneNumber": {"testPhoneNumbers": numbers}}}),
-        );
-        assert_eq!(status, 400, "{refused}");
-    }
+    // A number that is not E.164 is refused and changes nothing; production takes any code.
+    let (status, refused) = patch_sign_in(
+        &s,
+        "signIn.phoneNumber.testPhoneNumbers",
+        &json!({"signIn": {"phoneNumber": {"testPhoneNumbers": {"6505550101": "123456"}}}}),
+    );
+    assert_eq!(status, 400, "{refused}");
     let (_, read) = admin(&s, "GET", PROJECT_CONFIG, &Value::Null);
     assert_eq!(
         read["signIn"]["phoneNumber"]["testPhoneNumbers"],
@@ -11633,7 +11645,8 @@ fn project_client_permissions_are_exposed_and_applied_atomically() {
         &s,
         "PATCH",
         &format!("{path}?updateMask=client.permissions.disabledUserSignup"),
-        &json!({"client": {"permissions": {"disabledUserSignup": "true"}}}),
+        // Production reads "true" or "yes" as a bool, but not arbitrary text.
+        &json!({"client": {"permissions": {"disabledUserSignup": "maybe"}}}),
     );
     assert_eq!(refused.0, 400, "{}", refused.1);
     let after = admin(&s, "GET", path, &Value::Null);
@@ -11693,7 +11706,7 @@ fn project_config_rejects_malformed_unmasked_fields_without_mutation() {
             "sign-in",
             json!({
                 "client": {"permissions": {"disabledUserSignup": true}},
-                "signIn": {"allowDuplicateEmails": "true"}
+                "signIn": {"allowDuplicateEmails": "maybe"}
             }),
         ),
         (
@@ -15390,7 +15403,16 @@ fn authorized_domains_round_trip_through_the_admin_config() {
     assert_eq!(patched["authorizedDomains"], domains);
     let (_, read) = admin(&s, "GET", PROJECT_CONFIG, &Value::Null);
     assert_eq!(read["authorizedDomains"], domains);
-    for invalid in [json!([1]), json!("demo-app.web.app"), json!([""])] {
+    for (invalid, message) in [
+        (
+            json!("demo-app.web.app"),
+            "Invalid value at 'config.authorized_domains', Proto field is repeated but value is not a list",
+        ),
+        (
+            json!([""]),
+            "INVALID_AUTHORIZED_DOMAIN : An authorized domain is empty.",
+        ),
+    ] {
         let (status, refused) = admin(
             &s,
             "PATCH",
@@ -15399,7 +15421,7 @@ fn authorized_domains_round_trip_through_the_admin_config() {
         );
         assert_eq!(
             (status, refused["error"]["message"].as_str()),
-            (400, Some("INVALID_ARGUMENT")),
+            (400, Some(message)),
             "{invalid}"
         );
     }
@@ -16849,11 +16871,8 @@ fn stored_config_members_are_written_by_mask_and_clear_to_their_initial_value() 
     );
     assert_eq!(status, 200);
     let (status, _) = patch(
-        "notification.defaultLocale,notification.sendEmail.resetPasswordTemplate.subject",
-        json!({"notification": {
-            "defaultLocale": "ja",
-            "sendEmail": {"resetPasswordTemplate": {"subject": "Reset for %APP_NAME%"}},
-        }}),
+        "notification.defaultLocale",
+        json!({"notification": {"defaultLocale": "ja"}}),
     );
     assert_eq!(status, 200);
     let (status, _) = patch(
@@ -16878,7 +16897,6 @@ fn stored_config_members_are_written_by_mask_and_clear_to_their_initial_value() 
     );
     assert_eq!(read["notification"]["defaultLocale"], json!("ja"));
     let reset = &read["notification"]["sendEmail"]["resetPasswordTemplate"];
-    assert_eq!(reset["subject"], json!("Reset for %APP_NAME%"));
     assert_eq!(
         reset["senderLocalPart"],
         json!("noreply"),
@@ -16915,11 +16933,6 @@ fn stored_config_members_are_written_by_mask_and_clear_to_their_initial_value() 
     );
     assert_eq!(status, 200, "{allowed}");
     assert_eq!(allowed["smsRegionConfig"], json!({"allowByDefault": {}}));
-    assert_eq!(
-        read["notification"]["sendEmail"]["resetPasswordTemplate"]["subject"],
-        json!("Reset for %APP_NAME%"),
-        "an unmasked leaf keeps its written value"
-    );
 }
 
 /// A masked `passwordPolicyConfig` the body leaves out clears the policy, as production does
@@ -17140,5 +17153,144 @@ fn a_code_acts_on_the_account_that_owns_its_address_now() {
             (400, expected_gone("EMAIL_NOT_FOUND")),
             "{label}"
         );
+    }
+}
+
+/// Production's refusals of config values it parsed but will not take (sandbox recording
+/// 2026-09-25, AUTH-CONFIG-SDK config/invalid, password-policy/config, recaptcha). Strict
+/// refuses every one; the emulator profile only those fireemu already refused.
+#[test]
+#[allow(clippy::too_many_lines)]
+fn config_values_are_refused_with_production_messages() {
+    const CONFIG: &str = "/identitytoolkit.googleapis.com/admin/v2/projects/demo-app/config";
+    let strict = strict_state();
+    let emulator = state();
+    let patch = |s: &AuthState, mask: &str, body: Value| {
+        admin(s, "PATCH", &format!("{CONFIG}?updateMask={mask}"), &body)
+    };
+    let refused = |s: &AuthState, mask: &str, body: Value, message: &str| {
+        let (status, answer) = patch(s, mask, body);
+        assert_eq!(status, 400, "{answer}");
+        assert_eq!(answer["error"]["message"], json!(message), "{answer}");
+        assert_eq!(
+            answer["error"]["status"],
+            json!("INVALID_ARGUMENT"),
+            "{answer}"
+        );
+        assert!(answer["error"].get("errors").is_none(), "{answer}");
+    };
+    let policy = |state: &str, options: Value| {
+        json!({"passwordPolicyConfig": {
+            "passwordPolicyEnforcementState": state,
+            "passwordPolicyVersions": [{"customStrengthOptions": options}],
+        }})
+    };
+    for s in [&strict, &emulator] {
+        refused(
+            s,
+            "signIn.phoneNumber.testPhoneNumbers",
+            json!({"signIn": {"phoneNumber": {"testPhoneNumbers": {"16505550101": "123456"}}}}),
+            "INVALID_PHONE_NUMBER : Invalid format.",
+        );
+        for (options, message) in [
+            (json!({"minPasswordLength": 5}), "INVALID_CONFIG : Minimum password length must be between 6 and 30"),
+            (json!({"minPasswordLength": 31}), "INVALID_CONFIG : Minimum password length must be between 6 and 30"),
+            (json!({"maxPasswordLength": 5}), "INVALID_CONFIG : Maximum password length must be greater than or equal to the minimum password length"),
+            (json!({"maxPasswordLength": 4097}), "INVALID_CONFIG : Maximum password length must be less than or equal to 4096"),
+        ] {
+            refused(s, "passwordPolicyConfig", policy("ENFORCE", options), message);
+        }
+        refused(
+            s,
+            "passwordPolicyConfig",
+            json!({"passwordPolicyConfig": {"passwordPolicyEnforcementState": "ENFORCE"}}),
+            "INVALID_CONFIG : Policy versions list must be of length 1",
+        );
+        refused(
+            s,
+            "authorizedDomains",
+            json!({"authorizedDomains": ["demo-app.web.app", ""]}),
+            "INVALID_AUTHORIZED_DOMAIN : An authorized domain is empty.",
+        );
+    }
+    // Codes production takes as they are; the number's letters become keypad digits.
+    let (status, taken) = patch(
+        &strict,
+        "signIn.phoneNumber.testPhoneNumbers",
+        json!({"signIn": {"phoneNumber": {"testPhoneNumbers": {"+1650555abcd": "abc", "+16505550107": "12345"}}}}),
+    );
+    assert_eq!(status, 200, "{taken}");
+    assert_eq!(
+        taken["signIn"]["phoneNumber"]["testPhoneNumbers"],
+        json!({"+16505552223": "abc", "+16505550107": "12345"})
+    );
+    for domain in [
+        "https://app.example.com",
+        "app.example.com:8080",
+        "*.example.com",
+        "app example.com",
+    ] {
+        refused(
+            &strict,
+            "authorizedDomains",
+            json!({"authorizedDomains": [domain]}),
+            &format!("INVALID_AUTHORIZED_DOMAIN : {domain} should only contain the valid domain."),
+        );
+    }
+    refused(
+        &strict,
+        "smsRegionConfig",
+        json!({"smsRegionConfig": {"allowByDefault": {"disallowedRegions": ["ZZ"]}}}),
+        "INVALID_REGION_CODE : Invalid region code.",
+    );
+    let (status, lower) = patch(
+        &strict,
+        "smsRegionConfig",
+        json!({"smsRegionConfig": {"allowlistOnly": {"allowedRegions": ["us"]}}}),
+    );
+    assert_eq!(
+        (status, &lower["smsRegionConfig"]),
+        (200, &json!({"allowlistOnly": {"allowedRegions": ["us"]}}))
+    );
+    let score = "INVALID_CONFIG : The end score in reCAPTCHA managed rules must be a value between 0.0 and 1.0, at 11 discrete values; e.g. 0.1, 0.2, 0.3, 0.4, ... 0.9, 1.0.";
+    for (config, message) in [
+        (json!({"managedRules": [{"endScore": 0.35, "action": "BLOCK"}]}), score),
+        (json!({"managedRules": [{"endScore": 1.5, "action": "BLOCK"}]}), score),
+        (json!({"managedRules": [{"endScore": 0.3}]}), "INVALID_CONFIG : The action in reCAPTCHA managed rules must be set."),
+        (
+            json!({"phoneEnforcementState": "OFF", "useSmsBotScore": true}),
+            "INVALID_RECAPTCHA_PHONE_AUTH_CONFIGURATION : Phone auth enforcement state must be aligned with toll fraud or bot score enablement.",
+        ),
+        (
+            json!({"phoneEnforcementState": "AUDIT", "useSmsTollFraudProtection": true, "tollFraudManagedRules": [{"startScore": 0.35, "action": "BLOCK"}]}),
+            "INVALID_CONFIG : The start score in reCAPTCHA managed rules must be a value between 0.0 and 1.0, at 11 discrete values; e.g. 0.1, 0.2, 0.3, 0.4, ... 0.9, 1.0.",
+        ),
+        (json!({"recaptchaKeys": [{"key": "projects/p/keys/k", "type": "WEB"}]}), "INVALID_SITE_KEY"),
+    ] {
+        refused(&strict, "recaptchaConfig", json!({"recaptchaConfig": config}), message);
+    }
+    refused(
+        &strict,
+        "notification.sendEmail.resetPasswordTemplate.subject",
+        json!({"notification": {"sendEmail": {"resetPasswordTemplate": {"subject": "x"}}}}),
+        "EMAIL_TEMPLATE_UPDATE_NOT_ALLOWED",
+    );
+    // The emulator profile adds none of these refusals.
+    for (mask, body) in [
+        (
+            "authorizedDomains",
+            json!({"authorizedDomains": ["app.example.com:8080"]}),
+        ),
+        (
+            "recaptchaConfig",
+            json!({"recaptchaConfig": {"managedRules": [{"endScore": 0.35, "action": "BLOCK"}]}}),
+        ),
+        (
+            "notification.sendEmail.resetPasswordTemplate.subject",
+            json!({"notification": {"sendEmail": {"resetPasswordTemplate": {"subject": "x"}}}}),
+        ),
+    ] {
+        let (status, answer) = patch(&emulator, mask, body);
+        assert_eq!(status, 200, "{mask}: {answer}");
     }
 }

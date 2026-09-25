@@ -256,6 +256,16 @@ test("classification needs a current fixture and a determinate answer on both si
     "INDETERMINATE",
   );
   assert.equal(classify({ production: { status: 500 }, fireemu: denied }), "INDETERMINATE");
+  // A step whose dependency production refused never ran: it passes only as that, not as a
+  // match of its own behaviour, and only when fireemu refused the dependency too.
+  const unresolved = {
+    status: -1,
+    unresolved: "step begin recorded nothing",
+    dependencyTransient: false,
+  };
+  assert.equal(classify({ production: unresolved, fireemu: unresolved }), "DEPENDENCY_REFUSED");
+  assert.equal(classify({ production: unresolved, fireemu: denied }), "MISMATCH");
+  assert.equal(classify({ production: denied, fireemu: unresolved }), "MISMATCH");
 });
 
 test("the corpus is valid, waits only in its last program and stays within the request cap", () => {

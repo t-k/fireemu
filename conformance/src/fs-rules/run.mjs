@@ -710,6 +710,11 @@ export function classify({ row, stale, production, alternative, fireemu }) {
   if (fireemu === undefined) return "MISSING";
   if ([production, alternative, fireemu].some(isTransient)) return "INDETERMINATE";
   if (alternative && !Object.hasOwn(NONDETERMINISTIC_ROWS, row)) return "INDETERMINATE";
+  // A step whose dependency was refused on both sides never ran: it confirms that refusal only.
+  if (production.unresolved !== undefined || fireemu.unresolved !== undefined) {
+    const both = production.unresolved !== undefined && fireemu.unresolved !== undefined;
+    return both && !alternative ? "DEPENDENCY_REFUSED" : "MISMATCH";
+  }
   if (sameRecording(production, fireemu)) return alternative ? "MATCH_NONDETERMINISTIC" : "MATCH";
   if (alternative && sameRecording(alternative, fireemu)) return "MATCH_NONDETERMINISTIC";
   return "MISMATCH";
@@ -752,7 +757,7 @@ async function check() {
     join(RUN_DIR, "comparison.json"),
     `${JSON.stringify({ artifact: local.binary, artifactSha256, summary, orphans, failures: local.failures, rows }, null, 2)}\n`,
   );
-  const passing = new Set(["MATCH", "MATCH_NONDETERMINISTIC"]);
+  const passing = new Set(["MATCH", "MATCH_NONDETERMINISTIC", "DEPENDENCY_REFUSED"]);
   for (const row of rows.filter((r) => !passing.has(r.status))) {
     console.log(`\n${row.status} ${row.row}`);
     console.log(`  production ${String(JSON.stringify(row.production)).slice(0, 400)}`);

@@ -12,10 +12,16 @@ import test from 'node:test';
 const runner = fileURLToPath(new URL('./index.mjs', import.meta.url));
 const daemonSource = `
 const {spawn} = require('node:child_process');
-const {writeFileSync} = require('node:fs');
+const {writeFileSync, openSync} = require('node:fs');
+const runnerEnv = {...process.env, GCLOUD_PROJECT: 'demo-abnormal-cleanup', FIREEMU_RUNNER: '1'};
+if (process.env.FIREEMU_RUNNER_PRELOAD) {
+  runnerEnv.NODE_OPTIONS = '--require=' + process.env.FIREEMU_RUNNER_PRELOAD;
+}
 const child = spawn(process.argv[3], [process.argv[1], '--source', process.argv[2]], {
-  detached: true, stdio: ['pipe', 'pipe', 'pipe'],
-  env: {...process.env, GCLOUD_PROJECT: 'demo-abnormal-cleanup', FIREEMU_RUNNER: '1'}
+  detached: true,
+  stdio: ['pipe', 'pipe', process.env.FIREEMU_RUNNER_STDERR
+    ? openSync(process.env.FIREEMU_RUNNER_STDERR, 'w') : 'pipe'],
+  env: runnerEnv
 });
 child.on('error', error => process.send({error: error.message}));
 child.on('exit', (code, signal) => process.send({runnerExited: true, code, signal}));
@@ -75,6 +81,11 @@ child.on('message', () => process.exit(7));
 
 function groupOf(pid) {
   try {
+    if (process.platform === 'linux' && existsSync(`/proc/${pid}/stat`)) {
+      const stat = readFileSync(`/proc/${pid}/stat`, 'utf8');
+      const fields = stat.slice(stat.lastIndexOf(') ') + 2).trim().split(/\s+/);
+      return Number(fields[2]);
+    }
     const value = execFileSync('/bin/ps', ['-o', 'pgid=', '-p', String(pid)], {encoding: 'utf8', timeout: 1000}).trim();
     return /^\d+$/.test(value) ? Number(value) : null;
   } catch {
@@ -83,6 +94,12 @@ function groupOf(pid) {
 }
 
 function alive(pid) {
+  if (process.platform === 'linux') {
+    try {
+      const stat = readFileSync(`/proc/${pid}/stat`, 'utf8');
+      return stat.slice(stat.lastIndexOf(') ') + 2, stat.lastIndexOf(') ') + 3) !== 'Z';
+    } catch (error) { if (error.code === 'ENOENT') return false; throw error; }
+  }
   try { process.kill(pid, 0); return true; }
   catch (error) { if (error.code === 'ESRCH') return false; throw error; }
 }
@@ -90,6 +107,9 @@ function alive(pid) {
 function ownedMember(pid, group, token) {
   if (!pid || groupOf(pid) !== group) return false;
   try {
+    if (process.platform === 'linux') {
+      return readFileSync(`/proc/${pid}/cmdline`, 'utf8').includes(token);
+    }
     const command = execFileSync('/bin/ps', ['-o', 'command=', '-p', String(pid)], {
       encoding: 'utf8', timeout: 1000
     });
@@ -119,7 +139,7 @@ async function waitFor(predicate, label, timeout = 3000) {
 async function checkAbnormalCleanup(t, nodeCommand, {
   slowDiscovery = false, resistant = false, writeAfterDeath = false,
   partialFrame = false, shutdownBeforeKill = false, hangOnExit = false,
-  fatalExit = false
+  fatalExit = false, lsofUnavailable = false, psUnavailable = false
 } = {}) {
   const dir = mkdtempSync(join(tmpdir(), 'fireemu-abnormal-cleanup-'));
   const marker = join(dir, 'child.pid');
@@ -127,6 +147,27 @@ async function checkAbnormalCleanup(t, nodeCommand, {
   const runnerMarker = join(dir, 'runner.pid');
   const runnerExitMarker = join(dir, 'runner-exit.txt');
   const exitEnteredMarker = join(dir, 'exit-entered.txt');
+  const lsofMarker = join(dir, 'lsof-called.txt');
+  const psMarker = join(dir, 'ps-called.txt');
+  const runnerStderr = join(dir, 'runner-stderr.txt');
+  const preload = join(dir, 'preload.cjs');
+  if (lsofUnavailable || psUnavailable) writeFileSync(preload, `
+const childProcess = require('node:child_process');
+const {writeFileSync} = require('node:fs');
+const original = childProcess.execFileSync;
+childProcess.execFileSync = function(command, ...args) {
+  if (command === '/usr/sbin/lsof' && process.env.FIREEMU_BLOCK_LSOF === '1') {
+    writeFileSync(process.env.FIREEMU_LSOF_MARKER, 'called');
+    throw Object.assign(new Error('lsof unavailable'), {code: 'ENOENT'});
+  }
+  if (command === '/bin/ps' && process.env.FIREEMU_BLOCK_PS === '1') {
+    writeFileSync(process.env.FIREEMU_PS_MARKER, 'called');
+    throw Object.assign(new Error('ps unavailable'), {code: 'ENOENT'});
+  }
+  return original.call(this, command, ...args);
+};
+require('node:module').syncBuiltinESMExports();
+`);
   writeFileSync(join(dir, 'package.json'), JSON.stringify({private: true, main: slowDiscovery ? 'index.mjs' : 'index.cjs'}));
   writeFileSync(join(dir, slowDiscovery ? 'index.mjs' : 'index.cjs'),
     slowDiscovery ? slowUserSource : fatalExit ? fatalUserSource : userSource);
@@ -140,7 +181,11 @@ async function checkAbnormalCleanup(t, nodeCommand, {
       FIREEMU_RESIST_TERM: resistant ? '1' : '0', FIREEMU_RUNNER_MARKER: runnerMarker,
       FIREEMU_WRITE_AFTER_DEATH: writeAfterDeath ? '1' : '0',
       FIREEMU_PARTIAL_FRAME: partialFrame ? '1' : '0', FIREEMU_RUNNER_EXIT: runnerExitMarker,
-      FIREEMU_HANG_ON_EXIT: hangOnExit ? '1' : '0', FIREEMU_EXIT_ENTERED: exitEnteredMarker}
+      FIREEMU_HANG_ON_EXIT: hangOnExit ? '1' : '0', FIREEMU_EXIT_ENTERED: exitEnteredMarker,
+      FIREEMU_RUNNER_PRELOAD: lsofUnavailable || psUnavailable ? preload : '',
+      FIREEMU_LSOF_MARKER: lsofMarker, FIREEMU_PS_MARKER: psMarker,
+      FIREEMU_BLOCK_LSOF: lsofUnavailable ? '1' : '0', FIREEMU_BLOCK_PS: psUnavailable ? '1' : '0',
+      FIREEMU_RUNNER_STDERR: lsofUnavailable || nodeCommand !== process.execPath ? runnerStderr : ''}
   });
   const daemonExit = once(daemon, 'exit');
   const daemonMessages = [];
@@ -176,6 +221,8 @@ async function checkAbnormalCleanup(t, nodeCommand, {
   runnerPid = notice.runnerPid;
   assert.ok(Number.isInteger(runnerPid) && runnerPid > 1);
   childPid = await waitFor(() => existsSync(marker) && Number(readFileSync(marker, 'utf8')), 'user child');
+  if (lsofUnavailable) assert.equal(existsSync(lsofMarker), false, 'discovery must not wait for lsof');
+  if (psUnavailable) assert.equal(existsSync(psMarker), false, 'procfs must provide the group ID');
   if (resistant) await waitFor(() => existsSync(readyMarker), 'SIGTERM handler');
   ownedGroup = fatalExit ? groupOf(childPid) : groupOf(runnerPid);
   assert.equal(groupOf(childPid), ownedGroup, 'the user child shares the runner group');
@@ -194,7 +241,21 @@ async function checkAbnormalCleanup(t, nodeCommand, {
   if (fatalExit) await waitFor(() => existsSync(runnerExitMarker), 'user exit handler');
   daemon.kill('SIGKILL');
   await daemonExit;
-  await waitFor(() => !alive(runnerPid) && !alive(childPid), 'runner group cleanup', hangOnExit ? 5000 : 3000);
+  if (lsofUnavailable) {
+    await waitFor(() => !alive(runnerPid), 'runner exit after unverified shim');
+    assert.equal(readFileSync(lsofMarker, 'utf8'), 'called');
+    const warning = readFileSync(runnerStderr, 'utf8');
+    assert.equal(warning.match(/runner process group ownership is unverified/g)?.length, 1);
+    assert.ok(alive(childPid), 'an unverified group must not be signaled');
+    return;
+  }
+  try {
+    await waitFor(() => !alive(runnerPid) && !alive(childPid), 'runner group cleanup', hangOnExit ? 5000 : 3000);
+  } catch (error) {
+    const diagnostic = existsSync(runnerStderr) ? readFileSync(runnerStderr, 'utf8').slice(-1000) : '';
+    throw new Error(`${error.message}; runner stderr: ${diagnostic}`);
+  }
+  if (psUnavailable) assert.equal(existsSync(psMarker), false, 'cleanup must not call ps');
   runnerPid = null;
   childPid = null;
   ownedGroup = null;
@@ -243,6 +304,14 @@ test('Volta shim leader is an owned runner process group', {
 test('Volta shim cleanup escalates for a SIGTERM-resistant child', {
   skip: process.platform === 'win32' || !voltaNode || !existsSync(voltaNode)
 }, async t => checkAbnormalCleanup(t, voltaNode, {resistant: true}));
+
+test('Volta shim identity is checked on cleanup and an unavailable lsof warns once', {
+  skip: process.platform !== 'darwin' || !voltaNode || !existsSync(voltaNode)
+}, async t => checkAbnormalCleanup(t, voltaNode, {lsofUnavailable: true}));
+
+test('Linux runner reads its group from procfs without invoking ps', {
+  skip: process.platform !== 'linux'
+}, async t => checkAbnormalCleanup(t, process.execPath, {psUnavailable: true}));
 
 test('a non-shim parent group is warned about and never signaled', {
   skip: process.platform === 'win32'

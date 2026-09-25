@@ -1363,10 +1363,12 @@ pub const OBSERVED_LONG_OOB_CODE_SECONDS: i64 = 3_900;
 pub const EXPIRED_OOB_CODE_RETENTION_SECONDS: i64 = 86_400;
 /// Phone verification codes expire after ten minutes of virtual time.
 pub const SMS_CODE_TTL_SECONDS: i64 = 600;
-/// Under production's second-factor rules a phone enrollment session outlives ten minutes:
-/// production enrolled with sessions about 1803 seconds old (sandbox recording 2026-09-24,
-/// `auth-mfa/lifetime#aged-session-s1800`, both recordings; the run waits 1800 seconds and a
-/// 3-second margin). A longer lifetime is unobserved, so an older session is still refused.
+/// Under production's second-factor rules a phone enrollment session does not expire:
+/// production enrolled with sessions of every age it was shown, up to about 1803 seconds
+/// (sandbox recording 2026-09-24, `auth-mfa/lifetime#aged-session-s1800`, both recordings; the
+/// run waits 1800 seconds and a 3-second margin), and never refused one. Its lifetime is
+/// unobserved, so it is not refused as expired (owner decision M12, as AUTH-ACTION's long
+/// codes). At [`MAX_OUTSTANDING_CODES`] the oldest one older than this makes room.
 pub const OBSERVED_MFA_PHONE_ENROLLMENT_SECONDS: i64 = 1_805;
 /// Under production's second-factor rules a TOTP sign-in whose pending credential is at least
 /// this old is `TOTP_CHALLENGE_TIMEOUT`: production accepted one 293 seconds old and refused
@@ -3399,17 +3401,14 @@ impl AuthStore {
             )
     }
 
-    /// Whether a phone code is past its lifetime: [`OBSERVED_MFA_PHONE_ENROLLMENT_SECONDS`] for
-    /// a phone enrollment under production's second-factor rules, else
-    /// [`SMS_CODE_TTL_SECONDS`].
+    /// Whether a phone code is past its lifetime: never for a phone enrollment under
+    /// production's second-factor rules (see [`OBSERVED_MFA_PHONE_ENROLLMENT_SECONDS`]), else
+    /// after [`SMS_CODE_TTL_SECONDS`].
     fn phone_code_expired(production: bool, code: &VerificationCode, now: LogicalInstant) -> bool {
-        let ttl = match code.purpose {
-            VerificationPurpose::Enrollment { .. } if production => {
-                OBSERVED_MFA_PHONE_ENROLLMENT_SECONDS
-            }
-            _ => SMS_CODE_TTL_SECONDS,
-        };
-        Self::expired(code.created_at, ttl, now)
+        match code.purpose {
+            VerificationPurpose::Enrollment { .. } if production => false,
+            _ => Self::expired(code.created_at, SMS_CODE_TTL_SECONDS, now),
+        }
     }
 
     /// Creates a phone verification code for `phone` (a deterministic six-digit code).
@@ -3423,6 +3422,28 @@ impl AuthStore {
     ) -> Result<VerificationCode, AuthError> {
         Self::validate_phone_number(phone)?;
         self.sweep_transient_credentials(now);
+        // A phone enrollment session never leaves by age under production's rules, so at the
+        // cap the oldest one older than production's observed ages makes room.
+        if self.verification_codes.len() >= MAX_OUTSTANDING_CODES
+            && self.second_factor_rules_are_production()
+        {
+            let oldest = self
+                .verification_codes
+                .values()
+                .filter(|code| {
+                    matches!(code.purpose, VerificationPurpose::Enrollment { .. })
+                        && Self::expired(
+                            code.created_at,
+                            OBSERVED_MFA_PHONE_ENROLLMENT_SECONDS,
+                            now,
+                        )
+                })
+                .min_by_key(|code| (code.created_at, code.sequence))
+                .map(|code| code.session_info.clone());
+            if let Some(oldest) = oldest {
+                Arc::make_mut(&mut self.verification_codes).remove(&oldest);
+            }
+        }
         if self.verification_codes.len() >= MAX_OUTSTANDING_CODES {
             return Err(AuthError::TooManyOutstandingCodes);
         }

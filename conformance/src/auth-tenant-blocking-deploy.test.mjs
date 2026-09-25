@@ -11,6 +11,7 @@ import {
   FIXTURE_FUNCTIONS,
   REQUIRED_APIS,
   createDeployer,
+  deploymentCliEnv,
   isFixtureArtifact,
   isFixtureTrigger,
 } from "./auth-tenant-blocking/deploy.mjs";
@@ -19,6 +20,17 @@ import { validateTenantCorpus } from "./auth-tenant-blocking/guard.mjs";
 const PROJECT = "fireemu-oracle-idp";
 const NUMBER = "637500000000";
 const fn = (name) => ({ functionUri: `https://${name.toLowerCase()}-abc123-uc.a.run.app` });
+
+test("deployment subprocesses do not inherit the recording lock capability", () => {
+  const env = deploymentCliEnv({
+    FIREEMU_SANDBOX_LOCK_NONCE: "secret",
+    FIREEMU_SANDBOX_WRAPPER_PID: "123",
+    FIREEMU_AUTH_CAMPAIGN_PID: "456",
+    GOOGLE_APPLICATION_CREDENTIALS: "/unreviewed.json",
+    SAFE_VALUE: "kept",
+  });
+  assert.deepEqual(env, { SAFE_VALUE: "kept" });
+});
 
 /**
  * A fake of the REST surfaces the deployer calls. `state` is what exists; `calls` records every

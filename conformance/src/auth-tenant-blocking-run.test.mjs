@@ -175,6 +175,42 @@ test("production recording requires the reviewed shared ledger lock before crede
   }
 });
 
+test("a runner child process cannot inherit the reviewed lock capability", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "atb-child-env-"));
+  try {
+    const ledger = join(dir, "ledger.jsonl");
+    const marker = join(dir, "git-env.txt");
+    await writeFile(ledger, "");
+    await writeFile(
+      join(dir, "git"),
+      "#!/bin/sh\nprintf '%s' \"${FIREEMU_SANDBOX_LOCK_NONCE-unset}\" > \"$ATB_MARKER\"\nprintf '/tmp/fake/.git\\n'\n",
+      { mode: 0o700 },
+    );
+    const result = spawnSync(
+      process.execPath,
+      [join(import.meta.dirname, "auth-tenant-blocking/run.mjs"), "record-production"],
+      {
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          PATH: `${dir}:${process.env.PATH}`,
+          ATB_MARKER: marker,
+          FIREEMU_SANDBOX_LOCK_NONCE: "a".repeat(64),
+          FIREEMU_SANDBOX_WRAPPER_PID: String(process.pid),
+          FIREEMU_AUTH_CAMPAIGN_PID: String(process.pid),
+          FIREEMU_SANDBOX_LEDGER: ledger,
+          FIREEMU_AUTH_TENANT_PRIVATE_DIR: dir,
+        },
+      },
+    );
+    assert.notEqual(result.status, 0);
+    assert.equal(await readFile(marker, "utf8"), "unset");
+    assert.equal(await readFile(ledger, "utf8"), "");
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
 test("the reviewed lock binds its ledger, nonce, wrapper, and campaign process", async () => {
   const dir = await mkdtemp(join(tmpdir(), "atb-reviewed-lock-"));
   try {

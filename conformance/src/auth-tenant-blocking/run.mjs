@@ -53,7 +53,22 @@ import { guardTenantRequest, isHarnessDisplayName, validateTenantCorpus } from "
 import { assertNoOpaqueValue } from "./harness.mjs";
 import { createSession, runCorpus, tenantIdOf } from "./session.mjs";
 
-const execFileAsync = promisify(execFile);
+const execFileAsyncRaw = promisify(execFile);
+/** A child process must never receive the lock capability reserved for this runner. */
+export function withoutLockCapability(source = process.env) {
+  const env = { ...source };
+  delete env.FIREEMU_SANDBOX_LOCK_NONCE;
+  delete env.FIREEMU_SANDBOX_WRAPPER_PID;
+  delete env.FIREEMU_AUTH_CAMPAIGN_PID;
+  return env;
+}
+
+function execFileAsync(file, args, options = {}) {
+  return execFileAsyncRaw(file, args, {
+    ...options,
+    env: withoutLockCapability(options.env ?? process.env),
+  });
+}
 const FIXTURE = join(CONFORMANCE_DIR, "auth-tenant-blocking-production.json");
 const RUN_DIR = join(CONFORMANCE_DIR, ".runs", "auth-tenant-blocking");
 const LOCAL_PORT = 32298;
@@ -988,7 +1003,7 @@ async function runLocalSession(programs) {
       cwd: CONFORMANCE_DIR,
       stdio: ["ignore", "inherit", "inherit"],
       env: {
-        ...process.env,
+        ...withoutLockCapability(),
         AUTH_TENANT_IN: inPath,
         AUTH_TENANT_OUT: outPath,
         AUTH_TENANT_SIGNERS: signersPath,

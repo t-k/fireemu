@@ -64,7 +64,16 @@ const DROPPED_ENV = [
   "GOOGLE_CLOUD_QUOTA_PROJECT",
   "FIREBASE_TOKEN",
   "DEBUG",
+  "FIREEMU_SANDBOX_LOCK_NONCE",
+  "FIREEMU_SANDBOX_WRAPPER_PID",
+  "FIREEMU_AUTH_CAMPAIGN_PID",
 ];
+/** Deployment subprocesses must never inherit the runner's lock capability. */
+export function deploymentCliEnv(source = process.env) {
+  const env = { ...source };
+  for (const name of DROPPED_ENV) delete env[name];
+  return env;
+}
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 /**
@@ -180,12 +189,10 @@ export function createDeployer({
 
   /** The CLI in its own process group (a terminal signal does not kill it, SF-3). */
   async function cli(args, { cwd, timeout }) {
-    const env = { ...process.env };
-    for (const name of DROPPED_ENV) delete env[name];
     return await run(FIREBASE_CLI, args, {
       cwd,
       timeout,
-      env,
+      env: deploymentCliEnv(),
       detached: true,
       maxBuffer: 16 * 1024 * 1024,
     });
@@ -305,6 +312,7 @@ export function createDeployer({
         cwd: buildDir,
         timeout: 600_000,
         detached: true,
+        env: deploymentCliEnv(),
       });
     } catch (error) {
       throw cliFailure("npm ci", error, project, number);

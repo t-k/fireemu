@@ -4111,10 +4111,33 @@ impl BlockingAuthBridge {
 
         let selection = settings.selections.for_event(event);
         let selected_function = Self::selected_function(selection);
-        let admitted = self
+        let deadline = Instant::now() + self.deadline;
+        let first_admission = self
             .runtime
-            .try_admit_blocking_auth_for(event, selected_function)
-            .map_err(|_| BlockingFunctionFailure::unhandled())?;
+            .try_admit_blocking_auth_for(event, selected_function);
+        let admitted = if let Ok(admitted) = first_admission {
+            admitted
+        } else {
+            let handle = tokio::runtime::Handle::try_current()
+                .map_err(|_| BlockingFunctionFailure::unhandled())?;
+            handle
+                .block_on(async {
+                    tokio::time::timeout_at(
+                        tokio::time::Instant::from_std(deadline),
+                        self.runtime
+                            .recover_blocking_auth_runner_for(event, selected_function),
+                    )
+                    .await
+                })
+                .map_err(|_| BlockingFunctionFailure::timeout())?
+                .map_err(|_| BlockingFunctionFailure::unhandled())?;
+            // A recovered runner is healthy even when the caller's admission deadline has
+            // expired. Return the local timeout before reserving a slot or recycling it.
+            blocking_auth_remaining(deadline)?;
+            self.runtime
+                .try_admit_blocking_auth_for(event, selected_function)
+                .map_err(|_| BlockingFunctionFailure::unhandled())?
+        };
         let Some((target, _admission)) = admitted else {
             return if matches!(
                 selection,
@@ -4155,7 +4178,6 @@ impl BlockingAuthBridge {
             target.region,
             target.function
         );
-        let deadline = Instant::now() + self.deadline;
         let exchange = (|| {
             let address = target
                 .addr
@@ -5267,6 +5289,13 @@ mod tests {
     async fn runtime_with_blocking_auth_policy_order(
         order: &[(&str, bool, bool)],
     ) -> Arc<fireemu_adapter_functions::runtime::FunctionsRuntime> {
+        runtime_with_blocking_auth_policy_order_and_env(order, Vec::new()).await
+    }
+
+    async fn runtime_with_blocking_auth_policy_order_and_env(
+        order: &[(&str, bool, bool)],
+        env: Vec<(String, String)>,
+    ) -> Arc<fireemu_adapter_functions::runtime::FunctionsRuntime> {
         use fireemu_adapter_functions::runner::{Runner, SpawnSpec};
         use fireemu_adapter_functions::runtime::{FunctionsConfig, FunctionsRuntime};
         use fireemu_core_functions::manifest::{BlockingAuthEvent, Trigger};
@@ -5278,7 +5307,7 @@ mod tests {
         let spec = SpawnSpec {
             command: vec!["python3".to_owned(), script.display().to_string()],
             cwd: None,
-            env: Vec::new(),
+            env,
             hello_timeout: Duration::from_secs(60),
         };
         let runner = Runner::spawn_spec(&spec).await.unwrap();
@@ -5891,6 +5920,74 @@ mod tests {
             );
             tokio::task::yield_now().await;
         }
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn first_blocking_auth_request_after_idle_runner_exit_recovers() {
+        use fireemu_adapter_http::identity_toolkit::AuthBlockingHook;
+        use fireemu_core_auth::mfa::TotpPolicy;
+        use fireemu_core_auth::store::{AuthStore, NewUser};
+        use fireemu_core_functions::manifest::BlockingAuthEvent;
+        use fireemu_core_types::determinism::SplitMix64;
+        use fireemu_core_types::time::LogicalInstant;
+
+        let runtime = runtime_with_blocking_auth_policy_order(&[("guardA", false, false)]).await;
+        let bridge = BlockingAuthBridge::new(runtime.clone());
+        let now = LogicalInstant::from_unix_seconds(1_788_004_860);
+        let mut store = AuthStore::new("demo-app", SplitMix64::new(7), TotpPolicy::default());
+        let uid = store
+            .create_user(NewUser::email("person@example.test"), now)
+            .unwrap();
+        let user = store.user_by_id(uid.as_str()).unwrap().clone();
+        runtime.runner().kill_now();
+
+        let result = tokio::task::spawn_blocking(move || {
+            bridge.invoke(BlockingAuthEvent::BeforeCreate, &user)
+        })
+        .await
+        .unwrap();
+        runtime.shutdown().await;
+
+        let value = result.expect("the first request waits for runner recovery");
+        assert!(value.is_object());
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn blocking_auth_runner_recovery_uses_the_existing_timeout_envelope() {
+        use fireemu_adapter_http::identity_toolkit::AuthBlockingHook;
+        use fireemu_core_auth::mfa::TotpPolicy;
+        use fireemu_core_auth::store::{AuthStore, NewUser};
+        use fireemu_core_functions::manifest::BlockingAuthEvent;
+        use fireemu_core_types::determinism::SplitMix64;
+        use fireemu_core_types::time::LogicalInstant;
+
+        let runtime = runtime_with_blocking_auth_policy_order_and_env(
+            &[("guardA", false, false)],
+            vec![("FIREEMU_FAKE_HELLO_DELAY_MS".to_owned(), "300".to_owned())],
+        )
+        .await;
+        let bridge = BlockingAuthBridge::with_deadline(runtime.clone(), Duration::from_millis(50));
+        let now = LogicalInstant::from_unix_seconds(1_788_004_860);
+        let mut store = AuthStore::new("demo-app", SplitMix64::new(7), TotpPolicy::default());
+        let uid = store
+            .create_user(NewUser::email("person@example.test"), now)
+            .unwrap();
+        let user = store.user_by_id(uid.as_str()).unwrap().clone();
+        runtime.runner().kill_now();
+
+        let result = tokio::task::spawn_blocking(move || {
+            bridge.invoke(BlockingAuthEvent::BeforeCreate, &user)
+        })
+        .await
+        .unwrap();
+        runtime.shutdown().await;
+
+        let failure = result.expect_err("the slow runner cannot meet the request deadline");
+        assert_eq!(failure.identity_status(), 503);
+        assert_eq!(
+            failure,
+            fireemu_adapter_http::identity_toolkit::BlockingFunctionFailure::timeout()
+        );
     }
 
     #[test]

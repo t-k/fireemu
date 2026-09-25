@@ -1420,11 +1420,11 @@ async fn events_are_dispatched_and_retried_in_virtual_time() {
 }
 
 #[tokio::test]
-async fn an_interrupted_event_is_redelivered_after_its_runner_crashes() {
+async fn a_crashed_event_retries_only_when_retry_is_enabled() {
     let dir = std::env::temp_dir().join(format!("fireemu-crash-once-{}", std::process::id()));
     std::fs::create_dir(&dir).unwrap();
     let path = dir.join("crash-once");
-    let (runtime, _clock) = start_with_runtime_options_and_env(
+    let (runtime, clock) = start_with_runtime_options_and_env(
         fireemu_adapter_functions::runtime::OverlapPolicy::Allow,
         fireemu_adapter_functions::runtime::CatchUpPolicy::All,
         4,
@@ -1433,14 +1433,32 @@ async fn an_interrupted_event_is_redelivered_after_its_runner_crashes() {
             "FIREEMU_FAKE_CRASH_ONCE_MARKER".to_owned(),
             path.display().to_string(),
         )],
-        |_| {},
+        |manifest| {
+            manifest
+                .functions
+                .iter_mut()
+                .find(|function| function.name == "crashOnce")
+                .unwrap()
+                .retry = true;
+        },
     )
     .await;
     runtime.publish("crash-once", &[json!({"data": "YQ=="})]);
+    let waiting = runtime.await_idle(Duration::from_millis(500)).await;
+    assert!(
+        waiting.is_err(),
+        "the first crash waits for the retry clock"
+    );
+    clock
+        .lock()
+        .unwrap()
+        .advance(LogicalDuration::from_seconds(60))
+        .unwrap();
+    runtime.on_clock_changed();
     runtime
         .await_idle(Duration::from_secs(5))
         .await
-        .expect("an interrupted event is redelivered after the replacement starts");
+        .expect("the policy retries after a replacement starts");
     let records: Vec<_> = runtime
         .history()
         .into_iter()
@@ -1448,10 +1466,118 @@ async fn an_interrupted_event_is_redelivered_after_its_runner_crashes() {
         .collect();
     assert_eq!(records.len(), 2);
     assert!(records[0].outcome.starts_with("runner gone:"));
+    assert_eq!(records[0].attempt, 1);
     assert_eq!(records[1].outcome, "ok");
+    assert_eq!(records[1].attempt, 2);
     assert!(runtime.runner_alive());
     runtime.shutdown().await;
     std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[tokio::test]
+async fn a_spontaneously_crashing_non_retry_event_terminates_after_one_delivery() {
+    let dir = std::env::temp_dir().join(format!("fireemu-crash-always-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let starts = dir.join("starts");
+    let (runtime, _clock) = start_with_runtime_options_and_env(
+        fireemu_adapter_functions::runtime::OverlapPolicy::Allow,
+        fireemu_adapter_functions::runtime::CatchUpPolicy::All,
+        4,
+        true,
+        vec![(
+            "FIREEMU_FAKE_START_PROBE".to_owned(),
+            starts.display().to_string(),
+        )],
+        |_| {},
+    )
+    .await;
+
+    runtime.publish("crash-always", &[json!({"data": "YQ=="})]);
+    let idle = runtime.await_idle(Duration::from_secs(4)).await;
+    let records: Vec<_> = runtime
+        .history()
+        .into_iter()
+        .filter(|record| record.function == "crashAlways")
+        .collect();
+    let status = runtime.status();
+    runtime.shutdown().await;
+    let start_count = std::fs::read_to_string(&starts).unwrap().lines().count();
+    std::fs::remove_dir_all(dir).unwrap();
+
+    assert!(
+        idle.is_ok(),
+        "the crashed event kept the session busy: {status}"
+    );
+    assert_eq!(records.len(), 1, "the event was redelivered: {records:?}");
+    assert!(records[0].outcome.starts_with("runner gone:"));
+    assert_eq!(status["deadLettered"], 1);
+    assert!(
+        start_count <= 2,
+        "the runner was restarted {start_count} times"
+    );
+}
+
+#[tokio::test]
+async fn a_spontaneously_crashing_retry_event_exhausts_its_attempt_budget() {
+    let (runtime, clock) = start_with_runtime_options_and_env(
+        fireemu_adapter_functions::runtime::OverlapPolicy::Allow,
+        fireemu_adapter_functions::runtime::CatchUpPolicy::All,
+        4,
+        true,
+        Vec::new(),
+        |manifest| {
+            manifest
+                .functions
+                .iter_mut()
+                .find(|function| function.name == "crashAlways")
+                .unwrap()
+                .retry = true;
+        },
+    )
+    .await;
+    runtime.publish("crash-always", &[json!({"data": "YQ=="})]);
+    for delivered in 1..=3 {
+        tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                if runtime
+                    .history()
+                    .iter()
+                    .filter(|record| record.function == "crashAlways")
+                    .count()
+                    >= delivered
+                {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("the crash is recorded before advancing the retry clock");
+        clock
+            .lock()
+            .unwrap()
+            .advance(LogicalDuration::from_seconds(60))
+            .unwrap();
+        runtime.on_clock_changed();
+    }
+    let idle = runtime.await_idle(Duration::from_secs(5)).await;
+    let records: Vec<_> = runtime
+        .history()
+        .into_iter()
+        .filter(|record| record.function == "crashAlways")
+        .collect();
+    let status = runtime.status();
+    runtime.shutdown().await;
+
+    assert!(idle.is_ok(), "the retry budget did not terminate: {status}");
+    assert_eq!(
+        records
+            .iter()
+            .map(|record| record.attempt)
+            .collect::<Vec<_>>(),
+        vec![1, 2, 3, 4]
+    );
+    assert_eq!(status["deadLettered"], 1);
 }
 
 #[tokio::test]

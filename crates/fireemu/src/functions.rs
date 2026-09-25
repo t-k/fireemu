@@ -1759,7 +1759,23 @@ impl NodeProbeCache {
             .entry(key.clone())
             .or_default()
             .clone();
-        entry.get_or_init(|| probe_node_candidates(key)).clone()
+        let result = entry.get_or_init(|| probe_node_candidates(key)).clone();
+        let successful = result
+            .as_ref()
+            .is_ok_and(|probed| !probed.installations.is_empty() && probed.errors.is_empty());
+        if !successful {
+            let mut entries = self
+                .entries
+                .lock()
+                .map_err(|_| "Node probe cache lock is poisoned".to_owned())?;
+            if entries
+                .get(key)
+                .is_some_and(|current| Arc::ptr_eq(current, &entry))
+            {
+                entries.remove(key);
+            }
+        }
+        result
     }
 }
 
@@ -5484,6 +5500,87 @@ mod tests {
         };
         assert_eq!(cache.probed(&changed).unwrap(), first);
         assert_eq!(std::fs::read_to_string(&calls).unwrap().lines().count(), 4);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn node_probe_cache_retries_failed_probe_with_same_environment() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let root = std::env::temp_dir().join(format!(
+            "fireemu-node-probe-retry-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        let program = root.join("node");
+        let calls = root.join("calls");
+        std::fs::write(
+            &program,
+            format!("#!/bin/sh\necho failed >> '{}'\nexit 1\n", calls.display()),
+        )
+        .unwrap();
+        std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let key = NodeProbeKey {
+            path: None,
+            volta_home: None,
+            fireemu_node: Some(program.clone().into_os_string()),
+        };
+        let cache = NodeProbeCache::default();
+        let first = cache.probed(&key).unwrap();
+        assert!(first.installations.is_empty());
+        assert_eq!(first.errors.len(), 1);
+
+        std::fs::write(
+            &program,
+            format!(
+                "#!/bin/sh\necho recovered >> '{}'\ncase \"$1\" in --version) echo v22.12.0;; -p) echo true;; esac\n",
+                calls.display()
+            ),
+        )
+        .unwrap();
+        let second = cache.probed(&key).unwrap();
+        assert_eq!(second.installations.len(), 1);
+        assert!(second.errors.is_empty());
+        assert_eq!(std::fs::read_to_string(&calls).unwrap().lines().count(), 3);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn node_probe_cache_retries_timed_out_probe() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let root = std::env::temp_dir().join(format!(
+            "fireemu-node-probe-timeout-retry-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        let program = root.join("node");
+        std::fs::write(&program, "#!/bin/sh\nexec /bin/sleep 30\n").unwrap();
+        std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let key = NodeProbeKey {
+            path: None,
+            volta_home: None,
+            fireemu_node: Some(program.clone().into_os_string()),
+        };
+        let cache = NodeProbeCache::default();
+        let first = cache.probed(&key).unwrap();
+        assert!(first.installations.is_empty());
+        assert!(first.errors.iter().any(|error| error.contains("timed out")));
+
+        std::fs::write(
+            &program,
+            "#!/bin/sh\ncase \"$1\" in --version) echo v22.12.0;; -p) echo true;; esac\n",
+        )
+        .unwrap();
+        let second = cache.probed(&key).unwrap();
+        assert_eq!(second.installations.len(), 1);
+        assert!(second.errors.is_empty());
         std::fs::remove_dir_all(root).unwrap();
     }
 

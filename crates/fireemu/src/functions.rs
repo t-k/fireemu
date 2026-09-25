@@ -1143,11 +1143,16 @@ fn warn_reload_once(last: &mut bool, codebase: &str, operation: &str, reason: &s
     first
 }
 
-fn source_scan_retry_delay(reason: Option<&str>) -> Duration {
-    if reason.is_some_and(|reason| reason.starts_with(SOURCE_BYTE_BUDGET_ERROR_PREFIX)) {
-        Duration::from_secs(30)
-    } else {
-        Duration::from_millis(750)
+fn source_scan_retry_delay(previous: Duration, reason: Option<&str>) -> Duration {
+    match reason {
+        None => Duration::from_millis(750),
+        Some(reason) if reason.starts_with(SOURCE_BYTE_BUDGET_ERROR_PREFIX) => {
+            Duration::from_secs(30)
+        }
+        Some(_) => previous
+            .max(Duration::from_millis(750))
+            .saturating_mul(2)
+            .min(Duration::from_secs(8)),
     }
 }
 
@@ -1162,11 +1167,11 @@ async fn changed_source_stamp(
     let next_stamp = match scan_budget.scan(root, &codebase.ignore).await {
         Ok(stamp) => {
             *last_scan_error = false;
-            *retry_delay = source_scan_retry_delay(None);
+            *retry_delay = source_scan_retry_delay(*retry_delay, None);
             stamp
         }
         Err(reason) => {
-            *retry_delay = source_scan_retry_delay(Some(&reason));
+            *retry_delay = source_scan_retry_delay(*retry_delay, Some(&reason));
             warn_reload_once(last_scan_error, &codebase.codebase, "scan", &reason);
             return None;
         }
@@ -1180,6 +1185,10 @@ async fn changed_source_stamp(
         .await
         .unwrap_or(next_stamp);
     if stable_stamp != next_stamp {
+        return None;
+    }
+    if observed_stamp.is_none() {
+        *observed_stamp = Some(stable_stamp);
         return None;
     }
     if observed_stamp.map(|stamp| stamp.content_signature) == Some(stable_stamp.content_signature) {
@@ -1203,7 +1212,10 @@ async fn supervise_codebase_reloads(
     let mut observed_stamp = initial_stamp.as_ref().ok().copied();
     let mut last_scan_error = false;
     let mut last_snapshot_error = false;
-    let mut retry_delay = source_scan_retry_delay(initial_stamp.as_ref().err().map(String::as_str));
+    let mut retry_delay = source_scan_retry_delay(
+        Duration::from_millis(750),
+        initial_stamp.as_ref().err().map(String::as_str),
+    );
     if let Err(reason) = initial_stamp {
         warn_reload_once(&mut last_scan_error, &codebase.codebase, "scan", &reason);
     }
@@ -1235,7 +1247,7 @@ async fn supervise_codebase_reloads(
                 snapshot
             }
             Err(reason) => {
-                retry_delay = source_scan_retry_delay(Some(&reason));
+                retry_delay = source_scan_retry_delay(retry_delay, Some(&reason));
                 warn_reload_once(
                     &mut last_snapshot_error,
                     &codebase.codebase,
@@ -4509,8 +4521,8 @@ mod tests {
     use super::probe_node;
     use super::{
         blocking_auth_io_failure, blocking_auth_read_response, blocking_auth_response_failure,
-        blocking_auth_write_request, check_callable_app_check, function_pubsub_resources,
-        functions_source_stamp, functions_source_stamp_with_charge,
+        blocking_auth_write_request, changed_source_stamp, check_callable_app_check,
+        function_pubsub_resources, functions_source_stamp, functions_source_stamp_with_charge,
         functions_source_stamp_with_file_version, hash_source_file, hash_source_stamp_entry,
         node_engine_matches, owned_pubsub_topic, package_node_engine, parse_node_version,
         provision_function_pubsub_resources, select_node_installation, snapshot_functions_source,
@@ -4672,14 +4684,137 @@ mod tests {
             )
             .unwrap_err();
         assert_eq!(
-            source_scan_retry_delay(Some(&reason)),
+            source_scan_retry_delay(Duration::from_millis(750), Some(&reason)),
             Duration::from_secs(30)
         );
         assert_eq!(
-            source_scan_retry_delay(Some("permission denied")),
+            source_scan_retry_delay(Duration::from_millis(750), Some("permission denied")),
+            Duration::from_millis(1500)
+        );
+        assert_eq!(
+            source_scan_retry_delay(Duration::from_secs(8), None),
             Duration::from_millis(750)
         );
-        assert_eq!(source_scan_retry_delay(None), Duration::from_millis(750));
+    }
+
+    #[tokio::test]
+    async fn first_successful_scan_after_startup_failure_sets_a_baseline() {
+        let root =
+            std::env::temp_dir().join(format!("fireemu-scan-baseline-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(root.join("index.js"), "exports.ok = 1;").unwrap();
+        let codebase = crate::config::FunctionsCodebase {
+            codebase: "default".to_owned(),
+            source: root.display().to_string(),
+            runtime: None,
+            ignore: Vec::new(),
+        };
+        let budget = FunctionsSourceScanBudget::new();
+        let mut observed = None;
+        let mut last_error = true;
+        let mut retry_delay = Duration::from_secs(3);
+
+        assert!(changed_source_stamp(
+            &root,
+            &codebase,
+            &budget,
+            &mut observed,
+            &mut last_error,
+            &mut retry_delay
+        )
+        .await
+        .is_none());
+        assert!(
+            observed.is_some(),
+            "the first successful scan is the baseline"
+        );
+        assert!(!last_error);
+        assert_eq!(retry_delay, Duration::from_millis(750));
+
+        std::fs::write(root.join("index.js"), "exports.ok = 2;").unwrap();
+        assert!(changed_source_stamp(
+            &root,
+            &codebase,
+            &budget,
+            &mut observed,
+            &mut last_error,
+            &mut retry_delay
+        )
+        .await
+        .is_some());
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[tokio::test]
+    async fn repeated_source_scan_errors_back_off_and_release_the_scan_permit() {
+        let root = std::env::temp_dir().join(format!("fireemu-scan-retry-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let codebase = crate::config::FunctionsCodebase {
+            codebase: "default".to_owned(),
+            source: root.display().to_string(),
+            runtime: None,
+            ignore: Vec::new(),
+        };
+        let budget = FunctionsSourceScanBudget::new();
+        let mut observed = None;
+        let mut last_error = false;
+        let mut retry_delay = Duration::from_millis(750);
+
+        assert!(changed_source_stamp(
+            &root,
+            &codebase,
+            &budget,
+            &mut observed,
+            &mut last_error,
+            &mut retry_delay
+        )
+        .await
+        .is_none());
+        assert!(retry_delay > Duration::from_millis(750));
+        assert_eq!(budget.gate.available_permits(), 1);
+        let first_delay = retry_delay;
+        assert!(changed_source_stamp(
+            &root,
+            &codebase,
+            &budget,
+            &mut observed,
+            &mut last_error,
+            &mut retry_delay
+        )
+        .await
+        .is_none());
+        assert!(retry_delay > first_delay);
+        assert_eq!(budget.gate.available_permits(), 1);
+        for _ in 0..8 {
+            assert!(changed_source_stamp(
+                &root,
+                &codebase,
+                &budget,
+                &mut observed,
+                &mut last_error,
+                &mut retry_delay
+            )
+            .await
+            .is_none());
+        }
+        assert_eq!(retry_delay, Duration::from_secs(8));
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(root.join("index.js"), "exports.ok = 1;").unwrap();
+        assert!(changed_source_stamp(
+            &root,
+            &codebase,
+            &budget,
+            &mut observed,
+            &mut last_error,
+            &mut retry_delay
+        )
+        .await
+        .is_none());
+        assert!(observed.is_some());
+        assert!(!last_error);
+        assert_eq!(retry_delay, Duration::from_millis(750));
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

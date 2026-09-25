@@ -4,11 +4,11 @@
   "conditionId": "FS-DATA-WRITE/stream-transaction-precedence",
   "recipeId": "writes/write-stream-transaction",
   "recipeDigest": "1299c03ce0b34ea87b01da2cd42f947b898cae10cc3bbbffdaa70fcf3747eb7b",
-  "sourceCommit": "8db298cf6d903f67b598149dca5ffd0e988c15d6",
-  "binarySha256": "0fc1930de13e7ebf71d6908ed439138fe4248bee932efbf70f60daba68359589",
-  "buildManifestSha256": "3b550784623bdb3f65d73f44ecf6dc7f27986986c35718b29d8bb3ee5e209416",
-  "localReceiptSha256": "4bda128f8a07fc7a96a2922a0659fa182edf7dfae470931691afc0ba1690dc48",
-  "localComparisonRunSha256": "7b1472c7917f1c0f6e2acd1f03f09a9c540387321cbf972650cc74b6df7e6c83",
+  "sourceCommit": "a2aec9fbc12c3bd6e35547c6239e46527fb55cd2",
+  "binarySha256": "5c92dbc39f1b9bd5d78ff9cf37e3717e5295c64c7277d918d174bc340ab93aa3",
+  "buildManifestSha256": "5571a8cac4211df2d1c569a50fe520cb1093579a15e29d5ce1011371200d44a5",
+  "localReceiptSha256": "cdb6614e242a61ab8d2af5d56838006afea788663b382c32d6380f87ce9c7c65",
+  "localComparisonRunSha256": "44f3f37cc463e69aa15ecc555c09569fb94d2d0c477403f9d0334c7744ddd38b",
   "runtimeInputCount": 445,
   "runtimeInputsDigest": "9b1863d6610e8c208e1eda356d0f532bfca50accf600df52c56b79131a99b144",
   "productionReceiptSha256": "12956fbe82acefc106093eb2cd913ede9092f74aa98bd29f39e795492754b3f3",
@@ -22,22 +22,21 @@
     "tools/compat-broad/fs-write-txn-recompare-v2/stream_recompare_v2.mjs": "fc90742fc7ae14f635e3abbc76c6f4071152e3ef01c5a36b9999d5090319fa28"
   },
   "localOuterEvidenceSha256": {
-    "execution/inputs.json": "9d331afc9d9b0abe6086110c993eab7f0756625c48b5be98b839bd7a73ee218b",
-    "execution/gate/state.json": "3cb1539af7ee96d690c3d60b97ebfdfde9be8a278cf5db3858a3480b3fd6937e",
-    "execution/receipt.json": "2135dce0ca3bad866235fdf84bdcb1ed7805c9579d617d141d5460fbe234753a",
-    "execution/credential-preparation/binding.json": "a580c72914cc2220a2dee9ed51fb2aa595a08ef868b1c483fa2d399bc70c0ee1",
-    "execution/credential-preparation/refresh-charge.json": "6d7a8a8556968b2256058bcdd80d4de2d6b7b784592cddcefe5f26209713d884",
-    "execution/credential-preparation/refresh-receipt.json": "cc1e6f00e1dadae56c8ebf9401d81253d4276c5a1dd097b2e57386b6c642c606",
-    "execution/credential-preparation/tokeninfo-charge.json": "7d1e329766b6b92e685bf10ff1cb476094d30ee558f539031c0046c39c83cae3",
-    "execution/credential-preparation/tokeninfo-receipt.json": "eeb3a72ec5cd21da38044c5d1d5057bd55ae5559b47da57585eafbdff7f9dfdf",
-    "execution/credential-preparation/complete.json": "6c3a5e650a6ba6e42bfe0447acdbfb94a57549af111562cdc2c87a3b3e59a907",
-    "ledger/state.json": "1c79f6b06059a8dd757f2268cfa871120354e4ba7ee264b12cef3bd25a2a309b",
+    "execution/inputs.json": "db81f655a38178637872ad84d39d3fac71ffd769b0914b4d4d937514a9cfef81",
+    "execution/gate/state.json": "c66c17eb8072b3e55bea1e848e6910614d338121ba3f5d301fbd256898d2c0b8",
+    "execution/receipt.json": "0fd98e2c443ed03a517d6965e05408e703fdcb4f7149e8b334bdecab6150487d",
+    "execution/credential-preparation/binding.json": "799b2e5b0e6a5e4680b758e71fa06fdcda110bc4083b8061c729858417b7baac",
+    "execution/credential-preparation/refresh-charge.json": "513e073363e973581a719802e5161963f67893fa56991c156c94e7171eaa995f",
+    "execution/credential-preparation/refresh-receipt.json": "71c2db1c332526d74f485dda860f271644039d74bf5d82da15de9d1e53de21cd",
+    "execution/credential-preparation/tokeninfo-charge.json": "bafb4d91d62988fe60bcf876bad0fff27125fd5f97d4fd16a6e5e0dd9f501e8d",
+    "execution/credential-preparation/tokeninfo-receipt.json": "0b5d0163fa0273f13f4c8059708b77c46d04b1829dee309f23bee81e47637f01",
+    "execution/credential-preparation/complete.json": "9847566245dcc6bdc9aa36a48c429d633f71d7f5a1ff4935439c89bc474be188",
+    "ledger/state.json": "5d7b12331bf2a8de56239b390b412d7540dff1914547caac354606e3a22fd3a7",
     "config.json": "96f3bacf5f05aa6cfcb589351c1be213b815b998e08bf7881022fe0fb66b9c4b",
-    "instance.json": "3434a6c0ce0dbef56131abe7b725fafaab85a65b290ae5e6cd528d4c7ee5f32b",
-    "child-identity.json": "f97e231b099b7dd34075388c258c0e11540b4a6a85b8c7d13382e769eeaa0092"
+    "instance.json": "ff3248fa7a047286cd8870981fdd8e007451221acca6226633572adf867fe2a3",
+    "child-identity.json": "045b3d4d6b8da27d8c3d4116ddef84a34eede247cdcebdab23b8a4484e7cf7ed"
   },
   "localRun": {
-    "buildCases": 14,
     "gateEvents": 23,
     "observations": 15,
     "recoveryObservations": 10,
@@ -55,5 +54,15 @@
     "v1DifferenceLeafCount": 32,
     "indeterminate": 0
   },
-  "newProductionRequests": 0
+  "newProductionRequests": 0,
+  "buildProfile": "release",
+  "buildCommand": [
+    "cargo",
+    "build",
+    "--release",
+    "--locked",
+    "-p",
+    "fireemu",
+    "--message-format=json"
+  ]
 }

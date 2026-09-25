@@ -6,8 +6,8 @@
   "closureReview": {
     "decision": "PENDING",
     "candidateComparisonPath": "spec/compatibility/closure/evidence/FS-DATA-WRITE-current-comparison.json",
-    "candidateSourceHead": "8db298cf6d903f67b598149dca5ffd0e988c15d6",
-    "candidateExecutableSha256": "0fc1930de13e7ebf71d6908ed439138fe4248bee932efbf70f60daba68359589",
+    "candidateSourceHead": "a2aec9fbc12c3bd6e35547c6239e46527fb55cd2",
+    "candidateExecutableSha256": "5c92dbc39f1b9bd5d78ff9cf37e3717e5295c64c7277d918d174bc340ab93aa3",
     "approvedKnownDifferenceCount": 10,
     "pendingOracleDifferenceCount": 2
   },
@@ -83,10 +83,10 @@
             "transport": "rest"
           }
         ],
-        "finalArtifactSha256": "0fc1930de13e7ebf71d6908ed439138fe4248bee932efbf70f60daba68359589",
-        "sourceHead": "8db298cf6d903f67b598149dca5ffd0e988c15d6",
+        "finalArtifactSha256": "5c92dbc39f1b9bd5d78ff9cf37e3717e5295c64c7277d918d174bc340ab93aa3",
+        "sourceHead": "a2aec9fbc12c3bd6e35547c6239e46527fb55cd2",
         "comparisonPath": "spec/compatibility/closure/evidence/FS-DATA-WRITE-current-accepted-conditions.json",
-        "comparisonSha256": "d452e482c905745100b2603892abb1fd47d7a53b636703a123a1d9588e01420f"
+        "comparisonSha256": "f4a4ecc2dd860725ca450b447a5003ecda70cc84806bcb30e5f7a3f0d7200241"
       }
     },
     {
@@ -119,10 +119,10 @@
             "transport": "rest"
           }
         ],
-        "finalArtifactSha256": "0fc1930de13e7ebf71d6908ed439138fe4248bee932efbf70f60daba68359589",
-        "sourceHead": "8db298cf6d903f67b598149dca5ffd0e988c15d6",
+        "finalArtifactSha256": "5c92dbc39f1b9bd5d78ff9cf37e3717e5295c64c7277d918d174bc340ab93aa3",
+        "sourceHead": "a2aec9fbc12c3bd6e35547c6239e46527fb55cd2",
         "comparisonPath": "spec/compatibility/closure/evidence/FS-DATA-WRITE-current-accepted-conditions.json",
-        "comparisonSha256": "d452e482c905745100b2603892abb1fd47d7a53b636703a123a1d9588e01420f"
+        "comparisonSha256": "f4a4ecc2dd860725ca450b447a5003ecda70cc84806bcb30e5f7a3f0d7200241"
       }
     },
     {
@@ -239,10 +239,10 @@
             "transport": "rest"
           }
         ],
-        "finalArtifactSha256": "0fc1930de13e7ebf71d6908ed439138fe4248bee932efbf70f60daba68359589",
-        "sourceHead": "8db298cf6d903f67b598149dca5ffd0e988c15d6",
+        "finalArtifactSha256": "5c92dbc39f1b9bd5d78ff9cf37e3717e5295c64c7277d918d174bc340ab93aa3",
+        "sourceHead": "a2aec9fbc12c3bd6e35547c6239e46527fb55cd2",
         "comparisonPath": "spec/compatibility/closure/evidence/FS-DATA-WRITE-current-accepted-conditions.json",
-        "comparisonSha256": "d452e482c905745100b2603892abb1fd47d7a53b636703a123a1d9588e01420f"
+        "comparisonSha256": "f4a4ecc2dd860725ca450b447a5003ecda70cc84806bcb30e5f7a3f0d7200241"
       }
     },
     {
@@ -289,10 +289,10 @@
             "transport": "rest"
           }
         ],
-        "finalArtifactSha256": "0fc1930de13e7ebf71d6908ed439138fe4248bee932efbf70f60daba68359589",
-        "sourceHead": "8db298cf6d903f67b598149dca5ffd0e988c15d6",
+        "finalArtifactSha256": "5c92dbc39f1b9bd5d78ff9cf37e3717e5295c64c7277d918d174bc340ab93aa3",
+        "sourceHead": "a2aec9fbc12c3bd6e35547c6239e46527fb55cd2",
         "comparisonPath": "spec/compatibility/closure/evidence/FS-DATA-WRITE-current-accepted-conditions.json",
-        "comparisonSha256": "d452e482c905745100b2603892abb1fd47d7a53b636703a123a1d9588e01420f",
+        "comparisonSha256": "f4a4ecc2dd860725ca450b447a5003ecda70cc84806bcb30e5f7a3f0d7200241",
         "ownerDecision": "2026-09-25 FS-DATA-WRITE D3",
         "knownDifferenceIds": [
           "writes/limits/empty-document-name/4628#readback",
@@ -346,10 +346,10 @@
             "transport": "rest"
           }
         ],
-        "finalArtifactSha256": "0fc1930de13e7ebf71d6908ed439138fe4248bee932efbf70f60daba68359589",
-        "sourceHead": "8db298cf6d903f67b598149dca5ffd0e988c15d6",
+        "finalArtifactSha256": "5c92dbc39f1b9bd5d78ff9cf37e3717e5295c64c7277d918d174bc340ab93aa3",
+        "sourceHead": "a2aec9fbc12c3bd6e35547c6239e46527fb55cd2",
         "comparisonPath": "spec/compatibility/closure/evidence/FS-DATA-WRITE-current-accepted-conditions.json",
-        "comparisonSha256": "d452e482c905745100b2603892abb1fd47d7a53b636703a123a1d9588e01420f",
+        "comparisonSha256": "f4a4ecc2dd860725ca450b447a5003ecda70cc84806bcb30e5f7a3f0d7200241",
         "ownerDecision": "2026-09-25 FS-DATA-WRITE D3",
         "knownDifferenceIds": [
           "writes/limits/index-entry-sum-per-document#observation-0",
@@ -416,10 +416,10 @@
             "transport": "rest"
           }
         ],
-        "finalArtifactSha256": "0fc1930de13e7ebf71d6908ed439138fe4248bee932efbf70f60daba68359589",
-        "sourceHead": "8db298cf6d903f67b598149dca5ffd0e988c15d6",
+        "finalArtifactSha256": "5c92dbc39f1b9bd5d78ff9cf37e3717e5295c64c7277d918d174bc340ab93aa3",
+        "sourceHead": "a2aec9fbc12c3bd6e35547c6239e46527fb55cd2",
         "comparisonPath": "spec/compatibility/closure/evidence/FS-DATA-WRITE-current-accepted-conditions.json",
-        "comparisonSha256": "d452e482c905745100b2603892abb1fd47d7a53b636703a123a1d9588e01420f"
+        "comparisonSha256": "f4a4ecc2dd860725ca450b447a5003ecda70cc84806bcb30e5f7a3f0d7200241"
       }
     },
     {
@@ -537,7 +537,7 @@
         "writes/limits/decoded-11x1040000"
       ],
       "boundaryStatus": "NOT_APPLICABLE",
-      "scopeNote": "Concrete REST documents:commit JSON acceptance samples only; the nominal 10 MiB decoded-protobuf threshold and other transport surfaces are not inferred.",
+      "scopeNote": "Concrete REST documents:commit JSON acceptance samples only; they do not establish a decoded-protobuf 10 MiB limit. Under owner decision D4, strict non-Commit REST, gRPC, and WebChannel reuse the observed raw REST Commit 11 MiB bound as an unobserved estimate; their own production upper boundaries remain unresolved.",
       "status": "VERIFIED",
       "evidence": {
         "productionRecordings": [
@@ -578,7 +578,10 @@
         "writes/limits/non-commit-rest-request-bytes"
       ],
       "boundaryStatus": "UNBRACKETED",
-      "status": "PRODUCTION_RECORDED"
+      "status": "PRODUCTION_RECORDED",
+      "strictLimitEstimateBytes": 11534336,
+      "estimateOwnerDecision": "2026-09-25 FS-DATA-WRITE D4",
+      "scopeNote": "The strict 11 MiB (11,534,336-byte) upper bound is an unobserved estimate from the observed raw REST Commit boundary under owner decision D4; this transport's production upper boundary remains unresolved."
     },
     {
       "conditionId": "FS-LIMIT-API-REQUEST-BYTES/webchannel",
@@ -587,7 +590,10 @@
         "writes/limits/webchannel-request-bytes"
       ],
       "boundaryStatus": "UNBRACKETED",
-      "status": "PRODUCTION_RECORDED"
+      "status": "PRODUCTION_RECORDED",
+      "strictLimitEstimateBytes": 11534336,
+      "estimateOwnerDecision": "2026-09-25 FS-DATA-WRITE D4",
+      "scopeNote": "The strict 11 MiB (11,534,336-byte) upper bound is an unobserved estimate from the observed raw REST Commit boundary under owner decision D4; this transport's production upper boundary remains unresolved."
     },
     {
       "conditionId": "FS-LIMIT-API-REQUEST-BYTES/grpc",
@@ -597,7 +603,10 @@
         "writes/limits/grpc-stream-request-bytes"
       ],
       "boundaryStatus": "UNBRACKETED",
-      "status": "MISMATCH"
+      "status": "MISMATCH",
+      "strictLimitEstimateBytes": 11534336,
+      "estimateOwnerDecision": "2026-09-25 FS-DATA-WRITE D4",
+      "scopeNote": "The strict 11 MiB (11,534,336-byte) upper bound is an unobserved estimate from the observed raw REST Commit boundary under owner decision D4; this transport's production upper boundary remains unresolved."
     },
     {
       "conditionId": "FS-DATA-WRITE/stream-transaction-precedence",
@@ -610,10 +619,10 @@
       "evidence": {
         "productionReceiptSha256": "12956fbe82acefc106093eb2cd913ede9092f74aa98bd29f39e795492754b3f3",
         "savedProductionAuthorityDigest": "431f0de31ff74ef1685a013fbb5bf6286129196a0984b58d723869fa0799991f",
-        "finalArtifactSha256": "0fc1930de13e7ebf71d6908ed439138fe4248bee932efbf70f60daba68359589",
-        "sourceHead": "8db298cf6d903f67b598149dca5ffd0e988c15d6",
+        "finalArtifactSha256": "5c92dbc39f1b9bd5d78ff9cf37e3717e5295c64c7277d918d174bc340ab93aa3",
+        "sourceHead": "a2aec9fbc12c3bd6e35547c6239e46527fb55cd2",
         "comparisonPath": "spec/compatibility/closure/evidence/FS-DATA-WRITE-stream-transaction-current-saved-replay.json",
-        "comparisonSha256": "ba0b67b4c3101f28b2ecf5d9b781c779de5e3ba9eb8a2d2aeab449d2e72f3a63"
+        "comparisonSha256": "53a5e9ada6c17acf49619576977d0efcdfa9b1219e32239d5d7787043e974c72"
       }
     },
     {
@@ -640,10 +649,10 @@
             "transport": "grpc"
           }
         ],
-        "finalArtifactSha256": "0fc1930de13e7ebf71d6908ed439138fe4248bee932efbf70f60daba68359589",
-        "sourceHead": "8db298cf6d903f67b598149dca5ffd0e988c15d6",
+        "finalArtifactSha256": "5c92dbc39f1b9bd5d78ff9cf37e3717e5295c64c7277d918d174bc340ab93aa3",
+        "sourceHead": "a2aec9fbc12c3bd6e35547c6239e46527fb55cd2",
         "comparisonPath": "spec/compatibility/closure/evidence/FS-DATA-WRITE-current-accepted-conditions.json",
-        "comparisonSha256": "d452e482c905745100b2603892abb1fd47d7a53b636703a123a1d9588e01420f"
+        "comparisonSha256": "f4a4ecc2dd860725ca450b447a5003ecda70cc84806bcb30e5f7a3f0d7200241"
       }
     },
     {
@@ -696,10 +705,10 @@
             "transport": "grpc"
           }
         ],
-        "finalArtifactSha256": "0fc1930de13e7ebf71d6908ed439138fe4248bee932efbf70f60daba68359589",
-        "sourceHead": "8db298cf6d903f67b598149dca5ffd0e988c15d6",
+        "finalArtifactSha256": "5c92dbc39f1b9bd5d78ff9cf37e3717e5295c64c7277d918d174bc340ab93aa3",
+        "sourceHead": "a2aec9fbc12c3bd6e35547c6239e46527fb55cd2",
         "comparisonPath": "spec/compatibility/closure/evidence/FS-DATA-WRITE-current-accepted-conditions.json",
-        "comparisonSha256": "d452e482c905745100b2603892abb1fd47d7a53b636703a123a1d9588e01420f"
+        "comparisonSha256": "f4a4ecc2dd860725ca450b447a5003ecda70cc84806bcb30e5f7a3f0d7200241"
       }
     },
     {
@@ -861,18 +870,19 @@
         "fs-data-write-list/list-documents/read-time#read-time-empty"
       ],
       "boundaryStatus": "OBSERVED (page size 300)",
-      "status": "PENDING_INTEGRATION",
+      "status": "VERIFIED",
       "evidence": {
         "productionRecordings": [
           "e6bcc4b467e48d8a285d1cb754ce37bc3decf56dd5e822ef7f1e77abb089ed33",
           "5ef3ad1593391e2948f980cfde0b39747406c56d14597cbe7950158aafac3637"
         ],
-        "proposalPath": "docs.local/instructions/2026-09-24-fs-data-write-list-condition-proposal.md",
         "fixturePath": "conformance/fs-data-write-list-production.json",
         "fixtureSha256": "1d70589d2ffc50b837dc92574ea0daf502677f08804d6227a4b5cbe4641f87f4",
-        "proposedArtifactSha256": "32e58e92a56f1063c1feb01c09080787cfd147e183c2fde5e0b026867d9697d2",
-        "sourceCommit": "c7d9e1213",
-        "comparisonPath": "spec/compatibility/closure/evidence/FS-DATA-WRITE-LIST-comparison.json"
+        "comparisonPath": "spec/compatibility/closure/evidence/FS-DATA-WRITE-LIST-comparison.json",
+        "comparisonSha256": "07f25db234442c5786eea9ab0c754b862e90452a9b31b31c82add275fcf256ba",
+        "finalArtifactSha256": "5c92dbc39f1b9bd5d78ff9cf37e3717e5295c64c7277d918d174bc340ab93aa3",
+        "sourceHead": "a2aec9fbc12c3bd6e35547c6239e46527fb55cd2",
+        "integrationCommit": "7c9344b9d"
       }
     },
     {
@@ -916,18 +926,19 @@
         "fs-data-write-list/list-collection-ids/rest#read-time-empty"
       ],
       "boundaryStatus": "NOT_APPLICABLE",
-      "status": "PENDING_INTEGRATION",
+      "status": "VERIFIED",
       "evidence": {
         "productionRecordings": [
           "e6bcc4b467e48d8a285d1cb754ce37bc3decf56dd5e822ef7f1e77abb089ed33",
           "5ef3ad1593391e2948f980cfde0b39747406c56d14597cbe7950158aafac3637"
         ],
-        "proposalPath": "docs.local/instructions/2026-09-24-fs-data-write-list-condition-proposal.md",
         "fixturePath": "conformance/fs-data-write-list-production.json",
         "fixtureSha256": "1d70589d2ffc50b837dc92574ea0daf502677f08804d6227a4b5cbe4641f87f4",
-        "proposedArtifactSha256": "32e58e92a56f1063c1feb01c09080787cfd147e183c2fde5e0b026867d9697d2",
-        "sourceCommit": "c7d9e1213",
-        "comparisonPath": "spec/compatibility/closure/evidence/FS-DATA-WRITE-LIST-comparison.json"
+        "comparisonPath": "spec/compatibility/closure/evidence/FS-DATA-WRITE-LIST-comparison.json",
+        "comparisonSha256": "07f25db234442c5786eea9ab0c754b862e90452a9b31b31c82add275fcf256ba",
+        "finalArtifactSha256": "5c92dbc39f1b9bd5d78ff9cf37e3717e5295c64c7277d918d174bc340ab93aa3",
+        "sourceHead": "a2aec9fbc12c3bd6e35547c6239e46527fb55cd2",
+        "integrationCommit": "7c9344b9d"
       }
     },
     {
@@ -972,18 +983,19 @@
         "fs-data-write-list/grpc/list-collection-ids#collection-parent"
       ],
       "boundaryStatus": "NOT_APPLICABLE",
-      "status": "PENDING_INTEGRATION",
+      "status": "VERIFIED",
       "evidence": {
         "productionRecordings": [
           "e6bcc4b467e48d8a285d1cb754ce37bc3decf56dd5e822ef7f1e77abb089ed33",
           "5ef3ad1593391e2948f980cfde0b39747406c56d14597cbe7950158aafac3637"
         ],
-        "proposalPath": "docs.local/instructions/2026-09-24-fs-data-write-list-condition-proposal.md",
         "fixturePath": "conformance/fs-data-write-list-production.json",
         "fixtureSha256": "1d70589d2ffc50b837dc92574ea0daf502677f08804d6227a4b5cbe4641f87f4",
-        "proposedArtifactSha256": "32e58e92a56f1063c1feb01c09080787cfd147e183c2fde5e0b026867d9697d2",
-        "sourceCommit": "c7d9e1213",
-        "comparisonPath": "spec/compatibility/closure/evidence/FS-DATA-WRITE-LIST-comparison.json"
+        "comparisonPath": "spec/compatibility/closure/evidence/FS-DATA-WRITE-LIST-comparison.json",
+        "comparisonSha256": "07f25db234442c5786eea9ab0c754b862e90452a9b31b31c82add275fcf256ba",
+        "finalArtifactSha256": "5c92dbc39f1b9bd5d78ff9cf37e3717e5295c64c7277d918d174bc340ab93aa3",
+        "sourceHead": "a2aec9fbc12c3bd6e35547c6239e46527fb55cd2",
+        "integrationCommit": "7c9344b9d"
       }
     },
     {
@@ -995,18 +1007,19 @@
         "fs-data-write-list/list-documents/read-time#write-2"
       ],
       "boundaryStatus": "NOT_APPLICABLE",
-      "status": "PENDING_INTEGRATION",
+      "status": "VERIFIED",
       "evidence": {
         "productionRecordings": [
           "e6bcc4b467e48d8a285d1cb754ce37bc3decf56dd5e822ef7f1e77abb089ed33",
           "5ef3ad1593391e2948f980cfde0b39747406c56d14597cbe7950158aafac3637"
         ],
-        "proposalPath": "docs.local/instructions/2026-09-24-fs-data-write-list-condition-proposal.md",
         "fixturePath": "conformance/fs-data-write-list-production.json",
         "fixtureSha256": "1d70589d2ffc50b837dc92574ea0daf502677f08804d6227a4b5cbe4641f87f4",
-        "proposedArtifactSha256": "32e58e92a56f1063c1feb01c09080787cfd147e183c2fde5e0b026867d9697d2",
-        "sourceCommit": "c7d9e1213",
-        "comparisonPath": "spec/compatibility/closure/evidence/FS-DATA-WRITE-LIST-comparison.json"
+        "comparisonPath": "spec/compatibility/closure/evidence/FS-DATA-WRITE-LIST-comparison.json",
+        "comparisonSha256": "07f25db234442c5786eea9ab0c754b862e90452a9b31b31c82add275fcf256ba",
+        "finalArtifactSha256": "5c92dbc39f1b9bd5d78ff9cf37e3717e5295c64c7277d918d174bc340ab93aa3",
+        "sourceHead": "a2aec9fbc12c3bd6e35547c6239e46527fb55cd2",
+        "integrationCommit": "7c9344b9d"
       }
     }
   ]

@@ -1,0 +1,47 @@
+{
+  "schemaVersion": 1,
+  "kind": "FS-DATA-WRITE-release-artifact",
+  "sourceCommit": "a2aec9fbc12c3bd6e35547c6239e46527fb55cd2",
+  "binarySha256": "5c92dbc39f1b9bd5d78ff9cf37e3717e5295c64c7277d918d174bc340ab93aa3",
+  "buildProfile": "release",
+  "buildCommand": [
+    "cargo",
+    "build",
+    "--release",
+    "--locked",
+    "-p",
+    "fireemu",
+    "--message-format=json"
+  ],
+  "privateBuildReceiptSha256": "e5ec8dcba6e53df94b26e86e4f4fcf4c043348b3d7e66da8f4462a0fb8aebff7",
+  "buildJsonlSha256": "104d4bdeb9bb6ca910c1cdd306b6c4781e4fad118b8114eac4565d7076d2acda",
+  "buildStderrSha256": "8cd3604460e5bdab26d26cc7c78e2c5a38320f0218a6869d5eb3d9cff819506f",
+  "series": {
+    "write": {
+      "reportPath": "spec/compatibility/closure/evidence/FS-DATA-WRITE-current-comparison.json",
+      "reportSha256": "84ebab06f35c4bbcbd32a431836522d6fa2470fab5e8dfbf25ed3747cf556abe",
+      "acceptedPath": "spec/compatibility/closure/evidence/FS-DATA-WRITE-current-accepted-conditions.json",
+      "acceptedSha256": "f4a4ecc2dd860725ca450b447a5003ecda70cc84806bcb30e5f7a3f0d7200241"
+    },
+    "list": {
+      "reportPath": "spec/compatibility/closure/evidence/FS-DATA-WRITE-LIST-comparison.json",
+      "reportSha256": "07f25db234442c5786eea9ab0c754b862e90452a9b31b31c82add275fcf256ba",
+      "localProjectionPath": "spec/compatibility/closure/evidence/FS-DATA-WRITE-LIST-release-local-rows.json",
+      "localProjectionSha256": "1d03b40887d08a9c084c86dfa2e811448f12688c6f0ff816b6bf779fb4ec428c",
+      "privateResultSha256": "6bfe50743d33a933f1e78a79ad1736da73d48e42eec2cdcb0dd9bf53b86ab141",
+      "fixtureSha256": "1d70589d2ffc50b837dc92574ea0daf502677f08804d6227a4b5cbe4641f87f4"
+    },
+    "query": {
+      "reportPath": "spec/compatibility/closure/evidence/FS-DATA-WRITE-query-regression-comparison.json",
+      "reportSha256": "6587989acaa7f0aa4d75641092f8d2a48eb7ee0793dcc8fa5162fd49a39201aa",
+      "localProjectionPath": "spec/compatibility/closure/evidence/FS-DATA-WRITE-query-regression-local-rows.json",
+      "localProjectionSha256": "f61345a8b04b69660ea9a888b19b756494a169c1e3c39ac9608afe52c9ceaa14",
+      "privateResultSha256": "e8853860a6f03912c1b6feee672c8cb41bbc97c81b8e11d09f00bd79946c9e6f",
+      "fixtureSha256": "8df55045119be7c30e63e9109ad614dae2be0cbc3a644b54c60f98cc962110d3"
+    },
+    "savedTransaction": {
+      "reportPath": "spec/compatibility/closure/evidence/FS-DATA-WRITE-stream-transaction-current-saved-replay.json",
+      "reportSha256": "53a5e9ada6c17acf49619576977d0efcdfa9b1219e32239d5d7787043e974c72"
+    }
+  }
+}

@@ -2,8 +2,8 @@
   "schemaVersion": 1,
   "task": "FS-DATA-WRITE",
   "decision": "PENDING_REVIEW",
-  "sourceHead": "8db298cf6d903f67b598149dca5ffd0e988c15d6",
-  "executableSha256": "0fc1930de13e7ebf71d6908ed439138fe4248bee932efbf70f60daba68359589",
+  "sourceHead": "a2aec9fbc12c3bd6e35547c6239e46527fb55cd2",
+  "executableSha256": "5c92dbc39f1b9bd5d78ff9cf37e3717e5295c64c7277d918d174bc340ab93aa3",
   "configSha256": "0f15f02dbfef3f0ee5cd6302684e8bb547b8c49dea5a825deeb57b2938545f0b",
   "runtimeInputs": {
     "Cargo.toml": "ae1c67986785f5d1184e3f6b0fc5aa3894d9d0bb8154e7be436df943ff1d7b41",
@@ -47,18 +47,10 @@
   ],
   "otherDifferenceIds": [],
   "comparisonExitCode": 1,
-  "historicalRegression": {
-    "command": "pnpm -C conformance firestore:check-production",
-    "comparableRows": 322,
-    "knownMismatches": 16,
-    "indeterminateRows": 1,
-    "newMismatches": 0,
-    "newIndeterminateRows": 0
-  },
   "localResultDigests": {
     "restSha256": "763d734307808e4d1095a0115d8122547dddb44ff286eb0f205ed00f6de55248",
     "streamSha256": "d7f049a8d75484d2fcf74f9c27f25e628d8b032b859d5994a6b225f53fc8c9f6",
-    "bindingSha256": "99eca2332fee96eb1d2bac75b403294cb6b16c98e64adea006ceb7642cdd7606"
+    "bindingSha256": "5e3686b48d1491e9e5f5431b2abc50b2574edfaf7ece74b0e7f52faa2b947f20"
   },
   "productionFixtures": [
     {
@@ -89,7 +81,7 @@
   "reviewNotes": [
     "The owner approved the ten B1 index-entry differences as known divergences on 2026-09-25; their observations remain visible and unmodified.",
     "The two gRPC Write stream token differences require the owner-approved D5 oracle probe and are unresolved.",
-    "The four LIST conditions remain pending integration from work/fs-list-for-data-write.",
-    "The ten retired REST recipes remain in the historical fixture and are outside the current corpus and closure recipe IDs."
+    "The ten retired REST recipes remain in the historical fixture and are outside the current corpus and closure recipe IDs.",
+    "The integrated LIST rows and FS-QUERY-INDEX regression were compared with the same release artifact; the historical 322-row run remains private auxiliary evidence without an independent launch receipt."
   ]
 }

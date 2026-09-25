@@ -31,10 +31,16 @@ env:
   #     (already failing before 866bb0634);
   #   - an O7/O8 campaign test that fails only on the CI runner;
   #   - an O7/O8 campaign test that alone runs longer than the 45-minute job limit
-  #     (test_request_bytes_admission.py, about 56 minutes on the CI runner).
+  #     (test_request_bytes_admission.py, about 56 minutes on the CI runner);
   #   - a lane's O2/O8 campaign for fireemu-35fe6 that the lane now closes on the
   #     sandbox instead (owner decision 2026-09-25, AUTH-MFA:
-  #     auth-totp-enroll/test_mfa_shadow_binding.py, whose shadow is not re-taken).
+  #     auth-totp-enroll/test_mfa_shadow_binding.py, whose shadow is not re-taken);
+  #   - the FS-RULES O5 production campaign for fireemu-35fe6 (fs-rules-publication), which
+  #     the FS-RULES sandbox harness (conformance/src/fs-rules, fireemu-oracle-idp) replaced
+  #     as the lane's closure evidence (owner decision 2026-09-25). Its collector tests
+  #     predate the 2026-09-22 Rules management session requirement, and
+  #     test_o5_user_token_comparator_v2.py takes about 6 hours, longer than the
+  #     compat-broad-retired job allows: run it by hand, in chunks of tests.
   # tools/compat-inventory/closure_records.py refuses a closure that cites a path here,
   # and tools/compat-inventory/broad_shards.py leaves these files out of the shards.
   RETIRED_SUITES: |
@@ -52,6 +58,31 @@ env:
     tools/compat-broad/fs-request-bytes-boundary/test_request_bytes_production.py
     tools/compat-broad/fs-request-bytes-boundary/test_request_bytes_recovery_campaign.py
     tools/compat-broad/fs-request-bytes-boundary/test_request_bytes_sentinel.py
+    tools/compat-broad/fs-rules-publication/test_o5_collector_journal_recovery.py
+    tools/compat-broad/fs-rules-publication/test_o5_local_boundary.py
+    tools/compat-broad/fs-rules-publication/test_o5_parent_integrity.py
+    tools/compat-broad/fs-rules-publication/test_o5_recovery_integrity.py
+    tools/compat-broad/fs-rules-publication/test_o5_rules_case.py
+    tools/compat-broad/fs-rules-publication/test_o5_rules_comparator.py
+    tools/compat-broad/fs-rules-publication/test_o5_rules_manifest.py
+    tools/compat-broad/fs-rules-publication/test_o5_rules_shadow.py
+    tools/compat-broad/fs-rules-publication/test_o5_setup_recovery.py
+    tools/compat-broad/fs-rules-publication/test_o5_user_token_campaign.py
+    tools/compat-broad/fs-rules-publication/test_o5_user_token_case.py
+    tools/compat-broad/fs-rules-publication/test_o5_user_token_collector.py
+    tools/compat-broad/fs-rules-publication/test_o5_user_token_collector_bound.py
+    tools/compat-broad/fs-rules-publication/test_o5_user_token_comparator.py
+    tools/compat-broad/fs-rules-publication/test_o5_user_token_comparator_v2.py
+    tools/compat-broad/fs-rules-publication/test_o5_user_token_descriptor.py
+    tools/compat-broad/fs-rules-publication/test_o5_user_token_https_worker.py
+    tools/compat-broad/fs-rules-publication/test_o5_user_token_identity_proof.py
+    tools/compat-broad/fs-rules-publication/test_o5_user_token_production.py
+    tools/compat-broad/fs-rules-publication/test_o5_user_token_production_bridge.py
+    tools/compat-broad/fs-rules-publication/test_o5_user_token_remote_transport.py
+    tools/compat-broad/fs-rules-publication/test_o5_user_token_semantic_admission.py
+    tools/compat-broad/fs-rules-publication/test_o5_user_token_semantics.py
+    tools/compat-broad/fs-rules-publication/test_o5_user_token_shadow.py
+    tools/compat-broad/fs-rules-publication/test_o5_user_token_spec.py
     tools/compat-broad/fs-write-limits/test_limits_03_baseline_prep.py
     tools/compat-broad/fs-write-limits/test_limits_03_failed_apply_recovery.py
     tools/compat-broad/fs-write-limits/test_limits_03_held_recovery.py
@@ -79,7 +110,7 @@ jobs:
         run: |
           uv run --project tools/compat-inventory --locked --python 3.12 tools/compat-inventory/closure_records.py --check
           uv run --project tools/compat-inventory --locked --python 3.12 -m pytest tools/compat-inventory/test_closure_records.py tools/compat-inventory/test_broad_shards.py -q
-          uv run --project tools/compat-inventory --locked --python 3.12 tools/compat-inventory/broad_shards.py --shards 22
+          uv run --project tools/compat-inventory --locked --python 3.12 tools/compat-inventory/broad_shards.py --shards 7
       - uses: pnpm/action-setup@f40ffcd9367d9f12939873eb1018b921a783ffaa
         with:
           version: 10.32.1
@@ -253,10 +284,9 @@ jobs:
         # Shards are planned from measured per-file durations
         # (tools/compat-inventory/broad-test-durations.json); broad_shards.py refuses a
         # plan in which any shard would need more than 35 minutes, and runs a file longer
-        # than 28 minutes as chunks of whole tests. More than half of the total time is
-        # fs-rules-publication/test_o5_user_token_comparator_v2.py (178 tests, about 2
-        # minutes each), whose chunks spread over 21 of the 22 shards.
-        shard: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21]
+        # than 28 minutes as chunks of whole tests. The longest shard is one file that
+        # cannot be split further (about 27 minutes); seven shards leave headroom.
+        shard: [0, 1, 2, 3, 4, 5, 6]
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
@@ -268,7 +298,7 @@ jobs:
         env:
           PYTEST_SHARD: ${{ matrix.shard }}
         run: |
-          uv run --project tools/compat-inventory --locked --python 3.12 tools/compat-inventory/broad_shards.py --shards 22 --shard "$PYTEST_SHARD" > "$RUNNER_TEMP/shard-files.txt"
+          uv run --project tools/compat-inventory --locked --python 3.12 tools/compat-inventory/broad_shards.py --shards 7 --shard "$PYTEST_SHARD" > "$RUNNER_TEMP/shard-files.txt"
           mapfile -t files < "$RUNNER_TEMP/shard-files.txt"
           echo "shard $PYTEST_SHARD: ${#files[@]} files"
           uv run --project tools/compat-inventory --locked --python 3.12 -m pytest "${files[@]}" -q

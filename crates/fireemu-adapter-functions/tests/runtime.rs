@@ -2095,6 +2095,14 @@ async fn reset_discards_in_flight_work() {
 
 #[tokio::test]
 async fn a_spontaneous_recovery_cannot_replace_a_newer_reload() {
+    let dir = std::env::temp_dir().join(format!(
+        "fireemu-recovery-reload-gate-{}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let gate = dir.join("hello-gate");
+    std::fs::create_dir(&gate).unwrap();
     let script = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fake_runner.py");
     let fast = SpawnSpec {
         command: vec!["python3".to_owned(), script.to_owned()],
@@ -2103,7 +2111,10 @@ async fn a_spontaneous_recovery_cannot_replace_a_newer_reload() {
         hello_timeout: RUNNER_HELLO_TIMEOUT,
     };
     let mut slow = fast.clone();
-    slow.env = vec![("FIREEMU_FAKE_HELLO_DELAY_MS".to_owned(), "1000".to_owned())];
+    slow.env = vec![(
+        "FIREEMU_FAKE_HELLO_GATE".to_owned(),
+        gate.display().to_string(),
+    )];
     let initial = Arc::new(Runner::spawn_spec(&fast).await.unwrap());
     let manifest = parse_manifest(initial.hello().manifest.as_ref().unwrap()).unwrap();
     let runtime = FunctionsRuntime::new(
@@ -2138,7 +2149,13 @@ async fn a_spontaneous_recovery_cannot_replace_a_newer_reload() {
                 .await
         })
     };
-    tokio::time::sleep(Duration::from_millis(50)).await;
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while !gate.join("waiting").is_file() {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("the stale recovery reaches its hello gate before reload");
     assert!(
         !recovering.is_finished(),
         "recovery is in flight before reload"
@@ -2153,6 +2170,7 @@ async fn a_spontaneous_recovery_cannot_replace_a_newer_reload() {
             cleanup_dir: None,
         })
         .unwrap();
+    std::fs::write(gate.join("release"), b"").unwrap();
     assert_eq!(recovering.await.unwrap().unwrap().status, 200);
     assert!(Arc::ptr_eq(&runtime.runner(), &replacement));
     let current = runtime
@@ -2167,6 +2185,7 @@ async fn a_spontaneous_recovery_cannot_replace_a_newer_reload() {
         200
     );
     runtime.shutdown().await;
+    std::fs::remove_dir_all(dir).unwrap();
 }
 
 #[tokio::test]

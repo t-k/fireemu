@@ -709,11 +709,16 @@ export const REOBSERVED = {
   "auth-mfa/totp/sign-in#older-unused-code": "auth-mfa/totp/quota-free#older-unused-code",
 };
 
-/** An indeterminate row of [`REOBSERVED`] passes only when its re-observation matched. */
-export function reobservedStatus({ row, status }, statuses) {
-  const again = REOBSERVED[row];
+/**
+ * An indeterminate row of [`REOBSERVED`] passes only when its re-observation matched and
+ * fireemu's own answer on the row is the re-observed production answer (so fireemu's own
+ * quota refusal, a server error or an acceptance never passes).
+ */
+export function reobservedStatus({ row, status, fireemu }, rowsByName) {
+  const again = rowsByName.get(REOBSERVED[row]);
   if (status !== "INDETERMINATE" || again === undefined) return status;
-  return statuses.get(again) === "MATCH" ? "REOBSERVED_MATCH" : status;
+  const same = again.status === "MATCH" && !isTransient(fireemu) && sameRecording(again.production, fireemu);
+  return same ? "REOBSERVED_MATCH" : status;
 }
 
 export function classify({ stale, production, alternative, fireemu, timing = [] }) {
@@ -763,8 +768,8 @@ async function check() {
       });
     }
   }
-  const statuses = new Map(rows.map((r) => [r.row, r.status]));
-  for (const row of rows) row.status = reobservedStatus(row, statuses);
+  const rowsByName = new Map(rows.map((r) => [r.row, { status: r.status, production: r.production }]));
+  for (const row of rows) row.status = reobservedStatus(row, rowsByName);
   const known = new Set(PROGRAMS.map((p) => p.id));
   const orphans = Object.keys(fixture.programs).filter((id) => !known.has(id));
   const summary = {};

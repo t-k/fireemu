@@ -336,3 +336,46 @@ test("each verified condition's row counts are its comparisons' own", () => {
     assert.deepEqual(counts, condition.evidence.rows, condition.conditionId);
   }
 });
+
+test("the lifetime programs sample exactly the decided ages (M4, M8, M13)", async () => {
+  const { PROGRAMS } = await import("./auth-mfa/corpus.mjs");
+  const ages = (programId, prefix) => {
+    const { steps } = PROGRAMS.find(({ id }) => id === programId);
+    return steps.filter(({ id, age }) => id.startsWith(prefix) && age).map(({ age }) => age.seconds);
+  };
+  assert.deepEqual(ages("auth-mfa/lifetime-short", "aged-pending-q"), [60, 120, 180, 240, 290]);
+  assert.deepEqual(ages("auth-mfa/lifetime-short", "sms-start-aged-m"), [150, 300]);
+  assert.deepEqual(ages("auth-mfa/lifetime-short", "aged-token-start-r"), [240, 330]);
+  assert.deepEqual(ages("auth-mfa/lifetime-sms", "sms-start-aged-m"), [450, 600, 1800]);
+});
+
+test("an SMS pending row's control is a new sign-in of the same account that completes", async () => {
+  const { PROGRAMS } = await import("./auth-mfa/corpus.mjs");
+  for (const programId of ["auth-mfa/lifetime-short", "auth-mfa/lifetime-sms"]) {
+    const { steps } = PROGRAMS.find(({ id }) => id === programId);
+    const byId = new Map(steps.map((step) => [step.id, step]));
+    for (const aged of steps.filter(({ id }) => /^aged-pending-m\d+$/.test(id))) {
+      const name = aged.id.replace("aged-pending-", "");
+      const index = steps.indexOf(aged);
+      assert.deepEqual(
+        steps.slice(index + 1, index + 4).map(({ id }) => id),
+        [`control-pending-${name}`, `control-start-${name}`, `control-finalize-${name}`],
+        aged.id,
+      );
+      const source = byId.get(aged.body.mfaPendingCredential.$from.split(":")[0]);
+      const control = byId.get(`control-pending-${name}`);
+      assert.equal(control.body.email, source.body.email, `${aged.id}: same account`);
+      for (const id of [`control-start-${name}`, `control-finalize-${name}`]) {
+        assert.equal(
+          byId.get(id).body.mfaPendingCredential.$from,
+          `control-pending-${name}:mfaPendingCredential`,
+          id,
+        );
+      }
+      assert.equal(
+        byId.get(`control-finalize-${name}`).body.phoneVerificationInfo.sessionInfo.$from,
+        `control-start-${name}:phoneResponseInfo.sessionInfo`,
+      );
+    }
+  }
+});

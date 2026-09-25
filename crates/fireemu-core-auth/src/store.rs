@@ -1368,6 +1368,18 @@ pub const SMS_CODE_TTL_SECONDS: i64 = 600;
 /// `auth-mfa/lifetime#aged-session-s1800`, both recordings; the run waits 1800 seconds and a
 /// 3-second margin). A longer lifetime is unobserved, so an older session is still refused.
 pub const OBSERVED_MFA_PHONE_ENROLLMENT_SECONDS: i64 = 1_805;
+/// Under production's second-factor rules a TOTP sign-in whose pending credential is at least
+/// this old is `TOTP_CHALLENGE_TIMEOUT`: production accepted one 293 seconds old and refused
+/// one 303 seconds old (sandbox recordings 2026-09-24, `auth-mfa/lifetime-short#aged-pending-q290`
+/// and `auth-mfa/lifetime#aged-pending-p300`). The ages between are unobserved; refusing only
+/// from the youngest refused age adds no refusal production was not seen to make.
+pub const OBSERVED_TOTP_CHALLENGE_TIMEOUT_SECONDS: i64 = 303;
+/// Under production's second-factor rules a TOTP enrollment start whose session signed in at
+/// least this long ago is `CREDENTIAL_TOO_OLD_LOGIN_AGAIN`: production started one with a
+/// sign-in 244 seconds old and refused one 333 seconds old (sandbox recording 2026-09-24,
+/// `auth-mfa/lifetime-short#aged-token-start-r240` and `-r330`). Refused from the youngest
+/// refused age only, as [`OBSERVED_TOTP_CHALLENGE_TIMEOUT_SECONDS`].
+pub const OBSERVED_TOTP_ENROLLMENT_LOGIN_AGE_SECONDS: i64 = 333;
 /// A pending second-factor sign-in (`mfaPendingCredential`) expires after an hour of virtual
 /// time. The official emulator's credential is stateless and never expires; this is a local
 /// lifecycle policy, not a claimed production value.
@@ -3348,6 +3360,24 @@ impl AuthStore {
         now.as_nanos() - created_at.as_nanos() > i128::from(ttl_seconds) * 1_000_000_000
     }
 
+    /// Whether `now` is at least `seconds` after `since` (an observed refusal age).
+    fn expired_at(since: LogicalInstant, seconds: i64, now: LogicalInstant) -> bool {
+        now.as_nanos() - since.as_nanos() >= i128::from(seconds) * 1_000_000_000
+    }
+
+    /// Whether a TOTP enrollment start is refused for its session's sign-in time
+    /// (`auth_time`, Unix seconds): under production's second-factor rules, at
+    /// [`OBSERVED_TOTP_ENROLLMENT_LOGIN_AGE_SECONDS`] or older.
+    #[must_use]
+    pub fn totp_enrollment_login_too_old(&self, auth_time: i64, now: LogicalInstant) -> bool {
+        self.second_factor_rules_are_production()
+            && Self::expired_at(
+                LogicalInstant::from_unix_seconds(auth_time),
+                OBSERVED_TOTP_ENROLLMENT_LOGIN_AGE_SECONDS,
+                now,
+            )
+    }
+
     /// Whether a phone code is past its lifetime: [`OBSERVED_MFA_PHONE_ENROLLMENT_SECONDS`] for
     /// a phone enrollment under production's second-factor rules, else
     /// [`SMS_CODE_TTL_SECONDS`].
@@ -4922,8 +4952,13 @@ impl AuthStore {
                 .get(uid)
                 .map(Arc::as_ref)
                 .ok_or(MfaError::UserNotFound)?;
-            if user.mfa.pending_sign_in(&pending.0).is_none() {
+            let Some(started) = user.mfa.pending_sign_in(&pending.0).map(|p| p.started_at) else {
                 return Err(MfaError::PendingSignInUnknown);
+            };
+            if self.second_factor_rules_are_production()
+                && Self::expired_at(started, OBSERVED_TOTP_CHALLENGE_TIMEOUT_SECONDS, now)
+            {
+                return Err(MfaError::TotpChallengeTimeout);
             }
             // Disabled after the first factor: refused before the code is matched, so
             // neither the pending credential nor the code's step is consumed. Production

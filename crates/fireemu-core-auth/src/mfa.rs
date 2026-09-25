@@ -459,6 +459,8 @@ pub enum MfaError {
     TooManyEnrollmentAttempts,
     /// The enrollment session was finalized already.
     EnrollmentAlreadyComplete,
+    /// A TOTP sign-in's pending credential is older than production accepts.
+    TotpChallengeTimeout,
     /// Unknown enrollment session.
     EnrollmentSessionUnknown,
     /// Unknown pending sign-in.
@@ -505,6 +507,7 @@ impl fmt::Display for MfaError {
             Self::EnrollmentSessionExpired => f.write_str("enrollment session expired"),
             Self::TooManyEnrollmentAttempts => f.write_str("too many enrollment attempts"),
             Self::EnrollmentAlreadyComplete => f.write_str("enrollment already complete"),
+            Self::TotpChallengeTimeout => f.write_str("TOTP challenge timeout"),
             Self::EnrollmentSessionUnknown => f.write_str("unknown enrollment session"),
             Self::PendingSignInUnknown => f.write_str("unknown pending sign-in"),
             Self::NoEnrolledFactor => f.write_str("no second factor enrolled"),

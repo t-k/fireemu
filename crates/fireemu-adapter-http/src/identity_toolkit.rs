@@ -1024,6 +1024,10 @@ fn mfa_error(e: &MfaError) -> JsonResponse {
             400,
             "MFA_ENROLLMENT_ALREADY_COMPLETE : This MFA enrollment has already been completed.",
         ),
+        MfaError::TotpChallengeTimeout => error(
+            400,
+            "TOTP_CHALLENGE_TIMEOUT : TOTP challenge timeout, provide first factor again.",
+        ),
         MfaError::EnrollmentSessionUnknown | MfaError::PendingSignInUnknown => {
             error(400, "INVALID_SESSION_INFO")
         }
@@ -1199,6 +1203,8 @@ fn verify_honouring_legacy(
 /// whose behaviour depends on the first factor).
 struct Session {
     uid: LocalId,
+    /// The token's `auth_time` (Unix seconds), when it carries one.
+    auth_time: Option<i64>,
     provider: String,
     second_factor: Option<SecondFactorAssertion>,
     extra_claims: CustomClaims,
@@ -1307,6 +1313,7 @@ fn verify_session_accepting(
         .user_by_id(&v.uid)
         .map(|u| Session {
             uid: u.local_id.clone(),
+            auth_time: decoded.payload.get("auth_time").and_then(JsonValue::as_i64),
             provider,
             second_factor,
             extra_claims,
@@ -2485,6 +2492,7 @@ fn dispatch_with_blocking_hook(
                 };
                 Some(Session {
                     uid: session.uid,
+                    auth_time: Some(claims.auth_time),
                     provider: claims.firebase.sign_in_provider,
                     second_factor: session.second_factor,
                     extra_claims: claims.custom,
@@ -9731,6 +9739,12 @@ fn mfa_enrollment_start(
     }
     if let Some(refusal) = phone_enrollment_refusal(store, &session, None, true) {
         return refusal;
+    }
+    if session
+        .auth_time
+        .is_some_and(|auth_time| store.totp_enrollment_login_too_old(auth_time, at))
+    {
+        return error(400, "CREDENTIAL_TOO_OLD_LOGIN_AGAIN");
     }
     match store.start_totp_enrollment(&uid, at) {
         Ok(material) => {

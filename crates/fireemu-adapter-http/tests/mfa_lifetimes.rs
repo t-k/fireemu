@@ -240,6 +240,15 @@ fn finalize_phone_step(s: &AuthState, pending: &Value, phone: &Value) -> (u16, V
     )
 }
 
+/// A session signed in now, through the account's phone factor.
+fn fresh_session(s: &AuthState) -> String {
+    let pending = pending_login(s);
+    let phone = start_phone_code(s, &pending);
+    let (status, signed_in) = finalize_phone_step(s, &pending, &phone);
+    assert_eq!(status, 200, "{signed_in}");
+    signed_in["idToken"].as_str().unwrap().to_owned()
+}
+
 fn finalize_totp_step(s: &AuthState, pending: &Value, factor: &Value, code: u32) -> (u16, Value) {
     post(
         s,
@@ -403,6 +412,16 @@ fn create(s: &AuthState, id_token: &str, object: Object, into: &mut Objects) {
         }
         Object::Pending => into.pending = pending_login(s),
         Object::TotpEnrollment => {
+            // Production's rules start a TOTP enrollment only with a recent sign-in (sandbox
+            // recording 2026-09-24, auth-mfa/lifetime-short#aged-token-start-r330).
+            let production = s.store.lock().unwrap().second_factor_rules_are_production();
+            let fresh;
+            let id_token = if production {
+                fresh = fresh_session(s);
+                fresh.as_str()
+            } else {
+                id_token
+            };
             let (session, secret) = start_totp_enrollment(s, id_token);
             into.enrollment_session = session;
             into.enrollment_secret = secret;
@@ -582,9 +601,10 @@ fn crossing_each_lifetime_alone_leaves_the_other_objects_usable() {
             );
             assert_eq!(sms, 0, "{context}");
             // Production's rules keep a pending credential after success: the SMS one always
-            // (refused or used), the other unless it expired.
+            // (refused or used), the other unless it expired, and the one of the fresh sign-in
+            // the TOTP enrollment started with.
             let expected_pending = if strict {
-                1 + usize::from(crossed != Object::Pending)
+                2 + usize::from(crossed != Object::Pending)
             } else {
                 usize::from(crossed == Object::Sms)
             };
@@ -633,10 +653,11 @@ fn crossing_each_lifetime_alone_leaves_the_other_objects_usable() {
                     let code = start_phone_code(&s, &objects.sms_pending);
                     let (status, signed) = finalize_phone_step(&s, &objects.sms_pending, &code);
                     assert_eq!(status, 200, "{context}: {signed}");
-                    // Production's rules keep both pending credentials after success.
+                    // Production's rules keep the pending credentials after success (with the
+                    // TOTP enrollment's fresh sign-in, three).
                     assert_eq!(
                         s.store.lock().unwrap().pending_sign_in_count(),
-                        2 * usize::from(strict)
+                        3 * usize::from(strict)
                     );
                 }
                 Object::Pending => {
@@ -646,7 +667,7 @@ fn crossing_each_lifetime_alone_leaves_the_other_objects_usable() {
                     assert_eq!(status, 200, "{context}: {signed}");
                     assert_eq!(
                         s.store.lock().unwrap().pending_sign_in_count(),
-                        2 * usize::from(strict)
+                        3 * usize::from(strict)
                     );
                 }
                 Object::TotpEnrollment => {
@@ -688,6 +709,23 @@ fn an_expired_totp_enrollment_is_session_expired_in_grace_and_unknown_after_it()
         };
         assert_refused(&refused, again, "after reap");
 
+        // Production's rules start a TOTP enrollment only with a recent sign-in (sandbox
+        // recording 2026-09-24, auth-mfa/lifetime-short#aged-token-start-r330).
+        let id_token = if strict {
+            let (status, refused) = post(
+                &s,
+                &format!("{V2}/accounts/mfaEnrollment:start"),
+                &json!({"idToken": id_token, "totpEnrollmentInfo": {}}),
+            );
+            assert_eq!(status, 400, "{refused}");
+            assert_eq!(
+                refused["error"]["message"],
+                "CREDENTIAL_TOO_OLD_LOGIN_AGAIN"
+            );
+            fresh_session(&s)
+        } else {
+            id_token
+        };
         // An untouched session is reaped by the sweep once the grace window has passed:
         // one lifetime under the official emulator's rules, a day under production's.
         let (second, second_secret) = start_totp_enrollment(&s, &id_token);
@@ -708,7 +746,9 @@ fn an_expired_totp_enrollment_is_session_expired_in_grace_and_unknown_after_it()
             .mfa
             .totp_factors()
             .is_empty());
-        // The sign-up token still has 3600 s of life: a fresh session enrolls.
+        // The sign-up token still has 3600 s of life: a fresh enrollment session enrolls (under
+        // production's rules with a fresh sign-in).
+        let id_token = if strict { fresh_session(&s) } else { id_token };
         let (third, third_secret) = start_totp_enrollment(&s, &id_token);
         let (status, enrolled) = finalize_totp_enrollment(&s, &id_token, &third, &third_secret);
         assert_eq!(status, 200, "{enrolled}");

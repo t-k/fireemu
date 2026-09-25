@@ -43,7 +43,7 @@ use fireemu_core_auth::jwt::{
 use fireemu_core_auth::store::AuthStore;
 use fireemu_core_firestore::field_path::FieldPath;
 use fireemu_core_firestore::path::DocumentPath;
-use fireemu_core_firestore::query::{Direction, FieldOp, FilterExpr, Query, UnaryOp};
+use fireemu_core_firestore::query::{Direction, FieldOp, FilterExpr, Query, QueryScope, UnaryOp};
 use fireemu_core_firestore::store::{
     CommitVersion, Document, FirestoreState, Precondition, Write, WriteOp,
 };
@@ -1389,8 +1389,53 @@ fn tighten(mut range: ValueRange, (bound, is_lower): (RangeBound, bool)) -> Opti
 /// while `orderBy is list` does not (`conformance/rules-programs.json`,
 /// `query-order-by-shape`). Without an explicit ordering it is `null`, as `limit` is
 /// without a limit.
+/// The name of the ninth `request.query` key. The FS-RULES exploration (2026-09-25, not
+/// evidence) read its first 12 characters, `selectOnlyKe`, a length over 12 and a bool; the
+/// rest of the name is inferred until it is read.
+pub const REQUEST_QUERY_KEYS_ONLY_KEY: &str = "selectOnlyKeys";
+
+/// `request.query` as production builds it: the three documented keys and six more (FS-RULES
+/// exploration 2026-09-25, not evidence). Observed for a plain root query: `kind` is the
+/// collection id, `parent` null, `allDescendants` and `distinct` false, `groupBy` a map and the
+/// keys-only flag a bool. Unobserved: `kind` of a query without a collection id (empty here),
+/// `parent` below a document (its path here), `groupBy`'s members (none here) and the keys-only
+/// flag's value (true here only for a projection of exactly `__name__`).
 fn query_value(query: &Query) -> RulesValue {
+    let (parent, kind, all_descendants) = match &query.scope {
+        QueryScope::Collection {
+            parent,
+            collection_id,
+        } => (parent, collection_id.as_str(), false),
+        QueryScope::CollectionGroup {
+            parent,
+            collection_id,
+        } => (parent, collection_id.as_str(), true),
+        QueryScope::KindlessAllDescendants { parent } => (parent, "", true),
+        QueryScope::KindlessChildren { parent } => (parent, "", false),
+    };
     let mut m = BTreeMap::new();
+    m.insert(
+        "allDescendants".to_owned(),
+        RulesValue::Bool(all_descendants),
+    );
+    m.insert("distinct".to_owned(), RulesValue::Bool(false));
+    m.insert("groupBy".to_owned(), RulesValue::Map(BTreeMap::new()));
+    m.insert("kind".to_owned(), RulesValue::String(kind.to_owned()));
+    m.insert(
+        "parent".to_owned(),
+        parent.as_ref().map_or(RulesValue::Null, |document| {
+            RulesValue::Path(rules_document_segments(document))
+        }),
+    );
+    m.insert(
+        REQUEST_QUERY_KEYS_ONLY_KEY.to_owned(),
+        RulesValue::Bool(
+            query
+                .projection
+                .as_ref()
+                .is_some_and(|fields| fields.len() == 1 && fields[0].is_document_name()),
+        ),
+    );
     m.insert(
         "limit".to_owned(),
         query

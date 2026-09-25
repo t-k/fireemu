@@ -1151,6 +1151,44 @@ fn source_scan_retry_delay(reason: Option<&str>) -> Duration {
     }
 }
 
+async fn changed_source_stamp(
+    root: &Path,
+    codebase: &FunctionsCodebase,
+    scan_budget: &FunctionsSourceScanBudget,
+    observed_stamp: &mut Option<FunctionsSourceStamp>,
+    last_scan_error: &mut bool,
+    retry_delay: &mut Duration,
+) -> Option<FunctionsSourceStamp> {
+    let next_stamp = match scan_budget.scan(root, &codebase.ignore).await {
+        Ok(stamp) => {
+            *last_scan_error = false;
+            *retry_delay = source_scan_retry_delay(None);
+            stamp
+        }
+        Err(reason) => {
+            *retry_delay = source_scan_retry_delay(Some(&reason));
+            warn_reload_once(last_scan_error, &codebase.codebase, "scan", &reason);
+            return None;
+        }
+    };
+    if *observed_stamp == Some(next_stamp) {
+        return None;
+    }
+    tokio::time::sleep(Duration::from_millis(250)).await;
+    let stable_stamp = scan_budget
+        .scan(root, &codebase.ignore)
+        .await
+        .unwrap_or(next_stamp);
+    if stable_stamp != next_stamp {
+        return None;
+    }
+    if observed_stamp.map(|stamp| stamp.content_signature) == Some(stable_stamp.content_signature) {
+        *observed_stamp = Some(stable_stamp);
+        return None;
+    }
+    Some(stable_stamp)
+}
+
 async fn supervise_codebase_reloads(
     weak_runtime: std::sync::Weak<FunctionsRuntime>,
     cfg: RuntimeConfig,
@@ -1174,35 +1212,19 @@ async fn supervise_codebase_reloads(
         let Some(runtime) = weak_runtime.upgrade() else {
             return;
         };
-        let next_stamp = match resources.scan_budget.scan(&root, &codebase.ignore).await {
-            Ok(stamp) => {
-                last_scan_error = false;
-                retry_delay = source_scan_retry_delay(None);
-                stamp
-            }
-            Err(reason) => {
-                retry_delay = source_scan_retry_delay(Some(&reason));
-                warn_reload_once(&mut last_scan_error, &codebase.codebase, "scan", &reason);
-                continue;
-            }
+        let Some(stable_stamp) = changed_source_stamp(
+            &root,
+            &codebase,
+            &resources.scan_budget,
+            &mut observed_stamp,
+            &mut last_scan_error,
+            &mut retry_delay,
+        )
+        .await
+        else {
+            continue;
         };
-        if observed_stamp == Some(next_stamp) {
-            continue;
-        }
-        tokio::time::sleep(Duration::from_millis(250)).await;
-        let stable_stamp = resources
-            .scan_budget
-            .scan(&root, &codebase.ignore)
-            .await
-            .unwrap_or(next_stamp);
-        if stable_stamp != next_stamp {
-            continue;
-        }
         let stable = stable_stamp.content_signature;
-        if observed_stamp.map(|stamp| stamp.content_signature) == Some(stable) {
-            observed_stamp = Some(stable_stamp);
-            continue;
-        }
         let snapshot = match resources
             .scan_budget
             .snapshot(&root, &codebase.ignore)
@@ -5955,7 +5977,7 @@ mod tests {
         std::fs::create_dir_all(root.join("nested")).unwrap();
         std::fs::write(root.join("nested/module.js"), "module.exports = 1;").unwrap();
 
-        FunctionsSourceSnapshot::new(root.clone())
+        FunctionsSourceSnapshot::new(root.clone(), root.clone())
             .remove()
             .await
             .unwrap();

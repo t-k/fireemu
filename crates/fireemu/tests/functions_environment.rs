@@ -17,9 +17,6 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
 
-#[cfg(unix)]
-use std::os::unix::fs::PermissionsExt;
-
 fn sdk_root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tools/sdk-smoke")
 }
@@ -270,7 +267,7 @@ const path = require('node:path');
     const value = await get();
     if (value.marker === 'after' && value.cwd !== sourceCwd) {
       assert.equal(path.dirname(value.cwd), fs.realpathSync(os.tmpdir()));
-      assert.match(path.basename(value.cwd), /^fireemu-functions-\d+-\d+$/);
+      assert.match(path.basename(value.cwd), /^fireemu-functions-\d+-\d+(?:-n\d+)?$/);
       return;
     }
     await new Promise(resolve => setTimeout(resolve, 100));

@@ -183,12 +183,31 @@ pub async fn write_stream(
                 break;
             }
         };
+        // Production evaluates an empty write after anything the client already sent: a client
+        // that half-closed right behind it gets a stream that ends OK (trailing-metadata),
+        // one still waiting for the answer gets `empty write operation`
+        // (response-before-half-close). Look once, without waiting.
+        if state.parent.is_some()
+            && req.writes.iter().any(|write| write.operation.is_none())
+            && already_half_closed(&mut inbound)
+        {
+            break;
+        }
         let outcome = handle_write_request(&ctx, &mut state, &req);
         let stop = outcome.is_err();
         if tx.send(outcome).await.is_err() || stop {
             break;
         }
     }
+}
+
+/// Whether the client side of a stream has already ended, without waiting for it.
+fn already_half_closed<S: tokio_stream::Stream + Unpin>(inbound: &mut S) -> bool {
+    let mut cx = std::task::Context::from_waker(std::task::Waker::noop());
+    matches!(
+        std::pin::Pin::new(inbound).poll_next(&mut cx),
+        std::task::Poll::Ready(None)
+    )
 }
 
 fn token_bytes(prefix: u64, n: u64) -> Vec<u8> {
@@ -1760,5 +1779,95 @@ mod refresh_tests {
                     .expect("unbounded query stays incremental");
         }
         assert_eq!(examined, 50);
+    }
+}
+
+#[cfg(test)]
+mod empty_write_tests {
+    use super::*;
+    use fireemu_core_firestore::index::{IndexSet, IndexValidationPolicy, PlanningContext};
+    use fireemu_core_session::clock::VirtualClock;
+    use fireemu_core_types::edition::{FirestoreApiMode, FirestoreEdition};
+    use fireemu_core_types::time::LogicalInstant;
+
+    fn context() -> StreamContext {
+        let gateway = Gateway {
+            enforce_limits: true,
+            ctx: PlanningContext {
+                edition: FirestoreEdition::Standard,
+                api_mode: FirestoreApiMode::Native,
+                policy: IndexValidationPolicy::Production,
+            },
+            indexes: IndexSet::default(),
+        };
+        let clock = Arc::new(std::sync::Mutex::new(VirtualClock::new(
+            LogicalInstant::UNIX_EPOCH,
+        )));
+        let local = Arc::new(LocalBackend::new(gateway.clone(), clock, 7));
+        StreamContext {
+            local: local.clone(),
+            gateway: Arc::new(gateway),
+            rules: None,
+            principal: Principal::Owner,
+            authorization: None,
+            epoch: local.epoch(),
+            app_check: None,
+        }
+    }
+
+    /// Runs a stream over `requests`; `half_closed` drops the client side before the server
+    /// reads, as when a client half-closes right after its last message.
+    async fn run(half_closed: bool) -> Vec<Result<pb::WriteResponse, Status>> {
+        let (client, inbound) = mpsc::channel(4);
+        client
+            .send(Ok(pb::WriteRequest {
+                database: "projects/demo-app/databases/(default)".to_owned(),
+                ..Default::default()
+            }))
+            .await
+            .unwrap();
+        client
+            .send(Ok(pb::WriteRequest {
+                writes: vec![pb::Write::default()],
+                ..Default::default()
+            }))
+            .await
+            .unwrap();
+        let open = (!half_closed).then_some(client);
+        let (tx, mut rx) = mpsc::channel(4);
+        write_stream(
+            context(),
+            tokio_stream::wrappers::ReceiverStream::new(inbound),
+            tx,
+        )
+        .await;
+        drop(open);
+        let mut out = Vec::new();
+        while let Some(item) = rx.recv().await {
+            out.push(item);
+        }
+        out
+    }
+
+    /// `writes/write-stream-terminal/response-before-half-close` (recorded twice on
+    /// 2026-09-25): a client still waiting for the answer gets `empty write operation`.
+    /// `writes/write-stream-terminal/trailing-metadata`: a client that half-closed right after
+    /// the empty write gets a stream that ends OK. Production evaluates the empty write after
+    /// it has seen the half-close; which one it sees first depends on arrival order.
+    #[tokio::test]
+    async fn an_empty_write_is_refused_only_while_the_client_is_still_sending() {
+        let open = run(false).await;
+        assert_eq!(open.len(), 2, "{open:?}");
+        assert!(open[0].is_ok());
+        let refused = open[1].as_ref().unwrap_err();
+        assert_eq!(refused.code(), tonic::Code::InvalidArgument);
+        assert_eq!(refused.message(), "empty write operation");
+
+        let closed = run(true).await;
+        assert_eq!(closed.len(), 1, "{closed:?}");
+        assert!(
+            closed[0].is_ok(),
+            "only the handshake answer, then an OK end"
+        );
     }
 }

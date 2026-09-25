@@ -758,6 +758,17 @@ fn normalize_transport_status(headers: &mut HeaderMap, enforce_limits: bool) {
     }
 }
 
+/// Moves a trailers-only answer's status and metadata out of its headers, leaving only the
+/// content type, and returns them as the trailers of the same answer.
+fn split_trailers_only(headers: &mut HeaderMap) -> HeaderMap {
+    let content_type = headers.remove(hyper::header::CONTENT_TYPE);
+    let trailers = std::mem::take(headers);
+    if let Some(value) = content_type {
+        headers.insert(hyper::header::CONTENT_TYPE, value);
+    }
+    trailers
+}
+
 fn normalize_transport_frame(
     mut frame: Frame<Bytes>,
     enforce_limits: bool,
@@ -867,6 +878,24 @@ where
                             // A `dropConnection` fault: the stream is reset (HTTP/2) or
                             // the connection closed (HTTP/1) instead of delivering it.
                             return Err(dropped());
+                        }
+                        if enforce_limits && response.headers().contains_key(Status::GRPC_STATUS) {
+                            // tonic answers an error trailers-only; production's front end sends
+                            // headers and then trailers (FS-DATA-WRITE decision 1, 2026-09-25).
+                            let trailers = split_trailers_only(response.headers_mut());
+                            let frame = normalize_transport_frame(
+                                Frame::trailers(trailers),
+                                enforce_limits,
+                                write_stream,
+                            );
+                            let body = http_body_util::StreamBody::new(tokio_stream::once(Ok::<
+                                _,
+                                BoxError,
+                            >(
+                                frame
+                            )))
+                            .boxed_unsync();
+                            return Ok::<_, std::io::Error>(response.map(|_| body));
                         }
                         return Ok::<_, std::io::Error>(response.map(|b| {
                             b.map_frame(move |frame| {

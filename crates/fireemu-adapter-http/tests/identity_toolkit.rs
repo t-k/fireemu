@@ -11077,6 +11077,187 @@ fn patch_sign_in(s: &AuthState, mask: &str, body: &Value) -> (u16, Value) {
     )
 }
 
+fn with_registry(mut s: AuthState) -> AuthState {
+    s.registry = Some(Arc::new(AuthRegistry::new("demo-app", s.store.clone())));
+    s
+}
+
+/// The registry path of a config write keeps the profile's policy rule, stores written and
+/// derived members, and normalizes a whole `quota` mask, as the path without a registry does.
+#[test]
+fn config_writes_through_the_registry_behave_as_without_it() {
+    for strict in [true, false] {
+        let s = with_registry(if strict { strict_state() } else { state() });
+        let (status, answer) = patch_sign_in(
+            &s,
+            "passwordPolicyConfig",
+            &json!({"passwordPolicyConfig": {"passwordPolicyEnforcementState": "ENFORCE"}}),
+        );
+        assert_eq!(
+            status,
+            if strict { 400 } else { 200 },
+            "strict {strict}: {answer}"
+        );
+        let (status, answer) = patch_sign_in(
+            &s,
+            "mobileLinksConfig.domain",
+            &json!({"mobileLinksConfig": {"domain": "FIREBASE_DYNAMIC_LINK_DOMAIN"}}),
+        );
+        assert_eq!(status, 200, "{answer}");
+        let (status, answer) = patch_sign_in(
+            &s,
+            "quota",
+            &json!({"quota": {"signUpQuotaConfig": {"quota": "0", "quotaDuration": "3600s", "startTime": "2030-01-01T00:00:00Z"}}}),
+        );
+        assert_eq!(status, 200, "{answer}");
+        let (_, read) = admin(&s, "GET", PROJECT_CONFIG, &Value::Null);
+        assert_eq!(
+            read["mobileLinksConfig"]["domain"], "FIREBASE_DYNAMIC_LINK_DOMAIN",
+            "{read}"
+        );
+        assert_eq!(
+            read["quota"]["signUpQuotaConfig"],
+            json!({"quotaDuration": "3600s", "startTime": "2030-01-01T00:00:00Z"}),
+            "strict {strict}: {read}"
+        );
+        // A tenant selector that disagrees with itself is not taken for an unknown tenant.
+        let (status, refused) = admin(
+            &s,
+            "GET",
+            &format!("{V2}/passwordPolicy?key=fake-api-key&tenantId=tenant-a"),
+            &json!({"tenantId": "tenant-b"}),
+        );
+        assert_eq!(
+            (status, refused["error"]["message"].as_str()),
+            (400, Some("TENANT_ID_MISMATCH")),
+            "{refused}"
+        );
+    }
+}
+
+/// A config write to a routed project that changes only its policy, quota, providers or
+/// stored members installs the project, as a change of the project config does.
+#[test]
+fn a_routed_project_is_installed_by_any_config_write() {
+    for (project, mask, body) in [
+        (
+            "routed-policy",
+            "passwordPolicyConfig",
+            json!({"passwordPolicyConfig": {
+                "passwordPolicyEnforcementState": "ENFORCE",
+                "passwordPolicyVersions": [{"customStrengthOptions": {"minPasswordLength": 8}}],
+            }}),
+        ),
+        (
+            "routed-quota",
+            "quota.signUpQuotaConfig",
+            json!({"quota": {"signUpQuotaConfig": {"quota": "5", "quotaDuration": "3600s", "startTime": "2030-01-01T00:00:00Z"}}}),
+        ),
+        (
+            "routed-sign-in",
+            "signIn.anonymous.enabled",
+            json!({"signIn": {"anonymous": {"enabled": false}}}),
+        ),
+        (
+            "routed-member",
+            "mobileLinksConfig.domain",
+            json!({"mobileLinksConfig": {"domain": "FIREBASE_DYNAMIC_LINK_DOMAIN"}}),
+        ),
+    ] {
+        let mut s = state();
+        let registry = Arc::new(AuthRegistry::new("demo-app", s.store.clone()));
+        s.registry = Some(registry.clone());
+        s.allow_routed_projects = true;
+        let (status, answer) = admin(
+            &s,
+            "PATCH",
+            &format!("/identitytoolkit.googleapis.com/admin/v2/projects/{project}/config?updateMask={mask}"),
+            &body,
+        );
+        assert_eq!(status, 200, "{project}: {answer}");
+        assert_eq!(registry.routed_count(), 1, "{project}");
+    }
+}
+
+/// reCAPTCHA members as production stores them: a deep write of a true account defender is
+/// kept; writing a member's initial value leaves it unreported in the emulator profile; a
+/// written SMS region default replaces an allowlist.
+#[test]
+fn stored_members_keep_true_switches_and_drop_initial_values() {
+    let s = strict_state();
+    let (status, answer) = patch_sign_in(
+        &s,
+        "recaptchaConfig.useAccountDefender",
+        &json!({"recaptchaConfig": {"useAccountDefender": true}}),
+    );
+    assert_eq!(status, 200, "{answer}");
+    assert_eq!(
+        answer["recaptchaConfig"]["useAccountDefender"], true,
+        "{answer}"
+    );
+
+    let s = state();
+    let (status, _) = patch_sign_in(
+        &s,
+        "mobileLinksConfig.domain",
+        &json!({"mobileLinksConfig": {"domain": "HOSTING_DOMAIN"}}),
+    );
+    assert_eq!(status, 200);
+    let (_, read) = admin(&s, "GET", PROJECT_CONFIG, &Value::Null);
+    assert!(read.get("mobileLinksConfig").is_none(), "{read}");
+
+    let s = strict_state();
+    for (mask, body) in [
+        (
+            "smsRegionConfig",
+            json!({"smsRegionConfig": {"allowlistOnly": {"allowedRegions": ["JP"]}}}),
+        ),
+        (
+            "smsRegionConfig.allowByDefault.disallowedRegions",
+            json!({"smsRegionConfig": {"allowByDefault": {"disallowedRegions": ["US"]}}}),
+        ),
+    ] {
+        let (status, answer) = patch_sign_in(&s, mask, &body);
+        assert_eq!(status, 200, "{answer}");
+    }
+    let (_, read) = admin(&s, "GET", PROJECT_CONFIG, &Value::Null);
+    assert_eq!(
+        read["smsRegionConfig"],
+        json!({"allowByDefault": {"disallowedRegions": ["US"]}}),
+        "{read}"
+    );
+    // A mask naming a parent of the test numbers checks them too.
+    let (status, refused) = patch_sign_in(
+        &s,
+        "signIn.phoneNumber",
+        &json!({"signIn": {"phoneNumber": {"enabled": true, "testPhoneNumbers": {"16505550101": "1"}}}}),
+    );
+    assert_eq!(
+        (status, refused["error"]["message"].as_str()),
+        (400, Some("INVALID_PHONE_NUMBER : Invalid format.")),
+        "{refused}"
+    );
+}
+
+/// Strict `createAuthUri` for a configured OIDC provider is not refused as unconfigured.
+#[test]
+fn create_auth_uri_of_a_configured_provider_is_not_refused() {
+    let s = strict_state();
+    let (status, created) = admin(
+        &s,
+        "POST",
+        "/identitytoolkit.googleapis.com/v2/projects/demo-app/oauthIdpConfigs?oauthIdpConfigId=oidc.acme",
+        &json!({"clientId": "acme-client", "issuer": "https://issuer.acme.example", "enabled": true, "responseType": {"idToken": true}}),
+    );
+    assert_eq!(status, 200, "{created}");
+    let (status, answer) = post(
+        &s,
+        &format!("{V1}/accounts:createAuthUri"),
+        &json!({"providerId": "oidc.acme", "continueUri": "http://localhost/finish"}),
+    );
+    assert_eq!(status, 501, "{answer}");
+}
+
 /// The emulator profile reports the sign-in providers once any one switch was written, and
 /// only then (the official emulator's document has no providers).
 #[test]

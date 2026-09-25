@@ -623,6 +623,7 @@ mod tests {
         assert_eq!(parse_integer(&json!(12.0), 32), Some(12));
         assert_eq!(parse_integer(&json!(12.5), 32), None);
         assert_eq!(parse_integer(&json!(1e19), 64), None);
+        assert_eq!(parse_integer(&json!(9.2e18), 64), None);
         assert_eq!(
             parse_integer(&json!(-9.1e18), 64),
             Some(-9_100_000_000_000_000_000)

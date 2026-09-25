@@ -494,8 +494,8 @@ const sms = program(
 // In auth-mfa/totp/sign-in production answered QUOTA_EXCEEDED to #replayed-enrollment-code
 // (recording 1) and #older-unused-code (both recordings), the fifth and sixth wrong codes on
 // that account. Here each check is the only wrong code on a new account: a factor enrolled
-// with its step-0 code, a sign-in with the step-4 code, then the check on a new pending
-// credential.
+// with its step-0 code, a sign-in with the code four steps after that sign-in's own send time
+// (offsets are relative to each row's send time), then the check on a new pending credential.
 const quotaFreeAccount = (n, check, code) => [
   adminCreate(`create-${n}`, n),
   signIn(`sign-in-${n}`, n),

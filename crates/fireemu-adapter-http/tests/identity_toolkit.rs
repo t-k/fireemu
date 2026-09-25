@@ -11029,6 +11029,79 @@ fn patch_sign_in(s: &AuthState, mask: &str, body: &Value) -> (u16, Value) {
     )
 }
 
+/// The reCAPTCHA config reads back as production stores it (sandbox recording 2026-09-25,
+/// auth-config-sdk/recaptcha and sdk/admin-config): the phone side (its enforcement state and
+/// both SMS switches) is always reported, the email side only as written; a masked clear keeps
+/// the phone side; a false account defender written through a deep mask is not reported.
+#[test]
+fn the_recaptcha_config_reads_back_as_production_stores_it() {
+    let s = strict_state();
+    let recaptcha = |mask: &str, body: Value| {
+        let (status, answer) = patch_sign_in(&s, mask, &body);
+        assert_eq!(status, 200, "{answer}");
+        answer["recaptchaConfig"].clone()
+    };
+    assert_eq!(
+        recaptcha(
+            "recaptchaConfig",
+            json!({"recaptchaConfig": {
+                "emailPasswordEnforcementState": "AUDIT",
+                "managedRules": [{"endScore": 0.3, "action": "BLOCK"}],
+                "useAccountDefender": false,
+            }})
+        ),
+        json!({
+            "emailPasswordEnforcementState": "AUDIT",
+            "managedRules": [{"endScore": 0.3, "action": "BLOCK"}],
+            "useAccountDefender": false,
+            "phoneEnforcementState": "RECAPTCHA_PROVIDER_ENFORCEMENT_STATE_UNSPECIFIED",
+            "useSmsBotScore": false,
+            "useSmsTollFraudProtection": false,
+        })
+    );
+    assert_eq!(
+        recaptcha(
+            "recaptchaConfig",
+            json!({"recaptchaConfig": {
+                "emailPasswordEnforcementState": "AUDIT",
+                "phoneEnforcementState": "AUDIT",
+                "useSmsBotScore": true,
+                "useSmsTollFraudProtection": true,
+                "tollFraudManagedRules": [{"startScore": 0.8, "action": "BLOCK"}],
+            }})
+        ),
+        json!({
+            "emailPasswordEnforcementState": "AUDIT",
+            "phoneEnforcementState": "AUDIT",
+            "useSmsBotScore": true,
+            "useSmsTollFraudProtection": true,
+            "tollFraudManagedRules": [{"startScore": 0.8, "action": "BLOCK"}],
+        })
+    );
+    assert_eq!(
+        recaptcha("recaptchaConfig", json!({})),
+        json!({"phoneEnforcementState": "AUDIT", "useSmsBotScore": true, "useSmsTollFraudProtection": true})
+    );
+    assert_eq!(
+        recaptcha(
+            "recaptchaConfig.emailPasswordEnforcementState,recaptchaConfig.phoneEnforcementState,recaptchaConfig.useSmsBotScore,recaptchaConfig.useSmsTollFraudProtection,recaptchaConfig.useAccountDefender",
+            json!({"recaptchaConfig": {
+                "emailPasswordEnforcementState": "OFF",
+                "phoneEnforcementState": "OFF",
+                "useSmsBotScore": false,
+                "useSmsTollFraudProtection": false,
+                "useAccountDefender": false,
+            }})
+        ),
+        json!({
+            "emailPasswordEnforcementState": "OFF",
+            "phoneEnforcementState": "OFF",
+            "useSmsBotScore": false,
+            "useSmsTollFraudProtection": false,
+        })
+    );
+}
+
 /// Writing one member of the SMS region policy's oneof replaces the other, as production does
 /// for the Admin SDK's deep mask (sandbox recording 2026-09-25,
 /// auth-config-sdk/sdk/admin-config#update-sms-region).
@@ -13043,7 +13116,7 @@ fn password_sign_in_notify_returns_each_policy_notification() {
             },
             {
                 "notificationCode": "MISSING_UPPERCASE_CHARACTER",
-                "notificationMessage": "Password must contain an uppercase character"
+                "notificationMessage": "Password must contain an upper case character"
             },
             {
                 "notificationCode": "MISSING_NUMERIC_CHARACTER",
@@ -17462,7 +17535,15 @@ fn stored_config_members_are_written_by_mask_and_clear_to_their_initial_value() 
         json!({"domain": "HOSTING_DOMAIN"})
     );
     assert!(read.get("autodeleteAnonymousUsers").is_none());
-    assert!(read.get("recaptchaConfig").is_none());
+    // Production never drops a written reCAPTCHA config; a clear keeps its phone side.
+    assert_eq!(
+        read["recaptchaConfig"],
+        json!({
+            "phoneEnforcementState": "RECAPTCHA_PROVIDER_ENFORCEMENT_STATE_UNSPECIFIED",
+            "useSmsBotScore": false,
+            "useSmsTollFraudProtection": false,
+        })
+    );
     assert_eq!(read["monitoring"], json!({"requestLogging": {}}));
     assert_eq!(read["notification"]["defaultLocale"], json!("en"));
     assert_eq!(read["smsRegionConfig"], json!({"allowlistOnly": {}}));
@@ -17864,9 +17945,10 @@ fn the_strict_config_document_after_writes_reads_as_production() {
         .is_some());
     assert_eq!(read["signIn"]["email"], json!({}));
     assert_eq!(read["signIn"]["anonymous"], json!({}));
+    // Written false switches are kept, and the phone side is always reported.
     assert_eq!(
         read["recaptchaConfig"],
-        json!({"phoneEnforcementState": "OFF", "useSmsBotScore": false})
+        json!({"phoneEnforcementState": "OFF", "useSmsBotScore": false, "useSmsTollFraudProtection": false})
     );
 
     let (status, answer) = patch(

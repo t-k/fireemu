@@ -561,7 +561,13 @@ pub(super) fn apply_stored_members(
         changed = true;
         let initial = initial_member(member, project);
         let mut value = if paths.contains(member) {
-            lookup(body, &[member]).cloned()
+            match lookup(body, &[member]).cloned() {
+                // Production's masked clear of the reCAPTCHA config keeps its phone side.
+                None if *member == "recaptchaConfig" => {
+                    member_value(current, member, project).map(recaptcha_phone_side)
+                }
+                written => written,
+            }
         } else {
             member_value(current, member, project)
         };
@@ -578,7 +584,18 @@ pub(super) fn apply_stored_members(
                     }
                 }
             }
-            put(target, &segments, written.or(fallback));
+            // A false account defender written through a deep mask is not stored.
+            let unset = *member == "recaptchaConfig"
+                && segments == ["useAccountDefender"]
+                && written == Some(Value::Bool(false));
+            put(
+                target,
+                &segments,
+                if unset { None } else { written.or(fallback) },
+            );
+        }
+        if *member == "recaptchaConfig" {
+            value = value.map(with_recaptcha_phone_defaults);
         }
         if let Some(value) = &value {
             if !valid_member(member, value) {
@@ -592,6 +609,42 @@ pub(super) fn apply_stored_members(
         );
     }
     Ok(changed.then_some(next))
+}
+
+/// The members of the reCAPTCHA config's phone side, which production keeps apart from the
+/// email side (sandbox recording 2026-09-25, auth-config-sdk/recaptcha).
+const RECAPTCHA_PHONE_SIDE: &[&str] = &[
+    "phoneEnforcementState",
+    "useSmsBotScore",
+    "useSmsTollFraudProtection",
+];
+
+/// What a masked clear leaves of the reCAPTCHA config: its phone side.
+fn recaptcha_phone_side(config: Value) -> Value {
+    Value::Object(
+        config
+            .as_object()
+            .into_iter()
+            .flatten()
+            .filter(|(key, _)| RECAPTCHA_PHONE_SIDE.contains(&key.as_str()))
+            .map(|(key, value)| (key.clone(), value.clone()))
+            .collect(),
+    )
+}
+
+/// A stored reCAPTCHA config always reports its phone side: an unwritten enforcement state as
+/// unspecified and unwritten SMS switches as off.
+fn with_recaptcha_phone_defaults(mut config: Value) -> Value {
+    if let Some(fields) = config.as_object_mut() {
+        fields
+            .entry("phoneEnforcementState")
+            .or_insert_with(|| json!("RECAPTCHA_PROVIDER_ENFORCEMENT_STATE_UNSPECIFIED"));
+        fields.entry("useSmsBotScore").or_insert(Value::Bool(false));
+        fields
+            .entry("useSmsTollFraudProtection")
+            .or_insert(Value::Bool(false));
+    }
+    config
 }
 
 /// The other members of the oneof `field` of `member` belongs to.

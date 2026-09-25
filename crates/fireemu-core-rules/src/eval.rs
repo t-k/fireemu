@@ -230,6 +230,15 @@ struct Budget {
 }
 
 impl Budget {
+    /// One node, plus one evaluation for each pair of parentheses around it: production
+    /// counts a parenthesised expression as an expression of its own (FS-RULES 2026-09-24).
+    fn charge_node(&mut self, expr: &Expr) -> Result<(), EvalError> {
+        for _ in 0..=expr.parens {
+            self.charge()?;
+        }
+        Ok(())
+    }
+
     fn charge(&mut self) -> Result<(), EvalError> {
         self.expressions = self.expressions.saturating_add(1);
         if self.expressions > self.expression_max {
@@ -610,6 +619,11 @@ fn evaluate_prepared(
             regex_diagnostics: RegexEvaluationDiagnostics::default(),
             projected_member_reads: 0,
             doc_reads_max: limit_max(match ctx.service {
+                // A query's rule may read as many documents as a multi-document request
+                // (20; production allows 11, the official emulator 20 and not 21).
+                RulesService::Firestore if ctx.method == Method::List => {
+                    "RULES-DOC-ACCESS-MULTI-TOTAL"
+                }
                 RulesService::Firestore => "RULES-DOC-ACCESS-SINGLE",
                 // Storage rules may call firestore.get() / exists() twice per request.
                 RulesService::Storage => "STORAGE-RULES-FIRESTORE-ACCESS",
@@ -760,19 +774,26 @@ fn walk_items<'a>(
     ev: &mut Evaluator<'a>,
     matched_any: &mut bool,
 ) -> Result<bool, EvalError> {
-    let mut allowed = false;
+    let mut raised = None;
     for item in items {
         if let Item::Match(block) = item {
             match walk_match(block, remaining, ctx, ev, matched_any) {
-                Ok(true) => allowed = true,
+                Ok(true) => return Ok(true),
                 Ok(false) | Err(EvalError::Soft(_) | EvalError::Unknown) => {}
-                Err(EvalError::Budget { limit_id, .. })
-                    if allowed && limit_id == "FIREEMU-RULES-MATCH-WORK" => {}
-                Err(e @ (EvalError::Budget { .. } | EvalError::Unsupported(_))) => return Err(e),
+                // fireemu's own matcher budget stops the walk: nothing after it is known.
+                Err(
+                    e @ EvalError::Budget {
+                        limit_id: "FIREEMU-RULES-MATCH-WORK",
+                        ..
+                    },
+                ) => return Err(e),
+                Err(e @ (EvalError::Budget { .. } | EvalError::Unsupported(_))) => {
+                    raised.get_or_insert(e);
+                }
             }
         }
     }
-    Ok(allowed)
+    raised.map_or(Ok(false), Err)
 }
 
 fn function_key(function: &FunctionDecl) -> usize {
@@ -999,6 +1020,7 @@ fn walk_match<'a>(
             .then_some(reachability.complete_offsets.as_slice())
     });
     let mut outcome: Result<bool, EvalError> = Ok(false);
+    let mut raised: Option<EvalError> = None;
     let zero_or_more = ev.wildcard_zero_or_more;
     let match_work = Arc::clone(&ev.match_path_work);
     let prefilter_work = Arc::clone(&ev.match_prefilter_work);
@@ -1057,25 +1079,11 @@ fn walk_match<'a>(
             *matched_any = true;
             result = evaluate_allows(&block.allows, ctx, ev);
         }
-        if !matches!(
-            result,
-            Err(EvalError::Budget { .. } | EvalError::Unsupported(_))
-        ) {
+        // An allow that holds decides; otherwise the nested blocks may still allow, and only
+        // when nothing does is a raised error the answer.
+        if !matches!(result, Ok(true)) {
             let nested = walk_items(&block.items, &rest, ctx, ev, matched_any);
-            result = match (result, nested) {
-                (
-                    Ok(true),
-                    Err(EvalError::Budget {
-                        limit_id: "FIREEMU-RULES-MATCH-WORK",
-                        ..
-                    }),
-                ) => Ok(true),
-                (Err(e @ (EvalError::Budget { .. } | EvalError::Unsupported(_))), _)
-                | (_, Err(e @ (EvalError::Budget { .. } | EvalError::Unsupported(_)))) => Err(e),
-                (Ok(true), _) | (_, Ok(true)) => Ok(true),
-                (Err(e), _) | (_, Err(e)) => Err(e),
-                (Ok(false), Ok(false)) => Ok(false),
-            };
+            result = either(result, nested);
         }
         ev.scope.functions.truncate(functions_before);
         ev.scope.bindings.truncate(bindings_before);
@@ -1085,7 +1093,18 @@ fn walk_match<'a>(
                 Ok(true)
             }
             Ok(false) => Ok(false),
-            Err(e @ (EvalError::Budget { .. } | EvalError::Unsupported(_))) => Err(e),
+            // fireemu's matcher budget stops enumerating paths; a rule's own error only
+            // decides when no other path allows.
+            Err(
+                e @ EvalError::Budget {
+                    limit_id: "FIREEMU-RULES-MATCH-WORK",
+                    ..
+                },
+            ) => Err(e),
+            Err(e @ (EvalError::Budget { .. } | EvalError::Unsupported(_))) => {
+                raised.get_or_insert(e);
+                Ok(false)
+            }
             Err(e) => {
                 if matches!(outcome, Ok(false)) {
                     outcome = Err(e);
@@ -1105,6 +1124,8 @@ fn walk_match<'a>(
     )?;
     if matched {
         Ok(true)
+    } else if let Some(e) = raised {
+        Err(e)
     } else {
         outcome
     }
@@ -1326,22 +1347,47 @@ fn evaluate_allows<'a>(
     ctx: &RequestContext,
     ev: &mut Evaluator<'a>,
 ) -> Result<bool, EvalError> {
-    let mut allowed = false;
+    // Allow statements are alternatives: the first that holds allows the request whatever the
+    // others raise (production and the official emulator, FS-RULES 2026-09-24). A budget or
+    // unsupported error only decides when nothing holds.
+    let mut raised = None;
     for allow in allows {
         if !allow.methods.iter().any(|m| ctx.method.covered_by(*m)) {
             continue;
         }
         let Some(cond) = &allow.condition else {
-            allowed = true;
-            continue;
+            return Ok(true);
         };
         match ev.eval(cond) {
-            Ok(RulesValue::Bool(true)) => allowed = true,
+            Ok(RulesValue::Bool(true)) => return Ok(true),
             Ok(_) | Err(EvalError::Soft(_) | EvalError::Unknown) => {}
-            Err(e @ (EvalError::Budget { .. } | EvalError::Unsupported(_))) => return Err(e),
+            Err(e @ (EvalError::Budget { .. } | EvalError::Unsupported(_))) => {
+                raised.get_or_insert(e);
+            }
         }
     }
-    Ok(allowed)
+    raised.map_or(Ok(false), Err)
+}
+
+/// A block's own allows together with its nested blocks: one that holds decides; otherwise a
+/// budget or unsupported error outranks an ordinary one, which outranks `false`.
+fn either(
+    own: Result<bool, EvalError>,
+    nested: Result<bool, EvalError>,
+) -> Result<bool, EvalError> {
+    if matches!(own, Ok(true)) || matches!(nested, Ok(true)) {
+        return Ok(true);
+    }
+    match (own, nested) {
+        (Err(a), Err(b)) => Err(if is_hard(&a) || !is_hard(&b) { a } else { b }),
+        (Err(e), Ok(_)) | (Ok(_), Err(e)) => Err(e),
+        (Ok(_), Ok(_)) => Ok(false),
+    }
+}
+
+/// A budget or unsupported error: it decides a request when no alternative allows it.
+const fn is_hard(error: &EvalError) -> bool {
+    matches!(error, EvalError::Budget { .. } | EvalError::Unsupported(_))
 }
 
 /// One line of why an expression is undefined, for a trace.
@@ -3955,7 +4001,7 @@ impl<'a> Evaluator<'a> {
                 return result;
             }
         }
-        self.budget.charge()?;
+        self.budget.charge_node(expr)?;
         match expr.kind() {
             ExprKind::Literal(l) => Ok(match l {
                 Literal::Null => RulesValue::Null,
@@ -4232,8 +4278,8 @@ impl<'a> Evaluator<'a> {
                 if *inner != op {
                     break;
                 }
-                // Each nested node is one expression evaluation.
-                self.budget.charge()?;
+                // Each nested node is one expression evaluation (and one per parentheses).
+                self.budget.charge_node(cursor)?;
                 operands.push(r);
                 cursor = l;
             }

@@ -451,3 +451,69 @@ fn exists_after_reads_presence_in_the_state_after_the_write() {
         .collect();
     assert!(matches!(eval(&both.join(" && "), &full), Decision::Allow));
 }
+
+/// Allow statements are alternatives: one that holds allows the request whatever another one
+/// raises (a document-access budget, an invalid regex), in either order, as production and the
+/// official emulator answer (FS-RULES 2026-09-24).
+#[test]
+fn an_allow_that_holds_wins_over_errors_in_the_others() {
+    let eleven = (0..11)
+        .map(|i| format!("exists(/databases/$(database)/documents/m/{i})"))
+        .collect::<Vec<_>>()
+        .join(" || ");
+    let access = Access {
+        before: BTreeMap::new(),
+        after: None,
+    };
+    let c = ctx(&[("p", RulesValue::String("(".into()))]);
+    let decide_allows = |allows: &[&str]| {
+        let statements = allows.iter().fold(String::new(), |mut out, condition| {
+            out.push_str("allow write: if ");
+            out.push_str(condition);
+            out.push_str("; ");
+            out
+        });
+        let source = format!(
+            "rules_version = '2';\nservice cloud.firestore {{ match /databases/{{database}}/documents {{ match /notes/{{id}} {{ {statements}}} }} }}"
+        );
+        evaluate_request_with(&parse_ruleset(&source).unwrap(), &c, Some(&access)).decision
+    };
+    for allows in [
+        ["true", eleven.as_str()],
+        [eleven.as_str(), "true"],
+        ["'a'.matches(resource.data.p)", "true"],
+        ["true", "'a'.matches(resource.data.p)"],
+    ] {
+        assert!(
+            matches!(decide_allows(&allows), Decision::Allow),
+            "{allows:?}"
+        );
+    }
+    // With no allow holding, the error still denies.
+    assert!(matches!(
+        decide_allows(&[eleven.as_str(), "false"]),
+        Decision::Deny(_)
+    ));
+}
+
+/// A pair of parentheses is one more expression evaluated: a balanced conjunction of 334
+/// leaves (334 leaves, 333 operators, 332 parenthesised subtrees) fits the budget of 1,000,
+/// one of 335 leaves does not (FS-RULES 2026-09-24 and the official emulator).
+#[test]
+fn parentheses_count_toward_the_expression_budget() {
+    fn balanced(n: usize) -> String {
+        if n == 1 {
+            "true".to_owned()
+        } else {
+            format!("({} && {})", balanced(n / 2), balanced(n - n / 2))
+        }
+    }
+    assert!(holds(&balanced(334)));
+    assert!(matches!(
+        decide(&balanced(335), &ctx(&[])),
+        Decision::Deny(DenyReason::BudgetExceeded {
+            limit_id: "RULES-EXPRESSIONS-PER-REQUEST",
+            ..
+        })
+    ));
+}

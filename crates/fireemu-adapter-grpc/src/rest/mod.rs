@@ -1379,6 +1379,10 @@ impl RestState {
             labels: labels_from_json(body)?,
             request_options: None,
         };
+        // End users may not call batchWrite at all (FS-RULES, 2026-09-24).
+        if let Some(rules) = &self.rules {
+            rules.require_owner(principal, "batchWrite")?;
+        }
         let guard = self.write_guard(principal);
         let response = self.local.batch_write_with(&req, &*guard)?;
         Ok(ok(json::without_empty(json!({

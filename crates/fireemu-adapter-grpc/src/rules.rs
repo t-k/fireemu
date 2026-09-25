@@ -41,7 +41,9 @@ use fireemu_core_auth::store::AuthStore;
 use fireemu_core_firestore::field_path::FieldPath;
 use fireemu_core_firestore::path::DocumentPath;
 use fireemu_core_firestore::query::{Direction, FieldOp, FilterExpr, Query, UnaryOp};
-use fireemu_core_firestore::store::{CommitVersion, Document, FirestoreState, Write, WriteOp};
+use fireemu_core_firestore::store::{
+    CommitVersion, Document, FirestoreState, Precondition, Write, WriteOp,
+};
 use fireemu_core_firestore::value::Value;
 use fireemu_core_rules::ast::Ruleset;
 use fireemu_core_rules::coverage::{Coverage, CoverageEntry, RequestTrace, RulesDiagnostics};
@@ -171,11 +173,6 @@ impl DocumentAccess for LatestReader {
             .read_unadmitted(&self.parent, |db| db.get(&path).map(resource_value))
             .flatten()
     }
-}
-
-/// Maximum distinct `get()` / `exists()` documents of one single-document or query request.
-fn single_max() -> u64 {
-    limit_value("RULES-DOC-ACCESS-SINGLE", 10)
 }
 
 /// Maximum distinct `get()` / `exists()` documents across one multi-document request.
@@ -374,6 +371,10 @@ pub struct RulesEnforcer {
     /// refuses every client request without a `cloud.firestore` release (the `strict`
     /// profile); the official emulator allows everything (the `emulator` profile).
     refuse_without_ruleset: bool,
+    /// Whether a write's failed precondition answers before Security Rules do: production
+    /// answers `ALREADY_EXISTS` for a create of an existing document a rule denies (the
+    /// `strict` profile); the official emulator answers the rule's denial (`emulator`).
+    preconditions_before_rules: bool,
 }
 
 impl RulesEnforcer {
@@ -392,7 +393,15 @@ impl RulesEnforcer {
             registry: None,
             acceptance: TokenAcceptance::default(),
             refuse_without_ruleset: false,
+            preconditions_before_rules: false,
         }
+    }
+
+    /// Sets whether a write's failed precondition answers before Security Rules do.
+    #[must_use]
+    pub const fn with_preconditions_before_rules(mut self, first: bool) -> Self {
+        self.preconditions_before_rules = first;
+        self
     }
 
     /// Sets whether a client request is refused while its database has no ruleset.
@@ -777,7 +786,7 @@ impl RulesEnforcer {
             inner: access,
             seen: RefCell::new(BTreeSet::new()),
         };
-        let single_max = single_max();
+        let list_max = multi_total_max();
         if let Some(candidates) = exact_name_candidates(parent, query) {
             return authorize_exact_names(
                 ruleset,
@@ -814,13 +823,13 @@ impl RulesEnforcer {
                     Some(&rules.diagnostics),
                 )?;
                 let accessed = reader.seen.borrow().len() as u64;
-                if accessed > single_max {
+                if accessed > list_max {
                     return Err(denied(
                         &rules.diagnostics,
                         principal,
                         Method::List,
                         placeholder.relative(),
-                        format!("RULES-DOC-ACCESS-SINGLE: {accessed} exceeds {single_max}"),
+                        format!("RULES-DOC-ACCESS-MULTI-TOTAL: {accessed} exceeds {list_max}"),
                     ));
                 }
             }
@@ -855,6 +864,12 @@ impl RulesEnforcer {
             return self.without_ruleset(&rules.diagnostics, principal, Method::Update, path);
         };
         let at = db.next_commit_time(now);
+        // A commit whose precondition fails is refused by the store with that failure, before
+        // any rule is read (strict). Nothing is written either way, so skipping the rules here
+        // allows nothing.
+        if self.preconditions_before_rules && fails_a_precondition(db, writes, at) {
+            return Ok(());
+        }
         // The state after the whole commit, for `getAfter()`.
         let mut after: BTreeMap<DocumentPath, Option<Document>> = BTreeMap::new();
         for write in writes {
@@ -945,7 +960,7 @@ fn authorize_exact_names(
     reader: &AggregateReader<'_>,
     now: LogicalInstant,
 ) -> Result<(), Status> {
-    let single_max = single_max();
+    let list_max = multi_total_max();
     for candidate in candidates {
         let segments = rules_document_segments(candidate);
         let resource = reader.inner.get(&segments);
@@ -981,17 +996,54 @@ fn authorize_exact_names(
             ));
         }
         let accessed = reader.seen.borrow().len() as u64;
-        if accessed > single_max {
+        if accessed > list_max {
             return Err(denied(
                 diagnostics,
                 principal,
                 Method::List,
                 candidate.relative(),
-                format!("RULES-DOC-ACCESS-SINGLE: {accessed} exceeds {single_max}"),
+                format!("RULES-DOC-ACCESS-MULTI-TOTAL: {accessed} exceeds {list_max}"),
             ));
         }
     }
     Ok(())
+}
+
+/// Whether a write of the commit fails its precondition against the state the writes before it
+/// leave, as the store checks it.
+fn fails_a_precondition(db: &FirestoreState, writes: &[Write], at: LogicalInstant) -> bool {
+    let mut staged: BTreeMap<&DocumentPath, Option<Document>> = BTreeMap::new();
+    for write in writes {
+        let path = write.op.path();
+        let current = match staged.get(path) {
+            Some(s) => s.clone(),
+            None => db.get(path).cloned(),
+        };
+        let holds = match &write.precondition {
+            None => true,
+            Some(Precondition::Exists(exists)) => current.is_some() == *exists,
+            Some(Precondition::UpdateTime(t)) => {
+                current.as_ref().is_some_and(|doc| doc.update_time == *t)
+            }
+        };
+        if !holds {
+            return true;
+        }
+        let next = match &write.op {
+            WriteOp::Delete { .. } => None,
+            WriteOp::Verify { .. } => current,
+            WriteOp::Set { .. } => {
+                match FirestoreState::preview_from(current.as_ref(), write, at) {
+                    Ok(next) => next,
+                    // Not a precondition failure: the rules decide as usual, and the evaluation
+                    // below refuses the same write.
+                    Err(_) => return false,
+                }
+            }
+        };
+        staged.insert(path, next);
+    }
+    false
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1329,31 +1381,27 @@ fn query_value(query: &Query) -> RulesValue {
         "offset".to_owned(),
         RulesValue::Int(i64::from(query.offset)),
     );
-    m.insert(
-        "orderBy".to_owned(),
-        if query.order_by.is_empty() {
-            RulesValue::Null
-        } else {
-            RulesValue::Map(
-                query
-                    .order_by
-                    .iter()
-                    .map(|o| {
-                        (
-                            o.field.canonical(),
-                            RulesValue::String(
-                                match o.direction {
-                                    Direction::Ascending => "ASC",
-                                    Direction::Descending => "DESC",
-                                }
-                                .to_owned(),
-                            ),
-                        )
-                    })
-                    .collect(),
-            )
-        },
-    );
+    m.insert("orderBy".to_owned(), {
+        // A map in every query, empty when it has no order (FS-RULES, 2026-09-24).
+        RulesValue::Map(
+            query
+                .order_by
+                .iter()
+                .map(|o| {
+                    (
+                        o.field.canonical(),
+                        RulesValue::String(
+                            match o.direction {
+                                Direction::Ascending => "ASC",
+                                Direction::Descending => "DESC",
+                            }
+                            .to_owned(),
+                        ),
+                    )
+                })
+                .collect(),
+        )
+    });
     RulesValue::Map(m)
 }
 

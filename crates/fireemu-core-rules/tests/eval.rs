@@ -1156,14 +1156,22 @@ fn unsupported_builtins_deny_instead_of_allowing() {
 }
 
 #[test]
-fn unsupported_parent_allow_cannot_be_overridden_by_a_nested_allow() {
+fn a_nested_allow_that_holds_is_not_hidden_by_an_unsupported_parent_allow() {
+    // Allow statements are alternatives: one that holds allows whatever another raises, as
+    // production and the official emulator answer (FS-RULES 2026-09-24).
     let src = "rules_version = '2';\nservice cloud.firestore {\n  match /databases/{db}/documents {\n    match /a/{x} {\n      allow read: if get(/databases/$(db)/documents/b/$(x)).data.ok == true;\n      match /{rest=**} { allow read: if true; }\n    }\n  }\n}";
     let ruleset = parse_ruleset(src).unwrap();
     let report = evaluate_request(
         &ruleset,
         &ctx(Method::Get, "/databases/(default)/documents/a/1", None),
     );
-
+    assert!(matches!(report.decision, Decision::Allow), "{report:?}");
+    // Alone, the unsupported allow still denies with its reason.
+    let alone = src.replace("match /{rest=**} { allow read: if true; }", "");
+    let report = evaluate_request(
+        &parse_ruleset(&alone).unwrap(),
+        &ctx(Method::Get, "/databases/(default)/documents/a/1", None),
+    );
     assert!(
         matches!(report.decision, Decision::Deny(DenyReason::Unsupported(_))),
         "{report:?}"
@@ -1171,22 +1179,22 @@ fn unsupported_parent_allow_cannot_be_overridden_by_a_nested_allow() {
 }
 
 #[test]
-fn unsupported_sibling_allow_cannot_be_overridden_by_a_later_allow() {
+fn a_later_sibling_allow_that_holds_is_not_hidden_by_an_unsupported_one() {
+    // Allow statements are alternatives: one that holds allows whatever another raises, as
+    // production and the official emulator answer (FS-RULES 2026-09-24).
     let src = "service cloud.firestore {\n  match /databases/{db}/documents {\n    match /a/{x} {\n      allow read: if get(/databases/$(db)/documents/b/$(x)).data.ok == true;\n    }\n    match /a/{x} { allow read: if true; }\n  }\n}";
     let ruleset = parse_ruleset(src).unwrap();
     let report = evaluate_request(
         &ruleset,
         &ctx(Method::Get, "/databases/(default)/documents/a/1", None),
     );
-
-    assert!(
-        matches!(report.decision, Decision::Deny(DenyReason::Unsupported(_))),
-        "{report:?}"
-    );
+    assert!(matches!(report.decision, Decision::Allow), "{report:?}");
 }
 
 #[test]
-fn an_earlier_allow_cannot_hide_a_later_unsupported_allow() {
+fn an_unsupported_allow_does_not_hide_an_earlier_one_that_holds() {
+    // Allow statements are alternatives: one that holds allows whatever another raises, as
+    // production and the official emulator answer (FS-RULES 2026-09-24).
     for src in [
         "service cloud.firestore { match /databases/{db}/documents { match /a/{x} { allow read: if true; allow read: if get(/databases/$(db)/documents/b/$(x)).data.ok == true; } } }",
         "rules_version = '2'; service cloud.firestore { match /databases/{db}/documents { match /a/{x} { allow read: if true; match /{rest=**} { allow read: if get(/databases/$(db)/documents/b/$(x)).data.ok == true; } } } }",
@@ -1197,11 +1205,7 @@ fn an_earlier_allow_cannot_hide_a_later_unsupported_allow() {
             &ruleset,
             &ctx(Method::Get, "/databases/(default)/documents/a/1", None),
         );
-
-        assert!(
-            matches!(report.decision, Decision::Deny(DenyReason::Unsupported(_))),
-            "{report:?}"
-        );
+        assert!(matches!(report.decision, Decision::Allow), "{report:?}");
     }
 }
 
@@ -3148,7 +3152,7 @@ service cloud.firestore {
 }
 
 #[test]
-fn regex_step_budget_exhaustion_cannot_be_overridden_by_a_nested_allow() {
+fn a_nested_allow_that_holds_is_not_hidden_by_regex_step_exhaustion() {
     let rules = r"
 rules_version = '2';
 service cloud.firestore {
@@ -3166,7 +3170,17 @@ service cloud.firestore {
     let mut request = ctx(Method::Get, "/databases/(default)/documents/notes/n1", None);
     request.resource = Some(doc(&[("value", RulesValue::String("a".repeat(210_000)))]));
 
+    // Allow statements are alternatives: one that holds allows whatever another raises, as
+    // production and the official emulator answer (FS-RULES 2026-09-24).
     let report = evaluate_request(&ruleset, &request);
+    assert!(matches!(report.decision, Decision::Allow), "{report:?}");
+    // Without the nested allow, fireemu's regex step budget denies with its reason.
+    let alone = parse_ruleset(&rules.replace(
+        "match /{rest=**} {\n        allow get: if true;\n      }",
+        "",
+    ))
+    .unwrap();
+    let report = evaluate_request(&alone, &request);
     assert!(
         matches!(
             report.decision,
@@ -3210,7 +3224,7 @@ service cloud.firestore {
 }
 
 #[test]
-fn regex_backtracking_step_budget_cannot_be_overridden_by_a_nested_allow() {
+fn a_nested_allow_that_holds_is_not_hidden_by_regex_backtracking_exhaustion() {
     let rules = r"
 rules_version = '2';
 service cloud.firestore {
@@ -3228,7 +3242,17 @@ service cloud.firestore {
     let mut request = ctx(Method::Get, "/databases/(default)/documents/notes/n1", None);
     request.resource = Some(doc(&[("value", RulesValue::String("a".repeat(10_000)))]));
 
+    // Allow statements are alternatives: one that holds allows whatever another raises, as
+    // production and the official emulator answer (FS-RULES 2026-09-24).
     let report = evaluate_request(&ruleset, &request);
+    assert!(matches!(report.decision, Decision::Allow), "{report:?}");
+    // Without the nested allow, fireemu's regex step budget denies with its reason.
+    let alone = parse_ruleset(&rules.replace(
+        "match /{rest=**} {\n        allow get: if true;\n      }",
+        "",
+    ))
+    .unwrap();
+    let report = evaluate_request(&alone, &request);
     assert!(
         matches!(
             report.decision,

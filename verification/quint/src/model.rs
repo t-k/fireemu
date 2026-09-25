@@ -573,7 +573,11 @@ const MODELS: &[ModelDescriptor] = &[
         main: "RegexAuthorizationProof",
         config: "configs/RegexAuthorization.json",
         mutation_manifest: "mutations/RegexAuthorization.json",
-        properties: &[invariant("TypeOK"), invariant("ExhaustionNeverAllows")],
+        properties: &[
+            invariant("TypeOK"),
+            invariant("ExhaustionNeverAllows"),
+            invariant("AlternativesDecide"),
+        ],
         actions: &["Evaluate"],
         production_sources: &[
             "crates/fireemu-core-rules/src/eval.rs",
@@ -590,6 +594,7 @@ const MODELS: &[ModelDescriptor] = &[
             "notMatched",
             "stepExhausted",
             "depthExhausted",
+            "exhaustedBesideAllow",
             "parentNegated",
             "nestedNegated",
         ],

@@ -811,6 +811,10 @@ impl Firestore for GatewayService {
                 &request.get_ref().database,
                 "BatchWrite",
             )?;
+            // End users may not call BatchWrite at all (FS-RULES, 2026-09-24).
+            if let Some(rules) = &self.rules {
+                rules.require_owner(&caller.principal, "BatchWrite")?;
+            }
             let guard = self.write_guard(&caller);
             return local
                 .batch_write_with(request.get_ref(), &*guard)

@@ -552,7 +552,7 @@
     },
     {
       "id": "INV-RULES-004",
-      "statement": "Regular expression step-budget exhaustion is distinct from an ordinary non-match and never reaches allow, including when matches() is negated.",
+      "statement": "Regular expression step-budget exhaustion is distinct from an ordinary non-match and never reaches allow by itself, including when matches() is negated; another allow statement that holds still allows, as production and the official emulator answer (FS-RULES 2026-09-24).",
       "criticality": "critical",
       "owner": "core-rules",
       "status": "implemented",
@@ -561,7 +561,8 @@
         "property": "prop_rules_regex_exhaustion_never_allows",
         "mutation": [
           "M-RULES-015",
-          "M-FORMAL-RULES-REGEX-001"
+          "M-FORMAL-RULES-REGEX-001",
+          "M-FORMAL-RULES-REGEX-002"
         ],
         "integration": [
           "crates/fireemu-core-rules/tests/eval.rs",

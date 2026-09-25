@@ -3266,6 +3266,81 @@ service cloud.firestore {
     );
 }
 
+/// The per-request expression budget is fatal, as production treats it (FS-RULES:
+/// `terms-500-then-true` and `terms-500-or-true` are denied): an allow with no condition, in
+/// the same block or in another match, does not rescue a request that ran out of it.
+#[test]
+fn an_unconditional_allow_does_not_rescue_an_exhausted_expression_budget() {
+    let expensive = balanced_and(1_024);
+    for body in [
+        format!("match /a/{{x}} {{ allow get: if {expensive}; allow get; }}"),
+        format!(
+            "match /a/{{x}} {{ allow get: if {expensive}; }}\n    match /{{p=**}} {{ allow get; }}"
+        ),
+        format!("match /a/{{x}} {{ allow get: if {expensive}; allow get: if true; }}"),
+    ] {
+        let src = format!(
+            "rules_version = '2';\nservice cloud.firestore {{\n  match /databases/{{db}}/documents {{\n    {body}\n  }}\n}}"
+        );
+        let ruleset = parse_ruleset(&src).unwrap();
+        let report = evaluate_request(
+            &ruleset,
+            &ctx(Method::Get, "/databases/(default)/documents/a/1", None),
+        );
+        assert!(
+            matches!(
+                report.decision,
+                Decision::Deny(DenyReason::BudgetExceeded {
+                    limit_id: "RULES-EXPRESSIONS-PER-REQUEST",
+                    ..
+                })
+            ),
+            "{body}: {report:?}"
+        );
+    }
+}
+
+/// A regex that exhausts fireemu's step budget no longer ends the request, so another allow may
+/// still hold; after four such matches in one request the request stops, so a ruleset of many
+/// regex allows cannot multiply the work a single request may cost.
+#[test]
+fn regex_step_exhaustion_is_capped_per_request() {
+    let exhausting = "resource.data.value.matches('(a|aa)*b')";
+    let request = {
+        let mut request = ctx(Method::Get, "/databases/(default)/documents/notes/n1", None);
+        request.resource = Some(doc(&[("value", RulesValue::String("a".repeat(10_000)))]));
+        request
+    };
+    let rules = |exhausting_allows: usize| {
+        let allows = format!("      allow get: if {exhausting};\n").repeat(exhausting_allows);
+        parse_ruleset(&format!(
+            "rules_version = '2';\nservice cloud.firestore {{\n  match /databases/{{database}}/documents {{\n    match /notes/{{id}} {{\n{allows}      allow get: if true;\n    }}\n  }}\n}}"
+        ))
+        .unwrap()
+    };
+    for allowed in [1, 4] {
+        let report = evaluate_request(&rules(allowed), &request);
+        assert!(
+            matches!(report.decision, Decision::Allow),
+            "{allowed}: {report:?}"
+        );
+    }
+    for denied in [5, 12] {
+        let report = evaluate_request(&rules(denied), &request);
+        assert!(
+            matches!(
+                report.decision,
+                Decision::Deny(DenyReason::BudgetExceeded {
+                    limit_id: "FIREEMU-REGEX-EXHAUSTIONS-PER-REQUEST",
+                    current: 5,
+                    maximum: 4,
+                })
+            ),
+            "{denied}: {report:?}"
+        );
+    }
+}
+
 /// A delete has no incoming document: production's `request.resource` is present and null
 /// then (FS-RULES, 2026-09-24), so `request.resource == null` holds and reading its data is
 /// the error.

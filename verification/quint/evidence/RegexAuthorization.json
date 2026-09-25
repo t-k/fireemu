@@ -51,7 +51,7 @@
   ],
   "digests": {
     ".github/workflows/quint.yml": "3322397d1feaaea0a163de7b8a289a33d071650d51f4674c4a4556df6b45e972",
-    "crates/fireemu-core-rules/src/eval.rs": "eb8b274c374c084d50ca12d64b87a3a0b23fbcd052f8b7cc386f34cc3415d285",
+    "crates/fireemu-core-rules/src/eval.rs": "020afdf695fa74aa5d242700c14d63dd8e81e3e9871871f7687e2328a4097250",
     "crates/fireemu-core-rules/src/parse.rs": "acad9e662374515ad06da52f8a331e6b7be59c3d1ef266b48239a061b748bb71",
     "crates/fireemu-core-rules/src/regex.rs": "873e10444696349edf5be984e590b164c72ba8603864eddb8defce574012b4ee",
     "crates/fireemu-core-rules/src/value.rs": "ca0504c466b8dfe6050d0e44f296e2713e2bf4699eb1e1d0a4544ed82c2a5131",
@@ -63,26 +63,27 @@
     "verification/quint/configs/RegexAuthorization.json": "e46a8cd3559c3c7c1efb240e78c2b2a4fd54a42dca1736e079c209d290408ff7",
     "verification/quint/evidence/cargo-authority.json": "650d7da16f13aa92c1afc41b5d4e6c3b190de745bf5ce8bd2d8a163170294289",
     "verification/quint/java/io/fireemu/verification/LoopbackServerProviderAgent.java": "6f4f23bb6cf8f2d8da2d55478c409bfe30f56d1a78296b5259647df4511888dc",
-    "verification/quint/mutations/RegexAuthorization.json": "93236d9ac0c97cf7220e2e7bbba023da2bf723819d5caf330b70226cf44ab022",
+    "verification/quint/mutations/RegexAuthorization.json": "6df8a9145699ef5df68123933c0320f8e6354f4529df976e9d78cd6057eec760",
     "verification/quint/package.json": "0544cbb331fabdba1e770dbfd72fc7521ace0dc17cf60ee96df0ae27384552d4",
     "verification/quint/pnpm-lock.yaml": "c46de8feb983d78945bf816a5a4d54d505d3840c88f1ebe19772a08acd9f0556",
     "verification/quint/run-verification.sh": "57eeb07ba39d042eea571b8a939e35ab05dd37218a30aa559785788d2aa81b7f",
-    "verification/quint/specs/RegexAuthorization.qnt": "cb4467eb425cc4670ddde94e99779927a8b0a2d5ca31a60c5f4606999a3ac84d",
+    "verification/quint/specs/RegexAuthorization.qnt": "5ba60a880b3adfa61bd7b8a9b907bdef533433630811e56a9fda8e25fc30655c",
     "verification/quint/src/cargo_authority.rs": "2c67dbd90419daa38f42f44b5f62c87388d5a15637ced48a2110b252dcbbd33a",
     "verification/quint/src/evidence.rs": "2fcf95169ee6ae80bb768c874430e3869d2a29dadf4c87f7cae2794c64dbf4be",
     "verification/quint/src/lib.rs": "2addd005fe8bee74c693854dc7ccb19dde14153b408f3d3e7335c5a8abbe929f",
     "verification/quint/src/main.rs": "f8ada163629ef231fc5e580031fab6d5f2fcdbd9b2e0cff3604a192ff24a043f",
-    "verification/quint/src/model.rs": "b7ee8769795f9456684d192ef996d51ef79f0dbf93e13052e6479e26fa112c05",
+    "verification/quint/src/model.rs": "3e16546cf010a3bcd0257099b61e92dc935a8d56eb8631fa528eebaf804ba79f",
     "verification/quint/src/process.rs": "56fbdc380eb60993a038366f050f45c030b22f5dc7048971aa451f54883dbb5f",
     "verification/quint/src/publication.rs": "e4b57348c74d51585609b9f114ad56366309f90fa6e2297639546f42922e53a8",
-    "verification/quint/src/regex_authorization.rs": "e9d3712abb612c20f92e56a0e6db72271299c80dc05c8632ceb6544108ce6ca1",
+    "verification/quint/src/regex_authorization.rs": "01671d142928b58bbd026d7c1e3f311298e84484cf1dcb75967fbad4e0373d4f",
     "verification/quint/src/server.rs": "b0d10768918bf0449419d9e6384a574e14db01f651264e6037856c3367e05c0a",
-    "verification/quint/tests/regex_authorization_connect.rs": "36d78ad71c648963a6bd565104800da2919cfb23b11946755e55c083c6e476b6"
+    "verification/quint/tests/regex_authorization_connect.rs": "db52e501a3e268be7a0faecadb451144cee13c28b3cf2cbbcd71797442dea152"
   },
   "invariants": [
     "TypeOK",
     "ExhaustionNeverAllows",
-    "AlternativesDecide"
+    "AlternativesDecide",
+    "CapStops"
   ],
   "temporalProperties": [],
   "mutations": [
@@ -97,6 +98,12 @@
       "property": "ExhaustionNeverAllows",
       "outcome": "killed_safety",
       "diagnostic": "TLC invariant violation"
+    },
+    {
+      "id": "M-FORMAL-RULES-REGEX-003",
+      "property": "CapStops",
+      "outcome": "killed_safety",
+      "diagnostic": "TLC invariant violation"
     }
   ],
   "scenarios": [
@@ -105,6 +112,7 @@
     "stepExhausted",
     "depthExhausted",
     "exhaustedBesideAllow",
+    "exhaustedPastCap",
     "parentNegated",
     "nestedNegated"
   ],

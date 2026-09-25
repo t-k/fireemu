@@ -577,6 +577,7 @@ const MODELS: &[ModelDescriptor] = &[
             invariant("TypeOK"),
             invariant("ExhaustionNeverAllows"),
             invariant("AlternativesDecide"),
+            invariant("CapStops"),
         ],
         actions: &["Evaluate"],
         production_sources: &[
@@ -595,6 +596,7 @@ const MODELS: &[ModelDescriptor] = &[
             "stepExhausted",
             "depthExhausted",
             "exhaustedBesideAllow",
+            "exhaustedPastCap",
             "parentNegated",
             "nestedNegated",
         ],

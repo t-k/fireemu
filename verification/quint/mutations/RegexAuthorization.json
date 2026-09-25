@@ -15,6 +15,13 @@
       "operator": "exhaustion-counts-as-a-match",
       "from": "    if (outcome == Exhausted) Exhausted\n    else if (negated) {",
       "to": "    if (outcome == Exhausted) Matched\n    else if (negated) {"
+    },
+    {
+      "id": "M-FORMAL-RULES-REGEX-003",
+      "property": "CapStops",
+      "operator": "never-stop-at-the-exhaustion-cap",
+      "from": "    else if (prior + exhausted(parent) + exhausted(nested) > CAP) \"Deny\"",
+      "to": "    else if (prior + exhausted(parent) + exhausted(nested) > CAP + 10) \"Deny\""
     }
   ]
 }

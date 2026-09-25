@@ -10,12 +10,17 @@ use fireemu_verification_quint::regex_authorization::{
 };
 use quint_connect::runner::{run_test, Config as RunnerConfig, RunConfig, TestConfig};
 
-const CASES: [(&str, &str, &str); 7] = [
+const CASES: [(&str, &str, &str); 8] = [
     ("matched", "Allow", "None"),
     ("notMatched", "Deny", "RuleMismatch"),
     ("stepExhausted", "Deny", "FIREEMU-REGEX-STEPS-PER-MATCH"),
     ("depthExhausted", "Deny", "FIREEMU-REGEX-DEPTH-PER-MATCH"),
     ("exhaustedBesideAllow", "Allow", "None"),
+    (
+        "exhaustedPastCap",
+        "Deny",
+        "FIREEMU-REGEX-EXHAUSTIONS-PER-REQUEST",
+    ),
     ("parentNegated", "Deny", "RuleMismatch"),
     ("nestedNegated", "Allow", "None"),
 ];

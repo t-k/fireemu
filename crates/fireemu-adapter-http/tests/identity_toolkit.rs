@@ -777,6 +777,82 @@ fn concurrent_signups_assign_distinct_uids_before_create_commits() {
     );
 }
 
+/// Creates an unrelated account through the Admin API while the first `BeforeCreate` runs, as
+/// another client of the same project may at any moment.
+struct InterveningAdminCreateHook {
+    state: std::sync::OnceLock<std::sync::Weak<AuthState>>,
+    done: AtomicBool,
+}
+
+impl AuthBlockingHook for InterveningAdminCreateHook {
+    fn handles(&self, event: BlockingAuthEvent) -> bool {
+        event == BlockingAuthEvent::BeforeCreate
+    }
+
+    fn invoke(
+        &self,
+        _event: BlockingAuthEvent,
+        _user: &fireemu_core_auth::store::UserRecord,
+    ) -> Result<Value, BlockingFunctionFailure> {
+        if !self.done.swap(true, Ordering::SeqCst) {
+            let state = self.state.get().and_then(std::sync::Weak::upgrade).unwrap();
+            let (status, body) = admin(
+                &state,
+                "POST",
+                &format!("{V1}/projects/demo-app/accounts"),
+                &json!({"email": "intervening@example.com", "password": "hunter22"}),
+            );
+            assert_eq!(status, 200, "{body}");
+        }
+        Ok(json!({}))
+    }
+}
+
+fn state_with_intervening_admin_create() -> Arc<AuthState> {
+    let hook = Arc::new(InterveningAdminCreateHook {
+        state: std::sync::OnceLock::new(),
+        done: AtomicBool::new(false),
+    });
+    let mut auth = state();
+    auth.blocking = Some(hook.clone());
+    let auth = Arc::new(auth);
+    hook.state.set(Arc::downgrade(&auth)).unwrap();
+    auth
+}
+
+/// `BHRNG-1`: an account created by another request while `BeforeCreate` runs does not make an
+/// email-link sign-in that creates its account fail. Production draws account ids
+/// independently; fireemu refused it with `identity changed while the hook was running` because
+/// the other account skipped the id the sign-in had reserved.
+#[test]
+fn an_account_created_while_before_create_runs_does_not_fail_an_email_link_sign_in() {
+    let auth = state_with_intervening_admin_create();
+    let (status, sent) = post(
+        &auth,
+        &format!("{V1}/accounts:sendOobCode"),
+        &json!({"requestType": "EMAIL_SIGNIN", "email": "link-outer@example.com", "continueUrl": "http://localhost/"}),
+    );
+    assert_eq!(status, 200, "{sent}");
+    let (status, codes) = admin(
+        &auth,
+        "GET",
+        "/emulator/v1/projects/demo-app/oobCodes",
+        &Value::Null,
+    );
+    assert_eq!(status, 200, "{codes}");
+    let code = codes["oobCodes"][0]["oobCode"].clone();
+    let (status, body) = post(
+        &auth,
+        &format!("{V1}/accounts:signInWithEmailLink"),
+        &json!({"email": "link-outer@example.com", "oobCode": code, "returnSecureToken": true}),
+    );
+    assert_eq!(status, 200, "{body}");
+    let store = auth.store.lock().unwrap();
+    let outer = store.user_by_email("link-outer@example.com").unwrap();
+    assert_eq!(outer.local_id.to_string(), body["localId"].as_str().unwrap());
+    assert!(store.user_by_email("intervening@example.com").is_some());
+}
+
 #[test]
 fn unhandled_blocking_auth_failure_is_unavailable_and_rolls_back_creation() {
     let mut s = state();
@@ -3663,15 +3739,17 @@ impl AuthBlockingHook for TenantMutatingHook {
 
 struct CreatingAdminHook {
     state: std::sync::Weak<AuthState>,
+    seen: Mutex<Option<String>>,
 }
 
 impl AuthBlockingHook for CreatingAdminHook {
     fn invoke(
         &self,
         event: BlockingAuthEvent,
-        _user: &fireemu_core_auth::store::UserRecord,
+        user: &fireemu_core_auth::store::UserRecord,
     ) -> Result<Value, BlockingFunctionFailure> {
         if event == BlockingAuthEvent::BeforeCreate {
+            *self.seen.lock().unwrap() = Some(user.local_id.to_string());
             let state = self
                 .state
                 .upgrade()
@@ -4170,25 +4248,39 @@ fn blocking_auth_enabled_to_disabled_transition_returns_a_retryable_conflict() {
     assert_eq!(auth.store.lock().unwrap().user_count(), 0);
 }
 
+/// An account the hook creates through the Admin API skips the id the sign-up reserved, so the
+/// hook's answer is applied to the account it was about and the sign-up succeeds (`BHRNG-1`;
+/// fireemu used to refuse the sign-up whenever another account was created meanwhile).
 #[test]
 fn blocking_auth_never_replays_a_response_onto_a_different_generated_user() {
+    let hook = std::sync::OnceLock::new();
     let state = Arc::new_cyclic(|weak| {
         let mut state = state();
-        state.blocking = Some(Arc::new(CreatingAdminHook {
+        let creating = Arc::new(CreatingAdminHook {
             state: weak.clone(),
-        }));
+            seen: Mutex::new(None),
+        });
+        hook.set(creating.clone()).ok();
+        state.blocking = Some(creating);
         state
     });
 
-    let (status, refused) = post(
+    let (status, body) = post(
         &state,
         &format!("{V1}/accounts:signUp"),
         &json!({"email": "original@example.com", "password": "hunter22"}),
     );
-    assert_eq!(status, 400, "{refused}");
+    assert_eq!(status, 200, "{body}");
+    let seen = hook.get().unwrap().seen.lock().unwrap().clone().unwrap();
+    assert_eq!(body["localId"], seen.as_str());
     let store = state.store.lock().unwrap();
     assert!(store.user_by_email("admin-created@example.com").is_some());
-    assert!(store.user_by_email("original@example.com").is_none());
+    let original = store.user_by_email("original@example.com").unwrap();
+    assert_eq!(original.local_id.as_str(), seen);
+    assert_ne!(
+        store.user_by_email("admin-created@example.com").unwrap().local_id.as_str(),
+        seen
+    );
 }
 
 const UNREGISTERED_CALLER: &str = "Method doesn't allow unregistered callers (callers without established identity). Please use API Key or other form of API consumer identity to call this API.";

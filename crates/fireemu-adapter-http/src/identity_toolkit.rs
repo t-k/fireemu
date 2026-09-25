@@ -2174,7 +2174,6 @@ fn dispatch_with_blocking_hook(
     if blocking.blocking_auth_revision() != expected_blocking_revision {
         return error(409, "BLOCKING_FUNCTION_CONFIGURATION_CHANGED");
     }
-    let generated_id_interference = store.generated_id_interference_count();
     let mut candidate = store.clone();
     let live_snapshot = store.clone();
     let reset_generation = store.reset_generation();
@@ -2390,12 +2389,6 @@ fn dispatch_with_blocking_hook(
             if let Some(denial) = project_provider_denial(handler, live.sign_in_config(), body) {
                 return denial;
             }
-        }
-        if live.generated_id_interference_count() != generated_id_interference {
-            return error(
-                400,
-                "BLOCKING_FUNCTION_ERROR_RESPONSE : identity changed while the hook was running",
-            );
         }
         let mut committed = live.clone();
         if is_new {

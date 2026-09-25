@@ -332,7 +332,13 @@ export function freezeSandboxFixture({
     for (const recipe of liveStreams) {
       for (const recording of [firstStream, secondStream]) {
         const result = recording[recipe.id];
-        if (!result || !Number.isInteger(result.status?.code) || !Array.isArray(result.events)) {
+        // A unary byte probe records one status for its exact wire size; a stream records
+        // its events.
+        const complete =
+          recipe.action === "get-document-transaction-bytes"
+            ? result?.wireBytes === recipe.wireBytes
+            : Array.isArray(result?.events);
+        if (!result || !Number.isInteger(result.status?.code) || !complete) {
           throw new Error(`incomplete stream recording: ${recipe.id}`);
         }
       }

@@ -463,6 +463,69 @@ test("fixture refuses an OAuth bearer echoed into a REST error body", () => {
   );
 });
 
+test("fixture accepts a unary gRPC byte probe, which has a status and no stream events", () => {
+  const unary = {
+    id: "writes/limits/grpc-unary-request-bytes/10485760",
+    transport: "grpc",
+    action: "get-document-transaction-bytes",
+    wireBytes: 10485760,
+    maxFrames: 1,
+  };
+  const withUnary = { ...corpus, streamRecipes: [unary] };
+  const rest = { "writes/control": { steps: { read: { status: 404, code: "NOT_FOUND" } } } };
+  const options = {
+    corpus: withUnary,
+    first: rest,
+    second: rest,
+    recordedAt: ["2026-09-25T00:00:00Z", "2026-09-25T00:01:00Z"],
+    harnessRevision: "a".repeat(40),
+    sdkVersions: { firebaseAdmin: "14.3.0" },
+    credentialToken: "private-test-token",
+  };
+  // The shape the production unary child records (stream-session.mjs).
+  const observed = {
+    [unary.id]: {
+      sentFrames: 1,
+      status: { code: 3, details: "Invalid transaction.", trailers: [] },
+      wireBytes: 10485760,
+    },
+  };
+  const frozen = freezeSandboxFixture({
+    ...options,
+    firstStream: observed,
+    secondStream: observed,
+  });
+  assert.equal(frozen.streams[unary.id].status.code, 3);
+  // A unary result still needs an integer status and the exact wire size it was asked for.
+  for (const broken of [
+    { ...observed[unary.id], status: {} },
+    { ...observed[unary.id], wireBytes: 10485761 },
+  ]) {
+    const recording = { [unary.id]: broken };
+    assert.throws(
+      () => freezeSandboxFixture({ ...options, firstStream: recording, secondStream: recording }),
+      /incomplete stream recording/,
+    );
+  }
+  // A stream recipe still needs its events.
+  const stream = {
+    ...unary,
+    id: "writes/limits/grpc-stream-request-bytes/10485760",
+    action: "write-stream-token-bytes",
+  };
+  const streamResult = { [stream.id]: { sentFrames: 1, status: { code: 0 }, wireBytes: 10485760 } };
+  assert.throws(
+    () =>
+      freezeSandboxFixture({
+        ...options,
+        corpus: { ...corpus, streamRecipes: [stream] },
+        firstStream: streamResult,
+        secondStream: streamResult,
+      }),
+    /incomplete stream recording/,
+  );
+});
+
 test("fixture cannot omit or hide drift in live gRPC stream observations", () => {
   const withStream = {
     ...corpus,

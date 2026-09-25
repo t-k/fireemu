@@ -80,6 +80,7 @@ fn call(s: &RestState, method: &str, path: &str, body: Value) -> (u16, Value) {
         authorization: Some("Bearer owner".to_owned()),
         app_check: Vec::new(),
         body,
+        batch_field_order: Vec::new(),
         origin: None,
         browser_metadata: false,
     });

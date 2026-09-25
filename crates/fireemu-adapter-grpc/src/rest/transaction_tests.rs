@@ -47,6 +47,7 @@ fn call(state: &RestState, method: &str, path: &str, body: Value) -> (u16, Value
         browser_metadata: false,
         app_check: Vec::new(),
         body,
+        batch_field_order: Vec::new(),
     });
     (response.status, response.body)
 }

@@ -488,10 +488,11 @@ async fn rest_call(
             ));
         }
     };
-    let body = match request_body(&bytes, &path, state.gateway.production_refusals()) {
-        Ok(body) => body,
-        Err(response) => return Ok(json_response(&response, origin.as_deref())),
-    };
+    let (body, batch_field_order) =
+        match request_body(&bytes, &path, state.gateway.production_refusals()) {
+            Ok(body) => body,
+            Err(response) => return Ok(json_response(&response, origin.as_deref())),
+        };
     drop(bytes);
     let request = RestEnvelope {
         request: RestRequest {
@@ -505,6 +506,7 @@ async fn rest_call(
             browser_metadata,
             app_check,
             body,
+            batch_field_order,
         },
         _payload_permit: payload_permit,
     };
@@ -702,15 +704,23 @@ fn request_body(
     bytes: &[u8],
     path: &str,
     production_refusals: bool,
-) -> Result<serde_json::Value, crate::rest::RestResponse> {
+) -> Result<(serde_json::Value, Vec<Vec<String>>), crate::rest::RestResponse> {
     if bytes.is_empty() {
-        return Ok(serde_json::Value::Object(serde_json::Map::new()));
+        return Ok((
+            serde_json::Value::Object(serde_json::Map::new()),
+            Vec::new(),
+        ));
     }
-    crate::rest::transcode::parse_body(bytes)
+    let parsed = if path.ends_with(":batchWrite") {
+        crate::rest::json_syntax::parse_with_batch_field_order(bytes)
+    } else {
+        crate::rest::transcode::parse_body(bytes).map(|value| (value, Vec::new()))
+    };
+    parsed
         .or_else(|error| {
             if !production_refusals {
                 if let Ok(value) = serde_json::from_slice(bytes) {
-                    return Ok(value);
+                    return Ok((value, Vec::new()));
                 }
             }
             Err(error)
@@ -964,10 +974,20 @@ mod tests {
         let query = "/v1/projects/p/databases/(default)/documents:runQuery";
         let commit = "/v1/projects/p/databases/(default)/documents:commit";
         assert_eq!(
-            super::request_body(br#"{"structuredQuery": {"limit": 1,},}"#, query, true).unwrap(),
+            super::request_body(br#"{"structuredQuery": {"limit": 1,},}"#, query, true)
+                .unwrap()
+                .0,
             json!({"structuredQuery": {"limit": 1}})
         );
-        assert_eq!(super::request_body(b"", commit, true).unwrap(), json!({}));
+        assert_eq!(super::request_body(b"", commit, true).unwrap().0, json!({}));
+        let batch = "/v1/projects/p/databases/(default)/documents:batchWrite";
+        let (_, field_order) = super::request_body(
+            br"{writes:[{update:{fields:{z:{stringValue:'ok'},a:{integerValue:'bad'}}}}]}",
+            batch,
+            true,
+        )
+        .unwrap();
+        assert_eq!(field_order, vec![vec!["z".to_owned(), "a".to_owned()]]);
         let truncated = super::request_body(br#"{"structuredQuery":"#, query, true).unwrap_err();
         assert_eq!(truncated.status, 400);
         assert_eq!(
@@ -988,7 +1008,7 @@ mod tests {
             .unwrap()
             .contains("Message too deep"));
         let read = super::request_body(deep.as_bytes(), commit, false).unwrap();
-        assert!(read.is_array());
+        assert!(read.0.is_array());
         let bare = super::request_body(b"not json", commit, false).unwrap_err();
         assert_eq!(
             bare.body["error"]["message"],
@@ -1659,6 +1679,7 @@ mod tests {
                 browser_metadata: false,
                 app_check: Vec::new(),
                 body: serde_json::Value::Object(serde_json::Map::new()),
+                batch_field_order: Vec::new(),
             },
             _payload_permit: Some(permit),
         }

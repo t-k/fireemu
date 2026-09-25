@@ -102,11 +102,12 @@ test("saved production comparison selects only identical program recipes and rep
       },
     ],
   };
+  const retired = { ...saved, id: "retired" };
   const recordedCorpus = {
     schemaVersion: 1,
-    restPrograms: [saved, changed],
+    restPrograms: [saved, changed, retired],
     streamRecipes: [],
-    restRequestCount: 2,
+    restRequestCount: 3,
   };
   const currentCorpus = {
     ...recordedCorpus,
@@ -130,7 +131,7 @@ test("saved production comparison selects only identical program recipes and rep
     schemaVersion: 1,
     sourceCommit: "a".repeat(40),
     corpusSha256: digest(recordedCorpus),
-    programs: { saved: digest(saved), changed: digest(changed) },
+    programs: { saved: digest(saved), changed: digest(changed), retired: digest(retired) },
     streams: {},
   };
   const fixture = {
@@ -138,12 +139,14 @@ test("saved production comparison selects only identical program recipes and rep
     programs: {
       saved: { steps: { write: { status: 200, code: "OK", body: {} } } },
       changed: { steps: { write: { status: 200, code: "OK", body: {} } } },
+      retired: { steps: { write: { status: 200, code: "OK", body: {} } } },
     },
     streams: {},
   };
   const selected = selectComparableSandboxRecipes(fixture, manifest, currentCorpus, currentCorpus);
   assert.deepEqual(selected.matchedRestIds, ["saved"]);
   assert.deepEqual(selected.pendingRestIds, ["changed"]);
+  assert.deepEqual(selected.retiredRestIds, ["retired"]);
   assert.deepEqual(Object.keys(selected.fixture.programs), ["saved"]);
   assert.deepEqual(
     selected.corpus.restPrograms.map((program) => program.id),

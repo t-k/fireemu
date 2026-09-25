@@ -102,14 +102,9 @@ export function selectComparableSandboxRecipes(fixture, manifest, currentCorpus,
     (program) => manifest.programs[program.id] === sha256(JSON.stringify(program)),
   );
   const matchedRestIds = selectedPrograms.map((program) => program.id).toSorted();
-  const pendingRestIds = [
-    ...new Set([
-      ...recordedIds,
-      ...(currentCorpus.restPrograms ?? []).map((program) => program.id),
-    ]),
-  ]
-    .filter((id) => !matchedRestIds.includes(id))
-    .toSorted();
+  const currentRestIds = (currentCorpus.restPrograms ?? []).map((program) => program.id);
+  const pendingRestIds = currentRestIds.filter((id) => !matchedRestIds.includes(id)).toSorted();
+  const retiredRestIds = recordedIds.filter((id) => !currentRestIds.includes(id));
   const currentStreams = (currentCorpus.streamRecipes ?? []).filter(
     (recipe) => recipe.transport === "grpc",
   );
@@ -117,14 +112,13 @@ export function selectComparableSandboxRecipes(fixture, manifest, currentCorpus,
     (recipe) => manifest.streams?.[recipe.id] === sha256(JSON.stringify(recipe)),
   );
   const matchedStreamIds = selectedStreams.map((recipe) => recipe.id).toSorted();
-  const pendingStreamIds = [
-    ...new Set([
-      ...Object.keys(fixture.streams ?? {}),
-      ...currentStreams.map((recipe) => recipe.id),
-    ]),
-  ]
+  const currentStreamIds = currentStreams.map((recipe) => recipe.id);
+  const pendingStreamIds = currentStreamIds
     .filter((id) => !matchedStreamIds.includes(id))
     .toSorted();
+  const retiredStreamIds = Object.keys(fixture.streams ?? {}).filter(
+    (id) => !currentStreamIds.includes(id),
+  );
   const keep = (entries, ids) => Object.fromEntries(ids.map((id) => [id, entries[id]]));
   return {
     fixture: {
@@ -143,8 +137,10 @@ export function selectComparableSandboxRecipes(fixture, manifest, currentCorpus,
     },
     matchedRestIds,
     pendingRestIds,
+    retiredRestIds,
     matchedStreamIds,
     pendingStreamIds,
+    retiredStreamIds,
   };
 }
 
@@ -2463,10 +2459,12 @@ async function compareLocal(runDir) {
       corpus,
       matchedRestIds: corpus.restPrograms.map((program) => program.id),
       pendingRestIds: [],
+      retiredRestIds: [],
       matchedStreamIds: corpus.streamRecipes
         .filter((recipe) => recipe.transport === "grpc")
         .map((recipe) => recipe.id),
       pendingStreamIds: [],
+      retiredStreamIds: [],
     };
   } else {
     const manifest = JSON.parse(
@@ -2505,7 +2503,7 @@ async function compareLocal(runDir) {
   comparison.pendingRestIds = supplemental.pendingRestIds;
   comparison.pendingStreamIds = supplemental.pendingStreamIds;
   process.stdout.write(
-    `${JSON.stringify({ corpusDigest, recordedCorpusDigest: fixture.evidence.corpusSha256, comparedPrograms: comparison.matchedRestIds.length, comparedStreams: comparison.matchedStreamIds.length, pendingRestIds: comparison.pendingRestIds, pendingStreamIds: comparison.pendingStreamIds, mismatches: differences.length, differences })}\n`,
+    `${JSON.stringify({ corpusDigest, recordedCorpusDigest: fixture.evidence.corpusSha256, comparedPrograms: comparison.matchedRestIds.length, comparedStreams: comparison.matchedStreamIds.length, pendingRestIds: comparison.pendingRestIds, pendingStreamIds: comparison.pendingStreamIds, retiredRestIds: comparison.retiredRestIds, retiredStreamIds: comparison.retiredStreamIds, mismatches: differences.length, differences })}\n`,
   );
   process.exitCode = comparisonExitCode(
     differences,

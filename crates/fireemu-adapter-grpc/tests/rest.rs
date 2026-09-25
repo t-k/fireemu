@@ -131,6 +131,7 @@ fn call_as(
         authorization: authorization.map(str::to_owned),
         app_check: Vec::new(),
         body,
+        batch_field_order: Vec::new(),
         origin: None,
         browser_metadata: false,
     });
@@ -4575,6 +4576,7 @@ fn the_security_rules_route_needs_the_control_token_from_a_browser() {
             browser_metadata: browser,
             app_check: Vec::new(),
             body: json!({"rules": {"files": [{"name": "firestore.rules", "content": ALLOW}]}}),
+            batch_field_order: Vec::new(),
         });
         (r.status, r.body)
     };
@@ -4643,6 +4645,7 @@ fn the_emulator_clear_route_needs_the_control_token_from_a_browser() {
                 browser_metadata: browser,
                 app_check: Vec::new(),
                 body: json!({}),
+                batch_field_order: Vec::new(),
             });
             (r.status, r.body)
         };

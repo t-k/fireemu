@@ -1189,6 +1189,23 @@ async fn changed_source_stamp(
     Some(stable_stamp)
 }
 
+fn refuse_fixed_inspector_reload(
+    cfg: &RuntimeConfig,
+    codebase: &FunctionsCodebase,
+    stable_stamp: FunctionsSourceStamp,
+    observed_stamp: &mut Option<FunctionsSourceStamp>,
+) -> bool {
+    let Some(port) = cfg.functions_inspect_port else {
+        return false;
+    };
+    *observed_stamp = Some(stable_stamp);
+    eprintln!(
+        "warning: functions[{}]: hot reload disabled for fixed inspector port {port}; restart to load source changes or use --inspect-functions without a port",
+        codebase.codebase
+    );
+    true
+}
+
 async fn supervise_codebase_reloads(
     weak_runtime: std::sync::Weak<FunctionsRuntime>,
     cfg: RuntimeConfig,
@@ -1224,6 +1241,9 @@ async fn supervise_codebase_reloads(
         else {
             continue;
         };
+        if refuse_fixed_inspector_reload(&cfg, &codebase, stable_stamp, &mut observed_stamp) {
+            continue;
+        }
         let stable = stable_stamp.content_signature;
         let snapshot = match resources
             .scan_budget

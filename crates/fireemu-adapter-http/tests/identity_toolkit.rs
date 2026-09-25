@@ -11182,6 +11182,16 @@ fn with_registry(mut s: AuthState) -> AuthState {
     s
 }
 
+fn enable_tenants(s: &AuthState) {
+    let (status, body) = admin(
+        s,
+        "PATCH",
+        &format!("{PROJECT_CONFIG}?updateMask=multiTenant.allowTenants"),
+        &json!({"multiTenant": {"allowTenants": true}}),
+    );
+    assert_eq!(status, 200, "{body}");
+}
+
 /// The registry path of a config write keeps the profile's policy rule, stores written and
 /// derived members, and normalizes a whole `quota` mask, as the path without a registry does.
 #[test]
@@ -15469,6 +15479,7 @@ fn sorted_admin_query_remains_scoped_to_the_selected_tenant() {
     let registry = Arc::new(AuthRegistry::new("demo-app", s.store.clone()));
     registry.ensure_tenant("demo-app", "customer").unwrap();
     s.registry = Some(registry);
+    enable_tenants(&s);
     let tenant = format!("{ADMIN}/tenants/customer");
     for (uid, name) in [("a", "Z"), ("b", "A")] {
         let (status, body) = admin(
@@ -15505,6 +15516,7 @@ fn strict_admin_query_body_tenant_is_scoped_and_never_silently_ignored() {
     let registry = Arc::new(AuthRegistry::new("demo-app", s.store.clone()));
     registry.ensure_tenant("demo-app", "customer").unwrap();
     s.registry = Some(registry);
+    enable_tenants(&s);
     let tenant = format!("{ADMIN}/tenants/customer");
     assert_eq!(
         admin(
@@ -15753,6 +15765,7 @@ fn account_expression_is_namespace_scoped_and_keeps_management_authorization() {
     let registry = Arc::new(AuthRegistry::new("demo-app", s.store.clone()));
     registry.ensure_tenant("demo-app", "customer").unwrap();
     s.registry = Some(registry);
+    enable_tenants(&s);
     assert_eq!(
         admin(
             &s,
@@ -17925,6 +17938,136 @@ fn a_mixed_mfa_and_stored_member_patch_is_atomic() {
         assert_eq!(read["mfa"], enabled);
         assert_eq!(read["notification"]["defaultLocale"], "ja");
     }
+}
+
+/// Strict tenant management follows the project's `allowTenants` switch. Disabling it keeps
+/// existing tenant data intact until the project enables tenant management again.
+#[test]
+fn strict_tenant_management_requires_allow_tenants() {
+    let s = with_registry(strict_state());
+    let tenants = format!("{V2}/projects/demo-app/tenants");
+    let create = || admin(&s, "POST", &tenants, &json!({"displayName": "atb-switch"}));
+    let list = || admin(&s, "GET", &tenants, &Value::Null);
+    let patch = |allowed: bool| {
+        admin(
+            &s,
+            "PATCH",
+            &format!("{PROJECT_CONFIG}?updateMask=multiTenant.allowTenants"),
+            &json!({"multiTenant": {"allowTenants": allowed}}),
+        )
+    };
+    assert_eq!(
+        admin(&s, "GET", PROJECT_CONFIG, &Value::Null).1["multiTenant"],
+        json!({})
+    );
+    let (status, refused) = create();
+    assert_eq!(
+        (status, refused["error"]["message"].as_str()),
+        (400, Some("INVALID_PROJECT_ID"))
+    );
+    let (status, enabled) = patch(true);
+    assert_eq!(status, 200, "{enabled}");
+    assert_eq!(enabled["multiTenant"], json!({"allowTenants": true}));
+    let (status, created) = create();
+    assert_eq!(status, 200, "{created}");
+    let (status, disabled) = patch(false);
+    assert_eq!(status, 200, "{disabled}");
+    assert_eq!(disabled["multiTenant"], json!({}));
+    let (status, refused) = list();
+    assert_eq!(
+        (status, refused["error"]["message"].as_str()),
+        (400, Some("INVALID_PROJECT_ID"))
+    );
+    assert_eq!(patch(true).0, 200);
+    let (status, listed) = list();
+    assert_eq!(status, 200, "{listed}");
+    assert_eq!(listed["tenants"][0]["name"], created["name"]);
+    let (status, cleared) = admin(
+        &s,
+        "PATCH",
+        &format!("{PROJECT_CONFIG}?updateMask=multiTenant.allowTenants"),
+        &json!({}),
+    );
+    assert_eq!(status, 200, "{cleared}");
+    assert_eq!(cleared["multiTenant"], json!({}));
+    assert_eq!(list().0, 400);
+}
+
+/// Turning tenant management off hides an existing tenant from client Auth without deleting its
+/// users; turning it on again restores access to that namespace.
+#[test]
+fn strict_tenant_authentication_requires_allow_tenants() {
+    let s = with_registry(strict_state());
+    let config = format!("{PROJECT_CONFIG}?updateMask=multiTenant.allowTenants");
+    let set = |allowed| {
+        admin(
+            &s,
+            "PATCH",
+            &config,
+            &json!({"multiTenant": {"allowTenants": allowed}}),
+        )
+    };
+    assert_eq!(set(true).0, 200);
+    let (status, created) = admin(
+        &s,
+        "POST",
+        &format!("{V2}/projects/demo-app/tenants"),
+        &json!({"displayName": "atb-client", "allowPasswordSignup": true}),
+    );
+    assert_eq!(status, 200, "{created}");
+    let tenant = created["name"]
+        .as_str()
+        .unwrap()
+        .rsplit('/')
+        .next()
+        .unwrap();
+    let signup = |email: &str| {
+        post(
+            &s,
+            &format!("{V1}/accounts:signUp"),
+            &json!({"tenantId": tenant, "email": email, "password": "password123", "returnSecureToken": true}),
+        )
+    };
+    let (status, first) = signup("kept@example.com");
+    assert_eq!(status, 200, "{first}");
+    assert_eq!(set(false).0, 200);
+    let (status, refused) = signup("blocked@example.com");
+    assert_eq!(
+        (status, refused["error"]["message"].as_str()),
+        (404, Some("TENANT_NOT_FOUND"))
+    );
+    let (status, refused) = post(
+        &s,
+        &format!("{V1}/accounts:signInWithPassword"),
+        &json!({"tenantId": tenant, "email": "kept@example.com", "password": "password123", "returnSecureToken": true}),
+    );
+    assert_eq!(
+        (status, refused["error"]["message"].as_str()),
+        (404, Some("TENANT_NOT_FOUND"))
+    );
+    let (status, refused) = admin(
+        &s,
+        "POST",
+        &format!("{V1}/projects/demo-app/tenants/{tenant}/accounts:lookup"),
+        &json!({"localId": [first["localId"]]}),
+    );
+    assert_eq!(
+        (status, refused["error"]["message"].as_str()),
+        (404, Some("TENANT_NOT_FOUND"))
+    );
+    assert_eq!(set(true).0, 200);
+    let (status, signed_in) = post(
+        &s,
+        &format!("{V1}/accounts:signInWithPassword"),
+        &json!({"tenantId": tenant, "email": "kept@example.com", "password": "password123", "returnSecureToken": true}),
+    );
+    assert_eq!(status, 200, "{signed_in}");
+    let (status, refused) = post(
+        &s,
+        &format!("{V1}/accounts:signInWithPassword"),
+        &json!({"tenantId": tenant, "email": "blocked@example.com", "password": "password123", "returnSecureToken": true}),
+    );
+    assert_eq!(status, 400, "{refused}");
 }
 
 /// Strict: an email change applied from the emulator's action page follows the same rules as

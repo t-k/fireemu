@@ -2,6 +2,8 @@
 
 use std::sync::{Arc, Mutex};
 
+use fireemu_core_auth::config_members::ALLOW_TENANTS;
+
 use fireemu_core_auth::jwt::{encode_unsigned, verify_id_token_decoded, JwtError};
 use fireemu_core_auth::mfa::{TotpFactor, TotpPolicy, TotpSecret};
 use fireemu_core_auth::store::{
@@ -14,6 +16,71 @@ const NOW: LogicalInstant = LogicalInstant::from_unix_seconds(1_788_004_860);
 
 fn store(project: &str, seed: u64) -> AuthStore {
     AuthStore::new(project, SplitMix64::new(seed), TotpPolicy::default())
+}
+
+fn set_allow_tenants(store: &Arc<Mutex<AuthStore>>, allowed: bool) {
+    let mut store = store.lock().unwrap();
+    let mut members = store.stored_config_members().clone();
+    members.set(ALLOW_TENANTS, allowed.then(|| "true".to_owned()));
+    store.set_stored_config_members(members);
+}
+
+/// A caller can observe the old switch before the project gate, but a queued tenant mutation
+/// must use the switch value at its commit gate after a disabling config write.
+#[test]
+fn guarded_tenant_mutations_recheck_allow_tenants_at_the_project_gate() {
+    let parent = Arc::new(Mutex::new(store("demo-app", 1)));
+    let registry = AuthRegistry::new("demo-app", parent.clone());
+    set_allow_tenants(&parent, true);
+    let (existing, _, _) = registry
+        .create_tenant_with_password_policy_guarded(
+            "demo-app",
+            TenantMetadata::default(),
+            TenantMetadataPatch::default(),
+            None,
+        )
+        .unwrap();
+    assert!(parent.lock().unwrap().allows_tenants()); // The adapter's pre-gate observation.
+    let gate = registry.operation_gate("demo-app", None).unwrap();
+    let held = gate.lock().unwrap();
+    std::thread::scope(|scope| {
+        let (ready, started) = std::sync::mpsc::channel();
+        let registry_ref = &registry;
+        let queued = scope.spawn(move || {
+            ready.send(()).unwrap();
+            registry_ref.create_tenant_with_password_policy_guarded(
+                "demo-app",
+                TenantMetadata::default(),
+                TenantMetadataPatch::default(),
+                None,
+            )
+        });
+        started.recv().unwrap();
+        set_allow_tenants(&parent, false);
+        drop(held);
+        assert!(queued.join().unwrap().is_none());
+    });
+    assert_eq!(registry.tenants("demo-app"), [existing.as_str()]);
+    assert!(registry
+        .patch_tenant_with_password_policy_guarded(
+            "demo-app",
+            &existing,
+            TenantMetadataPatch::default(),
+            None,
+        )
+        .is_none());
+    assert!(!registry.delete_tenant_guarded("demo-app", &existing));
+    assert_eq!(registry.tenants("demo-app"), [existing.as_str()]);
+    set_allow_tenants(&parent, true);
+    assert!(registry
+        .patch_tenant_with_password_policy_guarded(
+            "demo-app",
+            &existing,
+            TenantMetadataPatch::default(),
+            None,
+        )
+        .is_some());
+    assert!(registry.delete_tenant_guarded("demo-app", &existing));
 }
 
 #[test]

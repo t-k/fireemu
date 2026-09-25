@@ -2146,6 +2146,14 @@ impl AuthStore {
         &self.stored_members
     }
 
+    /// Whether the project's Admin v2 config currently admits tenant operations.
+    #[must_use]
+    pub fn allows_tenants(&self) -> bool {
+        self.stored_members
+            .get(crate::config_members::ALLOW_TENANTS)
+            == Some("true")
+    }
+
     /// Replaces the project's written config members.
     pub fn set_stored_config_members(
         &mut self,
@@ -7608,6 +7616,42 @@ impl AuthRegistry {
         patch: TenantMetadataPatch,
         password_policy: Option<PasswordPolicy>,
     ) -> Option<(String, TenantMetadata, PasswordPolicy)> {
+        self.create_tenant_with_password_policy_inner(
+            project,
+            metadata,
+            patch,
+            password_policy,
+            false,
+        )
+    }
+
+    /// Creates a tenant only if its parent config enables tenant operations at the project gate.
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn create_tenant_with_password_policy_guarded(
+        &self,
+        project: &str,
+        metadata: TenantMetadata,
+        patch: TenantMetadataPatch,
+        password_policy: Option<PasswordPolicy>,
+    ) -> Option<(String, TenantMetadata, PasswordPolicy)> {
+        self.create_tenant_with_password_policy_inner(
+            project,
+            metadata,
+            patch,
+            password_policy,
+            true,
+        )
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    fn create_tenant_with_password_policy_inner(
+        &self,
+        project: &str,
+        metadata: TenantMetadata,
+        patch: TenantMetadataPatch,
+        password_policy: Option<PasswordPolicy>,
+        require_enabled: bool,
+    ) -> Option<(String, TenantMetadata, PasswordPolicy)> {
         if project.is_empty() || project.contains(['/', '\\']) {
             return None;
         }
@@ -7619,6 +7663,9 @@ impl AuthRegistry {
         } else {
             projects.registered.get(project)?
         };
+        if require_enabled && !parent.lock().ok()?.allows_tenants() {
+            return None;
+        }
         let mut metadata = metadata;
         let display_name = patch
             .display_name
@@ -7725,6 +7772,30 @@ impl AuthRegistry {
         patch: TenantMetadataPatch,
         password_policy: Option<PasswordPolicy>,
     ) -> Option<(TenantMetadata, PasswordPolicy)> {
+        self.patch_tenant_with_password_policy_inner(project, tenant, patch, password_policy, false)
+    }
+
+    /// Patches a tenant only if its parent config enables tenant operations at the project gate.
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn patch_tenant_with_password_policy_guarded(
+        &self,
+        project: &str,
+        tenant: &str,
+        patch: TenantMetadataPatch,
+        password_policy: Option<PasswordPolicy>,
+    ) -> Option<(TenantMetadata, PasswordPolicy)> {
+        self.patch_tenant_with_password_policy_inner(project, tenant, patch, password_policy, true)
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    fn patch_tenant_with_password_policy_inner(
+        &self,
+        project: &str,
+        tenant: &str,
+        patch: TenantMetadataPatch,
+        password_policy: Option<PasswordPolicy>,
+        require_enabled: bool,
+    ) -> Option<(TenantMetadata, PasswordPolicy)> {
         if project.is_empty()
             || project.contains(['/', '\\'])
             || tenant.is_empty()
@@ -7734,6 +7805,9 @@ impl AuthRegistry {
         }
         let gate = self.operation_gate(project, None)?;
         let _operation = gate.lock().ok()?;
+        if require_enabled && !self.project_store(project)?.lock().ok()?.allows_tenants() {
+            return None;
+        }
         let key = (project.to_owned(), tenant.to_owned());
         let tenants = self.tenants.lock().ok()?;
         let store = tenants.get(&key).cloned()?;
@@ -8433,6 +8507,15 @@ impl AuthRegistry {
 
     /// Deletes a tenant namespace and its metadata.
     pub fn delete_tenant(&self, project: &str, tenant: &str) -> bool {
+        self.delete_tenant_inner(project, tenant, false)
+    }
+
+    /// Deletes a tenant only if its parent config enables tenant operations at the project gate.
+    pub fn delete_tenant_guarded(&self, project: &str, tenant: &str) -> bool {
+        self.delete_tenant_inner(project, tenant, true)
+    }
+
+    fn delete_tenant_inner(&self, project: &str, tenant: &str, require_enabled: bool) -> bool {
         // Tenant authentication and tenant configuration updates use the project gate. Hold the
         // same gate before inspecting membership so deletion cannot detach a namespace while an
         // in-flight request is committing against its previously selected store.
@@ -8442,6 +8525,14 @@ impl AuthRegistry {
         let Ok(_operation) = gate.lock() else {
             return false;
         };
+        if require_enabled
+            && !self
+                .project_store(project)
+                .and_then(|store| store.lock().ok().map(|store| store.allows_tenants()))
+                .unwrap_or(false)
+        {
+            return false;
+        }
         let key = (project.to_owned(), tenant.to_owned());
         let removed = self.tenants.lock().ok().and_then(|mut stores| {
             let mut metadata = self.tenant_metadata.lock().ok()?;

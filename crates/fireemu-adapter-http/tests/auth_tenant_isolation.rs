@@ -90,6 +90,9 @@ fn profiles() -> Vec<(&'static str, AuthState, Arc<AuthRegistry>)> {
                 registry.ensure_tenant("demo-app", tenant).unwrap();
             }
             state.registry = Some(registry.clone());
+            if label == "strict" {
+                enable_tenants(&state, "demo-app");
+            }
             (label, state, registry)
         })
         .collect()
@@ -127,6 +130,17 @@ fn with_client_key(state: &AuthState, path: &str, key: &str) -> String {
 fn admin(state: &AuthState, method: &str, path: &str, body: &Value) -> (u16, Value) {
     let r = handle_with(state, method, path, &owner(), body);
     (r.status, r.body)
+}
+
+fn enable_tenants(state: &AuthState, project: &str) {
+    let path = format!("/identitytoolkit.googleapis.com/admin/v2/projects/{project}/config?updateMask=multiTenant.allowTenants");
+    let (status, body) = admin(
+        state,
+        "PATCH",
+        &path,
+        &json!({"multiTenant": {"allowTenants": true}}),
+    );
+    assert_eq!(status, 200, "{project}: {body}");
 }
 
 fn claims(id_token: &str) -> Value {
@@ -659,6 +673,9 @@ fn sdk_shaped_refresh_of_a_tenant_token_from_another_project_is_refused() {
                 project,
                 AuthStore::new(project, SplitMix64::new(11), TotpPolicy::default()),
             ));
+            if profile == "strict" {
+                enable_tenants(&state, project);
+            }
             registry.ensure_tenant(project, "customer-a").unwrap();
             tenancy.register(project, &[], &[key.to_owned()]).unwrap();
         }
@@ -2080,6 +2097,7 @@ fn a_strict_tenant_keeps_auth_totp_and_asks_for_enrolled_factors() {
     let registry = Arc::new(AuthRegistry::new("demo-app", state.store.clone()));
     registry.ensure_tenant("demo-app", TENANT_A).unwrap();
     state.registry = Some(registry);
+    enable_tenants(&state, "demo-app");
     let (status, created) = admin(
         &state,
         "POST",

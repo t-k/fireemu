@@ -5,9 +5,11 @@
 //!   (sandbox reads 2026-09-23 and 2026-09-25): every member production reports, read-only ones
 //!   included, and no member whose value is unset; a `false` switch is left out, as production
 //!   leaves it out;
-//! - the emulator profile answers the official Auth emulator's document
-//!   (`signIn.allowDuplicateEmails`, `blockingFunctions`, `emailPrivacyConfig`) and adds only the
-//!   members that were written.
+//! - the emulator profile starts with the official Auth emulator's three members
+//!   (`signIn.allowDuplicateEmails`, `blockingFunctions`, `emailPrivacyConfig`), adds the
+//!   project's MFA state exposed by AUTH-MFA, and adds the other members that were written.
+//!   The MFA addition is a fireemu extension after the AUTH-CONFIG-SDK K3 baseline; the strict
+//!   profile keeps production's config shape.
 //!
 //! The written members fireemu keeps without interpreting them all live in
 //! [`fireemu_core_auth::config_members`]; this module supplies their initial values.
@@ -19,6 +21,7 @@ use super::JsonResponse;
 
 /// Config members stored as written ([`fireemu_core_auth::config_members`]).
 pub(super) const STORED_MEMBERS: &[&str] = &[
+    "multiTenant",
     "notification",
     "mobileLinksConfig",
     "smsRegionConfig",
@@ -117,6 +120,7 @@ fn initial_notification(project: &str) -> Value {
 /// members a new project does not report (`recaptchaConfig`, `autodeleteAnonymousUsers`).
 pub(super) fn initial_member(member: &str, project: &str) -> Option<Value> {
     match member {
+        "multiTenant" => Some(json!({})),
         "notification" => Some(initial_notification(project)),
         "mobileLinksConfig" => Some(json!({"domain": "HOSTING_DOMAIN"})),
         "smsRegionConfig" => Some(json!({"allowlistOnly": {}})),
@@ -394,7 +398,11 @@ pub(super) fn strict_document(sources: &ConfigSources<'_>) -> Value {
     }
     for member in STORED_MEMBERS {
         if let Some(value) = member_value(sources.members, member, project) {
-            document[*member] = value;
+            document[*member] = if *member == "multiTenant" {
+                without_false(value)
+            } else {
+                value
+            };
         }
     }
     document

@@ -29,7 +29,7 @@ use fireemu_core_auth::signup_quota::{
     QuotaAlgorithm, QuotaMode, SignupQuotaConfig, SignupReservation, TemporaryQuota,
 };
 use fireemu_core_auth::store::{
-    AuthError, AuthPrincipal, AuthStore, CredentialNotice, FederatedIdentity,
+    AuthError, AuthPrincipal, AuthRegistry, AuthStore, CredentialNotice, FederatedIdentity,
     InboundSamlProviderConfig, LocalId, NewUser, OAuthResponseType, OidcProviderConfig,
     OobRequestType, PendingSignInId, PhoneCodeUse, ProjectAuthConfigPatch,
     ProjectConfigStoreUpdate, RoutedStoreInstall, SecondFactorAssertion, SignInConfig,
@@ -2631,6 +2631,21 @@ fn dispatch_with_blocking_hook(
         },
         None => None,
     };
+    if !state.stateless_refresh_tokens && tenant.is_some() {
+        let Some(parent) = state
+            .registry
+            .as_ref()
+            .and_then(|registry| registry.store_for(&project))
+        else {
+            return error(400, "INVALID_PROJECT_ID");
+        };
+        let Ok(parent) = parent.lock() else {
+            return error(500, "INTERNAL");
+        };
+        if !parent.allows_tenants() {
+            return unknown_tenant_refusal(handler, error(404, "TENANT_NOT_FOUND"));
+        }
+    }
     match (tenant.as_deref(), state.registry.as_ref()) {
         (Some(tenant), Some(registry)) => {
             registry.with_existing_tenant_metadata(&project, tenant, commit)
@@ -2841,6 +2856,18 @@ fn handle_with_policy(
         .blocking
         .as_deref()
         .map_or(0, AuthBlockingHook::blocking_auth_revision);
+    let tenant_management_request = matches!(
+        resolution,
+        routes::Resolution::Matched { route, .. }
+            if matches!(
+                route.handler,
+                routes::Handler::TenantCreate
+                    | routes::Handler::TenantList
+                    | routes::Handler::TenantGet
+                    | routes::Handler::TenantUpdate
+                    | routes::Handler::TenantDelete
+            )
+    );
     // End-user requests take the namespace gate before acquiring the store guard. Configuration
     // PATCHes use this same gate and then lock the store, so keeping one order prevents a signup
     // from holding the store while a concurrent PATCH waits for the gate. The gate also covers
@@ -2869,7 +2896,10 @@ fn handle_with_policy(
         // reacquired by dispatch_with_blocking_hook for its commit, while non-hooking routes can
         // continue to read the store during an external callback.
         None
-    } else if blocking_auth || end_user_request {
+    } else if blocking_auth
+        || end_user_request
+        || (store_tenant.is_some() && !tenant_management_request)
+    {
         let gate = match state.registry.as_ref() {
             Some(registry) => registry
                 // Project and tenant management both commit through the project gate. A
@@ -2900,6 +2930,26 @@ fn handle_with_policy(
             None => None,
         }
     };
+    if !state.stateless_refresh_tokens && store_tenant.is_some() {
+        let Some(parent) = state
+            .registry
+            .as_ref()
+            .and_then(|registry| registry.store_for(&store_project))
+        else {
+            return error(400, "INVALID_PROJECT_ID");
+        };
+        let Ok(parent) = parent.lock() else {
+            return error(500, "INTERNAL");
+        };
+        if !parent.allows_tenants() {
+            return match resolution {
+                routes::Resolution::Matched { route, .. } => {
+                    unknown_tenant_refusal(route.handler, error(404, "TENANT_NOT_FOUND"))
+                }
+                _ => error(404, "TENANT_NOT_FOUND"),
+            };
+        }
+    }
     let tenant_metadata = store_tenant.as_deref().and_then(|tenant| {
         state
             .registry
@@ -5368,6 +5418,19 @@ fn with_derived_members(
 ) {
     if fields
         .iter()
+        .any(|field| field == "multiTenant" || field == "multiTenant.allowTenants")
+    {
+        let allowed = body
+            .pointer("/multiTenant/allowTenants")
+            .and_then(Value::as_bool)
+            == Some(true);
+        members.set(
+            fireemu_core_auth::config_members::ALLOW_TENANTS,
+            allowed.then(|| "true".to_owned()),
+        );
+    }
+    if fields
+        .iter()
         .any(|field| field == "quota" || field.starts_with("quota.signUpQuotaConfig"))
     {
         members.set(
@@ -6469,6 +6532,14 @@ fn validate_tenant_update_payload(body: &Value) -> Result<(), JsonResponse> {
     Ok(())
 }
 
+fn tenant_management_disabled(state: &AuthState, registry: &AuthRegistry, project: &str) -> bool {
+    !state.stateless_refresh_tokens
+        && registry
+            .store_for(project)
+            .and_then(|store| store.lock().ok().map(|store| !store.allows_tenants()))
+            .unwrap_or(false)
+}
+
 #[allow(clippy::too_many_lines)]
 fn tenant_management(
     state: &AuthState,
@@ -6485,6 +6556,17 @@ fn tenant_management(
     let Some(project) = project else {
         return error(400, "INVALID_PROJECT_ID");
     };
+    if !state.stateless_refresh_tokens {
+        let Some(parent) = registry.store_for(project) else {
+            return error(400, "INVALID_PROJECT_ID");
+        };
+        let Ok(parent) = parent.lock() else {
+            return error(500, "INTERNAL");
+        };
+        if !parent.allows_tenants() {
+            return error(400, "INVALID_PROJECT_ID");
+        }
+    }
     match handler {
         Handler::TenantCreate => {
             let metadata = match tenant_metadata(body) {
@@ -6498,12 +6580,26 @@ fn tenant_management(
                     Err(response) => return response,
                 },
             };
-            let Some((tenant, metadata, policy)) = registry.create_tenant_with_password_policy(
-                project,
-                metadata,
-                tenant_client_config_patch(body),
-                password_policy,
-            ) else {
+            let patch = tenant_client_config_patch(body);
+            let created = if state.stateless_refresh_tokens {
+                registry.create_tenant_with_password_policy(
+                    project,
+                    metadata,
+                    patch,
+                    password_policy,
+                )
+            } else {
+                registry.create_tenant_with_password_policy_guarded(
+                    project,
+                    metadata,
+                    patch,
+                    password_policy,
+                )
+            };
+            let Some((tenant, metadata, policy)) = created else {
+                if tenant_management_disabled(state, registry, project) {
+                    return error(400, "INVALID_PROJECT_ID");
+                }
                 return if registry.store_for(project).is_some() {
                     error(500, "INTERNAL")
                 } else {
@@ -6644,9 +6740,20 @@ fn tenant_management(
                 Ok(patch) => patch,
                 Err(response) => return response,
             };
-            let Some((metadata, policy)) =
+            let updated = if state.stateless_refresh_tokens {
                 registry.patch_tenant_with_password_policy(project, tenant, patch, password_policy)
-            else {
+            } else {
+                registry.patch_tenant_with_password_policy_guarded(
+                    project,
+                    tenant,
+                    patch,
+                    password_policy,
+                )
+            };
+            let Some((metadata, policy)) = updated else {
+                if tenant_management_disabled(state, registry, project) {
+                    return error(400, "INVALID_PROJECT_ID");
+                }
                 return error(404, "TENANT_NOT_FOUND");
             };
             JsonResponse {
@@ -6658,7 +6765,15 @@ fn tenant_management(
             let Some(tenant) = tenant else {
                 return error(400, "INVALID_TENANT_ID");
             };
-            if !registry.delete_tenant(project, tenant) {
+            let deleted = if state.stateless_refresh_tokens {
+                registry.delete_tenant(project, tenant)
+            } else {
+                registry.delete_tenant_guarded(project, tenant)
+            };
+            if !deleted {
+                if tenant_management_disabled(state, registry, project) {
+                    return error(400, "INVALID_PROJECT_ID");
+                }
                 return error(404, "TENANT_NOT_FOUND");
             }
             JsonResponse {

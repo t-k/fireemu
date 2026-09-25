@@ -1217,10 +1217,6 @@ pub struct AuthStore {
     generated_local_id_reservations: Arc<Mutex<GeneratedLocalIdReservations>>,
     /// Monotonic request tickets that identify one generated-ID reservation owner.
     generated_local_id_reservation_ticket: Arc<AtomicU64>,
-    /// Monotonic count of ordinary generated-ID allocations that skipped an in-flight blocking
-    /// reservation. A blocking candidate captures this before its hook runs; a change at commit
-    /// means a nested ordinary Admin allocation changed the identity allocation boundary.
-    generated_id_interference: Arc<AtomicU64>,
     /// Users that currently own a pending enrollment or sign-in. Credential sweeping only
     /// visits this bounded subset instead of cloning or scanning every account.
     pending_user_ids: BTreeSet<LocalId>,
@@ -1562,7 +1558,6 @@ impl AuthStore {
             pending_idp: PendingIdpCache::default(),
             generated_local_id_reservations: Arc::new(Mutex::new(BTreeMap::new())),
             generated_local_id_reservation_ticket: Arc::new(AtomicU64::new(0)),
-            generated_id_interference: Arc::new(AtomicU64::new(0)),
             pending_user_ids: BTreeSet::new(),
             created_users: Vec::new(),
             deleted_users: Vec::new(),
@@ -2918,18 +2913,11 @@ impl AuthStore {
         self.reset_generation.load(Ordering::Acquire)
     }
 
-    /// Returns the monotonic count of ordinary generated-ID allocations that crossed an
-    /// in-flight blocking candidate reservation.
-    #[must_use]
-    pub fn generated_id_interference_count(&self) -> u64 {
-        self.generated_id_interference.load(Ordering::Acquire)
-    }
-
     /// Reserves the next generated local ID for a speculative blocking request.
     ///
     /// The reservation is shared by snapshots, but the live random stream is unchanged. This
-    /// keeps concurrent blocking candidates distinct while preserving the established identity
-    /// change check when an ordinary nested Admin request consumes the same generated ID.
+    /// keeps concurrent blocking candidates distinct, and an ordinary account created while the
+    /// hook runs skips the reserved id instead of taking it (`BHRNG-1`).
     pub fn reserve_next_generated_local_id(&mut self) -> String {
         self.reserve_next_generated_local_id_with_generation().0
     }
@@ -3135,11 +3123,7 @@ impl AuthStore {
                             .iter()
                             .any(|(generation, _)| *generation == self.reset_generation())
                     });
-                if reserved {
-                    self.generated_id_interference
-                        .fetch_add(1, Ordering::AcqRel);
-                    continue;
-                }
+                // An in-flight blocking request keeps the id it reserved: this account skips it.
                 if !self.users.contains_key(&candidate) && !reserved {
                     break candidate;
                 }
@@ -5366,7 +5350,6 @@ impl AuthSnapshot {
         restored.generated_local_id_reservations = live.generated_local_id_reservations.clone();
         restored.generated_local_id_reservation_ticket =
             live.generated_local_id_reservation_ticket.clone();
-        restored.generated_id_interference = live.generated_id_interference.clone();
         // A snapshot intentionally has no provider configurations. Preserve the destination's
         // control-plane state instead of allowing a cross-project restore to transfer it.
         restored.oidc_configs = live.oidc_configs.clone();

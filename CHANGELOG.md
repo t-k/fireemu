@@ -57,6 +57,7 @@ Behavior below was measured against a real Identity Platform project on 2026-09-
 
 ### Fixed
 
+- Both profiles: an account created by another request (an Admin call, another sign-up) while a `beforeCreate` blocking function runs no longer makes the sign-up or sign-in fail with `BLOCKING_FUNCTION_ERROR_RESPONSE : identity changed while the hook was running`. The other account skips the id the waiting request reserved, and the waiting request keeps it, as production (which draws ids independently) never refuses such a request.
 - Both profiles: a session snapshot captures the session project's Identity Platform tenants with the project, and a restore rolls them back too: tenant users and credentials added after the capture are gone, a tenant created since is removed, and a tenant deleted since comes back with its users under a new session epoch. It used to restore the project's own users only. The session resource report counts tenant users in `users.count` and reports the number of tenants as `tenants.count`.
 
 ## [0.7.1] - 2026-09-10

@@ -1,6 +1,6 @@
 {
   "kind": "auth-config-sdk-comparison-v1",
-  "artifactSha256": "0ef860222e0e326290593bbaa719ddc0f5cad3790174e7a51d4a09485fcdc98b",
+  "artifactSha256": "e3f99cdf0380e2b9df602de6cb960fa475b86f577a87b2685656e8714d3b53bc",
   "fixtureSha256": "8b7374e00864b1b6ca3a5eaf1fb04d7905d5f7f03dc3adf93b8f47b5811b1058",
   "summary": {
     "MATCH": 351,

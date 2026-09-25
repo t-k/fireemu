@@ -644,3 +644,14 @@ fn an_emulator_pending_sign_in_is_reaped_after_its_sibling_succeeds() {
         Err(MfaError::PendingSignInUnknown)
     );
 }
+
+/// The emulator profile keeps the ten minutes of every phone code, a phone enrollment's
+/// included (restored after the per-account bound replaced it; follow-up confirmation SF-1).
+#[test]
+fn an_emulator_phone_enrollment_session_lives_ten_minutes() {
+    assert!(phone_enrollment_at(false, 600).is_ok());
+    assert_eq!(
+        phone_enrollment_at(false, 601),
+        Err(fireemu_core_auth::store::AuthError::InvalidSessionInfo)
+    );
+}

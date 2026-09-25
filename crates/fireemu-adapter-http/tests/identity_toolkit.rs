@@ -17788,11 +17788,18 @@ fn totp_sign_in_aged(s: &AuthState, email: &str, age: i64) -> (u16, Value) {
 }
 
 /// Production accepted a TOTP pending credential 293 seconds old and refused one 303 seconds
-/// old with `TOTP_CHALLENGE_TIMEOUT`. Strict refuses from the youngest refused age only; the
-/// ages between are unobserved and stay accepted.
+/// old with `TOTP_CHALLENGE_TIMEOUT`, both measured from send to send. Strict refuses from 302
+/// seconds, one second below the refusal to absorb the two requests' differing latencies; the
+/// ages below stay accepted.
 #[test]
 fn strict_a_totp_pending_credential_times_out_where_production_refused() {
-    for (age, refused) in [(293, false), (302, false), (303, true), (1_800, true)] {
+    for (age, refused) in [
+        (293, false),
+        (301, false),
+        (302, true),
+        (303, true),
+        (1_800, true),
+    ] {
         let s = strict_mfa_state();
         let (status, body) = totp_sign_in_aged(&s, "pending-age@example.com", age);
         if refused {

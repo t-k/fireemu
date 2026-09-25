@@ -588,7 +588,30 @@ async function sessionLocal() {
   );
 }
 
+/**
+ * Runs each program in a fireemu session of its own. fireemu's virtual clock follows the wall
+ * clock only forward, so after an alignment or an age moved it ahead it stands still until the
+ * wall clock catches up; a later program's instants would then all share one whole-second or
+ * aligned fraction that production never shows (its instants carry a millisecond or microsecond
+ * fraction). A fresh session starts at the wall clock, as a production recording does.
+ */
 async function runLocal(programs) {
+  const merged = { results: {}, failures: [], timings: [], secrets: [], requests: 0, harnessRequests: 0 };
+  let binary;
+  for (const program of programs) {
+    const local = await runLocalSession([program]);
+    binary = local.binary;
+    Object.assign(merged.results, local.results);
+    merged.failures.push(...local.failures);
+    merged.timings.push(local.timings);
+    merged.secrets.push(...(local.secrets ?? []));
+    merged.requests += local.requests;
+    merged.harnessRequests += local.harnessRequests;
+  }
+  return { binary, ...merged };
+}
+
+async function runLocalSession(programs) {
   await mkdir(RUN_DIR, { recursive: true, mode: 0o700 });
   const inPath = join(RUN_DIR, "programs.json");
   const outPath = join(RUN_DIR, "fireemu.json");

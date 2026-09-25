@@ -10291,6 +10291,9 @@ fn send_oob_code(
                 return response;
             }
         }
+        if let Some(response) = mobile_link_refusal(store, body) {
+            return response;
+        }
         // A newer password reset, email change or sign-in link retires the older one; a
         // verification link cannot be asked for twice within minutes, so its rule is unobserved.
         if request_type != OobRequestType::VerifyEmail {
@@ -10303,22 +10306,91 @@ fn send_oob_code(
     };
     let mut response =
         json!({"kind": "identitytoolkit#GetOobConfirmationCodeResponse", "email": email});
+    let mut link = oob_link(headers, request_type, &code, body, store);
+    if strict {
+        link = mobile_link(store, body, link);
+    }
     if return_oob_link {
         response["oobCode"] = json!(code);
-        response["oobLink"] = json!(oob_link(headers, request_type, &code, body, store));
+        response["oobLink"] = json!(link);
     } else {
         // The mail that is not sent: the official emulator prints the link instead.
         store.push_credential_notice(CredentialNotice::EmailAction {
             request_type,
             email: email.clone(),
             new_email: store.oob_code(&code).and_then(|c| c.new_email.clone()),
-            link: oob_link(headers, request_type, &code, body, store),
+            link,
         });
     }
     JsonResponse {
         status: 200,
         body: response,
     }
+}
+
+/// Whether an action link asks for a mobile app: an iOS bundle or an Android package.
+fn names_mobile_app(body: &Value) -> bool {
+    str_field(body, "iOSBundleId").is_some_and(|id| !id.is_empty())
+        || str_field(body, "androidPackageName").is_some_and(|name| !name.is_empty())
+}
+
+/// Whether an app handles the action link itself (`canHandleCodeInApp`).
+fn handled_in_app(body: &Value) -> bool {
+    body.get("canHandleCodeInApp").and_then(Value::as_bool) == Some(true)
+}
+
+/// Strict: production's refusals of mobile link settings (sandbox recording 2026-09-25,
+/// auth-config-sdk/mobile-links). fireemu configures no Firebase Hosting domain, so every link
+/// domain is refused; Dynamic Links are never activated.
+fn mobile_link_refusal(store: &AuthStore, body: &Value) -> Option<JsonResponse> {
+    if str_field(body, "linkDomain").is_some_and(|domain| !domain.is_empty()) {
+        return Some(error(
+            400,
+            "INVALID_HOSTING_LINK_DOMAIN : The provided hosting link domain is not configured in Firebase Hosting or is not owned by the current project. This cannot be a default hosting domain (web.app or firebaseapp.com).",
+        ));
+    }
+    if handled_in_app(body) && str_field(body, "continueUrl").is_none() {
+        return Some(error(400, "MISSING_CONTINUE_URI"));
+    }
+    let dynamic_links = project_config::member_value(
+        store.stored_config_members(),
+        "mobileLinksConfig",
+        store.project_id(),
+    )
+    .and_then(|config| config.get("domain").cloned())
+        == Some(json!("FIREBASE_DYNAMIC_LINK_DOMAIN"));
+    if dynamic_links && handled_in_app(body) && names_mobile_app(body) {
+        return Some(error(
+            400,
+            "DYNAMIC_LINK_NOT_ACTIVATED : FDL domain is not configured",
+        ));
+    }
+    None
+}
+
+/// Strict: an action link with mobile settings as production gives it. A link an app handles
+/// is wrapped in the hosting domain's `/__/auth/links`; otherwise a mobile app wraps the
+/// continue URL (sandbox recording 2026-09-25, auth-config-sdk/mobile-links).
+fn mobile_link(store: &AuthStore, body: &Value, link: String) -> String {
+    if !names_mobile_app(body) {
+        return link;
+    }
+    let wrapper = format!(
+        "https://{}.firebaseapp.com/__/auth/links?link=",
+        store.project_id()
+    );
+    if handled_in_app(body) {
+        return format!("{wrapper}{}", percent_encode(&link));
+    }
+    let Some(continue_url) = str_field(body, "continueUrl") else {
+        return link;
+    };
+    let plain = format!("continueUrl={}", percent_encode(continue_url));
+    let wrapped = format!(
+        "continueUrl={}",
+        percent_encode(&format!("{wrapper}{continue_url}"))
+    );
+    link.replacen(&plain, &wrapped, 1)
 }
 
 /// The refusal of a continue URL whose host is not one of the project's authorized domains.

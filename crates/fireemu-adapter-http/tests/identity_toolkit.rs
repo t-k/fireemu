@@ -11029,6 +11029,131 @@ fn patch_sign_in(s: &AuthState, mask: &str, body: &Value) -> (u16, Value) {
     )
 }
 
+/// A URL query component with its `%XX` escapes decoded.
+fn percent_decoded(value: &str) -> String {
+    let bytes = value.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        let escaped = (bytes[i] == b'%' && i + 2 < bytes.len())
+            .then(|| u8::from_str_radix(&value[i + 1..i + 3], 16).ok())
+            .flatten();
+        if let Some(byte) = escaped {
+            out.push(byte);
+            i += 3;
+        } else {
+            out.push(bytes[i]);
+            i += 1;
+        }
+    }
+    String::from_utf8_lossy(&out).into_owned()
+}
+
+/// Strict action links carry mobile settings as production's do (sandbox recording
+/// 2026-09-25, auth-config-sdk/mobile-links): a link an app handles is wrapped in the hosting
+/// domain's `/__/auth/links`, a mobile package without it wraps the continue URL, and a link
+/// domain, an app link without a continue URL and a Dynamic Links domain are refused. The
+/// emulator profile keeps the official emulator's plain links.
+#[test]
+#[allow(clippy::too_many_lines)]
+fn strict_action_links_carry_mobile_settings_as_production_does() {
+    const WRAPPER: &str = "https://demo-app.firebaseapp.com/__/auth/links?link=";
+    const FINISH: &str = "https://demo-app.firebaseapp.com/finish";
+    let param = |link: &str, name: &str| -> Option<String> {
+        let query = link.split_once('?')?.1;
+        query.split('&').find_map(|pair| {
+            let (key, value) = pair.split_once('=')?;
+            (key == name).then(|| percent_decoded(value))
+        })
+    };
+    for strict in [true, false] {
+        let s = if strict { strict_state() } else { state() };
+        let (status, created) = admin(
+            &s,
+            "POST",
+            &format!("{ADMIN}/accounts"),
+            &json!({"email": "mobile@example.com", "password": "password1"}),
+        );
+        assert_eq!(status, 200, "{created}");
+        let link = |settings: Value| {
+            let mut body = json!({"requestType": "PASSWORD_RESET", "email": "mobile@example.com", "returnOobLink": true});
+            body.as_object_mut()
+                .unwrap()
+                .extend(settings.as_object().unwrap().clone());
+            admin(&s, "POST", &format!("{ADMIN}/accounts:sendOobCode"), &body)
+        };
+        let in_app = json!({
+            "continueUrl": FINISH,
+            "canHandleCodeInApp": true,
+            "iOSBundleId": "com.example.ios",
+            "androidPackageName": "com.example.android",
+            "androidInstallApp": true,
+            "androidMinimumVersion": "12",
+        });
+
+        let (status, answer) = link(in_app.clone());
+        assert_eq!(status, 200, "{answer}");
+        let outer = answer["oobLink"].as_str().unwrap();
+        if strict {
+            assert!(outer.starts_with(WRAPPER), "{outer}");
+            let inner = param(outer, "link").unwrap();
+            assert_eq!(
+                param(&inner, "oobCode").as_deref(),
+                answer["oobCode"].as_str()
+            );
+            assert_eq!(param(&inner, "continueUrl").as_deref(), Some(FINISH));
+        } else {
+            assert_eq!(param(outer, "continueUrl").as_deref(), Some(FINISH));
+        }
+
+        let (status, answer) =
+            link(json!({"continueUrl": FINISH, "iOSBundleId": "com.example.ios"}));
+        assert_eq!(status, 200, "{answer}");
+        let plain = answer["oobLink"].as_str().unwrap();
+        let continued = param(plain, "continueUrl");
+        if strict {
+            assert_eq!(continued, Some(format!("{WRAPPER}{FINISH}")), "{plain}");
+        } else {
+            assert_eq!(continued.as_deref(), Some(FINISH), "{plain}");
+        }
+        let (status, answer) = link(json!({"continueUrl": FINISH, "androidInstallApp": true}));
+        assert_eq!(status, 200, "{answer}");
+        assert_eq!(
+            param(answer["oobLink"].as_str().unwrap(), "continueUrl").as_deref(),
+            Some(FINISH)
+        );
+
+        let refused = |settings: Value, message: &str| {
+            let (status, answer) = link(settings);
+            if strict {
+                assert_eq!(
+                    (status, answer["error"]["message"].as_str()),
+                    (400, Some(message))
+                );
+            } else {
+                assert_eq!(status, 200, "{answer}");
+            }
+        };
+        refused(json!({"canHandleCodeInApp": true}), "MISSING_CONTINUE_URI");
+        let mut other_domain = in_app.clone();
+        other_domain["linkDomain"] = json!("app.example.com");
+        refused(
+            other_domain,
+            "INVALID_HOSTING_LINK_DOMAIN : The provided hosting link domain is not configured in Firebase Hosting or is not owned by the current project. This cannot be a default hosting domain (web.app or firebaseapp.com).",
+        );
+        let (status, config) = patch_sign_in(
+            &s,
+            "mobileLinksConfig.domain",
+            &json!({"mobileLinksConfig": {"domain": "FIREBASE_DYNAMIC_LINK_DOMAIN"}}),
+        );
+        assert_eq!(status, 200, "{config}");
+        refused(
+            in_app.clone(),
+            "DYNAMIC_LINK_NOT_ACTIVATED : FDL domain is not configured",
+        );
+    }
+}
+
 /// The default locale localizes the email and SMS templates and names the language of action
 /// links, as production does (sandbox recording 2026-09-25, auth-config-sdk/other-fields).
 /// Only English and Japanese are modelled.

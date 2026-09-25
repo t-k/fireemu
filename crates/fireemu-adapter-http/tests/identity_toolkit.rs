@@ -18355,3 +18355,58 @@ fn emulator_a_pending_sign_in_is_reaped_after_its_sibling_succeeds_by_phone() {
     let (status, body) = complete_phone(&s, &second);
     assert_eq!(status, 400, "{body}");
 }
+
+// ---- AUTH-MFA follow-up directive (2026-09-25), Must 1: strict with auth.totp fails closed ----
+
+/// Strict: the fireemu-only `auth.totp` extension alone does not turn TOTP on; production
+/// refuses a TOTP start while the project's `mfa` config does not enable it
+/// (`auth-mfa/disabled#totp-start`).
+#[test]
+fn strict_auth_totp_alone_does_not_enable_totp_enrollment() {
+    let s = AuthState {
+        totp_extension_enabled: true,
+        ..strict_state()
+    };
+    let token = verified_session(&s, "extension-only@example.com");
+    let (status, body) = post(
+        &s,
+        &format!("{V2}/accounts/mfaEnrollment:start"),
+        &json!({"idToken": token, "totpEnrollmentInfo": {}}),
+    );
+    assert_eq!(
+        (status, v2_refusal(&body).0),
+        (400, "OPERATION_NOT_ALLOWED : TOTP based MFA not enabled."),
+        "{body}"
+    );
+}
+
+/// Strict fails closed: an account with a TOTP factor is asked for it even while the project's
+/// `mfa` config is off. Production skips an enrolled factor only in the observed case, a phone
+/// factor under an off config (`auth-mfa/disabled#sign-in-a-with-factor`).
+#[test]
+fn strict_an_enrolled_totp_factor_is_asked_for_while_mfa_is_off() {
+    let s = strict_mfa_state();
+    let (_, _, _) = totp_enrolled(&s, "totp-then-off@example.com");
+    set_project_mfa(&s, &json!({"state": "DISABLED"}));
+    let (status, body) = post(
+        &s,
+        &format!("{V1}/accounts:signInWithPassword"),
+        &json!({"email": "totp-then-off@example.com", "password": "password123", "returnSecureToken": true}),
+    );
+    assert_eq!(status, 200, "{body}");
+    assert!(body["mfaPendingCredential"].is_string(), "{body}");
+    assert!(body.get("idToken").is_none(), "{body}");
+    // The observed case stays: a phone factor alone is not asked for while MFA is off.
+    create(
+        &s,
+        &json!({"email": "phone-while-off@example.com", "password": "password123", "emailVerified": true,
+            "mfaInfo": [{"phoneInfo": "+16505550101"}]}),
+    );
+    let (status, body) = post(
+        &s,
+        &format!("{V1}/accounts:signInWithPassword"),
+        &json!({"email": "phone-while-off@example.com", "password": "password123", "returnSecureToken": true}),
+    );
+    assert_eq!(status, 200, "{body}");
+    assert!(body["idToken"].is_string(), "{body}");
+}

@@ -413,3 +413,21 @@ test("a harness tenant whose create answer was lost is deleted by its display na
   assert.equal(state.tenants.size, 0);
   assert.equal(state.allowTenants, false);
 });
+
+test("a harness-named tenant that exists before a program stops it untouched (TB2 reading)", async () => {
+  const { createSession } = await import("./auth-tenant-blocking/session.mjs");
+  const leftover = { id: "atb-x-a-zzzzz", displayName: "atb-x-a" };
+  const { state, fetchFake } = fakeSandbox({ tenants: [leftover] });
+  const program = {
+    id: "atb/tenant/x",
+    tenants: { a: { displayName: "atb-x-a" } },
+    steps: [{ id: "list", path: "v2/projects/{project}/tenants", method: "GET", auth: "admin" }],
+  };
+  const session = createSession(production, { configSettleMs: 0 });
+  await assert.rejects(
+    withFetch(fetchFake, () => session.runProgram(program)),
+    /exist before it starts/,
+  );
+  assert.deepEqual([...state.tenants.keys()], [leftover.id]);
+  assert.equal(state.allowTenants, false);
+});

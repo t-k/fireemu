@@ -254,6 +254,9 @@ export function createSession(
     // The test phone numbers each owned tenant was created or patched with (pre-send review
     // MF-3): a tenant-scoped SMS request may name only these.
     phones: new Map(),
+    // Harness-named tenants that existed before the program started: never owned, never deleted
+    // (coordinator's reading of TB2, 2026-09-25: another run's leftover stops the run).
+    preexisting: new Set(),
   });
   let tenantsCreated = 0;
   let tenantsDeleted = 0;
@@ -433,11 +436,12 @@ export function createSession(
         if (status === 200) tenantsDeleted += 1;
       }
       const left = await listTenants({ cleanup: true, registries });
-      const lost = left.filter(
+      const mine = left.filter(({ id }) => !registries.preexisting.has(id));
+      const lost = mine.filter(
         ({ id, displayName }) =>
           requested.has(displayName) && !registries.tenants.owned().includes(id),
       );
-      const remaining = left.filter(
+      const remaining = mine.filter(
         ({ id, displayName }) =>
           registries.tenants.owned().includes(id) || isHarnessDisplayName(displayName),
       );
@@ -512,8 +516,11 @@ export function createSession(
         notePhones(registries, tenantIdOf(json?.name), json);
       if (Array.isArray(json?.tenants)) {
         const requested = requestedDisplayNames(program);
-        for (const tenant of json.tenants)
-          if (requested.has(tenant.displayName)) registries.tenants.own(tenantIdOf(tenant.name));
+        for (const tenant of json.tenants) {
+          const id = tenantIdOf(tenant.name);
+          if (requested.has(tenant.displayName) && !registries.preexisting.has(id))
+            registries.tenants.own(id);
+        }
       }
       raw.set(step.id, json);
       const relations = {};
@@ -547,8 +554,19 @@ export function createSession(
     const baseline = mask.length ? await readConfig(mask) : undefined;
     let failure;
     try {
-      if (multiTenant)
+      if (multiTenant) {
         await writeConfig(["multiTenant.allowTenants"], { "multiTenant.allowTenants": true });
+        // A tenant of a harness display name before the program creates any is another run's
+        // leftover: stop without touching it.
+        const present = (await listTenants({ registries })).filter(({ displayName }) =>
+          isHarnessDisplayName(displayName),
+        );
+        for (const { id } of present) registries.preexisting.add(id);
+        if (present.length)
+          throw fatal(
+            `${program.id}: ${present.length} tenant(s) of a harness display name exist before it starts; not touched`,
+          );
+      }
       await createTenants(program, registries, labels);
       if (mask.length) {
         const applied = await writeConfig(mask, program.config);

@@ -460,26 +460,35 @@ fn lookup<'v>(value: &'v Value, path: &[&str]) -> Option<&'v Value> {
         .filter(|found| !found.is_null())
 }
 
-fn put(value: &mut Value, path: &[&str], new: Option<Value>) {
+/// Writes `new` at `path`, creating missing parents; `false` when a parent on the way is a
+/// value that is not an object, which a path cannot go below.
+fn put(value: &mut Value, path: &[&str], new: Option<Value>) -> bool {
     let Some((last, parents)) = path.split_last() else {
-        return;
+        return true;
     };
     let mut current = value;
     for key in parents {
-        if !current.get(*key).is_some_and(Value::is_object) {
-            current[*key] = json!({});
+        let Some(object) = current.as_object_mut() else {
+            return false;
+        };
+        let child = object.entry((*key).to_owned()).or_insert_with(|| json!({}));
+        if child.is_null() {
+            *child = json!({});
         }
-        current = &mut current[*key];
+        current = child;
     }
-    match (current.as_object_mut(), new) {
-        (Some(object), Some(new)) => {
+    let Some(object) = current.as_object_mut() else {
+        return false;
+    };
+    match new {
+        Some(new) => {
             object.insert((*last).to_owned(), new);
         }
-        (Some(object), None) => {
+        None => {
             object.remove(*last);
         }
-        (None, _) => {}
     }
+    true
 }
 
 /// Whether a stored member's value is one fireemu accepts. Production's own checks of these
@@ -588,11 +597,13 @@ pub(super) fn apply_stored_members(
             let unset = *member == "recaptchaConfig"
                 && segments == ["useAccountDefender"]
                 && written == Some(Value::Bool(false));
-            put(
+            if !put(
                 target,
                 &segments,
                 if unset { None } else { written.or(fallback) },
-            );
+            ) {
+                return Err(());
+            }
         }
         if *member == "recaptchaConfig" {
             value = value.map(with_recaptcha_phone_defaults);

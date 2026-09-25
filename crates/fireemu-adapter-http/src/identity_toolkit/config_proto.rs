@@ -585,8 +585,11 @@ pub(super) fn known_writable_path(path: &str) -> bool {
         }
         match field.kind {
             Kind::Msg(inner) => fields = inner,
-            // Below a member this module does not model, or a list or map, any path is taken.
-            _ => return true,
+            // Below a member this module does not model, or a map, a path is taken to a bounded
+            // depth (no config path is deeper).
+            Kind::Opaque | Kind::Map(_) => return path.split('.').count() <= MAX_PATH_DEPTH,
+            // Nothing lies below a scalar, an enum or a list.
+            _ => return segments.peek().is_none(),
         }
         if segments.peek().is_none() {
             return true;
@@ -594,6 +597,9 @@ pub(super) fn known_writable_path(path: &str) -> bool {
     }
     true
 }
+
+/// The deepest update mask path taken below a member this module does not model.
+const MAX_PATH_DEPTH: usize = 8;
 
 #[cfg(test)]
 mod tests {
@@ -690,8 +696,21 @@ mod tests {
             "defaultHostingSite",
             "client.apiKey",
             "signIn.hashConfig",
+            // Nothing lies below a scalar, an enum or a list.
+            "autodeleteAnonymousUsers.a",
+            "emailPrivacyConfig.enableImprovedEmailPrivacy.a",
+            "recaptchaConfig.managedRules.a",
+            "recaptchaConfig.emailPasswordEnforcementState.a",
         ] {
             assert!(!known_writable_path(path), "{path}");
         }
+        // Below a member this module does not model, a path is taken to a bounded depth.
+        assert!(known_writable_path(
+            "notification.sendEmail.resetPasswordTemplate.subject"
+        ));
+        assert!(!known_writable_path(&format!(
+            "notification{}",
+            ".a".repeat(20)
+        )));
     }
 }

@@ -11073,6 +11073,51 @@ fn patch_sign_in(s: &AuthState, mask: &str, body: &Value) -> (u16, Value) {
     )
 }
 
+/// A mask below a stored member's scalar, or deeper than any config path, is refused or
+/// ignored without harming the store: the project keeps answering (security review
+/// 2026-09-25: a panic poisoned the store's mutex, a very deep mask overflowed the stack).
+#[test]
+fn a_mask_below_a_scalar_or_too_deep_leaves_the_store_answering() {
+    for strict in [true, false] {
+        let s = if strict { strict_state() } else { state() };
+        let (status, _) = patch_sign_in(
+            &s,
+            "autodeleteAnonymousUsers",
+            &json!({"autodeleteAnonymousUsers": true}),
+        );
+        assert_eq!(status, 200);
+        for (mask, body) in [
+            ("autodeleteAnonymousUsers.a.b".to_owned(), json!({})),
+            (
+                "autodeleteAnonymousUsers,autodeleteAnonymousUsers.a.b".to_owned(),
+                json!({"autodeleteAnonymousUsers": true}),
+            ),
+            ("notification.defaultLocale.a".to_owned(), json!({})),
+            (format!("notification{}", ".a".repeat(20_000)), json!({})),
+            (
+                format!("recaptchaConfig.managedRules{}", ".a".repeat(20_000)),
+                json!({}),
+            ),
+        ] {
+            let (status, answer) = patch_sign_in(&s, &mask, &body);
+            assert!(
+                status == 200 || status == 400,
+                "strict {strict} {}: {status} {answer}",
+                &mask[..mask.len().min(60)]
+            );
+        }
+        let (status, read) = admin(&s, "GET", PROJECT_CONFIG, &Value::Null);
+        assert_eq!(status, 200, "strict {strict}: {read}");
+        assert_eq!(read["autodeleteAnonymousUsers"], true);
+        let (status, signed) = post(
+            &s,
+            &format!("{V1}/accounts:signUp"),
+            &json!({"returnSecureToken": true}),
+        );
+        assert_eq!(status, 200, "strict {strict}: {signed}");
+    }
+}
+
 /// The reCAPTCHA config reads back as production stores it (sandbox recording 2026-09-25,
 /// auth-config-sdk/recaptcha and sdk/admin-config): the phone side (its enforcement state and
 /// both SMS switches) is always reported, the email side only as written; a masked clear keeps

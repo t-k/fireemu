@@ -261,6 +261,10 @@ fn fixture(case: &str) -> Result<Fixture> {
             rules: STEP_EXHAUSTED_BESIDE_NESTED_ALLOW,
             resource_value: Some("a".repeat(210_000)),
         },
+        "exhaustedPastCap" => Fixture {
+            rules: STEP_EXHAUSTED_PAST_CAP,
+            resource_value: Some("a".repeat(210_000)),
+        },
         "parentNegated" => Fixture {
             rules: PARENT_NEGATED,
             resource_value: None,
@@ -350,6 +354,24 @@ service cloud.firestore {
   match /databases/{database}/documents {
     match /notes/{id} {
       allow get: if resource.data.value.replace('z', 'x') == resource.data.value;
+      match /{rest=**} { allow get: if true; }
+    }
+  }
+}
+";
+
+// Five exhaustions in one request: past the cap of four the request stops, and the nested
+// allow that holds is never reached.
+const STEP_EXHAUSTED_PAST_CAP: &str = r"
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    match /notes/{id} {
+      allow get: if resource.data.value.replace('z', 'x') == resource.data.value;
+      allow get: if resource.data.value.replace('y', 'x') == resource.data.value;
+      allow get: if resource.data.value.replace('w', 'x') == resource.data.value;
+      allow get: if resource.data.value.replace('v', 'x') == resource.data.value;
+      allow get: if resource.data.value.replace('u', 'x') == resource.data.value;
       match /{rest=**} { allow get: if true; }
     }
   }

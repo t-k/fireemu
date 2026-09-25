@@ -218,6 +218,50 @@ impl DocumentAccess for Access {
     }
 }
 
+/// The Firestore answers the FS-RULES lane observed (a missing document is null; in a read,
+/// `getAfter()` reads the current state) are Firestore's: Storage rules keep refusing
+/// `getAfter()`/`existsAfter()` and treating a missing document as an error.
+#[test]
+fn storage_rules_keep_their_answers_for_after_reads_and_missing_documents() {
+    let access = Access {
+        before: BTreeMap::from([(
+            "databases/(default)/documents/c/present".to_owned(),
+            doc(&[("n", RulesValue::Int(1))]),
+        )]),
+        after: None,
+    };
+    let decide = |cond: &str| {
+        let source = format!(
+            "rules_version = '2';\nservice firebase.storage {{\n  match /b/{{bucket}}/o {{\n    match /{{file=**}} {{ allow read: if {cond}; }}\n  }}\n}}"
+        );
+        let request = RequestContext {
+            service: RulesService::Storage,
+            method: Method::Get,
+            path: "/b/demo/o/f".to_owned(),
+            auth: None,
+            resource: None,
+            request_resource: None,
+            time_unix_nanos: 0,
+            abstract_path: false,
+            request_query: None,
+        };
+        evaluate_request_with(&parse_ruleset(&source).unwrap(), &request, Some(&access)).decision
+    };
+    let present = "/databases/(default)/documents/c/present";
+    let missing = "/databases/(default)/documents/c/missing";
+    assert!(matches!(
+        decide(&format!("firestore.get({present}).data.n == 1")),
+        Decision::Allow
+    ));
+    for cond in [
+        format!("getAfter({present}) != null"),
+        format!("existsAfter({present})"),
+        format!("firestore.get({missing}) == null"),
+    ] {
+        assert!(!matches!(decide(&cond), Decision::Allow), "{cond}");
+    }
+}
+
 #[test]
 fn get_after_reads_the_state_after_the_write_and_fails_closed_elsewhere() {
     let n1 = "databases/(default)/documents/notes/n1";

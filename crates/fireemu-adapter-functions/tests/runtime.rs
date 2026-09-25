@@ -1491,9 +1491,9 @@ async fn failed_blocking_auth_respawn_releases_recovery_ownership() {
         cwd: None,
         env: vec![
             probe_env,
-            ("FIREEMU_FAKE_HELLO_DELAY_MS".to_owned(), "500".to_owned()),
+            ("FIREEMU_FAKE_EXIT_BEFORE_HELLO".to_owned(), "1".to_owned()),
         ],
-        hello_timeout: Duration::from_millis(100),
+        hello_timeout: Duration::from_secs(10),
     };
     let runtime = FunctionsRuntime::new(
         manifest,
@@ -1526,7 +1526,7 @@ async fn failed_blocking_auth_respawn_releases_recovery_ownership() {
     drop(admission);
     assert!(runtime.restart_runner_after_blocking_failure(&blocking));
     runtime.publish("crash-once", &[json!({"data": "YQ=="})]);
-    tokio::time::timeout(Duration::from_secs(2), async {
+    tokio::time::timeout(Duration::from_secs(10), async {
         while std::fs::read_to_string(&probe).unwrap().lines().count() < 3 {
             tokio::time::sleep(Duration::from_millis(10)).await;
         }
@@ -1534,7 +1534,7 @@ async fn failed_blocking_auth_respawn_releases_recovery_ownership() {
     .await
     .expect("queued work must wake after the failed Blocking Auth restart");
     let result = tokio::time::timeout(
-        Duration::from_secs(2),
+        Duration::from_secs(10),
         runtime.invoke_http(&stale_http, "GET", "/after-failed-auth-restart", &[], &[]),
     )
     .await

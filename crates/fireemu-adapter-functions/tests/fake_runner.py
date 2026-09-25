@@ -9,6 +9,7 @@ bytes that reach the runner, not on the daemon's intent.
 
 FIREEMU_FAKE_CONSUME=enabled|undetermined makes the guarded callable declare that
 consumeAppCheckToken value, for the fail-closed discovery tests.
+FIREEMU_FAKE_EXIT_BEFORE_HELLO=1 records the start and exits without a hello.
 """
 import http.server
 import json
@@ -27,6 +28,9 @@ if probe := os.environ.get("FIREEMU_SANDBOX_PROBE"):
 if probe := os.environ.get("FIREEMU_FAKE_START_PROBE"):
     with open(probe, "a", encoding="utf-8") as starts:
         starts.write(f"{os.getpid()}\n")
+
+if os.environ.get("FIREEMU_FAKE_EXIT_BEFORE_HELLO") == "1":
+    sys.exit(17)
 
 
 def send(msg):

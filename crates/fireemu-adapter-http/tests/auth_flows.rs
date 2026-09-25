@@ -8830,3 +8830,48 @@ fn enable_project_sms_mfa(s: &AuthState) {
     );
     assert_eq!(r.status, 200, "{}", r.body);
 }
+
+/// A routed project's store is installed by any successful kind of config update: the password
+/// policy, the sign-in config, the sign-up quota and the multi-factor config each on their own
+/// (mutation follow-up, docs.local/mutation/auth-mfa/20260925).
+#[test]
+fn routed_project_config_installs_its_store_for_each_kind_of_update() {
+    for (mask, body) in [
+        (
+            "passwordPolicyConfig",
+            json!({"passwordPolicyConfig": {"passwordPolicyEnforcementState": "ENFORCE",
+                "passwordPolicyVersions": [{"customStrengthOptions": {"minPasswordLength": 12}}]}}),
+        ),
+        (
+            "signIn.allowDuplicateEmails",
+            json!({"signIn": {"allowDuplicateEmails": true}}),
+        ),
+        (
+            "quota.signUpQuotaConfig",
+            json!({"quota": {"signUpQuotaConfig": {"quota": "10", "startTime": "2026-09-25T00:00:00Z", "quotaDuration": "3600s"}}}),
+        ),
+        (
+            "mfa",
+            json!({"mfa": {"state": "ENABLED", "enabledProviders": ["PHONE_SMS"]}}),
+        ),
+    ] {
+        let mut state = state();
+        let registry = Arc::new(fireemu_core_auth::store::AuthRegistry::new(
+            "demo-app",
+            state.store.clone(),
+        ));
+        state.registry = Some(registry.clone());
+        state.allow_routed_projects = true;
+        let project = "worker-config";
+        let path = format!("/identitytoolkit.googleapis.com/admin/v2/projects/{project}/config");
+        let updated = handle_with(
+            &state,
+            "PATCH",
+            &format!("{path}?updateMask={mask}"),
+            &owner(),
+            &body,
+        );
+        assert_eq!(updated.status, 200, "{mask}: {}", updated.body);
+        assert!(registry.routed_store_for(project).is_some(), "{mask}");
+    }
+}

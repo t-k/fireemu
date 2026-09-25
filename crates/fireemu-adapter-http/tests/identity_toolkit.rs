@@ -18060,3 +18060,37 @@ fn strict_an_sms_pending_credential_has_no_totp_challenge_timeout() {
         assert_eq!(status, 200, "{age}: {body}");
     }
 }
+
+// ---- AUTH-MFA: mutation follow-ups (docs.local/mutation/auth-mfa/20260925) --------------------
+
+/// Without an update mask a non-null `mfa` member is part of the update and a null one is not.
+#[test]
+fn a_maskless_config_update_reads_a_non_null_mfa_member_only() {
+    let s = state();
+    let mfa: Value = serde_json::from_str(MFA_ON).unwrap();
+    let (status, body) = admin(&s, "PATCH", PROJECT_CONFIG, &json!({ "mfa": mfa }));
+    assert_eq!(status, 200, "{body}");
+    assert_eq!(body["mfa"]["state"], "ENABLED", "{body}");
+    let (status, body) = admin(
+        &s,
+        "PATCH",
+        PROJECT_CONFIG,
+        &json!({"mfa": null, "signIn": {"allowDuplicateEmails": true}}),
+    );
+    assert_eq!(status, 200, "{body}");
+    assert_eq!(body["mfa"]["state"], "ENABLED", "{body}");
+}
+
+/// Strict: the answer that asks for a second factor keeps a password sign-in's display name.
+#[test]
+fn strict_the_pending_answer_keeps_the_display_name() {
+    let s = strict_mfa_state();
+    create(
+        &s,
+        &json!({"email": "named@example.com", "password": "password123", "emailVerified": true,
+            "displayName": "Named", "mfaInfo": [{"phoneInfo": "+16505550101"}]}),
+    );
+    let pending = pending_of(&s, "named@example.com");
+    assert_eq!(pending["displayName"], "Named", "{pending}");
+    assert!(pending.get("isNewUser").is_none(), "{pending}");
+}

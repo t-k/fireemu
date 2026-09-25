@@ -84,8 +84,26 @@
       "configProjections": [
         "default"
       ],
-      "status": "PENDING_CORPUS",
-      "note": "With the project's MFA switched off: TOTP and SMS enrollment starts, a phone factor written by the Admin API, and the first- and second-factor sign-in of that account."
+      "status": "VERIFIED",
+      "note": "With the project's MFA switched off: TOTP and SMS enrollment starts, a phone factor written by the Admin API, and the first- and second-factor sign-in of that account.",
+      "evidence": {
+        "productionRecordings": [
+          {
+            "recordedAt": "2026-09-24T17:59:03.835Z",
+            "gitSha": "0b65b0da49d378b52cc1407f8d27d78de4ea516d",
+            "recordings": 2,
+            "project": "fireemu-oracle-idp"
+          }
+        ],
+        "finalArtifactSha256": "7fe1a3e5723e1f7337dfc60ed70fd363db5b109eab5954d9b7a7ad79c06d4e51",
+        "sourceCommit": "1bc96d02fd06113d33342fca51e1b51f24a605bb",
+        "comparisonPaths": [
+          "spec/compatibility/closure/evidence/AUTH-MFA-comparison.json"
+        ],
+        "rows": {
+          "MATCH": 9
+        }
+      }
     },
     {
       "conditionId": "AUTH-MFA/project-config",
@@ -96,8 +114,26 @@
       "configProjections": [
         "default"
       ],
-      "status": "PENDING_CORPUS",
-      "note": "The Admin config API's mfa member: the read-back of the applied value, and which values production accepts or refuses (adjacentIntervals 0, 10, 11 and -1, a TOTP provider without its config or disabled, ENABLED without providers, DISABLED with providers, MANDATORY, an unknown provider and an unknown state)."
+      "status": "VERIFIED",
+      "note": "The Admin config API's mfa member: the read-back of the applied value, and which values production accepts or refuses (adjacentIntervals 0, 10, 11 and -1, a TOTP provider without its config or disabled, ENABLED without providers, DISABLED with providers, MANDATORY, an unknown provider and an unknown state).",
+      "evidence": {
+        "productionRecordings": [
+          {
+            "recordedAt": "2026-09-24T17:59:03.835Z",
+            "gitSha": "0b65b0da49d378b52cc1407f8d27d78de4ea516d",
+            "recordings": 2,
+            "project": "fireemu-oracle-idp"
+          }
+        ],
+        "finalArtifactSha256": "7fe1a3e5723e1f7337dfc60ed70fd363db5b109eab5954d9b7a7ad79c06d4e51",
+        "sourceCommit": "1bc96d02fd06113d33342fca51e1b51f24a605bb",
+        "comparisonPaths": [
+          "spec/compatibility/closure/evidence/AUTH-MFA-comparison.json"
+        ],
+        "rows": {
+          "MATCH": 13
+        }
+      }
     },
     {
       "conditionId": "AUTH-MFA/totp-enrollment",
@@ -108,8 +144,27 @@
       "configProjections": [
         "default"
       ],
-      "status": "PENDING_CORPUS",
-      "note": "mfaEnrollment:start and :finalize for TOTP: the start answer and its deadline, missing and unknown session info, missing, wrong and repeated wrong codes, the accepted code and its tokens, a finalized session offered again, the factor read back by the client and the Admin API, the first-factor session's token and refresh after enrollment, the start of a second TOTP enrollment, and the code window at enrollment (5 and 6 steps either side)."
+      "status": "VERIFIED",
+      "note": "mfaEnrollment:start and :finalize for TOTP: the start answer and its deadline, missing and unknown session info, missing, wrong and repeated wrong codes, the accepted code and its tokens, a finalized session offered again, the factor read back by the client and the Admin API, the first-factor session's token and refresh after enrollment, the start of a second TOTP enrollment, and the code window at enrollment (5 and 6 steps either side).",
+      "evidence": {
+        "productionRecordings": [
+          {
+            "recordedAt": "2026-09-24T17:59:03.835Z",
+            "gitSha": "0b65b0da49d378b52cc1407f8d27d78de4ea516d",
+            "recordings": 2,
+            "project": "fireemu-oracle-idp"
+          }
+        ],
+        "finalArtifactSha256": "7fe1a3e5723e1f7337dfc60ed70fd363db5b109eab5954d9b7a7ad79c06d4e51",
+        "sourceCommit": "1bc96d02fd06113d33342fca51e1b51f24a605bb",
+        "comparisonPaths": [
+          "spec/compatibility/closure/evidence/AUTH-MFA-comparison.json"
+        ],
+        "rows": {
+          "MATCH": 27,
+          "MATCH_NONDETERMINISTIC": 1
+        }
+      }
     },
     {
       "conditionId": "AUTH-MFA/totp-sign-in",
@@ -121,8 +176,33 @@
       "configProjections": [
         "default"
       ],
-      "status": "PENDING_CORPUS",
-      "note": "The first-factor answer that asks for a second factor, mfaSignIn:start for a TOTP factor, mfaSignIn:finalize with missing and unknown pending credentials, codes and factors, wrong codes, the code window at sign-in, the accepted code, the pending credential offered again after success, a code already used at sign-in or at enrollment, an unused code older than the last accepted one, the factor id left out, and phone verification offered for a TOTP factor. Production's per-account attempt quota answered QUOTA_EXCEEDED to the two used-code checks after the program's earlier wrong codes, so auth-mfa/totp/quota-free repeats them as the only wrong code of a new account (owner decision M10)."
+      "status": "VERIFIED",
+      "note": "The first-factor answer that asks for a second factor, mfaSignIn:start for a TOTP factor, mfaSignIn:finalize with missing and unknown pending credentials, codes and factors, wrong codes, the code window at sign-in, the accepted code, the pending credential offered again after success, a code already used at sign-in or at enrollment, an unused code older than the last accepted one, the factor id left out, and phone verification offered for a TOTP factor. Production's per-account attempt quota answered QUOTA_EXCEEDED to the two used-code checks after the program's earlier wrong codes, so auth-mfa/totp/quota-free repeats them as the only wrong code of a new account (owner decision M10).",
+      "evidence": {
+        "productionRecordings": [
+          {
+            "recordedAt": "2026-09-24T17:59:03.835Z",
+            "gitSha": "0b65b0da49d378b52cc1407f8d27d78de4ea516d",
+            "recordings": 2,
+            "project": "fireemu-oracle-idp"
+          },
+          {
+            "recordedAt": "2026-09-25T01:19:15.102Z",
+            "gitSha": "86ef1298089a8461bc0cb56db48b7fe6fe479a40",
+            "recordings": 2,
+            "project": "fireemu-oracle-idp"
+          }
+        ],
+        "finalArtifactSha256": "7fe1a3e5723e1f7337dfc60ed70fd363db5b109eab5954d9b7a7ad79c06d4e51",
+        "sourceCommit": "1bc96d02fd06113d33342fca51e1b51f24a605bb",
+        "comparisonPaths": [
+          "spec/compatibility/closure/evidence/AUTH-MFA-comparison.json"
+        ],
+        "rows": {
+          "MATCH": 46,
+          "REOBSERVED_MATCH": 2
+        }
+      }
     },
     {
       "conditionId": "AUTH-MFA/withdrawal-and-revocation",
@@ -133,8 +213,26 @@
       "configProjections": [
         "default"
       ],
-      "status": "PENDING_CORPUS",
-      "note": "mfaEnrollment:withdraw with a missing, unknown and repeated factor and without a token, the answer to a withdrawal, what it does to the tokens and refresh tokens issued before it and to validSince, the read-back and the sign-in afterwards, and a withdrawal with a first-factor token that predates the factor. SMS withdrawal is in AUTH-MFA/sms."
+      "status": "VERIFIED",
+      "note": "mfaEnrollment:withdraw with a missing, unknown and repeated factor and without a token, the answer to a withdrawal, what it does to the tokens and refresh tokens issued before it and to validSince, the read-back and the sign-in afterwards, and a withdrawal with a first-factor token that predates the factor. SMS withdrawal is in AUTH-MFA/sms.",
+      "evidence": {
+        "productionRecordings": [
+          {
+            "recordedAt": "2026-09-24T17:59:03.835Z",
+            "gitSha": "0b65b0da49d378b52cc1407f8d27d78de4ea516d",
+            "recordings": 2,
+            "project": "fireemu-oracle-idp"
+          }
+        ],
+        "finalArtifactSha256": "7fe1a3e5723e1f7337dfc60ed70fd363db5b109eab5954d9b7a7ad79c06d4e51",
+        "sourceCommit": "1bc96d02fd06113d33342fca51e1b51f24a605bb",
+        "comparisonPaths": [
+          "spec/compatibility/closure/evidence/AUTH-MFA-comparison.json"
+        ],
+        "rows": {
+          "MATCH": 21
+        }
+      }
     },
     {
       "conditionId": "AUTH-MFA/sms",
@@ -145,8 +243,26 @@
       "configProjections": [
         "default"
       ],
-      "status": "PENDING_CORPUS",
-      "note": "SMS enrollment, sign-in and withdrawal with configured test numbers (owner decision M3): missing and invalid numbers, missing and wrong codes, a finalized session offered again, the factor read back, mfaSignIn:start without phone info and with an unknown factor, sign-in finalize, a session offered again, a second phone factor, the same number twice, and a withdrawal with its effect on validSince."
+      "status": "VERIFIED",
+      "note": "SMS enrollment, sign-in and withdrawal with configured test numbers (owner decision M3): missing and invalid numbers, missing and wrong codes, a finalized session offered again, the factor read back, mfaSignIn:start without phone info and with an unknown factor, sign-in finalize, a session offered again, a second phone factor, the same number twice, and a withdrawal with its effect on validSince.",
+      "evidence": {
+        "productionRecordings": [
+          {
+            "recordedAt": "2026-09-24T17:59:03.835Z",
+            "gitSha": "0b65b0da49d378b52cc1407f8d27d78de4ea516d",
+            "recordings": 2,
+            "project": "fireemu-oracle-idp"
+          }
+        ],
+        "finalArtifactSha256": "7fe1a3e5723e1f7337dfc60ed70fd363db5b109eab5954d9b7a7ad79c06d4e51",
+        "sourceCommit": "1bc96d02fd06113d33342fca51e1b51f24a605bb",
+        "comparisonPaths": [
+          "spec/compatibility/closure/evidence/AUTH-MFA-comparison.json"
+        ],
+        "rows": {
+          "MATCH": 28
+        }
+      }
     },
     {
       "conditionId": "AUTH-MFA/interactions",
@@ -157,8 +273,26 @@
       "configProjections": [
         "default"
       ],
-      "status": "PENDING_CORPUS",
-      "note": "Who may enroll (an unverified address, an anonymous and a phone first factor, a missing and a garbage ID token, both kinds at once), TOTP beside a phone factor, the factor limit (five and six factors written by the Admin API, and client enrollment at the limit), and a pending credential across account changes (disabled and enabled again, a password change, factors cleared, the account deleted, another account's factor)."
+      "status": "VERIFIED",
+      "note": "Who may enroll (an unverified address, an anonymous and a phone first factor, a missing and a garbage ID token, both kinds at once), TOTP beside a phone factor, the factor limit (five and six factors written by the Admin API, and client enrollment at the limit), and a pending credential across account changes (disabled and enabled again, a password change, factors cleared, the account deleted, another account's factor).",
+      "evidence": {
+        "productionRecordings": [
+          {
+            "recordedAt": "2026-09-24T17:59:03.835Z",
+            "gitSha": "0b65b0da49d378b52cc1407f8d27d78de4ea516d",
+            "recordings": 2,
+            "project": "fireemu-oracle-idp"
+          }
+        ],
+        "finalArtifactSha256": "7fe1a3e5723e1f7337dfc60ed70fd363db5b109eab5954d9b7a7ad79c06d4e51",
+        "sourceCommit": "1bc96d02fd06113d33342fca51e1b51f24a605bb",
+        "comparisonPaths": [
+          "spec/compatibility/closure/evidence/AUTH-MFA-comparison.json"
+        ],
+        "rows": {
+          "MATCH": 53
+        }
+      }
     },
     {
       "conditionId": "AUTH-MFA/admin-factors",
@@ -169,8 +303,26 @@
       "configProjections": [
         "default"
       ],
-      "status": "PENDING_CORPUS",
-      "note": "Factors in imported accounts (AUTH-ACCOUNT scope decision A10): accounts:batchCreate with phone factors (with and without an id and an enrollment time), a TOTP factor and an invalid phone; factors replaced, set to TOTP, set to an invalid phone and cleared by the Admin accounts:update; sign-in with an imported factor; and a client TOTP enrollment beside an Admin-written phone factor."
+      "status": "VERIFIED",
+      "note": "Factors in imported accounts (AUTH-ACCOUNT scope decision A10): accounts:batchCreate with phone factors (with and without an id and an enrollment time), a TOTP factor and an invalid phone; factors replaced, set to TOTP, set to an invalid phone and cleared by the Admin accounts:update; sign-in with an imported factor; and a client TOTP enrollment beside an Admin-written phone factor.",
+      "evidence": {
+        "productionRecordings": [
+          {
+            "recordedAt": "2026-09-24T17:59:03.835Z",
+            "gitSha": "0b65b0da49d378b52cc1407f8d27d78de4ea516d",
+            "recordings": 2,
+            "project": "fireemu-oracle-idp"
+          }
+        ],
+        "finalArtifactSha256": "7fe1a3e5723e1f7337dfc60ed70fd363db5b109eab5954d9b7a7ad79c06d4e51",
+        "sourceCommit": "1bc96d02fd06113d33342fca51e1b51f24a605bb",
+        "comparisonPaths": [
+          "spec/compatibility/closure/evidence/AUTH-MFA-comparison.json"
+        ],
+        "rows": {
+          "MATCH": 21
+        }
+      }
     },
     {
       "conditionId": "AUTH-MFA/other-first-factors",
@@ -181,22 +333,66 @@
       "configProjections": [
         "default"
       ],
-      "status": "PENDING_CORPUS",
-      "note": "A second factor after an email-link sign-in (a password account, and an account that only ever signed in by link) and after a custom-token sign-in (owner decision M5)."
+      "status": "VERIFIED",
+      "note": "A second factor after an email-link sign-in (a password account, and an account that only ever signed in by link) and after a custom-token sign-in (owner decision M5).",
+      "evidence": {
+        "productionRecordings": [
+          {
+            "recordedAt": "2026-09-24T17:59:03.835Z",
+            "gitSha": "0b65b0da49d378b52cc1407f8d27d78de4ea516d",
+            "recordings": 2,
+            "project": "fireemu-oracle-idp"
+          }
+        ],
+        "finalArtifactSha256": "7fe1a3e5723e1f7337dfc60ed70fd363db5b109eab5954d9b7a7ad79c06d4e51",
+        "sourceCommit": "1bc96d02fd06113d33342fca51e1b51f24a605bb",
+        "comparisonPaths": [
+          "spec/compatibility/closure/evidence/AUTH-MFA-comparison.json"
+        ],
+        "rows": {
+          "MATCH": 21
+        }
+      }
     },
     {
       "conditionId": "AUTH-MFA/second-factor-claims",
       "source": "spec/compatibility/closure/AUTH-CREDENTIAL.json#C7",
       "recipeIds": [
         "auth-mfa/totp/sign-in",
+        "auth-mfa/totp/quota-free",
         "auth-mfa/sms",
         "auth-mfa/first-factor"
       ],
       "configProjections": [
         "default"
       ],
-      "status": "PENDING_CORPUS",
-      "note": "firebase.sign_in_second_factor and firebase.second_factor_identifier in the ID token after TOTP and SMS enrollment and sign-in, kept by a refresh, carried by a session cookie, and after email-link and custom-token first factors (AUTH-CREDENTIAL scope decision C7)."
+      "status": "VERIFIED",
+      "note": "firebase.sign_in_second_factor and firebase.second_factor_identifier in the ID token after TOTP and SMS enrollment and sign-in, kept by a refresh, carried by a session cookie, and after email-link and custom-token first factors (AUTH-CREDENTIAL scope decision C7).",
+      "evidence": {
+        "productionRecordings": [
+          {
+            "recordedAt": "2026-09-24T17:59:03.835Z",
+            "gitSha": "0b65b0da49d378b52cc1407f8d27d78de4ea516d",
+            "recordings": 2,
+            "project": "fireemu-oracle-idp"
+          },
+          {
+            "recordedAt": "2026-09-25T01:19:15.102Z",
+            "gitSha": "86ef1298089a8461bc0cb56db48b7fe6fe479a40",
+            "recordings": 2,
+            "project": "fireemu-oracle-idp"
+          }
+        ],
+        "finalArtifactSha256": "7fe1a3e5723e1f7337dfc60ed70fd363db5b109eab5954d9b7a7ad79c06d4e51",
+        "sourceCommit": "1bc96d02fd06113d33342fca51e1b51f24a605bb",
+        "comparisonPaths": [
+          "spec/compatibility/closure/evidence/AUTH-MFA-comparison.json"
+        ],
+        "rows": {
+          "MATCH": 95,
+          "REOBSERVED_MATCH": 2
+        }
+      }
     },
     {
       "conditionId": "AUTH-MFA/pending-credential-lifetime",
@@ -208,8 +404,34 @@
       "configProjections": [
         "default"
       ],
-      "status": "PENDING_CORPUS",
-      "note": "A TOTP pending credential offered at 300, 450, 600 and 1800 seconds (owner decision M4) and, since production refused it already at 300, at 60, 120, 180, 240 and 290 seconds (M8); an SMS pending credential whose code is sent at 150 and 300 seconds (M8). Each is followed at once by a same-account control with a credential acquired then."
+      "status": "VERIFIED",
+      "note": "A TOTP pending credential offered at 300, 450, 600 and 1800 seconds (owner decision M4) and, since production refused it already at 300, at 60, 120, 180, 240 and 290 seconds (M8); an SMS pending credential whose code is sent at 150 and 300 seconds (M8). Each is followed at once by a same-account control with a credential acquired then.",
+      "evidence": {
+        "productionRecordings": [
+          {
+            "recordedAt": "2026-09-24T17:59:03.835Z",
+            "gitSha": "0b65b0da49d378b52cc1407f8d27d78de4ea516d",
+            "recordings": 2,
+            "project": "fireemu-oracle-idp"
+          },
+          {
+            "recordedAt": "2026-09-24T23:56:47.745Z",
+            "gitSha": "32b4b1977c69231f8663529507be5a2ca1fbe707",
+            "recordings": 2,
+            "project": "fireemu-oracle-idp"
+          }
+        ],
+        "finalArtifactSha256": "7fe1a3e5723e1f7337dfc60ed70fd363db5b109eab5954d9b7a7ad79c06d4e51",
+        "sourceCommit": "1bc96d02fd06113d33342fca51e1b51f24a605bb",
+        "comparisonPaths": [
+          "spec/compatibility/closure/evidence/AUTH-MFA-comparison.json"
+        ],
+        "rows": {
+          "MATCH": 172,
+          "MATCH_NONDETERMINISTIC": 4,
+          "MATCH_TIMING_DEPENDENT": 1
+        }
+      }
     },
     {
       "conditionId": "AUTH-MFA/enrollment-session-lifetime",
@@ -221,8 +443,34 @@
       "configProjections": [
         "default"
       ],
-      "status": "PENDING_CORPUS",
-      "note": "A TOTP enrollment session finalized at 300, 450, 600, 870, 930 and 1800 seconds (either side of the 900 seconds its deadline announces) and an SMS enrollment session at 300, 450, 600 and 1800 seconds, each with the token of a sign-in made just before (so only the session is old) and followed by a same-account control with a session started then; and whether an enrollment start needs a recent sign-in (a token 1800 seconds old, then a new one). The recent sign-in an enrollment start needs is bracketed with tokens 240 and 330 seconds old (M8)."
+      "status": "VERIFIED",
+      "note": "A TOTP enrollment session finalized at 300, 450, 600, 870, 930 and 1800 seconds (either side of the 900 seconds its deadline announces) and an SMS enrollment session at 300, 450, 600 and 1800 seconds, each with the token of a sign-in made just before (so only the session is old) and followed by a same-account control with a session started then; and whether an enrollment start needs a recent sign-in (a token 1800 seconds old, then a new one). The recent sign-in an enrollment start needs is bracketed with tokens 240 and 330 seconds old (M8).",
+      "evidence": {
+        "productionRecordings": [
+          {
+            "recordedAt": "2026-09-24T17:59:03.835Z",
+            "gitSha": "0b65b0da49d378b52cc1407f8d27d78de4ea516d",
+            "recordings": 2,
+            "project": "fireemu-oracle-idp"
+          },
+          {
+            "recordedAt": "2026-09-24T23:56:47.745Z",
+            "gitSha": "32b4b1977c69231f8663529507be5a2ca1fbe707",
+            "recordings": 2,
+            "project": "fireemu-oracle-idp"
+          }
+        ],
+        "finalArtifactSha256": "7fe1a3e5723e1f7337dfc60ed70fd363db5b109eab5954d9b7a7ad79c06d4e51",
+        "sourceCommit": "1bc96d02fd06113d33342fca51e1b51f24a605bb",
+        "comparisonPaths": [
+          "spec/compatibility/closure/evidence/AUTH-MFA-comparison.json"
+        ],
+        "rows": {
+          "MATCH": 172,
+          "MATCH_NONDETERMINISTIC": 4,
+          "MATCH_TIMING_DEPENDENT": 1
+        }
+      }
     },
     {
       "conditionId": "AUTH-MFA/final-artifact-regression",
@@ -236,8 +484,116 @@
       "configProjections": [
         "default"
       ],
-      "status": "PENDING_CORPUS",
-      "note": "The final artifact compared with every AUTH-MFA row and, as regressions, every AUTH-ACTION, AUTH-CREDENTIAL and AUTH-ACCOUNT row."
+      "status": "VERIFIED",
+      "note": "The final artifact compared with every AUTH-MFA row and, as regressions, every AUTH-ACTION, AUTH-CREDENTIAL and AUTH-ACCOUNT row.",
+      "evidence": {
+        "productionRecordings": [
+          {
+            "recordedAt": "2026-09-23T11:52:22.579Z",
+            "gitSha": "2f9128f45f0d5aeb4aea9bdfaaa0f1e1c105e31f",
+            "recordings": 2,
+            "project": "fireemu-oracle-idp"
+          },
+          {
+            "recordedAt": "2026-09-23T12:44:15.390Z",
+            "gitSha": "3fdcb7f5350bfc24257fe448ea72be5417be26c7",
+            "recordings": 2,
+            "project": "fireemu-oracle-idp"
+          },
+          {
+            "recordedAt": "2026-09-23T15:29:14.879Z",
+            "gitSha": "81ba4d60f0faf5268a8b6b9eacb1ef34b03e5315",
+            "recordings": 2,
+            "project": "fireemu-oracle-idp"
+          },
+          {
+            "recordedAt": "2026-09-24T05:51:03.248Z",
+            "gitSha": "de2865c9a3ad3e3d6a8826b1291afd0e02223b75",
+            "recordings": 2,
+            "project": "fireemu-oracle-idp"
+          },
+          {
+            "recordedAt": "2026-09-24T05:53:09.841Z",
+            "gitSha": "4092354575c2d6a33179339b627c3e5db64c854a",
+            "recordings": 2,
+            "project": "fireemu-oracle-idp"
+          },
+          {
+            "recordedAt": "2026-09-24T08:04:46.724Z",
+            "gitSha": "092787b0e72597f66cd1fea368a6f3caa0d308be",
+            "recordings": 2,
+            "project": "fireemu-oracle-idp"
+          },
+          {
+            "recordedAt": "2026-09-24T12:13:38.654Z",
+            "gitSha": "37e8e0e461cc91319792748c94fa402afc8a60dd",
+            "recordings": 2,
+            "project": "fireemu-oracle-idp"
+          },
+          {
+            "recordedAt": "2026-09-24T14:23:20.843Z",
+            "gitSha": "268dd2569ad9aac0e62963c794609bce45f5e6d8",
+            "recordings": 2,
+            "project": "fireemu-oracle-idp"
+          },
+          {
+            "recordedAt": "2026-09-24T17:27:34.229Z",
+            "gitSha": "36a07517b322aff6b31db07308f7280421ccd74c",
+            "recordings": 2,
+            "project": "fireemu-oracle-idp"
+          },
+          {
+            "recordedAt": "2026-09-24T17:59:03.835Z",
+            "gitSha": "0b65b0da49d378b52cc1407f8d27d78de4ea516d",
+            "recordings": 2,
+            "project": "fireemu-oracle-idp"
+          },
+          {
+            "recordedAt": "2026-09-24T23:56:47.745Z",
+            "gitSha": "32b4b1977c69231f8663529507be5a2ca1fbe707",
+            "recordings": 2,
+            "project": "fireemu-oracle-idp"
+          },
+          {
+            "recordedAt": "2026-09-25T01:19:15.102Z",
+            "gitSha": "86ef1298089a8461bc0cb56db48b7fe6fe479a40",
+            "recordings": 2,
+            "project": "fireemu-oracle-idp"
+          }
+        ],
+        "finalArtifactSha256": "7fe1a3e5723e1f7337dfc60ed70fd363db5b109eab5954d9b7a7ad79c06d4e51",
+        "sourceCommit": "1bc96d02fd06113d33342fca51e1b51f24a605bb",
+        "comparisonPaths": [
+          "spec/compatibility/closure/evidence/AUTH-MFA-comparison.json",
+          "spec/compatibility/closure/evidence/AUTH-MFA-action-regression.json",
+          "spec/compatibility/closure/evidence/AUTH-MFA-credential-regression.json",
+          "spec/compatibility/closure/evidence/AUTH-MFA-account-regression.json"
+        ],
+        "rows": {
+          "MATCH": 1609,
+          "MATCH_NONDETERMINISTIC": 5,
+          "REOBSERVED_MATCH": 2,
+          "MATCH_TIMING_DEPENDENT": 1,
+          "MISMATCH": 1
+        },
+        "documentedDivergences": [
+          {
+            "row": "auth-account/admin/custom-attributes#invalid-json",
+            "kind": "message-text",
+            "decidedBy": "owner",
+            "decidedOn": "2026-09-25",
+            "scopeDecision": "M11",
+            "reason": "AUTH-ACCOUNT scope decision A12, inherited as AUTH-ACTION E9: production returns gson's parser message for malformed customAttributes JSON; the INVALID_CLAIMS refusal itself matches."
+          }
+        ],
+        "workspaceTests": {
+          "command": "cargo nextest run --workspace --profile pr",
+          "passed": 3422,
+          "failed": 0
+        },
+        "buildTree": "clean (git status --porcelain empty at build); artifact copy, sha256, source commit and check logs in docs.local/runs/auth-mfa-final-20260925/ (private)",
+        "mutation": "In progress at binding: docs.local/mutation/auth-mfa/20260925/ (private) runs cargo-mutants over df08b28cf..261e60874 in fireemu-core-auth and fireemu-adapter-http; survivors are triaged in its triage.md and pinned by tests without changing the artifact's source."
+      }
     },
     {
       "conditionId": "AUTH-MFA/closure-review",
@@ -248,8 +604,41 @@
       "configProjections": [
         "default"
       ],
-      "status": "PENDING_CORPUS",
-      "note": "An independent closure review and a separate safety review of the final artifact."
+      "status": "PENDING_REVIEW",
+      "note": "An independent closure review and a separate safety review of the final artifact.",
+      "evidence": {
+        "productionRecordings": [
+          {
+            "recordedAt": "2026-09-24T17:59:03.835Z",
+            "gitSha": "0b65b0da49d378b52cc1407f8d27d78de4ea516d",
+            "recordings": 2,
+            "project": "fireemu-oracle-idp"
+          },
+          {
+            "recordedAt": "2026-09-24T23:56:47.745Z",
+            "gitSha": "32b4b1977c69231f8663529507be5a2ca1fbe707",
+            "recordings": 2,
+            "project": "fireemu-oracle-idp"
+          },
+          {
+            "recordedAt": "2026-09-25T01:19:15.102Z",
+            "gitSha": "86ef1298089a8461bc0cb56db48b7fe6fe479a40",
+            "recordings": 2,
+            "project": "fireemu-oracle-idp"
+          }
+        ],
+        "finalArtifactSha256": "7fe1a3e5723e1f7337dfc60ed70fd363db5b109eab5954d9b7a7ad79c06d4e51",
+        "sourceCommit": "1bc96d02fd06113d33342fca51e1b51f24a605bb",
+        "comparisonPaths": [
+          "spec/compatibility/closure/evidence/AUTH-MFA-comparison.json"
+        ],
+        "rows": {
+          "MATCH": 411,
+          "MATCH_NONDETERMINISTIC": 5,
+          "REOBSERVED_MATCH": 2,
+          "MATCH_TIMING_DEPENDENT": 1
+        }
+      }
     }
   ],
   "closureReview": null

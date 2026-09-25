@@ -214,5 +214,10 @@ fn a_tenant_with_a_display_name_is_named_as_production_names_it() {
         create(&registry, Some("ab")),
         "fireemu-00000000000000000003"
     );
-    assert_eq!(create(&registry, None), "fireemu-00000000000000000004");
+    assert_eq!(
+        create(&registry, Some("fsr-tenant")),
+        "fsr-tenant-12xom",
+        "sequence 4 has a seed bit that the earlier cases do not exercise"
+    );
+    assert_eq!(create(&registry, None), "fireemu-00000000000000000005");
 }

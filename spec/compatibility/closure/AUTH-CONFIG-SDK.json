@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
   "parent": "AUTH-CONFIG-SDK",
-  "parentStatus": "IMPLEMENTING",
+  "parentStatus": "COMPAT_VERIFIED",
   "oracleTrack": "disposable-sandbox",
   "scopeDecisions": [
     {
@@ -879,12 +879,32 @@
       "configProjections": [
         "strict"
       ],
-      "status": "PENDING_REVIEW",
-      "note": "An independent closure review and a safety review of the final artifact (no cargo-mutants in the reviews; the lane's own mutation evidence is checked).",
+      "status": "VERIFIED",
+      "note": "Independent closure and safety reviews approved the final artifact and inspected the lane's current-source mutation evidence.",
       "evidence": {
+        "productionRecordings": [
+          {
+            "recordedAt": "2026-09-25T04:53:38.739Z",
+            "gitSha": "0b80fe7d00e9ebd60ac3a5894b9fae2cfde36c3e",
+            "recordings": 2,
+            "project": "fireemu-oracle-idp"
+          }
+        ],
         "finalArtifactSha256": "8c698a58c71af5779d6e94c33e89a8d0b8a1a600b6b6a1990d3373a0b79aa631",
-        "sourceCommit": "698fc850528b32a4d4cf70b3e3cbba67f02476ae"
+        "sourceCommit": "698fc850528b32a4d4cf70b3e3cbba67f02476ae",
+        "comparisonPaths": [
+          "spec/compatibility/closure/evidence/AUTH-CONFIG-SDK-comparison.json"
+        ]
       }
     }
-  ]
+  ],
+  "closureReview": {
+    "decision": "APPROVED",
+    "decidedOn": "2026-09-26",
+    "reviewer": "independent final closure review and independent safety review of the final artifact and source 698fc8505",
+    "reviewedCommit": "698fc850528b32a4d4cf70b3e3cbba67f02476ae",
+    "finalArtifactSha256": "8c698a58c71af5779d6e94c33e89a8d0b8a1a600b6b6a1990d3373a0b79aa631",
+    "report": "docs.local/reviews/2026-09-26-auth-config-sdk-final-review.md (private)",
+    "followUps": "Non-blocking embedded multi-AuthState shared-store gate invariant: docs.local/issues/open/auth-config-shared-store-needs-shared-gate.md."
+  }
 }

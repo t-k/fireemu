@@ -46,6 +46,10 @@ const TASK = "FUNCTIONS-HTTP-SANDBOX";
 const FIRST_RUN_DIR = join(PRIVATE_ROOT, "runs/functions-http-stage3-2026-09-25T130504.907Z");
 const FIRST_RUN_COMMIT = "50f3625e3d2eb1b5f85879eb6210e2cf8b212649";
 const RECOVERY_READBACK_SHA = "50817abfe8246b7c3b7ea85d96f79ba6015d14ee75d1076cb700fd728e8031e5";
+const SECOND_RUN_DIR = join(PRIVATE_ROOT, "runs/functions-http-stage3-2026-09-25T142109.975Z");
+const SECOND_RUN_COMMIT = "fa536544c99009ab733fe3b1bc324a5afa6c361f";
+const SECOND_RECOVERY_READBACK_SHA =
+  "1a1354889e8a29129a9f9039cc63230a99419d9a59c34916fb93af7bc0722cb8";
 const CORPUS_SHA = "836c138ba213546428e700e7ecb51644089bb5b0cdc91946eb9904a648106bea";
 const FIXTURE_SHA = "0c481ec6b6ec87db71a2f90550238ce69ec2b923c7a92b7ea5171cb7909886a5";
 const FIREBASE_CONFIG_SHA = "0b76734c83f808f8842ee093177fc9ecc2fda2ec9f9d06e025436a0d7f9f7197";
@@ -96,7 +100,12 @@ async function logChange(action, detail) {
   await appendFile(SANDBOX_DOC, `- ${ts}: ${action}: ${detail}.\n`);
 }
 
-export function assertAdmission(lines, currentTime = now(), firstRunDir = FIRST_RUN_DIR) {
+export function assertAdmission(
+  lines,
+  currentTime = now(),
+  firstRunDir = FIRST_RUN_DIR,
+  secondRunDir = SECOND_RUN_DIR,
+) {
   const relevant = lines.filter((line) => line.project === PROJECT);
   const storage = relevant.some(
     (line) =>
@@ -113,8 +122,17 @@ export function assertAdmission(lines, currentTime = now(), firstRunDir = FIRST_
   if (!storage || !stage2)
     throw new Error("Storage and FUNCTIONS-HTTP stage 2 must both finish successfully");
   const stage3 = relevant.filter((line) => line.taskId === TASK && line.stage === 3);
-  if (stage3.length !== 4) throw new Error("stage 3 attempt was not recovered exactly once");
-  const [started, change, failed, recovered] = stage3;
+  if (stage3.length !== 8) throw new Error("stage 3 attempts were not recovered exactly twice");
+  const [
+    started,
+    change,
+    failed,
+    recovered,
+    retryStarted,
+    retryChange,
+    retryFailed,
+    retryRecovered,
+  ] = stage3;
   if (
     started.event !== "started" ||
     change.event !== "change" ||
@@ -133,7 +151,29 @@ export function assertAdmission(lines, currentTime = now(), firstRunDir = FIRST_
     recovered.recoveryReadbackSha256 !== RECOVERY_READBACK_SHA ||
     recovered.recoveryRequests !== 5
   ) {
-    throw new Error("stage 3 attempt recovery evidence differs from the reviewed result");
+    throw new Error("stage 3 first recovery evidence differs from the reviewed result");
+  }
+  if (
+    retryStarted.event !== "started" ||
+    retryChange.event !== "change" ||
+    retryChange.action !== "service-identity-generation-possible" ||
+    retryFailed.event !== "needs-recovery" ||
+    retryRecovered.event !== "finished" ||
+    [retryStarted, retryFailed, retryRecovered].some(
+      (line) =>
+        line.runDir !== secondRunDir ||
+        line.gitSha !== SECOND_RUN_COMMIT ||
+        line.corpusDigest !== CORPUS_SHA ||
+        line.attempt !== 2,
+    ) ||
+    retryStarted.reservationLedgerTs !== "2026-09-25T13:05:04.913Z" ||
+    retryFailed.requests?.invocation !== 0 ||
+    retryFailed.requests.cliDeploy !== 1 ||
+    retryRecovered.outcome !== "recovered-no-observation" ||
+    retryRecovered.recoveryReadbackSha256 !== SECOND_RECOVERY_READBACK_SHA ||
+    retryRecovered.recoveryRequests !== 5
+  ) {
+    throw new Error("stage 3 second recovery evidence differs from the reviewed result");
   }
   const terminalLine = (line) =>
     line.outcome !== undefined &&
@@ -161,7 +201,7 @@ const estimatedUsd = (requests) =>
 
 export function retryAccounting(requests) {
   const current = estimatedUsd(requests);
-  const priorAttemptResidualAllowanceUsd = 0.02;
+  const priorAttemptResidualAllowanceUsd = 0.04;
   const cumulativeEstimatedUsd = Number((current + priorAttemptResidualAllowanceUsd).toFixed(2));
   if (cumulativeEstimatedUsd > 9) throw new Error("stage 3 budget would be exceeded");
   return { estimatedUsd: current, priorAttemptResidualAllowanceUsd, cumulativeEstimatedUsd };
@@ -992,6 +1032,11 @@ export async function recordProduction() {
     RECOVERY_READBACK_SHA,
     FIRST_RUN_DIR,
   );
+  await readRecoveryReadback(
+    join(SECOND_RUN_DIR, "recovery-readback.json"),
+    SECOND_RECOVERY_READBACK_SHA,
+    SECOND_RUN_DIR,
+  );
   const ledgerLines = (await readFile(LEDGER, "utf8"))
     .trim()
     .split("\n")
@@ -1035,7 +1080,7 @@ export async function recordProduction() {
       corpusDigest: CORPUS_SHA,
       runDir,
       maxEstimatedUsd: 9,
-      attempt: 2,
+      attempt: 3,
       reservationLedgerTs: "2026-09-25T13:05:04.913Z",
       reservationReusedUsd: 9,
     };

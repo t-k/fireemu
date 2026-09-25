@@ -114,7 +114,9 @@ function validateClosure(closure) {
   assert.equal(closure.schemaVersion, 1);
   assert.equal(closure.parent, "FUNCTIONS-EVENTS");
   assert.ok(["IMPLEMENTING", "COMPAT_VERIFIED"].includes(closure.parentStatus));
-  assert.ok(["PROPOSED", "FROZEN"].includes(closure.inventoryStatus));
+  assert.equal(closure.inventoryStatus, "FROZEN");
+  assert.equal(closure.frozenOn, "2026-09-25");
+  assert.match(closure.freezeAuthority, /owner-decisions\.md/);
   assert.equal(closure.oracleTrack, "disposable-sandbox");
   assert.equal(closure.oracle.plannedProject, "fireemu-oracle-events");
   assert.ok(["PLANNED", "READY"].includes(closure.oracle.projectStatus));
@@ -140,11 +142,8 @@ function validateClosure(closure) {
   );
   for (const decision of closure.scopeDecisions) {
     assert.ok(decision.decision && decision.rationale, decision.id);
-    assert.ok(["FROZEN", "PROPOSED"].includes(decision.status), decision.id);
-    if (decision.id === "E1" || decision.status === "FROZEN") {
-      assert.ok(decision.decidedBy && decision.decidedOn && decision.decisionRef, decision.id);
-    }
-    if (closure.inventoryStatus === "FROZEN") assert.equal(decision.status, "FROZEN");
+    assert.equal(decision.status, "FROZEN", decision.id);
+    assert.ok(decision.decidedBy && decision.decidedOn && decision.decisionRef, decision.id);
   }
   for (const condition of closure.conditions) {
     const label = condition.conditionId;
@@ -166,17 +165,14 @@ function validateClosure(closure) {
       ].includes(condition.status),
       label,
     );
-    if (closure.inventoryStatus === "PROPOSED") {
-      assert.ok(
-        ["PENDING_CORPUS", "PENDING_SCOPE", "PENDING_REVIEW"].includes(condition.status),
-        label,
-      );
+    if (["PENDING_CORPUS", "PENDING_SCOPE", "PENDING_REVIEW"].includes(condition.status)) {
       assert.equal(
         condition.evidence,
         undefined,
-        `${label}: proposal cannot claim production evidence`,
+        `${label}: pending condition cannot claim production evidence`,
       );
     }
+    assert.notEqual(condition.status, "PENDING_SCOPE", `${label}: scope is frozen`);
     const source = label.split("/")[1].split("-")[0];
     if (["firestore", "storage", "pubsub"].includes(source)) {
       assert.deepEqual(
@@ -223,13 +219,6 @@ function validateClosure(closure) {
       assert.match(closure.closureReview.reviewedCommit, /^[0-9a-f]{40}$/);
     }
   }
-  if (closure.inventoryStatus === "PROPOSED") {
-    assert.equal(
-      closure.conditions.find(({ conditionId }) => conditionId.endsWith("/storage-archived"))
-        .status,
-      "PENDING_SCOPE",
-    );
-  }
   if (closure.parentStatus === "COMPAT_VERIFIED") {
     assert.equal(closure.inventoryStatus, "FROZEN");
     assert.ok(closure.conditions.every(({ status }) => status === "VERIFIED"));
@@ -237,11 +226,11 @@ function validateClosure(closure) {
   }
 }
 
-test("FUNCTIONS-EVENTS proposal retains the source, routing, payload, and review obligations", () => {
+test("FUNCTIONS-EVENTS frozen inventory retains source, routing, payload, and review obligations", () => {
   validateClosure(readClosure());
 });
 
-test("FUNCTIONS-EVENTS proposal rejects a missing event case and false evidence", () => {
+test("FUNCTIONS-EVENTS inventory rejects a missing event case and false evidence", () => {
   const missing = readClosure();
   const pubsub = missing.conditions.find(({ conditionId }) =>
     conditionId.endsWith("/pubsub-published"),
@@ -251,11 +240,14 @@ test("FUNCTIONS-EVENTS proposal rejects a missing event case and false evidence"
 
   const falseEvidence = readClosure();
   falseEvidence.conditions[0].evidence = { productionRecordings: [] };
-  assert.throws(() => validateClosure(falseEvidence), /proposal cannot claim production evidence/);
+  assert.throws(
+    () => validateClosure(falseEvidence),
+    /pending condition cannot claim production evidence/,
+  );
 
   const falsePromotion = readClosure();
   falsePromotion.parentStatus = "COMPAT_VERIFIED";
-  assert.throws(() => validateClosure(falsePromotion), /FROZEN/);
+  assert.throws(() => validateClosure(falsePromotion), /VERIFIED/);
 
   const firestoreCreate = readClosure().conditions.find(({ conditionId }) =>
     conditionId.endsWith("/firestore-created"),

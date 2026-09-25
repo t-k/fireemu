@@ -141,11 +141,11 @@ No target feature is moved to class B merely because it is unimplemented, unobse
 
 ## Cloud Functions event parent status
 
-The owner added `FUNCTIONS-EVENTS` to the production-compatibility parents on 2026-09-25. Its 22-condition [closure proposal](../../spec/compatibility/closure/FUNCTIONS-EVENTS.json) covers Firestore, Storage, Auth and Pub/Sub trigger delivery and event contents. The condition set and eight remaining scope decisions await review; no production event recording or final-artifact comparison exists. The owner approved a dedicated sandbox project, but project preparation is a later stage.
+The owner added `FUNCTIONS-EVENTS` to the production-compatibility parents on 2026-09-25. Its 22-condition [closure inventory](../../spec/compatibility/closure/FUNCTIONS-EVENTS.json) covers Firestore, Storage, Auth and Pub/Sub trigger delivery and event contents. The owner froze the condition set and scope decisions E1-E9 on 2026-09-25; no production event recording or final-artifact comparison exists. The dedicated sandbox project is approved for later preparation.
 
 | Feature group | Required conditions | Current evidence | Parent state | Remaining completion work |
 | --- | --- | --- | --- | --- |
-| FUNCTIONS-EVENTS | Firestore document, Storage object, Auth user and Pub/Sub topic trigger routing, payloads, negative controls and bounded retry identity | Local runtime and emulator tests exist under `FN-CLAIM-EVENTS`; these are not production comparisons for this parent. | `IMPLEMENTING` | Review and freeze the proposal and resource scope, prepare the dedicated sandbox, record the same corpus twice in production, repair mismatches, compare one final artifact and obtain independent closure approval. |
+| FUNCTIONS-EVENTS | Firestore document, Storage object, Auth user and Pub/Sub topic trigger routing, payloads, negative controls and bounded retry identity | Local runtime and emulator tests exist under `FN-CLAIM-EVENTS`; these are not production comparisons for this parent. | `IMPLEMENTING` | Prepare the dedicated sandbox after a separate pre-send review, record the same corpus twice in production, repair mismatches, compare one final artifact and obtain independent closure approval. |
 
 ## Existing evidence boundaries
 

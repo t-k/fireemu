@@ -18329,3 +18329,29 @@ fn strict_a_deleted_accounts_pending_credential_is_known_for_its_hour() {
     assert_eq!(refusal(&s, &first), "INVALID_PENDING_TOKEN");
     assert_eq!(refusal(&s, &second), "USER_NOT_FOUND");
 }
+
+/// Emulator profile: a pending sign-in is reaped after its hour, also when another pending
+/// sign-in of the same user succeeded with its phone factor first (mutation follow-up,
+/// docs.local/mutation/auth-mfa/20260925).
+#[test]
+fn emulator_a_pending_sign_in_is_reaped_after_its_sibling_succeeds_by_phone() {
+    let s = state();
+    let (status, body) = patch_sign_in(
+        &s,
+        "signIn.phoneNumber.testPhoneNumbers",
+        &json!({"signIn": {"phoneNumber": {"testPhoneNumbers": {"+16505550101": "123456"}}}}),
+    );
+    assert_eq!(status, 200, "{body}");
+    create(
+        &s,
+        &json!({"email": "siblings@example.com", "password": "password123", "emailVerified": true,
+            "mfaInfo": [{"phoneInfo": "+16505550101"}]}),
+    );
+    let first = pending_of(&s, "siblings@example.com");
+    let second = pending_of(&s, "siblings@example.com");
+    let (status, body) = complete_phone(&s, &first);
+    assert_eq!(status, 200, "{body}");
+    advance(&s, 3_601);
+    let (status, body) = complete_phone(&s, &second);
+    assert_eq!(status, 400, "{body}");
+}

@@ -98,8 +98,8 @@
             "project": "fireemu-oracle-idp"
           }
         ],
-        "finalArtifactSha256": "d6e322987a6a79528c27557cf254f10659a68007dd6d0c3966d6e77b25995447",
-        "sourceCommit": "4fe41c052fd6e2c5f56007a6c673a5dff3bbf732",
+        "finalArtifactSha256": "463625477e0c929dbf02ae0c46ae2738d4165a24653004ddb3738c3bdbd01db6",
+        "sourceCommit": "c708c01a1b43102d6edeaa5d566cc2fab6e98300",
         "comparisonPath": "spec/compatibility/closure/evidence/FS-RULES-comparison.json",
         "rows": {
           "MATCH": 72
@@ -126,8 +126,8 @@
             "project": "fireemu-oracle-idp"
           }
         ],
-        "finalArtifactSha256": "d6e322987a6a79528c27557cf254f10659a68007dd6d0c3966d6e77b25995447",
-        "sourceCommit": "4fe41c052fd6e2c5f56007a6c673a5dff3bbf732",
+        "finalArtifactSha256": "463625477e0c929dbf02ae0c46ae2738d4165a24653004ddb3738c3bdbd01db6",
+        "sourceCommit": "c708c01a1b43102d6edeaa5d566cc2fab6e98300",
         "comparisonPath": "spec/compatibility/closure/evidence/FS-RULES-comparison.json",
         "rows": {
           "MATCH": 628
@@ -154,8 +154,8 @@
             "project": "fireemu-oracle-idp"
           }
         ],
-        "finalArtifactSha256": "d6e322987a6a79528c27557cf254f10659a68007dd6d0c3966d6e77b25995447",
-        "sourceCommit": "4fe41c052fd6e2c5f56007a6c673a5dff3bbf732",
+        "finalArtifactSha256": "463625477e0c929dbf02ae0c46ae2738d4165a24653004ddb3738c3bdbd01db6",
+        "sourceCommit": "c708c01a1b43102d6edeaa5d566cc2fab6e98300",
         "comparisonPath": "spec/compatibility/closure/evidence/FS-RULES-comparison.json",
         "rows": {
           "MATCH": 10
@@ -182,8 +182,8 @@
             "project": "fireemu-oracle-idp"
           }
         ],
-        "finalArtifactSha256": "d6e322987a6a79528c27557cf254f10659a68007dd6d0c3966d6e77b25995447",
-        "sourceCommit": "4fe41c052fd6e2c5f56007a6c673a5dff3bbf732",
+        "finalArtifactSha256": "463625477e0c929dbf02ae0c46ae2738d4165a24653004ddb3738c3bdbd01db6",
+        "sourceCommit": "c708c01a1b43102d6edeaa5d566cc2fab6e98300",
         "comparisonPath": "spec/compatibility/closure/evidence/FS-RULES-comparison.json",
         "rows": {
           "MATCH": 47
@@ -210,8 +210,8 @@
             "project": "fireemu-oracle-idp"
           }
         ],
-        "finalArtifactSha256": "d6e322987a6a79528c27557cf254f10659a68007dd6d0c3966d6e77b25995447",
-        "sourceCommit": "4fe41c052fd6e2c5f56007a6c673a5dff3bbf732",
+        "finalArtifactSha256": "463625477e0c929dbf02ae0c46ae2738d4165a24653004ddb3738c3bdbd01db6",
+        "sourceCommit": "c708c01a1b43102d6edeaa5d566cc2fab6e98300",
         "comparisonPath": "spec/compatibility/closure/evidence/FS-RULES-comparison.json",
         "rows": {
           "MATCH": 33,
@@ -239,8 +239,8 @@
             "project": "fireemu-oracle-idp"
           }
         ],
-        "finalArtifactSha256": "d6e322987a6a79528c27557cf254f10659a68007dd6d0c3966d6e77b25995447",
-        "sourceCommit": "4fe41c052fd6e2c5f56007a6c673a5dff3bbf732",
+        "finalArtifactSha256": "463625477e0c929dbf02ae0c46ae2738d4165a24653004ddb3738c3bdbd01db6",
+        "sourceCommit": "c708c01a1b43102d6edeaa5d566cc2fab6e98300",
         "comparisonPath": "spec/compatibility/closure/evidence/FS-RULES-comparison.json",
         "rows": {
           "MATCH": 85
@@ -257,7 +257,7 @@
         "default"
       ],
       "status": "VERIFIED",
-      "note": "Document access call budgets: 10 per single-document request and 20 per multi-document request (batchGet, commit), at N and N+1, repeated paths, and get together with getAfter of one path; a list or query rule may read 20 distinct documents (20 allowed, 21 denied). End-user BatchWrite is refused whole before any budget applies (see atomic-writes), and no transaction is judged (see document-access).",
+      "note": "Document access call budgets: 10 per single-document request and 20 per multi-document request (batchGet, commit), at N and N+1, repeated paths, and get together with getAfter of one path; a list or query rule may read 20 distinct documents (20 allowed, 21 denied). A local regression checks that read-side getAfter()/existsAfter() counts each distinct path once at 11 and 20 paths; this combination has not been recorded in production. End-user BatchWrite is refused whole before any budget applies (see atomic-writes), and no transaction is judged (see document-access).",
       "evidence": {
         "productionRecordings": [
           {
@@ -267,8 +267,8 @@
             "project": "fireemu-oracle-idp"
           }
         ],
-        "finalArtifactSha256": "d6e322987a6a79528c27557cf254f10659a68007dd6d0c3966d6e77b25995447",
-        "sourceCommit": "4fe41c052fd6e2c5f56007a6c673a5dff3bbf732",
+        "finalArtifactSha256": "463625477e0c929dbf02ae0c46ae2738d4165a24653004ddb3738c3bdbd01db6",
+        "sourceCommit": "c708c01a1b43102d6edeaa5d566cc2fab6e98300",
         "comparisonPath": "spec/compatibility/closure/evidence/FS-RULES-comparison.json",
         "rows": {
           "MATCH": 30
@@ -295,8 +295,8 @@
             "project": "fireemu-oracle-idp"
           }
         ],
-        "finalArtifactSha256": "d6e322987a6a79528c27557cf254f10659a68007dd6d0c3966d6e77b25995447",
-        "sourceCommit": "4fe41c052fd6e2c5f56007a6c673a5dff3bbf732",
+        "finalArtifactSha256": "463625477e0c929dbf02ae0c46ae2738d4165a24653004ddb3738c3bdbd01db6",
+        "sourceCommit": "c708c01a1b43102d6edeaa5d566cc2fab6e98300",
         "comparisonPath": "spec/compatibility/closure/evidence/FS-RULES-comparison.json",
         "rows": {
           "MATCH": 57
@@ -323,8 +323,8 @@
             "project": "fireemu-oracle-idp"
           }
         ],
-        "finalArtifactSha256": "d6e322987a6a79528c27557cf254f10659a68007dd6d0c3966d6e77b25995447",
-        "sourceCommit": "4fe41c052fd6e2c5f56007a6c673a5dff3bbf732",
+        "finalArtifactSha256": "463625477e0c929dbf02ae0c46ae2738d4165a24653004ddb3738c3bdbd01db6",
+        "sourceCommit": "c708c01a1b43102d6edeaa5d566cc2fab6e98300",
         "comparisonPath": "spec/compatibility/closure/evidence/FS-RULES-comparison.json",
         "rows": {
           "MATCH": 45
@@ -351,8 +351,8 @@
             "project": "fireemu-oracle-idp"
           }
         ],
-        "finalArtifactSha256": "d6e322987a6a79528c27557cf254f10659a68007dd6d0c3966d6e77b25995447",
-        "sourceCommit": "4fe41c052fd6e2c5f56007a6c673a5dff3bbf732",
+        "finalArtifactSha256": "463625477e0c929dbf02ae0c46ae2738d4165a24653004ddb3738c3bdbd01db6",
+        "sourceCommit": "c708c01a1b43102d6edeaa5d566cc2fab6e98300",
         "comparisonPath": "spec/compatibility/closure/evidence/FS-RULES-comparison.json",
         "rows": {
           "MATCH": 21,
@@ -380,8 +380,8 @@
             "project": "fireemu-oracle-idp"
           }
         ],
-        "finalArtifactSha256": "d6e322987a6a79528c27557cf254f10659a68007dd6d0c3966d6e77b25995447",
-        "sourceCommit": "4fe41c052fd6e2c5f56007a6c673a5dff3bbf732",
+        "finalArtifactSha256": "463625477e0c929dbf02ae0c46ae2738d4165a24653004ddb3738c3bdbd01db6",
+        "sourceCommit": "c708c01a1b43102d6edeaa5d566cc2fab6e98300",
         "comparisonPath": "spec/compatibility/closure/evidence/FS-RULES-comparison.json",
         "rows": {
           "MATCH": 21
@@ -408,8 +408,8 @@
             "project": "fireemu-oracle-idp"
           }
         ],
-        "finalArtifactSha256": "d6e322987a6a79528c27557cf254f10659a68007dd6d0c3966d6e77b25995447",
-        "sourceCommit": "4fe41c052fd6e2c5f56007a6c673a5dff3bbf732",
+        "finalArtifactSha256": "463625477e0c929dbf02ae0c46ae2738d4165a24653004ddb3738c3bdbd01db6",
+        "sourceCommit": "c708c01a1b43102d6edeaa5d566cc2fab6e98300",
         "comparisonPath": "spec/compatibility/closure/evidence/FS-RULES-comparison.json",
         "rows": {
           "MATCH": 24
@@ -442,8 +442,8 @@
             "project": "fireemu-oracle-idp"
           }
         ],
-        "finalArtifactSha256": "d6e322987a6a79528c27557cf254f10659a68007dd6d0c3966d6e77b25995447",
-        "sourceCommit": "4fe41c052fd6e2c5f56007a6c673a5dff3bbf732",
+        "finalArtifactSha256": "463625477e0c929dbf02ae0c46ae2738d4165a24653004ddb3738c3bdbd01db6",
+        "sourceCommit": "c708c01a1b43102d6edeaa5d566cc2fab6e98300",
         "comparisonPath": "spec/compatibility/closure/evidence/FS-RULES-comparison.json",
         "rows": {
           "MATCH": 43
@@ -470,8 +470,8 @@
             "project": "fireemu-oracle-idp"
           }
         ],
-        "finalArtifactSha256": "d6e322987a6a79528c27557cf254f10659a68007dd6d0c3966d6e77b25995447",
-        "sourceCommit": "4fe41c052fd6e2c5f56007a6c673a5dff3bbf732",
+        "finalArtifactSha256": "463625477e0c929dbf02ae0c46ae2738d4165a24653004ddb3738c3bdbd01db6",
+        "sourceCommit": "c708c01a1b43102d6edeaa5d566cc2fab6e98300",
         "comparisonPath": "spec/compatibility/closure/evidence/FS-RULES-comparison.json",
         "rows": {
           "MATCH": 16
@@ -498,8 +498,8 @@
             "project": "fireemu-oracle-idp"
           }
         ],
-        "finalArtifactSha256": "d6e322987a6a79528c27557cf254f10659a68007dd6d0c3966d6e77b25995447",
-        "sourceCommit": "4fe41c052fd6e2c5f56007a6c673a5dff3bbf732",
+        "finalArtifactSha256": "463625477e0c929dbf02ae0c46ae2738d4165a24653004ddb3738c3bdbd01db6",
+        "sourceCommit": "c708c01a1b43102d6edeaa5d566cc2fab6e98300",
         "comparisonPath": "spec/compatibility/closure/evidence/FS-RULES-comparison.json",
         "rows": {
           "MATCH": 12
@@ -521,8 +521,8 @@
       "status": "VERIFIED",
       "note": "The final artifact's FS-RULES comparison, with the AUTH-ACCOUNT, AUTH-CREDENTIAL and FS-QUERY-INDEX (owner decision 2026-09-25) comparisons re-run on the same artifact; their summaries are recorded with the artifact's sha256.",
       "evidence": {
-        "finalArtifactSha256": "d6e322987a6a79528c27557cf254f10659a68007dd6d0c3966d6e77b25995447",
-        "sourceCommit": "4fe41c052fd6e2c5f56007a6c673a5dff3bbf732",
+        "finalArtifactSha256": "463625477e0c929dbf02ae0c46ae2738d4165a24653004ddb3738c3bdbd01db6",
+        "sourceCommit": "c708c01a1b43102d6edeaa5d566cc2fab6e98300",
         "comparisonPath": "spec/compatibility/closure/evidence/FS-RULES-comparison.json",
         "rows": {
           "MATCH": 1144,
@@ -530,21 +530,21 @@
         },
         "regressions": {
           "auth-account": {
-            "artifactSha256": "d6e322987a6a79528c27557cf254f10659a68007dd6d0c3966d6e77b25995447",
+            "artifactSha256": "463625477e0c929dbf02ae0c46ae2738d4165a24653004ddb3738c3bdbd01db6",
             "summary": {
               "MATCH": 631
             },
             "comparisonPath": "spec/compatibility/closure/evidence/FS-RULES-auth-account-regression.json"
           },
           "auth-credential": {
-            "artifactSha256": "d6e322987a6a79528c27557cf254f10659a68007dd6d0c3966d6e77b25995447",
+            "artifactSha256": "463625477e0c929dbf02ae0c46ae2738d4165a24653004ddb3738c3bdbd01db6",
             "summary": {
               "MATCH": 222
             },
             "comparisonPath": "spec/compatibility/closure/evidence/FS-RULES-auth-credential-regression.json"
           },
           "fs-query-index": {
-            "artifactSha256": "d6e322987a6a79528c27557cf254f10659a68007dd6d0c3966d6e77b25995447",
+            "artifactSha256": "463625477e0c929dbf02ae0c46ae2738d4165a24653004ddb3738c3bdbd01db6",
             "summary": {
               "MATCH": 675,
               "DIVERGENCE_APPROVED": 35

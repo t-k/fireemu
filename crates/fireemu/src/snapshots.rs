@@ -1242,6 +1242,19 @@ mod tests {
         ));
     }
 
+    /// A part of another shape is refused by validation before any restore starts, as the other
+    /// hooks refuse it (mutation survivor of `validate`, 2026-09-25).
+    #[test]
+    fn the_auth_hook_refuses_a_part_of_another_shape() {
+        let hook = super::Auth(tenant_registry());
+        let scope = Scope::Project("worker-alpha".to_owned());
+        let foreign: super::SnapshotPart = std::sync::Arc::new(7u8);
+        assert!(hook.validate(&scope, &foreign).is_err());
+        assert!(hook.restore(&scope, &foreign).is_err());
+        let part = hook.capture(&scope).unwrap();
+        assert!(hook.validate(&scope, &part).is_ok());
+    }
+
     /// `TENRST-2`, `SNAP-MEM-01`: tenant users count toward the snapshot's retained bytes.
     #[test]
     fn the_auth_hook_counts_tenant_users_in_the_retained_bytes() {

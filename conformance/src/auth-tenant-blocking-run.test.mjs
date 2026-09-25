@@ -104,6 +104,7 @@ test("local admission fails closed on malformed rows and unknown task cost", asy
     ["[]"],
     ["null"],
     [{ ts: now, project: "fireemu-oracle-idp", taskId: "AUTH-MFA-SANDBOX" }],
+    [{ ts: now, project: "fireemu-oracle-idp", taskId: "AUTH-MFA-SANDBOX", event: "finished" }],
     [{ ts: now, project: "fireemu-oracle-idp", event: "started" }],
     [
       {

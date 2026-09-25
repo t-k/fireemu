@@ -428,7 +428,9 @@ function ledgerEntries(ledgerText) {
         (row.event === undefined && row.outcome === undefined) ||
         (row.event !== undefined &&
           (typeof row.event !== "string" || !knownEvents.has(row.event))) ||
-        (row.outcome !== undefined && (typeof row.outcome !== "string" || !row.outcome))
+        (row.outcome !== undefined && (typeof row.outcome !== "string" || !row.outcome)) ||
+        ((row.event === "finished" || row.event === "campaign-control-terminal") &&
+          row.outcome === undefined)
       )
         throw new Error("sandbox ledger row has no recognized state");
       if (typeof row.taskId !== "string" || !row.taskId) {

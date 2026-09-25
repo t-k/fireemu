@@ -11077,6 +11077,121 @@ fn patch_sign_in(s: &AuthState, mask: &str, body: &Value) -> (u16, Value) {
     )
 }
 
+/// The emulator profile reports the sign-in providers once any one switch was written, and
+/// only then (the official emulator's document has no providers).
+#[test]
+fn the_emulator_document_reports_providers_after_any_one_write() {
+    let untouched = state();
+    let (_, read) = admin(&untouched, "GET", PROJECT_CONFIG, &Value::Null);
+    assert_eq!(
+        read["signIn"],
+        json!({"allowDuplicateEmails": false}),
+        "{read}"
+    );
+    for (mask, body) in [
+        (
+            "signIn.email.enabled",
+            json!({"signIn": {"email": {"enabled": false}}}),
+        ),
+        (
+            "signIn.email.passwordRequired",
+            json!({"signIn": {"email": {"passwordRequired": true}}}),
+        ),
+        (
+            "signIn.anonymous.enabled",
+            json!({"signIn": {"anonymous": {"enabled": false}}}),
+        ),
+        (
+            "signIn.phoneNumber.enabled",
+            json!({"signIn": {"phoneNumber": {"enabled": false}}}),
+        ),
+        (
+            "signIn.phoneNumber.testPhoneNumbers",
+            json!({"signIn": {"phoneNumber": {"testPhoneNumbers": {"+16505550101": "123456"}}}}),
+        ),
+    ] {
+        let s = state();
+        let (status, answer) = patch_sign_in(&s, mask, &body);
+        assert_eq!(status, 200, "{mask}: {answer}");
+        let (_, read) = admin(&s, "GET", PROJECT_CONFIG, &Value::Null);
+        let members = read["signIn"].as_object().map_or(0, serde_json::Map::len);
+        assert!(members > 1, "{mask}: {read}");
+    }
+}
+
+/// A policy the body carries is checked whole even when the mask names one of its leaves, so
+/// a malformed member outside the mask is refused (not taken as a partial update).
+#[test]
+fn a_malformed_policy_outside_the_mask_is_refused() {
+    for strict in [true, false] {
+        let s = if strict { strict_state() } else { state() };
+        let (status, refused) = patch_sign_in(
+            &s,
+            "passwordPolicyConfig.passwordPolicyEnforcementState",
+            &json!({"passwordPolicyConfig": {
+                "passwordPolicyEnforcementState": "ENFORCE",
+                "passwordPolicyVersions": [{"customStrengthOptions": {"minPasswordLength": 5}}],
+            }}),
+        );
+        assert_eq!(status, 400, "strict {strict}: {refused}");
+    }
+}
+
+/// Without an update mask, a member the body sets to null is not taken as written (an omitted
+/// mask is inferred from the members present, K13).
+#[test]
+fn an_omitted_mask_skips_null_members() {
+    let s = state();
+    let (status, _) = patch_sign_in(
+        &s,
+        "mobileLinksConfig.domain",
+        &json!({"mobileLinksConfig": {"domain": "FIREBASE_DYNAMIC_LINK_DOMAIN"}}),
+    );
+    assert_eq!(status, 200);
+    let (status, answer) = admin(
+        &s,
+        "PATCH",
+        PROJECT_CONFIG,
+        &json!({"mobileLinksConfig": null, "autodeleteAnonymousUsers": true}),
+    );
+    assert_eq!(status, 200, "{answer}");
+    let (_, read) = admin(&s, "GET", PROJECT_CONFIG, &Value::Null);
+    assert_eq!(
+        read["mobileLinksConfig"]["domain"], "FIREBASE_DYNAMIC_LINK_DOMAIN",
+        "{read}"
+    );
+    assert_eq!(read["autodeleteAnonymousUsers"], true, "{read}");
+}
+
+/// Without a tenant registry, a client request naming a tenant the emulator does not serve is
+/// refused: the policy read with the v2 API's `INVALID_TENANT_ID`, as production answers it
+/// (sandbox recording 2026-09-25), other routes with `TENANT_NOT_FOUND` as before.
+#[test]
+fn an_unserved_tenant_is_refused_per_route() {
+    let s = state();
+    let (status, refused) = admin(
+        &s,
+        "GET",
+        &format!("{V2}/passwordPolicy?key=fake-api-key&tenantId=unknown-tenant"),
+        &Value::Null,
+    );
+    assert_eq!(
+        (status, refused["error"]["message"].as_str()),
+        (400, Some("INVALID_TENANT_ID")),
+        "{refused}"
+    );
+    let (status, refused) = post(
+        &s,
+        &format!("{V1}/accounts:signUp"),
+        &json!({"tenantId": "unknown-tenant", "returnSecureToken": true}),
+    );
+    assert_eq!(
+        (status, refused["error"]["message"].as_str()),
+        (400, Some("TENANT_NOT_FOUND")),
+        "{refused}"
+    );
+}
+
 /// Concurrent config writes of different stored members keep every write, and the derived
 /// sign-up quota matches the quota finally stored (closure review 2026-09-25: the members
 /// were read under one lock and written under another).
@@ -11123,9 +11238,10 @@ fn concurrent_config_writes_keep_every_member() {
             read["quota"]["signUpQuotaConfig"]["quota"], "5",
             "strict {strict}: {read}"
         );
+        // The emulator profile reports a member only while it differs from a new project's.
+        let locale = &read["notification"]["defaultLocale"];
         assert!(
-            read["notification"]["defaultLocale"] == "ja"
-                || read["notification"]["defaultLocale"] == "en",
+            locale == "ja" || locale == "en" || (!strict && locale.is_null()),
             "{read}"
         );
     }

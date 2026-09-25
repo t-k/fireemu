@@ -18045,10 +18045,12 @@ fn strict_a_real_numbers_sms_session_is_single_use() {
 }
 
 /// The TOTP challenge timeout is TOTP's: a phone second factor completes a pending credential
-/// 303 and 1800 seconds old (auth-mfa/lifetime-short#aged-pending-m300; SF-3 c).
+/// 303 and 453 seconds old (auth-mfa/lifetime-short#aged-pending-m300,
+/// auth-mfa/lifetime-sms#aged-pending-m450; SF-3 c). Its own limit is pinned by
+/// `strict_an_sms_pending_credential_expires_where_production_refused`.
 #[test]
 fn strict_an_sms_pending_credential_has_no_totp_challenge_timeout() {
-    for age in [303, 1_800] {
+    for age in [303, 453] {
         let s = strict_mfa_state();
         let (status, _) = real_number_phone_account(&s, "sms-pending@example.com");
         assert_eq!(status, 400);
@@ -18409,4 +18411,56 @@ fn strict_an_enrolled_totp_factor_is_asked_for_while_mfa_is_off() {
     );
     assert_eq!(status, 200, "{body}");
     assert!(body["idToken"].is_string(), "{body}");
+}
+
+// ---- AUTH-MFA follow-up directive, Must 2: the SMS pending credential's lifetime -------------
+
+/// Starts the SMS step of a pending credential `age` seconds after it was issued.
+fn sms_start_aged(s: &AuthState, email: &str, age: i64) -> (u16, Value) {
+    let pending = pending_of(s, email);
+    advance(s, age);
+    post(
+        s,
+        &format!("{V2}/accounts/mfaSignIn:start"),
+        &json!({"mfaPendingCredential": pending["mfaPendingCredential"],
+            "mfaEnrollmentId": pending["mfaInfo"][0]["mfaEnrollmentId"], "phoneSignInInfo": {}}),
+    )
+}
+
+/// Production started the SMS step of a pending credential about 453 seconds old and refused
+/// one about 603 seconds old as expired (sandbox recording 2026-09-25,
+/// `auth-mfa/lifetime-sms`). Strict refuses from 602 seconds, one second below the refusal, as
+/// M9; the emulator profile keeps its hour.
+#[test]
+fn strict_an_sms_pending_credential_expires_where_production_refused() {
+    for (age, refused) in [(453, false), (601, false), (602, true), (1_803, true)] {
+        let s = strict_phone_account("sms-age@example.com");
+        let (status, body) = sms_start_aged(&s, "sms-age@example.com", age);
+        if refused {
+            assert_eq!(
+                (status, v2_refusal(&body).0),
+                (
+                    400,
+                    "INVALID_MFA_PENDING_CREDENTIAL : MFA pending credential is expired."
+                ),
+                "{age}: {body}"
+            );
+        } else {
+            assert_eq!(status, 200, "{age}: {body}");
+        }
+    }
+    let s = state();
+    let (status, body) = patch_sign_in(
+        &s,
+        "signIn.phoneNumber.testPhoneNumbers",
+        &json!({"signIn": {"phoneNumber": {"testPhoneNumbers": {"+16505550101": "123456"}}}}),
+    );
+    assert_eq!(status, 200, "{body}");
+    create(
+        &s,
+        &json!({"email": "sms-age@example.com", "password": "password123", "emailVerified": true,
+            "mfaInfo": [{"phoneInfo": "+16505550101"}]}),
+    );
+    let (status, body) = sms_start_aged(&s, "sms-age@example.com", 1_803);
+    assert_eq!(status, 200, "{body}");
 }

@@ -368,11 +368,17 @@ impl Object {
         Self::PendingToken,
     ];
 
-    /// Largest age (seconds) at which the object is still usable.
-    fn last_valid_age(self) -> i64 {
+    /// Largest age (seconds) at which the object is still usable. Under production's rules a
+    /// pending credential starts its SMS step only before
+    /// `OBSERVED_SMS_PENDING_START_SECONDS` (sandbox recording 2026-09-25,
+    /// auth-mfa/lifetime-sms).
+    fn last_valid_age(self, strict: bool) -> i64 {
         match self {
             Self::Oob => OOB_CODE_TTL_SECONDS,
             Self::Sms => SMS_CODE_TTL_SECONDS,
+            Self::Pending if strict => {
+                fireemu_core_auth::store::OBSERVED_SMS_PENDING_START_SECONDS - 1
+            }
             Self::Pending => PENDING_SIGN_IN_TTL_SECONDS,
             Self::TotpEnrollment => enrollment_ttl_seconds(),
             // The continuation cache is half-open: the handle is gone at exactly its TTL.
@@ -384,11 +390,11 @@ impl Object {
 /// Creation offset (seconds after `t0`) of `other` in the row that crosses `crossed` at
 /// `check_at`: an object that outlives the check instant is created at `t0`, every other one
 /// at half its lifetime before the check, so at the check only the crossed object is expired.
-fn creation_offset(crossed: Object, other: Object, check_at: i64) -> i64 {
-    if other == crossed || other.last_valid_age() > check_at {
+fn creation_offset(crossed: Object, other: Object, check_at: i64, strict: bool) -> i64 {
+    if other == crossed || other.last_valid_age(strict) > check_at {
         0
     } else {
-        check_at - other.last_valid_age() / 2
+        check_at - other.last_valid_age(strict) / 2
     }
 }
 
@@ -433,10 +439,11 @@ fn create(s: &AuthState, id_token: &str, object: Object, into: &mut Objects) {
 /// Creates the five objects in creation-time order and moves the clock to the check
 /// instant; returns the objects.
 fn build(s: &AuthState, id_token: &str, crossed: Object) -> Objects {
-    let check_at = crossed.last_valid_age() + 1;
+    let strict = s.store.lock().unwrap().second_factor_rules_are_production();
+    let check_at = crossed.last_valid_age(strict) + 1;
     let mut schedule: Vec<(i64, Object)> = Object::ALL
         .iter()
-        .map(|&o| (creation_offset(crossed, o, check_at), o))
+        .map(|&o| (creation_offset(crossed, o, check_at, strict), o))
         .collect();
     schedule.sort_by_key(|(offset, _)| *offset);
     let mut objects = Objects::default();
@@ -491,12 +498,22 @@ fn crossing_each_lifetime_alone_leaves_the_other_objects_usable() {
                         &context,
                     );
                 }
+                Object::Pending if strict => {
+                    // Production refuses the SMS step of a pending credential from about 603
+                    // seconds (auth-mfa/lifetime-sms); the credential itself is still known.
+                    assert_refused(
+                        &start_phone_step(&s, &objects.pending),
+                        "INVALID_MFA_PENDING_CREDENTIAL : MFA pending credential is expired.",
+                        &context,
+                    );
+                    assert_refused(
+                        &finalize_totp_step(&s, &objects.pending, &json!("any"), 0),
+                        "INVALID_MFA_ENROLLMENT_ID",
+                        &context,
+                    );
+                }
                 Object::Pending => {
-                    let unknown = if strict {
-                        "INVALID_PENDING_TOKEN"
-                    } else {
-                        "INVALID_MFA_PENDING_CREDENTIAL"
-                    };
+                    let unknown = "INVALID_MFA_PENDING_CREDENTIAL";
                     assert_refused(&start_phone_step(&s, &objects.pending), unknown, &context);
                     assert_refused(
                         &finalize_totp_step(&s, &objects.pending, &json!("any"), 0),
@@ -601,10 +618,10 @@ fn crossing_each_lifetime_alone_leaves_the_other_objects_usable() {
             );
             assert_eq!(sms, 0, "{context}");
             // Production's rules keep a pending credential after success: the SMS one always
-            // (refused or used), the other unless it expired, and the one of the fresh sign-in
-            // the TOTP enrollment started with.
+            // (refused or used), the other (a crossed one is only too old for its SMS step, not
+            // gone), and the one of the fresh sign-in the TOTP enrollment started with.
             let expected_pending = if strict {
-                2 + usize::from(crossed != Object::Pending)
+                3
             } else {
                 usize::from(crossed == Object::Sms)
             };
@@ -665,9 +682,10 @@ fn crossing_each_lifetime_alone_leaves_the_other_objects_usable() {
                     let code = start_phone_code(&s, &pending);
                     let (status, signed) = finalize_phone_step(&s, &pending, &code);
                     assert_eq!(status, 200, "{context}: {signed}");
+                    // Under production's rules the crossed credential is still kept too.
                     assert_eq!(
                         s.store.lock().unwrap().pending_sign_in_count(),
-                        3 * usize::from(strict)
+                        4 * usize::from(strict)
                     );
                 }
                 Object::TotpEnrollment => {

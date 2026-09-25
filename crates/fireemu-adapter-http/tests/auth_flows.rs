@@ -5747,10 +5747,37 @@ fn pending_retry_survives_sms_expiry_while_the_pending_credential_lives() {
 
 #[test]
 fn pending_retry_ends_when_the_pending_credential_expires() {
-    use fireemu_core_auth::store::PENDING_SIGN_IN_TTL_SECONDS;
-    for strict in [false, true] {
+    use fireemu_core_auth::store::{
+        OBSERVED_SMS_PENDING_START_SECONDS, PENDING_SIGN_IN_TTL_SECONDS,
+    };
+    // Under production's rules the SMS step starts only before the observed limit (sandbox
+    // recording 2026-09-25, auth-mfa/lifetime-sms), and after the hour the swept credential is
+    // unknown.
+    {
         let email = "pending-lifetime@example.com";
-        let (s, _) = pending_expiry_state(strict, email);
+        let (s, _) = pending_expiry_state(true, email);
+        let pending = pending_login(&s, email);
+        advance_clock(&s, OBSERVED_SMS_PENDING_START_SECONDS - 1);
+        let phone = start_phone_code(&s, &pending);
+        let (status, signed) = finalize_phone_step(&s, &pending, &phone);
+        assert_eq!(status, 200, "{signed}");
+        let pending = pending_login(&s, email);
+        advance_clock(&s, OBSERVED_SMS_PENDING_START_SECONDS);
+        let (status, refused) = start_phone_step(&s, &pending);
+        assert_eq!(status, 400, "{refused}");
+        assert_eq!(
+            refused["error"]["message"],
+            "INVALID_MFA_PENDING_CREDENTIAL : MFA pending credential is expired."
+        );
+        advance_clock(&s, PENDING_SIGN_IN_TTL_SECONDS);
+        let (status, refused) = start_phone_step(&s, &pending);
+        assert_eq!(status, 400, "{refused}");
+        assert_eq!(refused["error"]["message"], "INVALID_PENDING_TOKEN");
+    }
+    // The official emulator's rules: the pending credential's hour.
+    {
+        let email = "pending-lifetime@example.com";
+        let (s, _) = pending_expiry_state(false, email);
         // At the pending lifetime a fresh code still finalizes; one second past it the
         // pending credential is gone, its code with it, and start is refused as well.
         let pending = pending_login(&s, email);
@@ -5784,13 +5811,10 @@ fn pending_retry_ends_when_the_pending_credential_expires() {
         assert_eq!(s.store.lock().unwrap().pending_sign_in_count(), 0);
         let (status, refused) = start_phone_step(&s, &pending);
         assert_eq!(status, 400, "{refused}");
-        // Production's word for a pending credential it no longer knows.
-        let unknown = if strict {
-            "INVALID_PENDING_TOKEN"
-        } else {
+        assert_eq!(
+            refused["error"]["message"],
             "INVALID_MFA_PENDING_CREDENTIAL"
-        };
-        assert_eq!(refused["error"]["message"], unknown);
+        );
     }
 }
 
@@ -5838,25 +5862,37 @@ fn pending_and_sms_expiry_matrix_keeps_expiry_causes_separate() {
         let (s, _) = pending_expiry_state(strict, "expiry-matrix-pending@example.com");
         let pending = pending_login(&s, "expiry-matrix-pending@example.com");
         advance_clock(&s, PENDING_SIGN_IN_TTL_SECONDS - 1);
-        let phone = start_phone_code(&s, &pending);
-        advance_clock(&s, 2);
-        let at = s.clock.lock().unwrap().now_for_test();
-        assert!(s
-            .store
-            .lock()
-            .unwrap()
-            .check_phone_code(
-                phone["sessionInfo"].as_str().unwrap(),
-                phone["code"].as_str().unwrap(),
-                at,
-            )
-            .is_ok());
-        let (status, refused) = finalize_phone_step(&s, &pending, &phone);
-        assert_eq!(status, 400, "{refused}");
-        assert_eq!(refused["error"]["message"], "INVALID_SESSION_INFO");
-        assert!(refused.get("idToken").is_none());
-        assert_eq!(s.store.lock().unwrap().pending_sign_in_count(), 0);
-        assert!(s.store.lock().unwrap().verification_codes().is_empty());
+        if strict {
+            // Production refuses the SMS step of a pending credential from about 603 seconds
+            // (sandbox recording 2026-09-25, auth-mfa/lifetime-sms), so under its rules a
+            // pending credential cannot outlive a code started for it.
+            let (status, refused) = start_phone_step(&s, &pending);
+            assert_eq!(status, 400, "{refused}");
+            assert_eq!(
+                refused["error"]["message"],
+                "INVALID_MFA_PENDING_CREDENTIAL : MFA pending credential is expired."
+            );
+        } else {
+            let phone = start_phone_code(&s, &pending);
+            advance_clock(&s, 2);
+            let at = s.clock.lock().unwrap().now_for_test();
+            assert!(s
+                .store
+                .lock()
+                .unwrap()
+                .check_phone_code(
+                    phone["sessionInfo"].as_str().unwrap(),
+                    phone["code"].as_str().unwrap(),
+                    at,
+                )
+                .is_ok());
+            let (status, refused) = finalize_phone_step(&s, &pending, &phone);
+            assert_eq!(status, 400, "{refused}");
+            assert_eq!(refused["error"]["message"], "INVALID_SESSION_INFO");
+            assert!(refused.get("idToken").is_none());
+            assert_eq!(s.store.lock().unwrap().pending_sign_in_count(), 0);
+            assert!(s.store.lock().unwrap().verification_codes().is_empty());
+        }
 
         let (s, _) = pending_expiry_state(strict, "expiry-matrix-both@example.com");
         let pending = pending_login(&s, "expiry-matrix-both@example.com");

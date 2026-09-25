@@ -96,6 +96,12 @@
       "decision": "The SMS pending credential's lifetime is observed too: auth-mfa/lifetime-sms samples it at 450 and 600 seconds with 1800 seconds as the refusal-side control, each followed at once by a same-account control, recorded twice in the same task (within M1 and M4). Strict follows the result and places no inferred refusal outside the measured bracket.",
       "decidedBy": "Claude under the owner's delegation to the coordinator (owner ledger, 2026-09-25, AUTH-MFA)",
       "decidedOn": "2026-09-25"
+    },
+    {
+      "id": "M14",
+      "decision": "auth-mfa/lifetime-sms (recorded twice, 2026-09-25) found the SMS step of a pending credential started at about 453 seconds and refused as INVALID_MFA_PENDING_CREDENTIAL (expired) at about 603 and 1803 seconds. Strict refuses the SMS start from 602 seconds, one second below the refusal to absorb the requests' latency, as the owner's M9 exception; a finalize after an accepted start is not refused, as that was not observed.",
+      "decidedBy": "Claude under the owner's delegation to the coordinator, within the owner's M9 exception (owner ledger, 2026-09-25, AUTH-MFA)",
+      "decidedOn": "2026-09-25"
     }
   ],
   "conditions": [
@@ -430,7 +436,7 @@
         "default"
       ],
       "status": "PENDING_CORPUS",
-      "note": "A TOTP pending credential offered at 300, 450, 600 and 1800 seconds (owner decision M4) and, since production refused it already at 300, at 60, 120, 180, 240 and 290 seconds (M8); an SMS pending credential whose code is sent at 150 and 300 seconds (M8), and at 450, 600 and 1800 seconds (M13). Each is followed at once by a same-account control with a credential acquired then.",
+      "note": "A TOTP pending credential offered at 300, 450, 600 and 1800 seconds (owner decision M4) and, since production refused it already at 300, at 60, 120, 180, 240 and 290 seconds (M8); an SMS pending credential whose code is sent at 150 and 300 seconds (M8), and at 450, 600 and 1800 seconds (M13; production refused the SMS start from about 603 seconds, M14). Each is followed at once by a same-account control with a credential acquired then.",
       "evidence": {
         "productionRecordings": [
           {

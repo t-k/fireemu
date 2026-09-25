@@ -12089,6 +12089,12 @@ fn mfa_sign_in_start(
         }) {
             return error(400, "INVALID_PHONE_NUMBER : Invalid format.");
         }
+        if store.sms_pending_start_expired(&pending_id, at) {
+            return error(
+                400,
+                "INVALID_MFA_PENDING_CREDENTIAL : MFA pending credential is expired.",
+            );
+        }
     }
     // The official order: both request fields first, then the credential, then the factor.
     let Some(pending) = str_field(body, "mfaPendingCredential").filter(|p| !p.is_empty()) else {

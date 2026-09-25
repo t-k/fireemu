@@ -193,6 +193,16 @@ pub async fn write_stream(
         {
             break;
         }
+        // Production's first-message token probe is rejected while the sender remains open.
+        // Its recorded request-byte probes half-close immediately and end OK without a reply.
+        if state.parent.is_none()
+            && !req.stream_token.is_empty()
+            && req.stream_id.is_empty()
+            && req.writes.is_empty()
+            && already_half_closed(&mut inbound)
+        {
+            break;
+        }
         let outcome = handle_write_request(&ctx, &mut state, &req);
         let stop = outcome.is_err();
         if tx.send(outcome).await.is_err() || stop {
@@ -229,10 +239,13 @@ fn handle_write_request(
                 "the first Write request must name the database",
             ));
         }
-        if !req.stream_id.is_empty() || !req.stream_token.is_empty() {
+        if !req.stream_id.is_empty() {
             return Err(Status::failed_precondition(
                 "write stream resumption is not supported; start a new stream",
             ));
+        }
+        if !req.stream_token.is_empty() {
+            return Err(Status::aborted("resuming a stream not supported"));
         }
         if !req.writes.is_empty() {
             return Err(Status::invalid_argument(
@@ -1869,5 +1882,45 @@ mod empty_write_tests {
             closed[0].is_ok(),
             "only the handshake answer, then an OK end"
         );
+    }
+
+    /// Production's D5 probe refused an unknown first token while the sender stayed open,
+    /// whereas both 10 MiB request-byte recordings ended OK after an immediate half-close.
+    #[tokio::test]
+    async fn an_unknown_first_token_depends_on_client_half_close() {
+        async fn run(half_closed: bool) -> Vec<Result<pb::WriteResponse, Status>> {
+            let (client, inbound) = mpsc::channel(2);
+            client
+                .send(Ok(pb::WriteRequest {
+                    database: "projects/demo-app/databases/(default)".to_owned(),
+                    stream_token: vec![7; 16],
+                    ..Default::default()
+                }))
+                .await
+                .unwrap();
+            let open = (!half_closed).then_some(client);
+            let (tx, mut rx) = mpsc::channel(2);
+            write_stream(
+                context(),
+                tokio_stream::wrappers::ReceiverStream::new(inbound),
+                tx,
+            )
+            .await;
+            drop(open);
+            let mut out = Vec::new();
+            while let Some(item) = rx.recv().await {
+                out.push(item);
+            }
+            out
+        }
+
+        let open = run(false).await;
+        assert_eq!(open.len(), 1, "{open:?}");
+        let refused = open[0].as_ref().unwrap_err();
+        assert_eq!(refused.code(), tonic::Code::Aborted);
+        assert_eq!(refused.message(), "resuming a stream not supported");
+
+        let closed = run(true).await;
+        assert!(closed.is_empty(), "{closed:?}");
     }
 }

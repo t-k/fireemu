@@ -1217,18 +1217,16 @@ async fn wait_for_fixed_inspector_port_release(port: u16, timeout: Duration) -> 
 }
 
 async fn prepare_fixed_inspector_reload(
-    runtime: &FunctionsRuntime,
+    runtime: &Arc<FunctionsRuntime>,
     codebase: &str,
     port: u16,
-) -> Result<(), String> {
-    let (_, previous) = runtime
-        .current_runners()
-        .into_iter()
-        .find(|(name, _)| name == codebase)
-        .ok_or_else(|| format!("Functions codebase {codebase:?} is no longer available"))?;
+) -> Result<fireemu_adapter_functions::runtime::RunnerRestartGuard, String> {
     // A fixed inspector port cannot be bound by both generations at once.
-    previous.kill_now();
-    wait_for_fixed_inspector_port_release(port, Duration::from_secs(3)).await
+    let restart_guard = runtime
+        .stop_runner_for_fixed_inspector_reload(codebase)
+        .await?;
+    wait_for_fixed_inspector_port_release(port, Duration::from_secs(3)).await?;
+    Ok(restart_guard)
 }
 
 fn report_reload_install(
@@ -1342,15 +1340,18 @@ async fn supervise_codebase_reloads(
         else {
             continue;
         };
-        if let Some(port) = cfg.functions_inspect_port {
-            if let Err(reason) =
-                prepare_fixed_inspector_reload(&runtime, &codebase.codebase, port).await
-            {
-                warn_reload_once(&mut last_start_error, &codebase.codebase, "start", &reason);
-                discard_reload_snapshot(snapshot, &codebase.codebase).await;
-                continue;
+        let _restart_guard = if let Some(port) = cfg.functions_inspect_port {
+            match prepare_fixed_inspector_reload(&runtime, &codebase.codebase, port).await {
+                Ok(guard) => Some(guard),
+                Err(reason) => {
+                    warn_reload_once(&mut last_start_error, &codebase.codebase, "start", &reason);
+                    discard_reload_snapshot(snapshot, &codebase.codebase).await;
+                    continue;
+                }
             }
-        }
+        } else {
+            None
+        };
         let mut staged = codebase.clone();
         staged.source = snapshot.to_string_lossy().into_owned();
         match start_codebase(
@@ -4667,17 +4668,17 @@ mod tests {
         blocking_auth_write_request, changed_source_stamp, check_callable_app_check,
         function_pubsub_resources, functions_source_stamp, functions_source_stamp_with_charge,
         functions_source_stamp_with_file_version, hash_source_file, hash_source_stamp_entry,
-        load_user_environment, node_engine_matches, owned_pubsub_topic, package_node_engine, parse_node_version,
-        provision_function_pubsub_resources, select_node_installation, snapshot_functions_source,
-        source_scan_pacing_delay, source_scan_retry_delay, stream_source_chunks, update_watch_hash,
-        validate_functions_codebase_budget, wait_for_fixed_inspector_port_release,
-        warn_reload_once, BlockingAuthBridge, FunctionsSourceByteBudget,
-        FunctionsSourceEntryBudget, FunctionsSourceFileVersion, FunctionsSourceScanBudget,
-        FunctionsSourceSnapshot, FunctionsSourceStamp, FunctionsSourceTraversal, NodeInstallation,
-        PubSubBridge, UserEnvironment, BLOCKING_AUTH_DEADLINE, MAX_BLOCKING_AUTH_RESPONSE_BYTES,
-        MAX_FUNCTIONS_SOURCE_BYTES, MAX_FUNCTIONS_SOURCE_ENTRIES,
-        MAX_FUNCTIONS_SOURCE_WATCH_BYTES_PER_SECOND, MAX_FUNCTIONS_SOURCE_WATCH_FILES_PER_SECOND,
-        SOURCE_IO_BUFFER_BYTES,
+        load_user_environment, node_engine_matches, owned_pubsub_topic, package_node_engine,
+        parse_node_version, provision_function_pubsub_resources, select_node_installation,
+        snapshot_functions_source, source_scan_pacing_delay, source_scan_retry_delay,
+        stream_source_chunks, update_watch_hash, validate_functions_codebase_budget,
+        wait_for_fixed_inspector_port_release, warn_reload_once, BlockingAuthBridge,
+        FunctionsSourceByteBudget, FunctionsSourceEntryBudget, FunctionsSourceFileVersion,
+        FunctionsSourceScanBudget, FunctionsSourceSnapshot, FunctionsSourceStamp,
+        FunctionsSourceTraversal, NodeInstallation, PubSubBridge, UserEnvironment,
+        BLOCKING_AUTH_DEADLINE, MAX_BLOCKING_AUTH_RESPONSE_BYTES, MAX_FUNCTIONS_SOURCE_BYTES,
+        MAX_FUNCTIONS_SOURCE_ENTRIES, MAX_FUNCTIONS_SOURCE_WATCH_BYTES_PER_SECOND,
+        MAX_FUNCTIONS_SOURCE_WATCH_FILES_PER_SECOND, SOURCE_IO_BUFFER_BYTES,
     };
     #[cfg(not(windows))]
     use super::{

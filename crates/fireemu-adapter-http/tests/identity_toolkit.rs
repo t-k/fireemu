@@ -5799,12 +5799,13 @@ fn firebase_profile_admin_password_change_preserves_refresh_and_update_is_atomic
     assert_eq!(status, 200);
     let uid = signed["localId"].as_str().unwrap().to_owned();
     let refresh = signed["refreshToken"].as_str().unwrap().to_owned();
-    // Weak new password: the claims in the same request are not applied either.
+    // A refused new password (production refuses one over 4096 characters, also from an
+    // administrator): the claims in the same request are not applied either.
     let (status, _) = admin(
         &s,
         "POST",
         &format!("{ADMIN}/accounts:update"),
-        &json!({"localId": uid, "password": "x", "customAttributes": "{\"role\":\"admin\"}"}),
+        &json!({"localId": uid, "password": "a".repeat(4097), "customAttributes": "{\"role\":\"admin\"}"}),
     );
     assert_eq!(status, 400);
     let (_, looked) = admin(
@@ -6571,17 +6572,15 @@ fn password_policy_boundaries_apply_to_admin_update_before_any_profile_mutation(
     );
     assert_ne!(lookup["users"][0]["displayName"], "must-not-apply");
 
+    // An administrator may set a short password (sandbox recording 2026-09-25,
+    // auth-config-sdk/password-policy/existing#admin-update-short).
     let (status, response) = admin(
         &s,
         "POST",
         &format!("{ADMIN}/accounts:update"),
         &json!({"localId": signed["localId"], "password": "12345"}),
     );
-    assert_eq!(status, 400, "{response}");
-    assert_eq!(
-        response["error"]["message"], "WEAK_PASSWORD : Password should be at least 6 characters",
-        "{response}"
-    );
+    assert_eq!(status, 200, "{response}");
     let (status, response) = admin(
         &s,
         "POST",
@@ -11028,6 +11027,48 @@ fn patch_sign_in(s: &AuthState, mask: &str, body: &Value) -> (u16, Value) {
         &format!("{PROJECT_CONFIG}?updateMask={mask}"),
         body,
     )
+}
+
+/// An administrator may set a password below the minimum length, as production lets it
+/// (sandbox recording 2026-09-25, auth-config-sdk/password-policy/existing#admin-update-short);
+/// an end user may not.
+#[test]
+fn an_admin_update_takes_a_short_password_and_a_client_update_does_not() {
+    for strict in [true, false] {
+        let s = if strict { strict_state() } else { state() };
+        let (status, created) = post(
+            &s,
+            &format!("{V1}/accounts:signUp"),
+            &json!({"email": "short@example.com", "password": "password1", "returnSecureToken": true}),
+        );
+        assert_eq!(status, 200, "{created}");
+        let (status, refused) = post(
+            &s,
+            &format!("{V1}/accounts:update"),
+            &json!({"idToken": created["idToken"], "password": "12345"}),
+        );
+        assert_eq!(
+            (status, refused["error"]["message"].as_str()),
+            (
+                400,
+                Some("WEAK_PASSWORD : Password should be at least 6 characters")
+            ),
+            "strict {strict}"
+        );
+        let (status, updated) = admin(
+            &s,
+            "POST",
+            &format!("{ADMIN}/accounts:update"),
+            &json!({"localId": created["localId"], "password": "12345"}),
+        );
+        assert_eq!(status, 200, "strict {strict}: {updated}");
+        let (status, signed_in) = post(
+            &s,
+            &format!("{V1}/accounts:signInWithPassword"),
+            &json!({"email": "short@example.com", "password": "12345", "returnSecureToken": true}),
+        );
+        assert_eq!(status, 200, "strict {strict}: {signed_in}");
+    }
 }
 
 /// A password sign-in of an address that several imported accounts share reaches the earliest

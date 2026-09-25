@@ -18241,3 +18241,21 @@ fn emulator_a_test_numbers_enrollment_session_is_single_use() {
         "{again}"
     );
 }
+
+/// A masked `mfa` update without a value resets the project's multi-factor config to its
+/// default, as a field mask clears a field the request leaves out (mutation follow-up,
+/// docs.local/mutation/auth-mfa/20260925).
+#[test]
+fn a_masked_mfa_update_without_a_value_resets_the_config() {
+    for body in [json!({"mfa": null}), json!({})] {
+        let s = strict_mfa_state();
+        let (status, body) = admin(
+            &s,
+            "PATCH",
+            &format!("{PROJECT_CONFIG}?updateMask=mfa"),
+            &body,
+        );
+        assert_eq!(status, 200, "{body}");
+        assert_eq!(body["mfa"], json!({"state": "DISABLED"}), "{body}");
+    }
+}

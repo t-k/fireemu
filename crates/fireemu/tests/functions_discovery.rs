@@ -635,7 +635,7 @@ fn inspect_functions_opens_the_requested_port_and_serialises_all_handler_kinds()
 #[cfg(unix)]
 #[test]
 #[ignore = "requires tools/sdk-smoke dependencies; CI runs this test after npm ci"]
-fn fixed_inspector_port_explicitly_refuses_reload_and_keeps_the_runner() {
+fn fixed_inspector_port_reloads_on_the_same_port() {
     let dir = scratch("fixed-inspector-reload");
     let _cleanup = ScratchGuard(dir.clone());
     std::fs::write(dir.join("package.json"), r#"{"main":"index.js"}"#).unwrap();
@@ -657,8 +657,12 @@ void (async () => {
   const url = `http://${process.env.FIREEMU_FUNCTIONS_HOST}/${process.env.GOOGLE_CLOUD_PROJECT}/us-central1/http`;
   const before = await fetch(url).then((response) => response.text());
   fs.writeFileSync(process.argv[1], process.argv[2]);
-  await new Promise((resolve) => setTimeout(resolve, 4000));
-  const after = await fetch(url).then((response) => response.text());
+  let after = before;
+  for (let attempt = 0; attempt < 100; attempt++) {
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    try { after = await fetch(url).then((response) => response.text()); } catch {}
+    if (after === 'after') break;
+  }
   const inspector = await fetch(`http://127.0.0.1:${process.argv[3]}/json/list`).then((response) => response.ok);
   console.log(JSON.stringify({ before, after, inspector }));
 })().catch((error) => { console.error(error); process.exitCode = 1; });
@@ -685,15 +689,12 @@ void (async () => {
     );
     assert!(
         String::from_utf8_lossy(&out.stdout)
-            .contains(r#"{"before":"before","after":"before","inspector":true}"#),
+            .contains(r#"{"before":"before","after":"after","inspector":true}"#),
         "stdout:\n{}\nstderr:\n{error}",
         String::from_utf8_lossy(&out.stdout)
     );
-    assert_eq!(
-        error
-            .matches("hot reload disabled for fixed inspector port")
-            .count(),
-        1,
+    assert!(
+        !error.contains("hot reload disabled for fixed inspector port"),
         "{error}"
     );
     assert!(!error.contains("requested debugger port"), "{error}");

@@ -148,11 +148,15 @@ def test_historical_worktree_parent_refuses_a_symlink_escape(tmp_path: Path) -> 
         authority.historical_worktree_parent(tmp_path)
 
 
-def test_historical_worktree_parent_accepts_the_real_repository_parent() -> None:
+def test_historical_worktree_parent_accepts_a_real_worktree_directory(
+    tmp_path: Path,
+) -> None:
+    # A CI checkout has no .worktree directory, so build a real one here instead of
+    # depending on the developer's repository layout.
     authority = load_authority()
-    assert authority.historical_worktree_parent(WORKTREE_ROOT) == (
-        WORKTREE_ROOT / ".worktree"
-    )
+    root = tmp_path.resolve()
+    (root / ".worktree").mkdir()
+    assert authority.historical_worktree_parent(root) == root / ".worktree"
 
 
 def git_setup(root: Path, *args: str) -> None:

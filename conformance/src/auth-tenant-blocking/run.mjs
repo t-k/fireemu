@@ -438,14 +438,17 @@ export function otherLaneOnSandbox(ledgerText, now = Date.now(), ignoredTaskIds 
       !ignoredTaskIds.includes(entry.taskId),
   );
   const last = new Map();
-  for (const entry of lines) last.set(entry.taskId, entry);
+  for (const entry of lines) {
+    if (entry.event === "started" || entry.event === "finished" || entry.outcome !== undefined)
+      last.set(entry.taskId, entry);
+  }
   const open = [...last.values()].find((entry) => entry.event === "started");
   if (open) return `${open.taskId} started at ${open.ts} and has not finished`;
   const recent = lines.find((entry) => now - Date.parse(entry.ts) < 30 * 60_000);
   return recent ? `${recent.taskId} wrote a line at ${recent.ts}` : undefined;
 }
 
-/** The reviewed upper bound for one campaign, including its control and cleanup work. */
+/** The reviewed budget reservation for one campaign, including control and cleanup work. */
 const RUN_RESERVATION_USD = SUITE === "blocking" ? 5 : 1;
 const TASK_BUDGET_USD = 10;
 

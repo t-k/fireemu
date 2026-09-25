@@ -167,6 +167,22 @@ test("another suite's hold and thirty-minute gap both block admission", () => {
   assert.equal(otherLaneOnSandbox(row(31 * 60_000, { outcome: "recorded" }), now), undefined);
 });
 
+test("a note after another lane's start does not close its hold", () => {
+  const now = Date.now();
+  const other = "AUTH-MFA-SANDBOX";
+  const row = (age, fields) =>
+    JSON.stringify({
+      ts: new Date(now - age).toISOString(),
+      project: "fireemu-oracle-idp",
+      taskId: other,
+      ...fields,
+    });
+  const ledger = `${row(3 * 3_600_000, { event: "started" })}\n${row(2 * 3_600_000, { event: "note" })}\n`;
+  assert.match(otherLaneOnSandbox(ledger, now), /has not finished/);
+  const closed = `${ledger}${row(31 * 60_000, { event: "finished", outcome: "recorded" })}\n`;
+  assert.equal(otherLaneOnSandbox(closed, now), undefined);
+});
+
 test("an IAM campaign hold survives sandbox restoration and blocks new recordings", async () => {
   const now = Date.now();
   const project = "fireemu-oracle-idp";

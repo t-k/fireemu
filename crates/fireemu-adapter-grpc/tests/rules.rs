@@ -2881,39 +2881,141 @@ async fn transactions_are_bound_to_the_token_audience_too() {
     h.handle.abort();
 }
 
-/// Production refuses an end user's `BeginTransaction` with the ordinary denial, signed in or
-/// not, whatever the rules say (FS-RULES production recording, 2026-09-24); the official
-/// emulator opens the transaction. The owner may, under both.
+/// A query of `open` that opens a transaction with `options`.
+fn open_query_in_new_transaction(options: pb::TransactionOptions) -> pb::RunQueryRequest {
+    pb::RunQueryRequest {
+        parent: format!("{DB}/documents"),
+        query_type: Some(pb::run_query_request::QueryType::StructuredQuery(
+            pb::StructuredQuery {
+                from: vec![pb::structured_query::CollectionSelector {
+                    collection_id: "open".to_owned(),
+                    all_descendants: false,
+                }],
+                ..Default::default()
+            },
+        )),
+        consistency_selector: Some(pb::run_query_request::ConsistencySelector::NewTransaction(
+            options,
+        )),
+        ..Default::default()
+    }
+}
+
+/// Production refuses an end user, signed in or not, a read-write transaction with the ordinary
+/// denial whatever the rules say, whether by `BeginTransaction` or by a read's
+/// `newTransaction`, and opens a read-only one (FS-RULES production recording, 2026-09-25); the
+/// official emulator opens both. The owner may, under both profiles.
 #[tokio::test]
-async fn end_users_may_not_begin_a_transaction_in_production() {
-    let begin = || pb::BeginTransactionRequest {
+async fn end_users_may_not_open_a_read_write_transaction_in_production() {
+    use pb::transaction_options::{Mode, ReadOnly, ReadWrite};
+    let read_only = || pb::TransactionOptions {
+        mode: Some(Mode::ReadOnly(ReadOnly::default())),
+    };
+    let read_write = || pb::TransactionOptions {
+        mode: Some(Mode::ReadWrite(ReadWrite::default())),
+    };
+    let begin = |options: Option<pb::TransactionOptions>| pb::BeginTransactionRequest {
         database: DB.to_owned(),
+        options,
+        ..Default::default()
+    };
+    let batch_get = |options: pb::TransactionOptions| pb::BatchGetDocumentsRequest {
+        database: DB.to_owned(),
+        documents: vec![format!("{DB}/documents/open/d")],
+        consistency_selector: Some(
+            pb::batch_get_documents_request::ConsistencySelector::NewTransaction(options),
+        ),
         ..Default::default()
     };
     let mut h = start_with_enforcer(TokenAcceptance::Verified, IndexSet::default(), |e| {
         e.with_end_user_transactions(false)
     })
     .await;
+    h.rules
+        .replace_source(
+            "rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    match /{document=**} { allow read, write: if true; }
+  }
+}",
+        )
+        .unwrap();
     let (_, token) = h.user("t@example.com");
-    for request in [with_bearer(begin(), &token), tonic::Request::new(begin())] {
-        let err = h.client.begin_transaction(request).await.unwrap_err();
+    let denied = |err: tonic::Status| {
         assert_eq!(err.code(), tonic::Code::PermissionDenied, "{err}");
         assert_eq!(err.message(), "Missing or insufficient permissions.");
+    };
+    for options in [None, Some(read_write())] {
+        denied(
+            h.client
+                .begin_transaction(with_bearer(begin(options.clone()), &token))
+                .await
+                .unwrap_err(),
+        );
+        denied(
+            h.client
+                .begin_transaction(tonic::Request::new(begin(options)))
+                .await
+                .unwrap_err(),
+        );
     }
-    assert!(h
-        .client
-        .begin_transaction(with_bearer(begin(), "owner"))
+    denied(
+        h.client
+            .batch_get_documents(with_bearer(batch_get(read_write()), &token))
+            .await
+            .unwrap_err(),
+    );
+    denied(
+        h.client
+            .run_query(with_bearer(
+                open_query_in_new_transaction(read_write()),
+                &token,
+            ))
+            .await
+            .unwrap_err(),
+    );
+    // Read-only transactions open, for an end user as for anyone.
+    h.client
+        .begin_transaction(with_bearer(begin(Some(read_only())), &token))
         .await
-        .is_ok());
+        .unwrap();
+    h.client
+        .begin_transaction(tonic::Request::new(begin(Some(read_only()))))
+        .await
+        .unwrap();
+    h.client
+        .batch_get_documents(with_bearer(batch_get(read_only()), &token))
+        .await
+        .unwrap();
+    h.client
+        .run_query(with_bearer(
+            open_query_in_new_transaction(read_only()),
+            &token,
+        ))
+        .await
+        .unwrap();
+    // The owner opens a read-write one.
+    h.client
+        .begin_transaction(with_bearer(begin(None), "owner"))
+        .await
+        .unwrap();
     h.handle.abort();
+}
 
+/// The official emulator opens an end user's read-write transaction.
+#[tokio::test]
+async fn end_users_open_read_write_transactions_without_production_refusals() {
     let mut h = start().await;
     let (_, token) = h.user("t@example.com");
-    assert!(h
-        .client
-        .begin_transaction(with_bearer(begin(), &token))
+    let begin = pb::BeginTransactionRequest {
+        database: DB.to_owned(),
+        ..Default::default()
+    };
+    h.client
+        .begin_transaction(with_bearer(begin, &token))
         .await
-        .is_ok());
+        .unwrap();
     h.handle.abort();
 }
 

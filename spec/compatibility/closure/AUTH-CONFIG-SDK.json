@@ -54,14 +54,14 @@
     },
     {
       "id": "K9",
-      "decision": "Project MFA configuration (mfa, and the Admin SDK multiFactorConfig beyond reading it) belongs to AUTH-MFA and is left out of this parent's comparison projection, because that lane changes it on the shared sandbox.",
+      "decision": "Project MFA configuration (mfa, and the Admin SDK multiFactorConfig beyond reading it) belongs to AUTH-MFA and is left out of this parent's comparison projection, because that lane changes it on the shared sandbox. Owner ledger 2026-09-25 (the AUTH-CONFIG-SDK start: MFA configuration belongs to AUTH-MFA).",
       "decidedBy": "owner (t-k)",
       "decidedOn": "2026-09-25",
       "movedTo": "AUTH-MFA"
     },
     {
       "id": "K10",
-      "decision": "Multi-tenancy (multiTenant), tenant configuration and the tenant inheritance of project settings (moved here by AUTH-ACCOUNT A3), and blocking functions belong to AUTH-TENANT-BLOCKING and are left out of this parent's comparison projection.",
+      "decision": "Multi-tenancy (multiTenant), tenant configuration and the tenant inheritance of project settings (moved here by AUTH-ACCOUNT A3), and blocking functions belong to AUTH-TENANT-BLOCKING and are left out of this parent's comparison projection. Owner ledger 2026-09-25 (the AUTH-CONFIG-SDK start: tenant configuration belongs to AUTH-TENANT-BLOCKING).",
       "decidedBy": "owner (t-k)",
       "decidedOn": "2026-09-25",
       "movedTo": "AUTH-TENANT-BLOCKING"
@@ -80,7 +80,7 @@
     },
     {
       "id": "K13",
-      "decision": "An omitted or empty updateMask is not observed on the shared sandbox, and the harness refuses to send one: production's reading of either is undocumented, and if it replaced every settable member the harness could not write back the members other lanes own (mfa, multiTenant, blockingFunctions). fireemu keeps its present reading (an empty mask changes nothing; an omitted mask is inferred from the members present) until either is observed on a project no other lane uses. Recorded as an unobserved edge.",
+      "decision": "An omitted or empty updateMask is not observed on the shared sandbox, and the harness refuses to send one: production's reading of either is undocumented, and if it replaced every settable member the harness could not write back the members other lanes own (mfa, multiTenant, blockingFunctions). fireemu keeps its present reading (an empty mask changes nothing; an omitted mask is inferred from the members present) until either is observed on a project no other lane uses. Recorded as an unobserved edge. Recorded after the first pre-send review (docs.local/reviews/2026-09-25-auth-config-sdk-prerun-review-1.md, M1).",
       "decidedBy": "lane (sandbox safety; pre-send review 1, 2026-09-25)",
       "decidedOn": "2026-09-25"
     },
@@ -104,13 +104,13 @@
     },
     {
       "id": "K17",
-      "decision": "While a provider is AUDIT, production's client v2/recaptchaConfig answered 500 INTERNAL on the sandbox (recaptcha#client-audit-web, -ios, -android, -phone and #client-cleared), because no reCAPTCHA Enterprise key can be provisioned there even with the API enabled (K15). This is a difference the sandbox cannot observe; fireemu keeps answering the configured enforcement states with 200 and no key, and the configuration's read and write match production. Owner ledger 2026-09-25.",
+      "decision": "While a provider is AUDIT, production's client v2/recaptchaConfig answered 500 INTERNAL on the sandbox (recaptcha#client-audit-web, -ios, -android, -phone and #client-cleared), presumably because no reCAPTCHA Enterprise key can be provisioned there even with the API enabled (K15); the cause is inferred, not observed. This is a difference the sandbox cannot observe; fireemu keeps answering the configured enforcement states with 200 and no key, and the configuration's read and write match production. How a browser Web SDK behaves under AUDIT without a key is not verified (K1, K2). Owner ledger 2026-09-25.",
       "decidedBy": "owner (t-k)",
       "decidedOn": "2026-09-25"
     },
     {
       "id": "K18",
-      "decision": "The final-artifact regression re-runs the AUTH-ACCOUNT, AUTH-CREDENTIAL and AUTH-ACTION corpora and inherits their one documented divergence: AUTH-ACCOUNT scope decision A12, the gson parser message text for malformed customAttributes JSON (as AUTH-ACTION E9 inherits it).",
+      "decision": "The final-artifact regression re-runs the AUTH-ACCOUNT, AUTH-CREDENTIAL and AUTH-ACTION corpora and inherits their one documented divergence: AUTH-ACCOUNT scope decision A12, the gson parser message text for malformed customAttributes JSON (owner ledger 2026-09-24 A12, and 2026-09-25 M11, which carries it into a regression as AUTH-ACTION E9 does). feat resolves A12 with f534ecd56, which this branch does not contain; after integration the row is expected to match and the conditions are bound again to the integrated artifact.",
       "decidedBy": "owner (t-k)",
       "decidedOn": "2026-09-24"
     }
@@ -287,7 +287,7 @@
         "strict"
       ],
       "status": "VERIFIED",
-      "note": "An account whose password does not meet a policy set after it was created: sign-in under ENFORCE with forceUpgradeOnSignin (refused or not) and without it (userNotifications), under OFF, a compliant password change, a reset through an Admin-generated code, and the Admin update route under the default policy.",
+      "note": "An account whose password does not meet a policy set after it was created: sign-in under ENFORCE with forceUpgradeOnSignin (refused or not) and without it (userNotifications), under OFF, a compliant password change, a reset through an Admin-generated code, and the Admin update route under the default policy. The Admin update of a short password was observed with five characters only; an empty password stays refused (unobserved).",
       "evidence": {
         "productionRecordings": [
           {
@@ -437,7 +437,7 @@
         "strict"
       ],
       "status": "VERIFIED",
-      "note": "recaptchaConfig writes and refusals (enforcement states, managed rules and their scores, the SMS flags), the client v2/recaptchaConfig projection per client type under OFF and AUDIT, and sign-up, sign-in and phone code requests without a reCAPTCHA token under AUDIT (K2).",
+      "note": "recaptchaConfig writes and refusals (enforcement states, managed rules and their scores, the SMS flags), the client v2/recaptchaConfig projection per client type under OFF and AUDIT, and sign-up, sign-in and phone code requests without a reCAPTCHA token under AUDIT (K2). The rule that a masked clear keeps the phone side rests on one row (#clear with the phone side AUDIT); a clear with the phone side OFF or unset is unobserved.",
       "evidence": {
         "productionRecordings": [
           {
@@ -510,7 +510,7 @@
         "strict"
       ],
       "status": "VERIFIED",
-      "note": "quota.signUpQuotaConfig writes, read-back and refusals (quota, startTime, quotaDuration). Enforcement is K4.",
+      "note": "quota.signUpQuotaConfig writes, read-back and refusals (quota, startTime, quotaDuration). Enforcement is K4. Each normalization (a zero quota left out, the epoch start, 0s) rests on one row. A start time other than the epoch is recorded as a placeholder, so its value and format (time zone, fractions) are not compared; fireemu reports it as written.",
       "evidence": {
         "productionRecordings": [
           {
@@ -540,7 +540,7 @@
         "strict"
       ],
       "status": "VERIFIED",
-      "note": "Moved from AUTH-ACTION E5: action links generated with iOSBundleId, androidPackageName, androidInstallApp, androidMinimumVersion (and the Web SDK's androidMinimumVersionCode), dynamicLinkDomain and linkDomain, their refusals, and mobileLinksConfig.domain.",
+      "note": "Moved from AUTH-ACTION E5: action links generated with iOSBundleId, androidPackageName, androidInstallApp, androidMinimumVersion (and the Web SDK's androidMinimumVersionCode), dynamicLinkDomain and linkDomain, their refusals, and mobileLinksConfig.domain. Observed through the Admin returnOobLink route only; strict applies the same wrapping and refusals to the client sendOobCode. The wrapper host is the project ID's firebaseapp.com domain; a project whose defaultHostingSite differs is unobserved.",
       "evidence": {
         "productionRecordings": [
           {
@@ -570,7 +570,7 @@
         "strict"
       ],
       "status": "VERIFIED",
-      "note": "Read and write of notification (K8), autodeleteAnonymousUsers, monitoring.requestLogging, smsRegionConfig and its effect on a test number, and authorizedDomains with the client v1/projects projection.",
+      "note": "Read and write of notification (K8), autodeleteAnonymousUsers, monitoring.requestLogging, smsRegionConfig and its effect on a test number, and authorizedDomains with the client v1/projects projection. Unobserved and not claimed: SMS region refusals other than for the +1 650 test number (fireemu follows Identity Platform's documented calling-code basis, refusing a +1 number only when every candidate region is refused, and a number whose region it cannot name not at all), the MFA SMS routes (not refused), and a new project's allowlistOnly {} (from an earlier production read, not this corpus).",
       "evidence": {
         "productionRecordings": [
           {

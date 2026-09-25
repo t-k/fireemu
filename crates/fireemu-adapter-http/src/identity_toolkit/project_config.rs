@@ -138,6 +138,44 @@ pub(super) fn sign_in_providers(config: &fireemu_core_auth::store::SignInConfig)
     })
 }
 
+/// The stored member holding the written sign-up quota as production reports it.
+pub(super) const SIGN_UP_QUOTA: &str = "_signUpQuotaConfig";
+
+/// A written `quota.signUpQuotaConfig` as production stores it: a zero quota left out, a
+/// missing start as the epoch, a missing duration as zero; `None` when cleared.
+pub(super) fn normalized_sign_up_quota(body: &Value) -> Option<Value> {
+    let written = body
+        .pointer("/quota/signUpQuotaConfig")
+        .filter(|v| !v.is_null())?;
+    let mut quota = Map::new();
+    if let Some(number) = written
+        .get("quota")
+        .and_then(|q| {
+            q.as_str()
+                .map(str::to_owned)
+                .or_else(|| q.as_i64().map(|n| n.to_string()))
+        })
+        .filter(|q| q != "0")
+    {
+        quota.insert("quota".to_owned(), json!(number));
+    }
+    quota.insert(
+        "startTime".to_owned(),
+        written
+            .get("startTime")
+            .cloned()
+            .unwrap_or_else(|| json!("1970-01-01T00:00:00Z")),
+    );
+    quota.insert(
+        "quotaDuration".to_owned(),
+        written
+            .get("quotaDuration")
+            .cloned()
+            .unwrap_or_else(|| json!("0s")),
+    );
+    Some(Value::Object(quota))
+}
+
 /// A PATCH answer as production gives it: the configuration without the email templates.
 pub(super) fn patch_answer(mut document: Value) -> Value {
     if let Some(send_email) = document

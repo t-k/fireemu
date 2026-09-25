@@ -4410,35 +4410,31 @@ fn quota_config_from_json(
             {
                 return Err(error(400, "INVALID_ARGUMENT"));
             }
-            let quota_number = quota_object
-                .get("quota")
-                .and_then(Value::as_str)
-                .filter(|value| {
-                    !value.is_empty()
-                        && value.bytes().all(|byte| byte.is_ascii_digit())
-                        && value
-                            .parse::<u64>()
-                            .is_ok_and(|value| i64::try_from(value).is_ok())
-                })
-                .ok_or_else(|| error(400, "INVALID_ARGUMENT"))?
-                .parse::<u64>()
-                .map_err(|_| error(400, "INVALID_ARGUMENT"))?;
-            let start_time = LogicalInstant::parse_rfc3339(
-                quota_object
-                    .get("startTime")
-                    .and_then(Value::as_str)
-                    .ok_or_else(|| error(400, "INVALID_ARGUMENT"))?,
-            )
-            .map_err(|_| error(400, "INVALID_ARGUMENT"))?;
-            let duration = quota_duration_from_json(
-                quota_object
-                    .get("quotaDuration")
-                    .ok_or_else(|| error(400, "INVALID_ARGUMENT"))?,
-            )?;
-            Some(
-                TemporaryQuota::new(quota_number, start_time, duration)
+            // Production takes any quota it can parse: a negative or zero quota, a missing
+            // start (the epoch) and a missing or zero duration (sandbox recording
+            // 2026-09-25). fireemu's quota simulation runs only a quota it can represent;
+            // the written value is kept for the document (`project_config`).
+            let quota_number = match quota_object.get("quota") {
+                None | Some(Value::Null) => Some(0),
+                Some(value) => Some(
+                    value
+                        .as_str()
+                        .and_then(|text| text.parse::<i64>().ok())
+                        .or_else(|| value.as_i64())
+                        .ok_or_else(|| error(400, "INVALID_ARGUMENT"))?,
+                ),
+            }
+            .and_then(|quota| u64::try_from(quota).ok());
+            let start_time = match quota_object.get("startTime").and_then(Value::as_str) {
+                None => LogicalInstant::UNIX_EPOCH,
+                Some(text) => LogicalInstant::parse_rfc3339(text)
                     .map_err(|_| error(400, "INVALID_ARGUMENT"))?,
-            )
+            };
+            let duration = match quota_object.get("quotaDuration") {
+                None | Some(Value::Null) => LogicalDuration::from_nanos(0),
+                Some(value) => quota_duration_from_json(value)?,
+            };
+            quota_number.and_then(|quota| TemporaryQuota::new(quota, start_time, duration).ok())
         };
     }
     if let Some(value) = object
@@ -4906,7 +4902,11 @@ fn project_config_document(
         password_policy: policy
             .configured
             .then(|| password_policy_config_json(policy)),
-        sign_up_quota: quota.get("signUpQuotaConfig").cloned(),
+        sign_up_quota: store
+            .stored_config_members()
+            .get(project_config::SIGN_UP_QUOTA)
+            .and_then(|text| serde_json::from_str(text).ok())
+            .or_else(|| quota.get("signUpQuotaConfig").cloned()),
         quota_simulation: simulation,
         authorized_domains: store.authorized_domains(),
         authorized_domains_written: store.sign_in_config().authorized_domains.is_some(),
@@ -5193,6 +5193,18 @@ fn project_config_management(
             let Ok(mut store) = selected_store.lock() else {
                 return error(500, "INTERNAL");
             };
+            // The sign-up quota as production normalizes and reports it.
+            if fields
+                .iter()
+                .any(|field| field == "quota" || field.starts_with("quota.signUpQuotaConfig"))
+            {
+                let mut members = store.stored_config_members().clone();
+                members.set(
+                    project_config::SIGN_UP_QUOTA,
+                    project_config::normalized_sign_up_quota(body).map(|quota| quota.to_string()),
+                );
+                store.set_stored_config_members(members);
+            }
             // Production records when the password policy was last written.
             if fields
                 .iter()

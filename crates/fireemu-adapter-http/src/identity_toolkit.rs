@@ -6624,8 +6624,9 @@ fn end_user_client_permission_denial(
 }
 
 /// Strict: while client sign-up is off, production refuses a phone code for a number and an
-/// email sign-in link for an address that no account holds when they are asked for, also
-/// from an administrator (sandbox recording 2026-09-25, auth-config-sdk/client-permissions).
+/// Admin email sign-in link for an address that no account holds when they are asked for
+/// (sandbox recording 2026-09-25, auth-config-sdk/client-permissions). A client's email link
+/// request is unobserved (the harness sends no email), so it is not refused here.
 fn new_account_code_denial(
     handler: routes::Handler,
     store: &AuthStore,
@@ -6639,7 +6640,7 @@ fn new_account_code_denial(
     let new_account = match handler {
         routes::Handler::SendVerificationCode => str_field(body, "phoneNumber")
             .is_some_and(|number| store.user_by_phone(number).is_none()),
-        routes::Handler::SendOobCode | routes::Handler::AdminSendOobCode => {
+        routes::Handler::AdminSendOobCode => {
             body.get("requestType").and_then(Value::as_str) == Some("EMAIL_SIGNIN")
                 && str_field(body, "email")
                     .map(canonicalize_email)

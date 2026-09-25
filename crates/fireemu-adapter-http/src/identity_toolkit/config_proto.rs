@@ -603,7 +603,60 @@ const MAX_PATH_DEPTH: usize = 8;
 
 #[cfg(test)]
 mod tests {
-    use super::{keypad_number, known_writable_path, parse_config_body};
+    use super::{
+        check, keypad_number, known_writable_path, parse_bool, parse_config_body, parse_integer,
+        Kind,
+    };
+
+    #[test]
+    fn scalars_are_read_as_the_proto_json_parser_reads_them() {
+        for text in ["true", "YES", "1", "t", "y"] {
+            assert_eq!(parse_bool(&json!(text)), Some(true), "{text}");
+        }
+        for text in ["false", "No", "0", "f", "n", ""] {
+            assert_eq!(parse_bool(&json!(text)), Some(false), "{text}");
+        }
+        assert_eq!(parse_bool(&json!("maybe")), None);
+        assert_eq!(parse_bool(&json!(0)), Some(false));
+        assert_eq!(parse_bool(&json!(2)), Some(true));
+
+        assert_eq!(parse_integer(&json!(12.0), 32), Some(12));
+        assert_eq!(parse_integer(&json!(12.5), 32), None);
+        assert_eq!(parse_integer(&json!(1e19), 64), None);
+        assert_eq!(
+            parse_integer(&json!(-9.1e18), 64),
+            Some(-9_100_000_000_000_000_000)
+        );
+        assert_eq!(parse_integer(&json!(" 42 "), 32), Some(42));
+        assert_eq!(parse_integer(&json!(3_000_000_000_i64), 32), None);
+        assert_eq!(
+            parse_integer(&json!(3_000_000_000_i64), 64),
+            Some(3_000_000_000)
+        );
+
+        assert_eq!(
+            check(&json!("0.3"), Kind::Float, "p").ok(),
+            Some(Some(json!(0.3)))
+        );
+        assert!(check(&json!("x"), Kind::Float, "p").is_err());
+        assert_eq!(
+            check(&json!(7), Kind::Str, "p").ok(),
+            Some(Some(json!("7")))
+        );
+        assert_eq!(
+            check(&json!(true), Kind::Str, "p").ok(),
+            Some(Some(json!("true")))
+        );
+        assert!(check(&json!([1]), Kind::Str, "p").is_err());
+    }
+
+    #[test]
+    fn test_numbers_read_letters_as_keypad_digits() {
+        assert_eq!(
+            keypad_number("+1abcdefghijklmnopqrstuvwxyz"),
+            "+122233344455566677778889999"
+        );
+    }
     use serde_json::json;
 
     fn message(result: Result<serde_json::Value, super::JsonResponse>) -> String {

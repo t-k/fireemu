@@ -491,61 +491,6 @@ fn put(value: &mut Value, path: &[&str], new: Option<Value>) -> bool {
     true
 }
 
-/// Whether a stored member's value is one fireemu accepts. Production's own checks of these
-/// members are recorded by the AUTH-CONFIG-SDK corpus; this refuses what is not the member's
-/// shape at all.
-fn valid_member(member: &str, value: &Value) -> bool {
-    const REGIONS: fn(&Value, &str) -> bool = |inner, key| {
-        inner.as_object().is_some_and(|object| {
-            object.keys().all(|k| k == key)
-                && object.get(key).is_none_or(|list| {
-                    list.as_array()
-                        .is_some_and(|items| items.iter().all(Value::is_string))
-                })
-        })
-    };
-    match member {
-        "autodeleteAnonymousUsers" => value.is_boolean(),
-        "mobileLinksConfig" => value.as_object().is_some_and(|object| {
-            object.iter().all(|(key, v)| {
-                key == "domain"
-                    && matches!(
-                        v.as_str(),
-                        Some("HOSTING_DOMAIN" | "FIREBASE_DYNAMIC_LINK_DOMAIN")
-                    )
-            })
-        }),
-        "smsRegionConfig" => value.as_object().is_some_and(|object| {
-            object.len() <= 1
-                && object.iter().all(|(key, inner)| match key.as_str() {
-                    "allowByDefault" => REGIONS(inner, "disallowedRegions"),
-                    "allowlistOnly" => REGIONS(inner, "allowedRegions"),
-                    _ => false,
-                })
-        }),
-        "recaptchaConfig" => value.as_object().is_some_and(|object| {
-            object.iter().all(|(key, v)| match key.as_str() {
-                "emailPasswordEnforcementState" | "phoneEnforcementState" => matches!(
-                    v.as_str(),
-                    Some(
-                        "OFF"
-                            | "AUDIT"
-                            | "ENFORCE"
-                            | "RECAPTCHA_PROVIDER_ENFORCEMENT_STATE_UNSPECIFIED"
-                    )
-                ),
-                "managedRules" | "tollFraudManagedRules" | "recaptchaKeys" => v.is_array(),
-                "useAccountDefender" | "useSmsBotScore" | "useSmsTollFraudProtection" => {
-                    v.is_boolean()
-                }
-                _ => false,
-            })
-        }),
-        "monitoring" | "notification" => value.is_object(),
-        _ => false,
-    }
-}
-
 /// The stored members after a PATCH's masked stored-member paths, or `Err` when a resulting
 /// member is not valid. A member masked whole takes the body's value (absent: cleared); a masked
 /// leaf takes the body's leaf, or a new project's leaf when the body leaves it out. A member that
@@ -607,11 +552,6 @@ pub(super) fn apply_stored_members(
         }
         if *member == "recaptchaConfig" {
             value = value.map(with_recaptcha_phone_defaults);
-        }
-        if let Some(value) = &value {
-            if !valid_member(member, value) {
-                return Err(());
-            }
         }
         let unwritten = value.is_none() || value == initial;
         next.set(

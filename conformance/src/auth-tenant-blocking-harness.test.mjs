@@ -248,3 +248,168 @@ test("the validator refuses unreviewed switches, foreign display names and waits
     /PHONE\(n\)/,
   );
 });
+
+// ---- pre-send review 2026-09-25 -------------------------------------------------------------
+
+test("key material, client secrets and page tokens are masked and refused in a fixture (MF-2)", async () => {
+  const { assertNoOpaqueValue } = await import("./auth-tenant-blocking/harness.mjs");
+  const recorded = normalizeTenantResponse(
+    200,
+    JSON.stringify({
+      hashConfig: { algorithm: "SCRYPT", signerKey: "c2VjcmV0", saltSeparator: "Bw==", rounds: 8 },
+      clientSecret: "shh",
+      nextPageToken: "atb-sel-a-x7k2p",
+    }),
+    production,
+    registries(),
+  );
+  assert.deepEqual(recorded.body, {
+    hashConfig: { algorithm: "SCRYPT", signerKey: "<bytes>", saltSeparator: "<bytes>", rounds: 8 },
+    clientSecret: "<clientSecret>",
+    nextPageToken: "<pageToken>",
+  });
+  assertNoOpaqueValue(JSON.stringify(recorded));
+  assert.throws(() => assertNoOpaqueValue('{"signerKey": "c2VjcmV0"}'), /signerKey/);
+  assert.throws(() => assertNoOpaqueValue('{"clientSecret":"x"}'), /clientSecret/);
+});
+
+test("a tenant-scoped SMS request names only that tenant's own test numbers (MF-3)", () => {
+  const send = (body) => ({ id: "s", path: "v1/accounts:sendVerificationCode", auth: "key", body });
+  const phones = new Map([[OURS, new Set(["+16505550102"])]]);
+  guard(send({ phoneNumber: "+16505550102", tenantId: OURS }), { tenantPhones: phones });
+  assert.throws(
+    () => guard(send({ phoneNumber: "+16505550101", tenantId: OURS }), { tenantPhones: phones }),
+    /not a test number of tenant/,
+  );
+  // The project's own test numbers stay allowed without a tenant.
+  guard(send({ phoneNumber: "+16505550101" }), { tenantPhones: phones });
+  // An enrollment names its tenant through the ID token.
+  const token = (tenant) =>
+    [
+      Buffer.from('{"alg":"none"}').toString("base64url"),
+      Buffer.from(JSON.stringify({ firebase: { tenant } })).toString("base64url"),
+      "",
+    ].join(".");
+  const enroll = (tenant, phoneNumber) => ({
+    id: "s",
+    path: "v2/accounts/mfaEnrollment:start",
+    auth: "key",
+    body: { idToken: token(tenant), phoneEnrollmentInfo: { phoneNumber } },
+  });
+  guard(enroll(OURS, "+16505550102"), { tenantPhones: phones });
+  assert.throws(
+    () => guard(enroll(OURS, "+16505550103"), { tenantPhones: phones }),
+    /not a test number/,
+  );
+});
+
+test("the harness recognises its display names, and the corpus uses only them (MF-4)", async () => {
+  const { isHarnessDisplayName, requestedDisplayNames } =
+    await import("./auth-tenant-blocking/guard.mjs");
+  for (const name of ["atb-sel-a", "atb", "atb_name", "Atb-Upper", "1atb-name", "1atb-bad"])
+    assert.ok(isHarnessDisplayName(name), name);
+  for (const name of ["fsr-tenant", "", undefined, "catb"]) assert.ok(!isHarnessDisplayName(name));
+  const base = { id: "atb/tenant/x" };
+  assert.throws(
+    () =>
+      validateTenantCorpus([
+        {
+          ...base,
+          steps: [
+            {
+              id: "s",
+              path: "v2/projects/{project}/tenants",
+              method: "POST",
+              body: { displayName: "other" },
+            },
+          ],
+        },
+      ]),
+    /harness name/,
+  );
+  const manage = PROGRAMS.find(({ id }) => id === "atb/tenant/manage");
+  assert.ok(requestedDisplayNames(manage).has("Atb-Upper"));
+});
+
+/**
+ * A fake Identity Platform for the stop paths: the project config, tenants and an empty account
+ * list. `createFails` answers a tenant create with 503 after creating it.
+ */
+function fakeSandbox({ tenants = [], createFails = false } = {}) {
+  const state = { allowTenants: false, tenants: new Map(tenants.map((t) => [t.id, t])), seq: 0 };
+  const json = (status, body) => new Response(JSON.stringify(body), { status });
+  const fetchFake = async (url, init = {}) => {
+    const { pathname } = new URL(url);
+    const method = init.method ?? "GET";
+    const body = typeof init.body === "string" ? JSON.parse(init.body) : {};
+    if (pathname.endsWith("/accounts:batchGet")) return json(200, {});
+    if (pathname.endsWith("/config")) {
+      if (method === "PATCH") state.allowTenants = body.multiTenant?.allowTenants === true;
+      return json(200, { multiTenant: state.allowTenants ? { allowTenants: true } : {} });
+    }
+    const tenant = /\/tenants\/([^/]+)$/.exec(pathname)?.[1];
+    if (pathname.endsWith("/tenants") && method === "POST") {
+      state.seq += 1;
+      const id = `${body.displayName}-a${String(state.seq).padStart(4, "0")}`;
+      state.tenants.set(id, { id, displayName: body.displayName });
+      const answer = { name: `projects/fireemu-oracle-idp/tenants/${id}`, ...body };
+      return createFails
+        ? json(503, { error: { code: 503, message: "UNAVAILABLE" } })
+        : json(200, answer);
+    }
+    if (pathname.endsWith("/tenants"))
+      return json(200, {
+        tenants: [...state.tenants.values()].map((t) => ({
+          name: `projects/fireemu-oracle-idp/tenants/${t.id}`,
+          displayName: t.displayName,
+        })),
+      });
+    if (tenant && method === "DELETE")
+      return state.tenants.delete(tenant) ? json(200, {}) : json(404, { error: { code: 404 } });
+    return json(404, { error: { code: 404, message: "NOT_FOUND" } });
+  };
+  return { state, fetchFake };
+}
+
+async function withFetch(fetchFake, run) {
+  const original = globalThis.fetch;
+  globalThis.fetch = fetchFake;
+  try {
+    return await run();
+  } finally {
+    globalThis.fetch = original;
+  }
+}
+
+test("a tenant a list names is never the program's to delete (MF-1)", async () => {
+  const { createSession } = await import("./auth-tenant-blocking/session.mjs");
+  const foreign = { id: "fsr-tenant-q1w2e", displayName: "fsr-tenant" };
+  const { state, fetchFake } = fakeSandbox({ tenants: [foreign] });
+  const program = {
+    id: "atb/tenant/x",
+    tenants: { a: { displayName: "atb-x-a" } },
+    steps: [{ id: "list", path: "v2/projects/{project}/tenants", method: "GET", auth: "admin" }],
+  };
+  const session = createSession(production, { configSettleMs: 0 });
+  const result = await withFetch(fetchFake, () => session.runProgram(program));
+  assert.equal(result.steps.list.status, 200);
+  assert.deepEqual([...state.tenants.keys()], [foreign.id]);
+  assert.equal(state.allowTenants, false);
+});
+
+test("a harness tenant whose create answer was lost is deleted by its display name (SF-2)", async () => {
+  const { createSession } = await import("./auth-tenant-blocking/session.mjs");
+  const { state, fetchFake } = fakeSandbox({ createFails: true });
+  const program = {
+    id: "atb/tenant/x",
+    tenants: { a: { displayName: "atb-x-a" } },
+    steps: [{ id: "list", path: "v2/projects/{project}/tenants", method: "GET", auth: "admin" }],
+  };
+  const session = createSession(production, { configSettleMs: 0 });
+  await assert.rejects(
+    withFetch(fetchFake, () => session.runProgram(program)),
+    /HTTP 503/,
+  );
+  assert.equal(state.tenants.size, 0);
+  assert.equal(state.allowTenants, false);
+});

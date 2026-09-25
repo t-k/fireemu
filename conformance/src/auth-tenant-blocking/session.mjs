@@ -28,7 +28,7 @@ import {
 } from "../auth-credential/tokens.mjs";
 import { createEnrollmentRegistry } from "../auth-mfa/harness.mjs";
 import { resolveCodes } from "../auth-mfa/session.mjs";
-import { DISPLAY_NAME_PREFIX, guardTenantRequest } from "./guard.mjs";
+import { guardTenantRequest, isHarnessDisplayName, requestedDisplayNames } from "./guard.mjs";
 import { createTenantRegistry, normalizeTenantResponse } from "./harness.mjs";
 
 /** An error that must stop the whole run: the sandbox may no longer be in a known state. */
@@ -49,6 +49,9 @@ const SECRET_MEMBERS = new Set([
   "id_token",
   "access_token",
   "sessionCookie",
+  "signerKey",
+  "saltSeparator",
+  "clientSecret",
 ]);
 
 function collectSecrets(value, into, key = "") {
@@ -212,7 +215,8 @@ export function createSession(
     const request = buildRequest(step, ctx, raw);
     guardTenantRequest(request, ctx, {
       harness: harness || cleanup,
-      tenants: new Set(registries.tenants.ids()),
+      tenants: new Set(registries.tenants.owned()),
+      tenantPhones: registries.phones,
     });
     charge(harness, cleanup);
     let response;
@@ -247,7 +251,18 @@ export function createSession(
   const harnessRegistries = () => ({
     enrollments: createEnrollmentRegistry(),
     tenants: createTenantRegistry(),
+    // The test phone numbers each owned tenant was created or patched with (pre-send review
+    // MF-3): a tenant-scoped SMS request may name only these.
+    phones: new Map(),
   });
+  let tenantsCreated = 0;
+  let tenantsDeleted = 0;
+
+  /** Remembers an owned tenant's test numbers from an accepted create or PATCH answer. */
+  function notePhones(registries, id, answer) {
+    if (id && answer && typeof answer.testPhoneNumbers === "object")
+      registries.phones.set(id, new Set(Object.keys(answer.testPhoneNumbers ?? {})));
+  }
 
   /** A harness call; any answer but `accept` is fatal. The registries decide which tenants it may name. */
   async function admin(
@@ -391,31 +406,47 @@ export function createSession(
       if (status !== 200)
         throw new Error(`tenant ${label}: HTTP ${status} ${JSON.stringify(json?.error ?? null)}`);
       if (!id) throw fatal(`tenant ${label}: the answer names no tenant`);
+      tenantsCreated += 1;
       registries.tenants.label(id, label);
       labels.set(label, id);
+      notePhones(registries, id, json);
       log(`${program.id}: tenant ${label} created`);
     }
   }
 
   /**
-   * Deletes every tenant the program created or saw created, then reads the list back: none of
-   * them, and no tenant of the harness's display names, may remain.
+   * Deletes every tenant the program owns (created by the harness or by a step), then reads the
+   * list back. A listed tenant carrying a display name this program asked for is one whose
+   * creation answer was lost (a 5xx or a transport failure that still created it): it is owned
+   * and deleted too (pre-send review SF-2). Any other tenant of a harness display name left over
+   * stops the run; a tenant of another lane is never touched (MF-1).
    */
   async function deleteTenants(program, registries) {
-    for (const id of registries.tenants.ids()) {
-      await admin("DELETE", `v2/projects/{project}/tenants/${id}`, {
-        cleanup: true,
-        registries,
-        accept: [200, 404],
-      });
+    const requested = requestedDisplayNames(program);
+    for (let round = 0; round < 3; round += 1) {
+      for (const id of registries.tenants.owned()) {
+        const { status } = await admin("DELETE", `v2/projects/{project}/tenants/${id}`, {
+          cleanup: true,
+          registries,
+          accept: [200, 404],
+        });
+        if (status === 200) tenantsDeleted += 1;
+      }
+      const left = await listTenants({ cleanup: true, registries });
+      const lost = left.filter(
+        ({ id, displayName }) =>
+          requested.has(displayName) && !registries.tenants.owned().includes(id),
+      );
+      const remaining = left.filter(
+        ({ id, displayName }) =>
+          registries.tenants.owned().includes(id) || isHarnessDisplayName(displayName),
+      );
+      if (remaining.length === 0) return;
+      if (lost.length === 0)
+        throw fatal(`${program.id}: tenants remain after cleanup: ${remaining.length}`);
+      for (const { id } of lost) registries.tenants.own(id);
     }
-    const left = await listTenants({ cleanup: true, registries });
-    const ours = left.filter(
-      ({ id, displayName }) =>
-        registries.tenants.ids().includes(id) ||
-        String(displayName ?? "").startsWith(DISPLAY_NAME_PREFIX),
-    );
-    if (ours.length) throw fatal(`${program.id}: tenants remain after cleanup: ${ours.length}`);
+    throw fatal(`${program.id}: tenants remain after three cleanup rounds`);
   }
 
   /**
@@ -467,6 +498,23 @@ export function createSession(
         };
       }
       const { recorded, json } = outcome;
+      // A tenant this step created is the program's; so is one a list names under a display
+      // name the program asked for (a create whose answer was lost). Nothing else is.
+      if (recorded.status === 200 && step.method === "POST" && step.path.endsWith("/tenants")) {
+        const id = tenantIdOf(json?.name);
+        if (id) {
+          registries.tenants.own(id);
+          tenantsCreated += 1;
+          notePhones(registries, id, json);
+        }
+      }
+      if (recorded.status === 200 && step.method === "PATCH" && /\/tenants\/[^/]+$/.test(step.path))
+        notePhones(registries, tenantIdOf(json?.name), json);
+      if (Array.isArray(json?.tenants)) {
+        const requested = requestedDisplayNames(program);
+        for (const tenant of json.tenants)
+          if (requested.has(tenant.displayName)) registries.tenants.own(tenantIdOf(tenant.name));
+      }
       raw.set(step.id, json);
       const relations = {};
       for (const [name, { kind, left, right }] of Object.entries(step.relations ?? {})) {
@@ -523,11 +571,11 @@ export function createSession(
     } catch (error) {
       problems.push(error);
     }
-    if (registries.tenants.ids().length || multiTenant) {
+    if (registries.tenants.owned().length || multiTenant) {
       try {
         // Tenants can only be listed and deleted while multi-tenancy is on; a program that ran
         // with it off switches it on for the cleanup when a step created a tenant anyway.
-        if (!multiTenant && registries.tenants.ids().length)
+        if (!multiTenant && registries.tenants.owned().length)
           await writeConfig(
             ["multiTenant.allowTenants"],
             { "multiTenant.allowTenants": true },
@@ -573,7 +621,12 @@ export function createSession(
     listTenants,
     deleteHarnessTenant,
     admin,
-    counts: () => ({ requests, harnessRequests: harnessRequests + cleanupRequests }),
+    counts: () => ({
+      requests,
+      harnessRequests: harnessRequests + cleanupRequests,
+      tenantsCreated,
+      tenantsDeleted,
+    }),
     secrets: () => [...seenSecrets],
   };
 }

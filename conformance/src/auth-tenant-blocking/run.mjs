@@ -47,7 +47,8 @@ import { SIGNER_ACCOUNTS, harnessRequest } from "../auth-credential/harness.mjs"
 import { customTokenClaims } from "../auth-credential/tokens.mjs";
 import { MFA_CONFIGS } from "../auth-mfa/guard.mjs";
 import { PROGRAMS } from "./corpus.mjs";
-import { DISPLAY_NAME_PREFIX, guardTenantRequest, validateTenantCorpus } from "./guard.mjs";
+import { guardTenantRequest, isHarnessDisplayName, validateTenantCorpus } from "./guard.mjs";
+import { assertNoOpaqueValue } from "./harness.mjs";
 import { createSession, runCorpus, tenantIdOf } from "./session.mjs";
 
 const execFileAsync = promisify(execFile);
@@ -360,6 +361,7 @@ async function writeFixture({ programs, recordings, meta, secrets }) {
   );
   const text = `${JSON.stringify(fixture, null, 2)}\n`;
   scanFixture(text, [...secrets, SIGNER_ACCOUNTS.project]);
+  assertNoOpaqueValue(text);
   if (/otpauth:|"[A-Z2-7]{32}"/.test(text)) throw new Error("fixture holds a TOTP secret");
   await writeFile(FIXTURE, text);
   return diffRecordings(first.results, second.results);
@@ -499,6 +501,14 @@ async function recordProduction() {
     { mode: 0o600 },
   );
   const requests = recordings.reduce((n, r) => n + r.requests + r.harnessRequests, 0);
+  const tenantsCreated = recordings.reduce((n, r) => n + (r.tenantsCreated ?? 0), 0);
+  const tenantsDeleted = recordings.reduce((n, r) => n + (r.tenantsDeleted ?? 0), 0);
+  // Every project setting a recording switches and restores (sandbox-oracles.md: record every
+  // change in the ledger line).
+  const switched = [
+    "multiTenant.allowTenants",
+    ...new Set(programs.flatMap((program) => Object.keys(program.config ?? {}))),
+  ];
   const failures = recordings.flatMap((r) => r.failures);
   try {
     if (!error) {
@@ -534,6 +544,9 @@ async function recordProduction() {
         outcome,
         taskId: TASK_ID,
         programs: meta.programs,
+        tenantsCreated,
+        tenantsDeleted,
+        switched,
         ...(error ? { error } : {}),
         ...(switchesAfter ? { switchesAfter } : {}),
       })}\n`,
@@ -840,6 +853,7 @@ async function restoreSandbox() {
   let outcome = "restore-failed";
   let before;
   let deleted = 0;
+  let nameless = 0;
   let error;
   let requests = 0;
   const switches = Object.keys(PROJECT_SWITCH_BASELINE);
@@ -857,19 +871,21 @@ async function restoreSandbox() {
       { "multiTenant.allowTenants": true },
       { cleanup: true },
     );
-    const ours = (await session.listTenants({ cleanup: true })).filter(({ displayName }) =>
-      String(displayName ?? "").startsWith(DISPLAY_NAME_PREFIX),
-    );
-    for (const { id } of ours) {
+    const listed = await session.listTenants({ cleanup: true });
+    for (const { id } of listed.filter(({ displayName }) => isHarnessDisplayName(displayName))) {
       await session.deleteHarnessTenant(id);
       deleted += 1;
     }
-    const left = (await session.listTenants({ cleanup: true })).filter(({ displayName }) =>
-      String(displayName ?? "").startsWith(DISPLAY_NAME_PREFIX),
-    );
+    const after = await session.listTenants({ cleanup: true });
+    const left = after.filter(({ displayName }) => isHarnessDisplayName(displayName));
     if (left.length) throw new Error(`${left.length} harness tenants remain`);
+    // A tenant without a display name may be the management program's nameless create or
+    // another lane's: it is reported, never deleted (pre-send review MF-4).
+    nameless = after.filter(({ displayName }) => !displayName).length;
     await session.writeConfig(switches, PROJECT_SWITCH_BASELINE, { cleanup: true });
     await prepareProject(ctx, { apply: false });
+    if (nameless)
+      throw new Error(`${nameless} tenants without a display name remain; check by hand`);
     outcome = "restored-by-hand";
   } catch (caught) {
     error = String(caught?.message ?? caught);
@@ -877,7 +893,7 @@ async function restoreSandbox() {
     requests = session?.counts().harnessRequests ?? 0;
     await appendFile(
       ledger,
-      `${JSON.stringify({ ts: new Date().toISOString(), project: SANDBOX_PROJECT, database: null, taskId: TASK_ID, outcome, before, deletedTenants: deleted, requests, ...(error ? { error } : {}) })}\n`,
+      `${JSON.stringify({ ts: new Date().toISOString(), project: SANDBOX_PROJECT, database: null, taskId: TASK_ID, outcome, before, deletedTenants: deleted, namelessTenants: nameless, requests, ...(error ? { error } : {}) })}\n`,
     );
   }
   if (error) throw new Error(error);

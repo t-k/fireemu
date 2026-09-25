@@ -207,7 +207,12 @@ const manage = program("atb/tenant/manage", [
     { allowPasswordSignup: "yes" },
     "allowPasswordSignup",
   ),
-  patchTenant("patch-bad-name", "TENANTOF(create-minimal)", { displayName: "1bad" }, "displayName"),
+  patchTenant(
+    "patch-bad-name",
+    "TENANTOF(create-minimal)",
+    { displayName: "1atb-bad" },
+    "displayName",
+  ),
   patchTenant(
     "patch-mfa",
     "TENANTOF(create-minimal)",
@@ -529,10 +534,6 @@ const settings = program(
     ),
     signIn("privacy-on-wrong-password", "s1", S, "wrong-password"),
     signIn("privacy-on-unknown-address", "unknown-s", S),
-    client("phone-project-number-in-tenant", "sendVerificationCode", {
-      phoneNumber: "PHONE(0)",
-      tenantId: S,
-    }),
     patchTenant(
       "tenant-test-phone",
       S,
@@ -579,7 +580,12 @@ const inheritance = program(
     signIn("wrong-password-in-late-tenant", "l1", "TENANTOF(create-after)", "wrong-password"),
   ],
   {
-    tenants: { i: openTenant("atb-inh-i") },
+    // The tenant's own test number (pre-send review MF-3): no SMS leaves production.
+    tenants: {
+      i: openTenant("atb-inh-i", {
+        testPhoneNumbers: { $phoneKeys: { "PHONE(2)": TEST_PHONE_CODE } },
+      }),
+    },
     // Changed after the tenant was created (the session creates tenants first).
     config: {
       "emailPrivacyConfig.enableImprovedEmailPrivacy": false,

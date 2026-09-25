@@ -1418,7 +1418,7 @@
             "the official Storage emulator implements no object versioning, no ACLs (its POST acl stub answers success without effect), no signed URLs, no compose and no notifications",
             "the official Storage emulator parses no generation or metageneration precondition and verifies no declared checksum: it was measured to overwrite an object guarded by ifGenerationMatch=0, delete through a stale guard, and store a payload whose declared md5 did not match the bytes",
             "the official Storage emulator ignores resumable offsets and the JSON API Content-Range chunk protocol: it appends whatever arrives and finalizes every PUT, so a two-chunk upload was measured to commit its first chunk as the whole object",
-            "the official Storage emulator registers JSON API object update (PATCH) and copy only on the short /b/... spelling: the /storage/v1/... spelling of those answers its 501 catch-all, and a bucket GET answers the 404 missing-object envelope; fireemu reproduces that route table exactly",
+            "the official Storage emulator registers JSON API object update (PATCH) and copy only on the short /b/... spelling: the /storage/v1/... spelling of those answers its 501 catch-all, and a bucket GET answers the 404 missing-object envelope",
             "the official Storage emulator pages items alone and repeats every folded prefix on every page; fireemu uses the combined items-and-prefixes maxResults budget documented by the Firebase and Cloud Storage list APIs",
             "a JSON API media insert without a name crashes the pinned official CLI outright (an unhandled TypeError after its own 400 exits firebase emulators:exec with code 2); fireemu answers a plain 400, and the row is recorded here because no fixture can record a crash"
           ],
@@ -1433,6 +1433,14 @@
             },
             {
               "behaviour": "both Storage dialects count items and folded prefixes together toward maxResults, return each prefix on one page only and cap the page at 1000; conformance/storage-matrix.json pins the official emulator's different pagination",
+              "precision": "conservative"
+            },
+            {
+              "behaviour": "both profiles accept the production /storage/v1 object PATCH, copyTo and rewriteTo routes that the official emulator answers with 501; https://cloud.google.com/storage/docs/json_api/v1/objects/patch, https://cloud.google.com/storage/docs/json_api/v1/objects/copy, https://cloud.google.com/storage/docs/json_api/v1/objects/rewrite",
+              "precision": "documented-divergence"
+            },
+            {
+              "behaviour": "the strict profile refuses list filters it cannot apply (matchGlob, startOffset, endOffset and includeTrailingDelimiter=true) with 400, returns current generations for versions=true because archived generations are unavailable, and refuses unsatisfiable media ranges with 416 and Content-Range; a nonzero suffix on an empty object is accepted as RFC 9110 section 14.1.1 specifies; the emulator profile retains the official emulator's behavior; https://cloud.google.com/storage/docs/json_api/v1/objects/list, https://cloud.google.com/storage/docs/json_api/v1/status-codes, https://www.rfc-editor.org/rfc/rfc9110.html#section-14.1.1",
               "precision": "conservative"
             }
           ],

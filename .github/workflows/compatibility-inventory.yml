@@ -260,8 +260,8 @@ jobs:
         env:
           PYTEST_SHARD: ${{ matrix.shard }}
         run: |
-          uv run --project tools/compat-inventory --locked --python 3.12 tools/compat-inventory/broad_shards.py --shards 7 --shard "$PYTEST_SHARD" > shard-files.txt
-          mapfile -t files < shard-files.txt
+          uv run --project tools/compat-inventory --locked --python 3.12 tools/compat-inventory/broad_shards.py --shards 7 --shard "$PYTEST_SHARD" > "$RUNNER_TEMP/shard-files.txt"
+          mapfile -t files < "$RUNNER_TEMP/shard-files.txt"
           echo "shard $PYTEST_SHARD: ${#files[@]} files"
           uv run --project tools/compat-inventory --locked --python 3.12 -m pytest "${files[@]}" -q
 
@@ -280,8 +280,8 @@ jobs:
         run: python3 -m pip install uv==0.11.28
       - name: Run the retired suites
         run: |
-          uv run --project tools/compat-inventory --locked --python 3.12 tools/compat-inventory/broad_shards.py --shards 1 --retired > retired-files.txt
-          mapfile -t files < retired-files.txt
+          uv run --project tools/compat-inventory --locked --python 3.12 tools/compat-inventory/broad_shards.py --shards 1 --retired > "$RUNNER_TEMP/retired-files.txt"
+          mapfile -t files < "$RUNNER_TEMP/retired-files.txt"
           uv run --project tools/compat-inventory --locked --python 3.12 -m pytest "${files[@]}" -q
       - name: Check immutable historical tools, observations and approvals
         if: always()

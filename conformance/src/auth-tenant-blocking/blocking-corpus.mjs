@@ -268,7 +268,7 @@ const claims = program("atb/blocking/claims", [
   signUp("sign-up-l5", "l5"),
   refreshWith("refresh-l5", "sign-up-l5"),
   admin("admin-claims-l5", "update", {
-    localId: "UID(l5)",
+    localId: from("sign-up-l5:localId"),
     customAttributes: '{"atbS":"admin","atbAdmin":true}',
   }),
   signIn("sign-in-l5-with-claims", "l5"),

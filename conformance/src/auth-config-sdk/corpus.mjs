@@ -403,6 +403,10 @@ const providers = {
       email: "EMAIL(unknown-reset)",
     }),
     adminLink("email-off-admin-reset", "PASSWORD_RESET", "EMAIL(existing)"),
+    client("email-off-reset-confirm", "resetPassword", {
+      oobCode: "fireemu-invalid-code",
+      newPassword: "password456",
+    }),
     adminCreate("email-off-admin-create", { email: "EMAIL(admin-new)", password: "password123" }),
     setConfig("email-on", "signIn.email.enabled", { signIn: { email: { enabled: true } } }),
     setConfig("anonymous-off", "signIn.anonymous.enabled", {
@@ -507,11 +511,6 @@ const clientPermissions = {
     client("sign-in-link-new", "signInWithEmailLink", {
       email: "EMAIL(link-new)",
       oobCode: from("link-new:oobCode"),
-    }),
-    client("send-link-new", "sendOobCode", {
-      requestType: "EMAIL_SIGNIN",
-      email: "EMAIL(send-link-new)",
-      continueUrl: HOSTING,
     }),
     adminLink("link-existing", "EMAIL_SIGNIN", "EMAIL(existing)", { continueUrl: HOSTING }),
     client("sign-in-link-existing", "signInWithEmailLink", {

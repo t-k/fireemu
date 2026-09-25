@@ -2,7 +2,7 @@
 
 import { execFileSync, spawn } from "node:child_process";
 import { createHash, randomBytes } from "node:crypto";
-import { appendFile, mkdir, open, readFile, writeFile } from "node:fs/promises";
+import { appendFile, mkdir, open, readFile, stat, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -35,6 +35,11 @@ const KEY_FILE = join(
   PRIVATE_ROOT,
   "oracle-credentials/fireemu-oracle-query-auth-key-20260925.json",
 );
+const PROJECT_IDENTITY_FILE = join(
+  PRIVATE_ROOT,
+  "oracle-credentials/fireemu-oracle-query-project.json",
+);
+const PROJECT_IDENTITY_SHA = "e7b988b49c3ca24496b8c030a27b4714a31182950f9e9b7108ef4628df8fad58";
 const SANDBOX_DOC = join(PRIVATE_ROOT, "sandbox-oracles.md");
 const CLI = join(CONFORMANCE, "node_modules/firebase-tools/lib/bin/firebase.js");
 const TASK = "FUNCTIONS-HTTP-SANDBOX";
@@ -49,13 +54,14 @@ const RUN_HOST = "https://run.googleapis.com";
 const ARTIFACT_HOST = "https://artifactregistry.googleapis.com";
 const SERVICE_USAGE_HOST = "https://serviceusage.googleapis.com";
 const RESOURCE_MANAGER_HOST = "https://cloudresourcemanager.googleapis.com";
-const PROJECT_NUMBER = "1049549757969";
 const RESOURCE = `projects/${PROJECT}/locations/${REGION}`;
 const REPOSITORY = `${RESOURCE}/repositories/gcf-artifacts`;
-const SERVICE_IDENTITIES = {
-  eventarc: `service-${PROJECT_NUMBER}@gcp-sa-eventarc.iam.gserviceaccount.com`,
-  pubsub: `service-${PROJECT_NUMBER}@gcp-sa-pubsub.iam.gserviceaccount.com`,
+const SERVICE_AGENT_DOMAINS = {
+  eventarc: "gcp-sa-eventarc.iam.gserviceaccount.com",
+  pubsub: "gcp-sa-pubsub.iam.gserviceaccount.com",
 };
+const serviceAgentEmail = (kind, projectNumber) =>
+  `service-${projectNumber}@${SERVICE_AGENT_DOMAINS[kind]}`;
 const MAX_RESPONSE_BYTES = 1024 * 1024;
 const EXPOSURE_MS = 60 * 60 * 1000;
 
@@ -183,6 +189,45 @@ export function summarizeCliOutput(output, exitCode) {
   };
 }
 
+export async function writeCliDiagnostic(output, exitCode, kind, attempt, runDir) {
+  if (!["cliDeploy", "cliDelete"].includes(kind) || !Number.isInteger(attempt) || attempt < 1)
+    throw new Error("invalid CLI diagnostic identity");
+  const redacted = output
+    .split(/\r?\n/)
+    .map((line) => {
+      if (
+        /client\.apiKey|api[_ -]?key|[?&]key=|access[_ -]?token|id[_ -]?token|refresh[_ -]?token|authorization|client[_ -]?secret|password/i.test(
+          line,
+        )
+      )
+        return "[REDACTED CREDENTIAL LINE]";
+      return line
+        .replace(/AIza[0-9A-Za-z_-]{20,}/g, "[REDACTED API KEY]")
+        .replace(/ya29\.[0-9A-Za-z._-]+/g, "[REDACTED ACCESS TOKEN]")
+        .replace(/[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}/g, "[REDACTED JWT]")
+        .replace(/[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/g, "[REDACTED EMAIL]");
+    })
+    .join("\n");
+  const file = join(runDir, `cli-${kind}-${String(attempt).padStart(2, "0")}.json`);
+  await writeFile(
+    file,
+    `${JSON.stringify(
+      {
+        kind,
+        attempt,
+        ...summarizeCliOutput(output, exitCode),
+        outputSha256: digest(output),
+        output: redacted.slice(-32_768),
+        truncated: redacted.length > 32_768,
+      },
+      null,
+      2,
+    )}\n`,
+    { mode: 0o600, flag: "wx" },
+  );
+  return file;
+}
+
 async function requiredSourceDigests() {
   const checked = [
     ["corpus.json", CORPUS_SHA],
@@ -264,6 +309,29 @@ async function ownerAdc() {
   return { path, file };
 }
 
+export async function readPrivateProjectIdentity(path, expectedSha) {
+  const metadata = await stat(path);
+  if (metadata.size > 256 || (metadata.mode & 0o077) !== 0)
+    throw new Error("private project identity file is not bounded and owner-only");
+  const content = await readFile(path);
+  if (expectedSha && digest(content) !== expectedSha)
+    throw new Error("private project identity digest changed");
+  let value;
+  try {
+    value = JSON.parse(content);
+  } catch {
+    throw new Error("private project identity is invalid");
+  }
+  if (
+    value?.projectId !== PROJECT ||
+    !/^\d{6,16}$/.test(value.projectNumber) ||
+    JSON.stringify(Object.keys(value).toSorted()) !== JSON.stringify(["projectId", "projectNumber"])
+  ) {
+    throw new Error("private project identity is invalid");
+  }
+  return value.projectNumber;
+}
+
 async function acquireToken(adc, budget, kind) {
   budget.take(kind);
   const response = await fetch("https://oauth2.googleapis.com/token", {
@@ -329,7 +397,7 @@ function createControl(adc, budget) {
 }
 
 async function cli(args, adcPath, budget, kind, runDir) {
-  budget.take(kind);
+  const attempt = budget.take(kind);
   const isolatedConfig = join(runDir, "firebase-cli-config");
   await mkdir(isolatedConfig, { recursive: true, mode: 0o700 });
   const child = spawn(process.execPath, [CLI, ...args, "--project", PROJECT, "--non-interactive"], {
@@ -370,6 +438,11 @@ async function cli(args, adcPath, budget, kind, runDir) {
   if (code !== 0 || summary.autoEnabledApi) {
     const failure = new Error(`${kind} failed or attempted API enablement (exit ${code})`);
     failure.indeterminate = kind === "cliDeploy";
+    try {
+      await writeCliDiagnostic(output, code, kind, attempt, runDir);
+    } catch {
+      failure.message += "; private CLI diagnostic could not be written";
+    }
     throw failure;
   }
   return summary;
@@ -439,18 +512,19 @@ export async function preflightCliSideEffects(control) {
   }
 }
 
-export async function readServiceAgentGrants(control) {
+export async function readServiceAgentGrants(control, projectNumber) {
+  if (!/^\d{6,16}$/.test(projectNumber)) throw new Error("invalid private project number");
   const response = await control(
     "POST",
-    `${RESOURCE_MANAGER_HOST}/v3/projects/${PROJECT_NUMBER}:getIamPolicy`,
+    `${RESOURCE_MANAGER_HOST}/v3/projects/${projectNumber}:getIamPolicy`,
     { options: { requestedPolicyVersion: 3 } },
     "control",
   );
   const bindings = response.value.bindings ?? [];
   if (!Array.isArray(bindings)) throw new Error("project IAM policy bindings are invalid");
   const result = {};
-  for (const [kind, email] of Object.entries(SERVICE_IDENTITIES)) {
-    const member = `serviceAccount:${email}`;
+  for (const kind of Object.keys(SERVICE_AGENT_DOMAINS)) {
+    const member = `serviceAccount:${serviceAgentEmail(kind, projectNumber)}`;
     result[kind] = [];
     for (const binding of bindings) {
       if (!binding.members?.includes(member)) continue;
@@ -465,7 +539,7 @@ export async function readServiceAgentGrants(control) {
 
 export function serviceAgentGrantChanges(before, after) {
   const added = [];
-  for (const kind of Object.keys(SERVICE_IDENTITIES)) {
+  for (const kind of Object.keys(SERVICE_AGENT_DOMAINS)) {
     const prior = new Set(before[kind]);
     const current = new Set(after[kind]);
     for (const role of prior) {
@@ -835,6 +909,10 @@ export async function recordProduction() {
   await assertPrivateApproval();
   const corpus = await requiredSourceDigests();
   const adc = await ownerAdc();
+  const projectNumber = await readPrivateProjectIdentity(
+    PROJECT_IDENTITY_FILE,
+    PROJECT_IDENTITY_SHA,
+  );
   const ledgerLines = (await readFile(LEDGER, "utf8"))
     .trim()
     .split("\n")
@@ -891,7 +969,7 @@ export async function recordProduction() {
     let grantsBefore;
     try {
       await preflightCliSideEffects(control);
-      grantsBefore = await readServiceAgentGrants(control);
+      grantsBefore = await readServiceAgentGrants(control, projectNumber);
       await writeFile(
         join(runDir, "service-agent-grants-before.json"),
         `${JSON.stringify(grantsBefore, null, 2)}\n`,
@@ -923,7 +1001,7 @@ export async function recordProduction() {
     }
     if (grantsBefore && budget.snapshot().cliDeploy > 0) {
       try {
-        const grantsAfter = await readServiceAgentGrants(control);
+        const grantsAfter = await readServiceAgentGrants(control, projectNumber);
         await writeFile(
           join(runDir, "service-agent-grants-after.json"),
           `${JSON.stringify(grantsAfter, null, 2)}\n`,
@@ -932,7 +1010,7 @@ export async function recordProduction() {
         for (const { kind, role } of serviceAgentGrantChanges(grantsBefore, grantsAfter)) {
           await logChange(
             "service-agent-project-grant-observed",
-            `${kind}: ${SERVICE_IDENTITIES[kind]}; ${role}; project IAM readback`,
+            `${kind}: ${serviceAgentEmail(kind, projectNumber)}; ${role}; project IAM readback`,
           );
         }
         await logChange(

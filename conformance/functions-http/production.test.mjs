@@ -1,4 +1,8 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
+import { mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { test } from "node:test";
 
 import {
@@ -8,9 +12,11 @@ import {
   assertReviewApproval,
   expiredAt,
   preflightCliSideEffects,
+  readPrivateProjectIdentity,
   readServiceAgentGrants,
   serviceAgentGrantChanges,
   summarizeCliOutput,
+  writeCliDiagnostic,
 } from "./production.mjs";
 
 test("stage 3 approval accepts only one authoritative decision block", () => {
@@ -173,6 +179,27 @@ test("CLI output reports auto API enablement without revealing captured text", (
   );
 });
 
+test("failed CLI output is retained privately with credentials and email removed", async () => {
+  const runDir = await mkdtemp(join(tmpdir(), "functions-http-cli-diagnostic-"));
+  try {
+    const output = [
+      "Error: Permission denied: cloudfunctions.functions.create",
+      "client.apiKey: AIza12345678901234567890123456789012345",
+      "Authorization: Bearer ya29.secret-value",
+      "owner@example.com",
+    ].join("\n");
+    const file = await writeCliDiagnostic(output, 1, "cliDeploy", 1, runDir);
+    const details = JSON.parse(await readFile(file, "utf8"));
+    assert.equal((await stat(file)).mode & 0o777, 0o600);
+    assert.equal(details.exitCode, 1);
+    assert.equal(details.kind, "cliDeploy");
+    assert.match(details.output, /Permission denied: cloudfunctions.functions.create/);
+    assert.doesNotMatch(details.output, /AIza|ya29|owner@example.com|client\.apiKey/);
+  } finally {
+    await rm(runDir, { recursive: true, force: true });
+  }
+});
+
 test("CLI preflight requires the reviewed APIs and exact repository cleanup policy", async () => {
   const names = [
     "cloudfunctions",
@@ -240,38 +267,78 @@ test("CLI preflight requires the reviewed APIs and exact repository cleanup poli
 });
 
 test("project IAM readback records only Pub/Sub and Eventarc service-agent grants", async () => {
+  const projectNumber = "1".repeat(13);
   const calls = [];
   const before = await readServiceAgentGrants(async (method, url, body, kind) => {
     calls.push({ method, url, body, kind });
     return { status: 200, value: { bindings: [] } };
-  });
+  }, projectNumber);
   assert.deepEqual(calls, [
     {
       method: "POST",
-      url: "https://cloudresourcemanager.googleapis.com/v3/projects/1049549757969:getIamPolicy",
+      url:
+        "https://cloudresourcemanager.googleapis.com/v3/projects/" +
+        projectNumber +
+        ":getIamPolicy",
       body: { options: { requestedPolicyVersion: 3 } },
       kind: "control",
     },
   ]);
-  const after = await readServiceAgentGrants(async () => ({
-    status: 200,
-    value: {
-      bindings: [
-        {
-          role: "roles/pubsub.serviceAgent",
-          members: ["serviceAccount:service-1049549757969@gcp-sa-pubsub.iam.gserviceaccount.com"],
-        },
-        {
-          role: "roles/eventarc.serviceAgent",
-          members: ["serviceAccount:service-1049549757969@gcp-sa-eventarc.iam.gserviceaccount.com"],
-        },
-        { role: "roles/owner", members: ["user:someone@example.com"] },
-      ],
-    },
-  }));
+  const after = await readServiceAgentGrants(
+    async () => ({
+      status: 200,
+      value: {
+        bindings: [
+          {
+            role: "roles/pubsub.serviceAgent",
+            members: [
+              "serviceAccount:service-" + projectNumber + "@gcp-sa-pubsub.iam.gserviceaccount.com",
+            ],
+          },
+          {
+            role: "roles/eventarc.serviceAgent",
+            members: [
+              "serviceAccount:service-" +
+                projectNumber +
+                "@gcp-sa-eventarc.iam.gserviceaccount.com",
+            ],
+          },
+          { role: "roles/owner", members: ["user:someone@example.com"] },
+        ],
+      },
+    }),
+    projectNumber,
+  );
   assert.deepEqual(serviceAgentGrantChanges(before, after), [
     { kind: "eventarc", role: "roles/eventarc.serviceAgent" },
     { kind: "pubsub", role: "roles/pubsub.serviceAgent" },
   ]);
   assert.throws(() => serviceAgentGrantChanges(after, before), /service-agent grant disappeared/);
+});
+
+test("project number is loaded only from a private identity file for the reviewed project", async () => {
+  const runDir = await mkdtemp(join(tmpdir(), "functions-http-project-identity-"));
+  const file = join(runDir, "project.json");
+  const projectNumber = "2".repeat(13);
+  try {
+    const content = JSON.stringify({ projectId: "fireemu-oracle-query", projectNumber });
+    const contentSha = createHash("sha256").update(content).digest("hex");
+    await writeFile(file, content, {
+      mode: 0o600,
+    });
+    assert.equal(await readPrivateProjectIdentity(file, contentSha), projectNumber);
+    await assert.rejects(
+      () => readPrivateProjectIdentity(file, "0".repeat(64)),
+      /private project identity/,
+    );
+    await writeFile(file, JSON.stringify({ projectId: "other-project", projectNumber }));
+    await assert.rejects(() => readPrivateProjectIdentity(file), /private project identity/);
+    await writeFile(
+      file,
+      JSON.stringify({ projectId: "fireemu-oracle-query", projectNumber: "abc" }),
+    );
+    await assert.rejects(() => readPrivateProjectIdentity(file), /private project identity/);
+  } finally {
+    await rm(runDir, { recursive: true, force: true });
+  }
 });

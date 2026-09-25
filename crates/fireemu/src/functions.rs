@@ -1143,11 +1143,16 @@ fn warn_reload_once(last: &mut bool, codebase: &str, operation: &str, reason: &s
     first
 }
 
-fn source_scan_retry_delay(reason: Option<&str>) -> Duration {
-    if reason.is_some_and(|reason| reason.starts_with(SOURCE_BYTE_BUDGET_ERROR_PREFIX)) {
-        Duration::from_secs(30)
-    } else {
-        Duration::from_millis(750)
+fn source_scan_retry_delay(previous: Duration, reason: Option<&str>) -> Duration {
+    match reason {
+        None => Duration::from_millis(750),
+        Some(reason) if reason.starts_with(SOURCE_BYTE_BUDGET_ERROR_PREFIX) => {
+            Duration::from_secs(30)
+        }
+        Some(_) => previous
+            .max(Duration::from_millis(750))
+            .saturating_mul(2)
+            .min(Duration::from_secs(8)),
     }
 }
 
@@ -1162,11 +1167,11 @@ async fn changed_source_stamp(
     let next_stamp = match scan_budget.scan(root, &codebase.ignore).await {
         Ok(stamp) => {
             *last_scan_error = false;
-            *retry_delay = source_scan_retry_delay(None);
+            *retry_delay = source_scan_retry_delay(*retry_delay, None);
             stamp
         }
         Err(reason) => {
-            *retry_delay = source_scan_retry_delay(Some(&reason));
+            *retry_delay = source_scan_retry_delay(*retry_delay, Some(&reason));
             warn_reload_once(last_scan_error, &codebase.codebase, "scan", &reason);
             return None;
         }
@@ -1182,11 +1187,105 @@ async fn changed_source_stamp(
     if stable_stamp != next_stamp {
         return None;
     }
+    if observed_stamp.is_none() {
+        *observed_stamp = Some(stable_stamp);
+        return None;
+    }
     if observed_stamp.map(|stamp| stamp.content_signature) == Some(stable_stamp.content_signature) {
         *observed_stamp = Some(stable_stamp);
         return None;
     }
     Some(stable_stamp)
+}
+
+async fn wait_for_fixed_inspector_port_release(port: u16, timeout: Duration) -> Result<(), String> {
+    let deadline = tokio::time::Instant::now() + timeout;
+    loop {
+        match std::net::TcpListener::bind(("127.0.0.1", port)) {
+            Ok(listener) => {
+                drop(listener);
+                return Ok(());
+            }
+            Err(cause) if tokio::time::Instant::now() >= deadline => {
+                return Err(format!(
+                    "fixed inspector port {port} did not become available after stopping the previous runner: {cause}"
+                ));
+            }
+            Err(_) => tokio::time::sleep(Duration::from_millis(25)).await,
+        }
+    }
+}
+
+async fn prepare_fixed_inspector_reload(
+    runtime: &Arc<FunctionsRuntime>,
+    codebase: &str,
+    port: u16,
+) -> Result<fireemu_adapter_functions::runtime::RunnerRestartGuard, String> {
+    // A fixed inspector port cannot be bound by both generations at once.
+    let restart_guard = runtime
+        .stop_runner_for_fixed_inspector_reload(codebase)
+        .await?;
+    wait_for_fixed_inspector_port_release(port, Duration::from_secs(3)).await?;
+    Ok(restart_guard)
+}
+
+fn report_reload_install(
+    result: Result<u64, String>,
+    fixed_inspector: bool,
+    codebase: &str,
+    stable_stamp: FunctionsSourceStamp,
+    observed_stamp: &mut Option<FunctionsSourceStamp>,
+    last_start_error: &mut bool,
+) {
+    match result {
+        Ok(generation) => {
+            *observed_stamp = Some(stable_stamp);
+            *last_start_error = false;
+            eprintln!("note: functions[{codebase}]: reloaded generation {generation}");
+        }
+        Err(reason) if fixed_inspector => {
+            *observed_stamp = Some(stable_stamp);
+            warn_reload_once(
+                last_start_error,
+                codebase,
+                "install after stopping the previous runner",
+                &reason,
+            );
+        }
+        Err(reason) => eprintln!("warning: functions[{codebase}]: reload rejected: {reason}"),
+    }
+}
+
+async fn snapshot_consistent_reload_source(
+    root: &Path,
+    codebase: &FunctionsCodebase,
+    scan_budget: &FunctionsSourceScanBudget,
+    stable: u64,
+    retry_delay: &mut Duration,
+    last_snapshot_error: &mut bool,
+) -> Option<FunctionsSourceSnapshot> {
+    let snapshot = match scan_budget.snapshot(root, &codebase.ignore).await {
+        Ok(snapshot) => {
+            *last_snapshot_error = false;
+            snapshot
+        }
+        Err(reason) => {
+            *retry_delay = source_scan_retry_delay(*retry_delay, Some(&reason));
+            warn_reload_once(last_snapshot_error, &codebase.codebase, "snapshot", &reason);
+            return None;
+        }
+    };
+    let (snapshot_stamp, current_stamp) = tokio::join!(
+        scan_budget.scan(&snapshot, &codebase.ignore),
+        scan_budget.scan(root, &codebase.ignore),
+    );
+    if snapshot_stamp.as_ref().map(|stamp| stamp.content_signature) != Ok(stable)
+        || current_stamp.as_ref().map(|stamp| stamp.content_signature) != Ok(stable)
+    {
+        discard_reload_snapshot(snapshot, &codebase.codebase).await;
+        return None;
+    }
+    Some(snapshot)
 }
 
 async fn supervise_codebase_reloads(
@@ -1203,7 +1302,11 @@ async fn supervise_codebase_reloads(
     let mut observed_stamp = initial_stamp.as_ref().ok().copied();
     let mut last_scan_error = false;
     let mut last_snapshot_error = false;
-    let mut retry_delay = source_scan_retry_delay(initial_stamp.as_ref().err().map(String::as_str));
+    let mut last_start_error = false;
+    let mut retry_delay = source_scan_retry_delay(
+        Duration::from_millis(750),
+        initial_stamp.as_ref().err().map(String::as_str),
+    );
     if let Err(reason) = initial_stamp {
         warn_reload_once(&mut last_scan_error, &codebase.codebase, "scan", &reason);
     }
@@ -1225,37 +1328,30 @@ async fn supervise_codebase_reloads(
             continue;
         };
         let stable = stable_stamp.content_signature;
-        let snapshot = match resources
-            .scan_budget
-            .snapshot(&root, &codebase.ignore)
-            .await
-        {
-            Ok(snapshot) => {
-                last_snapshot_error = false;
-                snapshot
-            }
-            Err(reason) => {
-                retry_delay = source_scan_retry_delay(Some(&reason));
-                warn_reload_once(
-                    &mut last_snapshot_error,
-                    &codebase.codebase,
-                    "snapshot",
-                    &reason,
-                );
-                continue;
-            }
-        };
-        let (snapshot_stamp, current_stamp) = tokio::join!(
-            resources.scan_budget.scan(&snapshot, &codebase.ignore),
-            resources.scan_budget.scan(&root, &codebase.ignore),
-        );
-        if snapshot_stamp.as_ref().map(|stamp| stamp.content_signature) != Ok(stable)
-            || current_stamp.as_ref().map(|stamp| stamp.content_signature) != Ok(stable)
-        {
-            discard_reload_snapshot(snapshot, &codebase.codebase).await;
+        let Some(snapshot) = snapshot_consistent_reload_source(
+            &root,
+            &codebase,
+            &resources.scan_budget,
+            stable,
+            &mut retry_delay,
+            &mut last_snapshot_error,
+        )
+        .await
+        else {
             continue;
-        }
-        observed_stamp = Some(stable_stamp);
+        };
+        let _restart_guard = if let Some(port) = cfg.functions_inspect_port {
+            match prepare_fixed_inspector_reload(&runtime, &codebase.codebase, port).await {
+                Ok(guard) => Some(guard),
+                Err(reason) => {
+                    warn_reload_once(&mut last_start_error, &codebase.codebase, "start", &reason);
+                    discard_reload_snapshot(snapshot, &codebase.codebase).await;
+                    continue;
+                }
+            }
+        } else {
+            None
+        };
         let mut staged = codebase.clone();
         staged.source = snapshot.to_string_lossy().into_owned();
         match start_codebase(
@@ -1270,22 +1366,29 @@ async fn supervise_codebase_reloads(
         {
             Ok(mut spec) => {
                 spec.cleanup_dir = Some(snapshot.into_path());
-                match runtime.reload_codebase(spec) {
-                    Ok(generation) => eprintln!(
-                        "note: functions[{}]: reloaded generation {generation}",
-                        codebase.codebase
-                    ),
-                    Err(reason) => eprintln!(
-                        "warning: functions[{}]: reload rejected: {reason}",
-                        codebase.codebase
-                    ),
-                }
+                report_reload_install(
+                    runtime.reload_codebase(spec),
+                    cfg.functions_inspect_port.is_some(),
+                    &codebase.codebase,
+                    stable_stamp,
+                    &mut observed_stamp,
+                    &mut last_start_error,
+                );
             }
             Err(reason) => {
-                eprintln!(
-                            "warning: functions[{}]: reload failed; keeping the last-known-good generation: {reason}",
-                            codebase.codebase
-                        );
+                if cfg.functions_inspect_port.is_some() {
+                    warn_reload_once(
+                        &mut last_start_error,
+                        &codebase.codebase,
+                        "start after stopping the previous runner",
+                        &reason,
+                    );
+                } else {
+                    eprintln!(
+                        "warning: functions[{}]: reload failed; keeping the last-known-good generation: {reason}",
+                        codebase.codebase
+                    );
+                }
                 discard_reload_snapshot(snapshot, &codebase.codebase).await;
             }
         }
@@ -1325,7 +1428,7 @@ pub fn firebase_config(project: &str) -> String {
 
 /// The user environment of one codebase: the dotenv chain, invocation-scoped local secrets
 /// and the legacy runtime configuration, with the files each came from.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Clone, Default, PartialEq, Eq)]
 pub struct UserEnvironment {
     /// `.env` chain values, later files having overridden earlier ones.
     pub values: Vec<(String, String)>,
@@ -1338,13 +1441,33 @@ pub struct UserEnvironment {
     pub files: Vec<String>,
 }
 
+impl std::fmt::Debug for UserEnvironment {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("UserEnvironment")
+            .field("values", &"[redacted]")
+            .field("secrets", &"[redacted]")
+            .field("runtime_config", &"[redacted]")
+            .field("files", &self.files)
+            .finish()
+    }
+}
+
+fn redacted_environment_parse_error(error: &str) -> &str {
+    if error.starts_with("Invalid dotenv file") {
+        "Invalid dotenv file, error on lines: [redacted]"
+    } else {
+        error
+    }
+}
+
 /// Parent variables the official CLI would leave on the Functions child, excluding names
 /// owned by the emulator and ambient Google credentials. Function code is trusted local code,
 /// but these exclusions keep the callable trust boundary and the no-ADC guarantee intact.
 fn inheritable_parent_environment() -> Vec<(String, String)> {
     use fireemu_core_functions::env;
 
-    std::env::vars()
+    std::env::vars_os()
+        .filter_map(|(name, value)| Some((name.into_string().ok()?, value.into_string().ok()?)))
         .filter(|(name, _)| {
             env::validate_key(name).is_ok()
                 && name != "GOOGLE_APPLICATION_CREDENTIALS"
@@ -1402,8 +1525,12 @@ pub fn load_user_environment(
         }
         let text = std::fs::read_to_string(&path)
             .map_err(|e| format!("Failed to load environment variables from {name}. ({e})"))?;
-        let values = env::parse_strict(&text)
-            .map_err(|e| format!("Failed to load environment variables from {name}. {e}"))?;
+        let values = env::parse_strict(&text).map_err(|e| {
+            format!(
+                "Failed to load environment variables from {name}. {}",
+                redacted_environment_parse_error(&e)
+            )
+        })?;
         for (k, v) in values {
             out.values.retain(|(existing, _)| existing != &k);
             out.values.push((k, v));
@@ -1421,8 +1548,9 @@ pub fn load_user_environment(
         out.secrets = env::parse_strict(&text)
             .map_err(|e| {
                 format!(
-                    "Failed to read local secrets file {}: {e}",
-                    secrets.display()
+                    "Failed to read local secrets file {}: {}",
+                    secrets.display(),
+                    redacted_environment_parse_error(&e)
                 )
             })?
             .into_iter()
@@ -4111,10 +4239,33 @@ impl BlockingAuthBridge {
 
         let selection = settings.selections.for_event(event);
         let selected_function = Self::selected_function(selection);
-        let admitted = self
+        let deadline = Instant::now() + self.deadline;
+        let first_admission = self
             .runtime
-            .try_admit_blocking_auth_for(event, selected_function)
-            .map_err(|_| BlockingFunctionFailure::unhandled())?;
+            .try_admit_blocking_auth_for(event, selected_function);
+        let admitted = if let Ok(admitted) = first_admission {
+            admitted
+        } else {
+            let handle = tokio::runtime::Handle::try_current()
+                .map_err(|_| BlockingFunctionFailure::unhandled())?;
+            handle
+                .block_on(async {
+                    tokio::time::timeout_at(
+                        tokio::time::Instant::from_std(deadline),
+                        self.runtime
+                            .recover_blocking_auth_runner_for(event, selected_function),
+                    )
+                    .await
+                })
+                .map_err(|_| BlockingFunctionFailure::timeout())?
+                .map_err(|_| BlockingFunctionFailure::unhandled())?;
+            // A recovered runner is healthy even when the caller's admission deadline has
+            // expired. Return the local timeout before reserving a slot or recycling it.
+            blocking_auth_remaining(deadline)?;
+            self.runtime
+                .try_admit_blocking_auth_for(event, selected_function)
+                .map_err(|_| BlockingFunctionFailure::unhandled())?
+        };
         let Some((target, _admission)) = admitted else {
             return if matches!(
                 selection,
@@ -4155,7 +4306,6 @@ impl BlockingAuthBridge {
             target.region,
             target.function
         );
-        let deadline = Instant::now() + self.deadline;
         let exchange = (|| {
             let address = target
                 .addr
@@ -4499,29 +4649,36 @@ fn base64_encode(data: &[u8]) -> String {
 mod tests {
     use std::collections::{BTreeMap, BTreeSet};
     #[cfg(unix)]
+    use std::ffi::OsString;
+    #[cfg(unix)]
+    use std::os::unix::ffi::OsStringExt;
+    #[cfg(unix)]
     use std::process::Command;
     use std::sync::atomic::AtomicBool;
     use std::sync::{Arc, Mutex};
     use std::time::{Duration, Instant};
 
+    #[cfg(unix)]
+    use super::inheritable_parent_environment;
     use super::path_node_candidates;
     #[cfg(unix)]
     use super::probe_node;
     use super::{
         blocking_auth_io_failure, blocking_auth_read_response, blocking_auth_response_failure,
-        blocking_auth_write_request, check_callable_app_check, function_pubsub_resources,
-        functions_source_stamp, functions_source_stamp_with_charge,
+        blocking_auth_write_request, changed_source_stamp, check_callable_app_check,
+        function_pubsub_resources, functions_source_stamp, functions_source_stamp_with_charge,
         functions_source_stamp_with_file_version, hash_source_file, hash_source_stamp_entry,
-        node_engine_matches, owned_pubsub_topic, package_node_engine, parse_node_version,
-        provision_function_pubsub_resources, select_node_installation, snapshot_functions_source,
-        source_scan_pacing_delay, source_scan_retry_delay, stream_source_chunks, update_watch_hash,
-        validate_functions_codebase_budget, warn_reload_once, BlockingAuthBridge,
+        load_user_environment, node_engine_matches, owned_pubsub_topic, package_node_engine,
+        parse_node_version, provision_function_pubsub_resources, select_node_installation,
+        snapshot_functions_source, source_scan_pacing_delay, source_scan_retry_delay,
+        stream_source_chunks, update_watch_hash, validate_functions_codebase_budget,
+        wait_for_fixed_inspector_port_release, warn_reload_once, BlockingAuthBridge,
         FunctionsSourceByteBudget, FunctionsSourceEntryBudget, FunctionsSourceFileVersion,
         FunctionsSourceScanBudget, FunctionsSourceSnapshot, FunctionsSourceStamp,
-        FunctionsSourceTraversal, NodeInstallation, PubSubBridge, BLOCKING_AUTH_DEADLINE,
-        MAX_BLOCKING_AUTH_RESPONSE_BYTES, MAX_FUNCTIONS_SOURCE_BYTES, MAX_FUNCTIONS_SOURCE_ENTRIES,
-        MAX_FUNCTIONS_SOURCE_WATCH_BYTES_PER_SECOND, MAX_FUNCTIONS_SOURCE_WATCH_FILES_PER_SECOND,
-        SOURCE_IO_BUFFER_BYTES,
+        FunctionsSourceTraversal, NodeInstallation, PubSubBridge, UserEnvironment,
+        BLOCKING_AUTH_DEADLINE, MAX_BLOCKING_AUTH_RESPONSE_BYTES, MAX_FUNCTIONS_SOURCE_BYTES,
+        MAX_FUNCTIONS_SOURCE_ENTRIES, MAX_FUNCTIONS_SOURCE_WATCH_BYTES_PER_SECOND,
+        MAX_FUNCTIONS_SOURCE_WATCH_FILES_PER_SECOND, SOURCE_IO_BUFFER_BYTES,
     };
     #[cfg(not(windows))]
     use super::{
@@ -4539,6 +4696,95 @@ mod tests {
     };
     use fireemu_core_session::clock::VirtualClock;
     use serde_json::json;
+
+    #[tokio::test]
+    async fn fixed_inspector_port_wait_reports_a_port_still_in_use() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let error = wait_for_fixed_inspector_port_release(port, Duration::from_millis(50))
+            .await
+            .unwrap_err();
+        assert!(error.contains(&format!("fixed inspector port {port}")));
+        assert!(error.contains("did not become available"));
+
+        drop(listener);
+        wait_for_fixed_inspector_port_release(port, Duration::from_millis(50))
+            .await
+            .unwrap();
+    }
+
+    #[test]
+    fn user_environment_debug_redacts_all_loaded_values() {
+        let environment = UserEnvironment {
+            values: vec![("TOKEN".to_owned(), "dotenv-sentinel".to_owned())],
+            secrets: vec![("SECRET".to_owned(), "secret-sentinel".to_owned())],
+            runtime_config: Some("runtime-config-sentinel".to_owned()),
+            files: vec![".env".to_owned()],
+        };
+        let debug = format!("{environment:?}");
+        for value in [
+            "dotenv-sentinel",
+            "secret-sentinel",
+            "runtime-config-sentinel",
+        ] {
+            assert!(!debug.contains(value), "{debug}");
+        }
+        assert!(debug.contains("[redacted]"));
+    }
+
+    #[test]
+    fn invalid_environment_file_diagnostics_do_not_expose_values() {
+        let root = std::env::temp_dir().join(format!(
+            "fireemu-redacted-environment-{}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        for file in [".env", ".secret.local"] {
+            std::fs::write(root.join(file), "invalid-line-sentinel\n").unwrap();
+            let error = load_user_environment(&root, "demo", None).unwrap_err();
+            assert!(error.contains(file), "{error}");
+            assert!(!error.contains("invalid-line-sentinel"), "{error}");
+            std::fs::remove_file(root.join(file)).unwrap();
+        }
+        std::fs::remove_dir(&root).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn inheritable_parent_environment_skips_non_utf8_values() {
+        if std::env::var_os("FIREEMU_TEST_NON_UTF8_CHILD").is_some() {
+            let inherited = inheritable_parent_environment();
+            assert!(inherited
+                .iter()
+                .any(|(name, value)| { name == "VOLTA_FN_UTF8_PROBE" && value == "kept" }));
+            assert!(!inherited
+                .iter()
+                .any(|(name, _)| name == "VOLTA_FN_NON_UTF8_PROBE"));
+            println!("non-UTF-8 Functions environment probe ran");
+            return;
+        }
+
+        let output = Command::new(std::env::current_exe().unwrap())
+            .arg("--exact")
+            .arg("functions::tests::inheritable_parent_environment_skips_non_utf8_values")
+            .arg("--nocapture")
+            .env("FIREEMU_TEST_NON_UTF8_CHILD", "1")
+            .env("VOLTA_FN_UTF8_PROBE", "kept")
+            .env("VOLTA_FN_NON_UTF8_PROBE", OsString::from_vec(vec![0xff]))
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(
+            String::from_utf8_lossy(&output.stdout)
+                .contains("non-UTF-8 Functions environment probe ran"),
+            "child test did not run: {}",
+            String::from_utf8_lossy(&output.stdout)
+        );
+    }
 
     #[test]
     fn source_streaming_bounds_each_read_and_charges_bytes_before_a_late_error() {
@@ -4672,14 +4918,137 @@ mod tests {
             )
             .unwrap_err();
         assert_eq!(
-            source_scan_retry_delay(Some(&reason)),
+            source_scan_retry_delay(Duration::from_millis(750), Some(&reason)),
             Duration::from_secs(30)
         );
         assert_eq!(
-            source_scan_retry_delay(Some("permission denied")),
+            source_scan_retry_delay(Duration::from_millis(750), Some("permission denied")),
+            Duration::from_millis(1500)
+        );
+        assert_eq!(
+            source_scan_retry_delay(Duration::from_secs(8), None),
             Duration::from_millis(750)
         );
-        assert_eq!(source_scan_retry_delay(None), Duration::from_millis(750));
+    }
+
+    #[tokio::test]
+    async fn first_successful_scan_after_startup_failure_sets_a_baseline() {
+        let root =
+            std::env::temp_dir().join(format!("fireemu-scan-baseline-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(root.join("index.js"), "exports.ok = 1;").unwrap();
+        let codebase = crate::config::FunctionsCodebase {
+            codebase: "default".to_owned(),
+            source: root.display().to_string(),
+            runtime: None,
+            ignore: Vec::new(),
+        };
+        let budget = FunctionsSourceScanBudget::new();
+        let mut observed = None;
+        let mut last_error = true;
+        let mut retry_delay = Duration::from_secs(3);
+
+        assert!(changed_source_stamp(
+            &root,
+            &codebase,
+            &budget,
+            &mut observed,
+            &mut last_error,
+            &mut retry_delay
+        )
+        .await
+        .is_none());
+        assert!(
+            observed.is_some(),
+            "the first successful scan is the baseline"
+        );
+        assert!(!last_error);
+        assert_eq!(retry_delay, Duration::from_millis(750));
+
+        std::fs::write(root.join("index.js"), "exports.ok = 2;").unwrap();
+        assert!(changed_source_stamp(
+            &root,
+            &codebase,
+            &budget,
+            &mut observed,
+            &mut last_error,
+            &mut retry_delay
+        )
+        .await
+        .is_some());
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[tokio::test]
+    async fn repeated_source_scan_errors_back_off_and_release_the_scan_permit() {
+        let root = std::env::temp_dir().join(format!("fireemu-scan-retry-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let codebase = crate::config::FunctionsCodebase {
+            codebase: "default".to_owned(),
+            source: root.display().to_string(),
+            runtime: None,
+            ignore: Vec::new(),
+        };
+        let budget = FunctionsSourceScanBudget::new();
+        let mut observed = None;
+        let mut last_error = false;
+        let mut retry_delay = Duration::from_millis(750);
+
+        assert!(changed_source_stamp(
+            &root,
+            &codebase,
+            &budget,
+            &mut observed,
+            &mut last_error,
+            &mut retry_delay
+        )
+        .await
+        .is_none());
+        assert!(retry_delay > Duration::from_millis(750));
+        assert_eq!(budget.gate.available_permits(), 1);
+        let first_delay = retry_delay;
+        assert!(changed_source_stamp(
+            &root,
+            &codebase,
+            &budget,
+            &mut observed,
+            &mut last_error,
+            &mut retry_delay
+        )
+        .await
+        .is_none());
+        assert!(retry_delay > first_delay);
+        assert_eq!(budget.gate.available_permits(), 1);
+        for _ in 0..8 {
+            assert!(changed_source_stamp(
+                &root,
+                &codebase,
+                &budget,
+                &mut observed,
+                &mut last_error,
+                &mut retry_delay
+            )
+            .await
+            .is_none());
+        }
+        assert_eq!(retry_delay, Duration::from_secs(8));
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(root.join("index.js"), "exports.ok = 1;").unwrap();
+        assert!(changed_source_stamp(
+            &root,
+            &codebase,
+            &budget,
+            &mut observed,
+            &mut last_error,
+            &mut retry_delay
+        )
+        .await
+        .is_none());
+        assert!(observed.is_some());
+        assert!(!last_error);
+        assert_eq!(retry_delay, Duration::from_millis(750));
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
@@ -5267,6 +5636,13 @@ mod tests {
     async fn runtime_with_blocking_auth_policy_order(
         order: &[(&str, bool, bool)],
     ) -> Arc<fireemu_adapter_functions::runtime::FunctionsRuntime> {
+        runtime_with_blocking_auth_policy_order_and_env(order, Vec::new()).await
+    }
+
+    async fn runtime_with_blocking_auth_policy_order_and_env(
+        order: &[(&str, bool, bool)],
+        env: Vec<(String, String)>,
+    ) -> Arc<fireemu_adapter_functions::runtime::FunctionsRuntime> {
         use fireemu_adapter_functions::runner::{Runner, SpawnSpec};
         use fireemu_adapter_functions::runtime::{FunctionsConfig, FunctionsRuntime};
         use fireemu_core_functions::manifest::{BlockingAuthEvent, Trigger};
@@ -5278,7 +5654,7 @@ mod tests {
         let spec = SpawnSpec {
             command: vec!["python3".to_owned(), script.display().to_string()],
             cwd: None,
-            env: Vec::new(),
+            env,
             hello_timeout: Duration::from_secs(60),
         };
         let runner = Runner::spawn_spec(&spec).await.unwrap();
@@ -5891,6 +6267,74 @@ mod tests {
             );
             tokio::task::yield_now().await;
         }
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn first_blocking_auth_request_after_idle_runner_exit_recovers() {
+        use fireemu_adapter_http::identity_toolkit::AuthBlockingHook;
+        use fireemu_core_auth::mfa::TotpPolicy;
+        use fireemu_core_auth::store::{AuthStore, NewUser};
+        use fireemu_core_functions::manifest::BlockingAuthEvent;
+        use fireemu_core_types::determinism::SplitMix64;
+        use fireemu_core_types::time::LogicalInstant;
+
+        let runtime = runtime_with_blocking_auth_policy_order(&[("guardA", false, false)]).await;
+        let bridge = BlockingAuthBridge::new(runtime.clone());
+        let now = LogicalInstant::from_unix_seconds(1_788_004_860);
+        let mut store = AuthStore::new("demo-app", SplitMix64::new(7), TotpPolicy::default());
+        let uid = store
+            .create_user(NewUser::email("person@example.test"), now)
+            .unwrap();
+        let user = store.user_by_id(uid.as_str()).unwrap().clone();
+        runtime.runner().kill_now();
+
+        let result = tokio::task::spawn_blocking(move || {
+            bridge.invoke(BlockingAuthEvent::BeforeCreate, &user)
+        })
+        .await
+        .unwrap();
+        runtime.shutdown().await;
+
+        let value = result.expect("the first request waits for runner recovery");
+        assert!(value.is_object());
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn blocking_auth_runner_recovery_uses_the_existing_timeout_envelope() {
+        use fireemu_adapter_http::identity_toolkit::AuthBlockingHook;
+        use fireemu_core_auth::mfa::TotpPolicy;
+        use fireemu_core_auth::store::{AuthStore, NewUser};
+        use fireemu_core_functions::manifest::BlockingAuthEvent;
+        use fireemu_core_types::determinism::SplitMix64;
+        use fireemu_core_types::time::LogicalInstant;
+
+        let runtime = runtime_with_blocking_auth_policy_order_and_env(
+            &[("guardA", false, false)],
+            vec![("FIREEMU_FAKE_HELLO_DELAY_MS".to_owned(), "300".to_owned())],
+        )
+        .await;
+        let bridge = BlockingAuthBridge::with_deadline(runtime.clone(), Duration::from_millis(50));
+        let now = LogicalInstant::from_unix_seconds(1_788_004_860);
+        let mut store = AuthStore::new("demo-app", SplitMix64::new(7), TotpPolicy::default());
+        let uid = store
+            .create_user(NewUser::email("person@example.test"), now)
+            .unwrap();
+        let user = store.user_by_id(uid.as_str()).unwrap().clone();
+        runtime.runner().kill_now();
+
+        let result = tokio::task::spawn_blocking(move || {
+            bridge.invoke(BlockingAuthEvent::BeforeCreate, &user)
+        })
+        .await
+        .unwrap();
+        runtime.shutdown().await;
+
+        let failure = result.expect_err("the slow runner cannot meet the request deadline");
+        assert_eq!(failure.identity_status(), 503);
+        assert_eq!(
+            failure,
+            fireemu_adapter_http::identity_toolkit::BlockingFunctionFailure::timeout()
+        );
     }
 
     #[test]

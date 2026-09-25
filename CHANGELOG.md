@@ -19,6 +19,8 @@ Each release is a Git tag; the binaries and the npm packages are built from that
 
 ### Changed
 
+- Both profiles: App Check debug-token exchange accepts the original proto field names `debug_token` and `limited_use` alongside `debugToken` and `limitedUse`, as the pinned Web SDK sends. Conflicting values for two spellings of one field return 400; equal values are accepted. `limited_use: true` keeps the documented 501 replay-protection refusal.
+
 Auth: the Auth items below were measured against a real Identity Platform project on 2026-09-24 (AUTH-CREDENTIAL). Each item names the profiles it affects; "unlike the official emulator" marks where the emulator profile now differs from the Firebase Emulator Suite.
 
 - Both profiles: Storage lists count prefixes and items together toward `maxResults` and cap pages at 1000 entries, as the [Firebase ListOptions reference](https://firebase.google.com/docs/reference/js/storage.listoptions) and [Cloud Storage JSON API reference](https://cloud.google.com/storage/docs/json_api/v1/objects/list) describe. Each prefix appears on one page only; this follows from treating prefixes and items as one ordered sequence, but is not explicitly stated in those references. The official emulator pages items alone and repeats prefixes.

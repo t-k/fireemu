@@ -235,6 +235,8 @@ The shared HTTP listener shall implement both production-shaped routes:
 }
 ```
 
+The exchange also accepts the original proto field names `debug_token` and `limited_use`, as [ProtoJSON parsers do](https://protobuf.dev/programming-guides/json/#field-names-as-json-keys). The pinned `@firebase/app-check` 0.13.1 debug provider sends `debug_token`. Either spelling has the same meaning; if both spellings of a field are present with different values, the request is rejected with `400 INVALID_ARGUMENT`. Equal values are accepted.
+
 The API key query parameter is accepted and ignored. The request succeeds only when the target app exists, is enabled, belongs to the selected project, and the constant-time SHA-256 digest comparison matches a registered debug token. Exchange canonicalizes UUIDv4 text exactly as registration does before hashing. It scans the fixed-capacity digest set without early exit and performs equivalent dummy work for an unknown app. This limits timing differences but does not claim resistance to a local process-level side channel. A successful response sets `Cache-Control: no-store` and is:
 
 ```json
@@ -244,7 +246,7 @@ The API key query parameter is accepted and ignored. The request succeeds only w
 }
 ```
 
-`limitedUse: true` returns `501 UNIMPLEMENTED` with stable code `APP_CHECK_REPLAY_UNSUPPORTED` until `APPCHECK-REPLAY-1` is implemented. It must never silently return a reusable session token.
+`limitedUse: true` and `limited_use: true` return `501 UNIMPLEMENTED` with stable code `APP_CHECK_REPLAY_UNSUPPORTED` until `APPCHECK-REPLAY-1` is implemented. They must never silently return a reusable session token.
 
 Malformed input returns `400 INVALID_ARGUMENT`. Unknown apps, projects, and debug secrets return the same `403 PERMISSION_DENIED` public message, `App attestation failed.`, so the response body is not an app or secret enumeration oracle. Detailed reason codes are available only in control-token-authenticated structured observations.
 

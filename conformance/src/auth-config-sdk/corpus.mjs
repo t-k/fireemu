@@ -346,12 +346,14 @@ const policyExisting = {
   touches: ["passwordPolicyConfig"],
   steps: [
     adminCreate("create-weak", { email: "EMAIL(weak)", password: "password" }),
+    // The Admin update probes use an account of their own: production may accept them.
+    adminCreate("create-admin-probe", { email: "EMAIL(admin-probe)", password: "password" }),
     adminCall("admin-update-short", "update", {
-      localId: from("create-weak:localId"),
+      localId: from("create-admin-probe:localId"),
       password: "12345",
     }),
     adminCall("admin-update-long", "update", {
-      localId: from("create-weak:localId"),
+      localId: from("create-admin-probe:localId"),
       password: { $repeat: "a", count: 4097 },
     }),
     setPolicy("enforce-force", "ENFORCE", ALL_CLASSES, { forceUpgradeOnSignin: true }),
@@ -636,58 +638,66 @@ const mobileSettings = {
   androidMinimumVersion: "12",
 };
 
+/**
+ * An account and one link request for its address: production limits reset links per address
+ * (RESET_PASSWORD_EXCEED_LIMIT), so no address asks for more than one.
+ */
+const linkFor = (id, requestType, name, extra) => [
+  adminCreate(`create-${name}`, { email: `EMAIL(${name})`, password: "password123" }),
+  adminLink(id, requestType, `EMAIL(${name})`, extra),
+];
+
 const mobileLinks = {
   id: "auth-config-sdk/mobile-links",
   projection: "strict",
   touches: ["mobileLinksConfig.domain", "signIn.email.passwordRequired"],
   steps: [
-    adminCreate("create", { email: "EMAIL(mobile)", password: "password123" }),
-    adminLink("reset-all-settings", "PASSWORD_RESET", "EMAIL(mobile)", mobileSettings),
-    adminLink("reset-ios-only", "PASSWORD_RESET", "EMAIL(mobile)", {
+    ...linkFor("reset-all-settings", "PASSWORD_RESET", "mobile-1", mobileSettings),
+    ...linkFor("reset-ios-only", "PASSWORD_RESET", "mobile-2", {
       continueUrl: HOSTING,
       iOSBundleId: "com.example.ios",
     }),
-    adminLink("reset-android-only", "PASSWORD_RESET", "EMAIL(mobile)", {
+    ...linkFor("reset-android-only", "PASSWORD_RESET", "mobile-3", {
       continueUrl: HOSTING,
       androidPackageName: "com.example.android",
     }),
-    adminLink("reset-android-version-code", "PASSWORD_RESET", "EMAIL(mobile)", {
+    ...linkFor("reset-android-version-code", "PASSWORD_RESET", "mobile-4", {
       continueUrl: HOSTING,
       androidPackageName: "com.example.android",
       androidMinimumVersionCode: "12",
     }),
-    adminLink("reset-install-without-package", "PASSWORD_RESET", "EMAIL(mobile)", {
+    ...linkFor("reset-install-without-package", "PASSWORD_RESET", "mobile-5", {
       continueUrl: HOSTING,
       androidInstallApp: true,
     }),
-    adminLink("reset-version-without-package", "PASSWORD_RESET", "EMAIL(mobile)", {
+    ...linkFor("reset-version-without-package", "PASSWORD_RESET", "mobile-6", {
       continueUrl: HOSTING,
       androidMinimumVersion: "12",
     }),
-    adminLink("reset-ios-without-continue", "PASSWORD_RESET", "EMAIL(mobile)", {
+    ...linkFor("reset-ios-without-continue", "PASSWORD_RESET", "mobile-7", {
       iOSBundleId: "com.example.ios",
     }),
-    adminLink("reset-in-app-without-continue", "PASSWORD_RESET", "EMAIL(mobile)", {
+    ...linkFor("reset-in-app-without-continue", "PASSWORD_RESET", "mobile-8", {
       canHandleCodeInApp: true,
     }),
-    adminLink("reset-link-domain-hosting", "PASSWORD_RESET", "EMAIL(mobile)", {
+    ...linkFor("reset-link-domain-hosting", "PASSWORD_RESET", "mobile-9", {
       ...mobileSettings,
       linkDomain: "{project}.web.app",
     }),
-    adminLink("reset-link-domain-other", "PASSWORD_RESET", "EMAIL(mobile)", {
+    ...linkFor("reset-link-domain-other", "PASSWORD_RESET", "mobile-10", {
       ...mobileSettings,
       linkDomain: "app.example.com",
     }),
-    adminLink("reset-dynamic-link-domain", "PASSWORD_RESET", "EMAIL(mobile)", {
+    ...linkFor("reset-dynamic-link-domain", "PASSWORD_RESET", "mobile-11", {
       ...mobileSettings,
       dynamicLinkDomain: "example.page.link",
     }),
-    adminLink("verify-all-settings", "VERIFY_EMAIL", "EMAIL(mobile)", mobileSettings),
+    ...linkFor("verify-all-settings", "VERIFY_EMAIL", "mobile-12", mobileSettings),
     setConfig("links-on", "signIn.email.passwordRequired", {
       signIn: { email: { passwordRequired: false } },
     }),
-    adminLink("sign-in-all-settings", "EMAIL_SIGNIN", "EMAIL(mobile)", mobileSettings),
-    adminLink("sign-in-not-in-app", "EMAIL_SIGNIN", "EMAIL(mobile)", {
+    ...linkFor("sign-in-all-settings", "EMAIL_SIGNIN", "mobile-13", mobileSettings),
+    ...linkFor("sign-in-not-in-app", "EMAIL_SIGNIN", "mobile-14", {
       ...mobileSettings,
       canHandleCodeInApp: false,
     }),
@@ -695,8 +705,8 @@ const mobileLinks = {
       mobileLinksConfig: { domain: "FIREBASE_DYNAMIC_LINK_DOMAIN" },
     }),
     getConfig("read-dynamic-link-domain"),
-    adminLink("sign-in-under-dynamic-link-domain", "EMAIL_SIGNIN", "EMAIL(mobile)", mobileSettings),
-    adminLink("reset-under-dynamic-link-domain", "PASSWORD_RESET", "EMAIL(mobile)", mobileSettings),
+    ...linkFor("sign-in-under-dynamic-link-domain", "EMAIL_SIGNIN", "mobile-15", mobileSettings),
+    ...linkFor("reset-under-dynamic-link-domain", "PASSWORD_RESET", "mobile-16", mobileSettings),
   ],
 };
 

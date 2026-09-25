@@ -80,7 +80,8 @@ async function deleteLocalUser(user, budget) {
 
 async function localChild() {
   const host = process.env.FIREEMU_FUNCTIONS_HOST;
-  if (!/^127\.0\.0\.1:\d+$/.test(host ?? "")) throw new Error("local Functions host is not loopback");
+  if (!/^127\.0\.0\.1:\d+$/.test(host ?? ""))
+    throw new Error("local Functions host is not loopback");
   const corpus = await loadCorpus();
   const budget = createBudget();
   const recordings = [{}, {}];
@@ -104,7 +105,11 @@ async function localChild() {
   }
   const output = process.env.FUNCTIONS_HTTP_LOCAL_OUTPUT;
   if (!output) throw new Error("local output path is missing");
-  await writeFile(output, `${JSON.stringify({ recordings, requests: budget.snapshot() }, null, 2)}\n`, { mode: 0o600 });
+  await writeFile(
+    output,
+    `${JSON.stringify({ recordings, requests: budget.snapshot() }, null, 2)}\n`,
+    { mode: 0o600 },
+  );
 }
 
 async function checkLocal() {
@@ -114,12 +119,37 @@ async function checkLocal() {
   await mkdir(runDir, { recursive: true, mode: 0o700 });
   const output = join(runDir, `local-${new Date().toISOString().replaceAll(":", "")}.json`);
   const args = [
-    "exec", "--project", LOCAL_PROJECT, "--only", "auth,functions",
-    "--functions", FIXTURE_SOURCE,
-    "--http-port", "0", "--functions-port", "0", "--firestore-port", "0",
-    "--storage-port", "0", "--eventarc-port", "0", "--tasks-port", "0",
-    "--pubsub-port", "0", "--ui-port", "0", "--hub-port", "0", "--logging-port", "0",
-    "--", process.execPath, fileURLToPath(import.meta.url), "local-child",
+    "exec",
+    "--project",
+    LOCAL_PROJECT,
+    "--only",
+    "auth,functions",
+    "--functions",
+    FIXTURE_SOURCE,
+    "--http-port",
+    "0",
+    "--functions-port",
+    "0",
+    "--firestore-port",
+    "0",
+    "--storage-port",
+    "0",
+    "--eventarc-port",
+    "0",
+    "--tasks-port",
+    "0",
+    "--pubsub-port",
+    "0",
+    "--ui-port",
+    "0",
+    "--hub-port",
+    "0",
+    "--logging-port",
+    "0",
+    "--",
+    process.execPath,
+    fileURLToPath(import.meta.url),
+    "local-child",
   ];
   const child = spawn(binary, args, {
     cwd: CONFORMANCE,
@@ -132,11 +162,18 @@ async function checkLocal() {
   });
   if (code !== 0) throw new Error(`local fireemu session exited ${code}`);
   const result = JSON.parse(await readFile(output, "utf8"));
-  console.log(JSON.stringify({ programs: Object.keys(result.recordings[0]).length, requests: result.requests, output }));
+  console.log(
+    JSON.stringify({
+      programs: Object.keys(result.recordings[0]).length,
+      requests: result.requests,
+      output,
+    }),
+  );
 }
 
 async function recordProduction() {
-  throw new Error("production runner is not implemented or approved");
+  const { recordProduction: record } = await import("./production.mjs");
+  await record();
 }
 
 const mode = process.argv[2];

@@ -300,6 +300,18 @@ async fn start_with_options(
     indexes: IndexSet,
     refuse_without_ruleset: bool,
 ) -> Harness {
+    start_with_enforcer(acceptance, indexes, |enforcer| {
+        enforcer.with_refusal_without_ruleset(refuse_without_ruleset)
+    })
+    .await
+}
+
+/// A harness whose enforcer `configure` finishes (profile switches).
+async fn start_with_enforcer(
+    acceptance: TokenAcceptance,
+    indexes: IndexSet,
+    configure: impl FnOnce(RulesEnforcer) -> RulesEnforcer,
+) -> Harness {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     let gateway = Gateway {
@@ -320,12 +332,11 @@ async fn start_with_options(
     )));
     let rules = Arc::new(RulesetSlot::new(LoadedRules::from_source(RULES).unwrap()));
     let registry = Arc::new(AuthRegistry::new("demo-app", auth.clone()));
-    let enforcer = Arc::new(
+    let enforcer = Arc::new(configure(
         RulesEnforcer::new(rules.clone(), auth.clone(), clock)
             .with_token_acceptance(acceptance)
-            .with_registry(registry.clone())
-            .with_refusal_without_ruleset(refuse_without_ruleset),
-    );
+            .with_registry(registry.clone()),
+    ));
     let svc =
         FirestoreServer::new(GatewayService::local(gateway, backend.clone()).with_rules(enforcer));
     let handle = tokio::spawn(async move {
@@ -2865,6 +2876,42 @@ async fn transactions_are_bound_to_the_token_audience_too() {
             },
             &token,
         ))
+        .await
+        .is_ok());
+    h.handle.abort();
+}
+
+/// Production refuses an end user's `BeginTransaction` with the ordinary denial, signed in or
+/// not, whatever the rules say (FS-RULES production recording, 2026-09-24); the official
+/// emulator opens the transaction. The owner may, under both.
+#[tokio::test]
+async fn end_users_may_not_begin_a_transaction_in_production() {
+    let begin = || pb::BeginTransactionRequest {
+        database: DB.to_owned(),
+        ..Default::default()
+    };
+    let mut h = start_with_enforcer(TokenAcceptance::Verified, IndexSet::default(), |e| {
+        e.with_end_user_transactions(false)
+    })
+    .await;
+    let (_, token) = h.user("t@example.com");
+    for request in [with_bearer(begin(), &token), tonic::Request::new(begin())] {
+        let err = h.client.begin_transaction(request).await.unwrap_err();
+        assert_eq!(err.code(), tonic::Code::PermissionDenied, "{err}");
+        assert_eq!(err.message(), "Missing or insufficient permissions.");
+    }
+    assert!(h
+        .client
+        .begin_transaction(with_bearer(begin(), "owner"))
+        .await
+        .is_ok());
+    h.handle.abort();
+
+    let mut h = start().await;
+    let (_, token) = h.user("t@example.com");
+    assert!(h
+        .client
+        .begin_transaction(with_bearer(begin(), &token))
         .await
         .is_ok());
     h.handle.abort();

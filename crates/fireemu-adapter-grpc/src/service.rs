@@ -562,6 +562,9 @@ impl Firestore for GatewayService {
                 "BeginTransaction",
             )?;
             self.check_database_audience(&caller, &request.get_ref().database)?;
+            if let Some(rules) = &self.rules {
+                rules.check_begin_transaction(&caller.principal)?;
+            }
             let transaction = local.begin_transaction(request.get_ref())?;
             return Ok(Response::new(pb::BeginTransactionResponse { transaction }));
         }

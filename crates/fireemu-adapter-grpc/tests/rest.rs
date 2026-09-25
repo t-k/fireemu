@@ -1886,6 +1886,38 @@ fn rest_run_query_supports_standard_find_nearest() {
     );
 }
 
+/// Under production's refusals an end user's `beginTransaction` is the ordinary denial
+/// (FS-RULES, 2026-09-24); the owner still opens one.
+#[test]
+fn end_users_may_not_begin_a_transaction_over_rest_in_production() {
+    let (mut s, clock) = state_with_clock(Some("rules_version = '2';\nservice cloud.firestore { match /databases/{d}/documents { match /{document=**} { allow read, write: if true; } } }"), TokenAcceptance::Verified);
+    let auth = Arc::new(Mutex::new(AuthStore::new(
+        "demo-app",
+        SplitMix64::new(3),
+        TotpPolicy::default(),
+    )));
+    let loaded = Arc::new(RulesetSlot::new(
+        LoadedRules::from_source("rules_version = '2';\nservice cloud.firestore { match /databases/{d}/documents { match /{document=**} { allow read, write: if true; } } }").unwrap(),
+    ));
+    s.rules = Some(Arc::new(
+        RulesEnforcer::new(loaded, auth, clock).with_end_user_transactions(false),
+    ));
+    let (status, err) = call_as(
+        &s,
+        "POST",
+        &format!("{DOCS}:beginTransaction"),
+        json!({}),
+        None,
+    );
+    assert_eq!(status, 403, "{err}");
+    assert_eq!(
+        err,
+        json!({"error": {"code": 403, "message": "Missing or insufficient permissions.", "status": "PERMISSION_DENIED"}})
+    );
+    let (status, body) = call(&s, "POST", &format!("{DOCS}:beginTransaction"), json!({}));
+    assert_eq!(status, 200, "{body}");
+}
+
 /// Every REST route names its gRPC method in the OAuth refusal's `ErrorInfo`.
 #[test]
 fn the_oauth_refusal_names_the_transcoded_method() {

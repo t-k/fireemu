@@ -371,6 +371,9 @@ pub struct RulesEnforcer {
     /// refuses every client request without a `cloud.firestore` release (the `strict`
     /// profile); the official emulator allows everything (the `emulator` profile).
     refuse_without_ruleset: bool,
+    /// Whether an end user may open a transaction with `BeginTransaction`: production refuses
+    /// it with the ordinary denial (the `strict` profile); the official emulator opens it.
+    end_user_transactions: bool,
 }
 
 impl RulesEnforcer {
@@ -389,6 +392,7 @@ impl RulesEnforcer {
             registry: None,
             acceptance: TokenAcceptance::default(),
             refuse_without_ruleset: false,
+            end_user_transactions: true,
         }
     }
 
@@ -397,6 +401,30 @@ impl RulesEnforcer {
     pub const fn with_refusal_without_ruleset(mut self, refuse: bool) -> Self {
         self.refuse_without_ruleset = refuse;
         self
+    }
+
+    /// Sets whether an end user may open a transaction with `BeginTransaction`.
+    #[must_use]
+    pub const fn with_end_user_transactions(mut self, allowed: bool) -> Self {
+        self.end_user_transactions = allowed;
+        self
+    }
+
+    /// Whether `principal` may open a transaction with `BeginTransaction`: production refuses
+    /// an end user, signed in or not, with its usual denial whatever the rules say (FS-RULES,
+    /// 2026-09-24).
+    pub fn check_begin_transaction(&self, principal: &Principal) -> Result<(), Status> {
+        if self.end_user_transactions || matches!(principal, Principal::Owner) {
+            return Ok(());
+        }
+        let rules = self.rules.snapshot().map_err(Status::internal)?;
+        Err(denied(
+            &rules.diagnostics,
+            principal,
+            Method::Get,
+            "BeginTransaction".to_owned(),
+            "an end user may not begin a transaction in production".to_owned(),
+        ))
     }
 
     /// The answer to a client request against a database without a ruleset.

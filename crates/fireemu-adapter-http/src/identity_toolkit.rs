@@ -66,6 +66,7 @@ const SIGNUP_QUOTA_FIELDS: [&str; 3] = ["quota", "startTime", "quotaDuration"];
 
 mod custom_token;
 pub use custom_token::{CustomTokenRefusal, CustomTokenTrust};
+mod config_proto;
 mod password_hash;
 mod project_config;
 pub use password_hash::restorable_spec as restorable_imported_hash_spec;
@@ -3695,9 +3696,13 @@ fn password_policy_from_config_json(value: &Value) -> Result<PasswordPolicy, Jso
         Some(Value::Bool(value)) => *value,
         Some(_) => return Err(error(400, "INVALID_ARGUMENT")),
     };
+    // Production requires exactly one version (sandbox recording 2026-09-25).
+    let one_version =
+        || config_proto::refusal("INVALID_CONFIG : Policy versions list must be of length 1");
     let options = match object.get("passwordPolicyVersions") {
-        None | Some(Value::Null) => None,
-        Some(Value::Array(versions)) if versions.len() == 1 => {
+        None | Some(Value::Null) => return Err(one_version()),
+        Some(Value::Array(versions)) if versions.len() != 1 => return Err(one_version()),
+        Some(Value::Array(versions)) => {
             let version = versions[0]
                 .as_object()
                 .ok_or_else(|| error(400, "INVALID_ARGUMENT"))?;
@@ -3757,7 +3762,27 @@ fn password_policy_from_config_json(value: &Value) -> Result<PasswordPolicy, Jso
         boolean("containsNonAlphanumericCharacter")?,
         fireemu_core_auth::password_policy::default_allowed_non_alphanumeric(),
     )
-    .map_err(|_| error(400, "INVALID_ARGUMENT"))
+    .map_err(|refused| password_policy_refusal(refused, max))
+}
+
+/// Production's wording of each password policy refusal (sandbox recording 2026-09-25).
+fn password_policy_refusal(
+    refused: fireemu_core_auth::password_policy::ConfigError,
+    max: Option<usize>,
+) -> JsonResponse {
+    use fireemu_core_auth::password_policy::ConfigError;
+    config_proto::refusal(match refused {
+        ConfigError::InvalidMinimumLength => {
+            "INVALID_CONFIG : Minimum password length must be between 6 and 30"
+        }
+        ConfigError::InvalidMaximumLength if max.is_some_and(|max| max > 4096) => {
+            "INVALID_CONFIG : Maximum password length must be less than or equal to 4096"
+        }
+        ConfigError::InvalidMaximumLength => {
+            "INVALID_CONFIG : Maximum password length must be greater than or equal to the minimum password length"
+        }
+        ConfigError::InvalidAllowedCharacter => "INVALID_CONFIG",
+    })
 }
 
 fn password_policy_config_json(policy: &PasswordPolicy) -> Value {
@@ -3823,8 +3848,9 @@ fn password_policy_from_update(
     };
     // Validate the complete supplied policy before applying the mask. A malformed policy
     // payload must never become a partial successful update merely because its malformed
-    // member was outside the selected mask.
-    if !value.is_null() {
+    // member was outside the selected mask. A leaf update supplies no versions; the merged
+    // policy is checked below.
+    if !value.is_null() && object.contains_key("passwordPolicyVersions") {
         let _supplied_policy = password_policy_from_config_json(value)?;
     }
     if policy_fields.contains(&"passwordPolicyConfig") {
@@ -3834,7 +3860,12 @@ fn password_policy_from_update(
         return password_policy_from_config_json(value).map(Some);
     }
 
-    let mut merged = password_policy_config_json(current);
+    // Production merges a leaf into the stored policy, or into none when the project has none.
+    let mut merged = if current.configured {
+        password_policy_config_json(current)
+    } else {
+        json!({})
+    };
     let merged_object = merged
         .as_object_mut()
         .expect("password policy projection is an object");
@@ -3877,13 +3908,12 @@ fn apply_project_config_parent(
     child: &str,
     current: &mut Option<bool>,
 ) -> Result<(), JsonResponse> {
-    let Some(value) = body.get(parent) else {
-        return Ok(());
-    };
-    if value.is_null() {
+    // A masked member the body leaves out is reset, as a null one is (production reads the
+    // body as proto3 JSON, where both are the default message).
+    let Some(value) = body.get(parent).filter(|value| !value.is_null()) else {
         *current = Some(false);
         return Ok(());
-    }
+    };
     let Some(object) = value.as_object() else {
         return Err(error(400, "INVALID_ARGUMENT"));
     };
@@ -4678,7 +4708,8 @@ fn validate_project_config_payload(body: &Value) -> Result<(), JsonResponse> {
         }
     }
     if let Some(value) = object.get("passwordPolicyConfig") {
-        if !value.is_null() {
+        // A leaf update supplies no versions; the merged policy is checked when applied.
+        if value.get("passwordPolicyVersions").is_some() {
             password_policy_from_config_json(value)?;
         }
     }
@@ -4875,13 +4906,13 @@ fn project_config_management(
         let body = project_config_document(state, project, &store, store.config());
         return JsonResponse { status: 200, body };
     }
-    if !body.is_object() {
-        return error(400, "INVALID_ARGUMENT");
-    }
-    if let Err(response) = validate_project_config_payload(body) {
-        return response;
-    }
-    let fields = match update_mask(query) {
+    // Production reads the body as proto3 JSON of its Config message (AUTH-CONFIG-SDK).
+    let parsed = match config_proto::parse_config_body(body) {
+        Ok(parsed) => parsed,
+        Err(response) => return response,
+    };
+    let body = &parsed;
+    let fields = match update_mask_with(query, false) {
         Ok(Some(fields)) => fields,
         Ok(None) => {
             let mut fields = Vec::new();
@@ -4939,6 +4970,19 @@ fn project_config_management(
         }
         Err(response) => return response,
     };
+    // A path production does not know or may not write is ignored, as production ignores it.
+    let fields: Vec<String> = fields
+        .into_iter()
+        .filter(|field| config_proto::known_writable_path(field))
+        .collect();
+    if let Err(response) =
+        project_config::validate_values(body, &fields, !state.stateless_refresh_tokens)
+    {
+        return response;
+    }
+    if let Err(response) = validate_project_config_payload(body) {
+        return response;
+    }
     if fields.iter().any(|field| {
         (field.starts_with("passwordPolicyConfig") && !valid_password_policy_field(field))
             || (!valid_project_config_field(field)
@@ -5530,6 +5574,15 @@ fn parse_saml(body: &Value, id: String) -> Result<InboundSamlProviderConfig, Jso
 }
 
 fn update_mask(query: Option<&str>) -> Result<Option<Vec<String>>, JsonResponse> {
+    update_mask_with(query, true)
+}
+
+/// The update mask; `refuse_duplicates` false keeps the first of repeated paths, as the
+/// project config PATCH of production does (AUTH-CONFIG-SDK).
+fn update_mask_with(
+    query: Option<&str>,
+    refuse_duplicates: bool,
+) -> Result<Option<Vec<String>>, JsonResponse> {
     let mut value = None;
     for pair in query
         .unwrap_or_default()
@@ -5571,7 +5624,10 @@ fn update_mask(query: Option<&str>) -> Result<Option<Vec<String>>, JsonResponse>
             return Err(error(400, "INVALID_ARGUMENT"));
         }
         if !seen.insert(field.to_owned()) {
-            return Err(error(400, "INVALID_ARGUMENT"));
+            if refuse_duplicates {
+                return Err(error(400, "INVALID_ARGUMENT"));
+            }
+            continue;
         }
         fields.push(field.to_owned());
     }
@@ -12367,11 +12423,12 @@ mod tests {
             });
             assert!(password_policy_from_config_json(&body).is_err());
         }
+        // Production requires exactly one version.
         assert!(password_policy_from_config_json(&json!({
             "passwordPolicyEnforcementState": "ENFORCE",
             "passwordPolicyVersions": null,
         }))
-        .is_ok());
+        .is_err());
         assert!(password_policy_from_config_json(&json!({
             "passwordPolicyEnforcementState": "ENFORCE",
             "passwordPolicyVersions": [{"customStrengthOptions": {"minPasswordLength": 12}}]

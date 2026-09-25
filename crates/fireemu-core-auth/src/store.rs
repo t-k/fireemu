@@ -678,19 +678,19 @@ impl SignInConfig {
     /// Identity Platform documents at most ten test phone numbers per project.
     pub const MAX_TEST_PHONE_NUMBERS: usize = 10;
 
-    /// Whether every test number is valid E.164 with a six-digit code, within the documented
-    /// count.
+    /// Whether every test number is valid E.164, within the documented count.
     #[must_use]
     pub fn is_valid(&self) -> bool {
         self.authorized_domains
             .as_ref()
             .is_none_or(|domains| domains.iter().all(|domain| !domain.is_empty()))
             && self.test_phone_numbers.len() <= Self::MAX_TEST_PHONE_NUMBERS
-            && self.test_phone_numbers.iter().all(|(number, code)| {
-                AuthStore::validate_phone_number(number).is_ok()
-                    && code.len() == 6
-                    && code.bytes().all(|b| b.is_ascii_digit())
-            })
+            // Production takes any code for a test number, six digits or not (sandbox
+            // recording 2026-09-25, AUTH-CONFIG-SDK config/invalid).
+            && self
+                .test_phone_numbers
+                .keys()
+                .all(|number| AuthStore::validate_phone_number(number).is_ok())
     }
 }
 

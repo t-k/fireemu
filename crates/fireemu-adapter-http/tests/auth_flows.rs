@@ -3885,7 +3885,11 @@ fn admin_v2_config_update_mask_is_typed_atomic_and_scoped() {
         }),
     );
     assert_eq!(outside_mask.status, 400, "{}", outside_mask.body);
-    assert_eq!(outside_mask.body["error"]["message"], "INVALID_ARGUMENT");
+    // Production parses the whole body first and names the member it cannot read.
+    assert_eq!(
+        outside_mask.body["error"]["message"],
+        "Invalid value at 'config.email_privacy_config.enable_improved_email_privacy' (TYPE_BOOL), \"wrong type\""
+    );
     let after_outside_mask = read();
     assert_eq!(
         after_outside_mask.status, 200,
@@ -3953,11 +3957,41 @@ fn admin_v2_config_update_mask_is_typed_atomic_and_scoped() {
         false
     );
 
+    // Production ignores a path it does not know and a repeated path (sandbox recording
+    // 2026-09-25, AUTH-CONFIG-SDK config/mask): only the known path is written.
     for mask in [
-        "signIn.unknown",
-        "signIn.allowDuplicateEmails,signIn.allowDuplicateEmails",
+        "signIn.unknown,emailPrivacyConfig.enableImprovedEmailPrivacy",
+        "emailPrivacyConfig.enableImprovedEmailPrivacy,emailPrivacyConfig.enableImprovedEmailPrivacy",
+        "emailPrivacyConfig.enableImprovedEmailPrivacy%2CemailPrivacyConfig.enableImprovedEmailPrivacy",
+    ] {
+        let accepted = handle_with(
+            &s,
+            "PATCH",
+            &format!("{path}?updateMask={mask}"),
+            &owner(),
+            &json!({
+                "signIn": {"allowDuplicateEmails": false},
+                "emailPrivacyConfig": {"enableImprovedEmailPrivacy": true}
+            }),
+        );
+        assert_eq!(accepted.status, 200, "mask={mask}: {}", accepted.body);
+        assert_eq!(accepted.body["signIn"]["allowDuplicateEmails"], true, "{mask}");
+        assert_eq!(
+            accepted.body["emailPrivacyConfig"]["enableImprovedEmailPrivacy"],
+            true,
+            "{mask}"
+        );
+    }
+    let privacy_off = handle_with(
+        &s,
+        "PATCH",
+        &format!("{path}?updateMask=emailPrivacyConfig.enableImprovedEmailPrivacy"),
+        &owner(),
+        &json!({"emailPrivacyConfig": {"enableImprovedEmailPrivacy": false}}),
+    );
+    assert_eq!(privacy_off.status, 200, "{}", privacy_off.body);
+    for mask in [
         "signIn.allowDuplicateEmails,,emailPrivacyConfig.enableImprovedEmailPrivacy",
-        "signIn.allowDuplicateEmails%2CsignIn.allowDuplicateEmails",
         "signIn.allowDuplicateEmails&updateMask=emailPrivacyConfig.enableImprovedEmailPrivacy",
         "%ZZ",
     ] {
@@ -8335,7 +8369,8 @@ fn routed_project_config_uses_selected_store_and_publishes_only_successful_write
         assert_eq!(registry.routed_store_for(project).is_some(), existing);
         for (mask, body, status) in [
             ("", json!({}), 200),
-            ("unknown", json!({}), 400),
+            // Production ignores a path it does not know.
+            ("unknown", json!({}), 200),
             (
                 "signIn.allowDuplicateEmails",
                 json!({"signIn":{"allowDuplicateEmails":"invalid"}}),

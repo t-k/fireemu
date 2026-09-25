@@ -15,6 +15,8 @@
 use serde_json::{json, Map, Value};
 use sha2::{Digest, Sha512};
 
+use super::JsonResponse;
+
 /// Config members stored as written ([`fireemu_core_auth::config_members`]).
 pub(super) const STORED_MEMBERS: &[&str] = &[
     "notification",
@@ -374,6 +376,173 @@ pub(super) fn apply_stored_members(
         );
     }
     Ok(changed.then_some(next))
+}
+
+/// ISO 3166-1 alpha-2 region codes, the codes production takes in `smsRegionConfig` (in any
+/// case; it refuses others with `INVALID_REGION_CODE`).
+const REGION_CODES: &str = "AD AE AF AG AI AL AM AO AQ AR AS AT AU AW AX AZ BA BB BD BE BF BG BH BI BJ BL BM BN BO BQ BR BS BT BV BW BY BZ CA CC CD CF CG CH CI CK CL CM CN CO CR CU CV CW CX CY CZ DE DJ DK DM DO DZ EC EE EG EH ER ES ET FI FJ FK FM FO FR GA GB GD GE GF GG GH GI GL GM GN GP GQ GR GS GT GU GW GY HK HM HN HR HT HU ID IE IL IM IN IO IQ IR IS IT JE JM JO JP KE KG KH KI KM KN KP KR KW KY KZ LA LB LC LI LK LR LS LT LU LV LY MA MC MD ME MF MG MH MK ML MM MN MO MP MQ MR MS MT MU MV MW MX MY MZ NA NC NE NF NG NI NL NO NP NR NU NZ OM PA PE PF PG PH PK PL PM PN PR PS PT PW PY QA RE RO RS RU RW SA SB SC SD SE SG SH SI SJ SK SL SM SN SO SR SS ST SV SX SY SZ TC TD TF TG TH TJ TK TL TM TN TO TR TT TV TW TZ UA UG UM US UY UZ VA VC VE VG VI VN VU WF WS YE YT ZA ZM ZW";
+
+/// Whether `domain` is a host production takes as an authorized domain: DNS labels only, no
+/// scheme, port, path, wildcard or space.
+fn valid_authorized_domain(domain: &str) -> bool {
+    domain.split('.').all(|label| {
+        !label.is_empty()
+            && label.len() <= 63
+            && !label.starts_with('-')
+            && !label.ends_with('-')
+            && label
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || b == b'-')
+    })
+}
+
+/// Whether a reCAPTCHA managed-rule score is one of production's eleven values 0.0..=1.0.
+fn valid_score(score: Option<f64>) -> bool {
+    score.is_some_and(|score| {
+        (0.0..=1.0).contains(&score) && ((score * 10.0).round() - score * 10.0).abs() < 1e-6
+    })
+}
+
+const TEMPLATES: &[&str] = &[
+    "resetPasswordTemplate",
+    "verifyEmailTemplate",
+    "changeEmailTemplate",
+    "revertSecondFactorAdditionTemplate",
+    "legacyResetPasswordTemplate",
+];
+
+/// Production's refusals of values it parsed but will not take, for the masked paths
+/// (AUTH-CONFIG-SDK sandbox recordings 2026-09-25). `strict` adds the refusals the emulator
+/// profile does not make (authorized domains, SMS regions, reCAPTCHA rules, email templates).
+#[allow(clippy::too_many_lines)]
+pub(super) fn validate_values(
+    body: &Value,
+    fields: &[String],
+    strict: bool,
+) -> Result<(), JsonResponse> {
+    use super::config_proto::refusal;
+    let masked = |member: &str| {
+        fields.iter().any(|field| {
+            field == member
+                || field.starts_with(&format!("{member}."))
+                || member.starts_with(&format!("{field}."))
+        })
+    };
+    if masked("signIn.phoneNumber.testPhoneNumbers") {
+        if let Some(numbers) = body
+            .pointer("/signIn/phoneNumber/testPhoneNumbers")
+            .and_then(Value::as_object)
+        {
+            if numbers.keys().any(|number| {
+                fireemu_core_auth::store::AuthStore::validate_phone_number(number).is_err()
+            }) {
+                return Err(refusal("INVALID_PHONE_NUMBER : Invalid format."));
+            }
+        }
+    }
+    if masked("authorizedDomains") {
+        for domain in body
+            .get("authorizedDomains")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter_map(Value::as_str)
+        {
+            if domain.is_empty() {
+                return Err(refusal(
+                    "INVALID_AUTHORIZED_DOMAIN : An authorized domain is empty.",
+                ));
+            }
+            if strict && !valid_authorized_domain(domain) {
+                return Err(refusal(&format!(
+                    "INVALID_AUTHORIZED_DOMAIN : {domain} should only contain the valid domain."
+                )));
+            }
+        }
+    }
+    if !strict {
+        return Ok(());
+    }
+    if masked("smsRegionConfig") {
+        let regions = [
+            "/smsRegionConfig/allowByDefault/disallowedRegions",
+            "/smsRegionConfig/allowlistOnly/allowedRegions",
+        ]
+        .into_iter()
+        .filter_map(|pointer| body.pointer(pointer).and_then(Value::as_array))
+        .flatten()
+        .filter_map(Value::as_str);
+        for region in regions {
+            if !REGION_CODES
+                .split(' ')
+                .any(|code| code.eq_ignore_ascii_case(region))
+            {
+                return Err(refusal("INVALID_REGION_CODE : Invalid region code."));
+            }
+        }
+    }
+    if masked("recaptchaConfig") {
+        if let Some(recaptcha) = body.get("recaptchaConfig") {
+            let rules = |key: &str| {
+                recaptcha
+                    .get(key)
+                    .and_then(Value::as_array)
+                    .cloned()
+                    .unwrap_or_default()
+            };
+            let set = |rule: &Value| {
+                rule.get("action")
+                    .and_then(Value::as_str)
+                    .is_some_and(|a| a != "RECAPTCHA_ACTION_UNSPECIFIED")
+            };
+            for rule in rules("managedRules") {
+                if !valid_score(rule.get("endScore").and_then(Value::as_f64)) {
+                    return Err(refusal("INVALID_CONFIG : The end score in reCAPTCHA managed rules must be a value between 0.0 and 1.0, at 11 discrete values; e.g. 0.1, 0.2, 0.3, 0.4, ... 0.9, 1.0."));
+                }
+                if !set(&rule) {
+                    return Err(refusal(
+                        "INVALID_CONFIG : The action in reCAPTCHA managed rules must be set.",
+                    ));
+                }
+            }
+            for rule in rules("tollFraudManagedRules") {
+                if !valid_score(rule.get("startScore").and_then(Value::as_f64)) {
+                    return Err(refusal("INVALID_CONFIG : The start score in reCAPTCHA managed rules must be a value between 0.0 and 1.0, at 11 discrete values; e.g. 0.1, 0.2, 0.3, 0.4, ... 0.9, 1.0."));
+                }
+                if !set(&rule) {
+                    return Err(refusal(
+                        "INVALID_CONFIG : The action in reCAPTCHA managed rules must be set.",
+                    ));
+                }
+            }
+            let phone_on = matches!(
+                recaptcha
+                    .get("phoneEnforcementState")
+                    .and_then(Value::as_str),
+                Some("AUDIT" | "ENFORCE")
+            );
+            let sms_flag = |key: &str| recaptcha.get(key).and_then(Value::as_bool) == Some(true);
+            if (sms_flag("useSmsBotScore") || sms_flag("useSmsTollFraudProtection")) && !phone_on {
+                return Err(refusal("INVALID_RECAPTCHA_PHONE_AUTH_CONFIGURATION : Phone auth enforcement state must be aligned with toll fraud or bot score enablement."));
+            }
+            if recaptcha
+                .get("recaptchaKeys")
+                .and_then(Value::as_array)
+                .is_some_and(|keys| !keys.is_empty())
+            {
+                return Err(refusal("INVALID_SITE_KEY"));
+            }
+        }
+    }
+    if fields.iter().any(|field| {
+        TEMPLATES.iter().any(|template| {
+            let path = format!("notification.sendEmail.{template}");
+            field == &path || field.starts_with(&format!("{path}."))
+        })
+    }) {
+        return Err(refusal("EMAIL_TEMPLATE_UPDATE_NOT_ALLOWED"));
+    }
+    Ok(())
 }
 
 #[cfg(test)]

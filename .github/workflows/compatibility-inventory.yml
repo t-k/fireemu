@@ -48,6 +48,7 @@ env:
     tools/compat-broad/fs-request-bytes-boundary/test_request_bytes_production.py
     tools/compat-broad/fs-request-bytes-boundary/test_request_bytes_recovery_campaign.py
     tools/compat-broad/fs-request-bytes-boundary/test_request_bytes_sentinel.py
+    tools/compat-broad/fs-write-limits/test_limits_03_baseline_prep.py
     tools/compat-broad/fs-write-limits/test_limits_03_failed_apply_recovery.py
     tools/compat-broad/fs-write-limits/test_limits_03_held_recovery.py
     tools/compat-broad/fs-write-limits/test_limits_03_index_hosting.py
@@ -74,7 +75,7 @@ jobs:
         run: |
           uv run --project tools/compat-inventory --locked --python 3.12 tools/compat-inventory/closure_records.py --check
           uv run --project tools/compat-inventory --locked --python 3.12 -m pytest tools/compat-inventory/test_closure_records.py tools/compat-inventory/test_broad_shards.py -q
-          uv run --project tools/compat-inventory --locked --python 3.12 tools/compat-inventory/broad_shards.py --shards 7
+          uv run --project tools/compat-inventory --locked --python 3.12 tools/compat-inventory/broad_shards.py --shards 22
       - uses: pnpm/action-setup@f40ffcd9367d9f12939873eb1018b921a783ffaa
         with:
           version: 10.32.1
@@ -247,8 +248,11 @@ jobs:
       matrix:
         # Shards are planned from measured per-file durations
         # (tools/compat-inventory/broad-test-durations.json); broad_shards.py refuses a
-        # plan in which any shard would need more than 35 minutes.
-        shard: [0, 1, 2, 3, 4, 5, 6]
+        # plan in which any shard would need more than 35 minutes, and runs a file longer
+        # than 28 minutes as chunks of whole tests. More than half of the total time is
+        # fs-rules-publication/test_o5_user_token_comparator_v2.py (178 tests, about 2
+        # minutes each), whose chunks spread over 21 of the 22 shards.
+        shard: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21]
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
@@ -260,7 +264,7 @@ jobs:
         env:
           PYTEST_SHARD: ${{ matrix.shard }}
         run: |
-          uv run --project tools/compat-inventory --locked --python 3.12 tools/compat-inventory/broad_shards.py --shards 7 --shard "$PYTEST_SHARD" > "$RUNNER_TEMP/shard-files.txt"
+          uv run --project tools/compat-inventory --locked --python 3.12 tools/compat-inventory/broad_shards.py --shards 22 --shard "$PYTEST_SHARD" > "$RUNNER_TEMP/shard-files.txt"
           mapfile -t files < "$RUNNER_TEMP/shard-files.txt"
           echo "shard $PYTEST_SHARD: ${#files[@]} files"
           uv run --project tools/compat-inventory --locked --python 3.12 -m pytest "${files[@]}" -q

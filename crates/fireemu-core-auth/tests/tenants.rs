@@ -196,6 +196,43 @@ fn a_tenant_restore_with_a_poisoned_store_changes_nothing() {
     assert_eq!(added.lock().unwrap().user_count(), 1);
 }
 
+/// A project snapshot includes only its own tenant namespaces, even when another registered
+/// project has tenants in the same registry.
+#[test]
+fn a_tenant_snapshot_does_not_capture_another_projects_tenants() {
+    let registry = AuthRegistry::new("demo-app", Arc::new(Mutex::new(store("demo-app", 1))));
+    assert!(registry.register("other-app", store("other-app", 2)));
+    registry.ensure_tenant("demo-app", "kept").unwrap();
+    registry.ensure_tenant("other-app", "foreign").unwrap();
+
+    let snapshot = registry.capture_tenants_snapshot("demo-app").unwrap();
+    registry.ensure_tenant("demo-app", "added").unwrap();
+    registry
+        .restore_tenants_snapshot("demo-app", &snapshot)
+        .unwrap();
+
+    assert_eq!(registry.tenants("demo-app"), ["kept"]);
+    assert_eq!(registry.tenants("other-app"), ["foreign"]);
+    assert!(registry.tenant_metadata("other-app", "foreign").is_some());
+}
+
+/// Rolling a project's tenants back preserves the other project's published tenant metadata.
+#[test]
+fn a_tenant_rollback_preserves_another_projects_tenants() {
+    let registry = AuthRegistry::new("demo-app", Arc::new(Mutex::new(store("demo-app", 1))));
+    assert!(registry.register("other-app", store("other-app", 2)));
+    registry.ensure_tenant("demo-app", "kept").unwrap();
+    registry.ensure_tenant("other-app", "foreign").unwrap();
+
+    let rollback = registry.capture_tenants_rollback("demo-app").unwrap();
+    registry.ensure_tenant("demo-app", "added").unwrap();
+    registry.rollback_tenants("demo-app", &rollback).unwrap();
+
+    assert_eq!(registry.tenants("demo-app"), ["kept"]);
+    assert_eq!(registry.tenants("other-app"), ["foreign"]);
+    assert!(registry.tenant_metadata("other-app", "foreign").is_some());
+}
+
 /// A tenant created with a display name of the documented form (4-20 letters, digits and
 /// hyphens, beginning with a letter) is named as production names it: the display name, a
 /// hyphen and five characters of `[a-z0-9]` (FS-RULES sandbox recording 2026-09-25: `fsr-tenant`

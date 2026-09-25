@@ -39,5 +39,7 @@ jobs:
         run: cargo test -p fireemu --test functions_codebases -- --ignored --test-threads=1
       - name: verify Functions environment, routing, secret isolation and reload
         run: cargo test -p fireemu --test functions_environment -- --include-ignored
+      - name: verify Node runtime selection with the installed loader
+        run: cargo test -p fireemu --test functions_runtime_selection
       - name: verify runner trust boundaries and log attribution
         run: node --test tools/runner-node/*.test.mjs

@@ -392,14 +392,10 @@ async fn respond(
         Ok(buffer) => buffer,
         Err(e) => return Ok(body_error_response(e, origin.as_deref())),
     };
-    let Ok(permit) = BLOCKING_HANDLER_SLOTS.try_acquire() else {
-        return Ok(handler_error_response(
-            StatusCode::SERVICE_UNAVAILABLE,
-            b"storage handler capacity exhausted",
-            origin.as_deref(),
-            true,
-        ));
-    };
+    let permit = BLOCKING_HANDLER_SLOTS
+        .acquire()
+        .await
+        .expect("storage handler semaphore is never closed");
     let trace = std::env::var_os("FIREEMU_TRACE_STORAGE").is_some();
     let (trace_method, trace_path, trace_query, trace_len) = (
         method.clone(),

@@ -131,10 +131,12 @@ fn exec_with_profile(source: &Path, project: &str, profile: &str) -> Output {
 }
 
 #[test]
+#[ignore = "requires tools/sdk-smoke dependencies; the manual SDK workflow runs this test"]
 fn relative_functions_source_sets_runner_cwd_to_codebase_dir() {
-    if !have_sdk() {
-        return;
-    }
+    assert!(
+        have_sdk(),
+        "install tools/sdk-smoke dependencies before running this test"
+    );
     let dir = scratch_codebase("relative-cwd");
     write(&dir, "cwd-marker.txt", "relative");
     write(
@@ -177,10 +179,12 @@ const fs = require('node:fs');
 }
 
 #[test]
+#[ignore = "requires tools/sdk-smoke dependencies; the manual SDK workflow runs this test"]
 fn http_function_uses_codebase_cwd_and_reload_snapshot_for_relative_reads() {
-    if !have_sdk() {
-        return;
-    }
+    assert!(
+        have_sdk(),
+        "install tools/sdk-smoke dependencies before running this test"
+    );
     let dir = scratch_codebase("cwd-and-reload");
     write(&dir, "cwd-marker.txt", "before");
     write(
@@ -230,6 +234,38 @@ const path = require('node:path');
         .stdin(Stdio::null())
         .output()
         .unwrap();
+    assert!(
+        output.status.success(),
+        "stdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[cfg(unix)]
+#[test]
+#[ignore = "requires tools/sdk-smoke dependencies; the manual SDK workflow runs this test"]
+fn relative_runner_override_starts_from_the_daemon_working_directory() {
+    assert!(
+        have_sdk(),
+        "install tools/sdk-smoke dependencies before running this test"
+    );
+    let dir = scratch_codebase("relative-runner-override");
+    write(
+        &dir,
+        "index.js",
+        "const { onRequest } = require('firebase-functions/v2/https');\nexports.fxReady = onRequest((_request, response) => response.send('ready'));\n",
+    );
+    let workspace = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let output = fireemu_exec(&dir, "demo-relative-runner-override")
+        .current_dir(workspace)
+        .env("FIREEMU_RUNNER_NODE", "tools/runner-node/index.mjs")
+        .args(["--", "true"])
+        .stdin(Stdio::null())
+        .output()
+        .unwrap();
+
     assert!(
         output.status.success(),
         "stdout:\n{}\nstderr:\n{}",

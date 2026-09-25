@@ -895,8 +895,7 @@ fn assemble_suite(assembly: ServiceAssembly, exec_mode: bool) -> Result<ReadySui
                 .with_registry(registry.clone())
                 .with_database_rules(database_rules.clone())
                 .with_token_acceptance(cfg.token_acceptance)
-                .with_refusal_without_ruleset(cfg.refuse_without_ruleset)
-                .with_preconditions_before_rules(cfg.preconditions_before_rules),
+                .with_refusal_without_ruleset(cfg.refuse_without_ruleset),
         )
     });
     let mut service = GatewayService::local(gateway.clone(), backend.clone());

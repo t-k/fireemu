@@ -300,17 +300,6 @@ async fn start_with_options(
     indexes: IndexSet,
     refuse_without_ruleset: bool,
 ) -> Harness {
-    start_with_all(acceptance, indexes, refuse_without_ruleset, false).await
-}
-
-/// `preconditions_before_rules`: the strict profile's order of a failed precondition and a
-/// Security Rules denial.
-async fn start_with_all(
-    acceptance: TokenAcceptance,
-    indexes: IndexSet,
-    refuse_without_ruleset: bool,
-    preconditions_before_rules: bool,
-) -> Harness {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     let gateway = Gateway {
@@ -335,8 +324,7 @@ async fn start_with_all(
         RulesEnforcer::new(rules.clone(), auth.clone(), clock)
             .with_token_acceptance(acceptance)
             .with_registry(registry.clone())
-            .with_refusal_without_ruleset(refuse_without_ruleset)
-            .with_preconditions_before_rules(preconditions_before_rules),
+            .with_refusal_without_ruleset(refuse_without_ruleset),
     );
     let svc =
         FirestoreServer::new(GatewayService::local(gateway, backend.clone()).with_rules(enforcer));
@@ -3549,63 +3537,78 @@ service cloud.firestore {
     h.handle.abort();
 }
 
-/// Production answers a create of an existing document with `ALREADY_EXISTS` even where a rule
-/// denies it, and an update of a missing document with `NOT_FOUND` (FS-RULES, 2026-09-24): the
-/// strict profile checks the precondition first. The emulator profile answers the rule's
-/// denial first, as the official emulator does.
+/// The rules judge a write by the method its precondition names: `exists: false` is a create
+/// and `exists: true` an update, whatever the document is now (FS-RULES production recording,
+/// 2026-09-24). A write the rules allow is then refused by its failed precondition; one they
+/// deny is refused by them.
 #[tokio::test]
-async fn strict_answers_a_failed_precondition_before_the_rules() {
-    for (preconditions_first, expected) in [
-        (true, tonic::Code::AlreadyExists),
-        (false, tonic::Code::PermissionDenied),
-    ] {
-        let mut h = start_with_all(
-            TokenAcceptance::Verified,
-            IndexSet::default(),
-            false,
-            preconditions_first,
+async fn the_rules_method_follows_the_precondition() {
+    let mut h = start().await;
+    let (_alice, alice_token) = h.user("alice@example.com");
+    h.rules
+        .replace_source(
+            "rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    match /created/{id} { allow create: if request.resource.data.ok == true; }
+    match /updated/{id} { allow update: if request.resource.data.ok == true; }
+  }
+}",
         )
-        .await;
-        let (_alice, alice_token) = h.user("alice@example.com");
+        .unwrap();
+    for doc in ["created/present", "updated/present"] {
         h.client
             .commit(with_bearer(
-                commit(vec![set_write("norule/present", &[("n", s("1"))])]),
+                commit(vec![set_write(doc, &[("n", s("1"))])]),
                 "owner",
             ))
             .await
             .unwrap();
-        let mut create = set_write("norule/present", &[("n", s("2"))]);
-        create.current_document = Some(pb::Precondition {
-            condition_type: Some(pb::precondition::ConditionType::Exists(false)),
+    }
+    let ok = |value: bool| pb::Value {
+        value_type: Some(pb::value::ValueType::BooleanValue(value)),
+    };
+    let write = |doc: &str, allowed: bool, exists: bool| {
+        let mut w = set_write(doc, &[("ok", ok(allowed))]);
+        w.current_document = Some(pb::Precondition {
+            condition_type: Some(pb::precondition::ConditionType::Exists(exists)),
         });
+        w
+    };
+    for (name, w, expected) in [
+        (
+            "create allowed, exists",
+            write("created/present", true, false),
+            tonic::Code::AlreadyExists,
+        ),
+        (
+            "create denied, exists",
+            write("created/present", false, false),
+            tonic::Code::PermissionDenied,
+        ),
+        (
+            "update allowed, missing",
+            write("updated/missing", true, true),
+            tonic::Code::NotFound,
+        ),
+        (
+            "update denied, missing",
+            write("updated/missing", false, true),
+            tonic::Code::PermissionDenied,
+        ),
+        // Without a create rule a create is denied even of a document that exists.
+        (
+            "create of an updatable document",
+            write("updated/present", true, false),
+            tonic::Code::PermissionDenied,
+        ),
+    ] {
         let err = h
             .client
-            .commit(with_bearer(commit(vec![create]), &alice_token))
+            .commit(with_bearer(commit(vec![w]), &alice_token))
             .await
             .unwrap_err();
-        assert_eq!(err.code(), expected, "{err}");
-        if preconditions_first {
-            let mut update = set_write("norule/missing", &[("n", s("2"))]);
-            update.current_document = Some(pb::Precondition {
-                condition_type: Some(pb::precondition::ConditionType::Exists(true)),
-            });
-            let err = h
-                .client
-                .commit(with_bearer(commit(vec![update]), &alice_token))
-                .await
-                .unwrap_err();
-            assert_eq!(err.code(), tonic::Code::NotFound, "{err}");
-            // A write whose precondition holds is still judged by the rules.
-            let err = h
-                .client
-                .commit(with_bearer(
-                    commit(vec![set_write("norule/other", &[("n", s("3"))])]),
-                    &alice_token,
-                ))
-                .await
-                .unwrap_err();
-            assert_eq!(err.code(), tonic::Code::PermissionDenied, "{err}");
-        }
-        h.handle.abort();
+        assert_eq!(err.code(), expected, "{name}: {err}");
     }
+    h.handle.abort();
 }

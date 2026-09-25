@@ -52,6 +52,7 @@ const FIREBASE_CONFIG_SHA = "0b76734c83f808f8842ee093177fc9ecc2fda2ec9f9d06e0254
 const FIXTURE_PACKAGE_SHA = "5a2a9739e294a24104b837a940a65dd38746140dd64fd5744ac85f1d13c4043c";
 const FIXTURE_LOCK_SHA = "9d0a9bc3287ad79bc66ee7174c2486dd078d18e77b2c27d612c3c8712d703eeb";
 const AUTH_HOST = "https://identitytoolkit.googleapis.com";
+const FIREBASE_HOST = "https://firebase.googleapis.com";
 const FUNCTION_HOST = "https://cloudfunctions.googleapis.com";
 const RUN_HOST = "https://run.googleapis.com";
 const ARTIFACT_HOST = "https://artifactregistry.googleapis.com";
@@ -427,6 +428,7 @@ function createControl(adc, budget) {
         RUN_HOST,
         ARTIFACT_HOST,
         AUTH_HOST,
+        FIREBASE_HOST,
         SERVICE_USAGE_HOST,
         RESOURCE_MANAGER_HOST,
       ].some((host) => url.startsWith(`${host}/`))
@@ -572,6 +574,15 @@ export async function preflightCliSideEffects(control) {
     Object.keys(cleanupPolicy.condition).length !== 2
   ) {
     throw new Error("gcf-artifacts reviewed cleanup policy changed");
+  }
+  const adminSdkConfig = await control(
+    "GET",
+    `${FIREBASE_HOST}/v1beta1/projects/${PROJECT}/adminSdkConfig`,
+    undefined,
+    "control",
+  );
+  if (adminSdkConfig.value.projectId !== PROJECT) {
+    throw new Error("Firebase Admin SDK config differs from the reviewed project");
   }
 }
 

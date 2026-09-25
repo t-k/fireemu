@@ -306,11 +306,30 @@ test("CLI preflight requires the reviewed APIs and exact repository cleanup poli
       },
     },
   };
-  const control = async (_method, url) =>
-    url.includes("serviceusage.googleapis.com")
-      ? { value: { services: names } }
-      : { status: 200, value: repo };
+  const calls = [];
+  const control = async (method, url) => {
+    calls.push({ method, url });
+    if (url.includes("serviceusage.googleapis.com")) return { value: { services: names } };
+    if (url.includes("artifactregistry.googleapis.com")) return { status: 200, value: repo };
+    if (url.includes("firebase.googleapis.com")) {
+      return { status: 200, value: { projectId: "fireemu-oracle-query" } };
+    }
+    throw new Error("unreviewed preflight URL");
+  };
   await preflightCliSideEffects(control);
+  assert.deepEqual(calls.at(-1), {
+    method: "GET",
+    url: "https://firebase.googleapis.com/v1beta1/projects/fireemu-oracle-query/adminSdkConfig",
+  });
+  await assert.rejects(
+    () =>
+      preflightCliSideEffects(async (method, url) =>
+        url.includes("firebase.googleapis.com")
+          ? { status: 200, value: { projectId: "wrong-project" } }
+          : control(method, url),
+      ),
+    /Admin SDK config/,
+  );
   await assert.rejects(
     () =>
       preflightCliSideEffects(async (method, url) => {

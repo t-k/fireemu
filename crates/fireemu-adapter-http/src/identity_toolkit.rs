@@ -4682,7 +4682,7 @@ fn quota_config_json(quota: &SignupQuotaConfig) -> Value {
 }
 
 #[allow(clippy::too_many_lines)]
-fn validate_project_config_payload(body: &Value) -> Result<(), JsonResponse> {
+fn validate_project_config_payload(body: &Value, one_version: bool) -> Result<(), JsonResponse> {
     let object = body
         .as_object()
         .ok_or_else(|| error(400, "INVALID_ARGUMENT"))?;
@@ -4785,7 +4785,7 @@ fn validate_project_config_payload(body: &Value) -> Result<(), JsonResponse> {
     if let Some(value) = object.get("passwordPolicyConfig") {
         // A leaf update supplies no versions; the merged policy is checked when applied.
         if value.get("passwordPolicyVersions").is_some() {
-            password_policy_from_config_json(value, false)?;
+            password_policy_from_config_json(value, one_version)?;
         }
     }
     if let Some(value) = object.get("quota").filter(|value| !value.is_null()) {
@@ -5064,7 +5064,7 @@ fn project_config_management(
     {
         return response;
     }
-    if let Err(response) = validate_project_config_payload(body) {
+    if let Err(response) = validate_project_config_payload(body, !state.stateless_refresh_tokens) {
         return response;
     }
     // A writable path fireemu does not model (valid_project_config_field names the policy and

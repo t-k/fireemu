@@ -18327,6 +18327,17 @@ fn config_values_are_refused_with_production_messages() {
         json!({"passwordPolicyConfig": {"passwordPolicyEnforcementState": "ENFORCE"}}),
         "INVALID_CONFIG : Policy versions list must be of length 1",
     );
+    for versions in [json!([]), json!([{}, {}])] {
+        refused(
+            &strict,
+            "passwordPolicyConfig",
+            json!({"passwordPolicyConfig": {
+                "passwordPolicyEnforcementState": "ENFORCE",
+                "passwordPolicyVersions": versions,
+            }}),
+            "INVALID_CONFIG : Policy versions list must be of length 1",
+        );
+    }
     refused(
         &strict,
         "passwordPolicyConfig.passwordPolicyEnforcementState",

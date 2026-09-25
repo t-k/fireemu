@@ -2679,6 +2679,50 @@ async fn serves_over_a_real_socket() {
     server.abort();
 }
 
+/// A malformed JSON body of an Identity Platform v2 route is refused with the v2 API's
+/// `400 INVALID_ARGUMENT`, as production refuses it (AUTH-CONFIG-SDK sandbox recording
+/// 2026-09-25, config/invalid#body-malformed). The parser's diagnostic in the message is a
+/// known difference (owner decision); v1 routes keep their answer.
+#[tokio::test]
+async fn a_malformed_v2_body_is_an_invalid_argument() {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let server = tokio::spawn(fireemu_adapter_http::server::serve(
+        listener,
+        Arc::new(state()),
+    ));
+    let send = |path: String| async move {
+        let mut stream = tokio::net::TcpStream::connect(addr).await.unwrap();
+        let request = format!(
+            "PATCH {path} HTTP/1.1\r\nHost: localhost\r\nContent-Type: application/json\r\nAuthorization: Bearer owner\r\nContent-Length: 1\r\nConnection: close\r\n\r\n{{"
+        );
+        stream.write_all(request.as_bytes()).await.unwrap();
+        let mut response = Vec::new();
+        stream.read_to_end(&mut response).await.unwrap();
+        let text = String::from_utf8(response).unwrap();
+        let json_start = text.find("\r\n\r\n").unwrap() + 4;
+        (
+            text[9..12].to_owned(),
+            serde_json::from_str::<Value>(&text[json_start..]).unwrap(),
+        )
+    };
+    let (status, refused) = send(format!(
+        "{PROJECT_CONFIG}?updateMask=emailPrivacyConfig.enableImprovedEmailPrivacy"
+    ))
+    .await;
+    assert_eq!(status, "400");
+    assert_eq!(refused["error"]["status"], "INVALID_ARGUMENT", "{refused}");
+    assert!(refused["error"].get("errors").is_none(), "{refused}");
+    let (status, refused) = send(format!("{V1}/accounts:update")).await;
+    assert_eq!(status, "400");
+    assert_eq!(
+        refused["error"]["message"], "INVALID_JSON_PAYLOAD",
+        "{refused}"
+    );
+    server.abort();
+}
+
 /// PCT-1. The form decoder in the server layer took `%+f` through `u8::from_str_radix`,
 /// which accepts a leading sign, and produced U+000F. The shared codec takes two ASCII
 /// hexadecimal digits and nothing else, so the sequence stays literal and only `+` is a

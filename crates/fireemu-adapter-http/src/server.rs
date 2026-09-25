@@ -174,6 +174,21 @@ async fn respond(
                 serde_json::from_slice(&bytes).ok()
             };
             match json {
+                // Identity Platform's v2 API refuses a malformed body with its own shape
+                // (AUTH-CONFIG-SDK sandbox recording 2026-09-25); the parser's diagnostic that
+                // production appends is a known difference (owner decision).
+                None if path.starts_with("/identitytoolkit.googleapis.com/v2/")
+                    || path.starts_with("/identitytoolkit.googleapis.com/admin/v2/") =>
+                {
+                    (
+                        400,
+                        fireemu_adapter_support::api_error::google_rpc(
+                            400,
+                            "Invalid JSON payload received.",
+                            "INVALID_ARGUMENT",
+                        ),
+                    )
+                }
                 None => (
                     400,
                     fireemu_adapter_support::api_error::firebase_minimal(

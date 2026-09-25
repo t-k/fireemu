@@ -9,7 +9,7 @@ use std::time::Duration;
 use fireemu_adapter_grpc::gateway::Gateway;
 use fireemu_adapter_grpc::local::LocalBackend;
 use fireemu_adapter_grpc::rest::{RestRequest, RestState};
-use fireemu_adapter_grpc::rules::RulesEnforcer;
+use fireemu_adapter_grpc::rules::{RulesEnforcer, TokenSemantics};
 use fireemu_core_auth::jwt::{base64url_encode, TokenAcceptance};
 use fireemu_core_auth::mfa::TotpPolicy;
 use fireemu_core_auth::store::AuthStore;
@@ -98,7 +98,11 @@ fn state_with_gateway(
             TotpPolicy::default(),
         )));
         let loaded = Arc::new(RulesetSlot::new(LoadedRules::from_source(src).unwrap()));
-        Arc::new(RulesEnforcer::new(loaded, auth, clock.clone()).with_token_acceptance(acceptance))
+        Arc::new(
+            RulesEnforcer::new(loaded, auth, clock.clone())
+                .with_token_semantics(TokenSemantics::Firestore)
+                .with_token_acceptance(acceptance),
+        )
     });
     let state = RestState {
         local,

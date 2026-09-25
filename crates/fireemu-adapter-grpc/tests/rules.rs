@@ -8,7 +8,7 @@ use std::sync::{Arc, Mutex};
 use fireemu_adapter_grpc::decode::Parent;
 use fireemu_adapter_grpc::gateway::Gateway;
 use fireemu_adapter_grpc::local::LocalBackend;
-use fireemu_adapter_grpc::rules::{LatestReader, Principal, RulesEnforcer};
+use fireemu_adapter_grpc::rules::{LatestReader, Principal, RulesEnforcer, TokenSemantics};
 use fireemu_adapter_grpc::service::GatewayService;
 use fireemu_core_auth::jwt::{base64url_encode, encode_unsigned, TokenAcceptance};
 use fireemu_core_auth::mfa::TotpPolicy;
@@ -334,6 +334,7 @@ async fn start_with_enforcer(
     let registry = Arc::new(AuthRegistry::new("demo-app", auth.clone()));
     let enforcer = Arc::new(configure(
         RulesEnforcer::new(rules.clone(), auth.clone(), clock)
+            .with_token_semantics(TokenSemantics::Firestore)
             .with_token_acceptance(acceptance)
             .with_registry(registry.clone()),
     ));

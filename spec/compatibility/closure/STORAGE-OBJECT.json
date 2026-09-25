@@ -1,0 +1,91 @@
+{
+  "schemaVersion": 1,
+  "parent": "STORAGE-OBJECT",
+  "parentStatus": "IMPLEMENTING",
+  "oracleTrack": "disposable-sandbox",
+  "inventoryState": "PROPOSED",
+  "closureReview": {
+    "decision": "PENDING_REVIEW"
+  },
+  "observationContract": {
+    "project": "fireemu-oracle-query",
+    "profile": "strict",
+    "productionRecordingsRequired": 2,
+    "comparison": "For equivalent requests and initial object state, compare HTTP status, response headers and body, returned bytes, object metadata, list membership and ordering, and read-back state after writes and refusals. Normalize only run-specific values with an explicit reason. The official-emulator storage matrix is local regression evidence, not production evidence.",
+    "finalArtifact": "Run the production comparison and official-emulator storage-probe against the same copied binary; retain its SHA-256, source commit, clean build status, and both comparison outputs. Independent closure review must approve the same artifact before promotion."
+  },
+  "scopeDecisions": [
+    {
+      "id": "S1",
+      "status": "PROPOSED",
+      "decision": "Storage Security Rules language, matching, publication and denial semantics belong to STORAGE-RULES. STORAGE-OBJECT exercises Firebase requests under a fixed allow rule and checks credential identity at the API boundary.",
+      "recommendation": "Approve the split while retaining an ID-token request and a permission-error control in this parent."
+    },
+    {
+      "id": "S2",
+      "status": "PROPOSED",
+      "decision": "Cloud Functions object triggers and event delivery belong to FUNCTIONS-EVENTS.",
+      "recommendation": "Approve; object responses and persisted state remain in STORAGE-OBJECT."
+    },
+    {
+      "id": "S3",
+      "status": "PROPOSED",
+      "decision": "Bucket creation, bucket configuration and IAM administration are outside this object-data parent. The default Firebase Storage bucket is a recorded precondition, not a compared object operation.",
+      "recommendation": "Approve and require a separate parent decision for bucket administration."
+    },
+    {
+      "id": "S4",
+      "status": "PROPOSED",
+      "decision": "Signed URLs, the XML API, object ACLs, compose and notification administration are outside the two REST dialects declared for this parent.",
+      "recommendation": "Approve for this parent; retain GCS JSON copy and rewrite because the current Storage contract claims them."
+    },
+    {
+      "id": "S5",
+      "status": "PROPOSED",
+      "decision": "Archived object generations, lifecycle transitions and versioning configuration are outside the current-generation object contract. Generation changes and preconditions on the current object remain in scope.",
+      "recommendation": "Approve only if the owner accepts a current-generation-only claim; otherwise add a versioning condition before freeze."
+    },
+    {
+      "id": "S6",
+      "status": "PROPOSED",
+      "decision": "The finite production corpus uses small bounded objects. The existing fireemu 256 MiB object cap and process memory budget are not established as production parity by this closure.",
+      "recommendation": "Keep the local cap disclosed as a bounded known difference; ask the owner whether it blocks COMPAT_VERIFIED or belongs to a separate large-object condition."
+    },
+    {
+      "id": "S7",
+      "status": "PROPOSED",
+      "decision": "This closure compares raw Firebase Storage and GCS JSON HTTP requests. SDK client behavior, including browser and mobile transport details, is outside this REST corpus.",
+      "recommendation": "Approve this protocol boundary and retain the official-emulator SDK smoke checks as regression evidence only."
+    }
+  ],
+  "conditions": [
+    { "conditionId": "STORAGE-OBJECT/firebase-simple-upload", "source": "spec/compatibility/contract.json#ST-CLAIM-OBJECTS", "recipeIds": ["storage-object/firebase/simple-upload"], "checks": ["Media upload, returned metadata, stored bytes and read-back agree; a refused upload publishes no object."], "status": "PENDING_CORPUS" },
+    { "conditionId": "STORAGE-OBJECT/firebase-multipart-upload", "source": "spec/compatibility/contract.json#ST-CLAIM-OBJECTS", "recipeIds": ["storage-object/firebase/multipart-upload"], "checks": ["Multipart metadata and bytes persist together; malformed multipart input leaves no object."], "status": "PENDING_CORPUS" },
+    { "conditionId": "STORAGE-OBJECT/firebase-resumable-upload", "source": "spec/compatibility/contract.json#ST-CLAIM-OBJECTS", "recipeIds": ["storage-object/firebase/resumable-upload"], "checks": ["Initiation, offset query, chunks, finalization and cancellation return production responses and read-back state; wrong offsets do not commit."], "status": "PENDING_CORPUS" },
+    { "conditionId": "STORAGE-OBJECT/firebase-download", "source": "spec/compatibility/contract.json#ST-CLAIM-OBJECTS", "recipeIds": ["storage-object/firebase/download"], "checks": ["Full, bounded, open-ended and suffix ranges return the expected bytes and headers."], "status": "PENDING_CORPUS" },
+    { "conditionId": "STORAGE-OBJECT/firebase-download-tokens", "source": "spec/compatibility/contract.json#ST-CLAIM-OBJECTS", "recipeIds": ["storage-object/firebase/download-tokens"], "checks": ["Token creation, reuse, deletion and token-bearing download behavior match; private token values are normalized and never published."], "status": "PENDING_CORPUS" },
+    { "conditionId": "STORAGE-OBJECT/firebase-metadata", "source": "spec/compatibility/contract.json#ST-CLAIM-OBJECTS", "recipeIds": ["storage-object/firebase/metadata"], "checks": ["Get and update preserve bytes and generation, apply metadata changes and metageneration as production does."], "status": "PENDING_CORPUS" },
+    { "conditionId": "STORAGE-OBJECT/firebase-delete", "source": "spec/compatibility/contract.json#ST-CLAIM-OBJECTS", "recipeIds": ["storage-object/firebase/delete"], "checks": ["Delete and repeated delete responses match, and metadata/media reads confirm absence."], "status": "PENDING_CORPUS" },
+    { "conditionId": "STORAGE-OBJECT/firebase-list", "source": "spec/compatibility/contract.json#ST-CLAIM-OBJECTS", "recipeIds": ["storage-object/firebase/list"], "checks": ["Prefix, delimiter, flat and paged results match; maxResults including zero, pageToken continuation, order and no duplicate or skipped names are checked."], "status": "PENDING_CORPUS" },
+    { "conditionId": "STORAGE-OBJECT/firebase-overwrite", "source": "spec/compatibility/contract.json#ST-CLAIM-OBJECTS", "recipeIds": ["storage-object/firebase/overwrite"], "checks": ["Overwrite changes generation, resets or changes metadata as observed, and returns the new bytes on read-back."], "status": "PENDING_CORPUS" },
+    { "conditionId": "STORAGE-OBJECT/gcs-simple-multipart-upload", "source": "spec/compatibility/contract.json#ST-CLAIM-OBJECTS", "recipeIds": ["storage-object/gcs/simple-multipart-upload"], "checks": ["JSON API media and multipart inserts return metadata and persist bytes; malformed insert does not publish."], "status": "PENDING_CORPUS" },
+    { "conditionId": "STORAGE-OBJECT/gcs-resumable-upload", "source": "spec/compatibility/contract.json#ST-CLAIM-OBJECTS", "recipeIds": ["storage-object/gcs/resumable-upload"], "checks": ["Resumable initiation, Content-Range chunks, offset mismatch and finalization match production, with read-back of committed bytes."], "status": "PENDING_CORPUS" },
+    { "conditionId": "STORAGE-OBJECT/gcs-download", "source": "spec/compatibility/contract.json#ST-CLAIM-OBJECTS", "recipeIds": ["storage-object/gcs/download"], "checks": ["Metadata and media get, full and ranged bytes, selected generation and response headers match."], "status": "PENDING_CORPUS" },
+    { "conditionId": "STORAGE-OBJECT/gcs-metadata", "source": "spec/compatibility/contract.json#ST-CLAIM-OBJECTS", "recipeIds": ["storage-object/gcs/metadata"], "checks": ["Get, PATCH and update preserve object bytes and change metadata and metageneration as production does."], "status": "PENDING_CORPUS" },
+    { "conditionId": "STORAGE-OBJECT/gcs-delete", "source": "spec/compatibility/contract.json#ST-CLAIM-OBJECTS", "recipeIds": ["storage-object/gcs/delete"], "checks": ["Delete, repeated delete and read-after-delete status, body and state match."], "status": "PENDING_CORPUS" },
+    { "conditionId": "STORAGE-OBJECT/gcs-list", "source": "spec/compatibility/contract.json#ST-CLAIM-OBJECTS", "recipeIds": ["storage-object/gcs/list"], "checks": ["Prefix, delimiter, maxResults including zero, pageToken and supported filters match, including combined item/prefix pages, ordering and exhaustion."], "status": "PENDING_CORPUS" },
+    { "conditionId": "STORAGE-OBJECT/gcs-copy-rewrite", "source": "spec/compatibility/contract.json#ST-CLAIM-OBJECTS", "recipeIds": ["storage-object/gcs/copy-rewrite"], "checks": ["Copy and rewrite return production metadata and copy bytes; missing source and conditional refusal leave destination unchanged."], "status": "PENDING_CORPUS" },
+    { "conditionId": "STORAGE-OBJECT/generation-preconditions", "source": "spec/compatibility/contract.json#ST-CLAIM-OBJECTS", "recipeIds": ["storage-object/gcs/generation-preconditions"], "checks": ["Match and not-match, zero-create and stale generation conditions on write, read and delete return the right response and post-state."], "status": "PENDING_CORPUS" },
+    { "conditionId": "STORAGE-OBJECT/metageneration-preconditions", "source": "spec/compatibility/contract.json#ST-CLAIM-OBJECTS", "recipeIds": ["storage-object/gcs/metageneration-preconditions"], "checks": ["Match, not-match, stale and malformed metageneration guards on metadata update and delete preserve state on refusal."], "status": "PENDING_CORPUS" },
+    { "conditionId": "STORAGE-OBJECT/checksums", "source": "spec/compatibility/contract.json#ST-CLAIM-OBJECTS", "recipeIds": ["storage-object/gcs/checksums"], "checks": ["Valid MD5 and CRC32C are reported; mismatches and malformed declarations return production errors without publishing bytes."], "status": "PENDING_CORPUS" },
+    { "conditionId": "STORAGE-OBJECT/missing-object-errors", "source": "docs/compatibility/ip-fs-production-compatibility.md#storage-object-production-closure", "recipeIds": ["storage-object/errors/missing"], "checks": ["Both dialects distinguish missing metadata, media, update and delete with production status and error shape."], "status": "PENDING_CORPUS" },
+    { "conditionId": "STORAGE-OBJECT/authorization-errors", "source": "docs/compatibility/ip-fs-production-compatibility.md#storage-object-production-closure", "recipeIds": ["storage-object/errors/authorization"], "checks": ["Missing, malformed and insufficient credentials produce the production status and error shape, and refused writes publish nothing."], "status": "PENDING_CORPUS" },
+    { "conditionId": "STORAGE-OBJECT/invalid-object-name-errors", "source": "docs/compatibility/ip-fs-production-compatibility.md#storage-object-production-closure", "recipeIds": ["storage-object/errors/object-name"], "checks": ["Missing and invalid object names in upload, get and list paths return the production error shape without mutation."], "status": "PENDING_CORPUS" },
+    { "conditionId": "STORAGE-OBJECT/invalid-range-errors", "source": "docs/compatibility/ip-fs-production-compatibility.md#storage-object-production-closure", "recipeIds": ["storage-object/errors/range"], "checks": ["Malformed and unsatisfiable ranges, including the empty-object boundary, return production status, headers and body without mutation."], "status": "PENDING_CORPUS" },
+    { "conditionId": "STORAGE-OBJECT/admin-credential", "source": "docs/compatibility/ip-fs-production-compatibility.md#storage-object-production-closure", "recipeIds": ["storage-object/auth/admin"], "checks": ["Owner ADC access token can execute the authorized object operations in each dialect; no credential bytes enter public evidence."], "status": "PENDING_CORPUS" },
+    { "conditionId": "STORAGE-OBJECT/firebase-id-token", "source": "docs/compatibility/ip-fs-production-compatibility.md#storage-object-production-closure", "recipeIds": ["storage-object/auth/firebase-id-token"], "checks": ["A real Firebase Auth ID token reaches the Firebase object API under an allow rule, with identity, success and refusal controls; token bytes stay private."], "status": "PENDING_CORPUS" },
+    { "conditionId": "STORAGE-OBJECT/cross-dialect-state", "source": "spec/compatibility/contract.json#ST-CLAIM-OBJECTS", "recipeIds": ["storage-object/cross-dialect/state"], "checks": ["Object bytes, metadata, generation and deletion written through one dialect are observed consistently through the other."], "status": "PENDING_CORPUS" },
+    { "conditionId": "STORAGE-OBJECT/final-artifact-regression", "source": "docs/compatibility/ip-fs-production-compatibility.md#storage-object-production-closure", "recipeIds": ["storage-object/final-artifact"], "checks": ["The same copied binary and SHA-256 produce a complete strict-profile production comparison and official-emulator storage-probe comparison, with a clean source-bound build receipt."], "status": "PENDING_CORPUS" },
+    { "conditionId": "STORAGE-OBJECT/closure-review", "source": "docs/compatibility/ip-fs-production-compatibility.md#storage-object-production-closure", "recipeIds": ["storage-object/closure-review"], "checks": ["An independent reviewer approves every declared condition, scope decision, production recording and final-artifact binding before COMPAT_VERIFIED."], "status": "PENDING_REVIEW" }
+  ]
+}

@@ -16,8 +16,9 @@ use fireemu_adapter_grpc::gateway::Gateway;
 use fireemu_adapter_grpc::local::LocalBackend;
 use fireemu_adapter_grpc::rest::RestState;
 use fireemu_adapter_grpc::serve::{
-    serve_multiplexed, serve_multiplexed_with, API_REQUEST_BYTES, MAX_GRPC_MESSAGE_BYTES,
-    MAX_REST_BODY_BYTES, MAX_STRICT_COMMIT_RAW_BYTES,
+    max_grpc_message_bytes, serve_multiplexed, serve_multiplexed_with, API_REQUEST_BYTES,
+    MAX_GRPC_MESSAGE_BYTES, MAX_REST_BODY_BYTES, MAX_STRICT_COMMIT_RAW_BYTES,
+    MAX_STRICT_REQUEST_BYTES,
 };
 use fireemu_adapter_grpc::service::GatewayService;
 use fireemu_adapter_grpc::webchannel::MAX_FORM_BYTES;
@@ -39,7 +40,8 @@ const COMMIT: &str = "/v1/projects/demo-app/databases/(default)/documents:commit
 const CHANNEL: &str = "/google.firestore.v1.Firestore/Write/channel";
 
 /// Documents per boundary request. Each one stays well inside `FS-LIMIT-DOCUMENT-BYTES`
-/// (1 MiB), so a 10 MiB request is refused for its own size and nothing else.
+/// (1 MiB) at both the 10 MiB and the strict 11 MiB boundary, so a request is refused for its
+/// own size and nothing else.
 const DOCUMENTS: usize = 12;
 
 #[test]
@@ -52,6 +54,20 @@ fn every_transport_bound_is_the_catalog_maximum() {
     assert_eq!(MAX_REST_BODY_BYTES, API_REQUEST_BYTES);
     assert_eq!(MAX_FORM_BYTES, API_REQUEST_BYTES);
     assert_eq!(MAX_GRPC_MESSAGE_BYTES, API_REQUEST_BYTES);
+    // Owner decision D4 (2026-09-25): strict answers every transport at the 11 MiB production
+    // observed on REST `:commit`; production accepted 10,485,761 bytes on the others.
+    assert_eq!(MAX_STRICT_REQUEST_BYTES, 11 * 1024 * 1024);
+    assert_eq!(max_grpc_message_bytes(true), MAX_STRICT_REQUEST_BYTES);
+    assert_eq!(max_grpc_message_bytes(false), API_REQUEST_BYTES);
+}
+
+/// The request bound each profile applies on every transport.
+fn request_limit(enforce_limits: bool) -> usize {
+    if enforce_limits {
+        MAX_STRICT_REQUEST_BYTES
+    } else {
+        API_REQUEST_BYTES
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -111,10 +127,12 @@ fn grpc_write_contribution(write: &pb::Write) -> usize {
     1 + prost::length_delimiter_len(len) + len
 }
 
-/// Payload of each of the [`DOCUMENTS`] `- 1` fixed documents. Their contribution never
-/// changes, so only the last document has to be searched, and each one stays inside
-/// `FS-LIMIT-DOCUMENT-BYTES`.
-const FIXED_PAYLOAD: usize = 950_000;
+/// Payload of each of the [`DOCUMENTS`] `- 1` fixed documents, a little under an even share of
+/// `bytes`. Their contribution never changes, so only the last document has to be searched,
+/// and each one stays inside `FS-LIMIT-DOCUMENT-BYTES` at the 10 MiB and the 11 MiB boundary.
+const fn fixed_payload(bytes: usize) -> usize {
+    bytes / DOCUMENTS - 4_096
+}
 
 /// Writes whose enclosing message, measured by `envelope`, encodes to exactly `bytes`.
 ///
@@ -131,7 +149,13 @@ fn grpc_writes_of(
     let last = DOCUMENTS - 1;
     for bump in 0..16usize {
         let fixed: Vec<pb::Write> = (0..last)
-            .map(|index| grpc_write(scope, index, FIXED_PAYLOAD + usize::from(index == 0) * bump))
+            .map(|index| {
+                grpc_write(
+                    scope,
+                    index,
+                    fixed_payload(bytes) + usize::from(index == 0) * bump,
+                )
+            })
             .collect();
         let head = envelope(&fixed);
         let Some(tail_budget) = bytes.checked_sub(head) else {
@@ -209,7 +233,7 @@ struct ExpectedRefusal {
 
 fn expected_refusal(enforce_limits: bool) -> ExpectedRefusal {
     let production_shape =
-        format!("Request payload size exceeds the limit: {API_REQUEST_BYTES} bytes.");
+        format!("Request payload size exceeds the limit: {MAX_STRICT_REQUEST_BYTES} bytes.");
     if enforce_limits {
         ExpectedRefusal {
             http_status: "HTTP/1.1 400",
@@ -303,6 +327,21 @@ async fn rest_boundary(addr: std::net::SocketAddr, expected: &ExpectedRefusal) {
             refused_sentinel.starts_with("HTTP/1.1 400"),
             "{refused_sentinel}"
         );
+        // Every other REST route takes the same 11 MiB in strict (owner decision D4):
+        // production accepted a 10,485,761-byte batchWrite (non-commit-rest-request-bytes).
+        let batch_write = "/v1/projects/demo-app/databases/(default)/documents:batchWrite";
+        let padded = |bytes: usize| format!("{compact}{}", " ".repeat(bytes - compact.len()));
+        let accepted = http(addr, "POST", batch_write, &padded(API_REQUEST_BYTES + 1)).await;
+        assert!(accepted.starts_with("HTTP/1.1 200"), "{accepted}");
+        let refused = http(
+            addr,
+            "POST",
+            batch_write,
+            &padded(MAX_STRICT_REQUEST_BYTES + 1),
+        )
+        .await;
+        assert!(refused.starts_with("HTTP/1.1 400"), "{refused}");
+        assert!(refused.contains("Request payload size exceeds the limit: 11534336 bytes."));
         return;
     }
     let accepted = http(
@@ -334,17 +373,18 @@ async fn grpc_unary_boundary(
     addr: std::net::SocketAddr,
     client: &mut FirestoreClient<tonic::transport::Channel>,
     expected: &ExpectedRefusal,
+    limit: usize,
 ) {
-    let at = grpc_commit_of(API_REQUEST_BYTES, "grpc-at");
-    assert_eq!(at.encoded_len(), API_REQUEST_BYTES);
+    let at = grpc_commit_of(limit, "grpc-at");
+    assert_eq!(at.encoded_len(), limit);
     client
         .commit(at)
         .await
         .expect("the inclusive maximum is accepted");
     assert!(exists(addr, "grpc-at-0").await);
 
-    let over = grpc_commit_of(API_REQUEST_BYTES + 1, "grpc-over");
-    assert_eq!(over.encoded_len(), API_REQUEST_BYTES + 1);
+    let over = grpc_commit_of(limit + 1, "grpc-over");
+    assert_eq!(over.encoded_len(), limit + 1);
     let error = client.commit(over).await.unwrap_err();
     assert_eq!(error.code(), expected.grpc_code, "{}", error.message());
     assert_eq!(error.message(), expected.grpc_message);
@@ -357,13 +397,14 @@ async fn write_stream_boundary(
     addr: std::net::SocketAddr,
     client: &mut FirestoreClient<tonic::transport::Channel>,
     expected: &ExpectedRefusal,
+    limit: usize,
 ) {
-    write_stream_case(client, API_REQUEST_BYTES, "stream-at")
+    write_stream_case(client, limit, "stream-at")
         .await
         .expect("the inclusive maximum is accepted on the stream");
     assert!(exists(addr, "stream-at-0").await);
 
-    let refused = write_stream_case(client, API_REQUEST_BYTES + 1, "stream-over")
+    let refused = write_stream_case(client, limit + 1, "stream-over")
         .await
         .expect_err("one more byte is refused on the stream");
     assert_eq!(refused.code(), expected.grpc_code, "{}", refused.message());
@@ -373,13 +414,13 @@ async fn write_stream_boundary(
 
 /// `WebChannel`: the exact maximum is read and handed to the channel, which then answers on its
 /// own merits; one more byte never reaches it.
-async fn webchannel_boundary(addr: std::net::SocketAddr, expected: &ExpectedRefusal) {
-    let at_maximum = http(addr, "POST", CHANNEL, &"x".repeat(API_REQUEST_BYTES)).await;
+async fn webchannel_boundary(addr: std::net::SocketAddr, expected: &ExpectedRefusal, limit: usize) {
+    let at_maximum = http(addr, "POST", CHANNEL, &"x".repeat(limit)).await;
     assert!(
         !at_maximum.starts_with("HTTP/1.1 413") && !at_maximum.starts_with("HTTP/1.1 400"),
         "the inclusive maximum must reach the channel: {at_maximum}"
     );
-    let over = http(addr, "POST", CHANNEL, &"x".repeat(API_REQUEST_BYTES + 1)).await;
+    let over = http(addr, "POST", CHANNEL, &"x".repeat(limit + 1)).await;
     assert!(over.starts_with(expected.http_status), "{over}");
     assert!(over.contains(&expected.http_message), "{over}");
 }
@@ -415,7 +456,7 @@ async fn boundary_cases(enforce_limits: bool) {
     let server = tokio::spawn(serve_multiplexed(
         listener,
         FirestoreServer::new(GatewayService::local(gateway(enforce_limits), backend))
-            .max_decoding_message_size(MAX_GRPC_MESSAGE_BYTES)
+            .max_decoding_message_size(max_grpc_message_bytes(enforce_limits))
             .max_encoding_message_size(MAX_GRPC_MESSAGE_BYTES),
         rest,
     ));
@@ -431,11 +472,12 @@ async fn boundary_cases(enforce_limits: bool) {
     // the side that refuses it.
     let mut client = FirestoreClient::new(channel)
         .max_decoding_message_size(MAX_GRPC_MESSAGE_BYTES)
-        .max_encoding_message_size(API_REQUEST_BYTES + 1);
+        .max_encoding_message_size(request_limit(enforce_limits) + 1);
 
-    grpc_unary_boundary(addr, &mut client, &expected).await;
-    write_stream_boundary(addr, &mut client, &expected).await;
-    webchannel_boundary(addr, &expected).await;
+    let limit = request_limit(enforce_limits);
+    grpc_unary_boundary(addr, &mut client, &expected, limit).await;
+    write_stream_boundary(addr, &mut client, &expected, limit).await;
+    webchannel_boundary(addr, &expected, limit).await;
 
     // The daemon survives every refusal.
     let ready = http(addr, "GET", "/", "").await;

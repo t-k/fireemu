@@ -42,6 +42,25 @@ pub const MAX_REST_BODY_BYTES: usize = API_REQUEST_BYTES;
 
 /// Production accepts an 11 MiB raw REST Commit body and refuses one more byte.
 pub const MAX_STRICT_COMMIT_RAW_BYTES: usize = 11 * 1024 * 1024;
+
+/// The request bound the strict profile applies on every transport (owner decision D4,
+/// 2026-09-25). Production accepted 10,485,761 bytes on the non-commit REST routes, a gRPC
+/// unary request, the `Write` stream and `WebChannel` (FS-DATA-WRITE partial supplement), so
+/// the 10 MiB catalog figure is not their limit. Their own limits are unobserved; this reuses
+/// the one production-observed REST figure, REST `:commit`, as an estimate, keeping every
+/// transport bounded.
+pub const MAX_STRICT_REQUEST_BYTES: usize = MAX_STRICT_COMMIT_RAW_BYTES;
+
+/// The gRPC request bound for a profile: [`MAX_STRICT_REQUEST_BYTES`] in strict, the catalog
+/// figure in the emulator profile.
+#[must_use]
+pub const fn max_grpc_message_bytes(enforce_limits: bool) -> usize {
+    if enforce_limits {
+        MAX_STRICT_REQUEST_BYTES
+    } else {
+        MAX_GRPC_MESSAGE_BYTES
+    }
+}
 const MAX_STRICT_COMMIT_REJECTION_DRAIN_BYTES: usize = 32 * 1024 * 1024;
 
 /// Maximum accepted gRPC message (`FS-LIMIT-API-REQUEST-BYTES`), applied by tonic before the
@@ -86,7 +105,7 @@ pub const BODY_READ_DEADLINE: std::time::Duration = std::time::Duration::from_se
 /// The `emulator` profile keeps the 413 the local runtime has always answered. The boundary
 /// is identical under both: only the shape of the refusal differs.
 fn api_request_too_large_message() -> String {
-    format!("Request payload size exceeds the limit: {API_REQUEST_BYTES} bytes.")
+    format!("Request payload size exceeds the limit: {MAX_STRICT_REQUEST_BYTES} bytes.")
 }
 
 /// The legacy refusal, kept for the `emulator` profile.
@@ -438,6 +457,8 @@ async fn rest_call(
         state.gateway.enforce_limits && crate::rest::is_strict_commit_route(&method, &path);
     let body_limit = if strict_commit {
         MAX_STRICT_COMMIT_RAW_BYTES
+    } else if state.gateway.enforce_limits {
+        MAX_STRICT_REQUEST_BYTES
     } else {
         MAX_REST_BODY_BYTES
     };
@@ -579,7 +600,14 @@ where
         .iter()
         .map(|v| v.to_str().unwrap_or_default().to_owned())
         .collect();
-    let allowance = BodyAllowance::for_request(declared, crate::webchannel::MAX_FORM_BYTES);
+    let allowance = BodyAllowance::for_request(
+        declared,
+        if enforce_limits {
+            MAX_STRICT_REQUEST_BYTES
+        } else {
+            crate::webchannel::MAX_FORM_BYTES
+        },
+    );
     let bytes = match read_body(req, allowance, body_deadline).await {
         Ok(bytes) => bytes,
         Err(rejection) => {
@@ -1046,9 +1074,10 @@ mod tests {
         let reshaped = Status::from_header_map(&strict).unwrap();
         assert_eq!(reshaped.code(), Code::InvalidArgument);
         assert_eq!(reshaped.message(), api_request_too_large_message());
+        // Strict states its own bound (owner decision D4), not the 10 MiB catalog figure.
         assert_eq!(
             api_request_too_large_message(),
-            "Request payload size exceeds the limit: 10485760 bytes."
+            "Request payload size exceeds the limit: 11534336 bytes."
         );
 
         // The encode direction is never touched. `MAX_GRPC_RESPONSE_BYTES` is a local memory

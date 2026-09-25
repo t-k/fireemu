@@ -1193,7 +1193,7 @@
               "precision": "documented-divergence"
             },
             {
-              "behaviour": "the Admin project config answers per profile (AUTH-CONFIG-SDK sandbox recording 2026-09-25): the strict profile answers production's document for a project initialized with Identity Platform (initial templates, hashConfig, mobile links, SMS regions, written strength options and quota as production normalizes them), the emulator profile the official emulator's members plus the members written; in both profiles the email and SMS templates and action links follow notification.defaultLocale (English and Japanese), a written SMS region policy replaces the other member of its oneof, and the reCAPTCHA member reads back as production stores it",
+              "behaviour": "the Admin project config answers per profile (AUTH-CONFIG-SDK sandbox recording 2026-09-25): the strict profile answers production's document for a project initialized with Identity Platform (initial templates, hashConfig, mobile links, SMS regions, written strength options and quota as production normalizes them), the emulator profile the official emulator's members plus the members written; in both profiles the email and SMS templates and action links follow notification.defaultLocale (English and Japanese), a written SMS region policy replaces the other member of its oneof, and the reCAPTCHA member reads back as production stores it; the PATCH body is read as production's proto3 JSON with production's refusal wording, unknown, read-only and repeated mask paths are ignored, a masked parent (signIn, emailPrivacyConfig, client.permissions) the body leaves out goes back to its default where the official emulator keeps the old value, and a test number's code is any text; GET v2/recaptchaConfig answers the configured states (the official emulator answers 501) and v2/passwordPolicy refuses an unknown tenant with 400 INVALID_TENANT_ID",
               "precision": "documented-divergence"
             },
             {
@@ -1201,7 +1201,7 @@
               "precision": "documented-divergence"
             },
             {
-              "behaviour": "the strict profile adds production's configuration-dependent refusals the official emulator does not model (AUTH-CONFIG-SDK sandbox recording 2026-09-25): codes for new accounts while client sign-up is off, a written SMS region policy, mobile link settings (link domains, an app link without a continue URL, the Dynamic Links domain) and createAuthUri for a provider that is not configured; it also wraps app links in /__/auth/links as production does",
+              "behaviour": "the strict profile adds production's configuration-dependent refusals the official emulator does not model (AUTH-CONFIG-SDK sandbox recording 2026-09-25): codes for new accounts while client sign-up is off, a written SMS region policy, mobile link settings (link domains, an app link without a continue URL, the Dynamic Links domain) and createAuthUri for a provider that is not configured, and the config values production refuses (a password policy without one version, non-CLDR region codes, template updates, off-step reCAPTCHA scores and actionless rules, misaligned SMS switches, reCAPTCHA keys, malformed authorized domains); it also wraps app links in /__/auth/links as production does",
               "precision": "documented-divergence"
             }
           ],

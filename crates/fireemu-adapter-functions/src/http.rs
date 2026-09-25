@@ -33,8 +33,6 @@ pub const MAX_FUNCTION_BODY_BYTES: usize = 32 * 1024 * 1024;
 pub const MAX_TASK_BODY_BYTES: usize = 100 * 1024;
 /// Maximum raw HTTP response accepted from a function, including framing and headers.
 pub const MAX_FUNCTION_RESPONSE_BYTES: u64 = 64 * 1024 * 1024;
-/// Maximum decoded body accepted from a buffered function response.
-pub const MAX_FUNCTION_RESPONSE_BODY_BYTES: usize = 10 * 1024 * 1024;
 /// Production's maximum streamed response size for a second-generation function.
 pub const MAX_STREAMING_FUNCTION_RESPONSE_BYTES: u64 = 10 * 1024 * 1024;
 const MAX_FUNCTION_CONNECTIONS: usize = 128;
@@ -809,16 +807,10 @@ pub fn parse_response(raw: &[u8], method: &str) -> Result<ProxiedResponse, Strin
     } else if chunked {
         decode_chunked(rest)?
     } else if let Some(n) = content_length {
-        if n > MAX_FUNCTION_RESPONSE_BODY_BYTES {
-            return Err("function response body exceeds byte limit".to_owned());
-        }
         rest.get(..n)
             .ok_or_else(|| "truncated response body".to_owned())?
             .to_vec()
     } else {
-        if rest.len() > MAX_FUNCTION_RESPONSE_BODY_BYTES {
-            return Err("function response body exceeds byte limit".to_owned());
-        }
         rest.to_vec()
     };
     Ok(ProxiedResponse {
@@ -841,9 +833,6 @@ fn decode_chunked(mut rest: &[u8]) -> Result<Vec<u8>, String> {
         rest = &rest[line_end + 2..];
         if size == 0 {
             return Ok(out);
-        }
-        if size > MAX_FUNCTION_RESPONSE_BODY_BYTES - out.len() {
-            return Err("function response body exceeds byte limit".to_owned());
         }
         out.extend_from_slice(
             rest.get(..size)
@@ -1600,9 +1589,9 @@ pub async fn serve_tasks(
 
 #[cfg(test)]
 mod buffered_response_tests {
-    use super::{parse_response, MAX_FUNCTION_RESPONSE_BODY_BYTES};
+    use super::parse_response;
 
-    const BODY_LIMIT: usize = MAX_FUNCTION_RESPONSE_BODY_BYTES;
+    const LARGE_BODY: usize = 10 * 1024 * 1024 + 1;
 
     fn response(headers: &str, body: &[u8]) -> Vec<u8> {
         let mut raw = format!("HTTP/1.1 200 OK\r\n{headers}\r\n").into_bytes();
@@ -1611,32 +1600,27 @@ mod buffered_response_tests {
     }
 
     #[test]
-    fn content_length_body_accepts_exact_limit_and_rejects_one_byte_more() {
-        let exact = vec![b'x'; BODY_LIMIT];
-        let raw = response(&format!("Content-Length: {BODY_LIMIT}\r\n"), &exact);
-        assert_eq!(parse_response(&raw, "GET").unwrap().body.len(), BODY_LIMIT);
-
-        let too_large = vec![b'x'; BODY_LIMIT + 1];
-        let raw = response(
-            &format!("Content-Length: {}\r\n", too_large.len()),
-            &too_large,
-        );
-        assert!(parse_response(&raw, "GET").is_err());
+    fn ordinary_on_request_content_length_body_above_ten_mib_is_forwarded() {
+        let body = vec![b'x'; LARGE_BODY];
+        let raw = response(&format!("Content-Length: {}\r\n", body.len()), &body);
+        assert_eq!(parse_response(&raw, "GET").unwrap().body, body);
     }
 
     #[test]
-    fn close_delimited_body_rejects_more_than_limit() {
-        let raw = response("", &vec![b'x'; BODY_LIMIT + 1]);
-        assert!(parse_response(&raw, "GET").is_err());
+    fn ordinary_on_request_close_delimited_body_above_ten_mib_is_forwarded() {
+        let body = vec![b'x'; LARGE_BODY];
+        let raw = response("", &body);
+        assert_eq!(parse_response(&raw, "GET").unwrap().body, body);
     }
 
     #[test]
-    fn chunked_body_counts_decoded_bytes_across_chunks() {
-        let mut body = format!("{BODY_LIMIT:x}\r\n").into_bytes();
-        body.extend(std::iter::repeat_n(b'x', BODY_LIMIT));
-        body.extend_from_slice(b"\r\n1\r\ny\r\n0\r\n\r\n");
-        let raw = response("Transfer-Encoding: chunked\r\n", &body);
-        assert!(parse_response(&raw, "GET").is_err());
+    fn ordinary_on_request_chunked_body_above_ten_mib_is_forwarded() {
+        let body = vec![b'x'; LARGE_BODY];
+        let mut wire = format!("{:x}\r\n", LARGE_BODY - 1).into_bytes();
+        wire.extend_from_slice(&body[..LARGE_BODY - 1]);
+        wire.extend_from_slice(b"\r\n1\r\nx\r\n0\r\n\r\n");
+        let raw = response("Transfer-Encoding: chunked\r\n", &wire);
+        assert_eq!(parse_response(&raw, "GET").unwrap().body, body);
     }
 }
 

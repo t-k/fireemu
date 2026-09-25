@@ -12,7 +12,7 @@ nothing until they are ruled on (they fail no claim while excluded by name).
 
 ## firebase-protocol
 
-parity: 100 &middot; documented-divergence: 2
+parity: 99 &middot; documented-divergence: 3
 
 | program | step | status |
 | --- | --- | --- |
@@ -108,7 +108,7 @@ parity: 100 &middot; documented-divergence: 2
 | `fb-list` | `flat` | parity |
 | `fb-list` | `subdirectory` | parity |
 | `fb-list` | `empty-prefix` | parity |
-| `fb-list` | `paged` | parity |
+| `fb-list` | `paged` | documented-divergence |
 | `fb-list` | `page-token-shape` | parity |
 | `fb-list` | `list-closed-prefix` | parity |
 | `fb-list` | `list-listable-prefix-anonymous` | parity |
@@ -161,7 +161,7 @@ parity: 30 &middot; documented-divergence: 3
 
 ## json-api
 
-parity: 63 &middot; documented-divergence: 12
+parity: 62 &middot; documented-divergence: 13
 
 | program | step | status |
 | --- | --- | --- |
@@ -198,7 +198,7 @@ parity: 63 &middot; documented-divergence: 12
 | `gcs-update-list-delete` | `list-delimited` | parity |
 | `gcs-update-list-delete` | `list-flat-names` | parity |
 | `gcs-update-list-delete` | `list-empty` | parity |
-| `gcs-update-list-delete` | `list-paged` | parity |
+| `gcs-update-list-delete` | `list-paged` | documented-divergence |
 | `gcs-update-list-delete` | `list-short-route` | parity |
 | `gcs-update-list-delete` | `list-without-credentials` | parity |
 | `gcs-update-list-delete` | `delete` | parity |

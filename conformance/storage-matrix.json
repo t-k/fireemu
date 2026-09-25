@@ -6,8 +6,8 @@
   },
   "project": "demo-storage-probe",
   "summary": {
-    "parity": 195,
-    "documented-divergence": 24,
+    "parity": 193,
+    "documented-divergence": 26,
     "debt": 0
   },
   "programs": [
@@ -408,7 +408,16 @@
           "id": "multipart-data-ending-in-line-breaks",
           "status": "parity",
           "value": {
-            "bytes": [108, 105, 110, 101, 13, 10, 13, 10],
+            "bytes": [
+              108,
+              105,
+              110,
+              101,
+              13,
+              10,
+              13,
+              10
+            ],
             "status": 200
           }
         }
@@ -1709,7 +1718,10 @@
                   "name": "open/lst/zz.txt"
                 }
               ],
-              "prefixes": ["open/lst/dir/", "open/lst/dir2/"]
+              "prefixes": [
+                "open/lst/dir/",
+                "open/lst/dir2/"
+              ]
             },
             "headers": {
               "content-type": "application/json; charset=utf-8"
@@ -1795,27 +1807,71 @@
         },
         {
           "id": "paged",
-          "status": "parity",
-          "value": {
+          "status": "documented-divergence",
+          "oracle": {
             "0": {
               "hasNext": true,
-              "items": ["open/lst/a.txt", "open/lst/b.txt"],
-              "prefixes": ["open/lst/dir/", "open/lst/dir2/"],
+              "items": [
+                "open/lst/a.txt",
+                "open/lst/b.txt"
+              ],
+              "prefixes": [
+                "open/lst/dir/",
+                "open/lst/dir2/"
+              ],
               "status": 200
             },
             "1": {
               "hasNext": false,
-              "items": ["open/lst/zz.txt"],
-              "prefixes": ["open/lst/dir/", "open/lst/dir2/"],
+              "items": [
+                "open/lst/zz.txt"
+              ],
+              "prefixes": [
+                "open/lst/dir/",
+                "open/lst/dir2/"
+              ],
               "status": 200
             }
-          }
+          },
+          "fireemu": {
+            "0": {
+              "hasNext": true,
+              "items": [
+                "open/lst/a.txt",
+                "open/lst/b.txt"
+              ],
+              "prefixes": [],
+              "status": 200
+            },
+            "1": {
+              "hasNext": true,
+              "items": [],
+              "prefixes": [
+                "open/lst/dir/",
+                "open/lst/dir2/"
+              ],
+              "status": 200
+            },
+            "2": {
+              "hasNext": false,
+              "items": [
+                "open/lst/zz.txt"
+              ],
+              "prefixes": [],
+              "status": 200
+            }
+          },
+          "documents": "README.md, \"Storage\"; capability manifest ST-OBJ-1 (crates/fireemu/src/capabilities.json); spec/compatibility/contract.json",
+          "reason": "The Firebase list API counts items and folded prefixes together toward maxResults and limits a page to 1000 entries. fireemu places each prefix on only one page, an inference from paging the combined ordered entries rather than an explicit statement in the reference. The official emulator pages items alone and repeats every folded prefix on every page."
         },
         {
           "id": "page-token-shape",
           "status": "parity",
           "value": {
-            "items": ["open/lst/a.txt", "open/lst/b.txt"],
+            "items": [
+              "open/lst/a.txt",
+              "open/lst/b.txt"
+            ],
             "nextPageToken": "open/lst/dir/c.txt"
           }
         },
@@ -3512,7 +3568,9 @@
                 }
               ],
               "kind": "storage#objects",
-              "prefixes": ["open/gcsu/list/dir/"]
+              "prefixes": [
+                "open/gcsu/list/dir/"
+              ]
             },
             "headers": {
               "content-type": "application/json; charset=utf-8"
@@ -3550,27 +3608,66 @@
         },
         {
           "id": "list-paged",
-          "status": "parity",
-          "value": {
+          "status": "documented-divergence",
+          "oracle": {
             "0": {
               "hasNext": true,
-              "names": ["open/gcsu/list/a.txt"],
-              "prefixes": ["open/gcsu/list/dir/"],
+              "names": [
+                "open/gcsu/list/a.txt"
+              ],
+              "prefixes": [
+                "open/gcsu/list/dir/"
+              ],
               "status": 200
             },
             "1": {
               "hasNext": false,
-              "names": ["open/gcsu/list/b.txt"],
-              "prefixes": ["open/gcsu/list/dir/"],
+              "names": [
+                "open/gcsu/list/b.txt"
+              ],
+              "prefixes": [
+                "open/gcsu/list/dir/"
+              ],
               "status": 200
             }
-          }
+          },
+          "fireemu": {
+            "0": {
+              "hasNext": true,
+              "names": [
+                "open/gcsu/list/a.txt"
+              ],
+              "prefixes": null,
+              "status": 200
+            },
+            "1": {
+              "hasNext": true,
+              "names": [
+                "open/gcsu/list/b.txt"
+              ],
+              "prefixes": null,
+              "status": 200
+            },
+            "2": {
+              "hasNext": false,
+              "names": [],
+              "prefixes": [
+                "open/gcsu/list/dir/"
+              ],
+              "status": 200
+            }
+          },
+          "documents": "README.md, \"Storage\"; capability manifest ST-OBJ-1 (crates/fireemu/src/capabilities.json); spec/compatibility/contract.json",
+          "reason": "The Cloud Storage JSON API counts items and folded prefixes together toward maxResults. fireemu places each prefix on only one page, an inference from paging the combined ordered entries rather than an explicit statement in the reference; the official emulator pages items alone and repeats every folded prefix."
         },
         {
           "id": "list-short-route",
           "status": "parity",
           "value": {
-            "names": ["open/gcsu/list/dir/c.txt", "open/gcsu/list/dir/d.txt"],
+            "names": [
+              "open/gcsu/list/dir/c.txt",
+              "open/gcsu/list/dir/d.txt"
+            ],
             "status": 200
           }
         },
@@ -4698,7 +4795,9 @@
           "status": "parity",
           "value": {
             "kind": "storage#buckets",
-            "names": ["demo-storage-probe.appspot.com"],
+            "names": [
+              "demo-storage-probe.appspot.com"
+            ],
             "status": 200
           }
         },

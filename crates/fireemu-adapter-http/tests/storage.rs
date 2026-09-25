@@ -18,8 +18,8 @@ use fireemu_core_auth::store::{AuthStore, NewUser};
 use fireemu_core_rules::runtime::{LoadedRules, RulesetSlot};
 use fireemu_core_session::clock::VirtualClock;
 use fireemu_core_storage::name::{BucketName, ObjectName};
-use fireemu_core_storage::store::StorageEvent;
 use fireemu_core_storage::store::StorageState as ObjectStore;
+use fireemu_core_storage::store::{NewMetadata, Precondition, StorageEvent};
 use fireemu_core_types::determinism::SplitMix64;
 use fireemu_core_types::time::LogicalInstant;
 use serde_json::{json, Value};
@@ -347,6 +347,76 @@ fn firebase_protocol_upload_download_list_update_delete() {
     // The official Firebase dialect answers a missing object with a bare status text.
     assert_eq!(r.status, 404);
     assert_eq!(r.body.as_ref(), b"Not Found");
+}
+
+#[test]
+fn firebase_and_json_api_list_pages_share_the_combined_entry_budget() {
+    let storage = state(None);
+    {
+        let mut store = storage.store.lock().unwrap();
+        let bucket = BucketName::try_new(BUCKET).unwrap();
+        for object_name in ["a", "b", "dir/x", "dir2/x", "zz"] {
+            store
+                .put(
+                    &bucket,
+                    &ObjectName::try_new(object_name).unwrap(),
+                    Vec::new(),
+                    NewMetadata::default(),
+                    Precondition::default(),
+                    START,
+                )
+                .unwrap();
+        }
+    }
+
+    for route in [
+        format!("/v0/b/{BUCKET}/o"),
+        format!("/storage/v1/b/{BUCKET}/o"),
+    ] {
+        let mut token: Option<String> = None;
+        for (expected_items, expected_prefixes, expected_token) in [
+            (vec!["a", "b"], vec![], Some("dir/")),
+            (vec![], vec!["dir/", "dir2/"], Some("zz")),
+            (vec!["zz"], vec![], None),
+        ] {
+            let query = token.as_ref().map_or_else(
+                || "delimiter=%2F&maxResults=2".to_owned(),
+                |value| format!("delimiter=%2F&maxResults=2&pageToken={value}"),
+            );
+            let response = handle(
+                &storage,
+                req(
+                    "GET",
+                    &format!("{route}?{query}"),
+                    &[("authorization", "Bearer owner")],
+                    b"",
+                ),
+            );
+            assert_eq!(
+                response.status,
+                200,
+                "{route}: {}",
+                String::from_utf8_lossy(&response.body)
+            );
+            let body = json_body(&response);
+            let items: Vec<&str> = body["items"].as_array().map_or_else(Vec::new, |values| {
+                values
+                    .iter()
+                    .map(|item| item["name"].as_str().unwrap())
+                    .collect()
+            });
+            let prefixes: Vec<&str> = body["prefixes"].as_array().map_or_else(Vec::new, |values| {
+                values
+                    .iter()
+                    .map(|prefix| prefix.as_str().unwrap())
+                    .collect()
+            });
+            assert_eq!(items, expected_items, "{route}");
+            assert_eq!(prefixes, expected_prefixes, "{route}");
+            assert_eq!(body["nextPageToken"].as_str(), expected_token, "{route}");
+            token = expected_token.map(str::to_owned);
+        }
+    }
 }
 
 #[test]

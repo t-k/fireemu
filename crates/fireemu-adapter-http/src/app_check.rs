@@ -247,10 +247,25 @@ fn jwks(state: &AppCheckState) -> JsonResponse {
 }
 
 /// The accepted body fields of an exchange request. Unknown members fail closed (ADR-005).
-const EXCHANGE_BODY_KEYS: [&str; 2] = ["debugToken", "limitedUse"];
+const EXCHANGE_BODY_KEYS: [&str; 4] = ["debugToken", "debug_token", "limitedUse", "limited_use"];
 
 fn invalid_argument(message: &str) -> JsonResponse {
     error(400, "INVALID_ARGUMENT", message)
+}
+
+/// `ProtoJSON` accepts `lowerCamelCase` and original proto field names. Since a JSON object has no preserved order here, equal aliases are accepted and conflicting aliases are refused. See <https://protobuf.dev/programming-guides/json/#field-names-as-json-keys>.
+fn exchange_field<'a>(
+    object: &'a serde_json::Map<String, Value>,
+    json_name: &str,
+    proto_name: &str,
+) -> Result<Option<&'a Value>, JsonResponse> {
+    match (object.get(json_name), object.get(proto_name)) {
+        (Some(json_value), Some(proto_value)) if json_value != proto_value => Err(
+            invalid_argument(&format!("conflicting {json_name} and {proto_name}")),
+        ),
+        (Some(value), _) | (_, Some(value)) => Ok(Some(value)),
+        (None, None) => Ok(None),
+    }
 }
 
 /// `POST .../apps/{appId}:exchangeDebugToken`.
@@ -275,13 +290,16 @@ fn exchange_debug_token(
             return invalid_argument(&format!("unknown request field {key}"));
         }
     }
-    let Some(debug_token) = object.get("debugToken").and_then(Value::as_str) else {
-        return invalid_argument("debugToken is required and must be a string");
+    let debug_token = match exchange_field(object, "debugToken", "debug_token") {
+        Ok(Some(Value::String(token))) => token.as_str(),
+        Ok(_) => return invalid_argument("debugToken is required and must be a string"),
+        Err(refusal) => return refusal,
     };
-    let limited_use = match object.get("limitedUse") {
-        None => false,
-        Some(Value::Bool(b)) => *b,
-        Some(_) => return invalid_argument("limitedUse must be a boolean"),
+    let limited_use = match exchange_field(object, "limitedUse", "limited_use") {
+        Ok(None) => false,
+        Ok(Some(Value::Bool(value))) => *value,
+        Ok(Some(_)) => return invalid_argument("limitedUse must be a boolean"),
+        Err(refusal) => return refusal,
     };
 
     let at = now(state);

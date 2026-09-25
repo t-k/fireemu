@@ -51,6 +51,7 @@ suite) needs, and what leaves the other smokes working without attaching a token
   guards its `indexedDB` token cache. The SDK never dials the local exchange endpoint itself
   (`@firebase/app-check` hard-codes the production base URL), which is why the provider calls
   the daemon and hands the JWT back.
+- `appcheck-debug.mjs`: the pinned Web SDK's built-in debug provider sends `debug_token` through a fetch redirect to the local App Check exchange. Run with `fireemu exec --config tools/sdk-smoke/fireemu.appcheck.json --project demo-app --only appcheck --http-port 0 --hub-port 0 --logging-port 0 -- node tools/sdk-smoke/appcheck-debug.mjs`; the script requires a loopback App Check host and does not contact Google.
 - `missing-index.mjs`: the `firebase` client SDK against a strict-profile gateway that declares
   exactly one composite index (`missing-index.indexes.json`, reached through
   `missing-index.firebase.json`). An undeclared `getDocsFromServer()` must reject with

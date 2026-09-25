@@ -271,6 +271,72 @@ fn a_limited_use_exchange_fails_closed_with_the_replay_code() {
 }
 
 #[test]
+fn a_proto_field_name_exchanges_for_a_session_token() {
+    let state = app_check_state(1);
+    let response = call(
+        &state,
+        "POST",
+        EXCHANGE,
+        &json!({"debug_token": SECRET}).to_string(),
+    );
+    assert_eq!(response.status, 200, "{}", response.body);
+    assert!(response.body["token"].is_string());
+}
+
+#[test]
+fn a_proto_limited_use_field_fails_closed_with_the_replay_code() {
+    let state = app_check_state(1);
+    let response = call(
+        &state,
+        "POST",
+        EXCHANGE,
+        &json!({"debug_token": SECRET, "limited_use": true}).to_string(),
+    );
+    assert_eq!(response.status, 501, "{}", response.body);
+    assert_eq!(
+        response.body["error"]["reason"],
+        "APP_CHECK_REPLAY_UNSUPPORTED"
+    );
+    assert!(response.body.get("token").is_none());
+}
+
+#[test]
+fn conflicting_proto_and_json_field_spellings_are_invalid_arguments() {
+    let state = app_check_state(1);
+    for body in [
+        json!({"debugToken": SECRET, "debug_token": OTHER_SECRET}),
+        json!({"debugToken": SECRET, "limitedUse": false, "limited_use": true}),
+    ] {
+        let response = call(&state, "POST", EXCHANGE, &body.to_string());
+        assert_eq!(response.status, 400, "{}", response.body);
+        assert_eq!(response.body["error"]["status"], "INVALID_ARGUMENT");
+        assert!(response.body["error"]["message"]
+            .as_str()
+            .is_some_and(|message| message.contains("conflicting")));
+        assert!(response.body.get("token").is_none());
+    }
+}
+
+#[test]
+fn matching_proto_and_json_field_spellings_are_accepted() {
+    let state = app_check_state(1);
+    let response = call(
+        &state,
+        "POST",
+        EXCHANGE,
+        &json!({
+            "debugToken": SECRET,
+            "debug_token": SECRET,
+            "limitedUse": false,
+            "limited_use": false
+        })
+        .to_string(),
+    );
+    assert_eq!(response.status, 200, "{}", response.body);
+    assert!(response.body["token"].is_string());
+}
+
+#[test]
 fn malformed_exchange_requests_are_invalid_argument_and_never_attestation_failures() {
     let state = app_check_state(1);
     let oversized = json!({"debugToken": "x".repeat(17 * 1024)}).to_string();

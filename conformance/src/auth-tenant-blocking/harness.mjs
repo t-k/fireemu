@@ -26,10 +26,14 @@ export function tenantShape(id) {
 
 /**
  * Per-program names of tenants. `label(id, name)` names a tenant the harness created;
- * `apply(recorded)` names every tenant an answer mentions and replaces each occurrence.
+ * `apply(recorded)` names every tenant an answer mentions and replaces each occurrence. Naming
+ * a tenant does not make it the program's: only `own(id)` does (a tenant the harness or a step
+ * of the program created), and only owned tenants may be addressed or deleted (pre-send review
+ * MF-1: a tenant list also names other lanes' tenants).
  */
 export function createTenantRegistry() {
   const names = new Map();
+  const owned = new Set();
   let unlabelled = 0;
   const name = (id, label) => {
     if (!names.has(id)) {
@@ -64,7 +68,13 @@ export function createTenantRegistry() {
     label(id, label) {
       if (names.has(id)) throw new Error(`tenant ${id} is already named`);
       name(id, label);
+      owned.add(id);
     },
+    own(id) {
+      name(id);
+      owned.add(id);
+    },
+    owned: () => [...owned],
     apply(recorded) {
       collect(recorded, "");
       return replace(recorded);
@@ -76,10 +86,47 @@ export function createTenantRegistry() {
 }
 
 /**
- * The recorded form of one HTTP answer: the AUTH-MFA normalization, then tenants named by the
- * program's registry. `project` limits a config answer to one top-level member.
+ * Answer members whose value is key material or an opaque cursor: a tenant's scrypt signer key
+ * and salt separator (`tenants.get` returns them to the owner), a provider's client secret, and
+ * a page token (it may wrap a tenant id). Only their presence is recorded (pre-send review MF-2,
+ * SF-3).
+ */
+export const OPAQUE_MEMBERS = {
+  signerKey: "<bytes>",
+  saltSeparator: "<bytes>",
+  clientSecret: "<clientSecret>",
+  nextPageToken: "<pageToken>",
+};
+
+function maskOpaque(value, key = "") {
+  if (typeof value === "string" && Object.hasOwn(OPAQUE_MEMBERS, key)) return OPAQUE_MEMBERS[key];
+  if (Array.isArray(value)) return value.map((v) => maskOpaque(v, key));
+  if (value && typeof value === "object")
+    return Object.fromEntries(Object.entries(value).map(([k, v]) => [k, maskOpaque(v, k)]));
+  return value;
+}
+
+/**
+ * The recorded form of one HTTP answer: key material and cursors masked, the AUTH-MFA
+ * normalization, then tenants named by the program's registry. `project` limits a config answer
+ * to one top-level member.
  */
 export function normalizeTenantResponse(status, text, ctx, registries, options = {}) {
-  const recorded = normalizeMfaResponse(status, text, ctx, registries.enrollments, options);
+  let masked = text;
+  try {
+    masked = JSON.stringify(maskOpaque(JSON.parse(text)));
+  } catch {
+    /* recorded as non-JSON below */
+  }
+  const recorded = normalizeMfaResponse(status, masked, ctx, registries.enrollments, options);
   return registries.tenants.apply(recorded);
+}
+
+/** Refuses a fixture text that still carries a value of an opaque member. */
+export function assertNoOpaqueValue(text) {
+  for (const [key, placeholder] of Object.entries(OPAQUE_MEMBERS)) {
+    for (const [, value] of text.matchAll(new RegExp(`"${key}":\\s*"([^"]*)"`, "g"))) {
+      if (value !== placeholder) throw new Error(`fixture holds a value of ${key}`);
+    }
+  }
 }

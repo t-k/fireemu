@@ -12,6 +12,7 @@
 // session restores the pre-program values and reads them back.
 
 import { REQUEST_CAP, TEST_PHONES } from "../auth-account/harness.mjs";
+import { decodeJwt } from "../auth-credential/tokens.mjs";
 import { MFA_CONFIGS } from "../auth-mfa/guard.mjs";
 
 const PRODUCTION_ORIGINS = {
@@ -27,6 +28,27 @@ const LOCAL_PREFIX = {
 export const UNKNOWN_TENANT = "atb-nosuch-tenant";
 /** Every display name the harness gives a tenant starts with this. */
 export const DISPLAY_NAME_PREFIX = "atb-";
+/**
+ * A display name the harness or a corpus step may give a tenant, the invalid forms the
+ * management program offers included (`atb`, `atb_name`, `Atb-Upper`, `1atb-name`); the
+ * validator requires it of every name the corpus sends, and the cleanup and restore-sandbox
+ * recognise the harness's tenants by it (pre-send review MF-4).
+ */
+const HARNESS_DISPLAY_NAME = /^\d?atb/i;
+
+export const isHarnessDisplayName = (name) =>
+  typeof name === "string" && HARNESS_DISPLAY_NAME.test(name);
+
+/** Every display name a program asks a tenant to carry, by the harness or a step. */
+export function requestedDisplayNames(program) {
+  const names = new Set();
+  for (const spec of Object.values(program.tenants ?? {}))
+    if (typeof spec.displayName === "string") names.add(spec.displayName);
+  for (const step of program.steps)
+    if (/\/tenants(\/[^/]+)?$/.test(step.path) && typeof step.body?.displayName === "string")
+      names.add(step.body.displayName);
+  return names;
+}
 
 /**
  * The project config paths the harness may switch for a program (owner decision TB2): the
@@ -96,7 +118,7 @@ function allowedTenant(id, tenants) {
 export function guardTenantRequest(
   { url, init },
   ctx,
-  { harness = false, tenants = new Set() } = {},
+  { harness = false, tenants = new Set(), tenantPhones = new Map() } = {},
 ) {
   const parsed = new URL(url);
   const raw = url.slice(parsed.origin.length).split("?")[0];
@@ -144,6 +166,7 @@ export function guardTenantRequest(
   if (/oauthIdpConfigs/.test(path)) guardProvider(path, method, body, p);
   if (path.endsWith(":sendOobCode") && body.requestType === "VERIFY_AND_CHANGE_EMAIL")
     throw new Error("an email change is never requested");
+  guardTenantPhone(path, body, tenantPhones);
   for (const input of inputs) {
     walkEntries(input, (key, value) => {
       if (PROJECT_KEYS.has(key) && value !== ctx.project)
@@ -158,6 +181,26 @@ export function guardTenantRequest(
       }
     });
   }
+}
+
+/**
+ * A request that texts a code inside a tenant names one of that tenant's own test numbers: a
+ * tenant does not answer the project's test numbers without an SMS unless shown to (pre-send
+ * review MF-3). The tenant is the body's `tenantId`, or the tenant of the ID token it carries.
+ */
+function guardTenantPhone(path, body, tenantPhones) {
+  let phone;
+  if (path === "/v1/accounts:sendVerificationCode") phone = body.phoneNumber;
+  else if (path === "/v2/accounts/mfaEnrollment:start")
+    phone = body.phoneEnrollmentInfo?.phoneNumber;
+  if (phone === undefined) return;
+  const tenant =
+    typeof body.tenantId === "string" && body.tenantId !== ""
+      ? body.tenantId
+      : decodeJwt(body.idToken)?.claims?.firebase?.tenant;
+  if (tenant === undefined) return;
+  if (!tenantPhones.get(tenant)?.has(phone))
+    throw new Error(`${phone} is not a test number of tenant ${tenant}`);
 }
 
 /** A config read is free; only the harness writes, and only reviewed paths and values. */
@@ -268,10 +311,10 @@ export function validateTenantCorpus(programs) {
       } else if (step.project !== undefined) {
         throw new Error(`${step.id}: only a config answer is projected`);
       }
-      if (step.path === "v2/projects/{project}/tenants" && step.method === "POST") {
+      if (/^v2\/projects\/\{project\}\/tenants(\/[^/]+)?$/.test(step.path)) {
         const name = step.body?.displayName;
-        if (name !== undefined && typeof name !== "string")
-          throw new Error(`${step.id}: a display name is a string`);
+        if (name !== undefined && !isHarnessDisplayName(name))
+          throw new Error(`${step.id}: a tenant display name is a harness name (${name})`);
       }
       if (step.path.endsWith("sendOobCode") && step.body?.requestType === "VERIFY_AND_CHANGE_EMAIL")
         throw new Error(`${step.id}: an email change is never requested`);

@@ -1,6 +1,6 @@
 {
   "kind": "auth-action-comparison-v1",
-  "artifactSha256": "e3f99cdf0380e2b9df602de6cb960fa475b86f577a87b2685656e8714d3b53bc",
+  "artifactSha256": "8c698a58c71af5779d6e94c33e89a8d0b8a1a600b6b6a1990d3373a0b79aa631",
   "fixtureSha256": "4a83aa942859b2abb69fb2e457fe4dbd2dcd1560edf52f7125fd7ef510915c5f",
   "summary": {
     "MATCH": 346

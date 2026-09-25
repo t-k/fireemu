@@ -7463,10 +7463,10 @@
       }
     },
     "fs-rules/expiry/around-exp": {
-      "corpusDigest": "72005147d1e4ccc4f465ab277aaa3477caa5991bf48958d454f842aff91ec903",
+      "corpusDigest": "37fa8f2ffe77d08c76dbd46a74d61a690277f5e9872d3b5ff046231f105544bd",
       "harnessDigest": "d6391ae0739204b68ff395caf3141f4b43729afb6bb1b986b05ec610bad7acfc",
-      "recordedAt": "2026-09-25T01:50:53.794Z",
-      "gitSha": "d4cf6c69e80aea497f36ed166e1ba9bb53829e99",
+      "recordedAt": "2026-09-25T09:07:58.182Z",
+      "gitSha": "fc1826b1357cee55f58f2645e533dfbe177fd577",
       "steps": {
         "exp-minus-60-rest": {
           "status": 404,
@@ -7551,6 +7551,58 @@
         "exp-plus-26-grpc": {
           "grpc": 5,
           "details": "Document \"projects/demo-fs-rules/databases/(default)/documents/fsr-any/d\" not found."
+        },
+        "exp-plus-26-half-rest": {
+          "status": 404,
+          "body": {
+            "error": {
+              "code": 404,
+              "message": "Document \"projects/demo-fs-rules/databases/(default)/documents/fsr-any/d\" not found.",
+              "status": "NOT_FOUND"
+            }
+          }
+        },
+        "exp-plus-27-grpc": {
+          "grpc": 5,
+          "details": "Document \"projects/demo-fs-rules/databases/(default)/documents/fsr-any/d\" not found."
+        },
+        "exp-plus-27-half-rest": {
+          "status": 404,
+          "body": {
+            "error": {
+              "code": 404,
+              "message": "Document \"projects/demo-fs-rules/databases/(default)/documents/fsr-any/d\" not found.",
+              "status": "NOT_FOUND"
+            }
+          }
+        },
+        "exp-plus-28-grpc": {
+          "grpc": 5,
+          "details": "Document \"projects/demo-fs-rules/databases/(default)/documents/fsr-any/d\" not found."
+        },
+        "exp-plus-28-half-rest": {
+          "status": 404,
+          "body": {
+            "error": {
+              "code": 404,
+              "message": "Document \"projects/demo-fs-rules/databases/(default)/documents/fsr-any/d\" not found.",
+              "status": "NOT_FOUND"
+            }
+          }
+        },
+        "exp-plus-29-grpc": {
+          "grpc": 5,
+          "details": "Document \"projects/demo-fs-rules/databases/(default)/documents/fsr-any/d\" not found."
+        },
+        "exp-plus-29-half-rest": {
+          "status": 404,
+          "body": {
+            "error": {
+              "code": 404,
+              "message": "Document \"projects/demo-fs-rules/databases/(default)/documents/fsr-any/d\" not found.",
+              "status": "NOT_FOUND"
+            }
+          }
         },
         "exp-plus-30-rest": {
           "status": 401,

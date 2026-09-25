@@ -75,8 +75,9 @@ pub fn base64url_decode(text: &str) -> Result<Vec<u8>, JwtError> {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum TokenAcceptance {
     /// The `strict` profile: every token is an ID token of this session's Auth store, with
-    /// its issuer, audience, expiry, issued-at and authentication times on the virtual
-    /// clock, subject and revocation checked.
+    /// its issuer, audience, expiry, issued-at and authentication times on the virtual clock
+    /// checked. Identity Toolkit also checks the account (subject, disabled, revocation);
+    /// Firestore does not (see [`verify_firestore_token`]).
     #[default]
     Verified,
     /// The `emulator` profile: a token this store cannot verify is still accepted when it is
@@ -735,9 +736,10 @@ pub fn verify_firestore_token(
     Ok(decoded)
 }
 
-/// How long past `exp` Firestore still honours an ID token: production accepted a token 26
-/// seconds past it and refused one 30 seconds past it, on REST and gRPC (FS-RULES production
-/// recording, 2026-09-25). A token is refused from `exp + 30`.
+/// How long past `exp` Firestore still honours an ID token. Production accepted a token 29.8 s
+/// past it (REST; 29.3 s on gRPC) and refused one 30.3 s past it (REST; 31.3 s on gRPC), in two
+/// recordings each (FS-RULES, 2026-09-25): the allowance lies in (29.8, 30.3] s. A token is
+/// refused from `exp + 30`.
 pub const FIRESTORE_EXPIRY_LEEWAY_SECONDS: i64 = 30;
 
 /// The token checks that do not read the account: see [`verify_firestore_token`].

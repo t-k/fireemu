@@ -1,0 +1,441 @@
+{
+  "schemaVersion": 1,
+  "parent": "FUNCTIONS-EVENTS",
+  "parentStatus": "IMPLEMENTING",
+  "inventoryStatus": "PROPOSED",
+  "oracleTrack": "disposable-sandbox",
+  "oracle": {
+    "plannedProject": "fireemu-oracle-events",
+    "projectStatus": "PLANNED",
+    "proposedRegion": "us-central1"
+  },
+  "closureReview": {
+    "decision": "PENDING"
+  },
+  "scopeDecisions": [
+    {
+      "id": "E1",
+      "decision": "Use the owner-approved dedicated FUNCTIONS-EVENTS sandbox project. The coordinator creates and records its billing, budget, Firebase registration and Auth setup before any production observation.",
+      "rationale": "A dedicated project avoids contention with the Storage and HTTP lanes and isolates event-producing resources and deployment side effects.",
+      "status": "FROZEN",
+      "decidedBy": "owner",
+      "decidedOn": "2026-09-25",
+      "decisionRef": "docs.local/instructions/owner-decisions.md (2026-09-25 sandbox FUNCTIONS-EVENTS project)"
+    },
+    {
+      "id": "E2",
+      "decision": "Compare pinned Node.js v1 and v2 SDK handlers for Firestore, Storage and Pub/Sub; use stable v1 Auth create/delete handlers. Defer preview v2 Auth triggers until a separate owner decision.",
+      "rationale": "The local contract serves both generations for the first three sources, while the documented v2 Auth create/delete API remains Preview.",
+      "status": "PROPOSED"
+    },
+    {
+      "id": "E3",
+      "decision": "HTTP/callable, scheduled, task queue, custom Eventarc, Firebase alerts and Blocking Auth are outside this parent. Their separate claims or parents retain responsibility.",
+      "rationale": "This parent is explicitly limited to Firestore, Storage, Auth and Pub/Sub trigger delivery and event contents.",
+      "status": "PROPOSED"
+    },
+    {
+      "id": "E4",
+      "decision": "Write only to a lane-owned collection in the dedicated project's Firestore (default) database. Include a bounded authenticated client write for v2 Firestore auth context; review the user and Rules setup before sending.",
+      "rationale": "Path matching, no-op writes, snapshots and auth context require source writes, while a separate collection prevents cross-campaign interference.",
+      "status": "PROPOSED"
+    },
+    {
+      "id": "E5",
+      "decision": "Use one lane-owned primary bucket and one control bucket with unique object prefixes. Include archived events only after a reviewed versioning enablement, readback and restoration or cleanup plan for the primary bucket.",
+      "rationale": "A second bucket makes nonmatching-bucket routing observable, while a same-bucket object must still be delivered regardless of prefix. Archive needs versioning, which changes configuration and cleanup behavior.",
+      "status": "PROPOSED"
+    },
+    {
+      "id": "E6",
+      "decision": "Create a lane-owned primary Pub/Sub topic and one control topic, publish only bounded fixture messages and verify topic and subscription deletion afterward.",
+      "rationale": "A second topic makes negative routing observable; dedicated names bound the side effects.",
+      "status": "PROPOSED"
+    },
+    {
+      "id": "E7",
+      "decision": "Create and delete only disposable same-project Auth users, one at a time for deletion. Use repeated sign-in as the no-create control. Exclude tenant, blocking, custom-token signing, bulk-delete side effects beyond the explicit negative control, and external IdP sign-in.",
+      "rationale": "Stable v1 user create/delete events can be observed without additional signing grants or external IdP state; the proposed email/password fixtures exercise empty providerData only.",
+      "status": "PROPOSED"
+    },
+    {
+      "id": "E8",
+      "decision": "Keep raw event IDs, timestamps, resource names and payloads privately for both recordings. Compare deterministic fields and field presence; normalize volatile values only after both recordings show their variation.",
+      "rationale": "Event IDs and wall-clock timestamps vary between source mutations while routing and payload meaning remain observable.",
+      "status": "PROPOSED"
+    },
+    {
+      "id": "E9",
+      "decision": "Test a bounded fail-once-then-success handler with a v2 Firestore event. Compare retry eligibility and stable event identity, without requiring an exact attempt count, delay or ordering across independent events. Other sources and v1 retry behavior remain outside this representative retry condition.",
+      "rationale": "At-least-once delivery can duplicate or delay events; the corpus must not turn a scheduling observation into a deterministic contract.",
+      "status": "PROPOSED"
+    }
+  ],
+  "conditions": [
+    {
+      "conditionId": "FUNCTIONS-EVENTS/firestore-created",
+      "source": "https://firebase.google.com/docs/functions/firestore-events",
+      "recipeIds": [
+        "functions-events/firestore/create"
+      ],
+      "cases": [
+        "new-document",
+        "before-absent",
+        "after-present"
+      ],
+      "status": "PENDING_CORPUS",
+      "generations": [
+        1,
+        2
+      ]
+    },
+    {
+      "conditionId": "FUNCTIONS-EVENTS/firestore-updated",
+      "source": "https://firebase.google.com/docs/functions/firestore-events",
+      "recipeIds": [
+        "functions-events/firestore/update"
+      ],
+      "cases": [
+        "changed-field",
+        "before-present",
+        "after-present"
+      ],
+      "status": "PENDING_CORPUS",
+      "generations": [
+        1,
+        2
+      ]
+    },
+    {
+      "conditionId": "FUNCTIONS-EVENTS/firestore-deleted",
+      "source": "https://firebase.google.com/docs/functions/firestore-events",
+      "recipeIds": [
+        "functions-events/firestore/delete"
+      ],
+      "cases": [
+        "deleted-document",
+        "before-present",
+        "after-absent"
+      ],
+      "status": "PENDING_CORPUS",
+      "generations": [
+        1,
+        2
+      ]
+    },
+    {
+      "conditionId": "FUNCTIONS-EVENTS/firestore-written",
+      "source": "https://firebase.google.com/docs/functions/firestore-events",
+      "recipeIds": [
+        "functions-events/firestore/write"
+      ],
+      "cases": [
+        "create",
+        "update",
+        "delete"
+      ],
+      "status": "PENDING_CORPUS",
+      "generations": [
+        1,
+        2
+      ]
+    },
+    {
+      "conditionId": "FUNCTIONS-EVENTS/firestore-noop",
+      "source": "https://firebase.google.com/docs/functions/firestore-events",
+      "recipeIds": [
+        "functions-events/firestore/noop"
+      ],
+      "cases": [
+        "same-value-write-no-event"
+      ],
+      "status": "PENDING_CORPUS",
+      "generations": [
+        1,
+        2
+      ]
+    },
+    {
+      "conditionId": "FUNCTIONS-EVENTS/firestore-routing-params",
+      "source": "spec/compatibility/contract.json#FN-CLAIM-EVENTS",
+      "recipeIds": [
+        "functions-events/firestore/routing"
+      ],
+      "cases": [
+        "matching-path",
+        "nonmatching-path",
+        "wildcard-param"
+      ],
+      "status": "PENDING_CORPUS",
+      "generations": [
+        1,
+        2
+      ]
+    },
+    {
+      "conditionId": "FUNCTIONS-EVENTS/firestore-payload",
+      "source": "https://firebase.google.com/docs/functions/firestore-events",
+      "recipeIds": [
+        "functions-events/firestore/payload"
+      ],
+      "cases": [
+        "handler-envelope",
+        "field-values",
+        "document-name",
+        "update-time",
+        "event-metadata"
+      ],
+      "status": "PENDING_CORPUS",
+      "generations": [
+        1,
+        2
+      ]
+    },
+    {
+      "conditionId": "FUNCTIONS-EVENTS/firestore-auth-context",
+      "source": "https://firebase.google.com/docs/functions/firestore-events",
+      "recipeIds": [
+        "functions-events/firestore/auth-context"
+      ],
+      "cases": [
+        "authenticated-write",
+        "admin-write",
+        "auth-type-and-id"
+      ],
+      "status": "PENDING_SCOPE",
+      "generations": [
+        2
+      ]
+    },
+    {
+      "conditionId": "FUNCTIONS-EVENTS/storage-finalized",
+      "source": "https://firebase.google.com/docs/functions/gcp-storage-events",
+      "recipeIds": [
+        "functions-events/storage/finalize"
+      ],
+      "cases": [
+        "new-object",
+        "overwritten-generation",
+        "failed-upload-no-event"
+      ],
+      "status": "PENDING_CORPUS",
+      "generations": [
+        1,
+        2
+      ]
+    },
+    {
+      "conditionId": "FUNCTIONS-EVENTS/storage-deleted",
+      "source": "https://firebase.google.com/docs/functions/gcp-storage-events",
+      "recipeIds": [
+        "functions-events/storage/delete"
+      ],
+      "cases": [
+        "live-object-delete",
+        "no-event-for-missing-object"
+      ],
+      "status": "PENDING_CORPUS",
+      "generations": [
+        1,
+        2
+      ]
+    },
+    {
+      "conditionId": "FUNCTIONS-EVENTS/storage-metadata-updated",
+      "source": "https://firebase.google.com/docs/functions/gcp-storage-events",
+      "recipeIds": [
+        "functions-events/storage/metadata"
+      ],
+      "cases": [
+        "custom-metadata-change",
+        "metageneration"
+      ],
+      "status": "PENDING_CORPUS",
+      "generations": [
+        1,
+        2
+      ]
+    },
+    {
+      "conditionId": "FUNCTIONS-EVENTS/storage-archived",
+      "source": "https://firebase.google.com/docs/functions/gcp-storage-events",
+      "recipeIds": [
+        "functions-events/storage/archive"
+      ],
+      "cases": [
+        "versioned-overwrite",
+        "archived-generation"
+      ],
+      "status": "PENDING_SCOPE",
+      "generations": [
+        1,
+        2
+      ]
+    },
+    {
+      "conditionId": "FUNCTIONS-EVENTS/storage-payload",
+      "source": "https://firebase.google.com/docs/functions/gcp-storage-events",
+      "recipeIds": [
+        "functions-events/storage/payload"
+      ],
+      "cases": [
+        "handler-envelope",
+        "name-and-bucket",
+        "generation",
+        "content-type",
+        "event-metadata"
+      ],
+      "status": "PENDING_CORPUS",
+      "generations": [
+        1,
+        2
+      ]
+    },
+    {
+      "conditionId": "FUNCTIONS-EVENTS/storage-bucket-routing",
+      "source": "spec/compatibility/contract.json#FN-CLAIM-EVENTS",
+      "recipeIds": [
+        "functions-events/storage/routing"
+      ],
+      "cases": [
+        "matching-bucket",
+        "nonmatching-bucket",
+        "same-bucket-other-prefix-delivered"
+      ],
+      "status": "PENDING_CORPUS",
+      "generations": [
+        1,
+        2
+      ]
+    },
+    {
+      "conditionId": "FUNCTIONS-EVENTS/auth-created",
+      "source": "https://firebase.google.com/docs/functions/1st-gen/auth-events",
+      "recipeIds": [
+        "functions-events/auth/create"
+      ],
+      "cases": [
+        "admin-create",
+        "email-password-create",
+        "repeat-sign-in-no-event"
+      ],
+      "status": "PENDING_CORPUS",
+      "generations": [
+        1
+      ]
+    },
+    {
+      "conditionId": "FUNCTIONS-EVENTS/auth-deleted",
+      "source": "https://firebase.google.com/docs/functions/1st-gen/auth-events",
+      "recipeIds": [
+        "functions-events/auth/delete"
+      ],
+      "cases": [
+        "single-user-delete",
+        "bulk-delete-no-event"
+      ],
+      "status": "PENDING_CORPUS",
+      "generations": [
+        1
+      ]
+    },
+    {
+      "conditionId": "FUNCTIONS-EVENTS/auth-payload",
+      "source": "https://firebase.google.com/docs/functions/1st-gen/auth-events",
+      "recipeIds": [
+        "functions-events/auth/payload"
+      ],
+      "cases": [
+        "handler-envelope",
+        "uid",
+        "email",
+        "empty-provider-data",
+        "event-metadata"
+      ],
+      "status": "PENDING_CORPUS",
+      "generations": [
+        1
+      ]
+    },
+    {
+      "conditionId": "FUNCTIONS-EVENTS/pubsub-published",
+      "source": "https://firebase.google.com/docs/functions/pubsub-events",
+      "recipeIds": [
+        "functions-events/pubsub/publish"
+      ],
+      "cases": [
+        "handler-envelope",
+        "base64-data",
+        "attributes",
+        "message-id",
+        "publish-time"
+      ],
+      "status": "PENDING_CORPUS",
+      "generations": [
+        1,
+        2
+      ]
+    },
+    {
+      "conditionId": "FUNCTIONS-EVENTS/pubsub-topic-routing",
+      "source": "spec/compatibility/contract.json#FN-CLAIM-EVENTS",
+      "recipeIds": [
+        "functions-events/pubsub/routing"
+      ],
+      "cases": [
+        "matching-topic",
+        "nonmatching-topic",
+        "ordering-key"
+      ],
+      "status": "PENDING_CORPUS",
+      "generations": [
+        1,
+        2
+      ]
+    },
+    {
+      "conditionId": "FUNCTIONS-EVENTS/delivery-retry-identity",
+      "source": "https://firebase.google.com/docs/functions/retries",
+      "recipeIds": [
+        "functions-events/delivery/retry"
+      ],
+      "cases": [
+        "handler-failure",
+        "fail-once-then-success",
+        "retry-enabled",
+        "event-id-across-attempts"
+      ],
+      "status": "PENDING_CORPUS",
+      "generations": [
+        2
+      ],
+      "sources": [
+        "firestore"
+      ]
+    },
+    {
+      "conditionId": "FUNCTIONS-EVENTS/final-artifact-regression",
+      "source": "spec/compatibility/closure/FUNCTIONS-EVENTS.json",
+      "recipeIds": [
+        "functions-events/"
+      ],
+      "cases": [
+        "two-production-recordings",
+        "same-source-final-artifact-comparison",
+        "workspace-regression"
+      ],
+      "status": "PENDING_CORPUS"
+    },
+    {
+      "conditionId": "FUNCTIONS-EVENTS/closure-review",
+      "source": "spec/compatibility/closure/FUNCTIONS-EVENTS.json",
+      "recipeIds": [
+        "functions-events/"
+      ],
+      "cases": [
+        "independent-coordinator-approval"
+      ],
+      "status": "PENDING_REVIEW"
+    }
+  ]
+}

@@ -2,6 +2,9 @@
   "schemaVersion": 1,
   "parent": "FUNCTIONS-HTTP",
   "parentStatus": "IMPLEMENTING",
+  "inventoryStatus": "FROZEN",
+  "frozenOn": "2026-09-25",
+  "freezeAuthority": "docs.local/instructions/2026-09-25-codex-closure-freeze-go.md",
   "oracleTrack": "disposable-sandbox",
   "oracle": {
     "project": "fireemu-oracle-query",
@@ -16,37 +19,55 @@
       "id": "H1",
       "decision": "Observe Node.js 2nd gen onRequest and onCall exports from the same pinned firebase-functions fixture in production and fireemu, in us-central1.",
       "rationale": "This is the parent named in the owner directive; one source and one region keep runtime differences attributable to the service under test.",
-      "status": "PROPOSED"
+      "status": "FROZEN",
+      "decidedBy": "coordinator (delegated by owner)",
+      "decidedOn": "2026-09-25",
+      "decisionRef": "docs.local/instructions/owner-decisions.md (2026-09-25 FUNCTIONS-HTTP H1/H6)"
     },
     {
       "id": "H2",
       "decision": "Event triggers, scheduled functions, task queues, Blocking Auth, 1st gen, cold-start latency, scaling and billing are outside FUNCTIONS-HTTP.",
       "rationale": "These have separate parents or are explicitly excluded by the owner directive.",
-      "status": "PROPOSED"
+      "status": "FROZEN",
+      "decidedBy": "owner",
+      "decidedOn": "2026-09-25",
+      "decisionRef": "docs.local/instructions/owner-decisions.md (2026-09-25 FUNCTIONS-HTTP H2/H3)"
     },
     {
       "id": "H3",
       "decision": "App Check validation, enforcement and request.app are outside FUNCTIONS-HTTP; no App Check token is sent in this corpus.",
-      "rationale": "The existing APPCHECK-FUNCTIONS claim owns token policy and enforcement; this parent isolates HTTP and callable transport behavior.",
-      "status": "PROPOSED"
+      "rationale": "App Check is outside the current parent set and is recorded as a candidate for a future parent; this closure does not claim App Check behavior.",
+      "status": "FROZEN",
+      "decidedBy": "owner",
+      "decidedOn": "2026-09-25",
+      "decisionRef": "docs.local/instructions/owner-decisions.md (2026-09-25 FUNCTIONS-HTTP H2/H3)"
     },
     {
       "id": "H4",
-      "decision": "Valid and expired Firebase Auth ID tokens must be issued for fireemu-oracle-query itself; do not initialize Auth, create users or grant signing privileges until the coordinator reviews a concrete setup and any required owner decision is recorded.",
-      "rationale": "A different project's token would test cross-project refusal rather than the required authenticated request context; sandbox Auth setup may change project configuration.",
-      "status": "PROPOSED"
+      "decision": "Use same-project Firebase Auth ID tokens from email/password test users under @example.com. Enable Firebase Authentication once, with a restricted API key and no Identity Platform upgrade or signing grants, only after pre-send coordinator approval. Create and delete the users per program.",
+      "rationale": "A different project's token would test cross-project refusal rather than the required authenticated request context.",
+      "status": "FROZEN",
+      "decidedBy": "owner",
+      "decidedOn": "2026-09-25",
+      "decisionRef": "docs.local/instructions/owner-decisions.md (2026-09-25 FUNCTIONS-HTTP / STORAGE-OBJECT Auth setup)"
     },
     {
       "id": "H5",
-      "decision": "Keep one HTTP and one callable function invokable without caller credentials for the bounded corpus; record the exact invoker access settings and read them back in the pre-send review.",
+      "decision": "Allow one side-effect-free, secret-free HTTP fixture and one side-effect-free, secret-free callable fixture to be invoked by allUsers for at most about one hour per program. Read back the invoker policy, then delete both functions and their images after the program and verify deletion.",
       "rationale": "The corpus must separate public transport behavior from Firebase Auth ID token handling.",
-      "status": "PROPOSED"
+      "status": "FROZEN",
+      "decidedBy": "owner",
+      "decidedOn": "2026-09-25",
+      "decisionRef": "docs.local/instructions/owner-decisions.md (2026-09-25 FUNCTIONS-HTTP allUsers fixtures)"
     },
     {
       "id": "H6",
       "decision": "Compare deterministic request and response fields, status and ordered stream chunks; retain raw volatile proxy headers and execution IDs privately and normalize their values only after both recordings expose the variation.",
       "rationale": "Proxy IDs and timestamps can change between recordings, while header presence and handler-visible meaning remain observable.",
-      "status": "PROPOSED"
+      "status": "FROZEN",
+      "decidedBy": "coordinator (delegated by owner)",
+      "decidedOn": "2026-09-25",
+      "decisionRef": "docs.local/instructions/owner-decisions.md (2026-09-25 FUNCTIONS-HTTP H1/H6)"
     }
   ],
   "conditions": [

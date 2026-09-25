@@ -92,6 +92,8 @@ test("FUNCTIONS-HTTP closure keeps every declared condition and scope decision",
   assert.equal(closure.oracleTrack, "disposable-sandbox");
   assert.equal(closure.oracle.project, "fireemu-oracle-query");
   assert.equal(closure.oracle.region, "us-central1");
+  assert.equal(closure.inventoryStatus, "FROZEN");
+  assert.equal(closure.frozenOn, "2026-09-25");
   assert.ok(["IMPLEMENTING", "COMPAT_VERIFIED"].includes(closure.parentStatus));
   assert.ok(["PENDING", "APPROVED"].includes(closure.closureReview.decision));
 
@@ -120,8 +122,13 @@ test("FUNCTIONS-HTTP closure keeps every declared condition and scope decision",
   );
   for (const decision of closure.scopeDecisions) {
     assert.ok(decision.decision && decision.rationale, decision.id);
-    assert.ok(["PROPOSED", "FROZEN"].includes(decision.status), decision.id);
+    assert.equal(decision.status, "FROZEN", decision.id);
+    assert.ok(decision.decidedBy && decision.decidedOn && decision.decisionRef, decision.id);
   }
+  assert.match(
+    closure.scopeDecisions.find(({ id }) => id === "H3").rationale,
+    /candidate for a future parent/,
+  );
 
   for (const condition of closure.conditions) {
     const label = condition.conditionId;

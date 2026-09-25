@@ -1,11 +1,14 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 
 import {
+  assertReviewedLock,
+  productionStartedRow,
   otherLaneOnSandbox,
   recentAbort,
   restoreDue,
@@ -122,6 +125,15 @@ test("local admission fails closed on malformed rows and unknown task cost", asy
         event: "note",
       },
     ],
+    [{ ts: 0, project: "fireemu-oracle-idp", taskId: "AUTH-MFA-SANDBOX", event: "note" }],
+    [
+      {
+        ts: "2026-02-30T12:00:00Z",
+        project: "fireemu-oracle-idp",
+        taskId: "AUTH-MFA-SANDBOX",
+        event: "note",
+      },
+    ],
     [{ ts: now, project: "", taskId: "AUTH-MFA-SANDBOX", event: "note" }],
     [
       {
@@ -134,6 +146,67 @@ test("local admission fails closed on malformed rows and unknown task cost", asy
   ]) {
     const result = await admitLocal(rows);
     assert.notEqual(result.status, 0);
+  }
+});
+
+test("production recording requires the reviewed shared ledger lock before credentials", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "atb-direct-recording-"));
+  try {
+    const ledger = join(dir, "ledger.jsonl");
+    await writeFile(ledger, "");
+    const result = spawnSync(
+      process.execPath,
+      [join(import.meta.dirname, "auth-tenant-blocking/run.mjs"), "record-production"],
+      {
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          FIREEMU_SANDBOX_LEDGER: ledger,
+          FIREEMU_AUTH_TENANT_PRIVATE_DIR: dir,
+          FIREEMU_AUTH_SANDBOX_WEB_CONFIG: "",
+        },
+      },
+    );
+    assert.notEqual(result.status, 0);
+    assert.match(result.stderr, /reviewed shared sandbox ledger|reviewed sandbox lock/);
+    assert.equal(await readFile(ledger, "utf8"), "");
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("the reviewed lock binds its ledger, nonce, wrapper, and campaign process", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "atb-reviewed-lock-"));
+  try {
+    const ledger = join(dir, "ledger.jsonl");
+    const nonce = "a".repeat(64);
+    await writeFile(ledger, "");
+    await writeFile(
+      `${ledger}.lock`,
+      JSON.stringify({
+        pid: process.pid,
+        nonceSha256: createHash("sha256").update(nonce).digest("hex"),
+      }),
+    );
+    await assertReviewedLock(ledger, ledger, nonce, process.pid, process.ppid);
+    await assert.rejects(
+      assertReviewedLock(ledger, ledger, "b".repeat(64), process.pid, process.ppid),
+      /lock owner/,
+    );
+    await assert.rejects(
+      assertReviewedLock(ledger, ledger, nonce, process.pid + 1, process.ppid),
+      /lock owner/,
+    );
+    await assert.rejects(
+      assertReviewedLock(ledger, ledger, nonce, process.pid, process.ppid + 1),
+      /process chain/,
+    );
+    await assert.rejects(
+      assertReviewedLock(ledger, join(dir, "other.jsonl"), nonce, process.pid, process.ppid),
+      /shared sandbox ledger/,
+    );
+  } finally {
+    await rm(dir, { recursive: true, force: true });
   }
 });
 
@@ -165,6 +238,32 @@ test("local admission reserves the reviewed run cost within each task's US$10 bu
     );
     assert.equal(result.status === 0, accepted, `${suite} prior=${prior}: ${result.stderr}`);
   }
+});
+
+test("a restored recording retains its campaign reservation in later budget admission", async () => {
+  const old = new Date(Date.now() - 2 * 3_600_000).toISOString();
+  const rows = [
+    {
+      ts: old,
+      project: "fireemu-oracle-idp",
+      taskId: TASK_ID,
+      event: "finished",
+      outcome: "recorded",
+      estimatedUsd: 8.5,
+    },
+    productionStartedRow({ ts: old, gitSha: "a".repeat(40), programs: ["sample"] }),
+    {
+      ts: old,
+      project: "fireemu-oracle-idp",
+      taskId: TASK_ID,
+      event: "finished",
+      outcome: "restored-by-hand",
+      sandboxAtBaseline: true,
+    },
+  ];
+  const result = await admitLocal(rows);
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /budget/);
 });
 
 test("an unfinished run of this suite blocks another recording at any age", () => {

@@ -25,8 +25,8 @@
 import { execFile, spawn } from "node:child_process";
 import { createHash, generateKeyPairSync, randomBytes } from "node:crypto";
 import { existsSync } from "node:fs";
-import { appendFile, mkdir, readFile, writeFile } from "node:fs/promises";
-import { join } from "node:path";
+import { appendFile, lstat, mkdir, open as openFile, readFile, writeFile } from "node:fs/promises";
+import { join, resolve as resolvePath } from "node:path";
 import { promisify } from "node:util";
 
 import { CONFORMANCE_DIR } from "../config.mjs";
@@ -422,7 +422,7 @@ function ledgerEntries(ledgerText) {
       }
       if (row === null || typeof row !== "object" || Array.isArray(row))
         throw new Error("malformed sandbox ledger row");
-      if (typeof row.project !== "string" || !row.project || !Number.isFinite(Date.parse(row.ts)))
+      if (typeof row.project !== "string" || !row.project || !validLedgerTimestamp(row.ts))
         throw new Error("sandbox ledger row needs a project and timestamp");
       if (
         (row.event === undefined && row.outcome === undefined) ||
@@ -440,6 +440,21 @@ function ledgerEntries(ledgerText) {
       }
       return row;
     });
+}
+
+function validLedgerTimestamp(ts) {
+  if (typeof ts !== "string") return false;
+  const match =
+    /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.\d+)?(Z|[+-]\d{2}:\d{2})$/.exec(ts);
+  if (!match || !Number.isFinite(Date.parse(ts))) return false;
+  const [, year, month, day, hour, minute, second, zone] = match;
+  if (+month < 1 || +month > 12 || +hour > 23 || +minute > 59 || +second > 59) return false;
+  if (+day < 1 || +day > new Date(Date.UTC(+year, +month, 0)).getUTCDate()) return false;
+  if (zone !== "Z") {
+    const [, zoneHour, zoneMinute] = /[+-](\d{2}):(\d{2})/.exec(zone);
+    if (+zoneHour > 23 || +zoneMinute > 59) return false;
+  }
+  return true;
 }
 
 function isCleanTerminal(row) {
@@ -527,8 +542,6 @@ const TASK_BUDGET_USD = 10;
 /** Local, read-only admission shared by the campaign preflight and the production runner. */
 export function assertLedgerAdmission(ledgerText, now = Date.now()) {
   const rows = ledgerEntries(ledgerText);
-  if (rows.some((row) => row.project === SANDBOX_PROJECT && !Number.isFinite(Date.parse(row.ts))))
-    throw new Error("sandbox ledger has an invalid timestamp");
   const aborted = recentAbort(ledgerText, now);
   if (aborted)
     throw new Error(
@@ -557,6 +570,79 @@ export function assertLedgerAdmission(ledgerText, now = Date.now()) {
     throw new Error("the reviewed campaign would exceed this task's US$10 budget");
 }
 
+/** The reserved cost survives a failed run and a later verified restore. */
+export function productionStartedRow({ ts, gitSha: sha, programs }) {
+  return {
+    ts,
+    event: "started",
+    taskId: TASK_ID,
+    project: SANDBOX_PROJECT,
+    gitSha: sha,
+    programs,
+    maxEstimatedUsd: RUN_RESERVATION_USD,
+  };
+}
+
+/** Only the reviewed wrapper and its campaign child may authorize a production recording. */
+export async function assertReviewedLock(ledger, expectedLedger, nonce, wrapperPid, campaignPid) {
+  if (ledger !== expectedLedger) throw new Error("the reviewed shared sandbox ledger is required");
+  if (!/^[0-9a-f]{64}$/.test(nonce ?? ""))
+    throw new Error("the reviewed sandbox lock nonce is missing");
+  if (
+    !Number.isSafeInteger(+wrapperPid) ||
+    +wrapperPid < 1 ||
+    !Number.isSafeInteger(+campaignPid) ||
+    +campaignPid !== process.ppid
+  )
+    throw new Error("the reviewed sandbox lock process chain is missing");
+  const ledgerStat = await lstat(ledger);
+  if (!ledgerStat.isFile() || ledgerStat.isSymbolicLink())
+    throw new Error("the reviewed shared sandbox ledger must be a regular file");
+  const lockPath = `${ledger}.lock`;
+  const lockStat = await lstat(lockPath);
+  if (!lockStat.isFile() || lockStat.isSymbolicLink())
+    throw new Error("the reviewed sandbox lock must be a regular file");
+  const lock = await openFile(lockPath, "r");
+  try {
+    const openStat = await lock.stat();
+    if (openStat.ino !== lockStat.ino || openStat.dev !== lockStat.dev)
+      throw new Error("the reviewed sandbox lock changed");
+    const data = JSON.parse(await lock.readFile("utf8"));
+    const liveStat = await lstat(lockPath);
+    if (liveStat.ino !== openStat.ino || liveStat.dev !== openStat.dev)
+      throw new Error("the reviewed sandbox lock changed");
+    if (
+      data.pid !== +wrapperPid ||
+      data.nonceSha256 !== createHash("sha256").update(nonce).digest("hex")
+    )
+      throw new Error("the reviewed sandbox lock owner does not match");
+    process.kill(+wrapperPid, 0);
+  } finally {
+    await lock.close();
+  }
+}
+
+async function assertProductionLock(ledger) {
+  const { stdout } = await execFileAsync(
+    "git",
+    ["rev-parse", "--path-format=absolute", "--git-common-dir"],
+    { cwd: CONFORMANCE_DIR },
+  );
+  const expectedLedger = join(
+    resolvePath(stdout.trim(), ".."),
+    "docs.local",
+    "runs",
+    "sandbox-ledger.jsonl",
+  );
+  await assertReviewedLock(
+    ledger,
+    expectedLedger,
+    process.env.FIREEMU_SANDBOX_LOCK_NONCE,
+    process.env.FIREEMU_SANDBOX_WRAPPER_PID,
+    process.env.FIREEMU_AUTH_CAMPAIGN_PID,
+  );
+}
+
 async function admitLocal() {
   const ledger = process.env.FIREEMU_SANDBOX_LEDGER;
   if (!ledger || !existsSync(ledger)) throw new Error("the shared sandbox ledger is required");
@@ -571,6 +657,7 @@ async function recordProduction() {
   if (!ledger || !privateRoot) {
     throw new Error("FIREEMU_SANDBOX_LEDGER and FIREEMU_AUTH_TENANT_PRIVATE_DIR are required");
   }
+  await assertProductionLock(ledger);
   await assertCleanTree();
   const ledgerText = existsSync(ledger) ? await readFile(ledger, "utf8") : "";
   assertLedgerAdmission(ledgerText);
@@ -610,9 +697,11 @@ async function recordProduction() {
   const ignoreWriteError = () => {};
   process.stdout.on("error", ignoreWriteError);
   process.stderr.on("error", ignoreWriteError);
+  await assertProductionLock(ledger);
+  assertLedgerAdmission(await readFile(ledger, "utf8"));
   await appendFile(
     ledger,
-    `${JSON.stringify({ ts: new Date().toISOString(), event: "started", taskId: TASK_ID, project: SANDBOX_PROJECT, gitSha: meta.sha, programs: meta.programs })}\n`,
+    `${JSON.stringify(productionStartedRow({ ts: new Date().toISOString(), gitSha: meta.sha, programs: meta.programs }))}\n`,
   );
   const recordings = [];
   const secrets = [];

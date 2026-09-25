@@ -489,6 +489,38 @@ const sms = program(
   ENABLED,
 );
 
+// ---- the used-code checks again, below the account's attempt quota (owner decision M10) --------
+
+// In auth-mfa/totp/sign-in production answered QUOTA_EXCEEDED to #replayed-enrollment-code
+// (recording 1) and #older-unused-code (both recordings), the fifth and sixth wrong codes on
+// that account. Here each check is the only wrong code on a new account: a factor enrolled
+// with its step-0 code, a sign-in with the step-4 code, then the check on a new pending
+// credential.
+const quotaFreeAccount = (n, check, code) => [
+  adminCreate(`create-${n}`, n),
+  signIn(`sign-in-${n}`, n),
+  totpStart(`start-${n}`, `sign-in-${n}`),
+  { ...totpFinalize(`finalize-${n}`, `sign-in-${n}`, `start-${n}`, totp(`start-${n}`, 0)), align: true },
+  signIn(`pending-${n}`, n),
+  {
+    ...totpSignIn(`plus-4-${n}`, `pending-${n}`, listed(`pending-${n}`), totp(`start-${n}`, 4)),
+    ...fresh(),
+  },
+  signIn(`pending-${n}-again`, n),
+  totpSignIn(check, `pending-${n}-again`, listed(`pending-${n}-again`), code(n)),
+];
+
+const totpQuotaFree = program(
+  "auth-mfa/totp/quota-free",
+  [
+    // The code the enrollment used (step 0), after the step-4 sign-in.
+    ...quotaFreeAccount("qe", "replayed-enrollment-code", (n) => sameCode(`finalize-${n}`)),
+    // An unused code of step 2, older than the accepted step 4.
+    ...quotaFreeAccount("qo", "older-unused-code", (n) => totp(`start-${n}`, 2)),
+  ],
+  ENABLED,
+);
+
 // ---- who may enroll, and how many ----------------------------------------------------------------
 
 const interactions = program(
@@ -977,6 +1009,7 @@ export const PROGRAMS = [
   config,
   totpEnroll,
   totpSignInProgram,
+  totpQuotaFree,
   totpWithdraw,
   sms,
   interactions,

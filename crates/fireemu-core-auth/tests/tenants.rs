@@ -239,3 +239,33 @@ fn a_tenant_with_a_display_name_is_named_as_production_names_it() {
     );
     assert_eq!(create(&registry, None), "fireemu-00000000000000000004");
 }
+
+/// `TENRST-2`: a capture waits for the project operation gate, so it never copies the tenant
+/// namespaces halfway through a tenant creation or configuration change (mutation survivor of
+/// `project_operation_gate`, 2026-09-25).
+#[test]
+fn a_tenant_capture_waits_for_the_project_operation_gate() {
+    use std::time::Duration;
+
+    let registry = Arc::new(AuthRegistry::new(
+        "demo-app",
+        Arc::new(Mutex::new(store("demo-app", 1))),
+    ));
+    registry.ensure_tenant("demo-app", "kept").unwrap();
+    let gate = registry.operation_gate("demo-app", None).unwrap();
+    let held = gate.lock().unwrap();
+    let (sender, receiver) = std::sync::mpsc::channel();
+    let capturing = registry.clone();
+    let worker = std::thread::spawn(move || {
+        sender
+            .send(capturing.capture_tenants_snapshot("demo-app").is_ok())
+            .unwrap();
+    });
+    assert!(
+        receiver.recv_timeout(Duration::from_millis(200)).is_err(),
+        "the capture must wait for the gate"
+    );
+    drop(held);
+    assert!(receiver.recv_timeout(Duration::from_secs(5)).unwrap());
+    worker.join().unwrap();
+}

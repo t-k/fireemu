@@ -17867,7 +17867,9 @@ fn a_code_acts_on_the_account_that_owns_its_address_now() {
 
 /// Production's refusals of config values it parsed but will not take (sandbox recording
 /// 2026-09-25, AUTH-CONFIG-SDK config/invalid, password-policy/config, recaptcha). Strict
-/// refuses every one; the emulator profile only those fireemu already refused.
+/// refuses every one; the emulator profile only those fireemu already refused (with
+/// production's words). A policy without versions, which the official emulator takes, is
+/// refused under strict only.
 #[test]
 #[allow(clippy::too_many_lines)]
 fn config_values_are_refused_with_production_messages() {
@@ -17911,15 +17913,37 @@ fn config_values_are_refused_with_production_messages() {
         }
         refused(
             s,
-            "passwordPolicyConfig",
-            json!({"passwordPolicyConfig": {"passwordPolicyEnforcementState": "ENFORCE"}}),
-            "INVALID_CONFIG : Policy versions list must be of length 1",
-        );
-        refused(
-            s,
             "authorizedDomains",
             json!({"authorizedDomains": ["demo-app.web.app", ""]}),
             "INVALID_AUTHORIZED_DOMAIN : An authorized domain is empty.",
+        );
+    }
+    refused(
+        &strict,
+        "passwordPolicyConfig",
+        json!({"passwordPolicyConfig": {"passwordPolicyEnforcementState": "ENFORCE"}}),
+        "INVALID_CONFIG : Policy versions list must be of length 1",
+    );
+    refused(
+        &strict,
+        "passwordPolicyConfig.passwordPolicyEnforcementState",
+        json!({"passwordPolicyConfig": {"passwordPolicyEnforcementState": "ENFORCE"}}),
+        "INVALID_CONFIG : Policy versions list must be of length 1",
+    );
+    for mask in [
+        "passwordPolicyConfig",
+        "passwordPolicyConfig.passwordPolicyEnforcementState",
+    ] {
+        let emulator = state();
+        let (status, answer) = patch(
+            &emulator,
+            mask,
+            json!({"passwordPolicyConfig": {"passwordPolicyEnforcementState": "ENFORCE"}}),
+        );
+        assert_eq!(status, 200, "{mask}: {answer}");
+        assert_eq!(
+            answer["passwordPolicyConfig"]["passwordPolicyEnforcementState"], "ENFORCE",
+            "{mask}: {answer}"
         );
     }
     // Codes production takes as they are; the number's letters become keypad digits.

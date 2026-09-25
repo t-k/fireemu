@@ -216,6 +216,17 @@ pub(super) fn without_false(value: Value) -> Value {
 /// the written members but never reported as a member of its own.
 pub(super) const POLICY_UPDATE_TIME: &str = "_passwordPolicyLastUpdateTime";
 
+/// The stored member holding the names of the password strength options last written, so a
+/// written false option is reported as production reports it.
+pub(super) const POLICY_WRITTEN_OPTIONS: &str = "_passwordPolicyWrittenOptions";
+
+/// The strength options a written policy names, when the write replaced its versions.
+pub(super) fn written_policy_options(body: &Value) -> Option<Vec<String>> {
+    body.pointer("/passwordPolicyConfig/passwordPolicyVersions/0/customStrengthOptions")
+        .and_then(Value::as_object)
+        .map(|options| options.keys().cloned().collect())
+}
+
 /// The sign-in provider objects production reports once written: each object with its
 /// switches, a false one left out by the document's false omission.
 pub(super) fn sign_in_providers(config: &fireemu_core_auth::store::SignInConfig) -> Value {
@@ -368,6 +379,19 @@ pub(super) fn strict_document(sources: &ConfigSources<'_>) -> Value {
     // A false switch of the members fireemu models is left out; a written member keeps what
     // was written, false switches included, as production does for them.
     let mut document = without_false(document);
+    let written_options: Vec<String> = sources
+        .members
+        .get(POLICY_WRITTEN_OPTIONS)
+        .and_then(|text| serde_json::from_str(text).ok())
+        .unwrap_or_default();
+    if let Some(options) = document
+        .pointer_mut("/passwordPolicyConfig/passwordPolicyVersions/0/customStrengthOptions")
+        .and_then(Value::as_object_mut)
+    {
+        for name in &written_options {
+            options.entry(name.clone()).or_insert(Value::Bool(false));
+        }
+    }
     for member in STORED_MEMBERS {
         if let Some(value) = member_value(sources.members, member, project) {
             document[*member] = value;
@@ -546,6 +570,14 @@ pub(super) fn apply_stored_members(
             let written = lookup(body, &path.split('.').collect::<Vec<_>>()).cloned();
             let fallback = initial.as_ref().and_then(|v| lookup(v, &segments)).cloned();
             let target = value.get_or_insert_with(|| json!({}));
+            // Writing one member of a oneof clears the others, as production's proto does.
+            if written.is_some() {
+                if let (Some(first), Some(fields)) = (segments.first(), target.as_object_mut()) {
+                    for sibling in oneof_siblings(member, first) {
+                        fields.remove(*sibling);
+                    }
+                }
+            }
             put(target, &segments, written.or(fallback));
         }
         if let Some(value) = &value {
@@ -560,6 +592,15 @@ pub(super) fn apply_stored_members(
         );
     }
     Ok(changed.then_some(next))
+}
+
+/// The other members of the oneof `field` of `member` belongs to.
+fn oneof_siblings(member: &str, field: &str) -> &'static [&'static str] {
+    match (member, field) {
+        ("smsRegionConfig", "allowByDefault") => &["allowlistOnly"],
+        ("smsRegionConfig", "allowlistOnly") => &["allowByDefault"],
+        _ => &[],
+    }
 }
 
 /// ISO 3166-1 alpha-2 region codes, the codes production takes in `smsRegionConfig` (in any

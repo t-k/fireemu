@@ -11029,6 +11029,75 @@ fn patch_sign_in(s: &AuthState, mask: &str, body: &Value) -> (u16, Value) {
     )
 }
 
+/// Writing one member of the SMS region policy's oneof replaces the other, as production does
+/// for the Admin SDK's deep mask (sandbox recording 2026-09-25,
+/// auth-config-sdk/sdk/admin-config#update-sms-region).
+#[test]
+fn a_deep_sms_region_write_replaces_the_other_policy() {
+    for strict in [true, false] {
+        let s = if strict { strict_state() } else { state() };
+        let (status, answer) = patch_sign_in(
+            &s,
+            "smsRegionConfig",
+            &json!({"smsRegionConfig": {"allowByDefault": {}}}),
+        );
+        assert_eq!(status, 200, "{answer}");
+        let (status, answer) = patch_sign_in(
+            &s,
+            "smsRegionConfig.allowlistOnly.allowedRegions",
+            &json!({"smsRegionConfig": {"allowlistOnly": {"allowedRegions": ["US", "JP"]}}}),
+        );
+        assert_eq!(status, 200, "strict {strict}: {answer}");
+        let (_, read) = admin(&s, "GET", PROJECT_CONFIG, &Value::Null);
+        assert_eq!(
+            read["smsRegionConfig"],
+            json!({"allowlistOnly": {"allowedRegions": ["US", "JP"]}}),
+            "strict {strict}"
+        );
+    }
+}
+
+/// Strict: the password policy reports the strength options that were written, a false one
+/// included, as production does (sandbox recording 2026-09-25, auth-config-sdk/sdk/admin-config:
+/// the Admin SDK writes every character class).
+#[test]
+fn the_strict_password_policy_reports_the_written_options() {
+    let s = strict_state();
+    let (status, answer) = patch_sign_in(
+        &s,
+        "passwordPolicyConfig",
+        &json!({"passwordPolicyConfig": {
+            "passwordPolicyEnforcementState": "ENFORCE",
+            "passwordPolicyVersions": [{"customStrengthOptions": {
+                "containsUppercaseCharacter": true,
+                "containsLowercaseCharacter": false,
+                "minPasswordLength": 8,
+            }}],
+        }}),
+    );
+    assert_eq!(status, 200, "{answer}");
+    let options = |document: &Value| {
+        document["passwordPolicyConfig"]["passwordPolicyVersions"][0]["customStrengthOptions"]
+            .clone()
+    };
+    let written = json!({
+        "containsUppercaseCharacter": true,
+        "containsLowercaseCharacter": false,
+        "minPasswordLength": 8,
+    });
+    assert_eq!(options(&answer), written, "{answer}");
+    let (_, read) = admin(&s, "GET", PROJECT_CONFIG, &Value::Null);
+    assert_eq!(options(&read), written, "{read}");
+    // A write of the state alone keeps the written options.
+    let (status, answer) = patch_sign_in(
+        &s,
+        "passwordPolicyConfig.passwordPolicyEnforcementState",
+        &json!({"passwordPolicyConfig": {"passwordPolicyEnforcementState": "OFF"}}),
+    );
+    assert_eq!(status, 200, "{answer}");
+    assert_eq!(options(&answer), written, "{answer}");
+}
+
 /// Strict: a written SMS region policy refuses a code for a number of a region it does not
 /// allow, as production does (sandbox recording 2026-09-25, auth-config-sdk/other-fields).
 /// The emulator profile sends it, as the official emulator (which has no region policy) does.

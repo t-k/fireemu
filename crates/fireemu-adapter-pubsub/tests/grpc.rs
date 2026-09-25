@@ -2072,36 +2072,29 @@ async fn deleting_an_unrelated_subscription_does_not_stop_a_deferred_retry() {
     })
     .await
     .unwrap();
-    tokio::time::timeout(std::time::Duration::from_secs(1), async {
-        while bodies.lock().unwrap().is_empty() {
-            tokio::task::yield_now().await;
-        }
-    })
-    .await
-    .expect("the first subscription must enter backoff");
+    await_push_count(&bodies, 1).await;
+    // The sink records the body before it sends the 500 response. Wait until the dispatcher
+    // has processed that response and recorded backoff before advancing virtual time.
+    let resume_at = h
+        .clock
+        .lock()
+        .unwrap()
+        .now_for_test()
+        .checked_add(push_backoff_after(1))
+        .unwrap();
+    await_push_backoff(&h, first_subscription, resume_at).await;
 
     subc.delete_subscription(pb::DeleteSubscriptionRequest {
         subscription: second_subscription.to_owned(),
     })
     .await
     .unwrap();
-    h.clock
-        .lock()
-        .unwrap()
-        .advance(LogicalDuration::from_seconds(5))
-        .unwrap();
-    h.handle.on_clock_changed();
-    let retried = tokio::time::timeout(std::time::Duration::from_secs(1), async {
-        while bodies.lock().unwrap().len() < 2 {
-            tokio::task::yield_now().await;
-        }
-    })
-    .await;
+    advance(&h, LogicalDuration::from_seconds(5));
+    await_push_count(&bodies, 2).await;
 
     h.shutdown().await;
     stop.store(true, Ordering::Release);
     worker.join().unwrap();
-    retried.expect("deleting another subscription must not cancel this retry");
 }
 
 #[tokio::test]

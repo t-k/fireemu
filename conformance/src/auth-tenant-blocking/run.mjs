@@ -66,6 +66,8 @@ const LOCAL_PROJECT_NUMBER = "123456789012";
  */
 export const SUITE = process.env.AUTH_TENANT_SUITE === "blocking" ? "blocking" : "tenant";
 export const TASK_ID = SUITE === "blocking" ? "AUTH-BLOCKING-SANDBOX" : "AUTH-TENANT-SANDBOX";
+/** A separate ledger owner for a conditional signer binding whose removal is uncertain. */
+export const IAM_HOLD_TASK_ID = `${TASK_ID}-IAM`;
 const PROGRAMS = SUITE === "blocking" ? BLOCKING_PROGRAMS : TENANT_PROGRAMS;
 /** Every program of both suites: one fixture holds them all. */
 const ALL_PROGRAMS = [...TENANT_PROGRAMS, ...BLOCKING_PROGRAMS];
@@ -429,9 +431,12 @@ export function recentAbort(ledgerText, now = Date.now()) {
  * event, or any other task's line there within the last 30 minutes (the rule the AUTH lanes and
  * FS-RULES agreed on, 2026-09-25).
  */
-export function otherLaneOnSandbox(ledgerText, now = Date.now()) {
+export function otherLaneOnSandbox(ledgerText, now = Date.now(), ignoredTaskIds = []) {
   const lines = ledgerEntries(ledgerText).filter(
-    (entry) => entry.project === SANDBOX_PROJECT && entry.taskId !== TASK_ID,
+    (entry) =>
+      entry.project === SANDBOX_PROJECT &&
+      entry.taskId !== TASK_ID &&
+      !ignoredTaskIds.includes(entry.taskId),
   );
   const last = new Map();
   for (const entry of lines) last.set(entry.taskId, entry);
@@ -947,7 +952,9 @@ export async function restoreSandbox({
   const text = existsSync(ledger) ? await readFile(ledger, "utf8") : "";
   if (!restoreDue(text)) throw new Error("the ledger shows no run of this task to restore after");
   if (await isRecordingRunning()) throw new Error("a recording of this harness is still running");
-  const busy = otherLaneOnSandbox(text);
+  // The same suite's IAM hold must still block every new recording, but it does not prevent
+  // restoring a leftover tenant or public fixture. Only a separate IAM readback can close it.
+  const busy = otherLaneOnSandbox(text, Date.now(), [IAM_HOLD_TASK_ID]);
   if (busy) throw new Error(`another lane is on the sandbox: ${busy}`);
   const web = await webConfig();
   const tokens = [];

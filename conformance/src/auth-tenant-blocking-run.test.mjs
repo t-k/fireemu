@@ -48,6 +48,50 @@ test("another suite's hold and thirty-minute gap both block admission", () => {
   assert.equal(otherLaneOnSandbox(row(31 * 60_000, { outcome: "recorded" }), now), undefined);
 });
 
+test("an IAM campaign hold survives sandbox restoration and blocks new recordings", async () => {
+  const now = Date.now();
+  const project = "fireemu-oracle-idp";
+  const iamTask = `${TASK_ID}-IAM`;
+  const row = (taskId, fields) =>
+    JSON.stringify({ ts: new Date(now).toISOString(), project, taskId, ...fields });
+  const iamOnly = `${row(iamTask, { event: "started", reason: "IAM binding uncertain" })}\n`;
+  assert.equal(restoreDue(iamOnly), false);
+  assert.match(otherLaneOnSandbox(iamOnly, now + 2 * 3_600_000), /has not finished/);
+
+  const dir = await mkdtemp(join(tmpdir(), "atb-iam-hold-"));
+  const ledger = join(dir, "ledger.jsonl");
+  try {
+    await writeFile(ledger, `${row(TASK_ID, { event: "started" })}\n${iamOnly}`, { mode: 0o600 });
+    const foreignIamTask = `${TASK_ID === "AUTH-TENANT-SANDBOX" ? "AUTH-BLOCKING-SANDBOX" : "AUTH-TENANT-SANDBOX"}-IAM`;
+    await writeFile(
+      ledger,
+      `${row(TASK_ID, { event: "started" })}\n${row(foreignIamTask, { event: "started" })}\n`,
+    );
+    await assert.rejects(
+      restoreSandbox({ ledger, isRecordingRunning: async () => false }),
+      /another lane is on the sandbox/,
+    );
+    await writeFile(ledger, `${row(TASK_ID, { event: "started" })}\n${iamOnly}`);
+    await assert.rejects(
+      restoreSandbox({
+        ledger,
+        isRecordingRunning: async () => false,
+        webConfig: async () => ({ projectNumber: "123456789012" }),
+        context: async () => {
+          throw new Error("sandbox recovery reached its context");
+        },
+      }),
+      /sandbox recovery reached its context/,
+    );
+    const afterFailure = await readFile(ledger, "utf8");
+    assert.match(otherLaneOnSandbox(afterFailure, now + 2 * 3_600_000), /has not finished/);
+    const afterSandboxSuccess = `${afterFailure}${row(TASK_ID, { outcome: "restored-by-hand" })}\n`;
+    assert.match(otherLaneOnSandbox(afterSandboxSuccess, now + 2 * 3_600_000), /has not finished/);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
 test("an early restore failure retains the sandbox hold for every later preflight", async () => {
   for (const phase of ["production context", "session construction"]) {
     const dir = await mkdtemp(join(tmpdir(), "atb-restore-ledger-"));

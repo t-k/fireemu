@@ -5253,6 +5253,19 @@ fn project_config_management(
                     .flatten()
                     .map(|time| json!(time).to_string());
                 members.set(project_config::POLICY_UPDATE_TIME, time);
+                let configured = store.password_policy().configured;
+                if !configured {
+                    members.set(project_config::POLICY_WRITTEN_OPTIONS, None);
+                } else if fields.iter().any(|field| {
+                    field == "passwordPolicyConfig"
+                        || field.starts_with("passwordPolicyConfig.passwordPolicyVersions")
+                }) {
+                    members.set(
+                        project_config::POLICY_WRITTEN_OPTIONS,
+                        project_config::written_policy_options(body)
+                            .map(|names| json!(names).to_string()),
+                    );
+                }
                 store.set_stored_config_members(members);
             }
             let document = project_config_document(state, project, &store, config);

@@ -1,8 +1,9 @@
+# ruff: noqa: I001 -- reservations bootstraps the shared module path.
 """Ledger contract for the bounded AUTH revision-3 wall exception."""
 
 import pytest
-from broad_contract import digest
 from reservations import Ledger, _claim
+from broad_contract import digest
 from test_reservations import envelope
 from test_reservations import plan as base_plan
 

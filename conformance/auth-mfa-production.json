@@ -5234,6 +5234,1828 @@
         }
       }
     },
+    "auth-mfa/lifetime-short": {
+      "corpusDigest": "f2c4eb24a328e3fc6979be397c6fa690dc99d8d1d814a67f6ded752e626143ad",
+      "harnessDigest": "3b87d7dc611954ff25253393126c08b3d02dcc9453f81b9674548ada0121b190",
+      "recordedAt": "2026-09-24T23:56:47.745Z",
+      "gitSha": "32b4b1977c69231f8663529507be5a2ca1fbe707",
+      "steps": {
+        "create-q60": {
+          "status": 200,
+          "body": {
+            "kind": "identitytoolkit#SignupNewUserResponse",
+            "email": "fireemu-aa-<run>-q60@example.com",
+            "localId": "aa-<run>-q60"
+          }
+        },
+        "sign-in-q60": {
+          "status": 200,
+          "body": {
+            "kind": "identitytoolkit#VerifyPasswordResponse",
+            "localId": "aa-<run>-q60",
+            "email": "fireemu-aa-<run>-q60@example.com",
+            "displayName": "",
+            "idToken": {
+              "<jwt>": {
+                "header": {
+                  "alg": "RS256",
+                  "kid": "<present>",
+                  "typ": "JWT"
+                },
+                "signature": "<present>",
+                "claims": {
+                  "iss": "https://securetoken.google.com/demo-auth-account",
+                  "aud": "demo-auth-account",
+                  "auth_time": "<auth_time>",
+                  "user_id": "aa-<run>-q60",
+                  "sub": "aa-<run>-q60",
+                  "iat": "<iat>",
+                  "exp": "iat+3600",
+                  "email": "fireemu-aa-<run>-q60@example.com",
+                  "email_verified": true,
+                  "firebase": {
+                    "identities": {
+                      "email": [
+                        "fireemu-aa-<run>-q60@example.com"
+                      ]
+                    },
+                    "sign_in_provider": "password"
+                  }
+                },
+                "subIsUserId": true,
+                "subIsLocalId": true,
+                "userIdIsLocalId": true
+              }
+            },
+            "registered": true,
+            "refreshToken": "<refreshToken>",
+            "expiresIn": "3600"
+          }
+        },
+        "start-q60": {
+          "status": 200,
+          "body": {
+            "totpSessionInfo": {
+              "sharedSecretKey": "<sharedSecretKey>",
+              "verificationCodeLength": 6,
+              "hashingAlgorithm": "SHA1",
+              "periodSec": 30,
+              "sessionInfo": "<sessionInfo>",
+              "finalizeEnrollmentTime": "<run-time:instant:fraction-6>"
+            }
+          },
+          "relations": {
+            "finalizeDeadline": "+900s"
+          }
+        },
+        "finalize-q60": {
+          "status": 200,
+          "body": {
+            "idToken": {
+              "<jwt>": {
+                "header": {
+                  "alg": "RS256",
+                  "kid": "<present>",
+                  "typ": "JWT"
+                },
+                "signature": "<present>",
+                "claims": {
+                  "iss": "https://securetoken.google.com/demo-auth-account",
+                  "aud": "demo-auth-account",
+                  "auth_time": "<auth_time>",
+                  "user_id": "aa-<run>-q60",
+                  "sub": "aa-<run>-q60",
+                  "iat": "<iat>",
+                  "exp": "iat+3600",
+                  "email": "fireemu-aa-<run>-q60@example.com",
+                  "email_verified": true,
+                  "firebase": {
+                    "identities": {
+                      "email": [
+                        "fireemu-aa-<run>-q60@example.com"
+                      ]
+                    },
+                    "sign_in_provider": "password",
+                    "sign_in_second_factor": "totp",
+                    "second_factor_identifier": "<enrollment:1:uuid>"
+                  }
+                },
+                "subIsUserId": true
+              }
+            },
+            "refreshToken": "<refreshToken>",
+            "totpAuthInfo": {}
+          }
+        },
+        "create-q120": {
+          "status": 200,
+          "body": {
+            "kind": "identitytoolkit#SignupNewUserResponse",
+            "email": "fireemu-aa-<run>-q120@example.com",
+            "localId": "aa-<run>-q120"
+          }
+        },
+        "sign-in-q120": {
+          "status": 200,
+          "body": {
+            "kind": "identitytoolkit#VerifyPasswordResponse",
+            "localId": "aa-<run>-q120",
+            "email": "fireemu-aa-<run>-q120@example.com",
+            "displayName": "",
+            "idToken": {
+              "<jwt>": {
+                "header": {
+                  "alg": "RS256",
+                  "kid": "<present>",
+                  "typ": "JWT"
+                },
+                "signature": "<present>",
+                "claims": {
+                  "iss": "https://securetoken.google.com/demo-auth-account",
+                  "aud": "demo-auth-account",
+                  "auth_time": "<auth_time>",
+                  "user_id": "aa-<run>-q120",
+                  "sub": "aa-<run>-q120",
+                  "iat": "<iat>",
+                  "exp": "iat+3600",
+                  "email": "fireemu-aa-<run>-q120@example.com",
+                  "email_verified": true,
+                  "firebase": {
+                    "identities": {
+                      "email": [
+                        "fireemu-aa-<run>-q120@example.com"
+                      ]
+                    },
+                    "sign_in_provider": "password"
+                  }
+                },
+                "subIsUserId": true,
+                "subIsLocalId": true,
+                "userIdIsLocalId": true
+              }
+            },
+            "registered": true,
+            "refreshToken": "<refreshToken>",
+            "expiresIn": "3600"
+          }
+        },
+        "start-q120": {
+          "status": 200,
+          "body": {
+            "totpSessionInfo": {
+              "sharedSecretKey": "<sharedSecretKey>",
+              "verificationCodeLength": 6,
+              "hashingAlgorithm": "SHA1",
+              "periodSec": 30,
+              "sessionInfo": "<sessionInfo>",
+              "finalizeEnrollmentTime": "<run-time:instant:fraction-6>"
+            }
+          },
+          "relations": {
+            "finalizeDeadline": "+900s"
+          }
+        },
+        "finalize-q120": {
+          "status": 200,
+          "body": {
+            "idToken": {
+              "<jwt>": {
+                "header": {
+                  "alg": "RS256",
+                  "kid": "<present>",
+                  "typ": "JWT"
+                },
+                "signature": "<present>",
+                "claims": {
+                  "iss": "https://securetoken.google.com/demo-auth-account",
+                  "aud": "demo-auth-account",
+                  "auth_time": "<auth_time>",
+                  "user_id": "aa-<run>-q120",
+                  "sub": "aa-<run>-q120",
+                  "iat": "<iat>",
+                  "exp": "iat+3600",
+                  "email": "fireemu-aa-<run>-q120@example.com",
+                  "email_verified": true,
+                  "firebase": {
+                    "identities": {
+                      "email": [
+                        "fireemu-aa-<run>-q120@example.com"
+                      ]
+                    },
+                    "sign_in_provider": "password",
+                    "sign_in_second_factor": "totp",
+                    "second_factor_identifier": "<enrollment:2:uuid>"
+                  }
+                },
+                "subIsUserId": true
+              }
+            },
+            "refreshToken": "<refreshToken>",
+            "totpAuthInfo": {}
+          }
+        },
+        "create-q180": {
+          "status": 200,
+          "body": {
+            "kind": "identitytoolkit#SignupNewUserResponse",
+            "email": "fireemu-aa-<run>-q180@example.com",
+            "localId": "aa-<run>-q180"
+          }
+        },
+        "sign-in-q180": {
+          "status": 200,
+          "body": {
+            "kind": "identitytoolkit#VerifyPasswordResponse",
+            "localId": "aa-<run>-q180",
+            "email": "fireemu-aa-<run>-q180@example.com",
+            "displayName": "",
+            "idToken": {
+              "<jwt>": {
+                "header": {
+                  "alg": "RS256",
+                  "kid": "<present>",
+                  "typ": "JWT"
+                },
+                "signature": "<present>",
+                "claims": {
+                  "iss": "https://securetoken.google.com/demo-auth-account",
+                  "aud": "demo-auth-account",
+                  "auth_time": "<auth_time>",
+                  "user_id": "aa-<run>-q180",
+                  "sub": "aa-<run>-q180",
+                  "iat": "<iat>",
+                  "exp": "iat+3600",
+                  "email": "fireemu-aa-<run>-q180@example.com",
+                  "email_verified": true,
+                  "firebase": {
+                    "identities": {
+                      "email": [
+                        "fireemu-aa-<run>-q180@example.com"
+                      ]
+                    },
+                    "sign_in_provider": "password"
+                  }
+                },
+                "subIsUserId": true,
+                "subIsLocalId": true,
+                "userIdIsLocalId": true
+              }
+            },
+            "registered": true,
+            "refreshToken": "<refreshToken>",
+            "expiresIn": "3600"
+          }
+        },
+        "start-q180": {
+          "status": 200,
+          "body": {
+            "totpSessionInfo": {
+              "sharedSecretKey": "<sharedSecretKey>",
+              "verificationCodeLength": 6,
+              "hashingAlgorithm": "SHA1",
+              "periodSec": 30,
+              "sessionInfo": "<sessionInfo>",
+              "finalizeEnrollmentTime": "<run-time:instant:fraction-6>"
+            }
+          },
+          "relations": {
+            "finalizeDeadline": "+900s"
+          }
+        },
+        "finalize-q180": {
+          "status": 200,
+          "body": {
+            "idToken": {
+              "<jwt>": {
+                "header": {
+                  "alg": "RS256",
+                  "kid": "<present>",
+                  "typ": "JWT"
+                },
+                "signature": "<present>",
+                "claims": {
+                  "iss": "https://securetoken.google.com/demo-auth-account",
+                  "aud": "demo-auth-account",
+                  "auth_time": "<auth_time>",
+                  "user_id": "aa-<run>-q180",
+                  "sub": "aa-<run>-q180",
+                  "iat": "<iat>",
+                  "exp": "iat+3600",
+                  "email": "fireemu-aa-<run>-q180@example.com",
+                  "email_verified": true,
+                  "firebase": {
+                    "identities": {
+                      "email": [
+                        "fireemu-aa-<run>-q180@example.com"
+                      ]
+                    },
+                    "sign_in_provider": "password",
+                    "sign_in_second_factor": "totp",
+                    "second_factor_identifier": "<enrollment:3:uuid>"
+                  }
+                },
+                "subIsUserId": true
+              }
+            },
+            "refreshToken": "<refreshToken>",
+            "totpAuthInfo": {}
+          }
+        },
+        "create-q240": {
+          "status": 200,
+          "body": {
+            "kind": "identitytoolkit#SignupNewUserResponse",
+            "email": "fireemu-aa-<run>-q240@example.com",
+            "localId": "aa-<run>-q240"
+          }
+        },
+        "sign-in-q240": {
+          "status": 200,
+          "body": {
+            "kind": "identitytoolkit#VerifyPasswordResponse",
+            "localId": "aa-<run>-q240",
+            "email": "fireemu-aa-<run>-q240@example.com",
+            "displayName": "",
+            "idToken": {
+              "<jwt>": {
+                "header": {
+                  "alg": "RS256",
+                  "kid": "<present>",
+                  "typ": "JWT"
+                },
+                "signature": "<present>",
+                "claims": {
+                  "iss": "https://securetoken.google.com/demo-auth-account",
+                  "aud": "demo-auth-account",
+                  "auth_time": "<auth_time>",
+                  "user_id": "aa-<run>-q240",
+                  "sub": "aa-<run>-q240",
+                  "iat": "<iat>",
+                  "exp": "iat+3600",
+                  "email": "fireemu-aa-<run>-q240@example.com",
+                  "email_verified": true,
+                  "firebase": {
+                    "identities": {
+                      "email": [
+                        "fireemu-aa-<run>-q240@example.com"
+                      ]
+                    },
+                    "sign_in_provider": "password"
+                  }
+                },
+                "subIsUserId": true,
+                "subIsLocalId": true,
+                "userIdIsLocalId": true
+              }
+            },
+            "registered": true,
+            "refreshToken": "<refreshToken>",
+            "expiresIn": "3600"
+          }
+        },
+        "start-q240": {
+          "status": 200,
+          "body": {
+            "totpSessionInfo": {
+              "sharedSecretKey": "<sharedSecretKey>",
+              "verificationCodeLength": 6,
+              "hashingAlgorithm": "SHA1",
+              "periodSec": 30,
+              "sessionInfo": "<sessionInfo>",
+              "finalizeEnrollmentTime": "<run-time:instant:fraction-6>"
+            }
+          },
+          "relations": {
+            "finalizeDeadline": "+900s"
+          }
+        },
+        "finalize-q240": {
+          "status": 200,
+          "body": {
+            "idToken": {
+              "<jwt>": {
+                "header": {
+                  "alg": "RS256",
+                  "kid": "<present>",
+                  "typ": "JWT"
+                },
+                "signature": "<present>",
+                "claims": {
+                  "iss": "https://securetoken.google.com/demo-auth-account",
+                  "aud": "demo-auth-account",
+                  "auth_time": "<auth_time>",
+                  "user_id": "aa-<run>-q240",
+                  "sub": "aa-<run>-q240",
+                  "iat": "<iat>",
+                  "exp": "iat+3600",
+                  "email": "fireemu-aa-<run>-q240@example.com",
+                  "email_verified": true,
+                  "firebase": {
+                    "identities": {
+                      "email": [
+                        "fireemu-aa-<run>-q240@example.com"
+                      ]
+                    },
+                    "sign_in_provider": "password",
+                    "sign_in_second_factor": "totp",
+                    "second_factor_identifier": "<enrollment:4:uuid>"
+                  }
+                },
+                "subIsUserId": true
+              }
+            },
+            "refreshToken": "<refreshToken>",
+            "totpAuthInfo": {}
+          }
+        },
+        "create-q290": {
+          "status": 200,
+          "body": {
+            "kind": "identitytoolkit#SignupNewUserResponse",
+            "email": "fireemu-aa-<run>-q290@example.com",
+            "localId": "aa-<run>-q290"
+          }
+        },
+        "sign-in-q290": {
+          "status": 200,
+          "body": {
+            "kind": "identitytoolkit#VerifyPasswordResponse",
+            "localId": "aa-<run>-q290",
+            "email": "fireemu-aa-<run>-q290@example.com",
+            "displayName": "",
+            "idToken": {
+              "<jwt>": {
+                "header": {
+                  "alg": "RS256",
+                  "kid": "<present>",
+                  "typ": "JWT"
+                },
+                "signature": "<present>",
+                "claims": {
+                  "iss": "https://securetoken.google.com/demo-auth-account",
+                  "aud": "demo-auth-account",
+                  "auth_time": "<auth_time>",
+                  "user_id": "aa-<run>-q290",
+                  "sub": "aa-<run>-q290",
+                  "iat": "<iat>",
+                  "exp": "iat+3600",
+                  "email": "fireemu-aa-<run>-q290@example.com",
+                  "email_verified": true,
+                  "firebase": {
+                    "identities": {
+                      "email": [
+                        "fireemu-aa-<run>-q290@example.com"
+                      ]
+                    },
+                    "sign_in_provider": "password"
+                  }
+                },
+                "subIsUserId": true,
+                "subIsLocalId": true,
+                "userIdIsLocalId": true
+              }
+            },
+            "registered": true,
+            "refreshToken": "<refreshToken>",
+            "expiresIn": "3600"
+          }
+        },
+        "start-q290": {
+          "status": 200,
+          "body": {
+            "totpSessionInfo": {
+              "sharedSecretKey": "<sharedSecretKey>",
+              "verificationCodeLength": 6,
+              "hashingAlgorithm": "SHA1",
+              "periodSec": 30,
+              "sessionInfo": "<sessionInfo>",
+              "finalizeEnrollmentTime": "<run-time:instant:fraction-6>"
+            }
+          },
+          "relations": {
+            "finalizeDeadline": "+900s"
+          }
+        },
+        "finalize-q290": {
+          "status": 200,
+          "body": {
+            "idToken": {
+              "<jwt>": {
+                "header": {
+                  "alg": "RS256",
+                  "kid": "<present>",
+                  "typ": "JWT"
+                },
+                "signature": "<present>",
+                "claims": {
+                  "iss": "https://securetoken.google.com/demo-auth-account",
+                  "aud": "demo-auth-account",
+                  "auth_time": "<auth_time>",
+                  "user_id": "aa-<run>-q290",
+                  "sub": "aa-<run>-q290",
+                  "iat": "<iat>",
+                  "exp": "iat+3600",
+                  "email": "fireemu-aa-<run>-q290@example.com",
+                  "email_verified": true,
+                  "firebase": {
+                    "identities": {
+                      "email": [
+                        "fireemu-aa-<run>-q290@example.com"
+                      ]
+                    },
+                    "sign_in_provider": "password",
+                    "sign_in_second_factor": "totp",
+                    "second_factor_identifier": "<enrollment:5:uuid>"
+                  }
+                },
+                "subIsUserId": true
+              }
+            },
+            "refreshToken": "<refreshToken>",
+            "totpAuthInfo": {}
+          }
+        },
+        "create-m150": {
+          "status": 200,
+          "body": {
+            "kind": "identitytoolkit#SignupNewUserResponse",
+            "email": "fireemu-aa-<run>-m150@example.com",
+            "localId": "aa-<run>-m150"
+          }
+        },
+        "sign-in-m150": {
+          "status": 200,
+          "body": {
+            "kind": "identitytoolkit#VerifyPasswordResponse",
+            "localId": "aa-<run>-m150",
+            "email": "fireemu-aa-<run>-m150@example.com",
+            "displayName": "",
+            "idToken": {
+              "<jwt>": {
+                "header": {
+                  "alg": "RS256",
+                  "kid": "<present>",
+                  "typ": "JWT"
+                },
+                "signature": "<present>",
+                "claims": {
+                  "iss": "https://securetoken.google.com/demo-auth-account",
+                  "aud": "demo-auth-account",
+                  "auth_time": "<auth_time>",
+                  "user_id": "aa-<run>-m150",
+                  "sub": "aa-<run>-m150",
+                  "iat": "<iat>",
+                  "exp": "iat+3600",
+                  "email": "fireemu-aa-<run>-m150@example.com",
+                  "email_verified": true,
+                  "firebase": {
+                    "identities": {
+                      "email": [
+                        "fireemu-aa-<run>-m150@example.com"
+                      ]
+                    },
+                    "sign_in_provider": "password"
+                  }
+                },
+                "subIsUserId": true,
+                "subIsLocalId": true,
+                "userIdIsLocalId": true
+              }
+            },
+            "registered": true,
+            "refreshToken": "<refreshToken>",
+            "expiresIn": "3600"
+          }
+        },
+        "start-m150": {
+          "status": 200,
+          "body": {
+            "phoneSessionInfo": {
+              "sessionInfo": "<sessionInfo>"
+            }
+          }
+        },
+        "finalize-m150": {
+          "status": 200,
+          "body": {
+            "idToken": {
+              "<jwt>": {
+                "header": {
+                  "alg": "RS256",
+                  "kid": "<present>",
+                  "typ": "JWT"
+                },
+                "signature": "<present>",
+                "claims": {
+                  "iss": "https://securetoken.google.com/demo-auth-account",
+                  "aud": "demo-auth-account",
+                  "auth_time": "<auth_time>",
+                  "user_id": "aa-<run>-m150",
+                  "sub": "aa-<run>-m150",
+                  "iat": "<iat>",
+                  "exp": "iat+3600",
+                  "email": "fireemu-aa-<run>-m150@example.com",
+                  "email_verified": true,
+                  "firebase": {
+                    "identities": {
+                      "email": [
+                        "fireemu-aa-<run>-m150@example.com"
+                      ]
+                    },
+                    "sign_in_provider": "password",
+                    "sign_in_second_factor": "phone",
+                    "second_factor_identifier": "<enrollment:6:uuid>"
+                  }
+                },
+                "subIsUserId": true
+              }
+            },
+            "refreshToken": "<refreshToken>"
+          }
+        },
+        "create-m300": {
+          "status": 200,
+          "body": {
+            "kind": "identitytoolkit#SignupNewUserResponse",
+            "email": "fireemu-aa-<run>-m300@example.com",
+            "localId": "aa-<run>-m300"
+          }
+        },
+        "sign-in-m300": {
+          "status": 200,
+          "body": {
+            "kind": "identitytoolkit#VerifyPasswordResponse",
+            "localId": "aa-<run>-m300",
+            "email": "fireemu-aa-<run>-m300@example.com",
+            "displayName": "",
+            "idToken": {
+              "<jwt>": {
+                "header": {
+                  "alg": "RS256",
+                  "kid": "<present>",
+                  "typ": "JWT"
+                },
+                "signature": "<present>",
+                "claims": {
+                  "iss": "https://securetoken.google.com/demo-auth-account",
+                  "aud": "demo-auth-account",
+                  "auth_time": "<auth_time>",
+                  "user_id": "aa-<run>-m300",
+                  "sub": "aa-<run>-m300",
+                  "iat": "<iat>",
+                  "exp": "iat+3600",
+                  "email": "fireemu-aa-<run>-m300@example.com",
+                  "email_verified": true,
+                  "firebase": {
+                    "identities": {
+                      "email": [
+                        "fireemu-aa-<run>-m300@example.com"
+                      ]
+                    },
+                    "sign_in_provider": "password"
+                  }
+                },
+                "subIsUserId": true,
+                "subIsLocalId": true,
+                "userIdIsLocalId": true
+              }
+            },
+            "registered": true,
+            "refreshToken": "<refreshToken>",
+            "expiresIn": "3600"
+          }
+        },
+        "start-m300": {
+          "status": 200,
+          "body": {
+            "phoneSessionInfo": {
+              "sessionInfo": "<sessionInfo>"
+            }
+          }
+        },
+        "finalize-m300": {
+          "status": 200,
+          "body": {
+            "idToken": {
+              "<jwt>": {
+                "header": {
+                  "alg": "RS256",
+                  "kid": "<present>",
+                  "typ": "JWT"
+                },
+                "signature": "<present>",
+                "claims": {
+                  "iss": "https://securetoken.google.com/demo-auth-account",
+                  "aud": "demo-auth-account",
+                  "auth_time": "<auth_time>",
+                  "user_id": "aa-<run>-m300",
+                  "sub": "aa-<run>-m300",
+                  "iat": "<iat>",
+                  "exp": "iat+3600",
+                  "email": "fireemu-aa-<run>-m300@example.com",
+                  "email_verified": true,
+                  "firebase": {
+                    "identities": {
+                      "email": [
+                        "fireemu-aa-<run>-m300@example.com"
+                      ]
+                    },
+                    "sign_in_provider": "password",
+                    "sign_in_second_factor": "phone",
+                    "second_factor_identifier": "<enrollment:7:uuid>"
+                  }
+                },
+                "subIsUserId": true
+              }
+            },
+            "refreshToken": "<refreshToken>"
+          }
+        },
+        "create-r240": {
+          "status": 200,
+          "body": {
+            "kind": "identitytoolkit#SignupNewUserResponse",
+            "email": "fireemu-aa-<run>-r240@example.com",
+            "localId": "aa-<run>-r240"
+          }
+        },
+        "create-r330": {
+          "status": 200,
+          "body": {
+            "kind": "identitytoolkit#SignupNewUserResponse",
+            "email": "fireemu-aa-<run>-r330@example.com",
+            "localId": "aa-<run>-r330"
+          }
+        },
+        "sign-in-r330": {
+          "status": 200,
+          "body": {
+            "kind": "identitytoolkit#VerifyPasswordResponse",
+            "localId": "aa-<run>-r330",
+            "email": "fireemu-aa-<run>-r330@example.com",
+            "displayName": "",
+            "idToken": {
+              "<jwt>": {
+                "header": {
+                  "alg": "RS256",
+                  "kid": "<present>",
+                  "typ": "JWT"
+                },
+                "signature": "<present>",
+                "claims": {
+                  "iss": "https://securetoken.google.com/demo-auth-account",
+                  "aud": "demo-auth-account",
+                  "auth_time": "<auth_time>",
+                  "user_id": "aa-<run>-r330",
+                  "sub": "aa-<run>-r330",
+                  "iat": "<iat>",
+                  "exp": "iat+3600",
+                  "email": "fireemu-aa-<run>-r330@example.com",
+                  "email_verified": true,
+                  "firebase": {
+                    "identities": {
+                      "email": [
+                        "fireemu-aa-<run>-r330@example.com"
+                      ]
+                    },
+                    "sign_in_provider": "password"
+                  }
+                },
+                "subIsUserId": true,
+                "subIsLocalId": true,
+                "userIdIsLocalId": true
+              }
+            },
+            "registered": true,
+            "refreshToken": "<refreshToken>",
+            "expiresIn": "3600"
+          }
+        },
+        "pending-m300": {
+          "status": 200,
+          "body": {
+            "kind": "identitytoolkit#VerifyPasswordResponse",
+            "localId": "aa-<run>-m300",
+            "email": "fireemu-aa-<run>-m300@example.com",
+            "displayName": "",
+            "registered": true,
+            "mfaPendingCredential": "<mfaPendingCredential>",
+            "mfaInfo": [
+              {
+                "phoneInfo": "+*******0102",
+                "mfaEnrollmentId": "<enrollment:7:uuid>",
+                "displayName": "Phone",
+                "enrolledAt": "<run-time:instant:fraction-6>"
+              }
+            ]
+          }
+        },
+        "pending-q290": {
+          "status": 200,
+          "body": {
+            "kind": "identitytoolkit#VerifyPasswordResponse",
+            "localId": "aa-<run>-q290",
+            "email": "fireemu-aa-<run>-q290@example.com",
+            "displayName": "",
+            "registered": true,
+            "mfaPendingCredential": "<mfaPendingCredential>",
+            "mfaInfo": [
+              {
+                "mfaEnrollmentId": "<enrollment:5:uuid>",
+                "displayName": "Authenticator",
+                "enrolledAt": "<run-time:instant:fraction-6>",
+                "totpInfo": {}
+              }
+            ]
+          }
+        },
+        "pending-q240": {
+          "status": 200,
+          "body": {
+            "kind": "identitytoolkit#VerifyPasswordResponse",
+            "localId": "aa-<run>-q240",
+            "email": "fireemu-aa-<run>-q240@example.com",
+            "displayName": "",
+            "registered": true,
+            "mfaPendingCredential": "<mfaPendingCredential>",
+            "mfaInfo": [
+              {
+                "mfaEnrollmentId": "<enrollment:4:uuid>",
+                "displayName": "Authenticator",
+                "enrolledAt": "<run-time:instant:fraction-6>",
+                "totpInfo": {}
+              }
+            ]
+          }
+        },
+        "sign-in-r240": {
+          "status": 200,
+          "body": {
+            "kind": "identitytoolkit#VerifyPasswordResponse",
+            "localId": "aa-<run>-r240",
+            "email": "fireemu-aa-<run>-r240@example.com",
+            "displayName": "",
+            "idToken": {
+              "<jwt>": {
+                "header": {
+                  "alg": "RS256",
+                  "kid": "<present>",
+                  "typ": "JWT"
+                },
+                "signature": "<present>",
+                "claims": {
+                  "iss": "https://securetoken.google.com/demo-auth-account",
+                  "aud": "demo-auth-account",
+                  "auth_time": "<auth_time>",
+                  "user_id": "aa-<run>-r240",
+                  "sub": "aa-<run>-r240",
+                  "iat": "<iat>",
+                  "exp": "iat+3600",
+                  "email": "fireemu-aa-<run>-r240@example.com",
+                  "email_verified": true,
+                  "firebase": {
+                    "identities": {
+                      "email": [
+                        "fireemu-aa-<run>-r240@example.com"
+                      ]
+                    },
+                    "sign_in_provider": "password"
+                  }
+                },
+                "subIsUserId": true,
+                "subIsLocalId": true,
+                "userIdIsLocalId": true
+              }
+            },
+            "registered": true,
+            "refreshToken": "<refreshToken>",
+            "expiresIn": "3600"
+          }
+        },
+        "pending-q180": {
+          "status": 200,
+          "body": {
+            "kind": "identitytoolkit#VerifyPasswordResponse",
+            "localId": "aa-<run>-q180",
+            "email": "fireemu-aa-<run>-q180@example.com",
+            "displayName": "",
+            "registered": true,
+            "mfaPendingCredential": "<mfaPendingCredential>",
+            "mfaInfo": [
+              {
+                "mfaEnrollmentId": "<enrollment:3:uuid>",
+                "displayName": "Authenticator",
+                "enrolledAt": "<run-time:instant:fraction-6>",
+                "totpInfo": {}
+              }
+            ]
+          }
+        },
+        "pending-m150": {
+          "status": 200,
+          "body": {
+            "kind": "identitytoolkit#VerifyPasswordResponse",
+            "localId": "aa-<run>-m150",
+            "email": "fireemu-aa-<run>-m150@example.com",
+            "displayName": "",
+            "registered": true,
+            "mfaPendingCredential": "<mfaPendingCredential>",
+            "mfaInfo": [
+              {
+                "phoneInfo": "+*******0101",
+                "mfaEnrollmentId": "<enrollment:6:uuid>",
+                "displayName": "Phone",
+                "enrolledAt": "<run-time:instant:fraction-6>"
+              }
+            ]
+          }
+        },
+        "pending-q120": {
+          "status": 200,
+          "body": {
+            "kind": "identitytoolkit#VerifyPasswordResponse",
+            "localId": "aa-<run>-q120",
+            "email": "fireemu-aa-<run>-q120@example.com",
+            "displayName": "",
+            "registered": true,
+            "mfaPendingCredential": "<mfaPendingCredential>",
+            "mfaInfo": [
+              {
+                "mfaEnrollmentId": "<enrollment:2:uuid>",
+                "displayName": "Authenticator",
+                "enrolledAt": "<run-time:instant:fraction-6>",
+                "totpInfo": {}
+              }
+            ]
+          }
+        },
+        "pending-q60": {
+          "status": 200,
+          "body": {
+            "kind": "identitytoolkit#VerifyPasswordResponse",
+            "localId": "aa-<run>-q60",
+            "email": "fireemu-aa-<run>-q60@example.com",
+            "displayName": "",
+            "registered": true,
+            "mfaPendingCredential": "<mfaPendingCredential>",
+            "mfaInfo": [
+              {
+                "mfaEnrollmentId": "<enrollment:1:uuid>",
+                "displayName": "Authenticator",
+                "enrolledAt": "<run-time:instant:fraction-6>",
+                "totpInfo": {}
+              }
+            ]
+          }
+        },
+        "aged-pending-q60": {
+          "status": 200,
+          "body": {
+            "idToken": {
+              "<jwt>": {
+                "header": {
+                  "alg": "RS256",
+                  "kid": "<present>",
+                  "typ": "JWT"
+                },
+                "signature": "<present>",
+                "claims": {
+                  "iss": "https://securetoken.google.com/demo-auth-account",
+                  "aud": "demo-auth-account",
+                  "auth_time": "<auth_time>",
+                  "user_id": "aa-<run>-q60",
+                  "sub": "aa-<run>-q60",
+                  "iat": "<iat>",
+                  "exp": "iat+3600",
+                  "email": "fireemu-aa-<run>-q60@example.com",
+                  "email_verified": true,
+                  "firebase": {
+                    "identities": {
+                      "email": [
+                        "fireemu-aa-<run>-q60@example.com"
+                      ]
+                    },
+                    "sign_in_provider": "password",
+                    "sign_in_second_factor": "totp",
+                    "second_factor_identifier": "<enrollment:1:uuid>"
+                  }
+                },
+                "subIsUserId": true
+              }
+            },
+            "refreshToken": "<refreshToken>"
+          }
+        },
+        "control-pending-q60": {
+          "status": 200,
+          "body": {
+            "kind": "identitytoolkit#VerifyPasswordResponse",
+            "localId": "aa-<run>-q60",
+            "email": "fireemu-aa-<run>-q60@example.com",
+            "displayName": "",
+            "registered": true,
+            "mfaPendingCredential": "<mfaPendingCredential>",
+            "mfaInfo": [
+              {
+                "mfaEnrollmentId": "<enrollment:1:uuid>",
+                "displayName": "Authenticator",
+                "enrolledAt": "<run-time:instant:fraction-6>",
+                "totpInfo": {}
+              }
+            ]
+          }
+        },
+        "control-finalize-q60": {
+          "status": 200,
+          "body": {
+            "idToken": {
+              "<jwt>": {
+                "header": {
+                  "alg": "RS256",
+                  "kid": "<present>",
+                  "typ": "JWT"
+                },
+                "signature": "<present>",
+                "claims": {
+                  "iss": "https://securetoken.google.com/demo-auth-account",
+                  "aud": "demo-auth-account",
+                  "auth_time": "<auth_time>",
+                  "user_id": "aa-<run>-q60",
+                  "sub": "aa-<run>-q60",
+                  "iat": "<iat>",
+                  "exp": "iat+3600",
+                  "email": "fireemu-aa-<run>-q60@example.com",
+                  "email_verified": true,
+                  "firebase": {
+                    "identities": {
+                      "email": [
+                        "fireemu-aa-<run>-q60@example.com"
+                      ]
+                    },
+                    "sign_in_provider": "password",
+                    "sign_in_second_factor": "totp",
+                    "second_factor_identifier": "<enrollment:1:uuid>"
+                  }
+                },
+                "subIsUserId": true
+              }
+            },
+            "refreshToken": "<refreshToken>"
+          }
+        },
+        "aged-pending-q120": {
+          "status": 200,
+          "body": {
+            "idToken": {
+              "<jwt>": {
+                "header": {
+                  "alg": "RS256",
+                  "kid": "<present>",
+                  "typ": "JWT"
+                },
+                "signature": "<present>",
+                "claims": {
+                  "iss": "https://securetoken.google.com/demo-auth-account",
+                  "aud": "demo-auth-account",
+                  "auth_time": "<auth_time>",
+                  "user_id": "aa-<run>-q120",
+                  "sub": "aa-<run>-q120",
+                  "iat": "<iat>",
+                  "exp": "iat+3600",
+                  "email": "fireemu-aa-<run>-q120@example.com",
+                  "email_verified": true,
+                  "firebase": {
+                    "identities": {
+                      "email": [
+                        "fireemu-aa-<run>-q120@example.com"
+                      ]
+                    },
+                    "sign_in_provider": "password",
+                    "sign_in_second_factor": "totp",
+                    "second_factor_identifier": "<enrollment:2:uuid>"
+                  }
+                },
+                "subIsUserId": true
+              }
+            },
+            "refreshToken": "<refreshToken>"
+          }
+        },
+        "control-pending-q120": {
+          "status": 200,
+          "body": {
+            "kind": "identitytoolkit#VerifyPasswordResponse",
+            "localId": "aa-<run>-q120",
+            "email": "fireemu-aa-<run>-q120@example.com",
+            "displayName": "",
+            "registered": true,
+            "mfaPendingCredential": "<mfaPendingCredential>",
+            "mfaInfo": [
+              {
+                "mfaEnrollmentId": "<enrollment:2:uuid>",
+                "displayName": "Authenticator",
+                "enrolledAt": "<run-time:instant:fraction-6>",
+                "totpInfo": {}
+              }
+            ]
+          }
+        },
+        "control-finalize-q120": {
+          "status": 200,
+          "body": {
+            "idToken": {
+              "<jwt>": {
+                "header": {
+                  "alg": "RS256",
+                  "kid": "<present>",
+                  "typ": "JWT"
+                },
+                "signature": "<present>",
+                "claims": {
+                  "iss": "https://securetoken.google.com/demo-auth-account",
+                  "aud": "demo-auth-account",
+                  "auth_time": "<auth_time>",
+                  "user_id": "aa-<run>-q120",
+                  "sub": "aa-<run>-q120",
+                  "iat": "<iat>",
+                  "exp": "iat+3600",
+                  "email": "fireemu-aa-<run>-q120@example.com",
+                  "email_verified": true,
+                  "firebase": {
+                    "identities": {
+                      "email": [
+                        "fireemu-aa-<run>-q120@example.com"
+                      ]
+                    },
+                    "sign_in_provider": "password",
+                    "sign_in_second_factor": "totp",
+                    "second_factor_identifier": "<enrollment:2:uuid>"
+                  }
+                },
+                "subIsUserId": true
+              }
+            },
+            "refreshToken": "<refreshToken>"
+          }
+        },
+        "sms-start-aged-m150": {
+          "status": 200,
+          "body": {
+            "phoneResponseInfo": {
+              "sessionInfo": "<sessionInfo>"
+            }
+          }
+        },
+        "aged-pending-m150": {
+          "status": 200,
+          "body": {
+            "idToken": {
+              "<jwt>": {
+                "header": {
+                  "alg": "RS256",
+                  "kid": "<present>",
+                  "typ": "JWT"
+                },
+                "signature": "<present>",
+                "claims": {
+                  "iss": "https://securetoken.google.com/demo-auth-account",
+                  "aud": "demo-auth-account",
+                  "auth_time": "<auth_time>",
+                  "user_id": "aa-<run>-m150",
+                  "sub": "aa-<run>-m150",
+                  "iat": "<iat>",
+                  "exp": "iat+3600",
+                  "email": "fireemu-aa-<run>-m150@example.com",
+                  "email_verified": true,
+                  "firebase": {
+                    "identities": {
+                      "email": [
+                        "fireemu-aa-<run>-m150@example.com"
+                      ]
+                    },
+                    "sign_in_provider": "password",
+                    "sign_in_second_factor": "phone",
+                    "second_factor_identifier": "<enrollment:6:uuid>"
+                  }
+                },
+                "subIsUserId": true
+              }
+            },
+            "refreshToken": "<refreshToken>"
+          }
+        },
+        "control-pending-m150": {
+          "status": 200,
+          "body": {
+            "kind": "identitytoolkit#VerifyPasswordResponse",
+            "localId": "aa-<run>-m150",
+            "email": "fireemu-aa-<run>-m150@example.com",
+            "displayName": "",
+            "registered": true,
+            "mfaPendingCredential": "<mfaPendingCredential>",
+            "mfaInfo": [
+              {
+                "phoneInfo": "+*******0101",
+                "mfaEnrollmentId": "<enrollment:6:uuid>",
+                "displayName": "Phone",
+                "enrolledAt": "<run-time:instant:fraction-6>"
+              }
+            ]
+          }
+        },
+        "control-start-m150": {
+          "status": 200,
+          "body": {
+            "phoneResponseInfo": {
+              "sessionInfo": "<sessionInfo>"
+            }
+          }
+        },
+        "control-finalize-m150": {
+          "status": 200,
+          "body": {
+            "idToken": {
+              "<jwt>": {
+                "header": {
+                  "alg": "RS256",
+                  "kid": "<present>",
+                  "typ": "JWT"
+                },
+                "signature": "<present>",
+                "claims": {
+                  "iss": "https://securetoken.google.com/demo-auth-account",
+                  "aud": "demo-auth-account",
+                  "auth_time": "<auth_time>",
+                  "user_id": "aa-<run>-m150",
+                  "sub": "aa-<run>-m150",
+                  "iat": "<iat>",
+                  "exp": "iat+3600",
+                  "email": "fireemu-aa-<run>-m150@example.com",
+                  "email_verified": true,
+                  "firebase": {
+                    "identities": {
+                      "email": [
+                        "fireemu-aa-<run>-m150@example.com"
+                      ]
+                    },
+                    "sign_in_provider": "password",
+                    "sign_in_second_factor": "phone",
+                    "second_factor_identifier": "<enrollment:6:uuid>"
+                  }
+                },
+                "subIsUserId": true
+              }
+            },
+            "refreshToken": "<refreshToken>"
+          }
+        },
+        "aged-pending-q180": {
+          "status": 200,
+          "body": {
+            "idToken": {
+              "<jwt>": {
+                "header": {
+                  "alg": "RS256",
+                  "kid": "<present>",
+                  "typ": "JWT"
+                },
+                "signature": "<present>",
+                "claims": {
+                  "iss": "https://securetoken.google.com/demo-auth-account",
+                  "aud": "demo-auth-account",
+                  "auth_time": "<auth_time>",
+                  "user_id": "aa-<run>-q180",
+                  "sub": "aa-<run>-q180",
+                  "iat": "<iat>",
+                  "exp": "iat+3600",
+                  "email": "fireemu-aa-<run>-q180@example.com",
+                  "email_verified": true,
+                  "firebase": {
+                    "identities": {
+                      "email": [
+                        "fireemu-aa-<run>-q180@example.com"
+                      ]
+                    },
+                    "sign_in_provider": "password",
+                    "sign_in_second_factor": "totp",
+                    "second_factor_identifier": "<enrollment:3:uuid>"
+                  }
+                },
+                "subIsUserId": true
+              }
+            },
+            "refreshToken": "<refreshToken>"
+          }
+        },
+        "control-pending-q180": {
+          "status": 200,
+          "body": {
+            "kind": "identitytoolkit#VerifyPasswordResponse",
+            "localId": "aa-<run>-q180",
+            "email": "fireemu-aa-<run>-q180@example.com",
+            "displayName": "",
+            "registered": true,
+            "mfaPendingCredential": "<mfaPendingCredential>",
+            "mfaInfo": [
+              {
+                "mfaEnrollmentId": "<enrollment:3:uuid>",
+                "displayName": "Authenticator",
+                "enrolledAt": "<run-time:instant:fraction-6>",
+                "totpInfo": {}
+              }
+            ]
+          }
+        },
+        "control-finalize-q180": {
+          "status": 200,
+          "body": {
+            "idToken": {
+              "<jwt>": {
+                "header": {
+                  "alg": "RS256",
+                  "kid": "<present>",
+                  "typ": "JWT"
+                },
+                "signature": "<present>",
+                "claims": {
+                  "iss": "https://securetoken.google.com/demo-auth-account",
+                  "aud": "demo-auth-account",
+                  "auth_time": "<auth_time>",
+                  "user_id": "aa-<run>-q180",
+                  "sub": "aa-<run>-q180",
+                  "iat": "<iat>",
+                  "exp": "iat+3600",
+                  "email": "fireemu-aa-<run>-q180@example.com",
+                  "email_verified": true,
+                  "firebase": {
+                    "identities": {
+                      "email": [
+                        "fireemu-aa-<run>-q180@example.com"
+                      ]
+                    },
+                    "sign_in_provider": "password",
+                    "sign_in_second_factor": "totp",
+                    "second_factor_identifier": "<enrollment:3:uuid>"
+                  }
+                },
+                "subIsUserId": true
+              }
+            },
+            "refreshToken": "<refreshToken>"
+          }
+        },
+        "aged-pending-q240": {
+          "status": 200,
+          "body": {
+            "idToken": {
+              "<jwt>": {
+                "header": {
+                  "alg": "RS256",
+                  "kid": "<present>",
+                  "typ": "JWT"
+                },
+                "signature": "<present>",
+                "claims": {
+                  "iss": "https://securetoken.google.com/demo-auth-account",
+                  "aud": "demo-auth-account",
+                  "auth_time": "<auth_time>",
+                  "user_id": "aa-<run>-q240",
+                  "sub": "aa-<run>-q240",
+                  "iat": "<iat>",
+                  "exp": "iat+3600",
+                  "email": "fireemu-aa-<run>-q240@example.com",
+                  "email_verified": true,
+                  "firebase": {
+                    "identities": {
+                      "email": [
+                        "fireemu-aa-<run>-q240@example.com"
+                      ]
+                    },
+                    "sign_in_provider": "password",
+                    "sign_in_second_factor": "totp",
+                    "second_factor_identifier": "<enrollment:4:uuid>"
+                  }
+                },
+                "subIsUserId": true
+              }
+            },
+            "refreshToken": "<refreshToken>"
+          }
+        },
+        "control-pending-q240": {
+          "status": 200,
+          "body": {
+            "kind": "identitytoolkit#VerifyPasswordResponse",
+            "localId": "aa-<run>-q240",
+            "email": "fireemu-aa-<run>-q240@example.com",
+            "displayName": "",
+            "registered": true,
+            "mfaPendingCredential": "<mfaPendingCredential>",
+            "mfaInfo": [
+              {
+                "mfaEnrollmentId": "<enrollment:4:uuid>",
+                "displayName": "Authenticator",
+                "enrolledAt": "<run-time:instant:fraction-6>",
+                "totpInfo": {}
+              }
+            ]
+          }
+        },
+        "control-finalize-q240": {
+          "status": 200,
+          "body": {
+            "idToken": {
+              "<jwt>": {
+                "header": {
+                  "alg": "RS256",
+                  "kid": "<present>",
+                  "typ": "JWT"
+                },
+                "signature": "<present>",
+                "claims": {
+                  "iss": "https://securetoken.google.com/demo-auth-account",
+                  "aud": "demo-auth-account",
+                  "auth_time": "<auth_time>",
+                  "user_id": "aa-<run>-q240",
+                  "sub": "aa-<run>-q240",
+                  "iat": "<iat>",
+                  "exp": "iat+3600",
+                  "email": "fireemu-aa-<run>-q240@example.com",
+                  "email_verified": true,
+                  "firebase": {
+                    "identities": {
+                      "email": [
+                        "fireemu-aa-<run>-q240@example.com"
+                      ]
+                    },
+                    "sign_in_provider": "password",
+                    "sign_in_second_factor": "totp",
+                    "second_factor_identifier": "<enrollment:4:uuid>"
+                  }
+                },
+                "subIsUserId": true
+              }
+            },
+            "refreshToken": "<refreshToken>"
+          }
+        },
+        "aged-token-start-r240": {
+          "status": 200,
+          "body": {
+            "totpSessionInfo": {
+              "sharedSecretKey": "<sharedSecretKey>",
+              "verificationCodeLength": 6,
+              "hashingAlgorithm": "SHA1",
+              "periodSec": 30,
+              "sessionInfo": "<sessionInfo>",
+              "finalizeEnrollmentTime": "<run-time:instant:fraction-6>"
+            }
+          },
+          "relations": {
+            "finalizeDeadline": "+900s"
+          }
+        },
+        "control-sign-in-r240": {
+          "status": 200,
+          "body": {
+            "kind": "identitytoolkit#VerifyPasswordResponse",
+            "localId": "aa-<run>-r240",
+            "email": "fireemu-aa-<run>-r240@example.com",
+            "displayName": "",
+            "idToken": {
+              "<jwt>": {
+                "header": {
+                  "alg": "RS256",
+                  "kid": "<present>",
+                  "typ": "JWT"
+                },
+                "signature": "<present>",
+                "claims": {
+                  "iss": "https://securetoken.google.com/demo-auth-account",
+                  "aud": "demo-auth-account",
+                  "auth_time": "<auth_time>",
+                  "user_id": "aa-<run>-r240",
+                  "sub": "aa-<run>-r240",
+                  "iat": "<iat>",
+                  "exp": "iat+3600",
+                  "email": "fireemu-aa-<run>-r240@example.com",
+                  "email_verified": true,
+                  "firebase": {
+                    "identities": {
+                      "email": [
+                        "fireemu-aa-<run>-r240@example.com"
+                      ]
+                    },
+                    "sign_in_provider": "password"
+                  }
+                },
+                "subIsUserId": true,
+                "subIsLocalId": true,
+                "userIdIsLocalId": true
+              }
+            },
+            "registered": true,
+            "refreshToken": "<refreshToken>",
+            "expiresIn": "3600"
+          }
+        },
+        "control-start-r240": {
+          "status": 200,
+          "body": {
+            "totpSessionInfo": {
+              "sharedSecretKey": "<sharedSecretKey>",
+              "verificationCodeLength": 6,
+              "hashingAlgorithm": "SHA1",
+              "periodSec": 30,
+              "sessionInfo": "<sessionInfo>",
+              "finalizeEnrollmentTime": "<run-time:instant:fraction-6>"
+            }
+          },
+          "relations": {
+            "finalizeDeadline": "+900s"
+          }
+        },
+        "aged-pending-q290": {
+          "status": 200,
+          "body": {
+            "idToken": {
+              "<jwt>": {
+                "header": {
+                  "alg": "RS256",
+                  "kid": "<present>",
+                  "typ": "JWT"
+                },
+                "signature": "<present>",
+                "claims": {
+                  "iss": "https://securetoken.google.com/demo-auth-account",
+                  "aud": "demo-auth-account",
+                  "auth_time": "<auth_time>",
+                  "user_id": "aa-<run>-q290",
+                  "sub": "aa-<run>-q290",
+                  "iat": "<iat>",
+                  "exp": "iat+3600",
+                  "email": "fireemu-aa-<run>-q290@example.com",
+                  "email_verified": true,
+                  "firebase": {
+                    "identities": {
+                      "email": [
+                        "fireemu-aa-<run>-q290@example.com"
+                      ]
+                    },
+                    "sign_in_provider": "password",
+                    "sign_in_second_factor": "totp",
+                    "second_factor_identifier": "<enrollment:5:uuid>"
+                  }
+                },
+                "subIsUserId": true
+              }
+            },
+            "refreshToken": "<refreshToken>"
+          }
+        },
+        "control-pending-q290": {
+          "status": 200,
+          "body": {
+            "kind": "identitytoolkit#VerifyPasswordResponse",
+            "localId": "aa-<run>-q290",
+            "email": "fireemu-aa-<run>-q290@example.com",
+            "displayName": "",
+            "registered": true,
+            "mfaPendingCredential": "<mfaPendingCredential>",
+            "mfaInfo": [
+              {
+                "mfaEnrollmentId": "<enrollment:5:uuid>",
+                "displayName": "Authenticator",
+                "enrolledAt": "<run-time:instant:fraction-6>",
+                "totpInfo": {}
+              }
+            ]
+          }
+        },
+        "control-finalize-q290": {
+          "status": 200,
+          "body": {
+            "idToken": {
+              "<jwt>": {
+                "header": {
+                  "alg": "RS256",
+                  "kid": "<present>",
+                  "typ": "JWT"
+                },
+                "signature": "<present>",
+                "claims": {
+                  "iss": "https://securetoken.google.com/demo-auth-account",
+                  "aud": "demo-auth-account",
+                  "auth_time": "<auth_time>",
+                  "user_id": "aa-<run>-q290",
+                  "sub": "aa-<run>-q290",
+                  "iat": "<iat>",
+                  "exp": "iat+3600",
+                  "email": "fireemu-aa-<run>-q290@example.com",
+                  "email_verified": true,
+                  "firebase": {
+                    "identities": {
+                      "email": [
+                        "fireemu-aa-<run>-q290@example.com"
+                      ]
+                    },
+                    "sign_in_provider": "password",
+                    "sign_in_second_factor": "totp",
+                    "second_factor_identifier": "<enrollment:5:uuid>"
+                  }
+                },
+                "subIsUserId": true
+              }
+            },
+            "refreshToken": "<refreshToken>"
+          }
+        },
+        "sms-start-aged-m300": {
+          "status": 200,
+          "body": {
+            "phoneResponseInfo": {
+              "sessionInfo": "<sessionInfo>"
+            }
+          }
+        },
+        "aged-pending-m300": {
+          "status": 200,
+          "body": {
+            "idToken": {
+              "<jwt>": {
+                "header": {
+                  "alg": "RS256",
+                  "kid": "<present>",
+                  "typ": "JWT"
+                },
+                "signature": "<present>",
+                "claims": {
+                  "iss": "https://securetoken.google.com/demo-auth-account",
+                  "aud": "demo-auth-account",
+                  "auth_time": "<auth_time>",
+                  "user_id": "aa-<run>-m300",
+                  "sub": "aa-<run>-m300",
+                  "iat": "<iat>",
+                  "exp": "iat+3600",
+                  "email": "fireemu-aa-<run>-m300@example.com",
+                  "email_verified": true,
+                  "firebase": {
+                    "identities": {
+                      "email": [
+                        "fireemu-aa-<run>-m300@example.com"
+                      ]
+                    },
+                    "sign_in_provider": "password",
+                    "sign_in_second_factor": "phone",
+                    "second_factor_identifier": "<enrollment:7:uuid>"
+                  }
+                },
+                "subIsUserId": true
+              }
+            },
+            "refreshToken": "<refreshToken>"
+          }
+        },
+        "control-pending-m300": {
+          "status": 200,
+          "body": {
+            "kind": "identitytoolkit#VerifyPasswordResponse",
+            "localId": "aa-<run>-m300",
+            "email": "fireemu-aa-<run>-m300@example.com",
+            "displayName": "",
+            "registered": true,
+            "mfaPendingCredential": "<mfaPendingCredential>",
+            "mfaInfo": [
+              {
+                "phoneInfo": "+*******0102",
+                "mfaEnrollmentId": "<enrollment:7:uuid>",
+                "displayName": "Phone",
+                "enrolledAt": "<run-time:instant:fraction-6>"
+              }
+            ]
+          }
+        },
+        "control-start-m300": {
+          "status": 200,
+          "body": {
+            "phoneResponseInfo": {
+              "sessionInfo": "<sessionInfo>"
+            }
+          }
+        },
+        "control-finalize-m300": {
+          "status": 200,
+          "body": {
+            "idToken": {
+              "<jwt>": {
+                "header": {
+                  "alg": "RS256",
+                  "kid": "<present>",
+                  "typ": "JWT"
+                },
+                "signature": "<present>",
+                "claims": {
+                  "iss": "https://securetoken.google.com/demo-auth-account",
+                  "aud": "demo-auth-account",
+                  "auth_time": "<auth_time>",
+                  "user_id": "aa-<run>-m300",
+                  "sub": "aa-<run>-m300",
+                  "iat": "<iat>",
+                  "exp": "iat+3600",
+                  "email": "fireemu-aa-<run>-m300@example.com",
+                  "email_verified": true,
+                  "firebase": {
+                    "identities": {
+                      "email": [
+                        "fireemu-aa-<run>-m300@example.com"
+                      ]
+                    },
+                    "sign_in_provider": "password",
+                    "sign_in_second_factor": "phone",
+                    "second_factor_identifier": "<enrollment:7:uuid>"
+                  }
+                },
+                "subIsUserId": true
+              }
+            },
+            "refreshToken": "<refreshToken>"
+          }
+        },
+        "aged-token-start-r330": {
+          "status": 400,
+          "body": {
+            "error": {
+              "code": 400,
+              "message": "CREDENTIAL_TOO_OLD_LOGIN_AGAIN",
+              "status": "INVALID_ARGUMENT"
+            }
+          },
+          "relations": {
+            "finalizeDeadline": "missing"
+          }
+        },
+        "control-sign-in-r330": {
+          "status": 200,
+          "body": {
+            "kind": "identitytoolkit#VerifyPasswordResponse",
+            "localId": "aa-<run>-r330",
+            "email": "fireemu-aa-<run>-r330@example.com",
+            "displayName": "",
+            "idToken": {
+              "<jwt>": {
+                "header": {
+                  "alg": "RS256",
+                  "kid": "<present>",
+                  "typ": "JWT"
+                },
+                "signature": "<present>",
+                "claims": {
+                  "iss": "https://securetoken.google.com/demo-auth-account",
+                  "aud": "demo-auth-account",
+                  "auth_time": "<auth_time>",
+                  "user_id": "aa-<run>-r330",
+                  "sub": "aa-<run>-r330",
+                  "iat": "<iat>",
+                  "exp": "iat+3600",
+                  "email": "fireemu-aa-<run>-r330@example.com",
+                  "email_verified": true,
+                  "firebase": {
+                    "identities": {
+                      "email": [
+                        "fireemu-aa-<run>-r330@example.com"
+                      ]
+                    },
+                    "sign_in_provider": "password"
+                  }
+                },
+                "subIsUserId": true,
+                "subIsLocalId": true,
+                "userIdIsLocalId": true
+              }
+            },
+            "registered": true,
+            "refreshToken": "<refreshToken>",
+            "expiresIn": "3600"
+          }
+        },
+        "control-start-r330": {
+          "status": 200,
+          "body": {
+            "totpSessionInfo": {
+              "sharedSecretKey": "<sharedSecretKey>",
+              "verificationCodeLength": 6,
+              "hashingAlgorithm": "SHA1",
+              "periodSec": 30,
+              "sessionInfo": "<sessionInfo>",
+              "finalizeEnrollmentTime": "<run-time:instant:fraction-6>"
+            }
+          },
+          "relations": {
+            "finalizeDeadline": "+900s"
+          }
+        }
+      }
+    },
     "auth-mfa/sms": {
       "corpusDigest": "c3f150950167d8ef3fb2416d688b28a2a22aca96d6fd646bbfddf7d6fd2e6ba2",
       "harnessDigest": "3b87d7dc611954ff25253393126c08b3d02dcc9453f81b9674548ada0121b190",

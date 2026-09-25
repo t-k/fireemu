@@ -13,6 +13,9 @@
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
 
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt;
+
 fn sdk_root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tools/sdk-smoke")
 }
@@ -392,6 +395,79 @@ test "$latest" = "local-after!"
     assert_eq!(output.status.code(), Some(0), "{stderr}");
     assert!(stderr.contains("reloaded generation 1"), "{stderr}");
     let _ = std::fs::remove_dir_all(workspace);
+}
+
+#[cfg(unix)]
+#[test]
+#[ignore = "requires tools/sdk-smoke dependencies; the manual SDK workflow runs this test"]
+fn a_reload_reuses_the_daemons_node_probe_results() {
+    assert!(
+        have_sdk(),
+        "install tools/sdk-smoke dependencies before running this test"
+    );
+    let actual_node = std::env::split_paths(&std::env::var_os("PATH").expect("Node requires PATH"))
+        .filter(|directory| directory.is_absolute())
+        .map(|directory| directory.join("node"))
+        .find(|program| program.is_file())
+        .expect("Node must be installed for the SDK workflow");
+    let dir = scratch_codebase("node-probe-reload");
+    write(
+        &dir,
+        "index.js",
+        "const { onRequest } = require('firebase-functions/v2/https');\nexports.fxReload = onRequest((_request, response) => response.status(200).send('before'));\n",
+    );
+    let probe_calls = dir.join("probe-calls");
+    let wrapper = dir.join("node-wrapper");
+    write(
+        &dir,
+        "node-wrapper",
+        &format!(
+            "#!/bin/sh\nif [ \"$1\" = \"--version\" ] || [ \"$1\" = \"-p\" ]; then echo \"$1\" >> '{}'; fi\nexec '{}' \"$@\"\n",
+            probe_calls.display(),
+            actual_node.display()
+        ),
+    );
+    std::fs::set_permissions(&wrapper, std::fs::Permissions::from_mode(0o700)).unwrap();
+
+    let output = fireemu_exec(&dir, "demo-node-probe-reload")
+        .args(["--", "node", "-e", r#"
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+(async () => {
+  const endpoint = `http://${process.env.FIREEMU_FUNCTIONS_HOST}/demo-node-probe-reload/us-central1/fxReload`;
+  const get = async () => {
+    const response = await fetch(endpoint);
+    assert.equal(response.status, 200);
+    return response.text();
+  };
+  assert.equal(await get(), 'before');
+  const source = process.argv[1];
+  fs.writeFileSync(source, fs.readFileSync(source, 'utf8').replace("'before'", "'after'"));
+  const deadline = Date.now() + 15000;
+  while (Date.now() < deadline) {
+    if (await get() === 'after') return;
+    await new Promise(resolve => setTimeout(resolve, 100));
+  }
+  throw new Error('the changed Functions generation was not served');
+})().catch(error => { console.error(error); process.exitCode = 1; });
+"#])
+        .arg(dir.join("index.js"))
+        .env("FIREEMU_NODE", &wrapper)
+        .stdin(Stdio::null())
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(output.status.success(), "{stderr}");
+    assert!(stderr.contains("reloaded generation"), "{stderr}");
+    assert_eq!(
+        std::fs::read_to_string(&probe_calls)
+            .unwrap()
+            .lines()
+            .collect::<Vec<_>>(),
+        ["--version", "-p"],
+        "Node probes ran again after reload: {stderr}"
+    );
+    std::fs::remove_dir_all(dir).unwrap();
 }
 
 /// The one line the fixture prints at load, parsed.

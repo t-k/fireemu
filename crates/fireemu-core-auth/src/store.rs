@@ -3884,6 +3884,16 @@ impl AuthStore {
         Ok(())
     }
 
+    /// Validates a password an administrator sets: production takes one below the minimum
+    /// length (sandbox recording 2026-09-25, five characters); an empty one is unobserved and
+    /// stays refused.
+    pub fn validate_admin_password(password: &str) -> Result<(), AuthError> {
+        if password.is_empty() {
+            return Err(AuthError::WeakPassword);
+        }
+        Self::validate_imported_password(password)
+    }
+
     /// Validates a password without storing it (lets callers fail before mutating).
     pub fn validate_password(password: &str) -> Result<(), AuthError> {
         if password.encode_utf16().count() < Self::MIN_PASSWORD_CHARS {
@@ -3906,7 +3916,7 @@ impl AuthStore {
         password: &str,
     ) -> Result<Vec<ViolationCode>, AuthError> {
         if operation == PasswordPolicyOperation::AdminUpdate {
-            Self::validate_imported_password(password)?;
+            Self::validate_admin_password(password)?;
         } else {
             Self::validate_password(password)?;
         }

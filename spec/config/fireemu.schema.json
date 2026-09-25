@@ -239,7 +239,7 @@
                   "type": "object",
                   "maxProperties": 10,
                   "propertyNames": { "pattern": "^\\+[1-9][0-9]{1,14}$" },
-                  "additionalProperties": { "type": "string", "pattern": "^[0-9]{6}$" }
+                  "additionalProperties": { "type": "string" }
                 }
               }
             }

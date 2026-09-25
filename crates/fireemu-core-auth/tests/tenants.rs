@@ -203,6 +203,11 @@ fn a_tenant_with_a_display_name_is_named_as_production_names_it() {
     assert_ne!(first, second);
     let again = AuthRegistry::new("demo-app", Arc::new(Mutex::new(store("demo-app", 1))));
     assert_eq!(create(&again, Some("fsr-tenant")), first, "reproducible");
+    // The suffix is drawn from the creation sequence, not a fixed pattern.
+    assert_eq!(
+        [first.as_str(), second.as_str()],
+        ["fsr-tenant-bpkmw", "fsr-tenant-zr6h1"]
+    );
     // Outside the documented form (production refuses it, unobserved) and without a display
     // name, the tenant keeps fireemu's generated name.
     assert_eq!(

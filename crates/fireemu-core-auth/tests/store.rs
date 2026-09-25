@@ -2,11 +2,14 @@
 //! credentials, refresh sessions and token validity.
 
 use fireemu_core_auth::mfa::TotpPolicy;
+use fireemu_core_auth::signup_quota::SignupQuotaConfig;
 use fireemu_core_auth::store::{
-    AuthError, AuthStore, LocalId, NewUser, PendingSignInId, ProjectAuthConfig, Provider,
+    AuthError, AuthRegistry, AuthStore, LocalId, NewUser, PendingSignInId, ProjectAuthConfig,
+    ProjectAuthConfigPatch, ProjectConfigStoreUpdate, Provider,
 };
 use fireemu_core_types::determinism::SplitMix64;
 use fireemu_core_types::time::{LogicalDuration, LogicalInstant};
+use std::sync::{Arc, Mutex};
 
 fn t0() -> LogicalInstant {
     LogicalInstant::from_unix_seconds(1_788_004_860)
@@ -19,6 +22,74 @@ fn t(seconds: i64) -> LogicalInstant {
 
 fn store() -> AuthStore {
     AuthStore::new("demo-app", SplitMix64::new(11), TotpPolicy::default())
+}
+
+#[test]
+fn project_config_transaction_refuses_invalid_members_before_publishing() {
+    let shared = Arc::new(Mutex::new(store()));
+    let registry = AuthRegistry::new("demo-app", Arc::clone(&shared));
+    let patch = ProjectAuthConfigPatch {
+        disabled_user_signup: Some(true),
+        ..ProjectAuthConfigPatch::default()
+    };
+    let quota = SignupQuotaConfig {
+        default_quota_per_hour: 1_000_001,
+        ..SignupQuotaConfig::default()
+    };
+    let sign_in = fireemu_core_auth::store::SignInConfig {
+        authorized_domains: Some(vec![String::new()]),
+        ..fireemu_core_auth::store::SignInConfig::default()
+    };
+
+    for update in [
+        ProjectConfigStoreUpdate {
+            signup_quota: Some(quota),
+            ..ProjectConfigStoreUpdate::default()
+        },
+        ProjectConfigStoreUpdate {
+            sign_in: Some(sign_in),
+            ..ProjectConfigStoreUpdate::default()
+        },
+    ] {
+        let result =
+            registry.patch_project_config_transaction("demo-app", patch, |_| Ok::<_, ()>(update));
+        assert!(matches!(result, Ok(None)));
+        let current = shared.lock().expect("project store");
+        assert!(!current.config().disabled_user_signup);
+        assert_eq!(
+            current.signup_quota().config(),
+            &SignupQuotaConfig::default()
+        );
+        assert!(current.sign_in_config().email_enabled);
+    }
+}
+
+#[test]
+fn project_config_transaction_publishes_a_valid_sign_in_candidate() {
+    let shared = Arc::new(Mutex::new(store()));
+    let registry = AuthRegistry::new("demo-app", Arc::clone(&shared));
+    let sign_in = fireemu_core_auth::store::SignInConfig {
+        email_enabled: false,
+        ..fireemu_core_auth::store::SignInConfig::default()
+    };
+    let result = registry.patch_project_config_transaction(
+        "demo-app",
+        ProjectAuthConfigPatch::default(),
+        |_| {
+            Ok::<_, ()>(ProjectConfigStoreUpdate {
+                sign_in: Some(sign_in),
+                ..ProjectConfigStoreUpdate::default()
+            })
+        },
+    );
+    assert!(matches!(result, Ok(Some(_))));
+    assert!(
+        !shared
+            .lock()
+            .expect("project store")
+            .sign_in_config()
+            .email_enabled
+    );
 }
 
 /// An ID that belonged to a user who no longer exists.

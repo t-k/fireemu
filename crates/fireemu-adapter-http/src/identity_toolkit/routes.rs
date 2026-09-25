@@ -211,6 +211,7 @@ pub(crate) enum Handler {
     CreateAuthUri,
     Projects,
     RecaptchaParams,
+    RecaptchaConfig,
     PasswordPolicy,
     MfaEnrollmentStart,
     MfaEnrollmentFinalize,
@@ -268,6 +269,7 @@ impl Handler {
         Self::CreateAuthUri,
         Self::Projects,
         Self::RecaptchaParams,
+        Self::RecaptchaConfig,
         Self::PasswordPolicy,
         Self::MfaEnrollmentStart,
         Self::MfaEnrollmentFinalize,
@@ -652,6 +654,12 @@ pub(crate) const ROUTES: &[Route] = &[
         Handler::PasswordPolicy,
     ),
     end_user(
+        "GET",
+        "/identitytoolkit.googleapis.com/v2/recaptchaConfig",
+        "recaptchaConfig",
+        Handler::RecaptchaConfig,
+    ),
+    end_user(
         "POST",
         concat_v2!("accounts/mfaEnrollment:start"),
         "mfaEnrollment:start",
@@ -992,6 +1000,19 @@ pub(crate) const ROUTES: &[Route] = &[
     ),
     admin_config("GET", "config:get", Handler::AdminGetProjectConfig),
     admin_config("PATCH", "config:update", Handler::AdminUpdateProjectConfig),
+    // The Admin SDK's project config manager names the same resource without `admin/`.
+    admin_v2(
+        "GET",
+        "/config",
+        "config:get",
+        Handler::AdminGetProjectConfig,
+    ),
+    admin_v2(
+        "PATCH",
+        "/config",
+        "config:update",
+        Handler::AdminUpdateProjectConfig,
+    ),
     // Emulator inspection routes.
     emulator(
         "GET",

@@ -22,6 +22,7 @@ use crate::mfa::{
     PendingSignInContext, PhoneFactor, TotpEnrollmentMaterial, TotpFactor, TotpPolicy, TotpSecret,
     MAX_FACTORS_PER_USER,
 };
+use crate::mfa_config::MfaProjectConfig;
 
 /// Reservations grouped by generated UID, reset generation, and request ticket.
 ///
@@ -678,19 +679,19 @@ impl SignInConfig {
     /// Identity Platform documents at most ten test phone numbers per project.
     pub const MAX_TEST_PHONE_NUMBERS: usize = 10;
 
-    /// Whether every test number is valid E.164 with a six-digit code, within the documented
-    /// count.
+    /// Whether every test number is valid E.164, within the documented count.
     #[must_use]
     pub fn is_valid(&self) -> bool {
         self.authorized_domains
             .as_ref()
             .is_none_or(|domains| domains.iter().all(|domain| !domain.is_empty()))
             && self.test_phone_numbers.len() <= Self::MAX_TEST_PHONE_NUMBERS
-            && self.test_phone_numbers.iter().all(|(number, code)| {
-                AuthStore::validate_phone_number(number).is_ok()
-                    && code.len() == 6
-                    && code.bytes().all(|b| b.is_ascii_digit())
-            })
+            // Production takes any code for a test number, six digits or not (sandbox
+            // recording 2026-09-25, AUTH-CONFIG-SDK config/invalid).
+            && self
+                .test_phone_numbers
+                .keys()
+                .all(|number| AuthStore::validate_phone_number(number).is_ok())
     }
 }
 
@@ -722,6 +723,21 @@ pub struct ProjectAuthConfigPatch {
     pub disabled_user_signup: Option<bool>,
     /// `None` preserves the current end-user deletion permission.
     pub disabled_user_deletion: Option<bool>,
+}
+
+/// Values prepared from one project's current store before a config transaction publishes.
+#[derive(Debug, Default)]
+pub struct ProjectConfigStoreUpdate {
+    /// A replacement password policy, if the request writes it.
+    pub password_policy: Option<PasswordPolicy>,
+    /// A replacement sign-up quota, if the request writes it.
+    pub signup_quota: Option<SignupQuotaConfig>,
+    /// Replacement sign-in providers and domains, if the request writes them.
+    pub sign_in: Option<SignInConfig>,
+    /// A replacement project MFA config, if the request writes it.
+    pub mfa_config: Option<MfaProjectConfig>,
+    /// Written and derived project config members, if the request writes them.
+    pub stored_members: Option<crate::config_members::StoredConfigMembers>,
 }
 
 /// The trust boundary used by operations affected by client permission settings.
@@ -1231,6 +1247,8 @@ pub struct AuthStore {
     sign_in: SignInConfig,
     /// The project's multi-factor configuration (Admin v2 `Config.mfa`).
     mfa_config: crate::mfa_config::MfaProjectConfig,
+    /// Written config members read back as written ([`crate::config_members`]).
+    stored_members: crate::config_members::StoredConfigMembers,
     /// Deterministic, local-only sign-up quota state. Admin/import paths do not use it unless
     /// their caller explicitly requests a reservation through the typed API.
     signup_quota: SignupQuota,
@@ -1565,6 +1583,7 @@ impl AuthStore {
             config: ProjectAuthConfig::default(),
             sign_in: SignInConfig::default(),
             mfa_config: crate::mfa_config::MfaProjectConfig::default(),
+            stored_members: crate::config_members::StoredConfigMembers::default(),
             signup_quota: SignupQuota::default(),
             oidc_configs: BTreeMap::new(),
             oidc_order: Vec::new(),
@@ -2119,6 +2138,20 @@ impl AuthStore {
         }
         self.sign_in = config;
         Ok(())
+    }
+
+    /// The project's written config members ([`crate::config_members`]).
+    #[must_use]
+    pub const fn stored_config_members(&self) -> &crate::config_members::StoredConfigMembers {
+        &self.stored_members
+    }
+
+    /// Replaces the project's written config members.
+    pub fn set_stored_config_members(
+        &mut self,
+        members: crate::config_members::StoredConfigMembers,
+    ) {
+        self.stored_members = members;
     }
 
     /// Whether a principal may create an end-user account in this namespace.
@@ -4108,6 +4141,16 @@ impl AuthStore {
         Ok(())
     }
 
+    /// Validates a password an administrator sets: production takes one below the minimum
+    /// length (sandbox recording 2026-09-25, five characters); an empty one is unobserved and
+    /// stays refused.
+    pub fn validate_admin_password(password: &str) -> Result<(), AuthError> {
+        if password.is_empty() {
+            return Err(AuthError::WeakPassword);
+        }
+        Self::validate_imported_password(password)
+    }
+
     /// Validates a password without storing it (lets callers fail before mutating).
     pub fn validate_password(password: &str) -> Result<(), AuthError> {
         if password.encode_utf16().count() < Self::MIN_PASSWORD_CHARS {
@@ -4129,7 +4172,11 @@ impl AuthStore {
         operation: PasswordPolicyOperation,
         password: &str,
     ) -> Result<Vec<ViolationCode>, AuthError> {
-        Self::validate_password(password)?;
+        if operation == PasswordPolicyOperation::AdminUpdate {
+            Self::validate_admin_password(password)?;
+        } else {
+            Self::validate_password(password)?;
+        }
         let violations = if self.password_policy.enforcement_state
             == crate::password_policy::EnforcementState::Enforce
         {
@@ -4452,14 +4499,12 @@ impl AuthStore {
         owners
     }
 
-    /// The account a password sign-in with `email` reaches: the active owner when it holds a
-    /// password, else the earliest owner that does (an imported duplicate without a password
-    /// does not hide the password account, sandbox recording 2026-09-23).
+    /// The account a password sign-in with `email` reaches: the earliest owner that holds a
+    /// password, else the active owner. An imported duplicate without a password does not
+    /// hide the password account (sandbox recording 2026-09-23), and of two imported password
+    /// accounts the earlier one is reached (sandbox recording 2026-09-25).
     fn password_owner_by_email(&self, email: &str) -> Option<&UserRecord> {
         let active = self.user_by_email(email)?;
-        if active.password.is_some() {
-            return Some(active);
-        }
         Some(
             self.users_by_email(email)
                 .into_iter()
@@ -5372,6 +5417,7 @@ impl AuthSnapshot {
             restored.config = live.config;
             restored.sign_in = live.sign_in.clone();
             restored.mfa_config = live.mfa_config.clone();
+            restored.stored_members = live.stored_members.clone();
             // A temporary proof is a credential of the captured namespace.
             restored.temporary_proofs.clear();
             // The local sign-up quota is namespace-owned control state as well. Preserve both
@@ -7163,7 +7209,10 @@ impl AuthRegistry {
         // recreated tenant is built before the membership locks are taken.
         let mut recreated = Vec::new();
         for captured in &snapshot.tenants {
-            if !live.iter().any(|((_, tenant), ..)| tenant == &captured.tenant) {
+            if !live
+                .iter()
+                .any(|((_, tenant), ..)| tenant == &captured.tenant)
+            {
                 let store = self
                     .build_tenant_store(project, &captured.tenant, &parent)
                     .ok_or("cannot build a tenant Auth store")?;
@@ -7856,6 +7905,36 @@ impl AuthRegistry {
         Ok(Some(next))
     }
 
+    /// Replaces a project's written config members under its namespace gate, as
+    /// [`Self::update_project_sign_in_config`] does for its sign-in providers. `Ok(None)`: no
+    /// such project, or its gate or store is unavailable.
+    pub fn update_project_stored_members<F, E>(
+        &self,
+        project: &str,
+        update: F,
+    ) -> Result<Option<crate::config_members::StoredConfigMembers>, E>
+    where
+        F: FnOnce(
+            &crate::config_members::StoredConfigMembers,
+        ) -> Result<crate::config_members::StoredConfigMembers, E>,
+    {
+        let Some(gate) = self.operation_gate(project, None) else {
+            return Ok(None);
+        };
+        let Ok(_operation) = gate.lock() else {
+            return Ok(None);
+        };
+        let Some(parent) = self.project_store(project) else {
+            return Ok(None);
+        };
+        let Ok(mut parent) = parent.lock() else {
+            return Ok(None);
+        };
+        let next = update(parent.stored_config_members())?;
+        parent.set_stored_config_members(next.clone());
+        Ok(Some(next))
+    }
+
     /// Applies a project settings update after taking the namespace gate and reading the
     /// current policy and quota under that same gate. The callback is used by adapters that
     /// decode a masked replacement from the current value; keeping that merge inside the gate
@@ -7897,7 +7976,56 @@ impl AuthRegistry {
                 return Ok(None);
             }
         }
-        Ok(self.patch_project_config_under_gate(project, patch, password_policy, signup_quota))
+        Ok(self.patch_project_config_under_gate(
+            project,
+            patch,
+            ProjectConfigStoreUpdate {
+                password_policy,
+                signup_quota,
+                ..ProjectConfigStoreUpdate::default()
+            },
+        ))
+    }
+
+    /// Computes every project config value from one store snapshot and publishes them under one
+    /// namespace gate and one parent store lock. Readers cannot observe a new quota with old
+    /// derived members, or new providers with old config members.
+    pub fn patch_project_config_transaction<F, E>(
+        &self,
+        project: &str,
+        patch: ProjectAuthConfigPatch,
+        prepare: F,
+    ) -> Result<Option<ProjectAuthConfig>, E>
+    where
+        F: FnOnce(&AuthStore) -> Result<ProjectConfigStoreUpdate, E>,
+    {
+        let Some(gate) = self.operation_gate(project, None) else {
+            return Ok(None);
+        };
+        let Ok(_operation) = gate.lock() else {
+            return Ok(None);
+        };
+        let Some(parent) = self.project_store(project) else {
+            return Ok(None);
+        };
+        let update = {
+            let Ok(parent) = parent.lock() else {
+                return Ok(None);
+            };
+            prepare(&parent)?
+        };
+        if update
+            .signup_quota
+            .as_ref()
+            .is_some_and(|quota| SignupQuota::new(quota.clone()).is_err())
+            || update
+                .sign_in
+                .as_ref()
+                .is_some_and(|sign_in| !sign_in.is_valid())
+        {
+            return Ok(None);
+        }
+        Ok(self.patch_project_config_under_gate(project, patch, update))
     }
 
     /// Registers a non-password Auth config override without creating the project namespace.
@@ -8142,13 +8270,20 @@ impl AuthRegistry {
         true
     }
 
+    #[allow(clippy::too_many_lines)]
     fn patch_project_config_under_gate(
         &self,
         project: &str,
         patch: ProjectAuthConfigPatch,
-        password_policy: Option<PasswordPolicy>,
-        signup_quota: Option<SignupQuotaConfig>,
+        update: ProjectConfigStoreUpdate,
     ) -> Option<ProjectAuthConfig> {
+        let ProjectConfigStoreUpdate {
+            password_policy,
+            signup_quota,
+            sign_in,
+            mfa_config,
+            stored_members,
+        } = update;
         let projects = self.projects.lock().ok()?;
         let parent = if project == self.default_project {
             &self.default
@@ -8158,7 +8293,13 @@ impl AuthRegistry {
                 .get(project)
                 .or_else(|| projects.routed.get(project))?
         };
-        if patch.is_empty() && password_policy.is_none() && signup_quota.is_none() {
+        if patch.is_empty()
+            && password_policy.is_none()
+            && signup_quota.is_none()
+            && sign_in.is_none()
+            && mfa_config.is_none()
+            && stored_members.is_none()
+        {
             return Some(parent.lock().ok()?.config());
         }
         if !patch.is_empty() {
@@ -8215,12 +8356,6 @@ impl AuthRegistry {
                     .copied()
                     .map_or(config, |override_patch| override_patch.apply_to(config));
                 tenant.set_config(tenant_config);
-            }
-            for (key, _) in &tenant_stores {
-                let tenant_config = tenant_overrides
-                    .get(key)
-                    .copied()
-                    .map_or(config, |override_patch| override_patch.apply_to(config));
                 metadata.get_mut(key)?.apply_effective_config(tenant_config);
             }
             if let Some(password_policy) = password_policy {
@@ -8230,9 +8365,13 @@ impl AuthRegistry {
                     .expect("a password policy patch holds the override lock")
                     .insert(project.to_owned(), password_policy);
             }
-            if let Some(quota) = signup_quota {
-                parent.set_signup_quota_config(quota).ok()?;
-            }
+            Self::publish_project_config_members(
+                &mut parent,
+                signup_quota,
+                sign_in,
+                mfa_config,
+                stored_members,
+            )?;
             return Some(config);
         }
         let mut overrides = match password_policy.as_ref() {
@@ -8248,10 +8387,36 @@ impl AuthRegistry {
                 .expect("a password policy patch holds the override lock")
                 .insert(project.to_owned(), password_policy);
         }
+        Self::publish_project_config_members(
+            &mut parent,
+            signup_quota,
+            sign_in,
+            mfa_config,
+            stored_members,
+        )?;
+        Some(config)
+    }
+
+    fn publish_project_config_members(
+        parent: &mut AuthStore,
+        signup_quota: Option<SignupQuotaConfig>,
+        sign_in: Option<SignInConfig>,
+        mfa_config: Option<MfaProjectConfig>,
+        stored_members: Option<crate::config_members::StoredConfigMembers>,
+    ) -> Option<()> {
         if let Some(quota) = signup_quota {
             parent.set_signup_quota_config(quota).ok()?;
         }
-        Some(config)
+        if let Some(sign_in) = sign_in {
+            parent.set_sign_in_config(sign_in).ok()?;
+        }
+        if let Some(mfa_config) = mfa_config {
+            parent.set_mfa_config(mfa_config);
+        }
+        if let Some(stored_members) = stored_members {
+            parent.set_stored_config_members(stored_members);
+        }
+        Some(())
     }
 
     fn project_store(&self, project: &str) -> Option<SharedAuthStore> {
@@ -10612,8 +10777,8 @@ mod broad_project_number_tests {
 mod password_policy_namespace_tests {
     use super::{
         AuthNamespaceConfigPatch, AuthPrincipal, AuthRegistry, AuthSnapshot, AuthStore,
-        ProjectAuthConfig, ProjectAuthConfigPatch, RoutedStoreInstall, TenantMetadata,
-        TenantMetadataPatch,
+        ProjectAuthConfig, ProjectAuthConfigPatch, ProjectConfigStoreUpdate, RoutedStoreInstall,
+        TenantMetadata, TenantMetadataPatch,
     };
     use crate::mfa::TotpPolicy;
     use crate::password_policy::{EnforcementState, PasswordPolicy};
@@ -11566,6 +11731,72 @@ mod password_policy_namespace_tests {
                     .expect("temporary quota is valid"),
                 ),
             }
+        );
+    }
+
+    #[test]
+    fn concurrent_project_transactions_publish_quota_and_members_together() {
+        let registry = Arc::new(AuthRegistry::new(
+            "demo-app",
+            Arc::new(Mutex::new(AuthStore::new(
+                "demo-app",
+                SplitMix64::new(1),
+                TotpPolicy::default(),
+            ))),
+        ));
+        let ready = Arc::new(Barrier::new(3));
+        std::thread::scope(|scope| {
+            for value in [5, 7] {
+                let registry = Arc::clone(&registry);
+                let ready = Arc::clone(&ready);
+                scope.spawn(move || {
+                    ready.wait();
+                    for _ in 0..128 {
+                        registry
+                            .patch_project_config_transaction(
+                                "demo-app",
+                                ProjectAuthConfigPatch::default(),
+                                |store| {
+                                    let mut quota = store.signup_quota().config().clone();
+                                    quota.default_quota_per_hour = value;
+                                    let mut members = store.stored_config_members().clone();
+                                    members.set("testQuota", Some(value.to_string()));
+                                    Ok::<_, ()>(ProjectConfigStoreUpdate {
+                                        signup_quota: Some(quota),
+                                        stored_members: Some(members),
+                                        ..ProjectConfigStoreUpdate::default()
+                                    })
+                                },
+                            )
+                            .expect("transaction is accepted")
+                            .expect("project exists");
+                    }
+                });
+            }
+            let registry = Arc::clone(&registry);
+            scope.spawn(move || {
+                ready.wait();
+                for _ in 0..10_000 {
+                    let store = registry.default_store();
+                    let store = store.lock().expect("default store");
+                    let quota = store.signup_quota().config().default_quota_per_hour;
+                    let recorded = store
+                        .stored_config_members()
+                        .get("testQuota")
+                        .map_or(quota, |text| text.parse().expect("recorded quota"));
+                    assert_eq!(quota, recorded);
+                }
+            });
+        });
+        let store = registry.default_store();
+        let store = store.lock().expect("default store");
+        assert_eq!(
+            store
+                .signup_quota()
+                .config()
+                .default_quota_per_hour
+                .to_string(),
+            store.stored_config_members().get("testQuota").unwrap()
         );
     }
 

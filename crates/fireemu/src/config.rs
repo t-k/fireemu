@@ -83,6 +83,23 @@ pub struct PasswordPolicyOverride {
     pub password_policy: PasswordPolicyConfig,
 }
 
+/// The sign-in providers from `auth.signIn` (`email`, `anonymous`, `phoneNumber`). Each
+/// unset member keeps fireemu's default, where every provider is enabled in both profiles
+/// (owner decision K14, AUTH-CONFIG-SDK; a new production project enables none).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct AuthSignInSettings {
+    /// `auth.signIn.email.enabled`.
+    pub email_enabled: Option<bool>,
+    /// `auth.signIn.email.passwordRequired` (email-link sign-in is off while set).
+    pub password_required: Option<bool>,
+    /// `auth.signIn.anonymous.enabled`.
+    pub anonymous_enabled: Option<bool>,
+    /// `auth.signIn.phoneNumber.enabled`.
+    pub phone_enabled: Option<bool>,
+    /// `auth.signIn.phoneNumber.testPhoneNumbers`: E.164 number to its code.
+    pub test_phone_numbers: Option<BTreeMap<String, String>>,
+}
+
 /// End-user account creation and deletion switches from `auth.client.permissions`.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct AuthClientPermissions {
@@ -968,12 +985,15 @@ pub struct RuntimeConfig {
     /// ordinary blocking handlers.
     pub auth_forward_inbound_credentials: bool,
     /// `auth.improvedEmailPrivacy`: production's email enumeration protection, on by default
-    /// for every new Firebase project. Sign-in with a wrong password or an unknown address
-    /// answers `INVALID_LOGIN_CREDENTIALS`, and a password reset for an unknown address is
-    /// acknowledged. `false` restores the official Auth emulator's revealing answers.
+    /// for every new Firebase project and so under the strict profile. Sign-in with a wrong
+    /// password or an unknown address answers `INVALID_LOGIN_CREDENTIALS`, and a password reset
+    /// for an unknown address is acknowledged. The emulator profile starts with it off, with the
+    /// official Auth emulator's revealing answers.
     pub auth_improved_email_privacy: bool,
     /// Whether auth.improvedEmailPrivacy was explicitly present in the input.
     pub auth_improved_email_privacy_explicit: bool,
+    /// `auth.signIn`'s providers.
+    pub auth_sign_in: AuthSignInSettings,
     /// `auth.logActionCodes`: print every email action link and SMS code to the daemon's
     /// standard output as the official Auth emulator does, on by default. `false` keeps the
     /// codes off the console; they stay readable from the emulator inspection routes.
@@ -1276,6 +1296,7 @@ impl Default for RuntimeConfig {
             auth_forward_inbound_credentials: false,
             auth_improved_email_privacy: true,
             auth_improved_email_privacy_explicit: false,
+            auth_sign_in: AuthSignInSettings::default(),
             auth_log_action_codes: true,
             auth_password_policy: None,
             auth_password_policy_overrides: Vec::new(),
@@ -2606,6 +2627,82 @@ pub fn firebase_json_reference(json: &Value) -> Result<Option<&str>, ConfigError
     }
 }
 
+/// `auth.signIn`'s provider members; `allowDuplicateEmails` is read by the caller.
+fn parse_sign_in_providers(
+    sign_in: &serde_json::Map<String, Value>,
+) -> Result<AuthSignInSettings, ConfigError> {
+    let member = |name: &str,
+                  keys: &[&str]|
+     -> Result<Option<&serde_json::Map<String, Value>>, ConfigError> {
+        let Some(value) = sign_in.get(name) else {
+            return Ok(None);
+        };
+        let object = value
+            .as_object()
+            .ok_or_else(|| ConfigError(format!("auth.signIn.{name} must be an object")))?;
+        if let Some(key) = object.keys().find(|key| !keys.contains(&key.as_str())) {
+            return Err(ConfigError(format!(
+                "unknown config key auth.signIn.{name}.{key}"
+            )));
+        }
+        Ok(Some(object))
+    };
+    let flag = |object: Option<&serde_json::Map<String, Value>>, name: &str, key: &str| {
+        object
+            .and_then(|object| object.get(key))
+            .map(|value| {
+                value.as_bool().ok_or_else(|| {
+                    ConfigError(format!("auth.signIn.{name}.{key} must be a boolean"))
+                })
+            })
+            .transpose()
+    };
+    let email = member("email", &["enabled", "passwordRequired"])?;
+    let anonymous = member("anonymous", &["enabled"])?;
+    let phone = member("phoneNumber", &["enabled", "testPhoneNumbers"])?;
+    let test_phone_numbers = phone
+        .and_then(|phone| phone.get("testPhoneNumbers"))
+        .map(|numbers| {
+            let path = "auth.signIn.phoneNumber.testPhoneNumbers";
+            let numbers = numbers
+                .as_object()
+                .ok_or_else(|| ConfigError(format!("{path} must be an object")))?;
+            if numbers.len() > 10 {
+                return Err(ConfigError(format!("{path} holds at most ten numbers")));
+            }
+            numbers
+                .iter()
+                .map(|(number, code)| {
+                    let e164 = number.strip_prefix('+').is_some_and(|digits| {
+                        (2..=15).contains(&digits.len())
+                            && !digits.starts_with('0')
+                            && digits.bytes().all(|b| b.is_ascii_digit())
+                    });
+                    if !e164 {
+                        return Err(ConfigError(format!(
+                            "{path}: {number} is not an E.164 number"
+                        )));
+                    }
+                    // Any text, as production's Admin config takes a test number's code.
+                    match code.as_str() {
+                        Some(code) => Ok((number.clone(), code.to_owned())),
+                        None => Err(ConfigError(format!(
+                            "{path}: the code of {number} is not text"
+                        ))),
+                    }
+                })
+                .collect::<Result<BTreeMap<_, _>, _>>()
+        })
+        .transpose()?;
+    Ok(AuthSignInSettings {
+        email_enabled: flag(email, "email", "enabled")?,
+        password_required: flag(email, "email", "passwordRequired")?,
+        anonymous_enabled: flag(anonymous, "anonymous", "enabled")?,
+        phone_enabled: flag(phone, "phoneNumber", "enabled")?,
+        test_phone_numbers,
+    })
+}
+
 impl RuntimeConfig {
     /// Selects the compatibility profile and rewrites the settings it derives. Every key the
     /// profile decides is written here and nowhere else, so an explicit key parsed afterwards
@@ -2616,6 +2713,11 @@ impl RuntimeConfig {
         self.enforce_limits = profile.enforce_limits();
         self.token_acceptance = profile.token_acceptance();
         self.implicit_database_creation = profile.implicit_database_creation();
+        // A new production project protects against email enumeration; the official Auth
+        // emulator starts with it off (owner decision K3, AUTH-CONFIG-SDK).
+        if !self.auth_improved_email_privacy_explicit {
+            self.auth_improved_email_privacy = profile == CompatibilityProfile::Strict;
+        }
     }
 
     fn parse_daemon(d: &serde_json::Map<String, Value>, cfg: &mut Self) -> Result<(), ConfigError> {
@@ -3318,10 +3420,13 @@ impl RuntimeConfig {
                     .as_object()
                     .ok_or_else(|| ConfigError("auth.signIn must be an object".to_owned()))?;
                 for key in sign_in.keys() {
-                    if key != "allowDuplicateEmails" {
+                    if !["allowDuplicateEmails", "email", "anonymous", "phoneNumber"]
+                        .contains(&key.as_str())
+                    {
                         return Err(ConfigError(format!("unknown config key auth.signIn.{key}")));
                     }
                 }
+                cfg.auth_sign_in = parse_sign_in_providers(sign_in)?;
                 cfg.auth_allow_duplicate_emails =
                     parse_strict_bool(sign_in, "allowDuplicateEmails", "auth.signIn", false)?;
                 cfg.auth_allow_duplicate_emails_explicit =
@@ -3561,6 +3666,127 @@ mod tests {
         assert!(strict.enforce_limits);
         assert_eq!(strict.token_acceptance, TokenAcceptance::Verified);
         assert!(!strict.implicit_database_creation);
+    }
+
+    #[test]
+    fn sign_in_providers_are_configurable_and_start_enabled() {
+        // Every provider starts enabled in both profiles (owner decision K14); a production
+        // project's providers can be carried over.
+        let defaults = with_profile(json!({})).unwrap();
+        assert_eq!(defaults.auth_sign_in, AuthSignInSettings::default());
+        let cfg = with_profile(json!({"auth": {"signIn": {
+            "allowDuplicateEmails": true,
+            "email": {"enabled": true, "passwordRequired": false},
+            "anonymous": {"enabled": false},
+            "phoneNumber": {"enabled": true, "testPhoneNumbers": {"+16505550101": "123456"}},
+        }}}))
+        .unwrap();
+        assert!(cfg.auth_allow_duplicate_emails);
+        assert_eq!(
+            cfg.auth_sign_in,
+            AuthSignInSettings {
+                email_enabled: Some(true),
+                password_required: Some(false),
+                anonymous_enabled: Some(false),
+                phone_enabled: Some(true),
+                test_phone_numbers: Some([("+16505550101".to_owned(), "123456".to_owned())].into()),
+            }
+        );
+        for (invalid, message) in [
+            (
+                json!({"email": {"enabled": "yes"}}),
+                "auth.signIn.email.enabled must be a boolean",
+            ),
+            (
+                json!({"email": {"other": true}}),
+                "unknown config key auth.signIn.email.other",
+            ),
+            (
+                json!({"anonymous": true}),
+                "auth.signIn.anonymous must be an object",
+            ),
+            (
+                json!({"phoneNumber": {"testPhoneNumbers": {"16505550101": "123456"}}}),
+                "auth.signIn.phoneNumber.testPhoneNumbers: 16505550101 is not an E.164 number",
+            ),
+            (
+                json!({"phoneNumber": {"testPhoneNumbers": {"+16505550101": 123_456}}}),
+                "auth.signIn.phoneNumber.testPhoneNumbers: the code of +16505550101 is not text",
+            ),
+        ] {
+            assert_eq!(
+                with_profile(json!({"auth": {"signIn": invalid}})).map(|_| ()),
+                Err(ConfigError(message.to_owned())),
+                "{message}"
+            );
+        }
+        // At most ten E.164 numbers: a leading zero, letters or a single digit are refused.
+        let numbers = |count: usize| {
+            (0..count)
+                .map(|n| (format!("+1650555{n:04}"), json!("123456")))
+                .collect::<serde_json::Map<_, _>>()
+        };
+        assert!(with_profile(
+            json!({"auth": {"signIn": {"phoneNumber": {"testPhoneNumbers": numbers(10)}}}})
+        )
+        .is_ok());
+        assert_eq!(
+            with_profile(
+                json!({"auth": {"signIn": {"phoneNumber": {"testPhoneNumbers": numbers(11)}}}})
+            )
+            .map(|_| ()),
+            Err(ConfigError(
+                "auth.signIn.phoneNumber.testPhoneNumbers holds at most ten numbers".to_owned()
+            ))
+        );
+        for number in ["+01234567", "+1650555abcd", "+1"] {
+            assert_eq!(
+                with_profile(json!({"auth": {"signIn": {"phoneNumber": {"testPhoneNumbers": {number: "1"}}}}})).map(|_| ()),
+                Err(ConfigError(format!(
+                    "auth.signIn.phoneNumber.testPhoneNumbers: {number} is not an E.164 number"
+                ))),
+                "{number}"
+            );
+        }
+        // A code is taken as production's Admin config takes it: any text (AUTH-CONFIG-SDK
+        // sandbox recording 2026-09-25 took "12345" and "abc").
+        let cfg = with_profile(
+            json!({"auth": {"signIn": {"phoneNumber": {"testPhoneNumbers": {
+                "+16505550101": "12345",
+                "+16505550102": "abc",
+            }}}}}),
+        )
+        .unwrap();
+        assert_eq!(
+            cfg.auth_sign_in.test_phone_numbers,
+            Some(
+                [
+                    ("+16505550101".to_owned(), "12345".to_owned()),
+                    ("+16505550102".to_owned(), "abc".to_owned()),
+                ]
+                .into()
+            )
+        );
+    }
+
+    #[test]
+    fn email_enumeration_protection_defaults_by_profile_and_yields_to_the_key() {
+        // A new production project turns improved email privacy on; the official emulator
+        // starts with it off (owner decision K3, AUTH-CONFIG-SDK).
+        assert!(with_profile(json!({})).unwrap().auth_improved_email_privacy);
+        assert!(
+            !with_profile(json!({"profile": "emulator"}))
+                .unwrap()
+                .auth_improved_email_privacy
+        );
+        for (profile, value) in [("emulator", true), ("strict", false)] {
+            let cfg = with_profile(json!({
+                "profile": profile,
+                "auth": {"improvedEmailPrivacy": value},
+            }))
+            .unwrap();
+            assert_eq!(cfg.auth_improved_email_privacy, value, "{profile}");
+        }
     }
 
     #[test]

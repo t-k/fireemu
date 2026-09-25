@@ -336,7 +336,10 @@ impl SnapshotHook for Auth {
         let mut store = store
             .lock()
             .map_err(|_| poisoned(self.name(), "the Auth store"))?;
-        let mut dropped = snapshot.project.restore_into(&mut store).totp_factors_dropped;
+        let mut dropped = snapshot
+            .project
+            .restore_into(&mut store)
+            .totp_factors_dropped;
         drop(store);
         dropped += self
             .0
@@ -1194,16 +1197,36 @@ mod tests {
         hook.restore(&scope, &target).unwrap();
 
         assert_eq!(registry.tenants("worker-alpha"), ["gone", "kept"]);
-        assert!(tenant_has(&registry, "worker-alpha", "kept", "kept@example.test"));
-        assert!(!tenant_has(&registry, "worker-alpha", "kept", "later@example.test"));
-        assert!(tenant_has(&registry, "worker-alpha", "gone", "gone@example.test"));
+        assert!(tenant_has(
+            &registry,
+            "worker-alpha",
+            "kept",
+            "kept@example.test"
+        ));
+        assert!(!tenant_has(
+            &registry,
+            "worker-alpha",
+            "kept",
+            "later@example.test"
+        ));
+        assert!(tenant_has(
+            &registry,
+            "worker-alpha",
+            "gone",
+            "gone@example.test"
+        ));
         assert!(registry.tenant_store("worker-alpha", "added").is_none());
         assert!(matches!(
             registry.store_for_refresh_token(&added_refresh),
             RefreshTokenStoreMatch::NotFound
         ));
         assert!(registry.tenant_metadata("worker-alpha", "gone").is_some());
-        assert!(tenant_has(&registry, "demo-app", "other", "other-later@example.test"));
+        assert!(tenant_has(
+            &registry,
+            "demo-app",
+            "other",
+            "other-later@example.test"
+        ));
     }
 
     /// `TENRST-2`: rolling back a restore puts the tenant namespaces back exactly as they were
@@ -1234,8 +1257,18 @@ mod tests {
         hook.rollback(&scope, &pre_image).unwrap();
 
         assert_eq!(registry.tenants("worker-alpha"), ["added", "kept"]);
-        assert!(tenant_has(&registry, "worker-alpha", "kept", "later@example.test"));
-        assert!(tenant_has(&registry, "worker-alpha", "added", "added@example.test"));
+        assert!(tenant_has(
+            &registry,
+            "worker-alpha",
+            "kept",
+            "later@example.test"
+        ));
+        assert!(tenant_has(
+            &registry,
+            "worker-alpha",
+            "added",
+            "added@example.test"
+        ));
         assert!(matches!(
             registry.store_for_refresh_token(&added_refresh),
             RefreshTokenStoreMatch::Unique(_)

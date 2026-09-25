@@ -12,7 +12,7 @@
       "field": "name",
       "local": {
         "citations": [
-          "crates/fireemu-adapter-grpc/src/rest/mod.rs:291"
+          "crates/fireemu-adapter-grpc/src/rest/mod.rs:316"
         ],
         "status": "implemented"
       },
@@ -25,7 +25,7 @@
       "field": "type",
       "local": {
         "citations": [
-          "crates/fireemu-adapter-grpc/src/rest/mod.rs:296"
+          "crates/fireemu-adapter-grpc/src/rest/mod.rs:321"
         ],
         "status": "partial"
       },
@@ -38,8 +38,8 @@
       "field": "databaseEdition",
       "local": {
         "citations": [
-          "crates/fireemu-adapter-grpc/src/rest/mod.rs:307",
-          "crates/fireemu-adapter-grpc/src/rest/mod.rs:709",
+          "crates/fireemu-adapter-grpc/src/rest/mod.rs:332",
+          "crates/fireemu-adapter-grpc/src/rest/mod.rs:862",
           "crates/fireemu-core-types/src/edition.rs:12"
         ],
         "status": "implemented"
@@ -53,7 +53,7 @@
       "field": "concurrencyMode",
       "local": {
         "citations": [
-          "crates/fireemu-adapter-grpc/src/rest/mod.rs:297"
+          "crates/fireemu-adapter-grpc/src/rest/mod.rs:322"
         ],
         "status": "partial"
       },
@@ -66,7 +66,7 @@
       "field": "versionRetentionPeriod",
       "local": {
         "citations": [
-          "crates/fireemu-adapter-grpc/src/rest/mod.rs:298"
+          "crates/fireemu-adapter-grpc/src/rest/mod.rs:323"
         ],
         "status": "partial"
       },
@@ -79,7 +79,7 @@
       "field": "earliestVersionTime",
       "local": {
         "citations": [
-          "crates/fireemu-adapter-grpc/src/rest/mod.rs:299"
+          "crates/fireemu-adapter-grpc/src/rest/mod.rs:324"
         ],
         "status": "implemented"
       },
@@ -92,7 +92,7 @@
       "field": "pointInTimeRecoveryEnablement",
       "local": {
         "citations": [
-          "crates/fireemu-adapter-grpc/src/rest/mod.rs:301"
+          "crates/fireemu-adapter-grpc/src/rest/mod.rs:326"
         ],
         "status": "partial"
       },
@@ -105,7 +105,7 @@
       "field": "realtimeUpdatesMode",
       "local": {
         "citations": [
-          "crates/fireemu-adapter-grpc/src/rest/mod.rs:308"
+          "crates/fireemu-adapter-grpc/src/rest/mod.rs:333"
         ],
         "status": "partial"
       },
@@ -140,7 +140,7 @@
       "field": "locationId",
       "local": {
         "citations": [
-          "crates/fireemu-adapter-grpc/src/rest/mod.rs:295"
+          "crates/fireemu-adapter-grpc/src/rest/mod.rs:320"
         ],
         "status": "partial"
       },
@@ -153,7 +153,7 @@
       "field": "appEngineIntegrationMode",
       "local": {
         "citations": [
-          "crates/fireemu-adapter-grpc/src/rest/mod.rs:300"
+          "crates/fireemu-adapter-grpc/src/rest/mod.rs:325"
         ],
         "status": "partial"
       },
@@ -166,7 +166,7 @@
       "field": "deleteProtectionState",
       "local": {
         "citations": [
-          "crates/fireemu-adapter-grpc/src/rest/mod.rs:302"
+          "crates/fireemu-adapter-grpc/src/rest/mod.rs:327"
         ],
         "status": "partial"
       },
@@ -179,7 +179,7 @@
       "field": "uid",
       "local": {
         "citations": [
-          "crates/fireemu-adapter-grpc/src/rest/mod.rs:292"
+          "crates/fireemu-adapter-grpc/src/rest/mod.rs:317"
         ],
         "status": "implemented"
       },
@@ -192,7 +192,7 @@
       "field": "etag",
       "local": {
         "citations": [
-          "crates/fireemu-adapter-grpc/src/rest/mod.rs:317"
+          "crates/fireemu-adapter-grpc/src/rest/mod.rs:342"
         ],
         "status": "implemented"
       },
@@ -205,7 +205,7 @@
       "field": "freeTier",
       "local": {
         "citations": [
-          "crates/fireemu-adapter-grpc/src/rest/mod.rs:314"
+          "crates/fireemu-adapter-grpc/src/rest/mod.rs:339"
         ],
         "status": "implemented"
       },
@@ -218,7 +218,7 @@
       "field": "createTime",
       "local": {
         "citations": [
-          "crates/fireemu-adapter-grpc/src/rest/mod.rs:293"
+          "crates/fireemu-adapter-grpc/src/rest/mod.rs:318"
         ],
         "status": "implemented"
       },
@@ -231,7 +231,7 @@
       "field": "updateTime",
       "local": {
         "citations": [
-          "crates/fireemu-adapter-grpc/src/rest/mod.rs:294"
+          "crates/fireemu-adapter-grpc/src/rest/mod.rs:319"
         ],
         "status": "implemented"
       },
@@ -310,7 +310,7 @@
       "field": "enhancedTextSearchQueryMode",
       "local": {
         "citations": [
-          "crates/fireemu-adapter-grpc/src/rest/mod.rs:309"
+          "crates/fireemu-adapter-grpc/src/rest/mod.rs:334"
         ],
         "status": "partial"
       },
@@ -354,8 +354,8 @@
       "id": "emulator.clearFirestoreData",
       "local": {
         "citations": [
-          "crates/fireemu-adapter-grpc/src/rest/mod.rs:514",
-          "crates/fireemu-adapter-grpc/src/rest/mod.rs:545"
+          "crates/fireemu-adapter-grpc/src/rest/mod.rs:667",
+          "crates/fireemu-adapter-grpc/src/rest/mod.rs:698"
         ],
         "status": "implemented"
       },
@@ -396,7 +396,7 @@
       "id": "cli.exportImport",
       "local": {
         "citations": [
-          "crates/fireemu/src/import_export.rs:2870",
+          "crates/fireemu/src/import_export.rs:2891",
           "crates/fireemu/src/import_export.rs:353",
           "crates/fireemu-core-export/src/metadata.rs:142"
         ],
@@ -500,8 +500,8 @@
       "dataPlaneConsequence": "The final post-state, absence of the deleted documents, is observable from the data plane; the local emulator wipe route is the local-safety counterpart.",
       "local": {
         "citations": [
-          "crates/fireemu-adapter-grpc/src/rest/mod.rs:514",
-          "crates/fireemu-adapter-grpc/src/rest/mod.rs:545"
+          "crates/fireemu-adapter-grpc/src/rest/mod.rs:667",
+          "crates/fireemu-adapter-grpc/src/rest/mod.rs:698"
         ],
         "status": "local-extension-only"
       },
@@ -594,7 +594,7 @@
         "citations": [
           "crates/fireemu-adapter-grpc/src/rest/admin_fields.rs:345",
           "crates/fireemu-core-firestore/src/ttl.rs:242",
-          "crates/fireemu-adapter-grpc/src/local.rs:2983",
+          "crates/fireemu-adapter-grpc/src/local.rs:3037",
           "crates/fireemu/src/control.rs:148"
         ],
         "status": "partial"
@@ -673,7 +673,7 @@
       "dataPlaneConsequence": "The written export format is a contract: fireemu's own export and import must read and write what the official tooling produces, which is already covered by local format evidence.",
       "local": {
         "citations": [
-          "crates/fireemu/src/import_export.rs:2870",
+          "crates/fireemu/src/import_export.rs:2891",
           "crates/fireemu-core-export/src/firestore.rs:480",
           "crates/fireemu-core-export/src/metadata.rs:142"
         ],
@@ -687,9 +687,9 @@
       "dataPlaneConsequence": "A wrong concurrencyMode, databaseEdition or versionRetentionPeriod makes a caller choose transaction, edition and read-time behavior the local runtime will then refuse or accept differently from production.",
       "local": {
         "citations": [
-          "crates/fireemu-adapter-grpc/src/rest/mod.rs:694",
-          "crates/fireemu-adapter-grpc/src/rest/mod.rs:769",
-          "crates/fireemu-adapter-grpc/src/rest/mod.rs:278"
+          "crates/fireemu-adapter-grpc/src/rest/mod.rs:847",
+          "crates/fireemu-adapter-grpc/src/rest/mod.rs:922",
+          "crates/fireemu-adapter-grpc/src/rest/mod.rs:303"
         ],
         "status": "partial"
       },
@@ -715,9 +715,9 @@
       "dataPlaneConsequence": "A database absent in production but present locally lets a caller address a database that would return NOT_FOUND against the real service.",
       "local": {
         "citations": [
-          "crates/fireemu-adapter-grpc/src/rest/mod.rs:694",
-          "crates/fireemu-adapter-grpc/src/rest/mod.rs:758",
-          "crates/fireemu-adapter-grpc/src/rest/mod.rs:737"
+          "crates/fireemu-adapter-grpc/src/rest/mod.rs:847",
+          "crates/fireemu-adapter-grpc/src/rest/mod.rs:911",
+          "crates/fireemu-adapter-grpc/src/rest/mod.rs:890"
         ],
         "status": "partial"
       },
@@ -750,8 +750,8 @@
       "local": {
         "citations": [
           "crates/fireemu-adapter-grpc/src/rest/admin_fields.rs:548",
-          "crates/fireemu-adapter-grpc/src/local.rs:2819",
-          "crates/fireemu-adapter-grpc/src/local.rs:2861"
+          "crates/fireemu-adapter-grpc/src/local.rs:2873",
+          "crates/fireemu-adapter-grpc/src/local.rs:2915"
         ],
         "status": "partial"
       },
@@ -764,7 +764,7 @@
       "local": {
         "citations": [
           "crates/fireemu-adapter-grpc/src/rest/admin_fields.rs:548",
-          "crates/fireemu-adapter-grpc/src/local.rs:2873"
+          "crates/fireemu-adapter-grpc/src/local.rs:2927"
         ],
         "status": "partial"
       },
@@ -916,8 +916,8 @@
   "repairTickets": [
     {
       "citations": [
-        "crates/fireemu-adapter-grpc/src/local.rs:1630",
-        "crates/fireemu-adapter-grpc/src/local.rs:1398",
+        "crates/fireemu-adapter-grpc/src/local.rs:1682",
+        "crates/fireemu-adapter-grpc/src/local.rs:1439",
         "crates/fireemu-core-types/src/ids.rs:183"
       ],
       "class": "local-safety-extension",
@@ -932,9 +932,9 @@
     },
     {
       "citations": [
-        "crates/fireemu-adapter-grpc/src/rest/mod.rs:307",
-        "crates/fireemu-adapter-grpc/src/rest/mod.rs:709",
-        "crates/fireemu-adapter-grpc/src/rest/mod.rs:295"
+        "crates/fireemu-adapter-grpc/src/rest/mod.rs:332",
+        "crates/fireemu-adapter-grpc/src/rest/mod.rs:862",
+        "crates/fireemu-adapter-grpc/src/rest/mod.rs:320"
       ],
       "class": "data-plane-contract",
       "fixApplied": false,
@@ -948,7 +948,7 @@
     },
     {
       "citations": [
-        "crates/fireemu-adapter-grpc/src/rest/mod.rs:278",
+        "crates/fireemu-adapter-grpc/src/rest/mod.rs:303",
         "tools/compat-broad/batch_contract.py:230",
         "tools/compat-broad/fixtures/database-settings-7be6cf08.json:1"
       ],
@@ -980,7 +980,7 @@
     },
     {
       "citations": [
-        "crates/fireemu-adapter-grpc/src/decode.rs:107",
+        "crates/fireemu-adapter-grpc/src/decode.rs:169",
         "crates/fireemu-core-types/src/ids.rs:183"
       ],
       "class": "data-plane-contract",

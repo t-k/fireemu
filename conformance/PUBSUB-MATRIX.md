@@ -59,7 +59,7 @@ parity: 5
 
 ## delivery
 
-parity: 8 &middot; documented-divergence: 1
+parity: 10 &middot; documented-divergence: 2
 
 | program | step | status |
 | --- | --- | --- |
@@ -72,6 +72,9 @@ parity: 8 &middot; documented-divergence: 1
 | `nack-redelivery` | `redelivered` | parity |
 | `seek-to-time` | `drained` | parity |
 | `seek-to-time` | `replayed` | documented-divergence |
+| `push-backoff` | `delivered` | parity |
+| `push-backoff` | `subscriptionThrottle` | documented-divergence |
+| `push-backoff` | `recovered` | parity |
 
 ## errors
 

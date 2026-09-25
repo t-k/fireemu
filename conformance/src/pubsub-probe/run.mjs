@@ -123,8 +123,11 @@ async function probeOracle(outPath) {
     env: {
       PUBSUB_PROBE_OUT: outPath,
       PUBSUB_PROBE_PROJECT: PROJECT,
+      PUBSUB_PROBE_SIDE: "oracle",
       FIREBASE_CLI_EXPERIMENTS: "",
       GOOGLE_APPLICATION_CREDENTIALS: "",
+      FIREEMU_CONTROL_URL: "",
+      FIREEMU_CONTROL_TOKEN: "",
     },
   });
   return JSON.parse(await readFile(outPath, "utf8"));
@@ -166,6 +169,7 @@ async function probeFireemu(outPath) {
     env: {
       PUBSUB_PROBE_OUT: outPath,
       PUBSUB_PROBE_PROJECT: PROJECT,
+      PUBSUB_PROBE_SIDE: "fireemu",
       // fireemu exec exports PUBSUB_EMULATOR_HOST; the session reads it.
     },
   });
@@ -347,6 +351,12 @@ async function check() {
           `${program.id}#${stepId}: the run produced a step the matrix does not describe`,
         );
       }
+    }
+  }
+  const recordedPrograms = new Set(matrix.programs.map((program) => program.id));
+  for (const programId of Object.keys(run.programs)) {
+    if (!recordedPrograms.has(programId)) {
+      failures.push(`${programId}: the run produced a program the matrix does not describe`);
     }
   }
   if (warnings.length) {

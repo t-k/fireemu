@@ -12,6 +12,24 @@ import { PROGRAMS } from "./programs.mjs";
 const project = process.env.PUBSUB_PROBE_PROJECT || "demo-pubsub-probe";
 const outPath = process.env.PUBSUB_PROBE_OUT;
 const emulatorHost = process.env.PUBSUB_EMULATOR_HOST;
+const side = process.env.PUBSUB_PROBE_SIDE;
+
+async function advanceClock(seconds) {
+  if (side === "oracle") return;
+  if (side !== "fireemu") throw new Error("Pub/Sub probe side is not configured");
+  const control = new URL(process.env.FIREEMU_CONTROL_URL);
+  if (!["127.0.0.1", "localhost", "[::1]"].includes(control.hostname)) {
+    throw new Error("control API must be loopback");
+  }
+  const token = process.env.FIREEMU_CONTROL_TOKEN;
+  if (!token) throw new Error("fireemu control token is missing");
+  const response = await fetch(`${control.origin}/v1/sessions/default/clock:advance`, {
+    method: "POST",
+    headers: { "content-type": "application/json", authorization: `Bearer ${token}` },
+    body: JSON.stringify({ seconds }),
+  });
+  if (!response.ok) throw new Error(`clock advance failed: ${response.status}`);
+}
 
 async function rest(method, path, body = {}) {
   const init = {
@@ -67,7 +85,7 @@ async function main() {
   for (const program of PROGRAMS) {
     // A fresh client per program keeps subscription streams from leaking across programs.
     const pubsub = new PubSub({ projectId: project });
-    const ctx = { project, pubsub, receive: receiveFactory(), rest };
+    const ctx = { project, pubsub, receive: receiveFactory(), rest, advanceClock };
     try {
       const steps = await program.run(ctx);
       result.programs[program.id] = {

@@ -180,6 +180,9 @@ pub struct PendingSignIn {
     pub started_at: LogicalInstant,
     /// First-factor provenance retained until the second factor is accepted.
     pub(crate) context: PendingSignInContext,
+    /// Whether a second factor completed it (production's rules keep it usable until it
+    /// expires; it is the first to make room at [`MAX_PENDING_PER_USER`]).
+    pub(crate) completed: bool,
 }
 
 impl fmt::Debug for PendingSignIn {
@@ -187,6 +190,7 @@ impl fmt::Debug for PendingSignIn {
         f.debug_struct("PendingSignIn")
             .field("started_at", &self.started_at)
             .field("context", &self.context)
+            .field("completed", &self.completed)
             .finish()
     }
 }
@@ -663,6 +667,38 @@ impl MfaState {
 
     pub(crate) fn pending_sign_ins_mut(&mut self) -> &mut BTreeMap<String, PendingSignIn> {
         &mut self.pending_sign_ins
+    }
+
+    /// Drops one entry production's rules keep only for their answers, to make room at
+    /// [`MAX_PENDING_PER_USER`]: the enrollment session that expired first, else the oldest
+    /// completed one, else the oldest completed pending sign-in. Returns the id of a dropped
+    /// sign-in (its owner index is the caller's); nothing is dropped when every entry is live
+    /// and unfinished.
+    pub(crate) fn drop_one_finished(&mut self, now: LogicalInstant) -> Option<String> {
+        let enrollment = self
+            .pending_enrollments
+            .iter()
+            .filter(|(_, p)| p.expires_at < now)
+            .min_by_key(|(_, p)| p.expires_at)
+            .or_else(|| {
+                self.pending_enrollments
+                    .iter()
+                    .filter(|(_, p)| p.completed)
+                    .min_by_key(|(_, p)| p.expires_at)
+            })
+            .map(|(id, _)| id.clone());
+        if let Some(id) = enrollment {
+            self.pending_enrollments.remove(&id);
+            return None;
+        }
+        let sign_in = self
+            .pending_sign_ins
+            .iter()
+            .filter(|(_, p)| p.completed)
+            .min_by_key(|(_, p)| p.started_at)
+            .map(|(id, _)| id.clone())?;
+        self.pending_sign_ins.remove(&sign_in);
+        Some(sign_in)
     }
 
     /// Whether `id` names a pending enrollment session (expired or not).

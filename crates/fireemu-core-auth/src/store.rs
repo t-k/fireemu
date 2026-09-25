@@ -3360,6 +3360,24 @@ impl AuthStore {
         now.as_nanos() - created_at.as_nanos() > i128::from(ttl_seconds) * 1_000_000_000
     }
 
+    /// Under production's rules, where finished pending entries are kept for their answers,
+    /// drops one of them when `user` is at [`crate::mfa::MAX_PENDING_PER_USER`], so the budget
+    /// refuses only live, unfinished flows (safety review 2026-09-25, MF-2). A dropped pending
+    /// credential is then unknown (`INVALID_PENDING_TOKEN`) and a dropped expired enrollment
+    /// session `INVALID_SESSION_INFO`; this local bound is not a production quota.
+    fn make_pending_room(
+        user: &mut UserRecord,
+        owners: &mut Arc<BTreeMap<String, LocalId>>,
+        now: LogicalInstant,
+    ) {
+        if user.mfa.pending_count() < crate::mfa::MAX_PENDING_PER_USER {
+            return;
+        }
+        if let Some(sign_in) = user.mfa.drop_one_finished(now) {
+            Arc::make_mut(owners).remove(&sign_in);
+        }
+    }
+
     /// Whether `now` is at least `seconds` after `since` (an observed refusal age).
     fn expired_at(since: LogicalInstant, seconds: i64, now: LogicalInstant) -> bool {
         now.as_nanos() - since.as_nanos() >= i128::from(seconds) * 1_000_000_000
@@ -3989,7 +4007,11 @@ impl AuthStore {
         }
         // Production keeps the pending credential after success (sandbox recording
         // 2026-09-24, auth-mfa/sms#sign-in-finalize-again).
-        if !production {
+        if production {
+            if let Some(kept) = user.mfa.pending_sign_ins_mut().get_mut(&pending.0) {
+                kept.completed = true;
+            }
+        } else {
             user.mfa.pending_sign_ins_mut().remove(&pending.0);
             Arc::make_mut(&mut self.pending_sign_in_owners).remove(&pending.0);
             if user.mfa.pending_count() == 0 {
@@ -4647,6 +4669,14 @@ impl AuthStore {
         // Expired sessions are swept before the budget is measured, so an abandoned flow
         // frees its slot on expiry; a refused start creates no secret and no session.
         self.sweep_transient_credentials(now);
+        if self.second_factor_rules_are_production() {
+            let user = self
+                .users
+                .get_mut(uid)
+                .map(Arc::make_mut)
+                .ok_or(MfaError::UserNotFound)?;
+            Self::make_pending_room(user, &mut self.pending_sign_in_owners, now);
+        }
         let user = self.users.get(uid).ok_or(MfaError::UserNotFound)?;
         if user.mfa.pending_count() >= crate::mfa::MAX_PENDING_PER_USER {
             return Err(MfaError::TooManyPending);
@@ -4860,6 +4890,7 @@ impl AuthStore {
         context: PendingSignInContext,
     ) -> Result<PendingSignInId, MfaError> {
         self.sweep_transient_credentials(now);
+        let production = self.second_factor_rules_are_production();
         let pending_id = self.next_id("signin-");
         let user = self
             .users
@@ -4872,6 +4903,9 @@ impl AuthStore {
         if user.mfa.is_empty() {
             return Err(MfaError::NoEnrolledFactor);
         }
+        if production {
+            Self::make_pending_room(user, &mut self.pending_sign_in_owners, now);
+        }
         if user.mfa.pending_count() >= crate::mfa::MAX_PENDING_PER_USER {
             return Err(MfaError::TooManyPending);
         }
@@ -4880,6 +4914,7 @@ impl AuthStore {
             PendingSignIn {
                 started_at: now,
                 context,
+                completed: false,
             },
         );
         Arc::make_mut(&mut self.pending_sign_in_owners).insert(pending_id.clone(), uid.clone());
@@ -5006,9 +5041,10 @@ impl AuthStore {
         // Production keeps a pending credential usable after it succeeded, until it expires
         // (sandbox recording 2026-09-24, auth-mfa/totp/sign-in#pending-1-again).
         if production {
-            if user.mfa.pending_sign_in(&pending.0).is_none() {
+            let Some(kept) = user.mfa.pending_sign_ins_mut().get_mut(&pending.0) else {
                 return Err(MfaError::PendingSignInUnknown);
-            }
+            };
+            kept.completed = true;
         } else {
             if user.mfa.pending_sign_ins_mut().remove(&pending.0).is_none() {
                 return Err(MfaError::PendingSignInUnknown);

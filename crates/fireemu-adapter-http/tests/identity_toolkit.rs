@@ -17866,3 +17866,68 @@ fn strict_a_totp_enrollment_needs_a_sign_in_as_recent_as_production_asked() {
     let (status, body) = totp_start_aged(&s, "recent@example.com", 1_800);
     assert_eq!(status, 200, "{body}");
 }
+
+// ---- AUTH-MFA strict: the per-user pending budget (safety review 2026-09-25, MF-2) ---------
+
+/// Production keeps a pending credential after it succeeds, but a user signing in again and
+/// again is never refused for it: a credential that succeeded makes room at the budget.
+#[test]
+fn strict_repeated_mfa_sign_ins_are_not_refused_by_the_pending_budget() {
+    let s = strict_mfa_state();
+    let (status, body) = patch_sign_in(
+        &s,
+        "signIn.phoneNumber.testPhoneNumbers",
+        &json!({"signIn": {"phoneNumber": {"testPhoneNumbers": {"+16505550101": "123456"}}}}),
+    );
+    assert_eq!(status, 200, "{body}");
+    create(
+        &s,
+        &json!({"email": "again@example.com", "password": "password123", "emailVerified": true,
+            "mfaInfo": [{"phoneInfo": "+16505550101"}]}),
+    );
+    let budget = fireemu_core_auth::mfa::MAX_PENDING_PER_USER;
+    for round in 0..budget + 8 {
+        let pending = pending_of(&s, "again@example.com");
+        let (status, started) = post(
+            &s,
+            &format!("{V2}/accounts/mfaSignIn:start"),
+            &json!({"mfaPendingCredential": pending["mfaPendingCredential"],
+                "mfaEnrollmentId": pending["mfaInfo"][0]["mfaEnrollmentId"], "phoneSignInInfo": {}}),
+        );
+        assert_eq!(status, 200, "round {round}: {started}");
+        let (status, signed_in) = post(
+            &s,
+            &format!("{V2}/accounts/mfaSignIn:finalize"),
+            &json!({"mfaPendingCredential": pending["mfaPendingCredential"],
+                "phoneVerificationInfo": {"sessionInfo": started["phoneResponseInfo"]["sessionInfo"], "code": "123456"}}),
+        );
+        assert_eq!(status, 200, "round {round}: {signed_in}");
+    }
+}
+
+/// Expired enrollment sessions, which production's rules keep for a day so a late finalize is
+/// `SESSION_EXPIRED`, make room at the budget; live ones still fill it.
+#[test]
+fn strict_expired_enrollment_sessions_do_not_hold_the_pending_budget() {
+    let s = strict_mfa_state();
+    let token = verified_session(&s, "sessions@example.com");
+    let budget = fireemu_core_auth::mfa::MAX_PENDING_PER_USER;
+    let start = |token: &str| {
+        post(
+            &s,
+            &format!("{V2}/accounts/mfaEnrollment:start"),
+            &json!({"idToken": token, "totpEnrollmentInfo": {}}),
+        )
+    };
+    for _ in 0..budget {
+        let (status, body) = start(&token);
+        assert_eq!(status, 200, "{body}");
+    }
+    let (status, body) = start(&token);
+    assert_eq!(status, 400, "live sessions fill the budget: {body}");
+    advance(&s, 901);
+    let (status, signed_in) = password_sign_in(&s, "sessions@example.com", "password123");
+    assert_eq!(status, 200, "{signed_in}");
+    let (status, body) = start(signed_in["idToken"].as_str().unwrap());
+    assert_eq!(status, 200, "{body}");
+}

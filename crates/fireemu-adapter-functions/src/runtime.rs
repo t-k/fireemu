@@ -155,7 +155,7 @@ pub struct BlockingAuthTarget {
 }
 
 /// Static runtime configuration.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct FunctionsConfig {
     /// Project ID the functions belong to.
     pub project: String,
@@ -183,6 +183,25 @@ pub struct FunctionsConfig {
     /// `defaultUri` is the function's public URL, so the runtime has to know its own address
     /// to build one and to recognise a task that named it explicitly.
     pub functions_host: Option<String>,
+}
+
+impl std::fmt::Debug for FunctionsConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("FunctionsConfig")
+            .field("project", &self.project)
+            .field("default_bucket", &self.default_bucket)
+            .field("location", &self.location)
+            .field("session", &self.session)
+            .field("max_running", &self.max_running)
+            .field("debug_mode", &self.debug_mode)
+            .field("retry_attempts", &self.retry_attempts)
+            .field("max_catch_up_runs", &self.max_catch_up_runs)
+            .field("runner_secret", &"[redacted]")
+            .field("overlap", &self.overlap)
+            .field("catch_up", &self.catch_up)
+            .field("functions_host", &self.functions_host)
+            .finish()
+    }
 }
 
 /// Which of the schedule runs that became due during a clock move are enqueued.

@@ -298,7 +298,7 @@ async fn read_bounded_stderr_line<R: AsyncBufRead + Unpin>(
 }
 
 /// How to start (and restart) a runner.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct SpawnSpec {
     /// Program and arguments.
     pub command: Vec<String>,
@@ -308,6 +308,17 @@ pub struct SpawnSpec {
     pub env: Vec<(String, String)>,
     /// How long to wait for the `hello`.
     pub hello_timeout: Duration,
+}
+
+impl std::fmt::Debug for SpawnSpec {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SpawnSpec")
+            .field("command", &"[redacted]")
+            .field("cwd", &self.cwd)
+            .field("env", &"[redacted]")
+            .field("hello_timeout", &self.hello_timeout)
+            .finish()
+    }
 }
 
 /// A running runner.
@@ -386,7 +397,8 @@ fn create_credential_sandbox() -> Result<PathBuf, String> {
 /// The environment of a runner child: the inherited allowlist, then `extra` (emulator
 /// endpoints and project settings).
 fn child_env(extra: &[(String, String)]) -> Result<(Vec<(String, String)>, PathBuf), String> {
-    let mut env: Vec<(String, String)> = std::env::vars()
+    let mut env: Vec<(String, String)> = std::env::vars_os()
+        .filter_map(|(key, value)| Some((key.into_string().ok()?, value.into_string().ok()?)))
         .filter(|(k, _)| {
             INHERITED_ENV.contains(&k.as_str())
                 || INHERITED_ENV_PREFIXES.iter().any(|p| k.starts_with(p))
@@ -1062,6 +1074,51 @@ mod tests {
         std::fs::remove_dir_all(second.1).expect("second sandbox cleanup");
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn child_env_skips_non_utf8_inherited_values_without_panicking() {
+        use std::ffi::OsString;
+        use std::os::unix::ffi::OsStringExt;
+        use std::process::Command;
+
+        const PROBE: &str = "FIREEMU_RUNNER_NON_UTF8_CHILD_TEST";
+        if std::env::var(PROBE).as_deref() == Ok("1") {
+            let (environment, sandbox) = child_env(&[]).expect("runner environment");
+            assert_eq!(
+                environment_value(&environment, "VOLTA_FIREEMU_VALID"),
+                "retained"
+            );
+            assert!(environment
+                .iter()
+                .all(|(key, _)| key != "VOLTA_FIREEMU_INVALID"));
+            std::fs::remove_dir_all(sandbox).expect("sandbox cleanup");
+            println!("non-UTF-8 environment probe ran");
+            return;
+        }
+
+        let output = Command::new(std::env::current_exe().expect("test executable"))
+            .args([
+                "--exact",
+                "runner::tests::child_env_skips_non_utf8_inherited_values_without_panicking",
+                "--nocapture",
+            ])
+            .env(PROBE, "1")
+            .env("VOLTA_FIREEMU_VALID", "retained")
+            .env("VOLTA_FIREEMU_INVALID", OsString::from_vec(vec![0xff]))
+            .output()
+            .expect("test subprocess");
+        assert!(
+            output.status.success(),
+            "stdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(
+            String::from_utf8_lossy(&output.stdout).contains("non-UTF-8 environment probe ran"),
+            "the subprocess did not run the probe"
+        );
+    }
+
     #[test]
     fn spawn_setup_guard_removes_its_owned_sandbox_on_error_and_unwind() {
         let on_error = super::create_credential_sandbox().unwrap();
@@ -1094,7 +1151,7 @@ mod tests {
             ],
             None,
             &[],
-            Duration::from_millis(100),
+            Duration::from_secs(5),
         )
         .await;
         let error = match result {

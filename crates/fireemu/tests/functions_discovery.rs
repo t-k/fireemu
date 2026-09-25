@@ -761,6 +761,34 @@ fn inspect_functions_refuses_a_listener_closed_during_module_loading() {
 }
 
 #[cfg(unix)]
+fn owned_runner_process_group(
+    daemon_pid: u32,
+    runner_pid: i32,
+    child_pid: i32,
+) -> (i32, ProcessGroupGuard) {
+    let runner = census::find(runner_pid).expect("the Node runner is visible");
+    let daemon_pid = i32::try_from(daemon_pid).unwrap();
+    let daemon_group = census::find(daemon_pid)
+        .expect("the daemon is visible")
+        .pgid;
+    assert_ne!(runner.pgid, daemon_group);
+    assert!(
+        census::descendants_of(daemon_pid)
+            .iter()
+            .any(|process| process.pid == runner.pgid && process.pgid == runner.pgid),
+        "the runner process group is led by a daemon-owned process, possibly a Node shim"
+    );
+    assert_eq!(
+        census::find(child_pid)
+            .expect("the fixture child is visible")
+            .pgid,
+        runner.pgid
+    );
+    let guard = ProcessGroupGuard::new(runner.pgid);
+    (runner.pgid, guard)
+}
+
+#[cfg(unix)]
 fn assert_signal_shutdown(signal: &str, label: &str) {
     let unrelated = ChildGuard::new(
         Command::new("sleep")
@@ -819,18 +847,8 @@ fn assert_signal_shutdown(signal: &str, label: &str) {
     let armed = arm_shutdown_fixture(functions_port, &project, &marker);
     let runner_pid = i32::try_from(armed["runnerPid"].as_i64().unwrap()).unwrap();
     let child_pid = i32::try_from(armed["childPid"].as_i64().unwrap()).unwrap();
-    let runner = census::find(runner_pid).expect("the Node runner is visible");
-    let mut runner_group = ProcessGroupGuard::new(runner.pgid);
-    assert_eq!(
-        runner.pgid, runner_pid,
-        "the runner leads its owned process group"
-    );
-    assert_eq!(
-        census::find(child_pid)
-            .expect("the fixture child is visible")
-            .pgid,
-        runner.pgid
-    );
+    let (runner_group_id, mut runner_group) =
+        owned_runner_process_group(daemon_pid, runner_pid, child_pid);
     assert!(
         locator.exists(),
         "the exact daemon locator was not published"
@@ -849,7 +867,7 @@ fn assert_signal_shutdown(signal: &str, label: &str) {
     );
     assert_eq!(std::fs::read_to_string(&marker).unwrap(), "graceful\n");
     census::assert_process_group_empty(
-        runner.pgid,
+        runner_group_id,
         "Functions runner signal shutdown",
         Duration::from_secs(5),
     );

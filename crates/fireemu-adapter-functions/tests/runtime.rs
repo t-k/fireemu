@@ -28,6 +28,49 @@ use serde_json::json;
 const START: LogicalInstant = LogicalInstant::from_unix_seconds(1_788_004_860);
 const RUNNER_HELLO_TIMEOUT: Duration = Duration::from_secs(60);
 
+#[test]
+fn spawn_spec_debug_redacts_environment_and_command_arguments() {
+    let spec = SpawnSpec {
+        command: vec!["node".to_owned(), "--token=command-sentinel-47".to_owned()],
+        cwd: Some("/functions".to_owned()),
+        env: vec![(
+            "LOCAL_SECRET".to_owned(),
+            "environment-sentinel-48".to_owned(),
+        )],
+        hello_timeout: Duration::from_secs(7),
+    };
+    let spec_debug = format!("{spec:?}");
+    for sentinel in ["command-sentinel-47", "environment-sentinel-48"] {
+        assert!(!spec_debug.contains(sentinel), "{spec_debug}");
+    }
+    assert!(spec_debug.contains("hello_timeout"), "{spec_debug}");
+}
+
+#[test]
+fn functions_config_debug_redacts_runner_secret() {
+    let config = FunctionsConfig {
+        project: "demo-app".to_owned(),
+        default_bucket: "demo-app.appspot.com".to_owned(),
+        location: "nam5".to_owned(),
+        session: SessionId::new(7),
+        max_running: 4,
+        debug_mode: false,
+        retry_attempts: 4,
+        max_catch_up_runs: 10,
+        runner_secret: "runtime-sentinel-49".to_owned(),
+        overlap: fireemu_adapter_functions::runtime::OverlapPolicy::Allow,
+        catch_up: fireemu_adapter_functions::runtime::CatchUpPolicy::All,
+        functions_host: None,
+    };
+
+    let config_debug = format!("{config:?}");
+    assert!(
+        !config_debug.contains("runtime-sentinel-49"),
+        "{config_debug}"
+    );
+    assert!(config_debug.contains("project"), "{config_debug}");
+}
+
 #[tokio::test]
 async fn runner_log_frames_preserve_function_and_user_metadata() {
     let script = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fake_runner.py");
@@ -2295,6 +2338,14 @@ fn iana_zones_follow_daylight_saving_time() {
     assert!(resolve(Some("Asia/Tokyo")).is_ok());
     assert!(resolve(Some("Mars/Olympus")).is_err());
     assert!(!fireemu_adapter_functions::zone::database_version().is_empty());
+}
+
+#[test]
+fn invalid_iana_zone_error_does_not_claim_daylight_saving_is_unsupported() {
+    let error = fireemu_adapter_functions::zone::resolve(Some("Mars/Olympus"))
+        .err()
+        .expect("the zone is not in the IANA database");
+    assert_eq!(error, "unknown time zone \"Mars/Olympus\"");
 }
 
 #[tokio::test]

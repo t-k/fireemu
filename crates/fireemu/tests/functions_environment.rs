@@ -690,7 +690,7 @@ fn a_dotenv_file_the_official_parser_refuses_stops_the_run_with_its_message() {
         ),
         (
             "GOOD=1\nthis is not an assignment\n",
-            "Invalid dotenv file, error on lines: this is not an assignment",
+            "Invalid dotenv file, error on lines: [redacted]",
         ),
     ] {
         let dir = scratch_codebase("refuse");

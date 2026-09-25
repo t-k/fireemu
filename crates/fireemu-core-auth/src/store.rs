@@ -5482,8 +5482,70 @@ impl AuthExportSnapshot {
     }
 }
 
+/// The tenant namespaces of one project captured for a session snapshot (`TENRST-2`).
+///
+/// Each tenant store is an [`AuthSnapshot`], so the capture holds no TOTP secret material or
+/// raw identity-provider credential (`INV-AUTH-003`). The tenant's published metadata and the
+/// settings changed through the tenant management API travel with it; startup configuration
+/// overrides stay with the registry, as configuration does.
+#[derive(Debug, Clone)]
+pub struct AuthTenantsSnapshot {
+    tenants: Vec<CapturedTenant>,
+}
+
+#[derive(Debug, Clone)]
+struct CapturedTenant {
+    tenant: String,
+    store: AuthSnapshot,
+    metadata: TenantMetadata,
+    runtime_override: Option<AuthNamespaceConfigPatch>,
+}
+
+impl AuthTenantsSnapshot {
+    /// An estimate of the heap bytes the captured tenant stores retain (`SNAP-MEM-01`).
+    #[must_use]
+    pub fn retained_bytes(&self) -> u64 {
+        self.tenants.iter().fold(0_u64, |total, captured| {
+            total.saturating_add(captured.store.retained_bytes())
+        })
+    }
+
+    /// Whether no captured tenant user holds TOTP secret material.
+    #[must_use]
+    pub fn holds_no_totp_secret(&self) -> bool {
+        self.tenants
+            .iter()
+            .all(|captured| captured.store.holds_no_totp_secret())
+    }
+}
+
+/// The exact tenant state of one project before a snapshot restore, used to undo the restore
+/// when a later service fails. Unlike [`AuthTenantsSnapshot`] it keeps the live store handles
+/// and full store contents, secrets included; it never leaves the process.
+#[derive(Debug, Clone)]
+pub struct AuthTenantsRollback {
+    tenants: Vec<RolledBackTenant>,
+}
+
+#[derive(Debug, Clone)]
+struct RolledBackTenant {
+    key: TenantKey,
+    handle: SharedAuthStore,
+    contents: AuthStore,
+    metadata: TenantMetadata,
+    runtime_override: Option<AuthNamespaceConfigPatch>,
+}
+
 type SharedAuthStore = Arc<Mutex<AuthStore>>;
 type TenantKey = (String, String);
+
+/// A project's published tenants: key, store handle, metadata and management-API override.
+type OwnedTenants = Vec<(
+    TenantKey,
+    SharedAuthStore,
+    TenantMetadata,
+    Option<AuthNamespaceConfigPatch>,
+)>;
 
 enum TenantPublication {
     Published(SharedAuthStore),
@@ -6953,6 +7015,297 @@ impl AuthRegistry {
         let gate = Arc::new(Mutex::new(()));
         gates.insert(key, Arc::downgrade(&gate));
         Some(gate)
+    }
+
+    fn project_operation_gate(&self, project: &str) -> Result<Arc<Mutex<()>>, &'static str> {
+        self.operation_gate(project, None)
+            .ok_or("the Auth operation-gate registry is poisoned")
+    }
+
+    /// The published tenants of `project`, read under the membership locks and returned with
+    /// the locks released.
+    fn owned_tenants(&self, project: &str) -> Result<OwnedTenants, &'static str> {
+        let tenants = self
+            .tenants
+            .lock()
+            .map_err(|_| "tenant registry is poisoned")?;
+        let metadata = self
+            .tenant_metadata
+            .lock()
+            .map_err(|_| "tenant metadata registry is poisoned")?;
+        let runtime_overrides = self
+            .tenant_runtime_config_overrides
+            .lock()
+            .map_err(|_| "tenant runtime config override registry is poisoned")?;
+        let mut owned = Vec::new();
+        for (key, store) in tenants
+            .iter()
+            .filter(|((candidate, _), _)| candidate == project)
+        {
+            let published = metadata
+                .get(key)
+                .cloned()
+                .ok_or("tenant store and metadata membership differ")?;
+            owned.push((
+                key.clone(),
+                store.clone(),
+                published,
+                runtime_overrides.get(key).copied(),
+            ));
+        }
+        if metadata.keys().any(|(candidate, tenant)| {
+            candidate == project && !tenants.contains_key(&(candidate.clone(), tenant.clone()))
+        }) {
+            return Err("tenant store and metadata membership differ");
+        }
+        Ok(owned)
+    }
+
+    /// Captures every tenant namespace of `project` for a session snapshot (`TENRST-2`).
+    ///
+    /// The project operation gate excludes tenant creation, deletion and configuration
+    /// changes while the tenants are copied.
+    ///
+    /// # Errors
+    /// A poisoned registry, gate or tenant store, or inconsistent tenant membership.
+    pub fn capture_tenants_snapshot(
+        &self,
+        project: &str,
+    ) -> Result<AuthTenantsSnapshot, &'static str> {
+        let gate = self.project_operation_gate(project)?;
+        let _operation = gate
+            .lock()
+            .map_err(|_| "the Auth operation gate is poisoned")?;
+        let mut tenants = Vec::new();
+        for ((_, tenant), store, metadata, runtime_override) in self.owned_tenants(project)? {
+            let store = store
+                .lock()
+                .map_err(|_| "a tenant Auth store is poisoned")?;
+            tenants.push(CapturedTenant {
+                tenant,
+                store: AuthSnapshot::capture(&store),
+                metadata,
+                runtime_override,
+            });
+        }
+        Ok(AuthTenantsSnapshot { tenants })
+    }
+
+    /// Captures the exact tenant state of `project` so a failed session restore can undo
+    /// [`Self::restore_tenants_snapshot`].
+    ///
+    /// # Errors
+    /// A poisoned registry, gate or tenant store, or inconsistent tenant membership.
+    pub fn capture_tenants_rollback(
+        &self,
+        project: &str,
+    ) -> Result<AuthTenantsRollback, &'static str> {
+        let gate = self.project_operation_gate(project)?;
+        let _operation = gate
+            .lock()
+            .map_err(|_| "the Auth operation gate is poisoned")?;
+        let mut tenants = Vec::new();
+        for (key, handle, metadata, runtime_override) in self.owned_tenants(project)? {
+            let contents = handle
+                .lock()
+                .map_err(|_| "a tenant Auth store is poisoned")?
+                .clone();
+            tenants.push(RolledBackTenant {
+                key,
+                handle,
+                contents,
+                metadata,
+                runtime_override,
+            });
+        }
+        Ok(AuthTenantsRollback { tenants })
+    }
+
+    /// Replaces the tenant namespaces of `project` with a captured set (`TENRST-2`).
+    ///
+    /// A tenant that still exists is restored in place, as the project store is: the restore
+    /// starts a new lifecycle epoch, so credentials issued before it stop working. A captured
+    /// tenant deleted since is published again under a fresh lifecycle epoch. A tenant created
+    /// since the capture is cleared and removed with its credentials. Every store is locked
+    /// before the first change, so a poisoned store leaves the tenants as they were.
+    ///
+    /// # Errors
+    /// The project has no Auth store, a lock is poisoned, or the tenant membership changed
+    /// while the restore was prepared.
+    pub fn restore_tenants_snapshot(
+        &self,
+        project: &str,
+        snapshot: &AuthTenantsSnapshot,
+    ) -> Result<RestoreReport, &'static str> {
+        let gate = self.project_operation_gate(project)?;
+        let _operation = gate
+            .lock()
+            .map_err(|_| "the Auth operation gate is poisoned")?;
+        let parent = self
+            .store_for(project)
+            .ok_or("the project has no Auth store")?;
+        let generation = self.membership_generation.load(Ordering::Acquire);
+        let live = self.owned_tenants(project)?;
+        // Building a namespace reads the startup overrides and the parent store, so every
+        // recreated tenant is built before the membership locks are taken.
+        let mut recreated = Vec::new();
+        for captured in &snapshot.tenants {
+            if !live.iter().any(|((_, tenant), ..)| tenant == &captured.tenant) {
+                let store = self
+                    .build_tenant_store(project, &captured.tenant, &parent)
+                    .ok_or("cannot build a tenant Auth store")?;
+                recreated.push((captured, store));
+            }
+        }
+        let mut tenants = self
+            .tenants
+            .lock()
+            .map_err(|_| "tenant registry is poisoned")?;
+        let mut metadata = self
+            .tenant_metadata
+            .lock()
+            .map_err(|_| "tenant metadata registry is poisoned")?;
+        let mut runtime_overrides = self
+            .tenant_runtime_config_overrides
+            .lock()
+            .map_err(|_| "tenant runtime config override registry is poisoned")?;
+        let mut gates = self
+            .operation_gates
+            .lock()
+            .map_err(|_| "tenant operation-gate registry is poisoned")?;
+        if self.membership_generation.load(Ordering::Acquire) != generation {
+            return Err("Auth tenant membership changed during the restore");
+        }
+        let mut live_guards = Vec::with_capacity(live.len());
+        for (key, store, ..) in &live {
+            live_guards.push((
+                key,
+                store
+                    .lock()
+                    .map_err(|_| "a tenant Auth store is poisoned")?,
+            ));
+        }
+        let mut recreated_guards = Vec::with_capacity(recreated.len());
+        for (captured, store) in &recreated {
+            recreated_guards.push((
+                *captured,
+                store,
+                store
+                    .lock()
+                    .map_err(|_| "a tenant Auth store is poisoned")?,
+            ));
+        }
+        let mut report = RestoreReport::default();
+        for (key, guard) in &mut live_guards {
+            if let Some(captured) = snapshot.tenants.iter().find(|c| c.tenant == key.1) {
+                report.totp_factors_dropped +=
+                    captured.store.restore_into(guard).totp_factors_dropped;
+            } else {
+                guard.clear();
+                tenants.remove(*key);
+                gates.remove(*key);
+            }
+        }
+        for (captured, store, guard) in &mut recreated_guards {
+            report.totp_factors_dropped += captured.store.restore_into(guard).totp_factors_dropped;
+            tenants.insert(
+                (project.to_owned(), captured.tenant.clone()),
+                (*store).clone(),
+            );
+        }
+        metadata.retain(|(candidate, _), _| candidate != project);
+        runtime_overrides.retain(|(candidate, _), _| candidate != project);
+        for captured in &snapshot.tenants {
+            let key = (project.to_owned(), captured.tenant.clone());
+            metadata.insert(key.clone(), captured.metadata.clone());
+            if let Some(runtime_override) = captured.runtime_override {
+                runtime_overrides.insert(key, runtime_override);
+            }
+        }
+        self.membership_generation.fetch_add(1, Ordering::Release);
+        Ok(report)
+    }
+
+    /// Puts the tenant namespaces of `project` back exactly as [`Self::capture_tenants_rollback`]
+    /// saw them: the same store handles, contents and settings. A tenant published since is
+    /// cleared and removed.
+    ///
+    /// # Errors
+    /// A poisoned registry, gate or tenant store; nothing is changed then.
+    pub fn rollback_tenants(
+        &self,
+        project: &str,
+        rollback: &AuthTenantsRollback,
+    ) -> Result<(), &'static str> {
+        let gate = self.project_operation_gate(project)?;
+        let _operation = gate
+            .lock()
+            .map_err(|_| "the Auth operation gate is poisoned")?;
+        let mut tenants = self
+            .tenants
+            .lock()
+            .map_err(|_| "tenant registry is poisoned")?;
+        let mut metadata = self
+            .tenant_metadata
+            .lock()
+            .map_err(|_| "tenant metadata registry is poisoned")?;
+        let mut runtime_overrides = self
+            .tenant_runtime_config_overrides
+            .lock()
+            .map_err(|_| "tenant runtime config override registry is poisoned")?;
+        let mut gates = self
+            .operation_gates
+            .lock()
+            .map_err(|_| "tenant operation-gate registry is poisoned")?;
+        let published_since = tenants
+            .iter()
+            .filter(|((candidate, _), store)| {
+                candidate == project
+                    && !rollback
+                        .tenants
+                        .iter()
+                        .any(|saved| Arc::ptr_eq(&saved.handle, store))
+            })
+            .map(|(key, store)| (key.clone(), store.clone()))
+            .collect::<Vec<_>>();
+        let mut saved_guards = Vec::with_capacity(rollback.tenants.len());
+        for saved in &rollback.tenants {
+            saved_guards.push((
+                saved,
+                saved
+                    .handle
+                    .lock()
+                    .map_err(|_| "a tenant Auth store is poisoned")?,
+            ));
+        }
+        let mut published_since_guards = Vec::with_capacity(published_since.len());
+        for (key, store) in &published_since {
+            published_since_guards.push((
+                key,
+                store
+                    .lock()
+                    .map_err(|_| "a tenant Auth store is poisoned")?,
+            ));
+        }
+        for (key, guard) in &mut published_since_guards {
+            guard.clear();
+            gates.remove(*key);
+        }
+        for (saved, guard) in &mut saved_guards {
+            **guard = saved.contents.clone();
+        }
+        tenants.retain(|(candidate, _), _| candidate != project);
+        metadata.retain(|(candidate, _), _| candidate != project);
+        runtime_overrides.retain(|(candidate, _), _| candidate != project);
+        for saved in &rollback.tenants {
+            tenants.insert(saved.key.clone(), saved.handle.clone());
+            metadata.insert(saved.key.clone(), saved.metadata.clone());
+            if let Some(runtime_override) = saved.runtime_override {
+                runtime_overrides.insert(saved.key.clone(), runtime_override);
+            }
+        }
+        self.membership_generation.fetch_add(1, Ordering::Release);
+        Ok(())
     }
 
     /// Captures the project store and every published tenant store as one export view.

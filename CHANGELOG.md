@@ -54,6 +54,10 @@ Behavior below was measured against a real Identity Platform project on 2026-09-
 - Strict profile: a verification or email change applied from the emulator's action page (`/emulator/action`) follows the same production rules as `accounts:update` with the code: earlier sessions are revoked, the replaced address is recorded as `initialEmail`, and its verification codes are void.
 - Both profiles: action codes, phone verification sessions and codes, phone proofs, MFA sessions and pending credentials, refresh tokens and TOTP secrets are drawn from the operating system CSPRNG, as the daemon's start-up secrets are, so a daemon run with a fixed `seed` no longer issues credentials that can be predicted from one another. Their shapes do not change; account and factor ids still follow the seed.
 
+### Fixed
+
+- Both profiles: a session snapshot captures the session project's Identity Platform tenants with the project, and a restore rolls them back too: tenant users and credentials added after the capture are gone, a tenant created since is removed, and a tenant deleted since comes back with its users under a new session epoch. It used to restore the project's own users only. The session resource report counts tenant users in `users.count` and reports the number of tenants as `tenants.count`.
+
 ## [0.7.1] - 2026-09-10
 
 ### Fixed

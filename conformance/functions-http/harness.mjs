@@ -4,7 +4,10 @@ import { createHash } from "node:crypto";
 
 export const PROJECT = "fireemu-oracle-query";
 export const REGION = "us-central1";
-export const FUNCTION_NAMES = Object.freeze({ http: "fireemuHttpProbe", callable: "fireemuCallableProbe" });
+export const FUNCTION_NAMES = Object.freeze({
+  http: "fireemuHttpProbe",
+  callable: "fireemuCallableProbe",
+});
 export const BOUNDS = Object.freeze({
   invocations: 136,
   control: 192,
@@ -89,7 +92,13 @@ export function validateCorpus(corpus) {
         throw new Error(`${program.id}#${step.id}: method`);
       }
       const path = step.request.path;
-      if (typeof path !== "string" || !path.startsWith("/") || path.startsWith("//") || path.includes("..") || path.length > 512) {
+      if (
+        typeof path !== "string" ||
+        !path.startsWith("/") ||
+        path.startsWith("//") ||
+        path.includes("..") ||
+        path.length > 512
+      ) {
         throw new Error(`${program.id}#${step.id}: path`);
       }
       if (!["complete", "first-chunk-then-abort"].includes(step.capture)) {
@@ -110,7 +119,8 @@ export function validateCorpus(corpus) {
     }
     deployments += targets.size;
   }
-  if (cases !== 68 || deployments !== 16) throw new Error("corpus must have 68 cases and 16 deployments");
+  if (cases !== 68 || deployments !== 16)
+    throw new Error("corpus must have 68 cases and 16 deployments");
   return { programs: programIds.size, cases, deployments, invocations: cases * 2 };
 }
 
@@ -138,7 +148,8 @@ export function createBudget() {
 export function validateFunctionRecord(record, target) {
   const name = expectedFunctionName(target);
   const resource = `projects/${PROJECT}/locations/${REGION}/functions/${name}`;
-  if (record?.name !== resource) throw new Error("function name differs from the reviewed resource");
+  if (record?.name !== resource)
+    throw new Error("function name differs from the reviewed resource");
   if (record.environment !== "GEN_2") throw new Error("function generation is not GEN_2");
   if (record.buildConfig?.runtime !== "nodejs22" || record.buildConfig?.entryPoint !== name) {
     throw new Error("function runtime or entry point differs from the fixture");
@@ -155,8 +166,17 @@ export function validateFunctionRecord(record, target) {
   }
   const host = uri.hostname.toLowerCase();
   const runHost = host.startsWith(`${name.toLowerCase()}-`) && host.endsWith(".run.app");
-  const functionsHost = host === `${REGION}-${PROJECT}.cloudfunctions.net` && uri.pathname === `/${name}`;
-  if (uri.protocol !== "https:" || uri.username || uri.password || uri.port || uri.search || uri.hash || (!runHost && !functionsHost)) {
+  const functionsHost =
+    host === `${REGION}-${PROJECT}.cloudfunctions.net` && uri.pathname === `/${name}`;
+  if (
+    uri.protocol !== "https:" ||
+    uri.username ||
+    uri.password ||
+    uri.port ||
+    uri.search ||
+    uri.hash ||
+    (!runHost && !functionsHost)
+  ) {
     throw new Error("function URL differs from the reviewed destination");
   }
   return uri.href.replace(/\/$/, "");
@@ -164,7 +184,11 @@ export function validateFunctionRecord(record, target) {
 
 export function withPublicInvoker(policy) {
   if (!policy || !Array.isArray(policy.bindings)) throw new Error("IAM policy has no bindings");
-  if (policy.bindings.some(({ role, members }) => role !== "roles/run.invoker" && members?.includes("allUsers"))) {
+  if (
+    policy.bindings.some(
+      ({ role, members }) => role !== "roles/run.invoker" && members?.includes("allUsers"),
+    )
+  ) {
     throw new Error("allUsers has an unreviewed role");
   }
   const copy = structuredClone(policy);
@@ -181,9 +205,11 @@ export function withoutPublicInvoker(policy) {
   if (!policy || !Array.isArray(policy.bindings)) throw new Error("IAM policy has no bindings");
   const copy = structuredClone(policy);
   copy.bindings = copy.bindings
-    .map((binding) => binding.role === "roles/run.invoker"
-      ? { ...binding, members: binding.members.filter((member) => member !== "allUsers") }
-      : binding)
+    .map((binding) =>
+      binding.role === "roles/run.invoker"
+        ? { ...binding, members: binding.members.filter((member) => member !== "allUsers") }
+        : binding,
+    )
     .filter((binding) => binding.members.length > 0);
   return copy;
 }
@@ -191,9 +217,11 @@ export function withoutPublicInvoker(policy) {
 function sanitize(value, replacements) {
   if (Array.isArray(value)) return value.map((item) => sanitize(item, replacements));
   if (value && typeof value === "object") {
-    return Object.fromEntries(Object.entries(value)
-      .filter(([key]) => !SECRET_KEYS.has(key.toLowerCase()))
-      .map(([key, item]) => [key, sanitize(item, replacements)]));
+    return Object.fromEntries(
+      Object.entries(value)
+        .filter(([key]) => !SECRET_KEYS.has(key.toLowerCase()))
+        .map(([key, item]) => [key, sanitize(item, replacements)]),
+    );
   }
   if (typeof value === "string") {
     let result = value;
@@ -228,7 +256,13 @@ export function normalizeInvocation(status, headers, bodyBytes, replacements = {
 
 export function buildInvocation(step, baseUrl, tokens) {
   const base = new URL(baseUrl);
-  if (!["http:", "https:"].includes(base.protocol) || base.username || base.password || base.search || base.hash) {
+  if (
+    !["http:", "https:"].includes(base.protocol) ||
+    base.username ||
+    base.password ||
+    base.search ||
+    base.hash
+  ) {
     throw new Error("invalid function base URL");
   }
   const prefix = base.pathname === "/" ? "" : base.pathname.replace(/\/$/, "");
@@ -243,7 +277,8 @@ export function buildInvocation(step, baseUrl, tokens) {
   }
   const init = { method: step.request.method, headers, redirect: "manual" };
   if (step.request.body !== undefined) {
-    init.body = typeof step.request.body === "string" ? step.request.body : JSON.stringify(step.request.body);
+    init.body =
+      typeof step.request.body === "string" ? step.request.body : JSON.stringify(step.request.body);
   }
   return { url: url.href, init };
 }
@@ -252,7 +287,10 @@ export function invalidSignatureToken(token) {
   const parts = token.split(".");
   if (parts.length !== 3) throw new Error("token is not a JWT");
   if (!parts[2]) {
-    const header = { ...JSON.parse(Buffer.from(parts[0], "base64url").toString("utf8")), alg: "RS256" };
+    const header = {
+      ...JSON.parse(Buffer.from(parts[0], "base64url").toString("utf8")),
+      alg: "RS256",
+    };
     return `${Buffer.from(JSON.stringify(header)).toString("base64url")}.${parts[1]}.invalid`;
   }
   const first = parts[2][0] === "A" ? "B" : "A";

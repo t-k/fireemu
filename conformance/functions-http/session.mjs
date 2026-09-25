@@ -37,18 +37,27 @@ async function readFirstLine(response) {
   return prefix.slice(0, prefix.indexOf("\n")).replace(/\r$/, "");
 }
 
-export async function runCases(program, endpoints, tokens, budget, {
-  fetchImpl = fetch,
-  replacements = {},
-  onResult = () => {},
-} = {}) {
+export async function runCases(
+  program,
+  endpoints,
+  tokens,
+  budget,
+  {
+    fetchImpl = fetch,
+    replacements = {},
+    onResult = () => {},
+    deadline = Number.POSITIVE_INFINITY,
+  } = {},
+) {
   const results = {};
   for (const step of program.cases) {
     const endpoint = endpoints[step.target];
     if (!endpoint) throw new Error(`${program.id}#${step.id}: no reviewed endpoint`);
     const { url, init } = buildInvocation(step, endpoint, tokens);
     const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+    const remaining = deadline - Date.now();
+    if (remaining <= 0) throw new Error(`${program.id}: public exposure deadline elapsed`);
+    const timer = setTimeout(() => controller.abort(), Math.min(REQUEST_TIMEOUT_MS, remaining));
     try {
       budget.take("invocation");
       const response = await fetchImpl(url, { ...init, signal: controller.signal });

@@ -19,7 +19,12 @@ const corpus = JSON.parse(readFileSync(new URL("./corpus.json", import.meta.url)
 const clone = (value) => structuredClone(value);
 
 test("the pinned corpus has exactly the reviewed functions and 136 invocations", () => {
-  assert.deepEqual(validateCorpus(corpus), { programs: 15, cases: 68, deployments: 16, invocations: 136 });
+  assert.deepEqual(validateCorpus(corpus), {
+    programs: 15,
+    cases: 68,
+    deployments: 16,
+    invocations: 136,
+  });
   assert.equal(expectedFunctionName("http"), "fireemuHttpProbe");
   assert.equal(expectedFunctionName("callable"), "fireemuCallableProbe");
 });
@@ -63,35 +68,57 @@ test("a deployed function must resolve to the owned project, region, service and
   };
   assert.equal(validateFunctionRecord(record, "http"), record.serviceConfig.uri);
   assert.throws(
-    () => validateFunctionRecord({ ...record, serviceConfig: { ...record.serviceConfig, uri: "https://evil.example" } }, "http"),
+    () =>
+      validateFunctionRecord(
+        { ...record, serviceConfig: { ...record.serviceConfig, uri: "https://evil.example" } },
+        "http",
+      ),
     /URL/,
   );
   assert.throws(
-    () => validateFunctionRecord({ ...record, name: record.name.replace("fireemu-oracle-query", "other") }, "http"),
+    () =>
+      validateFunctionRecord(
+        { ...record, name: record.name.replace("fireemu-oracle-query", "other") },
+        "http",
+      ),
     /name/,
   );
 });
 
 test("public invoker update touches only the owned service binding", () => {
-  const original = { version: 3, etag: "BwAA", bindings: [{ role: "roles/run.viewer", members: ["user:owner@example.com"] }] };
+  const original = {
+    version: 3,
+    etag: "BwAA",
+    bindings: [{ role: "roles/run.viewer", members: ["user:owner@example.com"] }],
+  };
   const updated = withPublicInvoker(original);
-  assert.deepEqual(original.bindings, [{ role: "roles/run.viewer", members: ["user:owner@example.com"] }]);
+  assert.deepEqual(original.bindings, [
+    { role: "roles/run.viewer", members: ["user:owner@example.com"] },
+  ]);
   assert.equal(updated.etag, "BwAA");
   assert.deepEqual(updated.bindings[1], { role: "roles/run.invoker", members: ["allUsers"] });
   assert.deepEqual(withPublicInvoker(updated), updated);
   assert.throws(
-    () => withPublicInvoker({ ...original, bindings: [{ role: "roles/editor", members: ["allUsers"] }] }),
+    () =>
+      withPublicInvoker({
+        ...original,
+        bindings: [{ role: "roles/editor", members: ["allUsers"] }],
+      }),
     /allUsers/,
   );
 });
 
 test("recorded invocation omits unstable and secret response fields", () => {
   const bytes = Buffer.from(JSON.stringify({ result: { marker: "bounded" }, token: "secret" }));
-  const response = normalizeInvocation(200, {
-    "content-type": "application/json; charset=utf-8",
-    "date": "Fri, 25 Sep 2026 00:00:00 GMT",
-    "x-cloud-trace-context": "private",
-  }, bytes);
+  const response = normalizeInvocation(
+    200,
+    {
+      "content-type": "application/json; charset=utf-8",
+      date: "Fri, 25 Sep 2026 00:00:00 GMT",
+      "x-cloud-trace-context": "private",
+    },
+    bytes,
+  );
   assert.equal(response.status, 200);
   assert.equal(response.headers["content-type"], "application/json; charset=utf-8");
   assert.equal(response.headers.date, undefined);

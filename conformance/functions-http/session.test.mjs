@@ -32,13 +32,27 @@ test("a streaming abort records only the first line and cancels the response", a
   const program = corpus.programs.find((entry) => entry.id === "functions-http/http/streaming");
   const step = program.cases.find((entry) => entry.id === "client-disconnect");
   let cancelled = false;
-  const fetchImpl = async () => new Response(new ReadableStream({
-    start(controller) { controller.enqueue(new TextEncoder().encode("first\nsecond\n")); },
-    cancel() { cancelled = true; },
-  }), { status: 200, headers: { "content-type": "text/plain" } });
-  const result = await runCases({ id: program.id, cases: [step] }, {
-    http: "http://127.0.0.1:5001/demo/us-central1/fireemuHttpProbe",
-  }, {}, createBudget(), { fetchImpl });
+  const fetchImpl = async () =>
+    new Response(
+      new ReadableStream({
+        start(controller) {
+          controller.enqueue(new TextEncoder().encode("first\nsecond\n"));
+        },
+        cancel() {
+          cancelled = true;
+        },
+      }),
+      { status: 200, headers: { "content-type": "text/plain" } },
+    );
+  const result = await runCases(
+    { id: program.id, cases: [step] },
+    {
+      http: "http://127.0.0.1:5001/demo/us-central1/fireemuHttpProbe",
+    },
+    {},
+    createBudget(),
+    { fetchImpl },
+  );
   assert.deepEqual(result[step.id].body, { firstLine: "first" });
   assert.equal(cancelled, true);
 });

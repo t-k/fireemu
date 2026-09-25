@@ -98,8 +98,25 @@ export const OPAQUE_MEMBERS = {
   nextPageToken: "<pageToken>",
 };
 
+/**
+ * A blocking trigger's function URI, as the kind of host it names: a Cloud Run host carries a
+ * random part, and fireemu names its own runtime (the difference is compared, not the host).
+ */
+export function functionUriKind(uri) {
+  let host;
+  try {
+    host = new URL(uri).hostname;
+  } catch {
+    return "<functionUri:not-a-url>";
+  }
+  if (host.endsWith(".run.app")) return "<functionUri:run.app>";
+  if (host.endsWith(".cloudfunctions.net")) return "<functionUri:cloudfunctions.net>";
+  return `<functionUri:${new URL(uri).protocol.replace(":", "")}>`;
+}
+
 function maskOpaque(value, key = "") {
   if (typeof value === "string" && Object.hasOwn(OPAQUE_MEMBERS, key)) return OPAQUE_MEMBERS[key];
+  if (typeof value === "string" && key === "functionUri") return functionUriKind(value);
   if (Array.isArray(value)) return value.map((v) => maskOpaque(v, key));
   if (value && typeof value === "object")
     return Object.fromEntries(Object.entries(value).map(([k, v]) => [k, maskOpaque(v, k)]));

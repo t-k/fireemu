@@ -431,3 +431,30 @@ test("a harness-named tenant that exists before a program stops it untouched (TB
   assert.deepEqual([...state.tenants.keys()], [leftover.id]);
   assert.equal(state.allowTenants, false);
 });
+
+test("a blocking trigger's function URI is recorded as the kind of host it names", async () => {
+  const { functionUriKind } = await import("./auth-tenant-blocking/harness.mjs");
+  assert.equal(
+    functionUriKind("https://atbbeforecreate-abc123-uc.a.run.app"),
+    "<functionUri:run.app>",
+  );
+  assert.equal(
+    functionUriKind("https://us-central1-fireemu-oracle-idp.cloudfunctions.net/atbBeforeCreate"),
+    "<functionUri:cloudfunctions.net>",
+  );
+  assert.equal(functionUriKind("fireemu://functions/p/us-central1/x"), "<functionUri:fireemu>");
+  const recorded = normalizeTenantResponse(
+    200,
+    JSON.stringify({
+      blockingFunctions: {
+        triggers: { beforeCreate: { functionUri: "https://x-1-uc.a.run.app" } },
+      },
+    }),
+    production,
+    registries(),
+  );
+  assert.equal(
+    recorded.body.blockingFunctions.triggers.beforeCreate.functionUri,
+    "<functionUri:run.app>",
+  );
+});

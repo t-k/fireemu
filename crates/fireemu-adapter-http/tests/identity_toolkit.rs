@@ -11389,11 +11389,15 @@ fn an_unserved_tenant_is_refused_per_route() {
 #[test]
 fn concurrent_config_writes_keep_every_member() {
     for strict in [true, false] {
-        let s = if strict { strict_state() } else { state() };
-        std::thread::scope(|scope| {
-            for round in 0..8 {
-                let s = &s;
-                scope.spawn(move || {
+        for registered in [true, false] {
+            let mut s = if strict { strict_state() } else { state() };
+            if registered {
+                s.registry = Some(Arc::new(AuthRegistry::new("demo-app", s.store.clone())));
+            }
+            std::thread::scope(|scope| {
+                for round in 0..8 {
+                    let s = &s;
+                    scope.spawn(move || {
                     let (status, answer) = patch_sign_in(
                         s,
                         "notification.defaultLocale",
@@ -11401,7 +11405,7 @@ fn concurrent_config_writes_keep_every_member() {
                     );
                     assert_eq!(status, 200, "{answer}");
                 });
-                scope.spawn(move || {
+                    scope.spawn(move || {
                     let (status, answer) = patch_sign_in(
                         s,
                         "mobileLinksConfig.domain",
@@ -11409,32 +11413,44 @@ fn concurrent_config_writes_keep_every_member() {
                     );
                     assert_eq!(status, 200, "{answer}");
                 });
-                scope.spawn(move || {
+                    scope.spawn(move || {
+                    let quota = if round % 2 == 0 { "5" } else { "7" };
                     let (status, answer) = patch_sign_in(
                         s,
                         "quota.signUpQuotaConfig",
-                        &json!({"quota": {"signUpQuotaConfig": {"quota": "5", "startTime": "2030-01-01T00:00:00Z", "quotaDuration": "3600s"}}}),
+                        &json!({"quota": {"signUpQuotaConfig": {"quota": quota, "startTime": "2030-01-01T00:00:00Z", "quotaDuration": "3600s"}}}),
                     );
                     assert_eq!(status, 200, "{answer}");
                 });
-            }
-        });
-        let (status, read) = admin(&s, "GET", PROJECT_CONFIG, &Value::Null);
-        assert_eq!(status, 200, "{read}");
-        assert_eq!(
-            read["mobileLinksConfig"]["domain"], "FIREBASE_DYNAMIC_LINK_DOMAIN",
-            "strict {strict}: {read}"
-        );
-        assert_eq!(
-            read["quota"]["signUpQuotaConfig"]["quota"], "5",
-            "strict {strict}: {read}"
-        );
-        // The emulator profile reports a member only while it differs from a new project's.
-        let locale = &read["notification"]["defaultLocale"];
-        assert!(
-            locale == "ja" || locale == "en" || (!strict && locale.is_null()),
-            "{read}"
-        );
+                }
+            });
+            let (status, read) = admin(&s, "GET", PROJECT_CONFIG, &Value::Null);
+            assert_eq!(status, 200, "{read}");
+            assert_eq!(
+                read["mobileLinksConfig"]["domain"], "FIREBASE_DYNAMIC_LINK_DOMAIN",
+                "strict {strict}: {read}"
+            );
+            let internal_quota = s
+                .store
+                .lock()
+                .unwrap()
+                .signup_quota()
+                .config()
+                .temporary
+                .expect("quota was written")
+                .quota;
+            assert_eq!(
+                read["quota"]["signUpQuotaConfig"]["quota"],
+                internal_quota.to_string(),
+                "strict {strict}, registered {registered}: {read}"
+            );
+            // The emulator profile reports a member only while it differs from a new project's.
+            let locale = &read["notification"]["defaultLocale"];
+            assert!(
+                locale == "ja" || locale == "en" || (!strict && locale.is_null()),
+                "{read}"
+            );
+        }
     }
 }
 

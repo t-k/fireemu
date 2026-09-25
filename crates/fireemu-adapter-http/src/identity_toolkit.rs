@@ -31,9 +31,9 @@ use fireemu_core_auth::signup_quota::{
 use fireemu_core_auth::store::{
     AuthError, AuthPrincipal, AuthStore, CredentialNotice, FederatedIdentity,
     InboundSamlProviderConfig, LocalId, NewUser, OAuthResponseType, OidcProviderConfig,
-    OobRequestType, PendingSignInId, PhoneCodeUse, ProjectAuthConfigPatch, RoutedStoreInstall,
-    SecondFactorAssertion, SignInConfig, UserQueryExpression, UserSortField, VerificationCode,
-    VerificationPurpose,
+    OobRequestType, PendingSignInId, PhoneCodeUse, ProjectAuthConfigPatch,
+    ProjectConfigStoreUpdate, RoutedStoreInstall, SecondFactorAssertion, SignInConfig,
+    UserQueryExpression, UserSortField, VerificationCode, VerificationPurpose,
 };
 use fireemu_core_session::clock::VirtualClock;
 pub use fireemu_core_session::loopback::origin_is_local;
@@ -5082,12 +5082,10 @@ fn project_config_management(
     if let Err(response) = apply_project_config_fields(&mut patch, body, &fields) {
         return response;
     }
-    // Decode the sign-in providers before anything changes; they are applied after the rest.
-    let updates_sign_in = match sign_in_config_from_update(&SignInConfig::default(), body, &fields)
-    {
-        Ok(update) => update.is_some(),
-        Err(response) => return response,
-    };
+    // Reject malformed sign-in providers before changing any settings.
+    if let Err(response) = sign_in_config_from_update(&SignInConfig::default(), body, &fields) {
+        return response;
+    }
     // The stored members too, from the current ones: a masked leaf merges into its member.
     let stored_members = {
         let Ok(store) = selected_store.lock() else {
@@ -5143,7 +5141,6 @@ fn project_config_management(
             || field.starts_with("passwordPolicyConfig")
     });
     let written_at = now(state).to_rfc3339().ok();
-    let policy_configured = std::cell::Cell::new(false);
     let config = if let Some(registry) = state
         .registry
         .as_ref()
@@ -5151,60 +5148,42 @@ fn project_config_management(
     {
         // Decode masked replacements after the registry has acquired the namespace gate. This
         // keeps a concurrent PATCH from merging against a stale policy or quota snapshot.
-        match registry.patch_project_config_with_current_settings(
-            project,
-            patch,
-            |current_policy, current_quota| {
-                let password_policy = password_policy_from_update(
-                    current_policy,
+        match registry.patch_project_config_transaction(project, patch, |store| {
+            let password_policy = password_policy_from_update(
+                store.password_policy(),
+                body,
+                &fields,
+                !state.stateless_refresh_tokens,
+            )?;
+            let signup_quota =
+                quota_config_from_update(store.signup_quota().config(), body, &fields)?;
+            let sign_in = sign_in_config_from_update(store.sign_in_config(), body, &fields)?;
+            let stored_members = if stored_members.is_some() || derives_members {
+                let next = project_config::apply_stored_members(
+                    store.stored_config_members(),
                     body,
                     &fields,
-                    !state.stateless_refresh_tokens,
-                )?;
-                policy_configured.set(
-                    password_policy
-                        .as_ref()
-                        .unwrap_or(current_policy)
-                        .configured,
-                );
-                let signup_quota = quota_config_from_update(current_quota, body, &fields)?;
-                Ok((password_policy, signup_quota))
-            },
-        ) {
-            Ok(Some(config)) => {
-                if updates_sign_in {
-                    match registry.update_project_sign_in_config(project, |current| {
-                        sign_in_config_from_update(current, body, &fields)
-                            .map(|next| next.unwrap_or_else(|| current.clone()))
-                    }) {
-                        Ok(Some(_)) => {}
-                        Ok(None) => return rollback_blocking(error(500, "INTERNAL")),
-                        Err(response) => return rollback_blocking(response),
-                    }
-                }
-                if stored_members.is_some() || derives_members {
-                    match registry.update_project_stored_members(project, |current| {
-                        project_config::apply_stored_members(current, body, &fields, project).map(
-                            |next| {
-                                let mut next = next.unwrap_or_else(|| current.clone());
-                                with_derived_members(
-                                    &mut next,
-                                    body,
-                                    &fields,
-                                    policy_configured.get(),
-                                    written_at.as_deref(),
-                                );
-                                next
-                            },
-                        )
-                    }) {
-                        Ok(Some(_)) => {}
-                        Ok(None) => return rollback_blocking(error(500, "INTERNAL")),
-                        Err(()) => return rollback_blocking(error(400, "INVALID_ARGUMENT")),
-                    }
-                }
-                config
-            }
+                    project,
+                )
+                .map_err(|()| error(400, "INVALID_ARGUMENT"))?;
+                let mut next = next.unwrap_or_else(|| store.stored_config_members().clone());
+                let configured = password_policy
+                    .as_ref()
+                    .unwrap_or(store.password_policy())
+                    .configured;
+                with_derived_members(&mut next, body, &fields, configured, written_at.as_deref());
+                Some(next)
+            } else {
+                None
+            };
+            Ok(ProjectConfigStoreUpdate {
+                password_policy,
+                signup_quota,
+                sign_in,
+                stored_members,
+            })
+        }) {
+            Ok(Some(config)) => config,
             Ok(None) => return rollback_blocking(error(500, "INTERNAL")),
             Err(response) => return rollback_blocking(response),
         }

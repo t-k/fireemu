@@ -264,7 +264,9 @@ const localSecrets = (() => {
 })();
 let functionEnvironmentQueue = Promise.resolve();
 const sharedFunctionInvocations = new Set();
+let queuedSharedKey = null;
 let activeSharedEnvironments = 0;
+let activeSharedKey = null;
 let sharedSavedSecrets;
 let discoveredGlobalOptions = {};
 
@@ -402,22 +404,29 @@ function setFunctionIdentity(spec) {
 }
 
 function withFunctionEnvironment(spec, task, invocationId) {
-  const shared = localSecrets.size > 0 && activeInspectorPort === undefined &&
-    !(spec?.platformOptions?.secrets || []).some(name => localSecrets.has(name));
+  const shared = localSecrets.size > 0 && activeInspectorPort === undefined;
+  const sharedKey = shared ? JSON.stringify([...new Set(
+    (spec?.platformOptions?.secrets || []).filter(name => localSecrets.has(name)),
+  )].sort()) : null;
   const run = async () => {
     if (finishingOutput || outputFailed) throw new Error("runner is shutting down");
     setFunctionIdentity(spec);
     let saved;
     if (shared) {
-      if (activeSharedEnvironments === 0) sharedSavedSecrets = hideLocalSecrets();
+      if (activeSharedEnvironments === 0) {
+        sharedSavedSecrets = hideLocalSecrets();
+        activeSharedKey = sharedKey;
+      } else if (activeSharedKey !== sharedKey) {
+        throw new Error("secret environment groups overlapped");
+      }
       activeSharedEnvironments++;
     } else {
       saved = hideLocalSecrets();
     }
-    for (const name of spec?.platformOptions?.secrets || []) {
-      if (localSecrets.has(name)) process.env[name] = localSecrets.get(name);
-    }
     try {
+      for (const name of spec?.platformOptions?.secrets || []) {
+        if (localSecrets.has(name)) process.env[name] = localSecrets.get(name);
+      }
       return await invocationLogger.run({ functionName: spec?.name, invocationId }, task);
     } finally {
       if (shared) {
@@ -425,6 +434,7 @@ function withFunctionEnvironment(spec, task, invocationId) {
         if (activeSharedEnvironments === 0) {
           restoreLocalSecrets(sharedSavedSecrets);
           sharedSavedSecrets = undefined;
+          activeSharedKey = null;
         }
       } else {
         restoreLocalSecrets(saved);
@@ -434,9 +444,15 @@ function withFunctionEnvironment(spec, task, invocationId) {
   if (localSecrets.size === 0 && activeInspectorPort === undefined) return run();
   const previous = functionEnvironmentQueue;
   if (shared) {
-    // Undeclared calls share one cleared environment; a queued declaring call
-    // closes this group before later calls can enter.
-    const result = previous.then(run);
+    // Only identical local-secret sets share an environment. A different set
+    // closes this group before its first invocation can enter.
+    if (queuedSharedKey !== sharedKey) {
+      const pendingShared = [...sharedFunctionInvocations];
+      sharedFunctionInvocations.clear();
+      functionEnvironmentQueue = Promise.allSettled([previous, ...pendingShared]).then(() => {});
+      queuedSharedKey = sharedKey;
+    }
+    const result = functionEnvironmentQueue.then(run);
     sharedFunctionInvocations.add(result);
     void result.then(
       () => sharedFunctionInvocations.delete(result),
@@ -446,6 +462,7 @@ function withFunctionEnvironment(spec, task, invocationId) {
   }
   const pendingShared = [...sharedFunctionInvocations];
   sharedFunctionInvocations.clear();
+  queuedSharedKey = null;
   const result = Promise.allSettled([previous, ...pendingShared]).then(run);
   functionEnvironmentQueue = result.catch(() => {});
   return result;

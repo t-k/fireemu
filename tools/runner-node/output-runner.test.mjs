@@ -30,7 +30,8 @@ const task=async data=>{
   marker('callback-finished','yes');
 };
 task.run=task;task.__endpoint={platform:'gcfv2',scheduleTrigger:{schedule:'every 5 minutes'},secretEnvironmentVariables:[{key:'LOCAL'}]};
-module.exports={task};
+const plain=async data=>task(data);plain.run=plain;plain.__endpoint={platform:'gcfv2',scheduleTrigger:{schedule:'every 5 minutes'}};
+module.exports={task,plain};
 `;
 async function start(t, customSource=source, secrets=false) {
   const dir=await mkdtemp(join(tmpdir(),'fireemu-output-'));
@@ -69,7 +70,7 @@ async function start(t, customSource=source, secrets=false) {
   });
   return {child,messages,wait,exited,marked,dir,
     get stderr(){return stderr;},get invalid(){return invalid;},get trailingBytes(){return bytes.length;},
-    invoke(data={},id='output-test'){child.stdin.write(frame({type:'invoke',invocationId:id,function:'task',entryPoint:'task',trigger:'schedule',event:{data}}));},
+    invoke(data={},id='output-test',name='task'){child.stdin.write(frame({type:'invoke',invocationId:id,function:name,entryPoint:name,trigger:'schedule',event:{data}}));},
     async ready(){await wait(()=>messages.find(m=>m.type==='hello'),'hello');}
   };
 }
@@ -164,10 +165,10 @@ test('an idle open input cannot keep a blocked output frame forever',{timeout:38
 });
 
 
-test('shutdown drain does not start callbacks still waiting in the environment queue',{timeout:10000},async t=>{
+test('shutdown drain does not start callbacks waiting for a different environment group',{timeout:10000},async t=>{
   const f=await start(t,source,true);await f.ready();f.child.stdout.pause();
   f.invoke({count:5,bytes:200000,label:'first',afterSleep:150},'first');
-  f.invoke({label:'second'},'second');
+  f.invoke({label:'second'},'second','plain');
   await f.wait(()=>f.marked('logs-produced'),'logs buffered');
   f.child.stdin.write(frame({type:'shutdown'}));
   await delay(250);

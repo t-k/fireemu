@@ -50,9 +50,10 @@ async function callback(req,res){const mode=req.headers['x-mode']||'normal',tag=
  if(mode==='return-open'){setTimeout(()=>res.end('later'),120);return;}
  if(!res.destroyed&&!res.writableEnded)res.json({tag,body:req.body,rawBytes:req.rawBody?.length,secret:req.headers['x-fireemu-runner-secret']||null,rawHeaders:req.rawHeaders});record({event:'settled',tag});}
 callback.__endpoint={platform:'gcfv2',httpsTrigger:{},secretEnvironmentVariables:[{key:'LOCAL_ONLY'}]};
+const plain=async(req,res)=>callback(req,res);plain.__endpoint={platform:'gcfv2',httpsTrigger:{}};
 const task=async(req,res)=>callback(req,res);task.__endpoint={platform:'gcfv2',taskQueueTrigger:{},secretEnvironmentVariables:[{key:'LOCAL_ONLY'}]};
 function blocking(){}blocking.__endpoint={platform:'gcfv2',blockingTrigger:{eventType:'beforeSignIn'},secretEnvironmentVariables:[{key:'LOCAL_ONLY'}]};blocking.run=async e=>{record({event:'start',tag:e.data.tag,name:'blocking'});return {displayName:e.data.tag};};
-module.exports={http:callback,task,blocking};
+module.exports={http:callback,plain,task,blocking};
 `;
 async function start(t,{serialize=false,configured=true}={}) {
  const dir=await mkdtemp(join(tmpdir(),'fireemu-http-admission-'));
@@ -125,8 +126,8 @@ test('finished early response retains body bytes until callback settles',{timeou
  const f=await start(t),body='x'.repeat(32*1024*1024);for(const tag of ['a','b']){const r=await f.call({headers:{'content-type':'text/plain','x-mode':'end-hold','x-tag':tag},body}).result;assert.equal(r.status,200);assert.equal(r.text,'early');}
  assert.equal((await f.call().result).status,503);await f.release(['a']);await f.wait(async()=> (await f.events()).some(x=>x.event==='settled'&&x.tag==='a'),'release');await delay(25);assert.equal((await f.call().result).status,200);await f.release(['*']);
 });
-test('secret queue retains disconnected pending request capacity until its turn',{timeout:12000},async t=>{
- const f=await start(t,{serialize:true}),first=f.call({headers:{'x-mode':'hold','x-tag':'first'}});await f.wait(async()=> (await f.events()).some(x=>x.event==='start'),'first');
+test('a different secret group retains disconnected pending request capacity until its turn',{timeout:12000},async t=>{
+ const f=await start(t,{serialize:true}),first=f.call({name:'plain',headers:{'x-mode':'hold','x-tag':'first'}});await f.wait(async()=> (await f.events()).some(x=>x.event==='start'),'first');
  const body='x'.repeat(32*1024*1024),second=f.call({headers:{'content-type':'text/plain','x-tag':'queued'},body});await f.wait(async()=> (await f.events()).filter(x=>x.event==='route').length===2,'queued');second.req.destroy();await second.result;
  // Retained queued 32MiB plus first 2 bytes leaves less than a full next body.
  const rejected=f.call({headers:{'content-length':String(32*1024*1024)},send:false});assert.equal((await f.bounded(rejected.result)).status,503);

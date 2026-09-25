@@ -336,6 +336,65 @@ test "$latest" = "after!"
     let _ = std::fs::remove_dir_all(dir);
 }
 
+#[cfg(unix)]
+#[test]
+#[ignore = "requires tools/sdk-smoke dependencies; run in the Functions SDK lane"]
+fn a_hoisted_sdk_and_local_package_remain_available_after_reload() {
+    use std::os::unix::fs::symlink;
+
+    let workspace =
+        std::env::temp_dir().join(format!("fireemu-hoisted-sdk-test-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&workspace);
+    let source = workspace.join("functions");
+    std::fs::create_dir_all(source.join("node_modules/local-pkg")).unwrap();
+    symlink(
+        std::fs::canonicalize(sdk_root().join("node_modules")).unwrap(),
+        workspace.join("node_modules"),
+    )
+    .unwrap();
+    write(
+        &source.join("node_modules/local-pkg"),
+        "index.js",
+        "module.exports = 'local-';",
+    );
+    write(
+        &source,
+        "package.json",
+        r#"{"name":"hoisted-reload","private":true,"main":"index.js","engines":{"node":"20"}}"#,
+    );
+    write(
+        &source,
+        "index.js",
+        "const { onRequest } = require('firebase-functions/v2/https');\nconst local = require('local-pkg');\nconst marker = 'before';\nexports.fxHoisted = onRequest((_request, response) => response.status(200).send(local + marker));\n",
+    );
+    let output = exec_script_with_arg(
+        &source,
+        "demo-hoisted-reload",
+        r#"
+set -eu
+endpoint="$FIREEMU_FUNCTIONS_HOST/demo-hoisted-reload/us-central1/fxHoisted"
+first=$(curl -fsS "$endpoint")
+node -e 'const fs=require("fs"); const p=process.argv[1]; const s=fs.readFileSync(p,"utf8"); fs.writeFileSync(p,s.replace("before", "after!"));' "$1"
+latest=""
+for _attempt in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15; do
+  sleep 1
+  latest=$(curl -fsS "$endpoint")
+  if [ "$latest" = "local-after!" ]; then
+    break
+  fi
+done
+printf '%s\n%s\n' "$first" "$latest"
+test "$first" = "local-before"
+test "$latest" = "local-after!"
+"#,
+        &source.join("index.js"),
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert_eq!(output.status.code(), Some(0), "{stderr}");
+    assert!(stderr.contains("reloaded generation 1"), "{stderr}");
+    let _ = std::fs::remove_dir_all(workspace);
+}
+
 /// The one line the fixture prints at load, parsed.
 fn observed(out: &Output) -> serde_json::Value {
     let err = String::from_utf8_lossy(&out.stderr).into_owned();

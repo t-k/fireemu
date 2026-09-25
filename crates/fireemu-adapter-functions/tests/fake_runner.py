@@ -113,9 +113,6 @@ echo = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Echo)
 threading.Thread(target=echo.serve_forever, daemon=True).start()
 
 consume = os.environ.get("FIREEMU_FAKE_CONSUME", "disabled")
-if start_probe := os.environ.get("FIREEMU_FAKE_START_PROBE"):
-    with open(start_probe, "a", encoding="utf-8") as probe:
-        probe.write(f"{os.getpid()}\n")
 time.sleep(int(os.environ.get("FIREEMU_FAKE_HELLO_DELAY_MS", "0")) / 1000)
 
 send({

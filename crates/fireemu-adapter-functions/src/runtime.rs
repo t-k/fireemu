@@ -785,7 +785,6 @@ struct Codebase {
     restart_gate: Arc<AsyncMutex<()>>,
     restart_budget: Mutex<RestartBudget>,
     restart_wake_scheduled: std::sync::atomic::AtomicBool,
-    spawn_in_flight: std::sync::atomic::AtomicBool,
 }
 
 #[derive(Default)]
@@ -853,6 +852,14 @@ struct RespawnGeneration {
     spawn: Option<SpawnSpec>,
     revision: u64,
     cleanup_dir: Option<Arc<CleanupDir>>,
+}
+
+fn tickets_match(current: Option<&Arc<()>>, expected: Option<&Arc<()>>) -> bool {
+    match (current, expected) {
+        (None, None) => true,
+        (Some(current), Some(expected)) => Arc::ptr_eq(current, expected),
+        _ => false,
+    }
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -988,6 +995,19 @@ impl Drop for TaskCompletion {
     }
 }
 
+/// Owns the restart gate until a fixed inspector reload has published or failed.
+pub struct RunnerRestartGuard {
+    runtime: Arc<FunctionsRuntime>,
+    gate: Option<OwnedMutexGuard<()>>,
+}
+
+impl Drop for RunnerRestartGuard {
+    fn drop(&mut self) {
+        drop(self.gate.take());
+        self.runtime.wake.notify_one();
+    }
+}
+
 impl FunctionsRuntime {
     fn empty_event_reservation(self: &Arc<Self>) -> EventBatchReservation {
         EventBatchReservation {
@@ -1120,7 +1140,6 @@ impl FunctionsRuntime {
                     restart_gate: Arc::new(AsyncMutex::new(())),
                     restart_budget: Mutex::new(RestartBudget::default()),
                     restart_wake_scheduled: std::sync::atomic::AtomicBool::new(false),
-                    spawn_in_flight: std::sync::atomic::AtomicBool::new(false),
                     generation: std::sync::RwLock::new(CodebaseGeneration {
                         revision: 0,
                         runner: c.runner,
@@ -1229,6 +1248,31 @@ impl FunctionsRuntime {
             .iter()
             .map(|codebase| (codebase.name.clone(), codebase.generation().runner.clone()))
             .collect()
+    }
+
+    /// Holds runner recovery while a fixed inspector port is handed to a new source snapshot.
+    pub async fn stop_runner_for_fixed_inspector_reload(
+        self: &Arc<Self>,
+        name: &str,
+    ) -> Result<RunnerRestartGuard, String> {
+        let codebase = self
+            .codebases
+            .iter()
+            .find(|codebase| codebase.name == name)
+            .ok_or_else(|| format!("Functions codebase {name:?} is no longer available"))?;
+        let gate = codebase.restart_gate.clone().lock_owned().await;
+        let _inner = self
+            .inner
+            .lock()
+            .map_err(|_| "runtime poisoned".to_owned())?;
+        if self.shutting_down.load(std::sync::atomic::Ordering::SeqCst) {
+            return Err("the Functions runtime is shutting down".to_owned());
+        }
+        codebase.generation().runner.kill_now();
+        Ok(RunnerRestartGuard {
+            runtime: self.clone(),
+            gate: Some(gate),
+        })
     }
 
     /// Closes admission while allowing already reserved source mutations to finish publishing.
@@ -1390,6 +1434,7 @@ impl FunctionsRuntime {
         // new dispatch from reaching the old generation and reaps it promptly.
         old.runner.kill_now();
         drop(old);
+        self.wake.notify_one();
         Ok(generation)
     }
 
@@ -2884,7 +2929,7 @@ impl FunctionsRuntime {
         let Some(respawn) = self.codebases.get(index).map(Codebase::capture_respawn) else {
             return;
         };
-        self.spawn_captured(index, generation, respawn);
+        self.spawn_captured(index, generation, &respawn, None);
     }
 
     /// Crashes and replaces one atomic codebase generation. A reload that wins after the
@@ -2894,7 +2939,7 @@ impl FunctionsRuntime {
             return;
         };
         respawn.runner.kill_now();
-        self.spawn_captured(index, generation, respawn);
+        self.spawn_captured(index, generation, &respawn, None);
     }
 
     /// Starts a replacement only when queued work needs a dead codebase. The gate prevents
@@ -2906,10 +2951,18 @@ impl FunctionsRuntime {
         if codebase.generation().runner.is_alive() {
             return;
         }
+        if codebase.generation().blocking_restart_ticket.is_some() {
+            return;
+        }
         if let Ok(gate) = codebase.restart_gate.clone().try_lock_owned() {
             let runtime = self.clone();
             tokio::spawn(async move {
-                if let Err(error) = runtime.recover_dead_runner_locked(index, gate).await {
+                let result = runtime.recover_dead_runner_locked(index, &gate, None).await;
+                drop(gate);
+                if result.is_ok() {
+                    runtime.wake.notify_one();
+                }
+                if let Err(error) = result {
                     eprintln!("[functions] runner recovery failed: {error}");
                     let codebase = &runtime.codebases[index];
                     let remaining = codebase
@@ -2939,8 +2992,30 @@ impl FunctionsRuntime {
             .codebases
             .get(index)
             .ok_or_else(|| "function has no codebase owner".to_owned())?;
-        let gate = codebase.restart_gate.clone().lock_owned().await;
-        self.recover_dead_runner_locked(index, gate).await
+        loop {
+            if self.shutting_down.load(std::sync::atomic::Ordering::SeqCst) {
+                return Err("the Functions runtime is shutting down".to_owned());
+            }
+            if codebase.generation().blocking_restart_ticket.is_some() {
+                tokio::time::sleep(Duration::from_millis(20)).await;
+                continue;
+            }
+            let gate = codebase.restart_gate.clone().lock_owned().await;
+            if codebase.generation().blocking_restart_ticket.is_some() {
+                continue;
+            }
+            let result = self.recover_dead_runner_locked(index, &gate, None).await;
+            drop(gate);
+            self.wake.notify_one();
+            if result
+                .as_ref()
+                .err()
+                .is_some_and(|error| error == "runner recovery was superseded")
+            {
+                continue;
+            }
+            return result;
+        }
     }
 
     /// Waits for the selected Blocking Auth codebase's runner to become available.
@@ -2967,10 +3042,30 @@ impl FunctionsRuntime {
         self.recover_dead_runner(owner).await.map(|_| ())
     }
 
+    fn release_failed_blocking_restart(
+        &self,
+        index: usize,
+        epoch: Epoch,
+        respawn: &RespawnGeneration,
+        ticket: &Arc<()>,
+    ) {
+        if let Ok(inner) = self.inner.lock() {
+            let mut current = self.codebases[index].generation_mut();
+            if inner.epoch == epoch
+                && current.revision == respawn.revision
+                && Arc::ptr_eq(&current.runner, &respawn.runner)
+                && tickets_match(current.blocking_restart_ticket.as_ref(), Some(ticket))
+            {
+                current.blocking_restart_ticket = None;
+            }
+        }
+    }
+
     async fn recover_dead_runner_locked(
         self: &Arc<Self>,
         index: usize,
-        _gate: OwnedMutexGuard<()>,
+        _gate: &OwnedMutexGuard<()>,
+        expected_ticket: Option<&Arc<()>>,
     ) -> Result<Arc<Runner>, String> {
         let codebase = &self.codebases[index];
         let mut attempts_this_call = 0;
@@ -2978,7 +3073,7 @@ impl FunctionsRuntime {
             if self.shutting_down.load(std::sync::atomic::Ordering::SeqCst) {
                 return Err("the Functions runtime is shutting down".to_owned());
             }
-            let (epoch, respawn, blocking_restart) = {
+            let (epoch, respawn, blocking_ticket) = {
                 let inner = self
                     .inner
                     .lock()
@@ -2992,25 +3087,13 @@ impl FunctionsRuntime {
                         revision: current.revision,
                         cleanup_dir: current.cleanup_dir.clone(),
                     },
-                    current.blocking_restart_ticket.is_some(),
+                    current.blocking_restart_ticket.clone(),
                 )
             };
-            if blocking_restart {
-                let timeout = respawn
-                    .spawn
-                    .as_ref()
-                    .map_or(Duration::from_secs(60), |spawn| spawn.hello_timeout);
-                tokio::time::timeout(timeout, async {
-                    while codebase.generation().blocking_restart_ticket.is_some() {
-                        if self.shutting_down.load(std::sync::atomic::Ordering::SeqCst) {
-                            break;
-                        }
-                        tokio::time::sleep(Duration::from_millis(20)).await;
-                    }
-                })
-                .await
-                .map_err(|_| "Blocking Auth runner restart did not finish".to_owned())?;
-                continue;
+            if !tickets_match(blocking_ticket.as_ref(), expected_ticket) {
+                return Err(
+                    "Blocking Auth runner restart is owned by another generation".to_owned(),
+                );
             }
             if respawn.runner.is_alive() {
                 return Ok(respawn.runner);
@@ -3038,16 +3121,21 @@ impl FunctionsRuntime {
                     let current = codebase.generation();
                     current.revision == respawn.revision
                         && Arc::ptr_eq(&current.runner, &respawn.runner)
+                        && tickets_match(current.blocking_restart_ticket.as_ref(), expected_ticket)
                 }
             });
             if !still_current || self.shutting_down.load(std::sync::atomic::Ordering::SeqCst) {
                 return Err("runner recovery was superseded".to_owned());
             }
-            let _source_generation = respawn.cleanup_dir;
+            let _source_generation = respawn.cleanup_dir.clone();
             let runner = match Runner::spawn_spec(spawn).await {
                 Ok(runner) => Arc::new(runner),
                 Err(error) => {
                     eprintln!("[functions] runner restart attempt failed: {error}");
+                    if let Some(ticket) = expected_ticket {
+                        self.release_failed_blocking_restart(index, epoch, &respawn, ticket);
+                        return Err(error);
+                    }
                     continue;
                 }
             };
@@ -3056,12 +3144,15 @@ impl FunctionsRuntime {
                 (inner.epoch == epoch
                     && !self.shutting_down.load(std::sync::atomic::Ordering::SeqCst)
                     && current.revision == respawn.revision
-                    && Arc::ptr_eq(&current.runner, &respawn.runner))
-                .then(|| std::mem::replace(&mut current.runner, runner.clone()))
+                    && Arc::ptr_eq(&current.runner, &respawn.runner)
+                    && tickets_match(current.blocking_restart_ticket.as_ref(), expected_ticket))
+                .then(|| {
+                    current.blocking_restart_ticket = None;
+                    std::mem::replace(&mut current.runner, runner.clone())
+                })
             });
             if let Some(old) = old {
                 old.kill_now();
-                self.wake.notify_one();
                 return Ok(runner);
             }
             runner.kill_now();
@@ -3151,99 +3242,26 @@ impl FunctionsRuntime {
     fn spawn_captured(
         self: &Arc<Self>,
         index: usize,
-        generation: Option<Epoch>,
-        respawn: RespawnGeneration,
+        _generation: Option<Epoch>,
+        respawn: &RespawnGeneration,
+        expected_ticket: Option<Arc<()>>,
     ) {
-        if self.shutting_down.load(std::sync::atomic::Ordering::SeqCst) {
+        if self.shutting_down.load(std::sync::atomic::Ordering::SeqCst) || respawn.spawn.is_none() {
             return;
         }
-        if respawn.spawn.is_none() {
-            return;
-        }
-        let codebase = &self.codebases[index];
-        if codebase
-            .spawn_in_flight
-            .swap(true, std::sync::atomic::Ordering::SeqCst)
-        {
-            return;
-        }
-        tokio::spawn(self.clone().spawn_coalesced(index, generation, respawn));
-    }
-
-    async fn spawn_coalesced(
-        self: Arc<Self>,
-        index: usize,
-        mut attempted_epoch: Option<Epoch>,
-        mut respawn: RespawnGeneration,
-    ) {
-        let codebase = &self.codebases[index];
-        loop {
-            // The captured source remains owned until its child finishes or is killed.
-            if self.shutting_down.load(std::sync::atomic::Ordering::SeqCst) {
-                codebase
-                    .spawn_in_flight
-                    .store(false, std::sync::atomic::Ordering::SeqCst);
-                return;
+        let runtime = self.clone();
+        tokio::spawn(async move {
+            let codebase = &runtime.codebases[index];
+            let gate = codebase.restart_gate.clone().lock_owned().await;
+            let result = runtime
+                .recover_dead_runner_locked(index, &gate, expected_ticket.as_ref())
+                .await;
+            drop(gate);
+            runtime.wake.notify_one();
+            if let Err(error) = result {
+                eprintln!("[functions] runner restart failed: {error}");
             }
-            let Some(spawn) = respawn.spawn.as_ref() else {
-                codebase
-                    .spawn_in_flight
-                    .store(false, std::sync::atomic::Ordering::SeqCst);
-                return;
-            };
-            let _source_generation = respawn.cleanup_dir.clone();
-            let result = Runner::spawn_spec(spawn).await;
-            let Ok(inner) = self.inner.lock() else {
-                if let Ok(runner) = result {
-                    runner.kill_now();
-                }
-                codebase
-                    .spawn_in_flight
-                    .store(false, std::sync::atomic::Ordering::SeqCst);
-                return;
-            };
-            let mut current = codebase.generation_mut();
-            let same_source = current.revision == respawn.revision
-                && Arc::ptr_eq(&current.runner, &respawn.runner);
-            let current_dead = !current.runner.is_alive();
-            let shutting_down = self.shutting_down.load(std::sync::atomic::Ordering::SeqCst);
-            let retry = match result {
-                Ok(runner) if same_source && current_dead && !shutting_down => {
-                    let old = std::mem::replace(&mut current.runner, Arc::new(runner));
-                    current.blocking_restart_ticket = None;
-                    old.kill_now();
-                    self.wake.notify_one();
-                    false
-                }
-                Ok(runner) => {
-                    runner.kill_now();
-                    current_dead && !shutting_down
-                }
-                Err(error) => {
-                    eprintln!("[functions] runner restart failed: {error}");
-                    current_dead
-                        && !shutting_down
-                        && (!same_source || Some(inner.epoch) != attempted_epoch)
-                }
-            };
-            if !retry {
-                // Reset holds the same runtime lock before killing the installed runner, so
-                // it cannot miss the transition from in-flight to ready for a new spawn.
-                codebase
-                    .spawn_in_flight
-                    .store(false, std::sync::atomic::Ordering::SeqCst);
-                return;
-            }
-            respawn = RespawnGeneration {
-                runner: current.runner.clone(),
-                spawn: current.spawn.clone(),
-                revision: current.revision,
-                cleanup_dir: current.cleanup_dir.clone(),
-            };
-            attempted_epoch = Some(inner.epoch);
-            drop(current);
-            drop(inner);
-        }
+        });
     }
 
     /// Notified whenever an invocation completes or the runtime resets.
@@ -3856,10 +3874,10 @@ impl FunctionsRuntime {
             cleanup_dir: current.cleanup_dir.clone(),
         };
         let epoch = inner.epoch;
+        respawn.runner.kill_now();
         drop(current);
         drop(inner);
-        respawn.runner.kill_now();
-        self.spawn_captured(target.owner, Some(epoch), respawn);
+        self.spawn_captured(target.owner, Some(epoch), &respawn, Some(ticket));
         true
     }
 

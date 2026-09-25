@@ -120,11 +120,13 @@ fn index_entry_size_and_total_size_budgets_are_independent() {
             Value::Array((0..count).map(Value::Integer).collect()),
         )])
     };
+    // The create transaction budget (owner decision D1): with this 1,496-byte name, 9,507
+    // distinct integers are charged 29,650,467 bytes and 9,508 are charged 29,653,585.
     assert!(IndexSet::default()
-        .document_index_usage(&long_path, &array(2000))
+        .document_index_usage(&long_path, &array(9_507))
         .is_ok());
     assert!(IndexSet::default()
-        .document_index_usage(&long_path, &array(3000))
+        .document_index_usage(&long_path, &array(9_508))
         .unwrap_err()
         .to_string()
         .contains("Transaction too big. Decrease transaction size."));

@@ -5547,3 +5547,97 @@ fn an_oversized_value_nested_in_a_map_is_an_invalid_nested_entity() {
     let (status, _) = call(&s, "GET", &format!("{DOCS}/m/x"), Value::Null);
     assert_eq!(status, 404);
 }
+
+/// Owner decisions A and D2 (2026-09-25): strict refuses a delete only from the smallest size
+/// every recording refused on its route. With a 1,000-byte name that is 12,113 elements for
+/// REST DELETE and `BatchWrite` and 12,112 for Commit (`near-limit-delete-refusal`, delta-v3 and
+/// the band exploration). `BatchWrite` reports the refusal per write, inside HTTP 200.
+#[test]
+fn deletes_are_refused_from_each_route_s_deterministic_minimum() {
+    // Each collection ID is 997 bytes plus a one-character suffix, so every name is 1,000 bytes.
+    let collection = "c".repeat(997);
+    let seed = |s: &RestState, id: &str, count: i64| {
+        let (status, body) = call(
+            s,
+            "PATCH",
+            &format!("{DOCS}/{collection}{id}/d"),
+            json!({"fields": {"a": {"arrayValue": {"values":
+                (0..count).map(|n| json!({"integerValue": n.to_string()})).collect::<Vec<_>>()
+            }}}}),
+        );
+        assert_eq!(status, 200, "seed {id} {count}: {body}");
+    };
+    let name =
+        |id: &str| format!("projects/demo-app/databases/(default)/documents/{collection}{id}/d");
+    let too_big = "Transaction too big. Decrease transaction size.";
+    let s = state_with_profile(true);
+
+    seed(&s, "r", 12_112);
+    let (status, body) = call(
+        &s,
+        "DELETE",
+        &format!("{DOCS}/{collection}r/d"),
+        Value::Null,
+    );
+    assert_eq!(status, 200, "REST 12,112: {body}");
+    seed(&s, "R", 12_113);
+    let (status, body) = call(
+        &s,
+        "DELETE",
+        &format!("{DOCS}/{collection}R/d"),
+        Value::Null,
+    );
+    assert_eq!(status, 400, "REST 12,113: {body}");
+    assert_eq!(body["error"]["message"], too_big);
+
+    seed(&s, "k", 12_111);
+    let (status, body) = call(
+        &s,
+        "POST",
+        &format!("{DOCS}:commit"),
+        json!({"writes": [{"delete": name("k")}]}),
+    );
+    assert_eq!(status, 200, "Commit 12,111: {body}");
+    seed(&s, "K", 12_112);
+    let (status, body) = call(
+        &s,
+        "POST",
+        &format!("{DOCS}:commit"),
+        json!({"writes": [{"delete": name("K")}]}),
+    );
+    assert_eq!(status, 400, "Commit 12,112: {body}");
+    assert_eq!(body["error"]["message"], too_big);
+
+    seed(&s, "w", 12_112);
+    let (status, body) = call(
+        &s,
+        "POST",
+        &format!("{DOCS}:batchWrite"),
+        json!({"writes": [{"delete": name("w")}]}),
+    );
+    assert_eq!(status, 200, "BatchWrite 12,112: {body}");
+    assert!(body["status"][0].get("code").is_none(), "{body}");
+    seed(&s, "W", 12_113);
+    let (status, body) = call(
+        &s,
+        "POST",
+        &format!("{DOCS}:batchWrite"),
+        json!({"writes": [{"delete": name("W")}]}),
+    );
+    assert_eq!(status, 200, "BatchWrite 12,113: {body}");
+    assert_eq!(body["status"][0]["code"], 3, "{body}");
+    assert_eq!(body["status"][0]["message"], too_big);
+    let (status, _) = call(&s, "GET", &format!("{DOCS}/{collection}W/d"), Value::Null);
+    assert_eq!(status, 200, "a refused delete keeps the document");
+
+    // The emulator profile adds no refusal the official emulator does not make.
+    let emulator = state_with_profile(false);
+    seed(&emulator, "R", 12_113);
+    let (status, body) = call(
+        &emulator,
+        "DELETE",
+        &format!("{DOCS}/{collection}R/d"),
+        Value::Null,
+    );
+    assert_eq!(status, 200, "emulator REST 12,113: {body}");
+}

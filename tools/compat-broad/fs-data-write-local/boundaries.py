@@ -186,9 +186,12 @@ def compile_case(family: str, position: str, nonce: str) -> dict[str, Any]:
         "write": {"update": document, "currentDocument": {"exists": False}},
         "indexConfiguration": config,
         "expect": {
+            # Production accepts about 22.5 MB of index entries (index-entry-sum/adjacent,
+            # recorded twice), so 8 MiB of them is not refused. A create is judged by its
+            # transaction budget instead (owner decision D1, 2026-09-25).
             "accepted": (
                 (position != "over" and family != "document-name")
-                or family == "indexed-value"
+                or family in ("indexed-value", "index-sum")
             ),
             "basis": "local-test-hypothesis-not-production-observation",
             "rejectedCommitPreservesSiblings": True,

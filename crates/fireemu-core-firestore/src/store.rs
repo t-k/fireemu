@@ -925,6 +925,8 @@ pub struct FirestoreState {
     live_paths: BTreeSet<Arc<DocumentPath>>,
     /// Which limits commits refuse.
     limit_scope: LimitScope,
+    /// The RPC the next commit arrived through, which prices a delete's transaction.
+    write_route: crate::index_usage::WriteRoute,
     version: CommitVersion,
     next_transaction: u64,
     next_query_execution: u64,
@@ -977,6 +979,7 @@ impl Default for FirestoreState {
             live_collection_group_paths: BTreeMap::new(),
             live_paths: BTreeSet::new(),
             limit_scope: LimitScope::default(),
+            write_route: crate::index_usage::WriteRoute::default(),
             version: CommitVersion::default(),
             next_transaction: 0,
             next_query_execution: 0,
@@ -1309,6 +1312,12 @@ impl FirestoreState {
     #[must_use]
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Names the RPC the next commit arrives through. The caller sets it with the database lock
+    /// held, before each commit, as it sets the index catalog.
+    pub fn set_write_route(&mut self, route: crate::index_usage::WriteRoute) {
+        self.write_route = route;
     }
 
     /// Installs the index generation used to validate subsequent writes and imports.
@@ -1938,6 +1947,7 @@ impl FirestoreState {
             live_collection_group_paths,
             live_paths,
             limit_scope: self.limit_scope,
+            write_route: self.write_route,
             version: self.version,
             next_transaction: self.next_transaction,
             next_query_execution: self.next_query_execution,
@@ -3337,6 +3347,17 @@ impl FirestoreState {
             let stage = staged.get_mut(&path).unwrap_or_else(|| unreachable!());
             let current = stage.current.as_deref();
             check_precondition(write.precondition.as_ref(), current, &path)?;
+            if let (WriteOp::Delete { .. }, Some(stored), LimitScope::Production) =
+                (&write.op, current, self.limit_scope)
+            {
+                // A delete is priced per route (owner decisions A and D2, 2026-09-25); the
+                // emulator profile adds no refusal the official emulator does not make.
+                self.index_catalog.delete_transaction_check(
+                    &stored.path,
+                    &stored.fields,
+                    self.write_route,
+                )?;
+            }
             let (next, mut result) = apply_write(write, current, commit_time, next_version)?;
             if let Some(Cow::Owned(doc)) = &next {
                 validate_document(doc, self.limit_scope)?;

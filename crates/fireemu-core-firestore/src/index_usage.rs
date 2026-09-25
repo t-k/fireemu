@@ -9,6 +9,50 @@ use crate::size::{document_name_size, index_entry_size, IndexEntryScope};
 use crate::store::{get_field, FirestoreError};
 use crate::value::{IndexValue, Value};
 
+/// The RPC a write arrived through. Production charges a delete's transaction differently per
+/// route; paths that are not a client write (TTL, internal maintenance) are never charged.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub enum WriteRoute {
+    /// `Commit`, including transactions.
+    Commit,
+    /// `BatchWrite`, each write applied on its own.
+    BatchWrite,
+    /// `DeleteDocument`, which REST `DELETE` maps to.
+    DeleteDocument,
+    /// Anything else; never charged for a delete.
+    #[default]
+    Internal,
+}
+
+/// The create transaction budget (owner decision D1, 2026-09-25). A create is charged its index
+/// entries (the published entry sizes) plus its stored bytes. Production's budget is not
+/// published; this value is fitted to the one recorded create transition
+/// (`writes/limits/index-entry-sum/adjacent`: a 2,000-byte name accepts 7,184 distinct
+/// integers, 29,650,337 charged bytes, and refuses 7,185, 29,654,463) and is the midpoint of
+/// that interval. Every other recorded create point falls within it.
+pub const TRANSACTION_BYTES: u64 = 29_652_400;
+
+/// A delete's charge relative to the create formula, per route (owner decisions A and D2,
+/// 2026-09-25), as `numerator / denominator`. Production refuses a delete at a smaller size than
+/// it accepts a create, and its answer between the two is nondeterministic. These are fitted
+/// so that, for a 1,000-byte name, strict refuses exactly from the smallest size every
+/// recording refused on that route (REST DELETE and `BatchWrite` 12,113, Commit 12,112) and
+/// accepts everything below. Other name lengths are an extrapolation, recorded as a known
+/// estimate in the closure.
+const fn delete_charge(route: WriteRoute) -> Option<(u64, u64)> {
+    match route {
+        WriteRoute::DeleteDocument | WriteRoute::BatchWrite => Some((DELETE_REST_NUM, DELETE_DEN)),
+        WriteRoute::Commit => Some((DELETE_COMMIT_NUM, DELETE_DEN)),
+        WriteRoute::Internal => None,
+    }
+}
+// The midpoints of the fitted intervals: REST DELETE and BatchWrite (T/25,758,391,
+// T/25,756,265], Commit (T/25,756,265, T/25,754,139], where T is `TRANSACTION_BYTES` and the
+// divisors are the create charges of 12,113, 12,112 and 12,111 elements under a 1,000-byte name.
+const DELETE_DEN: u64 = 1_000_000_000;
+const DELETE_REST_NUM: u64 = 1_151_221_899;
+const DELETE_COMMIT_NUM: u64 = 1_151_316_928;
+
 /// Index usage of one document, including automatic and configured composite indexes.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub struct IndexUsage {
@@ -60,19 +104,61 @@ impl IndexUsage {
     /// The byte sum is judged only once the whole document is counted: production reports an
     /// entry count over its limit even when the byte sum is also over
     /// (`writes/limits/index-entry-sum/adjacent`, 500-byte name, 20,000 elements).
-    fn finish(&self) -> Result<(), FirestoreError> {
-        if self.total_bytes > 8_388_608 {
-            return Err(FirestoreError::InvalidArgument(
-                "Transaction too big. Decrease transaction size.".into(),
-            ));
+    fn finish(&self, document_bytes: u64) -> Result<(), FirestoreError> {
+        if self.total_bytes.saturating_add(document_bytes) > TRANSACTION_BYTES {
+            return Err(transaction_too_big());
         }
         Ok(())
     }
 }
 
+fn transaction_too_big() -> FirestoreError {
+    FirestoreError::InvalidArgument("Transaction too big. Decrease transaction size.".into())
+}
+
+fn stored_bytes(
+    document: &DocumentPath,
+    fields: &BTreeMap<String, Value>,
+) -> Result<u64, FirestoreError> {
+    crate::size::document_size(document, fields)
+        .map(|size| size.total)
+        .map_err(|error| FirestoreError::InvalidArgument(error.to_string()))
+}
+
 impl IndexSet {
     /// Accounts for every index entry before any document or event is published.
     pub fn document_index_usage(
+        &self,
+        document: &DocumentPath,
+        fields: &BTreeMap<String, Value>,
+    ) -> Result<IndexUsage, FirestoreError> {
+        let usage = self.index_usage_of(document, fields)?;
+        usage.finish(stored_bytes(document, fields)?)?;
+        Ok(usage)
+    }
+
+    /// Refuses deleting a stored document whose transaction is over its route's budget.
+    pub fn delete_transaction_check(
+        &self,
+        document: &DocumentPath,
+        fields: &BTreeMap<String, Value>,
+        route: WriteRoute,
+    ) -> Result<(), FirestoreError> {
+        let Some((numerator, denominator)) = delete_charge(route) else {
+            return Ok(());
+        };
+        let create = self
+            .index_usage_of(document, fields)?
+            .total_bytes
+            .saturating_add(stored_bytes(document, fields)?);
+        let charged = u128::from(create) * u128::from(numerator) / u128::from(denominator);
+        if charged > u128::from(TRANSACTION_BYTES) {
+            return Err(transaction_too_big());
+        }
+        Ok(())
+    }
+
+    fn index_usage_of(
         &self,
         document: &DocumentPath,
         fields: &BTreeMap<String, Value>,
@@ -157,7 +243,6 @@ impl IndexSet {
                 )?;
             }
         }
-        usage.finish()?;
         Ok(usage)
     }
 
@@ -244,7 +329,7 @@ fn entry_size(
 
 #[cfg(test)]
 mod tests {
-    use super::IndexUsage;
+    use super::{IndexUsage, WriteRoute};
     use crate::path::DocumentPath;
     use fireemu_core_types::ids::{DatabaseId, ProjectId};
 
@@ -263,13 +348,79 @@ mod tests {
         assert!(IndexUsage::default().add(7_681, 1, &document).is_err());
         let mut sum = IndexUsage::default();
         assert!(sum.add(4_096, 2_048, &document).is_ok());
-        assert!(sum.finish().is_ok());
+        assert!(sum.finish(super::TRANSACTION_BYTES - 8_388_608).is_ok());
         assert!(sum.add(1, 1, &document).is_ok());
         assert!(matches!(
-            sum.finish(),
+            sum.finish(super::TRANSACTION_BYTES - 8_388_608),
             Err(crate::store::FirestoreError::InvalidArgument(message))
                 if message == "Transaction too big. Decrease transaction size."
         ));
+    }
+
+    fn root_document(collection_bytes: usize, id_bytes: usize) -> DocumentPath {
+        DocumentPath::parse(
+            &ProjectId::try_new("demo-app").unwrap(),
+            &DatabaseId::default_database(),
+            &format!("{}/{}", "c".repeat(collection_bytes), "d".repeat(id_bytes)),
+        )
+        .unwrap()
+    }
+
+    fn integers(count: i64) -> std::collections::BTreeMap<String, crate::value::Value> {
+        std::collections::BTreeMap::from([(
+            "a".to_owned(),
+            crate::value::Value::Array((0..count).map(crate::value::Value::Integer).collect()),
+        )])
+    }
+
+    fn too_big(result: Result<(), crate::store::FirestoreError>) -> bool {
+        matches!(
+            result,
+            Err(crate::store::FirestoreError::InvalidArgument(message))
+                if message == "Transaction too big. Decrease transaction size."
+        )
+    }
+
+    /// D1 (owner, 2026-09-25): a create's transaction is its index entries plus its stored
+    /// bytes, refused above a budget fitted to the recorded create pairs
+    /// (`writes/limits/index-entry-sum/adjacent`, recorded twice).
+    #[test]
+    fn create_transactions_match_every_recorded_create_point() {
+        let indexes = crate::index::IndexSet::default();
+        let create = |document: &DocumentPath, count: i64| {
+            indexes
+                .document_index_usage(document, &integers(count))
+                .map(|_| ())
+        };
+        let l2000 = root_document(1_400, 599);
+        assert_eq!(l2000.relative().len(), 2_000);
+        assert!(create(&l2000, 7_184).is_ok());
+        assert!(too_big(create(&l2000, 7_185)));
+        let l1000 = root_document(998, 1);
+        assert!(create(&l1000, 12_123).is_ok());
+        assert!(create(&l1000, 12_124).is_ok());
+        let l500 = root_document(498, 1);
+        assert!(create(&l500, 19_999).is_ok());
+    }
+
+    /// A and D2 (owner, 2026-09-25): a delete is refused only from the smallest size every
+    /// recording refused on its route (1,000-byte name: REST DELETE and `BatchWrite` 12,113,
+    /// Commit 12,112), with a per-route coefficient on the create formula.
+    #[test]
+    fn delete_transactions_refuse_from_each_route_s_deterministic_minimum() {
+        let indexes = crate::index::IndexSet::default();
+        let document = root_document(998, 1);
+        let delete = |count: i64, route: WriteRoute| {
+            indexes.delete_transaction_check(&document, &integers(count), route)
+        };
+        for route in [WriteRoute::DeleteDocument, WriteRoute::BatchWrite] {
+            assert!(delete(12_112, route).is_ok(), "{route:?}");
+            assert!(too_big(delete(12_113, route)), "{route:?}");
+        }
+        assert!(delete(12_111, WriteRoute::Commit).is_ok());
+        assert!(too_big(delete(12_112, WriteRoute::Commit)));
+        // Paths that are not a client delete route are never charged.
+        assert!(delete(12_113, WriteRoute::Internal).is_ok());
     }
 
     /// `writes/limits/index-entry-sum/adjacent` (recorded twice): with a 500-byte name, 20,000

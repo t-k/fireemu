@@ -287,13 +287,6 @@ impl CompatibilityProfile {
     pub const fn refuse_without_ruleset(self) -> bool {
         matches!(self, Self::Strict)
     }
-
-    /// Whether a write's failed precondition answers before a Security Rules denial.
-    /// Production does (FS-RULES, 2026-09-24); the official emulator answers the denial.
-    #[must_use]
-    pub const fn preconditions_before_rules(self) -> bool {
-        matches!(self, Self::Strict)
-    }
 }
 
 /// The Emulator Hub's official default port (`firebase-tools` `Constants.getDefaultPort`).
@@ -958,9 +951,6 @@ pub struct RuntimeConfig {
     /// Whether a client request is refused while its database has no ruleset
     /// (profile-derived; there is no key of its own).
     pub refuse_without_ruleset: bool,
-    /// Whether a write's failed precondition answers before a Security Rules denial
-    /// (profile-derived; there is no key of its own).
-    pub preconditions_before_rules: bool,
     /// How long a document whose time-to-live field has expired stays readable before the
     /// expiry sweep deletes it (`firestore.ttlSweepIntervalSeconds`). Production deletes
     /// typically within 24 hours and within 72 hours at worst, so the default is 24 hours
@@ -1292,7 +1282,6 @@ impl Default for RuntimeConfig {
             token_acceptance: profile.token_acceptance(),
             implicit_database_creation: profile.implicit_database_creation(),
             refuse_without_ruleset: profile.refuse_without_ruleset(),
-            preconditions_before_rules: profile.preconditions_before_rules(),
             ttl_sweep_interval: fireemu_core_firestore::ttl::DEFAULT_SWEEP_INTERVAL,
             database_create_time: None,
             require_demo_prefix: true,
@@ -2646,7 +2635,6 @@ impl RuntimeConfig {
         self.token_acceptance = profile.token_acceptance();
         self.implicit_database_creation = profile.implicit_database_creation();
         self.refuse_without_ruleset = profile.refuse_without_ruleset();
-        self.preconditions_before_rules = profile.preconditions_before_rules();
     }
 
     fn parse_daemon(d: &serde_json::Map<String, Value>, cfg: &mut Self) -> Result<(), ConfigError> {
@@ -3622,7 +3610,6 @@ mod tests {
         assert_eq!(emulator.token_acceptance, TokenAcceptance::EmulatorMock);
         assert!(emulator.implicit_database_creation);
         assert!(!emulator.refuse_without_ruleset);
-        assert!(!emulator.preconditions_before_rules);
 
         // strict: every one of those becomes production's refusal.
         let strict = with_profile(json!({"profile": "strict"})).unwrap();
@@ -3631,7 +3618,6 @@ mod tests {
         assert_eq!(strict.token_acceptance, TokenAcceptance::Verified);
         assert!(!strict.implicit_database_creation);
         assert!(strict.refuse_without_ruleset);
-        assert!(strict.preconditions_before_rules);
     }
 
     #[test]

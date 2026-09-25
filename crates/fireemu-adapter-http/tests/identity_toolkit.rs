@@ -17977,3 +17977,79 @@ fn an_admin_factor_entry_with_phone_info_is_a_phone_factor_in_both_profiles() {
         assert_eq!(found["users"][0]["mfaInfo"][0]["phoneInfo"], "+16505550101");
     }
 }
+
+// ---- AUTH-MFA strict: where the widened acceptance stops (safety review 2026-09-25, SF-3) ----
+
+/// Enrolls a phone factor on a non-test number and returns the account's email.
+fn real_number_phone_account(s: &AuthState, email: &str) -> (u16, Value) {
+    let token = verified_session(s, email);
+    let (status, started) = post(
+        s,
+        &format!("{V2}/accounts/mfaEnrollment:start"),
+        &json!({"idToken": token, "phoneEnrollmentInfo": {"phoneNumber": "+16505550199"}}),
+    );
+    assert_eq!(status, 200, "{started}");
+    let finalize = json!({"idToken": token, "phoneVerificationInfo": {
+        "sessionInfo": started["phoneSessionInfo"]["sessionInfo"], "code": phone_code(s)}});
+    let (status, enrolled) = post(
+        s,
+        &format!("{V2}/accounts/mfaEnrollment:finalize"),
+        &finalize,
+    );
+    assert_eq!(status, 200, "{enrolled}");
+    post(
+        s,
+        &format!("{V2}/accounts/mfaEnrollment:finalize"),
+        &finalize,
+    )
+}
+
+/// Only a configured test number's SMS session can be used again: a real number's enrollment
+/// and sign-in sessions are spent by their success (SF-3 a).
+#[test]
+fn strict_a_real_numbers_sms_session_is_single_use() {
+    let s = strict_mfa_state();
+    let (status, again) = real_number_phone_account(&s, "real@example.com");
+    assert_eq!(status, 400, "enrollment session again: {again}");
+    let pending = pending_of(&s, "real@example.com");
+    let (status, started) = post(
+        &s,
+        &format!("{V2}/accounts/mfaSignIn:start"),
+        &json!({"mfaPendingCredential": pending["mfaPendingCredential"],
+            "mfaEnrollmentId": pending["mfaInfo"][0]["mfaEnrollmentId"], "phoneSignInInfo": {}}),
+    );
+    assert_eq!(status, 200, "{started}");
+    let finalize = json!({"mfaPendingCredential": pending["mfaPendingCredential"],
+        "phoneVerificationInfo": {"sessionInfo": started["phoneResponseInfo"]["sessionInfo"], "code": phone_code(&s)}});
+    let (status, body) = post(&s, &format!("{V2}/accounts/mfaSignIn:finalize"), &finalize);
+    assert_eq!(status, 200, "{body}");
+    let (status, body) = post(&s, &format!("{V2}/accounts/mfaSignIn:finalize"), &finalize);
+    assert_eq!(status, 400, "sign-in session again: {body}");
+}
+
+/// The TOTP challenge timeout is TOTP's: a phone second factor completes a pending credential
+/// 303 and 1800 seconds old (auth-mfa/lifetime-short#aged-pending-m300; SF-3 c).
+#[test]
+fn strict_an_sms_pending_credential_has_no_totp_challenge_timeout() {
+    for age in [303, 1_800] {
+        let s = strict_mfa_state();
+        let (status, _) = real_number_phone_account(&s, "sms-pending@example.com");
+        assert_eq!(status, 400);
+        let pending = pending_of(&s, "sms-pending@example.com");
+        advance(&s, age);
+        let (status, started) = post(
+            &s,
+            &format!("{V2}/accounts/mfaSignIn:start"),
+            &json!({"mfaPendingCredential": pending["mfaPendingCredential"],
+                "mfaEnrollmentId": pending["mfaInfo"][0]["mfaEnrollmentId"], "phoneSignInInfo": {}}),
+        );
+        assert_eq!(status, 200, "{age}: {started}");
+        let (status, body) = post(
+            &s,
+            &format!("{V2}/accounts/mfaSignIn:finalize"),
+            &json!({"mfaPendingCredential": pending["mfaPendingCredential"],
+                "phoneVerificationInfo": {"sessionInfo": started["phoneResponseInfo"]["sessionInfo"], "code": phone_code(&s)}}),
+        );
+        assert_eq!(status, 200, "{age}: {body}");
+    }
+}

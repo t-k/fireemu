@@ -99,6 +99,23 @@ test("local admission refuses another lane's open or recent task including IAM h
   );
 });
 
+test("local admission accepts an older control observation without closing a foreign run", async () => {
+  const now = Date.now();
+  const row = (age, event) => ({
+    ts: new Date(now - age).toISOString(),
+    project: "fireemu-oracle-idp",
+    taskId: "FS-RULES-SANDBOX",
+    event,
+  });
+  const oldControl = row(31 * 60_000, "control");
+  const accepted = await admitLocal([oldControl]);
+  assert.equal(accepted.status, 0, accepted.stderr);
+
+  const held = await admitLocal([row(2 * 3_600_000, "started"), oldControl]);
+  assert.notEqual(held.status, 0);
+  assert.match(held.stderr, /another lane.*has not finished/);
+});
+
 test("local admission fails closed on malformed rows and unknown task cost", async () => {
   const now = new Date(Date.now() - 2 * 3_600_000).toISOString();
   for (const rows of [

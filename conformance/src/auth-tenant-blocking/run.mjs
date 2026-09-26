@@ -419,6 +419,7 @@ function ledgerEntries(ledgerText) {
     "finished",
     "note",
     "change",
+    "control",
     "needs-recovery",
     "cleanup-verified",
     "config-change",

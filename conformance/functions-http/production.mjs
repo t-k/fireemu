@@ -31,6 +31,11 @@ const COMMON_GIT = execFileSync(
 const PRIVATE_ROOT = join(dirname(COMMON_GIT), "docs.local");
 const LEDGER = join(PRIVATE_ROOT, "runs/sandbox-ledger.jsonl");
 const LOCK = `${LEDGER}.lock`;
+const OWNER_DECISIONS = join(PRIVATE_ROOT, "instructions/owner-decisions.md");
+const FOURTH_PACKET = join(
+  PRIVATE_ROOT,
+  "reviews/2026-09-26-functions-http-stage3-fourth-presend-packet.md",
+);
 const KEY_FILE = join(
   PRIVATE_ROOT,
   "oracle-credentials/fireemu-oracle-query-auth-key-20260925.json",
@@ -50,6 +55,12 @@ const SECOND_RUN_DIR = join(PRIVATE_ROOT, "runs/functions-http-stage3-2026-09-25
 const SECOND_RUN_COMMIT = "fa536544c99009ab733fe3b1bc324a5afa6c361f";
 const SECOND_RECOVERY_READBACK_SHA =
   "1a1354889e8a29129a9f9039cc63230a99419d9a59c34916fb93af7bc0722cb8";
+const THIRD_RUN_DIR = join(PRIVATE_ROOT, "runs/functions-http-stage3-2026-09-25T153014.830Z");
+const THIRD_RUN_COMMIT = "8078b372535a19cd34b9b085fb9e049f5927c272";
+const THIRD_RECOVERY_READBACK_SHA =
+  "8f9e32ea545246edc21c122f86de1b1feb95901e0ee8a6bc730ef3b8c206ce37";
+const THIRD_RECOVERY_BUILD_READBACK_SHA =
+  "7a13b7d55e71b15962d8e0d3883bb8a427865cb05f3f75527fd41a6f97be0312";
 const CORPUS_SHA = "836c138ba213546428e700e7ecb51644089bb5b0cdc91946eb9904a648106bea";
 const FIXTURE_SHA = "0c481ec6b6ec87db71a2f90550238ce69ec2b923c7a92b7ea5171cb7909886a5";
 const FIREBASE_CONFIG_SHA = "0b76734c83f808f8842ee093177fc9ecc2fda2ec9f9d06e025436a0d7f9f7197";
@@ -105,6 +116,7 @@ export function assertAdmission(
   currentTime = now(),
   firstRunDir = FIRST_RUN_DIR,
   secondRunDir = SECOND_RUN_DIR,
+  thirdRunDir = THIRD_RUN_DIR,
 ) {
   const relevant = lines.filter((line) => line.project === PROJECT);
   const storage = relevant.some(
@@ -122,7 +134,8 @@ export function assertAdmission(
   if (!storage || !stage2)
     throw new Error("Storage and FUNCTIONS-HTTP stage 2 must both finish successfully");
   const stage3 = relevant.filter((line) => line.taskId === TASK && line.stage === 3);
-  if (stage3.length !== 8) throw new Error("stage 3 attempts were not recovered exactly twice");
+  if (stage3.length !== 17)
+    throw new Error("stage 3 attempts were not recovered exactly three times");
   const [
     started,
     change,
@@ -132,6 +145,15 @@ export function assertAdmission(
     retryChange,
     retryFailed,
     retryRecovered,
+    thirdStarted,
+    thirdRevoked,
+    thirdDeleted,
+    thirdIdentity,
+    thirdFailed,
+    thirdCreated,
+    thirdApiAttempted,
+    thirdApiReadback,
+    thirdRecovered,
   ] = stage3;
   if (
     started.event !== "started" ||
@@ -175,6 +197,48 @@ export function assertAdmission(
   ) {
     throw new Error("stage 3 second recovery evidence differs from the reviewed result");
   }
+  if (
+    thirdStarted.event !== "started" ||
+    thirdRevoked.event !== "change" ||
+    thirdRevoked.action !== "public-invoker-revoked" ||
+    thirdDeleted.event !== "change" ||
+    thirdDeleted.action !== "function-deleted" ||
+    thirdIdentity.event !== "change" ||
+    thirdIdentity.action !== "service-identity-generation-possible" ||
+    thirdFailed.event !== "needs-recovery" ||
+    thirdCreated.event !== "change" ||
+    thirdCreated.action !== "function-created-cli-confirmed" ||
+    thirdApiAttempted.event !== "change" ||
+    thirdApiAttempted.action !== "firebaseextensions-api-enable-attempted" ||
+    thirdApiReadback.event !== "change" ||
+    thirdApiReadback.action !== "firebaseextensions-api-enabled-readback" ||
+    thirdRecovered.event !== "finished" ||
+    [thirdStarted, thirdFailed, thirdRecovered].some(
+      (line) =>
+        line.runDir !== thirdRunDir ||
+        line.gitSha !== THIRD_RUN_COMMIT ||
+        line.corpusDigest !== CORPUS_SHA,
+    ) ||
+    [thirdCreated, thirdApiAttempted, thirdApiReadback].some(
+      (line) => line.runDir !== thirdRunDir,
+    ) ||
+    [thirdStarted, thirdFailed, thirdRecovered].some((line) => line.attempt !== 3) ||
+    thirdStarted.reservationLedgerTs !== "2026-09-25T13:05:04.913Z" ||
+    thirdFailed.requests?.invocation !== 0 ||
+    thirdFailed.requests?.control !== 9 ||
+    thirdFailed.requests?.cleanup !== 8 ||
+    thirdFailed.requests?.cliDeploy !== 1 ||
+    thirdFailed.requests?.cliDelete !== 1 ||
+    thirdFailed.estimatedUsd !== 0.57 ||
+    thirdRecovered.outcome !== "recovered-no-observation" ||
+    thirdRecovered.recoveryReadbackSha256 !== THIRD_RECOVERY_READBACK_SHA ||
+    thirdRecovered.recoveryBuildReadbackSha256 !== THIRD_RECOVERY_BUILD_READBACK_SHA ||
+    thirdRecovered.recoveryRequests !== 8 ||
+    thirdRecovered.regionalBuildCount !== 1 ||
+    thirdRecovered.firebaseextensionsApiState !== "ENABLED"
+  ) {
+    throw new Error("stage 3 third recovery evidence differs from the reviewed result");
+  }
   const terminalLine = (line) =>
     line.outcome !== undefined &&
     line.outcome !== null &&
@@ -202,9 +266,17 @@ const estimatedUsd = (requests) =>
 export function retryAccounting(requests) {
   const current = estimatedUsd(requests);
   const priorAttemptResidualAllowanceUsd = 0.04;
-  const cumulativeEstimatedUsd = Number((current + priorAttemptResidualAllowanceUsd).toFixed(2));
-  if (cumulativeEstimatedUsd > 9) throw new Error("stage 3 budget would be exceeded");
-  return { estimatedUsd: current, priorAttemptResidualAllowanceUsd, cumulativeEstimatedUsd };
+  const thirdAttemptConservativeUsd = 0.57;
+  const cumulativeEstimatedUsd = Number(
+    (current + priorAttemptResidualAllowanceUsd + thirdAttemptConservativeUsd).toFixed(2),
+  );
+  if (cumulativeEstimatedUsd > 9.56) throw new Error("stage 3 budget would be exceeded");
+  return {
+    estimatedUsd: current,
+    priorAttemptResidualAllowanceUsd,
+    thirdAttemptConservativeUsd,
+    cumulativeEstimatedUsd,
+  };
 }
 
 export function assertOwnedImage(image, target) {
@@ -331,6 +403,33 @@ export function assertReviewApproval(content, gitSha, corpusDigest) {
   }
 }
 
+export function assertFourthOwnerDecision(content, packetSha, gitSha) {
+  const label = "FUNCTIONS-HTTP stage3 fourth send";
+  const scope = `packetSha256=${packetSha}; runnerCommit=${gitSha}; addedBudgetUsd=0.56; stage3CapUsd=9.56; taskCapUsd=10.56; maxDirectHttp=881; maxCliDeploy=19; maxCliDelete=17; approved`;
+  const rows = content
+    .split(/\r?\n/)
+    .map((line) => line.split(" | "))
+    .filter((cells) => cells[1] === label);
+  if (
+    rows.length !== 1 ||
+    rows[0].length !== 5 ||
+    !/^- \d{4}-\d{2}-\d{2}$/.test(rows[0][0]) ||
+    rows[0][2] !== scope ||
+    rows[0][3] !== "オーナー（このセッションへの直接の返答「承認」）" ||
+    rows[0][4] !== "docs.local/reviews/2026-09-26-functions-http-stage3-fourth-presend-packet.md"
+  ) {
+    throw new Error("fourth send owner decision must bind the packet, commit and added budget");
+  }
+}
+
+async function assertFourthAuthorization(gitSha) {
+  const metadata = await stat(FOURTH_PACKET);
+  if (metadata.size > 256 * 1024 || (metadata.mode & 0o077) !== 0)
+    throw new Error("fourth send packet must be bounded and owner-only");
+  const packetSha = digest(await readFile(FOURTH_PACKET));
+  assertFourthOwnerDecision(await readFile(OWNER_DECISIONS, "utf8"), packetSha, gitSha);
+}
+
 async function assertPrivateApproval() {
   const path = process.env.FIREEMU_FUNCTIONS_HTTP_STAGE3_REVIEW;
   if (!path || !resolve(path).startsWith(`${PRIVATE_ROOT}/`))
@@ -353,6 +452,7 @@ async function assertPrivateApproval() {
     throw new Error("stage 3 pre-send APPROVE must bind a clean reviewed commit and corpus");
   }
   assertReviewApproval(content, gitSha, CORPUS_SHA);
+  return gitSha;
 }
 
 async function ownerAdc() {
@@ -429,6 +529,57 @@ export async function readRecoveryReadback(path, expectedSha, firstRunDir) {
     throw new Error("private recovery readback is invalid");
   }
   return value;
+}
+
+export async function readThirdRecoveryReadbacks(
+  firstPath,
+  firstSha,
+  buildPath,
+  buildSha,
+  thirdRunDir,
+) {
+  async function readPinned(path, sha) {
+    const metadata = await stat(path);
+    if (metadata.size > MAX_RESPONSE_BYTES || (metadata.mode & 0o077) !== 0)
+      throw new Error("third recovery readback is not bounded and owner-only");
+    const content = await readFile(path);
+    if (digest(content) !== sha) throw new Error("third recovery readback digest changed");
+    try {
+      return JSON.parse(content);
+    } catch {
+      throw new Error("third recovery readback is invalid");
+    }
+  }
+  const first = await readPinned(firstPath, firstSha);
+  if (
+    first?.project !== PROJECT ||
+    first.runDir !== thirdRunDir ||
+    first.requests !== 6 ||
+    first.outcome !== "incomplete" ||
+    first.error !== "build creation time is invalid" ||
+    first.readbacks?.firebaseextensionsApi !== "ENABLED" ||
+    first.readbacks.function !== "absent" ||
+    first.readbacks.service !== "absent" ||
+    first.readbacks.package !== "absent"
+  ) {
+    throw new Error("third recovery readback is invalid");
+  }
+  const build = await readPinned(buildPath, buildSha);
+  if (
+    build?.project !== PROJECT ||
+    build.requests !== 2 ||
+    build.outcome !== "regional-builds-terminal" ||
+    !Array.isArray(build.builds) ||
+    build.builds.length !== 1 ||
+    typeof build.builds[0].id !== "string" ||
+    build.builds[0].status !== "SUCCESS" ||
+    !Number.isFinite(Date.parse(build.builds[0].createTime)) ||
+    !Number.isFinite(Date.parse(build.builds[0].finishTime)) ||
+    Date.parse(build.builds[0].finishTime) < Date.parse(build.builds[0].createTime)
+  ) {
+    throw new Error("third recovery build readback is invalid");
+  }
+  return { first, build };
 }
 
 async function acquireToken(adc, budget, kind) {
@@ -582,6 +733,7 @@ export async function preflightCliSideEffects(control) {
     "eventarc",
     "pubsub",
     "storage",
+    "firebaseextensions",
   ].map((name) => `${name}.googleapis.com`);
   if (required.some((name) => !enabled.has(name))) {
     throw new Error("Firebase CLI would encounter a disabled required API");
@@ -1020,7 +1172,8 @@ async function observeProgram(program, control, adcPath, budget, runDir, recordi
 }
 
 export async function recordProduction() {
-  await assertPrivateApproval();
+  const approvedGitSha = await assertPrivateApproval();
+  await assertFourthAuthorization(approvedGitSha);
   const corpus = await requiredSourceDigests();
   const adc = await ownerAdc();
   const projectNumber = await readPrivateProjectIdentity(
@@ -1036,6 +1189,13 @@ export async function recordProduction() {
     join(SECOND_RUN_DIR, "recovery-readback.json"),
     SECOND_RECOVERY_READBACK_SHA,
     SECOND_RUN_DIR,
+  );
+  await readThirdRecoveryReadbacks(
+    join(THIRD_RUN_DIR, "recovery-readback.json"),
+    THIRD_RECOVERY_READBACK_SHA,
+    join(THIRD_RUN_DIR, "recovery-build-readback.json"),
+    THIRD_RECOVERY_BUILD_READBACK_SHA,
+    THIRD_RUN_DIR,
   );
   const ledgerLines = (await readFile(LEDGER, "utf8"))
     .trim()
@@ -1070,6 +1230,8 @@ export async function recordProduction() {
         code === 0 ? resolveGit(result.trim()) : reject(new Error("git rev-parse failed")),
       );
     });
+    if (git !== approvedGitSha) throw new Error("fourth send reviewed commit changed");
+    await assertFourthAuthorization(git);
     const base = {
       ts: now(),
       project: PROJECT,
@@ -1079,10 +1241,11 @@ export async function recordProduction() {
       gitSha: git,
       corpusDigest: CORPUS_SHA,
       runDir,
-      maxEstimatedUsd: 9,
-      attempt: 3,
+      maxEstimatedUsd: 9.56,
+      attempt: 4,
       reservationLedgerTs: "2026-09-25T13:05:04.913Z",
       reservationReusedUsd: 9,
+      reservationAddedUsd: 0.56,
     };
     await appendFile(
       LEDGER,

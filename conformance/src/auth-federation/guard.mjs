@@ -34,8 +34,19 @@ export const THIRD_PARTY_PROVIDERS = new Set([
 /** The run's own providers: an OIDC or SAML ID with the `fireemu-` prefix. */
 export const RUN_PROVIDER = /^(oidc|saml)\.fireemu-[a-z0-9-]{1,48}$/;
 
-export function allowedHosts(project) {
-  return new Set([`${project}.firebaseapp.com`, `${project}.web.app`, "localhost"]);
+/**
+ * The hosts a request may name: the sandbox's own Hosting domains, localhost and the run's
+ * issuer host (a Hosting preview channel, known only after its deploy).
+ */
+export function allowedHosts(project, issuerHost) {
+  const hosts = new Set([`${project}.firebaseapp.com`, `${project}.web.app`, "localhost"]);
+  if (issuerHost) {
+    if (!issuerHost.startsWith(`${project}--`) || !issuerHost.endsWith(".web.app")) {
+      throw new Error(`issuer host ${issuerHost} is not a preview channel of the sandbox`);
+    }
+    hosts.add(issuerHost);
+  }
+  return hosts;
 }
 
 const PROVIDER_COLLECTION =
@@ -91,7 +102,8 @@ function assertHost(value, ctx, key) {
     // Not an absolute URL: sent as written, to be validated by the service.
     return;
   }
-  if (!allowedHosts(ctx.project).has(host)) throw new Error(`${key} host ${host} is not reviewed`);
+  if (!allowedHosts(ctx.project, ctx.issuerHost).has(host))
+    throw new Error(`${key} host ${host} is not reviewed`);
 }
 
 /** Whether `value` is a credential the run made: synthetic text or a JWS of the run's key. */
@@ -179,6 +191,8 @@ function locate(parsed, ctx) {
 /** The last check before a request leaves the process. `role` is "step" or "harness". */
 export function guardHttp({ url, method = "GET", body }, ctx, { role }) {
   if (!["step", "harness"].includes(role)) throw new Error("unknown role");
+  // A run's issuer host is checked before anything is sent, whatever the request names.
+  allowedHosts(ctx.project, ctx.issuerHost);
   const parsed = new URL(url);
   const raw = url.slice(parsed.origin.length).split("?")[0];
   if (/%2e|%2f|\/\.\.?(\/|$)/i.test(raw)) throw new Error(`request path is not canonical: ${raw}`);

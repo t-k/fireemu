@@ -55,6 +55,22 @@ test("provider writes touch only the run's providers and declared default IdPs",
   assert.doesNotThrow(() => send(ctx, "PATCH", `${base}/config?updateMask=signIn.allowDuplicateEmails`, { signIn: { allowDuplicateEmails: true } }));
 });
 
+test("the run's issuer host is allowed only as a preview channel of the sandbox", () => {
+  const channel = `${SANDBOX_PROJECT}--fed-r1-abc123.web.app`;
+  const ctx = production({ issuerHost: channel });
+  const base = `/admin/v2/projects/${SANDBOX_PROJECT}`;
+  const oidc = (issuer) => ({ clientId: "c", issuer, enabled: true });
+  assert.doesNotThrow(() => send(ctx, "POST", `${base}/oauthIdpConfigs?oauthIdpConfigId=oidc.fireemu-a`, oidc(`https://${channel}/oidc/r1`)));
+  assert.throws(
+    () => send(production(), "POST", `${base}/oauthIdpConfigs?oauthIdpConfigId=oidc.fireemu-a`, oidc(`https://${channel}/oidc/r1`)),
+    /not reviewed/,
+  );
+  assert.throws(
+    () => send(production({ issuerHost: "evil--x.web.app" }), "GET", `${base}/oauthIdpConfigs`),
+    /not a preview channel of the sandbox/,
+  );
+});
+
 test("no real third-party credential and no address outside example.com is sent", () => {
   const key = generateSigningKey({ kid: "run-kid" });
   const ctx = production({ runKids: ["run-kid"] });

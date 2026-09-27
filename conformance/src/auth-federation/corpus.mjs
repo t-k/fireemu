@@ -17,7 +17,8 @@ const admin = (id, method, path, extra = {}) => ({
 });
 const client = (id, method, body) => ({ id, auth: "key", path: `v1/accounts:${method}`, body });
 
-const ISSUER = "https://{project}.web.app/oidc/RUN";
+/** The run's issuer: a Hosting preview channel of the sandbox (O1), resolved per run. */
+const ISSUER = "https://ISSUERHOST/oidc/RUN";
 
 const oidcConfig = {
   id: "auth-federation/provider-config/oidc",
@@ -521,9 +522,13 @@ export const PROGRAMS = [
  * The corpus with this run's values in place of its placeholders: `{project}`, `RUN` (a
  * lowercase tag), `CERT(name)` and `TOKEN(name)` from the given maps.
  */
-export function resolveCorpus(programs, { project, run, certificates = {}, tokens = {} }) {
+export function resolveCorpus(
+  programs,
+  { project, run, issuerHost = `${project}.web.app`, certificates = {}, tokens = {} },
+) {
   const text = (value) =>
     value
+      .replaceAll("ISSUERHOST", issuerHost)
       .replaceAll("{project}", project)
       .replaceAll(/EMAIL\(([\w-]+)\)/g, (_, name) => `fireemu-fed-RUN-${name}@example.com`)
       .replaceAll("RUN", run)

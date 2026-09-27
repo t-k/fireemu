@@ -184,11 +184,12 @@ fn syntax_errors_carry_positions() {
     assert!(err.column > 0);
     let err = parse_ruleset("service cloud.firestore {").unwrap_err();
     assert!(err.message.contains("expected"));
-    let err = parse_ruleset(
-        "service cloud.firestore {\n match /a/{b} {\n allow frobnicate: if true;\n }\n}",
-    )
-    .unwrap_err();
-    assert!(err.message.contains("frobnicate") || err.message.contains("method"));
+    // An unknown access method is only a warning to the compiler; a condition without `if`
+    // is an error.
+    let err = parse_ruleset("service cloud.firestore {\n match /a/{b} {\n allow get: true;\n }\n}")
+        .unwrap_err();
+    assert_eq!(err.line, 3);
+    assert!(err.message.contains("if"), "{}", err.message);
 }
 
 #[test]

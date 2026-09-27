@@ -254,8 +254,16 @@ fn fixture(case: &str) -> Result<Fixture> {
             resource_value: Some("a".repeat(210_000)),
         },
         "depthExhausted" => Fixture {
-            rules: DEPTH_EXHAUSTED_WITH_NESTED_ALLOW,
+            rules: DEPTH_EXHAUSTED,
             resource_value: Some("a".repeat(64)),
+        },
+        "exhaustedBesideAllow" => Fixture {
+            rules: STEP_EXHAUSTED_BESIDE_NESTED_ALLOW,
+            resource_value: Some("a".repeat(210_000)),
+        },
+        "exhaustedPastCap" => Fixture {
+            rules: STEP_EXHAUSTED_PAST_CAP,
+            resource_value: Some("a".repeat(210_000)),
         },
         "parentNegated" => Fixture {
             rules: PARENT_NEGATED,
@@ -334,6 +342,36 @@ service cloud.firestore {
   match /databases/{database}/documents {
     match /notes/{id} {
       allow get: if resource.data.value.replace('z', 'x') == resource.data.value;
+    }
+  }
+}
+";
+
+// The same exhaustion beside an allow that holds: allow statements are alternatives.
+const STEP_EXHAUSTED_BESIDE_NESTED_ALLOW: &str = r"
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    match /notes/{id} {
+      allow get: if resource.data.value.replace('z', 'x') == resource.data.value;
+      match /{rest=**} { allow get: if true; }
+    }
+  }
+}
+";
+
+// Five exhaustions in one request: past the cap of four the request stops, and the nested
+// allow that holds is never reached.
+const STEP_EXHAUSTED_PAST_CAP: &str = r"
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    match /notes/{id} {
+      allow get: if resource.data.value.replace('z', 'x') == resource.data.value;
+      allow get: if resource.data.value.replace('y', 'x') == resource.data.value;
+      allow get: if resource.data.value.replace('w', 'x') == resource.data.value;
+      allow get: if resource.data.value.replace('v', 'x') == resource.data.value;
+      allow get: if resource.data.value.replace('u', 'x') == resource.data.value;
       match /{rest=**} { allow get: if true; }
     }
   }
@@ -342,13 +380,12 @@ service cloud.firestore {
 
 // Adjacent ambiguous groups accumulate continuation frames. A repeated group no longer does
 // because the production matcher deliberately iterates repetition candidates.
-const DEPTH_EXHAUSTED_WITH_NESTED_ALLOW: &str = r"
+const DEPTH_EXHAUSTED: &str = r"
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
     match /notes/{id} {
       allow get: if resource.data.value.matches('(a|aa)(a|aa)(a|aa)(a|aa)(a|aa)(a|aa)(a|aa)(a|aa)(a|aa)(a|aa)b') == false;
-      match /{rest=**} { allow get: if true; }
     }
   }
 }

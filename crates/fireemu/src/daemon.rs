@@ -9,7 +9,7 @@ use std::sync::{Arc, Mutex, RwLock};
 use fireemu_adapter_grpc::gateway::Gateway;
 use fireemu_adapter_grpc::local::LocalBackend;
 use fireemu_adapter_grpc::rest::RestState;
-use fireemu_adapter_grpc::rules::RulesEnforcer;
+use fireemu_adapter_grpc::rules::{RulesEnforcer, TokenSemantics};
 use fireemu_adapter_grpc::serve::serve_multiplexed;
 use fireemu_adapter_grpc::service::GatewayService;
 use fireemu_adapter_http::identity_toolkit::{AuthState, AuthWallClock};
@@ -892,9 +892,12 @@ fn assemble_suite(assembly: ServiceAssembly, exec_mode: bool) -> Result<ReadySui
     let enforcer = cfg.rules_enforced.then(|| {
         Arc::new(
             RulesEnforcer::new(rules.clone(), auth_store.clone(), clock.clone())
+                .with_token_semantics(TokenSemantics::Firestore)
                 .with_registry(registry.clone())
                 .with_database_rules(database_rules.clone())
-                .with_token_acceptance(cfg.token_acceptance),
+                .with_token_acceptance(cfg.token_acceptance)
+                .with_refusal_without_ruleset(cfg.refuse_without_ruleset)
+                .with_end_user_transactions(cfg.end_user_transactions),
         )
     });
     let mut service = GatewayService::local(gateway.clone(), backend.clone());
@@ -1293,6 +1296,9 @@ fn close_functions_source_admission(
     close();
 }
 
+/// The stack of every runtime thread (see `build_runtime`).
+const RUNTIME_THREAD_STACK_BYTES: usize = 8 * 1024 * 1024;
+
 fn build_runtime() -> Result<tokio::runtime::Runtime, String> {
     let worker_override = std::env::var("FIREEMU_WORKER_THREADS").ok();
     let blocking_override = std::env::var("FIREEMU_MAX_BLOCKING_THREADS").ok();
@@ -1305,6 +1311,10 @@ fn build_runtime() -> Result<tokio::runtime::Runtime, String> {
     tokio::runtime::Builder::new_multi_thread()
         .worker_threads(workers)
         .max_blocking_threads(blocking)
+        // Security Rules evaluate expressions as deep as production compiles them (up to the
+        // evaluator's own bound), which a debug build's frames do not fit into tokio's
+        // default 2 MiB.
+        .thread_stack_size(RUNTIME_THREAD_STACK_BYTES)
         .enable_all()
         .build()
         .map_err(|e| format!("cannot start runtime: {e}"))

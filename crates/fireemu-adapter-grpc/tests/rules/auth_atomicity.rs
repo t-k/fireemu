@@ -268,11 +268,16 @@ async fn atomic_rules_read_before_and_final_state_in_batches_and_transactions() 
     }
 }
 
+/// Firestore does not consult the account behind an ID token: until `exp`, a token of an
+/// account whose refresh tokens were revoked, that was disabled, or that was deleted still
+/// authorizes what the rules allow (FS-RULES production recording, 2026-09-24). Rules still
+/// judge every write.
 #[tokio::test]
-async fn revoked_and_disabled_tokens_cannot_change_single_batch_or_transaction_state() {
-    for disabled in [false, true] {
+async fn unexpired_tokens_of_revoked_disabled_and_deleted_accounts_still_authorize() {
+    for state in ["revoked", "disabled", "deleted"] {
         let mut h = start().await;
         let (alice, token) = h.user("alice@example.com");
+        let (bob, _) = h.user("bob@example.com");
         h.client
             .commit(with_bearer(
                 commit(vec![set_write("owned/existing", &[("owner", s(&alice))])]),
@@ -280,44 +285,44 @@ async fn revoked_and_disabled_tokens_cannot_change_single_batch_or_transaction_s
             ))
             .await
             .unwrap();
-        let transaction = begin(&mut h, &token).await;
-        let before = snapshot(&h);
         {
             let mut auth = h.auth.lock().unwrap();
             let uid = auth.user_by_id(&alice).unwrap().local_id.clone();
-            if disabled {
-                auth.user_mut(&uid).unwrap().disabled = true;
-            } else {
-                auth.revoke_tokens(
-                    &uid,
-                    LogicalInstant::from_nanos(START.as_nanos() + 1_000_000_000),
-                )
-                .unwrap();
+            match state {
+                "revoked" => auth
+                    .revoke_tokens(
+                        &uid,
+                        LogicalInstant::from_nanos(START.as_nanos() + 1_000_000_000),
+                    )
+                    .unwrap(),
+                "disabled" => auth.user_mut(&uid).unwrap().disabled = true,
+                _ => auth.delete_user_by_id(&alice).unwrap(),
             }
         }
-        for (multiwrite, transactional) in [(false, false), (true, false), (true, true)] {
+        for multiwrite in [false, true] {
             let mut writes = vec![set_write(
                 "owned/existing",
-                &[("owner", s(&alice)), ("bio", s("changed"))],
+                &[("owner", s(&alice)), ("bio", s(state))],
             )];
             if multiwrite {
                 writes.push(set_write("owned/new", &[("owner", s(&alice))]));
             }
-            let mut request = commit(writes);
-            if transactional {
-                request.transaction.clone_from(&transaction);
-            }
-            assert_eq!(
-                h.client
-                    .commit(with_bearer(request, &token))
-                    .await
-                    .unwrap_err()
-                    .code(),
-                tonic::Code::Unauthenticated
-            );
-            assert_eq!(snapshot(&h), before);
+            h.client
+                .commit(with_bearer(commit(writes), &token))
+                .await
+                .unwrap_or_else(|e| panic!("{state}: {e}"));
         }
-        rollback(&mut h, transaction, "owner").await;
+        let before = snapshot(&h);
+        let err = h
+            .client
+            .commit(with_bearer(
+                commit(vec![set_write("owned/bobs", &[("owner", s(&bob))])]),
+                &token,
+            ))
+            .await
+            .unwrap_err();
+        assert_eq!(err.code(), tonic::Code::PermissionDenied, "{state}");
+        assert_eq!(snapshot(&h), before, "{state}");
         h.handle.abort();
     }
 }

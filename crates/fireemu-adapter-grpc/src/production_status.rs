@@ -123,6 +123,31 @@ fn error_info(reason: &str, metadata: &[(&str, String)]) -> prost_types::Any {
     )
 }
 
+/// The front end's refusal of a bearer value that is not a JWT, which it takes for an OAuth
+/// access token, as REST answers it (FS-RULES production recording, 2026-09-24): an
+/// `ErrorInfo` with no domain names the service and the gRPC method the route transcodes to.
+#[must_use]
+pub fn credentials_missing(message: &str, method: &str) -> Status {
+    with_details(
+        Code::Unauthenticated,
+        message,
+        vec![any(
+            ERROR_INFO,
+            &ErrorInfo {
+                reason: "CREDENTIALS_MISSING".to_owned(),
+                domain: String::new(),
+                metadata: [
+                    ("service", "firestore.googleapis.com".to_owned()),
+                    ("method", format!("google.firestore.v1.Firestore.{method}")),
+                ]
+                .into_iter()
+                .map(|(key, value)| (key.to_owned(), value))
+                .collect(),
+            },
+        )],
+    )
+}
+
 /// Production's text for a cosine search that meets a zero vector.
 pub const COSINE_ZERO_VECTOR: &str =
     "Cannot compute cosine distance against a vector with a magnitude of zero.";
@@ -202,11 +227,10 @@ pub fn details_to_json(details: &[u8]) -> Option<Vec<Value>> {
         .filter_map(|detail| match detail.type_url.as_str() {
             ERROR_INFO => {
                 let info = ErrorInfo::decode(detail.value.as_slice()).ok()?;
-                let mut out = json!({
-                    "@type": ERROR_INFO,
-                    "reason": info.reason,
-                    "domain": info.domain,
-                });
+                let mut out = json!({"@type": ERROR_INFO, "reason": info.reason});
+                if !info.domain.is_empty() {
+                    out["domain"] = json!(info.domain);
+                }
                 if !info.metadata.is_empty() {
                     out["metadata"] = json!(info.metadata);
                 }
@@ -273,6 +297,40 @@ pub fn respec_grpc_message(headers: &mut hyper::HeaderMap) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn only_the_cosine_refusal_carries_an_error_info() {
+        let status = failed_precondition(COSINE_ZERO_VECTOR);
+        assert_eq!(status.code(), Code::FailedPrecondition);
+        assert_eq!(
+            details_to_json(status.details()),
+            Some(vec![json!({
+                "@type": "type.googleapis.com/google.rpc.ErrorInfo",
+                "reason": "COSINE_DISTANCE_ON_ZERO_VECTOR",
+                "domain": "firestore.googleapis.com",
+            })])
+        );
+        let other = failed_precondition("The query requires an index.");
+        assert_eq!(other.code(), Code::FailedPrecondition);
+        assert_eq!(details_to_json(other.details()), None);
+    }
+
+    #[test]
+    fn the_oauth_refusal_names_its_service_and_method_without_a_domain() {
+        let status = credentials_missing("m", "RunQuery");
+        assert_eq!(status.code(), Code::Unauthenticated);
+        assert_eq!(
+            details_to_json(status.details()),
+            Some(vec![json!({
+                "@type": "type.googleapis.com/google.rpc.ErrorInfo",
+                "reason": "CREDENTIALS_MISSING",
+                "metadata": {
+                    "method": "google.firestore.v1.Firestore.RunQuery",
+                    "service": "firestore.googleapis.com",
+                },
+            })])
+        );
+    }
 
     #[test]
     fn the_pipeline_refusal_renders_production_details() {

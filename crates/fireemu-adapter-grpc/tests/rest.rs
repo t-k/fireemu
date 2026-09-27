@@ -9,7 +9,7 @@ use std::time::Duration;
 use fireemu_adapter_grpc::gateway::Gateway;
 use fireemu_adapter_grpc::local::LocalBackend;
 use fireemu_adapter_grpc::rest::{RestRequest, RestState};
-use fireemu_adapter_grpc::rules::RulesEnforcer;
+use fireemu_adapter_grpc::rules::{RulesEnforcer, TokenSemantics};
 use fireemu_core_auth::jwt::{base64url_encode, TokenAcceptance};
 use fireemu_core_auth::mfa::TotpPolicy;
 use fireemu_core_auth::store::AuthStore;
@@ -98,7 +98,11 @@ fn state_with_gateway(
             TotpPolicy::default(),
         )));
         let loaded = Arc::new(RulesetSlot::new(LoadedRules::from_source(src).unwrap()));
-        Arc::new(RulesEnforcer::new(loaded, auth, clock.clone()).with_token_acceptance(acceptance))
+        Arc::new(
+            RulesEnforcer::new(loaded, auth, clock.clone())
+                .with_token_semantics(TokenSemantics::Firestore)
+                .with_token_acceptance(acceptance),
+        )
     });
     let state = RestState {
         local,
@@ -1886,6 +1890,157 @@ fn rest_run_query_supports_standard_find_nearest() {
     );
 }
 
+/// Under production's refusals an end user may not open a read-write transaction, by
+/// `beginTransaction` or a read's `newTransaction`, and may open a read-only one (FS-RULES,
+/// 2026-09-25); the owner opens either.
+#[test]
+fn end_users_may_not_open_a_read_write_transaction_over_rest_in_production() {
+    const OPEN: &str = "rules_version = '2';\nservice cloud.firestore { match /databases/{d}/documents { match /{document=**} { allow read, write: if true; } } }";
+    let (mut s, clock) = state_with_clock(Some(OPEN), TokenAcceptance::Verified);
+    let auth = Arc::new(Mutex::new(AuthStore::new(
+        "demo-app",
+        SplitMix64::new(3),
+        TotpPolicy::default(),
+    )));
+    let loaded = Arc::new(RulesetSlot::new(LoadedRules::from_source(OPEN).unwrap()));
+    s.rules = Some(Arc::new(
+        RulesEnforcer::new(loaded, auth, clock).with_end_user_transactions(false),
+    ));
+    let denial = json!({"error": {"code": 403, "message": "Missing or insufficient permissions.", "status": "PERMISSION_DENIED"}});
+    let document = "projects/demo-app/databases/(default)/documents/c/d";
+    let query = json!({"from": [{"collectionId": "c"}]});
+    for body in [json!({}), json!({"options": {"readWrite": {}}})] {
+        let (status, err) = call_as(&s, "POST", &format!("{DOCS}:beginTransaction"), body, None);
+        assert_eq!((status, err), (403, denial.clone()));
+    }
+    let (status, err) = call_as(
+        &s,
+        "POST",
+        &format!("{DOCS}:batchGet"),
+        json!({"documents": [document], "newTransaction": {"readWrite": {}}}),
+        None,
+    );
+    assert_eq!((status, err), (403, json!([denial.clone()])));
+    let (status, err) = call_as(
+        &s,
+        "POST",
+        &format!("{DOCS}:runQuery"),
+        json!({"structuredQuery": query, "newTransaction": {}}),
+        None,
+    );
+    assert_eq!((status, err), (403, json!([denial])));
+    for (path, body) in [
+        (
+            format!("{DOCS}:beginTransaction"),
+            json!({"options": {"readOnly": {}}}),
+        ),
+        (
+            format!("{DOCS}:batchGet"),
+            json!({"documents": [document], "newTransaction": {"readOnly": {}}}),
+        ),
+        (
+            format!("{DOCS}:runQuery"),
+            json!({"structuredQuery": query, "newTransaction": {"readOnly": {}}}),
+        ),
+    ] {
+        let (status, body) = call_as(&s, "POST", &path, body, None);
+        assert_eq!(status, 200, "{path}: {body}");
+    }
+    let (status, body) = call(&s, "POST", &format!("{DOCS}:beginTransaction"), json!({}));
+    assert_eq!(status, 200, "{body}");
+}
+
+/// Every REST route names its gRPC method in the OAuth refusal's `ErrorInfo`.
+#[test]
+fn the_oauth_refusal_names_the_transcoded_method() {
+    let s = state(Some(
+        "rules_version = '2';\nservice cloud.firestore { match /databases/{d}/documents { match /closed/{id} { allow read, write: if false; } } }",
+    ));
+    for (method, path, grpc_method) in [
+        ("GET", format!("{DOCS}/closed"), "GetOrListDocuments"),
+        ("PATCH", format!("{DOCS}/closed/a"), "UpdateDocument"),
+        ("DELETE", format!("{DOCS}/closed/a"), "DeleteDocument"),
+        (
+            "POST",
+            format!("{DOCS}/closed?documentId=a"),
+            "CreateDocument",
+        ),
+        ("POST", format!("{DOCS}:commit"), "Commit"),
+        ("POST", format!("{DOCS}:batchGet"), "BatchGetDocuments"),
+        ("POST", format!("{DOCS}:runQuery"), "RunQuery"),
+        (
+            "POST",
+            format!("{DOCS}:listCollectionIds"),
+            "ListCollectionIds",
+        ),
+        ("POST", format!("{DOCS}:batchWrite"), "BatchWrite"),
+        (
+            "POST",
+            format!("{DOCS}:beginTransaction"),
+            "BeginTransaction",
+        ),
+        ("POST", format!("{DOCS}:rollback"), "Rollback"),
+        (
+            "POST",
+            format!("{DOCS}:runAggregationQuery"),
+            "RunAggregationQuery",
+        ),
+        ("POST", format!("{DOCS}:partitionQuery"), "PartitionQuery"),
+        ("POST", format!("{DOCS}:executePipeline"), "ExecutePipeline"),
+    ] {
+        let (status, err) = call_as(&s, method, &path, json!({}), Some("Bearer not-a-token"));
+        assert_eq!(status, 401, "{method} {path}: {err}");
+        // Only the document read was recorded; the other methods' names are the gRPC methods
+        // the routes transcode to, and their refusals stay plain objects (not observed).
+        assert_eq!(
+            err["error"]["details"][0]["metadata"]["method"],
+            format!("google.firestore.v1.Firestore.{grpc_method}"),
+            "{method} {path}: {err}"
+        );
+    }
+}
+
+/// Only the front end's OAuth refusal carries the `ErrorInfo`: an expired ID token is refused
+/// with Firestore's own "Missing or invalid authentication." and no details.
+#[test]
+fn an_expired_token_is_refused_without_the_front_ends_error_info() {
+    const OPEN: &str = "rules_version = '2';\nservice cloud.firestore { match /databases/{d}/documents { match /{document=**} { allow read: if true; } } }";
+    let (mut s, clock) = state_with_clock(Some(OPEN), TokenAcceptance::Verified);
+    let auth = Arc::new(Mutex::new(AuthStore::new(
+        "demo-app",
+        SplitMix64::new(3),
+        TotpPolicy::default(),
+    )));
+    let expired = {
+        let mut store = auth.lock().unwrap();
+        let start = LogicalInstant::from_unix_seconds(1_788_004_860 - 3_600 - 60);
+        let uid = store
+            .create_user(
+                fireemu_core_auth::store::NewUser::email("late@example.com"),
+                start,
+            )
+            .unwrap();
+        let claims = store.id_token_claims(&uid, None, start).unwrap();
+        fireemu_core_auth::jwt::encode_unsigned(&claims)
+    };
+    let loaded = Arc::new(RulesetSlot::new(LoadedRules::from_source(OPEN).unwrap()));
+    s.rules = Some(Arc::new(
+        RulesEnforcer::new(loaded, auth, clock).with_token_semantics(TokenSemantics::Firestore),
+    ));
+    let (status, err) = call_as(
+        &s,
+        "GET",
+        &format!("{DOCS}/c/d"),
+        json!({}),
+        Some(&format!("Bearer {expired}")),
+    );
+    assert_eq!(status, 401, "{err}");
+    assert_eq!(
+        err,
+        json!({"error": {"code": 401, "message": "Missing or invalid authentication.", "status": "UNAUTHENTICATED"}})
+    );
+}
+
 #[test]
 fn rest_requests_are_authorized_like_grpc() {
     let s = state(Some(
@@ -1907,7 +2062,11 @@ fn rest_requests_are_authorized_like_grpc() {
         None,
     );
     assert_eq!(status, 403, "{err}");
-    assert_eq!(err["error"]["status"], "PERMISSION_DENIED");
+    // Production's body for every Security Rules denial (FS-RULES scope decision R6).
+    assert_eq!(
+        err,
+        json!({"error": {"code": 403, "message": "Missing or insufficient permissions.", "status": "PERMISSION_DENIED"}})
+    );
     let (status, _) = call_as(
         &s,
         "PATCH",
@@ -1924,7 +2083,25 @@ fn rest_requests_are_authorized_like_grpc() {
         Some("Bearer not-a-token"),
     );
     assert_eq!(status, 401, "{err}");
-    let (status, _) = call_as(
+    // The front end's body, with the ErrorInfo it names the method in (FS-RULES production
+    // recording, 2026-09-24): a document read is `GetOrListDocuments`.
+    assert_eq!(
+        err,
+        json!({"error": {
+            "code": 401,
+            "message": "Request had invalid authentication credentials. Expected OAuth 2 access token, login cookie or other valid authentication credential. See https://developers.google.com/identity/sign-in/web/devconsole-project.",
+            "status": "UNAUTHENTICATED",
+            "details": [{
+                "@type": "type.googleapis.com/google.rpc.ErrorInfo",
+                "reason": "CREDENTIALS_MISSING",
+                "metadata": {
+                    "service": "firestore.googleapis.com",
+                    "method": "google.firestore.v1.Firestore.GetOrListDocuments",
+                },
+            }],
+        }})
+    );
+    let (status, err) = call_as(
         &s,
         "POST",
         &format!("{DOCS}:runQuery"),
@@ -1932,6 +2109,24 @@ fn rest_requests_are_authorized_like_grpc() {
         None,
     );
     assert_eq!(status, 403);
+    // A streaming method answers its error inside a one-element array.
+    assert_eq!(
+        err[0]["error"]["message"],
+        "Missing or insufficient permissions."
+    );
+    // batchGet streams too (FS-RULES production recording, 2026-09-24).
+    let (status, err) = call_as(
+        &s,
+        "POST",
+        &format!("{DOCS}:batchGet"),
+        json!({"documents": [format!("projects/demo-app/databases/(default)/documents/closed/a")]}),
+        None,
+    );
+    assert_eq!(status, 403, "{err}");
+    assert_eq!(
+        err[0]["error"]["message"],
+        "Missing or insufficient permissions."
+    );
 }
 
 #[test]
@@ -2028,6 +2223,7 @@ fn rest_binds_unknown_mock_tokens_to_the_requested_project() {
     );
     assert_eq!(status, 401, "{body}");
 
+    // The strict profile refuses a token it cannot verify in production's words.
     let strict = state_with(Some(OWNER_RULES), TokenAcceptance::Verified);
     let (status, body) = call_as(
         &strict,
@@ -2036,7 +2232,11 @@ fn rest_binds_unknown_mock_tokens_to_the_requested_project() {
         write,
         Some(&bearer),
     );
-    assert_eq!(status, 401, "{body}");
+    assert_eq!(status, 403, "{body}");
+    assert_eq!(
+        body["error"]["message"], "Missing or insufficient permissions.",
+        "{body}"
+    );
 }
 
 const EMULATOR: &str = "/emulator/v1/projects/demo-app";
@@ -2443,7 +2643,8 @@ fn malformed_batch_get_documents_is_rejected_without_starting_a_transaction() {
             json!({"documents": documents, "newTransaction": {"readWrite": {}}}),
         );
         assert_eq!(status, 400, "{body}");
-        assert_eq!(body["error"]["status"], "INVALID_ARGUMENT", "{body}");
+        // A streaming method's refusal comes inside a one-element array, as for runQuery.
+        assert_eq!(body[0]["error"]["status"], "INVALID_ARGUMENT", "{body}");
     }
 
     let after = s
@@ -2897,6 +3098,12 @@ fn malformed_retry_transaction_token_is_refused_in_productions_wording() {
         );
         let (status, response) = call(&s, "POST", &path, body);
         assert_eq!(status, 400, "{path}: {response}");
+        // batchGet streams, so its refusal comes inside a one-element array.
+        let response = if path.ends_with(":batchGet") {
+            response[0].clone()
+        } else {
+            response
+        };
         assert_eq!(response["error"]["status"], "INVALID_ARGUMENT", "{path}");
         assert_eq!(response["error"]["message"], expected, "{path}");
     }
@@ -4519,7 +4726,10 @@ fn every_data_plane_surface_refuses_a_database_that_was_never_created() {
         // Production answers the streaming methods' errors inside a one-element array (recorded
         // for refusals in FS-QUERY-INDEX; a never-created database was seen so only in an
         // exploratory probe, which is not closure evidence).
-        let body = if path.ends_with(":runQuery") || path.ends_with(":runAggregationQuery") {
+        let body = if path.ends_with(":runQuery")
+            || path.ends_with(":runAggregationQuery")
+            || path.ends_with(":batchGet")
+        {
             body[0].clone()
         } else {
             body

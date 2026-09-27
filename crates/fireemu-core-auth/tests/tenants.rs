@@ -167,3 +167,47 @@ fn concurrent_tenant_patches_compose_without_reverting_security_fields() {
     assert_eq!(metadata.display_name.as_deref(), Some("Customer"));
     assert!(metadata.disable_auth);
 }
+
+/// A tenant created with a display name of the documented form (4-20 letters, digits and
+/// hyphens, beginning with a letter) is named as production names it: the display name, a
+/// hyphen and five characters of `[a-z0-9]` (FS-RULES sandbox recording 2026-09-25: `fsr-tenant`
+/// gave `fsr-tenant-` and five such characters). The suffix is reproducible for a run.
+#[test]
+fn a_tenant_with_a_display_name_is_named_as_production_names_it() {
+    let create = |registry: &AuthRegistry, name: Option<&str>| {
+        registry
+            .create_tenant(
+                "demo-app",
+                TenantMetadata {
+                    display_name: name.map(str::to_owned),
+                    ..TenantMetadata::default()
+                },
+            )
+            .unwrap()
+    };
+    let shaped = |id: &str, name: &str| {
+        id.strip_prefix(name)
+            .and_then(|rest| rest.strip_prefix('-'))
+            .is_some_and(|suffix| {
+                suffix.len() == 5
+                    && suffix
+                        .bytes()
+                        .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit())
+            })
+    };
+    let registry = AuthRegistry::new("demo-app", Arc::new(Mutex::new(store("demo-app", 1))));
+    let first = create(&registry, Some("fsr-tenant"));
+    let second = create(&registry, Some("fsr-tenant"));
+    assert!(shaped(&first, "fsr-tenant"), "{first}");
+    assert!(shaped(&second, "fsr-tenant"), "{second}");
+    assert_ne!(first, second);
+    let again = AuthRegistry::new("demo-app", Arc::new(Mutex::new(store("demo-app", 1))));
+    assert_eq!(create(&again, Some("fsr-tenant")), first, "reproducible");
+    // Outside the documented form (production refuses it, unobserved) and without a display
+    // name, the tenant keeps fireemu's generated name.
+    assert_eq!(
+        create(&registry, Some("ab")),
+        "fireemu-00000000000000000003"
+    );
+    assert_eq!(create(&registry, None), "fireemu-00000000000000000004");
+}

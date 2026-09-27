@@ -1386,6 +1386,42 @@ async fn a_verified_id_token_is_reinserted_exactly_once() {
     h.stop().await;
 }
 
+/// Firestore honours a token 30 seconds past `exp` and the unexpired token of a revoked,
+/// disabled or deleted account (FS-RULES). Nothing observed a callable doing so: a callable
+/// keeps ID-token verification, which refuses all of them.
+#[tokio::test]
+async fn a_callable_does_not_take_firestores_token_allowances() {
+    let h = start(true).await;
+    let late = {
+        let mut store = h.auth.lock().expect("the store is not poisoned");
+        let uid = store
+            .create_user(NewUser::email("late@example.com"), START)
+            .expect("the user is created");
+        let issued = LogicalInstant::from_nanos(START.as_nanos() - 3_610 * 1_000_000_000);
+        let claims = store.id_token_claims(&uid, None, issued).expect("claims");
+        format!("Bearer {}", encode_unsigned(&claims))
+    };
+    let (disabled_uid, disabled) = h.user("disabled@example.com");
+    {
+        let mut store = h.auth.lock().expect("the store is not poisoned");
+        let uid = store
+            .user_by_id(&disabled_uid)
+            .expect("the user exists")
+            .local_id
+            .clone();
+        store.user_mut(&uid).expect("the user exists").disabled = true;
+    }
+    for (name, bearer) in [("10 s past exp", late), ("disabled account", disabled)] {
+        let (status, body) = h.call("add", &[("authorization", &bearer)]).await;
+        assert_eq!(status, 200);
+        assert!(
+            echoed(&body, "authorization").is_empty(),
+            "{name}: the token must not reach the callable: {body}"
+        );
+    }
+    h.stop().await;
+}
+
 #[tokio::test]
 async fn duplicate_authorization_fields_are_invalid_and_none_survives() {
     let h = start(true).await;

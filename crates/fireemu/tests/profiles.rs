@@ -33,6 +33,21 @@ fn scratch(name: &str) -> PathBuf {
 /// One HTTP request, written by hand: the binary's test suite has no HTTP client dependency
 /// and the answers here are small enough to read in one go.
 fn http(port: u16, method: &str, path: &str, body: Option<&str>) -> (u16, String) {
+    http_with(port, method, path, body, "")
+}
+
+/// An owner (administrator) request, which Security Rules never judge.
+fn http_as_owner(port: u16, method: &str, path: &str, body: Option<&str>) -> (u16, String) {
+    http_with(port, method, path, body, "Authorization: Bearer owner\r\n")
+}
+
+fn http_with(
+    port: u16,
+    method: &str,
+    path: &str,
+    body: Option<&str>,
+    headers: &str,
+) -> (u16, String) {
     let mut stream = TcpStream::connect(("127.0.0.1", port)).expect("the daemon accepts");
     stream
         .set_read_timeout(Some(Duration::from_secs(20)))
@@ -40,7 +55,7 @@ fn http(port: u16, method: &str, path: &str, body: Option<&str>) -> (u16, String
     let body = body.unwrap_or("");
     write!(
         stream,
-        "{method} {path} HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+        "{method} {path} HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Type: application/json\r\n{headers}Content-Length: {}\r\nConnection: close\r\n\r\n{body}",
         body.len()
     )
     .unwrap();
@@ -293,7 +308,9 @@ fn a_configured_database_creation_time_bounds_read_times() {
     );
     let port = daemon.firestore_port();
     let query = |read_time: &str| {
-        http(
+        // As the owner: the daemon has no ruleset, which the strict profile answers for a
+        // client request with production's refusal.
+        http_as_owner(
             port,
             "POST",
             "/v1/projects/demo-profile-created/databases/(default)/documents:runQuery",
@@ -438,4 +455,95 @@ fn a_deep_body_is_refused_by_the_grammar_only_under_the_strict_profile() {
         );
         daemon.stop();
     }
+}
+
+/// Production refuses every client request while a project has no `cloud.firestore` release
+/// (FS-RULES, 2026-09-24), which is what the strict profile does while no ruleset is loaded;
+/// the emulator profile keeps the official emulator's allow-everything, and the banner says
+/// which one applies.
+#[test]
+fn without_a_ruleset_strict_refuses_client_requests_and_the_emulator_profile_allows_them() {
+    let document = "/v1/projects/demo-profile-unruled/databases/(default)/documents/notes/n1";
+    // The rules line follows the readiness line; give it a moment.
+    let rules_line = |daemon: &Daemon| {
+        for _ in 0..100 {
+            if daemon.banner().contains("  rules: ") {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        daemon.banner()
+    };
+    let strict = Daemon::start_with("unruled", "strict", "");
+    assert!(
+        rules_line(&strict).contains("rules: none loaded; every client request is refused"),
+        "{}",
+        strict.banner()
+    );
+    let port = strict.firestore_port();
+    let (status, body) = http(port, "GET", document, None);
+    assert_eq!(status, 403, "{body}");
+    assert!(
+        body.contains("Missing or insufficient permissions."),
+        "{body}"
+    );
+    let (status, body) = http_as_owner(port, "GET", document, None);
+    assert_eq!(
+        status, 404,
+        "the owner is never judged by Security Rules: {body}"
+    );
+    strict.stop();
+
+    let emulator = Daemon::start_with("unruled", "emulator", "");
+    assert!(
+        rules_line(&emulator).contains("rules: none loaded; every request is allowed"),
+        "{}",
+        emulator.banner()
+    );
+    let (status, body) = http(emulator.firestore_port(), "GET", document, None);
+    assert_eq!(status, 404, "{body}");
+    emulator.stop();
+}
+
+/// The daemon loads and evaluates the deepest expressions production compiles on its own
+/// runtime threads, whose stack is sized for them in a debug build too: lists and calls nested
+/// 99 levels, and 62 nested negations (evaluation stops at 64 levels, `eval::MAX_EVAL_NESTING`),
+/// are answered instead of overflowing a thread. With a 1 MiB stack the daemon does not answer.
+#[test]
+fn the_daemon_evaluates_the_deepest_accepted_expression() {
+    let daemon = Daemon::start_with("deep", "strict", "");
+    let port = daemon.firestore_port();
+    // Negations nest in the syntax tree (parentheses do not), so evaluation recurses; an even
+    // count keeps the condition true.
+    let condition = format!("{}true", "!".repeat(62));
+    let lists = format!("{}{} != null", "[".repeat(98), "]".repeat(98));
+    let calls = format!("{}true{}", "id(".repeat(98), ")".repeat(98));
+    let rules = serde_json::json!({"rules": {"files": [{"name": "firestore.rules", "content": format!(
+        "rules_version = '2';\nservice cloud.firestore {{\n  match /databases/{{database}}/documents {{\n    function id(x) {{ return x; }}\n    match /deep/{{id}} {{ allow get: if {condition}; }}\n    match /lists/{{id}} {{ allow get: if {lists}; }}\n    match /calls/{{id}} {{ allow get: if {calls}; }}\n  }}\n}}\n"
+    )}]}})
+    .to_string();
+    let (status, body) = http(
+        port,
+        "PUT",
+        "/emulator/v1/projects/demo-profile-deep:securityRules",
+        Some(&rules),
+    );
+    assert_eq!(status, 200, "{body}");
+    let (status, body) = http(
+        port,
+        "GET",
+        "/v1/projects/demo-profile-deep/databases/(default)/documents/deep/d",
+        None,
+    );
+    assert_eq!(status, 404, "the rule allows a missing document: {body}");
+    for collection in ["lists", "calls"] {
+        let (status, body) = http(
+            port,
+            "GET",
+            &format!("/v1/projects/demo-profile-deep/databases/(default)/documents/{collection}/d"),
+            None,
+        );
+        assert!(matches!(status, 403 | 404), "{collection}: {status} {body}");
+    }
+    daemon.stop();
 }

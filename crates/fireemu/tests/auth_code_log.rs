@@ -25,6 +25,38 @@ fn free_port() -> u16 {
     port
 }
 
+/// Reads a `Connection: close` response to its end. A reset after the whole response arrived
+/// (headers and `Content-Length` bytes) is the server closing first, not a failure: under load
+/// the kernel may answer the close with RST instead of FIN.
+fn read_response(stream: &mut TcpStream) -> String {
+    let mut raw = Vec::new();
+    let mut chunk = [0_u8; 8192];
+    loop {
+        match stream.read(&mut chunk) {
+            Ok(0) => break,
+            Ok(n) => raw.extend_from_slice(&chunk[..n]),
+            Err(e) if e.kind() == std::io::ErrorKind::ConnectionReset && complete(&raw) => break,
+            Err(e) => panic!("reading the response: {e}"),
+        }
+    }
+    String::from_utf8(raw).expect("the response is UTF-8")
+}
+
+fn complete(raw: &[u8]) -> bool {
+    let text = String::from_utf8_lossy(raw);
+    let Some((head, body)) = text.split_once("\r\n\r\n") else {
+        return false;
+    };
+    head.lines()
+        .find_map(|line| {
+            let (name, value) = line.split_once(':')?;
+            name.eq_ignore_ascii_case("content-length")
+                .then(|| value.trim().parse::<usize>().ok())
+                .flatten()
+        })
+        .is_some_and(|length| body.len() >= length)
+}
+
 fn http(port: u16, method: &str, path: &str, body: &Value) -> (u16, Value) {
     let mut stream = TcpStream::connect(("127.0.0.1", port)).expect("the daemon accepts");
     stream
@@ -38,8 +70,7 @@ fn http(port: u16, method: &str, path: &str, body: &Value) -> (u16, Value) {
     )
     .unwrap();
     stream.flush().unwrap();
-    let mut raw = String::new();
-    stream.read_to_string(&mut raw).unwrap();
+    let raw = read_response(&mut stream);
     let (head, body) = raw.split_once("\r\n\r\n").unwrap_or((raw.as_str(), ""));
     let status = head
         .lines()

@@ -25,6 +25,51 @@ const DELTA_V3_DRIFT = new Set(
 
 const sha256 = (value) => createHash("sha256").update(value).digest("hex");
 
+const BRACKET_SIZES = ["11534336", "11534337"];
+
+/** The bracket recording: each unobserved request or value limit measured by one byte. */
+export const BRACKET_REST_IDS = Object.freeze([
+  "writes/limits/aggregate-map/1048487",
+  "writes/limits/aggregate-map/1048488",
+  "writes/limits/indexed-field-value-bytes/5200",
+  "writes/limits/indexed-field-value-bytes/6128",
+  ...["batch-write", "batch-get", "run-query", "create", "patch"].flatMap((route) =>
+    BRACKET_SIZES.map((size) => `writes/limits/non-commit-rest-request-bytes/${route}/${size}`),
+  ),
+  ...BRACKET_SIZES.map((size) => `writes/limits/webchannel-request-bytes/${size}`),
+]);
+
+export const BRACKET_STREAM_IDS = Object.freeze(
+  BRACKET_SIZES.map((size) => `writes/limits/grpc-unary-request-bytes/${size}`),
+);
+
+const indexedPairName = (pad) =>
+  `ifvpair/r/p/${"z".repeat(800)}/p/${"z".repeat(800)}/p/${"z".repeat(pad)}/ifvtest/d`;
+
+/** Every document the bracket recipes can create; cleanup deletes exactly these. */
+export const BRACKET_OWNED_NAMES = Object.freeze(
+  [
+    ...["rawBatch", "rawBatchGet", "rawQuery", "rawCreate", "rawPatch"].flatMap((collection) =>
+      BRACKET_SIZES.map((size) => `${collection}/${size}`),
+    ),
+    "aggregatePair/m1048487",
+    "aggregatePair/m1048488",
+    indexedPairName(960),
+    indexedPairName(1424),
+  ]
+    .map((relative) => `projects/fireemu-oracle-sbx/databases/(default)/documents/${relative}`)
+    .toSorted(),
+);
+
+/**
+ * One bracket attempt: its 38 recipe requests, two preflight reads, one delete per owned name
+ * and one typed-missing read. The child refuses any other cap.
+ */
+export const BRACKET_HTTP_CAP = 55;
+
+/** The one collection a bracket probe reads whole; it must be empty before a recording. */
+export const BRACKET_QUERIED_COLLECTION = "rawQuery";
+
 function canonical(value) {
   if (Array.isArray(value)) return value.map(canonical);
   if (value && typeof value === "object") {

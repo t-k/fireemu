@@ -18,7 +18,14 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { credentialMetadata, selectCredential } from "./credentials.mjs";
 import { requireChildProductionAdmission } from "../fs-data-write-admission.mjs";
-import { padJsonBody } from "../fs-data-write-sandbox.mjs";
+import {
+  BRACKET_HTTP_CAP,
+  BRACKET_OWNED_NAMES,
+  BRACKET_QUERIED_COLLECTION,
+  BRACKET_REST_IDS,
+  padJsonBody,
+  validateSandboxCorpus,
+} from "../fs-data-write-sandbox.mjs";
 import { normalizeRecordedResponse } from "./production-normalization.mjs";
 import { createRequestBudget } from "./request-budget.mjs";
 import {
@@ -54,6 +61,7 @@ const DELTA_LOCK_HELD = process.env.FIRESTORE_PROBE_DELTA_LOCK_HELD === "1";
 // Owner-approved per use: cancel the journaled delta-v3 bulk delete before its cleanup.
 const DELTA_V3_CANCEL_BULK_DELETE = process.env.FIRESTORE_PROBE_DELTA_V3_CANCEL_BULK_DELETE === "1";
 const PARTIAL_MODE = process.env.FIRESTORE_PROBE_PARTIAL === "1";
+const BRACKET_MODE = process.env.FIRESTORE_PROBE_BRACKET === "1";
 const PARTIAL_BOUNDARY_ID = "writes/limits/index-entry-sum/adjacent";
 const CORPUS_DIGEST = process.env.FIRESTORE_PROBE_CORPUS_DIGEST;
 const SOURCE_GIT_SHA = process.env.FIRESTORE_PROBE_SOURCE_GIT_SHA;
@@ -194,6 +202,35 @@ export function isExactPartialProductionScope({
   return JSON.stringify(names.toSorted()) === JSON.stringify(expected.toSorted());
 }
 
+/** The bracket recording deletes exactly the fourteen documents its recipes can create. */
+export function isExactBracketProductionScope({
+  mode,
+  lockHeld,
+  otherMode,
+  host,
+  scheme,
+  project,
+  maxRequests,
+  managedClearJournal,
+  names,
+}) {
+  return (
+    mode === true &&
+    lockHeld === true &&
+    otherMode === false &&
+    host === "firestore.googleapis.com" &&
+    scheme === "https" &&
+    project === "fireemu-oracle-sbx" &&
+    Number.isSafeInteger(maxRequests) &&
+    maxRequests >= 1 &&
+    maxRequests <= BRACKET_HTTP_CAP &&
+    typeof managedClearJournal === "string" &&
+    managedClearJournal.length > 0 &&
+    Array.isArray(names) &&
+    JSON.stringify(names.toSorted()) === JSON.stringify(BRACKET_OWNED_NAMES)
+  );
+}
+
 export function isExactDeltaV3ProductionScope({
   mode,
   lockHeld,
@@ -282,7 +319,13 @@ export function productionScopeFromEnvironment(env) {
       ...common,
       mode: env.FIRESTORE_PROBE_PARTIAL === "1",
       lockHeld: env.FIRESTORE_PROBE_PARTIAL_LOCK_HELD === "1",
-      deltaMode: env.FIRESTORE_PROBE_DELTA_V3 === "1",
+      deltaMode: env.FIRESTORE_PROBE_DELTA_V3 === "1" || env.FIRESTORE_PROBE_BRACKET === "1",
+    }),
+    bracket: isExactBracketProductionScope({
+      ...common,
+      mode: env.FIRESTORE_PROBE_BRACKET === "1",
+      lockHeld: env.FIRESTORE_PROBE_BRACKET_LOCK_HELD === "1",
+      otherMode: env.FIRESTORE_PROBE_DELTA_V3 === "1" || env.FIRESTORE_PROBE_PARTIAL === "1",
     }),
   };
 }
@@ -295,6 +338,8 @@ let requestCount = 0;
 const requestBudget = MAX_REQUESTS === undefined ? null : createRequestBudget(Number(MAX_REQUESTS));
 let managedClearBlocked = false;
 let managedClearState = null;
+// Set once the bracket preflight proved every owned name absent; cleanup is then exact.
+let bracketState = null;
 
 export function legacyManagedClearNames() {
   return [...LEGACY_SHRINK_NAMES];
@@ -562,6 +607,8 @@ const timeoutSignal = () => AbortSignal.timeout(REQUEST_TIMEOUT_MS);
 
 /** Wipes the emulator's documents so one program never sees another's writes. */
 async function clear(database = "(default)", verifyManagedScope = false) {
+  // Bracket recipes write only owned names, removed by name after the last program.
+  if (bracketState !== null) return;
   if (PRODUCTION) {
     if (managedClearBlocked) throw new Error("managed clear needs operator recovery");
     await clearThroughPublicApi(database, verifyManagedScope);
@@ -1092,6 +1139,108 @@ async function writeDeltaCleanupJournal(status, extra = {}) {
     deletedNames: [...(managedClearState.cleanupDeletedNames ?? [])],
     ...extra,
   });
+}
+
+/** The bracket child runs only the fixed bracket recipes. */
+export function validateBracketCorpus(corpus) {
+  validateSandboxCorpus(corpus);
+  const ids = corpus.restPrograms.map((program) => program.id).toSorted();
+  if (JSON.stringify(ids) !== JSON.stringify([...BRACKET_REST_IDS].toSorted())) {
+    throw new Error("the bracket child accepts only the fixed bracket recipes");
+  }
+}
+
+/** A typed batchGet answer proves absence only when every name comes back `missing`. */
+export function batchGetProvesAbsent(status, rows, names) {
+  if (status !== 200 || !Array.isArray(rows) || rows.length !== names.length) return false;
+  const missing = new Set(rows.map((row) => (row?.found ? null : row?.missing)));
+  return names.every((name) => missing.has(name));
+}
+
+/** A runQuery answer proves the collection empty only when it returns no document. */
+export function runQueryProvesEmpty(status, rows) {
+  return status === 200 && Array.isArray(rows) && rows.every((row) => !row?.document);
+}
+
+const bracketDocuments = () =>
+  `${SCHEME}://${HOST}/v1/projects/${PROJECT}/databases/(default)/documents`;
+
+async function bracketJson(input, init) {
+  const response = await trackedFetch(input, {
+    ...init,
+    headers: authorized(init.body === undefined ? {} : { "content-type": "application/json" }),
+    signal: timeoutSignal(),
+    redirect: "error",
+  });
+  const text = await response.text();
+  let body = null;
+  try {
+    body = JSON.parse(text);
+  } catch {
+    // A non-JSON answer proves nothing.
+  }
+  return { status: response.status, body };
+}
+
+async function bracketOwnedNamesAbsent(names) {
+  const { status, body } = await bracketJson(`${bracketDocuments()}:batchGet`, {
+    method: "POST",
+    body: JSON.stringify({ documents: names }),
+  });
+  return batchGetProvesAbsent(status, body, names);
+}
+
+async function writeBracketJournal(status, extra = {}) {
+  await writePrivateJsonDurably(MANAGED_CLEAR_JOURNAL, {
+    schemaVersion: 1,
+    mode: "cleanup-bracket",
+    status,
+    project: PROJECT,
+    database: "(default)",
+    runId: deleteRunId,
+    corpusDigest: CORPUS_DIGEST,
+    sourceGitSha: SOURCE_GIT_SHA,
+    names: [...BRACKET_OWNED_NAMES],
+    ...extra,
+  });
+}
+
+/** Before any write: every owned name is absent and the queried collection is empty. */
+async function bracketPreflight() {
+  if (!(await bracketOwnedNamesAbsent([...BRACKET_OWNED_NAMES]))) {
+    throw new Error("bracket preflight: an owned document exists or absence is unproven");
+  }
+  const { status, body } = await bracketJson(`${bracketDocuments()}:runQuery`, {
+    method: "POST",
+    body: JSON.stringify({
+      structuredQuery: { from: [{ collectionId: BRACKET_QUERIED_COLLECTION }], limit: 1 },
+    }),
+  });
+  if (!runQueryProvesEmpty(status, body)) {
+    throw new Error("bracket preflight: the queried collection is not proven empty");
+  }
+}
+
+/** Delete every owned name, then prove all of them absent; otherwise keep the lock. */
+async function bracketCleanup() {
+  await writeBracketJournal("cleaning");
+  let failedDeletes = 0;
+  for (const name of BRACKET_OWNED_NAMES) {
+    const relative = name.slice(name.indexOf("/documents/") + "/documents/".length);
+    try {
+      const { status } = await bracketJson(`${bracketDocuments()}/${relative}`, {
+        method: "DELETE",
+      });
+      if (status !== 200) failedDeletes += 1;
+    } catch {
+      failedDeletes += 1;
+    }
+  }
+  const absent = failedDeletes === 0 && (await bracketOwnedNamesAbsent([...BRACKET_OWNED_NAMES]));
+  await writeBracketJournal(absent ? "complete" : "cleanup-failed", { failedDeletes });
+  if (!absent) {
+    throw new Error("bracket cleanup did not prove every owned document absent; keep the lock");
+  }
 }
 
 async function clearDeltaV3Exact(base, verifyManagedScope) {
@@ -2548,14 +2697,18 @@ async function main() {
       runId: process.env.FIRESTORE_PROBE_DELETE_RUN_ID,
     });
   }
-  const { delta: deltaScope, partial: partialScope } = productionScopeFromEnvironment(process.env);
+  const {
+    delta: deltaScope,
+    partial: partialScope,
+    bracket: bracketScope,
+  } = productionScopeFromEnvironment(process.env);
   // Recovery modes check their own exact journal and names before any request; the
   // generic gate is for recordings.
   if (RECOVERY_MODE === undefined) {
     assertV3ProductionCleanupAllowed({
       host: HOST,
       exactDeltaV3: deltaScope,
-      exactScope: partialScope,
+      exactScope: partialScope || bracketScope,
     });
   }
   if (RECOVERY_MODE === undefined && DELTA_V3_CANCEL_BULK_DELETE) {
@@ -2588,7 +2741,27 @@ async function main() {
     /^[a-f0-9]{32}$/.test(fixedLocalRunId ?? "") && (/^127\.0\.0\.1:\d+$/.test(HOST) || PRODUCTION)
       ? fixedLocalRunId
       : randomUUID().replaceAll("-", "");
-  if (PRODUCTION && (MANAGED_CLEAR_NAMES || MANAGED_CLEAR_JOURNAL)) {
+  if (BRACKET_MODE) {
+    // Production needs the exact scope the runner sends; a loopback rehearsal needs the
+    // same names and journal.
+    const names = JSON.parse(MANAGED_CLEAR_NAMES ?? "null");
+    if (
+      (PRODUCTION ? !bracketScope : !isLoopbackHost(HOST)) ||
+      !Array.isArray(names) ||
+      JSON.stringify(names.toSorted()) !== JSON.stringify(BRACKET_OWNED_NAMES) ||
+      !MANAGED_CLEAR_JOURNAL
+    ) {
+      throw new Error("the bracket child requires its exact scope, names and journal");
+    }
+    validateBracketCorpus(corpusInput);
+    try {
+      await bracketPreflight();
+    } finally {
+      if (META_OUT) await writeFile(META_OUT, `${JSON.stringify({ requestCount })}\n`);
+    }
+    bracketState = { names };
+    await writeBracketJournal("prepared");
+  } else if (PRODUCTION && (MANAGED_CLEAR_NAMES || MANAGED_CLEAR_JOURNAL)) {
     if (!MANAGED_CLEAR_NAMES || !MANAGED_CLEAR_JOURNAL) {
       throw new Error("managed clear requires both frozen names and a private journal");
     }
@@ -2756,7 +2929,8 @@ async function main() {
     await writeFile(OUT, `${JSON.stringify(results, null, 2)}\n`);
   } finally {
     try {
-      if (!managedClearBlocked) {
+      if (bracketState !== null) await bracketCleanup();
+      else if (!managedClearBlocked) {
         for (const database of touchedDatabases) await clear(database, true);
       }
     } finally {

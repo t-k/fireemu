@@ -19,6 +19,10 @@ import { fileURLToPath } from "node:url";
 
 import { CONFORMANCE_DIR, RUNS_DIR } from "./config.mjs";
 import {
+  BRACKET_HTTP_CAP,
+  BRACKET_OWNED_NAMES,
+  BRACKET_REST_IDS,
+  BRACKET_STREAM_IDS,
   compareSandboxArtifact,
   freezeSandboxFixture,
   validateSandboxCorpus,
@@ -433,6 +437,60 @@ export function partialRequestBound(recordingCorpus) {
   };
 }
 
+/** The fixed boundary pairs, in corpus order, taken byte for byte from the current corpus. */
+export function selectBracketRecipes(currentCorpus) {
+  validateSandboxCorpus(currentCorpus);
+  const wanted = new Set(BRACKET_REST_IDS);
+  const restPrograms = currentCorpus.restPrograms.filter((program) => wanted.has(program.id));
+  const streamRecipes = BRACKET_STREAM_IDS.map((id) =>
+    currentCorpus.streamRecipes.find((recipe) => recipe.id === id),
+  );
+  if (restPrograms.length !== wanted.size || streamRecipes.some((recipe) => !recipe)) {
+    throw new Error("the current corpus lacks a bracket recipe");
+  }
+  const sourceCorpusDigest = sha256(JSON.stringify(currentCorpus));
+  return {
+    sourceCorpusDigest,
+    recordingCorpus: {
+      schemaVersion: 1,
+      sourceCorpusSha256: sourceCorpusDigest,
+      restPrograms,
+      streamRecipes,
+      restRequestCount: restPrograms.reduce((total, program) => total + program.steps.length, 0),
+    },
+  };
+}
+
+export function bracketRequestBound(recordingCorpus) {
+  const { requestCount } = validateSandboxCorpus(recordingCorpus);
+  const ids = recordingCorpus.restPrograms.map((program) => program.id).toSorted();
+  const streamIds = (recordingCorpus.streamRecipes ?? []).map((recipe) => recipe.id);
+  if (
+    JSON.stringify(ids) !== JSON.stringify([...BRACKET_REST_IDS].toSorted()) ||
+    JSON.stringify(streamIds) !== JSON.stringify([...BRACKET_STREAM_IDS])
+  ) {
+    throw new Error("the bracket corpus must carry exactly the fixed bracket recipes");
+  }
+  const names = ownedMutationNamesForPrograms(recordingCorpus.restPrograms);
+  if (JSON.stringify(names) !== JSON.stringify(BRACKET_OWNED_NAMES)) {
+    throw new Error("the bracket recipes write outside the owned cleanup names");
+  }
+  const bound = {
+    declaredHttp: requestCount,
+    preflightHttp: 2,
+    cleanupHttp: names.length + 1,
+    maxHttpRequests: requestCount + 2 + names.length + 1,
+    maxStreamFrames: recordingCorpus.streamRecipes.reduce(
+      (total, recipe) => total + recipe.maxFrames,
+      0,
+    ),
+  };
+  if (bound.maxHttpRequests !== BRACKET_HTTP_CAP) {
+    throw new Error("the bracket request bound differs from the child's fixed cap");
+  }
+  return bound;
+}
+
 export function deltaV3RecordingCorpus(selection) {
   return {
     schemaVersion: 1,
@@ -452,6 +510,10 @@ export function productionAdmissionPlan(mode, selection) {
     recordingCorpus = selection.recordingCorpus;
     bounds = partialRequestBound(recordingCorpus);
     managedNames = partialManagedClearNames(recordingCorpus);
+  } else if (mode === "bracket") {
+    recordingCorpus = selection.recordingCorpus;
+    bounds = bracketRequestBound(recordingCorpus);
+    managedNames = [...BRACKET_OWNED_NAMES];
   } else if (mode === "delta-v3") {
     recordingCorpus = deltaV3RecordingCorpus(selection);
     bounds = deltaV3RequestBound(recordingCorpus);
@@ -1442,7 +1504,7 @@ export function deltaV3ManagedClearNames(recordingCorpus) {
   return names;
 }
 
-function ownedMutationNamesForPrograms(programs) {
+export function ownedMutationNamesForPrograms(programs) {
   const prefix = `projects/${SANDBOX_PROJECT}/databases/(default)/documents/`;
   const names = new Set();
   const add = (name) => {
@@ -1602,8 +1664,20 @@ export function productionRestEnvironment({
   sourceGitSha,
   deltaV3 = false,
   partial,
+  bracket,
   admission,
 }) {
+  if ([deltaV3 || undefined, partial, bracket].filter((mode) => mode !== undefined).length > 1) {
+    throw new Error("a production recording runs in exactly one recording mode");
+  }
+  if (
+    bracket !== undefined &&
+    (!Number.isSafeInteger(bracket?.maxHttpRequests) ||
+      bracket.maxHttpRequests < 1 ||
+      bracket.maxHttpRequests > BRACKET_HTTP_CAP)
+  ) {
+    throw new Error("the bracket HTTP cap must be a positive integer within its fixed cap");
+  }
   if (
     partial !== undefined &&
     (deltaV3 ||
@@ -1629,17 +1703,20 @@ export function productionRestEnvironment({
   }
   if (
     !Array.isArray(managedNames) ||
-    (deltaV3
-      ? managedNames.length !== 6 ||
-        managedShrinkScope(managedNames, SANDBOX_PROJECT, "(default)") !== "delta-v3"
-      : partial
+    (bracket
+      ? JSON.stringify(managedNames.toSorted()) !== JSON.stringify(BRACKET_OWNED_NAMES)
+      : deltaV3
         ? managedNames.length !== 6 ||
-          managedShrinkScope(managedNames, SANDBOX_PROJECT, "(default)") !== "v3"
-        : managedNames.length !== 12)
+          managedShrinkScope(managedNames, SANDBOX_PROJECT, "(default)") !== "delta-v3"
+        : partial
+          ? managedNames.length !== 6 ||
+            managedShrinkScope(managedNames, SANDBOX_PROJECT, "(default)") !== "v3"
+          : managedNames.length !== 12)
   ) {
     throw new Error("production managed-clear names do not match the selected exact scope");
   }
-  managedClearScope(managedNames, SANDBOX_PROJECT, "(default)");
+  // Bracket names are nested documents deleted one by one, not root groups cleared whole.
+  if (!bracket) managedClearScope(managedNames, SANDBOX_PROJECT, "(default)");
   return {
     FIRESTORE_PROBE_TARGET: "production",
     FIRESTORE_PROBE_SCHEME: "https",
@@ -1651,7 +1728,13 @@ export function productionRestEnvironment({
     FIRESTORE_PROBE_OUT: output,
     FIRESTORE_PROBE_META_OUT: meta,
     FIRESTORE_PROBE_MAX_REQUESTS: String(
-      partial ? partial.maxHttpRequests : deltaV3 ? DELTA_V3_HTTP_CAP : REST_CAP,
+      bracket
+        ? bracket.maxHttpRequests
+        : partial
+          ? partial.maxHttpRequests
+          : deltaV3
+            ? DELTA_V3_HTTP_CAP
+            : REST_CAP,
     ),
     FIRESTORE_PROBE_TIMEOUT_MS: "180000",
     FIRESTORE_PROBE_MANAGED_CLEAR_NAMES: JSON.stringify(managedNames),
@@ -1664,6 +1747,8 @@ export function productionRestEnvironment({
     FIRESTORE_PROBE_SOURCE_GIT_SHA: sourceGitSha,
     FIRESTORE_PROBE_PARTIAL: partial ? "1" : undefined,
     FIRESTORE_PROBE_PARTIAL_LOCK_HELD: partial ? "1" : undefined,
+    FIRESTORE_PROBE_BRACKET: bracket ? "1" : undefined,
+    FIRESTORE_PROBE_BRACKET_LOCK_HELD: bracket ? "1" : undefined,
     FIRESTORE_PROBE_ADMISSION: admission === undefined ? undefined : JSON.stringify(admission),
   };
 }
@@ -1712,6 +1797,7 @@ async function productionRecording({
   managedNames,
   deltaV3 = false,
   partial,
+  bracket,
   admission,
   streamFrameLimit = MAX_STREAM_FRAMES,
 }) {
@@ -1754,6 +1840,7 @@ async function productionRecording({
         sourceGitSha: gitSha,
         deltaV3,
         partial,
+        bracket,
         admission,
       }),
       25_200_000,
@@ -1772,6 +1859,9 @@ async function productionRecording({
     }
     if (partial && requestCount > partial.maxHttpRequests) {
       throw new Error("partial HTTP requests exceeded the reviewed recording bound");
+    }
+    if (bracket && requestCount > bracket.maxHttpRequests) {
+      throw new Error("bracket HTTP requests exceeded the reviewed recording bound");
     }
     // The REST phase can outlive a cached credential; the gRPC child gets a fresh one.
     const streamToken = await productionAccessToken();
@@ -1831,7 +1921,7 @@ async function productionRecording({
       attemptId: reservation.attemptId,
       packetId,
       runId,
-      requestCap: partial?.maxHttpRequests,
+      requestCap: partial?.maxHttpRequests ?? bracket?.maxHttpRequests,
     });
     const handle = await open(ledgerPath, "a", 0o600);
     try {
@@ -2107,6 +2197,7 @@ async function loadProductionSelection(mode) {
   );
   if (mode === "partial") return selectPartialRecipes(corpus, fixture, manifest);
   if (mode === "delta-v3") return selectDeltaV3Recipes(corpus, fixture, manifest);
+  if (mode === "bracket") return selectBracketRecipes(corpus);
   throw new Error("unknown production recording mode");
 }
 
@@ -2293,6 +2384,108 @@ export async function recordPartialProduction(admissionArgs) {
     await writeFile(
       output,
       `${JSON.stringify({ ...fixture, mode: "partial", recipeDigests: supplementRecipeDigests(recordingCorpus) }, null, 2)}\n`,
+      { flag: "wx" },
+    );
+    process.stdout.write(
+      `${JSON.stringify({ output, generatedDir, httpRequests: recordings.map((recording) => recording.requestCount), bounds: bound })}\n`,
+    );
+  });
+}
+
+/**
+ * Record the fixed boundary pairs twice with the same bytes, prove each attempt cleaned its
+ * owned names, and freeze a supplement only when both recordings agree row by row.
+ */
+export async function recordBracketProduction(admissionArgs) {
+  const pins = requireAdmissionArguments("record-bracket", admissionArgs);
+  const gitCommonDir = (
+    await execFileAsync("git", ["rev-parse", "--path-format=absolute", "--git-common-dir"], {
+      cwd: ROOT,
+    })
+  ).stdout.trim();
+  const ledgerPath = sandboxLedgerPath(gitCommonDir);
+  const privateDir = dirname(ledgerPath);
+  const selection = await loadProductionSelection("bracket");
+  const { recordingCorpus } = selection;
+  const bound = bracketRequestBound(recordingCorpus);
+  const admission = await admitProductionRecording("bracket", selection, pins);
+  const corpusDigest = selection.sourceCorpusDigest;
+  const gitSha = admission.sourceCommit;
+  const rows = await readLedger(ledgerPath);
+  requireHistoricalUnknownHold(rows);
+  remainingSandboxBudget(rows, ATTEMPT_ESTIMATE_USD * 2);
+  await mkdir(RUNS_DIR, { recursive: true });
+  const generatedDir = await mkdtemp(join(RUNS_DIR, "fs-data-write-bracket-"));
+  const corpusIn = join(generatedDir, "bracket-corpus.json");
+  await writeFile(corpusIn, JSON.stringify(recordingCorpus));
+  await withSandboxExclusiveLock(privateDir, async (lockedRows) => {
+    verifyProductionAdmissionOnDisk({ admission });
+    requireHistoricalUnknownHold(lockedRows);
+    remainingSandboxBudget(lockedRows, ATTEMPT_ESTIMATE_USD * 2);
+    const recordings = [];
+    for (let index = 0; index < 2; index += 1) {
+      const recording = await productionRecording({
+        corpusIn,
+        restIn: corpusIn,
+        privateDir,
+        gitSha,
+        corpusDigest,
+        restRequestCount: recordingCorpus.restRequestCount,
+        liveStreamCount: recordingCorpus.streamRecipes.length,
+        rows: lockedRows,
+        managedNames: [...BRACKET_OWNED_NAMES],
+        bracket: bound,
+        admission,
+        streamFrameLimit: bound.maxStreamFrames,
+      });
+      // The second attempt starts only after the first proved its owned names absent.
+      const journal = JSON.parse(await readFile(recording.journal, "utf8"));
+      if (journal.status !== "complete" || journal.mode !== "cleanup-bracket") {
+        throw new Error("bracket cleanup is unresolved; preserve the lock and journal");
+      }
+      recordings.push(recording);
+    }
+    if (recordings[0].runId === recordings[1].runId) {
+      throw new Error("bracket recordings reused a run ID");
+    }
+    await writeFile(
+      join(generatedDir, "bracket-recordings.json"),
+      `${JSON.stringify(
+        recordings.map(
+          ({ runId, runDir, startedAt, requestCount, streamFrames, rest, stream }) => ({
+            runId,
+            runDir,
+            startedAt,
+            httpRequests: requestCount,
+            streamFrames,
+            rest,
+            stream,
+          }),
+        ),
+        null,
+        2,
+      )}\n`,
+      { mode: 0o600 },
+    );
+    const fixture = freezeSandboxFixture({
+      corpus: recordingCorpus,
+      first: recordings[0].rest,
+      second: recordings[1].rest,
+      firstStream: recordings[0].stream,
+      secondStream: recordings[1].stream,
+      recordedAt: recordings.map((recording) => recording.startedAt),
+      harnessRevision: gitSha,
+      sdkVersions: recordingSdkVersions(),
+      credentialToken: recordings[0].token,
+    });
+    const fixtureText = JSON.stringify(fixture);
+    if (recordings.some(({ tokens }) => tokens.some((t) => fixtureText.includes(t)))) {
+      throw new Error("recorded response contains a credential token");
+    }
+    const output = join(generatedDir, `bracket-${admission.nonce}.json`);
+    await writeFile(
+      output,
+      `${JSON.stringify({ ...fixture, mode: "bracket", recipeDigests: supplementRecipeDigests(recordingCorpus) }, null, 2)}\n`,
       { flag: "wx" },
     );
     process.stdout.write(
@@ -2523,6 +2716,8 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
     await recordDeltaV3Production(process.argv.slice(3));
   } else if (process.argv[2] === "record-partial") {
     await recordPartialProduction(process.argv.slice(3));
+  } else if (process.argv[2] === "record-bracket") {
+    await recordBracketProduction(process.argv.slice(3));
   } else if (process.argv[2] === "plan") {
     await printProductionPlan(process.argv[3]);
   } else if (process.argv[2] === "reserve-admission") {
@@ -2544,7 +2739,7 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
     );
   } else {
     throw new Error(
-      "expected prepare, local-child, compare-local, record-production, record-delta-v3, record-partial, plan, reserve-admission, recover-legacy, recover-v3 or recover-delta-v3",
+      "expected prepare, local-child, compare-local, record-production, record-delta-v3, record-partial, record-bracket, plan, reserve-admission, recover-legacy, recover-v3 or recover-delta-v3",
     );
   }
 }

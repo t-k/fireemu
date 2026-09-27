@@ -17,6 +17,9 @@ import {
   mutationIntentTarget,
   queryDocumentNames,
   webchannelSessionPrerequisite,
+  batchGetProvesAbsent,
+  runQueryProvesEmpty,
+  validateBracketCorpus,
 } from "./sandbox-session.mjs";
 
 const prefix = "projects/fireemu-oracle-sbx/databases/(default)/documents/";
@@ -441,4 +444,47 @@ test("a WebChannel session measures only after an acknowledged control and alway
   for (const kind of ["control", "boundary", "terminate"]) {
     assert.match(webchannelSessionPrerequisite(kind, closed, acked), /did not open/);
   }
+});
+
+test("bracket absence and emptiness are proven only by typed answers", () => {
+  const owned = [`${prefix}a/1`, `${prefix}b/2`];
+  const missing = owned.map((name) => ({ missing: name, readTime: "t" }));
+  assert.equal(batchGetProvesAbsent(200, missing, owned), true);
+  assert.equal(batchGetProvesAbsent(200, missing.toReversed(), owned), true);
+  assert.equal(batchGetProvesAbsent(400, missing, owned), false);
+  assert.equal(batchGetProvesAbsent(200, missing.slice(1), owned), false);
+  assert.equal(batchGetProvesAbsent(200, [missing[0], missing[0]], owned), false);
+  assert.equal(
+    batchGetProvesAbsent(
+      200,
+      [missing[0], { found: { name: owned[1] }, missing: owned[1] }],
+      owned,
+    ),
+    false,
+  );
+  assert.equal(batchGetProvesAbsent(200, null, owned), false);
+  assert.equal(runQueryProvesEmpty(200, [{ readTime: "t" }]), true);
+  assert.equal(runQueryProvesEmpty(200, []), true);
+  assert.equal(runQueryProvesEmpty(200, [{ document: { name: owned[0] }, readTime: "t" }]), false);
+  assert.equal(runQueryProvesEmpty(500, [{ readTime: "t" }]), false);
+  assert.equal(runQueryProvesEmpty(200, { error: {} }), false);
+});
+
+test("the bracket child refuses any corpus but the fixed bracket recipes", async () => {
+  const { prepareSandboxCorpus, selectBracketRecipes } =
+    await import("../fs-data-write-sandbox-run.mjs");
+  const { corpus } = await prepareSandboxCorpus();
+  const { recordingCorpus } = selectBracketRecipes(corpus);
+  validateBracketCorpus(recordingCorpus);
+  assert.throws(() => validateBracketCorpus(corpus), /fixed bracket recipes/);
+  const [first, ...rest] = recordingCorpus.restPrograms;
+  assert.throws(
+    () =>
+      validateBracketCorpus({
+        ...recordingCorpus,
+        restPrograms: rest,
+        restRequestCount: recordingCorpus.restRequestCount - first.steps.length,
+      }),
+    /fixed bracket recipes/,
+  );
 });

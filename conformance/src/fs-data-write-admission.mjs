@@ -13,7 +13,7 @@ import { dirname, isAbsolute, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const TASK_ID = "FS-DATA-WRITE-SANDBOX";
-const MODES = new Set(["delta-v3", "partial"]);
+const MODES = new Set(["delta-v3", "partial", "bracket"]);
 const PACKET_OUTCOME = "reserved-presend-admission";
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 

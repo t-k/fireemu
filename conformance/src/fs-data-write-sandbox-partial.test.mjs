@@ -387,21 +387,29 @@ test("the child admits the exact production scope the parent actually sends for 
     managedNames: deltaV3ManagedClearNames(delta),
     deltaV3: true,
   });
-  assert.deepEqual(productionScopeFromEnvironment(deltaEnv), { delta: true, partial: false });
+  assert.deepEqual(productionScopeFromEnvironment(deltaEnv), {
+    delta: true,
+    partial: false,
+    bracket: false,
+  });
   const { recordingCorpus } = selectPartialRecipes(corpus, fixture, manifest);
   const partialEnv = productionRestEnvironment({
     ...common,
     managedNames: partialManagedClearNames(recordingCorpus),
     partial: { maxHttpRequests: partialRequestBound(recordingCorpus).maxHttpRequests },
   });
-  assert.deepEqual(productionScopeFromEnvironment(partialEnv), { delta: false, partial: true });
+  assert.deepEqual(productionScopeFromEnvironment(partialEnv), {
+    delta: false,
+    partial: true,
+    bracket: false,
+  });
   // Without the run ID the marker names cannot match a run-specific scope.
   assert.deepEqual(
     productionScopeFromEnvironment({ ...deltaEnv, FIRESTORE_PROBE_DELETE_RUN_ID: undefined }),
-    { delta: false, partial: false },
+    { delta: false, partial: false, bracket: false },
   );
   assert.deepEqual(
     productionScopeFromEnvironment({ ...deltaEnv, FIRESTORE_PROBE_HOST: "attacker.example" }),
-    { delta: false, partial: false },
+    { delta: false, partial: false, bracket: false },
   );
 });

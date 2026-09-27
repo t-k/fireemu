@@ -68,11 +68,13 @@ export function makeWebChannelHandshakeBody() {
   return `count=1&ofs=0&req0___data__=${data}`;
 }
 
+/** The first length-prefixed chunk; the length counts UTF-16 code units. */
 function parseFrame(text) {
   const match = /^(\d+)\n/.exec(text);
   if (!match) return undefined;
-  const payload = text.slice(match[0].length);
-  if (Number(match[1]) !== payload.length) return undefined;
+  const length = Number(match[1]);
+  const payload = text.slice(match[0].length, match[0].length + length);
+  if (payload.length !== length) return undefined;
   try {
     return JSON.parse(payload);
   } catch {
@@ -87,16 +89,9 @@ export function parseWebChannelOpening(status, sessionHeader, text) {
     return null;
   }
   const frame = parseFrame(text);
-  const data = frame?.[0]?.[1];
+  const data = Array.isArray(frame) && frame[0]?.[0] === 0 ? frame[0][1] : undefined;
   const sid = data?.[1];
-  if (
-    !Array.isArray(frame) ||
-    frame.length !== 1 ||
-    frame[0][0] !== 0 ||
-    data?.[0] !== "c" ||
-    typeof sid !== "string" ||
-    !/^[A-Za-z0-9_-]{12,256}$/.test(sid)
-  ) {
+  if (data?.[0] !== "c" || typeof sid !== "string" || !/^[A-Za-z0-9_-]{12,256}$/.test(sid)) {
     return null;
   }
   return { sid, gsessionid: sessionHeader };
@@ -131,7 +126,7 @@ export function projectWebChannelSessionStep(kind, status, text, session) {
     if (kind === "handshake") {
       return { status, code: "OK", body: session ? "session-opened" : "unparsed-opening" };
     }
-    if (kind === "terminate") return { status, code: "OK" };
+    if (kind === "terminate") return { status, code: "OK", body: "session-terminated" };
     return {
       status,
       code: "OK",

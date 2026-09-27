@@ -118,6 +118,23 @@ test("the opening answer yields the SID and session header, which may coincide",
   assert.equal(parseWebChannelOpening(200, null, opening), null);
   assert.equal(parseWebChannelOpening(200, "bad header!", opening), null);
   assert.equal(parseWebChannelOpening(200, "gsess-1", opening.replace(/^\d+/, "3")), null);
+  // Only the first chunk is read, by its declared length; a later chunk or entry does not hide
+  // the SID, which the terminate step needs.
+  assert.deepEqual(parseWebChannelOpening(200, "gsess-1", `${opening}12\n[[1,["noop"]]]`), {
+    sid: "SIDabcdefghijkl",
+    gsessionid: "gsess-1",
+  });
+  assert.deepEqual(
+    parseWebChannelOpening(
+      200,
+      "gsess-1",
+      frame([
+        [0, ["c", "SIDabcdefghijkl", "", 8, 14, 30000]],
+        [1, ["noop"]],
+      ]),
+    ),
+    { sid: "SIDabcdefghijkl", gsessionid: "gsess-1" },
+  );
   assert.equal(
     parseWebChannelOpening(200, "gsess-1", frame([[0, ["x", "SIDabcdefghijkl"]]])),
     null,
@@ -183,9 +200,11 @@ test("session steps are recorded by shape, never with the SID or session header"
   assert.ok(!JSON.stringify(refusal).includes(session.sid));
   assert.ok(!JSON.stringify(refusal).includes(session.gsessionid));
   assert.ok(!JSON.stringify(refusal).includes("fireemu-oracle-sbx"));
+  // The fixture freeze requires a body on every accepted row.
   assert.deepEqual(projectWebChannelSessionStep("terminate", 200, "ok", session), {
     status: 200,
     code: "OK",
+    body: "session-terminated",
   });
   assert.throws(() => projectWebChannelSessionStep("other", 200, "", session), /session step/);
 });

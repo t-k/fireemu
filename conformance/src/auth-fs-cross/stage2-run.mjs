@@ -68,7 +68,7 @@ export function smokeProgram(program, skip = [], { browser = false } = {}) {
   const kept = (ref) => !dropped.has(ref.split("/")[0]);
   const steps = [];
   for (const step of program.steps) {
-    if (step.do === "expiry-probes" || step.do === "sleep") continue;
+    if (step.do === "expiry-probes" || step.do === "expiry-groups" || step.do === "sleep") continue;
     if (dropped.has(step.client)) continue;
     if (!browser && step.id?.startsWith("b-")) continue;
     const trimmed = { ...step };

@@ -276,24 +276,45 @@ export function createInterpreter(program, deps) {
     record(step, observation(step, mark));
   }
 
+  /** The expiry of the token a probe is timed from. */
+  function expiryOf(probe) {
+    const exp = probe.token.principal
+      ? decodeJwt(session.principals.get(probe.token.principal)?.idToken ?? "")?.claims?.exp
+      : clients
+          .get(probe.token.client)
+          // The first token the client held: the one issued when the window opened.
+          .sdk.events.find((e) => e.event === "auth" && typeof e.exp === "number")?.exp;
+    if (typeof exp !== "number") throw fatal(`no expiry for ${JSON.stringify(probe.token)}`);
+    return exp;
+  }
+
+  async function probeOnce(step, probe, onTime) {
+    const mark = takeMark();
+    await session.seed([probe.write]);
+    note("harness", { probe: step.id, doc: probe.write.doc, onTime });
+    await session.pause(windowOf(step));
+    return { doc: probe.write.doc, onTime, ...observation(probe, mark) };
+  }
+
+  /**
+   * Each probe at its own token's expiry plus `plus`, concurrently; or, with `align: "latest"`,
+   * all of them one after another from the latest of those instants, so every token is past its
+   * mark before the first commit and each stream's end is seen against its own commit.
+   */
   async function expiryProbes(step) {
-    const results = await Promise.all(
-      step.probes.map(async (probe) => {
-        const exp = probe.token.principal
-          ? decodeJwt(session.principals.get(probe.token.principal)?.idToken ?? "")?.claims?.exp
-          : clients
-              .get(probe.token.client)
-              // The first token the client held: the one issued when the window opened.
-              .sdk.events.find((e) => e.event === "auth" && typeof e.exp === "number")?.exp;
-        if (typeof exp !== "number") throw fatal(`no expiry for ${JSON.stringify(probe.token)}`);
-        const onTime = await session.sleepUntil((exp + step.plus) * 1000 + 300);
-        const mark = takeMark();
-        await session.seed([probe.write]);
-        note("harness", { probe: step.id, doc: probe.write.doc, onTime });
-        await session.pause(windowOf(step));
-        return { doc: probe.write.doc, onTime, ...observation(probe, mark) };
-      }),
-    );
+    const target = (probe) => (expiryOf(probe) + step.plus) * 1000 + 300;
+    let results;
+    if (step.align === "latest") {
+      const onTime = await session.sleepUntil(Math.max(...step.probes.map(target)));
+      results = [];
+      for (const probe of step.probes) results.push(await probeOnce(step, probe, onTime));
+    } else {
+      results = await Promise.all(
+        step.probes.map(async (probe) =>
+          probeOnce(step, probe, await session.sleepUntil(target(probe))),
+        ),
+      );
+    }
     // A late timer makes its probe indeterminate (as in stage 1), never a different outcome.
     record(step, { probes: results });
   }
@@ -378,6 +399,10 @@ export function createInterpreter(program, deps) {
       await session.pause(step.ms);
     },
     "expiry-probes": expiryProbes,
+    /** Groups of expiry probes that run at the same time, each recorded as its own row. */
+    async "expiry-groups"(step) {
+      await Promise.all(step.groups.map((group) => expiryProbes(group)));
+    },
     async "close-client"(step) {
       const client = clients.get(step.client);
       await client.sdk.close();

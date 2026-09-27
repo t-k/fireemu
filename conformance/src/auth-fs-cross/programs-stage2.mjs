@@ -454,7 +454,9 @@ function seedDocuments() {
 }
 
 function heldSteps() {
-  const steps = [];
+  // The native tokens are issued now, seconds before the SDK clients sign in, however long the
+  // setup took: the expiry probes of both transports then fall in one short span.
+  const steps = HELD.map((held) => ({ do: "auth", action: "refresh", principal: held.principal }));
   for (const held of HELD) {
     steps.push({
       do: "stream",
@@ -501,27 +503,52 @@ function heldSteps() {
 
 const everyHeld = HELD.flatMap(heldListeners);
 
-/** The expiry probes of every held listener: its own documents, at its own token's time. */
-function expiryProbe(id, plus) {
-  return {
-    do: "expiry-probes",
-    id,
-    plus,
-    conditions: [CONDITION.revocation, CONDITION.tenant, CONDITION.refresh],
-    probes: HELD.flatMap((held) => [
-      {
-        token: { principal: held.principal },
-        write: heldWrite(held, "grpc", plus < 0 ? 4 : 5),
-        observe: [streamName(held)],
-      },
-      {
-        token: { client: clientName(held) },
-        write: heldWrite(held, "sdk", plus < 0 ? 4 : 5),
-        observe: [`${clientName(held)}/doc`, `${clientName(held)}/query`],
-      },
-    ]),
-  };
-}
+const EXPIRY_CONDITIONS = [CONDITION.revocation, CONDITION.tenant, CONDITION.refresh];
+const nativeProbe = (held, n) => ({
+  token: { principal: held.principal },
+  write: heldWrite(held, "grpc", n),
+  observe: [streamName(held)],
+});
+const sdkProbe = (held, n) => ({
+  token: { client: clientName(held) },
+  write: heldWrite(held, "sdk", n),
+  observe: [`${clientName(held)}/doc`, `${clientName(held)}/query`],
+});
+
+/** Before the tokens expire: every held listener, at its own token's time. */
+const expiryBefore = {
+  do: "expiry-probes",
+  id: "held/exp-minus-60",
+  plus: -60,
+  conditions: EXPIRY_CONDITIONS,
+  probes: HELD.flatMap((held) => [nativeProbe(held, 4), sdkProbe(held, 4)]),
+};
+
+/**
+ * After the tokens expire, two groups at once. The native streams are probed one after another
+ * from the latest native token's exp+35 s, so every token is past its allowance before the
+ * first commit: a stream ended by a timer has ended before its probe, one ended by an event on
+ * it ends in its own probe's window, and one ended by any commit ends in the first probe's
+ * window. The SDK listeners, which refresh their own tokens, are probed at their own times.
+ */
+const expiryAfter = {
+  do: "expiry-groups",
+  groups: [
+    {
+      id: "held/exp-plus-35-grpc",
+      plus: 35,
+      align: "latest",
+      conditions: EXPIRY_CONDITIONS,
+      probes: HELD.map((held) => nativeProbe(held, 5)),
+    },
+    {
+      id: "held/exp-plus-35-sdk",
+      plus: 35,
+      conditions: EXPIRY_CONDITIONS,
+      probes: HELD.map((held) => sdkProbe(held, 5)),
+    },
+  ],
+};
 
 export const STAGE2_PROGRAM = {
   id: "auth-fs-cross/stage2/window",
@@ -570,8 +597,8 @@ export const STAGE2_PROGRAM = {
       writes: heldWrites(3),
       observe: everyHeld,
     },
-    expiryProbe("held/exp-minus-60", -60),
-    expiryProbe("held/exp-plus-35", 35),
+    expiryBefore,
+    expiryAfter,
     { do: "close-all", id: "held/life", conditions: STAGE2_CONDITIONS },
   ],
 };

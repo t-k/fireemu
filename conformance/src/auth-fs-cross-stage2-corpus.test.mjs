@@ -25,7 +25,7 @@ const indexOf = (program, match) => program.steps.findIndex(match);
 
 test("the stage-2 program passes its guard and covers every closure transport", () => {
   assert.deepEqual(Object.keys(closure).toSorted(), [...STAGE2_CONDITIONS].toSorted());
-  assert.deepEqual(validate(STAGE2_PROGRAM), { commits: 43, reads: 15, rows: 55, maxWire: 2_200 });
+  assert.deepEqual(validate(STAGE2_PROGRAM), { commits: 43, reads: 15, rows: 56, maxWire: 2_200 });
 });
 
 test("every held principal's change comes after the short conditions and before its probes", () => {
@@ -34,8 +34,20 @@ test("every held principal's change comes after the short conditions and before 
   const changes = HELD.filter((h) => h.change).map((h) => steps.indexOf(h.change));
   const afterChange = indexOf(STAGE2_PROGRAM, (s) => s.id === "held/after-change");
   for (const at of changes) assert.ok(at > lastShort && at < afterChange);
-  const expiry = steps.filter((s) => s.do === "expiry-probes").map((s) => s.plus);
-  assert.deepEqual(expiry, [-60, 35]);
+  const expiry = steps
+    .flatMap((s) => (s.do === "expiry-groups" ? s.groups : s.do === "expiry-probes" ? [s] : []))
+    .map((g) => [g.id, g.plus, g.align ?? "own"]);
+  assert.deepEqual(expiry, [
+    ["held/exp-minus-60", -60, "own"],
+    ["held/exp-plus-35-grpc", 35, "latest"],
+    ["held/exp-plus-35-sdk", 35, "own"],
+  ]);
+  // The native tokens are refreshed right before the streams open, after every setup step.
+  const firstStream = steps.findIndex((s) => s.do === "stream");
+  assert.deepEqual(
+    steps.slice(0, firstStream).map((s) => [s.action, s.principal]),
+    HELD.map((h) => ["refresh", h.principal]),
+  );
 });
 
 test("the program and the rules name only this lane's collections", () => {
@@ -73,7 +85,7 @@ const REFUSED = [
   ],
   [
     "a stream on another collection",
-    (p) => (p.steps[0].targets[1].collection = "users"),
+    (p) => (p.steps.find((s) => s.do === "stream").targets[1].collection = "users"),
     /not a collection of this lane/,
   ],
   [
@@ -138,6 +150,8 @@ const REFUSED = [
           probe.observe = probe.observe.filter((r) => !r.startsWith("grpc-"));
         if (step.probes) step.probes = step.probes.filter((probe) => probe.observe.length);
       }
+      const groups = p.steps.find((s) => s.do === "expiry-groups");
+      groups.groups = groups.groups.filter((g) => !g.id.endsWith("-grpc"));
     },
     /listen-token-refresh: no row observes it through grpc/,
   ],
@@ -150,6 +164,21 @@ const REFUSED = [
     "an expiry probe too far out",
     (p) => (p.steps.find((s) => s.do === "expiry-probes").plus = -3_600),
     /out of range/,
+  ],
+  [
+    "an unknown alignment",
+    (p) => (p.steps.find((s) => s.do === "expiry-groups").groups[0].align = "earliest"),
+    /unknown alignment earliest/,
+  ],
+  [
+    "an empty expiry group",
+    (p) => (p.steps.find((s) => s.do === "expiry-groups").groups[1].probes = []),
+    /an expiry group probes something/,
+  ],
+  [
+    "no expiry groups",
+    (p) => (p.steps.find((s) => s.do === "expiry-groups").groups = []),
+    /at least one group/,
   ],
   [
     "a window past the limit",

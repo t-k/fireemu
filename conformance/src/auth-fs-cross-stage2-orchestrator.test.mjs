@@ -604,3 +604,69 @@ test("a stream that ended before a probe is reported as ended before, not as end
   const rows = await interpreter.run();
   assert.deepEqual(rows.p.listeners["grpc-a"], { events: [], endedBefore: true, end: null });
 });
+
+test("an aligned group waits once for its latest token, then probes one after another", async () => {
+  const client = fakeClient();
+  const session = fakeSession({
+    principals: {
+      a: { uid: "uid-a", idToken: token(1_000) },
+      b: { uid: "uid-b", idToken: token(2_000) },
+    },
+  });
+  client.deliver({ event: "auth", uid: "uid-a", exp: 3_000 });
+  const program = {
+    steps: [
+      { do: "client", client: "c", transport: "node-sdk" },
+      {
+        do: "expiry-groups",
+        groups: [
+          {
+            id: "grpc",
+            plus: 35,
+            align: "latest",
+            conditions: ["X"],
+            probes: [
+              { token: { principal: "a" }, write: { doc: "afc2-owned/a-grpc" }, observe: [] },
+              { token: { principal: "b" }, write: { doc: "afc2-owned/b-grpc" }, observe: [] },
+            ],
+          },
+          {
+            id: "sdk",
+            plus: 35,
+            conditions: ["X"],
+            probes: [{ token: { client: "c" }, write: { doc: "afc2-owned/a-sdk" }, observe: [] }],
+          },
+        ],
+      },
+    ],
+  };
+  const interpreter = createInterpreter(program, {
+    session,
+    ctx,
+    spawnClient: () => client,
+    openListen: () => {},
+    sdkConfig: {},
+  });
+  const rows = await interpreter.run();
+  const waits = session.calls.filter(([kind]) => kind === "sleepUntil").map(([, t]) => t);
+  // One wait for the aligned group (the later of a and b), one for the SDK probe.
+  assert.deepEqual(waits.toSorted(), [2_035_300, 3_035_300]);
+  const seeds = session.calls.filter(([kind]) => kind === "seed").map(([, docs]) => docs[0]);
+  // The aligned probes go in their order, each after the previous one's window.
+  assert.ok(seeds.indexOf("afc2-owned/a-grpc") < seeds.indexOf("afc2-owned/b-grpc"));
+  const pauseBetween = session.calls.findIndex(
+    ([kind, d]) => kind === "seed" && d[0] === "afc2-owned/b-grpc",
+  );
+  assert.equal(session.calls[pauseBetween - 1][0], "pause");
+  assert.deepEqual(
+    rows.grpc.probes.map((p) => [p.doc, p.onTime]),
+    [
+      ["afc2-owned/a-grpc", true],
+      ["afc2-owned/b-grpc", true],
+    ],
+  );
+  assert.deepEqual(
+    rows.sdk.probes.map((p) => p.doc),
+    ["afc2-owned/a-sdk"],
+  );
+});

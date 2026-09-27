@@ -21,7 +21,14 @@ const SDK_OPS = new Set([
   "transaction",
   "continueTransaction",
 ]);
-const AUTH_ACTIONS = new Set(["revoke", "disable", "delete-account", "claims", "delete-tenant"]);
+const AUTH_ACTIONS = new Set([
+  "refresh",
+  "revoke",
+  "disable",
+  "delete-account",
+  "claims",
+  "delete-tenant",
+]);
 const TRANSPORTS = new Set(["node-sdk", "browser"]);
 /** The closure's transport names as this program's clients and streams spell them. */
 const CLOSURE_TRANSPORT = { "node-sdk": "node-sdk", grpc: "grpc", "browser-webchannel": "browser" };
@@ -111,6 +118,26 @@ export function validateStage2(program, { principals = STAGE2_PRINCIPALS, closur
     if (step.windowMs !== undefined && !(step.windowMs > 0 && step.windowMs <= WINDOW_LIMIT_MS))
       fail(where, `window ${step.windowMs} out of range`);
   };
+
+  /** One expiry probe group: its offset, how it is timed, and what it probes. */
+  function expiryProbes(where, step) {
+    if (!(step.plus >= -300 && step.plus <= 120)) fail(where, `plus ${step.plus} out of range`);
+    if (step.align !== undefined && step.align !== "latest")
+      fail(where, `unknown alignment ${step.align}`);
+    if (!Array.isArray(step.probes) || step.probes.length === 0)
+      fail(where, "an expiry group probes something");
+    const transports = new Set();
+    for (const probe of step.probes) {
+      if (probe.token.principal !== undefined) {
+        if (!known.has(probe.token.principal))
+          fail(where, `unknown principal ${probe.token.principal}`);
+      } else openClient(where, probe.token.client);
+      checkDoc(where, probe.write.doc);
+      for (const ref of probe.observe) transports.add(listenerTransport(where, ref));
+      cost.commits += 1;
+    }
+    row(where, step, transports);
+  }
 
   program.steps.forEach((step, index) => {
     const where = `${program.id}#${index}(${step.do})`;
@@ -216,21 +243,14 @@ export function validateStage2(program, { principals = STAGE2_PRINCIPALS, closur
         if (!(step.ms > 0 && step.ms <= SLEEP_LIMIT_MS))
           fail(where, `sleep ${step.ms} out of range`);
         return;
-      case "expiry-probes": {
-        if (!(step.plus >= -300 && step.plus <= 120)) fail(where, `plus ${step.plus} out of range`);
-        const transports = new Set();
-        for (const probe of step.probes) {
-          if (probe.token.principal !== undefined) {
-            if (!known.has(probe.token.principal))
-              fail(where, `unknown principal ${probe.token.principal}`);
-          } else openClient(where, probe.token.client);
-          checkDoc(where, probe.write.doc);
-          for (const ref of probe.observe) transports.add(listenerTransport(where, ref));
-          cost.commits += 1;
-        }
-        row(where, step, transports);
+      case "expiry-probes":
+        expiryProbes(where, step);
         return;
-      }
+      case "expiry-groups":
+        if (!Array.isArray(step.groups) || step.groups.length === 0)
+          fail(where, "expiry groups name at least one group");
+        for (const group of step.groups) expiryProbes(`${where}/${group.id}`, group);
+        return;
       case "close-client":
         openClient(where, step.client).closed = true;
         return;

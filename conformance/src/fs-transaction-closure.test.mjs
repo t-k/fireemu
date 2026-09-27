@@ -16,10 +16,9 @@ const required = new Set([
   "idle-expiry",
   "total-lifetime-expiry",
   "read-time-retention",
-  "stream-precedence",
-  "grpc-rest-parity",
-  "sdk-retry-and-ordering",
-  "transaction-resource-limits",
+  "web-sdk-optimistic-retry",
+  "admin-sdk-server-retry",
+  "commit-atomic-visibility",
   "paging-and-cancellation",
   "final-artifact-regression",
   "closure-review",
@@ -39,8 +38,9 @@ test("FS-TRANSACTION proposal names every acceptance boundary without claiming c
   for (const condition of closure.conditions) {
     assert.ok(condition.source);
     assert.ok(condition.observation.method);
+    assert.ok(condition.observation.credentials, `${condition.conditionId} must name its credential context`);
     assert.ok(condition.verification.requiredEvidence.length);
-    assert.notEqual(condition.status, "VERIFIED");
+    assert.ok(["PENDING_CORPUS", "PENDING_RECORDING", "PENDING_REVIEW"].includes(condition.status));
     for (const recipe of condition.recipeIds) assert.equal(recipe, `fs-transaction/${condition.conditionId.split("/")[1]}`);
   }
   const preparedCases = closure.conditions.flatMap(({ observation }) => observation.existingCaseIds ?? []);
@@ -60,9 +60,14 @@ test("FS-TRANSACTION proposal names every acceptance boundary without claiming c
     "retry-token/retry-with-malformed-previous",
   ]));
   assert.equal(preparedCases.length, 13, "each prepared case belongs to one condition");
-  const sdk = closure.conditions.find(({ conditionId }) => conditionId === "FS-TRANSACTION/sdk-retry-and-ordering");
+  const sdk = closure.conditions.find(({ conditionId }) => conditionId === "FS-TRANSACTION/web-sdk-optimistic-retry");
   assert.deepEqual(sdk.observation.transports, ["node-web-sdk", "browser-webchannel"]);
   assert.equal(sdk.verification.recordingsRequiredPerTransport, 2);
+  assert.match(sdk.observation.method, /BatchGetDocuments.*precondition.*Commit.*callback count/);
+  const admin = closure.conditions.find(({ conditionId }) => conditionId === "FS-TRANSACTION/admin-sdk-server-retry");
+  assert.match(admin.observation.method, /firebase-admin 14\.3\.0.*retryTransaction/);
+  assert.match(closure.conditions.find(({ conditionId }) => conditionId === "FS-TRANSACTION/idle-expiry").observation.limitId, /^FS-LIMIT-TRANSACTION-IDLE-TIME$/);
+  assert.match(closure.conditions.find(({ conditionId }) => conditionId === "FS-TRANSACTION/total-lifetime-expiry").observation.limitId, /^FS-LIMIT-TRANSACTION-TOTAL-TIME$/);
   const readTime = closure.conditions.find(({ conditionId }) => conditionId === "FS-TRANSACTION/read-time-snapshot");
   assert.ok(!readTime.localEvidence.references.some((path) => path.includes("expiry-retry")));
   assert.match(closure.scopeDecisions.find(({ id }) => id === "T5").recommendation, /do not import O7\/O8 Gate/);
@@ -72,5 +77,9 @@ test("FS-TRANSACTION proposal names every acceptance boundary without claiming c
   assert.equal(closure.productionPlan.preparedCampaign.totalRequestEstimate, 190);
   assert.ok(closure.productionPlan.unestimatedConditions.length);
   assert.ok(closure.productionPlan.unestimatedConditions.includes("FS-TRANSACTION/failed-commit-and-rollback"));
-  assert.ok(closure.scopeDecisions.every(({ status }) => status === "PROPOSED"));
+  assert.ok(closure.scopeDecisions.every(({ status, decision, decidedBy, decidedOn }) => status === "DECIDED" && decision && decidedBy && decidedOn));
+  assert.equal(closure.scopeDecisions.find(({ id }) => id === "OT-1").decision, "PESSIMISTIC_ONLY_OPTIMISTIC_FOLLOW_UP");
+  assert.equal(closure.profileComparison.profile, "strict");
+  assert.equal(closure.profileComparison.emulatorCompatibilityCheck, "PENDING_LOCAL_OBSERVATION");
+  assert.equal(closure.parentStatus === "COMPAT_VERIFIED", closure.conditions.every(({ status }) => status === "VERIFIED") && closure.closureReview.decision === "APPROVED");
 });

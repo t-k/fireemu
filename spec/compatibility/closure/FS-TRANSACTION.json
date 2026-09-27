@@ -12,46 +12,91 @@
   "scopeDecisions": [
     {
       "id": "T1",
-      "status": "PROPOSED",
+      "status": "DECIDED",
       "recommendation": "Use behavioral conditions rather than a raw API-method denominator; each declared transaction surface must map to exactly one condition.",
-      "ownerDecisionRequired": true
+      "ownerDecisionRequired": false,
+      "decision": "BEHAVIORAL_CONDITIONS",
+      "decidedBy": "coordinator",
+      "decidedOn": "2026-09-27"
     },
     {
       "id": "T2",
-      "status": "PROPOSED",
+      "status": "DECIDED",
       "recommendation": "Keep query execution inside a transaction here, following the FS-QUERY-INDEX Q4d decision; ordinary query semantics stay with FS-QUERY-INDEX.",
       "ownerDecisionRequired": false,
-      "existingDecisionRef": "spec/compatibility/closure/FS-QUERY-INDEX.json#Q4d"
+      "existingDecisionRef": "spec/compatibility/closure/FS-QUERY-INDEX.json#Q4d",
+      "decision": "TRANSACTIONAL_QUERY_HERE",
+      "decidedBy": "owner via FS-QUERY-INDEX Q4d",
+      "decidedOn": "2026-09-24"
     },
     {
       "id": "T3",
-      "status": "PROPOSED",
+      "status": "DECIDED",
       "recommendation": "Keep transaction commit-to-listener notification ordering as a shared acceptance row with FS-LISTEN-SDK, but count the transaction outcome here and callback delivery there.",
-      "ownerDecisionRequired": true
+      "ownerDecisionRequired": false,
+      "decision": "COMMIT_ATOMIC_VISIBILITY_HERE",
+      "decidedBy": "coordinator",
+      "decidedOn": "2026-09-27"
     },
     {
       "id": "T4",
-      "status": "PROPOSED",
+      "status": "DECIDED",
       "recommendation": "Keep transaction-specific resource and timeout limits here; generic document and request limits remain with FS-DATA-WRITE.",
-      "ownerDecisionRequired": true
+      "ownerDecisionRequired": false,
+      "decision": "TIME_LIMITS_IN_EXPIRY_SIZE_MOVED_TO_FS_DATA_WRITE",
+      "decidedBy": "coordinator",
+      "decidedOn": "2026-09-27"
     },
     {
       "id": "T5",
-      "status": "PROPOSED",
+      "status": "DECIDED",
       "recommendation": "Use the sandbox conformance-harness process with clean-context corpus/runner review, two recordings and one JSONL ledger line per run. The old single-run O8 manifest is preparation material only; do not import O7/O8 Gate or reservation tooling. A fresh owner go-ahead remains necessary under the current production-send hold.",
-      "ownerDecisionRequired": true
+      "ownerDecisionRequired": false,
+      "decision": "SANDBOX_TWO_RECORDINGS_NO_O7_O8",
+      "decidedBy": "owner via sandbox standing authorization",
+      "decidedOn": "2026-09-23"
     },
     {
       "id": "T6",
-      "status": "PROPOSED",
+      "status": "DECIDED",
       "recommendation": "Retain historical fireemu-35fe6 recordings as immutable reference only; require sandbox evidence or an explicit owner decision before calling any historical-only condition VERIFIED.",
-      "ownerDecisionRequired": true
+      "ownerDecisionRequired": false,
+      "decision": "HISTORICAL_REFERENCE_ONLY",
+      "decidedBy": "coordinator",
+      "decidedOn": "2026-09-27"
     },
     {
       "id": "T7",
-      "status": "PROPOSED",
+      "status": "DECIDED",
       "recommendation": "Keep SDK-driven retry distinct from backend retry-token semantics. Do not exclude it on the strength of REST or gRPC observations.",
-      "ownerDecisionRequired": true
+      "ownerDecisionRequired": false,
+      "decision": "SDK_RETRY_SEPARATE",
+      "decidedBy": "coordinator",
+      "decidedOn": "2026-09-27"
+    },
+    {
+      "id": "OT-1",
+      "status": "DECIDED",
+      "decision": "PESSIMISTIC_ONLY_OPTIMISTIC_FOLLOW_UP",
+      "decidedBy": "owner",
+      "decidedOn": "2026-09-27",
+      "decisionRef": "docs.local/instructions/owner-decisions.md#2026-09-27-FS-TRANSACTION-OT-1"
+    },
+    {
+      "id": "M-T1",
+      "status": "DECIDED",
+      "decision": "MOVED_TO_FS_DATA_WRITE",
+      "movedTo": "FS-DATA-WRITE/stream-transaction-precedence",
+      "decidedBy": "coordinator",
+      "decidedOn": "2026-09-27"
+    },
+    {
+      "id": "M-T3",
+      "status": "DECIDED",
+      "decision": "SIZE_MOVED_TO_FS_DATA_WRITE",
+      "movedTo": "FS-DATA-WRITE",
+      "decidedBy": "coordinator",
+      "decidedOn": "2026-09-27"
     }
   ],
   "conditions": [
@@ -62,12 +107,14 @@
         "fs-transaction/read-write-lifecycle"
       ],
       "recipeStatus": "PROPOSED",
-      "status": "SAVED_REFERENCE_PENDING_FINAL",
+      "status": "PENDING_RECORDING",
       "observation": {
         "method": "REST BeginTransaction, GetDocument, BatchGetDocuments and Commit with read-write controls.",
         "existingCaseOrCampaignRefs": [
           "conformance/firestore-production-matrix.json#transactions/lifecycle"
-        ]
+        ],
+        "credentials": "Admin OAuth; server transaction bypasses Firestore Rules.",
+        "representativeGrpc": "Record one representative gRPC case for this condition when the API supports it; REST carries the full set."
       },
       "localEvidence": {
         "references": [],
@@ -91,12 +138,14 @@
         "fs-transaction/read-only-snapshot"
       ],
       "recipeStatus": "PROPOSED",
-      "status": "SAVED_REFERENCE_PENDING_FINAL",
+      "status": "PENDING_RECORDING",
       "observation": {
         "method": "REST read-only BeginTransaction, GetDocument and Commit refusal with a read-write control.",
         "existingCaseOrCampaignRefs": [
           "conformance/firestore-production-matrix.json#transactions/lifecycle"
-        ]
+        ],
+        "credentials": "Admin OAuth; server transaction bypasses Firestore Rules.",
+        "representativeGrpc": "Record one representative gRPC case for this condition when the API supports it; REST carries the full set."
       },
       "localEvidence": {
         "references": [],
@@ -120,12 +169,14 @@
         "fs-transaction/read-time-snapshot"
       ],
       "recipeStatus": "PROPOSED",
-      "status": "SAVED_REFERENCE_PENDING_FINAL",
+      "status": "PENDING_RECORDING",
       "observation": {
         "method": "REST readTime and newTransaction observations with a stable readback control.",
         "existingCaseOrCampaignRefs": [
           "conformance/firestore-production-matrix.json#reads/read-time"
-        ]
+        ],
+        "credentials": "Admin OAuth; server transaction bypasses Firestore Rules.",
+        "representativeGrpc": "Record one representative gRPC case for this condition when the API supports it; REST carries the full set."
       },
       "localEvidence": {
         "references": [],
@@ -152,10 +203,12 @@
       "recipeStatus": "PROPOSED",
       "status": "PENDING_CORPUS",
       "observation": {
-        "method": "REST and gRPC use, malformed, unknown, finished, foreign-project and foreign-database tokens, with a valid-token control.",
+        "method": "REST and gRPC use, malformed, unknown, finished, foreign-project and foreign-database tokens, with a valid-token control. Create and remove one named database for foreign-database use; test the same token on an absent document in query/(default) for foreign-project use under its shared lock.",
         "existingCaseOrCampaignRefs": [
           "conformance/firestore-production-matrix.json#transactions/lifecycle"
-        ]
+        ],
+        "credentials": "Admin OAuth; server transaction bypasses Firestore Rules.",
+        "representativeGrpc": "Record one representative gRPC case for this condition when the API supports it; REST carries the full set."
       },
       "localEvidence": {
         "references": [
@@ -181,12 +234,14 @@
         "fs-transaction/read-set-conflict"
       ],
       "recipeStatus": "PROPOSED",
-      "status": "SAVED_REFERENCE_PENDING_FINAL",
+      "status": "PENDING_RECORDING",
       "observation": {
-        "method": "Concurrent read-write transactions with a conflicting document write and a nonconflicting control; compare codes, order and final document.",
+        "method": "Concurrent read-write transactions with a conflicting document write and a nonconflicting control; compare codes, order and final document. On PESSIMISTIC mode, hold the competing writer in a separate task, release by commit or rollback, then compare outcome and order. A bounded timeout is INDETERMINATE.",
         "existingCaseOrCampaignRefs": [
           "conformance/firestore-production-matrix.json#transactions/lifecycle"
-        ]
+        ],
+        "credentials": "Admin OAuth; server transaction bypasses Firestore Rules.",
+        "representativeGrpc": "Record one representative gRPC case for this condition when the API supports it; REST carries the full set."
       },
       "localEvidence": {
         "references": [
@@ -212,12 +267,14 @@
         "fs-transaction/write-set-atomicity"
       ],
       "recipeStatus": "PROPOSED",
-      "status": "SAVED_REFERENCE_PENDING_FINAL",
+      "status": "PENDING_RECORDING",
       "observation": {
-        "method": "Conflicting and nonconflicting writes to transaction-owned documents; read back every write after refusal.",
+        "method": "Conflicting and nonconflicting writes to transaction-owned documents; read back every write after refusal. On PESSIMISTIC mode, hold the competing writer in a separate task, release by commit or rollback, then compare outcome and order. A bounded timeout is INDETERMINATE.",
         "existingCaseOrCampaignRefs": [
           "conformance/firestore-production-matrix.json#transactions/lifecycle"
-        ]
+        ],
+        "credentials": "Admin OAuth; server transaction bypasses Firestore Rules.",
+        "representativeGrpc": "Record one representative gRPC case for this condition when the API supports it; REST carries the full set."
       },
       "localEvidence": {
         "references": [
@@ -245,10 +302,12 @@
       "recipeStatus": "PROPOSED",
       "status": "PENDING_CORPUS",
       "observation": {
-        "method": "A query inside a read-write transaction followed by a matching phantom write and an outside-range control; compare outcome and post-state.",
+        "method": "A query inside a read-write transaction followed by a matching phantom write and an outside-range control; compare outcome and post-state. On PESSIMISTIC mode, hold the competing writer in a separate task, release by commit or rollback, then compare outcome and order. A bounded timeout is INDETERMINATE.",
         "existingCaseOrCampaignRefs": [
           "conformance/firestore-production-matrix.json#transactions/lifecycle/phantom-write"
-        ]
+        ],
+        "credentials": "Admin OAuth; server transaction bypasses Firestore Rules.",
+        "representativeGrpc": "Record one representative gRPC case for this condition when the API supports it; REST carries the full set."
       },
       "localEvidence": {
         "references": [
@@ -280,7 +339,9 @@
           "finished-token/rollback-after-begin",
           "finished-token/rollback-after-commit",
           "finished-token/rollback-after-rollback"
-        ]
+        ],
+        "credentials": "Admin OAuth; server transaction bypasses Firestore Rules.",
+        "representativeGrpc": "Record one representative gRPC case for this condition when the API supports it; REST carries the full set."
       },
       "localEvidence": {
         "references": [
@@ -306,7 +367,7 @@
       "recipeStatus": "PROPOSED",
       "status": "PENDING_RECORDING",
       "observation": {
-        "method": "REST retryTransaction after rollback, commit, read-only begin, unissued and malformed tokens; compare diagnostics and post-state.",
+        "method": "REST retryTransaction after rollback, commit, read-only begin, unissued and malformed tokens; compare diagnostics and post-state. Include a representative gRPC case and the firebase-admin 14.3.0 retryTransaction wire path.",
         "existingCaseOrCampaignRefs": [
           "spec/compatibility/broad-runs/fs-transaction-expiry-retry-04-manifest-v4.json"
         ],
@@ -316,7 +377,9 @@
           "retry-token/retry-with-read-only-previous",
           "retry-token/retry-with-unissued-previous",
           "retry-token/retry-with-malformed-previous"
-        ]
+        ],
+        "credentials": "Admin OAuth; server transaction bypasses Firestore Rules.",
+        "representativeGrpc": "Record one representative gRPC case for this condition when the API supports it; REST carries the full set."
       },
       "localEvidence": {
         "references": [
@@ -354,7 +417,10 @@
           "idle-expiry/rollback-after-idle",
           "idle-expiry/lock-held-before-idle",
           "idle-expiry/lock-released-after-idle"
-        ]
+        ],
+        "credentials": "Admin OAuth; server transaction bypasses Firestore Rules.",
+        "limitId": "FS-LIMIT-TRANSACTION-IDLE-TIME",
+        "representativeGrpc": "Record one representative gRPC case for this condition when the API supports it; REST carries the full set."
       },
       "localEvidence": {
         "references": [
@@ -381,7 +447,10 @@
       "status": "PENDING_CORPUS",
       "observation": {
         "method": "A separate bounded long-window observation across the total transaction lifetime with a live-before-boundary control.",
-        "existingCaseOrCampaignRefs": []
+        "existingCaseOrCampaignRefs": [],
+        "credentials": "Admin OAuth; server transaction bypasses Firestore Rules.",
+        "limitId": "FS-LIMIT-TRANSACTION-TOTAL-TIME",
+        "representativeGrpc": "Record one representative gRPC case for this condition when the API supports it; REST carries the full set."
       },
       "localEvidence": {
         "references": [
@@ -407,8 +476,10 @@
       "recipeStatus": "PROPOSED",
       "status": "PENDING_CORPUS",
       "observation": {
-        "method": "A read-only transaction with a readTime outside the configured retention window and an inside-window control; record database configuration.",
-        "existingCaseOrCampaignRefs": []
+        "method": "At the 59-minute and 61-minute non-PITR boundary already covered by FS-QUERY-INDEX/read-time, observe GetDocument, BatchGetDocuments and read-only transaction readTime only; compare accepted/refused results and configuration. Seven-day PITR is excluded by the managed-infrastructure decision.",
+        "existingCaseOrCampaignRefs": [],
+        "credentials": "Admin OAuth; server transaction bypasses Firestore Rules.",
+        "representativeGrpc": "Record one representative gRPC case for this condition when the API supports it; REST carries the full set."
       },
       "localEvidence": {
         "references": [
@@ -426,79 +497,22 @@
       }
     },
     {
-      "conditionId": "FS-TRANSACTION/stream-precedence",
+      "conditionId": "FS-TRANSACTION/web-sdk-optimistic-retry",
       "source": "docs/compatibility/ip-fs-production-compatibility.md#feature-group-status",
       "recipeIds": [
-        "fs-transaction/stream-precedence"
-      ],
-      "recipeStatus": "PROPOSED",
-      "status": "SAVED_REFERENCE_PENDING_FINAL",
-      "observation": {
-        "method": "gRPC Write stream contention with an active transaction, atomic refusal, rollback and successful subsequent stream write.",
-        "existingCaseOrCampaignRefs": [
-          "spec/compatibility/broad-runs/fs-write-txn-dee737c14-production-result.json"
-        ]
-      },
-      "localEvidence": {
-        "references": [
-          "crates/fireemu-adapter-grpc/tests/streams.rs"
-        ],
-        "productionExecuted": false
-      },
-      "historicalProductionReferences": [
-        "spec/compatibility/broad-runs/fs-write-txn-dee737c14-production-result.json"
-      ],
-      "verification": {
-        "requiredEvidence": [
-          "Two independently recorded sandbox observations for each new production corpus row, with complete post-state and cleanup.",
-          "A comparison against the final source-bound fireemu artifact that covers every recipe step and reports no unexplained mismatch."
-        ],
-        "recordingsRequired": 2
-      }
-    },
-    {
-      "conditionId": "FS-TRANSACTION/grpc-rest-parity",
-      "source": "docs/compatibility/ip-fs-production-compatibility.md#feature-group-status",
-      "recipeIds": [
-        "fs-transaction/grpc-rest-parity"
+        "fs-transaction/web-sdk-optimistic-retry"
       ],
       "recipeStatus": "PROPOSED",
       "status": "PENDING_CORPUS",
       "observation": {
-        "method": "Equivalent REST and gRPC transaction programs on the same database configuration, including error ordering and token ownership.",
-        "existingCaseOrCampaignRefs": []
-      },
-      "localEvidence": {
-        "references": [
-          "crates/fireemu-adapter-grpc/src/service/tests/query_transaction_tests.rs"
-        ],
-        "productionExecuted": false
-      },
-      "historicalProductionReferences": [],
-      "verification": {
-        "requiredEvidence": [
-          "Two independently recorded sandbox observations for each new production corpus row, with complete post-state and cleanup.",
-          "A comparison against the final source-bound fireemu artifact that covers every recipe step and reports no unexplained mismatch."
-        ],
-        "recordingsRequired": 2
-      }
-    },
-    {
-      "conditionId": "FS-TRANSACTION/sdk-retry-and-ordering",
-      "source": "docs/compatibility/ip-fs-production-compatibility.md#feature-group-status",
-      "recipeIds": [
-        "fs-transaction/sdk-retry-and-ordering"
-      ],
-      "recipeStatus": "PROPOSED",
-      "status": "PENDING_CORPUS",
-      "observation": {
-        "method": "Firebase Web SDK 12.18.0 transaction callback retry after ABORTED in Node and a real browser, callback count, final write and listener notification order, each with a nonconflicting control.",
+        "method": "Firebase Web SDK 12.18.0 runTransaction in Node and a real browser: observe BatchGetDocuments followed by precondition Commit, concurrent-write Commit refusal code, callback count, final state, and nonconflicting control. Confirm actual wire locally before corpus freeze.",
         "existingCaseOrCampaignRefs": [],
         "transports": [
           "node-web-sdk",
           "browser-webchannel"
         ],
-        "sdkVersion": "firebase 12.18.0"
+        "sdkVersion": "firebase 12.18.0",
+        "credentials": "Unauthenticated Web SDK client under deployed Rules."
       },
       "localEvidence": {
         "references": [
@@ -509,38 +523,11 @@
       "historicalProductionReferences": [],
       "verification": {
         "requiredEvidence": [
-          "Two independently recorded sandbox receipts for each of the Node and real-browser transports, including callback count, final state and a nonconflicting control.",
-          "Final source-bound comparison of retry and notification order on both transports, with no unexplained mismatch and complete cleanup."
+          "Two independent sandbox recordings for Node and real browser, including wire shape, refusal code, callback count and final state.",
+          "Final source-bound comparison with no unexplained mismatch and complete cleanup."
         ],
         "recordingsRequired": 2,
         "recordingsRequiredPerTransport": 2
-      }
-    },
-    {
-      "conditionId": "FS-TRANSACTION/transaction-resource-limits",
-      "source": "docs/compatibility/ip-fs-production-compatibility.md#feature-group-status",
-      "recipeIds": [
-        "fs-transaction/transaction-resource-limits"
-      ],
-      "recipeStatus": "PROPOSED",
-      "status": "PENDING_CORPUS",
-      "observation": {
-        "method": "Boundary pairs for transaction size, lock and time constraints with typed refusal and complete post-state readback.",
-        "existingCaseOrCampaignRefs": []
-      },
-      "localEvidence": {
-        "references": [
-          "crates/fireemu-core-firestore/tests/store.rs"
-        ],
-        "productionExecuted": false
-      },
-      "historicalProductionReferences": [],
-      "verification": {
-        "requiredEvidence": [
-          "Two independently recorded sandbox observations for each new production corpus row, with complete post-state and cleanup.",
-          "A comparison against the final source-bound fireemu artifact that covers every recipe step and reports no unexplained mismatch."
-        ],
-        "recordingsRequired": 2
       }
     },
     {
@@ -552,8 +539,10 @@
       "recipeStatus": "PROPOSED",
       "status": "PENDING_CORPUS",
       "observation": {
-        "method": "gRPC transactional paging and cancellation, followed by token and lock-release controls.",
-        "existingCaseOrCampaignRefs": []
+        "method": "Cancel a transactional gRPC query stream after a bounded page; show the token remains usable and the competing writer remains pending until commit or rollback, then succeeds. A bounded timeout is INDETERMINATE. ListDocuments transaction behavior belongs to FS-DATA-WRITE-LIST.",
+        "existingCaseOrCampaignRefs": [],
+        "credentials": "Admin OAuth; server transaction bypasses Firestore Rules.",
+        "representativeGrpc": "Record one representative gRPC case for this condition when the API supports it; REST carries the full set."
       },
       "localEvidence": {
         "references": [
@@ -568,6 +557,65 @@
           "A comparison against the final source-bound fireemu artifact that covers every recipe step and reports no unexplained mismatch."
         ],
         "recordingsRequired": 2
+      }
+    },
+    {
+      "conditionId": "FS-TRANSACTION/admin-sdk-server-retry",
+      "source": "docs/compatibility/ip-fs-production-compatibility.md#feature-group-status",
+      "recipeIds": [
+        "fs-transaction/admin-sdk-server-retry"
+      ],
+      "recipeStatus": "PROPOSED",
+      "status": "PENDING_CORPUS",
+      "observation": {
+        "method": "firebase-admin 14.3.0 server-side read-write runTransaction and retryTransaction: confirm BeginTransaction, embedded newTransaction and retry token wire locally, then compare conflict code, callback count and final state.",
+        "credentials": "Admin OAuth; server transaction bypasses Firestore Rules.",
+        "transports": [
+          "node-admin-sdk"
+        ],
+        "sdkVersion": "firebase-admin 14.3.0"
+      },
+      "localEvidence": {
+        "references": [],
+        "productionExecuted": false
+      },
+      "historicalProductionReferences": [],
+      "verification": {
+        "requiredEvidence": [
+          "Two independent sandbox recordings for Node and real browser, including wire shape, refusal code, callback count and final state.",
+          "Final source-bound comparison with no unexplained mismatch and complete cleanup."
+        ],
+        "recordingsRequired": 2,
+        "recordingsRequiredPerTransport": 2
+      }
+    },
+    {
+      "conditionId": "FS-TRANSACTION/commit-atomic-visibility",
+      "source": "docs/compatibility/ip-fs-production-compatibility.md#feature-group-status",
+      "recipeIds": [
+        "fs-transaction/commit-atomic-visibility"
+      ],
+      "recipeStatus": "PROPOSED",
+      "status": "PENDING_CORPUS",
+      "observation": {
+        "method": "On native gRPC Listen, a multi-document transaction commit must appear as one snapshot at one commit time; compare document values and notification ordering with a nontransaction control. SDK callback form belongs to FS-LISTEN-SDK.",
+        "credentials": "Admin OAuth for transaction commit; no user credential for public native Listen target.",
+        "transports": [
+          "grpc-listen"
+        ]
+      },
+      "localEvidence": {
+        "references": [],
+        "productionExecuted": false
+      },
+      "historicalProductionReferences": [],
+      "verification": {
+        "requiredEvidence": [
+          "Two independent sandbox recordings for Node and real browser, including wire shape, refusal code, callback count and final state.",
+          "Final source-bound comparison with no unexplained mismatch and complete cleanup."
+        ],
+        "recordingsRequired": 2,
+        "recordingsRequiredPerTransport": 2
       }
     },
     {
@@ -580,7 +628,8 @@
       "status": "PENDING_REVIEW",
       "observation": {
         "method": "Replay every saved and newly recorded transaction recipe against one final source-bound fireemu artifact.",
-        "existingCaseOrCampaignRefs": []
+        "existingCaseOrCampaignRefs": [],
+        "credentials": "No production credential; independent review only."
       },
       "localEvidence": {
         "references": [],
@@ -604,7 +653,8 @@
       "status": "PENDING_REVIEW",
       "observation": {
         "method": "Independent review of the complete condition-to-recipe map, comparison, cleanup and owner decisions.",
-        "existingCaseOrCampaignRefs": []
+        "existingCaseOrCampaignRefs": [],
+        "credentials": "No production credential; independent review only."
       },
       "localEvidence": {
         "references": [],
@@ -653,18 +703,19 @@
       "FS-TRANSACTION/failed-commit-and-rollback",
       "FS-TRANSACTION/total-lifetime-expiry",
       "FS-TRANSACTION/read-time-retention",
-      "FS-TRANSACTION/stream-precedence",
-      "FS-TRANSACTION/grpc-rest-parity",
-      "FS-TRANSACTION/sdk-retry-and-ordering",
-      "FS-TRANSACTION/transaction-resource-limits",
-      "FS-TRANSACTION/paging-and-cancellation"
+      "FS-TRANSACTION/paging-and-cancellation",
+      "FS-TRANSACTION/web-sdk-optimistic-retry",
+      "FS-TRANSACTION/admin-sdk-server-retry",
+      "FS-TRANSACTION/commit-atomic-visibility"
     ],
     "unestimatedReason": "The 190-request arithmetic covers only the prepared 13-case expiry/retry campaign. Every other acceptance condition, including the remaining failed-commit behavior and historical-reference replay, needs a finite sandbox corpus, request cap, cost estimate and cleanup plan before permission.",
     "prerequisites": [
       "FS-DATA-WRITE closure and exclusive sandbox scheduling",
       "New sandbox conformance corpus and source-bound runner, with clean-context review and a bounded request count",
       "Owner go-ahead under the current production-send hold, two recordings and one sandbox JSONL ledger line per run",
-      "Redesign the legacy one-run O8 manifest without importing Gate or reservation tooling"
+      "Redesign the legacy one-run O8 manifest without importing Gate or reservation tooling",
+      "Check that the sbx Web app and API key already exist before any Web SDK observation; creating one needs a separate owner decision",
+      "Check the deployed Firestore Rules release before sending; do not change Rules"
     ],
     "productionExecuted": false,
     "notPreparedObligations": [
@@ -672,7 +723,28 @@
       "token replay in a second named database",
       "readTime outside retention",
       "query-range phantom lock",
-      "client SDK retry"
+      "client SDK retry",
+      "Web SDK optimistic conflict and Admin SDK retry wire shape",
+      "native Listen atomic commit visibility",
+      "official emulator profile checks",
+      "OPTIMISTIC mode follow-up issue"
     ]
+  },
+  "note": "Behavioral conditions are counted once. Server transaction observations use Admin OAuth and bypass Firestore Rules; user read-write refusal and read-only allowance belong to FS-RULES. No production recording or closure is claimed.",
+  "profileComparison": {
+    "profile": "strict",
+    "emulatorCompatibilityCheck": "PENDING_LOCAL_OBSERVATION",
+    "note": "Before freeze, compare official emulator behavior for idle and total expiry, token ownership, and retry-token refusal. The emulator profile must not add refusals absent from the official emulator."
+  },
+  "configProjections": {
+    "databaseConcurrencyMode": "PESSIMISTIC",
+    "optimisticMode": "FOLLOW_UP_ISSUE",
+    "pitr": "DISABLED_FOR_RETENTION_OBSERVATION"
+  },
+  "oracle": {
+    "project": "fireemu-oracle-sbx",
+    "database": "(default)",
+    "credentials": "Admin OAuth for server transactions; unauthenticated Web SDK for optimistic transactions where deployed Rules permit",
+    "productionExecuted": false
   }
 }

@@ -24,6 +24,7 @@ const recipeIds = [
   "storage-object/firebase/delete",
   "storage-object/gcs/delete",
   "storage-object/cross-dialect/state",
+  "storage-object/errors/missing",
 ];
 const directory = await mkdtemp(join(tmpdir(), "storage-object-basic-"));
 const results = [];
@@ -127,6 +128,7 @@ for (const [index, recipeId] of recipeIds.entries()) {
           .update(Buffer.from(step.body.base64, "base64"))
           .digest("hex");
       else if (
+        response.status < 400 &&
         !(
           step.method === "DELETE" ||
           (["PATCH", "PUT"].includes(step.method) && step.body?.json && expectedBytesSha256)

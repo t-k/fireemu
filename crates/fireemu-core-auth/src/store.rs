@@ -3314,12 +3314,13 @@ impl AuthStore {
                 .is_some_and(|user| !user.mfa.totp_factors().is_empty())
     }
 
-    /// Whether second factors follow production's project rules (the strict profile).
+    /// Whether second factors follow production's rules (the strict profile). A tenant's follow
+    /// them as the project's do, with the tenant's own MFA config (AUTH-TENANT-BLOCKING sandbox
+    /// recording 2026-09-27, `atb/tenant/mfa` and `inheritance`; AUTH-MFA scope decision M2
+    /// left them to this parent).
     #[must_use]
     pub const fn second_factor_rules_are_production(&self) -> bool {
-        // A tenant's second factors belong to AUTH-TENANT-BLOCKING (scope decision M2): they
-        // keep the rules they had.
-        self.production_mfa && self.tenant_id.is_none()
+        self.production_mfa
     }
 
     /// Switches action codes to production's lifetimes (see `production_oob_lifetimes`).
@@ -9778,7 +9779,10 @@ mod compatibility_routing_tests {
             AuthRegistry::refresh_token_tenant("rt1.8.4.demo-appabcd.entropy"),
             Some(("demo-app".to_owned(), "abcd".to_owned()))
         );
-        assert_eq!(AuthRegistry::refresh_token_tenant("rt1.8.0.demo-app.entropy"), None);
+        assert_eq!(
+            AuthRegistry::refresh_token_tenant("rt1.8.0.demo-app.entropy"),
+            None
+        );
         assert_eq!(AuthRegistry::refresh_token_tenant("opaque"), None);
     }
 

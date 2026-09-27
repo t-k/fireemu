@@ -442,46 +442,56 @@ fn only_a_phone_enrollment_session_outlives_ten_minutes() {
     assert!(phone_code_at(|uid| VerificationPurpose::Enrollment { uid }, 1_806).is_ok());
 }
 
-/// A tenant's second factors keep their earlier rules under a store that follows production's
-/// (scope decision M2; safety review 2026-09-25, SF-3 b): no challenge timeout, no recent
-/// sign-in, and a pending credential is spent by its success.
+/// A tenant's second factors follow production's rules as the project's do (AUTH-TENANT-BLOCKING
+/// sandbox recording 2026-09-27, `atb/tenant/mfa`; AUTH-MFA scope decision M2 left them to
+/// that parent): the same sequence answers the same in a tenant store and a project store.
 #[test]
-fn a_tenant_keeps_its_earlier_second_factor_rules() {
-    let mut s = fireemu_core_auth::store::AuthStore::new_tenant(
+fn a_tenant_follows_the_same_second_factor_rules_as_the_project() {
+    let mut tenant = fireemu_core_auth::store::AuthStore::new_tenant(
         "demo-app",
         "tenant-a",
         SplitMix64::new(3),
         TotpPolicy::default(),
     );
-    s.set_production_mfa(true);
-    assert!(!s.second_factor_rules_are_production());
-    assert!(!s.totp_enrollment_login_too_old(1_788_004_875, seconds(1_800)));
-    let (uid, material) = started(&mut s);
-    s.finalize_totp_enrollment_named(
-        &uid,
-        &material.session_id,
-        code_at(&material, t0()),
-        None,
-        t0(),
-    )
-    .unwrap();
-    let pending = s.start_mfa_sign_in(&uid, t0()).unwrap();
-    let factor = s.user_by_id("a").unwrap().mfa.totp_factors()[0]
-        .mfa_enrollment_id
-        .clone();
-    let late = seconds(1_800);
-    s.finalize_mfa_sign_in_for_factor(&uid, &pending, &factor, code_at(&material, late), late)
-        .unwrap();
-    assert_eq!(
-        s.finalize_mfa_sign_in_for_factor(
-            &uid,
-            &pending,
-            &factor,
-            code_at(&material, seconds(1_830)),
-            seconds(1_830)
-        ),
-        Err(MfaError::PendingSignInUnknown)
+    tenant.set_production_mfa(true);
+    assert!(tenant.second_factor_rules_are_production());
+    let mut project = fireemu_core_auth::store::AuthStore::new(
+        "demo-app",
+        SplitMix64::new(3),
+        TotpPolicy::default(),
     );
+    project.set_production_mfa(true);
+    let run = |s: &mut fireemu_core_auth::store::AuthStore| {
+        let too_old = s.totp_enrollment_login_too_old(1_788_004_875, seconds(1_800));
+        let (uid, material) = started(s);
+        s.finalize_totp_enrollment_named(
+            &uid,
+            &material.session_id,
+            code_at(&material, t0()),
+            None,
+            t0(),
+        )
+        .unwrap();
+        let pending = s.start_mfa_sign_in(&uid, t0()).unwrap();
+        let factor = s.user_by_id("a").unwrap().mfa.totp_factors()[0]
+            .mfa_enrollment_id
+            .clone();
+        let late = seconds(1_800);
+        let finalized = s
+            .finalize_mfa_sign_in_for_factor(
+                &uid,
+                &pending,
+                &factor,
+                code_at(&material, late),
+                late,
+            )
+            .map(|_| ());
+        (too_old, finalized)
+    };
+    let in_tenant = run(&mut tenant);
+    assert_eq!(in_tenant, run(&mut project));
+    // Production's challenge timeout applies in the tenant too.
+    assert_eq!(in_tenant.1, Err(MfaError::TotpChallengeTimeout));
 }
 
 /// The refusals this parent added describe themselves (mutation follow-up,

@@ -739,6 +739,13 @@ fn sdk_shaped_refresh_of_a_tenant_token_from_another_project_is_refused() {
 #[allow(clippy::too_many_lines)]
 fn a_tenant_mfa_pending_credential_is_refused_by_the_other_tenant() {
     for (profile, state, _registry) in profiles() {
+        // Under strict a tenant asks for a second factor only while its own MFA config enables
+        // it (AUTH-TENANT-BLOCKING recording 2026-09-27, mfa#second-factor-m1).
+        if profile == "strict" {
+            for tenant in [TENANT_A, TENANT_B] {
+                enable_tenant_sms_mfa(&state, tenant);
+            }
+        }
         let (status, created) = admin(
             &state,
             "POST",
@@ -789,9 +796,15 @@ fn a_tenant_mfa_pending_credential_is_refused_by_the_other_tenant() {
                 start_body.clone(),
             );
             assert_eq!(status, 400, "{profile} start {selector:?}: {refused}");
-            assert_eq!(
-                class(&refused),
-                "INVALID_MFA_PENDING_CREDENTIAL",
+            // Strict refuses with production's pending-credential rules (the project's,
+            // AUTH-MFA); the exact class for this cross-tenant case was not recorded.
+            let expected: &[&str] = if profile == "strict" {
+                &["INVALID_PENDING_TOKEN", "INVALID_MFA_PENDING_CREDENTIAL"]
+            } else {
+                &["INVALID_MFA_PENDING_CREDENTIAL"]
+            };
+            assert!(
+                expected.contains(&class(&refused).as_str()),
                 "{profile} start {selector:?}: {refused}"
             );
         }
@@ -842,11 +855,23 @@ fn a_tenant_mfa_pending_credential_is_refused_by_the_other_tenant() {
                     status, 400,
                     "{profile} finalize {shape} {selector:?}: {refused}"
                 );
-                assert_eq!(
-                    class(&refused),
-                    expected,
-                    "{profile} finalize {shape} {selector:?}: {refused}"
-                );
+                if profile == "strict" {
+                    assert!(
+                        [
+                            "INVALID_SESSION_INFO",
+                            "INVALID_PENDING_TOKEN",
+                            "INVALID_MFA_PENDING_CREDENTIAL"
+                        ]
+                        .contains(&class(&refused).as_str()),
+                        "{profile} finalize {shape} {selector:?}: {refused}"
+                    );
+                } else {
+                    assert_eq!(
+                        class(&refused),
+                        expected,
+                        "{profile} finalize {shape} {selector:?}: {refused}"
+                    );
+                }
             }
         }
         // The refused finalize consumed neither the pending sign-in nor the code.
@@ -1961,11 +1986,22 @@ fn deleting_a_tenant_invalidates_its_credentials_and_leaves_the_sibling_and_proj
     }
 }
 
-/// A tenant's second factors keep the rules they had (AUTH-MFA scope decision M2): the
-/// project's `mfa` config, which a tenant never reads, does not refuse a tenant's phone
-/// enrollment in either profile (AUTH-MFA safety review 2026-09-25, MF-1).
+fn enable_tenant_sms_mfa(state: &AuthState, tenant: &str) {
+    let (status, body) = admin(
+        state,
+        "PATCH",
+        &format!("{ADMIN_V2}/tenants/{tenant}?updateMask=mfaConfig"),
+        &json!({"mfaConfig": {"state": "ENABLED", "enabledProviders": ["PHONE_SMS"]}}),
+    );
+    assert_eq!(status, 200, "{tenant}: {body}");
+}
+
+/// Under strict a tenant's own MFA config decides its phone enrollment, not the project's
+/// (AUTH-TENANT-BLOCKING recording 2026-09-27, inheritance#phone-enroll-in-tenant,
+/// mfa#phone-start-n1, phone-start-m1); the emulator profile enrolls one as the official
+/// emulator does.
 #[test]
-fn a_tenant_phone_enrollment_keeps_the_earlier_rules() {
+fn a_tenant_phone_enrollment_follows_the_tenant_mfa_config() {
     for (profile, state, _registry) in profiles() {
         let (status, created) = admin(
             &state,
@@ -1982,12 +2018,24 @@ fn a_tenant_phone_enrollment_keeps_the_earlier_rules() {
         );
         assert_eq!(status, 200, "{profile}: {signed_in}");
         let token = signed_in["idToken"].clone();
-        let (status, started) = client(
-            &state,
-            &format!("{V2}/accounts/mfaEnrollment:start"),
-            TENANT_A,
-            json!({"idToken": token, "phoneEnrollmentInfo": {"phoneNumber": "+15559876543"}}),
-        );
+        let start = || {
+            client(
+                &state,
+                &format!("{V2}/accounts/mfaEnrollment:start"),
+                TENANT_A,
+                json!({"idToken": token, "phoneEnrollmentInfo": {"phoneNumber": "+15559876543"}}),
+            )
+        };
+        if profile == "strict" {
+            let (status, refused) = start();
+            assert_eq!(status, 400, "{refused}");
+            assert_eq!(
+                refused["error"]["message"],
+                "OPERATION_NOT_ALLOWED : SMS based MFA not enabled."
+            );
+            enable_tenant_sms_mfa(&state, TENANT_A);
+        }
+        let (status, started) = start();
         assert_eq!(status, 200, "{profile}: {started}");
         let session = started["phoneSessionInfo"]["sessionInfo"].clone();
         let code = verification_codes(&state, TENANT_A)
@@ -2028,11 +2076,12 @@ fn a_registry_project_config_update_sets_the_mfa_config() {
     }
 }
 
-/// A strict tenant keeps its earlier second-factor rules (scope decision M2): `auth.totp` still
-/// enables its TOTP enrollment, and an enrolled factor is asked for while the project's `mfa`
-/// config is off (follow-up confirmation SF-2).
+/// A strict tenant follows production's second-factor rules with its own MFA config
+/// (AUTH-TENANT-BLOCKING recording 2026-09-27, mfa#totp-start-n1, sign-in-n1-with-factor):
+/// `auth.totp` does not enable its TOTP enrollment, and a factor an admin attached is not asked
+/// for while the tenant's MFA is off.
 #[test]
-fn a_strict_tenant_keeps_auth_totp_and_asks_for_enrolled_factors() {
+fn a_strict_tenant_follows_its_own_mfa_config() {
     let mut state = strict_state();
     state.totp_extension_enabled = true;
     let registry = Arc::new(AuthRegistry::new("demo-app", state.store.clone()));
@@ -2059,7 +2108,11 @@ fn a_strict_tenant_keeps_auth_totp_and_asks_for_enrolled_factors() {
         TENANT_A,
         json!({"idToken": signed_in["idToken"], "totpEnrollmentInfo": {}}),
     );
-    assert_eq!(status, 200, "auth.totp enables a tenant's TOTP: {started}");
+    assert_eq!(status, 400, "{started}");
+    assert_eq!(
+        started["error"]["message"],
+        "OPERATION_NOT_ALLOWED : TOTP based MFA not enabled."
+    );
     let (status, phone) = admin(
         &state,
         "POST",
@@ -2068,6 +2121,17 @@ fn a_strict_tenant_keeps_auth_totp_and_asks_for_enrolled_factors() {
             "mfaInfo": [{"phoneInfo": "+15559876543"}]}),
     );
     assert_eq!(status, 200, "{phone}");
+    let (status, pending) = client(
+        &state,
+        &format!("{V1}/accounts:signInWithPassword"),
+        TENANT_A,
+        json!({"email": "tenant-phone@example.com", "password": "hunter22", "returnSecureToken": true}),
+    );
+    assert_eq!(status, 200, "{pending}");
+    assert!(pending.get("mfaPendingCredential").is_none(), "{pending}");
+    assert!(pending["idToken"].is_string(), "{pending}");
+    // With the tenant's SMS MFA on, the same sign-in asks for the factor.
+    enable_tenant_sms_mfa(&state, TENANT_A);
     let (status, pending) = client(
         &state,
         &format!("{V1}/accounts:signInWithPassword"),

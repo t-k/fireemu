@@ -193,13 +193,20 @@ pub async fn write_stream(
         {
             break;
         }
-        // Production's first-message token probe is rejected while the sender remains open.
-        // Its recorded request-byte probes half-close immediately and end OK without a reply.
+        // Production refuses a first message carrying a token (ABORTED) while the client keeps
+        // sending, but ends the stream OK when the client half-closes right behind it
+        // (coordinator decision D5, 2026-09-27). A large message can finish arriving just
+        // before its half-close does, so only this refusal waits, briefly, for the half-close.
+        // The grace approximates production's processing time; it is not observed.
         if state.parent.is_none()
             && !req.stream_token.is_empty()
             && req.stream_id.is_empty()
             && req.writes.is_empty()
-            && already_half_closed(&mut inbound)
+            && half_closes_before(
+                &mut inbound,
+                tokio::time::sleep(FIRST_TOKEN_HALF_CLOSE_GRACE),
+            )
+            .await
         {
             break;
         }
@@ -208,6 +215,23 @@ pub async fn write_stream(
         if tx.send(outcome).await.is_err() || stop {
             break;
         }
+    }
+}
+
+/// How long a refused first-message token waits for the client's half-close (decision D5).
+const FIRST_TOKEN_HALF_CLOSE_GRACE: std::time::Duration = std::time::Duration::from_millis(100);
+
+/// Whether the client ends its side before `deadline` does. The end wins a tie; a message or
+/// the deadline means the client is still sending.
+async fn half_closes_before<S, D>(inbound: &mut S, deadline: D) -> bool
+where
+    S: tokio_stream::Stream + Unpin,
+    D: std::future::Future<Output = ()>,
+{
+    tokio::select! {
+        biased;
+        next = inbound.next() => next.is_none(),
+        () = deadline => false,
     }
 }
 
@@ -1881,6 +1905,28 @@ mod empty_write_tests {
         assert!(
             closed[0].is_ok(),
             "only the handshake answer, then an OK end"
+        );
+    }
+
+    /// The half-close race that decides a first-message token, without time: the client's end
+    /// wins over a deadline that is ready at the same moment.
+    #[tokio::test]
+    async fn the_first_token_grace_is_decided_by_what_arrives_first() {
+        use std::future::{pending, ready};
+        let closed = || tokio_stream::iter(Vec::<u8>::new());
+        let open = || tokio_stream::pending::<u8>();
+        assert!(half_closes_before(&mut closed(), pending::<()>()).await);
+        assert!(
+            half_closes_before(&mut closed(), ready(())).await,
+            "the end wins a tie"
+        );
+        assert!(
+            !half_closes_before(&mut open(), ready(())).await,
+            "the deadline passed"
+        );
+        assert!(
+            !half_closes_before(&mut tokio_stream::iter(vec![1_u8]), pending::<()>()).await,
+            "another message means the client is still sending"
         );
     }
 

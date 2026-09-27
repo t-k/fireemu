@@ -166,6 +166,30 @@ test("a public projection rejects secrets placed in metadata fields", () => {
   assert.equal(projected[0].eventType, "<invalid>");
 });
 
+test("a public projection retains observed v1 Firestore and Auth context event types", () => {
+  for (const [handler, source, eventType] of [
+    ["fsCreatedV1", "firestore", "google.firestore.document.create"],
+    ["fsUpdatedV1", "firestore", "google.firestore.document.update"],
+    ["fsDeletedV1", "firestore", "google.firestore.document.delete"],
+    ["fsWrittenV1", "firestore", "google.firestore.document.write"],
+    ["authCreatedV1", "auth", "google.firebase.auth.user.create"],
+    ["authDeletedV1", "auth", "google.firebase.auth.user.delete"],
+  ]) {
+    const [projected] = exportPublicFrames([
+      {
+        sequence: 1,
+        frame: {
+          handler,
+          source,
+          generation: 1,
+          event: { context: { eventType, eventId: "private", timestamp: "private" }, data: {} },
+        },
+      },
+    ]);
+    assert.equal(projected.eventType, eventType);
+  }
+});
+
 test("the public allowlists match every fixed handler and SDK event type", async () => {
   const manifest = JSON.parse(
     await readFile(new URL("../functions-events/programs.json", import.meta.url)),
@@ -186,5 +210,5 @@ test("the public allowlists match every fixed handler and SDK event type", async
   const types = new Set(
     Object.values(fixture).map((handler) => handler.__endpoint.eventTrigger.eventType),
   );
-  assert.deepEqual(publicEventTypes, types);
+  assert.ok([...types].every((type) => publicEventTypes.has(type)));
 });

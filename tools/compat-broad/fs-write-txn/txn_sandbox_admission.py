@@ -107,9 +107,44 @@ def _terminal(row):
     outcome = row.get("outcome")
     return (
         outcome in ("recorded", "prepared", "legacy-recovery-reservation-actual-requests")
-        or isinstance(outcome, str) and outcome.startswith("recovered-")
+        or _recovered(row)
+        or outcome == "failed" and "requests" in row and (row["requests"] is None or type(row["requests"]) is int and row["requests"] == 0)
         or row.get("event") == "finished" and outcome == "presend-cancelled-no-send"
     )
+
+
+def _recovered(row):
+    outcome = row.get("outcome")
+    return outcome == "recovered" or isinstance(outcome, str) and outcome.startswith("recovered-")
+
+
+def _same_run(first, second):
+    key = next((candidate for candidate in ("runDir", "runId") if first.get(candidate)), None)
+    return key is not None and second.get(key) == first[key]
+
+
+def _closed_attempt(open_row, key, later_rows):
+    identity = open_row.get(key)
+    if not identity:
+        return False
+    for index, ending in enumerate(later_rows):
+        if ending.get(key) != identity or ending.get("taskId") != open_row.get("taskId"):
+            continue
+        if _terminal(ending):
+            if not _recovered(ending) or not open_row.get("runDir") or _same_run(open_row, ending):
+                return True
+        if ending.get("outcome") not in ("failed", "bulk-delete-cancelled", "needs-recovery", "stopped-needs-review"):
+            continue
+        if not _same_run(ending, open_row):
+            continue
+        if any(
+            recovered.get("taskId") == open_row.get("taskId")
+            and _same_run(ending, recovered)
+            and _recovered(recovered)
+            for recovered in later_rows[index + 1 :]
+        ):
+            return True
+    return False
 
 
 def verify_send_gates(rows, now, decisions, pins):
@@ -137,13 +172,7 @@ def verify_send_gates(rows, now, decisions, pins):
                 (candidate for candidate in ("attemptId", "runId", "runDir") if row.get(candidate)),
                 None,
             )
-            identity = row.get(key)
-            if not identity or not any(
-                later.get(key) == identity
-                and later.get("taskId") == row.get("taskId")
-                and _terminal(later)
-                for later in sandbox[index + 1 :]
-            ):
+            if not _closed_attempt(row, key, sandbox[index + 1 :]):
                 raise ValueError("the sandbox has an open attempt")
     task_rows = [row for row in sandbox if row.get("taskId") == "FS-TRANSACTION-SANDBOX"]
     if task_rows:

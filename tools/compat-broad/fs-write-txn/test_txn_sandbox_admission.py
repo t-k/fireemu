@@ -154,6 +154,43 @@ def test_legacy_reservation_with_same_run_directory_has_a_terminal():
     assert admission.verify_send_gates(rows, NOW, DECISION, PINS) == LAST["ts"]
 
 
+@pytest.mark.parametrize("unsent_requests", [None, 0])
+def test_prior_sandbox_attempts_close_only_after_their_own_recovery(unsent_requests):
+    task = "FS-DATA-WRITE-SANDBOX"
+    base = {"project": "fireemu-oracle-sbx", "taskId": task}
+    rows = [
+        {**base, "ts": "2026-09-24T14:00:00Z", "outcome": "reserved", "attemptId": "before-send", "runDir": "/private/run-a"},
+        {**base, "ts": "2026-09-24T14:00:02Z", "outcome": "failed", "attemptId": "before-send", "runDir": "/private/run-a", "requests": unsent_requests},
+        {**base, "ts": "2026-09-24T14:10:00Z", "outcome": "reserved", "attemptId": "after-send", "runDir": "/private/run-b"},
+        {**base, "ts": "2026-09-24T14:11:00Z", "outcome": "failed", "attemptId": "after-send", "runDir": "/private/run-b", "requests": 118},
+        {**base, "ts": "2026-09-25T09:00:00Z", "outcome": "reserved", "attemptId": "cancelled-cleanup", "runDir": "/private/run-b"},
+        {**base, "ts": "2026-09-25T09:01:00Z", "outcome": "bulk-delete-cancelled", "attemptId": "cancelled-cleanup", "runDir": "/private/run-b", "requests": 3},
+        {**base, "ts": "2026-09-25T09:03:00Z", "outcome": "reserved", "attemptId": "finished-cleanup", "runDir": "/private/run-b"},
+        {**base, "ts": "2026-09-25T09:04:00Z", "outcome": "recovered", "attemptId": "finished-cleanup", "runDir": "/private/run-b", "requests": 110},
+        LAST,
+    ]
+    assert admission.verify_send_gates(rows, NOW, DECISION, PINS) == LAST["ts"]
+    with pytest.raises(ValueError, match="open attempt"):
+        admission.verify_send_gates(rows[:4] + [LAST], NOW, DECISION, PINS)
+    for changed in (
+        {"runDir": "/private/different-run"},
+        {"taskId": "DIFFERENT-TASK"},
+        {"outcome": "unknown-recovery"},
+    ):
+        altered = [dict(row) for row in rows]
+        altered[-2].update(changed)
+        with pytest.raises(ValueError, match="open attempt"):
+            admission.verify_send_gates(altered, NOW, DECISION, PINS)
+
+
+def test_unknown_endings_and_failed_without_request_count_remain_open():
+    opened = {"ts": "2026-09-27T14:00:00Z", "project": "fireemu-oracle-sbx", "taskId": "OTHER", "outcome": "reserved", "attemptId": "unknown", "runDir": "/private/run-c"}
+    for ending in ({"outcome": "failed"}, {"outcome": "unrecognized", "requests": 0}):
+        rows = [opened, {**opened, **ending, "ts": "2026-09-27T14:01:00Z"}, LAST]
+        with pytest.raises(ValueError, match="open attempt"):
+            admission.verify_send_gates(rows, NOW, DECISION, PINS)
+
+
 def test_owner_envelope_and_delegated_exact_version_are_accepted_together():
     assert admission.verify_send_gates([LAST], NOW, ENVELOPE + DELEGATED, PINS) == LAST["ts"]
     with pytest.raises(ValueError, match="owner"):

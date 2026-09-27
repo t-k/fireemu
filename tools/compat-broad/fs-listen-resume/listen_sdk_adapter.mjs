@@ -445,6 +445,9 @@ export const executeLocalLifecycle = async (sdk, config, {
     admitObservation();
     checkpoint('account-create-intent');
     const signUp = async (name, principal) => {
+      // A checkpoint or an earlier signup can consume the observation budget.
+      // Preserve known ownership from completed calls, but do not start another.
+      admitObservation();
       principal.signupAttempted = true;
       const { email, password } = principal.account;
       const credential = await sdk.createUserWithEmailAndPassword(clients[name].auth, email, password);
@@ -480,6 +483,7 @@ export const executeLocalLifecycle = async (sdk, config, {
       }
     };
     checkpoint('documents-at-risk');
+    admitObservation();
     catalogStarted = true;
     outcome = await run(deps, {
       catalog, budget, cleanupBudget, paths, nonce, client: 'primary', clientFor: CLEANUP_CLIENT_FOR,

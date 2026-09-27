@@ -399,6 +399,43 @@ test('a late successful signup is recovered without starting the next observatio
   assert.equal(out.lifecycle.accountCleanup.complete, true);
   assert.equal(f.account(), null);
   assert.ok(!f.calls.includes('signin:witness'));
+  assert.ok(!f.calls.includes('signup-b'));
+  assert.equal(out.lifecycle.accountCleanup.accounts.secondary.outcome, 'not-created-by-this-run');
+});
+
+test('a slow account intent checkpoint cannot start signup after the observation deadline', async () => {
+  let time = 0;
+  const f = fixture();
+  const out = await executeLocalLifecycle(f.sdk, config(() => time), {
+    request: f.request,
+    checkpoint: phase => { if (phase === 'account-create-intent') time = 300000; },
+  });
+  assert.equal(out.lifecycle.complete, false);
+  assert.ok(!f.calls.includes('signup'));
+  assert.ok(!f.calls.includes('signup-b'));
+  assert.equal(out.lifecycle.accountCleanup.complete, true);
+  assert.equal(out.lifecycle.accountCleanup.accounts.primary.outcome, 'not-created-by-this-run');
+  assert.ok(f.calls.includes('delete-app:primary'));
+  assert.ok(f.calls.includes('delete-app:secondary'));
+});
+
+test('a slow document checkpoint cannot enter the catalog after the observation deadline', async () => {
+  let time = 0;
+  let entered = false;
+  const f = fixture();
+  const out = await executeLocalLifecycle(f.sdk, config(() => time), {
+    request: f.request,
+    checkpoint: phase => { if (phase === 'documents-at-risk') time = 300000; },
+    run: async () => { entered = true; throw new Error('expired catalog entered'); },
+  });
+  assert.equal(entered, false);
+  assert.equal(out.lifecycle.complete, false);
+  assert.ok(!f.calls.includes('write'));
+  assert.equal(out.lifecycle.accountCleanup.complete, true);
+  assert.equal(f.account(), null);
+  assert.equal(f.accountB(), null);
+  assert.ok(f.calls.includes('delete-app:primary'));
+  assert.ok(f.calls.includes('delete-app:secondary'));
 });
 
 test('an expired recovery phase never calls a restoration hook', async () => {

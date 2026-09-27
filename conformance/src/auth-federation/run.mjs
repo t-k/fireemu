@@ -100,7 +100,8 @@ async function prepareRun(project) {
     run,
     certificates: { "saml-a": await makeCertificate(secretDir, "saml-a") },
     tokens: { missing: legacy("missing"), off: legacy("off") },
-  }).map((program) => ({ ...program, minted: mintTokens(program, { issuer, keys, now }) }));
+  });
+  for (const program of programs) program.minted = mintTokens(program, { issuer, keys, now });
   validateFederationCorpus(programs);
   return { run, secretDir, runKids: [keys.run.jwk.kid], programs, jwks: [keys.run.jwk] };
 }
@@ -252,7 +253,7 @@ async function harnessJson(ctx, method, path, body) {
   const response = await fetch(url, {
     method,
     headers: { authorization: ctx.adminAuthorization, "content-type": "application/json" },
-    body: text,
+    ...(text === undefined ? {} : { body: text }),
   });
   return response.json().catch(() => ({}));
 }

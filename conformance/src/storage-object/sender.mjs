@@ -185,8 +185,10 @@ export function createLocalStorageSender({
       media.step.objectName !== name ||
       metadata.step.method !== "GET" ||
       media.step.method !== "GET" ||
-      metadata.step.query.alt !== undefined ||
+      Object.keys(metadata.step.query).length !== 0 ||
+      Object.keys(media.step.query).length !== 1 ||
       media.step.query.alt !== "media" ||
+      Object.keys(media.step.headers ?? {}).some((header) => header.toLowerCase() === "range") ||
       metadata.response.status !== 200 ||
       media.response.status !== 200
     )

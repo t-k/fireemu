@@ -259,6 +259,26 @@ test("a bound upload is deleted only at its owned generation with counted absenc
     path: `/storage/v1/b/example.appspot.com/o/${encodeURIComponent(name)}`,
     query: { alt: "media" },
   });
+  await sender.sendStep({
+    id: "range",
+    dialect: "gcs",
+    method: "GET",
+    objectName: name,
+    path: `/storage/v1/b/example.appspot.com/o/${encodeURIComponent(name)}`,
+    query: { alt: "media" },
+    headers: { range: "bytes=0-0" },
+  });
+  assert.throws(
+    () =>
+      sender.confirmOwned({
+        name,
+        uploadOperationId: "upload",
+        metadataOperationId: "metadata",
+        mediaOperationId: "range",
+        expectedBytesSha256: digest,
+      }),
+    /readbacks|range/i,
+  );
   assert.throws(
     () =>
       sender.confirmOwned({

@@ -374,6 +374,9 @@ pub enum TokenSemantics {
     Firestore,
 }
 
+/// The wall time a real-time session follows (see [`RulesEnforcer::with_wall_clock`]).
+pub type WallSource = Arc<dyn Fn() -> LogicalInstant + Send + Sync>;
+
 /// Rules enforcement state shared by every surface.
 pub struct RulesEnforcer {
     rules: Arc<RulesetSlot>,
@@ -395,6 +398,9 @@ pub struct RulesEnforcer {
     end_user_transactions: bool,
     /// Which ID-token checks apply (see [`TokenSemantics`]).
     token_semantics: TokenSemantics,
+    /// The wall time an unpinned strict session follows; `None` keeps the clock where it is
+    /// told to be.
+    wall_clock: Option<WallSource>,
 }
 
 impl RulesEnforcer {
@@ -415,7 +421,18 @@ impl RulesEnforcer {
             refuse_without_ruleset: false,
             end_user_transactions: true,
             token_semantics: TokenSemantics::default(),
+            wall_clock: None,
         }
+    }
+
+    /// Moves the session clock forward to `source`'s wall time before every read of it, as the
+    /// Auth adapter does for its own requests: token expiry and `request.time` are then judged
+    /// at the time of the request, not at the time of the last Auth request. A clock already
+    /// ahead of the wall (advanced on purpose) is never moved back.
+    #[must_use]
+    pub fn with_wall_clock(mut self, source: WallSource) -> Self {
+        self.wall_clock = Some(source);
+        self
     }
 
     /// Sets which ID-token checks apply: the Firestore surfaces use
@@ -519,10 +536,16 @@ impl RulesEnforcer {
     }
 
     fn now(&self) -> Result<LogicalInstant, Status> {
-        self.clock
+        let mut clock = self
+            .clock
             .lock()
-            .map(|c| c.now())
-            .map_err(|_| Status::internal("clock lock poisoned"))
+            .map_err(|_| Status::internal("clock lock poisoned"))?;
+        if let Some(wall_clock) = &self.wall_clock {
+            // `advance_to` refuses an instant behind the clock, so a clock advanced on purpose
+            // past the wall stays where it is.
+            let _ = clock.advance_to(wall_clock());
+        }
+        Ok(clock.now())
     }
 
     /// Replaces the loaded ruleset, as `PUT /emulator/v1/projects/{p}:securityRules` and the

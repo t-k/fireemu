@@ -748,6 +748,21 @@ fn assemble_adapters(bound: BoundStartup) -> Result<ServiceAssembly, String> {
     })
 }
 
+/// The wall time Firestore follows: the strict profile's unpinned daemon judges token expiry
+/// and `request.time` at the time of each request, as production does (FS-RULES token-expiry,
+/// AUTH-FS-CROSS stage 2). A pinned clock keeps moving only when told to (ADR-004), and the
+/// emulator profile keeps its clock as it was, adding no refusal the official emulator lacks.
+fn firestore_wall_source(
+    profile: crate::config::CompatibilityProfile,
+    wall_clock: Option<AuthWallClock>,
+) -> Option<fireemu_adapter_grpc::rules::WallSource> {
+    if profile != crate::config::CompatibilityProfile::Strict {
+        return None;
+    }
+    let wall_clock = wall_clock?;
+    Some(Arc::new(move || wall_clock.now()))
+}
+
 fn assemble_suite(assembly: ServiceAssembly, exec_mode: bool) -> Result<ReadySuite, String> {
     let ServiceAssembly {
         log_bus,
@@ -889,9 +904,15 @@ fn assemble_suite(assembly: ServiceAssembly, exec_mode: bool) -> Result<ReadySui
         }
     }
 
+    let wall_source = firestore_wall_source(cfg.profile, auth.wall_clock.clone());
     let enforcer = cfg.rules_enforced.then(|| {
+        let enforcer = RulesEnforcer::new(rules.clone(), auth_store.clone(), clock.clone());
+        let enforcer = match wall_source {
+            Some(source) => enforcer.with_wall_clock(source),
+            None => enforcer,
+        };
         Arc::new(
-            RulesEnforcer::new(rules.clone(), auth_store.clone(), clock.clone())
+            enforcer
                 .with_token_semantics(TokenSemantics::Firestore)
                 .with_registry(registry.clone())
                 .with_database_rules(database_rules.clone())
@@ -1681,6 +1702,21 @@ mod tests {
         reapply_explicit_auth_quota,
     };
 
+    /// Only the strict profile's unpinned daemon follows wall time on Firestore; a pinned clock
+    /// and the emulator profile get no wall source.
+    #[test]
+    fn firestore_follows_the_wall_only_in_an_unpinned_strict_daemon() {
+        use crate::config::CompatibilityProfile;
+        use fireemu_adapter_http::identity_toolkit::AuthWallClock;
+
+        let start = LogicalInstant::from_unix_seconds(1_788_004_860);
+        let wall = AuthWallClock::from_anchor(start, std::time::Instant::now());
+        let source = super::firestore_wall_source(CompatibilityProfile::Strict, Some(wall.clone()))
+            .expect("strict and unpinned follow the wall");
+        assert!(source() >= start);
+        assert!(super::firestore_wall_source(CompatibilityProfile::Strict, None).is_none());
+        assert!(super::firestore_wall_source(CompatibilityProfile::Emulator, Some(wall)).is_none());
+    }
     #[test]
     fn auth_project_config_propagates_all_default_settings() {
         let cfg = crate::config::RuntimeConfig::from_json(&json!({

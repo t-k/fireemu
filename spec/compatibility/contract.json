@@ -987,6 +987,10 @@
             {
               "behaviour": "an unexpired ID token of a deleted tenant is honoured on Firestore in both profiles, as production honoured it about 3 s and 66 s after the deletion (AUTH-FS-CROSS sandbox, 2026-09-27): the tenant is not looked up, and the token keeps its tenant claim, so Security Rules still tell it apart from the project's user of the same uid",
               "precision": "exact-for-local-semantics"
+            },
+            {
+              "behaviour": "a strict-profile daemon without a pinned clock judges Firestore token expiry and request.time at wall time, as production judged expiry (FS-RULES sandbox, 2026-09-25): until then only Auth requests moved the session clock, so an expired token was honoured while no Auth request came in (AUTH-FS-CROSS local run, 2026-09-28); a pinned clock, a clock advanced on purpose and the emulator profile keep moving only when told",
+              "precision": "exact-for-local-semantics"
             }
           ],
           "productionOnly": [],

@@ -105,7 +105,9 @@ impl AuthWallClock {
         }
     }
 
-    fn now(&self) -> LogicalInstant {
+    /// The wall time now, on the logical time line the daemon started on.
+    #[must_use]
+    pub fn now(&self) -> LogicalInstant {
         let elapsed =
             i128::try_from(self.monotonic_start.elapsed().as_nanos()).unwrap_or(i128::MAX);
         self.logical_start

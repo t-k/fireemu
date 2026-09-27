@@ -88,7 +88,10 @@ test("AUTH-FS-CROSS parent promotion requires every condition and an approved cl
     closure.parentStatus === "COMPAT_VERIFIED",
     allVerified && closure.closureReview?.decision === "APPROVED",
   );
-  assert.ok(["UNFROZEN", "FROZEN"].includes(closure.freezeState));
+  // Frozen on 2026-09-27: the condition set above may change only as its comment says.
+  assert.equal(closure.freezeState, "FROZEN");
+  assert.equal(closure.inventoryStatus, "FROZEN");
+  assert.match(closure.frozenOn, /^\d{4}-\d{2}-\d{2}$/);
   assert.equal(closure.oracle.project, "fireemu-oracle-idp");
   assert.equal(closure.oracle.database, "(default)");
 });

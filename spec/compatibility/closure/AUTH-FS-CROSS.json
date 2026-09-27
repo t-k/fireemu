@@ -2,8 +2,8 @@
   "schemaVersion": 1,
   "parent": "AUTH-FS-CROSS",
   "parentStatus": "IMPLEMENTING",
-  "inventoryStatus": "FREEZE_CANDIDATE",
-  "freezeState": "UNFROZEN",
+  "inventoryStatus": "FROZEN",
+  "freezeState": "FROZEN",
   "oracleTrack": "disposable-sandbox",
   "oracle": {
     "project": "fireemu-oracle-idp",
@@ -442,5 +442,7 @@
         "recordingsRequired": 0
       }
     }
-  ]
+  ],
+  "frozenOn": "2026-09-27",
+  "frozenBy": "coordinator (delegated), after owner decisions OX-1 to OX-3, X3 and X9"
 }

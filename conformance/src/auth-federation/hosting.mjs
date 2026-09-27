@@ -326,7 +326,7 @@ const CONFIG_URL = `${ITK}/admin/v2/projects/${SANDBOX_PROJECT}/config`;
  * status, and the issuer's files no longer served (at most five rounds a minute apart; a
  * cached copy holds public keys only). A channel already gone counts as deleted.
  */
-async function removeChannel({ get, send, api, sleep, run, version, issuerHost }) {
+async function removeChannel({ get, send, api, sleep, run, version, issuerHost, deleteVersion }) {
   const channelPath = channelPathOf(run);
   const cleanup = {};
   try {
@@ -342,11 +342,21 @@ async function removeChannel({ get, send, api, sleep, run, version, issuerHost }
   } catch (error) {
     cleanup.channelReadBack = error.status === 404 ? "absent" : `error ${error.message}`;
   }
+  if (version && deleteVersion) {
+    // Only the version this run created; gone is 404 or DELETED.
+    try {
+      await send("DELETE", `${HOSTING}/${version}`, undefined, "version delete");
+      cleanup.versionDeleted = true;
+    } catch (error) {
+      cleanup.versionDeleted = error.status === 404;
+      if (error.status !== 404) cleanup.versionDeleteError = error.message;
+    }
+  }
   if (version) {
     try {
       cleanup.versionStatus = (await get(`${HOSTING}/${version}`, "version")).status;
     } catch (error) {
-      cleanup.versionStatus = `error ${error.message}`;
+      cleanup.versionStatus = error.status === 404 ? "absent" : `error ${error.message}`;
     }
   }
   if (issuerHost) {
@@ -393,6 +403,126 @@ function cleanOf(cleanup, channelCreated) {
   );
 }
 
+/**
+ * Publishes the run's issuer: creates the preview channel `fed-<run>` (whose URL names the
+ * issuer), one version holding the discovery document and the JWKS, releases it and reads
+ * both files back. `result` records how far it got (`channelAttempted`, `channelCreated`,
+ * `issuerHost`, `version`, `readback`), also when it throws.
+ */
+export async function deployIssuer({ api, auth, send, run, jwks, forbidden, stop, result }) {
+  const channelId = `fed-${run}`;
+  // From here the channel may exist even if the answer is lost: the cleanup probes it.
+  result.channelAttempted = true;
+  const channel = await send(
+    "POST",
+    `${HOSTING}/projects/${SANDBOX_PROJECT}/sites/${SITE}/channels?channelId=${channelId}`,
+    { ttl: "86400s" },
+    "channel create",
+  );
+  result.channelCreated = true;
+  const host = new URL(channel.url).host;
+  if (!issuerChannelHost(SANDBOX_PROJECT, run).test(host)) {
+    throw new Error(`channel host ${host} is not the run's preview channel`);
+  }
+  result.issuerHost = host;
+  const issuer = `https://${host}/oidc/${run}`;
+  const site = issuerSite({ issuer, run, jwks, forbidden });
+  stop.check();
+
+  const version = await send(
+    "POST",
+    `${HOSTING}/projects/-/sites/${SITE}/versions`,
+    {},
+    "version create",
+  );
+  result.version = version.name;
+  const zipped = Object.fromEntries(
+    Object.entries(site.files).map(([path, text]) => [path, gzipSync(text)]),
+  );
+  const hashes = Object.fromEntries(
+    Object.entries(zipped).map(([path, gz]) => [
+      path,
+      createHash("sha256").update(gz).digest("hex"),
+    ]),
+  );
+  const populated = await send(
+    "POST",
+    `${HOSTING}/${version.name}:populateFiles`,
+    { files: hashes },
+    "populateFiles",
+  );
+  const uploadUrl = new URL(populated.uploadUrl);
+  if (uploadUrl.host !== "upload-firebasehosting.googleapis.com") {
+    throw new Error(`upload URL ${uploadUrl.host} is not reviewed`);
+  }
+  for (const [path, hash] of Object.entries(hashes)) {
+    if (!(populated.uploadRequiredHashes ?? []).includes(hash)) continue;
+    const response = await api(`${populated.uploadUrl}/${hash}`, {
+      method: "POST",
+      headers: { ...auth, "content-type": "application/octet-stream" },
+      body: zipped[path],
+    });
+    await json(response, `upload ${path}`);
+  }
+  await send(
+    "PATCH",
+    `${HOSTING}/${version.name}?updateMask=status,config`,
+    { status: "FINALIZED", config: site.config },
+    "finalize",
+  );
+  await send(
+    "POST",
+    `${HOSTING}/projects/-/sites/${SITE}/channels/${channelId}/releases?versionName=${encodeURIComponent(version.name)}`,
+    {},
+    "release",
+  );
+  stop.check();
+
+  // Read back what an Identity Platform fetch would get.
+  result.readback = {};
+  for (const [path, text] of Object.entries(site.files)) {
+    const response = await api(`https://${host}${path}`, { headers: {} });
+    const body = await response.text();
+    const type = response.headers.get("content-type") ?? "";
+    const same = response.status === 200 && body === text;
+    result.readback[path] = { status: response.status, contentType: type, same };
+    if (!same || !type.startsWith("application/json")) {
+      throw new Error(`read back of ${path}: ${response.status} ${type} same=${same}`);
+    }
+  }
+}
+
+/**
+ * Removes what `deployIssuer` recorded in `result`: a create whose answer was lost is probed
+ * first; the channel (and, with `deleteVersion`, the version) is deleted and read back.
+ */
+export async function removeIssuer({ get, send, api, sleep, run, result, deleteVersion = false }) {
+  // A create whose answer was lost or refused is probed: a channel that exists is removed.
+  let created = result.channelCreated;
+  const probe = {};
+  if (!created && result.channelAttempted) {
+    try {
+      await get(channelPathOf(run), "channel probe");
+      created = true;
+    } catch (error) {
+      if (error.status !== 404) probe.channelProbe = `error ${error.message}`;
+    }
+  }
+  const cleanup = created
+    ? await removeChannel({
+        get,
+        send,
+        api,
+        sleep,
+        run,
+        version: result.version,
+        issuerHost: result.issuerHost,
+        deleteVersion,
+      })
+    : probe;
+  return { created, cleanup };
+}
+
 export async function hostingSmoke({ api, run, jwks, forbidden, appendLedger, sleep, stop, meta }) {
   checkRun(run);
   const { auth, get, send } = clients(api, meta.token);
@@ -433,111 +563,12 @@ export async function hostingSmoke({ api, run, jwks, forbidden, appendLedger, sl
   });
   let failure;
   try {
-    // From here the channel may exist even if the answer is lost: the cleanup probes it.
-    result.channelAttempted = true;
-    const channel = await send(
-      "POST",
-      `${HOSTING}/projects/${SANDBOX_PROJECT}/sites/${SITE}/channels?channelId=${channelId}`,
-      { ttl: "86400s" },
-      "channel create",
-    );
-    result.channelCreated = true;
-    const host = new URL(channel.url).host;
-    if (!issuerChannelHost(SANDBOX_PROJECT, run).test(host)) {
-      throw new Error(`channel host ${host} is not the run's preview channel`);
-    }
-    result.issuerHost = host;
-    const issuer = `https://${host}/oidc/${run}`;
-    const site = issuerSite({ issuer, run, jwks, forbidden });
-    stop.check();
-
-    const version = await send(
-      "POST",
-      `${HOSTING}/projects/-/sites/${SITE}/versions`,
-      {},
-      "version create",
-    );
-    result.version = version.name;
-    const zipped = Object.fromEntries(
-      Object.entries(site.files).map(([path, text]) => [path, gzipSync(text)]),
-    );
-    const hashes = Object.fromEntries(
-      Object.entries(zipped).map(([path, gz]) => [
-        path,
-        createHash("sha256").update(gz).digest("hex"),
-      ]),
-    );
-    const populated = await send(
-      "POST",
-      `${HOSTING}/${version.name}:populateFiles`,
-      { files: hashes },
-      "populateFiles",
-    );
-    const uploadUrl = new URL(populated.uploadUrl);
-    if (uploadUrl.host !== "upload-firebasehosting.googleapis.com") {
-      throw new Error(`upload URL ${uploadUrl.host} is not reviewed`);
-    }
-    for (const [path, hash] of Object.entries(hashes)) {
-      if (!(populated.uploadRequiredHashes ?? []).includes(hash)) continue;
-      const response = await api(`${populated.uploadUrl}/${hash}`, {
-        method: "POST",
-        headers: { ...auth, "content-type": "application/octet-stream" },
-        body: zipped[path],
-      });
-      await json(response, `upload ${path}`);
-    }
-    await send(
-      "PATCH",
-      `${HOSTING}/${version.name}?updateMask=status,config`,
-      { status: "FINALIZED", config: site.config },
-      "finalize",
-    );
-    await send(
-      "POST",
-      `${HOSTING}/projects/-/sites/${SITE}/channels/${channelId}/releases?versionName=${encodeURIComponent(version.name)}`,
-      {},
-      "release",
-    );
-    stop.check();
-
-    // Read back what an Identity Platform fetch would get.
-    result.readback = {};
-    for (const [path, text] of Object.entries(site.files)) {
-      const response = await api(`https://${host}${path}`, { headers: {} });
-      const body = await response.text();
-      const type = response.headers.get("content-type") ?? "";
-      const same = response.status === 200 && body === text;
-      result.readback[path] = { status: response.status, contentType: type, same };
-      if (!same || !type.startsWith("application/json")) {
-        throw new Error(`read back of ${path}: ${response.status} ${type} same=${same}`);
-      }
-    }
+    await deployIssuer({ api, auth, send, run, jwks, forbidden, stop, result });
   } catch (error) {
     failure = error;
   }
 
-  // A create whose answer was lost or refused is probed: a channel that exists is removed.
-  let created = result.channelCreated;
-  const probe = {};
-  if (!created && result.channelAttempted) {
-    try {
-      await get(channelPathOf(run), "channel probe");
-      created = true;
-    } catch (error) {
-      if (error.status !== 404) probe.channelProbe = `error ${error.message}`;
-    }
-  }
-  const cleanup = created
-    ? await removeChannel({
-        get,
-        send,
-        api,
-        sleep,
-        run,
-        version: result.version,
-        issuerHost: result.issuerHost,
-      })
-    : probe;
+  const { created, cleanup } = await removeIssuer({ get, send, api, sleep, run, result });
   cleanup.authorizedDomainsUnchanged = await domainsUnchanged(get, before);
   const clean = cleanOf(cleanup, created) && cleanup.channelProbe === undefined;
   const entry = {

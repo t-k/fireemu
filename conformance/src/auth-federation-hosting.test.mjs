@@ -11,6 +11,8 @@ import { gunzipSync } from "node:zlib";
 import { SANDBOX_PROJECT } from "./auth-account/harness.mjs";
 import {
   approved,
+  deployIssuer,
+  removeIssuer,
   checkWebConfig,
   hostingRecover,
   hostingSmoke,
@@ -112,8 +114,16 @@ function fakeSandbox(overrides = {}) {
         state.channel ? reply(200, { url: `https://${HOST}` }) : reply(404, {}),
       );
     }
+    if (method === "DELETE" && path === VERSION) {
+      return answer("versionDelete", () => {
+        state.versionDeleted = true;
+        return reply(200, {});
+      });
+    }
     if (method === "GET" && path === VERSION) {
-      return answer("versionGet", () => reply(200, { status: "ABANDONED" }));
+      return answer("versionGet", () =>
+        state.versionDeleted ? reply(404, {}) : reply(200, { status: "ABANDONED" }),
+      );
     }
     return reply(500, { unexpected: `${method} ${url}` });
   };
@@ -713,4 +723,62 @@ test("requests never follow a redirect", async () => {
   await call("https://firebasehosting.googleapis.com/a", { redirect: "follow" });
   await call(`https://${HOST}/x`);
   assert.deepEqual(seen, ["error", "error"]);
+});
+
+test("a recording publishes the issuer and later removes the channel and its version", async () => {
+  const fake = fakeSandbox();
+  const { call } = limitedFetch(fake.fetchImpl, { run: RUN });
+  const auth = { authorization: "Bearer fake-token", "x-goog-user-project": SANDBOX_PROJECT };
+  const request = async (method, url, body) => {
+    const response = await call(url, {
+      method,
+      headers: auth,
+      ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+    });
+    const text = await response.text();
+    if (!response.ok) {
+      const error = new Error(`HTTP ${response.status}`);
+      error.status = response.status;
+      throw error;
+    }
+    return text ? JSON.parse(text) : {};
+  };
+  const send = (method, url, body) => request(method, url, body);
+  const get = (url) => request("GET", url);
+  const { jwk } = generateSigningKey({ kid: "fireemu-record" });
+  const result = { channelCreated: false, channelAttempted: false };
+  await deployIssuer({
+    api: call,
+    auth,
+    send,
+    run: RUN,
+    jwks: [jwk],
+    forbidden: [],
+    stop: { check() {} },
+    result,
+  });
+  assert.equal(result.issuerHost, HOST);
+  assert.ok(Object.values(result.readback).every((row) => row.same));
+  // Between deploy and removal the channel serves the issuer (the recording runs here).
+  assert.ok(fake.state.channel);
+  const { created, cleanup } = await removeIssuer({
+    get,
+    send,
+    api: call,
+    sleep: async () => {},
+    run: RUN,
+    result,
+    deleteVersion: true,
+  });
+  assert.equal(created, true);
+  assert.equal(cleanup.channelReadBack, "absent");
+  assert.equal(cleanup.versionDeleted, true);
+  assert.equal(cleanup.versionStatus, "absent");
+  assert.ok(fake.calls.some(({ method, url }) => method === "DELETE" && url.endsWith(VERSION)));
+  // The smoke keeps its version (it only records its status).
+  const smokeFake = fakeSandbox();
+  await smoke(smokeFake);
+  assert.ok(
+    !smokeFake.calls.some(({ method, url }) => method === "DELETE" && url.endsWith(VERSION)),
+  );
 });

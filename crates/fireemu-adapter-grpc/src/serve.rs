@@ -779,10 +779,15 @@ fn split_trailers_only(headers: &mut HeaderMap) -> HeaderMap {
     trailers
 }
 
+/// `responded` says whether the stream sent any response message. Production closes a `Write`
+/// stream with `content-disposition: attachment` after a response
+/// (`write-stream-terminal/*`), but not when it ends without one
+/// (`grpc-stream-request-bytes/*`, recorded twice).
 fn normalize_transport_frame(
     mut frame: Frame<Bytes>,
     enforce_limits: bool,
     write_stream: bool,
+    responded: bool,
 ) -> Frame<Bytes> {
     if let Some(trailers) = frame.trailers_mut() {
         normalize_transport_status(trailers, enforce_limits);
@@ -793,7 +798,7 @@ fn normalize_transport_frame(
                     || (status.code() == tonic::Code::InvalidArgument
                         && status.message() == "empty write operation")
             });
-        if write_terminal && !trailers.contains_key("content-disposition") {
+        if write_terminal && responded && !trailers.contains_key("content-disposition") {
             trailers.insert(
                 "content-disposition",
                 HeaderValue::from_static("attachment"),
@@ -902,6 +907,7 @@ where
                                 Frame::trailers(trailers),
                                 enforce_limits,
                                 write_stream,
+                                false,
                             );
                             let body = http_body_util::StreamBody::new(tokio_stream::once(Ok::<
                                 _,
@@ -913,8 +919,15 @@ where
                             return Ok::<_, std::io::Error>(response.map(|_| body));
                         }
                         return Ok::<_, std::io::Error>(response.map(|b| {
+                            let mut responded = false;
                             b.map_frame(move |frame| {
-                                normalize_transport_frame(frame, enforce_limits, write_stream)
+                                responded |= frame.is_data();
+                                normalize_transport_frame(
+                                    frame,
+                                    enforce_limits,
+                                    write_stream,
+                                    responded,
+                                )
                             })
                             .map_err(|e| Box::new(e) as BoxError)
                             .boxed_unsync()
@@ -1047,7 +1060,7 @@ mod tests {
     #[test]
     fn successful_write_terminal_retains_stable_content_disposition() {
         let frame: Frame<Bytes> = Frame::trailers(headers(&Status::new(Code::Ok, "")));
-        let trailers = normalize_transport_frame(frame, true, true)
+        let trailers = normalize_transport_frame(frame, true, true, true)
             .into_trailers()
             .expect("terminal trailers");
         assert_eq!(
@@ -1056,13 +1069,15 @@ mod tests {
                 .and_then(|value| value.to_str().ok()),
             Some("attachment")
         );
-        for (strict, write_stream, code) in [
-            (false, true, Code::Ok),
-            (true, false, Code::Ok),
-            (true, true, Code::InvalidArgument),
+        for (strict, write_stream, code, responded) in [
+            (false, true, Code::Ok, true),
+            (true, false, Code::Ok, true),
+            (true, true, Code::InvalidArgument, true),
+            // A stream that ends without any response carries no content-disposition.
+            (true, true, Code::Ok, false),
         ] {
             let frame: Frame<Bytes> = Frame::trailers(headers(&Status::new(code, "refused")));
-            let trailers = normalize_transport_frame(frame, strict, write_stream)
+            let trailers = normalize_transport_frame(frame, strict, write_stream, responded)
                 .into_trailers()
                 .expect("terminal trailers");
             assert!(!trailers.contains_key("content-disposition"));

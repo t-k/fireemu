@@ -6448,6 +6448,14 @@ fn select_store(
         routes::Resolution::Matched { route, .. }
             if route.handler == routes::Handler::Token
     );
+    let sdk_sends_id_token_alone = matches!(
+        resolution,
+        routes::Resolution::Matched { route, .. }
+            if matches!(
+                route.handler,
+                routes::Handler::Lookup | routes::Handler::Update | routes::Handler::Delete
+            )
+    );
     if exchanges_custom_token {
         // A selected tenant is an explicit namespace assertion, whether it came from the query
         // or the request body. A valid custom token without a tenant claim is project-scoped and
@@ -6579,6 +6587,25 @@ fn select_store(
                 return Ok(store);
             }
         }
+        if sdk_sends_id_token_alone {
+            // The Web SDK sends `accounts:lookup` (after every sign-in), `accounts:delete` and
+            // some `accounts:update` forms with the API key and the ID token alone, for tenant
+            // users too. Web SDK tenant sign-in works in production, so these are taken to
+            // reach the token's tenant there (inferred; the AUTH-FS-CROSS stage-2 production
+            // recording checks it). The claim only selects the store: the handler verifies
+            // the token in full against that store. A tenant of another project, a deleted
+            // tenant and a claim naming no tenant fall through to the project store, where
+            // the existing refusal applies.
+            if let Some(store) = tenant_store_named_by_id_token(
+                registry,
+                selected_project
+                    .as_deref()
+                    .unwrap_or_else(|| registry.default_project()),
+                id_token_target.as_ref(),
+            ) {
+                return Ok(store);
+            }
+        }
         let Some(project) = selected_project else {
             // With no registered tenancy sessions, preserve the historical fake-key behavior for
             // the default namespace. An explicit tenant above still had to resolve through the
@@ -6641,6 +6668,23 @@ fn select_store(
         return Ok(store);
     }
     Ok(state.store.clone())
+}
+
+/// The tenant store of `project` that an ID token's `firebase.tenant` claim names, when its
+/// audience is `project` and the tenant exists; `None` otherwise. The claim is not trusted
+/// beyond choosing the store: the caller's handler verifies the token against it.
+fn tenant_store_named_by_id_token(
+    registry: &fireemu_core_auth::store::AuthRegistry,
+    project: &str,
+    target: Option<&(String, Option<String>)>,
+) -> Option<Arc<Mutex<AuthStore>>> {
+    let (audience, Some(tenant)) = target? else {
+        return None;
+    };
+    if audience != project {
+        return None;
+    }
+    registry.tenant_store(project, tenant)
 }
 
 /// The tenant store of `project` that issued the request's `refresh_token`, when the token

@@ -64,6 +64,7 @@ These follow production Firestore as recorded on 2026-09-24 (FS-QUERY-INDEX). Un
 
 ### Fixed
 
+- Both profiles: a tenant user can sign in through the Web SDK. The SDK sends `accounts:lookup` (after every sign-in), `accounts:delete` and some `accounts:update` forms with the API key and the ID token only, without `tenantId`. fireemu verified those tokens against the project's accounts and answered `INVALID_ID_TOKEN`. Such a call now reaches the tenant named by the token, when that tenant belongs to the key's project, and is verified there. A contradicting `tenantId`, a deleted tenant, and a tenant of another project are refused as before. Production's answer is inferred from the Web SDK working with tenants there; the AUTH-FS-CROSS stage-2 recording checks it.
 - A refusal echoes at most 1 KiB of the value, key, path or property path it names, and a transcoder refusal lists at most 16 violations, so a large request cannot grow the response or the daemon's memory many times its size.
 - The partition page token is bound to its snapshot version.
 

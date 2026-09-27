@@ -294,7 +294,10 @@ fn deleted_tenant_tokens_cannot_fall_back_to_the_same_uid_in_the_parent_store() 
             PROJECT,
         );
         if identity.tenant == Some(TENANTS[0]) {
-            assert!(matches!(result, Err(status) if status.code() == Code::Unauthenticated));
+            // A token Firestore cannot verify is refused in production's shape, as FS-RULES
+            // recorded for other unusable bearers; production's answer for a deleted tenant's
+            // token is not recorded yet (AUTH-FS-CROSS stage 1).
+            assert!(matches!(result, Err(status) if status.code() == Code::PermissionDenied));
         } else {
             assert!(result.is_ok());
         }
@@ -533,10 +536,12 @@ mod listeners {
             pb::target_change::TargetChangeType::Remove as i32
         );
         assert_eq!(change.target_ids, [1]);
-        assert_eq!(change.cause.unwrap().code, 16);
+        // The refusal has the shape FS-RULES recorded for an unusable bearer (PERMISSION_DENIED);
+        // production's listener behaviour after a tenant deletion is not recorded yet.
+        assert_eq!(change.cause.unwrap().code, Code::PermissionDenied as i32);
         assert_eq!(
             removed.next().await.unwrap().unwrap_err().code(),
-            Code::Unauthenticated
+            Code::PermissionDenied
         );
         assert!(removed.next().await.is_none());
         sibling.snapshot(TENANTS[1], 2, "after-delete", false).await;

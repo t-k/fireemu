@@ -1,7 +1,7 @@
 {
   "kind": "fs-query-index-comparison-v1",
   "artifactSha256": "82b0c4271e533d199456a44b2aa7a51574f11229e614743fc9a3776d5ccc8a18",
-  "fixtureSha256": "4db70b360ab433bdd8d4f700073eb70b09e4d23b5b1d9c699c461889964eaec7",
+  "fixtureSha256": "8df55045119be7c30e63e9109ad614dae2be0cbc3a644b54c60f98cc962110d3",
   "summary": {
     "MATCH": 675,
     "DIVERGENCE_APPROVED": 35

@@ -68,6 +68,9 @@ export function createSession(
     maxHarnessRequests = Infinity,
     log = () => {},
     shouldStop = () => false,
+    // Why a harness URL may not be sent (`null`: it may); production passes the declared
+    // hosts and projects of the packet.
+    destinationProblem = () => null,
   } = {},
 ) {
   let requests = 0;
@@ -198,6 +201,8 @@ export function createSession(
 
   /** One harness HTTP call; a failure to reach the target is fatal. */
   async function call(url, init, { expect = [200], timeout = timeoutMs } = {}) {
+    const refused = destinationProblem(url);
+    if (refused) throw fatal(`harness ${init.method}: ${refused}; not sent`);
     charge(true);
     let response;
     try {
@@ -791,6 +796,8 @@ export function createSession(
   async function markerStatus(label, which) {
     charge(true);
     const url = `${ctx.target.kind === "production" ? PRODUCTION.firestore : ctx.target.firestoreOrigin}/v1/${documentsName(ctx, which)}/fsr-marker/${label}`;
+    const refused = destinationProblem(url);
+    if (refused) throw fatal(`marker read: ${refused}; not sent`);
     let rest;
     try {
       rest = (await fetch(url, { signal: AbortSignal.timeout(timeoutMs) })).status;
@@ -1061,6 +1068,8 @@ export function createSession(
     step = withTenants(step);
     const request = buildFirestoreRest(step, ctx, raw, principals, bearerFor(step.as));
     guardFirestoreRequest(request, ctx);
+    const refused = destinationProblem(request.url);
+    if (refused) throw fatal(`${step.id}: ${refused}; not sent`);
     charge(false);
     let response;
     try {

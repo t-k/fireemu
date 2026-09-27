@@ -25,7 +25,7 @@ const indexOf = (program, match) => program.steps.findIndex(match);
 
 test("the stage-2 program passes its guard and covers every closure transport", () => {
   assert.deepEqual(Object.keys(closure).toSorted(), [...STAGE2_CONDITIONS].toSorted());
-  assert.deepEqual(validate(STAGE2_PROGRAM), { commits: 43, reads: 15, rows: 55 });
+  assert.deepEqual(validate(STAGE2_PROGRAM), { commits: 43, reads: 15, rows: 55, maxWire: 2_200 });
 });
 
 test("every held principal's change comes after the short conditions and before its probes", () => {
@@ -98,7 +98,7 @@ const REFUSED = [
       p.steps.splice(
         p.steps.length - 1,
         0,
-        { do: "client", client: "late", transport: "node-sdk" },
+        { do: "client", client: "late", transport: "node-sdk", wireCap: 100 },
         { do: "sdk", client: "late", op: "signIn", as: "del" },
       ),
     /principal del is used after its deletion/,
@@ -109,7 +109,7 @@ const REFUSED = [
       p.steps.splice(
         p.steps.length - 1,
         0,
-        { do: "client", client: "late", transport: "node-sdk" },
+        { do: "client", client: "late", transport: "node-sdk", wireCap: 100 },
         { do: "sdk", client: "late", op: "signIn", as: "ten-t1" },
       ),
     /tenant t1 is used after its deletion/,
@@ -194,13 +194,29 @@ const REFUSED = [
   ],
   [
     "a second client of one name",
-    (p) => p.steps.splice(1, 0, { do: "client", client: "sdk-rev", transport: "node-sdk" }),
+    (p) =>
+      p.steps.splice(1, 0, {
+        do: "client",
+        client: "sdk-rev",
+        transport: "node-sdk",
+        wireCap: 100,
+      }),
     /duplicate client sdk-rev/,
   ],
   [
     "an unknown transport",
     (p) => (p.steps.find((s) => s.do === "client").transport = "android"),
     /unknown transport android/,
+  ],
+  [
+    "a client without a wire cap",
+    (p) => delete p.steps.find((s) => s.do === "client").wireCap,
+    /wire cap undefined out of range/,
+  ],
+  [
+    "a wire cap past the limit",
+    (p) => (p.steps.find((s) => s.do === "client").wireCap = 301),
+    /wire cap 301 out of range/,
   ],
   ["an unknown ruleset", (p) => (p.ruleset = "cross"), /unknown ruleset cross/],
   ["an unknown tenant slot", (p) => p.tenants.push("t9"), /unknown tenant slot t9/],

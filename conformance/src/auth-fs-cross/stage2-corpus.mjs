@@ -28,6 +28,8 @@ const CLOSURE_TRANSPORT = { "node-sdk": "node-sdk", grpc: "grpc", "browser-webch
 /** A sleep longer than this is a mistake: the window's long waits are the expiry probes. */
 const SLEEP_LIMIT_MS = 5 * 60_000;
 const WINDOW_LIMIT_MS = 60_000;
+/** No client may be allowed more requests than this. */
+const WIRE_CAP_LIMIT = 300;
 
 const fail = (where, message) => {
   throw new Error(`${where}: ${message}`);
@@ -68,7 +70,7 @@ export function validateStage2(program, { principals = STAGE2_PRINCIPALS, closur
   const commands = new Set();
   const rows = new Set();
   const covered = new Map(STAGE2_CONDITIONS.map((c) => [c, new Set()]));
-  const cost = { commits: 1, reads: 0, rows: 0 };
+  const cost = { commits: 1, reads: 0, rows: 0, maxWire: 0 };
 
   const principal = (where, name) => {
     if (!known.has(name)) fail(where, `unknown principal ${name}`);
@@ -137,6 +139,9 @@ export function validateStage2(program, { principals = STAGE2_PRINCIPALS, closur
         if (!NAME.test(step.client) || clients.has(step.client))
           fail(where, `bad or duplicate client ${step.client}`);
         if (!TRANSPORTS.has(step.transport)) fail(where, `unknown transport ${step.transport}`);
+        if (!(Number.isInteger(step.wireCap) && step.wireCap > 0 && step.wireCap <= WIRE_CAP_LIMIT))
+          fail(where, `wire cap ${step.wireCap} out of range`);
+        cost.maxWire += step.wireCap;
         clients.set(step.client, { transport: step.transport, listeners: new Set() });
         return;
       case "sdk": {

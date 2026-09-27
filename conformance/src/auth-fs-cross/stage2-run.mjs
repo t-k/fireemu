@@ -30,8 +30,6 @@ const CLOSURE = join(
 /** The synthetic project number fireemu is configured with. */
 const LOCAL_PROJECT_NUMBER = "123456789012";
 const HARNESS_CEILING = 1_000;
-/** Requests one SDK client may make in a window (its own guard refuses the next one). */
-export const WIRE_CAP = 400;
 
 /** The program, checked against the frozen closure's transports. */
 export async function checkedProgram() {
@@ -85,7 +83,6 @@ export function localSdkConfig({ authOrigin, grpcHost, grpcPort }) {
     web: { apiKey: "fake-api-key", projectId: SANDBOX_PROJECT, authDomain: "localhost" },
     authEmulator: authOrigin,
     firestoreEmulator: { host: grpcHost, port: grpcPort },
-    wireCap: WIRE_CAP,
   };
 }
 

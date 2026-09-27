@@ -267,6 +267,9 @@ test("a probe records only what arrived after its commit, and a stream's end in 
     tenantId: null,
     id: "signIn-1",
   });
+  assert.deepEqual(interpreter.wireCounts(), { c: 0 });
+  client.deliver({ event: "wire", host: "127.0.0.1", path: "/x", principal: null });
+  assert.deepEqual(interpreter.wireCounts(), { c: 1 });
   assert.deepEqual(rows.p, {
     id: "p",
     conditions: ["X"],

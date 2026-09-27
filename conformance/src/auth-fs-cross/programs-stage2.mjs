@@ -14,6 +14,12 @@ import { integer, string } from "../fs-rules/programs/common.mjs";
 export const STAGE2_RULESET = "cross2";
 /** How long an observation collects events after its commit (or after it starts). */
 export const WINDOW_MS = 12_000;
+/**
+ * The requests one SDK client may make (its guard refuses the next). A held client lives for the
+ * whole window and refreshes its token; a short condition's client lives a minute or two.
+ */
+export const HELD_WIRE_CAP = 200;
+export const SHORT_WIRE_CAP = 100;
 /** A pending write and a switch back get longer: the SDK's streams restart first. */
 const SLOW_WINDOW_MS = 20_000;
 
@@ -160,7 +166,7 @@ function signOutSteps(tag) {
   ];
   const observed = [`${client}/own`, `${client}/query`, `${client}/open`, witness(tag, "out")];
   return [
-    { do: "client", client, transport: TRANSPORTS[tag] },
+    { do: "client", client, transport: TRANSPORTS[tag], wireCap: SHORT_WIRE_CAP },
     { do: "sdk", client, op: "signIn", as: "alice" },
     listenOwn(client, "own", "alice", tag, "out"),
     listenOwnQuery(client, "query", "alice", tag, "out"),
@@ -224,7 +230,7 @@ function switchSteps(tag) {
   const open = (n) => ({ doc: openDoc(tag, "ab"), fields: openFields(n) });
   const observed = [`${client}/own`, `${client}/query`, `${client}/open`, witness(tag, "ab")];
   return [
-    { do: "client", client, transport: TRANSPORTS[tag] },
+    { do: "client", client, transport: TRANSPORTS[tag], wireCap: SHORT_WIRE_CAP },
     { do: "sdk", client, op: "signIn", as: "alice" },
     listenOwn(client, "own", "alice", tag, "ab"),
     listenOwnQuery(client, "query", "alice", tag, "ab"),
@@ -275,7 +281,7 @@ function pendingSteps(tag, variant) {
   const id = (step) => `${scenario(tag, `pend-${variant}`)}/${step}`;
   const doc = `afc2-pending/${scenario(tag, variant)}`;
   return [
-    { do: "client", client, transport: TRANSPORTS[tag] },
+    { do: "client", client, transport: TRANSPORTS[tag], wireCap: SHORT_WIRE_CAP },
     { do: "sdk", client, op: "signIn", as: "alice" },
     { do: "sdk", client, op: "offline" },
     {
@@ -352,7 +358,7 @@ function transactionSteps() {
     ];
   };
   return [
-    { do: "client", client, transport: TRANSPORTS.n },
+    { do: "client", client, transport: TRANSPORTS.n, wireCap: SHORT_WIRE_CAP },
     { do: "sdk", client, op: "signIn", as: "alice" },
     ...one("control", []),
     ...one("signout", [{ do: "sdk", client, op: "signOut" }]),
@@ -384,7 +390,7 @@ function claimSteps() {
   const first = [`${client}/doc1`, `${client}/query1`];
   const second = [`${client}/doc2`, `${client}/query2`];
   return [
-    { do: "client", client, transport: TRANSPORTS.n },
+    { do: "client", client, transport: TRANSPORTS.n, wireCap: SHORT_WIRE_CAP },
     { do: "sdk", client, op: "signIn", as: "claim" },
     ...listeners("1"),
     { do: "observe", id: "claim/without-c", condition: CONDITION.refresh, observe: first },
@@ -467,7 +473,7 @@ function heldSteps() {
   for (const held of HELD) {
     const client = clientName(held);
     steps.push(
-      { do: "client", client, transport: "node-sdk" },
+      { do: "client", client, transport: "node-sdk", wireCap: HELD_WIRE_CAP },
       { do: "sdk", client, op: "signIn", as: held.principal },
       { do: "sdk", client, op: "listen", name: "doc", path: heldDoc(held, "sdk") },
       {

@@ -873,7 +873,7 @@
             "conformance": []
           },
           "officialLimitations": [
-            "the official emulator enforces a subset of the production limits (document bytes via the per-value cap, nesting depth, identifier lengths, IN values, array-contains count) and not the rest: measured on 2026-09-27 (firebase-tools 15.28.2, Firestore emulator v1.22.0), it accepted writes over the create transaction budget, over 40,000 index entries, with index entries over the strict entry limits (5,530 bytes for a single-field entry, 7,680 for other entries), and past the document-name guard; transforms per document and composite indexes are not enforced either. The emulator profile refuses exactly the measured subset and observes the production-only limits without refusing"
+            "the official emulator enforces a subset of the production limits (document bytes via the per-value cap, nesting depth, identifier lengths, IN values, array-contains count) and not the rest: measured on 2026-09-27 (firebase-tools 15.28.2, Firestore emulator v1.22.0), it accepted writes over the create transaction budget, over 40,000 index entries, with a single-field index entry over 5,530 bytes, and past the document-name guard; transforms per document and composite indexes are not enforced either. The emulator profile refuses exactly the measured subset and observes the production-only limits without refusing"
           ],
           "fireemuOnly": [
             {
@@ -890,6 +890,10 @@
             },
             {
               "behaviour": "FS-LIMIT-API-REQUEST-BYTES is enforced at 11,534,336 bytes (inclusive) on REST and on gRPC unary and streamed requests, in both profiles, with production's REST Commit refusal (HTTP 400 INVALID_ARGUMENT, gRPC code 3, 'Request payload size exceeds the limit: 11534336 bytes.'). Production recorded that bound on REST Commit, the non-commit REST routes and gRPC unary (FS-DATA-WRITE bracket recording, 2026-09-27), so the catalog's 10 MiB figure is not enforced; the gRPC stream's own bound is unobservable and uses the same value (owner decision). WebChannel form bodies have their own bound: production accepted 12,582,912 bytes on a valid session and refused 16,777,216 with its HTML 400 page, after which the session was gone (follow-up recording, 2026-09-27), so strict accepts up to 16,777,215 and answers that page and ends the session above it; the pinned official emulator accepts 16,777,216 and answers an empty 413 above it, keeping the session, and the emulator profile does the same. Only REST :commit and WebChannel drain an over-bound body before answering; on the other REST routes a body far over the bound may reset the connection instead of delivering the 400",
+              "precision": "documented-divergence"
+            },
+            {
+              "behaviour": "FS-LIMIT-INDEX-ENTRY-BYTES: strict refuses a single-field (collection scope) index entry over 5,530 bytes under the documented entry formula (own name, parent name, field name, indexed value up to 1,500 bytes, plus 32) with production's 'Index entry is too large.'. Production accepted 5,529 and refused 5,531, and every recorded FS-DATA-WRITE write agrees (2026-09-23 to 2026-09-27), well below the published 7,680. Composite and collection-group entries are unobserved in production: no refusal is recorded for them and the published figure does not match production's single-field accounting, so neither profile refuses them for their size until production is observed. The emulator profile counts entries without refusing, as the pinned official emulator does. A document-name guard refuses from a name size of 5,017 bytes; production refused an empty document from 4,645 (empty-document-name/4628), a known difference under owner decision D3",
               "precision": "documented-divergence"
             }
           ],

@@ -191,9 +191,12 @@ def compile_case(family: str, position: str, nonce: str) -> dict[str, Any]:
             # transaction budget instead (owner decision D1, 2026-09-25). Production also
             # accepted a map one byte over the field-value figure (FS-DATA-WRITE bracket
             # recording, 2026-09-27), so an aggregate value is bounded by the document only.
+            # A composite entry over the published 7,680 bytes has no recorded production
+            # refusal, and production's single-field threshold does not match that figure,
+            # so the composite entry here is not refused either.
             "accepted": (
                 (position != "over" and family != "document-name")
-                or family in ("indexed-value", "index-sum", "field-map", "field-array")
+                or family in ("indexed-value", "index-sum", "index-entry", "field-map", "field-array")
             ),
             "basis": "local-test-hypothesis-not-production-observation",
             "rejectedCommitPreservesSiblings": True,

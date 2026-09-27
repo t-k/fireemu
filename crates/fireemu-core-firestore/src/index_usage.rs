@@ -61,16 +61,16 @@ const DELETE_COMMIT_NUM: u64 = 1_151_316_928;
 /// smallest recorded refusal; 5,530 is unobserved.
 pub const SINGLE_FIELD_ENTRY_BYTES: u64 = 5_530;
 
-/// The published entry limit, kept for the entry kinds production has no recorded point for
-/// (composite and collection-group entries).
-pub const DOCUMENTED_ENTRY_BYTES: u64 = 7_680;
-
+/// The largest entry accepted per entry kind. Only single-field (collection scope) entries have
+/// a recorded production refusal. The published 7,680 bytes is not enforced for the others:
+/// production's single-field threshold shows that figure does not match its own accounting,
+/// and no composite or collection-group refusal is recorded, so strict refuses none.
 const fn entry_limit(scope: IndexEntryScope) -> u64 {
     match scope {
         IndexEntryScope::SingleFieldCollection => SINGLE_FIELD_ENTRY_BYTES,
         IndexEntryScope::SingleFieldCollectionGroup
         | IndexEntryScope::CompositeCollection
-        | IndexEntryScope::CompositeCollectionGroup => DOCUMENTED_ENTRY_BYTES,
+        | IndexEntryScope::CompositeCollectionGroup => u64::MAX,
     }
 }
 
@@ -360,9 +360,7 @@ fn entry_size(
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        entry_limit, IndexUsage, WriteRoute, DOCUMENTED_ENTRY_BYTES, SINGLE_FIELD_ENTRY_BYTES,
-    };
+    use super::{entry_limit, IndexUsage, WriteRoute, SINGLE_FIELD_ENTRY_BYTES};
     use crate::path::DocumentPath;
     use crate::size::IndexEntryScope;
     use fireemu_core_types::ids::{DatabaseId, ProjectId};
@@ -375,20 +373,18 @@ mod tests {
             "tasks/a",
         )
         .unwrap();
-        let limit = DOCUMENTED_ENTRY_BYTES;
+        let limit = SINGLE_FIELD_ENTRY_BYTES;
         let mut count = IndexUsage::default();
         assert!(count.add(1, 40_000, limit, &document, true).is_ok());
         assert!(count.add(1, 1, limit, &document, true).is_err());
-        for limit in [SINGLE_FIELD_ENTRY_BYTES, DOCUMENTED_ENTRY_BYTES] {
-            assert!(IndexUsage::default()
-                .add(limit, 1, limit, &document, true)
-                .is_ok());
-            assert!(matches!(
-                IndexUsage::default().add(limit + 1, 1, limit, &document, true),
-                Err(crate::store::FirestoreError::InvalidArgument(message))
-                    if message == "Index entry is too large."
-            ));
-        }
+        assert!(IndexUsage::default()
+            .add(limit, 1, limit, &document, true)
+            .is_ok());
+        assert!(matches!(
+            IndexUsage::default().add(limit + 1, 1, limit, &document, true),
+            Err(crate::store::FirestoreError::InvalidArgument(message))
+                if message == "Index entry is too large."
+        ));
         let mut sum = IndexUsage::default();
         assert!(sum.add(4_096, 2_048, limit, &document, true).is_ok());
         assert!(sum.finish(super::TRANSACTION_BYTES - 8_388_608).is_ok());
@@ -407,9 +403,8 @@ mod tests {
     }
 
     #[test]
-    fn only_single_field_collection_entries_use_the_recorded_threshold() {
+    fn only_single_field_collection_entries_have_a_size_limit() {
         assert_eq!(SINGLE_FIELD_ENTRY_BYTES, 5_530);
-        assert_eq!(DOCUMENTED_ENTRY_BYTES, 7_680);
         assert_eq!(
             entry_limit(IndexEntryScope::SingleFieldCollection),
             SINGLE_FIELD_ENTRY_BYTES
@@ -419,7 +414,7 @@ mod tests {
             IndexEntryScope::CompositeCollection,
             IndexEntryScope::CompositeCollectionGroup,
         ] {
-            assert_eq!(entry_limit(scope), DOCUMENTED_ENTRY_BYTES, "{scope:?}");
+            assert_eq!(entry_limit(scope), u64::MAX, "{scope:?}");
         }
     }
 

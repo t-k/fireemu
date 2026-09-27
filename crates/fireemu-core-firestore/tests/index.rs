@@ -94,8 +94,8 @@ fn index_entry_size_and_total_size_budgets_are_independent() {
         ("v3", IndexFieldMode::Ascending),
         ("v4", IndexFieldMode::Ascending),
     ]));
-    // A composite entry keeps the documented 7,680-byte bound: production has no recorded
-    // composite point. This one is 7,556 bytes, over the single-field threshold.
+    // Composite entries have no recorded production refusal, so strict refuses none, even
+    // over the published 7,680 bytes.
     assert_eq!(
         indexes
             .document_index_usage(&path, &fields)
@@ -114,9 +114,9 @@ fn index_entry_size_and_total_size_budgets_are_independent() {
     assert_eq!(
         indexes
             .document_index_usage(&path, &fields)
-            .unwrap_err()
-            .to_string(),
-        "invalid argument: Index entry is too large."
+            .unwrap()
+            .maximum_entry_bytes,
+        9_056
     );
     let long_path = DocumentPath::parse(
         &ProjectId::try_new("demo-app").unwrap(),

@@ -3,7 +3,7 @@ import { createHash } from "node:crypto";
 const PROJECT = "fireemu-oracle-query";
 const CAPTURE = { status: true, headers: "all", body: "raw-bytes" };
 const rulesRoot = `/v1/projects/${PROJECT}`;
-const rulesetsPath = `${rulesRoot}/rulesets`;
+const testPath = `${rulesRoot}:test`;
 const bucketlessReleaseName = `projects/${PROJECT}/releases/firebase.storage`;
 
 const hash = (source) => createHash("sha256").update(source).digest("hex");
@@ -41,46 +41,19 @@ function compileProgram(binding, cases, firestorePrograms, switchCase) {
     validSources,
     invalidSource: { ref: "invalid/storage-expression", sha256: hash(invalid), content: invalid },
     validSequence: [
-      request("release-before", "GET", releasePath, {
-        requiredState: "unchanged-baseline",
-        repeatFor: "validSources",
-      }),
-      request("create-ruleset", "POST", rulesetsPath, {
+      request("release-before", "GET", releasePath, { requiredState: "unchanged-baseline" }),
+      request("test-valid-source", "POST", testPath, {
         body: { source: { files: [{ name: "storage.rules", contentRef: "validSources[].content" }] } },
-        repeatFor: "validSources",
-      }),
-      request("read-source", "GET", null, { pathRef: "create-ruleset.name", repeatFor: "validSources" }),
-      request("delete-unreleased-ruleset", "DELETE", null, {
-        pathRef: "create-ruleset.name",
-        when: "owned-and-unreferenced",
-        repeatFor: "validSources",
-      }),
-      request("confirm-ruleset-absent", "GET", null, {
-        pathRef: "create-ruleset.name",
-        requiredState: "absent",
-        repeatFor: "validSources",
-      }),
-      request("release-after", "GET", releasePath, {
-        requiredState: "matches-release-before",
+        requiredState: "no-error-issues",
         repeatFor: "validSources",
       }),
     ],
     invalidSequence: [
-      request("release-before-invalid", "GET", releasePath, { requiredState: "unchanged-baseline" }),
-      request("create-invalid-ruleset", "POST", rulesetsPath, {
+      request("test-invalid-source", "POST", testPath, {
         body: { source: { files: [{ name: "storage.rules", contentRef: "invalidSource.content" }] } },
-        requiredState: "compile-refused",
+        requiredState: "error-issue-with-position",
       }),
-      request("delete-if-unexpectedly-created", "DELETE", null, {
-        pathRef: "create-invalid-ruleset.name",
-        when: "unexpected-owned-and-unreferenced",
-      }),
-      request("confirm-if-created-deleted", "GET", null, {
-        pathRef: "create-invalid-ruleset.name",
-        when: "unexpected-created",
-        requiredState: "absent",
-      }),
-      request("release-after-invalid", "GET", releasePath, { requiredState: "matches-release-before-invalid" }),
+      request("release-after-invalid", "GET", releasePath, { requiredState: "matches-release-before" }),
     ],
     fullBudgetAndFailureRecoveryPending: true,
   };

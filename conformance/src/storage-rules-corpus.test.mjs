@@ -57,16 +57,24 @@ test("Storage compile declaration retains every distinct Rules source and the in
   assert.ok(!referenced.includes(program.invalidSource.content));
   assert.deepEqual(program.validSequence.map((step) => step.id), [
     "release-before",
-    "create-ruleset",
-    "read-source",
-    "delete-unreleased-ruleset",
-    "confirm-ruleset-absent",
-    "release-after",
+    "test-valid-source",
   ]);
   assert.ok(program.validSequence.every((step) => step.service === "firebase-rules"));
+  assert.equal(program.validSequence[0].repeatFor, undefined);
+  assert.equal(program.validSequence[1].method, "POST");
+  assert.equal(program.validSequence[1].path, "/v1/projects/fireemu-oracle-query:test");
+  assert.equal(program.validSequence[1].repeatFor, "validSources");
+  assert.deepEqual(program.validSequence[1].body, {
+    source: { files: [{ name: "storage.rules", contentRef: "validSources[].content" }] },
+  });
+  assert.deepEqual(program.invalidSequence.map((step) => step.id), ["test-invalid-source", "release-after-invalid"]);
   assert.equal(program.invalidSequence.at(-1).id, "release-after-invalid");
-  assert.equal(program.invalidSequence[1].id, "create-invalid-ruleset");
-  assert.ok(program.invalidSequence.some((step) => step.id === "delete-if-unexpectedly-created"));
+  assert.equal(program.invalidSequence[0].method, "POST");
+  assert.equal(program.invalidSequence[0].path, "/v1/projects/fireemu-oracle-query:test");
+  assert.deepEqual(program.invalidSequence[0].body, {
+    source: { files: [{ name: "storage.rules", contentRef: "invalidSource.content" }] },
+  });
+  assert.ok(!JSON.stringify(program).includes("rulesets"));
   assert.equal(Object.hasOwn(program, "expectedStatus"), false);
 });
 
@@ -118,6 +126,8 @@ test("management declarations reject missing sources or changed restoration clai
   const mutations = [
     (corpus) => corpus.managementPrograms[0].validSources.pop(),
     (corpus) => (corpus.managementPrograms[0].invalidSource.content = "allow get: if true;"),
+    (corpus) => (corpus.managementPrograms[0].validSequence[1].path = "/v1/projects/fireemu-oracle-query/rulesets"),
+    (corpus) => (corpus.managementPrograms[0].validSequence[1].body.testSuite = { testCases: [] }),
     (corpus) => (corpus.managementPrograms[1].restore[1] = "skip-readback"),
     (corpus) => (corpus.managementPrograms[2].stepOrder[4] = "admin-get"),
   ];

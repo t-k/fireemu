@@ -40,7 +40,7 @@ def answer(slot):
             "expires_in": 3600,
         },
         "project": {"projectId": "fireemu-oracle-sbx", "projectNumber": "123456789"},
-        "database": {"name": "projects/fireemu-oracle-sbx/databases/(default)"},
+        "database": {"name": "projects/fireemu-oracle-sbx/databases/(default)", "concurrencyMode": "PESSIMISTIC"},
         "auth": {"key": "redacted"},
         "rules-release": {
             "name": "projects/fireemu-oracle-sbx/releases/cloud.firestore",
@@ -54,7 +54,7 @@ def answer(slot):
     return {"complete": True, "workerReaped": True, "status": 200, "body": body}
 
 
-def test_pre_and_postflight_use_exact_nine_management_slots(monkeypatch):
+def test_pre_and_postflight_use_exact_seven_management_slots_without_auth(monkeypatch):
     monkeypatch.setattr(management.preflight, "verify_metadata", lambda slot, body, baseline: {"bodyDigest": slot})
     monkeypatch.setattr(management.preflight, "verify_token", lambda *args, **kwargs: object())
     seen = []
@@ -69,14 +69,47 @@ def test_pre_and_postflight_use_exact_nine_management_slots(monkeypatch):
     second = session.postflight()
     assert seen == [
         ("oauth-tokeninfo", None), ("project", None), ("database", None),
-        ("auth", None), ("rules-release", None), ("ruleset-source", RULESET),
-        ("project", None), ("database", None), ("auth", None),
+        ("rules-release", None), ("ruleset-source", RULESET),
+        ("project", None), ("database", None),
     ]
-    assert budget.management == 9
+    assert budget.management == 7
     assert first["rulesetName"] == RULESET
     assert first["rulesSourceSha256"] == BASELINE["rulesSourceSha256"]
     assert second["project"] == "project"
     assert TOKEN not in repr(first) + repr(second)
+
+
+def test_uninitialized_auth_needs_no_baseline_or_request(monkeypatch):
+    monkeypatch.setattr(management.preflight, "verify_token", lambda *args, **kwargs: object())
+    monkeypatch.setattr(management.preflight, "verify_metadata", lambda slot, body, baseline: {"bodyDigest": slot})
+    seen = []
+    baseline = {key: value for key, value in BASELINE.items() if key != "authConfigDigest"}
+    session = management.MetadataSession(
+        TOKEN, baseline, contract.RequestBudget(plan.compile_plan(NONCE, OWNER)),
+        request_fn=lambda slot, token, resource=None: seen.append(slot) or answer(slot),
+    )
+    session.preflight()
+    session.postflight()
+    assert "auth" not in seen
+
+
+@pytest.mark.parametrize("mode", ["OPTIMISTIC", None])
+def test_preflight_refuses_a_database_without_pessimistic_concurrency(monkeypatch, mode):
+    monkeypatch.setattr(management.preflight, "verify_token", lambda *args, **kwargs: object())
+    monkeypatch.setattr(management.preflight, "verify_metadata", lambda slot, body, baseline: {"bodyDigest": slot})
+
+    def request(slot, token, resource=None):
+        result = answer(slot)
+        if slot == "database":
+            result["body"]["concurrencyMode"] = mode
+        return result
+
+    session = management.MetadataSession(
+        TOKEN, BASELINE, contract.RequestBudget(plan.compile_plan(NONCE, OWNER)),
+        request_fn=request,
+    )
+    with pytest.raises(ValueError, match="PESSIMISTIC"):
+        session.preflight()
 
 
 def test_metadata_refusal_stops_later_slots(monkeypatch):

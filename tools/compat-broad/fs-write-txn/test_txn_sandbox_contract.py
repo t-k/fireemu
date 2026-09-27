@@ -97,7 +97,7 @@ def test_budget_reserves_recovery_even_after_observation_limit():
         budget.charge("credential")
     with pytest.raises(ValueError, match="credential"):
         budget.charge("credential")
-    assert budget.management_limit == 9
+    assert budget.management_limit == 7
     assert budget.total_limit == frozen_plan()["budget"]["requests"] + 1
     assert budget.total <= budget.total_limit
 

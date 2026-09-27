@@ -63,7 +63,7 @@ class RequestBudget:
             raise ValueError("recovery request reserve is too small")
         if budget["metadataRequests"] != 8 or budget["credentialRequests"] != 2:
             raise ValueError("legacy plan request slots differ from the frozen corpus")
-        self.management_limit = 9
+        self.management_limit = 7
         self.credential_limit = budget["credentialRequests"]
         self.total_limit = budget["requests"] + 1
         self.observation = 0

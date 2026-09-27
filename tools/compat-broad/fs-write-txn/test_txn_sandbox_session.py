@@ -37,7 +37,7 @@ def test_session_counts_oauth_metadata_data_and_durable_responsibility(tmp_path)
 
         def postflight(self):
             events.append("postflight")
-            for _ in range(3):
+            for _ in range(2):
                 self.budget.charge("management")
             return {"database": "digest-a"}
 
@@ -74,7 +74,7 @@ def test_session_counts_oauth_metadata_data_and_durable_responsibility(tmp_path)
         collector_factory=Collector,
     )
     assert events == ["oauth", "preflight", "collector", "postflight"]
-    assert result["sandboxRequests"] == 10
+    assert result["sandboxRequests"] == 9
     assert json.loads((tmp_path / "responsibility.json").read_text())["event"] == "dispatch-intent"
     assert result["preflight"] == {"database": "digest-a"}
     assert result["postflight"] == {"database": "digest-a"}

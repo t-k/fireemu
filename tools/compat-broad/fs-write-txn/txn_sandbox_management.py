@@ -1,4 +1,4 @@
-"""Bounded OAuth, project, database, Auth and Rules readbacks for one run."""
+"""Bounded OAuth, project, database and Rules readbacks for one run."""
 
 from __future__ import annotations
 
@@ -22,8 +22,8 @@ PROJECT = "fireemu-oracle-sbx"
 RULES_RELEASE = f"projects/{PROJECT}/releases/cloud.firestore"
 RULES_HOST = "firebaserules.googleapis.com"
 RULES_RESPONSE_LIMIT = 65_536
-PRE_SLOTS = ("oauth-tokeninfo", "project", "database", "auth", "rules-release", "ruleset-source")
-POST_SLOTS = ("project", "database", "auth")
+PRE_SLOTS = ("oauth-tokeninfo", "project", "database", "rules-release", "ruleset-source")
+POST_SLOTS = ("project", "database")
 
 
 def _default_request(slot, token, resource=None):
@@ -79,12 +79,17 @@ def _default_request(slot, token, resource=None):
 
 
 class MetadataSession:
-    """One credential and nine fixed, pre-charged management slots."""
+    """One credential and seven fixed, pre-charged management slots."""
 
     def __init__(self, token, baseline, budget, *, request_fn=None):
         if not isinstance(token, str) or not 0 < len(token) <= 8192:
             raise ValueError("bounded OAuth credential required")
-        preflight.validate_frozen_baselines(baseline)
+        if (
+            not isinstance(baseline, dict)
+            or not isinstance(baseline.get("databaseProjectionDigest"), str)
+            or re.fullmatch(r"[a-f0-9]{64}", baseline["databaseProjectionDigest"]) is None
+        ):
+            raise ValueError("frozen sandbox database projection digest required")
         preflight.validate_principal(baseline.get("credentialPrincipal"))
         preflight.validate_project_number(baseline.get("projectNumber"))
         source_sha = baseline.get("rulesSourceSha256")
@@ -119,6 +124,8 @@ class MetadataSession:
             )
             return {"verified": True, "requiredSeconds": 1600}
         body = result["body"]
+        if slot == "database" and body.get("concurrencyMode") != "PESSIMISTIC":
+            raise ValueError("sandbox database must use PESSIMISTIC concurrency")
         if slot == "rules-release":
             ruleset = body.get("rulesetName")
             if body.get("name") != RULES_RELEASE or not isinstance(ruleset, str) or re.fullmatch(

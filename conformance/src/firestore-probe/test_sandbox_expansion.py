@@ -55,7 +55,7 @@ def test_raw_request_boundary_is_exact_and_keeps_readback() -> None:
 
 def test_non_commit_batchwrite_request_boundary_is_exact_and_keeps_readback() -> None:
     programs = {program["id"]: program for program in _module().build_programs()}
-    for size in (10_485_760, 10_485_761):
+    for size in (10_485_760, 10_485_761, 11_534_336, 11_534_337):
         program = programs[
             f"writes/limits/non-commit-rest-request-bytes/batch-write/{size}"
         ]
@@ -63,8 +63,8 @@ def test_non_commit_batchwrite_request_boundary_is_exact_and_keeps_readback() ->
         step = program["steps"][0]
         assert step["method"] == "POST"
         assert step["path"].endswith("/documents:batchWrite")
-        assert len(step["body"].encode()) == size
-        writes = json.loads(step["body"])["writes"]
+        assert len(_sent(step).encode()) == size
+        writes = json.loads(_sent(step))["writes"]
         assert len(writes) == 1
         assert program["steps"][1]["id"] == "readback"
         assert program["steps"][1]["body"]["documents"] == [writes[0]["update"]["name"]]
@@ -74,7 +74,7 @@ def test_non_commit_batchwrite_request_boundary_is_exact_and_keeps_readback() ->
 def test_non_commit_read_request_boundaries_seed_one_document() -> None:
     programs = {program["id"]: program for program in _module().build_programs()}
     for family, suffix in (("batch-get", ":batchGet"), ("run-query", ":runQuery")):
-        for size in (10_485_760, 10_485_761):
+        for size in (10_485_760, 10_485_761, 11_534_336, 11_534_337):
             program = programs[
                 f"writes/limits/non-commit-rest-request-bytes/{family}/{size}"
             ]
@@ -85,8 +85,8 @@ def test_non_commit_read_request_boundaries_seed_one_document() -> None:
             seeded_name = seed["body"]["writes"][0]["update"]["name"]
             assert probe["method"] == "POST"
             assert probe["path"].endswith(f"/documents{suffix}")
-            assert len(probe["body"].encode()) == size
-            body = json.loads(probe["body"])
+            assert len(_sent(probe).encode()) == size
+            body = json.loads(_sent(probe))
             if family == "batch-get":
                 assert body["documents"] == [seeded_name]
             else:
@@ -99,7 +99,7 @@ def test_non_commit_read_request_boundaries_seed_one_document() -> None:
 def test_non_commit_document_write_boundaries_keep_state_readback() -> None:
     programs = {program["id"]: program for program in _module().build_programs()}
     for family, method in (("create", "POST"), ("patch", "PATCH")):
-        for size in (10_485_760, 10_485_761):
+        for size in (10_485_760, 10_485_761, 11_534_336, 11_534_337):
             program = programs[
                 f"writes/limits/non-commit-rest-request-bytes/{family}/{size}"
             ]
@@ -107,8 +107,8 @@ def test_non_commit_document_write_boundaries_keep_state_readback() -> None:
             assert len(steps) == (3 if family == "patch" else 2)
             probe = steps[-2]
             assert probe["method"] == method
-            assert len(probe["body"].encode()) == size
-            body = json.loads(probe["body"])
+            assert len(_sent(probe).encode()) == size
+            body = json.loads(_sent(probe))
             assert body["fields"]["v"]["integerValue"] == "2"
             assert steps[-1]["id"] == "readback"
             if family == "patch":
@@ -251,7 +251,9 @@ def test_near_limit_delete_pairs_cover_each_rest_route_with_fresh_state_reads() 
             "body": {"documents": [name]},
         }
         assert group["id"] == "group-after-delete"
-        assert group["method"] == "POST" and group["path"].endswith("/documents:runQuery")
+        assert group["method"] == "POST" and group["path"].endswith(
+            "/documents:runQuery"
+        )
         if route == "rest":
             assert delete == {"id": "delete", "method": "DELETE", "path": f"/v1/{name}"}
         elif route == "commit":
@@ -346,3 +348,80 @@ def test_two_field_batch_decode_probe_distinguishes_source_order_from_sorted_ord
         write["update"]["name"] for write in writes
     ]
     assert all("expected" not in step for step in program["steps"])
+
+
+def _sent(step: dict) -> str:
+    """The body the harness sends: compact bodies are padded before their last `}`."""
+    body = step["body"]
+    size = step.get("padToBytes")
+    if size is None:
+        return body
+    assert len(body) < size and json.loads(body)
+    return body[:-1] + " " * (size - len(body)) + "}"
+
+
+def test_eleven_mebibyte_bodies_are_stored_compact_and_padded_by_the_harness() -> None:
+    programs = {program["id"]: program for program in _module().build_programs()}
+    for program in programs.values():
+        # The recorded raw Commit pair keeps its original whole bodies (their digests are
+        # bound to saved production evidence).
+        if program["id"].startswith("writes/limits/raw-11mib/"):
+            continue
+        for step in program["steps"]:
+            body = step.get("body")
+            if isinstance(body, str):
+                assert len(body.encode()) < 11_534_336, program["id"]
+            if "padToBytes" in step:
+                assert step["padToBytes"] in (11_534_336, 11_534_337)
+                assert program["id"].startswith(
+                    "writes/limits/non-commit-rest-request-bytes/"
+                )
+
+
+def _storage(segments: list[str]) -> int:
+    return 16 + sum(len(segment.encode()) + 1 for segment in segments)
+
+
+def test_aggregate_map_pair_brackets_the_value_limit_by_one_byte_of_map_size() -> None:
+    """Owner-approved aggregate pair: a map whose logical size is 1,048,487 then 1,048,488."""
+    programs = {program["id"]: program for program in _module().build_programs()}
+    names = set()
+    for size in (1_048_487, 1_048_488):
+        program = programs[f"writes/limits/aggregate-map/{size}"]
+        write, readback = program["steps"]
+        assert write["id"] == "write" and readback["id"] == "readback"
+        update = write["body"]["writes"][0]["update"]
+        inner = update["fields"]["m"]["mapValue"]["fields"]
+        assert list(inner) == ["s"]
+        value = inner["s"]["stringValue"]
+        assert set(value) == {"x"}
+        map_size = (len("s") + 1) + (len(value.encode()) + 1)
+        assert map_size == size
+        segments = update["name"].split("/documents/")[1].split("/")
+        document_size = _storage(segments) + 32 + (len("m") + 1) + map_size
+        assert document_size < 1_048_576
+        assert readback["body"]["documents"] == [update["name"]]
+        names.add(update["name"])
+        assert all("expected" not in step for step in program["steps"])
+    assert len(names) == 2
+
+
+def test_indexed_value_pair_charges_one_byte_over_the_entry_limit_only_on_the_upper_side() -> (
+    None
+):
+    """Owner-approved indexed pair: a 2,999-byte indexed string truncated to 1,500 bytes."""
+    programs = {program["id"]: program for program in _module().build_programs()}
+    for name_sum, entry in ((5_200, 6_753), (6_128, 7_681)):
+        program = programs[f"writes/limits/indexed-field-value-bytes/{name_sum}"]
+        write, readback = program["steps"]
+        update = write["body"]["writes"][0]["update"]
+        segments = update["name"].split("/documents/")[1].split("/")
+        assert len(segments) == 10 and segments[-2] == "ifvtest"
+        assert all(0 < len(segment.encode()) <= 1_500 for segment in segments)
+        assert _storage(segments) + _storage(segments[:-2]) == name_sum
+        [(field, value)] = update["fields"].items()
+        assert field == "s" * 20
+        text = value["stringValue"]
+        assert text == "x" * 2_999
+        assert name_sum + (len(field) + 1) + 32 + min(len(text) + 1, 1_500) == entry
+        assert readback["body"]["documents"] == [update["name"]]

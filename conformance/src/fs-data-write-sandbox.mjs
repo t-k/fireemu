@@ -140,6 +140,25 @@ function validateDeleteBoundaryProgram(program) {
 }
 
 /** Refuse any corpus that could address another Firestore project or escape its budget. */
+/** Sizes whose bodies the corpus stores compact; the harness pads them before sending. */
+export const PADDED_BODY_SIZES = new Set([11_534_336, 11_534_337]);
+
+/** A compact JSON body padded with spaces before its last `}` to exactly `size` bytes. */
+export function padJsonBody(body, size) {
+  if (
+    typeof body !== "string" ||
+    !PADDED_BODY_SIZES.has(size) ||
+    !body.endsWith("}") ||
+    Buffer.byteLength(body) >= size
+  ) {
+    throw new Error("invalid padded sandbox body");
+  }
+  JSON.parse(body);
+  const padded = `${body.slice(0, -1)}${" ".repeat(size - Buffer.byteLength(body))}}`;
+  if (Buffer.byteLength(padded) !== size) throw new Error("padded sandbox body size differs");
+  return padded;
+}
+
 export function validateSandboxCorpus(corpus) {
   if (corpus?.schemaVersion !== 1 || !Array.isArray(corpus.restPrograms)) {
     throw new Error("invalid sandbox corpus schema");
@@ -197,9 +216,18 @@ export function validateSandboxCorpus(corpus) {
       if (step.headers && Object.keys(step.headers).length > 0) {
         throw new Error("sandbox corpus must not include credential headers");
       }
+      if (step.padToBytes !== undefined) {
+        if (
+          !program.id.startsWith("writes/limits/non-commit-rest-request-bytes/") ||
+          !["POST", "PATCH"].includes(step.method)
+        ) {
+          throw new Error("invalid padded sandbox body");
+        }
+        padJsonBody(step.body, step.padToBytes);
+      }
       if (
         step.body !== undefined &&
-        Buffer.byteLength(JSON.stringify(step.body)) > MAX_BODY_BYTES
+        (step.padToBytes ?? Buffer.byteLength(JSON.stringify(step.body))) > MAX_BODY_BYTES
       ) {
         throw new Error("sandbox request exceeds the declared raw sentinel");
       }

@@ -18,6 +18,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { credentialMetadata, selectCredential } from "./credentials.mjs";
 import { requireChildProductionAdmission } from "../fs-data-write-admission.mjs";
+import { padJsonBody } from "../fs-data-write-sandbox.mjs";
 import { normalizeRecordedResponse } from "./production-normalization.mjs";
 import { createRequestBudget } from "./request-budget.mjs";
 import {
@@ -2169,7 +2170,9 @@ async function step(spec, raw) {
     init.headers["content-type"] = "application/json";
     init.body =
       typeof spec.body === "string"
-        ? spec.body
+        ? spec.padToBytes === undefined
+          ? spec.body
+          : padJsonBody(spec.body, spec.padToBytes)
         : JSON.stringify(resolve(substituteProject(spec.body), raw));
   }
   if (credential.authorization !== null) init.headers.authorization = credential.authorization;

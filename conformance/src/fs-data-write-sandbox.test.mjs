@@ -564,3 +564,17 @@ test("fixture cannot omit or hide drift in live gRPC stream observations", () =>
       .streamRecordingDigests.length === 2,
   );
 });
+
+test("an eleven-mebibyte body is stored compact and padded to its exact size before sending", async () => {
+  const { padJsonBody, PADDED_BODY_SIZES } = await import("./fs-data-write-sandbox.mjs");
+  const body = '{"documents":["x"]}';
+  for (const size of PADDED_BODY_SIZES) {
+    const padded = padJsonBody(body, size);
+    assert.equal(Buffer.byteLength(padded), size);
+    assert.deepEqual(JSON.parse(padded), JSON.parse(body));
+    assert.ok(padded.startsWith(body.slice(0, -1)) && padded.endsWith(" }"));
+  }
+  assert.throws(() => padJsonBody(body, 10_485_760), /invalid padded/);
+  assert.throws(() => padJsonBody('{"a":1', 11_534_336), /invalid padded/);
+  assert.throws(() => padJsonBody("[1]", 11_534_336), /invalid padded/);
+});

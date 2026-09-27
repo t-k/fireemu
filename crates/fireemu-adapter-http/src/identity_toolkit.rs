@@ -2694,8 +2694,150 @@ pub fn handle_with(
     handle_with_policy(state, method, path, headers, body, None)
 }
 
-#[allow(clippy::too_many_lines)]
 fn handle_with_policy(
+    state: &AuthState,
+    method: &str,
+    path: &str,
+    headers: &RequestHeaders,
+    body: &Value,
+    oidc_trust: Option<&crate::oidc::LocalOidcTrust>,
+) -> JsonResponse {
+    let response = handle_with_policy_inner(state, method, path, headers, body, oidc_trust);
+    if state.stateless_refresh_tokens {
+        return response;
+    }
+    let bare_path = path.split_once('?').map_or(path, |(bare, _)| bare);
+    match routes::resolve(method, bare_path) {
+        routes::Resolution::Matched { route, .. } => {
+            management_answer(state, route.handler, bare_path, response)
+        }
+        _ => response,
+    }
+}
+
+/// An Admin v2 management answer as production gives it (strict profile, AUTH-TENANT-BLOCKING
+/// recording 2026-09-27): errors in the v2 shape (`code`, `message`, `status`, no `errors`);
+/// tenant management of a project with multi-tenancy off is INVALID_PROJECT_ID whatever the
+/// tenant id; a provider config missing from the addressed scope is CONFIGURATION_NOT_FOUND,
+/// and a provider config names the project by number, lists `responseType` with its true
+/// members only and answers an empty list as `{}`.
+fn management_answer(
+    state: &AuthState,
+    handler: routes::Handler,
+    path: &str,
+    mut response: JsonResponse,
+) -> JsonResponse {
+    use routes::Handler;
+    let tenant_management = matches!(
+        handler,
+        Handler::TenantCreate
+            | Handler::TenantList
+            | Handler::TenantGet
+            | Handler::TenantUpdate
+            | Handler::TenantDelete
+    );
+    let provider_management = matches!(
+        handler,
+        Handler::ProviderCreate
+            | Handler::ProviderList
+            | Handler::ProviderGet
+            | Handler::ProviderUpdate
+            | Handler::ProviderDelete
+    ) && path.contains("/oauthIdpConfigs");
+    if !tenant_management && !provider_management {
+        return response;
+    }
+    let project = routes::scoped_target(path).map(|(project, _)| project.to_owned());
+    let registry = state.registry.as_ref();
+    if tenant_management && response.status != 200 {
+        let tenants_off = project.as_deref().is_some_and(|project| {
+            registry
+                .and_then(|registry| registry.store_for(project))
+                .and_then(|store| store.lock().ok().map(|store| !store.allows_tenants()))
+                .unwrap_or(false)
+        });
+        if tenants_off {
+            return config_proto::refusal("INVALID_PROJECT_ID");
+        }
+        return v2_error(response);
+    }
+    if !provider_management {
+        return response;
+    }
+    if response.status != 200 {
+        if response.status == 404 {
+            return JsonResponse {
+                status: 404,
+                body: json!({"error": {"code": 404, "message": "CONFIGURATION_NOT_FOUND", "status": "NOT_FOUND"}}),
+            };
+        }
+        return v2_error(response);
+    }
+    let number = project.as_deref().and_then(|project| {
+        registry
+            .and_then(|registry| registry.store_for(project))
+            .and_then(|store| store.lock().ok().and_then(|store| store.project_number()))
+    });
+    let rewrite = |config: &mut Value| {
+        if let (Some(project), Some(number)) = (project.as_deref(), number) {
+            if let Some(name) = config.get("name").and_then(Value::as_str) {
+                let renamed = name.replacen(
+                    &format!("projects/{project}/"),
+                    &format!("projects/{number}/"),
+                    1,
+                );
+                config["name"] = json!(renamed);
+            }
+        }
+        if let Some(Value::Object(types)) = config.get_mut("responseType") {
+            types.retain(|_, value| value != &Value::Bool(false));
+        }
+    };
+    if let Some(configs) = response
+        .body
+        .get_mut("oauthIdpConfigs")
+        .and_then(Value::as_array_mut)
+    {
+        configs.iter_mut().for_each(rewrite);
+        if configs.is_empty() {
+            if let Some(object) = response.body.as_object_mut() {
+                object.remove("oauthIdpConfigs");
+            }
+        }
+    } else if response.body.get("name").is_some() {
+        rewrite(&mut response.body);
+    }
+    response
+}
+
+/// An error in the Admin v2 shape: `code`, `message` and the canonical `status`, no `errors`.
+fn v2_error(mut response: JsonResponse) -> JsonResponse {
+    let status = match response.status {
+        400 => "INVALID_ARGUMENT",
+        401 => "UNAUTHENTICATED",
+        403 => "PERMISSION_DENIED",
+        404 => "NOT_FOUND",
+        409 => "ALREADY_EXISTS",
+        429 => "RESOURCE_EXHAUSTED",
+        501 => "NOT_IMPLEMENTED",
+        503 => "UNAVAILABLE",
+        _ => "INTERNAL",
+    };
+    if let Some(error) = response
+        .body
+        .get_mut("error")
+        .and_then(Value::as_object_mut)
+    {
+        error.remove("errors");
+        error
+            .entry("status".to_owned())
+            .or_insert_with(|| json!(status));
+    }
+    response
+}
+
+#[allow(clippy::too_many_lines)]
+fn handle_with_policy_inner(
     state: &AuthState,
     method: &str,
     path: &str,

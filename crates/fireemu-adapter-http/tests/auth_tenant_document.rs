@@ -482,3 +482,108 @@ fn the_tenant_list_is_ordered_by_id_and_pages_as_production_does() {
         assert_eq!(listed("?pageToken=not-a-token"), json!({}), "{label}");
     }
 }
+
+/// Tenant management answers in the Admin v2 error shape (`code`, `message`, `status`, no
+/// `errors`), and with multi-tenancy off every tenant management call is INVALID_PROJECT_ID,
+/// a read of a tenant id included (manage#get-unknown, switch-off#get-unknown-off).
+#[test]
+fn strict_tenant_management_errors_are_production_v2_errors() {
+    let strict = state(true);
+    let (status, body) = admin(
+        &strict,
+        "GET",
+        &format!("{TENANTS}/atb-nosuch-tenant"),
+        &json!({}),
+    );
+    assert_eq!(
+        (status, body),
+        (
+            404,
+            json!({"error": {"code": 404, "message": "TENANT_NOT_FOUND", "status": "NOT_FOUND"}})
+        )
+    );
+    let id = id_of(&create(&strict, &json!({"displayName": "atb-man-min"})));
+    let (status, _) = admin(&strict, "DELETE", &format!("{TENANTS}/{id}"), &json!({}));
+    assert_eq!(status, 200);
+    let (status, body) = admin(&strict, "DELETE", &format!("{TENANTS}/{id}"), &json!({}));
+    assert_eq!(
+        (status, body),
+        (
+            404,
+            json!({"error": {"code": 404, "message": "TENANT_NOT_FOUND", "status": "NOT_FOUND"}})
+        )
+    );
+    let (status, _) = admin(
+        &strict,
+        "PATCH",
+        "/identitytoolkit.googleapis.com/admin/v2/projects/demo-app/config?updateMask=multiTenant.allowTenants",
+        &json!({"multiTenant": {"allowTenants": false}}),
+    );
+    assert_eq!(status, 200);
+    let off = json!({"error": {"code": 400, "message": "INVALID_PROJECT_ID", "status": "INVALID_ARGUMENT"}});
+    for (method, path, body) in [
+        ("GET", TENANTS.to_owned(), json!({})),
+        ("GET", format!("{TENANTS}/atb-nosuch-tenant"), json!({})),
+        (
+            "POST",
+            TENANTS.to_owned(),
+            json!({"displayName": "atb-off"}),
+        ),
+    ] {
+        let (status, answer) = admin(&strict, method, &path, &body);
+        assert_eq!((status, answer), (400, off.clone()), "{method} {path}");
+    }
+}
+
+/// An OIDC provider config under strict, as production answers it (providers program): the
+/// project number in `name`, `responseType` with only its true members, `{}` for an empty
+/// list, and CONFIGURATION_NOT_FOUND in the v2 shape for a config outside the addressed scope.
+#[test]
+fn strict_provider_configs_answer_as_production() {
+    let strict = state(true);
+    let a = id_of(&create(&strict, &json!({"displayName": "atb-prov-a"})));
+    let b = id_of(&create(&strict, &json!({"displayName": "atb-prov-b"})));
+    let configs = |tenant: &str| {
+        format!(
+            "/identitytoolkit.googleapis.com/v2/projects/demo-app/tenants/{tenant}/oauthIdpConfigs"
+        )
+    };
+    let (status, created) = admin(
+        &strict,
+        "POST",
+        &format!("{}?oauthIdpConfigId=oidc.atb-a", configs(&a)),
+        &json!({"clientId": "atb-client", "issuer": "https://accounts.google.com",
+                "displayName": "atb provider", "enabled": true, "responseType": {"idToken": true}}),
+    );
+    assert_eq!(status, 200, "{created}");
+    let expected = json!({
+        "name": format!("projects/{PROJECT_NUMBER}/tenants/{a}/oauthIdpConfigs/oidc.atb-a"),
+        "clientId": "atb-client", "issuer": "https://accounts.google.com",
+        "displayName": "atb provider", "enabled": true, "responseType": {"idToken": true},
+    });
+    assert_eq!(created, expected);
+    let (status, got) = admin(
+        &strict,
+        "GET",
+        &format!("{}/oidc.atb-a", configs(&a)),
+        &json!({}),
+    );
+    assert_eq!((status, got), (200, expected.clone()));
+    let (status, listed) = admin(&strict, "GET", &configs(&a), &json!({}));
+    assert_eq!(
+        (status, listed),
+        (200, json!({"oauthIdpConfigs": [expected]}))
+    );
+    let (status, empty) = admin(&strict, "GET", &configs(&b), &json!({}));
+    assert_eq!((status, empty), (200, json!({})));
+    let missing = json!({"error": {"code": 404, "message": "CONFIGURATION_NOT_FOUND", "status": "NOT_FOUND"}});
+    for method in ["GET", "DELETE"] {
+        let (status, body) = admin(
+            &strict,
+            method,
+            &format!("{}/oidc.atb-a", configs(&b)),
+            &json!({}),
+        );
+        assert_eq!((status, body), (404, missing.clone()), "{method}");
+    }
+}

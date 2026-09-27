@@ -18100,10 +18100,12 @@ fn strict_tenant_reads_serialize_with_disabling_config_patch() {
             let (patch_status, config_response) = patch_rx.recv().unwrap();
             assert_eq!(patch_status, 200, "{config_response}");
         });
+        // With multi-tenancy off, a read of the list or of any tenant id is INVALID_PROJECT_ID
+        // (AUTH-TENANT-BLOCKING recording 2026-09-27, switch-off#list-off, get-unknown-off).
         let (status, refused) = admin(&s, "GET", path, &Value::Null);
+        assert_eq!(status, 400, "{refused}");
         assert_eq!(
-            status,
-            if path == &tenants { 400 } else { 404 },
+            refused["error"]["message"], "INVALID_PROJECT_ID",
             "{refused}"
         );
         enable_tenants(&s);

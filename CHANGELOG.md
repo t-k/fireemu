@@ -22,7 +22,7 @@ Functions HTTP and callable behavior was compared with two production recordings
 
 - Both profiles: an `onRequest` function receives cross-origin requests and their `Origin` header, so its handler applies the declared CORS policy; an empty request body reaches the handler as `{}`.
 - Strict profile: Functions ingress supplies one observed client hop in `X-Forwarded-For` and `https` in `X-Forwarded-Proto`, replacing client-supplied values. A 204 response and a callable stream without a declared Content-Type use the recorded `text/html` default.
-- Strict profile: a callable request with an invalid Bearer token gets production's 401 HTML response, malformed JSON gets its generic 400 HTML response, and a timed-out HTTP function gets its 504 text response. The emulator profile keeps the official emulator's outcomes for these cases.
+- Strict profile: a callable request with an invalid Bearer token gets production's 401 HTML response, malformed JSON gets its generic 400 HTML response, and a timed-out HTTP function gets its 504 text response. The emulator profile keeps the official emulator's malformed JSON and timeout outcomes. Its pre-existing 401 JSON refusal for invalid callable Bearer tokens differs from the official emulator's 200 but has the same status as production.
 
 Auth: the Auth items below were measured against a real Identity Platform project on 2026-09-24 (AUTH-CREDENTIAL). Each item names the profiles it affects; "unlike the official emulator" marks where the emulator profile now differs from the Firebase Emulator Suite.
 

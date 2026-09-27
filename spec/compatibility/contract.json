@@ -1538,7 +1538,7 @@
           ],
           "fireemuOnly": [
             {
-              "behaviour": "the daemon proxy refuses Bearer owner, forged bearer values and duplicate or folded auth fields as callable user identities instead of admitting them",
+              "behaviour": "the emulator profile retains its pre-existing 401 JSON refusal for malformed Bearer, invalid-signature and expired ID tokens on a callable: production also refuses these with 401 but uses HTML, while the official Functions emulator returns 200. Bearer owner and duplicate or folded auth fields are also refused as callable user identities under the configured trust boundary",
               "precision": "conservative"
             },
             {

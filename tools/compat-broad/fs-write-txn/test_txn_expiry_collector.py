@@ -184,6 +184,17 @@ def test_keyboard_interrupt_runs_owned_cleanup_before_returning_a_receipt():
     assert any(call.get("site", "").startswith("cleanup/") for call in endpoint.calls)
 
 
+def test_responsibility_snapshot_binds_the_owner_marker_for_exact_name_recovery():
+    snapshots = []
+    collector.collect(
+        options(), Endpoint(), advance=advances([]), monotonic=lambda: 0.0,
+        responsibility=snapshots.append,
+    )
+    assert snapshots
+    assert all(snapshot["ownerId"] == OWNER for snapshot in snapshots)
+    assert all(isinstance(snapshot["preconditions"], list) for snapshot in snapshots)
+
+
 def test_each_case_row_carries_its_expected_local_result():
     receipt = collector.collect(
         options(), Endpoint(), advance=advances([]), monotonic=lambda: 0.0

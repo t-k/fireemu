@@ -385,12 +385,14 @@ class Collection:
             "casesDigest": cases.cases_digest(),
             "target": self.options["target"],
             "nonce": self.options["nonce"],
+            "ownerId": self.options["ownerId"],
             "documentPrefix": self.plan["documentPrefix"],
             "projectId": self.options["projectId"],
             "database": self.options["database"],
             "requestCount": self.request_count,
             "inFlight": copy.deepcopy(self.pending_request),
             "resourceStates": dict(self.resource_state),
+            "preconditions": copy.deepcopy(self.preconditions),
             "pendingBegins": sorted(self.pending_begins),
             "openTransactions": [
                 {"tag": tag, "tokenSha256": hashlib.sha256(token).hexdigest()}

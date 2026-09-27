@@ -14,6 +14,11 @@ import txn_expiry_plan as plan
 import txn_sandbox_cli as cli
 
 
+def test_closure_path_matches_the_tracked_case_sensitive_name():
+    assert cli.CLOSURE.name == "FS-TRANSACTION.json"
+    assert cli.CLOSURE.is_file()
+
+
 def sha(value):
     return hashlib.sha256(value).hexdigest()
 

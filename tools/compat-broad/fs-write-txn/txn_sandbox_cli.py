@@ -39,7 +39,7 @@ SOURCE_FILES = (
     "tools/compat-broad/fs-write-txn/credential_prep.py",
     "tools/compat-broad/batch_adapter.py",
 )
-CLOSURE = ROOT / "spec/compatibility/closure/fs-transaction.json"
+CLOSURE = ROOT / "spec/compatibility/closure/FS-TRANSACTION.json"
 PACKET_FIELDS = {
     "schemaVersion", "packetId", "project", "database", "recordings",
     "requestsPerRecording", "estimatedUsdPerRecording", "sourceCommit",

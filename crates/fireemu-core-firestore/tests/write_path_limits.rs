@@ -599,19 +599,19 @@ fn index_accounting_refusals_are_strict_profile_only() {
             integers(20_000),
             "too many index entries",
         ),
-        // The indexed-string guard: a 1,500-byte string under a long name.
+        // A 1,500-byte string under a 2,642-byte name (index-entry-string-name/2642).
         (
             name_of(2_642),
             "s",
             Value::String("x".repeat(1_500)),
             "Index entry is too large.",
         ),
-        // FS-LIMIT-INDEX-ENTRY-BYTES reached by a bytes value, which is not truncated first.
+        // FS-LIMIT-INDEX-ENTRY-BYTES: a single-field entry over the recorded threshold.
         (
             name_of(3_668),
             "b",
             Value::Bytes(vec![7; 1_500]),
-            "FS-LIMIT-INDEX-ENTRY-BYTES",
+            "Index entry is too large.",
         ),
         // The whole-name guard.
         (

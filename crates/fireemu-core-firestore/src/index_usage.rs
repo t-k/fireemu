@@ -53,6 +53,27 @@ const DELETE_DEN: u64 = 1_000_000_000;
 const DELETE_REST_NUM: u64 = 1_151_221_899;
 const DELETE_COMMIT_NUM: u64 = 1_151_316_928;
 
+/// The largest single-field (collection scope) index entry production accepts, in bytes under
+/// the documented entry formula ([`index_entry_size`]). Production refuses the entry with
+/// "Index entry is too large." well below the published 7,680 bytes: it accepted 5,529
+/// (`writes/limits/index-entry-string-name/2641`) and refused 5,531 (`/2642`), and every other
+/// recorded write agrees (FS-DATA-WRITE, 2026-09-23 to 2026-09-27). Strict refuses from the
+/// smallest recorded refusal; 5,530 is unobserved.
+pub const SINGLE_FIELD_ENTRY_BYTES: u64 = 5_530;
+
+/// The published entry limit, kept for the entry kinds production has no recorded point for
+/// (composite and collection-group entries).
+pub const DOCUMENTED_ENTRY_BYTES: u64 = 7_680;
+
+const fn entry_limit(scope: IndexEntryScope) -> u64 {
+    match scope {
+        IndexEntryScope::SingleFieldCollection => SINGLE_FIELD_ENTRY_BYTES,
+        IndexEntryScope::SingleFieldCollectionGroup
+        | IndexEntryScope::CompositeCollection
+        | IndexEntryScope::CompositeCollectionGroup => DOCUMENTED_ENTRY_BYTES,
+    }
+}
+
 /// Index usage of one document, including automatic and configured composite indexes.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub struct IndexUsage {
@@ -65,12 +86,14 @@ pub struct IndexUsage {
 }
 
 impl IndexUsage {
-    /// Counts `count` entries of `bytes` each. With `enforce`, refuses a document over the
-    /// production entry limits; the emulator profile only counts.
+    /// Counts `count` entries of `bytes` each, where `limit` is the largest entry accepted.
+    /// With `enforce`, refuses a document over the production entry limits; the emulator
+    /// profile only counts.
     fn add(
         &mut self,
         bytes: u64,
         count: u64,
+        limit: u64,
         document: &DocumentPath,
         enforce: bool,
     ) -> Result<(), FirestoreError> {
@@ -80,29 +103,16 @@ impl IndexUsage {
         if !enforce {
             return Ok(());
         }
-        for (id, current, maximum) in [
-            (
-                crate::limits::INDEX_ENTRIES_PER_DOCUMENT,
-                self.entries,
-                40_000,
-            ),
-            (
-                crate::limits::INDEX_ENTRY_BYTES,
-                self.maximum_entry_bytes,
-                7_680,
-            ),
-        ] {
-            if current > maximum {
-                if id == crate::limits::INDEX_ENTRIES_PER_DOCUMENT {
-                    return Err(FirestoreError::InvalidArgument(format!(
-                        "too many index entries for entity /{}",
-                        document.relative()
-                    )));
-                }
-                return Err(FirestoreError::InvalidArgument(format!(
-                    "{id}: {current} exceeds {maximum}"
-                )));
-            }
+        // FS-LIMIT-INDEX-ENTRIES-PER-DOCUMENT
+        if self.entries > 40_000 {
+            return Err(FirestoreError::InvalidArgument(format!(
+                "too many index entries for entity /{}",
+                document.relative()
+            )));
+        }
+        // FS-LIMIT-INDEX-ENTRY-BYTES
+        if bytes > limit {
+            return Err(index_entry_too_large());
         }
         Ok(())
     }
@@ -116,6 +126,10 @@ impl IndexUsage {
         }
         Ok(())
     }
+}
+
+fn index_entry_too_large() -> FirestoreError {
+    FirestoreError::InvalidArgument("Index entry is too large.".into())
 }
 
 fn transaction_too_big() -> FirestoreError {
@@ -197,9 +211,7 @@ impl IndexSet {
         let name_bytes = document_name_size(document)
             .map_err(|error| FirestoreError::InvalidArgument(error.to_string()))?;
         if enforce && name_bytes >= 5_017 {
-            return Err(FirestoreError::InvalidArgument(
-                "Index entry is too large.".into(),
-            ));
+            return Err(index_entry_too_large());
         }
         self.automatic_usage(document, fields, &mut Vec::new(), &mut usage, enforce)?;
         for index in self
@@ -257,6 +269,7 @@ impl IndexSet {
                     usage.add(
                         entry_size(scope, document, parent.as_ref(), &values)?,
                         1,
+                        entry_limit(scope),
                         document,
                         enforce,
                     )?;
@@ -265,6 +278,7 @@ impl IndexSet {
                 usage.add(
                     entry_size(scope, document, parent.as_ref(), &values)?,
                     1,
+                    entry_limit(scope),
                     document,
                     enforce,
                 )?;
@@ -299,22 +313,6 @@ impl IndexSet {
                     IndexQueryScope::Collection => IndexEntryScope::SingleFieldCollection,
                     IndexQueryScope::CollectionGroup => IndexEntryScope::SingleFieldCollectionGroup,
                 };
-                // The saved production corpus accepts an indexed 1,500-byte string with
-                // a 2,600-byte relative name and refuses the same shape at 2,642 bytes.
-                // The transition inside that interval remains unobserved, so only guard
-                // the recorded refusal range for this indexed string shape.
-                if enforce
-                    && scope == IndexEntryScope::SingleFieldCollection
-                    && matches!(mode, IndexFieldMode::Ascending | IndexFieldMode::Descending)
-                    && matches!(value, Value::String(text) if text.len() >= 1_500)
-                    && document_name_size(document)
-                        .map_err(|error| FirestoreError::InvalidArgument(error.to_string()))?
-                        >= 2_659
-                {
-                    return Err(FirestoreError::InvalidArgument(
-                        "Index entry is too large.".into(),
-                    ));
-                }
                 if mode == IndexFieldMode::Contains {
                     let Value::Array(items) = value else {
                         continue;
@@ -326,6 +324,7 @@ impl IndexSet {
                             // directions. Production accepts 19,999 distinct elements
                             // plus two ordered entries, but rejects 20,000 elements.
                             2,
+                            entry_limit(scope),
                             document,
                             enforce,
                         )?;
@@ -334,6 +333,7 @@ impl IndexSet {
                     usage.add(
                         entry_size(scope, document, parent.as_ref(), &[(&canonical, value)])?,
                         1,
+                        entry_limit(scope),
                         document,
                         enforce,
                     )?;
@@ -360,8 +360,11 @@ fn entry_size(
 
 #[cfg(test)]
 mod tests {
-    use super::{IndexUsage, WriteRoute};
+    use super::{
+        entry_limit, IndexUsage, WriteRoute, DOCUMENTED_ENTRY_BYTES, SINGLE_FIELD_ENTRY_BYTES,
+    };
     use crate::path::DocumentPath;
+    use crate::size::IndexEntryScope;
     use fireemu_core_types::ids::{DatabaseId, ProjectId};
 
     #[test]
@@ -372,21 +375,28 @@ mod tests {
             "tasks/a",
         )
         .unwrap();
+        let limit = DOCUMENTED_ENTRY_BYTES;
         let mut count = IndexUsage::default();
-        assert!(count.add(1, 40_000, &document, true).is_ok());
-        assert!(count.add(1, 1, &document, true).is_err());
-        assert!(IndexUsage::default().add(7_680, 1, &document, true).is_ok());
-        assert!(IndexUsage::default()
-            .add(7_681, 1, &document, true)
-            .is_err());
+        assert!(count.add(1, 40_000, limit, &document, true).is_ok());
+        assert!(count.add(1, 1, limit, &document, true).is_err());
+        for limit in [SINGLE_FIELD_ENTRY_BYTES, DOCUMENTED_ENTRY_BYTES] {
+            assert!(IndexUsage::default()
+                .add(limit, 1, limit, &document, true)
+                .is_ok());
+            assert!(matches!(
+                IndexUsage::default().add(limit + 1, 1, limit, &document, true),
+                Err(crate::store::FirestoreError::InvalidArgument(message))
+                    if message == "Index entry is too large."
+            ));
+        }
         let mut sum = IndexUsage::default();
-        assert!(sum.add(4_096, 2_048, &document, true).is_ok());
+        assert!(sum.add(4_096, 2_048, limit, &document, true).is_ok());
         assert!(sum.finish(super::TRANSACTION_BYTES - 8_388_608).is_ok());
-        assert!(sum.add(1, 1, &document, true).is_ok());
+        assert!(sum.add(1, 1, limit, &document, true).is_ok());
         // Without enforcement the same usage is only counted.
         let mut counted = IndexUsage::default();
-        assert!(counted.add(1, 40_001, &document, false).is_ok());
-        assert!(counted.add(7_681, 1, &document, false).is_ok());
+        assert!(counted.add(1, 40_001, limit, &document, false).is_ok());
+        assert!(counted.add(7_681, 1, limit, &document, false).is_ok());
         assert_eq!(counted.entries, 40_002);
         assert_eq!(counted.maximum_entry_bytes, 7_681);
         assert!(matches!(
@@ -394,6 +404,23 @@ mod tests {
             Err(crate::store::FirestoreError::InvalidArgument(message))
                 if message == "Transaction too big. Decrease transaction size."
         ));
+    }
+
+    #[test]
+    fn only_single_field_collection_entries_use_the_recorded_threshold() {
+        assert_eq!(SINGLE_FIELD_ENTRY_BYTES, 5_530);
+        assert_eq!(DOCUMENTED_ENTRY_BYTES, 7_680);
+        assert_eq!(
+            entry_limit(IndexEntryScope::SingleFieldCollection),
+            SINGLE_FIELD_ENTRY_BYTES
+        );
+        for scope in [
+            IndexEntryScope::SingleFieldCollectionGroup,
+            IndexEntryScope::CompositeCollection,
+            IndexEntryScope::CompositeCollectionGroup,
+        ] {
+            assert_eq!(entry_limit(scope), DOCUMENTED_ENTRY_BYTES, "{scope:?}");
+        }
     }
 
     fn root_document(collection_bytes: usize, id_bytes: usize) -> DocumentPath {

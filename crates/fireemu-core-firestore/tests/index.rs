@@ -94,7 +94,15 @@ fn index_entry_size_and_total_size_budgets_are_independent() {
         ("v3", IndexFieldMode::Ascending),
         ("v4", IndexFieldMode::Ascending),
     ]));
-    assert!(indexes.document_index_usage(&path, &fields).is_ok());
+    // A composite entry keeps the documented 7,680-byte bound: production has no recorded
+    // composite point. This one is 7,556 bytes, over the single-field threshold.
+    assert_eq!(
+        indexes
+            .document_index_usage(&path, &fields)
+            .unwrap()
+            .maximum_entry_bytes,
+        7_556
+    );
     indexes.add_composite(composite(&[
         ("v0", IndexFieldMode::Ascending),
         ("v1", IndexFieldMode::Ascending),
@@ -103,11 +111,13 @@ fn index_entry_size_and_total_size_budgets_are_independent() {
         ("v4", IndexFieldMode::Ascending),
         ("v5", IndexFieldMode::Ascending),
     ]));
-    assert!(indexes
-        .document_index_usage(&path, &fields)
-        .unwrap_err()
-        .to_string()
-        .contains("FS-LIMIT-INDEX-ENTRY-BYTES"));
+    assert_eq!(
+        indexes
+            .document_index_usage(&path, &fields)
+            .unwrap_err()
+            .to_string(),
+        "invalid argument: Index entry is too large."
+    );
     let long_path = DocumentPath::parse(
         &ProjectId::try_new("demo-app").unwrap(),
         &DatabaseId::default_database(),
@@ -262,44 +272,112 @@ fn index_entry_count_refusal_names_the_relative_entity_path() {
     );
 }
 
+/// Single-field entries follow the threshold production recorded, under the documented entry
+/// formula (own name + parent name + field name + indexed value + 32, a value counted up to
+/// 1,500 bytes): the largest accepted entry is 5,529 bytes (`index-entry-string-name/2641`) and
+/// the smallest refused one 5,531 (`/2642`). Every other recorded point agrees, including
+/// shapes a guard on the own name alone gets wrong (FS-DATA-WRITE follow-up, 2026-09-27).
 #[test]
-fn indexed_1500_byte_string_uses_recorded_long_name_refusal_points() {
+fn single_field_entries_follow_the_recorded_production_threshold() {
     use fireemu_core_firestore::path::DocumentPath;
+    use fireemu_core_firestore::store::LimitScope;
     use fireemu_core_types::ids::{DatabaseId, ProjectId};
     use std::collections::BTreeMap;
 
-    let path = |relative_bytes: usize| {
-        let document_bytes = relative_bytes - 5;
-        let first = document_bytes.div_ceil(2);
-        let second = document_bytes / 2;
+    // A document name from (segment, length) pairs; a length of 0 keeps the segment as is.
+    let path = |segments: &[(&str, usize)]| {
+        let relative = segments
+            .iter()
+            .map(|(text, length)| {
+                if *length == 0 {
+                    (*text).to_owned()
+                } else {
+                    text.repeat(*length)
+                }
+            })
+            .collect::<Vec<_>>()
+            .join("/");
         DocumentPath::parse(
             &ProjectId::try_new("demo-app").unwrap(),
             &DatabaseId::default_database(),
-            &format!("c/{}/c/{}", "d".repeat(first), "d".repeat(second)),
+            &relative,
         )
         .unwrap()
     };
-    let fields = BTreeMap::from([("s".into(), Value::String("x".repeat(1500)))]);
+    let pair =
+        |first: usize, second: usize| path(&[("c", 0), ("d", first), ("c", 0), ("d", second)]);
+    let string = |field: &str, bytes: usize| {
+        BTreeMap::from([(field.to_owned(), Value::String("x".repeat(bytes)))])
+    };
+    let bracket = |last_id: usize| {
+        path(&[
+            ("ifvpair", 0),
+            ("r", 0),
+            ("p", 0),
+            ("z", 800),
+            ("p", 0),
+            ("z", 800),
+            ("p", 0),
+            ("z", last_id),
+            ("ifvtest", 0),
+            ("d", 0),
+        ])
+    };
+    let wide = "s".repeat(20);
     let indexes = IndexSet::default();
-    assert!(indexes.document_index_usage(&path(2600), &fields).is_ok());
-    assert!(indexes.document_index_usage(&path(2641), &fields).is_ok());
-    for relative_bytes in [2642, 2643] {
+    let largest = |document: &DocumentPath, fields: &BTreeMap<String, Value>| {
+        indexes
+            .document_index_usage_in(document, fields, LimitScope::OfficialEmulator)
+            .unwrap()
+            .maximum_entry_bytes
+    };
+    let accepted = [
+        // index-entry-string-name/2600 and /2641.
+        (pair(1_298, 1_297), string("s", 1_500), 5_468),
+        (pair(1_318, 1_318), string("s", 1_500), 5_529),
+        // Follow-up: a string over 1,500 bytes is counted as 1,500.
+        (pair(1_301, 1_300), string("s", 2_999), 5_477),
+        (pair(1_301, 1_301), string("s", 2_999), 5_478),
+        // Follow-up: the same own name as the refused 2642 below, under a shorter parent.
+        (pair(1_137, 1_500), string("s", 1_500), 5_349),
+    ];
+    for (document, fields, bytes) in &accepted {
+        assert_eq!(largest(document, fields), *bytes);
+        assert!(
+            indexes.document_index_usage(document, fields).is_ok(),
+            "{bytes} is accepted"
+        );
+    }
+    let refused = [
+        // index-entry-string-name/2642 and /2643.
+        (pair(1_319, 1_318), string("s", 1_500), 5_531),
+        (pair(1_319, 1_319), string("s", 1_500), 5_532),
+        // Bracket indexed-field-value-bytes/5200 and /6128: a 20-byte field name.
+        (bracket(960), string(&wide, 2_999), 6_753),
+        (bracket(1_424), string(&wide, 2_999), 7_681),
+    ];
+    for (document, fields, bytes) in &refused {
+        assert_eq!(largest(document, fields), *bytes);
         assert_eq!(
             indexes
-                .document_index_usage(&path(relative_bytes), &fields)
+                .document_index_usage(document, fields)
                 .unwrap_err()
                 .to_string(),
-            "invalid argument: Index entry is too large."
+            "invalid argument: Index entry is too large.",
+            "{bytes} is refused"
         );
     }
 
+    // An exempt field has no single-field entry to refuse.
     let mut exempt = IndexSet::default();
     exempt.add_exemption(&SingleFieldExemption {
         collection_group: CollectionId::try_new("c").unwrap(),
         field: fp("s"),
         query_scope: IndexQueryScope::Collection,
     });
-    assert!(exempt.document_index_usage(&path(2642), &fields).is_ok());
+    assert!(exempt
+        .document_index_usage(&pair(1_319, 1_318), &string("s", 1_500))
+        .is_ok());
 }
 
 /// Exploratory production points only; this deliberately ignored diagnostic pins the saved

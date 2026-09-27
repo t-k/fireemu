@@ -873,7 +873,7 @@
             "conformance": []
           },
           "officialLimitations": [
-            "the official emulator enforces a subset of the production limits (document bytes via the per-value cap, nesting depth, identifier lengths, IN values, array-contains count) and not the rest: measured on 2026-09-27 (firebase-tools 15.28.2, Firestore emulator v1.22.0), it accepted writes over the create transaction budget, over 40,000 index entries, with an index entry over 7,680 bytes, and past the indexed-string and document-name guards; transforms per document and composite indexes are not enforced either. The emulator profile refuses exactly the measured subset and observes the production-only limits without refusing"
+            "the official emulator enforces a subset of the production limits (document bytes via the per-value cap, nesting depth, identifier lengths, IN values, array-contains count) and not the rest: measured on 2026-09-27 (firebase-tools 15.28.2, Firestore emulator v1.22.0), it accepted writes over the create transaction budget, over 40,000 index entries, with index entries over the strict entry limits (5,530 bytes for a single-field entry, 7,680 for other entries), and past the document-name guard; transforms per document and composite indexes are not enforced either. The emulator profile refuses exactly the measured subset and observes the production-only limits without refusing"
           ],
           "fireemuOnly": [
             {

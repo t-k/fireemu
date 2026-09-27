@@ -1,0 +1,678 @@
+{
+  "schemaVersion": 1,
+  "parent": "FS-TRANSACTION",
+  "parentStatus": "IMPLEMENTING",
+  "inventoryStatus": "PROPOSED",
+  "freezeState": "UNFROZEN",
+  "oracleTrack": "disposable-sandbox",
+  "closureReview": {
+    "decision": "PENDING",
+    "note": "Draft for coordinator and owner scope review; no condition is promoted by historical production or local shadow evidence."
+  },
+  "scopeDecisions": [
+    {
+      "id": "T1",
+      "status": "PROPOSED",
+      "recommendation": "Use behavioral conditions rather than a raw API-method denominator; each declared transaction surface must map to exactly one condition.",
+      "ownerDecisionRequired": true
+    },
+    {
+      "id": "T2",
+      "status": "PROPOSED",
+      "recommendation": "Keep query execution inside a transaction here, following the FS-QUERY-INDEX Q4d decision; ordinary query semantics stay with FS-QUERY-INDEX.",
+      "ownerDecisionRequired": false,
+      "existingDecisionRef": "spec/compatibility/closure/FS-QUERY-INDEX.json#Q4d"
+    },
+    {
+      "id": "T3",
+      "status": "PROPOSED",
+      "recommendation": "Keep transaction commit-to-listener notification ordering as a shared acceptance row with FS-LISTEN-SDK, but count the transaction outcome here and callback delivery there.",
+      "ownerDecisionRequired": true
+    },
+    {
+      "id": "T4",
+      "status": "PROPOSED",
+      "recommendation": "Keep transaction-specific resource and timeout limits here; generic document and request limits remain with FS-DATA-WRITE.",
+      "ownerDecisionRequired": true
+    },
+    {
+      "id": "T5",
+      "status": "PROPOSED",
+      "recommendation": "Use the sandbox conformance-harness process with clean-context corpus/runner review, two recordings and one JSONL ledger line per run. The old single-run O8 manifest is preparation material only; do not import O7/O8 Gate or reservation tooling. A fresh owner go-ahead remains necessary under the current production-send hold.",
+      "ownerDecisionRequired": true
+    },
+    {
+      "id": "T6",
+      "status": "PROPOSED",
+      "recommendation": "Retain historical fireemu-35fe6 recordings as immutable reference only; require sandbox evidence or an explicit owner decision before calling any historical-only condition VERIFIED.",
+      "ownerDecisionRequired": true
+    },
+    {
+      "id": "T7",
+      "status": "PROPOSED",
+      "recommendation": "Keep SDK-driven retry distinct from backend retry-token semantics. Do not exclude it on the strength of REST or gRPC observations.",
+      "ownerDecisionRequired": true
+    }
+  ],
+  "conditions": [
+    {
+      "conditionId": "FS-TRANSACTION/read-write-lifecycle",
+      "source": "docs/compatibility/ip-fs-production-compatibility.md#feature-group-status",
+      "recipeIds": [
+        "fs-transaction/read-write-lifecycle"
+      ],
+      "recipeStatus": "PROPOSED",
+      "status": "SAVED_REFERENCE_PENDING_FINAL",
+      "observation": {
+        "method": "REST BeginTransaction, GetDocument, BatchGetDocuments and Commit with read-write controls.",
+        "existingCaseOrCampaignRefs": [
+          "conformance/firestore-production-matrix.json#transactions/lifecycle"
+        ]
+      },
+      "localEvidence": {
+        "references": [],
+        "productionExecuted": false
+      },
+      "historicalProductionReferences": [
+        "conformance/firestore-production-matrix.json"
+      ],
+      "verification": {
+        "requiredEvidence": [
+          "Two independently recorded sandbox observations for each new production corpus row, with complete post-state and cleanup.",
+          "A comparison against the final source-bound fireemu artifact that covers every recipe step and reports no unexplained mismatch."
+        ],
+        "recordingsRequired": 2
+      }
+    },
+    {
+      "conditionId": "FS-TRANSACTION/read-only-snapshot",
+      "source": "docs/compatibility/ip-fs-production-compatibility.md#feature-group-status",
+      "recipeIds": [
+        "fs-transaction/read-only-snapshot"
+      ],
+      "recipeStatus": "PROPOSED",
+      "status": "SAVED_REFERENCE_PENDING_FINAL",
+      "observation": {
+        "method": "REST read-only BeginTransaction, GetDocument and Commit refusal with a read-write control.",
+        "existingCaseOrCampaignRefs": [
+          "conformance/firestore-production-matrix.json#transactions/lifecycle"
+        ]
+      },
+      "localEvidence": {
+        "references": [],
+        "productionExecuted": false
+      },
+      "historicalProductionReferences": [
+        "conformance/firestore-production-matrix.json"
+      ],
+      "verification": {
+        "requiredEvidence": [
+          "Two independently recorded sandbox observations for each new production corpus row, with complete post-state and cleanup.",
+          "A comparison against the final source-bound fireemu artifact that covers every recipe step and reports no unexplained mismatch."
+        ],
+        "recordingsRequired": 2
+      }
+    },
+    {
+      "conditionId": "FS-TRANSACTION/read-time-snapshot",
+      "source": "docs/compatibility/ip-fs-production-compatibility.md#feature-group-status",
+      "recipeIds": [
+        "fs-transaction/read-time-snapshot"
+      ],
+      "recipeStatus": "PROPOSED",
+      "status": "SAVED_REFERENCE_PENDING_FINAL",
+      "observation": {
+        "method": "REST readTime and newTransaction observations with a stable readback control.",
+        "existingCaseOrCampaignRefs": [
+          "conformance/firestore-production-matrix.json#reads/read-time"
+        ]
+      },
+      "localEvidence": {
+        "references": [],
+        "productionExecuted": false,
+        "note": "The expiry/retry local shadow contains no readTime snapshot case. Historical read-time rows require final-artifact replay."
+      },
+      "historicalProductionReferences": [
+        "conformance/firestore-production-matrix.json"
+      ],
+      "verification": {
+        "requiredEvidence": [
+          "Two independently recorded sandbox observations for each new production corpus row, with complete post-state and cleanup.",
+          "A comparison against the final source-bound fireemu artifact that covers every recipe step and reports no unexplained mismatch."
+        ],
+        "recordingsRequired": 2
+      }
+    },
+    {
+      "conditionId": "FS-TRANSACTION/token-validation-and-ownership",
+      "source": "docs/compatibility/ip-fs-production-compatibility.md#feature-group-status",
+      "recipeIds": [
+        "fs-transaction/token-validation-and-ownership"
+      ],
+      "recipeStatus": "PROPOSED",
+      "status": "PENDING_CORPUS",
+      "observation": {
+        "method": "REST and gRPC use, malformed, unknown, finished, foreign-project and foreign-database tokens, with a valid-token control.",
+        "existingCaseOrCampaignRefs": [
+          "conformance/firestore-production-matrix.json#transactions/lifecycle"
+        ]
+      },
+      "localEvidence": {
+        "references": [
+          "crates/fireemu-adapter-grpc/src/rest/transaction_tests.rs"
+        ],
+        "productionExecuted": false
+      },
+      "historicalProductionReferences": [
+        "conformance/firestore-production-matrix.json"
+      ],
+      "verification": {
+        "requiredEvidence": [
+          "Two independently recorded sandbox observations for each new production corpus row, with complete post-state and cleanup.",
+          "A comparison against the final source-bound fireemu artifact that covers every recipe step and reports no unexplained mismatch."
+        ],
+        "recordingsRequired": 2
+      }
+    },
+    {
+      "conditionId": "FS-TRANSACTION/read-set-conflict",
+      "source": "docs/compatibility/ip-fs-production-compatibility.md#feature-group-status",
+      "recipeIds": [
+        "fs-transaction/read-set-conflict"
+      ],
+      "recipeStatus": "PROPOSED",
+      "status": "SAVED_REFERENCE_PENDING_FINAL",
+      "observation": {
+        "method": "Concurrent read-write transactions with a conflicting document write and a nonconflicting control; compare codes, order and final document.",
+        "existingCaseOrCampaignRefs": [
+          "conformance/firestore-production-matrix.json#transactions/lifecycle"
+        ]
+      },
+      "localEvidence": {
+        "references": [
+          "crates/fireemu-core-firestore/tests/store.rs"
+        ],
+        "productionExecuted": false
+      },
+      "historicalProductionReferences": [
+        "conformance/firestore-production-matrix.json"
+      ],
+      "verification": {
+        "requiredEvidence": [
+          "Two independently recorded sandbox observations for each new production corpus row, with complete post-state and cleanup.",
+          "A comparison against the final source-bound fireemu artifact that covers every recipe step and reports no unexplained mismatch."
+        ],
+        "recordingsRequired": 2
+      }
+    },
+    {
+      "conditionId": "FS-TRANSACTION/write-set-atomicity",
+      "source": "docs/compatibility/ip-fs-production-compatibility.md#feature-group-status",
+      "recipeIds": [
+        "fs-transaction/write-set-atomicity"
+      ],
+      "recipeStatus": "PROPOSED",
+      "status": "SAVED_REFERENCE_PENDING_FINAL",
+      "observation": {
+        "method": "Conflicting and nonconflicting writes to transaction-owned documents; read back every write after refusal.",
+        "existingCaseOrCampaignRefs": [
+          "conformance/firestore-production-matrix.json#transactions/lifecycle"
+        ]
+      },
+      "localEvidence": {
+        "references": [
+          "crates/fireemu-core-firestore/tests/store.rs"
+        ],
+        "productionExecuted": false
+      },
+      "historicalProductionReferences": [
+        "conformance/firestore-production-matrix.json"
+      ],
+      "verification": {
+        "requiredEvidence": [
+          "Two independently recorded sandbox observations for each new production corpus row, with complete post-state and cleanup.",
+          "A comparison against the final source-bound fireemu artifact that covers every recipe step and reports no unexplained mismatch."
+        ],
+        "recordingsRequired": 2
+      }
+    },
+    {
+      "conditionId": "FS-TRANSACTION/query-range-lock",
+      "source": "docs/compatibility/ip-fs-production-compatibility.md#feature-group-status",
+      "recipeIds": [
+        "fs-transaction/query-range-lock"
+      ],
+      "recipeStatus": "PROPOSED",
+      "status": "PENDING_CORPUS",
+      "observation": {
+        "method": "A query inside a read-write transaction followed by a matching phantom write and an outside-range control; compare outcome and post-state.",
+        "existingCaseOrCampaignRefs": [
+          "conformance/firestore-production-matrix.json#transactions/lifecycle/phantom-write"
+        ]
+      },
+      "localEvidence": {
+        "references": [
+          "crates/fireemu-adapter-grpc/src/service/tests/query_transaction_tests.rs"
+        ],
+        "productionExecuted": false
+      },
+      "historicalProductionReferences": [],
+      "verification": {
+        "requiredEvidence": [
+          "Two independently recorded sandbox observations for each new production corpus row, with complete post-state and cleanup.",
+          "A comparison against the final source-bound fireemu artifact that covers every recipe step and reports no unexplained mismatch."
+        ],
+        "recordingsRequired": 2
+      }
+    },
+    {
+      "conditionId": "FS-TRANSACTION/failed-commit-and-rollback",
+      "source": "docs/compatibility/ip-fs-production-compatibility.md#feature-group-status",
+      "recipeIds": [
+        "fs-transaction/failed-commit-and-rollback"
+      ],
+      "recipeStatus": "PROPOSED",
+      "status": "PENDING_CORPUS",
+      "observation": {
+        "method": "A refused commit followed by token reuse, explicit rollback, lock-release and post-state readback, with a successful-commit control. Include rollback after commit, rollback after rollback and a fresh rollback control.",
+        "existingCaseOrCampaignRefs": [],
+        "existingCaseIds": [
+          "finished-token/rollback-after-begin",
+          "finished-token/rollback-after-commit",
+          "finished-token/rollback-after-rollback"
+        ]
+      },
+      "localEvidence": {
+        "references": [
+          "crates/fireemu-core-firestore/tests/store.rs"
+        ],
+        "productionExecuted": false
+      },
+      "historicalProductionReferences": [],
+      "verification": {
+        "requiredEvidence": [
+          "Two independently recorded sandbox observations for each new production corpus row, with complete post-state and cleanup.",
+          "A comparison against the final source-bound fireemu artifact that covers every recipe step and reports no unexplained mismatch."
+        ],
+        "recordingsRequired": 2
+      }
+    },
+    {
+      "conditionId": "FS-TRANSACTION/retry-token-lifecycle",
+      "source": "docs/compatibility/ip-fs-production-compatibility.md#feature-group-status",
+      "recipeIds": [
+        "fs-transaction/retry-token-lifecycle"
+      ],
+      "recipeStatus": "PROPOSED",
+      "status": "PENDING_RECORDING",
+      "observation": {
+        "method": "REST retryTransaction after rollback, commit, read-only begin, unissued and malformed tokens; compare diagnostics and post-state.",
+        "existingCaseOrCampaignRefs": [
+          "spec/compatibility/broad-runs/fs-transaction-expiry-retry-04-manifest-v4.json"
+        ],
+        "existingCaseIds": [
+          "retry-token/retry-with-rolled-back-previous",
+          "retry-token/retry-with-committed-previous",
+          "retry-token/retry-with-read-only-previous",
+          "retry-token/retry-with-unissued-previous",
+          "retry-token/retry-with-malformed-previous"
+        ]
+      },
+      "localEvidence": {
+        "references": [
+          "spec/compatibility/broad-runs/fs-transaction-expiry-retry-04-local-shadow-v3.json"
+        ],
+        "productionExecuted": false
+      },
+      "historicalProductionReferences": [
+        "conformance/firestore-production-matrix.json"
+      ],
+      "verification": {
+        "requiredEvidence": [
+          "Two independently recorded sandbox observations for each new production corpus row, with complete post-state and cleanup.",
+          "A comparison against the final source-bound fireemu artifact that covers every recipe step and reports no unexplained mismatch."
+        ],
+        "recordingsRequired": 2
+      }
+    },
+    {
+      "conditionId": "FS-TRANSACTION/idle-expiry",
+      "source": "docs/compatibility/ip-fs-production-compatibility.md#feature-group-status",
+      "recipeIds": [
+        "fs-transaction/idle-expiry"
+      ],
+      "recipeStatus": "PROPOSED",
+      "status": "PENDING_RECORDING",
+      "observation": {
+        "method": "Wall-clock idle expiry at the declared threshold, with before-threshold and held-lock controls, followed by lock-release and absence readback.",
+        "existingCaseOrCampaignRefs": [
+          "spec/compatibility/broad-runs/fs-transaction-expiry-retry-04-manifest-v4.json"
+        ],
+        "existingCaseIds": [
+          "idle-expiry/commit-before-idle",
+          "idle-expiry/commit-after-idle",
+          "idle-expiry/rollback-after-idle",
+          "idle-expiry/lock-held-before-idle",
+          "idle-expiry/lock-released-after-idle"
+        ]
+      },
+      "localEvidence": {
+        "references": [
+          "spec/compatibility/broad-runs/fs-transaction-expiry-retry-04-local-shadow-v3.json"
+        ],
+        "productionExecuted": false
+      },
+      "historicalProductionReferences": [],
+      "verification": {
+        "requiredEvidence": [
+          "Two independently recorded sandbox observations for each new production corpus row, with complete post-state and cleanup.",
+          "A comparison against the final source-bound fireemu artifact that covers every recipe step and reports no unexplained mismatch."
+        ],
+        "recordingsRequired": 2
+      }
+    },
+    {
+      "conditionId": "FS-TRANSACTION/total-lifetime-expiry",
+      "source": "docs/compatibility/ip-fs-production-compatibility.md#feature-group-status",
+      "recipeIds": [
+        "fs-transaction/total-lifetime-expiry"
+      ],
+      "recipeStatus": "PROPOSED",
+      "status": "PENDING_CORPUS",
+      "observation": {
+        "method": "A separate bounded long-window observation across the total transaction lifetime with a live-before-boundary control.",
+        "existingCaseOrCampaignRefs": []
+      },
+      "localEvidence": {
+        "references": [
+          "docs/compatibility/fs-transaction-next-campaign-preparation.md"
+        ],
+        "productionExecuted": false
+      },
+      "historicalProductionReferences": [],
+      "verification": {
+        "requiredEvidence": [
+          "Two independently recorded sandbox observations for each new production corpus row, with complete post-state and cleanup.",
+          "A comparison against the final source-bound fireemu artifact that covers every recipe step and reports no unexplained mismatch."
+        ],
+        "recordingsRequired": 2
+      }
+    },
+    {
+      "conditionId": "FS-TRANSACTION/read-time-retention",
+      "source": "docs/compatibility/ip-fs-production-compatibility.md#feature-group-status",
+      "recipeIds": [
+        "fs-transaction/read-time-retention"
+      ],
+      "recipeStatus": "PROPOSED",
+      "status": "PENDING_CORPUS",
+      "observation": {
+        "method": "A read-only transaction with a readTime outside the configured retention window and an inside-window control; record database configuration.",
+        "existingCaseOrCampaignRefs": []
+      },
+      "localEvidence": {
+        "references": [
+          "docs/compatibility/fs-transaction-next-campaign-preparation.md"
+        ],
+        "productionExecuted": false
+      },
+      "historicalProductionReferences": [],
+      "verification": {
+        "requiredEvidence": [
+          "Two independently recorded sandbox observations for each new production corpus row, with complete post-state and cleanup.",
+          "A comparison against the final source-bound fireemu artifact that covers every recipe step and reports no unexplained mismatch."
+        ],
+        "recordingsRequired": 2
+      }
+    },
+    {
+      "conditionId": "FS-TRANSACTION/stream-precedence",
+      "source": "docs/compatibility/ip-fs-production-compatibility.md#feature-group-status",
+      "recipeIds": [
+        "fs-transaction/stream-precedence"
+      ],
+      "recipeStatus": "PROPOSED",
+      "status": "SAVED_REFERENCE_PENDING_FINAL",
+      "observation": {
+        "method": "gRPC Write stream contention with an active transaction, atomic refusal, rollback and successful subsequent stream write.",
+        "existingCaseOrCampaignRefs": [
+          "spec/compatibility/broad-runs/fs-write-txn-dee737c14-production-result.json"
+        ]
+      },
+      "localEvidence": {
+        "references": [
+          "crates/fireemu-adapter-grpc/tests/streams.rs"
+        ],
+        "productionExecuted": false
+      },
+      "historicalProductionReferences": [
+        "spec/compatibility/broad-runs/fs-write-txn-dee737c14-production-result.json"
+      ],
+      "verification": {
+        "requiredEvidence": [
+          "Two independently recorded sandbox observations for each new production corpus row, with complete post-state and cleanup.",
+          "A comparison against the final source-bound fireemu artifact that covers every recipe step and reports no unexplained mismatch."
+        ],
+        "recordingsRequired": 2
+      }
+    },
+    {
+      "conditionId": "FS-TRANSACTION/grpc-rest-parity",
+      "source": "docs/compatibility/ip-fs-production-compatibility.md#feature-group-status",
+      "recipeIds": [
+        "fs-transaction/grpc-rest-parity"
+      ],
+      "recipeStatus": "PROPOSED",
+      "status": "PENDING_CORPUS",
+      "observation": {
+        "method": "Equivalent REST and gRPC transaction programs on the same database configuration, including error ordering and token ownership.",
+        "existingCaseOrCampaignRefs": []
+      },
+      "localEvidence": {
+        "references": [
+          "crates/fireemu-adapter-grpc/src/service/tests/query_transaction_tests.rs"
+        ],
+        "productionExecuted": false
+      },
+      "historicalProductionReferences": [],
+      "verification": {
+        "requiredEvidence": [
+          "Two independently recorded sandbox observations for each new production corpus row, with complete post-state and cleanup.",
+          "A comparison against the final source-bound fireemu artifact that covers every recipe step and reports no unexplained mismatch."
+        ],
+        "recordingsRequired": 2
+      }
+    },
+    {
+      "conditionId": "FS-TRANSACTION/sdk-retry-and-ordering",
+      "source": "docs/compatibility/ip-fs-production-compatibility.md#feature-group-status",
+      "recipeIds": [
+        "fs-transaction/sdk-retry-and-ordering"
+      ],
+      "recipeStatus": "PROPOSED",
+      "status": "PENDING_CORPUS",
+      "observation": {
+        "method": "Firebase Web SDK 12.18.0 transaction callback retry after ABORTED in Node and a real browser, callback count, final write and listener notification order, each with a nonconflicting control.",
+        "existingCaseOrCampaignRefs": [],
+        "transports": [
+          "node-web-sdk",
+          "browser-webchannel"
+        ],
+        "sdkVersion": "firebase 12.18.0"
+      },
+      "localEvidence": {
+        "references": [
+          "docs/compatibility/fs-transaction-next-campaign-preparation.md"
+        ],
+        "productionExecuted": false
+      },
+      "historicalProductionReferences": [],
+      "verification": {
+        "requiredEvidence": [
+          "Two independently recorded sandbox receipts for each of the Node and real-browser transports, including callback count, final state and a nonconflicting control.",
+          "Final source-bound comparison of retry and notification order on both transports, with no unexplained mismatch and complete cleanup."
+        ],
+        "recordingsRequired": 2,
+        "recordingsRequiredPerTransport": 2
+      }
+    },
+    {
+      "conditionId": "FS-TRANSACTION/transaction-resource-limits",
+      "source": "docs/compatibility/ip-fs-production-compatibility.md#feature-group-status",
+      "recipeIds": [
+        "fs-transaction/transaction-resource-limits"
+      ],
+      "recipeStatus": "PROPOSED",
+      "status": "PENDING_CORPUS",
+      "observation": {
+        "method": "Boundary pairs for transaction size, lock and time constraints with typed refusal and complete post-state readback.",
+        "existingCaseOrCampaignRefs": []
+      },
+      "localEvidence": {
+        "references": [
+          "crates/fireemu-core-firestore/tests/store.rs"
+        ],
+        "productionExecuted": false
+      },
+      "historicalProductionReferences": [],
+      "verification": {
+        "requiredEvidence": [
+          "Two independently recorded sandbox observations for each new production corpus row, with complete post-state and cleanup.",
+          "A comparison against the final source-bound fireemu artifact that covers every recipe step and reports no unexplained mismatch."
+        ],
+        "recordingsRequired": 2
+      }
+    },
+    {
+      "conditionId": "FS-TRANSACTION/paging-and-cancellation",
+      "source": "docs/compatibility/ip-fs-production-compatibility.md#feature-group-status",
+      "recipeIds": [
+        "fs-transaction/paging-and-cancellation"
+      ],
+      "recipeStatus": "PROPOSED",
+      "status": "PENDING_CORPUS",
+      "observation": {
+        "method": "gRPC transactional paging and cancellation, followed by token and lock-release controls.",
+        "existingCaseOrCampaignRefs": []
+      },
+      "localEvidence": {
+        "references": [
+          "crates/fireemu-adapter-grpc/src/service/tests/query_transaction_tests.rs"
+        ],
+        "productionExecuted": false
+      },
+      "historicalProductionReferences": [],
+      "verification": {
+        "requiredEvidence": [
+          "Two independently recorded sandbox observations for each new production corpus row, with complete post-state and cleanup.",
+          "A comparison against the final source-bound fireemu artifact that covers every recipe step and reports no unexplained mismatch."
+        ],
+        "recordingsRequired": 2
+      }
+    },
+    {
+      "conditionId": "FS-TRANSACTION/final-artifact-regression",
+      "source": "docs/compatibility/ip-fs-production-compatibility.md#feature-group-status",
+      "recipeIds": [
+        "fs-transaction/final-artifact-regression"
+      ],
+      "recipeStatus": "PROPOSED",
+      "status": "PENDING_REVIEW",
+      "observation": {
+        "method": "Replay every saved and newly recorded transaction recipe against one final source-bound fireemu artifact.",
+        "existingCaseOrCampaignRefs": []
+      },
+      "localEvidence": {
+        "references": [],
+        "productionExecuted": false
+      },
+      "historicalProductionReferences": [],
+      "verification": {
+        "requiredEvidence": [
+          "All conditions have source-bound comparisons and no unexplained mismatch."
+        ],
+        "recordingsRequired": 0
+      }
+    },
+    {
+      "conditionId": "FS-TRANSACTION/closure-review",
+      "source": "docs/compatibility/ip-fs-production-compatibility.md#feature-group-status",
+      "recipeIds": [
+        "fs-transaction/closure-review"
+      ],
+      "recipeStatus": "PROPOSED",
+      "status": "PENDING_REVIEW",
+      "observation": {
+        "method": "Independent review of the complete condition-to-recipe map, comparison, cleanup and owner decisions.",
+        "existingCaseOrCampaignRefs": []
+      },
+      "localEvidence": {
+        "references": [],
+        "productionExecuted": false
+      },
+      "historicalProductionReferences": [],
+      "verification": {
+        "requiredEvidence": [
+          "Independent approval of the exact final artifact and every condition."
+        ],
+        "recordingsRequired": 0
+      }
+    }
+  ],
+  "productionPlan": {
+    "status": "PROPOSAL_ONLY",
+    "preparedCampaign": {
+      "id": "FS-TRANSACTION-EXPIRY-RETRY-04",
+      "project": "fireemu-oracle-sbx",
+      "database": "(default)",
+      "manifest": "spec/compatibility/broad-runs/fs-transaction-expiry-retry-04-manifest-v4.json",
+      "authorizesProduction": false,
+      "recordingsNeeded": 2,
+      "requestsPerRecording": 95,
+      "totalRequestEstimate": 190,
+      "estimatedUsdPerRecording": 0.016688,
+      "estimatedUsdBothRecordings": 0.033376,
+      "maximumSequentialSeconds": 2760,
+      "ownedDocumentsPerRecording": 5,
+      "cleanup": "Roll back every issued token, conditionally remove the five owned documents, and read back typed absence; record unknown resources for recovery.",
+      "caseMappings": {
+        "FS-TRANSACTION/idle-expiry": 5,
+        "FS-TRANSACTION/failed-commit-and-rollback": 3,
+        "FS-TRANSACTION/retry-token-lifecycle": 5
+      },
+      "coverageLimit": "The three finished-token rows cover only part of failed-commit-and-rollback. The 13-case campaign does not close that full condition or any other transaction condition by itself."
+    },
+    "unestimatedConditions": [
+      "FS-TRANSACTION/read-write-lifecycle",
+      "FS-TRANSACTION/read-only-snapshot",
+      "FS-TRANSACTION/read-time-snapshot",
+      "FS-TRANSACTION/token-validation-and-ownership",
+      "FS-TRANSACTION/read-set-conflict",
+      "FS-TRANSACTION/write-set-atomicity",
+      "FS-TRANSACTION/query-range-lock",
+      "FS-TRANSACTION/failed-commit-and-rollback",
+      "FS-TRANSACTION/total-lifetime-expiry",
+      "FS-TRANSACTION/read-time-retention",
+      "FS-TRANSACTION/stream-precedence",
+      "FS-TRANSACTION/grpc-rest-parity",
+      "FS-TRANSACTION/sdk-retry-and-ordering",
+      "FS-TRANSACTION/transaction-resource-limits",
+      "FS-TRANSACTION/paging-and-cancellation"
+    ],
+    "unestimatedReason": "The 190-request arithmetic covers only the prepared 13-case expiry/retry campaign. Every other acceptance condition, including the remaining failed-commit behavior and historical-reference replay, needs a finite sandbox corpus, request cap, cost estimate and cleanup plan before permission.",
+    "prerequisites": [
+      "FS-DATA-WRITE closure and exclusive sandbox scheduling",
+      "New sandbox conformance corpus and source-bound runner, with clean-context review and a bounded request count",
+      "Owner go-ahead under the current production-send hold, two recordings and one sandbox JSONL ledger line per run",
+      "Redesign the legacy one-run O8 manifest without importing Gate or reservation tooling"
+    ],
+    "productionExecuted": false,
+    "notPreparedObligations": [
+      "total-lifetime expiry",
+      "token replay in a second named database",
+      "readTime outside retention",
+      "query-range phantom lock",
+      "client SDK retry"
+    ]
+  }
+}

@@ -92,7 +92,7 @@ def test_sandbox_corpus_covers_the_frozen_closure_recipes() -> None:
         "writes/limits/webchannel-request-bytes/10485760",
         "writes/limits/webchannel-request-bytes/10485761",
     }.issubset(ids)
-    assert len(corpus["streamRecipes"]) == 8
+    assert len(corpus["streamRecipes"]) == 10
     assert {recipe["id"] for recipe in corpus["streamRecipes"]} == {
         "writes/write-stream-transaction",
         "writes/write-stream-terminal/trailing-metadata",
@@ -100,6 +100,8 @@ def test_sandbox_corpus_covers_the_frozen_closure_recipes() -> None:
         "writes/write-stream-terminal/response-before-half-close",
         "writes/limits/grpc-unary-request-bytes/10485760",
         "writes/limits/grpc-unary-request-bytes/10485761",
+        "writes/limits/grpc-unary-request-bytes/11534336",
+        "writes/limits/grpc-unary-request-bytes/11534337",
         "writes/limits/grpc-stream-request-bytes/10485760",
         "writes/limits/grpc-stream-request-bytes/10485761",
     }

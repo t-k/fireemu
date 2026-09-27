@@ -130,7 +130,7 @@ def build_corpus() -> dict[str, Any]:
                 "wireBytes": size,
                 "maxFrames": 1,
             }
-            for size in (10_485_760, 10_485_761)
+            for size in (10_485_760, 10_485_761, 11_534_336, 11_534_337)
         ),
         *(
             {
@@ -174,11 +174,21 @@ def build_delta_corpus() -> dict[str, Any]:
         program for program in corpus["restPrograms"] if program["id"] in delete_ids
     ]
     if {program["id"] for program in programs} != delete_ids or len(programs) != 6:
-        raise ValueError("delta-v3 requires the exact six route-specific DELETE recipes")
+        raise ValueError(
+            "delta-v3 requires the exact six route-specific DELETE recipes"
+        )
     stream_id = "writes/write-stream-terminal/response-before-half-close"
-    streams = [recipe for recipe in corpus["streamRecipes"] if recipe["id"] == stream_id]
-    if len(streams) != 1 or streams[0]["transport"] != "grpc" or streams[0]["maxFrames"] != 2:
-        raise ValueError("delta-v3 requires the single response-before-half-close stream recipe")
+    streams = [
+        recipe for recipe in corpus["streamRecipes"] if recipe["id"] == stream_id
+    ]
+    if (
+        len(streams) != 1
+        or streams[0]["transport"] != "grpc"
+        or streams[0]["maxFrames"] != 2
+    ):
+        raise ValueError(
+            "delta-v3 requires the single response-before-half-close stream recipe"
+        )
     return {
         "schemaVersion": 1,
         "sourceCorpusSha256": hashlib.sha256(

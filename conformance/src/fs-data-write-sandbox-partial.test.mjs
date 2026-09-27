@@ -130,6 +130,8 @@ test("the partial corpus records every unrecorded recipe outside delta-v3, bound
     "writes/limits/grpc-stream-request-bytes/10485761",
     "writes/limits/grpc-unary-request-bytes/10485760",
     "writes/limits/grpc-unary-request-bytes/10485761",
+    "writes/limits/grpc-unary-request-bytes/11534336",
+    "writes/limits/grpc-unary-request-bytes/11534337",
   ]);
   for (const id of [
     "writes/batch-write-malformed/two-fields-bad-integer",
@@ -168,7 +170,7 @@ test("the partial corpus clears only the six adjacent boundary documents within 
   assert.ok(bound.managedRequestBound <= 400);
   assert.equal(bound.maxHttpRequests, bound.totalRequestBound + 400);
   assert.ok(bound.maxHttpRequests <= 1000);
-  assert.equal(bound.maxStreamFrames, 4);
+  assert.equal(bound.maxStreamFrames, 6);
   assert.throws(
     () =>
       partialManagedClearNames({

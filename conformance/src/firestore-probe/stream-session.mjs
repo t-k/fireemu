@@ -16,11 +16,19 @@ const HALF_CLOSE_ID = "writes/write-stream-terminal/half-close";
 const RESPONSE_HALF_CLOSE_ID = "writes/write-stream-terminal/response-before-half-close";
 const UNARY_EXACT_ID = "writes/limits/grpc-unary-request-bytes/10485760";
 const UNARY_OVER_ID = "writes/limits/grpc-unary-request-bytes/10485761";
+const UNARY_STRICT_LIMIT_ID = "writes/limits/grpc-unary-request-bytes/11534336";
+const UNARY_STRICT_OVER_ID = "writes/limits/grpc-unary-request-bytes/11534337";
+const UNARY_IDS = new Set([
+  UNARY_EXACT_ID,
+  UNARY_OVER_ID,
+  UNARY_STRICT_LIMIT_ID,
+  UNARY_STRICT_OVER_ID,
+]);
 const STREAM_EXACT_ID = "writes/limits/grpc-stream-request-bytes/10485760";
 const STREAM_OVER_ID = "writes/limits/grpc-stream-request-bytes/10485761";
 const SAVED_SOURCE = "spec/compatibility/broad-runs/fs-write-txn-dee737c14-production-result.json";
 const SANDBOX_PROJECT = "fireemu-oracle-sbx";
-const UNARY_BYTE_TARGETS = new Set([10_485_760, 10_485_761]);
+const UNARY_BYTE_TARGETS = new Set([10_485_760, 10_485_761, 11_534_336, 11_534_337]);
 const STREAM_BYTE_TARGETS = new Set([10_485_760, 10_485_761]);
 
 export async function makeUnaryRequestByWireBytes(targetBytes) {
@@ -65,6 +73,14 @@ const LIVE_SPECS = new Map([
     UNARY_OVER_ID,
     { action: "get-document-transaction-bytes", maxFrames: 1, wireBytes: 10_485_761 },
   ],
+  [
+    UNARY_STRICT_LIMIT_ID,
+    { action: "get-document-transaction-bytes", maxFrames: 1, wireBytes: 11_534_336 },
+  ],
+  [
+    UNARY_STRICT_OVER_ID,
+    { action: "get-document-transaction-bytes", maxFrames: 1, wireBytes: 11_534_337 },
+  ],
   [STREAM_EXACT_ID, { action: "write-stream-token-bytes", maxFrames: 1, wireBytes: 10_485_760 }],
   [STREAM_OVER_ID, { action: "write-stream-token-bytes", maxFrames: 1, wireBytes: 10_485_761 }],
 ]);
@@ -102,56 +118,37 @@ export function validateLiveStreamSubset(recipes) {
   return live;
 }
 
-/** Keep live gRPC sends limited to the fixed terminal and request-byte actions. */
+/**
+ * The full corpus must carry the saved reference and every live recipe exactly once, each on its
+ * fixed action, frame count and wire size. Live recipes are returned in their fixed order.
+ */
 export function validateStreamRecipes(recipes) {
-  if (!Array.isArray(recipes) || recipes.length !== 8) {
+  if (!Array.isArray(recipes) || recipes.length !== LIVE_SPECS.size + 1) {
     throw new Error("unsupported stream recipe set");
   }
-  const byId = new Map(recipes.map((recipe) => [recipe.id, recipe]));
+  const byId = new Map(recipes.map((recipe) => [recipe?.id, recipe]));
+  const saved = byId.get(SAVED_ID);
   if (
-    byId.size !== 8 ||
-    byId.get(SAVED_ID)?.transport !== "saved-reference" ||
-    byId.get(SAVED_ID)?.source !== SAVED_SOURCE ||
-    byId.get(TRAILERS_ID)?.transport !== "grpc" ||
-    byId.get(TRAILERS_ID)?.action !== "invalid-empty-write-after-handshake" ||
-    byId.get(TRAILERS_ID)?.maxFrames !== 2 ||
-    byId.get(HALF_CLOSE_ID)?.transport !== "grpc" ||
-    byId.get(HALF_CLOSE_ID)?.action !== "half-close-after-handshake" ||
-    byId.get(HALF_CLOSE_ID)?.maxFrames !== 1 ||
-    byId.get(RESPONSE_HALF_CLOSE_ID)?.transport !== "grpc" ||
-    byId.get(RESPONSE_HALF_CLOSE_ID)?.action !== "empty-write-response-before-half-close" ||
-    byId.get(RESPONSE_HALF_CLOSE_ID)?.maxFrames !== 2 ||
-    byId.get(UNARY_EXACT_ID)?.transport !== "grpc" ||
-    byId.get(UNARY_EXACT_ID)?.action !== "get-document-transaction-bytes" ||
-    byId.get(UNARY_EXACT_ID)?.wireBytes !== 10_485_760 ||
-    byId.get(UNARY_EXACT_ID)?.maxFrames !== 1 ||
-    byId.get(UNARY_OVER_ID)?.transport !== "grpc" ||
-    byId.get(UNARY_OVER_ID)?.action !== "get-document-transaction-bytes" ||
-    byId.get(UNARY_OVER_ID)?.wireBytes !== 10_485_761 ||
-    byId.get(UNARY_OVER_ID)?.maxFrames !== 1 ||
-    byId.get(STREAM_EXACT_ID)?.transport !== "grpc" ||
-    byId.get(STREAM_EXACT_ID)?.action !== "write-stream-token-bytes" ||
-    byId.get(STREAM_EXACT_ID)?.wireBytes !== 10_485_760 ||
-    byId.get(STREAM_EXACT_ID)?.maxFrames !== 1 ||
-    byId.get(STREAM_OVER_ID)?.transport !== "grpc" ||
-    byId.get(STREAM_OVER_ID)?.action !== "write-stream-token-bytes" ||
-    byId.get(STREAM_OVER_ID)?.wireBytes !== 10_485_761 ||
-    byId.get(STREAM_OVER_ID)?.maxFrames !== 1
+    byId.size !== recipes.length ||
+    saved?.transport !== "saved-reference" ||
+    saved?.source !== SAVED_SOURCE
   ) {
     throw new Error("unsupported stream recipe");
   }
-  return {
-    live: [
-      byId.get(TRAILERS_ID),
-      byId.get(HALF_CLOSE_ID),
-      byId.get(RESPONSE_HALF_CLOSE_ID),
-      byId.get(UNARY_EXACT_ID),
-      byId.get(UNARY_OVER_ID),
-      byId.get(STREAM_EXACT_ID),
-      byId.get(STREAM_OVER_ID),
-    ],
-    saved: byId.get(SAVED_ID),
-  };
+  const live = [];
+  for (const [id, spec] of LIVE_SPECS) {
+    const recipe = byId.get(id);
+    if (
+      recipe?.transport !== "grpc" ||
+      recipe.action !== spec.action ||
+      recipe.maxFrames !== spec.maxFrames ||
+      recipe.wireBytes !== spec.wireBytes
+    ) {
+      throw new Error("unsupported stream recipe");
+    }
+    live.push(recipe);
+  }
+  return { live, saved };
 }
 
 export function shouldHalfCloseAfterResponse(recipe, responseCount) {
@@ -267,7 +264,7 @@ async function runUnaryRequestByteRecipe(recipe, { connection, projectId, token 
 export async function runStreamRecipe(recipe, { target, projectId, host, port, token }) {
   const connection = validateStreamTarget({ target, projectId, host, port });
   if (typeof token !== "string" || token.length === 0) throw new Error("stream bearer is required");
-  if ([UNARY_EXACT_ID, UNARY_OVER_ID].includes(recipe?.id)) {
+  if (UNARY_IDS.has(recipe?.id)) {
     return runUnaryRequestByteRecipe(recipe, { connection, projectId, token });
   }
   const requestByteStream = [STREAM_EXACT_ID, STREAM_OVER_ID].includes(recipe?.id);

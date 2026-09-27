@@ -110,7 +110,7 @@
     },
     {
       "id": "K18",
-      "decision": "The final-artifact regression re-runs the AUTH-ACCOUNT, AUTH-CREDENTIAL and AUTH-ACTION corpora and inherits their one documented divergence: AUTH-ACCOUNT scope decision A12, the gson parser message text for malformed customAttributes JSON (owner ledger 2026-09-24 A12, and 2026-09-25 M11, which carries it into a regression as AUTH-ACTION E9 does). feat resolves A12 with f534ecd56, which this branch does not contain; after integration the row is expected to match and the conditions are bound again to the integrated artifact.",
+      "decision": "The final-artifact regression re-runs the AUTH-ACCOUNT, AUTH-CREDENTIAL and AUTH-ACTION corpora and inherits their one documented divergence: AUTH-ACCOUNT scope decision A12, the gson parser message text for malformed customAttributes JSON (owner ledger 2026-09-24 A12, and 2026-09-25 M11, which carries it into a regression as AUTH-ACTION E9 does). feat resolves A12 with f534ecd56, which this branch does not contain; after integration the row is expected to match and the conditions are bound again to the integrated artifact. Delegated ledger 2026-09-27 (AUTH-CONFIG-SDK, the coordinator's promotion review): K18 is carried as the pre-integration known difference, as A12 and M11 are, and removed when the conditions are bound again after integration.",
       "decidedBy": "owner (t-k)",
       "decidedOn": "2026-09-24"
     }
@@ -852,7 +852,7 @@
           },
           "clippy": "cargo clippy --workspace --all-targets: no warnings",
           "fmt": "cargo fmt --all --check: clean",
-          "binaryCopy": "docs.local/runs/auth-config-sdk-final-20260926/ (private: the binary, its sha256, git status at build, each check log)"
+          "binaryCopy": "docs.local/runs/auth-config-sdk-final-20260926/ (private: the binary, binary-manifest.txt with its sha256 and source commit, and each check log; git status at build was not recorded, and the coordinator's review rebuilt 6abfc732b and found the code and data identical)"
         },
         "rows": {
           "MATCH": 1549,

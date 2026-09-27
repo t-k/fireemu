@@ -484,7 +484,7 @@ fn the_tenant_list_is_ordered_by_id_and_pages_as_production_does() {
 }
 
 /// Tenant management answers in the Admin v2 error shape (`code`, `message`, `status`, no
-/// `errors`), and with multi-tenancy off every tenant management call is INVALID_PROJECT_ID,
+/// `errors`), and with multi-tenancy off every tenant management call is `INVALID_PROJECT_ID`,
 /// a read of a tenant id included (manage#get-unknown, switch-off#get-unknown-off).
 #[test]
 fn strict_tenant_management_errors_are_production_v2_errors() {
@@ -537,7 +537,7 @@ fn strict_tenant_management_errors_are_production_v2_errors() {
 
 /// An OIDC provider config under strict, as production answers it (providers program): the
 /// project number in `name`, `responseType` with only its true members, `{}` for an empty
-/// list, and CONFIGURATION_NOT_FOUND in the v2 shape for a config outside the addressed scope.
+/// list, and `CONFIGURATION_NOT_FOUND` in the v2 shape for a config outside the addressed scope.
 #[test]
 fn strict_provider_configs_answer_as_production() {
     let strict = state(true);

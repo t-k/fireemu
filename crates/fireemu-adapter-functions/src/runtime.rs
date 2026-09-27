@@ -12,6 +12,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use fireemu_adapter_grpc::local::CommitEvent;
+use fireemu_adapter_grpc::rules::RulesEnforcer;
 use fireemu_core_auth::store::{UserEvent, UserEventKind};
 use fireemu_core_events::event::{EventSource, EventType, LogicalEvent};
 use fireemu_core_events::outbox::Outbox;
@@ -36,8 +37,8 @@ use crate::events::{
     auth_event, change_kind, firestore_event, pubsub_event, schedule_event, storage_event,
 };
 use crate::http::{
-    forward, forward_stream, ProxiedResponse, ProxiedStreamResponse, StreamCompletion,
-    StreamStartError,
+    forward, forward_stream, FunctionsHttpProfile, ProxiedResponse, ProxiedStreamResponse,
+    StreamCompletion, StreamStartError,
 };
 use crate::runner::{Invocation, InvokeOutcome, Runner, SpawnSpec};
 
@@ -75,6 +76,21 @@ pub const MAX_ACTIVE_EVENTARC_BYTES: usize = 48 * 1024 * 1024;
 pub const MAX_EVENTARC_DELIVERIES_PER_PUBLISH: usize = 256;
 const RUNNER_RESTART_ATTEMPTS: u32 = 5;
 const RUNNER_RESTART_WINDOW: Duration = Duration::from_secs(30);
+
+fn http_timeout_response(profile: FunctionsHttpProfile) -> ProxiedResponse {
+    match profile {
+        FunctionsHttpProfile::Emulator => ProxiedResponse {
+            status: 500,
+            headers: Vec::new(),
+            body: br#"{"code":"ECONNRESET"}"#.to_vec(),
+        },
+        FunctionsHttpProfile::Strict => ProxiedResponse {
+            status: 504,
+            headers: vec![("content-type".to_owned(), "text/plain".to_owned())],
+            body: b"upstream request timeout".to_vec(),
+        },
+    }
+}
 
 async fn forward_with_debug_deadline(
     debug_mode: bool,
@@ -943,6 +959,8 @@ pub struct FunctionsRuntime {
     /// The callable trust boundary, when the callable trusted protocol is active
     /// (specification section 13.4). `None` leaves the pre-App-Check behaviour untouched.
     callable_trust: std::sync::RwLock<Option<Arc<crate::callable::CallableTrust>>>,
+    /// Strict callable ingress verifies a presented Bearer even without App Check.
+    callable_auth_verifier: std::sync::RwLock<Option<Arc<RulesEnforcer>>>,
     /// Whether background (event) triggers deliver, toggled by the Emulator Hub's
     /// `PUT /functions/{disable,enable}BackgroundTriggers`. Disabled means **dropped**:
     /// a Firestore, Storage, Pub/Sub or Auth event that arrives while it is off is never
@@ -1183,6 +1201,7 @@ impl FunctionsRuntime {
             retry,
             faults: Mutex::new(None),
             callable_trust: std::sync::RwLock::new(None),
+            callable_auth_verifier: std::sync::RwLock::new(None),
             background_triggers: std::sync::atomic::AtomicBool::new(true),
             trigger_generation: std::sync::atomic::AtomicU64::new(0),
             shutting_down: std::sync::atomic::AtomicBool::new(false),
@@ -1473,6 +1492,22 @@ impl FunctionsRuntime {
     #[must_use]
     pub fn callable_trust(&self) -> Option<Arc<crate::callable::CallableTrust>> {
         self.callable_trust.read().ok().and_then(|t| t.clone())
+    }
+
+    /// Installs the Auth verifier used by strict callable ingress.
+    pub fn set_callable_auth_verifier(&self, verifier: Arc<RulesEnforcer>) {
+        if let Ok(mut slot) = self.callable_auth_verifier.write() {
+            *slot = Some(verifier);
+        }
+    }
+
+    /// Returns the Auth verifier used by strict callable ingress.
+    #[must_use]
+    pub fn callable_auth_verifier(&self) -> Option<Arc<RulesEnforcer>> {
+        self.callable_auth_verifier
+            .read()
+            .ok()
+            .and_then(|slot| slot.clone())
     }
 
     /// Turns background (event) trigger delivery on or off, as the Emulator Hub's
@@ -2215,6 +2250,24 @@ impl FunctionsRuntime {
         Ok(answer)
     }
 
+    async fn invoke_task_http(
+        self: &Arc<Self>,
+        target: &HttpTarget,
+        path: &str,
+        headers: &[(String, String)],
+        body: &[u8],
+    ) -> Result<ProxiedResponse, HttpInvokeError> {
+        self.invoke_http_classified(
+            target,
+            "POST",
+            path,
+            headers,
+            body,
+            FunctionsHttpProfile::Emulator,
+        )
+        .await
+    }
+
     /// Delivers one task, retrying on the official schedule until it succeeds or runs out.
     ///
     /// Backoff is real time, as it is upstream: the default unit is 100 ms, so three attempts
@@ -2274,7 +2327,7 @@ impl FunctionsRuntime {
             let attempt_started = std::time::Instant::now();
             let outcome = tokio::time::timeout(
                 Duration::from_secs(task.dispatch_deadline_seconds),
-                self.invoke_http_classified(&target, "POST", &path, &headers, &body),
+                self.invoke_task_http(&target, &path, &headers, &body),
             )
             .await;
             let status = match outcome {
@@ -3199,6 +3252,7 @@ impl FunctionsRuntime {
         epoch: Epoch,
         id: EventId,
         timeout: u64,
+        profile: FunctionsHttpProfile,
     ) -> Result<String, Result<ProxiedResponse, String>> {
         match self.current_http_addr_before(target, deadline).await {
             Ok(addr) => Ok(addr),
@@ -3210,11 +3264,7 @@ impl FunctionsRuntime {
                     "timeout".to_owned(),
                 );
                 log_http_timeout(timeout);
-                Err(Ok(ProxiedResponse {
-                    status: 500,
-                    headers: Vec::new(),
-                    body: br#"{"code":"ECONNRESET"}"#.to_vec(),
-                }))
+                Err(Ok(http_timeout_response(profile)))
             }
             Err(StreamStartError::Upstream(error)) => {
                 self.record_http_invocation(
@@ -3890,7 +3940,28 @@ impl FunctionsRuntime {
         headers: &[(String, String)],
         body: &[u8],
     ) -> Result<ProxiedResponse, String> {
-        self.invoke_http_classified(target, method, path_and_query, headers, body)
+        self.invoke_http_with_profile(
+            target,
+            method,
+            path_and_query,
+            headers,
+            body,
+            FunctionsHttpProfile::Emulator,
+        )
+        .await
+    }
+
+    /// Proxies one HTTP request with the selected public timeout response.
+    pub async fn invoke_http_with_profile(
+        self: &Arc<Self>,
+        target: &HttpTarget,
+        method: &str,
+        path_and_query: &str,
+        headers: &[(String, String)],
+        body: &[u8],
+        profile: FunctionsHttpProfile,
+    ) -> Result<ProxiedResponse, String> {
+        self.invoke_http_classified(target, method, path_and_query, headers, body, profile)
             .await
             .map_err(HttpInvokeError::into_message)
     }
@@ -3986,6 +4057,27 @@ impl FunctionsRuntime {
         headers: &[(String, String)],
         body: &[u8],
     ) -> Result<HttpStreamStart, String> {
+        self.invoke_http_stream_with_profile(
+            target,
+            method,
+            path_and_query,
+            headers,
+            body,
+            FunctionsHttpProfile::Emulator,
+        )
+        .await
+    }
+
+    /// Starts an HTTP stream with the selected public pre-header timeout response.
+    pub async fn invoke_http_stream_with_profile(
+        self: &Arc<Self>,
+        target: &HttpTarget,
+        method: &str,
+        path_and_query: &str,
+        headers: &[(String, String)],
+        body: &[u8],
+        profile: FunctionsHttpProfile,
+    ) -> Result<HttpStreamStart, String> {
         if self.shutting_down.load(std::sync::atomic::Ordering::SeqCst) {
             return Err("the Functions runtime is shutting down".to_owned());
         }
@@ -4020,7 +4112,7 @@ impl FunctionsRuntime {
             .then(|| tokio::time::Instant::now() + Duration::from_secs(timeout));
         let (id, epoch, admission) = self.admit_http_stream(target, function_capacity)?;
         let addr = match self
-            .http_addr_or_response(target, deadline, epoch, id, timeout)
+            .http_addr_or_response(target, deadline, epoch, id, timeout, profile)
             .await
         {
             Ok(addr) => addr,
@@ -4049,11 +4141,7 @@ impl FunctionsRuntime {
                 );
                 log_http_timeout(timeout);
                 drop(admission);
-                Ok(HttpStreamStart::Buffered(ProxiedResponse {
-                    status: 500,
-                    headers: Vec::new(),
-                    body: br#"{"code":"ECONNRESET"}"#.to_vec(),
-                }))
+                Ok(HttpStreamStart::Buffered(http_timeout_response(profile)))
             }
             Err(StreamStartError::Upstream(error)) => {
                 self.record_http_invocation(
@@ -4075,6 +4163,7 @@ impl FunctionsRuntime {
         path_and_query: &str,
         headers: &[(String, String)],
         body: &[u8],
+        profile: FunctionsHttpProfile,
     ) -> Result<ProxiedResponse, HttpInvokeError> {
         if self.shutting_down.load(std::sync::atomic::Ordering::SeqCst) {
             return Err(HttpInvokeError::Message(
@@ -4138,7 +4227,7 @@ impl FunctionsRuntime {
             key,
         };
         let addr = match self
-            .http_addr_or_response(target, deadline, epoch, id, timeout)
+            .http_addr_or_response(target, deadline, epoch, id, timeout, profile)
             .await
         {
             Ok(addr) => addr,
@@ -4184,11 +4273,7 @@ impl FunctionsRuntime {
             // request, and the handler writes `JSON.stringify(err)` after a bare
             // `writeHead(500)`. Recorded in
             // `conformance/fixtures/functions/http-routing-cors-and-timeouts.json`.
-            Ok(ProxiedResponse {
-                status: 500,
-                headers: Vec::new(),
-                body: br#"{"code":"ECONNRESET"}"#.to_vec(),
-            })
+            Ok(http_timeout_response(profile))
         }
     }
 

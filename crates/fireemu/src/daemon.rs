@@ -652,6 +652,15 @@ fn assemble_adapters(bound: BoundStartup) -> Result<ServiceAssembly, String> {
     )?;
     if let Some(runtime) = &functions_runtime {
         runtime.set_faults(faults.for_project(runtime.project()));
+        let verifier = Arc::new(
+            RulesEnforcer::new(
+                Arc::new(RulesetSlot::default()),
+                auth_store.clone(),
+                clock.clone(),
+            )
+            .with_registry(registry.clone()),
+        );
+        runtime.set_callable_auth_verifier(verifier.clone());
         if let Some(gate) = &app_check_gate {
             // The callable baseline is `unenforced`: the daemon classifies and records
             // every callable token, and the callable's own `enforceAppCheck` decides
@@ -667,14 +676,6 @@ fn assemble_adapters(bound: BoundStartup) -> Result<ServiceAssembly, String> {
                 fireemu_core_app_check::verify::BaselineMode::Unenforced,
             )
             .ok_or_else(|| "the callable App Check policy is unavailable".to_owned())?;
-            let verifier = Arc::new(
-                RulesEnforcer::new(
-                    Arc::new(RulesetSlot::default()),
-                    auth_store.clone(),
-                    clock.clone(),
-                )
-                .with_registry(registry.clone()),
-            );
             runtime.set_callable_trust(Arc::new(
                 fireemu_adapter_functions::callable::CallableTrust::new(
                     policy,
@@ -1051,13 +1052,22 @@ async fn serve_suite(
         spawn_server!("Emulator Hub", hub::serve(listener, hub_state.clone()));
     }
     let functions_http_admission = fireemu_adapter_functions::http::HttpAdmission::new();
+    let functions_http_profile = match cfg.profile {
+        crate::config::CompatibilityProfile::Emulator => {
+            fireemu_adapter_functions::http::FunctionsHttpProfile::Emulator
+        }
+        crate::config::CompatibilityProfile::Strict => {
+            fireemu_adapter_functions::http::FunctionsHttpProfile::Strict
+        }
+    };
     if let (Some(listener), Some(runtime)) = (functions_listener, functions_runtime.clone()) {
         spawn_server!(
             "Functions",
-            fireemu_adapter_functions::http::serve_functions(
+            fireemu_adapter_functions::http::serve_functions_with_profile(
                 listener,
                 runtime,
                 functions_http_admission.clone(),
+                functions_http_profile,
             )
         );
     }

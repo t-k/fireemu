@@ -1512,7 +1512,7 @@
       "claims": [
         {
           "id": "FN-CLAIM-HTTP",
-          "statement": "onRequest, onCall (v2) and v1 HTTPS functions run in the bundled Node runner behind /{project}/{region}/{function} and reproduce the official callable envelope, the two 404s of an unknown route, the timeout answer and the CORS a loopback origin gets. A v2 callable stream forwards sendChunk and onCallGenkit values progressively, keeps its final result pending until completion, and propagates a client disconnect to the runner while retaining admission for the stream lifetime.",
+          "statement": "onRequest, onCall (v2) and v1 HTTPS functions run in the bundled Node runner behind /{project}/{region}/{function}. The emulator profile reproduces the official callable envelope, route misses and timeout answer; the strict profile reproduces the recorded production timeout, malformed JSON and invalid Bearer responses, forwarded headers, and response content types. Both profiles pass an onRequest Origin to the handler, including cross-origin requests. A v2 callable stream forwards sendChunk and onCallGenkit values progressively, keeps its final result pending until completion, and propagates a client disconnect to the runner while retaining admission for the stream lifetime.",
           "capabilities": [
             {
               "id": "FN-HTTP-1",
@@ -1534,7 +1534,7 @@
           },
           "officialLimitations": [
             "the official Functions emulator runs the runtime with token verification skipped, so any App Check field becomes an app with a null id and Bearer owner becomes an authenticated context with a null uid",
-            "the official emulator kills the runtime process of a function that overruns its timeout; it runs one process per trigger, and one fireemu runner serves a whole codebase, so fireemu answers the same 500 without taking the codebase down"
+            "the official emulator kills the runtime process of a function that overruns its timeout; it runs one process per trigger, and one fireemu runner serves a whole codebase, so fireemu's emulator profile answers the same 500 without taking the codebase down"
           ],
           "fireemuOnly": [
             {
@@ -1542,7 +1542,7 @@
               "precision": "conservative"
             },
             {
-              "behaviour": "a non-loopback Origin is refused with 403 instead of reflected; the official emulator runs its runtime with enableCors, so any page on the internet can drive a developer's local callable and read the result",
+              "behaviour": "a callable request from a non-loopback Origin is refused with 403 at the daemon proxy; onRequest functions receive the Origin and apply their configured CORS policy in the handler",
               "precision": "conservative"
             }
           ],

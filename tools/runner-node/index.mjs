@@ -1139,6 +1139,10 @@ function v1Context(msg) {
 }
 
 async function makeHttpServer(functions, manifest) {
+  const httpProfile = process.env.FIREEMU_HTTP_PROFILE ?? "emulator";
+  if (httpProfile !== "strict" && httpProfile !== "emulator") {
+    throw new Error("invalid Functions HTTP profile");
+  }
   const require = createRequire(join(sourceDir, "package.json"));
   let express;
   let expressRequire = require;
@@ -1298,6 +1302,17 @@ async function makeHttpServer(functions, manifest) {
       .catch(replyFailure)
       .finally(() => { lifetime.dispose(); completeAdmission(); });
   });
+  if (httpProfile === "strict") {
+    app.use((error, _req, res, next) => {
+      if (error?.status !== 400 || error?.type !== "entity.parse.failed") {
+        next(error);
+        return;
+      }
+      res.status(400);
+      res.setHeader("content-type", "text/html; charset=utf-8");
+      res.end('<!DOCTYPE html>\n<html lang="en">\n<head>\n<meta charset="utf-8">\n<title>Error</title>\n</head>\n<body>\n<pre>Bad Request</pre>\n</body>\n</html>\n');
+    });
+  }
   const server = createServer((req, res) => admission.handle(req, res, app));
   // Do not let Node send 100 Continue before authentication/capacity checks.
   server.on("checkContinue", (req, res) => admission.handle(req, res, app, true));

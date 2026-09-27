@@ -2046,6 +2046,55 @@ async fn http_recovery_uses_the_function_deadline() {
 }
 
 #[tokio::test]
+async fn strict_http_recovery_returns_the_recorded_upstream_timeout() {
+    let (runtime, _clock) = start_with_runtime_options_and_env(
+        fireemu_adapter_functions::runtime::OverlapPolicy::Allow,
+        fireemu_adapter_functions::runtime::CatchUpPolicy::All,
+        4,
+        true,
+        vec![("FIREEMU_FAKE_HELLO_DELAY_MS".to_owned(), "3000".to_owned())],
+        |manifest| {
+            manifest
+                .functions
+                .iter_mut()
+                .find(|function| function.name == "echo")
+                .unwrap()
+                .timeout_seconds = 1;
+        },
+    )
+    .await;
+    let target = runtime
+        .http_target("demo-app", "us-central1", "echo")
+        .unwrap();
+    runtime.runner().kill_now();
+    let response = tokio::time::timeout(
+        Duration::from_secs(2),
+        runtime.invoke_http_with_profile(
+            &target,
+            "GET",
+            "/slow-recovery",
+            &[],
+            &[],
+            fireemu_adapter_functions::http::FunctionsHttpProfile::Strict,
+        ),
+    )
+    .await
+    .expect("the invocation returns within its recovery deadline")
+    .expect("a timed-out recovery has an HTTP response");
+    assert_eq!(response.status, 504);
+    assert_eq!(
+        response.headers,
+        vec![("content-type".to_owned(), "text/plain".to_owned())]
+    );
+    assert_eq!(response.body, b"upstream request timeout");
+    assert!(runtime
+        .history()
+        .iter()
+        .any(|record| record.function == "echo" && record.outcome == "timeout"));
+    runtime.shutdown().await;
+}
+
+#[tokio::test]
 async fn an_idle_runner_exit_is_replaced_for_the_next_http_invocation() {
     let (runtime, _clock) = start().await;
     let stale_target = runtime

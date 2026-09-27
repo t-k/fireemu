@@ -35,6 +35,16 @@ pub const MAX_TASK_BODY_BYTES: usize = 100 * 1024;
 pub const MAX_FUNCTION_RESPONSE_BYTES: u64 = 64 * 1024 * 1024;
 /// Production's maximum streamed response size for a second-generation function.
 pub const MAX_STREAMING_FUNCTION_RESPONSE_BYTES: u64 = 10 * 1024 * 1024;
+
+/// Selects the public HTTP behavior of the pinned emulator or production ingress.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FunctionsHttpProfile {
+    /// Reproduce the pinned Firebase Local Emulator Suite.
+    Emulator,
+    /// Reproduce the recorded production Functions and Cloud Run ingress.
+    Strict,
+}
+
 const MAX_FUNCTION_CONNECTIONS: usize = 128;
 const MAX_CONCURRENT_BODY_READS: usize = 64;
 const MAX_RESERVED_BODY_BYTES: usize = 64 * 1024 * 1024;
@@ -983,6 +993,34 @@ fn sanitize_credentials(
     }
 }
 
+fn strict_callable_bearer_refusal(
+    runtime: &FunctionsRuntime,
+    raw: &hyper::HeaderMap,
+) -> Option<Response<OutBody>> {
+    let presented = field_values(raw, "authorization");
+    let [authorization] = presented.as_slice() else {
+        return None;
+    };
+    let (scheme, token) = authorization.split_once(' ')?;
+    if !scheme.eq_ignore_ascii_case("bearer") || token.is_empty() {
+        return None;
+    }
+    let verified_user = runtime.callable_auth_verifier().is_some_and(|verifier| {
+        matches!(
+            verifier
+                .principal_from_authorization_for_project(Some(authorization), runtime.project(),),
+            Ok(fireemu_adapter_grpc::rules::Principal::User(_))
+        )
+    });
+    (!verified_user).then(|| {
+        typed(
+            StatusCode::UNAUTHORIZED,
+            "text/html; charset=UTF-8",
+            "\n<html><head>\n<meta http-equiv=\"content-type\" content=\"text/html;charset=utf-8\">\n<title>401 Unauthorized</title>\n</head>\n<body text=#000000 bgcolor=#ffffff>\n<h1>Error: Unauthorized</h1>\n<h2>Your client does not have permission to the requested URL <code>/</code>.</h2>\n<h2></h2>\n</body></html>\n",
+        )
+    })
+}
+
 /// Answers the Cloud Tasks routes, including the emulator diagnostics endpoint.
 ///
 /// There is no queue to create: the official emulator creates one per `onTaskDispatched`
@@ -1254,11 +1292,83 @@ fn streaming_response(response: ProxiedStreamResponse) -> Response<OutBody> {
         .unwrap_or_else(|_| Response::new(full(Bytes::new())))
 }
 
+fn strict_default_content_type(
+    mut response: Response<OutBody>,
+    profile: FunctionsHttpProfile,
+    streaming: bool,
+) -> Response<OutBody> {
+    if profile == FunctionsHttpProfile::Strict
+        && (response.status() == StatusCode::NO_CONTENT || streaming)
+        && !response.headers().contains_key(hyper::header::CONTENT_TYPE)
+    {
+        response.headers_mut().insert(
+            hyper::header::CONTENT_TYPE,
+            hyper::header::HeaderValue::from_static("text/html"),
+        );
+    }
+    response
+}
+
+struct HttpIngressMode {
+    profile: FunctionsHttpProfile,
+    streaming: bool,
+}
+
+async fn invoke_runner(
+    runtime: &Arc<FunctionsRuntime>,
+    target: &crate::runtime::HttpTarget,
+    method: &str,
+    path_and_query: &str,
+    headers: &[(String, String)],
+    body: &[u8],
+    mode: HttpIngressMode,
+) -> Result<Response<OutBody>, std::io::Error> {
+    if mode.streaming {
+        return match runtime
+            .invoke_http_stream_with_profile(
+                target,
+                method,
+                path_and_query,
+                headers,
+                body,
+                mode.profile,
+            )
+            .await
+        {
+            Ok(crate::runtime::HttpStreamStart::Buffered(response)) => Ok(
+                strict_default_content_type(buffered_response(response), mode.profile, false),
+            ),
+            Ok(crate::runtime::HttpStreamStart::Streaming(response)) => Ok(
+                strict_default_content_type(streaming_response(response), mode.profile, true),
+            ),
+            Err(error) if error == crate::runtime::DROP_CONNECTION => {
+                Err(std::io::Error::other(error))
+            }
+            Err(error) => Ok(simple(StatusCode::BAD_GATEWAY, &error)),
+        };
+    }
+    match runtime
+        .invoke_http_with_profile(target, method, path_and_query, headers, body, mode.profile)
+        .await
+    {
+        Ok(response) => Ok(strict_default_content_type(
+            buffered_response(response),
+            mode.profile,
+            false,
+        )),
+        // A `dropConnection` fault: the connection closes without a response.
+        Err(error) if error == crate::runtime::DROP_CONNECTION => Err(std::io::Error::other(error)),
+        Err(error) => Ok(simple(StatusCode::BAD_GATEWAY, &error)),
+    }
+}
+
 async fn respond(
     runtime: Arc<FunctionsRuntime>,
     req: Request<Incoming>,
     body_limit: usize,
     surface: HttpSurface,
+    profile: FunctionsHttpProfile,
+    peer_ip: std::net::IpAddr,
 ) -> Result<Response<OutBody>, std::io::Error> {
     let path = req.uri().path().to_owned();
     let query = req.uri().query().map(str::to_owned);
@@ -1301,6 +1411,12 @@ async fn respond(
     if let Some(answer) = function_preflight(callable, &method, req.headers()) {
         return Ok(answer);
     }
+    if callable && profile == FunctionsHttpProfile::Strict {
+        if let Some(denial) = strict_callable_bearer_refusal(&runtime, req.headers()) {
+            drain_refused_body(req.into_body()).await;
+            return Ok(denial);
+        }
+    }
     let headers: Vec<(String, String)> = req
         .headers()
         .iter()
@@ -1310,7 +1426,7 @@ async fn respond(
                 .map(|v| (k.as_str().to_owned(), v.to_owned()))
         })
         .collect();
-    let headers = match sanitize_credentials(&runtime, function, req.headers(), headers) {
+    let mut headers = match sanitize_credentials(&runtime, function, req.headers(), headers) {
         Ok(headers) => headers,
         Err(denial) => {
             drain_refused_body(req.into_body()).await;
@@ -1321,6 +1437,14 @@ async fn respond(
             ));
         }
     };
+    if profile == FunctionsHttpProfile::Strict {
+        headers.retain(|(name, _)| {
+            !name.eq_ignore_ascii_case("x-forwarded-for")
+                && !name.eq_ignore_ascii_case("x-forwarded-proto")
+        });
+        headers.push(("x-forwarded-for".to_owned(), peer_ip.to_string()));
+        headers.push(("x-forwarded-proto".to_owned(), "https".to_owned()));
+    }
     let body = match collect_body(req.into_body(), body_limit).await {
         Ok(body) => body,
         Err(answer) => return Ok(*answer),
@@ -1329,32 +1453,16 @@ async fn respond(
         Some(q) => format!("{path}?{q}"),
         None => path,
     };
-    if streaming {
-        return match runtime
-            .invoke_http_stream(&target, &method, &path_and_query, &headers, &body)
-            .await
-        {
-            Ok(crate::runtime::HttpStreamStart::Buffered(response)) => {
-                Ok(buffered_response(response))
-            }
-            Ok(crate::runtime::HttpStreamStart::Streaming(response)) => {
-                Ok(streaming_response(response))
-            }
-            Err(error) if error == crate::runtime::DROP_CONNECTION => {
-                Err(std::io::Error::other(error))
-            }
-            Err(error) => Ok(simple(StatusCode::BAD_GATEWAY, &error)),
-        };
-    }
-    match runtime
-        .invoke_http(&target, &method, &path_and_query, &headers, &body)
-        .await
-    {
-        Ok(response) => Ok(buffered_response(response)),
-        // A `dropConnection` fault: the connection closes without a response.
-        Err(error) if error == crate::runtime::DROP_CONNECTION => Err(std::io::Error::other(error)),
-        Err(error) => Ok(simple(StatusCode::BAD_GATEWAY, &error)),
-    }
+    invoke_runner(
+        &runtime,
+        &target,
+        &method,
+        &path_and_query,
+        &headers,
+        &body,
+        HttpIngressMode { profile, streaming },
+    )
+    .await
 }
 
 /// Every instance of one field, in wire order, with an unrenderable value as an empty string.
@@ -1472,9 +1580,10 @@ async fn serve_surface(
     runtime: Arc<FunctionsRuntime>,
     surface: HttpSurface,
     admission: HttpAdmission,
+    profile: FunctionsHttpProfile,
 ) -> std::io::Result<()> {
     loop {
-        let (stream, _) = listener.accept().await?;
+        let (stream, peer) = listener.accept().await?;
         let connection = admission
             .connections
             .clone()
@@ -1493,7 +1602,7 @@ async fn serve_surface(
                     let body_limit = request_body_limit(surface, req.uri().path());
                     let reservation = request_body_reservation(&req, body_limit);
                     let _request = request_admission.acquire(reservation).await;
-                    respond(runtime, req, body_limit, surface).await
+                    respond(runtime, req, body_limit, surface, profile, peer.ip()).await
                 }
             });
             let mut builder = http1::Builder::new();
@@ -1512,7 +1621,24 @@ pub async fn serve_functions(
     runtime: Arc<FunctionsRuntime>,
     admission: HttpAdmission,
 ) -> std::io::Result<()> {
-    serve_surface(listener, runtime, HttpSurface::Functions, admission).await
+    serve_functions_with_profile(listener, runtime, admission, FunctionsHttpProfile::Emulator).await
+}
+
+/// Serves HTTP and callable Functions with an explicit compatibility profile.
+pub async fn serve_functions_with_profile(
+    listener: TcpListener,
+    runtime: Arc<FunctionsRuntime>,
+    admission: HttpAdmission,
+    profile: FunctionsHttpProfile,
+) -> std::io::Result<()> {
+    serve_surface(
+        listener,
+        runtime,
+        HttpSurface::Functions,
+        admission,
+        profile,
+    )
+    .await
 }
 
 /// Serves only the Eventarc channel publication routes on the official Eventarc listener.
@@ -1521,7 +1647,14 @@ pub async fn serve_eventarc(
     runtime: Arc<FunctionsRuntime>,
     admission: HttpAdmission,
 ) -> std::io::Result<()> {
-    serve_surface(listener, runtime, HttpSurface::Eventarc, admission).await
+    serve_surface(
+        listener,
+        runtime,
+        HttpSurface::Eventarc,
+        admission,
+        FunctionsHttpProfile::Emulator,
+    )
+    .await
 }
 
 /// Serves only the Cloud Tasks queue routes on the official Tasks listener.
@@ -1530,7 +1663,14 @@ pub async fn serve_tasks(
     runtime: Arc<FunctionsRuntime>,
     admission: HttpAdmission,
 ) -> std::io::Result<()> {
-    serve_surface(listener, runtime, HttpSurface::Tasks, admission).await
+    serve_surface(
+        listener,
+        runtime,
+        HttpSurface::Tasks,
+        admission,
+        FunctionsHttpProfile::Emulator,
+    )
+    .await
 }
 
 #[cfg(test)]

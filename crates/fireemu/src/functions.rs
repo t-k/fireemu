@@ -2758,6 +2758,10 @@ async fn start_codebase(
         ("TZ".to_owned(), "UTC".to_owned()),
         ("FIREEMU_RUNNER".to_owned(), "1".to_owned()),
         ("FIREEMU_RUNNER_SECRET".to_owned(), runner_secret.to_owned()),
+        (
+            "FIREEMU_HTTP_PROFILE".to_owned(),
+            cfg.profile.as_str().to_owned(),
+        ),
     ]);
     if let Some(host) = &hosts.firestore {
         env.push(("FIRESTORE_EMULATOR_HOST".to_owned(), host.clone()));

@@ -587,6 +587,19 @@ async fn start(trusted: bool) -> Harness {
 }
 
 async fn start_with_consume(trusted: bool, consume: &str) -> Harness {
+    start_with_consume_profile(
+        trusted,
+        consume,
+        fireemu_adapter_functions::http::FunctionsHttpProfile::Emulator,
+    )
+    .await
+}
+
+async fn start_with_consume_profile(
+    trusted: bool,
+    consume: &str,
+    profile: fireemu_adapter_functions::http::FunctionsHttpProfile,
+) -> Harness {
     let script = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fake_runner.py");
     let spec = SpawnSpec {
         command: vec!["python3".to_owned(), script.to_owned()],
@@ -626,26 +639,30 @@ async fn start_with_consume(trusted: bool, consume: &str) -> Harness {
         SplitMix64::new(3),
         TotpPolicy::default(),
     )));
+    let verifier = Arc::new(RulesEnforcer::new(
+        Arc::new(RulesetSlot::default()),
+        auth.clone(),
+        clock,
+    ));
+    runtime.set_callable_auth_verifier(verifier.clone());
     if trusted {
         let policy = ServiceAdmission::new(gate.clone(), "functions", BaselineMode::Unenforced)
             .map(Arc::new)
             .expect("unenforced is a policy");
-        let verifier = Arc::new(RulesEnforcer::new(
-            Arc::new(RulesetSlot::default()),
-            auth.clone(),
-            clock,
-        ));
         runtime.set_callable_trust(Arc::new(CallableTrust::new(policy, verifier, PROJECT)));
     }
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
         .await
         .expect("bind");
     let addr = listener.local_addr().expect("a local address");
-    let server = tokio::spawn(fireemu_adapter_functions::http::serve_functions(
-        listener,
-        runtime.clone(),
-        fireemu_adapter_functions::http::HttpAdmission::new(),
-    ));
+    let server = tokio::spawn(
+        fireemu_adapter_functions::http::serve_functions_with_profile(
+            listener,
+            runtime.clone(),
+            fireemu_adapter_functions::http::HttpAdmission::new(),
+            profile,
+        ),
+    );
     Harness {
         addr,
         gate,
@@ -1403,6 +1420,142 @@ async fn bearer_owner_never_reaches_a_callable() {
         echoed(&body, "authorization").is_empty(),
         "the emulator's admin credential is not a callable user identity: {body}"
     );
+    h.stop().await;
+}
+
+#[tokio::test]
+async fn strict_callable_ingress_refuses_invalid_bearer_before_invocation() {
+    let h = start_with_consume_profile(
+        true,
+        "disabled",
+        fireemu_adapter_functions::http::FunctionsHttpProfile::Strict,
+    )
+    .await;
+    let (_, valid) = h.user("strict@example.com");
+    let expected = "\n<html><head>\n<meta http-equiv=\"content-type\" content=\"text/html;charset=utf-8\">\n<title>401 Unauthorized</title>\n</head>\n<body text=#000000 bgcolor=#ffffff>\n<h1>Error: Unauthorized</h1>\n<h2>Your client does not have permission to the requested URL <code>/</code>.</h2>\n<h2></h2>\n</body></html>\n";
+    for bearer in ["Bearer malformed".to_owned(), format!("{valid}x")] {
+        let response = h
+            .request("POST", "add", &[("authorization", &bearer)])
+            .await;
+        assert_eq!(response.status, 401);
+        assert_eq!(
+            response_header(&response, "content-type"),
+            Some("text/html; charset=UTF-8")
+        );
+        assert_eq!(response.body, expected.as_bytes());
+    }
+    assert_eq!(h.request("POST", "add", &[]).await.status, 200);
+    assert_eq!(
+        h.request("POST", "add", &[("authorization", &valid)])
+            .await
+            .status,
+        200
+    );
+    h.stop().await;
+}
+
+#[tokio::test]
+async fn strict_callable_ingress_checks_bearer_when_app_check_is_not_selected() {
+    let h = start_with_consume_profile(
+        false,
+        "disabled",
+        fireemu_adapter_functions::http::FunctionsHttpProfile::Strict,
+    )
+    .await;
+    let (_, valid) = h.user("without-app-check@example.com");
+    let refused = h
+        .request("POST", "add", &[("authorization", "Bearer malformed")])
+        .await;
+    assert_eq!(refused.status, 401);
+    assert_eq!(
+        response_header(&refused, "content-type"),
+        Some("text/html; charset=UTF-8")
+    );
+    assert_eq!(h.request("POST", "add", &[]).await.status, 200);
+    assert_eq!(
+        h.request("POST", "add", &[("authorization", &valid)])
+            .await
+            .status,
+        200
+    );
+    h.stop().await;
+}
+
+#[tokio::test]
+async fn strict_ingress_adds_the_recorded_default_type_only_to_missing_response_types() {
+    for (profile, expected_default) in [
+        (
+            fireemu_adapter_functions::http::FunctionsHttpProfile::Emulator,
+            None,
+        ),
+        (
+            fireemu_adapter_functions::http::FunctionsHttpProfile::Strict,
+            Some("text/html"),
+        ),
+    ] {
+        let h = start_with_consume_profile(false, "disabled", profile).await;
+        let no_content = h.request("GET", "echo/status204", &[]).await;
+        assert_eq!(no_content.status, 204);
+        assert_eq!(
+            response_header(&no_content, "content-type"),
+            expected_default
+        );
+        let stream = h
+            .request(
+                "POST",
+                "guardedV2/stream",
+                &[("accept", "text/event-stream")],
+            )
+            .await;
+        assert_eq!(stream.status, 200);
+        assert_eq!(stream.body, b"data: {\"result\":{\"ok\":true}}\n\n");
+        assert_eq!(response_header(&stream, "content-type"), expected_default);
+        let explicit = h
+            .request(
+                "POST",
+                "guardedV2/stream-explicit",
+                &[("accept", "text/event-stream")],
+            )
+            .await;
+        assert_eq!(
+            response_header(&explicit, "content-type"),
+            Some("text/event-stream")
+        );
+        h.stop().await;
+    }
+}
+
+#[tokio::test]
+async fn strict_ingress_sets_one_forwarded_hop_and_https_for_http_and_callable() {
+    let h = start_with_consume_profile(
+        false,
+        "disabled",
+        fireemu_adapter_functions::http::FunctionsHttpProfile::Strict,
+    )
+    .await;
+    for function in ["echo", "add"] {
+        for headers in [
+            &[][..],
+            &[
+                ("x-forwarded-for", "203.0.113.10, 203.0.113.11"),
+                ("x-forwarded-proto", "http"),
+                ("x-forwarded-for", "203.0.113.12"),
+            ][..],
+        ] {
+            let (status, body) = h.call(function, headers).await;
+            assert_eq!(status, 200, "{function}");
+            assert_eq!(
+                echoed(&body, "x-forwarded-for"),
+                vec!["127.0.0.1"],
+                "{function}: {body}"
+            );
+            assert_eq!(
+                echoed(&body, "x-forwarded-proto"),
+                vec!["https"],
+                "{function}: {body}"
+            );
+        }
+    }
     h.stop().await;
 }
 

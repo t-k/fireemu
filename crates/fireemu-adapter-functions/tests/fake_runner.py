@@ -87,6 +87,19 @@ class Echo(http.server.BaseHTTPRequestHandler):
             self.send_response(204)
             self.end_headers()
             return
+        if self.path.endswith("/status204"):
+            self.send_response(204)
+            self.end_headers()
+            return
+        if self.path.endswith("/stream") or self.path.endswith("/stream-explicit"):
+            payload = b'data: {"result":{"ok":true}}\n\n'
+            self.send_response(200)
+            if self.path.endswith("/stream-explicit"):
+                self.send_header("content-type", "text/event-stream")
+            self.send_header("content-length", str(len(payload)))
+            self.end_headers()
+            self.wfile.write(payload)
+            return
         payload = json.dumps(
             {
                 "method": self.command,

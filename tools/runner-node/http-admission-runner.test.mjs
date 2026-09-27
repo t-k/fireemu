@@ -20,8 +20,9 @@ const record=e=>fs.appendFileSync(path.join(__dirname,'../../events.jsonl'),JSON
 module.exports=function(){const middle=[];let route;const app=(req,res)=>{
  res.status=c=>{res.statusCode=c;return res;};res.send=x=>{res.end(String(x));return res;};res.json=x=>{res.setHeader('content-type','application/json');res.end(JSON.stringify(x));return res;};
  req.get=n=>req.headers[n.toLowerCase()];const p=req.url.split('?')[0].split('/');req.params={project:p[1],region:p[2],name:p[3]};
- let index=0;const next=err=>{if(res.destroyed||res.writableEnded)return;if(err){res.status(err.status||400).send('parser failed');return;}
-  if(index<middle.length){const fn=middle[index++];try{fn(req,res,next);}catch(e){next(e);}return;}
+ let index=0;const next=err=>{if(res.destroyed||res.writableEnded)return;
+  while(index<middle.length){const fn=middle[index++];if(Boolean(err)!==(fn.length===4))continue;try{if(err)fn(err,req,res,next);else fn(req,res,next);}catch(e){next(e);}return;}
+  if(err){res.status(err.status||400).send('parser failed');return;}
   record({event:'route',name:req.params.name});route(req,res);
  };next();};app.use=fn=>middle.push(fn);app.all=(_r,fn)=>route=fn;return app;};
 for(const kind of ['json','text','urlencoded','raw'])module.exports[kind]=opts=>(req,res,next)=>{
@@ -35,7 +36,7 @@ for(const kind of ['json','text','urlencoded','raw'])module.exports[kind]=opts=>
    if(b.length>32*1024*1024)throw Object.assign(Error('too big'),{status:413});
    opts.verify(req,res,b);req.body=kind==='json'?(b.length?JSON.parse(b.toString()):Buffer.alloc(0)):kind==='text'?b.toString():kind==='urlencoded'?Object.fromEntries(new URLSearchParams(b.toString())):b;
    req.parsed=true;next();
-  }catch(e){next(e);}
+  }catch(e){if(kind==='json'&&e instanceof SyntaxError){e.status=400;e.type='entity.parse.failed';}next(e);}
  });};
 `;
 const code=`
@@ -54,14 +55,14 @@ const task=async(req,res)=>callback(req,res);task.__endpoint={platform:'gcfv2',t
 function blocking(){}blocking.__endpoint={platform:'gcfv2',blockingTrigger:{eventType:'beforeSignIn'},secretEnvironmentVariables:[{key:'LOCAL_ONLY'}]};blocking.run=async e=>{record({event:'start',tag:e.data.tag,name:'blocking'});return {displayName:e.data.tag};};
 module.exports={http:callback,task,blocking};
 `;
-async function start(t,{serialize=false,configured=true}={}) {
+async function start(t,{serialize=false,configured=true,profile='emulator'}={}) {
  const dir=await mkdtemp(join(tmpdir(),'fireemu-http-admission-'));
  async function put(p,s){const f=join(dir,p);await mkdir(dirname(f),{recursive:true});await writeFile(f,s);}
  await put('package.json',JSON.stringify({main:'index.cjs'}));await put('index.cjs',code);
  await put('node_modules/express/package.json',JSON.stringify({name:'express',version:'5.1.0',main:'index.cjs'}));await put('node_modules/express/index.cjs',expressSource);
  await put('node_modules/firebase-functions/package.json',JSON.stringify({name:'firebase-functions',version:'7.3.2',main:'index.cjs',exports:{'.':'./index.cjs','./https':'./https.cjs','./v2/options':'./options.cjs'}}));
  await put('node_modules/firebase-functions/index.cjs','module.exports={};');await put('node_modules/firebase-functions/options.cjs','exports.getGlobalOptions=()=>({});');await put('node_modules/firebase-functions/https.cjs','exports.HttpsError=class extends Error{};');
- const child=spawn(process.execPath,[runner,'--source',dir],{stdio:['pipe','pipe','pipe'],env:{PATH:process.env.PATH,GCLOUD_PROJECT:project,...(configured?{FIREEMU_RUNNER_SECRET:secret}:{}),...(serialize?{FIREEMU_LOCAL_SECRETS_JSON:'{"LOCAL_ONLY":"fixture"}'}:{})}});
+ const child=spawn(process.execPath,[runner,'--source',dir],{stdio:['pipe','pipe','pipe'],env:{PATH:process.env.PATH,GCLOUD_PROJECT:project,FIREEMU_HTTP_PROFILE:profile,...(configured?{FIREEMU_RUNNER_SECRET:secret}:{}),...(serialize?{FIREEMU_LOCAL_SECRETS_JSON:'{"LOCAL_ONLY":"fixture"}'}:{})}});
  let buffer=Buffer.alloc(0),stderr='',exit=null;const messages=[],clients=[];
  const exited=new Promise((resolve,reject)=>{child.once('error',reject);child.once('exit',(code,signal)=>{exit={code,signal};resolve(exit);});});
  child.stdin.on('error',()=>{});child.stderr.on('data',b=>{if(stderr.length<65536)stderr+=b;});
@@ -72,7 +73,7 @@ async function start(t,{serialize=false,configured=true}={}) {
  await wait(()=>messages.some(x=>x.type==='hello'),'hello');const port=messages.find(x=>x.type==='hello').httpPort;assert.ok(Number.isInteger(port));
  function call({name='http',headers={},body='{}',send=true,method='POST',path}={}) {
   let resolveResult;const result=new Promise(r=>resolveResult=r);let continued=false;
-  const req=request({host:'127.0.0.1',port,path:path||'/'+project+'/us-central1/'+name,method,agent:false,headers:{'x-fireemu-runner-secret':secret,'content-type':'application/json',...headers}},res=>{let text='';res.on('data',b=>{text+=b;});res.once('end',()=>resolveResult({status:res.statusCode,text,complete:res.complete}));res.on('error',e=>resolveResult({error:e.code,text}));});
+  const req=request({host:'127.0.0.1',port,path:path||'/'+project+'/us-central1/'+name,method,agent:false,headers:{'x-fireemu-runner-secret':secret,'content-type':'application/json',...headers}},res=>{let text='';res.on('data',b=>{text+=b;});res.once('end',()=>resolveResult({status:res.statusCode,text,headers:res.headers,complete:res.complete}));res.on('error',e=>resolveResult({error:e.code,text}));});
   req.on('continue',()=>continued=true);req.on('error',e=>resolveResult({error:e.code}));clients.push(req);if(send)req.end(body);else req.flushHeaders();
   return {req,result,get continued(){return continued;}};
  }
@@ -112,6 +113,13 @@ for(const [ctype,body] of [['application/json','{"x":"日本語"}'],['text/plain
 }
 test('parser error and route mismatch do not strand reservations',{timeout:10000},async t=>{
  const f=await start(t);for(let i=0;i<8;i++){assert.equal((await f.call({body:'{'}).result).status,400);assert.equal((await f.call({name:'missing'}).result).status,404);}assert.equal((await f.call().result).status,200);
+});
+test('strict JSON parse failure has the production generic HTML without a stack',{timeout:10000},async t=>{
+ const f=await start(t,{profile:'strict'}),response=await f.call({body:'{'}).result;
+ assert.equal(response.status,400);
+ assert.equal(response.headers['content-type'],'text/html; charset=utf-8');
+ assert.equal(response.text,'<!DOCTYPE html>\n<html lang="en">\n<head>\n<meta charset="utf-8">\n<title>Error</title>\n</head>\n<body>\n<pre>Bad Request</pre>\n</body>\n</html>\n');
+ assert.equal((await f.call().result).status,200);
 });
 test('an empty HTTP request reaches the handler with an object body',{timeout:10000},async t=>{
  const f=await start(t),response=await f.call({body:'',headers:{'content-length':'0'}}).result;

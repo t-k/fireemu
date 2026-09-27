@@ -1157,9 +1157,17 @@ export function batchGetProvesAbsent(status, rows, names) {
   return names.every((name) => missing.has(name));
 }
 
-/** A runQuery answer proves the collection empty only when it returns no document. */
+/**
+ * A runQuery answer proves the collection empty only when it returns a read time and neither a
+ * document nor an error element (an error can arrive mid-stream with status 200).
+ */
 export function runQueryProvesEmpty(status, rows) {
-  return status === 200 && Array.isArray(rows) && rows.every((row) => !row?.document);
+  return (
+    status === 200 &&
+    Array.isArray(rows) &&
+    rows.every((row) => !row?.document && !row?.error) &&
+    rows.some((row) => typeof row?.readTime === "string")
+  );
 }
 
 const bracketDocuments = () =>

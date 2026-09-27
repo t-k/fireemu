@@ -10,15 +10,17 @@ import {
   readFile,
   rmdir,
   stat,
+  unlink,
   writeFile,
 } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { promisify } from "node:util";
-import { dirname, join, resolve } from "node:path";
+import { dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { CONFORMANCE_DIR, RUNS_DIR } from "./config.mjs";
 import {
+  assertCompleteRecording,
   BRACKET_HTTP_CAP,
   BRACKET_OWNED_NAMES,
   BRACKET_REST_IDS,
@@ -2392,12 +2394,144 @@ export async function recordPartialProduction(admissionArgs) {
   });
 }
 
+const SANDBOX_IDLE_MS = 30 * 60_000;
+const OWNER_APPROVER = /^オーナー/;
+
+/** A row that records work on the sandbox, as opposed to a note or a reservation. */
+function sandboxActivity(row) {
+  return (
+    row?.project === SANDBOX_PROJECT &&
+    row.event !== "note" &&
+    row.event !== "started" &&
+    !String(row.outcome ?? "").startsWith("reserved") &&
+    row.outcome !== "historical-unknown-hold"
+  );
+}
+
+/**
+ * The gates the pre-send review requires immediately before a bracket recording: the sandbox
+ * has been idle for 30 minutes and has no open attempt, this packet has never run, and the
+ * owner ledger holds exactly one owner row pinning this packet, commit, plan and nonce.
+ */
+export function verifyBracketSendGates({ rows, now, decisions, pins }) {
+  const sandbox = rows.filter((row) => row?.project === SANDBOX_PROJECT);
+  for (const [index, row] of sandbox.entries()) {
+    const opens = row.outcome === "reserved" || row.event === "started";
+    if (
+      opens &&
+      !sandbox
+        .slice(index + 1)
+        .some(
+          (later) =>
+            later.attemptId === row.attemptId &&
+            later.outcome !== "reserved" &&
+            later.event !== "started",
+        )
+    ) {
+      throw new Error("the sandbox has an open attempt; recover it before a bracket recording");
+    }
+  }
+  if (rows.some((row) => row?.packetId === pins.packetId && row.outcome === "reserved")) {
+    throw new Error("this bracket packet already ran; a rerun needs a new nonce and approval");
+  }
+  const latest = sandbox.findLast(sandboxActivity);
+  if (latest && !(now - Date.parse(latest.ts) >= SANDBOX_IDLE_MS)) {
+    throw new Error("the sandbox has not been idle for 30 minutes since its last activity");
+  }
+  const required = [
+    `packetSha256=${pins.packetSha256}`,
+    `sourceCommit=${pins.sourceCommit}`,
+    `planSha256=${pins.planSha256}`,
+    `nonce=${pins.nonce}`,
+  ];
+  const approvals = decisions.split(/\r?\n/).filter((line) => {
+    const columns = line
+      .replace(/^\s*-\s*/, "")
+      .split("|")
+      .map((value) => value.trim());
+    const tokens = new Set((columns[2] ?? "").split(";").map((value) => value.trim()));
+    return (
+      columns.length === 5 &&
+      /^\d{4}-\d{2}-\d{2}$/.test(columns[0]) &&
+      columns[1] === "FS-DATA-WRITE" &&
+      required.every((token) => tokens.has(token)) &&
+      OWNER_APPROVER.test(columns[3]) &&
+      columns[4] === pins.packetPath
+    );
+  });
+  if (approvals.length !== 1) {
+    throw new Error("the owner approval row for this bracket packet is missing or duplicated");
+  }
+  return { lastActivity: latest?.ts ?? null };
+}
+
+/** The ledger lock every sandbox lane shares; taken exclusively for the whole recording. */
+export async function acquireSharedLedgerLock(path, packetId) {
+  let handle;
+  try {
+    handle = await open(path, "wx", 0o600);
+  } catch (error) {
+    if (error?.code === "EEXIST") {
+      throw new Error("the shared ledger lock is held by another lane; wait for its release", {
+        cause: error,
+      });
+    }
+    throw error;
+  }
+  try {
+    await handle.writeFile(`${JSON.stringify({ packetId, pid: process.pid })}\n`);
+    await handle.sync();
+  } finally {
+    await handle.close();
+  }
+  return { path, packetId };
+}
+
+export async function releaseSharedLedgerLock(held) {
+  const owner = JSON.parse(await readFile(held.path, "utf8"));
+  if (owner.packetId !== held.packetId || owner.pid !== process.pid) {
+    throw new Error("the shared ledger lock changed hands; leave it for review");
+  }
+  await unlink(held.path);
+}
+
+const BRACKET_FLAGS = ["--nonce", "--review", "--review-sha256", "--packet", "--packet-sha256"];
+
+export function requireBracketArguments(args = []) {
+  const values = {};
+  for (let index = 0; index < args.length; index += 2) {
+    const flag = args[index];
+    if (!BRACKET_FLAGS.includes(flag) || args[index + 1] === undefined || flag in values) {
+      values.invalid = true;
+      break;
+    }
+    values[flag] = args[index + 1];
+  }
+  if (
+    values.invalid ||
+    BRACKET_FLAGS.some((flag) => !values[flag]) ||
+    !/^[a-f0-9]{64}$/.test(values["--packet-sha256"]) ||
+    !/^[a-f0-9]{64}$/.test(values["--review-sha256"])
+  ) {
+    throw new Error(
+      "record-bracket requires --nonce, --review, --review-sha256, --packet and --packet-sha256",
+    );
+  }
+  return {
+    nonce: values["--nonce"],
+    review: values["--review"],
+    reviewSha256: values["--review-sha256"],
+    packet: values["--packet"],
+    packetSha256: values["--packet-sha256"],
+  };
+}
+
 /**
  * Record the fixed boundary pairs twice with the same bytes, prove each attempt cleaned its
  * owned names, and freeze a supplement only when both recordings agree row by row.
  */
 export async function recordBracketProduction(admissionArgs) {
-  const pins = requireAdmissionArguments("record-bracket", admissionArgs);
+  const pins = requireBracketArguments(admissionArgs);
   const gitCommonDir = (
     await execFileAsync("git", ["rev-parse", "--path-format=absolute", "--git-common-dir"], {
       cwd: ROOT,
@@ -2415,83 +2549,123 @@ export async function recordBracketProduction(admissionArgs) {
   requireHistoricalUnknownHold(rows);
   remainingSandboxBudget(rows, ATTEMPT_ESTIMATE_USD * 2);
   await mkdir(RUNS_DIR, { recursive: true });
+  const mainRoot = resolve(privateDir, "../..");
+  const packetPath = resolve(pins.packet);
+  if (sha256(await readFile(packetPath)) !== pins.packetSha256) {
+    throw new Error("the bracket packet differs from its pinned SHA-256");
+  }
+  const gatePins = {
+    packetId: admissionPacketId("bracket", admission.nonce),
+    nonce: admission.nonce,
+    packetSha256: pins.packetSha256,
+    sourceCommit: admission.sourceCommit,
+    planSha256: admission.planSha256,
+    packetPath: relative(mainRoot, packetPath),
+  };
+  const decisionsPath = join(mainRoot, "docs.local/instructions/owner-decisions.md");
   const generatedDir = await mkdtemp(join(RUNS_DIR, "fs-data-write-bracket-"));
   const corpusIn = join(generatedDir, "bracket-corpus.json");
   await writeFile(corpusIn, JSON.stringify(recordingCorpus));
-  await withSandboxExclusiveLock(privateDir, async (lockedRows) => {
-    verifyProductionAdmissionOnDisk({ admission });
-    requireHistoricalUnknownHold(lockedRows);
-    remainingSandboxBudget(lockedRows, ATTEMPT_ESTIMATE_USD * 2);
-    const recordings = [];
-    for (let index = 0; index < 2; index += 1) {
-      const recording = await productionRecording({
-        corpusIn,
-        restIn: corpusIn,
-        privateDir,
-        gitSha,
-        corpusDigest,
-        restRequestCount: recordingCorpus.restRequestCount,
-        liveStreamCount: recordingCorpus.streamRecipes.length,
+  // Held from before the first reservation until the last ledger row; kept if anything was
+  // sent and the recording failed, so no other lane starts before the review.
+  const sharedLock = await acquireSharedLedgerLock(`${ledgerPath}.lock`, gatePins.packetId);
+  let sent = false;
+  try {
+    await recordBracketUnderLocks();
+    await releaseSharedLedgerLock(sharedLock);
+  } catch (error) {
+    if (!sent) await releaseSharedLedgerLock(sharedLock);
+    throw error;
+  }
+
+  async function recordBracketUnderLocks() {
+    await withSandboxExclusiveLock(privateDir, async (lockedRows) => {
+      verifyProductionAdmissionOnDisk({ admission });
+      requireHistoricalUnknownHold(lockedRows);
+      remainingSandboxBudget(lockedRows, ATTEMPT_ESTIMATE_USD * 2);
+      verifyBracketSendGates({
         rows: lockedRows,
-        managedNames: [...BRACKET_OWNED_NAMES],
-        bracket: bound,
-        admission,
-        streamFrameLimit: bound.maxStreamFrames,
+        now: Date.now(),
+        decisions: await readFile(decisionsPath, "utf8"),
+        pins: gatePins,
       });
-      // The second attempt starts only after the first proved its owned names absent.
-      const journal = JSON.parse(await readFile(recording.journal, "utf8"));
-      if (journal.status !== "complete" || journal.mode !== "cleanup-bracket") {
-        throw new Error("bracket cleanup is unresolved; preserve the lock and journal");
+      if (sha256(await readFile(packetPath)) !== pins.packetSha256) {
+        throw new Error("the bracket packet changed after admission");
       }
-      recordings.push(recording);
-    }
-    if (recordings[0].runId === recordings[1].runId) {
-      throw new Error("bracket recordings reused a run ID");
-    }
-    await writeFile(
-      join(generatedDir, "bracket-recordings.json"),
-      `${JSON.stringify(
-        recordings.map(
-          ({ runId, runDir, startedAt, requestCount, streamFrames, rest, stream }) => ({
-            runId,
-            runDir,
-            startedAt,
-            httpRequests: requestCount,
-            streamFrames,
-            rest,
-            stream,
-          }),
-        ),
-        null,
-        2,
-      )}\n`,
-      { mode: 0o600 },
-    );
-    const fixture = freezeSandboxFixture({
-      corpus: recordingCorpus,
-      first: recordings[0].rest,
-      second: recordings[1].rest,
-      firstStream: recordings[0].stream,
-      secondStream: recordings[1].stream,
-      recordedAt: recordings.map((recording) => recording.startedAt),
-      harnessRevision: gitSha,
-      sdkVersions: recordingSdkVersions(),
-      credentialToken: recordings[0].token,
+      const recordings = [];
+      for (let index = 0; index < 2; index += 1) {
+        sent = true;
+        const recording = await productionRecording({
+          corpusIn,
+          restIn: corpusIn,
+          privateDir,
+          gitSha,
+          corpusDigest,
+          restRequestCount: recordingCorpus.restRequestCount,
+          liveStreamCount: recordingCorpus.streamRecipes.length,
+          rows: lockedRows,
+          managedNames: [...BRACKET_OWNED_NAMES],
+          bracket: bound,
+          admission,
+          streamFrameLimit: bound.maxStreamFrames,
+        });
+        // The second attempt starts only after the first proved its owned names absent and
+        // answered every step; a failed row would make the freeze refuse both.
+        const journal = JSON.parse(await readFile(recording.journal, "utf8"));
+        if (journal.status !== "complete" || journal.mode !== "cleanup-bracket") {
+          throw new Error("bracket cleanup is unresolved; preserve the lock and journal");
+        }
+        assertCompleteRecording(recordingCorpus, recording.rest, recording.stream);
+        recordings.push(recording);
+      }
+      if (recordings[0].runId === recordings[1].runId) {
+        throw new Error("bracket recordings reused a run ID");
+      }
+      await writeFile(
+        join(generatedDir, "bracket-recordings.json"),
+        `${JSON.stringify(
+          recordings.map(
+            ({ runId, runDir, startedAt, requestCount, streamFrames, rest, stream }) => ({
+              runId,
+              runDir,
+              startedAt,
+              httpRequests: requestCount,
+              streamFrames,
+              rest,
+              stream,
+            }),
+          ),
+          null,
+          2,
+        )}\n`,
+        { mode: 0o600 },
+      );
+      const fixture = freezeSandboxFixture({
+        corpus: recordingCorpus,
+        first: recordings[0].rest,
+        second: recordings[1].rest,
+        firstStream: recordings[0].stream,
+        secondStream: recordings[1].stream,
+        recordedAt: recordings.map((recording) => recording.startedAt),
+        harnessRevision: gitSha,
+        sdkVersions: recordingSdkVersions(),
+        credentialToken: recordings[0].token,
+      });
+      const fixtureText = JSON.stringify(fixture);
+      if (recordings.some(({ tokens }) => tokens.some((t) => fixtureText.includes(t)))) {
+        throw new Error("recorded response contains a credential token");
+      }
+      const output = join(generatedDir, `bracket-${admission.nonce}.json`);
+      await writeFile(
+        output,
+        `${JSON.stringify({ ...fixture, mode: "bracket", recipeDigests: supplementRecipeDigests(recordingCorpus) }, null, 2)}\n`,
+        { flag: "wx" },
+      );
+      process.stdout.write(
+        `${JSON.stringify({ output, generatedDir, httpRequests: recordings.map((recording) => recording.requestCount), bounds: bound })}\n`,
+      );
     });
-    const fixtureText = JSON.stringify(fixture);
-    if (recordings.some(({ tokens }) => tokens.some((t) => fixtureText.includes(t)))) {
-      throw new Error("recorded response contains a credential token");
-    }
-    const output = join(generatedDir, `bracket-${admission.nonce}.json`);
-    await writeFile(
-      output,
-      `${JSON.stringify({ ...fixture, mode: "bracket", recipeDigests: supplementRecipeDigests(recordingCorpus) }, null, 2)}\n`,
-      { flag: "wx" },
-    );
-    process.stdout.write(
-      `${JSON.stringify({ output, generatedDir, httpRequests: recordings.map((recording) => recording.requestCount), bounds: bound })}\n`,
-    );
-  });
+  }
 }
 
 async function productionAccessToken() {

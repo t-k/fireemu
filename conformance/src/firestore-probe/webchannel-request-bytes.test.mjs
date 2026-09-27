@@ -166,6 +166,32 @@ test("session steps are recorded by shape, never with the SID or session header"
       code: "OK",
       body: "forward-ack",
     });
+    // The third value counts bytes waiting on the back channel, which this probe never
+    // opens, so production may report a non-zero value.
+    for (const ack of [
+      [0, 1, 57],
+      [1, 3, 0],
+    ]) {
+      assert.deepEqual(
+        projectWebChannelSessionStep(kind, 200, frame(ack), session).body,
+        "forward-ack",
+      );
+    }
+    for (const other of [
+      [1, 0],
+      [1, -1, 0],
+      [1, 0, -3],
+      [1, 0.5, 0],
+      [2, 0, 0],
+      [1, 0, 0, 0],
+      ["1", 0, 0],
+    ]) {
+      assert.equal(
+        projectWebChannelSessionStep(kind, 200, frame(other), session).body,
+        "unexpected-forward-answer",
+        JSON.stringify(other),
+      );
+    }
     assert.deepEqual(
       projectWebChannelSessionStep(kind, 200, `x ${session.sid} ${session.gsessionid}`, session),
       { status: 200, code: "OK", body: "unexpected-forward-answer" },

@@ -1,7 +1,11 @@
 import assert from "node:assert/strict";
+import { mkdtemp, readFile, rm, stat } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { test } from "node:test";
 
 import {
+  assertCompleteRecording,
   BRACKET_OWNED_NAMES,
   BRACKET_REST_IDS,
   BRACKET_STREAM_IDS,
@@ -11,7 +15,11 @@ import {
   productionScopeFromEnvironment,
 } from "./firestore-probe/sandbox-session.mjs";
 import {
+  acquireSharedLedgerLock,
   bracketRequestBound,
+  releaseSharedLedgerLock,
+  requireBracketArguments,
+  verifyBracketSendGates,
   ownedMutationNamesForPrograms,
   prepareSandboxCorpus,
   productionAdmissionPlan,
@@ -201,4 +209,168 @@ test("the exact bracket scope refuses every other target", () => {
   ]) {
     assert.equal(isExactBracketProductionScope({ ...scope, ...change }), false, change);
   }
+});
+
+const pins = {
+  packetId: "fs-data-write-bracket-0123456789abcdef01234567",
+  nonce: "0123456789abcdef01234567",
+  packetSha256: "a".repeat(64),
+  sourceCommit: "b".repeat(40),
+  planSha256: "c".repeat(64),
+  packetPath: "docs.local/runs/fs-data-write-bracket-20260927/PRESEND-PACKET.md",
+};
+const ownerRow = (overrides = {}) => {
+  const value = { ...pins, ...overrides };
+  return `- 2026-09-27 | FS-DATA-WRITE | bracket packet approved; packetSha256=${value.packetSha256}; sourceCommit=${value.sourceCommit}; planSha256=${value.planSha256}; nonce=${value.nonce} | オーナー（このセッションへの直接の返答） | ${value.packetPath}`;
+};
+const at = (minutes) => new Date(Date.UTC(2026, 8, 27, 12, 0) + minutes * 60_000).toISOString();
+const sbx = (row) => ({ project: "fireemu-oracle-sbx", taskId: "FS-DATA-WRITE-SANDBOX", ...row });
+const now = Date.parse(at(60));
+
+test("a bracket send waits 30 minutes after the last sbx activity, ignoring notes and reservations", () => {
+  const decisions = `# ledger\n${ownerRow()}\n`;
+  // 29 minutes before now.
+  const finished = sbx({ ts: at(31), outcome: "recorded", attemptId: "x" });
+  const rows = [sbx({ ts: at(0), outcome: "reserved", attemptId: "x" }), finished];
+  assert.throws(() => verifyBracketSendGates({ rows, now, decisions, pins }), /30 minutes/);
+  const later = [
+    sbx({ ts: at(0), outcome: "reserved", attemptId: "x" }),
+    sbx({ ts: at(30), outcome: "recorded", attemptId: "x" }),
+    sbx({ ts: at(59), event: "note", note: "text" }),
+    sbx({ ts: at(59), outcome: "reserved-presend-admission", packetId: pins.packetId }),
+    { ts: at(59), project: "fireemu-oracle-idp", outcome: "recorded" },
+  ];
+  assert.deepEqual(verifyBracketSendGates({ rows: later, now, decisions, pins }), {
+    lastActivity: at(30),
+  });
+});
+
+test("a bracket send refuses an open sbx attempt and a second run of the same packet", () => {
+  const decisions = ownerRow();
+  const open = [sbx({ ts: at(0), outcome: "reserved", attemptId: "y" })];
+  assert.throws(() => verifyBracketSendGates({ rows: open, now, decisions, pins }), /open attempt/);
+  const started = [sbx({ ts: at(0), event: "started", attemptId: "z" })];
+  assert.throws(
+    () => verifyBracketSendGates({ rows: started, now, decisions, pins }),
+    /open attempt/,
+  );
+  const ran = [
+    sbx({ ts: at(0), outcome: "reserved", attemptId: "w", packetId: pins.packetId }),
+    sbx({ ts: at(1), outcome: "failed", attemptId: "w", packetId: pins.packetId }),
+  ];
+  assert.throws(() => verifyBracketSendGates({ rows: ran, now, decisions, pins }), /already ran/);
+});
+
+test("a bracket send needs one owner row pinning packet, commit, plan and nonce", () => {
+  const rows = [];
+  assert.equal(
+    verifyBracketSendGates({ rows, now, decisions: ownerRow(), pins }).lastActivity,
+    null,
+  );
+  for (const decisions of [
+    "",
+    ownerRow({ packetSha256: "d".repeat(64) }),
+    ownerRow({ sourceCommit: "e".repeat(40) }),
+    ownerRow({ planSha256: "f".repeat(64) }),
+    ownerRow({ nonce: "fffffffffffffffffffffff0" }),
+    ownerRow({ packetPath: "docs.local/other.md" }),
+    ownerRow().replace("オーナー（このセッションへの直接の返答）", "Claude（委任）"),
+    ownerRow().replace("| FS-DATA-WRITE |", "| FS-RULES |"),
+    `${ownerRow()}\n${ownerRow()}`,
+  ]) {
+    assert.throws(
+      () => verifyBracketSendGates({ rows, now, decisions, pins }),
+      /owner approval/,
+      decisions,
+    );
+  }
+});
+
+test("the shared ledger lock is taken exclusively and released only by its holder", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "bracket-lock-"));
+  try {
+    const path = join(dir, "sandbox-ledger.jsonl.lock");
+    const held = await acquireSharedLedgerLock(path, pins.packetId);
+    assert.equal((await stat(path)).mode & 0o777, 0o600);
+    assert.equal(JSON.parse(await readFile(path, "utf8")).packetId, pins.packetId);
+    await assert.rejects(acquireSharedLedgerLock(path, "other"), /shared ledger lock/);
+    await releaseSharedLedgerLock(held);
+    await assert.rejects(stat(path), { code: "ENOENT" });
+    const again = await acquireSharedLedgerLock(path, pins.packetId);
+    await releaseSharedLedgerLock(again);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("record-bracket takes the review and packet pins and nothing else", () => {
+  const args = [
+    "--nonce",
+    pins.nonce,
+    "--review",
+    "/r.md",
+    "--review-sha256",
+    "1".repeat(64),
+    "--packet",
+    "/p.md",
+    "--packet-sha256",
+    pins.packetSha256,
+  ];
+  assert.deepEqual(requireBracketArguments(args), {
+    nonce: pins.nonce,
+    review: "/r.md",
+    reviewSha256: "1".repeat(64),
+    packet: "/p.md",
+    packetSha256: pins.packetSha256,
+  });
+  assert.throws(() => requireBracketArguments(args.slice(0, 6)), /--packet/);
+  assert.throws(() => requireBracketArguments([...args, "--extra", "x"]), /--packet/);
+  assert.throws(
+    () => requireBracketArguments(args.map((value) => (value === pins.packetSha256 ? "x" : value))),
+    /--packet/,
+  );
+});
+
+test("a failed or incomplete first attempt stops before the second is sent", async () => {
+  const { corpus } = await prepareSandboxCorpus();
+  const { recordingCorpus } = selectBracketRecipes(corpus);
+  const rest = Object.fromEntries(
+    recordingCorpus.restPrograms.map((program) => [
+      program.id,
+      {
+        steps: Object.fromEntries(
+          program.steps.map((step) => [step.id, { status: 200, code: "OK", body: {} }]),
+        ),
+      },
+    ]),
+  );
+  const stream = Object.fromEntries(
+    recordingCorpus.streamRecipes.map((recipe) => [
+      recipe.id,
+      { sentFrames: 1, wireBytes: recipe.wireBytes, status: { code: 3, details: "x" } },
+    ]),
+  );
+  assertCompleteRecording(recordingCorpus, rest, stream);
+  const webchannel = "writes/limits/webchannel-request-bytes/11534336";
+  for (const failed of [
+    { status: 0, code: "not-run", message: "the WebChannel control message was not acknowledged" },
+    { status: 0, code: "probe-error", message: "fetch failed" },
+    { status: 200, code: "OK" },
+  ]) {
+    const broken = structuredClone(rest);
+    broken[webchannel].steps.boundary = failed;
+    assert.throws(
+      () => assertCompleteRecording(recordingCorpus, broken, stream),
+      /failed observation/,
+    );
+  }
+  const missing = structuredClone(rest);
+  delete missing[webchannel];
+  assert.throws(() => assertCompleteRecording(recordingCorpus, missing, stream), /incomplete/);
+  const noStream = structuredClone(stream);
+  delete noStream[BRACKET_STREAM_IDS[1]];
+  assert.throws(
+    () => assertCompleteRecording(recordingCorpus, rest, noStream),
+    /incomplete stream/,
+  );
 });

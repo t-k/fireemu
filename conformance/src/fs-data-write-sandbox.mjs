@@ -398,6 +398,48 @@ export function compareSandboxArtifact(production, localPrograms, localStreams, 
 }
 
 /** Freeze only reproducible sandbox responses; no fireemu source digest is bound here. */
+/**
+ * One recording holds a complete, typed answer for every step and live stream of the corpus.
+ * The freeze applies it to both recordings; a runner applies it to its first recording so a
+ * failed attempt stops before the second is sent.
+ */
+export function assertCompleteRecording(corpus, rest, stream) {
+  for (const program of corpus.restPrograms) {
+    const recordedSteps = rest?.[program.id]?.steps;
+    if (!recordedSteps || program.steps.some((step) => !recordedSteps[step.id])) {
+      throw new Error(`incomplete sandbox recording: ${program.id}`);
+    }
+    for (const step of program.steps) {
+      const result = recordedSteps[step.id];
+      if (
+        !Number.isInteger(result.status) ||
+        result.status < 200 ||
+        result.status > 599 ||
+        typeof result.code !== "string" ||
+        !result.code ||
+        ["no-response", "probe-error", "non-json"].includes(result.code) ||
+        (result.status < 300 && (result.code !== "OK" || !Object.hasOwn(result, "body")))
+      ) {
+        throw new Error(`failed observation: ${program.id}#${step.id}`);
+      }
+    }
+  }
+  const liveStreams = (corpus.streamRecipes ?? []).filter((recipe) => recipe.transport === "grpc");
+  if (liveStreams.length > 0 && !stream) throw new Error("incomplete stream recording");
+  for (const recipe of liveStreams) {
+    const result = stream[recipe.id];
+    // A unary byte probe records one status for its exact wire size; a stream records its
+    // events.
+    const complete =
+      recipe.action === "get-document-transaction-bytes"
+        ? result?.wireBytes === recipe.wireBytes
+        : Array.isArray(result?.events);
+    if (!result || !Number.isInteger(result.status?.code) || !complete) {
+      throw new Error(`incomplete stream recording: ${recipe.id}`);
+    }
+  }
+}
+
 export function freezeSandboxFixture({
   corpus,
   first,
@@ -426,45 +468,10 @@ export function freezeSandboxFixture({
   const nondeterministicPrograms = [
     ...new Set(differences.map((id) => id.split("#", 1)[0])),
   ].toSorted();
-  for (const program of corpus.restPrograms) {
-    for (const recording of [first, second]) {
-      const recordedSteps = recording[program.id]?.steps;
-      if (!recordedSteps || program.steps.some((step) => !recordedSteps[step.id])) {
-        throw new Error(`incomplete sandbox recording: ${program.id}`);
-      }
-      for (const step of program.steps) {
-        const result = recordedSteps[step.id];
-        if (
-          !Number.isInteger(result.status) ||
-          result.status < 200 ||
-          result.status > 599 ||
-          typeof result.code !== "string" ||
-          !result.code ||
-          ["no-response", "probe-error", "non-json"].includes(result.code) ||
-          (result.status < 300 && (result.code !== "OK" || !Object.hasOwn(result, "body")))
-        ) {
-          throw new Error(`failed observation: ${program.id}#${step.id}`);
-        }
-      }
-    }
-  }
+  assertCompleteRecording(corpus, first, firstStream);
+  assertCompleteRecording(corpus, second, secondStream);
   const liveStreams = (corpus.streamRecipes ?? []).filter((recipe) => recipe.transport === "grpc");
   if (liveStreams.length > 0) {
-    if (!firstStream || !secondStream) throw new Error("incomplete stream recording");
-    for (const recipe of liveStreams) {
-      for (const recording of [firstStream, secondStream]) {
-        const result = recording[recipe.id];
-        // A unary byte probe records one status for its exact wire size; a stream records
-        // its events.
-        const complete =
-          recipe.action === "get-document-transaction-bytes"
-            ? result?.wireBytes === recipe.wireBytes
-            : Array.isArray(result?.events);
-        if (!result || !Number.isInteger(result.status?.code) || !complete) {
-          throw new Error(`incomplete stream recording: ${recipe.id}`);
-        }
-      }
-    }
     if (JSON.stringify(canonical(firstStream)) !== JSON.stringify(canonical(secondStream))) {
       throw new Error("nondeterministic stream recording");
     }

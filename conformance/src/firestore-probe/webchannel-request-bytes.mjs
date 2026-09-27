@@ -97,15 +97,17 @@ export function parseWebChannelOpening(status, sessionHeader, text) {
   return { sid, gsessionid: sessionHeader };
 }
 
+/**
+ * `[backchannelAttached, lastArrayId, pendingBytes]`. The last value counts bytes waiting on the
+ * back channel, which this probe never opens, so any non-negative count is an acknowledgement.
+ */
 function isForwardAck(text) {
   const value = parseFrame(text);
   return (
     Array.isArray(value) &&
     value.length === 3 &&
     [0, 1].includes(value[0]) &&
-    Number.isSafeInteger(value[1]) &&
-    value[1] >= 0 &&
-    value[2] === 0
+    [value[1], value[2]].every((count) => Number.isSafeInteger(count) && count >= 0)
   );
 }
 

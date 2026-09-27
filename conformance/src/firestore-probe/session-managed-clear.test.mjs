@@ -464,7 +464,10 @@ test("bracket absence and emptiness are proven only by typed answers", () => {
   );
   assert.equal(batchGetProvesAbsent(200, null, owned), false);
   assert.equal(runQueryProvesEmpty(200, [{ readTime: "t" }]), true);
-  assert.equal(runQueryProvesEmpty(200, []), true);
+  // An answer proves emptiness only with a read time and no error element.
+  assert.equal(runQueryProvesEmpty(200, []), false);
+  assert.equal(runQueryProvesEmpty(200, [{ error: { code: 13 } }]), false);
+  assert.equal(runQueryProvesEmpty(200, [{ readTime: "t" }, { error: { code: 13 } }]), false);
   assert.equal(runQueryProvesEmpty(200, [{ document: { name: owned[0] }, readTime: "t" }]), false);
   assert.equal(runQueryProvesEmpty(500, [{ readTime: "t" }]), false);
   assert.equal(runQueryProvesEmpty(200, { error: {} }), false);

@@ -2,266 +2,265 @@
   "schemaVersion": 1,
   "parent": "AUTH-FS-CROSS",
   "parentStatus": "IMPLEMENTING",
-  "inventoryStatus": "PROPOSED",
+  "inventoryStatus": "FREEZE_CANDIDATE",
   "freezeState": "UNFROZEN",
   "oracleTrack": "disposable-sandbox",
+  "oracle": {
+    "project": "fireemu-oracle-idp",
+    "database": "(default)",
+    "edition": "STANDARD",
+    "location": "us-central1"
+  },
   "closureReview": {
-    "decision": "PENDING",
-    "note": "The five native tenant/listener tests and related FS-RULES receipts are not cross-product closure evidence on this branch."
+    "decision": "PENDING"
   },
   "scopeDecisions": [
     {
-      "id": "X1",
-      "status": "PROPOSED",
-      "recommendation": "Reuse FS-RULES receipts only for identical principal, claim, tenant and token-state inputs after source integration and binding; require new observations for transaction, listener and SDK cross-product effects.",
-      "ownerDecisionRequired": true
+      "id": "C1",
+      "decision": "Conditions observable with unary requests belong to FS-RULES, where they are VERIFIED, and are not conditions here: principals on get, batchGet, runQuery and writes (FS-RULES/principals, query-proofs, document-access), credential refusals of expired, empty, malformed, tampered and unsigned bearers (refusal-shape, token-expiry), unexpired tokens of revoked, disabled and deleted accounts (token-states), claim changes seen only after a refresh (auth-token-fields), and multi-write atomicity after an Auth change (atomic-writes, token-states). A bearer issued by another project's Auth was never recorded there and stays here (foreign-project-token).",
+      "decidedBy": "coordinator (delegated by the owner, ledger 2026-09-25)",
+      "decidedOn": "2026-09-27",
+      "movedTo": "FS-RULES"
     },
     {
-      "id": "X2",
-      "status": "PROPOSED",
-      "recommendation": "Keep end-user transaction authorization outcomes here while FS-TRANSACTION owns generic conflict and retry semantics; explicitly decide whether any refusal is a production dependency boundary.",
-      "ownerDecisionRequired": true
+      "id": "C2",
+      "decision": "Production refuses an end user's read-write transaction (BeginTransaction and newTransaction.readWrite) and allows read-only ones, in two recordings (FS-RULES/document-access); this is a production dependency boundary. Principal binding of the read-only transaction and the Web SDK's optimistic transaction are observed here; generic transaction semantics (snapshots, conflict, retry, expiry, rollback) belong to FS-TRANSACTION.",
+      "decidedBy": "coordinator (delegated by the owner, ledger 2026-09-25)",
+      "decidedOn": "2026-09-27",
+      "movedTo": "FS-TRANSACTION"
+    },
+    {
+      "id": "C3",
+      "decision": "Applying FS-RULES R2 (owner, 2026-09-24): catalog cases 106 (sign-out) and 109/109C (revocation) move here from FS-LISTEN-SDK; 106N and 108/108C, which involve no Auth state change, stay there.",
+      "decidedBy": "owner (t-k), FS-RULES R2",
+      "decidedOn": "2026-09-24",
+      "movedFrom": "FS-LISTEN-SDK"
+    },
+    {
+      "id": "C4",
+      "decision": "The oracle is fireemu-oracle-idp/(default), whose Firestore and Rules this lane owns during its runs. Runs are serialized with AUTH-TENANT-BLOCKING and AUTH-FEDERATION under the shared lock; each run reads the project's configuration at start and restores and reads back that baseline. Tenants are created and deleted as fixture setup, not as tenant administration semantics (AUTH-TENANT-BLOCKING).",
+      "decidedBy": "coordinator (delegated by the owner, ledger 2026-09-25)",
+      "decidedOn": "2026-09-27"
+    },
+    {
+      "id": "C5",
+      "decision": "State changes during a listen are probed by commits made after the change; a quiet window alone is never evidence that nothing happens.",
+      "decidedBy": "coordinator (delegated by the owner, ledger 2026-09-25)",
+      "decidedOn": "2026-09-27"
+    },
+    {
+      "id": "C6",
+      "decision": "Token minting and refresh belong to AUTH-CREDENTIAL, the Rules language to FS-RULES, listens without an Auth state change to FS-LISTEN-SDK, tenant administration to AUTH-TENANT-BLOCKING and server-side transaction semantics to FS-TRANSACTION.",
+      "decidedBy": "coordinator (delegated by the owner, ledger 2026-09-25)",
+      "decidedOn": "2026-09-27"
+    },
+    {
+      "id": "C7",
+      "decision": "As in FS-RULES R9, rows are compared under the strict profile; the emulator profile keeps accepting unsigned emulator tokens and adds no refusal the official emulator does not make.",
+      "decidedBy": "owner (t-k), FS-RULES R9",
+      "decidedOn": "2026-09-24"
+    },
+    {
+      "id": "C8",
+      "decision": "Production runs in two stages: stage 1 records the unary conditions (tenant-same-uid, read-only-transaction-binding, foreign-project-token); stage 2 records the listener and SDK conditions after fireemu follows stage 1.",
+      "decidedBy": "coordinator (delegated by the owner, ledger 2026-09-25)",
+      "decidedOn": "2026-09-27"
+    },
+    {
+      "id": "C9",
+      "decision": "An observed difference is decided row by row by the owner, only after two recordings and the final-artifact comparison; no predicted outcome is approved in advance.",
+      "decidedBy": "owner (t-k), standing rule",
+      "decidedOn": "2026-09-24"
+    },
+    {
+      "id": "OX-1",
+      "decision": "Android and Apple SDKs are out of scope; the declared SDK matrix has only the Web SDK.",
+      "decidedBy": "owner (t-k)",
+      "decidedOn": "2026-09-27"
+    },
+    {
+      "id": "OX-2",
+      "decision": "The sandbox changes on fireemu-oracle-idp (the cloud.firestore release and rulesets, multiTenant.allowTenants, tenants and test accounts per recording, and an IAM binding limited to signJwt) are approved as a policy on FS-RULES R1, R7 and R8 terms: each run restores and reads back the baseline read at its start. Their exact content is approved with each packet.",
+      "decidedBy": "owner (t-k)",
+      "decidedOn": "2026-09-27"
+    },
+    {
+      "id": "OX-3",
+      "decision": "Each stage-2 recording holds one listen window of about 65 minutes, past the token's expiry (3600 s plus the ~30 s allowance), under the shared lock; the coordinator assigns the time.",
+      "decidedBy": "owner (t-k)",
+      "decidedOn": "2026-09-27"
     },
     {
       "id": "X3",
-      "status": "PROPOSED",
-      "recommendation": "Require declared firebase 12.18.0 Web SDK in Node and a real browser, plus native REST/gRPC. Exclude Android and Apple because the declared SDK matrix does not include them.",
-      "ownerDecisionRequired": true,
-      "source": "docs/compatibility/emulator-scope.md#profiles-and-sdks"
+      "decision": "The Node Web SDK 12.18.0 and native REST/gRPC are required for the SDK conditions; a real browser is required only for listen-sign-out-and-switch and pending-write-across-switch.",
+      "decidedBy": "owner (t-k)",
+      "decidedOn": "2026-09-27"
     },
     {
-      "id": "X4",
-      "status": "PROPOSED",
-      "recommendation": "Use fireemu-oracle-idp/(default) only with FS-RULES ownership of the Rules release and tenant changes, and read back their restoration. Do not run while its shared lock is held.",
-      "ownerDecisionRequired": true
-    },
-    {
-      "id": "X5",
-      "status": "PROPOSED",
-      "recommendation": "Freeze a finite revocation/deletion listener observation window and commit-triggered control; a quiet timeout alone does not prove an absence of events.",
-      "ownerDecisionRequired": true
-    },
-    {
-      "id": "X6",
-      "status": "PROPOSED",
-      "recommendation": "Decide any observed cross-product divergence only after two receipts and final-artifact comparison; no predicted listener outcome is preapproved.",
-      "ownerDecisionRequired": true
-    },
-    {
-      "id": "X7",
-      "status": "PROPOSED",
-      "recommendation": "Keep token minting and refresh protocol in AUTH-CREDENTIAL, generic Rules language in FS-RULES, generic Listen/reconnect in FS-LISTEN-SDK, tenant administration in AUTH-TENANT-BLOCKING and generic transaction conflict/retry in FS-TRANSACTION.",
-      "ownerDecisionRequired": true
+      "id": "X9",
+      "decision": "A token of another project is obtained by creating one @example.com test user on fireemu-oracle-query, taking its ID token and deleting the user at once (as approved in the owner ledger on 2026-09-25 for that project).",
+      "decidedBy": "owner (t-k)",
+      "decidedOn": "2026-09-27"
     }
   ],
+  "productionPlan": {
+    "status": "PROPOSAL_ONLY",
+    "authorizesProduction": false,
+    "productionExecuted": false,
+    "recordingsRequired": 2,
+    "stages": {
+      "1": [
+        "tenant-same-uid",
+        "read-only-transaction-binding",
+        "foreign-project-token"
+      ],
+      "2": [
+        "sdk-optimistic-transaction",
+        "listen-sign-out-and-switch",
+        "listen-token-refresh",
+        "listen-revocation-disable-delete",
+        "listen-tenant-deletion",
+        "pending-write-across-switch"
+      ]
+    },
+    "costBasis": "Firestore document reads and writes in the hundreds per recording and a few Identity Platform monthly active users; estimated under US$1 per stage against the US$10 per-task budget. Each packet prices its actual operation mix.",
+    "wallTime": "Stage 2 holds a listen window of about 65 minutes per recording (OX-3)."
+  },
   "conditions": [
-    {
-      "conditionId": "AUTH-FS-CROSS/principal-get-query",
-      "source": "docs/compatibility/ip-fs-production-compatibility.md#feature-group-status",
-      "recipeIds": [
-        "auth-fs-cross/principal-get-query"
-      ],
-      "recipeStatus": "PROPOSED",
-      "status": "PENDING_RECORDING",
-      "observation": {
-        "method": "REST and gRPC bearer-token GetDocument, BatchGetDocuments and RunQuery under Rules with owner, nonowner and unauthenticated controls, including post-state.",
-        "relatedExistingRecipeOrCaseIds": [
-          "fs-rules/principals",
-          "fs-rules/auth-token"
-        ]
-      },
-      "localEvidence": {
-        "references": [
-          "docs/compatibility/auth-fs-tenant-read-local.md"
-        ],
-        "productionExecuted": false,
-        "limits": "In-process tenant and listener tests do not exercise signed production tokens, transport, SDK behavior or production timing."
-      },
-      "verification": {
-        "recordingsRequired": 2,
-        "requiredEvidence": [
-          "Two independently acquired sandbox recordings with valid, refusal and post-state controls for the exact cross-product recipe.",
-          "Source-bound comparison on the final fireemu artifact, complete owned-resource cleanup and no unexplained mismatch."
-        ]
-      }
-    },
-    {
-      "conditionId": "AUTH-FS-CROSS/claims-refresh",
-      "source": "docs/compatibility/ip-fs-production-compatibility.md#feature-group-status",
-      "recipeIds": [
-        "auth-fs-cross/claims-refresh"
-      ],
-      "recipeStatus": "PROPOSED",
-      "status": "PENDING_CORPUS",
-      "observation": {
-        "method": "Old and newly minted ID tokens before and after a custom-claim change, with a same-principal Rules query control; record token issuance and server-backed result.",
-        "relatedExistingRecipeOrCaseIds": [
-          "fs-rules/auth-token"
-        ]
-      },
-      "localEvidence": {
-        "references": [],
-        "productionExecuted": false,
-        "limits": "Related local or other-parent evidence does not verify this cross-product condition."
-      },
-      "verification": {
-        "recordingsRequired": 2,
-        "requiredEvidence": [
-          "Two independently acquired sandbox recordings with valid, refusal and post-state controls for the exact cross-product recipe.",
-          "Source-bound comparison on the final fireemu artifact, complete owned-resource cleanup and no unexplained mismatch."
-        ]
-      }
-    },
     {
       "conditionId": "AUTH-FS-CROSS/tenant-same-uid",
       "source": "docs/compatibility/ip-fs-production-compatibility.md#feature-group-status",
       "recipeIds": [
         "auth-fs-cross/tenant-same-uid"
       ],
-      "recipeStatus": "PROPOSED",
-      "status": "PENDING_RECORDING",
+      "configProjections": [
+        "default"
+      ],
+      "status": "PENDING_CORPUS",
+      "note": "The same UID in two tenants of the project is told apart by Rules, and an unexpired ID token of a deleted tenant is presented to Firestore, with a surviving sibling tenant as control.",
+      "stage": 1,
       "observation": {
-        "method": "Native REST/gRPC get, multi-get and query with the same UID in two tenants, plus a deleted-tenant and surviving-sibling control.",
-        "relatedExistingRecipeOrCaseIds": [
-          "fs-rules/tenant"
-        ]
+        "method": "Accounts with one localId in two tenants (and the project) read documents whose rules need both the uid and firebase.tenant, through get, batchGet and runQuery; then tenant A is deleted and A's unexpired token is sent on get, runQuery and a create, with tenant B's token as control. Tenants are created and deleted as fixture setup.",
+        "transports": [
+          "rest",
+          "grpc"
+        ],
+        "catalogCases": []
       },
       "localEvidence": {
         "references": [
           "docs/compatibility/auth-fs-tenant-read-local.md"
         ],
         "productionExecuted": false,
-        "limits": "In-process tenant and listener tests do not exercise signed production tokens, transport, SDK behavior or production timing."
+        "limits": "Local strict-profile tests refuse a deleted tenant's token (the tenant store is gone, so the token's tenant no longer matches); the default emulator profile admits the same unsigned token as a mock token. Production is unobserved."
       },
       "verification": {
-        "recordingsRequired": 2,
-        "requiredEvidence": [
-          "Two independently acquired sandbox recordings with valid, refusal and post-state controls for the exact cross-product recipe.",
-          "Source-bound comparison on the final fireemu artifact, complete owned-resource cleanup and no unexplained mismatch."
-        ]
+        "recordingsRequired": 2
       }
     },
     {
-      "conditionId": "AUTH-FS-CROSS/credential-refusal",
+      "conditionId": "AUTH-FS-CROSS/read-only-transaction-binding",
       "source": "docs/compatibility/ip-fs-production-compatibility.md#feature-group-status",
       "recipeIds": [
-        "auth-fs-cross/credential-refusal"
+        "auth-fs-cross/read-only-transaction-binding"
       ],
-      "recipeStatus": "PROPOSED",
+      "configProjections": [
+        "default"
+      ],
       "status": "PENDING_CORPUS",
+      "note": "A read-only transaction opened with one principal's token is used with another principal's, another tenant's and no credential. End users cannot open read-write transactions (FS-RULES/document-access), so this is the only server-side transaction an end user holds.",
+      "stage": 1,
       "observation": {
-        "method": "Expired, malformed, wrong-project and wrong-tenant bearer-token refusals through Firestore, with a valid-token control and canonical error ordering.",
-        "relatedExistingRecipeOrCaseIds": [
-          "fs-rules/auth-token"
-        ]
+        "method": "Principal A opens a read-only transaction (BeginTransaction readOnly, and newTransaction.readOnly on runQuery and batchGet); the transaction ID is then used with B's token, a tenant principal's token and no credential for batchGet and runQuery on documents only A may read: whether the ID is bound to its principal and under which principal Rules evaluate.",
+        "transports": [
+          "rest",
+          "grpc"
+        ],
+        "catalogCases": []
       },
       "localEvidence": {
         "references": [],
-        "productionExecuted": false,
-        "limits": "Related local or other-parent evidence does not verify this cross-product condition."
+        "productionExecuted": false
       },
       "verification": {
-        "recordingsRequired": 2,
-        "requiredEvidence": [
-          "Two independently acquired sandbox recordings with valid, refusal and post-state controls for the exact cross-product recipe.",
-          "Source-bound comparison on the final fireemu artifact, complete owned-resource cleanup and no unexplained mismatch."
-        ]
+        "recordingsRequired": 2
       }
     },
     {
-      "conditionId": "AUTH-FS-CROSS/token-revoked-disabled-deleted",
+      "conditionId": "AUTH-FS-CROSS/foreign-project-token",
       "source": "docs/compatibility/ip-fs-production-compatibility.md#feature-group-status",
       "recipeIds": [
-        "auth-fs-cross/token-revoked-disabled-deleted"
+        "auth-fs-cross/foreign-project-token"
       ],
-      "recipeStatus": "PROPOSED",
+      "configProjections": [
+        "default"
+      ],
       "status": "PENDING_CORPUS",
+      "note": "A validly signed ID token issued by another Firebase project's Auth is presented to Firestore on the sandbox, with a same-project control.",
+      "stage": 1,
       "observation": {
-        "method": "Firestore Rules read/write effects of revoked sessions, disabled accounts and deleted accounts, with separate still-valid bearer and refreshed-token controls.",
-        "relatedExistingRecipeOrCaseIds": [
-          "fs-rules/token-states",
-          "fs-rules/expiry"
-        ]
+        "method": "One @example.com test user created on fireemu-oracle-query (X9), its ID token taken and the user deleted and read back at once; the token is sent on get and runQuery of an open and an owner-only document on fireemu-oracle-idp, over REST and gRPC, beside the same requests with an idp token.",
+        "transports": [
+          "rest",
+          "grpc"
+        ],
+        "catalogCases": []
       },
       "localEvidence": {
         "references": [],
-        "productionExecuted": false,
-        "limits": "Related local or other-parent evidence does not verify this cross-product condition."
+        "productionExecuted": false
       },
       "verification": {
-        "recordingsRequired": 2,
-        "requiredEvidence": [
-          "Two independently acquired sandbox recordings with valid, refusal and post-state controls for the exact cross-product recipe.",
-          "Source-bound comparison on the final fireemu artifact, complete owned-resource cleanup and no unexplained mismatch."
-        ]
+        "recordingsRequired": 2
       }
     },
     {
-      "conditionId": "AUTH-FS-CROSS/transaction-principal-binding",
+      "conditionId": "AUTH-FS-CROSS/sdk-optimistic-transaction",
       "source": "docs/compatibility/ip-fs-production-compatibility.md#feature-group-status",
       "recipeIds": [
-        "auth-fs-cross/transaction-principal-binding"
+        "auth-fs-cross/sdk-optimistic-transaction"
       ],
-      "recipeStatus": "PROPOSED",
+      "configProjections": [
+        "default"
+      ],
       "status": "PENDING_CORPUS",
+      "note": "A Web SDK runTransaction (batchGet reads, then one Commit with preconditions and verify writes) across a sign-out or a principal switch between its reads and its commit.",
+      "stage": 2,
       "observation": {
-        "method": "Begin, read, query and commit across a principal or tenant switch, with an unchanged-principal control and final-state readback.",
-        "relatedExistingRecipeOrCaseIds": [
-          "fs-rules/tenant"
-        ]
+        "method": "Node Web SDK runTransaction on Rules-protected documents with a sign-out, and separately an A-to-B switch, after the reads and before the commit; record the principal and outcome of the Commit, the number of update-function calls and the server post-state, with an unchanged-principal control.",
+        "transports": [
+          "node-sdk"
+        ],
+        "catalogCases": []
       },
       "localEvidence": {
         "references": [],
-        "productionExecuted": false,
-        "limits": "Related local or other-parent evidence does not verify this cross-product condition."
+        "productionExecuted": false
       },
       "verification": {
-        "recordingsRequired": 2,
-        "requiredEvidence": [
-          "Two independently acquired sandbox recordings with valid, refusal and post-state controls for the exact cross-product recipe.",
-          "Source-bound comparison on the final fireemu artifact, complete owned-resource cleanup and no unexplained mismatch."
-        ]
+        "recordingsRequired": 2
       }
     },
     {
-      "conditionId": "AUTH-FS-CROSS/atomic-write-after-auth-change",
+      "conditionId": "AUTH-FS-CROSS/listen-sign-out-and-switch",
       "source": "docs/compatibility/ip-fs-production-compatibility.md#feature-group-status",
       "recipeIds": [
-        "auth-fs-cross/atomic-write-after-auth-change"
+        "auth-fs-cross/listen-sign-out-and-switch"
       ],
-      "recipeStatus": "PROPOSED",
+      "configProjections": [
+        "default"
+      ],
       "status": "PENDING_CORPUS",
+      "note": "Active document and query listeners under Rules through sign-out (catalog case 106, moved here from FS-LISTEN-SDK by R2) and through a switch from principal A to B.",
+      "stage": 2,
       "observation": {
-        "method": "Multiwrite/transaction refusal after an Auth change, proving no partial publication and comparing Rules evaluation with a valid-principal control.",
-        "relatedExistingRecipeOrCaseIds": [
-          "fs-rules/token-states"
-        ]
-      },
-      "localEvidence": {
-        "references": [],
-        "productionExecuted": false,
-        "limits": "Related local or other-parent evidence does not verify this cross-product condition."
-      },
-      "verification": {
-        "recordingsRequired": 2,
-        "requiredEvidence": [
-          "Two independently acquired sandbox recordings with valid, refusal and post-state controls for the exact cross-product recipe.",
-          "Source-bound comparison on the final fireemu artifact, complete owned-resource cleanup and no unexplained mismatch."
-        ]
-      }
-    },
-    {
-      "conditionId": "AUTH-FS-CROSS/listen-auth-switch",
-      "source": "docs/compatibility/ip-fs-production-compatibility.md#feature-group-status",
-      "recipeIds": [
-        "auth-fs-cross/listen-auth-switch"
-      ],
-      "recipeStatus": "PROPOSED",
-      "status": "PENDING_RECORDING",
-      "observation": {
-        "method": "Pinned Web SDK active listener through sign-out and principal A-to-B switch, with Rules-protected server snapshot and a static-principal witness.",
-        "relatedExistingRecipeOrCaseIds": [
-          "AUTH-FS-CROSS.auth-switch-rules-listen"
+        "method": "Pinned Web SDK document and query listeners on Rules-protected data; sign out, and separately switch A to B, then commit changes the new principal may and may not read; record server snapshots, errors and listener ends against a static-principal witness.",
+        "transports": [
+          "node-sdk",
+          "browser-webchannel"
+        ],
+        "catalogCases": [
+          "FS-LISTEN-SDK-106"
         ]
       },
       "localEvidence": {
@@ -269,14 +268,10 @@
           "tools/sdk-smoke/sdk-listen-coverage.json"
         ],
         "productionExecuted": false,
-        "limits": "Related local or other-parent evidence does not verify this cross-product condition."
+        "limits": "The local scenario AUTH-FS-CROSS.auth-switch-rules-listen is unobserved in production."
       },
       "verification": {
-        "recordingsRequired": 2,
-        "requiredEvidence": [
-          "Two independently acquired sandbox recordings with valid, refusal and post-state controls for the exact cross-product recipe.",
-          "Source-bound comparison on the final fireemu artifact, complete owned-resource cleanup and no unexplained mismatch."
-        ]
+        "recordingsRequired": 2
       }
     },
     {
@@ -285,53 +280,57 @@
       "recipeIds": [
         "auth-fs-cross/listen-token-refresh"
       ],
-      "recipeStatus": "PROPOSED",
+      "configProjections": [
+        "default"
+      ],
       "status": "PENDING_CORPUS",
+      "note": "Active document and query listeners across a claim change with a forced token refresh, and a native listen stream held past its token's expiry allowance.",
+      "stage": 2,
       "observation": {
-        "method": "Pinned Web SDK active listener across forced token refresh and claim change, including cache and server-backed event order.",
-        "relatedExistingRecipeOrCaseIds": [
-          "AUTH-FS-CROSS.auth-switch-rules-listen"
-        ]
+        "method": "Node Web SDK listeners on documents whose rules need claim c: add c then getIdToken(true), remove c then getIdToken(true), each probed by a commit; a native gRPC Listen opened with a token and held past exp + 30 s (FS-RULES/token-expiry) without refresh, probed by commits before and after.",
+        "transports": [
+          "node-sdk",
+          "grpc"
+        ],
+        "catalogCases": []
       },
       "localEvidence": {
         "references": [],
-        "productionExecuted": false,
-        "limits": "The SDK coverage catalog has no direct local execution for this Auth transition; this proposed condition needs a new local and production corpus."
+        "productionExecuted": false
       },
       "verification": {
-        "recordingsRequired": 2,
-        "requiredEvidence": [
-          "Two independently acquired sandbox recordings with valid, refusal and post-state controls for the exact cross-product recipe.",
-          "Source-bound comparison on the final fireemu artifact, complete owned-resource cleanup and no unexplained mismatch."
-        ]
+        "recordingsRequired": 2
       }
     },
     {
-      "conditionId": "AUTH-FS-CROSS/listen-revocation-deletion",
+      "conditionId": "AUTH-FS-CROSS/listen-revocation-disable-delete",
       "source": "docs/compatibility/ip-fs-production-compatibility.md#feature-group-status",
       "recipeIds": [
-        "auth-fs-cross/listen-revocation-deletion"
+        "auth-fs-cross/listen-revocation-disable-delete"
       ],
-      "recipeStatus": "PROPOSED",
+      "configProjections": [
+        "default"
+      ],
       "status": "PENDING_CORPUS",
+      "note": "Active document and query listeners after the principal's refresh tokens are revoked (catalog cases 109 and 109C, moved here from FS-LISTEN-SDK by R2), the account is disabled, or the account is deleted.",
+      "stage": 2,
       "observation": {
-        "method": "Native and SDK active-listener behavior after revocation, disable and account deletion, with commit-triggered and quiet-window controls; compare observed timing without inferring from silence.",
-        "relatedExistingRecipeOrCaseIds": [
+        "method": "Node Web SDK and native gRPC listeners probed by commits right after the change and around the token's expiry, within one window long enough to pass exp + 30 s (OX-3); a quiet window never counts as evidence of absence. FS-RULES/token-states observed that unary requests keep accepting such tokens until expiry.",
+        "transports": [
+          "node-sdk",
+          "grpc"
+        ],
+        "catalogCases": [
           "FS-LISTEN-SDK-109",
           "FS-LISTEN-SDK-109C"
         ]
       },
       "localEvidence": {
         "references": [],
-        "productionExecuted": false,
-        "limits": "The SDK coverage catalog has no direct local execution for this Auth transition; this proposed condition needs a new local and production corpus."
+        "productionExecuted": false
       },
       "verification": {
-        "recordingsRequired": 2,
-        "requiredEvidence": [
-          "Two independently acquired sandbox recordings with valid, refusal and post-state controls for the exact cross-product recipe.",
-          "Source-bound comparison on the final fireemu artifact, complete owned-resource cleanup and no unexplained mismatch."
-        ]
+        "recordingsRequired": 2
       }
     },
     {
@@ -340,86 +339,57 @@
       "recipeIds": [
         "auth-fs-cross/listen-tenant-deletion"
       ],
-      "recipeStatus": "PROPOSED",
-      "status": "PENDING_RECORDING",
-      "observation": {
-        "method": "Native gRPC and pinned SDK active listener after tenant deletion, checking REMOVE/error/EOF and a same-UID sibling tenant that remains live.",
-        "relatedExistingRecipeOrCaseIds": [
-          "fs-rules/tenant"
-        ]
-      },
-      "localEvidence": {
-        "references": [
-          "docs/compatibility/auth-fs-tenant-read-local.md"
-        ],
-        "productionExecuted": false,
-        "limits": "In-process tenant and listener tests do not exercise signed production tokens, transport, SDK behavior or production timing."
-      },
-      "verification": {
-        "recordingsRequired": 2,
-        "requiredEvidence": [
-          "Two independently acquired sandbox recordings with valid, refusal and post-state controls for the exact cross-product recipe.",
-          "Source-bound comparison on the final fireemu artifact, complete owned-resource cleanup and no unexplained mismatch."
-        ]
-      }
-    },
-    {
-      "conditionId": "AUTH-FS-CROSS/query-listener-authorization",
-      "source": "docs/compatibility/auth-fs-tenant-read-local.md",
-      "recipeIds": [
-        "auth-fs-cross/query-listener-authorization"
+      "configProjections": [
+        "default"
       ],
-      "recipeStatus": "PROPOSED",
       "status": "PENDING_CORPUS",
+      "note": "Active document and query listeners of a tenant principal when the tenant is deleted, with a same-UID principal of a surviving tenant as control.",
+      "stage": 2,
       "observation": {
-        "method": "Rules-protected native gRPC and pinned Node/browser SDK query listeners across principal, claim and tenant switches and tenant deletion; compare ADD/REMOVE/error/EOF and server-backed query snapshots against unchanged-principal and document-listener controls.",
-        "relatedExistingRecipeOrCaseIds": [
-          "fs-rules/tenant",
-          "FS-LISTEN-SDK-103",
-          "FS-LISTEN-SDK-103C"
-        ]
+        "method": "Native gRPC and Node Web SDK listeners opened before the deletion, probed by commits after it; record REMOVE, errors, stream ends and snapshots on both tenants.",
+        "transports": [
+          "grpc",
+          "node-sdk"
+        ],
+        "catalogCases": []
       },
       "localEvidence": {
         "references": [
           "docs/compatibility/auth-fs-tenant-read-local.md"
         ],
         "productionExecuted": false,
-        "limits": "The local tenant suite tests query authorization decisions, but it does not execute query-listener wire frames or SDK transitions."
+        "limits": "Local in-process listener tests end the deleted tenant's target (REMOVE cause 16, then UNAUTHENTICATED and EOF) under the strict profile; the default emulator profile does not. Production is unobserved."
       },
       "verification": {
-        "recordingsRequired": 2,
-        "requiredEvidence": [
-          "A frozen query-target corpus with valid and refusal controls and two independent sandbox recordings per declared transport.",
-          "Final source-bound comparison of query target frames, server-backed state, termination order and cleanup, with no unexplained mismatch."
-        ]
+        "recordingsRequired": 2
       }
     },
     {
-      "conditionId": "AUTH-FS-CROSS/sdk-cache-pending-write",
+      "conditionId": "AUTH-FS-CROSS/pending-write-across-switch",
       "source": "docs/compatibility/ip-fs-production-compatibility.md#feature-group-status",
       "recipeIds": [
-        "auth-fs-cross/sdk-cache-pending-write"
+        "auth-fs-cross/pending-write-across-switch"
       ],
-      "recipeStatus": "PROPOSED",
+      "configProjections": [
+        "default"
+      ],
       "status": "PENDING_CORPUS",
+      "note": "A Web SDK write left pending by one principal when the user switches to another or signs out: what the backend receives and does.",
+      "stage": 2,
       "observation": {
-        "method": "Node and real-browser Web SDK Rules-protected listener under Auth state change, retaining cache and pending-write metadata beside server-backed snapshots.",
-        "relatedExistingRecipeOrCaseIds": [
-          "FS-LISTEN-SDK-102",
-          "FS-LISTEN-SDK-102C"
-        ]
+        "method": "With the network disabled, A writes; switch to B (and separately sign out), enable the network, then switch back to A; record whether and with which token the write is sent, its outcome and the server state at each step. Display differences inside the SDK are out of scope (FS-LISTEN-SDK OL-2).",
+        "transports": [
+          "node-sdk",
+          "browser-webchannel"
+        ],
+        "catalogCases": []
       },
       "localEvidence": {
         "references": [],
-        "productionExecuted": false,
-        "limits": "The SDK coverage catalog has no direct local execution for this Auth transition; this proposed condition needs a new local and production corpus."
+        "productionExecuted": false
       },
       "verification": {
-        "recordingsRequired": 2,
-        "requiredEvidence": [
-          "Two independently acquired sandbox recordings with valid, refusal and post-state controls for the exact cross-product recipe.",
-          "Source-bound comparison on the final fireemu artifact, complete owned-resource cleanup and no unexplained mismatch."
-        ]
+        "recordingsRequired": 2
       }
     },
     {
@@ -428,21 +398,23 @@
       "recipeIds": [
         "auth-fs-cross/final-artifact-regression"
       ],
-      "recipeStatus": "PROPOSED",
+      "configProjections": [
+        "default"
+      ],
       "status": "PENDING_REVIEW",
+      "note": "The final artifact's AUTH-FS-CROSS comparison, with the FS-RULES comparison re-run on the same artifact because the unary conditions moved there.",
+      "stage": null,
       "observation": {
-        "method": "Replay all cross-product recipes on one final source-bound artifact, including native and pinned SDK transports.",
-        "relatedExistingRecipeOrCaseIds": []
+        "method": "Replay every AUTH-FS-CROSS recipe and the FS-RULES corpus on one final source-bound artifact.",
+        "transports": [],
+        "catalogCases": []
       },
       "localEvidence": {
         "references": [],
         "productionExecuted": false
       },
       "verification": {
-        "recordingsRequired": 0,
-        "requiredEvidence": [
-          "Complete final source-bound comparison and independent approval before promotion."
-        ]
+        "recordingsRequired": 0
       }
     },
     {
@@ -451,46 +423,24 @@
       "recipeIds": [
         "auth-fs-cross/closure-review"
       ],
-      "recipeStatus": "PROPOSED",
+      "configProjections": [
+        "default"
+      ],
       "status": "PENDING_REVIEW",
+      "note": "Independent clean-context closure review and a separate safety review of every change that widens what a request may do.",
+      "stage": null,
       "observation": {
-        "method": "Independent review of scope, every condition, related-parent evidence boundaries, production receipts, divergences, cleanup and owner decisions.",
-        "relatedExistingRecipeOrCaseIds": []
+        "method": "Independent review of scope, conditions, receipts, divergences, cleanup and owner decisions.",
+        "transports": [],
+        "catalogCases": []
       },
       "localEvidence": {
         "references": [],
         "productionExecuted": false
       },
       "verification": {
-        "recordingsRequired": 0,
-        "requiredEvidence": [
-          "Complete final source-bound comparison and independent approval before promotion."
-        ]
+        "recordingsRequired": 0
       }
     }
-  ],
-  "productionPlan": {
-    "status": "PROPOSAL_ONLY",
-    "authorizesProduction": false,
-    "project": "fireemu-oracle-idp",
-    "database": "(default)",
-    "recordingsRequired": 2,
-    "allWireCapRequiresNewInstrumentation": true,
-    "planningRequestRangeForBothRecordings": [
-      4000,
-      8000
-    ],
-    "requestRangeBasis": "A separate FS-RULES expiry re-record used 1038 requests for two passes, and the complete local browser Listen catalog used 2776 WebChannel requests across two modes and two recordings. The cross-product subset, Node SDK, Auth changes, setup and cleanup differ; this is a conservative planning range, not a send cap.",
-    "cleanup": "Close listeners and clients; conditionally delete and read back owned documents and test accounts; restore and read back the FS-RULES Rules release, tenant state and any temporary identity permissions.",
-    "prerequisites": [
-      "FS-RULES source and closure evidence integrated or explicitly referenced without promotion",
-      "FS-RULES owner schedules exclusive idp Firestore and Rules access; no shared lock overlap",
-      "New finite cross-product corpus, source-bound runner, all-wire accounting and recovery packet",
-      "Two sandbox recordings, clean-context review, owner decision, run ledger and final comparison"
-    ],
-    "productionExecuted": false,
-    "provisionalCostPlanningCeilingUsd": 5,
-    "costEstimateBasis": "At 8000 requests charged at a conservative US$0.0001 each, request cost is US$0.80; US$5 is a provisional planning ceiling with margin for network and ancillary operations. A source-bound packet must price the actual operation mix and remain within the standing US$10 task budget.",
-    "standingOwnerTaskBudgetUsd": 10
-  }
+  ]
 }

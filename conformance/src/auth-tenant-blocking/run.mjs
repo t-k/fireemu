@@ -698,6 +698,32 @@ export async function appendStartedLine(ledger, row, progress) {
 }
 
 /** The reserved cost survives a failed run and a later verified restore. */
+/**
+ * When the last recording of this task started (its runner's `started` line), or undefined: a
+ * restore removes only the upload objects created since then (review-2 S-B).
+ */
+export function recordingStartedAt(text) {
+  const starts = text
+    .split("\n")
+    .filter((line) => line.trim())
+    .map((line) => {
+      try {
+        return JSON.parse(line);
+      } catch {
+        return undefined;
+      }
+    })
+    .filter(
+      (row) =>
+        row?.taskId === TASK_ID &&
+        row.project === SANDBOX_PROJECT &&
+        row.event === "started" &&
+        Array.isArray(row.programs),
+    );
+  const at = new Date(starts.at(-1)?.ts ?? Number.NaN);
+  return Number.isFinite(at.getTime()) ? at : undefined;
+}
+
 export function productionStartedRow({ ts, gitSha: sha, programs }) {
   return {
     ts,
@@ -712,11 +738,6 @@ export function productionStartedRow({ ts, gitSha: sha, programs }) {
 
 const PROJECT_ID = /^[a-z][a-z0-9-]{4,28}[a-z0-9]$/;
 
-/**
- * Only the reviewed wrapper and its campaign child may authorize a production recording. The
- * lock is the legacy shared one (`<ledger>.lock`), or with `scope.project` that project's own
- * (`sandbox-locks/<project>.lock`, owner decision A, 2026-09-28), while no shared lock stands.
- */
 /**
  * Deploys the blocking fixture into `fixture` (its CLI version, preflight and `deployed`). A stop
  * requested by `signal` before the deployment deploys nothing (review S4); `onDeploy` runs just
@@ -736,6 +757,11 @@ export async function deployFixture(
   if (signal.aborted) throw new Error("stopped by a signal after the deployment");
 }
 
+/**
+ * Only the reviewed wrapper and its campaign child may authorize a production recording. The
+ * lock is the legacy shared one (`<ledger>.lock`), or with `scope.project` that project's own
+ * (`sandbox-locks/<project>.lock`, owner decision A, 2026-09-28), while no shared lock stands.
+ */
 export async function assertReviewedLock(
   ledger,
   expectedLedger,
@@ -1376,6 +1402,8 @@ export async function restoreSandbox({
   lockCheck = assertProductionLock,
   budgetTotal = RESTORE_REQUEST_BUDGET,
   fetchTarget = globalThis,
+  suite = SUITE,
+  fixtureDeployer = createDeployer,
 } = {}) {
   if (!ledger) throw new Error("FIREEMU_SANDBOX_LEDGER is required");
   // A restore writes to production as a recording does: only under the reviewed lock (review S3).
@@ -1415,9 +1443,9 @@ export async function restoreSandbox({
       maxCleanupRequests: 200,
       log: (line) => console.log(line),
     });
-    if (SUITE === "blocking") {
+    if (suite === "blocking") {
       // A blocking run that could not remove its fixture: remove it first (pre-send review SF-1).
-      const deployer = createDeployer({
+      const deployer = fixtureDeployer({
         project: SANDBOX_PROJECT,
         number: web.projectNumber,
         token: async () => {
@@ -1427,7 +1455,7 @@ export async function restoreSandbox({
         },
         log: (line) => console.log(line),
       });
-      deployer.adoptLeftovers();
+      deployer.adoptLeftovers(recordingStartedAt(text));
       fixtureRemoved = false;
       fixtureRemoved = await deployer.remove(
         join(process.env.FIREEMU_AUTH_TENANT_PRIVATE_DIR ?? CONFORMANCE_DIR, "restore-build"),

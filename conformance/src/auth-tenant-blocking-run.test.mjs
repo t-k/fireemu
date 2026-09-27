@@ -9,6 +9,7 @@ import { test } from "node:test";
 import {
   assertReviewedLock,
   deployFixture,
+  recordingStartedAt,
   productionStartedRow,
   otherLaneOnSandbox,
   recentAbort,
@@ -880,6 +881,75 @@ test("restore-sandbox charges every request to its own budget and records it", a
     // The budget is uninstalled: a later request is not charged.
     await target.fetch("https://example.invalid/");
     assert.equal(sent, 4);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("a restore dates the leftovers by the recording's own start line (review-2 S-B)", () => {
+  const row = (fields) =>
+    JSON.stringify({ project: "fireemu-oracle-idp", taskId: TASK_ID, ...fields });
+  const ledger = [
+    row({ ts: "2026-09-28T08:00:00.000Z", event: "started", gitSha: "a", programs: ["x"] }),
+    row({ ts: "2026-09-28T08:30:00.000Z", outcome: "recorded" }),
+    row({ ts: "2026-09-28T09:00:00.000Z", event: "started", gitSha: "b", programs: ["x"] }),
+    // The campaign's hold and another task's start are not the recording's.
+    row({
+      ts: "2026-09-28T09:40:00.000Z",
+      event: "started",
+      reason: "runner sandbox cleanup uncertain",
+    }),
+    JSON.stringify({
+      ts: "2026-09-28T09:50:00.000Z",
+      event: "started",
+      taskId: "OTHER",
+      project: "fireemu-oracle-idp",
+      gitSha: "c",
+      programs: [],
+    }),
+    "not json",
+  ].join("\n");
+  assert.equal(recordingStartedAt(ledger)?.toISOString(), "2026-09-28T09:00:00.000Z");
+  assert.equal(recordingStartedAt(""), undefined);
+  assert.equal(
+    recordingStartedAt(row({ event: "started", gitSha: "a", programs: [], ts: "later" })),
+    undefined,
+  );
+});
+
+test("a blocking restore adopts the leftovers of the recording that stopped (review-2 S-B)", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "atb-restore-adopt-"));
+  const ledger = join(dir, "ledger.jsonl");
+  const started = new Date(Date.now() - 600_000).toISOString();
+  await writeFile(
+    ledger,
+    `${JSON.stringify({ ts: started, event: "started", taskId: TASK_ID, project: "fireemu-oracle-idp", gitSha: "a", programs: ["x"] })}\n`,
+    { mode: 0o600 },
+  );
+  const adopted = [];
+  try {
+    await assert.rejects(
+      restoreSandbox({
+        ledger,
+        isRecordingRunning: async () => false,
+        lockCheck: async () => {},
+        webConfig: async () => ({ projectNumber: "123456789012" }),
+        context: async () => ({}),
+        sessionFactory: () => ({ counts: () => ({ harnessRequests: 0 }) }),
+        suite: "blocking",
+        fixtureDeployer: () => ({
+          adoptLeftovers: (since) => adopted.push(since),
+          remove: async () => {
+            throw new Error("stop after adoption");
+          },
+        }),
+      }),
+      /stop after adoption/,
+    );
+    assert.deepEqual(
+      adopted.map((since) => since?.toISOString()),
+      [started],
+    );
   } finally {
     await rm(dir, { recursive: true, force: true });
   }

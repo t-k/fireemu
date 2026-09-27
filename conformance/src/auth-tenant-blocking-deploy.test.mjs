@@ -67,6 +67,8 @@ function fakeCloud({
   repositoryLag = 0,
   // The fixture functions answer `DEPLOYING` to this many function listings (review S6).
   deployingReads = 0,
+  // When each object was created (default: after any test's `since`).
+  created = {},
 } = {}) {
   let deploying = deployingReads;
   let lag = repositoryLag;
@@ -132,7 +134,12 @@ function fakeCloud({
         if (!deleteSticks) state[key] = state[key].filter((o) => o !== name);
         return new Response(null, { status: 204 });
       }
-      return json(200, { items: state[key].map((name) => ({ name })) });
+      return json(200, {
+        items: state[key].map((name) => ({
+          name,
+          timeCreated: created[name] ?? "2026-09-28T10:00:00.000Z",
+        })),
+      });
     }
     if (hostname === "run.googleapis.com")
       return json(200, { bindings: [{ role: "roles/run.invoker", members: ["allUsers"] }] });
@@ -307,7 +314,7 @@ test("a restore cannot claim a Run trigger without its live fixture service", as
   const { deployer, state, calls } = fakeCloud({
     blocking: { triggers: { beforeCreate: trigger } },
   });
-  deployer.adoptLeftovers();
+  deployer.adoptLeftovers(new Date(0));
   await assert.rejects(deployer.remove(await buildDir()), /another function/);
   assert.deepEqual(state.blocking.triggers.beforeCreate, trigger);
   assert.ok(!calls.some((call) => call.startsWith("PATCH identitytoolkit.googleapis.com")));
@@ -391,7 +398,7 @@ test("the deployment never passes --force to firebase deploy", async () => {
 
 test("a restore leaves upload objects alone while another function exists", async () => {
   const { deployer, state } = fakeCloud({ functions: ["hello"], uploads: ["someone.zip"] });
-  deployer.adoptLeftovers();
+  deployer.adoptLeftovers(new Date(0));
   await assert.rejects(deployer.remove(await buildDir()), /another function exists/);
   assert.deepEqual(state.uploads, ["someone.zip"]);
 });
@@ -405,7 +412,7 @@ test("a restore removal works without a build copy (confirmation SF-C1)", async 
       ),
     },
   });
-  deployer.adoptLeftovers();
+  deployer.adoptLeftovers(new Date(0));
   const dir = join(await mkdtemp(join(tmpdir(), "atb-restore-")), "missing", "build");
   await deployer.remove(dir);
   assert.deepEqual(state.functions, []);
@@ -434,7 +441,7 @@ test(
       retryMs: 0,
       requestTimeoutMs: 20,
     });
-    hanging.adoptLeftovers();
+    hanging.adoptLeftovers(new Date(0));
     const started = Date.now();
     await assert.rejects(hanging.remove(dir));
     assert.ok(Date.now() - started < 10_000, "the removal ended");
@@ -464,7 +471,7 @@ test("functions:delete gets at most the time left until the public deadline (rev
 
 test("a restore's deletion gets ten minutes", () => {
   const { deployer } = fakeCloud({ now: () => Date.parse("2026-09-27T12:00:00Z") });
-  deployer.adoptLeftovers();
+  deployer.adoptLeftovers(new Date(0));
   assert.equal(deployer.deletionTimeoutMs(), 10 * 60_000);
 });
 
@@ -600,7 +607,7 @@ test("a removal sends at most REMOVAL_REST_BOUND REST requests (total cap)", asy
     deleteSticks: true,
     deployingReads: Number.POSITIVE_INFINITY,
   });
-  deployer.adoptLeftovers();
+  deployer.adoptLeftovers(new Date(0));
   const error = await deployer.remove(await buildDir()).catch((caught) => caught);
   assert.match(error.message, /fixture images remain/);
   assert.match(error.message, new RegExp(`more than ${MAX_FIXTURE_OBJECTS} fixture objects`));
@@ -631,7 +638,7 @@ test("an encoded cache image is removed and read back (review S5)", async () => 
     functions: Object.values(FIXTURE_FUNCTIONS),
     packages: [cache, other],
   });
-  deployer.adoptLeftovers();
+  deployer.adoptLeftovers(new Date(0));
   await deployer.remove(await buildDir());
   assert.deepEqual(state.packages, [other]);
 });
@@ -643,7 +650,7 @@ test("a removal waits while a function is still deploying (review S6)", async ()
     deployingReads: 3,
     events,
   });
-  deployer.adoptLeftovers();
+  deployer.adoptLeftovers(new Date(0));
   await deployer.remove(await buildDir());
   assert.deepEqual(state.functions, []);
   // The URI read and two settling reads answer DEPLOYING; the delete follows the first ACTIVE
@@ -659,12 +666,55 @@ test("a removal stops waiting after its bound and deletes anyway (review S6)", a
       functions: Object.values(FIXTURE_FUNCTIONS),
       deployingReads,
     });
-    deployer.adoptLeftovers();
+    deployer.adoptLeftovers(new Date(0));
     await deployer.remove(await buildDir());
     assert.deepEqual(state.functions, []);
     return calls.filter((c) => c.startsWith("GET cloudfunctions")).length;
   };
   assert.equal((await listings(Number.POSITIVE_INFINITY)) - (await listings(0)), SETTLE_READS);
+});
+
+test("a blockingFunctions other than the empty baseline stops the run (review-2 S-A)", async () => {
+  const { deployer, runs, calls } = fakeCloud({
+    blocking: { forwardInboundCredentials: { idToken: true } },
+  });
+  await assert.rejects(deployer.preflight(), /empty baseline/);
+  await assert.rejects(deployer.deploy(source, await buildDir()));
+  assert.deepEqual(runs, []);
+  assert.ok(!calls.some((call) => !call.startsWith("GET")), calls.join("\n"));
+  // Nothing was deployed, so nothing is removed.
+  assert.deepEqual(await deployer.remove(await buildDir()), { removed: "nothing deployed" });
+});
+
+test("a restore removes only the upload objects created since the recording started (review-2 S-B)", async () => {
+  const since = new Date("2026-09-28T09:00:00.000Z");
+  const { deployer, state } = fakeCloud({
+    functions: Object.values(FIXTURE_FUNCTIONS),
+    uploads: ["older.zip", "at-start.zip", "newer.zip"],
+    created: {
+      "older.zip": "2026-09-28T08:59:59.999Z",
+      "at-start.zip": "2026-09-28T09:00:00.000Z",
+      "newer.zip": "2026-09-28T09:30:00.000Z",
+    },
+  });
+  deployer.adoptLeftovers(since);
+  const removed = await deployer.remove(await buildDir());
+  assert.deepEqual(state.uploads, ["older.zip"]);
+  assert.equal(removed.uploadsLeftAlone, 1);
+});
+
+test("a restore without the recording's start removes no upload object (review-2 S-B)", async () => {
+  const { deployer, state } = fakeCloud({
+    functions: Object.values(FIXTURE_FUNCTIONS),
+    uploads: ["a.zip", "b.zip"],
+  });
+  deployer.adoptLeftovers(undefined);
+  const removed = await deployer.remove(await buildDir());
+  assert.deepEqual(state.uploads, ["a.zip", "b.zip"]);
+  assert.equal(removed.uploadsLeftAlone, 2);
+  assert.deepEqual(state.functions, []);
+  assert.throws(() => deployer.adoptLeftovers(new Date(Number.NaN)), /start as a Date/);
+  assert.throws(() => deployer.adoptLeftovers("2026-09-28"), /start as a Date/);
 });
 
 test("the pinned CLI starts without sending anything (allowance zero)", async () => {

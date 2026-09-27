@@ -768,6 +768,37 @@ fn normalize_transport_status(headers: &mut HeaderMap, enforce_limits: bool) {
     }
 }
 
+/// Shapes a gRPC answer as production's front end sends it: an error trailers-only answer is
+/// split into headers and trailers (FS-DATA-WRITE decision 1, 2026-09-25), and every trailers
+/// frame is normalized.
+fn shape_grpc_response(
+    mut response: Response<tonic::body::Body>,
+    enforce_limits: bool,
+    write_stream: bool,
+) -> Response<http_body_util::combinators::UnsyncBoxBody<Bytes, BoxError>> {
+    if enforce_limits && response.headers().contains_key(Status::GRPC_STATUS) {
+        let trailers = split_trailers_only(response.headers_mut());
+        let frame = normalize_transport_frame(
+            Frame::trailers(trailers),
+            enforce_limits,
+            write_stream,
+            false,
+        );
+        let body = http_body_util::StreamBody::new(tokio_stream::once(Ok::<_, BoxError>(frame)))
+            .boxed_unsync();
+        return response.map(|_| body);
+    }
+    response.map(|b| {
+        let mut responded = false;
+        b.map_frame(move |frame| {
+            responded |= frame.is_data();
+            normalize_transport_frame(frame, enforce_limits, write_stream, responded)
+        })
+        .map_err(|e| Box::new(e) as BoxError)
+        .boxed_unsync()
+    })
+}
+
 /// Moves a trailers-only answer's status and metadata out of its headers, leaving only the
 /// content type, and returns them as the trailers of the same answer.
 fn split_trailers_only(headers: &mut HeaderMap) -> HeaderMap {
@@ -899,39 +930,11 @@ where
                             // the connection closed (HTTP/1) instead of delivering it.
                             return Err(dropped());
                         }
-                        if enforce_limits && response.headers().contains_key(Status::GRPC_STATUS) {
-                            // tonic answers an error trailers-only; production's front end sends
-                            // headers and then trailers (FS-DATA-WRITE decision 1, 2026-09-25).
-                            let trailers = split_trailers_only(response.headers_mut());
-                            let frame = normalize_transport_frame(
-                                Frame::trailers(trailers),
-                                enforce_limits,
-                                write_stream,
-                                false,
-                            );
-                            let body = http_body_util::StreamBody::new(tokio_stream::once(Ok::<
-                                _,
-                                BoxError,
-                            >(
-                                frame
-                            )))
-                            .boxed_unsync();
-                            return Ok::<_, std::io::Error>(response.map(|_| body));
-                        }
-                        return Ok::<_, std::io::Error>(response.map(|b| {
-                            let mut responded = false;
-                            b.map_frame(move |frame| {
-                                responded |= frame.is_data();
-                                normalize_transport_frame(
-                                    frame,
-                                    enforce_limits,
-                                    write_stream,
-                                    responded,
-                                )
-                            })
-                            .map_err(|e| Box::new(e) as BoxError)
-                            .boxed_unsync()
-                        }));
+                        return Ok::<_, std::io::Error>(shape_grpc_response(
+                            response,
+                            enforce_limits,
+                            write_stream,
+                        ));
                     }
                     if let Some(origin) = header(&req, "origin") {
                         if !crate::webchannel::origin_is_local(origin) {

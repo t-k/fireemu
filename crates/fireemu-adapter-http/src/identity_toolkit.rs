@@ -70,6 +70,7 @@ mod config_proto;
 mod password_hash;
 mod phone_region;
 mod project_config;
+pub use project_config::{exportable_config_members, restored_config_members};
 mod project_mfa;
 pub use password_hash::restorable_spec as restorable_imported_hash_spec;
 mod routes;

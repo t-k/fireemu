@@ -35,8 +35,13 @@ import {
 const execFileAsync = promisify(execFile);
 const sha256 = (text) => createHash("sha256").update(text).digest("hex");
 
-/** Harness calls one recording may make (setup, probes, publication settling, cleanup). */
-export const HARNESS_CEILING = 700;
+/**
+ * Harness calls one recording may make before cleanup (setup, probes, publication settling), and
+ * in its cleanup (unpublishing settles for at most 8 minutes at about two requests a second,
+ * then the deletions).
+ */
+export const HARNESS_CEILING = 1_000;
+export const CLEANUP_CEILING = 1_100;
 /** The requests the browser key probe's client may make. */
 const KEY_PROBE_CAP = 5;
 /** Baseline reads at the start (with the API keys read) and the end, the key probe, the compile probe. */
@@ -48,7 +53,7 @@ export const RESERVE_USD = 1;
 export function runnerLimits(cost) {
   return {
     project: SANDBOX_PROJECT,
-    maxRequests: HARNESS_CEILING + cost.maxWire + FIXED_REQUESTS,
+    maxRequests: HARNESS_CEILING + CLEANUP_CEILING + cost.maxWire + FIXED_REQUESTS,
     reserveUsd: RESERVE_USD,
   };
 }
@@ -313,6 +318,7 @@ export async function recordProduction(env = process.env) {
         sdkConfig,
         sessionOptions: {
           maxHarnessRequests: HARNESS_CEILING,
+          maxCleanupRequests: CLEANUP_CEILING,
           destinationProblem,
           shouldStop: () => stopRequested,
           log: (line) => console.log(line),

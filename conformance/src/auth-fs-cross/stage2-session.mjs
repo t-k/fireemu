@@ -66,6 +66,9 @@ export function createSession(
     timeoutMs = 60_000,
     maxRequests = Infinity,
     maxHarnessRequests = Infinity,
+    // Cleanup has its own ceiling, so a stuck cleanup cannot send without bound either; past it
+    // cleanup stops and the run needs recovery.
+    maxCleanupRequests = Infinity,
     log = () => {},
     shouldStop = () => false,
     // Why a harness URL may not be sent (`null`: it may); production passes the declared
@@ -163,9 +166,14 @@ export function createSession(
           grpc.credentials.createInsecure(),
         );
 
+  let cleanupRequests = 0;
   const charge = (harness) => {
     if (harness) {
-      if (harnessRequests >= maxHarnessRequests && !cleaningUp)
+      if (cleaningUp) {
+        if (cleanupRequests >= maxCleanupRequests)
+          throw fatal(`cleanup request ceiling ${maxCleanupRequests} reached`);
+        cleanupRequests += 1;
+      } else if (harnessRequests >= maxHarnessRequests)
         throw fatal(`harness request ceiling ${maxHarnessRequests} reached`);
       harnessRequests += 1;
     } else {
@@ -1384,7 +1392,7 @@ export function createSession(
       grpcClient.close();
       await gapic.close();
     },
-    counts: () => ({ requests, harnessRequests, foreignRequests }),
+    counts: () => ({ requests, harnessRequests, cleanupRequests, foreignRequests }),
   };
 }
 

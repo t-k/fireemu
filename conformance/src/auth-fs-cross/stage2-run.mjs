@@ -45,6 +45,7 @@ const CLOSURE = join(
 /** The synthetic project number fireemu is configured with. */
 const LOCAL_PROJECT_NUMBER = "123456789012";
 const HARNESS_CEILING = 1_000;
+const CLEANUP_CEILING = 1_100;
 
 /** The program, checked against the frozen closure's transports. */
 export async function checkedProgram() {
@@ -130,7 +131,11 @@ async function sessionLocal() {
     out = await runStage2Window(program, ctx, {
       principals: STAGE2_PRINCIPALS,
       sdkConfig: localSdkConfig(target),
-      sessionOptions: { maxHarnessRequests: HARNESS_CEILING, log },
+      sessionOptions: {
+        maxHarnessRequests: HARNESS_CEILING,
+        maxCleanupRequests: CLEANUP_CEILING,
+        log,
+      },
       log,
     });
   } catch (error) {

@@ -31,6 +31,8 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
+from collections import namedtuple
 import sys
 from pathlib import Path
 
@@ -102,6 +104,53 @@ PERMISSION_BASELINE_FIELDS = (
     "pricingLocation",
 )
 
+
+
+_BaselineTarget = namedtuple("BaselineTarget", ("project", "project_number"))
+
+
+def baseline_target(project, project_number=None):
+    """Immutable policy for pure record verification; never a transport target.
+
+    Fixed campaign wrappers choose the project in source. The private owner
+    permission supplies its number, which is mandatory when deriving identity.
+    A number-free policy is sufficient only to validate provenance routes.
+    """
+    if not isinstance(project, str) or re.fullmatch(r"[a-z][a-z0-9-]{4,61}[a-z0-9]", project) is None:
+        raise ValueError("fixed baseline project required")
+    if project_number is not None and (
+        not isinstance(project_number, str)
+        or re.fullmatch(r"[1-9][0-9]{5,19}", project_number) is None
+    ):
+        raise ValueError("owner-bound sandbox project number required")
+    return _BaselineTarget(project, project_number)
+
+
+def target_routes(target):
+    """Return a fresh route map for an explicit read-only verification policy."""
+    if not isinstance(target, _BaselineTarget):
+        raise ValueError("explicit baseline target required")
+    baseline_target(*target)
+    project = target.project
+    return {
+        "projectIdentity": f"cloudresourcemanager.googleapis.com/v1/projects/{project}",
+        "database": f"firestore.googleapis.com/v1/projects/{project}/databases/(default)",
+        "authConfig": f"identitytoolkit.googleapis.com/admin/v2/projects/{project}/config",
+    }
+
+
+def _derive_target(route_key, body, target):
+    target_routes(target)
+    if target.project_number is None:
+        raise ValueError("owner-bound sandbox project number required")
+    if route_key == "projectIdentity":
+        identity = {"projectId": body.get("projectId"), "projectNumber": body.get("projectNumber")}
+        if identity != {"projectId": target.project, "projectNumber": target.project_number}:
+            raise ValueError("observed project identity differs from the fixed target")
+        return {"projectIdentity": identity}
+    if route_key == "database" and body.get("name") != f"projects/{target.project}/databases/(default)":
+        raise ValueError("observed database differs from the fixed target")
+    return _derive(route_key, body)
 
 def _read_json(path, *, limit):
     path = Path(path)
@@ -198,7 +247,7 @@ def _produced_by(receipt, *, phase, action, response_digest) -> None:
     raise ValueError("observation journal line the live run did not produce")
 
 
-def _journal_line(evidence_root, entry, *, production_roots):
+def _journal_line(evidence_root, entry, *, production_roots, route_actions=None):
     """Read one recorded response out of a journal bound by path and digest."""
     receipt = _live_production(
         evidence_root, entry.get("production"), production_roots=production_roots
@@ -225,7 +274,8 @@ def _journal_line(evidence_root, entry, *, production_roots):
         raise ValueError("successful recorded observation required")
     if recorded.get("route") != entry.get("route"):
         raise ValueError("named observation route differs")
-    phase, action = recorded.get("phase"), ROUTE_ACTIONS.get(entry.get("route"))
+    actions = ROUTE_ACTIONS if route_actions is None else route_actions
+    phase, action = recorded.get("phase"), actions.get(entry.get("route"))
     if action is None or phase != BASELINE_PHASE:
         raise ValueError("named observation phase required")
     _produced_by(
@@ -260,7 +310,7 @@ def _derive(route_key, body):
 
 
 def baseline_from_record(
-    record_path, *, evidence_root, production_roots=PRODUCTION_LOG_ROOTS
+    record_path, *, evidence_root, production_roots=PRODUCTION_LOG_ROOTS, target=None
 ):
     """Recompute every bound baseline value from the observations a record names.
 
@@ -269,6 +319,8 @@ def baseline_from_record(
     whose logs live elsewhere, can declare its own; it is never a way to skip
     the check, which is what keeps a replay fixture out of a baseline.
     """
+    routes = ROUTES if target is None else target_routes(target)
+    actions = {routes[key]: action for key, action in (("projectIdentity", "project"), ("database", "database"), ("authConfig", "auth"))}
     record = _read_json(record_path, limit=MAX_RECORD_BYTES)
     observations = record.get("observations")
     if record.get("kind") != RECORD_KIND or not isinstance(observations, list):
@@ -283,11 +335,11 @@ def baseline_from_record(
             "production",
         }:
             raise ValueError("closed baseline observation entry required")
-        keys = [key for key, route in ROUTES.items() if route == entry["route"]]
+        keys = [key for key, route in routes.items() if route == entry["route"]]
         if len(keys) != 1 or keys[0] in named:
             raise ValueError("each baseline route must be named exactly once")
         named[keys[0]] = entry
-    if set(named) != set(ROUTES):
+    if set(named) != set(routes):
         raise ValueError("each baseline route must be named exactly once")
     baseline = {
         "provenance": {
@@ -296,12 +348,10 @@ def baseline_from_record(
         }
     }
     for key, entry in named.items():
-        baseline.update(
-            _derive(
-                key,
-                _journal_line(evidence_root, entry, production_roots=production_roots),
-            )
+        body = _journal_line(
+            evidence_root, entry, production_roots=production_roots, route_actions=actions
         )
+        baseline.update(_derive(key, body) if target is None else _derive_target(key, body, target))
     if set(baseline) != set(BASELINE_FIELDS):
         raise ValueError("incomplete production baseline")
     return baseline
@@ -312,21 +362,22 @@ def permission_baseline(baseline):
     return {field: baseline[field] for field in PERMISSION_BASELINE_FIELDS}
 
 
-def validate_provenance(value) -> None:
+def validate_provenance(value, *, target=None) -> None:
     """Refuse a permission that does not name where its baseline came from.
 
     This is the check that survives into execution, where the observation
     journals are not available: it proves the permission was built against a
     named, hash-bound observation of each route rather than a typed literal.
     """
-    if not isinstance(value, dict) or set(value) != set(ROUTES):
+    routes = ROUTES if target is None else target_routes(target)
+    if not isinstance(value, dict) or set(value) != set(routes):
         raise ValueError("permission baseline provenance required")
     for key, entry in value.items():
         sha = entry.get("sha256") if isinstance(entry, dict) else None
         if (
             not isinstance(entry, dict)
             or set(entry) != {"route", "sha256"}
-            or entry["route"] != ROUTES[key]
+            or entry["route"] != routes[key]
             or not isinstance(sha, str)
             or len(sha) != 64
             or any(character not in "0123456789abcdef" for character in sha)
@@ -334,8 +385,15 @@ def validate_provenance(value) -> None:
             raise ValueError("permission baseline provenance required")
 
 
-def validate_permission_baseline(permission, baseline) -> None:
+def validate_permission_baseline(permission, baseline, *, target=None) -> None:
     """Refuse a permission whose baseline no recorded observation produces."""
+    if target is not None:
+        expected = _derive_target("projectIdentity", baseline.get("projectIdentity", {}), target)
+        if expected["projectIdentity"]["projectNumber"] != permission.get("projectNumber") or permission.get("project") != target.project:
+            raise ValueError("permission project identity differs from the fixed target")
+        projection = baseline.get("databaseProjection", {})
+        if projection.get("name") != f"projects/{target.project}/databases/(default)":
+            raise ValueError("baseline database differs from the fixed target")
     required = permission_baseline(baseline)
     if any(permission.get(field) != value for field, value in required.items()):
         raise ValueError("permission baseline differs from the recorded observation")

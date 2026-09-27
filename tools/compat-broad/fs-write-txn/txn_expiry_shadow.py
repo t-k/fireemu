@@ -158,6 +158,8 @@ def runtime_binding(artifact, root):
 
 
 MAX_SAVED_BYTES = 8 * 1024 * 1024
+MAX_RESPONSIBILITY_ENTRIES = 1024
+MAX_RESPONSIBILITY_BYTES = 64 * 1024
 
 
 def save(path, value):
@@ -196,6 +198,47 @@ def save(path, value):
             os.unlink(temporary)
         except FileNotFoundError:
             pass
+
+
+def make_responsibility_journal(output):
+    """Publish a bounded sequence of private, diagnostic-only snapshots.
+
+    Each file is immutable. The last complete file remains useful after a child
+    exits, but neither it nor a terminal snapshot authorizes cleanup or resume.
+    All failures propagate to the collector's permanent send-stop latch.
+    """
+    output = Path(output)
+    if output.is_symlink() or not output.is_dir():
+        raise ValueError("journal output must be a real private directory")
+    directory = output / "responsibility"
+    directory.mkdir(mode=0o700, exist_ok=False)
+    parent = os.open(output, os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        os.fsync(parent)
+    finally:
+        os.close(parent)
+    sequence = 0
+
+    def publish(snapshot):
+        nonlocal sequence
+        if not isinstance(snapshot, dict) or type(snapshot.get("sequence")) is not int:
+            raise ValueError("journal sequence must be an integer")
+        if snapshot["sequence"] != sequence + 1:
+            raise ValueError("journal sequence must advance exactly once")
+        if sequence >= MAX_RESPONSIBILITY_ENTRIES:
+            raise ValueError("responsibility journal entry limit reached")
+        if (snapshot.get("kind") != "txn-responsibility-v1" or
+                snapshot.get("target") != "local" or
+                snapshot.get("authorizesCleanup") is not False or
+                snapshot.get("authorizesResume") is not False):
+            raise ValueError("journal must remain local and diagnostic only")
+        raw = (json.dumps(snapshot, indent=2, sort_keys=True, allow_nan=False) + "\n").encode("utf-8")
+        if len(raw) > MAX_RESPONSIBILITY_BYTES:
+            raise ValueError("responsibility snapshot exceeds limit")
+        save(directory / f"{sequence + 1:06d}.json", snapshot)
+        sequence += 1
+
+    return publish
 
 
 def _read_result(path):
@@ -414,7 +457,10 @@ def child(output, nonce, owner_id):
         "deadlineSeconds": 300,
     }
     advance = clock_advance(control, token)
-    receipt = collector.collect(options, rest_transport(firestore), advance=advance)
+    receipt = collector.collect(
+        options, rest_transport(firestore), advance=advance,
+        responsibility=make_responsibility_journal(output),
+    )
     receipt["localControlRequestCount"] = advance.requests
     receipt["instance"] = {
         "pid": os.getpid(),

@@ -7,6 +7,10 @@ delete conditional on the observed update time, and a typed absence check. It
 never deletes or restores anything without an ownership proof, and it never
 converts a transport failure into a semantic result.
 
+An optional responsibility observer must persist each snapshot before returning.
+If it fails, every later send (including cleanup) is blocked and the receipt is
+incomplete. Snapshots are diagnostic evidence, never permission to resume.
+
 Timing is explicit. Production reaches the idle limit by waiting real seconds;
 the local emulator runs a virtual clock and reaches it by advancing that clock.
 Each row records which mechanism produced the elapsed time, so a comparison can
@@ -17,6 +21,7 @@ from __future__ import annotations
 
 import base64
 import copy
+import hashlib
 import math
 import re
 import datetime
@@ -302,6 +307,7 @@ class Collection:
         monotonic=time.monotonic,
         wall=time.time,
         checkpoint=None,
+        responsibility=None,
     ):
         self.options = validate_collector_options(options)
         self.plan = plan
@@ -316,6 +322,13 @@ class Collection:
         self.active_deadline = None
         self.wall = wall
         self.checkpoint = checkpoint
+        self.responsibility = responsibility
+        self.journal_failure = None
+        self.journal_sequence = 0
+        self.pending_request = None
+        self.pending_begins = set()
+        self.proven_absent = set()
+        self.journal_source = plan_module.source_digest() if responsibility is not None else None
         self.rows = []
         self.tokens = {}
         self.open_tokens = {}
@@ -357,6 +370,45 @@ class Collection:
 
     # -- request helpers ----------------------------------------------------
 
+    def _publish_responsibility(self, event, *, terminal_complete=None):
+        if self.responsibility is None:
+            return
+        if self.journal_failure is not None:
+            raise _Stopped("responsibility-journal-failed")
+        # Build an allowlisted detached value. Never persist request/response
+        # bodies, queries, raw tokens, or exception messages from the transport.
+        snapshot = {
+            "kind": "txn-responsibility-v1",
+            "sequence": self.journal_sequence + 1,
+            "event": event,
+            "sourceDigest": self.journal_source,
+            "casesDigest": cases.cases_digest(),
+            "target": self.options["target"],
+            "nonce": self.options["nonce"],
+            "documentPrefix": self.plan["documentPrefix"],
+            "projectId": self.options["projectId"],
+            "database": self.options["database"],
+            "requestCount": self.request_count,
+            "inFlight": copy.deepcopy(self.pending_request),
+            "resourceStates": dict(self.resource_state),
+            "pendingBegins": sorted(self.pending_begins),
+            "openTransactions": [
+                {"tag": tag, "tokenSha256": hashlib.sha256(token).hexdigest()}
+                for tag, token in sorted(self.open_tokens.items())
+            ],
+            "unconfirmedTransactionStarts": sorted(self.unconfirmed_transactions),
+            "typedAbsenceConfirmed": sorted(self.proven_absent),
+            "terminalComplete": terminal_complete,
+            "authorizesCleanup": False,
+            "authorizesResume": False,
+        }
+        try:
+            self.responsibility(snapshot)
+        except Exception as error:
+            self.journal_failure = type(error).__name__
+            raise _Stopped("responsibility-journal-failed") from None
+        self.journal_sequence += 1
+
     def _path(self, role):
         return f"{self.plan['documentPrefix']}/{role}"
 
@@ -374,6 +426,8 @@ class Collection:
         stops at it: observation, transaction release, the ownership read, the
         conditional delete and the final absence read alike.
         """
+        if self.journal_failure is not None:
+            return self._blocked("responsibility-journal-failed")
         if self.authority_refusal is not None:
             return self._blocked("authority-refused-earlier")
         if self.clock_failure is not None:
@@ -401,8 +455,25 @@ class Collection:
             # and the plan's three cleanup slots per document.
             "site": self.current_site,
         }
+        self.pending_request = {
+            "ordinal": self.request_count + 1, "rpc": rpc,
+            "site": self.current_site, "role": role,
+        }
+        self._publish_responsibility("dispatch-intent")
+        if self.responsibility is not None and self.active_deadline is not None:
+            # Persistence can consume the remaining phase budget. Keep the
+            # conservative intent, but never dispatch using a stale timeout.
+            remaining = self.active_deadline.remaining()
+            if remaining <= 0:
+                return self._blocked("phase-deadline-reached")
+            request["timeoutSeconds"] = min(timeout, remaining)
         self.request_count += 1
-        response = self.transport(request)
+        try:
+            response = self.transport(request)
+        except Exception:
+            self._publish_responsibility("response-unknown")
+            raise
+        self._publish_responsibility("response-received")
         if isinstance(response, dict):
             if type(response.get("httpStatus")) is int and response["httpStatus"] in (401, 403):
                 code = UNAUTHENTICATED if response["httpStatus"] == 401 else PERMISSION_DENIED
@@ -650,6 +721,7 @@ class Collection:
 
     def run(self):
         try:
+            self._publish_responsibility("prepared")
             deadline = _Deadline(self.options["deadlineSeconds"], self.monotonic)
             self.active_deadline = deadline
             self._observe(deadline)
@@ -662,7 +734,13 @@ class Collection:
         except Exception as error:  # noqa: BLE001 - a receipt is owed regardless
             self._note_failure("cleanup", type(error).__name__)
             cleanup, releases = self._unattempted_cleanup(type(error).__name__), []
-        return self._receipt(cleanup, releases)
+        receipt = self._receipt(cleanup, releases)
+        try:
+            self._publish_responsibility("finished", terminal_complete=receipt["complete"])
+        except _Stopped:
+            self.failure = self.failure or "responsibility-journal-failed"
+            receipt = self._receipt(cleanup, releases)
+        return receipt
 
     def _unattempted_cleanup(self, reason):
         """Entries for a recovery that could not run at all.
@@ -709,6 +787,7 @@ class Collection:
             closes = step["closesTransaction"]
             if closes and row["complete"] and response.get("code") == OK:
                 self.open_tokens.pop(closes, None)
+                self._publish_responsibility("transaction-closed")
             if step["slot"].startswith("idle/read/"):
                 self.locked_at[step["slot"].rsplit("/", 1)[1]] = self._campaign_now()
             if not row["complete"]:
@@ -724,6 +803,8 @@ class Collection:
                 row["precondition"] = failure
                 self._note_failure(step["slot"], failure, row)
                 raise _Stopped("precondition-not-established")
+            self.pending_request = None
+            self._publish_responsibility("step-complete")
 
     def _note_failure(self, site, reason, detail=None):
         """Record where the run stopped being able to do what it promised."""
@@ -823,6 +904,7 @@ class Collection:
         if role not in self.resource_state:
             self.resource_state[role] = NOT_SENT
         self.resource_state[role] = state
+        self._publish_responsibility("resource-state")
 
     def _create(self, role):
         """Send the create-only commit, taking responsibility before sending."""
@@ -882,20 +964,26 @@ class Collection:
         """
         tag = step["opensTransaction"] or f"unplanned/{step['slot']}"
         before = self.request_count
+        self.pending_begins.add(tag)
         try:
             response = self._begin(options_body)
         except Exception:
             if self.request_count != before:
                 self.unconfirmed_transactions.add(tag)
+            self.pending_begins.discard(tag)
+            self._publish_responsibility("transaction-unknown")
             raise
+        self.pending_begins.discard(tag)
         if not complete_response(response) or response.get("code") != OK:
             if (self.request_count != before and not (
                     complete_response(response) and response.get("code") in CREATE_REFUSALS)):
                 self.unconfirmed_transactions.add(tag)
+            self._publish_responsibility("transaction-state")
             return response
         decoded = _decode_token((response.get("body") or {}).get("transaction"))
         if decoded is None:
             self.unconfirmed_transactions.add(tag)
+            self._publish_responsibility("transaction-unknown")
             # A success-shaped reply without a usable token has not acquired
             # anything, and it may still have started a transaction this run can
             # never name. That is an incomplete response, not an acquisition.
@@ -906,6 +994,7 @@ class Collection:
             }
         self.tokens[tag] = decoded
         self.open_tokens[tag] = decoded
+        self._publish_responsibility("transaction-opened")
         expected = self._expected_code(step) == OK
         return {
             **response,
@@ -1012,7 +1101,11 @@ class Collection:
         for resource in self.plan["resources"]:
             role = resource["role"]
             try:
-                results.append(self._recover_one(role, recovery))
+                result = self._recover_one(role, recovery)
+                if result.get("complete"):
+                    self.pending_request = None
+                self._publish_responsibility("cleanup-result")
+                results.append(result)
             except Exception as error:  # noqa: BLE001 - one document, not the run
                 # One document failing to come back says nothing about the
                 # others, and the run still owes every one of them an attempt.
@@ -1105,9 +1198,9 @@ class Collection:
                 entry["released"] = False
                 entry["failure"] = "rollback-refused"
             releases.append(entry)
-        for entry in releases:
             if entry["released"]:
                 self.open_tokens.pop(entry["transaction"], None)
+                self._publish_responsibility("transaction-released")
         return releases
 
     def _recover_one(self, role, recovery):
@@ -1228,6 +1321,9 @@ class Collection:
         entry["complete"] = entry["absent"]
         if not entry["absent"]:
             entry["failure"] = "final-absence-not-proven"
+        else:
+            self.proven_absent.add(role)
+            self._publish_responsibility("typed-absence")
         return entry
 
     # -- receipt ------------------------------------------------------------
@@ -1281,6 +1377,8 @@ class Collection:
             "clockIntegrityFailure": self.clock_failure,
             "virtualClockConfirmed": self.virtual_clock_valid,
             "failure": self.failure,
+            **({"responsibilityJournalFailure": self.journal_failure}
+               if self.responsibility is not None else {}),
             "complete": (
                 not missing
                 and not unrecovered
@@ -1291,6 +1389,7 @@ class Collection:
                 and self.clock_failure is None
                 and self.virtual_clock_valid
                 and self.failure is None
+                and self.journal_failure is None
             ),
             # Counted where the requests are actually sent, so releases and
             # any request that failed are included and a request the collector

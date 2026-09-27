@@ -15,12 +15,12 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parents[1]))
 
 import txn_expiry_cases as cases
-from batch_contract import NUMBER, PROJECT
 from broad_contract import digest
 
 ROOT = Path(__file__).resolve().parents[3]
 HERE = Path(__file__).resolve().parent
 
+PROJECT = "fireemu-oracle-sbx"
 CONTRACT = "txn-expiry-retry-plan-v1"
 DATABASE = "(default)"
 
@@ -429,7 +429,6 @@ def compile_plan(nonce, owner_id, *, project=PROJECT, database=DATABASE):
         "campaign": cases.CAMPAIGN,
         "casesDigest": cases.cases_digest(),
         "projectId": project,
-        "projectNumber": NUMBER,
         "database": database,
         "nonce": nonce,
         "ownerId": owner_id,
@@ -530,6 +529,7 @@ def manifest(nonce, owner_id):
 
 
 OWNER_FIELDS_REQUIRED = (
+    "projectNumber",
     "issuedAt",
     "expiresAt",
     "ownerIdentity",
@@ -553,7 +553,6 @@ def required_permission(plan, manifest_digest=None):
         "nonce": plan["nonce"],
         "ownerId": plan["ownerId"],
         "project": plan["projectId"],
-        "projectNumber": plan["projectNumber"],
         "database": plan["database"],
         "casesDigest": plan["casesDigest"],
         "collectorSourceDigest": source_digest(),

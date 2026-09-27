@@ -33,7 +33,7 @@ sys.path.insert(0, str(HERE))
 import txn_expiry_cases as cases
 import txn_expiry_collector as collector
 import txn_expiry_plan as plan_module
-from batch_contract import PROJECT
+from txn_expiry_plan import PROJECT
 from batch_wire import _decode_json_response
 from o8_admission import authorize_transport
 

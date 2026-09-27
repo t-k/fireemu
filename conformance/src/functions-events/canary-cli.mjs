@@ -2,20 +2,25 @@ import { isAbsolute } from "node:path";
 
 const canaries = new Set(["fsCreatedV1", "fsCreatedV2"]);
 
-export function buildCanaryCli(action, projectId, name, configHome) {
+export function buildCanaryCli(action, projectId, name, options) {
   if (!/^[a-z][a-z0-9-]{4,28}[a-z0-9]$/.test(projectId)) {
     throw new Error("canary project ID is invalid");
   }
   if (!canaries.has(name)) throw new Error("unreviewed canary function");
-  if (typeof configHome !== "string" || !isAbsolute(configHome)) {
-    throw new Error("canary CLI requires an isolated absolute XDG config home");
+  for (const key of ["configHome", "configPath", "workDir", "home"]) {
+    if (typeof options?.[key] !== "string" || !isAbsolute(options[key])) {
+      throw new Error(`canary CLI requires an absolute ${key}`);
+    }
+  }
+  if (typeof options.path !== "string" || !options.path) {
+    throw new Error("canary CLI requires an explicit PATH");
   }
   let args;
   if (action === "deploy") {
     args = [
       "deploy",
       "--config",
-      "conformance/functions-events/firebase.json",
+      options.configPath,
       "--project",
       projectId,
       "--only",
@@ -28,7 +33,7 @@ export function buildCanaryCli(action, projectId, name, configHome) {
       "functions:delete",
       name,
       "--config",
-      "conformance/functions-events/firebase.json",
+      options.configPath,
       "--region",
       "us-central1",
       "--project",
@@ -40,5 +45,22 @@ export function buildCanaryCli(action, projectId, name, configHome) {
   } else {
     throw new Error("unknown canary CLI action");
   }
-  return { args, env: { GOOGLE_CLOUD_QUOTA_PROJECT: projectId, XDG_CONFIG_HOME: configHome } };
+  return {
+    args,
+    cwd: options.workDir,
+    env: {
+      HOME: options.home,
+      PATH: options.path,
+      XDG_CONFIG_HOME: options.configHome,
+      GOOGLE_CLOUD_QUOTA_PROJECT: projectId,
+      GCLOUD_PROJECT: projectId,
+      FIREBASE_CONFIG: JSON.stringify({ projectId }),
+      FE_EVENTS_MODE: "production",
+      FE_EVENTS_PROJECT_ID: projectId,
+      FE_EVENTS_PRIMARY_COLLECTION: "fe_events_primary",
+      FE_EVENTS_PRIMARY_BUCKET: `${projectId}.firebasestorage.app`,
+      FE_EVENTS_PRIMARY_TOPIC: "fe-events-primary",
+      FE_EVENTS_CAPTURE_MODE: "reject-canary",
+    },
+  };
 }

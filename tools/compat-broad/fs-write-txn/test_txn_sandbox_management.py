@@ -20,8 +20,13 @@ RULESET = "projects/fireemu-oracle-sbx/rulesets/ruleset-a"
 RULES_SOURCE = "match /conf_txn/{id} { allow read, write: if true; }"
 BASELINE = {
     "projectNumber": "123456789",
-    "databaseProjectionDigest": "a" * 64,
-    "authConfigDigest": "b" * 64,
+    "databaseExpected": {
+        "name": "projects/fireemu-oracle-sbx/databases/(default)",
+        "type": "FIRESTORE_NATIVE",
+        "databaseEdition": "STANDARD",
+        "locationId": "us-central1",
+        "concurrencyMode": "PESSIMISTIC",
+    },
     "rulesSourceSha256": hashlib.sha256(RULES_SOURCE.encode()).hexdigest(),
     "credentialPrincipal": {
         "clientId": "client-a",
@@ -40,7 +45,10 @@ def answer(slot):
             "expires_in": 3600,
         },
         "project": {"projectId": "fireemu-oracle-sbx", "projectNumber": "123456789"},
-        "database": {"name": "projects/fireemu-oracle-sbx/databases/(default)", "concurrencyMode": "PESSIMISTIC"},
+        "database": {
+            **BASELINE["databaseExpected"],
+            "uid": "synthetic-database-uid",
+        },
         "auth": {"key": "redacted"},
         "rules-release": {
             "name": "projects/fireemu-oracle-sbx/releases/cloud.firestore",
@@ -83,7 +91,7 @@ def test_uninitialized_auth_needs_no_baseline_or_request(monkeypatch):
     monkeypatch.setattr(management.preflight, "verify_token", lambda *args, **kwargs: object())
     monkeypatch.setattr(management.preflight, "verify_metadata", lambda slot, body, baseline: {"bodyDigest": slot})
     seen = []
-    baseline = {key: value for key, value in BASELINE.items() if key != "authConfigDigest"}
+    baseline = dict(BASELINE)
     session = management.MetadataSession(
         TOKEN, baseline, contract.RequestBudget(plan.compile_plan(NONCE, OWNER)),
         request_fn=lambda slot, token, resource=None: seen.append(slot) or answer(slot),
@@ -91,6 +99,26 @@ def test_uninitialized_auth_needs_no_baseline_or_request(monkeypatch):
     session.preflight()
     session.postflight()
     assert "auth" not in seen
+
+
+def test_project_and_database_are_bound_before_data_and_compared_afterwards(monkeypatch):
+    monkeypatch.setattr(management.preflight, "verify_token", lambda *args, **kwargs: object())
+    seen = []
+
+    def request(slot, token, resource=None):
+        seen.append(slot)
+        result = answer(slot)
+        if slot == "database" and seen.count("database") == 2:
+            result["body"]["uid"] = "changed-database-uid"
+        return result
+
+    session = management.MetadataSession(
+        TOKEN, BASELINE, contract.RequestBudget(plan.compile_plan(NONCE, OWNER)),
+        request_fn=request,
+    )
+    session.preflight()
+    with pytest.raises(ValueError, match="changed after observation"):
+        session.postflight()
 
 
 @pytest.mark.parametrize("mode", ["OPTIMISTIC", None])

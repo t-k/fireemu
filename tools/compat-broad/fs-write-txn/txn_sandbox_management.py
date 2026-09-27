@@ -16,6 +16,7 @@ sys.path.insert(0, str(HERE.parent))
 import batch_adapter
 import txn_expiry_preflight
 from credential_prep import _private_request
+from batch_contract import database_evidence
 
 preflight = txn_expiry_preflight.preflight
 PROJECT = "fireemu-oracle-sbx"
@@ -24,6 +25,13 @@ RULES_HOST = "firebaserules.googleapis.com"
 RULES_RESPONSE_LIMIT = 65_536
 PRE_SLOTS = ("oauth-tokeninfo", "project", "database", "rules-release", "ruleset-source")
 POST_SLOTS = ("project", "database")
+EXPECTED_DATABASE = {
+    "name": f"projects/{PROJECT}/databases/(default)",
+    "type": "FIRESTORE_NATIVE",
+    "databaseEdition": "STANDARD",
+    "locationId": "us-central1",
+    "concurrencyMode": "PESSIMISTIC",
+}
 
 
 def _default_request(slot, token, resource=None):
@@ -84,12 +92,10 @@ class MetadataSession:
     def __init__(self, token, baseline, budget, *, request_fn=None):
         if not isinstance(token, str) or not 0 < len(token) <= 8192:
             raise ValueError("bounded OAuth credential required")
-        if (
-            not isinstance(baseline, dict)
-            or not isinstance(baseline.get("databaseProjectionDigest"), str)
-            or re.fullmatch(r"[a-f0-9]{64}", baseline["databaseProjectionDigest"]) is None
-        ):
-            raise ValueError("frozen sandbox database projection digest required")
+        if not isinstance(baseline, dict) or set(baseline) != {
+            "projectNumber", "databaseExpected", "rulesSourceSha256", "credentialPrincipal"
+        } or baseline["databaseExpected"] != EXPECTED_DATABASE:
+            raise ValueError("frozen sandbox database identity and settings required")
         preflight.validate_principal(baseline.get("credentialPrincipal"))
         preflight.validate_project_number(baseline.get("projectNumber"))
         source_sha = baseline.get("rulesSourceSha256")
@@ -100,6 +106,7 @@ class MetadataSession:
         self.budget = budget
         self.request = request_fn or _default_request
         self._ready = False
+        self._database_projection = None
 
     def _read(self, slot, resource=None):
         self.budget.charge("management")
@@ -124,8 +131,15 @@ class MetadataSession:
             )
             return {"verified": True, "requiredSeconds": 1600}
         body = result["body"]
-        if slot == "database" and body.get("concurrencyMode") != "PESSIMISTIC":
-            raise ValueError("sandbox database must use PESSIMISTIC concurrency")
+        if slot == "database":
+            if any(body.get(key) != value for key, value in EXPECTED_DATABASE.items()):
+                raise ValueError("sandbox database must match PESSIMISTIC expected settings")
+            projection = database_evidence(body)["projectionDigest"]
+            if self._database_projection is None:
+                self._database_projection = projection
+            elif projection != self._database_projection:
+                raise ValueError("sandbox database changed after observation")
+            return projection
         if slot == "rules-release":
             ruleset = body.get("rulesetName")
             if body.get("name") != RULES_RELEASE or not isinstance(ruleset, str) or re.fullmatch(

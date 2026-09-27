@@ -133,6 +133,28 @@ test("all frozen case forms can express evidence consistency without compatibili
   }
 });
 
+test("case evidence rejects a changed corpus even when its record digest is recomputed", () => {
+  const changedCorpus = structuredClone(corpus);
+  changedCorpus.scenarios.find((item) => item.id === "fs-create").mutation =
+    "firestore.create-altered";
+  const row = changedCorpus.cases.find((item) => item.scenario === "fs-create");
+  const { binding, record } = fixture(row, "run-1", "recording-1", changedCorpus);
+  assert.throws(
+    () => validateDeliveryEvidence(changedCorpus, closure, binding, record),
+    /delivery evidence rejected/,
+  );
+});
+
+test("case evidence rejects a changed closure with the same case inventory", () => {
+  const changedClosure = structuredClone(closure);
+  changedClosure.scopeDecisions[0].rationale = "altered frozen decision";
+  const { binding, record } = positive();
+  assert.throws(
+    () => validateDeliveryEvidence(corpus, changedClosure, binding, record),
+    /delivery evidence rejected/,
+  );
+});
+
 test("negative routing binds source and handler separately and brackets the full window", () => {
   const f = negative();
   assert.notEqual(f.record.operations[0].resource, f.record.capture.frames[0].handlerResource);

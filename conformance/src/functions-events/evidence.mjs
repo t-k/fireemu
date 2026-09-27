@@ -32,8 +32,15 @@ const frozenCorpusSha256 = "b9074dd1df4adf8c1c270ca06d7c2a417a286258b0de6eba8bdc
 const frozenClosureSha256 = "c572c54905e3e9e8eb7cff01d05f79111975269534f97e99a9eb17cd927ed171";
 
 /** Check adapter claims and raw-byte integrity only; native semantics and capture provenance remain unverified. */
-export function validateDeliveryEvidence(corpus, closure, binding, record) {
+export function validateDeliveryEvidence(inputCorpus, inputClosure, binding, record) {
   try {
+    const corpusJson = JSON.stringify(inputCorpus);
+    const closureJson = JSON.stringify(inputClosure);
+    require(typeof corpusJson === "string" && Buffer.byteLength(corpusJson) <= 2 * 1024 * 1024);
+    require(typeof closureJson === "string" && Buffer.byteLength(closureJson) <= 1024 * 1024);
+    require(hash(corpusJson) === frozenCorpusSha256 && hash(closureJson) === frozenClosureSha256);
+    const corpus = JSON.parse(corpusJson);
+    const closure = JSON.parse(closureJson);
     validateCorpus(corpus, closure);
     require(keys(binding, ["runId", "recordingId", "handlerId", "resources", "entities"]));
     require([binding.runId, binding.recordingId, binding.handlerId].every(text));

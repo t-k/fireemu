@@ -73,6 +73,8 @@ export function createSession(
 ) {
   let requests = 0;
   let harnessRequests = 0;
+  /** Harness requests sent to the other project (X9), which gets its own ledger line. */
+  let foreignRequests = 0;
   /** A sleep that ends early once a stop is requested, so a signal never waits out a long wait. */
   async function pause(ms) {
     const until = Date.now() + ms;
@@ -420,6 +422,7 @@ export function createSession(
   /** One Identity Toolkit call on the foreign project, as its administrator or a client. */
   async function foreignCall(as, path, body) {
     const foreign = ctx.target.foreign;
+    foreignRequests += 1;
     const origin =
       ctx.target.kind === "production"
         ? PRODUCTION.itk
@@ -1262,7 +1265,7 @@ export function createSession(
       grpcClient.close();
       await gapic.close();
     },
-    counts: () => ({ requests, harnessRequests }),
+    counts: () => ({ requests, harnessRequests, foreignRequests }),
   };
 }
 

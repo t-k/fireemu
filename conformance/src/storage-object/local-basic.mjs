@@ -17,6 +17,13 @@ const recipeIds = [
   "storage-object/firebase/simple-upload",
   "storage-object/firebase/download",
   "storage-object/gcs/download",
+  "storage-object/errors/range",
+  "storage-object/firebase/metadata",
+  "storage-object/gcs/metadata",
+  "storage-object/firebase/overwrite",
+  "storage-object/firebase/delete",
+  "storage-object/gcs/delete",
+  "storage-object/cross-dialect/state",
 ];
 const directory = await mkdtemp(join(tmpdir(), "storage-object-basic-"));
 const results = [];
@@ -62,9 +69,48 @@ for (const [index, recipeId] of recipeIds.entries()) {
   let uploadId = null;
   let expectedBytesSha256 = null;
   let confirmed = false;
+  let ownedNow = false;
   let currentMetadataId = null;
   let currentMediaId = null;
+  let supplementalReadbacks = 0;
+  const mutationStatuses = [];
   for (const [stepIndex, declared] of recipe.steps.entries()) {
+    if (declared.method !== "GET" && uploadId && !confirmed) {
+      if (responses.get(uploadId)?.status >= 400)
+        throw new Error(`${recipeId}: a refused prior write has no declared readbacks`);
+      const metadataId = `supplemental-${declared.id}-metadata`;
+      const mediaId = `supplemental-${declared.id}-media`;
+      const objectPath = `/storage/v1/b/${bucket}/o/${encodeURIComponent(name)}`;
+      const metadata = await sender.sendStep({
+        id: metadataId,
+        dialect: "gcs",
+        method: "GET",
+        objectName: name,
+        path: objectPath,
+        query: {},
+      });
+      const media = await sender.sendStep({
+        id: mediaId,
+        dialect: "gcs",
+        method: "GET",
+        objectName: name,
+        path: objectPath,
+        query: { alt: "media" },
+      });
+      if (metadata.status !== 200 || media.status !== 200)
+        throw new Error(`${recipeId}: supplemental ownership readback failed`);
+      sender.confirmOwned({
+        name,
+        uploadOperationId: uploadId,
+        metadataOperationId: metadataId,
+        mediaOperationId: mediaId,
+        expectedBytesSha256,
+      });
+      currentMetadataId = metadataId;
+      currentMediaId = mediaId;
+      confirmed = true;
+      supplementalReadbacks += 2;
+    }
     const query = resolveDeclaredQuery({ recipe, stepIndex, responses, bucket });
     const step = { ...declared, query };
     const response = await sender.sendStep(step, { operationId: declared.id });
@@ -73,12 +119,22 @@ for (const [index, recipeId] of recipeIds.entries()) {
       bodyBase64: response.raw.toString("base64"),
     });
     if (step.method !== "GET") {
-      if (uploadId !== null || typeof step.body?.base64 !== "string")
-        throw new Error(`${recipeId}: unexpected second mutation or upload body`);
+      mutationStatuses.push({ id: declared.id, status: response.status });
+      if (uploadId !== null && !confirmed)
+        throw new Error(`${recipeId}: unexpected mutation or unresolved prior write`);
+      if (typeof step.body?.base64 === "string")
+        expectedBytesSha256 = createHash("sha256")
+          .update(Buffer.from(step.body.base64, "base64"))
+          .digest("hex");
+      else if (
+        !(
+          step.method === "DELETE" ||
+          (["PATCH", "PUT"].includes(step.method) && step.body?.json && expectedBytesSha256)
+        )
+      )
+        throw new Error(`${recipeId}: unsupported mutation body`);
       uploadId = declared.id;
-      expectedBytesSha256 = createHash("sha256")
-        .update(Buffer.from(step.body.base64, "base64"))
-        .digest("hex");
+      confirmed = false;
     } else if (Object.keys(query).length === 0) {
       currentMetadataId = declared.id;
     } else if (
@@ -88,27 +144,77 @@ for (const [index, recipeId] of recipeIds.entries()) {
     ) {
       currentMediaId = declared.id;
       if (!confirmed && uploadId && currentMetadataId) {
-        sender.confirmOwned({
-          name,
-          uploadOperationId: uploadId,
-          metadataOperationId: currentMetadataId,
-          mediaOperationId: currentMediaId,
-          expectedBytesSha256,
-        });
+        try {
+          if (response.status === 404 && responses.get(currentMetadataId)?.status === 404) {
+            await sender.confirmAbsent({
+              name,
+              mutationOperationId: uploadId,
+              metadataOperationId: currentMetadataId,
+              mediaOperationId: currentMediaId,
+            });
+            ownedNow = false;
+          } else if (responses.get(uploadId).status >= 400) {
+            sender.confirmRefused({
+              name,
+              mutationOperationId: uploadId,
+              metadataOperationId: currentMetadataId,
+              mediaOperationId: currentMediaId,
+            });
+            ownedNow = true;
+          } else {
+            sender.confirmOwned({
+              name,
+              uploadOperationId: uploadId,
+              metadataOperationId: currentMetadataId,
+              mediaOperationId: currentMediaId,
+              expectedBytesSha256,
+            });
+            ownedNow = true;
+          }
+        } catch (error) {
+          throw new Error(
+            `${recipeId}: ${uploadId} status ${responses.get(uploadId)?.status}: ${error.message}`,
+            { cause: error },
+          );
+        }
         confirmed = true;
       }
     }
   }
+  if (!confirmed && uploadId && responses.get(currentMetadataId)?.status === 404) {
+    const mediaId = `supplemental-${uploadId}-absence-media`;
+    const media = await sender.sendStep({
+      id: mediaId,
+      dialect: "gcs",
+      method: "GET",
+      objectName: name,
+      path: `/storage/v1/b/${bucket}/o/${encodeURIComponent(name)}`,
+      query: { alt: "media" },
+    });
+    if (media.status !== 404) throw new Error(`${recipeId}: post-mutation media was not absent`);
+    await sender.confirmAbsent({
+      name,
+      mutationOperationId: uploadId,
+      metadataOperationId: currentMetadataId,
+      mediaOperationId: mediaId,
+    });
+    currentMediaId = mediaId;
+    confirmed = true;
+    ownedNow = false;
+    supplementalReadbacks += 1;
+  }
   if (!confirmed || !currentMetadataId || !currentMediaId)
     throw new Error(`${recipeId}: owned bytes were not confirmed`);
   sender.beginCleanup();
-  const deleted = await sender.cleanupOwned({
-    name,
-    metadataOperationId: currentMetadataId,
-    mediaOperationId: currentMediaId,
-    operationId: recipe.cleanup[0].id,
-  });
-  if (deleted.status !== 204) throw new Error(`${recipeId}: cleanup delete was not confirmed`);
+  if (ownedNow) {
+    const deleted = await sender.cleanupOwned({
+      name,
+      metadataOperationId: currentMetadataId,
+      mediaOperationId: currentMediaId,
+      operationId: recipe.cleanup[0].id,
+    });
+    if (deleted.status !== 204) throw new Error(`${recipeId}: cleanup delete was not confirmed`);
+  }
   for (const step of recipe.cleanup.slice(1)) {
     const response = await sender.sendStep(step, { operationId: step.id });
     if (response.status !== 404) throw new Error(`${recipeId}: cleanup ${step.id} was not absent`);
@@ -116,7 +222,14 @@ for (const [index, recipeId] of recipeIds.entries()) {
   await sender.verifyRunEmpty();
   sender.close();
   if (sender.unresolved().length > 0) throw new Error(`${recipeId}: unresolved owned object`);
-  results.push({ recipeId, status: "LOCAL_COMPLETE", requests: sender.snapshot().total });
+  results.push({
+    recipeId,
+    status: "LOCAL_COMPLETE",
+    requests: sender.snapshot().total,
+    supplementalReadbacks,
+    cleanupDeleteSkippedAbsent: !ownedNow,
+    mutationStatuses,
+  });
 }
 
 process.stdout.write(`${JSON.stringify({ results, eventDirectory: directory })}\n`);

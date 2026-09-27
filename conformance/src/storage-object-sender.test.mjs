@@ -218,6 +218,7 @@ test("a bound upload is deleted only at its owned generation with counted absenc
         present = true;
         return Response.json(object);
       }
+      if (init.method === "PATCH") return Response.json({ error: "unsupported" }, { status: 501 });
       if (init.method === "DELETE") {
         assert.equal(url.searchParams.get("ifGenerationMatch"), "123");
         present = false;
@@ -300,20 +301,54 @@ test("a bound upload is deleted only at its owned generation with counted absenc
     }),
     "123",
   );
+  await sender.sendStep({
+    id: "patch",
+    dialect: "gcs",
+    method: "PATCH",
+    objectName: name,
+    path: `/storage/v1/b/example.appspot.com/o/${encodeURIComponent(name)}`,
+    query: {},
+    body: { json: { metadata: { marker: "changed" } } },
+  });
+  await sender.sendStep({
+    id: "metadata-after-patch",
+    dialect: "gcs",
+    method: "GET",
+    objectName: name,
+    path: `/storage/v1/b/example.appspot.com/o/${encodeURIComponent(name)}`,
+    query: {},
+  });
+  await sender.sendStep({
+    id: "media-after-patch",
+    dialect: "gcs",
+    method: "GET",
+    objectName: name,
+    path: `/storage/v1/b/example.appspot.com/o/${encodeURIComponent(name)}`,
+    query: { alt: "media" },
+  });
+  assert.equal(
+    sender.confirmRefused({
+      name,
+      mutationOperationId: "patch",
+      metadataOperationId: "metadata-after-patch",
+      mediaOperationId: "media-after-patch",
+    }),
+    "123",
+  );
   sender.beginCleanup();
   await assert.rejects(
     sender.cleanupOwned({
       name: "storage-object/recordtwo/x",
-      metadataOperationId: "metadata",
-      mediaOperationId: "media",
+      metadataOperationId: "metadata-after-patch",
+      mediaOperationId: "media-after-patch",
       operationId: "outside",
     }),
     /prefix/i,
   );
   const deleted = await sender.cleanupOwned({
     name,
-    metadataOperationId: "metadata",
-    mediaOperationId: "media",
+    metadataOperationId: "metadata-after-patch",
+    mediaOperationId: "media-after-patch",
     operationId: "cleanup",
   });
   assert.equal(deleted.status, 204);
@@ -322,4 +357,88 @@ test("a bound upload is deleted only at its owned generation with counted absenc
   assert.equal(sender.snapshot().total, fetchCalls);
   assert.ok(events.indexOf("reserve:cleanup") < events.indexOf("journal:cleanup"));
   assert.ok(events.indexOf("journal:cleanup") < events.indexOf("fetch:DELETE:123"));
+});
+
+test("subject deletion and repeated 404 are bound to complete absence reads", async () => {
+  const object = { bucket: "example.appspot.com", name, generation: "123" };
+  const bytes = Buffer.from("a");
+  const digest = createHash("sha256").update(bytes).digest("hex");
+  let present = false;
+  let calls = 0;
+  const sender = createLocalStorageSender({
+    plan: plan(),
+    origin: "http://127.0.0.1:9199",
+    fetchImpl: async (href, init) => {
+      calls++;
+      const url = new URL(href);
+      if (url.pathname === "/storage/v1/b/example.appspot.com/o")
+        return Response.json({ items: [] });
+      if (init.method === "POST") {
+        present = true;
+        return Response.json(object);
+      }
+      if (init.method === "DELETE") {
+        if (!present) return Response.json({ error: "missing" }, { status: 404 });
+        present = false;
+        return new Response(null, { status: 204 });
+      }
+      if (!present) return Response.json({ error: "missing" }, { status: 404 });
+      return url.searchParams.get("alt") === "media" ? new Response(bytes) : Response.json(object);
+    },
+    onStart: async () => {},
+    onReserve: async () => {},
+    onJournal: async () => {},
+  });
+  const path = `/storage/v1/b/example.appspot.com/o/${encodeURIComponent(name)}`;
+  const request = (id, method, query = {}, body) => ({
+    id,
+    dialect: "gcs",
+    method,
+    objectName: name,
+    path: method === "POST" ? "/upload/storage/v1/b/example.appspot.com/o" : path,
+    query: method === "POST" ? { uploadType: "media", name, ifGenerationMatch: "0" } : query,
+    ...(body ? { body } : {}),
+  });
+  await sender.start();
+  await sender.admitNamespace();
+  sender.admitObject(name);
+  await sender.sendStep(request("upload", "POST", {}, { base64: "YQ==" }));
+  await sender.sendStep(request("metadata", "GET"));
+  await sender.sendStep(request("media", "GET", { alt: "media" }));
+  sender.confirmOwned({
+    name,
+    uploadOperationId: "upload",
+    metadataOperationId: "metadata",
+    mediaOperationId: "media",
+    expectedBytesSha256: digest,
+  });
+  await sender.sendStep(request("delete", "DELETE"));
+  await sender.sendStep(request("after-delete-metadata", "GET"));
+  await sender.sendStep(request("after-delete-media", "GET", { alt: "media" }));
+  assert.equal(
+    await sender.confirmAbsent({
+      name,
+      mutationOperationId: "delete",
+      metadataOperationId: "after-delete-metadata",
+      mediaOperationId: "after-delete-media",
+    }),
+    "deleted",
+  );
+  await sender.sendStep(request("repeat-delete", "DELETE"));
+  await sender.sendStep(request("after-repeat-metadata", "GET"));
+  await sender.sendStep(request("after-repeat-media", "GET", { alt: "media" }));
+  assert.equal(
+    await sender.confirmAbsent({
+      name,
+      mutationOperationId: "repeat-delete",
+      metadataOperationId: "after-repeat-metadata",
+      mediaOperationId: "after-repeat-media",
+    }),
+    "already-absent",
+  );
+  sender.beginCleanup();
+  await sender.verifyRunEmpty();
+  sender.close();
+  assert.equal(sender.unresolved().length, 0);
+  assert.equal(sender.snapshot().total, calls);
 });

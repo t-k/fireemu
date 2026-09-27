@@ -292,7 +292,7 @@ export function createLocalStorageSender({
       if (
         !upload ||
         upload.step.objectName !== name ||
-        !["POST", "PUT"].includes(upload.step.method) ||
+        !["POST", "PUT", "PATCH"].includes(upload.step.method) ||
         upload.response.status < 200 ||
         upload.response.status >= 300 ||
         upload.ordinal !== lastMutation.get(name)
@@ -323,6 +323,89 @@ export function createLocalStorageSender({
       );
       confirmed.set(name, { ...current, mutationOrdinal: upload.ordinal });
       return current.generation;
+    },
+    confirmRefused({ name, mutationOperationId, metadataOperationId, mediaOperationId } = {}) {
+      const mutation = observed.get(mutationOperationId);
+      const current = ownedReadbacks(name, metadataOperationId, mediaOperationId);
+      const prior = confirmed.get(name);
+      if (
+        !mutation ||
+        mutation.step.objectName !== name ||
+        !["POST", "PUT", "PATCH", "DELETE"].includes(mutation.step.method) ||
+        mutation.response.status < 400 ||
+        mutation.response.status > 599 ||
+        mutation.ordinal !== lastMutation.get(name) ||
+        !prior ||
+        prior.generation !== current.generation ||
+        prior.bytesSha256 !== current.bytesSha256
+      )
+        throw new Error("refused mutation or unchanged owned state is unproved");
+      ownership.noteRefusedMutation(
+        name,
+        {
+          operationId: mutationOperationId,
+          status: mutation.response.status,
+        },
+        current,
+      );
+      confirmed.set(name, { ...current, mutationOrdinal: mutation.ordinal });
+      return current.generation;
+    },
+    async confirmAbsent({ name, mutationOperationId, metadataOperationId, mediaOperationId } = {}) {
+      if (typeof name !== "string" || !name.startsWith(prefix) || name.length === prefix.length)
+        throw new Error("object is outside the owned run prefix");
+      const mutation = observed.get(mutationOperationId);
+      const metadata = observed.get(metadataOperationId);
+      const media = observed.get(mediaOperationId);
+      if (
+        !mutation ||
+        !metadata ||
+        !media ||
+        mutation.step.objectName !== name ||
+        !["POST", "PUT", "PATCH", "DELETE"].includes(mutation.step.method) ||
+        mutation.ordinal !== lastMutation.get(name) ||
+        metadata.ordinal <= mutation.ordinal ||
+        media.ordinal <= metadata.ordinal ||
+        metadata.step.objectName !== name ||
+        media.step.objectName !== name ||
+        metadata.step.method !== "GET" ||
+        media.step.method !== "GET" ||
+        Object.keys(metadata.step.query).length !== 0 ||
+        Object.keys(media.step.query).length !== 1 ||
+        media.step.query.alt !== "media" ||
+        Object.keys(media.step.headers ?? {}).some((header) => header.toLowerCase() === "range") ||
+        metadata.response.status !== 404 ||
+        media.response.status !== 404
+      )
+        throw new Error("fresh bound absence readbacks are missing");
+      const listing = await countedFetch(
+        `subject-absence-${ordinal + 1}`,
+        `/storage/v1/b/${bucket}/o`,
+        { prefix: name, maxResults: "1000" },
+        { method: "GET", headers: {} },
+      );
+      if (listing.status !== 200) throw new Error("subject absence prefix list failed");
+      let parsed;
+      try {
+        parsed = JSON.parse(listing.raw.toString("utf8"));
+      } catch {
+        throw new Error("subject absence prefix list is not JSON");
+      }
+      const proof = {
+        operationId: mutationOperationId,
+        status: mutation.response.status,
+        metadataStatus: metadata.response.status,
+        mediaStatus: media.response.status,
+        prefixPagesComplete: !parsed?.nextPageToken,
+        nameFound: Array.isArray(parsed?.items) && parsed.items.some((item) => item?.name === name),
+      };
+      if (confirmed.has(name)) {
+        ownership.noteSubjectDeleted(name, proof);
+        confirmed.delete(name);
+        return "deleted";
+      }
+      ownership.noteRefusedAbsent(name, proof);
+      return "already-absent";
     },
     async cleanupOwned({ name, metadataOperationId, mediaOperationId, operationId } = {}) {
       if (counter.snapshot().mode !== "cleanup") throw new Error("owned cleanup phase is required");

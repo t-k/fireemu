@@ -15,7 +15,10 @@ export function createRunOwnership({ bucket, prefix } = {}) {
       typeof name !== "string" ||
       !name.startsWith(prefix) ||
       name.length === prefix.length ||
-      name.slice(prefix.length).split("/").some((part) => part === "." || part === "..")
+      name
+        .slice(prefix.length)
+        .split("/")
+        .some((part) => part === "." || part === "..")
     )
       throw new Error("object name is outside the owned run prefix");
   }
@@ -24,8 +27,7 @@ export function createRunOwnership({ bucket, prefix } = {}) {
     if (input?.bucket !== bucket) throw new Error("wrong bucket for owned run");
     if (input.prefix !== prefix) throw new Error("wrong run prefix");
     const pages = input.pages;
-    if (!Array.isArray(pages) || pages.length === 0)
-      throw new Error("incomplete prefix traversal");
+    if (!Array.isArray(pages) || pages.length === 0) throw new Error("incomplete prefix traversal");
     for (const [index, page] of pages.entries()) {
       if (!Array.isArray(page?.items)) throw new Error("incomplete prefix traversal");
       if (page.items.length > 0) throw new Error("occupied run prefix");
@@ -64,14 +66,24 @@ export function createRunOwnership({ bucket, prefix } = {}) {
         evidence.nameFound !== false
       )
         throw new Error("initial object absence is unproved");
-      objects.set(name, { state: "absent", operationId: null, generation: null, bytesSha256: null });
+      objects.set(name, {
+        state: "absent",
+        operationId: null,
+        generation: null,
+        bytesSha256: null,
+      });
       return true;
     },
     noteInitialAbsentFromNamespace(name) {
       checkName(name);
       if (!namespaceEmpty) throw new Error("initial run prefix absence is unproved");
       if (objects.has(name)) throw new Error("initial object absence was already recorded");
-      objects.set(name, { state: "absent", operationId: null, generation: null, bytesSha256: null });
+      objects.set(name, {
+        state: "absent",
+        operationId: null,
+        generation: null,
+        bytesSha256: null,
+      });
       return true;
     },
     noteMutationAttempt(name, operationId) {
@@ -79,8 +91,16 @@ export function createRunOwnership({ bucket, prefix } = {}) {
       const object = objects.get(name);
       if (!object || object.state === "pending" || object.state === "deleted")
         throw new Error("object mutation has no owned initial state");
-      if (typeof operationId !== "string" || !/^[A-Za-z0-9][A-Za-z0-9._/-]{0,119}$/.test(operationId))
+      if (
+        typeof operationId !== "string" ||
+        !/^[A-Za-z0-9][A-Za-z0-9._/-]{0,119}$/.test(operationId)
+      )
         throw new Error("invalid mutation operation ID");
+      object.previous = {
+        state: object.state,
+        generation: object.generation,
+        bytesSha256: object.bytesSha256,
+      };
       object.state = "pending";
       object.operationId = operationId;
     },
@@ -89,7 +109,11 @@ export function createRunOwnership({ bucket, prefix } = {}) {
       const object = objects.get(name);
       if (!object || object.state !== "pending" || response?.operationId !== object.operationId)
         throw new Error("write response is not bound to a pending owned mutation");
-      if (response.bucket !== bucket || response.name !== name || !validGeneration(response.generation))
+      if (
+        response.bucket !== bucket ||
+        response.name !== name ||
+        !validGeneration(response.generation)
+      )
         throw new Error("write response has wrong owned object or generation");
       if (
         typeof expectedBytesSha256 !== "string" ||
@@ -100,6 +124,78 @@ export function createRunOwnership({ bucket, prefix } = {}) {
       object.state = "written";
       object.generation = response.generation;
       object.bytesSha256 = expectedBytesSha256;
+      object.previous = null;
+    },
+    noteRefusedMutation(name, response, current) {
+      checkName(name);
+      const object = objects.get(name);
+      if (
+        !object ||
+        object.state !== "pending" ||
+        response?.operationId !== object.operationId ||
+        !Number.isInteger(response.status) ||
+        response.status < 400 ||
+        response.status > 599
+      )
+        throw new Error("refused mutation is not bound to a pending request");
+      const previous = object.previous;
+      if (
+        previous?.state !== "written" ||
+        current?.bucket !== bucket ||
+        current.name !== name ||
+        current.generation !== previous.generation ||
+        current.bytesSha256 !== previous.bytesSha256
+      )
+        throw new Error("unchanged owned generation and bytes are unproved");
+      object.state = "written";
+      object.operationId = null;
+      object.generation = previous.generation;
+      object.bytesSha256 = previous.bytesSha256;
+      object.previous = null;
+    },
+    noteSubjectDeleted(name, proof) {
+      checkName(name);
+      const object = objects.get(name);
+      if (
+        !object ||
+        object.state !== "pending" ||
+        object.previous?.state !== "written" ||
+        proof?.operationId !== object.operationId ||
+        ![200, 204].includes(proof.status) ||
+        proof.metadataStatus !== 404 ||
+        proof.mediaStatus !== 404 ||
+        proof.prefixPagesComplete !== true ||
+        proof.nameFound !== false
+      )
+        throw new Error("subject deletion and exact prefix absence are unproved");
+      object.state = "absent";
+      object.operationId = null;
+      object.generation = null;
+      object.bytesSha256 = null;
+      object.previous = null;
+    },
+    noteRefusedAbsent(name, proof) {
+      checkName(name);
+      const object = objects.get(name);
+      if (
+        !object ||
+        object.state !== "pending" ||
+        object.previous?.state !== "absent" ||
+        proof?.operationId !== object.operationId ||
+        !Number.isInteger(proof.status) ||
+        proof.status < 400 ||
+        proof.status > 599 ||
+        proof.metadataStatus !== 404 ||
+        proof.mediaStatus !== 404 ||
+        proof.prefixPagesComplete !== true ||
+        proof.nameFound !== false
+      )
+        throw new Error("refused absent mutation and exact prefix absence are unproved");
+      object.state = "absent";
+      object.operationId = null;
+      object.generation = null;
+      object.bytesSha256 = null;
+      object.previous = null;
     },
     cleanupRequest(name, current) {
       checkName(name);
@@ -128,7 +224,7 @@ export function createRunOwnership({ bucket, prefix } = {}) {
       return [...objects.entries()]
         .filter(([, object]) => !["absent", "deleted"].includes(object.state))
         .map(([name]) => name)
-        .sort();
+        .toSorted();
     },
     verifyEmpty(input) {
       if ([...objects.values()].some((object) => !["absent", "deleted"].includes(object.state)))

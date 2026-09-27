@@ -13,7 +13,7 @@ const binding = {
 test("publication bundles preserve every isolated case body under its Rules version", () => {
   const corpus = buildCorpus(binding);
   const bundles = buildPublicationSources(corpus, binding);
-  assert.deepEqual(bundles.map((bundle) => [bundle.version, bundle.caseIds.length]), [[1, 7], [2, 342]]);
+  assert.deepEqual(bundles.map((bundle) => [bundle.version, bundle.caseIds.length]), [[1, 7], [2, 329]]);
   const expectedIds = [...corpus.cases, ...corpus.firestorePrograms].map((entry) => entry.id);
   assert.deepEqual(new Set(bundles.flatMap((bundle) => bundle.caseIds)), new Set(expectedIds));
   assert.equal(bundles.flatMap((bundle) => bundle.caseIds).length, expectedIds.length);

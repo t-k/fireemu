@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { createStage3RequestCounter } from "./storage-rules/request-counter.mjs";
+import { createStage3RequestCounter, DRAFT_REQUEST_LIMITS } from "./storage-rules/request-counter.mjs";
 
 function counter(preflightIds = ["preflight/a"]) {
   const events = [];
@@ -29,11 +29,12 @@ test("stage 3 counts preflight after the started row and writes a terminal on re
 });
 
 test("normal requests cannot borrow the protected recovery reserve", async () => {
+  assert.deepEqual(DRAFT_REQUEST_LIMITS, { maxRequests: 6648, recoveryReserve: 2000 });
   const { value, events } = counter();
   await value.start({ runId: "run-a" });
   await value.sendPreflight("preflight/a", async () => 200, (status) => status === 200);
   value.admit();
-  for (let index = 0; index < 4804; index++) {
+  for (let index = 0; index < 4647; index++) {
     await value.send(`subject/${index}`, async () => 200);
   }
   await assert.rejects(value.send("subject/over-cap", async () => 200), /normal cap/);
@@ -43,9 +44,9 @@ test("normal requests cannot borrow the protected recovery reserve", async () =>
   }
   await assert.rejects(value.send("recovery/over-cap", async () => 200), /recovery cap/);
   await value.finish("needs-recovery");
-  assert.equal(events.at(-1)[1].requests, 6805);
+  assert.equal(events.at(-1)[1].requests, 6648);
   assert.equal(events.filter(([type, row]) => type === "reserve" && row.phase === "preflight").length, 1);
-  assert.equal(events.filter(([type, row]) => type === "reserve" && row.phase === "normal").length, 4804);
+  assert.equal(events.filter(([type, row]) => type === "reserve" && row.phase === "normal").length, 4647);
   assert.equal(events.filter(([type, row]) => type === "reserve" && row.phase === "recovery").length, 2000);
 });
 
@@ -91,7 +92,7 @@ test("a failed durable reservation or concurrent dispatch blocks new traffic", a
 
 test("uncertain started or terminal writes fail closed and limits cannot grow", async () => {
   assert.throws(() => createStage3RequestCounter({
-    maxRequests: 6806,
+    maxRequests: 6649,
     preflightIds: ["preflight/a"],
     onStarted: async () => {},
     onReserve: async () => {},

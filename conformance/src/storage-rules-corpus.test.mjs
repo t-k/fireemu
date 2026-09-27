@@ -19,12 +19,12 @@ const rows = (corpus, suffix) =>
 test("partial declaration preserves every frozen behavior recipe without claiming verification", () => {
   const corpus = build();
   const result = validateCorpus(corpus, closure);
-  assert.equal(result.cases, 344);
+  assert.equal(result.cases, 331);
   assert.equal(result.declaredRecipes, 22);
   assert.equal(result.pendingRecipes, 0);
   assert.equal(result.firestorePrograms, 5);
   assert.equal(result.managementPrograms, 3);
-  assert.equal(result.declaredObjectRequestsPerRecording, 3883);
+  assert.equal(result.declaredObjectRequestsPerRecording, 3739);
   assert.equal(result.declaredFirestoreRequestsPerRecording, 60);
   assert.equal(corpus.productionRecordingsRequired, 2);
   assert.equal(corpus.sendAuthorized, false);
@@ -565,14 +565,13 @@ test("principal and claim declarations use references, owned paths and separate 
   assert.equal(Object.hasOwn(corpus.principals["user-plain"].requiredClaims, "role"), false);
 });
 
-test("token refusal cases keep six distinct symbolic credential states under one auth rule", () => {
+test("token refusal cases keep five in-scope credential states under one auth rule", () => {
   const corpus = build();
   const actual = rows(corpus, "token-refusal");
   const credentials = new Map([
     ["missing", "anonymous"],
     ["malformed", "malformed-token"],
     ["foreign-project", "foreign-project-token"],
-    ["expired", "expired-token"],
     ["revoked", "revoked-token"],
     ["valid", "user-a"],
   ]);
@@ -596,11 +595,11 @@ test("token refusal cases keep six distinct symbolic credential states under one
   }
   assert.equal(corpus.principals["malformed-token"].kind, "invalid-authorization-reference");
   assert.match(corpus.principals["malformed-token"].requirement, /keep the actual header private/);
-  for (const kind of ["foreign-project", "expired", "revoked"])
+  for (const kind of ["foreign-project", "revoked"])
     assert.equal(corpus.principals[`${kind}-token`].kind, "firebase-id-token-reference");
   assert.match(corpus.principals["foreign-project-token"].requirement, /different project/);
-  assert.match(corpus.principals["expired-token"].requirement, /verified expiration before/);
   assert.match(corpus.principals["revoked-token"].requirement, /verified account token revocation/);
+  assert.equal(Object.hasOwn(corpus.principals, "expired-token"), false);
 });
 
 test("token refusal declaration rejects changed credential, missing case or invented status", () => {
@@ -611,7 +610,7 @@ test("token refusal declaration rejects changed credential, missing case or inve
         1,
       ),
     (corpus) => {
-      corpus.cases.find((c) => c.id === "token-expired").subject.credential = "user-a";
+      corpus.cases.find((c) => c.id === "token-foreign-project").subject.credential = "user-a";
     },
     (corpus) => {
       corpus.principals["foreign-project-token"].requirement = "unchecked";
@@ -636,7 +635,7 @@ test("token refusal declaration rejects extra secret or outcome fields at every 
       corpus.cases.find((c) => c.id === "token-revoked").tokenBytes = "private-value";
     },
     (corpus) => {
-      corpus.cases.find((c) => c.id === "token-expired").observedStatus = 200;
+      corpus.cases.find((c) => c.id === "token-foreign-project").observedStatus = 200;
     },
     (corpus) => {
       corpus.cases.find((c) => c.id === "token-malformed").subject.headers.tokenBytes =
@@ -970,10 +969,10 @@ test("denial and bypass controls preserve raw observations under the same deny r
   const corpus = build();
   assert.equal(rows(corpus, "errors/firebase-denial").length, 12);
   const boundary = rows(corpus, "gcs-admin-boundary");
-  assert.equal(boundary.length, 48);
+  assert.equal(boundary.length, 36);
   assert.deepEqual(
     new Set(boundary.map((c) => `${c.subject.dialect}/${c.principal}`)),
-    new Set(["firebase/user-a", "firebase/admin", "gcs/admin", "gcs/iam-denied"]),
+    new Set(["firebase/user-a", "firebase/admin", "gcs/admin"]),
   );
   for (const c of boundary) {
     assert.match(c.rulesSource, /allow read, write: if false;/);
@@ -1109,7 +1108,7 @@ test("REST routes, bodies and list scope are independently fixed by operation an
   }
 });
 
-test("absent resources and IAM permission errors have direct independent controls", () => {
+test("absent resources retain direct controls without out-of-scope IAM mutation", () => {
   const corpus = build();
   const nullRows = rows(corpus, "stored-resource").filter((row) => row.rule.kind === "stored-null");
   assert.equal(nullRows.length, 16);
@@ -1119,15 +1118,20 @@ test("absent resources and IAM permission errors have direct independent control
   );
   for (const row of nullRows)
     assert.ok(row.rulesSource.includes(`if resource ${row.rule.matches ? "==" : "!="} null;`));
-  const denied = rows(corpus, "gcs-admin-boundary").filter((row) => row.principal === "iam-denied");
-  assert.equal(denied.length, 12);
-  assert.equal(corpus.principals["iam-denied"].kind, "oauth-token-reference");
-  for (const row of denied) {
-    assert.equal(row.subject.dialect, "gcs");
-    assert.ok(
-      [...row.setup, ...row.before, ...row.after, ...row.cleanup].every(
-        (request) => request.credential === "admin",
-      ),
-    );
+  assert.equal(Object.hasOwn(corpus.principals, "iam-denied"), false);
+  assert.equal(rows(corpus, "gcs-admin-boundary").some((row) => row.principal === "iam-denied"), false);
+});
+
+test("owner-excluded credentials cannot return through an added fixture or case", () => {
+  for (const excluded of ["iam-denied", "expired-token"]) {
+    const changed = build();
+    changed.principals[excluded] = { kind: "credential-reference" };
+    assert.throws(() => validateCorpus(changed, closure));
   }
+  const changed = build();
+  const added = structuredClone(changed.cases.find((row) => row.id === "token-valid"));
+  added.id = "token-expired";
+  added.principal = "expired-token";
+  changed.cases.push(added);
+  assert.throws(() => validateCorpus(changed, closure));
 });

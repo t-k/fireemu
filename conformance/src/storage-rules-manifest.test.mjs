@@ -19,10 +19,11 @@ test("declared request manifest gives every object and Firestore step one stable
   const manifest = buildDeclaredRequestManifest(corpus, closure);
   assert.equal(manifest.status, "LOCAL_PARTIAL_NO_SEND");
   assert.equal(manifest.sendAuthorized, false);
-  assert.equal(manifest.rows.length, 3943);
-  assert.deepEqual(manifest.counts, { storage: 3883, firestore: 60 });
+  assert.equal(manifest.rows.length, 3799);
+  assert.deepEqual(manifest.counts, { storage: 3739, firestore: 60 });
   assert.equal(new Set(manifest.rows.map((row) => row.id)).size, manifest.rows.length);
-  assert.equal(manifest.rows.filter((row) => row.stage === "subject").length, 344);
+  assert.equal(manifest.rows.filter((row) => row.stage === "subject").length, 331);
+  assert.equal(manifest.rows.some((row) => row.id.includes("token-expired") || row.id.includes("iam-denied")), false);
   assert.equal(manifest.rows.filter((row) => row.stage === "comparison").length, 1);
   assert.deepEqual(
     new Set(manifest.rows.filter((row) => row.family === "firestore-program").map((row) => row.programId)),

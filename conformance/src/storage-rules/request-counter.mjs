@@ -1,5 +1,5 @@
 // Draft stage 3 envelope per recording. This module performs no HTTP or journal I/O.
-export const DRAFT_REQUEST_LIMITS = Object.freeze({ maxRequests: 6805, recoveryReserve: 2000 });
+export const DRAFT_REQUEST_LIMITS = Object.freeze({ maxRequests: 6648, recoveryReserve: 2000 });
 
 /** Reserve each outbound attempt durably before dispatch, including read-only preflight. */
 export function createStage3RequestCounter(options = {}) {

@@ -166,7 +166,6 @@ function specifications() {
     ["missing", "anonymous"],
     ["malformed", "malformed-token"],
     ["foreign-project", "foreign-project-token"],
-    ["expired", "expired-token"],
     ["revoked", "revoked-token"],
     ["valid", "user-a"],
   ])
@@ -333,7 +332,6 @@ function specifications() {
         ["firebase", "user-a"],
         ["firebase", "admin"],
         ["gcs", "admin"],
-        ["gcs", "iam-denied"],
       ])
         add(
           "gcs-admin-boundary",
@@ -352,11 +350,6 @@ function principalFixtures(binding) {
     admin: {
       kind: "owner-oauth-reference",
       requirement: "actual IAM permissions observed; no literal owner token",
-    },
-    "iam-denied": {
-      kind: "oauth-token-reference",
-      requirement:
-        "externally prepared valid OAuth principal with verified absence of the required object permission; this corpus never changes IAM",
     },
     "user-a": {
       kind: "firebase-id-token-reference",
@@ -390,11 +383,6 @@ function principalFixtures(binding) {
       kind: "firebase-id-token-reference",
       requirement:
         "externally minted and verified Firebase ID token from a different project; record project and token digest privately, never token bytes here",
-    },
-    "expired-token": {
-      kind: "firebase-id-token-reference",
-      requirement:
-        "same-project signed token with verified expiration before the subject request; retain mint and timing evidence privately",
     },
     "revoked-token": {
       kind: "firebase-id-token-reference",

@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { test } from "node:test";
-import { runPrograms } from "./functions-events/session.mjs";
+import { resourceMatches, runPrograms } from "./functions-events/session.mjs";
 
 const readJson = (path) => JSON.parse(readFileSync(new URL(path, import.meta.url)));
 const manifest = readJson("../functions-events/programs.json");
@@ -176,4 +176,27 @@ test("capture issues and cleanup failure prevent a local observation claim", asy
   });
   assert.ok(result.programs[0].cases.every((row) => row.status === "INCOMPLETE"));
   assert.equal(result.status, "INCOMPLETE");
+});
+
+test("a bulk Auth negative case correlates every owned user", () => {
+  const key = { kind: "auth", values: ["owned-user-a", "owned-user-b"] };
+  assert.equal(resourceMatches({ event: { data: { uid: "owned-user-a" } } }, key), true);
+  assert.equal(resourceMatches({ event: { data: { uid: "owned-user-b" } } }, key), true);
+  assert.equal(resourceMatches({ event: { data: { uid: "unrelated-user" } } }, key), false);
+});
+
+test("Pub/Sub frames correlate a publish receipt in both generations", () => {
+  const key = { kind: "pubsub", value: "message-123" };
+  assert.equal(
+    resourceMatches({ event: { context: { eventId: "message-123" }, data: {} } }, key),
+    true,
+  );
+  assert.equal(
+    resourceMatches({ event: { data: { message: { messageId: "message-123" } } } }, key),
+    true,
+  );
+  assert.equal(
+    resourceMatches({ event: { data: { message: { messageId: "other" } } } }, key),
+    false,
+  );
 });

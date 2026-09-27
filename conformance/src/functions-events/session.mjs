@@ -5,7 +5,7 @@ const priority = { LOCAL_OBSERVATION: 0, INCOMPLETE: 1, DIFF: 2 };
 const worst = (statuses) =>
   statuses.reduce((a, b) => (priority[a] >= priority[b] ? a : b), "LOCAL_OBSERVATION");
 
-function resourceMatches(frame, key) {
+export function resourceMatches(frame, key) {
   const event = frame.event ?? {};
   const data = event.data ?? {};
   switch (key.kind) {
@@ -20,7 +20,7 @@ function resourceMatches(frame, key) {
     case "storage":
       return data.name === key.value && (key.bucket == null || data.bucket === key.bucket);
     case "auth":
-      return data.uid === key.value;
+      return key.values ? key.values.includes(data.uid) : data.uid === key.value;
     case "pubsub":
       return [data.message?.messageId, data.messageId, event.context?.eventId].includes(key.value);
     default:

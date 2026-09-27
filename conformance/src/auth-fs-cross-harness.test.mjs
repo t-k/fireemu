@@ -105,3 +105,38 @@ test("the lane's ruleset carries its own marker and tells tenants apart", () => 
   );
   assert.throws(() => rulesetSource("main"), /unknown ruleset/);
 });
+
+test("the other project's key file must be private and name the other project", async () => {
+  const { mkdtempSync, writeFileSync, chmodSync } = await import("node:fs");
+  const { tmpdir } = await import("node:os");
+  const { join } = await import("node:path");
+  const { foreignWebConfig, FOREIGN_PROJECT } = await import("./auth-fs-cross/run.mjs");
+  const dir = mkdtempSync(join(tmpdir(), "afc-foreign-"));
+  const project = join(dir, "project.json");
+  const key = join(dir, "key.json");
+  const write = (path, value, mode = 0o600) => {
+    writeFileSync(path, JSON.stringify(value));
+    chmodSync(path, mode);
+  };
+  const saved = { ...process.env };
+  try {
+    process.env.FIREEMU_AUTH_FOREIGN_PROJECT_FILE = project;
+    process.env.FIREEMU_AUTH_FOREIGN_KEY_FILE = key;
+    write(project, { projectId: FOREIGN_PROJECT, projectNumber: "1234567" });
+    write(key, { keyString: "k".repeat(39) });
+    assert.deepEqual(await foreignWebConfig(), {
+      projectId: FOREIGN_PROJECT,
+      projectNumber: "1234567",
+      apiKey: "k".repeat(39),
+    });
+    write(key, { keyString: "k".repeat(39) }, 0o644);
+    await assert.rejects(foreignWebConfig(), /readable by others/);
+    write(key, { keyString: "short" });
+    await assert.rejects(foreignWebConfig(), /has no key/);
+    write(key, { keyString: "k".repeat(39) });
+    write(project, { projectId: "fireemu-oracle-idp", projectNumber: "1234567" });
+    await assert.rejects(foreignWebConfig(), /is not fireemu-oracle-query/);
+  } finally {
+    process.env = saved;
+  }
+});

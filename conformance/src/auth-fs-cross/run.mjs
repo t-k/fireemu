@@ -18,14 +18,15 @@
 // the other project whose ID token the foreign-project program presents (X9).
 //
 // Production needs FIREEMU_AUTH_SANDBOX_WEB_CONFIG (the sandbox web app config JSON, kept outside
-// the repository), FIREEMU_AUTH_FOREIGN_WEB_CONFIG (the same for fireemu-oracle-query, with its
-// restricted key), owner ADC, FIREEMU_SANDBOX_LEDGER and FIREEMU_AUTH_FS_CROSS_PRIVATE_DIR.
+// the repository), FIREEMU_AUTH_FOREIGN_PROJECT_FILE and FIREEMU_AUTH_FOREIGN_KEY_FILE (the id,
+// number and restricted key of fireemu-oracle-query), owner ADC, FIREEMU_SANDBOX_LEDGER and
+// FIREEMU_AUTH_FS_CROSS_PRIVATE_DIR.
 // AFC_PROGRAMS selects programs by id prefix.
 
 import { execFile, spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
-import { appendFile, mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { appendFile, mkdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { promisify } from "node:util";
 
@@ -139,7 +140,32 @@ async function webConfig(variable, project) {
 }
 
 const sandboxWebConfig = () => webConfig("FIREEMU_AUTH_SANDBOX_WEB_CONFIG", SANDBOX_PROJECT);
-const foreignWebConfig = () => webConfig("FIREEMU_AUTH_FOREIGN_WEB_CONFIG", FOREIGN_PROJECT);
+
+/**
+ * The other project of X9: its id and number, and the restricted key (Identity Toolkit and Secure
+ * Token only) kept apart in a mode-600 file. Neither file may be readable by others.
+ */
+export async function foreignWebConfig() {
+  const read = async (variable) => {
+    const path = process.env[variable];
+    if (!path) throw new Error(`${variable} is required`);
+    if ((await stat(path)).mode & 0o077) throw new Error(`${variable} is readable by others`);
+    return JSON.parse(await readFile(path, "utf8"));
+  };
+  const project = await read("FIREEMU_AUTH_FOREIGN_PROJECT_FILE");
+  const key = await read("FIREEMU_AUTH_FOREIGN_KEY_FILE");
+  if (project.projectId !== FOREIGN_PROJECT)
+    throw new Error(`FIREEMU_AUTH_FOREIGN_PROJECT_FILE is not ${FOREIGN_PROJECT}`);
+  if (!/^\d+$/.test(project.projectNumber ?? ""))
+    throw new Error("FIREEMU_AUTH_FOREIGN_PROJECT_FILE has no project number");
+  if (typeof key.keyString !== "string" || key.keyString.length < 20)
+    throw new Error("FIREEMU_AUTH_FOREIGN_KEY_FILE has no key");
+  return {
+    projectId: project.projectId,
+    projectNumber: project.projectNumber,
+    apiKey: key.keyString,
+  };
+}
 
 async function productionTarget(web, foreignWeb) {
   let token = await adminToken();

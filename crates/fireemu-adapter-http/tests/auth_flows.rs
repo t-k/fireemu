@@ -8816,3 +8816,154 @@ fn generated_saml_json_shape_corpus_is_executed_by_the_native_fixture_handler() 
         }
     }
 }
+
+fn saml_fixture_cookie(s: &AuthState, tenant: Option<&str>, id_token: &Value) -> Value {
+    let namespace = tenant.map_or_else(
+        || format!("{V1}/projects/demo-app"),
+        |id| format!("{V1}/projects/demo-app/tenants/{id}"),
+    );
+    let (status, response) = admin(
+        s,
+        &format!("{namespace}:createSessionCookie"),
+        &json!({"idToken": id_token, "validDuration": "3600"}),
+    );
+    assert_eq!(status, 200, "{response}");
+    response["sessionCookie"].clone()
+}
+
+// Fixture-only SAML handoffs: these JSON assertions are not signed XML evidence.
+fn assert_saml_fixture_cookie_lifecycle(
+    tenant: Option<&str>,
+    stateless_refresh: bool,
+    attributes: Option<&Value>,
+) {
+    use fireemu_core_auth::store::AuthRegistry;
+
+    const SIGNED_AT: i64 = 1_788_004_860;
+    let mut s = state();
+    s.stateless_refresh_tokens = stateless_refresh;
+    if let Some(tenant) = tenant {
+        let registry = Arc::new(AuthRegistry::new("demo-app", s.store.clone()));
+        registry.ensure_tenant("demo-app", tenant).unwrap();
+        s.registry = Some(registry);
+    }
+    let mut saml = json!({"assertion":{"subject":{"nameId":"lifecycle@saml.example.com"}}});
+    if let Some(attributes) = attributes {
+        saml["assertion"]["attributeStatements"] = attributes.clone();
+    }
+    let mut body = json!({"requestUri": DUMMY_URI, "postBody": format!(
+        "providerId=saml.lifecycle&id_token={}&SAMLResponse={}",
+        percent(&json!({"sub":"saml-lifecycle-subject"}).to_string()),
+        percent(&saml.to_string()))});
+    if let Some(tenant) = tenant {
+        body["tenantId"] = json!(tenant);
+    }
+    let (status, signed) = post(&s, &format!("{V1}/accounts:signInWithIdp"), &body);
+    assert_eq!(status, 200, "{signed}");
+    let uid = signed["localId"].clone();
+    let assert_token =
+        |encoded: &Value, issuer: &str, issued_at: i64, expected_attributes: Option<&Value>| {
+            let c = claims(encoded.as_str().unwrap());
+            assert_eq!(c["sub"], uid);
+            assert_eq!(c["aud"], "demo-app");
+            assert_eq!(c["iss"], issuer);
+            assert_eq!(c["iat"], issued_at);
+            assert_eq!(c["exp"], issued_at + 3600);
+            assert_eq!(c["auth_time"], SIGNED_AT);
+            assert_eq!(c["email"], "lifecycle@saml.example.com");
+            assert_eq!(c["email_verified"], true);
+            assert_eq!(c["firebase"]["sign_in_provider"], "saml.lifecycle");
+            assert_eq!(
+                c["firebase"]["identities"]["saml.lifecycle"],
+                json!(["saml-lifecycle-subject"])
+            );
+            assert_eq!(c["firebase"].get("sign_in_attributes"), expected_attributes);
+            assert_eq!(
+                c["firebase"].get("tenant").cloned(),
+                tenant.map(|id| json!(id))
+            );
+        };
+    let cookie = |id_token: &Value| saml_fixture_cookie(&s, tenant, id_token);
+    assert_token(
+        &signed["idToken"],
+        "https://securetoken.google.com/demo-app",
+        SIGNED_AT,
+        attributes,
+    );
+    let before_cookie = cookie(&signed["idToken"]);
+    assert_token(
+        &before_cookie,
+        "https://session.firebase.google.com/demo-app",
+        SIGNED_AT,
+        attributes,
+    );
+    s.clock
+        .lock()
+        .unwrap()
+        .advance_to(LogicalInstant::from_unix_seconds(SIGNED_AT + 30))
+        .unwrap();
+    let mut refresh = json!({"grant_type":"refresh_token", "refresh_token":signed["refreshToken"]});
+    if let Some(tenant) = tenant {
+        refresh["tenantId"] = json!(tenant);
+    }
+    let (status, refreshed) = post(&s, "/securetoken.googleapis.com/v1/token", &refresh);
+    assert_eq!(status, 200, "{refreshed}");
+    assert_token(
+        &refreshed["id_token"],
+        "https://securetoken.google.com/demo-app",
+        SIGNED_AT + 30,
+        None,
+    );
+    assert_token(
+        &cookie(&signed["idToken"]),
+        "https://session.firebase.google.com/demo-app",
+        SIGNED_AT + 30,
+        attributes,
+    );
+    assert_token(
+        &cookie(&refreshed["id_token"]),
+        "https://session.firebase.google.com/demo-app",
+        SIGNED_AT + 30,
+        None,
+    );
+    // Refresh does not rewrite a cookie that was already minted.
+    assert_token(
+        &before_cookie,
+        "https://session.firebase.google.com/demo-app",
+        SIGNED_AT,
+        attributes,
+    );
+    if tenant.is_some() {
+        assert!(s.store.lock().unwrap().users_by_creation().is_empty());
+    }
+}
+
+#[test]
+fn saml_fixture_project_claims_survive_cookie_handoffs_with_refresh() {
+    for stateless_refresh in [false, true] {
+        for attributes in [
+            None,
+            Some(json!({})),
+            Some(json!({"role":["reader"],"enabled":true,"rank":3,"nested":{"region":"west"}})),
+        ] {
+            assert_saml_fixture_cookie_lifecycle(None, stateless_refresh, attributes.as_ref());
+        }
+    }
+}
+
+#[test]
+fn saml_fixture_tenant_claims_survive_cookie_handoffs_with_refresh() {
+    for stateless_refresh in [false, true] {
+        for attributes in [
+            None,
+            Some(json!({})),
+            Some(json!({"role":["reader"],"enabled":true,"rank":3,"nested":{"region":"west"}})),
+        ] {
+            assert_saml_fixture_cookie_lifecycle(
+                Some("customer-a"),
+                stateless_refresh,
+                attributes.as_ref(),
+            );
+        }
+    }
+}

@@ -134,6 +134,121 @@ fn signed_oidc_creates_then_signs_in_to_the_same_account() {
     assert_eq!(s.store.lock().unwrap().users_by_creation().len(), 1);
 }
 
+fn assert_signed_oidc_claim_lifecycle(tenant: Option<&str>, stateless_refresh: bool) {
+    use fireemu_adapter_http::identity_toolkit::{handle, handle_with, OWNER_CREDENTIAL};
+    use fireemu_core_auth::jwt::decode_unsigned;
+    use fireemu_core_auth::store::AuthRegistry;
+
+    let mut s = state();
+    s.stateless_refresh_tokens = stateless_refresh;
+    let mut pin = trust();
+    let mut body = request(&token(&claims()));
+    if let Some(tenant) = tenant {
+        let registry = Arc::new(AuthRegistry::new("demo-app", s.store.clone()));
+        let config = s
+            .store
+            .lock()
+            .unwrap()
+            .oidc_config("oidc.local")
+            .unwrap()
+            .clone();
+        let store = registry.ensure_tenant("demo-app", tenant).unwrap();
+        assert!(store.lock().unwrap().create_oidc_config(config));
+        s.registry = Some(registry);
+        pin.tenant_id = Some(tenant.into());
+        body["tenantId"] = json!(tenant);
+    }
+    let signed = signed_post(&s, &pin, &body);
+    assert_eq!(signed.status, 200, "{}", signed.body);
+    let uid = signed.body["localId"].clone();
+    let assert_claims = |encoded: &Value, issuer: &str, attributes: Option<&Value>| {
+        let decoded = decode_unsigned(encoded.as_str().unwrap()).unwrap();
+        let claims: Value = serde_json::from_str(&decoded.payload_json).unwrap();
+        assert_eq!(claims["sub"], uid);
+        assert_eq!(claims["aud"], "demo-app");
+        assert_eq!(claims["iss"], issuer);
+        assert_eq!(claims["auth_time"], NOW);
+        assert_eq!(claims["firebase"]["sign_in_provider"], "oidc.local");
+        assert_eq!(
+            claims["firebase"]["identities"]["oidc.local"],
+            json!(["signed-subject"])
+        );
+        assert_eq!(claims["firebase"].get("sign_in_attributes"), attributes);
+        assert_eq!(
+            claims["firebase"].get("tenant").cloned(),
+            tenant.map(|id| json!(id))
+        );
+    };
+    assert_claims(
+        &signed.body["idToken"],
+        "https://securetoken.google.com/demo-app",
+        Some(&claims()),
+    );
+    s.clock
+        .lock()
+        .unwrap()
+        .advance_to(LogicalInstant::from_unix_seconds(NOW + 30))
+        .unwrap();
+    let mut refresh_body =
+        json!({"grant_type": "refresh_token", "refresh_token": signed.body["refreshToken"]});
+    if let Some(tenant) = tenant {
+        refresh_body["tenantId"] = json!(tenant);
+    }
+    let refreshed = handle(
+        &s,
+        "POST",
+        "/securetoken.googleapis.com/v1/token",
+        &refresh_body,
+    );
+    assert_eq!(refreshed.status, 200, "{}", refreshed.body);
+    assert_claims(
+        &refreshed.body["id_token"],
+        "https://securetoken.google.com/demo-app",
+        None,
+    );
+
+    let namespace = tenant.map_or_else(
+        || format!("{V1}/projects/demo-app"),
+        |tenant| format!("{V1}/projects/demo-app/tenants/{tenant}"),
+    );
+    let initial_attributes = claims();
+    for (id_token, attributes) in [
+        (&signed.body["idToken"], Some(&initial_attributes)),
+        (&refreshed.body["id_token"], None),
+    ] {
+        let cookie = handle_with(
+            &s,
+            "POST",
+            &format!("{namespace}:createSessionCookie"),
+            &RequestHeaders {
+                authorization: Some(OWNER_CREDENTIAL.to_owned()),
+                ..RequestHeaders::default()
+            },
+            &json!({"idToken": id_token, "validDuration": "3600"}),
+        );
+        assert_eq!(cookie.status, 200, "{}", cookie.body);
+        assert_claims(
+            &cookie.body["sessionCookie"],
+            "https://session.firebase.google.com/demo-app",
+            attributes,
+        );
+    }
+}
+
+#[test]
+fn signed_oidc_project_claims_survive_refresh_and_cookie_handoffs() {
+    for stateless_refresh in [false, true] {
+        assert_signed_oidc_claim_lifecycle(None, stateless_refresh);
+    }
+}
+
+#[test]
+fn signed_oidc_tenant_claims_survive_refresh_and_cookie_handoffs() {
+    for stateless_refresh in [false, true] {
+        assert_signed_oidc_claim_lifecycle(Some("customer-a"), stateless_refresh);
+    }
+}
+
 #[test]
 fn signed_oidc_refuses_claim_boundaries_without_mutating_existing_accounts() {
     let s = state();

@@ -1,6 +1,11 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { buildCorpus } from "./storage-object/corpus.mjs";
+import {
+  assertDeletedTokenDenied,
+  assertFirebaseTokenState,
+  resolveFirebaseDownloadToken,
+} from "./storage-object/download-token-resolution.mjs";
 
 const bucket = "example.firebasestorage.app";
 const prefix = "owned/token-run/";
@@ -111,4 +116,112 @@ test("token recipe increments only static request counts and leaves runtime obli
   assert.equal(value.requestsPerRecording, 1888);
   assert.equal(value.remainingRecipeIds.length, 2);
   assert.ok(value.remainingObligations.includes("download-token-provenance-and-authorization"));
+});
+
+test("a token reference selects one new private token from bound owner responses", () => {
+  const row = recipe();
+  const name = row.objects[0];
+  const priorStep = row.steps.find((step) => step.id === "after-upload-firebase-metadata");
+  const createStep = row.steps.find((step) => step.id === "create-token");
+  const reference = row.steps.find((step) => step.id === "download-with-token").query.token;
+  const evidence = (step, tokens) => ({
+    step,
+    response: {
+      status: 200,
+      raw: Buffer.from(JSON.stringify({ bucket, name, downloadTokens: tokens })),
+    },
+  });
+  const prior = evidence(priorStep, "old-token");
+  const created = evidence(createStep, "old-token,new-token");
+  assert.equal(
+    resolveFirebaseDownloadToken({ reference, prior, created, bucket, name }),
+    "new-token",
+  );
+  assert.doesNotThrow(() =>
+    assertFirebaseTokenState({
+      evidence: evidence(priorStep, "old-token,new-token"),
+      bucket,
+      name,
+      token: "new-token",
+      present: true,
+    }),
+  );
+  assert.throws(
+    () =>
+      assertFirebaseTokenState({
+        evidence: evidence(priorStep, "old-token"),
+        bucket,
+        name,
+        token: "new-token",
+        present: true,
+      }),
+    /state/,
+  );
+  assert.doesNotThrow(() =>
+    assertFirebaseTokenState({
+      evidence: evidence(priorStep, "old-token"),
+      bucket,
+      name,
+      token: "new-token",
+      present: false,
+    }),
+  );
+  assert.throws(
+    () =>
+      resolveFirebaseDownloadToken({
+        reference,
+        prior,
+        created: evidence(createStep, "old-token"),
+        bucket,
+        name,
+      }),
+    /exactly one/,
+  );
+  assert.throws(
+    () =>
+      resolveFirebaseDownloadToken({
+        reference,
+        prior,
+        created: evidence(createStep, "old-token,new-token,other-token"),
+        bucket,
+        name,
+      }),
+    /exactly one/,
+  );
+  assert.throws(
+    () =>
+      resolveFirebaseDownloadToken({
+        reference,
+        prior,
+        created: evidence(createStep, "new-token"),
+        bucket,
+        name,
+      }),
+    /removed/,
+  );
+  assert.throws(
+    () =>
+      resolveFirebaseDownloadToken({
+        reference,
+        prior,
+        created: evidence({ ...createStep, path: "/v0/b/wrong/o" }, "old-token,new-token"),
+        bucket,
+        name,
+      }),
+    /route/,
+  );
+});
+
+test("a deleted token must be denied without returning the owned media", () => {
+  const owned = Buffer.from("owned bytes");
+  assert.doesNotThrow(() =>
+    assertDeletedTokenDenied({ status: 403, raw: Buffer.from("denied") }, owned),
+  );
+  assert.throws(() => assertDeletedTokenDenied({ status: 200, raw: owned }, owned), /denied/);
+  for (const status of [408, 429])
+    assert.throws(
+      () => assertDeletedTokenDenied({ status, raw: Buffer.from("transient") }, owned),
+      /denied/,
+    );
+  assert.throws(() => assertDeletedTokenDenied({ status: 403, raw: owned }, owned), /owned bytes/);
 });

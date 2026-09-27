@@ -4046,3 +4046,188 @@ service cloud.firestore {
     }
     h.handle.abort();
 }
+
+/// `n` negated `exists()` calls on distinct documents named after the rule's `id`.
+fn distinct_reads(prefix: &str, n: usize) -> String {
+    (0..n)
+        .map(|k| format!("!exists(/databases/$(database)/documents/m/$({prefix} + '-{k}'))"))
+        .collect::<Vec<_>>()
+        .join(" && ")
+}
+
+async fn drained<T>(
+    stream: Result<tonic::Response<tonic::Streaming<T>>, tonic::Status>,
+) -> Result<(), tonic::Code> {
+    let mut stream = stream.map_err(|e| e.code())?.into_inner();
+    while let Some(item) = stream.next().await {
+        item.map_err(|e| e.code())?;
+    }
+    Ok(())
+}
+
+/// A multi-document request may make 20 distinct document reads in its rules, not 19: two
+/// documents whose rules read 10 each, by batchGet, by a commit and by a query that names its
+/// document (FS-RULES: `commit-10-and-10` allowed).
+#[tokio::test]
+async fn a_multi_document_request_may_read_exactly_twenty_documents() {
+    let mut h = start().await;
+    let (_, token) = h.user("t@example.com");
+    h.rules
+        .replace_source(&format!(
+            "rules_version = '2';
+service cloud.firestore {{
+  match /databases/{{database}}/documents {{
+    match /bg/{{id}} {{ allow get, create: if {}; }}
+    match /nm/{{id}} {{ allow list: if {}; }}
+  }}
+}}",
+            distinct_reads("id", 10),
+            distinct_reads("'n'", 20)
+        ))
+        .unwrap();
+    let batch = pb::BatchGetDocumentsRequest {
+        database: DB.to_owned(),
+        documents: vec![format!("{DOCS}/bg/a"), format!("{DOCS}/bg/b")],
+        ..Default::default()
+    };
+    assert_eq!(
+        drained(
+            h.client
+                .batch_get_documents(with_bearer(batch, &token))
+                .await
+        )
+        .await,
+        Ok(())
+    );
+    let create = |id: &str| {
+        let mut write = set_write(&format!("bg/{id}"), &[]);
+        write.current_document = Some(pb::Precondition {
+            condition_type: Some(pb::precondition::ConditionType::Exists(false)),
+        });
+        write
+    };
+    let commit = pb::CommitRequest {
+        database: DB.to_owned(),
+        writes: vec![create("c"), create("d")],
+        ..Default::default()
+    };
+    h.client
+        .commit(with_bearer(commit, &token))
+        .await
+        .expect("two creates reading 10 documents each");
+    let named = pb::RunQueryRequest {
+        parent: DOCS.to_owned(),
+        query_type: Some(pb::run_query_request::QueryType::StructuredQuery(
+            pb::StructuredQuery {
+                from: vec![sq::CollectionSelector {
+                    collection_id: "nm".into(),
+                    all_descendants: false,
+                }],
+                r#where: Some(sq::Filter {
+                    filter_type: Some(sq::filter::FilterType::FieldFilter(sq::FieldFilter {
+                        field: Some(sq::FieldReference {
+                            field_path: "__name__".into(),
+                        }),
+                        op: sq::field_filter::Operator::Equal as i32,
+                        value: Some(pb::Value {
+                            value_type: Some(pb::value::ValueType::ReferenceValue(format!(
+                                "{DOCS}/nm/a"
+                            ))),
+                        }),
+                    })),
+                }),
+                ..Default::default()
+            },
+        )),
+        ..Default::default()
+    };
+    assert_eq!(
+        drained(h.client.run_query(with_bearer(named, &token)).await).await,
+        Ok(())
+    );
+    h.handle.abort();
+}
+
+/// A denial's trace names the end user it refused.
+#[tokio::test]
+async fn a_denial_trace_names_the_user() {
+    let mut h = start().await;
+    let (alice, token) = h.user("alice@example.com");
+    trace_denials(&h);
+    let request = pb::ListCollectionIdsRequest {
+        parent: DOCS.to_owned(),
+        ..Default::default()
+    };
+    let err = h
+        .client
+        .list_collection_ids(with_bearer(request, &token))
+        .await
+        .unwrap_err();
+    assert_eq!(err.code(), tonic::Code::PermissionDenied);
+    let active = h.rules.snapshot().unwrap();
+    let diagnostics = active.diagnostics.lock().unwrap();
+    let trace = diagnostics
+        .requests()
+        .into_iter()
+        .find(|trace| !trace.allowed)
+        .expect("the denial is traced");
+    assert_eq!(trace.uid.as_deref(), Some(alice.as_str()));
+    drop(diagnostics);
+    h.handle.abort();
+}
+
+/// A signer that signs by reversing the input: enough to make the store verify signatures.
+struct ReversingSigner;
+
+impl fireemu_core_auth::jwt::IdTokenSigner for ReversingSigner {
+    fn alg(&self) -> &'static str {
+        "RS256"
+    }
+    fn kid(&self) -> &'static str {
+        "test"
+    }
+    fn sign(&self, signing_input: &[u8]) -> Vec<u8> {
+        signing_input.iter().rev().copied().collect()
+    }
+    fn verify(&self, signing_input: &[u8], signature: &[u8]) -> bool {
+        self.sign(signing_input) == signature
+    }
+    fn public_jwk_json(&self) -> String {
+        "{}".to_owned()
+    }
+}
+
+/// The emulator profile keeps its own text for an expired token of a signing session; the
+/// production text is the strict profile's.
+#[tokio::test]
+async fn the_emulator_profile_keeps_its_expired_token_text() {
+    let mut h = start_with(TokenAcceptance::EmulatorMock).await;
+    h.rules
+        .replace_source(
+            "rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    match /open/{id} { allow read: if true; }
+  }
+}",
+        )
+        .unwrap();
+    let expired = {
+        let mut store = h.auth.lock().unwrap();
+        store.set_signer(Arc::new(ReversingSigner));
+        let issued = LogicalInstant::from_nanos(START.as_nanos() - 3_700 * 1_000_000_000);
+        let uid = store
+            .create_user(NewUser::email("late@example.com"), issued)
+            .unwrap();
+        let claims = store.id_token_claims(&uid, None, issued).unwrap();
+        fireemu_core_auth::jwt::encode_with(&claims, store.signer())
+    };
+    let err = h
+        .client
+        .get_document(with_bearer(get("open/d"), &expired))
+        .await
+        .unwrap_err();
+    assert_eq!(err.code(), tonic::Code::Unauthenticated, "{err}");
+    assert!(err.message().starts_with("invalid ID token"), "{err}");
+    h.handle.abort();
+}

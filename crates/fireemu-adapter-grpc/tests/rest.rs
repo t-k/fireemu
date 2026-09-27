@@ -1973,6 +1973,20 @@ fn the_oauth_refusal_names_the_transcoded_method() {
             format!("{DOCS}:listCollectionIds"),
             "ListCollectionIds",
         ),
+        ("POST", format!("{DOCS}:batchWrite"), "BatchWrite"),
+        (
+            "POST",
+            format!("{DOCS}:beginTransaction"),
+            "BeginTransaction",
+        ),
+        ("POST", format!("{DOCS}:rollback"), "Rollback"),
+        (
+            "POST",
+            format!("{DOCS}:runAggregationQuery"),
+            "RunAggregationQuery",
+        ),
+        ("POST", format!("{DOCS}:partitionQuery"), "PartitionQuery"),
+        ("POST", format!("{DOCS}:executePipeline"), "ExecutePipeline"),
     ] {
         let (status, err) = call_as(&s, method, &path, json!({}), Some("Bearer not-a-token"));
         assert_eq!(status, 401, "{method} {path}: {err}");
@@ -1984,6 +1998,47 @@ fn the_oauth_refusal_names_the_transcoded_method() {
             "{method} {path}: {err}"
         );
     }
+}
+
+/// Only the front end's OAuth refusal carries the `ErrorInfo`: an expired ID token is refused
+/// with Firestore's own "Missing or invalid authentication." and no details.
+#[test]
+fn an_expired_token_is_refused_without_the_front_ends_error_info() {
+    const OPEN: &str = "rules_version = '2';\nservice cloud.firestore { match /databases/{d}/documents { match /{document=**} { allow read: if true; } } }";
+    let (mut s, clock) = state_with_clock(Some(OPEN), TokenAcceptance::Verified);
+    let auth = Arc::new(Mutex::new(AuthStore::new(
+        "demo-app",
+        SplitMix64::new(3),
+        TotpPolicy::default(),
+    )));
+    let expired = {
+        let mut store = auth.lock().unwrap();
+        let start = LogicalInstant::from_unix_seconds(1_788_004_860 - 3_600 - 60);
+        let uid = store
+            .create_user(
+                fireemu_core_auth::store::NewUser::email("late@example.com"),
+                start,
+            )
+            .unwrap();
+        let claims = store.id_token_claims(&uid, None, start).unwrap();
+        fireemu_core_auth::jwt::encode_unsigned(&claims)
+    };
+    let loaded = Arc::new(RulesetSlot::new(LoadedRules::from_source(OPEN).unwrap()));
+    s.rules = Some(Arc::new(
+        RulesEnforcer::new(loaded, auth, clock).with_token_semantics(TokenSemantics::Firestore),
+    ));
+    let (status, err) = call_as(
+        &s,
+        "GET",
+        &format!("{DOCS}/c/d"),
+        json!({}),
+        Some(&format!("Bearer {expired}")),
+    );
+    assert_eq!(status, 401, "{err}");
+    assert_eq!(
+        err,
+        json!({"error": {"code": 401, "message": "Missing or invalid authentication.", "status": "UNAUTHENTICATED"}})
+    );
 }
 
 #[test]

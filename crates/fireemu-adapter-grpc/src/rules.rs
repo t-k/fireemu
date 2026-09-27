@@ -791,8 +791,10 @@ impl RulesEnforcer {
                 &reader,
                 Some(&rules.diagnostics),
             )?;
+            // One document's rules read at most the single-request budget (10), so the total
+            // only binds a multi-document request.
             let accessed = reader.seen.borrow().len() as u64;
-            if items.len() > 1 && accessed > multi_total {
+            if accessed > multi_total {
                 return Err(denied(
                     &rules.diagnostics,
                     principal,
@@ -982,8 +984,10 @@ impl RulesEnforcer {
                 &reader,
                 Some(&rules.diagnostics),
             )?;
+            // One write's rules read at most the single-request budget (10), so the total only
+            // binds a multi-write request.
             let accessed = reader.seen.borrow().len() as u64;
-            if writes.len() > 1 && accessed > multi_total {
+            if accessed > multi_total {
                 return Err(denied(
                     &rules.diagnostics,
                     principal,

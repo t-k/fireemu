@@ -299,6 +299,40 @@ mod tests {
     use super::*;
 
     #[test]
+    fn only_the_cosine_refusal_carries_an_error_info() {
+        let status = failed_precondition(COSINE_ZERO_VECTOR);
+        assert_eq!(status.code(), Code::FailedPrecondition);
+        assert_eq!(
+            details_to_json(status.details()),
+            Some(vec![json!({
+                "@type": "type.googleapis.com/google.rpc.ErrorInfo",
+                "reason": "COSINE_DISTANCE_ON_ZERO_VECTOR",
+                "domain": "firestore.googleapis.com",
+            })])
+        );
+        let other = failed_precondition("The query requires an index.");
+        assert_eq!(other.code(), Code::FailedPrecondition);
+        assert_eq!(details_to_json(other.details()), None);
+    }
+
+    #[test]
+    fn the_oauth_refusal_names_its_service_and_method_without_a_domain() {
+        let status = credentials_missing("m", "RunQuery");
+        assert_eq!(status.code(), Code::Unauthenticated);
+        assert_eq!(
+            details_to_json(status.details()),
+            Some(vec![json!({
+                "@type": "type.googleapis.com/google.rpc.ErrorInfo",
+                "reason": "CREDENTIALS_MISSING",
+                "metadata": {
+                    "method": "google.firestore.v1.Firestore.RunQuery",
+                    "service": "firestore.googleapis.com",
+                },
+            })])
+        );
+    }
+
+    #[test]
     fn the_pipeline_refusal_renders_production_details() {
         let status = pipeline_requires_enterprise();
         assert_eq!(status.code(), Code::FailedPrecondition);

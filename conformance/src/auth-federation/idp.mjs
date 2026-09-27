@@ -6,9 +6,12 @@
 // directory or the system temporary directory, owner-readable only (mode 600).
 
 import { createPrivateKey, generateKeyPairSync, randomBytes, sign } from "node:crypto";
+import { existsSync } from "node:fs";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { dirname, resolve, sep } from "node:path";
+import { dirname, join, resolve, sep } from "node:path";
+
+import { checkRun } from "./guard.mjs";
 
 const base64url = (input) => Buffer.from(input).toString("base64url");
 
@@ -24,12 +27,23 @@ export function generateSigningKey({ modulusLength = 2048, kid } = {}) {
   return { privateKey, jwk };
 }
 
-/** Whether `path` may hold private key material: below `docs.local/` or the temp directory. */
-export function isPrivateKeyLocation(path) {
+/**
+ * Whether `path` may hold private key material: below the `docs.local/` of a repository root
+ * (a directory holding `.git`, which ignores `/docs.local/`) or the temp directory. A
+ * `docs.local` deeper in the tree is not ignored by git and is refused.
+ */
+export function isPrivateKeyLocation(
+  path,
+  { isRepositoryRoot = (dir) => existsSync(join(dir, ".git")) } = {},
+) {
   const absolute = resolve(path);
   const temp = resolve(tmpdir());
+  const parts = absolute.split(sep);
+  const index = parts.indexOf("docs.local");
   return (
-    absolute.split(sep).includes("docs.local") ||
+    (index > 0 &&
+      index < parts.length - 1 &&
+      isRepositoryRoot(parts.slice(0, index).join(sep) || sep)) ||
     absolute === temp ||
     absolute.startsWith(`${temp}${sep}`) ||
     absolute.startsWith(`/private/tmp${sep}`) ||
@@ -102,40 +116,37 @@ export function issuerFiles(issuer, ...jwks) {
   };
 }
 
-/**
- * Writes the static site a Firebase Hosting preview channel serves for the issuer path
- * `oidc/<run>`: the discovery document and the JWKS (public keys only), and a `firebase.json`
- * that keeps `.well-known` and serves both as JSON. Refuses to write anything that looks like
- * private key material.
- */
-export async function writeIssuerSite(dir, { issuer, run, jwks }) {
-  const base = `oidc/${run}`;
-  const files = {
-    [`public/${base}/.well-known/openid-configuration`]: discoveryDocument(issuer),
-    [`public/${base}/jwks.json`]: jwksDocument(...jwks),
-    "firebase.json": {
-      hosting: {
-        public: "public",
-        ignore: ["firebase.json"],
-        headers: [
-          {
-            source: `/${base}/**`,
-            headers: [
-              { key: "Content-Type", value: "application/json" },
-              { key: "Cache-Control", value: "no-store" },
-            ],
-          },
-        ],
-      },
-    },
-  };
-  for (const [path, content] of Object.entries(files)) {
-    const text = `${JSON.stringify(content, null, 2)}\n`;
-    if (/PRIVATE KEY|"d"\s*:|"p"\s*:|"q"\s*:/.test(text)) {
-      throw new Error(`refusing to publish private key material in ${path}`);
-    }
-    await mkdir(dirname(`${dir}/${path}`), { recursive: true });
-    await writeFile(`${dir}/${path}`, text);
+/** Text that must never be published: private key material, an API key, or `forbidden`. */
+export function scanPublished(text, forbidden = []) {
+  if (/PRIVATE KEY|"(d|p|q|dp|dq|qi|oth|k)"\s*:/.test(text)) {
+    throw new Error("refusing to publish private key material");
   }
-  return Object.keys(files);
+  if (/AIza[0-9A-Za-z_-]{20,}/.test(text)) throw new Error("refusing to publish an API key");
+  for (const secret of forbidden) {
+    if (secret && text.includes(String(secret)))
+      throw new Error("refusing to publish a sandbox secret");
+  }
+}
+
+/**
+ * What a Hosting preview channel serves for the issuer path `/oidc/<run>`: exactly the
+ * discovery document and the JWKS (public members only), keyed by their URL path, and the
+ * version config that serves each of them, named by its literal path, as uncached JSON. (A
+ * `**` glob does not match the dot segment `.well-known`.)
+ */
+export function issuerSite({ issuer, run, jwks, forbidden = [] }) {
+  const base = `/oidc/${checkRun(run)}`;
+  if (new URL(issuer).pathname !== base) throw new Error(`issuer ${issuer} is not ${base}`);
+  const files = {
+    [`${base}/.well-known/openid-configuration`]: `${JSON.stringify(discoveryDocument(issuer), null, 2)}\n`,
+    [`${base}/jwks.json`]: `${JSON.stringify(jwksDocument(...jwks), null, 2)}\n`,
+  };
+  for (const text of Object.values(files)) scanPublished(text, forbidden);
+  const config = {
+    headers: Object.keys(files).map((glob) => ({
+      glob,
+      headers: { "Content-Type": "application/json", "Cache-Control": "no-store" },
+    })),
+  };
+  return { files, config };
 }

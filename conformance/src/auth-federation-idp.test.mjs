@@ -2,9 +2,10 @@ import assert from "node:assert/strict";
 import { createPublicKey, verify } from "node:crypto";
 import { mkdtemp, readFile, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, matchesGlob } from "node:path";
 import { test } from "node:test";
 
+import * as idp from "./auth-federation/idp.mjs";
 import {
   discoveryDocument,
   generateSigningKey,
@@ -68,9 +69,13 @@ test("the issuer publishes a discovery document and a public-only JWKS", () => {
 });
 
 test("private keys are written only below docs.local or the temp dir, mode 600", async () => {
-  assert.ok(isPrivateKeyLocation("/Users/x/repo/docs.local/runs/k.pem"));
-  assert.ok(isPrivateKeyLocation(join(tmpdir(), "k.pem")));
-  assert.ok(!isPrivateKeyLocation("/Users/x/repo/conformance/k.pem"));
+  const roots = { isRepositoryRoot: (dir) => dir === "/Users/x/repo" };
+  assert.ok(isPrivateKeyLocation("/Users/x/repo/docs.local/runs/k.pem", roots));
+  assert.ok(isPrivateKeyLocation(join(tmpdir(), "k.pem"), roots));
+  assert.ok(!isPrivateKeyLocation("/Users/x/repo/conformance/k.pem", roots));
+  // A docs.local below the root is tracked by git: refused.
+  assert.ok(!isPrivateKeyLocation("/Users/x/repo/conformance/docs.local/k.pem", roots));
+  assert.ok(!isPrivateKeyLocation("/Users/x/repo/docs.local", roots));
   const key = generateSigningKey();
   await assert.rejects(saveSigningKey("conformance/k.pem", key), /refusing to write a private key/);
   const dir = await mkdtemp(join(tmpdir(), "fed-idp-"));
@@ -87,26 +92,30 @@ test("private keys are written only below docs.local or the temp dir, mode 600",
   assert.ok(verify("sha256", Buffer.from(`${h}.${p}`), publicKey, Buffer.from(s, "base64url")));
 });
 
-test("the issuer site holds only the discovery document and public keys", async () => {
-  const { writeIssuerSite } = await import("./auth-federation/idp.mjs");
+test("the issuer site holds only the discovery document and public keys", () => {
+  const { issuerSite } = idp;
   const key = generateSigningKey({ kid: "k1" });
-  const dir = await mkdtemp(join(tmpdir(), "fed-site-"));
-  const issuer = "https://sandbox--fed-r1-abc.web.app/oidc/r1";
-  const files = await writeIssuerSite(dir, { issuer, run: "r1", jwks: [key.jwk] });
-  assert.deepEqual(files.toSorted(), [
-    "firebase.json",
-    "public/oidc/r1/.well-known/openid-configuration",
-    "public/oidc/r1/jwks.json",
-  ]);
-  const discovery = JSON.parse(
-    await readFile(join(dir, "public/oidc/r1/.well-known/openid-configuration"), "utf8"),
-  );
+  const run = "a1b2c3";
+  const issuer = `https://sandbox--fed-${run}-abc.web.app/oidc/${run}`;
+  const { files, config } = issuerSite({ issuer, run, jwks: [key.jwk] });
+  const discoveryPath = `/oidc/${run}/.well-known/openid-configuration`;
+  const jwksPath = `/oidc/${run}/jwks.json`;
+  assert.deepEqual(Object.keys(files).toSorted(), [discoveryPath, jwksPath]);
+  const discovery = JSON.parse(files[discoveryPath]);
   assert.equal(discovery.issuer, issuer);
   assert.equal(discovery.jwks_uri, `${issuer}/jwks.json`);
-  const jwks = await readFile(join(dir, "public/oidc/r1/jwks.json"), "utf8");
-  assert.doesNotMatch(jwks, /"d"\s*:/);
-  const hosting = JSON.parse(await readFile(join(dir, "firebase.json"), "utf8")).hosting;
-  assert.ok(!hosting.ignore.includes("**/.*"), "dotfiles (.well-known) are published");
+  assert.deepEqual(JSON.parse(files[jwksPath]), jwksDocument(key.jwk));
+  // Every published path is served as uncached JSON by a header rule that matches it.
+  for (const path of Object.keys(files)) {
+    const rules = config.headers.filter((rule) => matchesGlob(path, rule.glob));
+    assert.equal(rules.length, 1, path);
+    assert.deepEqual(rules[0].headers, {
+      "Content-Type": "application/json",
+      "Cache-Control": "no-store",
+    });
+  }
+  // The earlier `/oidc/<run>/**` rule would not have matched the discovery document.
+  assert.ok(!matchesGlob(discoveryPath, `/oidc/${run}/**`));
   // A private JWK is published as its public members only.
   const privateJwk = {
     ...key.privateKey.export({ format: "jwk" }),
@@ -114,16 +123,25 @@ test("the issuer site holds only the discovery document and public keys", async 
     alg: "RS256",
     use: "sig",
   };
-  await writeIssuerSite(dir, { issuer, run: "r2", jwks: [privateJwk] });
-  const published = await readFile(join(dir, "public/oidc/r2/jwks.json"), "utf8");
+  const published = issuerSite({ issuer, run, jwks: [privateJwk] }).files[jwksPath];
   assert.doesNotMatch(published, /"(d|p|q|dp|dq|qi)"\s*:/);
-  // Anything else that looks like private key material is refused.
-  await assert.rejects(
-    writeIssuerSite(dir, {
-      issuer: "https://x.web.app/-----BEGIN PRIVATE KEY-----",
-      run: "r3",
-      jwks: [key.jwk],
-    }),
-    /refusing to publish private key material/,
+});
+
+test("the issuer site refuses a bad run, a foreign issuer path and any secret", () => {
+  const { issuerSite, scanPublished } = idp;
+  const key = generateSigningKey({ kid: "k1" });
+  const site = (run, issuer, forbidden) => issuerSite({ issuer, run, jwks: [key.jwk], forbidden });
+  for (const run of ["../../escape", "r1", "A1B2C3"]) {
+    assert.throws(() => site(run, `https://h.web.app/oidc/${run}`), /six hex digits/, run);
+  }
+  assert.throws(() => site("a1b2c3", "https://h.web.app/oidc/d4e5f6"), /is not \/oidc\/a1b2c3/);
+  assert.throws(() => site("a1b2c3", "https://h.web.app/oidc/a1b2c3", ["h.web"]), /sandbox secret/);
+  assert.throws(() => scanPublished('{"x":"AIzaSyA0123456789abcdefghijklmnop"}'), /API key/);
+  assert.throws(() => scanPublished("-----BEGIN PRIVATE KEY-----"), /private key material/);
+  assert.throws(() => scanPublished('{"k": "secret"}'), /private key material/);
+  assert.throws(
+    () => scanPublished("number 123456789012 inside", ["123456789012"]),
+    /sandbox secret/,
   );
+  assert.doesNotThrow(() => scanPublished('{"kid": "k1"}', ["123456789012"]));
 });

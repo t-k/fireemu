@@ -460,3 +460,35 @@ fn strict_selection_details_answer_as_production() {
     );
     assert_eq!(status, 200, "{created}");
 }
+
+/// In a tenant, production's Admin email sign-in link needs no continueUrl
+/// (actions#link-code-a1), unlike the project's (AUTH-ACTION recording 2026-09-24).
+#[test]
+fn strict_tenant_email_sign_in_links_need_no_continue_url() {
+    let s = state(true);
+    let (status, created) = admin(
+        &s,
+        "POST",
+        TENANTS,
+        &json!({"displayName": "atb-act-a", "allowPasswordSignup": true, "enableEmailLinkSignin": true}),
+    );
+    assert_eq!(status, 200, "{created}");
+    let tenant = created["name"]
+        .as_str()
+        .unwrap()
+        .rsplit('/')
+        .next()
+        .unwrap()
+        .to_owned();
+    let (status, link) = admin(
+        &s,
+        "POST",
+        &format!("{V1}/projects/demo-app/tenants/{tenant}/accounts:sendOobCode"),
+        &json!({"requestType": "EMAIL_SIGNIN", "email": "a1@example.com", "returnOobLink": true}),
+    );
+    assert_eq!(status, 200, "{link}");
+    assert!(
+        link["oobCode"].is_string() && link["oobLink"].is_string(),
+        "{link}"
+    );
+}

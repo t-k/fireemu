@@ -11171,9 +11171,10 @@ fn send_oob_code(
             if !email.contains('@') {
                 return error(400, "INVALID_EMAIL");
             }
-            // Strict: a sign-in link needs somewhere to continue, and a disabled owner gets
-            // none (sandbox recording 2026-09-24).
-            if strict && str_field(body, "continueUrl").is_none() {
+            // Strict: a project's sign-in link needs somewhere to continue, and a disabled
+            // owner gets none (sandbox recording 2026-09-24); a tenant's does not
+            // (AUTH-TENANT-BLOCKING recording 2026-09-27, actions#link-code-a1).
+            if strict && store.tenant_id().is_none() && str_field(body, "continueUrl").is_none() {
                 return error(400, "MISSING_CONTINUE_URI");
             }
             // Only the Admin route was observed; a client under improved email privacy is

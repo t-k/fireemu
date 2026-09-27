@@ -1362,6 +1362,26 @@ fn tenant_accounts_import_and_export_in_isolated_files() {
     assert_eq!(tenant["users"][0]["tenantId"], "customer-a");
     let default = std::fs::read_to_string(out.join("auth_export/accounts.json")).unwrap();
     assert!(!default.contains("tenant-user"));
+    // A tenant from an artifact without tenant metadata gets a new tenant's sign-in switches,
+    // and the export records them.
+    let settings: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(out.join("auth_export/fireemu-auth-settings.json")).unwrap(),
+    )
+    .unwrap();
+    let metadata = settings["namespaces"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|namespace| namespace["tenantId"] == "customer-a")
+        .map(|namespace| &namespace["metadata"])
+        .expect("the tenant's metadata is exported");
+    for switch in [
+        "allowPasswordSignup",
+        "enableEmailLinkSignin",
+        "enableAnonymousUser",
+    ] {
+        assert_eq!(metadata[switch], true, "{switch}: {metadata}");
+    }
 }
 
 #[test]
@@ -2509,4 +2529,69 @@ fn a_failed_export_on_exit_warns_and_preserves_the_command_exit_code() {
     assert!(log.contains("going to exit now"), "{log}");
     assert!(log.contains(&target.display().to_string()), "{log}");
     assert!(!target.exists(), "{log}");
+}
+
+/// Issue strict-multi-tenancy-switch-lost-on-export-import: the project's written config
+/// members, the multi-tenancy switch among them, survive an export and an import, so a tenant
+/// restored by the import is reachable under the strict profile.
+#[test]
+fn written_config_members_and_the_tenant_switch_survive_the_round_trip() {
+    let dir = scratch("config-members-round-trip");
+    let out = dir.join("out");
+    let base = "http://$FIREBASE_AUTH_EMULATOR_HOST/identitytoolkit.googleapis.com";
+    let admin = "-H 'Authorization: Bearer owner' -H 'Content-Type: application/json'";
+    let write = format!(
+        r#"curl -s -X PATCH "{base}/admin/v2/projects/demo-export/config?updateMask=multiTenant.allowTenants,autodeleteAnonymousUsers" {admin} -d '{{"multiTenant":{{"allowTenants":true}},"autodeleteAnonymousUsers":true}}' && echo && curl -s -X POST "{base}/v2/projects/demo-export/tenants" {admin} -d '{{"displayName":"round-trip"}}' && echo"#
+    );
+    let output = exec()
+        .args(["--only", "auth", "--export-on-exit"])
+        .arg(&out)
+        .args(["--", "sh", "-c"])
+        .arg(&write)
+        .output()
+        .unwrap();
+    let log = text(&output);
+    assert!(output.status.success(), "{log}");
+    let created: serde_json::Value = serde_json::from_str(
+        log.lines()
+            .find(|line| line.contains(r#""name":"projects/demo-export/tenants/"#))
+            .and_then(|line| line.find('{').map(|at| &line[at..]))
+            .unwrap_or_else(|| panic!("the tenant was created: {log}")),
+    )
+    .unwrap();
+    let tenant = created["name"]
+        .as_str()
+        .unwrap()
+        .rsplit('/')
+        .next()
+        .unwrap()
+        .to_owned();
+
+    let read = format!(
+        r#"curl -s "{base}/admin/v2/projects/demo-export/config" {admin}; echo; curl -s "{base}/v2/projects/demo-export/tenants/{tenant}" {admin}; echo"#
+    );
+    let again = exec()
+        .args(["--only", "auth", "--import"])
+        .arg(&out)
+        .args(["--", "sh", "-c"])
+        .arg(&read)
+        .output()
+        .unwrap();
+    let log = text(&again);
+    assert!(again.status.success(), "{log}");
+    let config: serde_json::Value = serde_json::from_str(
+        log.lines()
+            .find(|line| line.contains(r#""projects/demo-export/config""#))
+            .and_then(|line| line.find('{').map(|at| &line[at..]))
+            .unwrap_or_else(|| panic!("the config was read: {log}")),
+    )
+    .unwrap();
+    assert_eq!(config["multiTenant"]["allowTenants"], true, "{config}");
+    assert_eq!(config["autodeleteAnonymousUsers"], true, "{config}");
+    assert!(
+        log.contains(&format!(
+            r#""name":"projects/demo-export/tenants/{tenant}""#
+        )),
+        "the restored tenant is reachable under strict: {log}"
+    );
 }

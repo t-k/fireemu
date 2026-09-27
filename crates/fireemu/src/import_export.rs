@@ -198,6 +198,9 @@ struct PreparedAuth {
     /// Optional fireemu-only namespace settings. The sidecar carries quota configuration and
     /// explicit tenant projections; usage buckets are never serialized.
     auth_settings: Option<AuthSettings>,
+    /// The project's written config members the settings sidecar carries (validated when the
+    /// section is prepared), installed over the running ones; `None` keeps the running members.
+    config_members: Option<Vec<(String, String)>>,
     tenants: BTreeMap<String, Vec<ImportedUser>>,
 }
 
@@ -583,6 +586,15 @@ fn apply_auth(auth: &PreparedAuth, endpoints: &Endpoints) -> Result<(), Artifact
                         format!("the Auth settings quota is invalid: {error:?}"),
                     )
                 })?;
+        }
+        if let Some(members) = &auth.config_members {
+            let restored = fireemu_adapter_http::identity_toolkit::restored_config_members(
+                endpoints.project,
+                candidate.stored_config_members(),
+                members,
+            )
+            .map_err(|error| ArtifactError::new("auth", &settings_path, error))?;
+            candidate.set_stored_config_members(restored);
         }
         install_auth_users(
             &mut candidate,
@@ -1691,6 +1703,21 @@ fn read_auth_section(
             }
         }
     }
+    // The written config members are validated here, so an invalid one refuses the import
+    // before anything starts (issue strict-multi-tenancy-switch-lost-on-export-import).
+    let config_members = auth_settings
+        .as_ref()
+        .filter(|settings| settings.project_id == target_project)
+        .map(|settings| settings.project.config_members.clone())
+        .filter(|members| !members.is_empty());
+    if let Some(members) = &config_members {
+        fireemu_adapter_http::identity_toolkit::restored_config_members(
+            target_project,
+            &fireemu_core_auth::config_members::StoredConfigMembers::default(),
+            members,
+        )
+        .map_err(|error| ArtifactError::new("auth", section_dir.join(AUTH_SETTINGS_FILE), error))?;
+    }
     Ok(PreparedAuth {
         users,
         password_updated_at,
@@ -1700,6 +1727,7 @@ fn read_auth_section(
         email_privacy_declared,
         password_policies,
         auth_settings,
+        config_members,
         tenants,
     })
 }
@@ -3328,6 +3356,7 @@ fn export_auth(
                 quota: (tenant_quota != SignupQuotaConfig::default())
                     .then(|| exported_quota_settings(&tenant_quota)),
                 blocking: None,
+                config_members: Vec::new(),
             },
             config_is_explicit: tenant_config_override.is_some(),
             metadata: Some(exported_tenant_metadata(tenant_metadata)),
@@ -3357,9 +3386,13 @@ fn export_auth(
         write_private_file(&path, policies.to_json().as_bytes())
             .map_err(|e| ArtifactError::new("auth", &path, e))?;
     }
+    let project_members = fireemu_adapter_http::identity_toolkit::exportable_config_members(
+        store.stored_config_members(),
+    );
     if project_quota != SignupQuotaConfig::default()
         || project_blocking.is_some()
         || !tenant_settings.is_empty()
+        || !project_members.is_empty()
     {
         let path = section_dir.join(AUTH_SETTINGS_FILE);
         let settings = AuthSettings {
@@ -3369,6 +3402,7 @@ fn export_auth(
                 quota: (project_quota != SignupQuotaConfig::default())
                     .then(|| exported_quota_settings(&project_quota)),
                 blocking: project_blocking,
+                config_members: project_members,
             },
             namespaces: tenant_settings,
         };
@@ -4376,6 +4410,7 @@ mod tests {
                 }),
                 quota: None,
                 blocking: None,
+                config_members: Vec::new(),
             },
             config_is_explicit: false,
             metadata: None,
@@ -5095,6 +5130,7 @@ mod tests {
                     config: None,
                     quota: None,
                     blocking: Some(imported_blocking),
+                    config_members: Vec::new(),
                 },
                 namespaces: Vec::new(),
             }),

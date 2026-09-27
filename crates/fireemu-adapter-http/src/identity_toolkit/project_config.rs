@@ -455,6 +455,68 @@ pub(super) fn emulator_document(sources: &ConfigSources<'_>) -> Value {
     document
 }
 
+/// The written public config members of a project, as `(member, JSON text)` in member order,
+/// for an export. The private members derived from them (the multi-tenancy switch) are not
+/// exported: an import derives them again ([`restored_config_members`]).
+#[must_use]
+pub fn exportable_config_members(
+    members: &fireemu_core_auth::config_members::StoredConfigMembers,
+) -> Vec<(String, String)> {
+    STORED_MEMBERS
+        .iter()
+        .filter_map(|member| {
+            members
+                .get(member)
+                .map(|text| ((*member).to_owned(), text.to_owned()))
+        })
+        .collect()
+}
+
+/// The stored members an import installs over `current` for a project's exported config
+/// members. The written public members, and the multi-tenancy switch derived from
+/// `multiTenant`, become exactly the export's; the other private members of `current` are kept.
+/// Each exported member is parsed and validated as a config write of that member is, and stored
+/// as that write stores it. The checks are the emulator profile's: a value either profile could
+/// have stored is restored. `Err` names the first member refused.
+pub fn restored_config_members(
+    project: &str,
+    current: &fireemu_core_auth::config_members::StoredConfigMembers,
+    members: &[(String, String)],
+) -> Result<fireemu_core_auth::config_members::StoredConfigMembers, String> {
+    let mut body = Map::new();
+    let mut fields = Vec::with_capacity(members.len());
+    for (member, text) in members {
+        if !STORED_MEMBERS.contains(&member.as_str()) {
+            return Err(format!("config member {member:?} is not a written member"));
+        }
+        if body.contains_key(member) {
+            return Err(format!("config member {member:?} is repeated"));
+        }
+        let value: Value = serde_json::from_str(text)
+            .map_err(|_| format!("config member {member:?} is not JSON"))?;
+        if value.is_null() {
+            return Err(format!("config member {member:?} is null"));
+        }
+        body.insert(member.clone(), value);
+        fields.push(member.clone());
+    }
+    let refused = |member: &str| format!("config member {member:?} is not a valid value");
+    let first = |fields: &[String]| fields.first().cloned().unwrap_or_default();
+    let body = super::config_proto::parse_config_body(&Value::Object(body))
+        .map_err(|_| refused(&first(&fields)))?;
+    validate_values(&body, &fields, false).map_err(|_| refused(&first(&fields)))?;
+    let mut cleared = current.clone();
+    for member in STORED_MEMBERS {
+        cleared.set(member, None);
+    }
+    cleared.set(fireemu_core_auth::config_members::ALLOW_TENANTS, None);
+    let mut next = apply_stored_members(&cleared, &body, &fields, project)
+        .map_err(|()| refused(&first(&fields)))?
+        .unwrap_or(cleared);
+    super::with_derived_members(&mut next, &body, &fields, false, None);
+    Ok(next)
+}
+
 /// Whether `field` is a mask path of a stored member.
 pub(super) fn stored_member_field(field: &str) -> bool {
     STORED_MEMBERS
@@ -870,8 +932,91 @@ pub(super) fn client_recaptcha_config(
 
 #[cfg(test)]
 mod tests {
-    use super::{initial_member, without_false};
+    use super::{
+        exportable_config_members, initial_member, restored_config_members, without_false,
+    };
+    use fireemu_core_auth::config_members::{StoredConfigMembers, ALLOW_TENANTS};
     use serde_json::json;
+
+    fn member(name: &str, value: &serde_json::Value) -> (String, String) {
+        (name.to_owned(), value.to_string())
+    }
+
+    /// Issue strict-multi-tenancy-switch-lost-on-export-import.
+    #[test]
+    fn an_import_restores_the_written_members_and_derives_the_tenant_switch() {
+        let mut current = StoredConfigMembers::default();
+        current.set("notification", Some(r#"{"defaultLocale":"ja"}"#.to_owned()));
+        current.set(
+            "_passwordPolicyLastUpdateTime",
+            Some(r#""2026-09-27T00:00:00Z""#.to_owned()),
+        );
+        let restored = restored_config_members(
+            "p",
+            &current,
+            &[
+                member("multiTenant", &json!({"allowTenants": true})),
+                member("autodeleteAnonymousUsers", &json!(true)),
+            ],
+        )
+        .expect("valid members restore");
+        assert_eq!(restored.get(ALLOW_TENANTS), Some("true"));
+        assert_eq!(restored.get("autodeleteAnonymousUsers"), Some("true"));
+        // The export's members replace the written public ones; other private ones are kept.
+        assert_eq!(restored.get("notification"), None);
+        assert_eq!(
+            restored.get("_passwordPolicyLastUpdateTime"),
+            Some(r#""2026-09-27T00:00:00Z""#)
+        );
+        // Exporting what was restored gives the same public members back, never a private one.
+        assert_eq!(
+            exportable_config_members(&restored)
+                .iter()
+                .map(|(name, _)| name.as_str())
+                .collect::<Vec<_>>(),
+            ["multiTenant", "autodeleteAnonymousUsers"]
+        );
+        // A switch written off is restored off and clears a running one.
+        let mut on = StoredConfigMembers::default();
+        on.set(ALLOW_TENANTS, Some("true".to_owned()));
+        let off = restored_config_members(
+            "p",
+            &on,
+            &[member("multiTenant", &json!({"allowTenants": false}))],
+        )
+        .unwrap();
+        assert_eq!(off.get(ALLOW_TENANTS), None);
+        assert!(
+            restored_config_members("p", &on, &[member("notification", &json!({}))])
+                .unwrap()
+                .get(ALLOW_TENANTS)
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn an_import_refuses_a_member_a_config_write_would_refuse() {
+        let none = StoredConfigMembers::default();
+        for members in [
+            vec![("_allowTenants".to_owned(), "true".to_owned())],
+            vec![("signIn".to_owned(), "{}".to_owned())],
+            vec![("multiTenant".to_owned(), "not json".to_owned())],
+            vec![("multiTenant".to_owned(), "null".to_owned())],
+            vec![member(
+                "mobileLinksConfig",
+                &json!({"domain": "NOT_A_DOMAIN_KIND"}),
+            )],
+            vec![
+                member("multiTenant", &json!({"allowTenants": true})),
+                member("multiTenant", &json!({"allowTenants": true})),
+            ],
+        ] {
+            assert!(
+                restored_config_members("p", &none, &members).is_err(),
+                "{members:?}"
+            );
+        }
+    }
 
     #[test]
     fn false_switches_are_left_out_at_any_depth() {

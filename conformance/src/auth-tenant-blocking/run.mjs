@@ -775,7 +775,9 @@ async function admitLocal() {
   assertLedgerAdmission(await readFile(ledger, "utf8"));
   const programs = selectedPrograms();
   validateTenantCorpus(programs);
-  const plan = planCampaignBudget(programs, process.env.FIREEMU_AUTH_TENANT_REQUEST_BUDGET);
+  const plan = planCampaignBudget(programs, process.env.FIREEMU_AUTH_TENANT_REQUEST_BUDGET, {
+    blocking: SUITE === "blocking",
+  });
   console.log(
     `local ledger, task budget, corpus and request budget (${JSON.stringify(plan)}) admission passed without external requests`,
   );
@@ -795,7 +797,9 @@ async function recordProduction() {
   const corpusRequests = validateTenantCorpus(programs);
   // One budget for every external request of the campaign, refused before anything is sent when
   // it cannot carry two passes (issue auth-tenant-campaign-total-request-cap).
-  const plan = planCampaignBudget(programs, process.env.FIREEMU_AUTH_TENANT_REQUEST_BUDGET);
+  const plan = planCampaignBudget(programs, process.env.FIREEMU_AUTH_TENANT_REQUEST_BUDGET, {
+    blocking: SUITE === "blocking",
+  });
   const budget = createRequestBudget(plan);
   const meta = {
     sha: await gitSha(),
@@ -934,7 +938,9 @@ async function recordProduction() {
       clearTimeout(publicDeadline);
       fixture.repository = deployer.repositoryChange() ?? "unchanged";
       try {
-        fixture.removed = await deployer.remove(join(runDir, "function-build"));
+        fixture.removed = await withPhase("cleanup", () =>
+          deployer.remove(join(runDir, "function-build")),
+        );
       } catch (caught) {
         fixture.removed = false;
         outcome = "aborted-fatal";
@@ -942,6 +948,7 @@ async function recordProduction() {
         console.error(`FIXTURE NOT REMOVED: ${caught.message ?? caught}`);
       }
       fixture.requests = deployer.requests();
+      fixture.cliRequests = deployer.cliRequests();
     }
     await writeFile(
       join(runDir, "meta.json"),

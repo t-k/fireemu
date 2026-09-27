@@ -277,3 +277,32 @@ test("two passes share one budget: the second fits at the limit and is refused o
   assert.equal(over.state.tenants.size, 0);
   assert.equal(over.state.allowTenants, false);
 });
+
+test("a blocking campaign reserves the fixture removal and plans the deployment", async () => {
+  const b = await import("./auth-tenant-blocking/budget.mjs");
+  const { BLOCKING_PROGRAMS } = await import("./auth-tenant-blocking/blocking-corpus.mjs");
+  const plain = b.planCampaignBudget(BLOCKING_PROGRAMS, "2000");
+  const blocking = b.planCampaignBudget(BLOCKING_PROGRAMS, "2000", { blocking: true });
+  assert.equal(
+    blocking.cleanupReserve - plain.cleanupReserve,
+    b.REMOVAL_REST_BOUND + b.CLI_DELETE_ALLOWANCE + b.OAUTH_ATTEMPT_WEIGHT,
+  );
+  assert.equal(
+    blocking.minimumWork - plain.minimumWork,
+    b.DEPLOY_REST_BOUND + b.CLI_DEPLOY_ALLOWANCE + b.OAUTH_ATTEMPT_WEIGHT,
+  );
+  assert.deepEqual(
+    [b.DEPLOY_REST_BOUND, b.REMOVAL_REST_BOUND, b.CLI_DEPLOY_ALLOWANCE, b.CLI_DELETE_ALLOWANCE],
+    [35, 54, 400, 300],
+  );
+  // 1800 carries the blocking campaign; the smallest budget that does is refused one below.
+  const least = blocking.cleanupReserve + blocking.minimumWork;
+  assert.ok(least <= 1800, String(least));
+  assert.doesNotThrow(() =>
+    b.planCampaignBudget(BLOCKING_PROGRAMS, String(least), { blocking: true }),
+  );
+  assert.throws(
+    () => b.planCampaignBudget(BLOCKING_PROGRAMS, String(least - 1), { blocking: true }),
+    /cannot carry/,
+  );
+});

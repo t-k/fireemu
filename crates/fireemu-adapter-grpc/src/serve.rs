@@ -33,9 +33,9 @@ pub const API_REQUEST_BYTES: usize = 10 * 1024 * 1024;
 pub const MAX_COMMIT_RAW_BYTES: usize = 11 * 1024 * 1024;
 
 /// The request bound every transport applies at its own decode boundary, in both profiles:
-/// [`MAX_REST_BODY_BYTES`] on a REST body, [`crate::webchannel::MAX_FORM_BYTES`] on a
-/// `WebChannel` form body and [`MAX_GRPC_MESSAGE_BYTES`] on a gRPC message. It is an
-/// inclusive maximum measured before protocol decode.
+/// [`MAX_REST_BODY_BYTES`] on a REST body and [`MAX_GRPC_MESSAGE_BYTES`] on a gRPC message. It
+/// is an inclusive maximum measured before protocol decode. `WebChannel` has its own bound,
+/// [`crate::webchannel::max_form_bytes`].
 ///
 /// Owner decision D4 (2026-09-25) reuses the one production-observed figure, REST `:commit`,
 /// as the estimate for the transports whose own limit is unobserved. Decision D (2026-09-27)
@@ -263,14 +263,6 @@ impl BodyAllowance {
             Self::Undeclared => BodyRejection::Undeclared,
         }
     }
-
-    const fn for_request(declared: bool, maximum: usize) -> Self {
-        if declared {
-            Self::Declared(maximum)
-        } else {
-            Self::Undeclared
-        }
-    }
 }
 
 async fn read_body<B>(
@@ -301,7 +293,28 @@ async fn read_commit_body(
     req: Request<Incoming>,
     deadline: std::time::Duration,
 ) -> Result<Bytes, BodyRejection> {
-    let mut body = req.into_body();
+    read_drained_body(
+        req.into_body(),
+        MAX_COMMIT_RAW_BYTES,
+        MAX_COMMIT_REJECTION_DRAIN_BYTES,
+        deadline,
+    )
+    .await
+}
+
+/// Reads a body of at most `limit` bytes. A body over it is drained up to `drain` bytes without
+/// retaining the overflow, so the refusal reaches the client instead of a connection reset.
+async fn read_drained_body<B>(
+    body: B,
+    limit: usize,
+    drain: usize,
+    deadline: std::time::Duration,
+) -> Result<Bytes, BodyRejection>
+where
+    B: Body<Data = Bytes>,
+    B::Error: Into<BoxError>,
+{
+    let mut body = std::pin::pin!(body);
     let read = async {
         let mut retained = BytesMut::new();
         let mut total = 0usize;
@@ -310,10 +323,10 @@ async fn read_commit_body(
             let frame = frame.map_err(|_| BodyRejection::TooLarge)?;
             if let Ok(data) = frame.into_data() {
                 total = total.saturating_add(data.len());
-                if total > MAX_COMMIT_REJECTION_DRAIN_BYTES {
+                if total > drain {
                     return Err(BodyRejection::TooLarge);
                 }
-                if total > MAX_COMMIT_RAW_BYTES {
+                if total > limit {
                     too_large = true;
                     retained.clear();
                 } else if !too_large {
@@ -509,9 +522,8 @@ where
     B::Error: Into<BoxError>,
 {
     let origin = header(&req, "origin").map(str::to_owned);
-    // A form body is up to `MAX_FORM_BYTES`, the same as a REST body, so it is admitted from
-    // the same pool: without this, peak body memory on this path was bounded only by how
-    // fast clients connect.
+    // A form body is admitted from the same pool as a REST body: without this, peak body
+    // memory on this path was bounded only by how fast clients connect.
     //
     // Only a request that declares a body takes a permit. A `Listen` back channel is a bare
     // `GET` and reads nothing, so it must never be refused because writers are busy: that
@@ -547,9 +559,23 @@ where
         .iter()
         .map(|v| v.to_str().unwrap_or_default().to_owned())
         .collect();
-    let allowance = BodyAllowance::for_request(declared, crate::webchannel::MAX_FORM_BYTES);
-    let bytes = match read_body(req, allowance, body_deadline).await {
+    let read = if declared {
+        read_drained_body(
+            req.into_body(),
+            crate::webchannel::max_form_bytes(hub.enforce_limits()),
+            crate::webchannel::MAX_FORM_DRAIN_BYTES,
+            body_deadline,
+        )
+        .await
+    } else {
+        read_body(req, BodyAllowance::Undeclared, body_deadline).await
+    };
+    let bytes = match read {
         Ok(bytes) => bytes,
+        Err(BodyRejection::TooLarge) if declared => {
+            let sid = params.get("SID").map(String::as_str);
+            return channel_http_response(hub.oversized_form(sid), origin.as_deref());
+        }
         Err(rejection) => {
             return json_response(&body_rejection_response(rejection), origin.as_deref());
         }
@@ -564,13 +590,17 @@ where
         origin: origin.clone(),
         body,
     });
+    channel_http_response(response, origin.as_deref())
+}
+
+fn channel_http_response(response: ChannelResponse, origin: Option<&str>) -> Response<OutBody> {
     match response {
         ChannelResponse::Full {
             status,
             headers,
             body,
         } => {
-            let mut b = cors_headers(Response::builder().status(status), origin.as_deref());
+            let mut b = cors_headers(Response::builder().status(status), origin);
             for (k, v) in headers {
                 b = b.header(k, v);
             }
@@ -578,7 +608,7 @@ where
                 .unwrap_or_else(|_| Response::new(full(Bytes::new())))
         }
         ChannelResponse::Stream { headers, body } => {
-            let mut b = cors_headers(Response::builder().status(200), origin.as_deref());
+            let mut b = cors_headers(Response::builder().status(200), origin);
             for (k, v) in headers {
                 b = b.header(k, v);
             }
@@ -1143,12 +1173,20 @@ mod tests {
         }
 
         fn hub() -> Arc<Hub> {
+            hub_with(true)
+        }
+
+        fn hub_with(enforce_limits: bool) -> Arc<Hub> {
             let gateway = Gateway {
-                enforce_limits: true,
+                enforce_limits,
                 ctx: PlanningContext {
                     edition: FirestoreEdition::Standard,
                     api_mode: FirestoreApiMode::Native,
-                    policy: IndexValidationPolicy::Production,
+                    policy: if enforce_limits {
+                        IndexValidationPolicy::Production
+                    } else {
+                        IndexValidationPolicy::Emulator
+                    },
                 },
                 indexes: IndexSet::default(),
             };
@@ -1263,6 +1301,95 @@ mod tests {
                 assert_eq!(status, 503);
                 assert_eq!(body, too_many_concurrent_requests().body);
                 assert_eq!(body["error"]["status"], "RESOURCE_EXHAUSTED");
+            });
+        }
+
+        /// A form body over the profile's bound: strict answers production's HTML 400 and the
+        /// session is gone afterwards; the emulator profile answers the official emulator's
+        /// empty 413 and the session keeps working.
+        #[test]
+        fn an_oversized_form_ends_the_session_only_in_the_strict_profile() {
+            let runtime = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .unwrap();
+            runtime.block_on(async {
+                for enforce_limits in [true, false] {
+                    let permits = Arc::new(tokio::sync::Semaphore::new(4));
+                    let hub = hub_with(enforce_limits);
+                    let handshake = channel_call(
+                        hub.clone(),
+                        StreamKind::Listen,
+                        listen_handshake_request(),
+                        &permits,
+                        BODY_READ_DEADLINE,
+                    )
+                    .await;
+                    assert_eq!(handshake.status().as_u16(), 200);
+                    let session = handshake
+                        .headers()
+                        .get("x-http-session-id")
+                        .and_then(|v| v.to_str().ok())
+                        .expect("the handshake names its session")
+                        .to_owned();
+                    let forward = |bytes: usize| {
+                        let body = format!("count=0&pad={}", "a".repeat(bytes - 12));
+                        Request::builder()
+                            .method("POST")
+                            .uri(format!(
+                                "/google.firestore.v1.Firestore/Listen/channel?SID={session}&VER=8&RID=2&AID=0"
+                            ))
+                            .body(Full::new(Bytes::from(body)))
+                            .expect("a well-formed forward request")
+                    };
+                    let over = channel_call(
+                        hub.clone(),
+                        StreamKind::Listen,
+                        forward(crate::webchannel::max_form_bytes(enforce_limits) + 1),
+                        &permits,
+                        BODY_READ_DEADLINE,
+                    )
+                    .await;
+                    let status = over.status().as_u16();
+                    let text = over.into_body().collect().await.unwrap().to_bytes();
+                    let after = channel_call(
+                        hub.clone(),
+                        StreamKind::Listen,
+                        forward(13),
+                        &permits,
+                        BODY_READ_DEADLINE,
+                    )
+                    .await;
+                    let terminate = channel_call(
+                        hub.clone(),
+                        StreamKind::Listen,
+                        Request::builder()
+                            .method("GET")
+                            .uri(format!(
+                                "/google.firestore.v1.Firestore/Listen/channel?SID={session}&VER=8&RID=3&AID=0&TYPE=terminate"
+                            ))
+                            .body(Full::new(Bytes::new()))
+                            .expect("a well-formed terminate"),
+                        &permits,
+                        BODY_READ_DEADLINE,
+                    )
+                    .await;
+                    if enforce_limits {
+                        assert_eq!(status, 400);
+                        assert_eq!(
+                            text.as_ref(),
+                            crate::webchannel::STRICT_UNKNOWN_SESSION_BODY.as_bytes()
+                        );
+                        assert_eq!(after.status().as_u16(), 400, "the session is gone");
+                        // Production's terminate of the ended session answered the same page.
+                        assert_eq!(terminate.status().as_u16(), 400);
+                    } else {
+                        assert_eq!(status, 413);
+                        assert!(text.is_empty());
+                        assert_eq!(after.status().as_u16(), 200, "the session keeps working");
+                        assert_eq!(terminate.status().as_u16(), 200);
+                    }
+                }
             });
         }
 

@@ -649,7 +649,7 @@
         "comparisonPath": "spec/compatibility/closure/evidence/FS-DATA-WRITE-terminal-local-digests.json",
         "comparisonSha256": "983a93b1dee065289b1b3ec9e2c9ab07efb9ec162a4db1db02b5bb1c373ec567"
       },
-      "profileNote": "Both profiles apply the same 11,534,336-byte form bound and production's 400 answer (decision D, 2026-09-27). An unknown session answers 400 in both profiles: production's HTML page in strict (owner decision D6), 'Error: Unknown SID' in the emulator profile."
+      "profileNote": "Strict accepts form bodies up to 16,777,215 bytes and above that answers production's HTML 400 page and ends the session (production accepted 12,582,912 and refused 16,777,216, follow-up recording 2026-09-27). The emulator profile follows the pinned official emulator: up to 16,777,216 accepted, an empty 413 above it, the session kept. An unknown session answers 400 in both profiles: production's HTML page in strict (owner decision D6), 'Error: Unknown SID' in the emulator profile."
     },
     {
       "conditionId": "FS-LIMIT-API-REQUEST-BYTES/grpc",

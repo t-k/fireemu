@@ -57,8 +57,22 @@ const LONG_POLL_WAIT: Duration = Duration::from_secs(30);
 const LONG_POLL_MAX: Duration = Duration::from_secs(60);
 /// Streaming back channels send a keep-alive after this much silence.
 const KEEPALIVE: Duration = Duration::from_secs(30);
-/// Maximum accepted form body ([`crate::serve::MAX_REQUEST_BYTES`]).
-pub const MAX_FORM_BYTES: usize = crate::serve::MAX_REQUEST_BYTES;
+/// The largest `WebChannel` form body a profile accepts. Production accepted 12,582,912 bytes on
+/// a valid session and refused 16,777,216 (FS-DATA-WRITE follow-up recording, 2026-09-27), so
+/// strict accepts everything below the refusal; the pinned official emulator accepts
+/// 16,777,216 and refuses one more byte, and the emulator profile adds no refusal to it.
+#[must_use]
+pub const fn max_form_bytes(enforce_limits: bool) -> usize {
+    if enforce_limits {
+        16_777_215
+    } else {
+        16 * 1024 * 1024
+    }
+}
+
+/// How much of an over-bound form body is read and discarded before answering, so that the
+/// refusal reaches the client (production answered even a 33,554,433-byte body).
+pub const MAX_FORM_DRAIN_BYTES: usize = 64 * 1024 * 1024;
 /// Maximum concurrent sessions.
 pub const MAX_SESSIONS: usize = 256;
 /// Maximum unacknowledged arrays per session before it is closed.
@@ -1510,6 +1524,29 @@ impl Hub {
         }
     }
 
+    /// Whether this hub serves the strict profile.
+    #[must_use]
+    pub fn enforce_limits(&self) -> bool {
+        self.state.gateway.enforce_limits
+    }
+
+    /// The answer to a form body over [`max_form_bytes`]. Production answers its HTML 400 page
+    /// and the session is gone afterwards (its terminate answered the same page), so strict ends
+    /// the named session. The official emulator answers an empty 413 and keeps the session.
+    pub fn oversized_form(&self, sid: Option<&str>) -> ChannelResponse {
+        if self.enforce_limits() {
+            if let Some(sid) = sid {
+                self.remove(sid);
+            }
+            return unknown_session(true);
+        }
+        ChannelResponse::Full {
+            status: 413,
+            headers: Vec::new(),
+            body: String::new(),
+        }
+    }
+
     /// Handles one HTTP request of the channel endpoint.
     pub fn handle(&self, req: &ChannelRequest) -> ChannelResponse {
         self.purge_idle();
@@ -1526,8 +1563,12 @@ impl Hub {
         if req.params.get("TYPE").map(String::as_str) == Some("terminate") {
             // Sent as POST, or as a GET image request when the page unloads.
             if let Some(sid) = sid {
-                if self.session(req, &sid).is_ok() {
-                    self.remove(&sid);
+                match self.session(req, &sid) {
+                    Ok(_) => self.remove(&sid),
+                    // Production answers the terminate of a session it no longer has with its
+                    // unknown-session page (FS-DATA-WRITE follow-up recording, 2026-09-27).
+                    Err(unknown) if self.enforce_limits() => return unknown,
+                    Err(_) => {}
                 }
             }
             return text_response(200, String::new());

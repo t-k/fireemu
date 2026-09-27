@@ -21,7 +21,7 @@ use fireemu_adapter_grpc::serve::{
     MAX_GRPC_MESSAGE_BYTES, MAX_REQUEST_BYTES, MAX_REST_BODY_BYTES,
 };
 use fireemu_adapter_grpc::service::GatewayService;
-use fireemu_adapter_grpc::webchannel::MAX_FORM_BYTES;
+use fireemu_adapter_grpc::webchannel::{max_form_bytes, STRICT_UNKNOWN_SESSION_BODY};
 use fireemu_core_firestore::index::{IndexSet, IndexValidationPolicy, PlanningContext};
 use fireemu_core_limits::catalogs::FIRESTORE_STANDARD_2026_08_25;
 use fireemu_core_limits::model::LimitMaximum;
@@ -57,7 +57,11 @@ fn every_transport_takes_the_production_bound_above_the_catalog_figure() {
     assert_eq!(MAX_COMMIT_RAW_BYTES, 11 * 1024 * 1024);
     assert_eq!(MAX_REQUEST_BYTES, MAX_COMMIT_RAW_BYTES);
     assert_eq!(MAX_REST_BODY_BYTES, MAX_REQUEST_BYTES);
-    assert_eq!(MAX_FORM_BYTES, MAX_REQUEST_BYTES);
+    // WebChannel has its own bound (FS-DATA-WRITE follow-up recording, 2026-09-27): production
+    // accepted 12,582,912 bytes and refused 16,777,216, so strict accepts up to 16,777,215; the
+    // pinned official emulator accepts 16,777,216 and refuses one more byte.
+    assert_eq!(max_form_bytes(true), 16_777_215);
+    assert_eq!(max_form_bytes(false), 16 * 1024 * 1024);
     assert_eq!(MAX_GRPC_MESSAGE_BYTES, MAX_REQUEST_BYTES);
 }
 
@@ -348,16 +352,28 @@ async fn write_stream_boundary(
 }
 
 /// `WebChannel`: the exact maximum is read and handed to the channel, which then answers on its
-/// own merits; one more byte never reaches it.
-async fn webchannel_boundary(addr: std::net::SocketAddr, expected: &ExpectedRefusal, limit: usize) {
+/// own merits; one more byte never reaches it. Strict answers production's HTML 400, the
+/// emulator profile the official emulator's empty 413, and a body far over the bound is drained
+/// so that the answer reaches the client instead of a reset.
+async fn webchannel_boundary(addr: std::net::SocketAddr, enforce_limits: bool) {
+    let limit = max_form_bytes(enforce_limits);
     let at_maximum = http(addr, "POST", CHANNEL, &"x".repeat(limit)).await;
     assert!(
-        !at_maximum.starts_with("HTTP/1.1 413") && !at_maximum.starts_with("HTTP/1.1 400"),
+        !at_maximum.starts_with("HTTP/1.1 413") && !at_maximum.contains("Error 400 (Bad Request)"),
         "the inclusive maximum must reach the channel: {at_maximum}"
     );
-    let over = http(addr, "POST", CHANNEL, &"x".repeat(limit + 1)).await;
-    assert!(over.starts_with(expected.http_status), "{over}");
-    assert!(over.contains(&expected.http_message), "{over}");
+    for bytes in [limit + 1, 33_554_433] {
+        let over = http(addr, "POST", CHANNEL, &"x".repeat(bytes)).await;
+        if enforce_limits {
+            assert!(over.starts_with("HTTP/1.1 400"), "{bytes}: {over}");
+            assert!(
+                over.contains(&STRICT_UNKNOWN_SESSION_BODY[..80]),
+                "{bytes}: {over}"
+            );
+        } else {
+            assert!(over.starts_with("HTTP/1.1 413"), "{bytes}: {over}");
+        }
+    }
 }
 
 /// Every document of a refused request is absent.
@@ -412,7 +428,7 @@ async fn boundary_cases(enforce_limits: bool) {
     let limit = MAX_REQUEST_BYTES;
     grpc_unary_boundary(addr, &mut client, &expected, limit).await;
     write_stream_boundary(addr, &mut client, &expected, limit).await;
-    webchannel_boundary(addr, &expected, limit).await;
+    webchannel_boundary(addr, enforce_limits).await;
 
     // The daemon survives every refusal.
     let ready = http(addr, "GET", "/", "").await;

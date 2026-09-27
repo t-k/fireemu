@@ -9445,6 +9445,24 @@ fn update(
     // replacement to a disabled account without returning tokens.
     let enabled_after = store.user(&uid).is_some_and(|u| !u.disabled);
     if credentials_changed && enabled_after {
+        // A tenant's password change without returnSecureToken answers a legacy token that
+        // names the tenant, and no session (AUTH-TENANT-BLOCKING recording 2026-09-27,
+        // settings#password-off-update-password). A project's was not recorded this way.
+        let legacy = !stateless_refresh_tokens
+            && store.tenant_id().is_some()
+            && body.get("returnSecureToken").and_then(Value::as_bool) != Some(true);
+        if let (true, Some(provider)) = (legacy, session_provider.as_ref()) {
+            return match legacy_sign_in_token(store, &uid, at, provider.id(), None) {
+                Ok(id_token) => {
+                    response["idToken"] = json!(id_token);
+                    JsonResponse {
+                        status: 200,
+                        body: response,
+                    }
+                }
+                Err(r) => r,
+            };
+        }
         if let Some(provider) = session_provider {
             match issue_tokens_with(store, &uid, None, at, None, Some(provider)) {
                 Ok(tokens) => {
@@ -10862,6 +10880,11 @@ fn mfa_sign_in_finalize_production(
         return invalid();
     };
     if let Some(phone) = body.get("phoneVerificationInfo").filter(|v| !v.is_null()) {
+        // A tenant's SMS MFA is checked before the verification session (AUTH-TENANT-BLOCKING
+        // recording 2026-09-27, mfa#sms-finalize-m1-in-n).
+        if store.tenant_id().is_some() && !store.mfa_config().sms_enabled() {
+            return error(400, "OPERATION_NOT_ALLOWED : SMS based MFA not enabled.");
+        }
         return finalize_phone_sign_in(store, pending, phone, at);
     }
     let Some(enrollment_id) = str_field(body, "mfaEnrollmentId").filter(|id| !id.is_empty()) else {

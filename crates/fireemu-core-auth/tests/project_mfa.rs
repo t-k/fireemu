@@ -494,6 +494,41 @@ fn a_tenant_follows_the_same_second_factor_rules_as_the_project() {
     assert_eq!(in_tenant.1, Err(MfaError::TotpChallengeTimeout));
 }
 
+/// With its MFA off, a tenant asks for no enrolled factor, TOTP included (AUTH-TENANT-BLOCKING
+/// sandbox recording 2026-09-27, `atb/tenant/mfa#sign-in-m1-mfa-off`); a project still asks
+/// for a TOTP factor (fail closed, AUTH-MFA follow-up directive).
+#[test]
+fn a_tenant_with_its_mfa_off_asks_for_no_factor() {
+    let enrolled = |s: &mut fireemu_core_auth::store::AuthStore| {
+        s.set_production_mfa(true);
+        let (uid, material) = started(s);
+        s.finalize_totp_enrollment_named(
+            &uid,
+            &material.session_id,
+            code_at(&material, t0()),
+            None,
+            t0(),
+        )
+        .unwrap();
+        uid
+    };
+    let mut tenant = fireemu_core_auth::store::AuthStore::new_tenant(
+        "demo-app",
+        "tenant-a",
+        SplitMix64::new(3),
+        TotpPolicy::default(),
+    );
+    let uid = enrolled(&mut tenant);
+    assert!(!tenant.second_factor_required_for(&uid));
+    let mut project = fireemu_core_auth::store::AuthStore::new(
+        "demo-app",
+        SplitMix64::new(3),
+        TotpPolicy::default(),
+    );
+    let uid = enrolled(&mut project);
+    assert!(project.second_factor_required_for(&uid));
+}
+
 /// The refusals this parent added describe themselves (mutation follow-up,
 /// docs.local/mutation/auth-mfa/20260925).
 #[test]

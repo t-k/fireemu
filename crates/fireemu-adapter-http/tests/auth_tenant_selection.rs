@@ -492,3 +492,43 @@ fn strict_tenant_email_sign_in_links_need_no_continue_url() {
         "{link}"
     );
 }
+
+/// A tenant's password change without returnSecureToken answers a legacy token naming the
+/// tenant and no session (settings#password-off-update-password); with it, a secure session.
+#[test]
+fn strict_tenant_password_change_answers_a_legacy_token() {
+    let s = state(true);
+    let (t, signed) = tenant_with_user(&s, "atb-set-s");
+    let (status, changed) = client(
+        &s,
+        &format!("{V1}/accounts:update"),
+        &json!({"tenantId": t, "idToken": signed["idToken"], "password": "password789"}),
+    );
+    assert_eq!(status, 200, "{changed}");
+    assert!(changed.get("refreshToken").is_none(), "{changed}");
+    let token = changed["idToken"].as_str().unwrap();
+    let payload: Value = serde_json::from_str(
+        &fireemu_core_auth::jwt::decode_unsigned(token)
+            .unwrap()
+            .payload_json,
+    )
+    .unwrap();
+    assert_eq!(
+        payload["iss"], "https://identitytoolkit.google.com/",
+        "{payload}"
+    );
+    assert_eq!(payload["tenant"], json!(t));
+    assert_eq!(
+        payload["exp"].as_i64().unwrap() - payload["iat"].as_i64().unwrap(),
+        1_209_600
+    );
+    assert!(payload.get("firebase").is_none(), "{payload}");
+    let (status, secure) = client(
+        &s,
+        &format!("{V1}/accounts:update"),
+        &json!({"tenantId": t, "idToken": signed["idToken"], "password": "password790",
+                "returnSecureToken": true}),
+    );
+    assert_eq!(status, 200, "{secure}");
+    assert!(secure["refreshToken"].is_string(), "{secure}");
+}

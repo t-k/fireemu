@@ -2192,3 +2192,57 @@ fn a_strict_tenant_follows_its_own_mfa_config() {
     assert!(pending["mfaPendingCredential"].is_string(), "{pending}");
     assert!(pending.get("idToken").is_none(), "{pending}");
 }
+
+/// Under strict, a phone second factor finalized in a tenant without SMS MFA is refused for
+/// that before its session is read (AUTH-TENANT-BLOCKING recording 2026-09-27,
+/// mfa#sms-finalize-m1-in-n).
+#[test]
+fn strict_sms_finalize_in_a_tenant_without_sms_mfa_is_refused_first() {
+    let (_, state, _registry) = profiles().into_iter().nth(1).unwrap();
+    enable_tenant_sms_mfa(&state, TENANT_A);
+    let (status, created) = admin(
+        &state,
+        "POST",
+        &tenant_admin_path(TENANT_A, "accounts"),
+        &json!({"email": "m1@example.com", "password": "hunter22", "emailVerified": true,
+            "mfaInfo": [{"phoneInfo": "+15559876543", "displayName": "phone"}]}),
+    );
+    assert_eq!(status, 200, "{created}");
+    let (status, pending) = client(
+        &state,
+        &format!("{V1}/accounts:signInWithPassword"),
+        TENANT_A,
+        json!({"email": "m1@example.com", "password": "hunter22"}),
+    );
+    assert_eq!(status, 200, "{pending}");
+    let credential = pending["mfaPendingCredential"].clone();
+    let enrollment = pending["mfaInfo"][0]["mfaEnrollmentId"].clone();
+    let (status, started) = client(
+        &state,
+        &format!("{V2}/accounts/mfaSignIn:start"),
+        TENANT_A,
+        json!({"mfaPendingCredential": credential, "mfaEnrollmentId": enrollment,
+            "phoneSignInInfo": {"recaptchaToken": "x"}}),
+    );
+    assert_eq!(status, 200, "{started}");
+    let session = started["phoneResponseInfo"]["sessionInfo"].clone();
+    let code = verification_codes(&state, TENANT_A)
+        .into_iter()
+        .find(|c| c["sessionInfo"] == session)
+        .map(|c| c["code"].clone())
+        .unwrap();
+    let (status, refused) = client(
+        &state,
+        &format!("{V2}/accounts/mfaSignIn:finalize"),
+        TENANT_B,
+        json!({"mfaPendingCredential": credential,
+            "phoneVerificationInfo": {"sessionInfo": session, "code": code}}),
+    );
+    assert_eq!(
+        (status, refused),
+        (
+            400,
+            json!({"error": {"code": 400, "message": "OPERATION_NOT_ALLOWED : SMS based MFA not enabled.", "status": "INVALID_ARGUMENT"}})
+        )
+    );
+}

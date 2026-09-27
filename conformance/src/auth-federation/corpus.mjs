@@ -8,6 +8,8 @@
 // IDs are `oidc.fireemu-RUN-…`); `CERT(name)`, a PEM certificate of a key made for this run;
 // `TOKEN(name)`, an ID token signed with the run's key.
 
+import { issuerChannelHost } from "./guard.mjs";
+
 const admin = (id, method, path, extra = {}) => ({
   id,
   auth: "admin",
@@ -26,7 +28,12 @@ const oidcConfig = {
   steps: [
     admin("create", "POST", "oauthIdpConfigs", {
       query: { oauthIdpConfigId: "oidc.fireemu-RUN-a" },
-      body: { clientId: "client-a", issuer: ISSUER, enabled: true, responseType: { idToken: true } },
+      body: {
+        clientId: "client-a",
+        issuer: ISSUER,
+        enabled: true,
+        responseType: { idToken: true },
+      },
     }),
     admin("create-duplicate", "POST", "oauthIdpConfigs", {
       query: { oauthIdpConfigId: "oidc.fireemu-RUN-a" },
@@ -146,14 +153,30 @@ const thirdPartyRefusals = {
   id: "auth-federation/third-party-refusals",
   providers: ["oidc.fireemu-RUN-off"],
   steps: [
-    client("google-garbage-id-token", "signInWithIdp", idp({ providerId: "google.com", id_token: "fireemu-garbage" })),
-    client("facebook-garbage-access-token", "signInWithIdp", idp({ providerId: "facebook.com", access_token: "fireemu-garbage" })),
-    client("unconfigured-oidc", "signInWithIdp", idp({ providerId: "oidc.fireemu-RUN-missing", id_token: "TOKEN(missing)" })),
+    client(
+      "google-garbage-id-token",
+      "signInWithIdp",
+      idp({ providerId: "google.com", id_token: "fireemu-garbage" }),
+    ),
+    client(
+      "facebook-garbage-access-token",
+      "signInWithIdp",
+      idp({ providerId: "facebook.com", access_token: "fireemu-garbage" }),
+    ),
+    client(
+      "unconfigured-oidc",
+      "signInWithIdp",
+      idp({ providerId: "oidc.fireemu-RUN-missing", id_token: "TOKEN(missing)" }),
+    ),
     admin("create-disabled", "POST", "oauthIdpConfigs", {
       query: { oauthIdpConfigId: "oidc.fireemu-RUN-off" },
       body: { clientId: "client-off", issuer: ISSUER, enabled: false },
     }),
-    client("disabled-oidc", "signInWithIdp", idp({ providerId: "oidc.fireemu-RUN-off", id_token: "TOKEN(off)" })),
+    client(
+      "disabled-oidc",
+      "signInWithIdp",
+      idp({ providerId: "oidc.fireemu-RUN-off", id_token: "TOKEN(off)" }),
+    ),
     client("create-auth-uri-disabled", "createAuthUri", {
       providerId: "oidc.fireemu-RUN-off",
       continueUri: "https://{project}.firebaseapp.com/__/auth/handler",
@@ -161,7 +184,6 @@ const thirdPartyRefusals = {
     admin("delete-disabled", "DELETE", "oauthIdpConfigs/oidc.fireemu-RUN-off"),
   ],
 };
-
 
 // ---- the controlled OIDC IdP (O1) --------------------------------------------------------
 //
@@ -198,7 +220,7 @@ const lookup = (id, reference) => ({
 
 const oidcVerification = {
   id: "auth-federation/oidc/verification",
-  providers: [oidcProvider("v")],
+  providers: [oidcProvider("v"), oidcProvider("u")],
   client: "client-v",
   tokens: {
     valid: { claims: { email: "EMAIL(valid)", email_verified: true } },
@@ -212,6 +234,7 @@ const oidcVerification = {
     "not-yet-valid": { claims: { nbf: { $now: 3600 } } },
     "without-subject": { drop: ["sub"] },
     "hs256-header": { header: { alg: "HS256" } },
+    "unpublished-issuer": { claims: { iss: "https://ISSUERHOST/oidc/RUN-unpublished" } },
   },
   steps: [
     createOidc("v"),
@@ -228,8 +251,25 @@ const oidcVerification = {
       "without-subject",
       "hs256-header",
     ].map((name) => signIn(name, "v", name)),
-    client("garbage", "signInWithIdp", idp({ providerId: oidcProvider("v"), id_token: "fireemu-garbage" })),
+    client(
+      "garbage",
+      "signInWithIdp",
+      idp({ providerId: oidcProvider("v"), id_token: "fireemu-garbage" }),
+    ),
     client("missing-token", "signInWithIdp", idp({ providerId: oidcProvider("v") })),
+    // The run's provider named in another case: strict refuses it (O4), production unobserved.
+    signIn("mixed-case-provider", "V", "valid"),
+    // A provider whose issuer publishes no discovery document or keys.
+    admin("create-unpublished", "POST", "oauthIdpConfigs", {
+      query: { oauthIdpConfigId: oidcProvider("u") },
+      body: {
+        clientId: "client-v",
+        issuer: "https://ISSUERHOST/oidc/RUN-unpublished",
+        enabled: true,
+        responseType: { idToken: true },
+      },
+    }),
+    signIn("unpublished-issuer", "u", "unpublished-issuer"),
   ],
 };
 
@@ -272,7 +312,9 @@ const accountsNew = {
         picture: "https://{project}.web.app/picture.png",
       },
     },
-    "unverified-email": { claims: { sub: "sub-unverified", email: "EMAIL(unverified)", email_verified: false } },
+    "unverified-email": {
+      claims: { sub: "sub-unverified", email: "EMAIL(unverified)", email_verified: false },
+    },
     "without-email": { claims: { sub: "sub-no-email" } },
   },
   steps: [
@@ -290,7 +332,14 @@ const accountsReturning = {
   client: "client-b",
   tokens: {
     first: { claims: { sub: "sub-returning", email: "EMAIL(returning)", email_verified: true } },
-    second: { claims: { sub: "sub-returning", email: "EMAIL(returning)", email_verified: true, name: "Renamed" } },
+    second: {
+      claims: {
+        sub: "sub-returning",
+        email: "EMAIL(returning)",
+        email_verified: true,
+        name: "Renamed",
+      },
+    },
   },
   steps: [
     createOidc("b"),
@@ -311,7 +360,9 @@ const collisionVerified = {
   id: "auth-federation/collision/verified",
   providers: [oidcProvider("c")],
   client: "client-c",
-  tokens: { verified: { claims: { sub: "sub-verified", email: "EMAIL(owner-v)", email_verified: true } } },
+  tokens: {
+    verified: { claims: { sub: "sub-verified", email: "EMAIL(owner-v)", email_verified: true } },
+  },
   steps: [
     createOidc("c"),
     adminCreate("create-owner", { email: "EMAIL(owner-v)", password: "fireemu-password-1" }),
@@ -324,7 +375,11 @@ const collisionUnverified = {
   id: "auth-federation/collision/unverified",
   providers: [oidcProvider("u")],
   client: "client-u",
-  tokens: { unverified: { claims: { sub: "sub-unverified", email: "EMAIL(owner-u)", email_verified: false } } },
+  tokens: {
+    unverified: {
+      claims: { sub: "sub-unverified", email: "EMAIL(owner-u)", email_verified: false },
+    },
+  },
   steps: [
     createOidc("u"),
     adminCreate("create-owner", { email: "EMAIL(owner-u)", password: "fireemu-password-1" }),
@@ -364,7 +419,9 @@ const duplicateEmail = {
   providers: [oidcProvider("d")],
   client: "client-d",
   touches: ["signIn.allowDuplicateEmails"],
-  tokens: { shared: { claims: { sub: "sub-shared", email: "EMAIL(shared)", email_verified: true } } },
+  tokens: {
+    shared: { claims: { sub: "sub-shared", email: "EMAIL(shared)", email_verified: true } },
+  },
   steps: [
     createOidc("d"),
     admin("allow-duplicates", "PATCH", "config", {
@@ -381,7 +438,9 @@ const pendingToken = {
   id: "auth-federation/pending-token",
   providers: [oidcProvider("p")],
   client: "client-p",
-  tokens: { first: { claims: { sub: "sub-pending", email: "EMAIL(pending)", email_verified: true } } },
+  tokens: {
+    first: { claims: { sub: "sub-pending", email: "EMAIL(pending)", email_verified: true } },
+  },
   steps: [
     createOidc("p"),
     signIn("first", "p", "first"),
@@ -519,13 +578,17 @@ export const PROGRAMS = [
 ];
 
 /**
- * The corpus with this run's values in place of its placeholders: `{project}`, `RUN` (a
- * lowercase tag), `CERT(name)` and `TOKEN(name)` from the given maps.
+ * The corpus with this run's values in place of its placeholders: `{project}`, `RUN` (the
+ * run's tag), `ISSUERHOST` (the run's preview channel; required, never the live site),
+ * `CERT(name)` and `TOKEN(name)` from the given maps.
  */
 export function resolveCorpus(
   programs,
-  { project, run, issuerHost = `${project}.web.app`, certificates = {}, tokens = {} },
+  { project, run, issuerHost, certificates = {}, tokens = {} },
 ) {
+  if (!issuerChannelHost(project, run).test(issuerHost ?? "")) {
+    throw new Error(`issuer host ${issuerHost} is not the run's preview channel of the sandbox`);
+  }
   const text = (value) =>
     value
       .replaceAll("ISSUERHOST", issuerHost)

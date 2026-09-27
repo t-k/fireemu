@@ -5,8 +5,11 @@ import { SANDBOX_PROJECT } from "./auth-account/harness.mjs";
 import { guardHttp, isRunCredential, validateFederationCorpus } from "./auth-federation/guard.mjs";
 import { generateSigningKey, signIdToken } from "./auth-federation/idp.mjs";
 
+const RUN = "a1b2c3";
+const CHANNEL = `${SANDBOX_PROJECT}--fed-${RUN}-abc123.web.app`;
 const production = (extra = {}) => ({
   project: SANDBOX_PROJECT,
+  run: RUN,
   target: { kind: "production" },
   runKids: [],
   defaultIdpWrites: [],
@@ -23,14 +26,27 @@ const idp = (postBody) => ({
 
 test("only the federation families of the sandbox are reviewed", () => {
   const ctx = production();
-  assert.doesNotThrow(() => send(ctx, "POST", "/v1/accounts:signInWithIdp", idp({ providerId: "oidc.fireemu-a", id_token: "fireemu-garbage" })));
-  assert.doesNotThrow(() => send(ctx, "GET", `/admin/v2/projects/${SANDBOX_PROJECT}/oauthIdpConfigs`));
+  assert.doesNotThrow(() =>
+    send(
+      ctx,
+      "POST",
+      "/v1/accounts:signInWithIdp",
+      idp({ providerId: "oidc.fireemu-a1b2c3-a", id_token: "fireemu-garbage" }),
+    ),
+  );
+  assert.doesNotThrow(() =>
+    send(ctx, "GET", `/admin/v2/projects/${SANDBOX_PROJECT}/oauthIdpConfigs`),
+  );
   assert.doesNotThrow(() => send(ctx, "GET", "/v2/defaultSupportedIdps"));
   assert.throws(() => send(ctx, "POST", "/v1/accounts:signUp", {}), /not a reviewed family/);
   assert.throws(() => send(ctx, "POST", "/v1/accounts:sendOobCode", {}), /not a reviewed family/);
-  assert.throws(() => send(ctx, "GET", "/admin/v2/projects/other-project/oauthIdpConfigs"), /not a reviewed family/);
   assert.throws(
-    () => guardHttp({ url: "https://evil.example/v1/token", method: "POST" }, ctx, { role: "step" }),
+    () => send(ctx, "GET", "/admin/v2/projects/other-project/oauthIdpConfigs"),
+    /not a reviewed family/,
+  );
+  assert.throws(
+    () =>
+      guardHttp({ url: "https://evil.example/v1/token", method: "POST" }, ctx, { role: "step" }),
     /not reviewed/,
   );
 });
@@ -38,36 +54,152 @@ test("only the federation families of the sandbox are reviewed", () => {
 test("provider writes touch only the run's providers and declared default IdPs", () => {
   const ctx = production({ defaultIdpWrites: ["google.com"] });
   const base = `/admin/v2/projects/${SANDBOX_PROJECT}`;
-  const oidc = { clientId: "c", issuer: `https://${SANDBOX_PROJECT}.web.app/oidc/run`, enabled: true };
-  assert.doesNotThrow(() => send(ctx, "POST", `${base}/oauthIdpConfigs?oauthIdpConfigId=oidc.fireemu-a`, oidc));
-  assert.throws(() => send(ctx, "POST", `${base}/oauthIdpConfigs?oauthIdpConfigId=oidc.corp`, oidc), /not one of the run's/);
-  assert.throws(() => send(ctx, "DELETE", `${base}/inboundSamlConfigs/saml.corp`), /not one of the run's/);
-  // A malformed ID is sent to be refused by the service.
-  assert.doesNotThrow(() => send(ctx, "POST", `${base}/oauthIdpConfigs?oauthIdpConfigId=bad id`, oidc));
+  const oidc = {
+    clientId: "c",
+    issuer: `https://${SANDBOX_PROJECT}.web.app/oidc/run`,
+    enabled: true,
+  };
+  assert.doesNotThrow(() =>
+    send(ctx, "POST", `${base}/oauthIdpConfigs?oauthIdpConfigId=oidc.fireemu-a1b2c3-a`, oidc),
+  );
   assert.throws(
-    () => send(ctx, "POST", `${base}/oauthIdpConfigs?oauthIdpConfigId=oidc.fireemu-b`, { ...oidc, issuer: "https://issuer.example.org" }),
+    () => send(ctx, "POST", `${base}/oauthIdpConfigs?oauthIdpConfigId=oidc.corp`, oidc),
+    /not one of the run's/,
+  );
+  assert.throws(
+    () => send(ctx, "DELETE", `${base}/inboundSamlConfigs/saml.corp`),
+    /not one of the run's/,
+  );
+  // A malformed ID is sent to be refused by the service.
+  assert.doesNotThrow(() =>
+    send(ctx, "POST", `${base}/oauthIdpConfigs?oauthIdpConfigId=bad id`, oidc),
+  );
+  assert.throws(
+    () =>
+      send(ctx, "POST", `${base}/oauthIdpConfigs?oauthIdpConfigId=oidc.fireemu-a1b2c3-b`, {
+        ...oidc,
+        issuer: "https://issuer.example.org",
+      }),
     /issuer host issuer.example.org is not reviewed/,
   );
-  assert.doesNotThrow(() => send(ctx, "PATCH", `${base}/defaultSupportedIdpConfigs/google.com?updateMask=enabled`, { enabled: false }));
-  assert.throws(() => send(ctx, "PATCH", `${base}/defaultSupportedIdpConfigs/facebook.com?updateMask=enabled`, {}), /not declared/);
-  assert.throws(() => send(ctx, "PATCH", `${base}/config?updateMask=signIn.email.enabled`, {}), /not written by AUTH-FEDERATION/);
-  assert.throws(() => send(ctx, "PATCH", `${base}/config`, {}), /non-empty updateMask/);
-  assert.doesNotThrow(() => send(ctx, "PATCH", `${base}/config?updateMask=signIn.allowDuplicateEmails`, { signIn: { allowDuplicateEmails: true } }));
-});
-
-test("the run's issuer host is allowed only as a preview channel of the sandbox", () => {
-  const channel = `${SANDBOX_PROJECT}--fed-r1-abc123.web.app`;
-  const ctx = production({ issuerHost: channel });
-  const base = `/admin/v2/projects/${SANDBOX_PROJECT}`;
-  const oidc = (issuer) => ({ clientId: "c", issuer, enabled: true });
-  assert.doesNotThrow(() => send(ctx, "POST", `${base}/oauthIdpConfigs?oauthIdpConfigId=oidc.fireemu-a`, oidc(`https://${channel}/oidc/r1`)));
-  assert.throws(
-    () => send(production(), "POST", `${base}/oauthIdpConfigs?oauthIdpConfigId=oidc.fireemu-a`, oidc(`https://${channel}/oidc/r1`)),
-    /not reviewed/,
+  assert.doesNotThrow(() =>
+    send(ctx, "PATCH", `${base}/defaultSupportedIdpConfigs/google.com?updateMask=enabled`, {
+      enabled: false,
+    }),
   );
   assert.throws(
-    () => send(production({ issuerHost: "evil--x.web.app" }), "GET", `${base}/oauthIdpConfigs`),
-    /not a preview channel of the sandbox/,
+    () =>
+      send(ctx, "PATCH", `${base}/defaultSupportedIdpConfigs/facebook.com?updateMask=enabled`, {}),
+    /not declared/,
+  );
+  assert.throws(
+    () => send(ctx, "PATCH", `${base}/config?updateMask=signIn.email.enabled`, {}),
+    /not written by AUTH-FEDERATION/,
+  );
+  assert.throws(() => send(ctx, "PATCH", `${base}/config`, {}), /non-empty updateMask/);
+  assert.doesNotThrow(() =>
+    send(ctx, "PATCH", `${base}/config?updateMask=signIn.allowDuplicateEmails`, {
+      signIn: { allowDuplicateEmails: true },
+    }),
+  );
+});
+
+test("the run's issuer host is allowed only as the run's preview channel of the sandbox", () => {
+  const ctx = production({ issuerHost: CHANNEL });
+  const base = `/admin/v2/projects/${SANDBOX_PROJECT}`;
+  const oidc = (issuer) => ({ clientId: "c", issuer, enabled: true });
+  assert.doesNotThrow(() =>
+    send(
+      ctx,
+      "POST",
+      `${base}/oauthIdpConfigs?oauthIdpConfigId=oidc.fireemu-a1b2c3-a`,
+      oidc(`https://${CHANNEL}/oidc/${RUN}`),
+    ),
+  );
+  assert.throws(
+    () =>
+      send(
+        production(),
+        "POST",
+        `${base}/oauthIdpConfigs?oauthIdpConfigId=oidc.fireemu-a1b2c3-a`,
+        oidc(`https://${CHANNEL}/oidc/${RUN}`),
+      ),
+    /not reviewed/,
+  );
+  for (const host of [
+    "evil--x.web.app",
+    `${SANDBOX_PROJECT}--x.evil.web.app`,
+    `${SANDBOX_PROJECT}--.web.app`,
+    `${SANDBOX_PROJECT}--anything-at-all.web.app`,
+    `${SANDBOX_PROJECT}--fed-d4e5f6-abc123.web.app`,
+    `${SANDBOX_PROJECT}--fed-${RUN}-abc.def.web.app`,
+    `${SANDBOX_PROJECT}--live-${RUN}-abc123.web.app`,
+    `${SANDBOX_PROJECT}.web.app`,
+  ]) {
+    assert.throws(
+      () => send(production({ issuerHost: host }), "GET", `${base}/oauthIdpConfigs`),
+      /not the run's preview channel of the sandbox/,
+      host,
+    );
+  }
+});
+
+test("a run is named by six hex digits and touches only its own providers", () => {
+  const base = `/admin/v2/projects/${SANDBOX_PROJECT}`;
+  const oidc = {
+    clientId: "c",
+    issuer: `https://${SANDBOX_PROJECT}.web.app/oidc/x`,
+    enabled: true,
+  };
+  for (const run of [undefined, "r1", "../../escape", "A1B2C3", "a1b2c3d"]) {
+    assert.throws(
+      () => send(production({ run }), "GET", `${base}/oauthIdpConfigs`),
+      /six hex digits/,
+      String(run),
+    );
+  }
+  // Another run's or another lane's provider is neither written nor deleted.
+  for (const id of ["oidc.fireemu-d4e5f6-a", "oidc.fireemu-a", "saml.fireemu-tenant-a"]) {
+    assert.throws(
+      () => send(production(), "POST", `${base}/oauthIdpConfigs?oauthIdpConfigId=${id}`, oidc),
+      /not one of the run's/,
+      id,
+    );
+    assert.throws(
+      () => send(production(), "DELETE", `${base}/oauthIdpConfigs/${id}`),
+      /not one of the run's/,
+      id,
+    );
+  }
+  // A sign-in may name the run's provider in another case; another run's is refused.
+  assert.doesNotThrow(() =>
+    send(
+      production(),
+      "POST",
+      "/v1/accounts:signInWithIdp",
+      idp({ providerId: "oidc.fireemu-a1b2c3-V", id_token: "fireemu-garbage" }),
+    ),
+  );
+  assert.throws(
+    () =>
+      send(
+        production(),
+        "POST",
+        "/v1/accounts:signInWithIdp",
+        idp({ providerId: "oidc.fireemu-d4e5f6-v", id_token: "fireemu-garbage" }),
+      ),
+    /not the run's/,
+  );
+  // Only the run's lower-case ID may be written, even though the service may fold case.
+  assert.throws(
+    () =>
+      send(
+        production(),
+        "POST",
+        `${base}/oauthIdpConfigs?oauthIdpConfigId=oidc.fireemu-a1b2c3-V`,
+        oidc,
+      ),
+    /not one of the run's/,
   );
 });
 
@@ -78,28 +210,121 @@ test("no real third-party credential and no address outside example.com is sent"
   const foreign = signIdToken(generateSigningKey({ kid: "google-kid" }), { sub: "s" });
   assert.ok(isRunCredential(own, ctx));
   assert.ok(!isRunCredential(foreign, ctx));
-  assert.doesNotThrow(() => send(ctx, "POST", "/v1/accounts:signInWithIdp", idp({ providerId: "google.com", id_token: own })));
-  assert.throws(() => send(ctx, "POST", "/v1/accounts:signInWithIdp", idp({ providerId: "google.com", id_token: foreign })), /not a credential this run made/);
-  assert.throws(() => send(ctx, "POST", "/v1/accounts:signInWithIdp", idp({ providerId: "linkedin.com", id_token: own })), /not the run's or a reviewed third party/);
-  assert.throws(() => send(ctx, "POST", "/v1/accounts:signInWithIdp", { ...idp({ providerId: "oidc.fireemu-a", id_token: own }), requestUri: "https://evil.example.org/cb" }), /requestUri host/);
-  assert.throws(() => send(ctx, "POST", "/v1/projects/" + SANDBOX_PROJECT + "/accounts:lookup", { email: ["someone@gmail.com"] }), /outside example.com/);
+  assert.doesNotThrow(() =>
+    send(
+      ctx,
+      "POST",
+      "/v1/accounts:signInWithIdp",
+      idp({ providerId: "google.com", id_token: own }),
+    ),
+  );
+  assert.throws(
+    () =>
+      send(
+        ctx,
+        "POST",
+        "/v1/accounts:signInWithIdp",
+        idp({ providerId: "google.com", id_token: foreign }),
+      ),
+    /not a credential this run made/,
+  );
+  assert.throws(
+    () =>
+      send(
+        ctx,
+        "POST",
+        "/v1/accounts:signInWithIdp",
+        idp({ providerId: "linkedin.com", id_token: own }),
+      ),
+    /not the run's or a reviewed third party/,
+  );
+  assert.throws(
+    () =>
+      send(ctx, "POST", "/v1/accounts:signInWithIdp", {
+        ...idp({ providerId: "oidc.fireemu-a1b2c3-a", id_token: own }),
+        requestUri: "https://evil.example.org/cb",
+      }),
+    /requestUri host/,
+  );
+  assert.throws(
+    () =>
+      send(ctx, "POST", "/v1/projects/" + SANDBOX_PROJECT + "/accounts:lookup", {
+        email: ["someone@gmail.com"],
+      }),
+    /outside example.com/,
+  );
 });
 
 test("a corpus declares its providers, default IdPs and config paths", () => {
   assert.doesNotThrow(() =>
-    validateFederationCorpus([
-      { id: "auth-federation/x", providers: ["oidc.fireemu-x"], touches: ["signIn.allowDuplicateEmails"], steps: [{ id: "a" }, { id: "b" }] },
-    ]),
+    validateFederationCorpus(
+      [
+        {
+          id: "auth-federation/x",
+          providers: ["oidc.fireemu-a1b2c3-x"],
+          touches: ["signIn.allowDuplicateEmails"],
+          steps: [{ id: "a" }, { id: "b" }],
+        },
+      ],
+      { run: RUN },
+    ),
   );
-  assert.throws(() => validateFederationCorpus([{ id: "auth-federation/x", providers: ["oidc.corp"], steps: [] }]), /provider oidc.corp/);
-  assert.throws(() => validateFederationCorpus([{ id: "auth-federation/x", steps: [{ id: "a" }, { id: "a" }] }]), /duplicate step/);
-  assert.throws(() => validateFederationCorpus([{ id: "auth-federation/x", touches: ["mfa"], steps: [] }]), /touches mfa/);
   assert.throws(
-    () => validateFederationCorpus([{ id: "auth-federation/x", providers: [], steps: [{ id: "c", method: "POST", query: { oauthIdpConfigId: "oidc.fireemu-x" } }] }]),
-    /creates undeclared oidc.fireemu-x/,
+    () =>
+      validateFederationCorpus([{ id: "auth-federation/x", providers: ["oidc.corp"], steps: [] }], {
+        run: RUN,
+      }),
+    /provider oidc.corp/,
   );
   assert.throws(
-    () => validateFederationCorpus([{ id: "auth-federation/x", steps: [{ id: "c", method: "POST", query: { idpId: "google.com" } }] }]),
+    () =>
+      validateFederationCorpus([{ id: "auth-federation/x", steps: [{ id: "a" }, { id: "a" }] }], {
+        run: RUN,
+      }),
+    /duplicate step/,
+  );
+  assert.throws(
+    () =>
+      validateFederationCorpus([{ id: "auth-federation/x", touches: ["mfa"], steps: [] }], {
+        run: RUN,
+      }),
+    /touches mfa/,
+  );
+  assert.throws(
+    () =>
+      validateFederationCorpus(
+        [
+          {
+            id: "auth-federation/x",
+            providers: [],
+            steps: [
+              { id: "c", method: "POST", query: { oauthIdpConfigId: "oidc.fireemu-a1b2c3-x" } },
+            ],
+          },
+        ],
+        { run: RUN },
+      ),
+    /creates undeclared oidc.fireemu-a1b2c3-x/,
+  );
+  assert.throws(
+    () =>
+      validateFederationCorpus(
+        [{ id: "auth-federation/x", providers: ["oidc.fireemu-d4e5f6-x"], steps: [] }],
+        { run: RUN },
+      ),
+    /provider oidc.fireemu-d4e5f6-x/,
+  );
+  assert.throws(
+    () =>
+      validateFederationCorpus(
+        [
+          {
+            id: "auth-federation/x",
+            steps: [{ id: "c", method: "POST", query: { idpId: "google.com" } }],
+          },
+        ],
+        { run: RUN },
+      ),
     /undeclared default IdP google.com/,
   );
 });
@@ -108,13 +333,28 @@ test("the draft corpus resolves to requests the guard lets through", async () =>
   const { PROGRAMS, resolveCorpus } = await import("./auth-federation/corpus.mjs");
   const { materialize, mintTokens } = await import("./auth-federation/run.mjs");
   const keys = { run: generateSigningKey({ kid: "run-kid" }), other: generateSigningKey() };
+  for (const issuerHost of [
+    undefined,
+    `${SANDBOX_PROJECT}.web.app`,
+    `${SANDBOX_PROJECT}--fed-d4e5f6-abc123.web.app`,
+  ]) {
+    assert.throws(
+      () => resolveCorpus(PROGRAMS, { project: SANDBOX_PROJECT, run: RUN, issuerHost }),
+      /not the run's preview channel/,
+      String(issuerHost),
+    );
+  }
   const resolved = resolveCorpus(PROGRAMS, {
     project: SANDBOX_PROJECT,
-    run: "r1",
+    run: RUN,
+    issuerHost: CHANNEL,
     certificates: { "saml-a": "-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----" },
-    tokens: { missing: signIdToken(keys.run, { sub: "m" }), off: signIdToken(keys.run, { sub: "o" }) },
+    tokens: {
+      missing: signIdToken(keys.run, { sub: "m" }),
+      off: signIdToken(keys.run, { sub: "o" }),
+    },
   });
-  assert.doesNotThrow(() => validateFederationCorpus(resolved));
+  assert.doesNotThrow(() => validateFederationCorpus(resolved, { run: RUN }));
   const earlier = signIdToken(keys.run, { sub: "earlier" });
   // Every earlier answer holds what a later step may read from it.
   const raw = {
@@ -129,11 +369,15 @@ test("the draft corpus resolves to requests the guard lets through", async () =>
   };
   for (const program of resolved) {
     const minted = mintTokens(program, {
-      issuer: `https://${SANDBOX_PROJECT}.web.app/oidc/r1`,
+      issuer: `https://${CHANNEL}/oidc/${RUN}`,
       keys,
       now: 1_800_000_000,
     });
-    const ctx = production({ runKids: ["run-kid"], defaultIdpWrites: program.defaultIdpWrites ?? [] });
+    const ctx = production({
+      runKids: ["run-kid"],
+      issuerHost: CHANNEL,
+      defaultIdpWrites: program.defaultIdpWrites ?? [],
+    });
     for (const step of program.steps) {
       const query = step.query ? `?${new URLSearchParams(step.query)}` : "";
       const body = step.body === undefined ? undefined : materialize(step.body, raw, minted);
@@ -142,7 +386,11 @@ test("the draft corpus resolves to requests the guard lets through", async () =>
         assert.doesNotThrow(
           () =>
             guardHttp(
-              { url: `https://securetoken.googleapis.com/${step.path}`, method: "POST", body: JSON.stringify(body) },
+              {
+                url: `https://securetoken.googleapis.com/${step.path}`,
+                method: "POST",
+                body: JSON.stringify(body),
+              },
               ctx,
               { role: "step" },
             ),

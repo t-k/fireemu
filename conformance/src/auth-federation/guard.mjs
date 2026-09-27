@@ -31,18 +31,38 @@ export const THIRD_PARTY_PROVIDERS = new Set([
   "playgames.google.com",
 ]);
 
-/** The run's own providers: an OIDC or SAML ID with the `fireemu-` prefix. */
-export const RUN_PROVIDER = /^(oidc|saml)\.fireemu-[a-z0-9-]{1,48}$/;
+/** A run tag: six lowercase hex digits, so it can name nothing else (no path, no label). */
+export const RUN_TAG = /^[0-9a-f]{6}$/;
+
+/** The run's tag, or a refusal. */
+export function checkRun(run) {
+  if (!RUN_TAG.test(String(run))) throw new Error(`run tag ${run} is not six hex digits`);
+  return run;
+}
+
+/**
+ * The run's own providers: an OIDC or SAML ID `…fireemu-<run>-…`, so a run never writes or
+ * deletes another run's or another lane's providers.
+ */
+export function runProvider(run) {
+  return new RegExp(`^(oidc|saml)\\.fireemu-${checkRun(run)}-[a-z0-9-]{1,40}$`);
+}
+
+/** The Hosting preview channel that serves the run's issuer: `<project>--fed-<run>-<hash>`. */
+export function issuerChannelHost(project, run) {
+  const p = project.replaceAll(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return new RegExp(`^${p}--fed-${checkRun(run)}-[a-z0-9]{1,16}\\.web\\.app$`);
+}
 
 /**
  * The hosts a request may name: the sandbox's own Hosting domains, localhost and the run's
- * issuer host (a Hosting preview channel, known only after its deploy).
+ * issuer host (the run's Hosting preview channel, known only after its deploy).
  */
-export function allowedHosts(project, issuerHost) {
+export function allowedHosts(project, issuerHost, run) {
   const hosts = new Set([`${project}.firebaseapp.com`, `${project}.web.app`, "localhost"]);
   if (issuerHost) {
-    if (!issuerHost.startsWith(`${project}--`) || !issuerHost.endsWith(".web.app")) {
-      throw new Error(`issuer host ${issuerHost} is not a preview channel of the sandbox`);
+    if (!issuerChannelHost(project, run).test(issuerHost)) {
+      throw new Error(`issuer host ${issuerHost} is not the run's preview channel of the sandbox`);
     }
     hosts.add(issuerHost);
   }
@@ -102,7 +122,7 @@ function assertHost(value, ctx, key) {
     // Not an absolute URL: sent as written, to be validated by the service.
     return;
   }
-  if (!allowedHosts(ctx.project, ctx.issuerHost).has(host))
+  if (!allowedHosts(ctx.project, ctx.issuerHost, ctx.run).has(host))
     throw new Error(`${key} host ${host} is not reviewed`);
 }
 
@@ -120,12 +140,23 @@ export function isRunCredential(value, ctx) {
   }
 }
 
-const CREDENTIAL_KEYS = new Set(["id_token", "access_token", "code", "oauth_token", "SAMLResponse"]);
+const CREDENTIAL_KEYS = new Set([
+  "id_token",
+  "access_token",
+  "code",
+  "oauth_token",
+  "SAMLResponse",
+]);
 
 function guardIdpRequest(body, ctx) {
   const postBody = new URLSearchParams(typeof body.postBody === "string" ? body.postBody : "");
   const provider = postBody.get("providerId") ?? body.providerId;
-  if (provider && !RUN_PROVIDER.test(provider) && !THIRD_PARTY_PROVIDERS.has(provider)) {
+  // A sign-in may name the run's provider in another case (a strict refusal row); it reads only.
+  if (
+    provider &&
+    !runProvider(ctx.run).test(String(provider).toLowerCase()) &&
+    !THIRD_PARTY_PROVIDERS.has(provider)
+  ) {
     throw new Error(`provider ${provider} is not the run's or a reviewed third party`);
   }
   for (const [key, value] of postBody) {
@@ -156,7 +187,7 @@ function guardProviderWrite(method, path, query, ctx) {
     return;
   }
   // A malformed ID is refused by the service; only well-formed IDs must be the run's.
-  if (/^(oidc|saml)\.[a-z0-9-]+$/i.test(id ?? "") && !RUN_PROVIDER.test(id)) {
+  if (/^(oidc|saml)\.[a-z0-9-]+$/i.test(id ?? "") && !runProvider(ctx.run).test(id)) {
     throw new Error(`provider ${id} is not one of the run's`);
   }
 }
@@ -191,8 +222,9 @@ function locate(parsed, ctx) {
 /** The last check before a request leaves the process. `role` is "step" or "harness". */
 export function guardHttp({ url, method = "GET", body }, ctx, { role }) {
   if (!["step", "harness"].includes(role)) throw new Error("unknown role");
-  // A run's issuer host is checked before anything is sent, whatever the request names.
-  allowedHosts(ctx.project, ctx.issuerHost);
+  // A run's tag and issuer host are checked before anything is sent, whatever the request names.
+  checkRun(ctx.run);
+  allowedHosts(ctx.project, ctx.issuerHost, ctx.run);
   const parsed = new URL(url);
   const raw = url.slice(parsed.origin.length).split("?")[0];
   if (/%2e|%2f|\/\.\.?(\/|$)/i.test(raw)) throw new Error(`request path is not canonical: ${raw}`);
@@ -228,7 +260,8 @@ export function guardHttp({ url, method = "GET", body }, ctx, { role }) {
  * the providers it creates (and deletes them), the default IdPs it writes, and its config
  * paths; step IDs are unique.
  */
-export function validateFederationCorpus(programs) {
+export function validateFederationCorpus(programs, { run }) {
+  const own = runProvider(run);
   const ids = new Set();
   for (const program of programs) {
     if (ids.has(program.id)) throw new Error(`duplicate program ${program.id}`);
@@ -236,14 +269,14 @@ export function validateFederationCorpus(programs) {
     if (!program.id.startsWith("auth-federation/")) throw new Error(`${program.id}: not ours`);
     const steps = new Set();
     for (const provider of program.providers ?? []) {
-      if (!RUN_PROVIDER.test(provider)) throw new Error(`${program.id}: provider ${provider}`);
+      if (!own.test(provider)) throw new Error(`${program.id}: provider ${provider}`);
     }
     for (const step of program.steps) {
       if (steps.has(step.id)) throw new Error(`${program.id}: duplicate step ${step.id}`);
       steps.add(step.id);
       // Whatever a step may create is declared, so the harness deletes it after the program.
       const created = step.query?.oauthIdpConfigId ?? step.query?.inboundSamlConfigId;
-      if (step.method === "POST" && RUN_PROVIDER.test(created ?? "")) {
+      if (step.method === "POST" && /^(oidc|saml)\./i.test(created ?? "")) {
         if (!program.providers?.includes(created)) {
           throw new Error(`${program.id}#${step.id}: creates undeclared ${created}`);
         }

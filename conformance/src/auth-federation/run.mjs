@@ -17,9 +17,9 @@ import { CONFORMANCE_DIR } from "../config.mjs";
 import { resolveFireemuBinary } from "../evidence.mjs";
 import { SANDBOX_PROJECT } from "../auth-account/harness.mjs";
 import { PROGRAMS, resolveCorpus } from "./corpus.mjs";
-import { guardHttp, validateFederationCorpus } from "./guard.mjs";
+import { guardHttp, runProvider, validateFederationCorpus } from "./guard.mjs";
 import { normalizeHttp } from "./harness.mjs";
-import { generateSigningKey, saveSigningKey, signIdToken } from "./idp.mjs";
+import { generateSigningKey, jwksDocument, saveSigningKey, signIdToken } from "./idp.mjs";
 
 const execFileAsync = promisify(execFile);
 const RUN_DIR = join(CONFORMANCE_DIR, ".runs", "auth-federation");
@@ -85,25 +85,42 @@ export function mintTokens(program, { issuer, keys, now }) {
   return minted;
 }
 
-/** This run's key material and the corpus resolved with it. */
-async function prepareRun(project) {
-  const run = randomBytes(3).toString("hex");
+/**
+ * This run's key material and the corpus resolved with it. `issuerHost` is the run's preview
+ * channel (the local mode names one that is never deployed).
+ */
+async function prepareRun(project, run, issuerHost) {
   const secretDir = await mkdtemp(join(tmpdir(), "fireemu-auth-federation-"));
   const keys = { run: generateSigningKey(), other: generateSigningKey() };
   await saveSigningKey(join(secretDir, "oidc.pem"), keys.run);
   const now = Math.floor(Date.now() / 1000);
-  const issuer = `https://${project}.web.app/oidc/${run}`;
+  const issuer = `https://${issuerHost}/oidc/${run}`;
   const legacy = (subject) =>
-    signIdToken(keys.run, { iss: issuer, aud: "client-off", sub: subject, iat: now, exp: now + 3600 });
+    signIdToken(keys.run, {
+      iss: issuer,
+      aud: "client-off",
+      sub: subject,
+      iat: now,
+      exp: now + 3600,
+    });
   const programs = resolveCorpus(PROGRAMS, {
     project,
     run,
+    issuerHost,
     certificates: { "saml-a": await makeCertificate(secretDir, "saml-a") },
     tokens: { missing: legacy("missing"), off: legacy("off") },
   });
   for (const program of programs) program.minted = mintTokens(program, { issuer, keys, now });
-  validateFederationCorpus(programs);
-  return { run, secretDir, runKids: [keys.run.jwk.kid], programs, jwks: [keys.run.jwk] };
+  validateFederationCorpus(programs, { run });
+  return {
+    run,
+    issuerHost,
+    issuer,
+    secretDir,
+    runKids: [keys.run.jwk.kid],
+    programs,
+    jwks: [keys.run.jwk],
+  };
 }
 
 /** `step:a.b` → the value at `a.b` in the raw answer of `step`. */
@@ -242,7 +259,25 @@ export async function runPrograms(programs, ctx) {
       await harness("DELETE", `defaultSupportedIdpConfigs/${idp}`);
     }
   }
+  // Read back that none of the run's providers is left, whatever a delete answered.
+  for (const leftover of await runProviderLeftovers(ctx)) {
+    failures.push(`provider ${leftover} is left after the run`);
+  }
   return { results, failures, requests };
+}
+
+/** The run's providers the project still lists. */
+export async function runProviderLeftovers(ctx) {
+  const own = runProvider(ctx.run);
+  const left = [];
+  for (const collection of ["oauthIdpConfigs", "inboundSamlConfigs"]) {
+    const listed = await harnessJson(ctx, "GET", `${collection}?pageSize=100`);
+    for (const { name } of listed[collection] ?? []) {
+      const id = String(name).split("/").at(-1);
+      if (own.test(id)) left.push(id);
+    }
+  }
+  return left;
 }
 
 /** A harness config read or write-back through the same guard; the answer's JSON. */
@@ -285,6 +320,7 @@ async function sessionLocal() {
   const prepared = JSON.parse(await readFile(process.env.AUTH_FEDERATION_IN, "utf8"));
   const out = await runPrograms(prepared.programs, {
     run: prepared.run,
+    issuerHost: prepared.issuerHost,
     project: SANDBOX_PROJECT,
     projectNumber: LOCAL_PROJECT_NUMBER,
     runKids: prepared.runKids,
@@ -298,7 +334,12 @@ async function sessionLocal() {
 
 async function runLocal() {
   await mkdir(RUN_DIR, { recursive: true, mode: 0o700 });
-  const prepared = await prepareRun(SANDBOX_PROJECT);
+  const run = randomBytes(3).toString("hex");
+  const prepared = await prepareRun(
+    SANDBOX_PROJECT,
+    run,
+    `${SANDBOX_PROJECT}--fed-${run}-local.web.app`,
+  );
   try {
     const inPath = join(RUN_DIR, "programs.json");
     const outPath = join(RUN_DIR, "fireemu.json");
@@ -310,7 +351,12 @@ async function runLocal() {
         schemaVersion: 1,
         profile: "strict",
         daemon: { authProjectNumbers: { [SANDBOX_PROJECT]: LOCAL_PROJECT_NUMBER } },
-        auth: { idTokenSigning: "session-rsa", apiKeys: ["fake-api-key"] },
+        auth: {
+          idTokenSigning: "session-rsa",
+          apiKeys: ["fake-api-key"],
+          // Strict verifies the run's ID tokens with the key its issuer would publish (O4).
+          idpSigners: { [prepared.issuer]: jwksDocument(...prepared.jwks) },
+        },
       }),
     );
     const binary = resolveFireemuBinary();
@@ -345,7 +391,9 @@ async function runLocal() {
     if (code !== 0) throw new Error(`fireemu session exited ${code}`);
     const out = JSON.parse(await readFile(outPath, "utf8"));
     await writeFile(join(RUN_DIR, "fireemu-results.json"), `${JSON.stringify(out, null, 2)}\n`);
-    console.log(JSON.stringify({ binary, requests: out.requests, failures: out.failures }, null, 2));
+    console.log(
+      JSON.stringify({ binary, requests: out.requests, failures: out.failures }, null, 2),
+    );
   } finally {
     await rm(prepared.secretDir, { recursive: true, force: true });
   }

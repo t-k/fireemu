@@ -41,7 +41,12 @@ test("an ID token is an RS256 JWS the published JWK verifies", () => {
   });
   const publicKey = createPublicKey({ key: jwksDocument(key.jwk).keys[0], format: "jwk" });
   assert.ok(
-    verify("sha256", Buffer.from(`${header}.${payload}`), publicKey, Buffer.from(signature, "base64url")),
+    verify(
+      "sha256",
+      Buffer.from(`${header}.${payload}`),
+      publicKey,
+      Buffer.from(signature, "base64url"),
+    ),
   );
   // A header override and a foreign signing key make the negative rows.
   const other = generateSigningKey();
@@ -93,7 +98,9 @@ test("the issuer site holds only the discovery document and public keys", async 
     "public/oidc/r1/.well-known/openid-configuration",
     "public/oidc/r1/jwks.json",
   ]);
-  const discovery = JSON.parse(await readFile(join(dir, "public/oidc/r1/.well-known/openid-configuration"), "utf8"));
+  const discovery = JSON.parse(
+    await readFile(join(dir, "public/oidc/r1/.well-known/openid-configuration"), "utf8"),
+  );
   assert.equal(discovery.issuer, issuer);
   assert.equal(discovery.jwks_uri, `${issuer}/jwks.json`);
   const jwks = await readFile(join(dir, "public/oidc/r1/jwks.json"), "utf8");
@@ -101,13 +108,22 @@ test("the issuer site holds only the discovery document and public keys", async 
   const hosting = JSON.parse(await readFile(join(dir, "firebase.json"), "utf8")).hosting;
   assert.ok(!hosting.ignore.includes("**/.*"), "dotfiles (.well-known) are published");
   // A private JWK is published as its public members only.
-  const privateJwk = { ...key.privateKey.export({ format: "jwk" }), kid: "k2", alg: "RS256", use: "sig" };
+  const privateJwk = {
+    ...key.privateKey.export({ format: "jwk" }),
+    kid: "k2",
+    alg: "RS256",
+    use: "sig",
+  };
   await writeIssuerSite(dir, { issuer, run: "r2", jwks: [privateJwk] });
   const published = await readFile(join(dir, "public/oidc/r2/jwks.json"), "utf8");
   assert.doesNotMatch(published, /"(d|p|q|dp|dq|qi)"\s*:/);
   // Anything else that looks like private key material is refused.
   await assert.rejects(
-    writeIssuerSite(dir, { issuer: "https://x.web.app/-----BEGIN PRIVATE KEY-----", run: "r3", jwks: [key.jwk] }),
+    writeIssuerSite(dir, {
+      issuer: "https://x.web.app/-----BEGIN PRIVATE KEY-----",
+      run: "r3",
+      jwks: [key.jwk],
+    }),
     /refusing to publish private key material/,
   );
 });

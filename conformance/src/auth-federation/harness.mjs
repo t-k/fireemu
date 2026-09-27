@@ -1,6 +1,7 @@
 // Recording form of an AUTH-FEDERATION answer (draft). The same normalization applies to the
 // sandbox and to fireemu, so the two can be compared row by row:
-// - the run tag, the project and its number become placeholders;
+// - the run's issuer host (a preview channel with a per-deploy hash), the run tag, the project
+//   and its number become placeholders;
 // - certificates (the run's IdP certificate, the service's SP certificates) become
 //   placeholders with their count kept;
 // - ID tokens and session cookies are recorded as their header and claims (times relative to
@@ -42,15 +43,15 @@ export function normalize(value, ctx, key = "") {
   if (typeof value === "string") {
     if (TOKEN_KEYS.has(key)) return normalize(decodeToken(value), ctx);
     if (MASKED[key]) return MASKED[key];
-    let text = value.replaceAll(ctx.run, "<run>").replaceAll(ctx.project, "<project>");
+    // The issuer host first: it holds the project and the run, and its channel hash varies.
+    let text = ctx.issuerHost ? value.replaceAll(ctx.issuerHost, "<issuer-host>") : value;
+    text = text.replaceAll(ctx.run, "<run>").replaceAll(ctx.project, "<project>");
     if (ctx.projectNumber) text = text.replaceAll(String(ctx.projectNumber), "<project-number>");
     return text;
   }
   if (Array.isArray(value)) return value.map((item) => normalize(item, ctx, key));
   if (value && typeof value === "object") {
-    return Object.fromEntries(
-      Object.entries(value).map(([k, v]) => [k, normalize(v, ctx, k)]),
-    );
+    return Object.fromEntries(Object.entries(value).map(([k, v]) => [k, normalize(v, ctx, k)]));
   }
   return value;
 }

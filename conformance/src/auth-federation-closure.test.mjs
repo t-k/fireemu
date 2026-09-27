@@ -108,9 +108,7 @@ test(
     skip: noEvidence && "no comparison has been exported yet",
   },
   () => {
-    const comparison = readJson(
-      EVIDENCE,
-    );
+    const comparison = readJson(EVIDENCE);
     assert.doesNotThrow(() => assertBoundToFixture(comparison, "committed"));
     assert.throws(
       () => assertBoundToFixture({ ...comparison, fixtureSha256: "0".repeat(64) }, "stale"),

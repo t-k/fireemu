@@ -20,15 +20,23 @@ const required = new Set([
   "final-artifact-regression",
   "closure-review",
 ]);
+const statuses = new Set([
+  "PENDING_CORPUS",
+  "PENDING_RECORDING",
+  "PENDING_REVIEW",
+  "PRODUCTION_RECORDED",
+  "MISMATCH",
+  "VERIFIED",
+]);
+const requiredScopeDecisions = new Set(["L1", "L2", "L3", "L4", "L5", "L6", "OL-1", "OL-2", "OL-3", "Q1-Q4c"]);
 
 test("FS-LISTEN-SDK proposal covers its 18-case catalog and leaves unobserved paths open", () => {
   const closure = read("../../spec/compatibility/closure/FS-LISTEN-SDK.json");
   const catalog = read("../../spec/compatibility/fs-listen-sdk-cases.json");
   assert.equal(closure.parent, "FS-LISTEN-SDK");
-  assert.equal(closure.parentStatus, "IMPLEMENTING");
-  assert.equal(closure.inventoryStatus, "PROPOSED");
-  assert.equal(closure.freezeState, "UNFROZEN");
-  assert.equal(closure.closureReview.decision, "PENDING");
+  assert.equal(closure.inventoryStatus, "FROZEN");
+  assert.equal(closure.freezeState, "FROZEN");
+  assert.match(closure.frozenOn, /^\d{4}-\d{2}-\d{2}$/);
   assert.deepEqual(new Set(closure.conditions.map(({ conditionId }) => conditionId.split("/")[1])), required);
   assert.equal(closure.conditions.length, required.size);
   const actualCases = closure.conditions.flatMap(({ recipeIds }) => recipeIds).filter((id) => /^FS-LISTEN-SDK-\d/.test(id));
@@ -44,20 +52,32 @@ test("FS-LISTEN-SDK proposal covers its 18-case catalog and leaves unobserved pa
   assert.equal(tab.verification.recordingsRequiredPerTransport, 2);
   for (const condition of closure.conditions) {
     assert.ok(condition.source && condition.observation.method);
+    assert.ok(condition.note?.trim(), `${condition.conditionId}: note`);
     assert.ok(condition.verification.requiredEvidence.length);
     assert.equal(condition.verification.recordingsRequired, condition.status === "PENDING_REVIEW" ? 0 : 2);
-    assert.notEqual(condition.status, "VERIFIED");
+    assert.ok(statuses.has(condition.status), `${condition.conditionId}: ${condition.status}`);
+    if (condition.status === "VERIFIED") assert.ok(condition.evidence, `${condition.conditionId}: evidence`);
     assert.equal(condition.localEvidence.productionExecuted, false);
   }
   assert.equal(closure.productionPlan.authorizesProduction, false);
-  assert.equal(closure.productionPlan.browserWireBaselineForTwoRecordings, 2776);
   assert.ok(closure.productionPlan.totalWireRequestCapRequired);
   assert.equal(closure.productionPlan.project, "fireemu-oracle-query");
   assert.equal(closure.productionPlan.database, "(default)");
   assert.equal(closure.productionPlan.changesRules, false);
   assert.equal(closure.profileComparison.profile, "strict");
-  assert.ok(closure.scopeDecisions.every(({ status, decision, decidedBy, decidedOn }) => status === "DECIDED" && decision && decidedBy && decidedOn));
+  assert.equal(closure.oracle.project, "fireemu-oracle-query");
+  assert.equal(closure.oracle.database, "(default)");
+  assert.match(closure.oracle.credentials, /Email\/Password/);
+  assert.deepEqual(new Set(closure.scopeDecisions.map(({ id }) => id)), requiredScopeDecisions);
+  for (const decision of closure.scopeDecisions) {
+    assert.equal(decision.status, "DECIDED");
+    assert.ok(decision.decision?.trim());
+    assert.match(decision.decidedBy, /^(owner|coordinator)/);
+    assert.match(decision.decidedOn, /^\d{4}-\d{2}-\d{2}$/);
+    if (decision.id.startsWith("OL-")) assert.match(decision.decidedBy, /^owner/);
+  }
   assert.match(closure.conditions.find(({ conditionId }) => conditionId.endsWith("/query-change-order")).observation.method, /limitToLast/);
+  assert.match(closure.conditions.find(({ conditionId }) => conditionId.endsWith("/query-change-order")).observation.method, /one SDK callback/);
   assert.match(closure.conditions.find(({ conditionId }) => conditionId.endsWith("/default-subscription")).observation.method, /includeMetadataChanges/);
   assert.equal(closure.parentStatus === "COMPAT_VERIFIED", closure.conditions.every(({ status }) => status === "VERIFIED") && closure.closureReview.decision === "APPROVED");
 });

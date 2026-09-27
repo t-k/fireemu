@@ -593,3 +593,77 @@ test("restore-sandbox runs only under the reviewed lock and holds the sandbox be
     await rm(dir, { recursive: true, force: true });
   }
 });
+
+test("the signJwt preflight waits for a new binding to propagate, within a bound (review MF-1)", async () => {
+  const { waitForSigner } = await import("./auth-tenant-blocking/run.mjs");
+  const { SIGNER_READY_ATTEMPTS } = await import("./auth-tenant-blocking/budget.mjs");
+  const waits = [];
+  const sleep = async (ms) => waits.push(ms);
+  const answers = (statuses) => {
+    let sent = 0;
+    return {
+      send: async () => statuses[Math.min((sent += 1) - 1, statuses.length - 1)],
+      sent: () => sent,
+    };
+  };
+  // Refused while the binding propagates, then admitted: the recording can start.
+  const late = answers([403, 403, 403, 200]);
+  assert.equal(await waitForSigner(late.send, { sleep }), 4);
+  assert.equal(late.sent(), 4);
+  assert.deepEqual(waits, [30_000, 30_000, 30_000]);
+  // Never admitted: the preflight stops after the last attempt and sends nothing more.
+  waits.length = 0;
+  const never = answers([403]);
+  await assert.rejects(waitForSigner(never.send, { sleep }), /HTTP 403 after 14 attempts/);
+  assert.equal(never.sent(), SIGNER_READY_ATTEMPTS);
+  assert.equal(waits.length, SIGNER_READY_ATTEMPTS - 1);
+  // Any other answer is not propagation: it stops at once.
+  for (const status of [400, 401, 404, 429, 500]) {
+    const other = answers([status, 200]);
+    await assert.rejects(
+      waitForSigner(other.send, { sleep }),
+      new RegExp(`HTTP ${status} after 1`),
+    );
+    assert.equal(other.sent(), 1);
+  }
+  // A refused charge (the budget) is not retried either.
+  let charged = 0;
+  const refused = async () => {
+    charged += 1;
+    throw Object.assign(new Error("request budget: work request 1572 would pass 1571"), {
+      fatal: true,
+    });
+  };
+  await assert.rejects(waitForSigner(refused, { sleep }), /request budget/);
+  assert.equal(charged, 1);
+});
+
+test("a runner that stops before its started line still records what it charged (review SF-1)", async () => {
+  const { assertLedgerAdmission, unstartedRunnerRow } =
+    await import("./auth-tenant-blocking/run.mjs");
+  const row = unstartedRunnerRow({
+    ts: "2026-09-27T12:00:00.000Z",
+    budget: { total: 1800, cleanupReserve: 229, used: 45, refused: 0 },
+    error: new Error("signJwt preflight: HTTP 403 after 14 attempts"),
+  });
+  assert.deepEqual(row, {
+    ts: "2026-09-27T12:00:00.000Z",
+    event: "control",
+    taskId: "AUTH-TENANT-SANDBOX",
+    project: "fireemu-oracle-idp",
+    beforeStarted: true,
+    reason: "the runner stopped before its started line; nothing on the sandbox changed",
+    requests: 45,
+    requestCountSemantics: "charged before each request; a gcloud token call counts 3",
+    budget: { total: 1800, cleanupReserve: 229, used: 45, refused: 0 },
+    error: "signJwt preflight: HTTP 403 after 14 attempts",
+  });
+  // A control line is neither a run nor an abort: it holds nothing and costs nothing.
+  const ledger = `${JSON.stringify(row)}\n`;
+  assert.equal(recentAbort(ledger, Date.parse(row.ts) + 1000), undefined);
+  assertLedgerAdmission(ledger, Date.parse(row.ts) + 1000);
+  assert.equal(
+    unstartedRunnerRow({ ts: row.ts, budget: row.budget, error: "x".repeat(500) }).error.length,
+    200,
+  );
+});

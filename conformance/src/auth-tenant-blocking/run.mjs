@@ -50,6 +50,7 @@ import { BLOCKING_PROGRAMS } from "./blocking-corpus.mjs";
 import { PROGRAMS as TENANT_PROGRAMS } from "./corpus.mjs";
 import {
   FORCED_REFRESH_CAP,
+  SIGNER_READY_ATTEMPTS,
   OAUTH_ATTEMPT_WEIGHT,
   chargeExternal,
   createRequestBudget,
@@ -63,6 +64,7 @@ import { assertNoOpaqueValue } from "./harness.mjs";
 import { createSession, runCorpus, tenantIdOf } from "./session.mjs";
 
 const execFileAsyncRaw = promisify(execFile);
+const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 /** A child process must never receive the lock capability reserved for this runner. */
 export function withoutLockCapability(source = process.env) {
   const env = { ...source };
@@ -365,22 +367,44 @@ async function readSwitches(web, tokens) {
   }
 }
 
+/**
+ * Sends the signJwt preflight (`send` answers its HTTP status) until it is admitted. A new
+ * binding reads back before signJwt honours it (1 to 6 minutes on this project), so a 403 is
+ * retried every `intervalMs`, at most `attempts` times; each attempt is an ordinary charged
+ * request. Any other answer, and a refused charge, stops at once (review MF-1).
+ */
+export async function waitForSigner(
+  send,
+  { attempts = SIGNER_READY_ATTEMPTS, intervalMs = 30_000, sleep = delay } = {},
+) {
+  for (let attempt = 1; ; attempt += 1) {
+    const status = await send();
+    if (status === 200) return attempt;
+    if (status !== 403 || attempt >= attempts)
+      throw new Error(
+        `signJwt preflight: HTTP ${status} after ${attempt} attempt${attempt === 1 ? "" : "s"} (create the signJwt binding first)`,
+      );
+    await sleep(intervalMs);
+  }
+}
+
 /** Whether the project's own signer may mint a custom token (the signJwt binding exists). */
 async function assertSignerReady(web, tokens) {
   const ctx = await productionContext(String(Date.now()), web, tokens);
-  const now = Math.floor(Date.now() / 1000);
-  const claims = customTokenClaims(
-    { uid: "preflight" },
-    SIGNER_ACCOUNTS.project,
-    now,
-    (text) => text,
-  );
-  const request = harnessRequest.signJwt(ctx, SIGNER_ACCOUNTS.project, claims);
-  const response = await fetch(request.url, { ...request.init, redirect: "error" });
-  if (response.status !== 200)
-    throw new Error(
-      `signJwt preflight: HTTP ${response.status} (create the signJwt binding first)`,
+  const attempts = await waitForSigner(async () => {
+    const now = Math.floor(Date.now() / 1000);
+    const claims = customTokenClaims(
+      { uid: "preflight" },
+      SIGNER_ACCOUNTS.project,
+      now,
+      (text) => text,
     );
+    const request = harnessRequest.signJwt(ctx, SIGNER_ACCOUNTS.project, claims);
+    const response = await fetch(request.url, { ...request.init, redirect: "error" });
+    await response.arrayBuffer().catch(() => undefined);
+    return response.status;
+  });
+  console.log(`signJwt preflight admitted after ${attempts} attempt(s)`);
 }
 
 async function writeFixture({ programs, recordings, meta, secrets }) {
@@ -567,6 +591,9 @@ export function otherLaneOnSandbox(ledgerText, now = Date.now(), ignoredTaskIds 
   return recent ? `${recent.taskId} wrote a line at ${recent.ts}` : undefined;
 }
 
+/** How a runner line counts `requests`: budget.mjs charges before each request. */
+const REQUEST_COUNT_SEMANTICS = `charged before each request; a gcloud token call counts ${OAUTH_ATTEMPT_WEIGHT}`;
+
 /** The reviewed budget reservation for one campaign, including control and cleanup work. */
 const RUN_RESERVATION_USD = SUITE === "blocking" ? 5 : 1;
 const TASK_BUDGET_USD = 10;
@@ -600,6 +627,27 @@ export function assertLedgerAdmission(ledgerText, now = Date.now()) {
   }
   if (priorUsd + RUN_RESERVATION_USD > TASK_BUDGET_USD)
     throw new Error("the reviewed campaign would exceed this task's US$10 budget");
+}
+
+/**
+ * The ledger line of a runner that stopped before its started line (review SF-1): it charged
+ * requests (the owner token, the signJwt preflight) but changed nothing on the sandbox. A control
+ * line holds nothing and costs nothing; `beforeStarted` tells the campaign not to hold the
+ * sandbox for it.
+ */
+export function unstartedRunnerRow({ ts, budget, error }) {
+  return {
+    ts,
+    event: "control",
+    taskId: TASK_ID,
+    project: SANDBOX_PROJECT,
+    beforeStarted: true,
+    reason: "the runner stopped before its started line; nothing on the sandbox changed",
+    requests: budget.used,
+    requestCountSemantics: REQUEST_COUNT_SEMANTICS,
+    budget,
+    error: String(error?.message ?? error).slice(0, 200),
+  };
 }
 
 /** The reserved cost survives a failed run and a later verified restore. */
@@ -713,10 +761,29 @@ async function recordProduction() {
   const web = await sandboxWebConfig();
   const tokens = [];
   const uninstallBudget = installBudget(budget);
+  let started = false;
   try {
     await recordUnderBudget();
+  } catch (error) {
+    // Requests charged before the started line would otherwise be on no ledger line (SF-1).
+    if (!started && budget.used() > 0) await noteUnstarted(error);
+    throw error;
   } finally {
     uninstallBudget();
+  }
+
+  async function noteUnstarted(error) {
+    try {
+      await assertProductionLock(ledger);
+      await appendFile(
+        ledger,
+        `${JSON.stringify(unstartedRunnerRow({ ts: new Date().toISOString(), budget: budget.snapshot(), error }))}\n`,
+      );
+    } catch (caught) {
+      console.error(
+        `the runner charged ${budget.used()} requests before stopping, but could not note them: ${caught.message ?? caught}`,
+      );
+    }
   }
 
   async function recordUnderBudget() {
@@ -753,6 +820,7 @@ async function recordProduction() {
       ledger,
       `${JSON.stringify(productionStartedRow({ ts: new Date().toISOString(), gitSha: meta.sha, programs: meta.programs }))}\n`,
     );
+    started = true;
     const recordings = [];
     const secrets = [];
     let outcome = "recorded";
@@ -876,6 +944,7 @@ async function recordProduction() {
           // Every external request of the campaign as charged (token calls by their weight),
           // and the runner's own count of its recorded and harness requests.
           requests: budget.used(),
+          requestCountSemantics: REQUEST_COUNT_SEMANTICS,
           runnerRequests: requests,
           budget: budget.snapshot(),
           // The deployment's Cloud Build, storage and Cloud Run are well under a dollar (SF-7).

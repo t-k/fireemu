@@ -8,6 +8,7 @@ import {
   MAX_CAMPAIGN_REQUESTS,
   chargeExternal,
   createRequestBudget,
+  currentKind,
   installBudget,
   withKind,
   withPhase,
@@ -200,6 +201,12 @@ test("a campaign names its budget, and one that cannot carry two passes is refus
   assert.equal(plan.cleanupReserve, cleanupReserve(PROGRAMS));
   const steps = PROGRAMS.reduce((n, p) => n + p.steps.length, 0);
   assert.ok(plan.minimumWork >= 2 * steps, `${plan.minimumWork}`);
+  // Two passes of every step and five read-backs, the owner token, and every signJwt preflight
+  // attempt while the binding propagates (review MF-1).
+  const { OAUTH_ATTEMPT_WEIGHT, SIGNER_READY_ATTEMPTS } =
+    await import("./auth-tenant-blocking/budget.mjs");
+  assert.equal(plan.minimumWork, 2 * (5 + steps) + SIGNER_READY_ATTEMPTS + OAUTH_ATTEMPT_WEIGHT);
+  assert.equal(plan.minimumWork, 493);
   assert.throws(() => planCampaignBudget(PROGRAMS, undefined), /required/);
   assert.throws(() => planCampaignBudget(PROGRAMS, "2001"), /1\.\.2000/);
   assert.throws(() => planCampaignBudget(PROGRAMS, "1800x"), /whole number/);
@@ -208,4 +215,65 @@ test("a campaign names its budget, and one that cannot carry two passes is refus
     /cannot carry/,
   );
   planCampaignBudget(PROGRAMS, String(plan.minimumWork + plan.cleanupReserve));
+});
+
+test("two passes share one budget: the second fits at the limit and is refused one below (C1)", async () => {
+  const program = {
+    id: "atb/tenant/x",
+    tenants: { a: { displayName: "atb-x-a" } },
+    steps: Array.from({ length: 5 }, (_, i) => ({
+      id: `lookup-${i}`,
+      path: "v1/accounts:lookup",
+      auth: "key",
+      body: {},
+    })),
+  };
+  const reserve = programCleanupBound(program);
+  /** Runs `passes` passes of the program under one installed budget of `total`. */
+  const campaign = async (total, passes = 2) => {
+    const { state, fetchFake } = fakeSandbox();
+    const kinds = [];
+    const budget = createRequestBudget({ total, cleanupReserve: reserve });
+    const original = globalThis.fetch;
+    globalThis.fetch = async (...args) => {
+      kinds.push(currentKind());
+      return fetchFake(...args);
+    };
+    const restore = installBudget(budget);
+    const outcomes = [];
+    try {
+      for (let pass = 0; pass < passes; pass += 1)
+        outcomes.push(
+          await createSession(production, { configSettleMs: 0 })
+            .runProgram(program)
+            .then(
+              () => "done",
+              (error) => String(error.message),
+            ),
+        );
+    } finally {
+      restore();
+      globalThis.fetch = original;
+    }
+    return { state, kinds, budget, outcomes };
+  };
+  // One pass on its own: its work requests, then its cleanup.
+  const one = await campaign(MAX_CAMPAIGN_REQUESTS, 1);
+  assert.deepEqual(one.outcomes, ["done"]);
+  const pass = one.kinds.length;
+  const work = one.kinds.lastIndexOf("work") + 1;
+  // The second pass's last work request is the (pass + work)th: the work share must reach it.
+  const least = pass + work + reserve;
+  const fits = await campaign(least);
+  assert.deepEqual(fits.outcomes, ["done", "done"]);
+  assert.equal(fits.budget.used(), 2 * pass);
+  assert.equal(fits.budget.snapshot().refused, 0);
+  const over = await campaign(least - 1);
+  assert.equal(over.outcomes[0], "done");
+  assert.match(over.outcomes[1], /request budget: work request/);
+  assert.equal(over.budget.snapshot().refused, 1);
+  assert.ok(over.budget.used() <= least - 1);
+  // The refused pass still cleaned up from the reserve.
+  assert.equal(over.state.tenants.size, 0);
+  assert.equal(over.state.allowTenants, false);
 });

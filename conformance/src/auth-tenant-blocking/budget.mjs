@@ -20,6 +20,11 @@ export const MAX_CAMPAIGN_REQUESTS = 2000;
 export const OAUTH_ATTEMPT_WEIGHT = 3;
 /** Forced owner-token refreshes (after a 401 in a cleanup) a campaign may make. */
 export const FORCED_REFRESH_CAP = 2;
+/**
+ * signJwt preflight attempts while a new binding propagates (1 to 6 minutes on this project):
+ * 30 s apart, only while signJwt answers 403 (review MF-1).
+ */
+export const SIGNER_READY_ATTEMPTS = 14;
 
 const fatal = (message) => Object.assign(new Error(message), { fatal: true });
 
@@ -132,14 +137,14 @@ export function cleanupReserveFor(programs) {
 
 /**
  * The fewest work requests two passes of `programs` can take: before each pass the account and
- * config read-backs (5), every step, a signJwt preflight when a program mints a token, and the
- * first owner token. A budget whose work share is smaller cannot complete a campaign and is
+ * config read-backs (5), every step, the signJwt preflight's attempts when a program mints a
+ * token, and the first owner token. A budget whose work share is smaller cannot complete a campaign and is
  * refused before anything is sent (it is a floor, not an estimate: the charges above enforce the
  * ceiling).
  */
 export function minimumWork(programs) {
   const steps = programs.reduce((total, program) => total + program.steps.length, 0);
-  const signer = programs.some((program) => program.tokens) ? 1 : 0;
+  const signer = programs.some((program) => program.tokens) ? SIGNER_READY_ATTEMPTS : 0;
   return 2 * (5 + steps) + signer + OAUTH_ATTEMPT_WEIGHT;
 }
 

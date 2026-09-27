@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
 import { createRequire } from "node:module";
 import { readFileSync } from "node:fs";
 import { test } from "node:test";
@@ -19,9 +20,88 @@ const fixturePath = fileURLToPath(
 const reportPath = fileURLToPath(
   new URL("../functions-events/fixtures/report.js", import.meta.url),
 );
+const fixtureDir = fileURLToPath(new URL("../functions-events/fixtures/", import.meta.url));
 const manifest = JSON.parse(
   readFileSync(fileURLToPath(new URL("../functions-events/programs.json", import.meta.url))),
 );
+
+function productionDiscovery(overrides = {}) {
+  const env = { ...process.env };
+  for (const name of Object.keys(env)) {
+    if (name.startsWith("FE_EVENTS_") || name.endsWith("_EMULATOR_HOST")) delete env[name];
+  }
+  Object.assign(env, {
+    FE_EVENTS_MODE: "production",
+    FE_EVENTS_PROJECT_ID: "demo-events-prod",
+    GCLOUD_PROJECT: "demo-events-prod",
+    FE_EVENTS_PRIMARY_COLLECTION: "fe_events_primary",
+    FE_EVENTS_PRIMARY_BUCKET: "demo-events-prod.firebasestorage.app",
+    FE_EVENTS_PRIMARY_TOPIC: "fe-events-primary",
+    FE_EVENTS_CAPTURE_MODE: "reject-canary",
+    ...overrides,
+  });
+  return spawnSync(
+    process.execPath,
+    [
+      "-e",
+      "const f=require('./index.js'); console.log(JSON.stringify({names:Object.keys(f),v1:f.fsCreatedV1.__endpoint.eventTrigger,v2:f.fsCreatedV2.__endpoint.eventTrigger}));",
+    ],
+    { cwd: fixtureDir, env, encoding: "utf8", timeout: 10_000 },
+  );
+}
+
+test("production discovery loads the same event handlers for an explicit project", () => {
+  const result = productionDiscovery();
+  assert.equal(result.status, 0, result.stderr);
+  const discovered = JSON.parse(result.stdout);
+  assert.equal(discovered.names.length, 22);
+  assert.match(JSON.stringify(discovered.v1), /fe_events_primary/);
+  assert.match(JSON.stringify(discovered.v2), /fe_events_primary/);
+});
+
+test("production discovery rejects a different target or any emulator host", () => {
+  for (const overrides of [
+    { GCLOUD_PROJECT: "another-project" },
+    { FE_EVENTS_PROJECT_ID: "another-project" },
+    { FIRESTORE_EMULATOR_HOST: "127.0.0.1:8080" },
+    { FIREBASE_STORAGE_EMULATOR_HOST: "127.0.0.1:9199" },
+    { STORAGE_EMULATOR_HOST: "http://127.0.0.1:9199" },
+    { GCP_PROJECT: "another-project" },
+    { FIREBASE_CONFIG: '{"projectId":"another-project"}' },
+  ]) {
+    const result = productionDiscovery(overrides);
+    assert.notEqual(result.status, 0, JSON.stringify(overrides));
+    assert.doesNotMatch(result.stderr, /another-project|fireemu-oracle|Bearer /);
+  }
+});
+
+test("production discovery requires exact resources and a rejecting canary capture", () => {
+  for (const overrides of [
+    { FE_EVENTS_PRIMARY_COLLECTION: "" },
+    { FE_EVENTS_PRIMARY_BUCKET: "other-project.firebasestorage.app" },
+    { FE_EVENTS_PRIMARY_TOPIC: "" },
+    { FE_EVENTS_CAPTURE_MODE: "stdout" },
+    { FE_EVENTS_CAPTURE_MODE: "socket", FE_EVENTS_CAPTURE_SOCKET: "/tmp/example.sock" },
+    { FE_EVENTS_CAPTURE_SOCKET: "/tmp/example.sock" },
+  ]) {
+    const result = productionDiscovery(overrides);
+    assert.notEqual(result.status, 0, JSON.stringify(overrides));
+  }
+});
+
+test("canary capture rejects an unexpected event without serializing its payload", async () => {
+  const { report } = require(reportPath);
+  const previous = process.env.FE_EVENTS_CAPTURE_MODE;
+  const circular = { secret: "synthetic-secret" };
+  circular.self = circular;
+  process.env.FE_EVENTS_CAPTURE_MODE = "reject-canary";
+  try {
+    await assert.rejects(() => report(circular), /canary capture rejects events/);
+  } finally {
+    if (previous === undefined) delete process.env.FE_EVENTS_CAPTURE_MODE;
+    else process.env.FE_EVENTS_CAPTURE_MODE = previous;
+  }
+});
 
 test("the fixture exports every declared handler from one codebase", () => {
   const fixture = require(fixturePath);

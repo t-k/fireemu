@@ -1,6 +1,6 @@
 const { createHash } = require("node:crypto");
-const { assertLocalEnvironment, requireRetryFirestoreHost } = require("./local-host");
-assertLocalEnvironment();
+const { assertFixtureEnvironment, requireRetryFirestoreHost } = require("./local-host");
+assertFixtureEnvironment();
 const { getApps, initializeApp } = require("firebase-admin/app");
 const { getFirestore } = require("firebase-admin/firestore");
 const functions = require("firebase-functions/v1");

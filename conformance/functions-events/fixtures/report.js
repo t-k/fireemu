@@ -49,6 +49,9 @@ function v2Event(event, data) {
 }
 
 function report(frame) {
+  if (process.env.FE_EVENTS_CAPTURE_MODE === "reject-canary") {
+    return Promise.reject(new Error("canary capture rejects events"));
+  }
   const encoded = `${JSON.stringify(frame)}\n`;
   if (process.env.FE_EVENTS_CAPTURE_MODE === "stdout") {
     console.log(`FE_EVENTS_FRAME ${encoded.trimEnd()}`);

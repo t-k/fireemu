@@ -141,11 +141,11 @@ No target feature is moved to class B merely because it is unimplemented, unobse
 
 ## Cloud Functions HTTP parent status
 
-The owner added `FUNCTIONS-HTTP` to the production-compatibility parents on 2026-09-25. Its 19-condition [closure inventory](../../spec/compatibility/closure/FUNCTIONS-HTTP.json) is frozen after coordinator review and owner scope decisions; it has no production recording or final-artifact comparison. App Check behavior is outside this parent and is a candidate for a future parent.
+The owner added `FUNCTIONS-HTTP` to the production-compatibility parents on 2026-09-25. Its 19-condition [closure inventory](../../spec/compatibility/closure/FUNCTIONS-HTTP.json) is frozen after coordinator review and owner scope decisions. Two production recordings and two runs on the signed source's copied final artifact each cover 15 programs and 68 cases; the strict profile matches production in every case. The [bounded comparison](../../spec/compatibility/closure/evidence/FUNCTIONS-HTTP-comparison.json) records the artifact and input hashes. App Check behavior is outside this parent and is a candidate for a future parent.
 
 | Feature group | Required conditions | Current evidence | Parent state | Remaining completion work |
 | --- | --- | --- | --- | --- |
-| FUNCTIONS-HTTP | 2nd gen HTTP and callable request and response behavior, errors, Auth context, timeout and streaming in one Node.js region | Local emulator conformance and runtime tests exist under `FN-CLAIM-HTTP`; these are not production comparisons for this parent. | `IMPLEMENTING` | Prepare and review the sandbox deployment, record the same corpus twice in production, repair mismatches on the lane 1 reviewed base, compare one final artifact and obtain independent closure approval. |
+| FUNCTIONS-HTTP | 2nd gen HTTP and callable request and response behavior, errors, Auth context, timeout and streaming in one Node.js region | The copied final artifact matches both production recordings in all 68 cases; workspace regression passed 3,510 tests, and the Node runner passed 745 with four skips. The emulator profile adds no new refusal; its pre-existing 401 JSON callable Bearer refusals differ from the official emulator's 200. | `IMPLEMENTING` | Obtain the owner's disposition of the pre-existing emulator-profile Bearer difference and independent coordinator closure approval before promotion. |
 
 ## Existing evidence boundaries
 

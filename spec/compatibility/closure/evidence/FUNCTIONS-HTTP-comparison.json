@@ -1,0 +1,512 @@
+{
+  "schemaVersion": 1,
+  "parent": "FUNCTIONS-HTTP",
+  "sourceCommit": "b52e756e7f2161f93946fcb780d2dc2d780b5fc5",
+  "finalArtifactSha256": "2139b40f43f69d1cd23b9671a7f576097f459c8d2124fe4253c1f9a6ef1a9e7f",
+  "runnerTreeSha256": "d97c384362d374c5ff369e66e8a0b996e979f7fd7be2836930124b7333632e96",
+  "corpusSha256": "836c138ba213546428e700e7ecb51644089bb5b0cdc91946eb9904a648106bea",
+  "fixtureIndexSha256": "0c481ec6b6ec87db71a2f90550238ce69ec2b923c7a92b7ea5171cb7909886a5",
+  "fixturePackageLockSha256": "9d0a9bc3287ad79bc66ee7174c2486dd078d18e77b2c27d612c3c8712d703eeb",
+  "nodeVersion": "v22.22.1",
+  "privateArtifactReceipt": "docs.local/runs/functions-http-final-20260928/artifact.json",
+  "privateArtifactReceiptSha256": "cf58d3178ab40aac41e193410c5d001e7dfc49290c5a50a4d56679f21cb1921e",
+  "privateComparison": "docs.local/runs/functions-http-final-20260928/comparison.json",
+  "privateComparisonSha256": "30a09a4b322b2f5d3c037268bd66176a62639b471e600a74cd6abef1c0c2f52a",
+  "productionRecordingSha256": [
+    "555c1150e708606a6f21ac931d9196a5e75e62486398b760d9e9cfafc8d94e0f",
+    "555c1150e708606a6f21ac931d9196a5e75e62486398b760d9e9cfafc8d94e0f"
+  ],
+  "strictRecordingSha256": "92e9ea008073ae16897015e552ae7b58cb1560d2d55de14092c3ca71e8fea39f",
+  "emulatorRecordingSha256": "3626709cb99f7c59dc3eaa4357e2373132e65dc1a396a86c7ed597b9691edda3",
+  "officialEmulatorRecordingSha256": "c5ba12444686e50bf684592ec41c6a5869f7d8f709ac45ebd357ac900ebaf8c9",
+  "productionAndStrictPassesIdentical": true,
+  "strictProductionMatches": 68,
+  "totalCases": 68,
+  "perCondition": [
+    {
+      "conditionId": "FUNCTIONS-HTTP/http-method-path-query",
+      "programId": "functions-http/http/request-shape",
+      "matchedCaseIds": [
+        "GET",
+        "POST",
+        "HEAD",
+        "nested-path",
+        "repeated-query-key",
+        "encoded-query"
+      ],
+      "matchCount": 6
+    },
+    {
+      "conditionId": "FUNCTIONS-HTTP/http-request-headers",
+      "programId": "functions-http/http/request-headers",
+      "matchedCaseIds": [
+        "custom-request-header",
+        "x-forwarded-for",
+        "x-forwarded-proto",
+        "function-execution-id-presence"
+      ],
+      "matchCount": 4
+    },
+    {
+      "conditionId": "FUNCTIONS-HTTP/http-request-bodies",
+      "programId": "functions-http/http/request-bodies",
+      "matchedCaseIds": [
+        "json",
+        "raw-text",
+        "form-urlencoded",
+        "empty",
+        "malformed-json"
+      ],
+      "matchCount": 5
+    },
+    {
+      "conditionId": "FUNCTIONS-HTTP/http-response-status-headers",
+      "programId": "functions-http/http/response-shape",
+      "matchedCaseIds": [
+        "custom-status",
+        "custom-header",
+        "content-type",
+        "no-content"
+      ],
+      "matchCount": 4
+    },
+    {
+      "conditionId": "FUNCTIONS-HTTP/http-large-response",
+      "programId": "functions-http/http/large-response",
+      "matchedCaseIds": [
+        "one-mib-response-length-and-sha256"
+      ],
+      "matchCount": 1
+    },
+    {
+      "conditionId": "FUNCTIONS-HTTP/http-streaming",
+      "programId": "functions-http/http/streaming",
+      "matchedCaseIds": [
+        "ordered-chunks-before-completion",
+        "completed-stream",
+        "client-disconnect"
+      ],
+      "matchCount": 3
+    },
+    {
+      "conditionId": "FUNCTIONS-HTTP/http-cors-preflight",
+      "programId": "functions-http/http/cors",
+      "matchedCaseIds": [
+        "options-preflight",
+        "cross-origin-post"
+      ],
+      "matchCount": 2
+    },
+    {
+      "conditionId": "FUNCTIONS-HTTP/http-throw",
+      "programId": "functions-http/http/failures",
+      "matchedCaseIds": [
+        "synchronous-throw",
+        "rejected-promise"
+      ],
+      "matchCount": 2
+    },
+    {
+      "conditionId": "FUNCTIONS-HTTP/http-timeout",
+      "programId": "functions-http/http/failures",
+      "matchedCaseIds": [
+        "handler-exceeds-one-second-timeout"
+      ],
+      "matchCount": 1
+    },
+    {
+      "conditionId": "FUNCTIONS-HTTP/http-no-response",
+      "programId": "functions-http/http/failures",
+      "matchedCaseIds": [
+        "handler-returns-without-sending-response"
+      ],
+      "matchCount": 1
+    },
+    {
+      "conditionId": "FUNCTIONS-HTTP/callable-success-envelope",
+      "programId": "functions-http/callable/success",
+      "matchedCaseIds": [
+        "object-result",
+        "scalar-result",
+        "null-result",
+        "data-envelope"
+      ],
+      "matchCount": 4
+    },
+    {
+      "conditionId": "FUNCTIONS-HTTP/callable-https-errors",
+      "programId": "functions-http/callable/https-errors",
+      "matchedCaseIds": [
+        "ok",
+        "cancelled",
+        "unknown",
+        "invalid-argument",
+        "deadline-exceeded",
+        "not-found",
+        "already-exists",
+        "permission-denied",
+        "resource-exhausted",
+        "failed-precondition",
+        "aborted",
+        "out-of-range",
+        "unimplemented",
+        "internal",
+        "unavailable",
+        "data-loss",
+        "unauthenticated",
+        "details",
+        "unhandled-error"
+      ],
+      "matchCount": 19
+    },
+    {
+      "conditionId": "FUNCTIONS-HTTP/callable-malformed-requests",
+      "programId": "functions-http/callable/malformed",
+      "matchedCaseIds": [
+        "wrong-method",
+        "wrong-content-type",
+        "missing-data",
+        "extra-field",
+        "malformed-json"
+      ],
+      "matchCount": 5
+    },
+    {
+      "conditionId": "FUNCTIONS-HTTP/callable-auth-context",
+      "programId": "functions-http/callable/auth-context",
+      "matchedCaseIds": [
+        "no-authorization",
+        "valid-project-id-token",
+        "uid-and-claims"
+      ],
+      "matchCount": 3
+    },
+    {
+      "conditionId": "FUNCTIONS-HTTP/callable-auth-refusal",
+      "programId": "functions-http/callable/auth-refusal",
+      "matchedCaseIds": [
+        "malformed-bearer",
+        "invalid-signature",
+        "expired-id-token"
+      ],
+      "matchCount": 3
+    },
+    {
+      "conditionId": "FUNCTIONS-HTTP/callable-streaming",
+      "programId": "functions-http/callable/streaming",
+      "matchedCaseIds": [
+        "send-chunk-order",
+        "final-result",
+        "client-disconnect"
+      ],
+      "matchCount": 3
+    },
+    {
+      "conditionId": "FUNCTIONS-HTTP/public-invocation",
+      "programId": "functions-http/deployment/public-invocation",
+      "matchedCaseIds": [
+        "http-without-cloud-run-credentials",
+        "callable-without-cloud-run-credentials"
+      ],
+      "matchCount": 2
+    }
+  ],
+  "profileDifferenceCaseCount": 27,
+  "profileDifferenceCaseSetEqualsProductionOfficial": true,
+  "emulatorOfficialDifferenceCaseCount": 5,
+  "emulatorNewRefusals": 0,
+  "preExistingEmulatorCallableBearerRefusal": {
+    "caseIds": [
+      "malformed-bearer",
+      "invalid-signature",
+      "expired-id-token"
+    ],
+    "emulatorStatus": 401,
+    "emulatorContentType": "application/json; charset=utf-8",
+    "officialEmulatorStatus": 200,
+    "productionStatus": 401,
+    "productionContentType": "text/html; charset=UTF-8",
+    "ownerPolicyDecision": "PENDING"
+  },
+  "artifactSha256": "2139b40f43f69d1cd23b9671a7f576097f459c8d2124fe4253c1f9a6ef1a9e7f",
+  "rows": [
+    {
+      "row": "functions-http/http/request-shape#GET",
+      "status": "MATCH"
+    },
+    {
+      "row": "functions-http/http/request-shape#POST",
+      "status": "MATCH"
+    },
+    {
+      "row": "functions-http/http/request-shape#HEAD",
+      "status": "MATCH"
+    },
+    {
+      "row": "functions-http/http/request-shape#nested-path",
+      "status": "MATCH"
+    },
+    {
+      "row": "functions-http/http/request-shape#repeated-query-key",
+      "status": "MATCH"
+    },
+    {
+      "row": "functions-http/http/request-shape#encoded-query",
+      "status": "MATCH"
+    },
+    {
+      "row": "functions-http/http/request-headers#custom-request-header",
+      "status": "MATCH"
+    },
+    {
+      "row": "functions-http/http/request-headers#x-forwarded-for",
+      "status": "MATCH"
+    },
+    {
+      "row": "functions-http/http/request-headers#x-forwarded-proto",
+      "status": "MATCH"
+    },
+    {
+      "row": "functions-http/http/request-headers#function-execution-id-presence",
+      "status": "MATCH"
+    },
+    {
+      "row": "functions-http/http/request-bodies#json",
+      "status": "MATCH"
+    },
+    {
+      "row": "functions-http/http/request-bodies#raw-text",
+      "status": "MATCH"
+    },
+    {
+      "row": "functions-http/http/request-bodies#form-urlencoded",
+      "status": "MATCH"
+    },
+    {
+      "row": "functions-http/http/request-bodies#empty",
+      "status": "MATCH"
+    },
+    {
+      "row": "functions-http/http/request-bodies#malformed-json",
+      "status": "MATCH"
+    },
+    {
+      "row": "functions-http/http/response-shape#custom-status",
+      "status": "MATCH"
+    },
+    {
+      "row": "functions-http/http/response-shape#custom-header",
+      "status": "MATCH"
+    },
+    {
+      "row": "functions-http/http/response-shape#content-type",
+      "status": "MATCH"
+    },
+    {
+      "row": "functions-http/http/response-shape#no-content",
+      "status": "MATCH"
+    },
+    {
+      "row": "functions-http/http/large-response#one-mib-response-length-and-sha256",
+      "status": "MATCH"
+    },
+    {
+      "row": "functions-http/http/streaming#ordered-chunks-before-completion",
+      "status": "MATCH"
+    },
+    {
+      "row": "functions-http/http/streaming#completed-stream",
+      "status": "MATCH"
+    },
+    {
+      "row": "functions-http/http/streaming#client-disconnect",
+      "status": "MATCH"
+    },
+    {
+      "row": "functions-http/http/cors#options-preflight",
+      "status": "MATCH"
+    },
+    {
+      "row": "functions-http/http/cors#cross-origin-post",
+      "status": "MATCH"
+    },
+    {
+      "row": "functions-http/http/failures#synchronous-throw",
+      "status": "MATCH"
+    },
+    {
+      "row": "functions-http/http/failures#rejected-promise",
+      "status": "MATCH"
+    },
+    {
+      "row": "functions-http/http/failures#handler-exceeds-one-second-timeout",
+      "status": "MATCH"
+    },
+    {
+      "row": "functions-http/http/failures#handler-returns-without-sending-response",
+      "status": "MATCH"
+    },
+    {
+      "row": "functions-http/callable/success#object-result",
+      "status": "MATCH"
+    },
+    {
+      "row": "functions-http/callable/success#scalar-result",
+      "status": "MATCH"
+    },
+    {
+      "row": "functions-http/callable/success#null-result",
+      "status": "MATCH"
+    },
+    {
+      "row": "functions-http/callable/success#data-envelope",
+      "status": "MATCH"
+    },
+    {
+      "row": "functions-http/callable/https-errors#ok",
+      "status": "MATCH"
+    },
+    {
+      "row": "functions-http/callable/https-errors#cancelled",
+      "status": "MATCH"
+    },
+    {
+      "row": "functions-http/callable/https-errors#unknown",
+      "status": "MATCH"
+    },
+    {
+      "row": "functions-http/callable/https-errors#invalid-argument",
+      "status": "MATCH"
+    },
+    {
+      "row": "functions-http/callable/https-errors#deadline-exceeded",
+      "status": "MATCH"
+    },
+    {
+      "row": "functions-http/callable/https-errors#not-found",
+      "status": "MATCH"
+    },
+    {
+      "row": "functions-http/callable/https-errors#already-exists",
+      "status": "MATCH"
+    },
+    {
+      "row": "functions-http/callable/https-errors#permission-denied",
+      "status": "MATCH"
+    },
+    {
+      "row": "functions-http/callable/https-errors#resource-exhausted",
+      "status": "MATCH"
+    },
+    {
+      "row": "functions-http/callable/https-errors#failed-precondition",
+      "status": "MATCH"
+    },
+    {
+      "row": "functions-http/callable/https-errors#aborted",
+      "status": "MATCH"
+    },
+    {
+      "row": "functions-http/callable/https-errors#out-of-range",
+      "status": "MATCH"
+    },
+    {
+      "row": "functions-http/callable/https-errors#unimplemented",
+      "status": "MATCH"
+    },
+    {
+      "row": "functions-http/callable/https-errors#internal",
+      "status": "MATCH"
+    },
+    {
+      "row": "functions-http/callable/https-errors#unavailable",
+      "status": "MATCH"
+    },
+    {
+      "row": "functions-http/callable/https-errors#data-loss",
+      "status": "MATCH"
+    },
+    {
+      "row": "functions-http/callable/https-errors#unauthenticated",
+      "status": "MATCH"
+    },
+    {
+      "row": "functions-http/callable/https-errors#details",
+      "status": "MATCH"
+    },
+    {
+      "row": "functions-http/callable/https-errors#unhandled-error",
+      "status": "MATCH"
+    },
+    {
+      "row": "functions-http/callable/malformed#wrong-method",
+      "status": "MATCH"
+    },
+    {
+      "row": "functions-http/callable/malformed#wrong-content-type",
+      "status": "MATCH"
+    },
+    {
+      "row": "functions-http/callable/malformed#missing-data",
+      "status": "MATCH"
+    },
+    {
+      "row": "functions-http/callable/malformed#extra-field",
+      "status": "MATCH"
+    },
+    {
+      "row": "functions-http/callable/malformed#malformed-json",
+      "status": "MATCH"
+    },
+    {
+      "row": "functions-http/callable/auth-context#no-authorization",
+      "status": "MATCH"
+    },
+    {
+      "row": "functions-http/callable/auth-context#valid-project-id-token",
+      "status": "MATCH"
+    },
+    {
+      "row": "functions-http/callable/auth-context#uid-and-claims",
+      "status": "MATCH"
+    },
+    {
+      "row": "functions-http/callable/auth-refusal#malformed-bearer",
+      "status": "MATCH"
+    },
+    {
+      "row": "functions-http/callable/auth-refusal#invalid-signature",
+      "status": "MATCH"
+    },
+    {
+      "row": "functions-http/callable/auth-refusal#expired-id-token",
+      "status": "MATCH"
+    },
+    {
+      "row": "functions-http/callable/streaming#send-chunk-order",
+      "status": "MATCH"
+    },
+    {
+      "row": "functions-http/callable/streaming#final-result",
+      "status": "MATCH"
+    },
+    {
+      "row": "functions-http/callable/streaming#client-disconnect",
+      "status": "MATCH"
+    },
+    {
+      "row": "functions-http/deployment/public-invocation#http-without-cloud-run-credentials",
+      "status": "MATCH"
+    },
+    {
+      "row": "functions-http/deployment/public-invocation#callable-without-cloud-run-credentials",
+      "status": "MATCH"
+    }
+  ],
+  "productionRecordingFirstPersistedAt": [
+    "2026-09-27T13:59:44Z",
+    "2026-09-27T13:59:45Z"
+  ],
+  "productionFinishedAt": "2026-09-27T15:25:07.292Z",
+  "productionRecordingTimeBasis": "The two first-persisted timestamps are the private recording files' filesystem birth times; both recordings were updated through the recorded finish line."
+}

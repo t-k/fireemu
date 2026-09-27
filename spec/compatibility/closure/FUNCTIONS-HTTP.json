@@ -12,7 +12,11 @@
     "generation": 2
   },
   "closureReview": {
-    "decision": "PENDING"
+    "decision": "PENDING",
+    "submittedSourceCommit": "b52e756e7f2161f93946fcb780d2dc2d780b5fc5",
+    "submittedFinalArtifactSha256": "2139b40f43f69d1cd23b9671a7f576097f459c8d2124fe4253c1f9a6ef1a9e7f",
+    "submittedComparisonSha256": "eddccca0c30a5b93fe7d0c6ffb6f9c0814d01e74be22ab604fd7695cc1a167e8",
+    "openPolicyDecision": "The pre-existing emulator-profile 401 JSON callable Bearer refusal differs from the official emulator's 200; owner disposition is pending."
   },
   "scopeDecisions": [
     {
@@ -76,7 +80,20 @@
       "source": "https://firebase.google.com/docs/functions/http-events",
       "recipeIds": ["functions-http/http/request-shape"],
       "cases": ["GET", "POST", "HEAD", "nested-path", "repeated-query-key", "encoded-query"],
-      "status": "PENDING_CORPUS"
+      "status": "VERIFIED",
+      "evidence": {
+        "productionRecordings": [
+          {"recordedAt": "2026-09-27T13:59:44Z", "project": "fireemu-oracle-query", "corpusDigest": "836c138ba213546428e700e7ecb51644089bb5b0cdc91946eb9904a648106bea"},
+          {"recordedAt": "2026-09-27T13:59:45Z", "project": "fireemu-oracle-query", "corpusDigest": "836c138ba213546428e700e7ecb51644089bb5b0cdc91946eb9904a648106bea"}
+        ],
+        "sourceCommit": "b52e756e7f2161f93946fcb780d2dc2d780b5fc5",
+        "finalArtifactSha256": "2139b40f43f69d1cd23b9671a7f576097f459c8d2124fe4253c1f9a6ef1a9e7f",
+        "runnerTreeSha256": "d97c384362d374c5ff369e66e8a0b996e979f7fd7be2836930124b7333632e96",
+        "comparisonPath": "spec/compatibility/closure/evidence/FUNCTIONS-HTTP-comparison.json",
+        "comparisonSha256": "eddccca0c30a5b93fe7d0c6ffb6f9c0814d01e74be22ab604fd7695cc1a167e8",
+        "strictRecordingSha256": "92e9ea008073ae16897015e552ae7b58cb1560d2d55de14092c3ca71e8fea39f",
+        "rows": {"MATCH": 6}
+      }
     },
     {
       "conditionId": "FUNCTIONS-HTTP/http-request-headers",
@@ -88,70 +105,200 @@
         "x-forwarded-proto",
         "function-execution-id-presence"
       ],
-      "status": "PENDING_CORPUS"
+      "status": "VERIFIED",
+      "evidence": {
+        "productionRecordings": [
+          {"recordedAt": "2026-09-27T13:59:44Z", "project": "fireemu-oracle-query", "corpusDigest": "836c138ba213546428e700e7ecb51644089bb5b0cdc91946eb9904a648106bea"},
+          {"recordedAt": "2026-09-27T13:59:45Z", "project": "fireemu-oracle-query", "corpusDigest": "836c138ba213546428e700e7ecb51644089bb5b0cdc91946eb9904a648106bea"}
+        ],
+        "sourceCommit": "b52e756e7f2161f93946fcb780d2dc2d780b5fc5",
+        "finalArtifactSha256": "2139b40f43f69d1cd23b9671a7f576097f459c8d2124fe4253c1f9a6ef1a9e7f",
+        "runnerTreeSha256": "d97c384362d374c5ff369e66e8a0b996e979f7fd7be2836930124b7333632e96",
+        "comparisonPath": "spec/compatibility/closure/evidence/FUNCTIONS-HTTP-comparison.json",
+        "comparisonSha256": "eddccca0c30a5b93fe7d0c6ffb6f9c0814d01e74be22ab604fd7695cc1a167e8",
+        "strictRecordingSha256": "92e9ea008073ae16897015e552ae7b58cb1560d2d55de14092c3ca71e8fea39f",
+        "rows": {"MATCH": 4}
+      }
     },
     {
       "conditionId": "FUNCTIONS-HTTP/http-request-bodies",
       "source": "https://firebase.google.com/docs/functions/http-events",
       "recipeIds": ["functions-http/http/request-bodies"],
       "cases": ["json", "raw-text", "form-urlencoded", "empty", "malformed-json"],
-      "status": "PENDING_CORPUS"
+      "status": "VERIFIED",
+      "evidence": {
+        "productionRecordings": [
+          {"recordedAt": "2026-09-27T13:59:44Z", "project": "fireemu-oracle-query", "corpusDigest": "836c138ba213546428e700e7ecb51644089bb5b0cdc91946eb9904a648106bea"},
+          {"recordedAt": "2026-09-27T13:59:45Z", "project": "fireemu-oracle-query", "corpusDigest": "836c138ba213546428e700e7ecb51644089bb5b0cdc91946eb9904a648106bea"}
+        ],
+        "sourceCommit": "b52e756e7f2161f93946fcb780d2dc2d780b5fc5",
+        "finalArtifactSha256": "2139b40f43f69d1cd23b9671a7f576097f459c8d2124fe4253c1f9a6ef1a9e7f",
+        "runnerTreeSha256": "d97c384362d374c5ff369e66e8a0b996e979f7fd7be2836930124b7333632e96",
+        "comparisonPath": "spec/compatibility/closure/evidence/FUNCTIONS-HTTP-comparison.json",
+        "comparisonSha256": "eddccca0c30a5b93fe7d0c6ffb6f9c0814d01e74be22ab604fd7695cc1a167e8",
+        "strictRecordingSha256": "92e9ea008073ae16897015e552ae7b58cb1560d2d55de14092c3ca71e8fea39f",
+        "rows": {"MATCH": 5}
+      }
     },
     {
       "conditionId": "FUNCTIONS-HTTP/http-response-status-headers",
       "source": "https://firebase.google.com/docs/functions/http-events",
       "recipeIds": ["functions-http/http/response-shape"],
       "cases": ["custom-status", "custom-header", "content-type", "no-content"],
-      "status": "PENDING_CORPUS"
+      "status": "VERIFIED",
+      "evidence": {
+        "productionRecordings": [
+          {"recordedAt": "2026-09-27T13:59:44Z", "project": "fireemu-oracle-query", "corpusDigest": "836c138ba213546428e700e7ecb51644089bb5b0cdc91946eb9904a648106bea"},
+          {"recordedAt": "2026-09-27T13:59:45Z", "project": "fireemu-oracle-query", "corpusDigest": "836c138ba213546428e700e7ecb51644089bb5b0cdc91946eb9904a648106bea"}
+        ],
+        "sourceCommit": "b52e756e7f2161f93946fcb780d2dc2d780b5fc5",
+        "finalArtifactSha256": "2139b40f43f69d1cd23b9671a7f576097f459c8d2124fe4253c1f9a6ef1a9e7f",
+        "runnerTreeSha256": "d97c384362d374c5ff369e66e8a0b996e979f7fd7be2836930124b7333632e96",
+        "comparisonPath": "spec/compatibility/closure/evidence/FUNCTIONS-HTTP-comparison.json",
+        "comparisonSha256": "eddccca0c30a5b93fe7d0c6ffb6f9c0814d01e74be22ab604fd7695cc1a167e8",
+        "strictRecordingSha256": "92e9ea008073ae16897015e552ae7b58cb1560d2d55de14092c3ca71e8fea39f",
+        "rows": {"MATCH": 4}
+      }
     },
     {
       "conditionId": "FUNCTIONS-HTTP/http-large-response",
       "source": "spec/compatibility/contract.json#FN-CLAIM-HTTP",
       "recipeIds": ["functions-http/http/large-response"],
       "cases": ["one-mib-response-length-and-sha256"],
-      "status": "PENDING_CORPUS"
+      "status": "VERIFIED",
+      "evidence": {
+        "productionRecordings": [
+          {"recordedAt": "2026-09-27T13:59:44Z", "project": "fireemu-oracle-query", "corpusDigest": "836c138ba213546428e700e7ecb51644089bb5b0cdc91946eb9904a648106bea"},
+          {"recordedAt": "2026-09-27T13:59:45Z", "project": "fireemu-oracle-query", "corpusDigest": "836c138ba213546428e700e7ecb51644089bb5b0cdc91946eb9904a648106bea"}
+        ],
+        "sourceCommit": "b52e756e7f2161f93946fcb780d2dc2d780b5fc5",
+        "finalArtifactSha256": "2139b40f43f69d1cd23b9671a7f576097f459c8d2124fe4253c1f9a6ef1a9e7f",
+        "runnerTreeSha256": "d97c384362d374c5ff369e66e8a0b996e979f7fd7be2836930124b7333632e96",
+        "comparisonPath": "spec/compatibility/closure/evidence/FUNCTIONS-HTTP-comparison.json",
+        "comparisonSha256": "eddccca0c30a5b93fe7d0c6ffb6f9c0814d01e74be22ab604fd7695cc1a167e8",
+        "strictRecordingSha256": "92e9ea008073ae16897015e552ae7b58cb1560d2d55de14092c3ca71e8fea39f",
+        "rows": {"MATCH": 1}
+      }
     },
     {
       "conditionId": "FUNCTIONS-HTTP/http-streaming",
       "source": "spec/compatibility/contract.json#FN-CLAIM-HTTP",
       "recipeIds": ["functions-http/http/streaming"],
       "cases": ["ordered-chunks-before-completion", "completed-stream", "client-disconnect"],
-      "status": "PENDING_CORPUS"
+      "status": "VERIFIED",
+      "evidence": {
+        "productionRecordings": [
+          {"recordedAt": "2026-09-27T13:59:44Z", "project": "fireemu-oracle-query", "corpusDigest": "836c138ba213546428e700e7ecb51644089bb5b0cdc91946eb9904a648106bea"},
+          {"recordedAt": "2026-09-27T13:59:45Z", "project": "fireemu-oracle-query", "corpusDigest": "836c138ba213546428e700e7ecb51644089bb5b0cdc91946eb9904a648106bea"}
+        ],
+        "sourceCommit": "b52e756e7f2161f93946fcb780d2dc2d780b5fc5",
+        "finalArtifactSha256": "2139b40f43f69d1cd23b9671a7f576097f459c8d2124fe4253c1f9a6ef1a9e7f",
+        "runnerTreeSha256": "d97c384362d374c5ff369e66e8a0b996e979f7fd7be2836930124b7333632e96",
+        "comparisonPath": "spec/compatibility/closure/evidence/FUNCTIONS-HTTP-comparison.json",
+        "comparisonSha256": "eddccca0c30a5b93fe7d0c6ffb6f9c0814d01e74be22ab604fd7695cc1a167e8",
+        "strictRecordingSha256": "92e9ea008073ae16897015e552ae7b58cb1560d2d55de14092c3ca71e8fea39f",
+        "rows": {"MATCH": 3}
+      }
     },
     {
       "conditionId": "FUNCTIONS-HTTP/http-cors-preflight",
       "source": "spec/compatibility/contract.json#FN-CLAIM-HTTP",
       "recipeIds": ["functions-http/http/cors"],
       "cases": ["options-preflight", "cross-origin-post"],
-      "status": "PENDING_CORPUS"
+      "status": "VERIFIED",
+      "evidence": {
+        "productionRecordings": [
+          {"recordedAt": "2026-09-27T13:59:44Z", "project": "fireemu-oracle-query", "corpusDigest": "836c138ba213546428e700e7ecb51644089bb5b0cdc91946eb9904a648106bea"},
+          {"recordedAt": "2026-09-27T13:59:45Z", "project": "fireemu-oracle-query", "corpusDigest": "836c138ba213546428e700e7ecb51644089bb5b0cdc91946eb9904a648106bea"}
+        ],
+        "sourceCommit": "b52e756e7f2161f93946fcb780d2dc2d780b5fc5",
+        "finalArtifactSha256": "2139b40f43f69d1cd23b9671a7f576097f459c8d2124fe4253c1f9a6ef1a9e7f",
+        "runnerTreeSha256": "d97c384362d374c5ff369e66e8a0b996e979f7fd7be2836930124b7333632e96",
+        "comparisonPath": "spec/compatibility/closure/evidence/FUNCTIONS-HTTP-comparison.json",
+        "comparisonSha256": "eddccca0c30a5b93fe7d0c6ffb6f9c0814d01e74be22ab604fd7695cc1a167e8",
+        "strictRecordingSha256": "92e9ea008073ae16897015e552ae7b58cb1560d2d55de14092c3ca71e8fea39f",
+        "rows": {"MATCH": 2}
+      }
     },
     {
       "conditionId": "FUNCTIONS-HTTP/http-throw",
       "source": "spec/compatibility/contract.json#FN-CLAIM-HTTP",
       "recipeIds": ["functions-http/http/failures"],
       "cases": ["synchronous-throw", "rejected-promise"],
-      "status": "PENDING_CORPUS"
+      "status": "VERIFIED",
+      "evidence": {
+        "productionRecordings": [
+          {"recordedAt": "2026-09-27T13:59:44Z", "project": "fireemu-oracle-query", "corpusDigest": "836c138ba213546428e700e7ecb51644089bb5b0cdc91946eb9904a648106bea"},
+          {"recordedAt": "2026-09-27T13:59:45Z", "project": "fireemu-oracle-query", "corpusDigest": "836c138ba213546428e700e7ecb51644089bb5b0cdc91946eb9904a648106bea"}
+        ],
+        "sourceCommit": "b52e756e7f2161f93946fcb780d2dc2d780b5fc5",
+        "finalArtifactSha256": "2139b40f43f69d1cd23b9671a7f576097f459c8d2124fe4253c1f9a6ef1a9e7f",
+        "runnerTreeSha256": "d97c384362d374c5ff369e66e8a0b996e979f7fd7be2836930124b7333632e96",
+        "comparisonPath": "spec/compatibility/closure/evidence/FUNCTIONS-HTTP-comparison.json",
+        "comparisonSha256": "eddccca0c30a5b93fe7d0c6ffb6f9c0814d01e74be22ab604fd7695cc1a167e8",
+        "strictRecordingSha256": "92e9ea008073ae16897015e552ae7b58cb1560d2d55de14092c3ca71e8fea39f",
+        "rows": {"MATCH": 2}
+      }
     },
     {
       "conditionId": "FUNCTIONS-HTTP/http-timeout",
       "source": "spec/compatibility/contract.json#FN-CLAIM-HTTP",
       "recipeIds": ["functions-http/http/failures"],
       "cases": ["handler-exceeds-one-second-timeout"],
-      "status": "PENDING_CORPUS"
+      "status": "VERIFIED",
+      "evidence": {
+        "productionRecordings": [
+          {"recordedAt": "2026-09-27T13:59:44Z", "project": "fireemu-oracle-query", "corpusDigest": "836c138ba213546428e700e7ecb51644089bb5b0cdc91946eb9904a648106bea"},
+          {"recordedAt": "2026-09-27T13:59:45Z", "project": "fireemu-oracle-query", "corpusDigest": "836c138ba213546428e700e7ecb51644089bb5b0cdc91946eb9904a648106bea"}
+        ],
+        "sourceCommit": "b52e756e7f2161f93946fcb780d2dc2d780b5fc5",
+        "finalArtifactSha256": "2139b40f43f69d1cd23b9671a7f576097f459c8d2124fe4253c1f9a6ef1a9e7f",
+        "runnerTreeSha256": "d97c384362d374c5ff369e66e8a0b996e979f7fd7be2836930124b7333632e96",
+        "comparisonPath": "spec/compatibility/closure/evidence/FUNCTIONS-HTTP-comparison.json",
+        "comparisonSha256": "eddccca0c30a5b93fe7d0c6ffb6f9c0814d01e74be22ab604fd7695cc1a167e8",
+        "strictRecordingSha256": "92e9ea008073ae16897015e552ae7b58cb1560d2d55de14092c3ca71e8fea39f",
+        "rows": {"MATCH": 1}
+      }
     },
     {
       "conditionId": "FUNCTIONS-HTTP/http-no-response",
       "source": "spec/compatibility/contract.json#FN-CLAIM-HTTP",
       "recipeIds": ["functions-http/http/failures"],
       "cases": ["handler-returns-without-sending-response"],
-      "status": "PENDING_CORPUS"
+      "status": "VERIFIED",
+      "evidence": {
+        "productionRecordings": [
+          {"recordedAt": "2026-09-27T13:59:44Z", "project": "fireemu-oracle-query", "corpusDigest": "836c138ba213546428e700e7ecb51644089bb5b0cdc91946eb9904a648106bea"},
+          {"recordedAt": "2026-09-27T13:59:45Z", "project": "fireemu-oracle-query", "corpusDigest": "836c138ba213546428e700e7ecb51644089bb5b0cdc91946eb9904a648106bea"}
+        ],
+        "sourceCommit": "b52e756e7f2161f93946fcb780d2dc2d780b5fc5",
+        "finalArtifactSha256": "2139b40f43f69d1cd23b9671a7f576097f459c8d2124fe4253c1f9a6ef1a9e7f",
+        "runnerTreeSha256": "d97c384362d374c5ff369e66e8a0b996e979f7fd7be2836930124b7333632e96",
+        "comparisonPath": "spec/compatibility/closure/evidence/FUNCTIONS-HTTP-comparison.json",
+        "comparisonSha256": "eddccca0c30a5b93fe7d0c6ffb6f9c0814d01e74be22ab604fd7695cc1a167e8",
+        "strictRecordingSha256": "92e9ea008073ae16897015e552ae7b58cb1560d2d55de14092c3ca71e8fea39f",
+        "rows": {"MATCH": 1}
+      }
     },
     {
       "conditionId": "FUNCTIONS-HTTP/callable-success-envelope",
       "source": "https://firebase.google.com/docs/functions/callable-reference",
       "recipeIds": ["functions-http/callable/success"],
       "cases": ["object-result", "scalar-result", "null-result", "data-envelope"],
-      "status": "PENDING_CORPUS"
+      "status": "VERIFIED",
+      "evidence": {
+        "productionRecordings": [
+          {"recordedAt": "2026-09-27T13:59:44Z", "project": "fireemu-oracle-query", "corpusDigest": "836c138ba213546428e700e7ecb51644089bb5b0cdc91946eb9904a648106bea"},
+          {"recordedAt": "2026-09-27T13:59:45Z", "project": "fireemu-oracle-query", "corpusDigest": "836c138ba213546428e700e7ecb51644089bb5b0cdc91946eb9904a648106bea"}
+        ],
+        "sourceCommit": "b52e756e7f2161f93946fcb780d2dc2d780b5fc5",
+        "finalArtifactSha256": "2139b40f43f69d1cd23b9671a7f576097f459c8d2124fe4253c1f9a6ef1a9e7f",
+        "runnerTreeSha256": "d97c384362d374c5ff369e66e8a0b996e979f7fd7be2836930124b7333632e96",
+        "comparisonPath": "spec/compatibility/closure/evidence/FUNCTIONS-HTTP-comparison.json",
+        "comparisonSha256": "eddccca0c30a5b93fe7d0c6ffb6f9c0814d01e74be22ab604fd7695cc1a167e8",
+        "strictRecordingSha256": "92e9ea008073ae16897015e552ae7b58cb1560d2d55de14092c3ca71e8fea39f",
+        "rows": {"MATCH": 4}
+      }
     },
     {
       "conditionId": "FUNCTIONS-HTTP/callable-https-errors",
@@ -178,7 +325,20 @@
         "details",
         "unhandled-error"
       ],
-      "status": "PENDING_CORPUS"
+      "status": "VERIFIED",
+      "evidence": {
+        "productionRecordings": [
+          {"recordedAt": "2026-09-27T13:59:44Z", "project": "fireemu-oracle-query", "corpusDigest": "836c138ba213546428e700e7ecb51644089bb5b0cdc91946eb9904a648106bea"},
+          {"recordedAt": "2026-09-27T13:59:45Z", "project": "fireemu-oracle-query", "corpusDigest": "836c138ba213546428e700e7ecb51644089bb5b0cdc91946eb9904a648106bea"}
+        ],
+        "sourceCommit": "b52e756e7f2161f93946fcb780d2dc2d780b5fc5",
+        "finalArtifactSha256": "2139b40f43f69d1cd23b9671a7f576097f459c8d2124fe4253c1f9a6ef1a9e7f",
+        "runnerTreeSha256": "d97c384362d374c5ff369e66e8a0b996e979f7fd7be2836930124b7333632e96",
+        "comparisonPath": "spec/compatibility/closure/evidence/FUNCTIONS-HTTP-comparison.json",
+        "comparisonSha256": "eddccca0c30a5b93fe7d0c6ffb6f9c0814d01e74be22ab604fd7695cc1a167e8",
+        "strictRecordingSha256": "92e9ea008073ae16897015e552ae7b58cb1560d2d55de14092c3ca71e8fea39f",
+        "rows": {"MATCH": 19}
+      }
     },
     {
       "conditionId": "FUNCTIONS-HTTP/callable-malformed-requests",
@@ -191,35 +351,100 @@
         "extra-field",
         "malformed-json"
       ],
-      "status": "PENDING_CORPUS"
+      "status": "VERIFIED",
+      "evidence": {
+        "productionRecordings": [
+          {"recordedAt": "2026-09-27T13:59:44Z", "project": "fireemu-oracle-query", "corpusDigest": "836c138ba213546428e700e7ecb51644089bb5b0cdc91946eb9904a648106bea"},
+          {"recordedAt": "2026-09-27T13:59:45Z", "project": "fireemu-oracle-query", "corpusDigest": "836c138ba213546428e700e7ecb51644089bb5b0cdc91946eb9904a648106bea"}
+        ],
+        "sourceCommit": "b52e756e7f2161f93946fcb780d2dc2d780b5fc5",
+        "finalArtifactSha256": "2139b40f43f69d1cd23b9671a7f576097f459c8d2124fe4253c1f9a6ef1a9e7f",
+        "runnerTreeSha256": "d97c384362d374c5ff369e66e8a0b996e979f7fd7be2836930124b7333632e96",
+        "comparisonPath": "spec/compatibility/closure/evidence/FUNCTIONS-HTTP-comparison.json",
+        "comparisonSha256": "eddccca0c30a5b93fe7d0c6ffb6f9c0814d01e74be22ab604fd7695cc1a167e8",
+        "strictRecordingSha256": "92e9ea008073ae16897015e552ae7b58cb1560d2d55de14092c3ca71e8fea39f",
+        "rows": {"MATCH": 5}
+      }
     },
     {
       "conditionId": "FUNCTIONS-HTTP/callable-auth-context",
       "source": "https://firebase.google.com/docs/reference/functions/2nd-gen/node/firebase-functions.https.callablerequest",
       "recipeIds": ["functions-http/callable/auth-context"],
       "cases": ["no-authorization", "valid-project-id-token", "uid-and-claims"],
-      "status": "PENDING_CORPUS"
+      "status": "VERIFIED",
+      "evidence": {
+        "productionRecordings": [
+          {"recordedAt": "2026-09-27T13:59:44Z", "project": "fireemu-oracle-query", "corpusDigest": "836c138ba213546428e700e7ecb51644089bb5b0cdc91946eb9904a648106bea"},
+          {"recordedAt": "2026-09-27T13:59:45Z", "project": "fireemu-oracle-query", "corpusDigest": "836c138ba213546428e700e7ecb51644089bb5b0cdc91946eb9904a648106bea"}
+        ],
+        "sourceCommit": "b52e756e7f2161f93946fcb780d2dc2d780b5fc5",
+        "finalArtifactSha256": "2139b40f43f69d1cd23b9671a7f576097f459c8d2124fe4253c1f9a6ef1a9e7f",
+        "runnerTreeSha256": "d97c384362d374c5ff369e66e8a0b996e979f7fd7be2836930124b7333632e96",
+        "comparisonPath": "spec/compatibility/closure/evidence/FUNCTIONS-HTTP-comparison.json",
+        "comparisonSha256": "eddccca0c30a5b93fe7d0c6ffb6f9c0814d01e74be22ab604fd7695cc1a167e8",
+        "strictRecordingSha256": "92e9ea008073ae16897015e552ae7b58cb1560d2d55de14092c3ca71e8fea39f",
+        "rows": {"MATCH": 3}
+      }
     },
     {
       "conditionId": "FUNCTIONS-HTTP/callable-auth-refusal",
       "source": "https://firebase.google.com/docs/functions/callable-reference",
       "recipeIds": ["functions-http/callable/auth-refusal"],
       "cases": ["malformed-bearer", "invalid-signature", "expired-id-token"],
-      "status": "PENDING_CORPUS"
+      "status": "VERIFIED",
+      "evidence": {
+        "productionRecordings": [
+          {"recordedAt": "2026-09-27T13:59:44Z", "project": "fireemu-oracle-query", "corpusDigest": "836c138ba213546428e700e7ecb51644089bb5b0cdc91946eb9904a648106bea"},
+          {"recordedAt": "2026-09-27T13:59:45Z", "project": "fireemu-oracle-query", "corpusDigest": "836c138ba213546428e700e7ecb51644089bb5b0cdc91946eb9904a648106bea"}
+        ],
+        "sourceCommit": "b52e756e7f2161f93946fcb780d2dc2d780b5fc5",
+        "finalArtifactSha256": "2139b40f43f69d1cd23b9671a7f576097f459c8d2124fe4253c1f9a6ef1a9e7f",
+        "runnerTreeSha256": "d97c384362d374c5ff369e66e8a0b996e979f7fd7be2836930124b7333632e96",
+        "comparisonPath": "spec/compatibility/closure/evidence/FUNCTIONS-HTTP-comparison.json",
+        "comparisonSha256": "eddccca0c30a5b93fe7d0c6ffb6f9c0814d01e74be22ab604fd7695cc1a167e8",
+        "strictRecordingSha256": "92e9ea008073ae16897015e552ae7b58cb1560d2d55de14092c3ca71e8fea39f",
+        "rows": {"MATCH": 3}
+      }
     },
     {
       "conditionId": "FUNCTIONS-HTTP/callable-streaming",
       "source": "https://firebase.google.com/docs/functions/callable",
       "recipeIds": ["functions-http/callable/streaming"],
       "cases": ["send-chunk-order", "final-result", "client-disconnect"],
-      "status": "PENDING_CORPUS"
+      "status": "VERIFIED",
+      "evidence": {
+        "productionRecordings": [
+          {"recordedAt": "2026-09-27T13:59:44Z", "project": "fireemu-oracle-query", "corpusDigest": "836c138ba213546428e700e7ecb51644089bb5b0cdc91946eb9904a648106bea"},
+          {"recordedAt": "2026-09-27T13:59:45Z", "project": "fireemu-oracle-query", "corpusDigest": "836c138ba213546428e700e7ecb51644089bb5b0cdc91946eb9904a648106bea"}
+        ],
+        "sourceCommit": "b52e756e7f2161f93946fcb780d2dc2d780b5fc5",
+        "finalArtifactSha256": "2139b40f43f69d1cd23b9671a7f576097f459c8d2124fe4253c1f9a6ef1a9e7f",
+        "runnerTreeSha256": "d97c384362d374c5ff369e66e8a0b996e979f7fd7be2836930124b7333632e96",
+        "comparisonPath": "spec/compatibility/closure/evidence/FUNCTIONS-HTTP-comparison.json",
+        "comparisonSha256": "eddccca0c30a5b93fe7d0c6ffb6f9c0814d01e74be22ab604fd7695cc1a167e8",
+        "strictRecordingSha256": "92e9ea008073ae16897015e552ae7b58cb1560d2d55de14092c3ca71e8fea39f",
+        "rows": {"MATCH": 3}
+      }
     },
     {
       "conditionId": "FUNCTIONS-HTTP/public-invocation",
       "source": "https://firebase.google.com/docs/functions/http-events",
       "recipeIds": ["functions-http/deployment/public-invocation"],
       "cases": ["http-without-cloud-run-credentials", "callable-without-cloud-run-credentials"],
-      "status": "PENDING_CORPUS"
+      "status": "VERIFIED",
+      "evidence": {
+        "productionRecordings": [
+          {"recordedAt": "2026-09-27T13:59:44Z", "project": "fireemu-oracle-query", "corpusDigest": "836c138ba213546428e700e7ecb51644089bb5b0cdc91946eb9904a648106bea"},
+          {"recordedAt": "2026-09-27T13:59:45Z", "project": "fireemu-oracle-query", "corpusDigest": "836c138ba213546428e700e7ecb51644089bb5b0cdc91946eb9904a648106bea"}
+        ],
+        "sourceCommit": "b52e756e7f2161f93946fcb780d2dc2d780b5fc5",
+        "finalArtifactSha256": "2139b40f43f69d1cd23b9671a7f576097f459c8d2124fe4253c1f9a6ef1a9e7f",
+        "runnerTreeSha256": "d97c384362d374c5ff369e66e8a0b996e979f7fd7be2836930124b7333632e96",
+        "comparisonPath": "spec/compatibility/closure/evidence/FUNCTIONS-HTTP-comparison.json",
+        "comparisonSha256": "eddccca0c30a5b93fe7d0c6ffb6f9c0814d01e74be22ab604fd7695cc1a167e8",
+        "strictRecordingSha256": "92e9ea008073ae16897015e552ae7b58cb1560d2d55de14092c3ca71e8fea39f",
+        "rows": {"MATCH": 2}
+      }
     },
     {
       "conditionId": "FUNCTIONS-HTTP/final-artifact-regression",
@@ -230,7 +455,22 @@
         "same-source-final-artifact-comparison",
         "workspace-regression"
       ],
-      "status": "PENDING_CORPUS"
+      "status": "VERIFIED",
+      "evidence": {
+        "productionRecordings": [
+          {"recordedAt": "2026-09-27T13:59:44Z", "project": "fireemu-oracle-query", "corpusDigest": "836c138ba213546428e700e7ecb51644089bb5b0cdc91946eb9904a648106bea"},
+          {"recordedAt": "2026-09-27T13:59:45Z", "project": "fireemu-oracle-query", "corpusDigest": "836c138ba213546428e700e7ecb51644089bb5b0cdc91946eb9904a648106bea"}
+        ],
+        "sourceCommit": "b52e756e7f2161f93946fcb780d2dc2d780b5fc5",
+        "finalArtifactSha256": "2139b40f43f69d1cd23b9671a7f576097f459c8d2124fe4253c1f9a6ef1a9e7f",
+        "runnerTreeSha256": "d97c384362d374c5ff369e66e8a0b996e979f7fd7be2836930124b7333632e96",
+        "comparisonPath": "spec/compatibility/closure/evidence/FUNCTIONS-HTTP-comparison.json",
+        "comparisonSha256": "eddccca0c30a5b93fe7d0c6ffb6f9c0814d01e74be22ab604fd7695cc1a167e8",
+        "strictProductionRows": {"MATCH": 68},
+        "workspaceNextestPassed": 3510,
+        "nodeRunnerPassed": 745,
+        "nodeRunnerSkipped": 4
+      }
     },
     {
       "conditionId": "FUNCTIONS-HTTP/closure-review",

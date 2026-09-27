@@ -422,6 +422,11 @@ def test_lock_release_error_allows_request_free_finalization_only(tmp_path, monk
                      metadata_factory=NoReadsMetadata, wire_factory=_absent_wire)
     assert result["complete"] is True
     assert not value["lock_path"].exists()
+    latest = json.loads(value["ledger_path"].read_text().splitlines()[-1])
+    assert latest["outcome"] == "recovered-exact-name"
+    assert latest["resultSha256"] == hashlib.sha256(
+        (value["root"] / "docs.local/runs/fs-transaction-recovery-recovery-packet/recovery.json").read_bytes()
+    ).hexdigest()
 
 
 def test_terminal_result_sha_does_not_require_rereading_written_file(tmp_path, monkeypatch):

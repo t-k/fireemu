@@ -384,7 +384,19 @@ def _record_recovery_under_guard(*, packet, packet_sha, packet_path, snapshot_ra
             raise ValueError("terminal recovery receipt differs from verified result")
         if lock_path.stat().st_ino != lock_inode or lock_path.read_bytes() != lock_raw:
             raise ValueError("project lock changed before finalization")
-        lock_path.unlink()
+        final_row = {
+            **original, "ts": now.isoformat().replace("+00:00", "Z"),
+            "outcome": "recovered-exact-name", "reason": "request-free-finalization",
+        }
+        if original["outcome"] != "recovered-exact-name":
+            admission.append_ledger(ledger_path, final_row)
+        try:
+            lock_path.unlink()
+        except OSError:
+            admission.append_ledger(ledger_path, {
+                **final_row, "outcome": "needs-recovery", "reason": "lock-release-failed",
+            })
+            raise
         return result
     runner._remaining_task_budget(ledger_rows, packet["estimatedUsd"])
     result_dir.mkdir(mode=0o700)

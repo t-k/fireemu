@@ -72,9 +72,16 @@ const APPLICATION_RESTRICTIONS = [
 export function keyRestrictionProblems({ status, json }) {
   if (status !== 200) return [`API keys read failed (HTTP ${status})`];
   if (json?.nextPageToken) return ["API keys read has more than one page"];
+  return restrictedKeys(json).map(
+    ({ displayName, uid }) => `API key ${displayName ?? uid ?? "?"} has an application restriction`,
+  );
+}
+
+/** The keys with an application restriction, by display name and uid (never the key string). */
+export function restrictedKeys(json) {
   return (json?.keys ?? [])
     .filter((key) => APPLICATION_RESTRICTIONS.some((r) => key.restrictions?.[r] !== undefined))
-    .map((key) => `API key ${key.displayName ?? key.uid ?? "?"} has an application restriction`);
+    .map((key) => ({ displayName: key.displayName ?? null, uid: key.uid ?? null }));
 }
 
 // ---- locks ---------------------------------------------------------------------------------
@@ -272,6 +279,29 @@ export function startedLine({
     lockSha256: locks.map(({ sha256: digest }) => digest),
     // The packet's reservation, counted even if the run fails.
     maxEstimatedUsd: reserveUsd,
+  };
+}
+
+/**
+ * The line of a run stopped before it wrote anything, for a reason the owner decides on (a key
+ * that may refuse the browser): it names the reason and what caused it, and ends nothing open.
+ */
+export function stoppedLine({ ts, sha, recording, programDigest, reason, detail, requests }) {
+  return {
+    ts,
+    event: "finished",
+    taskId: TASK_ID,
+    project: SANDBOX_PROJECT,
+    stage: STAGE,
+    recording,
+    gitSha: sha,
+    programDigest,
+    outcome: "stopped-before-write",
+    sandboxAtBaseline: true,
+    reason,
+    ...detail,
+    requests,
+    estimatedUsd: 0,
   };
 }
 

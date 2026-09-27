@@ -359,8 +359,48 @@ test("a key with an application restriction, or a refused key probe, stops the r
       runStage2Production(await withProbe(refused.deps)),
       /browser key probe refused: auth\/requests-from-referer-blocked/,
     );
+    // Each stop is written down for the owner, naming the keys (never their strings) or the
+    // probe's code; nothing was written to the sandbox, so it ends cleanly.
+    const [keyStop] = lines(restricted.paths.ledger);
+    assert.deepEqual(
+      [
+        keyStop.event,
+        keyStop.outcome,
+        keyStop.sandboxAtBaseline,
+        keyStop.reason,
+        keyStop.keys,
+        keyStop.estimatedUsd,
+      ],
+      [
+        "finished",
+        "stopped-before-write",
+        true,
+        "api-key-application-restriction",
+        [{ displayName: "k", uid: null }],
+        0,
+      ],
+    );
+    const [probeStop] = lines(refused.paths.ledger);
+    assert.deepEqual(
+      [probeStop.outcome, probeStop.reason, probeStop.code, probeStop.requests],
+      [
+        "stopped-before-write",
+        "browser-key-probe-refused",
+        "auth/requests-from-referer-blocked",
+        8 + 1 + 1,
+      ],
+    );
+    // The same recording may run again under the same approval: nothing started.
+    const { admissionProblems } = await import("./auth-fs-cross/sandbox.mjs");
+    const { recordingProblems } = await import("./auth-fs-cross/stage2-sandbox.mjs");
+    const text = readFileSync(refused.paths.ledger, "utf8");
+    assert.deepEqual(recordingProblems(text, PACKET, 1), []);
+    assert.deepEqual(
+      admissionProblems(text, SANDBOX_PROJECT, Date.parse("2026-09-29T02:00:00Z")),
+      [],
+    );
     for (const { paths, fake } of [restricted, refused]) {
-      assert.equal(readFileSync(paths.ledger, "utf8"), "");
+      assert.equal(lines(paths.ledger).length, 1);
       assert.deepEqual(readdirSync(paths.lockDir), []);
       // Reads only: the baseline, the keys, nothing that writes.
       assert.deepEqual(

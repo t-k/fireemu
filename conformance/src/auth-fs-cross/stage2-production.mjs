@@ -15,6 +15,8 @@ import {
   closingLines,
   DECLARED_PROJECTS,
   keyRestrictionProblems,
+  restrictedKeys,
+  stoppedLine,
   packetApproval,
   recordingProblems,
   releaseProjectLock,
@@ -31,7 +33,11 @@ const KEYS = `https://apikeys.googleapis.com/v2/projects/${SANDBOX_PROJECT}/loca
 /** One read of the project's API keys (restrictions only, never a key string). */
 export async function readKeyRestrictions(fetchJson) {
   const answer = await fetchJson("GET", KEYS, undefined, SANDBOX_PROJECT);
-  return { requests: 1, problems: keyRestrictionProblems(answer) };
+  return {
+    requests: 1,
+    problems: keyRestrictionProblems(answer),
+    restricted: answer.status === 200 ? restrictedKeys(answer.json) : [],
+  };
 }
 const line = (row) => `${JSON.stringify(row)}\n`;
 
@@ -120,12 +126,39 @@ export async function runStage2Production(deps) {
     const start = await readBaseline(fetchJson);
     const keys = await readKeyRestrictions(fetchJson);
     const startProblems = [...start.mismatches, ...keys.problems];
+    // Nothing is written yet. A key that may refuse the browser is left for the owner to decide
+    // on, so the stop is written down with the keys it names; other differences stop silently.
+    const stop = async (reason, detail, requests) => {
+      await appendFile(
+        deps.ledger,
+        line(
+          stoppedLine({
+            ts: deps.now().toISOString(),
+            sha: admission.sha,
+            recording: deps.recording,
+            programDigest: admission.programDigest,
+            reason,
+            detail,
+            requests,
+          }),
+        ),
+      );
+    };
+    if (keys.restricted.length)
+      await stop("api-key-application-restriction", { keys: keys.restricted }, start.requests + 1);
     if (startProblems.length) throw new Error(`preflight: ${startProblems.join("; ")}`);
     const clockOffsetSeconds = await deps.clockOffset();
     // The browser's first request with the web key is a read: a refusal ends the run here,
     // before anything is written, and the locks are released.
     const keyProbe = await deps.browserKeyProbe();
-    if (!keyProbe.ok) throw new Error(`browser key probe refused: ${clean(String(keyProbe.code))}`);
+    if (!keyProbe.ok) {
+      await stop(
+        "browser-key-probe-refused",
+        { code: clean(String(keyProbe.code)) },
+        start.requests + 1 + keyProbe.requests,
+      );
+      throw new Error(`browser key probe refused: ${clean(String(keyProbe.code))}`);
+    }
     // The compile probe writes: from its first request only a clean readback releases the locks.
     keepLocks = true;
     let probe;

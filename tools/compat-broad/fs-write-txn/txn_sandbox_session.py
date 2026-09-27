@@ -103,6 +103,8 @@ def run_once(
     receipt = collection.run()
     if not isinstance(receipt, dict):
         raise ValueError("collector returned no bounded receipt")
+    if token in json.dumps(receipt, ensure_ascii=False):
+        raise ValueError("collector receipt contains the raw OAuth credential")
     receipt["preflight"] = before
     receipt["postflight"] = None
     if receipt.get("complete") is True:

@@ -4,6 +4,8 @@ import json
 import sys
 from pathlib import Path
 
+import pytest
+
 sys.path.insert(0, str(Path(__file__).parent))
 
 import txn_sandbox_session as session
@@ -113,3 +115,33 @@ def test_incomplete_collection_skips_postflight_and_keeps_count(tmp_path):
     assert result["complete"] is False
     assert result["sandboxRequests"] == 2
     assert result["postflight"] is None
+
+
+def test_session_rejects_its_raw_oauth_token_in_collector_receipt(tmp_path):
+    class Metadata:
+        def __init__(self, token, baseline, budget):
+            pass
+
+        def preflight(self):
+            return {}
+
+        def postflight(self):
+            return {}
+
+    class Collector:
+        def __init__(self, options, plan, wire, *, responsibility):
+            pass
+
+        def run(self):
+            answer = receipt(NONCE)
+            answer["rows"][0]["observed"]["message"] = "test-access-token"
+            return answer
+
+    with pytest.raises(ValueError, match="credential"):
+        session.run_once(
+            NONCE, OWNER, tmp_path, BASELINE,
+            credential_fn=lambda: "test-access-token",
+            metadata_factory=Metadata,
+            wire_factory=lambda token, budget: lambda request: None,
+            collector_factory=Collector,
+        )

@@ -136,7 +136,7 @@
       "configProjections": [
         "default"
       ],
-      "status": "PENDING_CORPUS",
+      "status": "PRODUCTION_RECORDED",
       "note": "The same UID in two tenants of the project is told apart by Rules, and an unexpired ID token of a deleted tenant is presented to Firestore, with a surviving sibling tenant as control.",
       "stage": 1,
       "observation": {
@@ -156,6 +156,18 @@
       },
       "verification": {
         "recordingsRequired": 2
+      },
+      "evidence": {
+        "productionRecordings": [
+          {
+            "recordedAt": "2026-09-27T17:28:05.738Z",
+            "gitSha": "51f1910b7684938829d839384ccd9a1ee4f3bba3",
+            "recordings": 2,
+            "project": "fireemu-oracle-idp"
+          }
+        ],
+        "fixturePath": "conformance/auth-fs-cross-production.json",
+        "note": "Both recordings agree on every row; the comparison on the final artifact is still to come."
       }
     },
     {
@@ -167,7 +179,7 @@
       "configProjections": [
         "default"
       ],
-      "status": "PENDING_CORPUS",
+      "status": "PRODUCTION_RECORDED",
       "note": "A read-only transaction opened with one principal's token is used with another principal's, another tenant's and no credential. End users cannot open read-write transactions (FS-RULES/document-access), so this is the only server-side transaction an end user holds.",
       "stage": 1,
       "observation": {
@@ -184,6 +196,18 @@
       },
       "verification": {
         "recordingsRequired": 2
+      },
+      "evidence": {
+        "productionRecordings": [
+          {
+            "recordedAt": "2026-09-27T17:28:05.738Z",
+            "gitSha": "51f1910b7684938829d839384ccd9a1ee4f3bba3",
+            "recordings": 2,
+            "project": "fireemu-oracle-idp"
+          }
+        ],
+        "fixturePath": "conformance/auth-fs-cross-production.json",
+        "note": "Both recordings agree on every row; the comparison on the final artifact is still to come."
       }
     },
     {
@@ -195,7 +219,7 @@
       "configProjections": [
         "default"
       ],
-      "status": "PENDING_CORPUS",
+      "status": "PRODUCTION_RECORDED",
       "note": "A validly signed ID token issued by another Firebase project's Auth is presented to Firestore on the sandbox, with a same-project control.",
       "stage": 1,
       "observation": {
@@ -212,6 +236,18 @@
       },
       "verification": {
         "recordingsRequired": 2
+      },
+      "evidence": {
+        "productionRecordings": [
+          {
+            "recordedAt": "2026-09-27T17:28:05.738Z",
+            "gitSha": "51f1910b7684938829d839384ccd9a1ee4f3bba3",
+            "recordings": 2,
+            "project": "fireemu-oracle-idp"
+          }
+        ],
+        "fixturePath": "conformance/auth-fs-cross-production.json",
+        "note": "Both recordings agree on every row; the comparison on the final artifact is still to come."
       }
     },
     {

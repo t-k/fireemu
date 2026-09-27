@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 const header = "service firebase.storage {\n  match /b/{bucket}/o {\n";
 const footer = "\n  }\n}\n";
 const version2 = "rules_version = '2';\n";
+const matchBodyPattern = /^    match \/([^\n]+) \{\n(?:      allow (?:read|write|get|list|create|update|delete)(?:, (?:read|write|get|list|create|update|delete))*: if [^;\n{}]+;\n)+    \}$/;
 
 function matchBody(entry, prefix) {
   const source = entry.rulesSource;
@@ -13,18 +14,29 @@ function matchBody(entry, prefix) {
     throw new Error(`invalid Rules wrapper: ${entry.id}`);
   }
   const body = withoutVersion.slice(header.length, -footer.length);
-  const matchLines = body.match(/^    match \/[^\n]+ \{$/gm) ?? [];
-  if (matchLines.length !== 1) throw new Error(`invalid Rules wrapper match count: ${entry.id}`);
-  if (!matchLines[0].startsWith(`    match /${prefix}`)) {
+  const match = body.match(matchBodyPattern);
+  if (!match) throw new Error(`invalid Rules wrapper match body: ${entry.id}`);
+  if (!match[1].startsWith(prefix)) {
     throw new Error(`changed Rules match prefix: ${entry.id}`);
   }
   return { id: entry.id, prefix, version, body };
 }
 
 export function buildPublicationSources(corpus, binding) {
-  if (!binding?.prefix?.startsWith("STORAGE-RULES/")) throw new Error("invalid owned prefix");
+  if (typeof binding?.prefix !== "string" || !/^STORAGE-RULES\/[a-z0-9][a-z0-9-]{0,47}\/$/.test(binding.prefix)) {
+    throw new Error("invalid owned prefix");
+  }
+  for (const entry of [...corpus.cases, ...corpus.firestorePrograms]) {
+    if (typeof entry.id !== "string" || !/^[A-Za-z0-9][A-Za-z0-9-]*$/.test(entry.id)) {
+      throw new Error("invalid case id");
+    }
+  }
   const entries = [
-    ...corpus.cases.map((entry) => matchBody(entry, entry.casePrefix)),
+    ...corpus.cases.map((entry) => {
+      const prefix = `${binding.prefix}${entry.id}/`;
+      if (entry.casePrefix !== prefix) throw new Error(`case prefix outside owned prefix: ${entry.id}`);
+      return matchBody(entry, prefix);
+    }),
     ...corpus.firestorePrograms.map((entry) => matchBody(entry, `${binding.prefix}${entry.id}/`)),
   ];
   if (new Set(entries.map((entry) => entry.id)).size !== entries.length) {

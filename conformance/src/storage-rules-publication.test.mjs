@@ -33,10 +33,27 @@ test("publication refuses overlapping owned paths and a changed match prefix", (
   const corpus = buildCorpus(binding);
   corpus.cases[1].rulesSource = corpus.cases[1].rulesSource.replace(corpus.cases[1].casePrefix, corpus.cases[0].casePrefix);
   corpus.cases[1].casePrefix = corpus.cases[0].casePrefix;
-  assert.throws(() => buildPublicationSources(corpus, binding), /overlap|duplicate/);
+  assert.throws(() => buildPublicationSources(corpus, binding), /case prefix|overlap|duplicate/);
   const changed = buildCorpus(binding);
   changed.cases[0].rulesSource = changed.cases[0].rulesSource.replace(changed.cases[0].casePrefix, `${binding.prefix}other/`);
   assert.throws(() => buildPublicationSources(changed, binding), /match prefix/);
+});
+
+test("publication refuses a case match outside the owned run prefix", () => {
+  const corpus = buildCorpus(binding);
+  const original = corpus.cases[0].casePrefix;
+  corpus.cases[0].casePrefix = `unowned/${corpus.cases[0].id}/`;
+  corpus.cases[0].rulesSource = corpus.cases[0].rulesSource.replace(original, corpus.cases[0].casePrefix);
+  assert.throws(() => buildPublicationSources(corpus, binding), /owned prefix|case prefix/);
+});
+
+test("publication refuses a sibling match with noncanonical indentation", () => {
+  const corpus = buildCorpus(binding);
+  corpus.cases[0].rulesSource = corpus.cases[0].rulesSource.replace(
+    "\n    }\n  }\n}\n",
+    "\n    }\n     match /{allPaths=**} {\n       allow read: if true;\n     }\n  }\n}\n",
+  );
+  assert.throws(() => buildPublicationSources(corpus, binding), /wrapper|match count/);
 });
 
 test("publication refuses a malformed wrapper", () => {

@@ -88,7 +88,7 @@ async function runProfile({ profile, binary, privateRoot, onlyRecipeIds, windowM
   const socketPath = join(shortDir, "events.sock");
   await writeFile(
     envPath,
-    `FE_EVENTS_CAPTURE_MODE=socket\nFE_EVENTS_CAPTURE_SOCKET=${socketPath}\n`,
+    `FE_EVENTS_MODE=local\nFE_EVENTS_CAPTURE_MODE=socket\nFE_EVENTS_CAPTURE_SOCKET=${socketPath}\n`,
     {
       flag: "wx",
       mode: 0o600,
@@ -102,6 +102,7 @@ async function runProfile({ profile, binary, privateRoot, onlyRecipeIds, windowM
     FE_EVENTS_PRIVATE_DIR: shortDir,
     FE_EVENTS_ONLY: onlyRecipeIds ?? "",
     FE_EVENTS_WINDOW_MS: String(windowMs),
+    FE_EVENTS_MODE: "local",
     FE_EVENTS_CAPTURE_MODE: "socket",
     FE_EVENTS_CAPTURE_SOCKET: socketPath,
   };

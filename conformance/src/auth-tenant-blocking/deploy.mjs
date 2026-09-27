@@ -217,6 +217,9 @@ export function createDeployer({
   let requests = 0;
   let baseline;
   let uploadsBefore;
+  // A restore's: when the stopped recording started, and the upload objects it left alone.
+  let adoptedSince;
+  let uploadsLeftAlone = 0;
   let deployStarted;
   let adopted = false;
   let repositoryChange;
@@ -342,7 +345,7 @@ export function createDeployer({
     return json?.blockingFunctions ?? {};
   }
 
-  /** The object names of a bucket, or undefined when it does not exist. */
+  /** The objects (`name`, `timeCreated`) of a bucket, or undefined when it does not exist. */
   async function objects(bucket) {
     const { status, json } = await call(
       "GET",
@@ -351,7 +354,7 @@ export function createDeployer({
     if (status === 404) return undefined;
     if (status !== 200) throw new Error(`objects of ${bucket}: HTTP ${status}`);
     if (json?.nextPageToken) throw new Error(`objects of ${bucket}: more than one page`);
-    return (json?.items ?? []).map((item) => item.name);
+    return (json?.items ?? []).map((item) => ({ name: item.name, timeCreated: item.timeCreated }));
   }
 
   /**
@@ -403,8 +406,12 @@ export function createDeployer({
     const config = await blockingConfig();
     if (Object.keys(config.triggers ?? {}).length)
       throw new Error("blocking triggers are already registered");
+    // The sandbox's baseline is an empty blockingFunctions: the removal and a restore both put
+    // it back to that, so any other value stops the run before anything changes (review-2 S-A).
+    if (JSON.stringify(config) !== "{}")
+      throw new Error("blockingFunctions is not the sandbox's empty baseline");
     baseline = config;
-    uploadsBefore = new Set((await objects(uploadsBucket)) ?? []);
+    uploadsBefore = new Set(((await objects(uploadsBucket)) ?? []).map((item) => item.name));
     return { repository: await prepareRepository() };
   }
 
@@ -512,15 +519,25 @@ export function createDeployer({
     return (json?.packages ?? []).map((p) => p.name).filter(isFixtureArtifact);
   }
 
-  /** The objects this deployment created: fixture sources, and uploads new since the preflight. */
+  /**
+   * The objects this deployment created: fixture sources, and uploads new since the preflight.
+   * A restore, which has no preflight listing, takes the uploads created since the stopped
+   * recording started, only while no other function exists; older ones are left and counted
+   * (review-2 S-B).
+   */
   async function deployedObjects() {
-    // A restore takes every upload object as the harness's only while no other function exists.
     if (adopted && (await listFunctions()).some((fn) => !NAMES.includes(fn)))
       throw new Error("another function exists; upload objects are left for a hand check");
-    const sources = ((await objects(sourcesBucket)) ?? []).filter(isFixtureArtifact);
-    const uploads = ((await objects(uploadsBucket)) ?? []).filter(
-      (name) => !uploadsBefore.has(name),
-    );
+    const sources = ((await objects(sourcesBucket)) ?? [])
+      .map((item) => item.name)
+      .filter(isFixtureArtifact);
+    const listed = (await objects(uploadsBucket)) ?? [];
+    const ours = (item) =>
+      adopted
+        ? adoptedSince !== undefined && Date.parse(item.timeCreated) >= adoptedSince.getTime()
+        : !uploadsBefore.has(item.name);
+    const uploads = listed.filter(ours).map((item) => item.name);
+    uploadsLeftAlone = listed.length - uploads.length;
     return [
       ...sources.map((name) => [sourcesBucket, name]),
       ...uploads.map((name) => [uploadsBucket, name]),
@@ -658,6 +675,7 @@ export function createDeployer({
     return {
       images,
       sources,
+      ...(adopted ? { uploadsLeftAlone } : {}),
       deployStartedAt: deployStarted.toISOString(),
       removedAt: new Date().toISOString(),
     };
@@ -677,13 +695,17 @@ export function createDeployer({
   }
 
   /**
-   * For restore-sandbox after a run that could not remove its fixture: the sandbox baseline has
-   * no blocking config, and every upload object is taken as this harness's (the sandbox holds no
-   * other functions, which the removal reads back first).
+   * For restore-sandbox after a run that could not remove its fixture: the sandbox baseline is an
+   * empty blockingFunctions (the recording's preflight required it), and the upload objects
+   * created at or after `since` (when the stopped recording started) are taken as this harness's
+   * while the sandbox holds no other function. Without `since` no upload object is removed.
    */
-  function adoptLeftovers() {
+  function adoptLeftovers(since) {
+    if (since !== undefined && !(since instanceof Date && Number.isFinite(since.getTime())))
+      throw new Error("adoptLeftovers needs the recording's start as a Date");
     baseline = {};
     uploadsBefore = new Set();
+    adoptedSince = since;
     deployStarted = new Date(0);
     adopted = true;
   }

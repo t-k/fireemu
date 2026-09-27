@@ -113,6 +113,11 @@ test("an owner line or an envelope with its delegated line approves; anything el
     ],
     ["a line of stage 1", owned.replace("stage-2 packet", "stage-1 packet"), RUNNER],
     [
+      "a version line by the coordinator without an envelope",
+      owned.replace("オーナー（直接）", "調整役（直接）"),
+      RUNNER,
+    ],
+    [
       "a revoked version",
       `${owned}\n- 2026-09-30 | AUTH-FS-CROSS stage-2 packet | REVOKED ${PACKET} | オーナー（直接） | -`,
       RUNNER,
@@ -364,4 +369,42 @@ test("the API keys read passes only when no key has an application restriction",
     ),
     /undeclared project/,
   );
+});
+
+test("locks are taken in sorted order, the directory must be private, and a legacy lock appearing undoes them", async () => {
+  const { dir, lockDir, legacyLock } = await scratch();
+  try {
+    const body = { taskId: TASK_ID };
+    const locks = await acquireProjectLocks({
+      lockDir,
+      legacyLock,
+      projects: ["b-project", "c-project", "a-project"],
+      body,
+    });
+    assert.deepEqual(
+      locks.map((l) => l.project),
+      ["a-project", "b-project", "c-project"],
+    );
+    for (const lock of locks) await releaseProjectLock(lock);
+    // A legacy lock that appears while the locks are taken (here: at the first lock's path).
+    await assert.rejects(
+      acquireProjectLocks({
+        lockDir,
+        legacyLock: join(lockDir, "a-project.lock"),
+        projects: ["a-project"],
+        body,
+      }),
+      /the legacy shared lock appeared/,
+    );
+    assert.deepEqual(await readdir(lockDir), []);
+    const { chmod } = await import("node:fs/promises");
+    await chmod(lockDir, 0o755);
+    await assert.rejects(
+      acquireProjectLocks({ lockDir, legacyLock, projects: ["a-project"], body }),
+      /is not private/,
+    );
+    assert.deepEqual(await readdir(lockDir), []);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
 });

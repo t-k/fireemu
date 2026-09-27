@@ -77,6 +77,13 @@ test("an SDK listener is compared by its server states and its error", () => {
     ["docs:1", "docs:absent", "error:permission-denied"],
   );
   assert.deepEqual(sdkSummary({ events: [] }), []);
+  // A cached or pending state is not what the server said.
+  assert.deepEqual(
+    sdkSummary({
+      events: [snapshot("0", { fromCache: true }), snapshot("5", { pending: true }), snapshot("1")],
+    }),
+    ["docs:1"],
+  );
 });
 
 test("a client is compared by whose token each call carried and how its commands ended", () => {

@@ -89,7 +89,8 @@ function fakeSession({ onSeed = () => {}, principals = {} } = {}) {
     },
     async sleepUntil(target) {
       calls.push(["sleepUntil", target]);
-      return target !== 0;
+      // One timer fires late.
+      return target !== 1_035_300;
     },
     async ownerRead(doc) {
       calls.push(["read", doc]);
@@ -350,6 +351,14 @@ test("placeholders resolve before a command leaves, and a transaction's result r
         commandId: "tx-1",
         since: "t",
       },
+      {
+        do: "sdk",
+        client: "c",
+        op: "writeLater",
+        writeId: "w",
+        path: "afc2-pending/x",
+        data: { owner: "UID(alice)" },
+      },
     ],
   };
   const interpreter = createInterpreter(program, {
@@ -381,6 +390,7 @@ test("placeholders resolve before a command leaves, and a transaction's result r
   assert.deepEqual(client.commands[1].where, [["owner", "==", "uid-alice"]]);
   assert.deepEqual(client.commands[2].write, { path: "afc2-tx/a", data: { by: "uid-alice" } });
   assert.equal(client.commands[2].id, "tx-1");
+  assert.deepEqual(client.commands.find((c) => c.op === "writeLater").data, { owner: "uid-alice" });
   assert.equal("mark" in client.commands[2] || "await" in client.commands[2], false);
   assert.deepEqual(rows["tx/result"].result, {
     kind: "result",
@@ -436,7 +446,7 @@ test("expiry probes wait for each token's own time and commit only that listener
   assert.deepEqual(
     rows.exp.probes.map((p) => [p.doc, p.onTime]),
     [
-      ["afc2-owned/a-grpc", true],
+      ["afc2-owned/a-grpc", false],
       ["afc2-owned/a-sdk", true],
     ],
   );
@@ -559,4 +569,38 @@ test("a failed window still closes its clients and cleans up the sandbox, then f
     "delete-rulesets",
     "close",
   ]);
+});
+
+test("a stream that ended before a probe is reported as ended before, not as ending in it", async () => {
+  const recorder = fakeRecorder();
+  const session = fakeSession({ principals: { a: { uid: "uid-a" } } });
+  const program = {
+    steps: [
+      {
+        do: "stream",
+        name: "grpc-a",
+        as: "a",
+        targets: [{ targetId: 1, document: "afc2-owned/a" }],
+      },
+      {
+        do: "probe",
+        id: "p",
+        condition: "X",
+        writes: [{ doc: "afc2-owned/a" }],
+        observe: ["grpc-a"],
+      },
+    ],
+  };
+  const interpreter = createInterpreter(program, {
+    session,
+    ctx,
+    spawnClient: () => fakeClient(),
+    openListen: () => {
+      recorder.end({ reason: "error", code: 16 });
+      return recorder;
+    },
+    sdkConfig: {},
+  });
+  const rows = await interpreter.run();
+  assert.deepEqual(rows.p.listeners["grpc-a"], { events: [], endedBefore: true, end: null });
 });

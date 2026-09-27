@@ -190,7 +190,13 @@ const REFUSED = [
   [
     "close-all before the end",
     (p) => p.steps.push({ do: "sleep", ms: 1 }),
-    /close-all ends the program|ends with close-all/,
+    /close-all ends the program/,
+  ],
+  ["a program without close-all", (p) => p.steps.pop(), /ends with close-all/],
+  [
+    "a second close-all in the middle",
+    (p) => p.steps.splice(1, 0, { do: "close-all", id: "early", conditions: STAGE2_CONDITIONS }),
+    /close-all ends the program/,
   ],
   [
     "a second client of one name",

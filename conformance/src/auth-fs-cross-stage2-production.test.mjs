@@ -287,6 +287,9 @@ test("a failed window at baseline ends aborted and verified; off baseline it nee
     );
     assert.equal(written[1].sandboxAtBaseline, false);
     assert.match(written[1].error, /atb-2 allowTenants/);
+    // The window's error is scrubbed before it reaches the ledger.
+    assert.match(written[1].error, /boom <api-key>/);
+    assert.equal(readFileSync(off.paths.ledger, "utf8").includes(KEY), false);
     assert.deepEqual(readdirSync(off.paths.lockDir), [`${SANDBOX_PROJECT}.lock`]);
   } finally {
     atBaseline.done();
@@ -415,5 +418,41 @@ test("a key with an application restriction, or a refused key probe, stops the r
   } finally {
     restricted.done();
     refused.done();
+  }
+});
+
+test("a runner of an undeclared project stops even under an approval that covers it", async () => {
+  const query = "fireemu-oracle-query";
+  const owner = ENVELOPE.replace(`project=${SANDBOX_PROJECT}`, `project=${query}`);
+  const { paths, deps, fake, done } = setup({ owner, runner: { ...RUNNER, project: query } });
+  try {
+    await assert.rejects(runStage2Production(await withProbe(deps)), /not the declared one/);
+    assert.equal(readFileSync(paths.ledger, "utf8"), "");
+    assert.deepEqual(fake.calls, []);
+  } finally {
+    done();
+  }
+});
+
+test("a window whose own cleanup failed needs recovery and keeps the lock, even at baseline", async () => {
+  const { paths, deps, done } = setup({
+    window: async () => ({
+      rows: {},
+      wire: {},
+      harnessRequests: 1,
+      cleanupErrors: ["delete tenant t1: HTTP 500"],
+    }),
+  });
+  try {
+    await runStage2Production(await withProbe(deps));
+    const written = lines(paths.ledger);
+    assert.deepEqual(
+      written.map((l) => l.event),
+      ["started", "needs-recovery"],
+    );
+    assert.match(written[1].error, /delete tenant t1/);
+    assert.deepEqual(readdirSync(paths.lockDir), [`${SANDBOX_PROJECT}.lock`]);
+  } finally {
+    done();
   }
 });

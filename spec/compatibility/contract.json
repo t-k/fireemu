@@ -1133,7 +1133,7 @@
               "precision": "exact-for-local-semantics"
             },
             {
-              "behaviour": "transient credentials are bounded: email action codes expire after an hour and phone codes after ten minutes of virtual time, pending second-factor sign-ins after an hour, and each kind refuses with QUOTA_EXCEEDED past 1000 outstanding codes per project or 32 pending sessions per user; the official emulator keeps every code until it is consumed and its pending credential is stateless (firebase-tools/lib/emulator/auth/state.js)",
+              "behaviour": "transient credentials are bounded: email action codes expire after an hour and phone codes after ten minutes of virtual time, pending second-factor sign-ins after an hour, and each kind refuses with QUOTA_EXCEEDED past 1000 outstanding codes per project or 32 pending sessions per user; the official emulator keeps every code until it is consumed and its pending credential is stateless (firebase-tools/lib/emulator/auth/state.js). The strict profile follows production where it was measured and bounds the rest itself: a phone enrollment session does not expire (production accepted every age it was shown, up to about 1803 seconds); an account holds at most 32 of them, and at that number or at the code cap its own oldest one older than that makes room, never another account's; a TOTP sign-in whose pending credential is 302 seconds old or older is TOTP_CHALLENGE_TIMEOUT (production accepted 293 and refused 303 seconds, so the boundary inside that bracket is fireemu's choice); a TOTP enrollment start needs a sign-in younger than 333 seconds (production accepted 244 and refused 333); the SMS step of a pending credential starts only before 602 seconds (production accepted about 453 and refused about 603, so the boundary inside that bracket is fireemu's choice); and at the per-user budget the finished flows production keeps (a pending credential that succeeded, an expired or completed enrollment session) make room first, answering as unknown afterwards",
               "precision": "exact-for-local-semantics"
             },
             {
@@ -1202,6 +1202,10 @@
             },
             {
               "behaviour": "the strict profile adds production's configuration-dependent refusals the official emulator does not model (AUTH-CONFIG-SDK sandbox recording 2026-09-25): codes for new accounts while client sign-up is off, a written SMS region policy, mobile link settings (link domains, an app link without a continue URL, the Dynamic Links domain) and createAuthUri for a provider that is not configured, and the config values production refuses (a password policy without one version, non-CLDR region codes, template updates, off-step reCAPTCHA scores and actionless rules, misaligned SMS switches, reCAPTCHA keys, malformed authorized domains); it also wraps app links in /__/auth/links as production does",
+              "precision": "documented-divergence"
+            },
+            {
+              "behaviour": "the Admin config stores multiTenant.allowTenants in both profiles and reads it back; while it is off, as it is for a new production project, the strict profile refuses tenant management with 400 INVALID_PROJECT_ID and a request addressed to a tenant with 404 TENANT_NOT_FOUND (v2/passwordPolicy: INVALID_TENANT_ID). Production's refusal of a tenant list is observed (FS-RULES sandbox recording 2026-09-25); the other answers are fireemu's reading until the AUTH-TENANT-BLOCKING recording (atb/tenant/switch-off). The emulator profile never refuses, as the official emulator has no switch",
               "precision": "documented-divergence"
             }
           ],
@@ -1350,11 +1354,15 @@
           ],
           "fireemuOnly": [
             {
-              "behaviour": "declaring auth.totp enables local TOTP enrollment and sign-in; its acceptance window and enrolment session TTL are policies driven by the virtual clock, while an absent auth.totp preserves the official emulator's INVALID_ARGUMENT refusal",
+              "behaviour": "declaring auth.totp enables local TOTP enrollment and sign-in in the emulator profile; its acceptance window and enrolment session TTL are policies driven by the virtual clock, while an absent auth.totp preserves the official emulator's INVALID_ARGUMENT refusal. In the strict profile only the project mfa config enables TOTP, as in production, and an account with a TOTP factor is asked for it even while that config is off (fail closed; production was seen to skip only a phone factor then)",
               "precision": "boundary-conformance"
             },
             {
-              "behaviour": "TOTP enrollment requires a verified email, as phone enrollment does: mfaEnrollment:start and mfaEnrollment:finalize both refuse an unverified email with UNVERIFIED_EMAIL. The official emulator has no TOTP route to measure this against, and production has not been observed for this condition; the AUTH-MFA-AGE-TOTP-01 campaign will settle it",
+              "behaviour": "the Admin config API holds the project's mfa member (state, enabledProviders, providerConfigs) and reads it back in production's shape; a value whose TOTP provider is enabled also enables TOTP enrollment and sign-in without auth.totp, with its adjacentIntervals as the acceptance window. The official emulator has no project mfa config; without one the emulator profile keeps its answers",
+              "precision": "boundary-conformance"
+            },
+            {
+              "behaviour": "TOTP enrollment requires a verified email, as phone enrollment does: mfaEnrollment:start and mfaEnrollment:finalize both refuse an unverified email with UNVERIFIED_EMAIL. Production refuses the start the same way (sandbox recording 2026-09-24, auth-mfa/interactions#unverified-totp-start); the official emulator has no TOTP route, so in the emulator profile this is fireemu's own rule",
               "precision": "boundary-conformance"
             },
             {

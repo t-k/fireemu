@@ -372,11 +372,12 @@ async function readSwitches(web, tokens) {
 
 /**
  * Sends the signJwt preflight (`send` answers its HTTP status) until it is admitted. A new
- * binding reads back before signJwt honours it (1 to 6 minutes on this project), so a 403 is
- * retried every `intervalMs`, at most `attempts` times; each attempt is an ordinary charged
- * work request, whatever phase the caller is in (it never uses the cleanup reserve). Any other
- * answer, and a refused charge, stops at once (review MF-1). A signal stops the wait at once and
- * sends no further attempt (review-2 Should-3).
+ * binding reads back before signJwt honours it (1 to 6.4 minutes on this project, sometimes
+ * over 7 by Google's account), so a 403 is retried every `intervalMs`, at most `attempts`
+ * times; each attempt is an ordinary charged work request, whatever phase the caller is in
+ * (it never uses the cleanup reserve). Any other answer, and a refused charge, stops at once
+ * (review MF-1). A signal stops the wait at once and sends no further attempt (review-2
+ * Should-3).
  */
 export async function waitForSigner(
   send,

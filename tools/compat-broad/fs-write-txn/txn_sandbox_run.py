@@ -52,6 +52,27 @@ def _remaining_task_budget(rows, estimate):
     return TASK_LIMIT_USD - spent
 
 
+def _freeze_differences(first, second):
+    differences = []
+    for name in ("rulesetName", "rulesSourceSha256"):
+        left = (first.get("preflight") or {}).get(name)
+        right = (second.get("preflight") or {}).get(name)
+        if left != right:
+            differences.append({"field": name, "first": left, "second": right})
+    try:
+        left, right = contract._project(first), contract._project(second)
+    except ValueError as error:
+        differences.append({"field": "projection", "failure": str(error)})
+    else:
+        for case_id in sorted(set(left) | set(right)):
+            if left.get(case_id) != right.get(case_id):
+                differences.append({
+                    "field": "case", "caseId": case_id,
+                    "first": left.get(case_id), "second": right.get(case_id),
+                })
+    return {"kind": "freeze-mismatch", "differences": differences}
+
+
 def _ledger_row(pins, attempt_id, run_dir, nonce, outcome, requests):
     if requests is not None and (
         type(requests) is not int
@@ -150,7 +171,21 @@ def record_twice(*, ledger_path, private_dir, pins, decisions, now, record_once,
                         _ledger_row(pins, attempt_id, run_dir, nonce, "stopped-needs-review", None),
                     )
                 raise
-        frozen = contract.freeze(*receipts)
+        try:
+            frozen = contract.freeze(*receipts)
+        except Exception:
+            try:
+                _save_private(
+                    run_dir / "freeze-differences.json",
+                    _freeze_differences(*receipts),
+                )
+            finally:
+                stopped = _ledger_row(
+                    pins, attempt_id, run_dir, nonce, "stopped-needs-review", None
+                )
+                stopped["reason"] = "freeze-mismatch"
+                admission.append_ledger(ledger_path, stopped)
+            raise
         frozen["sourceCommit"] = pins["sourceCommit"]
         frozen["packetSha256"] = pins["packetSha256"]
         freeze_path = run_dir / "freeze.json"

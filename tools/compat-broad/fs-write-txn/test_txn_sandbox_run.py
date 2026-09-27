@@ -85,6 +85,31 @@ def test_incomplete_first_pass_keeps_lock_and_skips_second(tmp_path):
     assert rows[-1]["outcome"] == "needs-recovery"
 
 
+def test_freeze_mismatch_records_a_stopped_row_and_private_differences(tmp_path):
+    ledger = tmp_path / "sandbox-ledger.jsonl"
+    ledger.write_text(json.dumps(LAST) + "\n")
+    ledger.chmod(0o600)
+
+    def record(index, nonce, owner, directory):
+        answer = receipt(nonce)
+        answer["sandboxRequests"] = 70
+        if index == 1:
+            answer["rows"][0]["observed"]["code"] = 13
+        return answer
+
+    with pytest.raises(ValueError, match="recordings differ"):
+        runner.record_twice(
+            ledger_path=ledger, private_dir=tmp_path, pins=PINS,
+            decisions=DECISION, now=NOW, record_once=record,
+        )
+    rows = [json.loads(line) for line in ledger.read_text().splitlines()]
+    assert rows[-1]["outcome"] == "stopped-needs-review"
+    assert rows[-1]["reason"] == "freeze-mismatch"
+    assert (tmp_path / "sandbox-locks/fireemu-oracle-sbx.lock").exists()
+    differences = json.loads((Path(rows[-1]["runDir"]) / "freeze-differences.json").read_text())
+    assert differences["differences"]
+
+
 def test_missing_owner_approval_does_not_take_lock_or_send(tmp_path):
     ledger = tmp_path / "sandbox-ledger.jsonl"
     ledger.write_text(json.dumps(LAST) + "\n")

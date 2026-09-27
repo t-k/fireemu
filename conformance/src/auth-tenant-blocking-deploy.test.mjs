@@ -1,13 +1,22 @@
 import assert from "node:assert/strict";
 import { existsSync } from "node:fs";
-import { mkdtemp } from "node:fs/promises";
+import { appendFile, mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 
 import { BLOCKING_PROGRAMS } from "./auth-tenant-blocking/blocking-corpus.mjs";
 import {
+  CLI_DELETE_ALLOWANCE,
+  CLI_DEPLOY_ALLOWANCE,
+  DEPLOY_REST_BOUND,
+  FIXTURE_FUNCTION_COUNT,
+  MAX_FIXTURE_OBJECTS,
+  REMOVAL_REST_BOUND,
+} from "./auth-tenant-blocking/budget.mjs";
+import {
   CLEANUP_POLICY,
+  CLI_METER,
   FIXTURE_FUNCTIONS,
   REQUIRED_APIS,
   createDeployer,
@@ -27,6 +36,10 @@ test("deployment subprocesses do not inherit the recording lock capability", () 
     FIREEMU_SANDBOX_WRAPPER_PID: "123",
     FIREEMU_AUTH_CAMPAIGN_PID: "456",
     GOOGLE_APPLICATION_CREDENTIALS: "/unreviewed.json",
+    NODE_OPTIONS: "--require=/unreviewed.cjs",
+    FIREEMU_CLI_METER_FILE: "/elsewhere",
+    FIREEMU_CLI_METER_LIMIT: "100000",
+    FIREEMU_CLI_METER_COUNT_LOOPBACK: "0",
     SAFE_VALUE: "kept",
   });
   assert.deepEqual(env, { SAFE_VALUE: "kept" });
@@ -45,7 +58,14 @@ function fakeCloud({
   uploads = [],
   repository = { cleanupPolicies: { [CLEANUP_POLICY.id]: CLEANUP_POLICY } },
   now,
+  charge,
+  token = async () => "ya29.fake",
+  cliCounts = {},
+  events = [],
+  deleteSticks = false,
+  repositoryLag = 0,
 } = {}) {
+  let lag = repositoryLag;
   const state = {
     functions: [...functions],
     blocking: structuredClone(blocking),
@@ -81,11 +101,15 @@ function fakeCloud({
     }
     if (hostname === "artifactregistry.googleapis.com" && pathname.endsWith("/gcf-artifacts")) {
       if (method === "PATCH") state.repository = { ...state.repository, ...JSON.parse(init.body) };
+      if (method === "GET" && state.repository && lag > 0) {
+        lag -= 1;
+        return json(404, {});
+      }
       return state.repository ? json(200, state.repository) : json(404, {});
     }
     if (hostname === "artifactregistry.googleapis.com") {
       if (method === "DELETE") {
-        state.packages = state.packages.filter((p) => !pathname.endsWith(p));
+        if (!deleteSticks) state.packages = state.packages.filter((p) => !pathname.endsWith(p));
         return json(200, {});
       }
       return json(200, {
@@ -97,7 +121,7 @@ function fakeCloud({
       const key = bucket.startsWith("gcf-v2-uploads") ? "uploads" : "sources";
       if (method === "DELETE") {
         const name = decodeURIComponent(pathname.split("/o/")[1]);
-        state[key] = state[key].filter((o) => o !== name);
+        if (!deleteSticks) state[key] = state[key].filter((o) => o !== name);
         return new Response(null, { status: 204 });
       }
       return json(200, { items: state[key].map((name) => ({ name })) });
@@ -115,6 +139,12 @@ function fakeCloud({
       throw Object.assign(new Error("spawn ENOENT"), { code: "ENOENT" });
     runs.push([file.split("/").at(-1), ...args].join(" "));
     runOptions.push(options);
+    events.push(`run ${args[0]}`);
+    const counted = cliCounts[args[0]] ?? 0;
+    if (counted) await appendFile(options.env.FIREEMU_CLI_METER_FILE, ".".repeat(counted));
+    // As the meter: a call past its allowance is killed.
+    if (counted > Number(options.env.FIREEMU_CLI_METER_LIMIT))
+      throw Object.assign(new Error("killed"), { signal: "SIGKILL", stderr: "cli-meter: stop" });
     if (args[0] === "deploy") {
       state.functions.push(...Object.values(FIXTURE_FUNCTIONS));
       state.blocking = {
@@ -134,11 +164,12 @@ function fakeCloud({
   const deployer = createDeployer({
     project: PROJECT,
     number: NUMBER,
-    token: async () => "ya29.fake",
+    token,
     fetchImpl,
     run,
     retryMs: 0,
     ...(now ? { now } : {}),
+    ...(charge ? { charge } : {}),
   });
   return { state, calls, runs, runOptions, deployer };
 }
@@ -399,12 +430,180 @@ test("functions:delete gets at most the time left until the public deadline (rev
   const dir = join(await mkdtemp(join(tmpdir(), "atb-deadline-")), "build");
   await deployer.preflight();
   await deployer.deploy(source, dir);
-  clock += 55 * 60_000;
+  clock += 45 * 60_000;
   await deployer.remove(dir);
   const index = runs.findIndex((r) => r.startsWith("firebase functions:delete"));
   assert.ok(index >= 0);
-  assert.equal(runOptions[index].timeout, 5 * 60_000);
-  // Past the deadline the deletion still runs, with the shortest timeout.
+  assert.equal(runOptions[index].timeout, 15 * 60_000);
+  clock -= 45 * 60_000;
+  assert.equal(deployer.deletionTimeoutMs(), 20 * 60_000);
+  // A late deletion still gets the time a deletion needs: stopping it would keep them public.
+  clock += 55 * 60_000;
+  assert.equal(deployer.deletionTimeoutMs(), 10 * 60_000);
   clock += 60 * 60_000;
-  assert.equal(deployer.deletionTimeoutMs(), 60_000);
+  assert.equal(deployer.deletionTimeoutMs(), 10 * 60_000);
+});
+
+test("a restore's deletion gets ten minutes", () => {
+  const { deployer } = fakeCloud({ now: () => Date.parse("2026-09-27T12:00:00Z") });
+  deployer.adoptLeftovers();
+  assert.equal(deployer.deletionTimeoutMs(), 10 * 60_000);
+});
+
+test("every CLI call is charged its allowance before it runs, under the meter (total cap)", async () => {
+  const events = [];
+  const charge = (weight) => events.push(`charge ${weight}`);
+  const { deployer, runs, runOptions } = fakeCloud({ charge, events });
+  const dir = await buildDir();
+  await deployer.cliVersion();
+  await deployer.preflight();
+  await deployer.deploy(source, dir);
+  await deployer.remove(dir);
+  assert.deepEqual(events, [
+    "charge 0",
+    "run --version",
+    "charge 0",
+    "run ci",
+    `charge ${CLI_DEPLOY_ALLOWANCE}`,
+    "run deploy",
+    `charge ${CLI_DELETE_ALLOWANCE}`,
+    "run functions:delete",
+  ]);
+  // npm installs from the cache only: the campaign sends nothing to the registry.
+  assert.ok(
+    runs
+      .find((r) => r.startsWith("npm ci"))
+      .split(" ")
+      .includes("--offline"),
+  );
+  const limits = runOptions.map((options) => options.env.FIREEMU_CLI_METER_LIMIT);
+  assert.deepEqual(limits, ["0", "0", String(CLI_DEPLOY_ALLOWANCE), String(CLI_DELETE_ALLOWANCE)]);
+  for (const options of runOptions) {
+    assert.equal(options.env.NODE_OPTIONS, `--require=${CLI_METER}`);
+    assert.equal(options.env.NO_UPDATE_NOTIFIER, "1");
+    assert.equal(options.env.CI, "1");
+    assert.equal(options.env.FIREEMU_CLI_METER_COUNT_LOOPBACK, undefined);
+  }
+  const files = runOptions.map((options) => options.env.FIREEMU_CLI_METER_FILE);
+  assert.equal(new Set(files).size, files.length, "each call counts into its own file");
+});
+
+test("a refused CLI charge runs nothing, and nothing is then due for removal", async () => {
+  const charge = (weight) => {
+    if (weight === CLI_DEPLOY_ALLOWANCE)
+      throw Object.assign(new Error("request budget: work"), { fatal: true });
+  };
+  const { deployer, runs } = fakeCloud({ charge });
+  const dir = await buildDir();
+  await deployer.preflight();
+  await assert.rejects(deployer.deploy(source, dir), (error) => error.fatal === true);
+  assert.ok(!runs.some((r) => r.startsWith("firebase deploy")));
+  assert.deepEqual(await deployer.remove(dir), { removed: "nothing deployed" });
+});
+
+test("the requests each CLI call measured are reported with its allowance", async () => {
+  const { deployer } = fakeCloud({ cliCounts: { deploy: 57, "functions:delete": 12 } });
+  const dir = await buildDir();
+  await deployer.preflight();
+  await deployer.deploy(source, dir);
+  await deployer.remove(dir);
+  assert.deepEqual(deployer.cliRequests(), [
+    { call: "ci", allowance: 0, used: 0, stopped: false },
+    { call: "deploy", allowance: CLI_DEPLOY_ALLOWANCE, used: 57, stopped: false },
+    { call: "functions:delete", allowance: CLI_DELETE_ALLOWANCE, used: 12, stopped: false },
+  ]);
+});
+
+test("a CLI call the meter stopped is reported as stopped", async () => {
+  const { deployer, runs } = fakeCloud({ cliCounts: { ci: 1 } });
+  await deployer.preflight();
+  await assert.rejects(deployer.deploy(source, await buildDir()), /npm ci failed.*SIGKILL/);
+  assert.ok(!runs.some((r) => r.startsWith("firebase deploy")));
+  assert.deepEqual(deployer.cliRequests(), [{ call: "ci", allowance: 0, used: 0, stopped: true }]);
+});
+
+test("the owner token is read once and renewed only after 40 minutes", async () => {
+  let clock = Date.parse("2026-09-27T12:00:00Z");
+  let tokens = 0;
+  const { deployer } = fakeCloud({
+    now: () => clock,
+    token: async () => {
+      tokens += 1;
+      return `ya29.${tokens}`;
+    },
+  });
+  const dir = await buildDir();
+  await deployer.preflight();
+  await deployer.deploy(source, dir);
+  await deployer.verifyRegistered();
+  assert.equal(tokens, 1);
+  clock += 39 * 60_000;
+  await deployer.invokers();
+  assert.equal(tokens, 1);
+  clock += 2 * 60_000;
+  await deployer.remove(dir);
+  assert.equal(tokens, 2);
+});
+
+test("a deployment sends at most DEPLOY_REST_BOUND REST requests (total cap)", async () => {
+  // The worst case: the repository is created and reads back with the policy only at the last
+  // of its twelve read-backs.
+  const { deployer, calls } = fakeCloud({ repository: null, repositoryLag: 11 });
+  await deployer.preflight();
+  await deployer.deploy(source, await buildDir());
+  await deployer.verifyRegistered();
+  await deployer.invokers();
+  assert.equal(calls.length, DEPLOY_REST_BOUND);
+});
+
+test("a removal sends at most REMOVAL_REST_BOUND REST requests (total cap)", async () => {
+  // The worst case: every fixture image and more objects than the cap, none of which ever goes,
+  // in a restore (which reads the functions before each object listing).
+  assert.equal(Object.keys(FIXTURE_FUNCTIONS).length, FIXTURE_FUNCTION_COUNT);
+  const images = Object.values(FIXTURE_FUNCTIONS).map(
+    (name) =>
+      `fireemu--oracle--idp__us--central1__${name.replace(/[A-Z]/g, (c) => `_${c.toLowerCase()}`)}`,
+  );
+  const objects = Array.from(
+    { length: MAX_FIXTURE_OBJECTS + 3 },
+    (_, i) => `atbBeforeCreate/function-source-${i}.zip`,
+  );
+  const { deployer, calls, state } = fakeCloud({
+    functions: Object.values(FIXTURE_FUNCTIONS),
+    blocking: {
+      triggers: Object.fromEntries(
+        Object.entries(FIXTURE_FUNCTIONS).map(([event, name]) => [event, fn(name)]),
+      ),
+    },
+    packages: images,
+    sources: objects,
+    deleteSticks: true,
+  });
+  deployer.adoptLeftovers();
+  const error = await deployer.remove(await buildDir()).catch((caught) => caught);
+  assert.match(error.message, /fixture images remain/);
+  assert.match(error.message, new RegExp(`more than ${MAX_FIXTURE_OBJECTS} fixture objects`));
+  assert.equal(
+    calls.filter((c) => c.startsWith("DELETE artifactregistry")).length,
+    FIXTURE_FUNCTION_COUNT,
+  );
+  assert.equal(calls.filter((c) => c.startsWith("DELETE storage")).length, MAX_FIXTURE_OBJECTS);
+  assert.equal(calls.length, REMOVAL_REST_BOUND);
+  assert.equal(state.functions.length, 0);
+});
+
+test("the pinned CLI starts without sending anything (allowance zero)", async () => {
+  const deployer = createDeployer({
+    project: PROJECT,
+    number: NUMBER,
+    token: async () => "ya29.fake",
+    fetchImpl: async () => {
+      throw new Error("no REST request");
+    },
+    charge: () => {},
+  });
+  assert.match(await deployer.cliVersion(), /^\d+\.\d+\.\d+$/);
+  assert.deepEqual(deployer.cliRequests(), [
+    { call: "--version", allowance: 0, used: 0, stopped: false },
+  ]);
 });

@@ -21,6 +21,38 @@ export const OAUTH_ATTEMPT_WEIGHT = 3;
 /** Forced owner-token refreshes (after a 401 in a cleanup) a campaign may make. */
 export const FORCED_REFRESH_CAP = 2;
 
+// The blocking fixture (deploy.mjs). The pinned Firebase CLI's own requests cannot be charged one
+// by one from here: each CLI call is charged its whole allowance before it runs, and the meter
+// (cli-meter.cjs) stops the CLI before it sends the request past that allowance. `firebase
+// --version` and `npm ci --offline` run with an allowance of zero.
+/**
+ * `firebase deploy` of the four functions: the checks and the uploads, the creation of four
+ * functions and their Run services, the polling of their operations (at most every 10 s) and the
+ * trigger registration. A declared allowance; the meter enforces it.
+ */
+export const CLI_DEPLOY_ALLOWANCE = 400;
+/** `firebase functions:delete` of the four functions and the polling of their operations. */
+export const CLI_DELETE_ALLOWANCE = 300;
+/** The fixture's functions, each with one image (deploy.mjs FIXTURE_FUNCTIONS). */
+export const FIXTURE_FUNCTION_COUNT = 4;
+/** A removal deletes at most this many source and upload objects; more are left for a hand check. */
+export const MAX_FIXTURE_OBJECTS = 16;
+/**
+ * The deployer's REST requests before the recordings: the preflight (8 API states, the function
+ * list, the blocking config, the upload objects, the repository read, its creation and 12
+ * read-backs), the registration check (the config, the function list, a wake-up of each of the
+ * four functions) and the invoker policy of each.
+ */
+export const DEPLOY_REST_BOUND = 8 + 3 + 14 + 6 + 4;
+/**
+ * The removal's REST requests: the function URIs, the list before and after functions:delete,
+ * the config read, restore and read-back, the image list, the deletion of each fixture image and
+ * 6 read-backs, the
+ * object listings (a restore reads the functions first, 3), their deletions and 6 read-backs.
+ */
+export const REMOVAL_REST_BOUND =
+  1 + 2 + 3 + (1 + FIXTURE_FUNCTION_COUNT + 6) + (3 + MAX_FIXTURE_OBJECTS + 6 * 3);
+
 const fatal = (message) => Object.assign(new Error(message), { fatal: true });
 
 let phase = "work";
@@ -148,7 +180,7 @@ export function minimumWork(programs) {
  * (`FIREEMU_AUTH_TENANT_REQUEST_BUDGET`): a whole number of requests no larger than the approved
  * maximum, whose work share carries two passes after the cleanup reserve.
  */
-export function planCampaignBudget(programs, value) {
+export function planCampaignBudget(programs, value, { blocking = false } = {}) {
   if (value === undefined || value === "")
     throw new Error("FIREEMU_AUTH_TENANT_REQUEST_BUDGET is required for a production campaign");
   if (!/^\d+$/.test(String(value)))
@@ -156,8 +188,14 @@ export function planCampaignBudget(programs, value) {
   const total = Number(value);
   if (total < 1 || total > MAX_CAMPAIGN_REQUESTS)
     throw new Error(`request budget: total ${total} is not a whole number in 1..2000`);
-  const reserve = cleanupReserveFor(programs);
-  const work = minimumWork(programs);
+  // A blocking campaign deploys the fixture before its recordings (work, with the deployer's
+  // owner token) and removes it after them (cleanup, with a renewed token).
+  const reserve =
+    cleanupReserveFor(programs) +
+    (blocking ? REMOVAL_REST_BOUND + CLI_DELETE_ALLOWANCE + OAUTH_ATTEMPT_WEIGHT : 0);
+  const work =
+    minimumWork(programs) +
+    (blocking ? DEPLOY_REST_BOUND + CLI_DEPLOY_ALLOWANCE + OAUTH_ATTEMPT_WEIGHT : 0);
   if (total - reserve < work)
     throw new Error(
       `request budget: ${total} cannot carry ${work} work requests and a ${reserve} cleanup reserve`,

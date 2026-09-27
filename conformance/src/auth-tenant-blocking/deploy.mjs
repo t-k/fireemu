@@ -9,13 +9,25 @@
 // source objects and the upload objects this deployment created. Each is read back. Nothing
 // here deletes another function, trigger, image or object: every deletion names the fixture's
 // functions, or an upload object that did not exist before the deployment started.
+//
+// Every request counts toward the campaign's single request budget (budget.mjs): the REST
+// requests through the budget's `fetch`, each CLI and npm call by its whole allowance before it
+// runs, under the request meter (cli-meter.cjs) that stops it at that allowance.
 
 import { execFile } from "node:child_process";
-import { cp, mkdir, rm } from "node:fs/promises";
+import { cp, mkdir, mkdtemp, rm, stat } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 
 import { CONFORMANCE_DIR } from "../config.mjs";
+import {
+  CLI_DELETE_ALLOWANCE,
+  CLI_DEPLOY_ALLOWANCE,
+  MAX_FIXTURE_OBJECTS,
+  chargeExternal,
+} from "./budget.mjs";
 
 const execFileAsync = promisify(execFile);
 
@@ -58,8 +70,14 @@ export const REQUIRED_APIS = [
 ];
 /** The pinned Firebase CLI (conformance/package.json), never the one on PATH. */
 export const FIREBASE_CLI = join(CONFORMANCE_DIR, "node_modules", ".bin", "firebase");
-/** Environment variables that would change the CLI's credentials, billing or logging. */
+/** The request meter every deployment subprocess loads (`--require`). */
+export const CLI_METER = fileURLToPath(new URL("./cli-meter.cjs", import.meta.url));
+/** Environment variables that would change the CLI's credentials, billing, logging or meter. */
 const DROPPED_ENV = [
+  "NODE_OPTIONS",
+  "FIREEMU_CLI_METER_FILE",
+  "FIREEMU_CLI_METER_LIMIT",
+  "FIREEMU_CLI_METER_COUNT_LOOPBACK",
   "GOOGLE_APPLICATION_CREDENTIALS",
   "GOOGLE_CLOUD_QUOTA_PROJECT",
   "FIREBASE_TOKEN",
@@ -73,6 +91,19 @@ export function deploymentCliEnv(source = process.env) {
   const env = { ...source };
   for (const name of DROPPED_ENV) delete env[name];
   return env;
+}
+/** A deployment subprocess's environment: counted into `file`, stopped past `limit`. */
+function meteredEnv(file, limit) {
+  return {
+    ...deploymentCliEnv(),
+    NODE_OPTIONS: `--require=${CLI_METER}`,
+    FIREEMU_CLI_METER_FILE: file,
+    FIREEMU_CLI_METER_LIMIT: String(limit),
+    // The update check and the CLI's message-of-the-day fetch (firebase-public cli.json, skipped
+    // under CI) would be requests of their own.
+    NO_UPDATE_NOTIFIER: "1",
+    CI: "1",
+  };
 }
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 /** The fixture's services are public for at most about this long from the deployment (TB1). */
@@ -160,6 +191,10 @@ export function createDeployer({
   // Every REST request is abandoned after this long, so no removal step can hang (review S4).
   requestTimeoutMs = 30_000,
   now = Date.now,
+  // Charges a CLI call's allowance to the installed budget before it runs.
+  charge = chargeExternal,
+  // The owner token is renewed after this long (each read is a charged `gcloud` call).
+  tokenMaxAgeMs = 40 * 60_000,
 }) {
   if (project !== "fireemu-oracle-idp")
     throw new Error("the fixture is deployed only to the sandbox");
@@ -169,15 +204,29 @@ export function createDeployer({
   let deployStarted;
   let adopted = false;
   let repositoryChange;
+  let ownerToken;
+  let ownerTokenAt;
+  const cliCalls = [];
+  let meterDir;
+
+  /** The owner token, read once and renewed when older than `tokenMaxAgeMs`. */
+  async function currentToken() {
+    if (ownerToken === undefined || now() - ownerTokenAt >= tokenMaxAgeMs) {
+      ownerToken = await token();
+      ownerTokenAt = now();
+    }
+    return ownerToken;
+  }
 
   async function call(method, url, body) {
+    const authorization = `Bearer ${await currentToken()}`;
     requests += 1;
     const response = await fetchImpl(url, {
       method,
       redirect: "error",
       signal: AbortSignal.timeout(requestTimeoutMs),
       headers: {
-        authorization: `Bearer ${await token()}`,
+        authorization,
         "x-goog-user-project": project,
         ...(body === undefined ? {} : { "content-type": "application/json" }),
       },
@@ -195,24 +244,51 @@ export function createDeployer({
 
   /**
    * The CLI deletion gets the time left until the public deadline (TB1: about an hour from the
-   * start of the deployment), at most 20 minutes and at least one: past the deadline the
-   * functions are still deleted, as fast as the CLI can (review S4).
+   * start of the deployment), at most 20 minutes (review S4). A late deletion, and a restore's,
+   * still gets 10 minutes: stopping the CLI mid-deletion would only leave the functions public
+   * for longer.
    */
   function deletionTimeoutMs() {
     const started = deployStarted?.getTime() ?? now();
     const left = started + PUBLIC_DEADLINE_MINUTES * 60_000 - now();
-    return Math.min(20 * 60_000, Math.max(60_000, left));
+    return Math.min(20 * 60_000, Math.max(10 * 60_000, left));
   }
 
-  /** The CLI in its own process group (a terminal signal does not kill it, SF-3). */
-  async function cli(args, { cwd, timeout }) {
-    return await run(FIREBASE_CLI, args, {
-      cwd,
-      timeout,
-      env: deploymentCliEnv(),
-      detached: true,
-      maxBuffer: 16 * 1024 * 1024,
-    });
+  /**
+   * Runs a CLI or npm call in its own process group (a terminal signal does not kill it, SF-3),
+   * charged its whole allowance first and counted by the meter, which stops it at the allowance.
+   * A refused charge runs nothing.
+   */
+  async function metered(file, args, { cwd, timeout, allowance, charged = () => {} }) {
+    charge(allowance);
+    charged();
+    meterDir ??= await mkdtemp(join(tmpdir(), "atb-cli-meter-"));
+    const counter = join(meterDir, `${cliCalls.length}`);
+    const entry = { call: args[0], allowance, used: 0, stopped: false };
+    cliCalls.push(entry);
+    try {
+      return await run(file, args, {
+        cwd,
+        timeout,
+        env: meteredEnv(counter, allowance),
+        detached: true,
+        maxBuffer: 16 * 1024 * 1024,
+      });
+    } finally {
+      // The meter appends a byte per request, the refused one included.
+      const counted = await stat(counter).then(
+        ({ size }) => size,
+        () => 0,
+      );
+      entry.used = Math.min(counted, allowance);
+      entry.stopped = counted > allowance;
+      await rm(counter, { force: true });
+    }
+  }
+
+  /** The pinned CLI under the meter. */
+  async function cli(args, options) {
+    return await metered(FIREBASE_CLI, args, options);
   }
 
   const functionsUrl = `https://cloudfunctions.googleapis.com/v2/projects/${project}/locations/${REGION}/functions`;
@@ -325,17 +401,18 @@ export function createDeployer({
       filter: (path) => !path.split("/").includes("node_modules"),
     });
     try {
-      await run("npm", ["ci", "--no-audit", "--no-fund", "--loglevel=error"], {
+      // From the npm cache only (filled before the campaign): the campaign sends nothing to
+      // the registry, and a missing package fails here, before anything is deployed.
+      await metered("npm", ["ci", "--offline", "--no-audit", "--no-fund", "--loglevel=error"], {
         cwd: buildDir,
         timeout: 600_000,
-        detached: true,
-        env: deploymentCliEnv(),
+        allowance: 0,
       });
     } catch (error) {
+      if (error.fatal) throw error;
       throw cliFailure("npm ci", error, project, number);
     }
     log("deploying the blocking fixture (pinned firebase-tools)");
-    deployStarted = new Date(now());
     try {
       await cli(
         [
@@ -346,9 +423,18 @@ export function createDeployer({
           // No --force: it would rewrite the cleanup policy and skip other confirmations.
           "--non-interactive",
         ],
-        { cwd: buildDir, timeout: 1_800_000 },
+        {
+          cwd: buildDir,
+          timeout: 1_800_000,
+          allowance: CLI_DEPLOY_ALLOWANCE,
+          // The removal is due from the moment the deployment may send anything.
+          charged: () => {
+            deployStarted = new Date(now());
+          },
+        },
       );
     } catch (error) {
+      if (error.fatal) throw error;
       throw cliFailure("firebase deploy", error, project, number);
     }
   }
@@ -474,9 +560,10 @@ export function createDeployer({
             // (a non-interactive run otherwise aborts); it changes no policy.
             "--force",
           ],
-          { cwd: buildDir, timeout: deletionTimeoutMs() },
+          { cwd: buildDir, timeout: deletionTimeoutMs(), allowance: CLI_DELETE_ALLOWANCE },
         );
       } catch (error) {
+        if (error.fatal) throw error;
         throw cliFailure("firebase functions:delete", error, project, number);
       }
     });
@@ -520,7 +607,8 @@ export function createDeployer({
     );
     let sources = 0;
     await step("sources", async () => {
-      for (const [bucket, name] of await deployedObjects()) {
+      const found = await deployedObjects();
+      for (const [bucket, name] of found.slice(0, MAX_FIXTURE_OBJECTS)) {
         const answer = await call(
           "DELETE",
           `https://storage.googleapis.com/storage/v1/b/${bucket}/o/${encodeURIComponent(name)}`,
@@ -529,6 +617,8 @@ export function createDeployer({
           throw new Error(`object delete: HTTP ${answer.status}`);
         sources += 1;
       }
+      if (found.length > MAX_FIXTURE_OBJECTS)
+        throw new Error(`more than ${MAX_FIXTURE_OBJECTS} fixture objects; the rest are left`);
     });
     await step("sources read back", () =>
       settle("fixture sources", async () => (await deployedObjects()).length === 0),
@@ -546,7 +636,11 @@ export function createDeployer({
 
   async function cliVersion() {
     try {
-      const { stdout } = await cli(["--version"], { cwd: CONFORMANCE_DIR, timeout: 60_000 });
+      const { stdout } = await cli(["--version"], {
+        cwd: CONFORMANCE_DIR,
+        timeout: 60_000,
+        allowance: 0,
+      });
       return String(stdout).trim();
     } catch {
       return "unknown";
@@ -578,5 +672,7 @@ export function createDeployer({
     /** What the preflight changed on gcf-artifacts, also when it failed afterwards (SF-C3). */
     repositoryChange: () => repositoryChange,
     requests: () => requests,
+    /** Each CLI and npm call: its allowance, the requests the meter counted, whether it stopped. */
+    cliRequests: () => cliCalls.map((entry) => ({ ...entry })),
   };
 }

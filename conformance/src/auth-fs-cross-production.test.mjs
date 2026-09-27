@@ -14,7 +14,7 @@ import {
 } from "./auth-fs-cross/sandbox.mjs";
 
 const KEY = "AIzaSECRETKEYVALUE0123456789";
-const NUMBER = "592603257417";
+const NUMBER = "100000000001";
 
 /** A fake production that answers the baseline reads, the compile probe and the foreign reads. */
 function world(overrides = {}) {

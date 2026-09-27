@@ -333,11 +333,11 @@ test("an approval is used by the run that starts under it", () => {
 });
 
 test("records never carry the run's keys, project numbers or tokens", () => {
-  const text = "key AIzaSECRET in 592603257417 and 1049549757969 with eyJhbGciOi.eyJzdWIi.c2ln";
+  const text = "key AIzaSECRET in 100000000001 and 100000000002 with eyJhbGciOi.eyJzdWIi.c2ln";
   const out = scrub(text, [
     ["AIzaSECRET", "api-key"],
-    ["592603257417", "project-number"],
-    ["1049549757969", "foreign-project-number"],
+    ["100000000001", "project-number"],
+    ["100000000002", "foreign-project-number"],
     [undefined, "missing"],
   ]);
   assert.equal(out, "key <api-key> in <project-number> and <foreign-project-number> with <token>");

@@ -22,6 +22,7 @@
 
 import { execFile } from "node:child_process";
 import { existsSync } from "node:fs";
+import { dirname } from "node:path";
 import { createHash, randomBytes } from "node:crypto";
 import { appendFile, open, readFile, rm, writeFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
@@ -31,6 +32,11 @@ import { gzipSync } from "node:zlib";
 import { SANDBOX_PROJECT } from "../auth-account/harness.mjs";
 import { checkRun, issuerChannelHost } from "./guard.mjs";
 import { generateSigningKey, issuerSite } from "./idp.mjs";
+
+// The digest covers the module that names the project; this checks the name it gives.
+if (SANDBOX_PROJECT !== "fireemu-oracle-idp") {
+  throw new Error(`the sandbox project is ${SANDBOX_PROJECT}, not fireemu-oracle-idp`);
+}
 
 export const TASK_ID = "AUTH-FEDERATION-SANDBOX";
 export const SITE = SANDBOX_PROJECT;
@@ -48,30 +54,66 @@ const GONE_ROUNDS = 5;
 const GONE_INTERVAL_MS = 60_000;
 const QUIET_MS = 30 * 60_000;
 
-/** The smoke's modules: the approval names the digest of their sources. */
-const SOURCES = ["hosting.mjs", "idp.mjs", "guard.mjs"].map((name) =>
-  fileURLToPath(new URL(name, import.meta.url)),
+/**
+ * The smoke's modules, by absolute path: the approval names the digest of their sources,
+ * including the module that names the sandbox project.
+ */
+export const SOURCES = ["hosting.mjs", "idp.mjs", "guard.mjs", "../auth-account/harness.mjs"].map(
+  (name) => fileURLToPath(new URL(name, import.meta.url)),
 );
 
-export async function scriptDigest(read = (path) => readFile(path)) {
+export async function scriptDigest(read = (path) => readFile(path), sources = SOURCES) {
   const hash = createHash("sha256");
-  for (const path of SOURCES) hash.update(await read(path));
+  for (const path of sources) hash.update(await read(path));
   return hash.digest("hex");
 }
 
+const escapeRegExp = (text) => text.replaceAll(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
 /**
- * Whether the owner ledger approves this script: a line naming AUTH-FEDERATION, the
- * `hosting-smoke` packet and the first 12 hex digits of the script digest.
+ * The owner-ledger line that approves `packet` at `digest`, or undefined. Only a line of the
+ * form `- YYYY-MM-DD | AUTH-FEDERATION | … <packet> APPROVED <64-digit digest> … | オーナー… |`
+ * approves: the full digest, the fixed word, the owner as the decider. A later line with
+ * `<packet> REVOKED <digest>` withdraws it (a still later approval restores it). `attempts`
+ * is 2 when the approving line says `attempts 2`.
  */
+export function ownerApproval(ownerDecisions, packet, digest) {
+  if (!/^[0-9a-f]{64}$/.test(digest)) throw new Error("a digest is 64 hex digits");
+  const word = (verb) =>
+    new RegExp(`(?:^|[^\\w-])${escapeRegExp(packet)} ${verb} ${digest}(?![0-9A-Za-z])`);
+  let approval;
+  for (const line of ownerDecisions.split("\n")) {
+    if (word("REVOKED").test(line)) {
+      approval = undefined;
+      continue;
+    }
+    const columns = /^- \d{4}-\d{2}-\d{2} \| AUTH-FEDERATION \| /.test(line)
+      ? line.slice(2).split(" | ")
+      : [];
+    if (columns.length < 4 || !word("APPROVED").test(columns[2])) continue;
+    if (!columns[3].trim().startsWith("オーナー")) continue;
+    approval = { line, attempts: /\battempts 2\b/.test(columns[2]) ? 2 : 1 };
+  }
+  return approval;
+}
+
+/** Whether the owner ledger approves the Hosting smoke at `digest`. */
 export function approved(ownerDecisions, digest) {
-  return ownerDecisions
-    .split("\n")
-    .some(
-      (line) =>
-        line.includes("AUTH-FEDERATION") &&
-        line.includes("hosting-smoke") &&
-        line.includes(digest.slice(0, 12)),
-    );
+  return ownerApproval(ownerDecisions, "hosting-smoke", digest) !== undefined;
+}
+
+/**
+ * The web app config's project number and API key, which the scan refuses to publish, after
+ * checking that the config is the sandbox's: a mismatch or a missing value stops the run.
+ */
+export function checkWebConfig(web) {
+  if (web?.projectId !== SANDBOX_PROJECT) throw new Error("the web config is not the sandbox's");
+  if (!/^\d+$/.test(web.projectNumber ?? "") || web.projectNumber !== web.messagingSenderId) {
+    throw new Error("the web config has no consistent project number");
+  }
+  if (!/^[A-Za-z0-9_-]{20,}$/.test(web.apiKey ?? ""))
+    throw new Error("the web config has no API key");
+  return [web.apiKey, web.projectNumber];
 }
 
 /** The ledger's lines; a line that does not parse stops the run (it cannot tell who is on). */
@@ -92,8 +134,9 @@ const taskOf = (entry) => entry.taskId ?? entry.task ?? "<unnamed>";
 
 /**
  * Why the sandbox is not free for this task, or undefined: this task's own run left open
- * (recover it first), another task's open `started` line, or another task's line within the
- * last 30 minutes (a time that does not parse counts as recent).
+ * (recover it first), another task's open `started` line or `needs-recovery` outcome, or
+ * another task's line within the last 30 minutes (a time that does not parse counts as
+ * recent).
  */
 export function sandboxBusy(text, now = Date.now()) {
   const lines = ledgerEntries(text).filter((entry) => entry.project === SANDBOX_PROJECT);
@@ -104,9 +147,11 @@ export function sandboxBusy(text, now = Date.now()) {
     return `this task's run ${own.run ?? ""} at ${own.ts} was not finished; recover it first`;
   }
   const unfinished = [...last.values()].find(
-    (entry) => taskOf(entry) !== TASK_ID && entry.event === "started",
+    (entry) =>
+      taskOf(entry) !== TASK_ID &&
+      (entry.event === "started" || entry.outcome === "needs-recovery"),
   );
-  if (unfinished) return `${taskOf(unfinished)} started at ${unfinished.ts} and has not finished`;
+  if (unfinished) return `${taskOf(unfinished)} at ${unfinished.ts} has not finished or recovered`;
   const recent = lines.find((entry) => {
     if (taskOf(entry) === TASK_ID) return false;
     const age = now - Date.parse(entry.ts);
@@ -115,11 +160,25 @@ export function sandboxBusy(text, now = Date.now()) {
   return recent ? `${taskOf(recent)} wrote a line at ${recent.ts}` : undefined;
 }
 
+/** Whether the process a lock names still runs. */
+function holderAlive(holder) {
+  const pid = Number(/\bpid (\d+)/.exec(holder)?.[1]);
+  if (!pid) return false;
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return error.code === "EPERM";
+  }
+}
+
 /**
- * Runs `work` holding `<ledger>.lock`, created exclusively, as every sandbox lane does. When
- * `keep(result)` holds (a run that needs recovery), the lock stays and says so, so no lane
- * starts on a sandbox this run may have left changed; `recover` takes it over. `ours` lets
- * `recover` take a lock this task left.
+ * Runs `work(state)` holding `<ledger>.lock`, created exclusively, as every sandbox lane does.
+ * The lock stays, rewritten to say `needs-recovery`, whenever the sandbox may not be at its
+ * baseline, so no lane starts on it: when `keep(result)` holds, and when `work` throws after
+ * `state.started` was set (the run wrote its started line) or while recovering (`ours`).
+ * `ours` takes over a lock this task left, only when it says `needs-recovery` or its process
+ * is gone, never a running smoke's.
  */
 export async function withSandboxLock(ledger, work, { keep = () => false, ours = false } = {}) {
   const lock = `${ledger}.lock`;
@@ -133,24 +192,34 @@ export async function withSandboxLock(ledger, work, { keep = () => false, ours =
   }
   if (ours) {
     const holder = await handle.readFile("utf8");
-    if (!holder.startsWith(`${TASK_ID} `)) {
+    const takeable =
+      holder.startsWith(`${TASK_ID} `) && (/ needs-recovery /.test(holder) || !holderAlive(holder));
+    if (!takeable) {
       await handle.close();
-      throw new Error(`${lock} is not this task's (${holder.trim()})`);
+      throw new Error(`${lock} is not this task's to recover (${holder.trim()})`);
     }
     await handle.truncate(0);
   }
+  const state = { started: false, run: undefined };
   let kept = false;
+  const leave = async (run) => {
+    kept = true;
+    await writeFile(
+      lock,
+      `${TASK_ID} needs-recovery run ${run ?? "unknown"} since ${new Date().toISOString()}\n`,
+    );
+  };
   try {
     await handle.write(`${TASK_ID} pid ${process.pid} since ${new Date().toISOString()}\n`, 0);
     await handle.close();
-    const result = await work();
-    kept = keep(result);
-    if (kept) {
-      await writeFile(
-        lock,
-        `${TASK_ID} needs-recovery run ${result.run} since ${new Date().toISOString()}\n`,
-      );
+    let result;
+    try {
+      result = await work(state);
+    } catch (error) {
+      if (ours || state.started) await leave(state.run);
+      throw error;
     }
+    if (keep(result)) await leave(result.run ?? state.run);
     return result;
   } finally {
     if (!kept) await rm(lock, { force: true });
@@ -182,7 +251,8 @@ export function limitedFetch(fetchImpl, { run, limits = LIMITS }) {
     if (used[kind] >= limits[kind])
       throw new Error(`${kind} request limit ${limits[kind]} reached`);
     used[kind] += 1;
-    return fetchImpl(url, init);
+    // A redirect would leave the reviewed URL: it fails instead of being followed.
+    return fetchImpl(url, { ...init, redirect: "error" });
   };
   return { call, used };
 }
@@ -326,7 +396,7 @@ export async function hostingSmoke({ api, run, jwks, forbidden, appendLedger, sl
   const { auth, get, send } = clients(api, meta.token);
   const channelId = `fed-${run}`;
   const configUrl = CONFIG_URL;
-  const result = { run, channelId, channelCreated: false };
+  const result = { run, channelId, channelCreated: false, channelAttempted: false };
 
   // Prechecks (read only): Hosting is enabled, the default site exists, no channel of an
   // earlier run is left, and authorizedDomains before.
@@ -361,6 +431,8 @@ export async function hostingSmoke({ api, run, jwks, forbidden, appendLedger, sl
   });
   let failure;
   try {
+    // From here the channel may exist even if the answer is lost: the cleanup probes it.
+    result.channelAttempted = true;
     const channel = await send(
       "POST",
       `${HOSTING}/projects/${SANDBOX_PROJECT}/sites/${SITE}/channels?channelId=${channelId}`,
@@ -442,7 +514,18 @@ export async function hostingSmoke({ api, run, jwks, forbidden, appendLedger, sl
     failure = error;
   }
 
-  const cleanup = result.channelCreated
+  // A create whose answer was lost or refused is probed: a channel that exists is removed.
+  let created = result.channelCreated;
+  const probe = {};
+  if (!created && result.channelAttempted) {
+    try {
+      await get(channelPathOf(run), "channel probe");
+      created = true;
+    } catch (error) {
+      if (error.status !== 404) probe.channelProbe = `error ${error.message}`;
+    }
+  }
+  const cleanup = created
     ? await removeChannel({
         get,
         send,
@@ -452,9 +535,9 @@ export async function hostingSmoke({ api, run, jwks, forbidden, appendLedger, sl
         version: result.version,
         issuerHost: result.issuerHost,
       })
-    : {};
+    : probe;
   cleanup.authorizedDomainsUnchanged = await domainsUnchanged(get, before);
-  const clean = cleanOf(cleanup, result.channelCreated);
+  const clean = cleanOf(cleanup, created) && cleanup.channelProbe === undefined;
   const entry = {
     outcome: failure
       ? clean
@@ -481,28 +564,40 @@ export async function hostingSmoke({ api, run, jwks, forbidden, appendLedger, sl
  * started line recorded. It never writes the Auth config: a changed authorizedDomains stays
  * `needs-recovery` for the owner to decide.
  */
-export async function hostingRecover({ api, run, before, appendLedger, sleep, meta }) {
+export async function hostingRecover({
+  api,
+  run,
+  before,
+  issuerHost: recorded,
+  appendLedger,
+  sleep,
+  meta,
+}) {
   checkRun(run);
   const { get, send } = clients(api, meta.token);
-  let issuerHost;
+  const channel = issuerChannelHost(SANDBOX_PROJECT, run);
+  // The host the run recorded is fetched again even when the channel is gone (a cached copy).
+  let issuerHost = channel.test(recorded ?? "") ? recorded : undefined;
+  let entry;
   try {
-    const channel = await get(channelPathOf(run), "channel");
-    const host = URL.canParse(channel.url) ? new URL(channel.url).host : "";
-    if (issuerChannelHost(SANDBOX_PROJECT, run).test(host)) issuerHost = host;
+    try {
+      const found = await get(channelPathOf(run), "channel");
+      const host = URL.canParse(found.url) ? new URL(found.url).host : "";
+      if (channel.test(host)) issuerHost = host;
+    } catch (error) {
+      if (error.status !== 404) throw error;
+    }
+    const cleanup = await removeChannel({ get, send, api, sleep, run, issuerHost });
+    cleanup.authorizedDomainsUnchanged = await domainsUnchanged(get, before);
+    entry = {
+      outcome: cleanOf(cleanup, true) ? "recovered" : "needs-recovery",
+      issuerHost,
+      ...cleanup,
+    };
   } catch (error) {
-    if (error.status !== 404) throw error;
+    entry = { outcome: "needs-recovery", error: error.message, issuerHost };
   }
-  const cleanup = await removeChannel({ get, send, api, sleep, run, issuerHost });
-  cleanup.authorizedDomainsUnchanged = await domainsUnchanged(get, before);
-  const entry = {
-    action: "hosting-recover",
-    outcome: cleanOf(cleanup, true) ? "recovered" : "needs-recovery",
-    run,
-    channelId: `fed-${run}`,
-    issuerHost,
-    ...cleanup,
-    estimatedUsd: 0,
-  };
+  entry = { action: "hosting-recover", run, channelId: `fed-${run}`, ...entry, estimatedUsd: 0 };
   await appendLedger(entry);
   return entry;
 }
@@ -512,33 +607,47 @@ async function sh(command, args) {
   return stdout.trim();
 }
 
-async function smokeFromEnvironment() {
-  const ledger = process.env.FIREEMU_SANDBOX_LEDGER;
-  const owner = process.env.FIREEMU_OWNER_DECISIONS;
-  const webPath = process.env.FIREEMU_AUTH_SANDBOX_WEB_CONFIG;
-  if (!ledger || !owner || !webPath) {
-    throw new Error(
-      "FIREEMU_SANDBOX_LEDGER, FIREEMU_OWNER_DECISIONS and FIREEMU_AUTH_SANDBOX_WEB_CONFIG are required",
-    );
-  }
+/** Whether any of `sources` differs from the commit, wherever the process was started. */
+export async function uncommitted(sources = SOURCES) {
+  const root = dirname(sources[0]);
+  return sh("git", ["-C", root, "status", "--porcelain", "--", ...sources]);
+}
+
+/**
+ * The gates every production send of this script passes (smoke and recover): the
+ * environment, credentials that are the owner's user ADC, an owner approval of this exact
+ * digest, and sources equal to the commit.
+ */
+export async function gate({ needs }) {
+  const env = Object.fromEntries(needs.map((name) => [name, process.env[name]]));
+  const missing = needs.filter((name) => !env[name]);
+  if (missing.length) throw new Error(`${missing.join(", ")} required`);
   for (const name of ["FIREBASE_TOKEN", "GOOGLE_APPLICATION_CREDENTIALS"]) {
     if (process.env[name]) throw new Error(`${name} must be unset (the owner's user ADC is used)`);
   }
   const digest = await scriptDigest();
-  if (!approved(await readFile(owner, "utf8"), digest)) {
-    throw new Error(`no owner-ledger line approves hosting-smoke ${digest.slice(0, 12)}`);
+  if (!approved(await readFile(env.FIREEMU_OWNER_DECISIONS, "utf8"), digest)) {
+    throw new Error(`no owner-ledger line approves hosting-smoke ${digest}`);
   }
-  if ((await sh("git", ["status", "--porcelain", "--", "src/auth-federation"])) !== "") {
-    throw new Error("src/auth-federation has uncommitted changes");
-  }
-  const web = JSON.parse(await readFile(webPath, "utf8"));
-  const forbidden = [web.apiKey, web.projectNumber].filter(Boolean);
+  if ((await uncommitted()) !== "") throw new Error("the smoke's sources have uncommitted changes");
+  return { env, digest };
+}
+
+async function smokeFromEnvironment() {
+  const { env, digest } = await gate({
+    needs: ["FIREEMU_SANDBOX_LEDGER", "FIREEMU_OWNER_DECISIONS", "FIREEMU_AUTH_SANDBOX_WEB_CONFIG"],
+  });
+  const ledger = env.FIREEMU_SANDBOX_LEDGER;
+  const forbidden = checkWebConfig(
+    JSON.parse(await readFile(env.FIREEMU_AUTH_SANDBOX_WEB_CONFIG, "utf8")),
+  );
   const run = randomBytes(3).toString("hex");
   // Only the public half leaves the process; the smoke signs nothing.
   const { jwk } = generateSigningKey({ kid: `fireemu-smoke-${run}` });
   return withSandboxLock(
     ledger,
-    async () => {
+    async (state) => {
+      state.run = run;
       const busy = sandboxBusy(await readFile(ledger, "utf8").catch(() => ""));
       if (busy) throw new Error(`the sandbox is not free: ${busy}`);
       const token = await sh("gcloud", ["auth", "application-default", "print-access-token"]);
@@ -554,11 +663,14 @@ async function smokeFromEnvironment() {
           sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
           stop,
           meta: { token, gitSha, digest },
-          appendLedger: (line) =>
-            appendFile(
+          appendLedger: (line) => {
+            // Set first: a started line half written still leaves the lock held.
+            if (line.event === "started") state.started = true;
+            return appendFile(
               ledger,
               `${JSON.stringify({ ts: new Date().toISOString(), project: SANDBOX_PROJECT, taskId: TASK_ID, ...line, requests: { ...used } })}\n`,
-            ),
+            );
+          },
         });
         console.log(JSON.stringify(entry, null, 2));
         if (entry.outcome !== "smoke-passed") process.exitCode = 1;
@@ -571,7 +683,10 @@ async function smokeFromEnvironment() {
   );
 }
 
-/** The run this task left unfinished and the authorizedDomains its started line recorded. */
+/**
+ * The run this task left unfinished: its tag, the authorizedDomains and script digest its
+ * started line recorded, and the issuer host its last line named.
+ */
 export function runToRecover(ledgerText) {
   const own = ledgerEntries(ledgerText).filter(
     (entry) => entry.project === SANDBOX_PROJECT && taskOf(entry) === TASK_ID,
@@ -582,27 +697,37 @@ export function runToRecover(ledgerText) {
   if (!started || !Array.isArray(started.authorizedDomainsBefore)) {
     throw new Error(`run ${last.run} has no started line with authorizedDomainsBefore`);
   }
-  return { run: checkRun(last.run), before: started.authorizedDomainsBefore };
+  const host = own.findLast((entry) => entry.run === last.run && entry.issuerHost)?.issuerHost;
+  return {
+    run: checkRun(last.run),
+    before: started.authorizedDomainsBefore,
+    digest: started.scriptDigest,
+    issuerHost: host,
+  };
 }
 
 async function recoverFromEnvironment() {
-  const ledger = process.env.FIREEMU_SANDBOX_LEDGER;
-  if (!ledger) throw new Error("FIREEMU_SANDBOX_LEDGER is required");
-  for (const name of ["FIREBASE_TOKEN", "GOOGLE_APPLICATION_CREDENTIALS"]) {
-    if (process.env[name]) throw new Error(`${name} must be unset (the owner's user ADC is used)`);
-  }
+  const { env, digest } = await gate({
+    needs: ["FIREEMU_SANDBOX_LEDGER", "FIREEMU_OWNER_DECISIONS"],
+  });
+  const ledger = env.FIREEMU_SANDBOX_LEDGER;
   const target = runToRecover(await readFile(ledger, "utf8"));
   if (!target) throw new Error("the ledger shows no run of this task to recover");
+  if (target.digest !== digest) {
+    throw new Error(`run ${target.run} ran digest ${target.digest}, not this script's ${digest}`);
+  }
   const ours = existsSync(`${ledger}.lock`);
   return withSandboxLock(
     ledger,
-    async () => {
+    async (state) => {
+      state.run = target.run;
       const token = await sh("gcloud", ["auth", "application-default", "print-access-token"]);
       const { call, used } = limitedFetch(fetch, { run: target.run });
       const entry = await hostingRecover({
         api: call,
         run: target.run,
         before: target.before,
+        issuerHost: target.issuerHost,
         sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
         meta: { token },
         appendLedger: (line) =>

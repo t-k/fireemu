@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
+import { spawnSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import { mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -10,6 +11,7 @@ import { gunzipSync } from "node:zlib";
 import { SANDBOX_PROJECT } from "./auth-account/harness.mjs";
 import {
   approved,
+  checkWebConfig,
   hostingRecover,
   hostingSmoke,
   LIMITS,
@@ -17,7 +19,9 @@ import {
   runToRecover,
   sandboxBusy,
   scriptDigest,
+  SOURCES,
   TASK_ID,
+  uncommitted,
   withSandboxLock,
 } from "./auth-federation/hosting.mjs";
 import { generateSigningKey } from "./auth-federation/idp.mjs";
@@ -353,7 +357,12 @@ test("the smoke starts only on a free sandbox and a digest the owner approved", 
   );
   assert.match(
     sandboxBusy(line("FS-RULES", "2026-09-27T09:00:00Z", { event: "started" }), now),
-    /FS-RULES started/,
+    /FS-RULES at .* has not finished or recovered/,
+  );
+  // Another task waiting for recovery holds the sandbox however old its line is.
+  assert.match(
+    sandboxBusy(line("FS-RULES", "2026-09-26T09:00:00Z", { outcome: "needs-recovery" }), now),
+    /FS-RULES at .* has not finished or recovered/,
   );
   assert.match(sandboxBusy(line("FS-RULES", "not a time"), now), /FS-RULES wrote/);
   assert.match(
@@ -373,14 +382,72 @@ test("the smoke starts only on a free sandbox and a digest the owner approved", 
     undefined,
   );
   assert.throws(() => sandboxBusy("{not json", now), /does not parse/);
+});
 
+test("only a fixed-form owner line naming the full digest approves, until it is revoked", async () => {
   const digest = await scriptDigest();
   assert.match(digest, /^[0-9a-f]{64}$/);
-  assert.ok(
-    approved(`- 2026-09-27 AUTH-FEDERATION hosting-smoke ${digest.slice(0, 12)} approved`, digest),
-  );
-  assert.ok(!approved(`- 2026-09-27 AUTH-FEDERATION hosting-smoke 000000000000 approved`, digest));
-  assert.ok(!approved(`- 2026-09-27 AUTH-MFA hosting-smoke ${digest.slice(0, 12)}`, digest));
+  const approval = `- 2026-09-27 | AUTH-FEDERATION | hosting-smoke APPROVED ${digest}（preview channel、API 15件） | オーナー（直接の返答「承認」） | review-2.md`;
+  assert.ok(approved(approval, digest));
+  const refused = {
+    "a review record": `- 2026-09-27 | AUTH-FEDERATION | hosting-smoke ${digest} の再レビューはREQUEST_CHANGES。承認しない | Claude（委任） | x`,
+    "a delegated decider": approval.replace("オーナー（直接の返答「承認」）", "Claude（委任）"),
+    "a draft packet": `- 2026-09-27 | AUTH-FEDERATION | hosting-smoke-draft APPROVED ${digest} | オーナー | x`,
+    "a prefixed packet": `- 2026-09-27 | AUTH-FEDERATION | xhosting-smoke APPROVED ${digest} | オーナー | x`,
+    "the task name only": `AUTH-FEDERATION-SANDBOX hosting-smoke APPROVED ${digest}`,
+    "12 digits only": approval.replace(digest, digest.slice(0, 12)),
+    "a longer digest": approval.replace(digest, `${digest}ff`),
+    "another lane": approval.replace("| AUTH-FEDERATION |", "| AUTH-MFA |"),
+    "no date": approval.replace("- 2026-09-27 |", "- today |"),
+    "the word elsewhere": `- 2026-09-27 | AUTH-FEDERATION | hosting-smoke ${digest} | オーナー APPROVED | x`,
+  };
+  for (const [name, line] of Object.entries(refused)) assert.ok(!approved(line, digest), name);
+  // A later revocation withdraws it; a later approval restores it.
+  const revoked = `- 2026-09-27 | AUTH-FEDERATION | hosting-smoke REVOKED ${digest} | 調整役 | x`;
+  assert.ok(!approved(`${approval}\n${revoked}`, digest));
+  assert.ok(approved(`${revoked}\n${approval}`, digest));
+  assert.ok(approved(`${approval}\n${revoked}\n${approval}`, digest));
+  // The digest covers the module that names the project, by absolute path.
+  const read = [];
+  await scriptDigest(async (path) => {
+    read.push(path);
+    return "";
+  });
+  assert.ok(read.some((path) => path.endsWith("/auth-account/harness.mjs")));
+  assert.ok(SOURCES.every((path) => path.startsWith("/") && existsSync(path)));
+});
+
+test("the uncommitted check works from any directory", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "fed-git-"));
+  spawnSync("git", ["-C", dir, "init", "-q"]);
+  const source = join(dir, "a.mjs");
+  const cwd = process.cwd();
+  process.chdir(tmpdir());
+  try {
+    assert.equal(await uncommitted([source]), "");
+    await writeFile(source, "1");
+    assert.match(await uncommitted([source]), /a\.mjs/);
+  } finally {
+    process.chdir(cwd);
+  }
+});
+
+test("the web config must be the sandbox's, with a project number and an API key", () => {
+  const web = {
+    projectId: SANDBOX_PROJECT,
+    projectNumber: "123456789012",
+    messagingSenderId: "123456789012",
+    apiKey: "fake-api-key-for-the-test-00",
+  };
+  assert.deepEqual(checkWebConfig(web), [web.apiKey, web.projectNumber]);
+  for (const [name, bad] of Object.entries({
+    "another project": { ...web, projectId: "fireemu-oracle-sbx" },
+    "no number": { ...web, projectNumber: undefined },
+    "a number that disagrees": { ...web, messagingSenderId: "1" },
+    "no key": { ...web, apiKey: "" },
+  })) {
+    assert.throws(() => checkWebConfig(bad), /web config/, name);
+  }
 });
 
 test("the shared sandbox lock is exclusive and released after the run", async () => {
@@ -445,12 +512,22 @@ test("recover finds the unfinished run and its authorizedDomains in the ledger",
       taskId: TASK_ID,
       ...extra,
     });
-  const started = line({ event: "started", run: RUN, authorizedDomainsBefore: DOMAINS });
-  assert.deepEqual(runToRecover(started), { run: RUN, before: DOMAINS });
-  assert.deepEqual(runToRecover(`${started}\n${line({ run: RUN, outcome: "needs-recovery" })}`), {
+  const started = line({
+    event: "started",
+    run: RUN,
+    authorizedDomainsBefore: DOMAINS,
+    scriptDigest: "d".repeat(64),
+  });
+  assert.deepEqual(runToRecover(started), {
     run: RUN,
     before: DOMAINS,
+    digest: "d".repeat(64),
+    issuerHost: undefined,
   });
+  assert.deepEqual(
+    runToRecover(`${started}\n${line({ run: RUN, outcome: "needs-recovery", issuerHost: HOST })}`),
+    { run: RUN, before: DOMAINS, digest: "d".repeat(64), issuerHost: HOST },
+  );
   assert.equal(
     runToRecover(`${started}\n${line({ run: RUN, outcome: "smoke-passed" })}`),
     undefined,
@@ -490,4 +567,141 @@ test("recover deletes a channel left behind and never writes the Auth config", a
   assert.equal((await recover([...DOMAINS, HOST])).outcome, "needs-recovery");
   assert.equal(ledger.length, 3);
   assert.ok(ledger.every((line) => line.action === "hosting-recover"));
+});
+
+test("the lock stays when a run fails after its started line or while recovering", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "fed-fail-"));
+  const ledger = join(dir, "sandbox-ledger.jsonl");
+  const lock = `${ledger}.lock`;
+  const boom = () => {
+    throw new Error("ADC expired");
+  };
+  // Before the started line nothing was sent: the lock goes.
+  await assert.rejects(
+    withSandboxLock(ledger, async () => boom()),
+    /ADC expired/,
+  );
+  assert.ok(!existsSync(lock));
+  // After it the sandbox may be changed: the lock stays and says so.
+  await assert.rejects(
+    withSandboxLock(ledger, async (state) => {
+      state.run = RUN;
+      state.started = true;
+      boom();
+    }),
+    /ADC expired/,
+  );
+  assert.match(await readFile(lock, "utf8"), new RegExp(`${TASK_ID} needs-recovery run ${RUN}`));
+  // A recovery that fails keeps it too.
+  await assert.rejects(
+    withSandboxLock(
+      ledger,
+      async (state) => {
+        state.run = RUN;
+        boom();
+      },
+      { ours: true },
+    ),
+    /ADC expired/,
+  );
+  assert.match(await readFile(lock, "utf8"), /needs-recovery/);
+});
+
+test("recover takes over only a lock that needs recovery or whose process is gone", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "fed-take-"));
+  const ledger = join(dir, "sandbox-ledger.jsonl");
+  const lock = `${ledger}.lock`;
+  const recovered = async () => ({ run: RUN, outcome: "recovered" });
+  // A running smoke of this task (this process is alive) is never taken over.
+  await writeFile(lock, `${TASK_ID} pid ${process.pid} since now\n`);
+  await assert.rejects(
+    withSandboxLock(ledger, recovered, { ours: true }),
+    /not this task's to recover/,
+  );
+  assert.match(await readFile(lock, "utf8"), new RegExp(`pid ${process.pid}`));
+  // A crashed one is.
+  const gone = spawnSync(process.execPath, ["-e", "0"]).pid;
+  await writeFile(lock, `${TASK_ID} pid ${gone} since then\n`);
+  await withSandboxLock(ledger, recovered, { ours: true });
+  assert.ok(!existsSync(lock));
+});
+
+test("recover records a failure without deleting and fetches a recorded issuer again", async () => {
+  const ledger = [];
+  const run = async (fake, extra = {}) => {
+    const { call } = limitedFetch(fake.fetchImpl, { run: RUN });
+    return hostingRecover({
+      api: call,
+      run: RUN,
+      before: DOMAINS,
+      appendLedger: async (entry) => ledger.push(entry),
+      sleep: async () => {},
+      meta: { token: "fake-token" },
+      ...extra,
+    });
+  };
+  const forbidden = fakeSandbox({
+    channel: () => reply(403, { error: { message: "PERMISSION_DENIED" } }),
+  });
+  const entry = await run(forbidden);
+  assert.equal(entry.outcome, "needs-recovery");
+  assert.match(entry.error, /channel: HTTP 403/);
+  assert.equal(ledger.at(-1).action, "hosting-recover");
+  assert.ok(!forbidden.calls.some(({ method }) => method === "DELETE"));
+  // The channel is gone but its files were cached: the recorded host is fetched again.
+  const cached = fakeSandbox({
+    issuer: () => reply(200, "{}", { "content-type": "application/json" }),
+  });
+  const stale = await run(cached, { issuerHost: HOST });
+  assert.equal(stale.issuerGone, false);
+  assert.equal(stale.outcome, "needs-recovery");
+  // A recorded host that is not the run's channel is not fetched.
+  const other = fakeSandbox();
+  const skipped = await run(other, { issuerHost: "evil.web.app" });
+  assert.equal(skipped.issuerHost, undefined);
+  assert.equal(skipped.outcome, "recovered");
+});
+
+test("a channel create whose answer is lost is probed and removed if it exists", async () => {
+  const lost = (exists) =>
+    fakeSandbox({
+      create: (state) => {
+        state.channel = exists;
+        throw new TypeError("fetch failed");
+      },
+    });
+  const created = lost(true);
+  const one = await smoke(created);
+  assert.equal(one.outcome.outcome, "failed-cleaned", JSON.stringify(one.outcome));
+  assert.equal(one.outcome.channelReadBack, "absent");
+  assert.ok(created.calls.some(({ method }) => method === "DELETE"));
+  const absent = lost(false);
+  const two = await smoke(absent);
+  assert.equal(two.outcome.outcome, "failed-cleaned");
+  assert.ok(!absent.calls.some(({ method }) => method === "DELETE"));
+  // A probe that cannot tell leaves the run to recovery.
+  const unknown = fakeSandbox({
+    create: () => {
+      throw new TypeError("fetch failed");
+    },
+    channel: () => reply(503, {}),
+  });
+  const three = await smoke(unknown);
+  assert.equal(three.outcome.outcome, "needs-recovery");
+  assert.match(three.outcome.channelProbe, /503/);
+  assert.ok(three.used.api <= LIMITS.api);
+});
+
+test("requests never follow a redirect", async () => {
+  const seen = [];
+  const { call } = limitedFetch(
+    async (url, init) => {
+      seen.push(init.redirect);
+      return reply(200, {});
+    },
+    { run: RUN },
+  );
+  await call("https://firebasehosting.googleapis.com/a", { redirect: "follow" });
+  await call(`https://${HOST}/x`);
+  assert.deepEqual(seen, ["error", "error"]);
 });

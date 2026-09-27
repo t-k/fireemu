@@ -5,6 +5,7 @@ import datetime as dt
 import hashlib
 import json
 import os
+import stat
 import sys
 from pathlib import Path
 from unittest.mock import patch
@@ -364,6 +365,50 @@ def test_terminal_row_with_original_lock_can_finalize_without_requests(tmp_path,
                      metadata_factory=NoReadsMetadata, wire_factory=_absent_wire)
     assert result["complete"] is True
     assert not value["lock_path"].exists()
+
+
+def test_receipt_directory_entries_are_durable_before_terminal_row(tmp_path, monkeypatch):
+    value = fixture_context(tmp_path, monkeypatch)
+    result_parent = value["root"] / "docs.local/runs"
+    result_dir = result_parent / "fs-transaction-recovery-recovery-packet"
+    original_fsync = os.fsync
+    original_append = recovery.admission.append_ledger
+    synced_directories = set()
+
+    def tracked_fsync(fd):
+        details = os.fstat(fd)
+        if stat.S_ISDIR(details.st_mode):
+            synced_directories.add(details.st_ino)
+        return original_fsync(fd)
+
+    def checked_append(path, row):
+        if row["outcome"] == "recovered-exact-name":
+            assert result_parent.stat().st_ino in synced_directories
+            assert result_dir.stat().st_ino in synced_directories
+        return original_append(path, row)
+
+    monkeypatch.setattr(os, "fsync", tracked_fsync)
+    monkeypatch.setattr(recovery.admission, "append_ledger", checked_append)
+    assert _record(value, credential_fn=lambda: "test-token",
+                   metadata_factory=NoReadsMetadata, wire_factory=_absent_wire)["complete"] is True
+
+
+def test_failed_receipt_directory_sync_keeps_the_original_lock(tmp_path, monkeypatch):
+    value = fixture_context(tmp_path, monkeypatch)
+    original_sync = recovery._fsync_directory
+
+    def fail_result_sync(path):
+        if path.name == "fs-transaction-recovery-recovery-packet":
+            raise OSError("simulated directory sync failure")
+        return original_sync(path)
+
+    monkeypatch.setattr(recovery, "_fsync_directory", fail_result_sync)
+    with pytest.raises(OSError, match="directory sync"):
+        _record(value, credential_fn=lambda: "test-token",
+                metadata_factory=NoReadsMetadata, wire_factory=_absent_wire)
+    assert value["lock_path"].exists()
+    rows = [json.loads(line) for line in value["ledger_path"].read_text().splitlines()]
+    assert rows[-1]["outcome"] == "needs-recovery"
 
 
 def test_recovery_budget_cap_rejects_before_credentials(tmp_path, monkeypatch):

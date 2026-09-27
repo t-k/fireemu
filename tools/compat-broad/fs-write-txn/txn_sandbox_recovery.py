@@ -184,6 +184,16 @@ def _sha(raw):
     return hashlib.sha256(raw).hexdigest()
 
 
+def _fsync_directory(path):
+    fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+    try:
+        if not stat.S_ISDIR(os.fstat(fd).st_mode):
+            raise ValueError("recovery receipt parent must be a directory")
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+
+
 @contextlib.contextmanager
 def _exclusive_recovery_guard(lock_path):
     """Keep recovery admission single-writer; the kernel releases this guard on death."""
@@ -371,6 +381,7 @@ def _record_recovery_under_guard(*, packet, packet_sha, packet_path, snapshot_ra
         return result
     runner._remaining_task_budget(ledger_rows, packet["estimatedUsd"])
     result_dir.mkdir(mode=0o700)
+    _fsync_directory(result_dir.parent)
     row = {
         "ts": now.isoformat().replace("+00:00", "Z"),
         "project": PROJECT, "database": DATABASE, "taskId": runner.TASK_ID,
@@ -395,6 +406,7 @@ def _record_recovery_under_guard(*, packet, packet_sha, packet_path, snapshot_ra
         result["totalRequests"] = budget.total
         result_path = result_dir / "recovery.json"
         runner._save_private(result_path, result)
+        _fsync_directory(result_dir)
         if result["complete"] is not True or result["recovered"] != list(ROLES):
             admission.append_ledger(ledger_path, {**row, "outcome": "needs-recovery", "requests": budget.total})
             raise ValueError("exact-name recovery is incomplete")

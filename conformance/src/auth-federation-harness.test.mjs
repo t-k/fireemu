@@ -406,3 +406,32 @@ test("the draft corpus resolves to requests the guard lets through", async () =>
   }
   assert.ok(!JSON.stringify(resolved).includes("RUN"), "every placeholder is resolved");
 });
+
+test("recordings replace the run's identifiers in object keys as well as in values", async () => {
+  const { normalize } = await import("./auth-federation/harness.mjs");
+  const ctx = {
+    run: RUN,
+    project: SANDBOX_PROJECT,
+    projectNumber: "123456789012",
+    issuerHost: CHANNEL,
+  };
+  const provider = `saml.fireemu-${RUN}-s`;
+  assert.deepEqual(
+    normalize(
+      {
+        identities: { [provider]: [`fireemu-fed-${RUN}@example.com`], email: ["x@example.com"] },
+        [`projects/${SANDBOX_PROJECT}`]: { [`https://${CHANNEL}/oidc/${RUN}`]: 1 },
+      },
+      ctx,
+    ),
+    {
+      identities: {
+        "saml.fireemu-<run>-s": ["fireemu-fed-<run>@example.com"],
+        email: ["x@example.com"],
+      },
+      "projects/<project>": { "https://<issuer-host>/oidc/<run>": 1 },
+    },
+  );
+  // A key the replacement would merge with another is refused rather than silently lost.
+  assert.throws(() => normalize({ [`a-${RUN}`]: 1, "a-<run>": 2 }, ctx), /collides/);
+});

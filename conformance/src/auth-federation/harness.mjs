@@ -38,20 +38,34 @@ function decodeToken(token) {
   }
 }
 
-/** The recorded form of `value`, with the run's identifiers as placeholders. */
+/** `text` with the run's identifiers as placeholders (the issuer host first: it holds both). */
+function placeholders(text, ctx) {
+  let out = ctx.issuerHost ? text.replaceAll(ctx.issuerHost, "<issuer-host>") : text;
+  out = out.replaceAll(ctx.run, "<run>").replaceAll(ctx.project, "<project>");
+  if (ctx.projectNumber) out = out.replaceAll(String(ctx.projectNumber), "<project-number>");
+  return out;
+}
+
+/**
+ * The recorded form of `value`, with the run's identifiers as placeholders in values and in
+ * object keys (a provider ID keys `firebase.identities`). Token and masked members are found
+ * by their key as answered.
+ */
 export function normalize(value, ctx, key = "") {
   if (typeof value === "string") {
     if (TOKEN_KEYS.has(key)) return normalize(decodeToken(value), ctx);
     if (MASKED[key]) return MASKED[key];
-    // The issuer host first: it holds the project and the run, and its channel hash varies.
-    let text = ctx.issuerHost ? value.replaceAll(ctx.issuerHost, "<issuer-host>") : value;
-    text = text.replaceAll(ctx.run, "<run>").replaceAll(ctx.project, "<project>");
-    if (ctx.projectNumber) text = text.replaceAll(String(ctx.projectNumber), "<project-number>");
-    return text;
+    return placeholders(value, ctx);
   }
   if (Array.isArray(value)) return value.map((item) => normalize(item, ctx, key));
   if (value && typeof value === "object") {
-    return Object.fromEntries(Object.entries(value).map(([k, v]) => [k, normalize(v, ctx, k)]));
+    const out = {};
+    for (const [k, v] of Object.entries(value)) {
+      const recordedKey = placeholders(k, ctx);
+      if (Object.hasOwn(out, recordedKey)) throw new Error(`key ${recordedKey} collides`);
+      out[recordedKey] = normalize(v, ctx, k);
+    }
+    return out;
   }
   return value;
 }

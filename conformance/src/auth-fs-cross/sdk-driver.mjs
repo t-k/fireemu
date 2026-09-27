@@ -47,7 +47,9 @@ onIdTokenChanged(auth, async (user) => {
   if (!user) return emit({ event: "auth", uid: null });
   const token = await user.getIdToken();
   tokenOwner.set(sha256(token), user.uid);
-  emit({ event: "auth", uid: user.uid, tenant: user.tenantId ?? null });
+  // The token's times, never the token: the parent schedules its expiry probes from them.
+  const { iat, exp } = JSON.parse(Buffer.from(token.split(".")[1], "base64url").toString("utf8"));
+  emit({ event: "auth", uid: user.uid, tenant: user.tenantId ?? null, iat, exp });
 });
 
 const listeners = new Map();
@@ -81,18 +83,26 @@ function listen({ name, path, collection: collectionPath, where: filters = [] })
   listeners.set(name, stop);
 }
 
-async function transact({ name, reads, write }) {
+async function transact({ name, reads, write, pauseAttempts = 1 }) {
   let attempts = 0;
-  const committed = await runTransaction(db, async (transaction) => {
-    attempts += 1;
-    const docs = [];
-    for (const path of reads) docs.push(plainDoc(await transaction.get(doc(db, path))));
-    emit({ event: "transaction-read", name, attempt: attempts, docs });
-    // The parent changes the Auth state, then lets the commit go.
-    await new Promise((resolve) => pausedTransactions.set(name, resolve));
-    transaction.set(doc(db, write.path), write.data);
-    return attempts;
-  });
+  let committed;
+  try {
+    committed = await runTransaction(db, async (transaction) => {
+      attempts += 1;
+      const docs = [];
+      for (const path of reads) docs.push(plainDoc(await transaction.get(doc(db, path))));
+      emit({ event: "transaction-read", name, attempt: attempts, docs });
+      // The parent changes the Auth state, then lets the commit go. A retry runs straight through,
+      // so the parent sees how many times the SDK called the update function.
+      if (attempts <= pauseAttempts)
+        await new Promise((resolve) => pausedTransactions.set(name, resolve));
+      transaction.set(doc(db, write.path), write.data);
+      return attempts;
+    });
+  } catch (error) {
+    // A failed transaction still reports how many times the update function ran.
+    throw Object.assign(error, { attempts });
+  }
   return { attempts: committed };
 }
 
@@ -124,12 +134,12 @@ const operations = {
     return {};
   },
   /** A write whose promise the parent watches later (it may stay pending while offline). */
-  writeLater: async ({ id, path, data }) => {
+  writeLater: async ({ writeId, path, data }) => {
     const promise = setDoc(doc(db, path), data).then(
-      () => emit({ event: "write-settled", id, ok: true }),
-      (error) => emit({ event: "write-settled", id, ok: false, code: error.code }),
+      () => emit({ event: "write-settled", writeId, ok: true }),
+      (error) => emit({ event: "write-settled", writeId, ok: false, code: error.code }),
     );
-    pendingWrites.set(id, promise);
+    pendingWrites.set(writeId, promise);
     return {};
   },
   remove: async ({ path }) => {
@@ -180,6 +190,7 @@ createInterface({ input: process.stdin }).on("line", (line) => {
         ok: false,
         code: error.code ?? null,
         error: error.message,
+        ...(error.attempts === undefined ? {} : { attempts: error.attempts }),
       }),
   );
 });

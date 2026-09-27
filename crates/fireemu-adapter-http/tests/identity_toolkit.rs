@@ -20822,3 +20822,54 @@ fn sign_up_quotas_are_taken_and_reported_as_production_normalizes_them() {
     let (status, cleared) = admin(&s, "PATCH", CONFIG, &json!({}));
     assert_eq!((status, &cleared["quota"]), (200, &json!({})));
 }
+
+/// A verified custom token's tenant claim under strict, as production answers it
+/// (AUTH-TENANT-BLOCKING sandbox recording 2026-09-27, custom-token program).
+#[test]
+fn strict_custom_token_tenant_claims_answer_as_production() {
+    use fireemu_adapter_http::identity_toolkit::CUSTOM_TOKEN_AUDIENCE;
+    const MISMATCH: &str =
+        "TENANT_ID_MISMATCH : Specified tenant ID does not match the custom token.";
+    let s = with_registry(strict_state_with_signer());
+    enable_tenants(&s);
+    for tenant in ["tenant-a", "tenant-b"] {
+        s.registry
+            .as_ref()
+            .unwrap()
+            .ensure_tenant("demo-app", tenant)
+            .unwrap();
+    }
+    let now = 1_788_004_860;
+    let token = |tenant: Option<&str>| {
+        let mut payload = json!({"aud": CUSTOM_TOKEN_AUDIENCE, "iss": TEST_SIGNER,
+            "sub": TEST_SIGNER, "uid": "ct", "iat": now, "exp": now + 3600});
+        if let Some(tenant) = tenant {
+            payload["tenant_id"] = json!(tenant);
+        }
+        signed_payload(test_signer_key(), &payload)
+    };
+    let exchange = |token: String, tenant: Option<&str>| {
+        let mut body = json!({"token": token, "returnSecureToken": true});
+        if let Some(tenant) = tenant {
+            body["tenantId"] = json!(tenant);
+        }
+        post(&s, &format!("{V1}/accounts:signInWithCustomToken"), &body)
+    };
+    for (claim, named) in [
+        (Some("tenant-a"), Some("tenant-b")),
+        (Some("tenant-a"), None),
+        (Some("atb-nosuch-tenant"), None),
+    ] {
+        let (status, body) = exchange(token(claim), named);
+        assert_eq!(status, 400, "{claim:?} {named:?}: {body}");
+        assert_eq!(body["error"]["message"], MISMATCH, "{claim:?} {named:?}");
+    }
+    let (status, body) = exchange(token(None), Some("tenant-a"));
+    assert_eq!(status, 500, "{body}");
+    assert_eq!(body["error"]["message"], "Internal error encountered.");
+    assert_eq!(body["error"]["status"], "INTERNAL");
+    let (status, body) = exchange(token(Some("tenant-a")), Some("tenant-a"));
+    assert_eq!(status, 200, "{body}");
+    let (status, body) = exchange(token(None), None);
+    assert_eq!(status, 200, "{body}");
+}

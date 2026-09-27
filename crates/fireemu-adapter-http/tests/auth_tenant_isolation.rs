@@ -489,6 +489,15 @@ fn a_tenant_refresh_token_is_refused_by_the_other_tenant_without_rotating_the_se
                     destination,
                     json!({"grant_type": "refresh_token", "refresh_token": refresh}),
                 );
+                // Under strict a refresh ignores a body tenantId, as production does
+                // (selection#refresh-a1-tenant-b): the session stays in its own tenant.
+                if profile == "strict" && selector == Selector::KeyAndBody {
+                    assert_eq!(status, 200, "{profile} {destination}: {refused}");
+                    let tenant =
+                        claims(refused["id_token"].as_str().unwrap())["firebase"]["tenant"].clone();
+                    assert_ne!(tenant, json!(destination), "{refused}");
+                    continue;
+                }
                 assert_eq!(
                     status, 400,
                     "{profile} {destination} {selector:?}: {refused}"
@@ -618,6 +627,11 @@ fn sdk_shaped_refresh_keeps_project_refresh_and_contradicting_selectors_unchange
                 }
                 let response = handle(&state, "POST", &format!("{SECURE_TOKEN}{query}"), &body);
                 let (status, refused) = (response.status, response.body);
+                // Under strict a refresh ignores a body tenantId (selection#refresh-a1-tenant-b).
+                if profile == "strict" && query == format!("?key={KEY}") && body_tenant.is_some() {
+                    assert_eq!(status, 200, "{profile} {query}: {refused}");
+                    continue;
+                }
                 if state.client_api_key == ClientApiKeyPolicy::Required && !query.contains("key=") {
                     // Production refuses a keyless client call before reading any selector.
                     assert_eq!(status, 403, "{profile} {query}: {refused}");
@@ -1130,20 +1144,27 @@ fn project_level_admin_lookup_does_not_find_tenant_users() {
         assert_eq!(found["users"][0]["localId"], "shared-uid");
         assert_eq!(found["users"][0]["tenantId"], TENANT_A);
 
-        // The project-level lookup route never accepts a body tenant as a redirection into a
-        // tenant namespace: the request is refused rather than silently rerouted.
+        // The project-level lookup route takes a body tenant as its scope under strict, as
+        // production does (AUTH-TENANT-BLOCKING recording 2026-09-27,
+        // selection#admin-lookup-a1-body-tenant); the emulator profile refuses it rather
+        // than rerouting.
         let (status, refused) = admin(
             &state,
             "POST",
             &format!("{V1}/projects/demo-app/accounts:lookup"),
             &json!({"localId": ["shared-uid"], "tenantId": TENANT_A}),
         );
-        assert_eq!(status, 400, "{profile}: {refused}");
-        assert_eq!(
-            class(&refused),
-            "TENANT_ID_MISMATCH",
-            "{profile}: {refused}"
-        );
+        if profile == "strict" {
+            assert_eq!(status, 200, "{profile}: {refused}");
+            assert_eq!(refused["users"][0]["tenantId"], TENANT_A, "{refused}");
+        } else {
+            assert_eq!(status, 400, "{profile}: {refused}");
+            assert_eq!(
+                class(&refused),
+                "TENANT_ID_MISMATCH",
+                "{profile}: {refused}"
+            );
+        }
 
         // Listing and query are project-scoped as well.
         let listed = snapshot(&state, None);

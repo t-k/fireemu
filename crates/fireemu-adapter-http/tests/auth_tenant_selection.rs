@@ -420,3 +420,43 @@ fn strict_tenant_switches_answer_as_production() {
         (400, v1("UNSUPPORTED_TENANT_OPERATION"))
     );
 }
+
+/// Selection details production showed (selection, credentials and admin-accounts programs).
+#[test]
+fn strict_selection_details_answer_as_production() {
+    let s = state(true);
+    let (a, signed) = tenant_with_user(&s, "atb-sel-a");
+    let (b, _) = tenant_with_user(&s, "atb-sel-b");
+    // selection#refresh-a1-tenant-b: a refresh ignores a tenantId field.
+    let (status, refreshed) = client(
+        &s,
+        TOKEN,
+        &json!({"grant_type": "refresh_token", "refresh_token": signed["refreshToken"], "tenantId": b}),
+    );
+    assert_eq!(status, 200, "{refreshed}");
+    // selection#admin-lookup-a1-body-tenant: the project path takes the body's tenant.
+    let (status, found) = admin(
+        &s,
+        "POST",
+        &format!("{V1}/projects/demo-app/accounts:lookup"),
+        &json!({"tenantId": a, "email": ["atb-sel-a@example.com"]}),
+    );
+    assert_eq!(status, 200, "{found}");
+    assert_eq!(found["users"][0]["tenantId"], json!(a));
+    // credentials#cookie-in-project: a tenant token mints a cookie on the project path.
+    let (status, cookie) = admin(
+        &s,
+        "POST",
+        &format!("{V1}/projects/demo-app:createSessionCookie"),
+        &json!({"idToken": signed["idToken"], "validDuration": "3600"}),
+    );
+    assert_eq!(status, 200, "{cookie}");
+    // admin-accounts#create-in-a-body-tenant-b: no error for a different body tenantId.
+    let (status, created) = admin(
+        &s,
+        "POST",
+        &format!("{V1}/projects/demo-app/tenants/{a}/accounts"),
+        &json!({"tenantId": b, "email": "z@example.com", "password": "password123"}),
+    );
+    assert_eq!(status, 200, "{created}");
+}

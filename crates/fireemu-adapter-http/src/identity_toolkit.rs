@@ -2867,28 +2867,8 @@ fn strict_named_tenant(
             Err(_) => return Err(error(500, "INTERNAL")),
         },
     };
-    let missing = |tenant: &str, v2: bool| {
-        let message = if registry.tenant_deleted(&project, tenant) {
-            "TENANT_DELETED"
-        } else {
-            "INVALID_TENANT_ID"
-        };
-        let refused = error(400, message);
-        if v2 {
-            secure_token_error_shape(refused)
-        } else {
-            refused
-        }
-    };
     if secure_token {
-        if let Some((token_project, tenant)) = str_field(body, "refresh_token")
-            .and_then(fireemu_core_auth::store::AuthRegistry::refresh_token_tenant)
-        {
-            if token_project == project && registry.tenant_store(&project, &tenant).is_none() {
-                return Err(missing(&tenant, true));
-            }
-        }
-        return Ok(None);
+        return strict_refreshed_tenant(registry, &project, body);
     }
     let mut rewritten = None;
     let mut named = scoped.and_then(|(_, tenant)| tenant).map(str::to_owned);
@@ -2929,10 +2909,49 @@ fn strict_named_tenant(
     }
     if let Some(named) = named {
         if registry.tenant_store(&project, &named).is_none() {
-            return Err(missing(&named, false));
+            return Err(missing_tenant(registry, &project, &named));
         }
     }
     Ok(rewritten)
+}
+
+/// Production's refusal of a named tenant that does not exist: `TENANT_DELETED` when it was
+/// deleted in this run, else `INVALID_TENANT_ID`.
+fn missing_tenant(registry: &AuthRegistry, project: &str, tenant: &str) -> JsonResponse {
+    error(
+        400,
+        if registry.tenant_deleted(project, tenant) {
+            "TENANT_DELETED"
+        } else {
+            "INVALID_TENANT_ID"
+        },
+    )
+}
+
+/// A Secure Token refresh under strict: a refresh token of a deleted tenant is refused in the
+/// Secure Token's shape, and a tenantId field is ignored (selection#refresh-a1-tenant-b).
+fn strict_refreshed_tenant(
+    registry: &AuthRegistry,
+    project: &str,
+    body: &Value,
+) -> Result<Option<Value>, JsonResponse> {
+    if let Some((token_project, tenant)) = str_field(body, "refresh_token")
+        .and_then(fireemu_core_auth::store::AuthRegistry::refresh_token_tenant)
+    {
+        if token_project == project && registry.tenant_store(project, &tenant).is_none() {
+            return Err(secure_token_error_shape(missing_tenant(
+                registry, project, &tenant,
+            )));
+        }
+    }
+    if body.get("tenantId").is_none() {
+        return Ok(None);
+    }
+    let mut without = body.clone();
+    if let Some(object) = without.as_object_mut() {
+        object.remove("tenantId");
+    }
+    Ok(Some(without))
 }
 
 /// An error in the Admin v2 shape: `code`, `message` and the canonical `status`, no `errors`.
@@ -3276,8 +3295,16 @@ fn handle_with_policy_inner(
     let Ok(mut store) = store_arc.lock() else {
         return error(500, "INTERNAL");
     };
+    // Production's Admin create on a tenant path takes a different body tenantId without an
+    // error (admin-accounts#create-in-a-body-tenant-b).
+    let body_tenant_ignored = !state.stateless_refresh_tokens
+        && matches!(
+            resolution,
+            routes::Resolution::Matched { route, .. }
+                if route.handler == routes::Handler::AdminCreate
+        );
     if let Some(request_tenant) = str_field(body, "tenantId") {
-        if store.tenant_id() != Some(request_tenant) {
+        if !body_tenant_ignored && store.tenant_id() != Some(request_tenant) {
             return error(400, "TENANT_ID_MISMATCH");
         }
     }
@@ -7366,8 +7393,16 @@ fn select_store(
         }
     }
     let requested_tenant = body_tenant.or(query_tenant.as_deref());
+    let strict = !state.stateless_refresh_tokens;
+    let handler = match resolution {
+        routes::Resolution::Matched { route, .. } => Some(route.handler),
+        _ => None,
+    };
     if let Some((_, Some(path_tenant))) = routes::scoped_target(path) {
-        if requested_tenant.is_some_and(|requested| requested != path_tenant) {
+        // Production's Admin create on a tenant path takes a different body tenantId without
+        // an error (admin-accounts#create-in-a-body-tenant-b); the path's tenant is used.
+        let body_ignored = strict && handler == Some(routes::Handler::AdminCreate);
+        if !body_ignored && requested_tenant.is_some_and(|requested| requested != path_tenant) {
             return Err(error(400, "TENANT_ID_MISMATCH"));
         }
     }
@@ -7448,10 +7483,22 @@ fn select_store(
         // Administrator query accepts its tenant selector in the JSON body as well.
         // Do not route a tenant query into the default project store. Other handlers
         // retain their existing selector rules; path/body/query conflicts were checked above.
-        let selected_tenant =
-            query_tenant
-                .as_deref()
-                .or(if query_body_scope { body_tenant } else { None });
+        // Strict: on the project path an Admin lookup takes the body's tenantId as its scope
+        // (selection#admin-lookup-a1-body-tenant), and a session cookie is minted in the
+        // tenant of the ID token it is given (credentials#cookie-in-project).
+        let body_scoped =
+            query_body_scope || (strict && handler == Some(routes::Handler::AdminLookup));
+        let token_scoped = (strict && handler == Some(routes::Handler::AdminCreateSessionCookie))
+            .then(|| {
+                id_token_target
+                    .as_ref()
+                    .and_then(|(_, tenant)| tenant.as_deref())
+            })
+            .flatten();
+        let selected_tenant = query_tenant
+            .as_deref()
+            .or(if body_scoped { body_tenant } else { None })
+            .or(token_scoped);
         if let Some(selected_tenant) = selected_tenant {
             let Some(store) = registry.tenant_store(project, selected_tenant) else {
                 return Err(error(404, "TENANT_NOT_FOUND"));
@@ -7900,13 +7947,25 @@ fn sign_in_with_custom_token(
     if production_rules && jwt && !custom_token_claims_hold(&payload, now_secs) {
         return error(400, "INVALID_CUSTOM_TOKEN");
     }
+    // Production (strict): a claim other than the named tenant is refused with its text, and
+    // a token without a claim exchanged in a tenant is its internal error (AUTH-TENANT-BLOCKING
+    // recording 2026-09-27, custom-token program).
     if let Some(tenant_id) = payload.get("tenant_id") {
         let Some(tenant_id) = tenant_id.as_str() else {
             return error(400, "INVALID_CUSTOM_TOKEN : tenant_id must be a string");
         };
         if store.tenant_id() != Some(tenant_id) {
-            return error(400, "TENANT_ID_MISMATCH");
+            return error(
+                400,
+                if production_rules {
+                    "TENANT_ID_MISMATCH : Specified tenant ID does not match the custom token."
+                } else {
+                    "TENANT_ID_MISMATCH"
+                },
+            );
         }
+    } else if production_rules && store.tenant_id().is_some() {
+        return backend_internal_error();
     }
     let uid = match payload.get("uid").or_else(|| payload.get("user_id")) {
         Some(JsonValue::String(s)) => Some(s.clone()),

@@ -19,7 +19,7 @@ test("the production Firebase config contains only the event fixture codebase", 
 
 test("each canary CLI command pins its project, config, quota project, and one function", () => {
   for (const name of ["fsCreatedV1", "fsCreatedV2"]) {
-    const deploy = buildCanaryCli("deploy", "demo-events-prod", name);
+    const deploy = buildCanaryCli("deploy", "demo-events-prod", name, "/tmp/events-config");
     assert.deepEqual(deploy.args, [
       "deploy",
       "--config",
@@ -29,28 +29,42 @@ test("each canary CLI command pins its project, config, quota project, and one f
       "--only",
       `functions:events:${name}`,
       "--non-interactive",
+      "--debug",
     ]);
     assert.equal(deploy.env.GOOGLE_CLOUD_QUOTA_PROJECT, "demo-events-prod");
-    const remove = buildCanaryCli("delete", "demo-events-prod", name);
+    assert.equal(deploy.env.XDG_CONFIG_HOME, "/tmp/events-config");
+    assert.equal(deploy.args.includes("--force"), false);
+    const remove = buildCanaryCli("delete", "demo-events-prod", name, "/tmp/events-config");
     assert.deepEqual(remove.args, [
       "functions:delete",
       name,
+      "--config",
+      "conformance/functions-events/firebase.json",
       "--region",
       "us-central1",
       "--project",
       "demo-events-prod",
+      "--non-interactive",
       "--force",
+      "--debug",
     ]);
     assert.equal(remove.env.GOOGLE_CLOUD_QUOTA_PROJECT, "demo-events-prod");
+    assert.equal(remove.env.XDG_CONFIG_HOME, "/tmp/events-config");
   }
 });
 
 test("canary CLI rejects an unreviewed function or malformed project", () => {
   for (const name of ["authCreatedV1", "fsCreatedV2,storageFinalizedV2", ""]) {
-    assert.throws(() => buildCanaryCli("deploy", "demo-events-prod", name));
+    assert.throws(() => buildCanaryCli("deploy", "demo-events-prod", name, "/tmp/events-config"));
   }
-  assert.throws(() => buildCanaryCli("deploy", "futaba-prod;other", "fsCreatedV1"));
-  assert.throws(() => buildCanaryCli("other", "demo-events-prod", "fsCreatedV1"));
+  assert.throws(() =>
+    buildCanaryCli("deploy", "futaba-prod;other", "fsCreatedV1", "/tmp/events-config"),
+  );
+  assert.throws(() =>
+    buildCanaryCli("other", "demo-events-prod", "fsCreatedV1", "/tmp/events-config"),
+  );
+  assert.throws(() => buildCanaryCli("deploy", "demo-events-prod", "fsCreatedV1", ""));
+  assert.throws(() => buildCanaryCli("deploy", "demo-events-prod", "fsCreatedV1", "relative"));
 });
 
 test("the deployable fixture has its own frozen SDK dependency lockfile", () => {

@@ -8,6 +8,7 @@ import hashlib
 import json
 import os
 import re
+import signal
 import subprocess
 import sys
 from pathlib import Path
@@ -198,6 +199,7 @@ def main(argv=None):
     envelope_path = _private(root / envelope_relative, root)
 
     def admit():
+        session.assert_clean_environment()
         commit = _source_commit()
         pins = load_packet(
             packet_path, args.packet_sha256, baseline_path, envelope_path,
@@ -213,17 +215,24 @@ def main(argv=None):
     pins = admit()
     baseline = json.loads(baseline_path.read_bytes())
     ledger_path = root / "docs.local/runs/sandbox-ledger.jsonl"
-    result = runner.record_twice(
-        ledger_path=ledger_path,
-        private_dir=ledger_path.parent,
-        pins=pins,
-        decisions=lambda: (root / "docs.local/instructions/owner-decisions.md").read_text(),
-        now=lambda: dt.datetime.now(dt.timezone.utc),
-        record_once=lambda index, nonce, owner, directory: session.run_once(
-            nonce, owner, directory, baseline
-        ),
-        admission_check=admit,
-    )
+    def interrupt_on_sigterm(_signum, _frame):
+        raise KeyboardInterrupt
+
+    previous_sigterm = signal.signal(signal.SIGTERM, interrupt_on_sigterm)
+    try:
+        result = runner.record_twice(
+            ledger_path=ledger_path,
+            private_dir=ledger_path.parent,
+            pins=pins,
+            decisions=lambda: (root / "docs.local/instructions/owner-decisions.md").read_text(),
+            now=lambda: dt.datetime.now(dt.timezone.utc),
+            record_once=lambda index, nonce, owner, directory: session.run_once(
+                nonce, owner, directory, baseline
+            ),
+            admission_check=admit,
+        )
+    finally:
+        signal.signal(signal.SIGTERM, previous_sigterm)
     print(json.dumps(result, sort_keys=True))
     return 0
 
@@ -231,6 +240,6 @@ def main(argv=None):
 if __name__ == "__main__":
     try:
         raise SystemExit(main())
-    except Exception as error:  # noqa: BLE001 -- never print credential or response material.
+    except (Exception, KeyboardInterrupt) as error:  # noqa: BLE001 -- never print credential or response material.
         print(f"sandbox recording stopped: {type(error).__name__}", file=sys.stderr)
         raise SystemExit(1) from None

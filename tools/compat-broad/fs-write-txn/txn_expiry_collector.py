@@ -727,11 +727,11 @@ class Collection:
             self._observe(deadline)
         except _Stopped as stop:
             self.failure = stop.reason
-        except Exception as error:  # noqa: BLE001 - retained, never reinterpreted
+        except (Exception, KeyboardInterrupt) as error:  # noqa: BLE001 - cleanup is owed after interruption.
             self.failure = type(error).__name__
         try:
             cleanup, releases = self._cleanup()
-        except Exception as error:  # noqa: BLE001 - a receipt is owed regardless
+        except (Exception, KeyboardInterrupt) as error:  # noqa: BLE001 - a receipt is owed regardless.
             self._note_failure("cleanup", type(error).__name__)
             cleanup, releases = self._unattempted_cleanup(type(error).__name__), []
         receipt = self._receipt(cleanup, releases)

@@ -163,7 +163,7 @@ def record_twice(*, ledger_path, private_dir, pins, decisions, now, record_once,
                     _ledger_row(pins, attempt_id, run_dir, nonce, "recorded", requests),
                 )
                 receipts.append(receipt)
-            except Exception:
+            except (Exception, KeyboardInterrupt):
                 last = admission.read_ledger(ledger_path)[-1]
                 if last.get("attemptId") == attempt_id and last.get("outcome") == "reserved":
                     admission.append_ledger(

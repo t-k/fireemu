@@ -167,6 +167,23 @@ def test_a_full_pass_observes_every_case_and_recovers_every_resource():
     assert sum(waits) == cases.maximum_elapsed_seconds()
 
 
+def test_keyboard_interrupt_runs_owned_cleanup_before_returning_a_receipt():
+    endpoint = Endpoint()
+
+    def interrupt_once(request):
+        if request.get("site") == "setup/create/locked-b":
+            raise KeyboardInterrupt
+        return endpoint(request)
+
+    receipt = collector.collect(
+        options(), interrupt_once, advance=advances([]), monotonic=lambda: 0.0
+    )
+    assert receipt["failure"] == "KeyboardInterrupt"
+    assert receipt["complete"] is False
+    assert endpoint.documents == {}
+    assert any(call.get("site", "").startswith("cleanup/") for call in endpoint.calls)
+
+
 def test_each_case_row_carries_its_expected_local_result():
     receipt = collector.collect(
         options(), Endpoint(), advance=advances([]), monotonic=lambda: 0.0

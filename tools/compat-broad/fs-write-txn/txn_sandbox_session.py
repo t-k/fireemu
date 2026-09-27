@@ -15,7 +15,29 @@ import txn_sandbox_management as management
 import txn_sandbox_wire as wire_module
 
 
+def assert_clean_environment(environ=None):
+    """Reject ambient transport and identity overrides before a production send."""
+    environ = os.environ if environ is None else environ
+    forbidden = [
+        name for name in environ
+        if name.upper().endswith("_PROXY")
+        or name.startswith("CLOUDSDK_")
+        or name in {
+            "GOOGLE_APPLICATION_CREDENTIALS", "GOOGLE_AUTH_ACCESS_TOKEN",
+            "GOOGLE_CLOUD_ACCESS_TOKEN", "FIREBASE_TOKEN", "GCLOUD_ACCESS_TOKEN",
+        }
+    ]
+    if forbidden:
+        raise ValueError("ambient proxy or credential environment is forbidden")
+
+
 def _access_token():
+    assert_clean_environment()
+    child_env = {
+        name: os.environ[name]
+        for name in ("HOME", "PATH", "LANG", "LC_ALL", "TMPDIR")
+        if name in os.environ
+    }
     try:
         result = subprocess.run(
             ["gcloud", "auth", "application-default", "print-access-token"],
@@ -23,6 +45,7 @@ def _access_token():
             capture_output=True,
             text=True,
             timeout=30,
+            env=child_env,
         )
     except (OSError, subprocess.SubprocessError) as error:
         raise ValueError("OAuth acquisition failed") from None

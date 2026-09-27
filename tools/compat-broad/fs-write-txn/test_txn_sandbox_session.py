@@ -1,6 +1,7 @@
 """The production session composes existing collector and new bounded gates."""
 
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -145,3 +146,29 @@ def test_session_rejects_its_raw_oauth_token_in_collector_receipt(tmp_path):
             wire_factory=lambda token, budget: lambda request: None,
             collector_factory=Collector,
         )
+
+
+@pytest.mark.parametrize("name", [
+    "HTTPS_PROXY", "ALL_PROXY", "CLOUDSDK_PROXY_ADDRESS",
+    "GOOGLE_APPLICATION_CREDENTIALS", "CLOUDSDK_AUTH_ACCESS_TOKEN_FILE",
+    "FIREBASE_TOKEN",
+])
+def test_ambient_proxy_or_credential_refuses_before_gcloud(monkeypatch, name):
+    monkeypatch.setenv(name, "injected")
+    monkeypatch.setattr(session.subprocess, "run", lambda *args, **kwargs: pytest.fail("gcloud ran"))
+    with pytest.raises(ValueError, match="ambient"):
+        session._access_token()
+
+
+def test_gcloud_gets_only_the_minimum_environment(monkeypatch):
+    monkeypatch.setenv("UNRELATED_SECRET", "must-not-travel")
+    observed = []
+
+    def run(command, **kwargs):
+        observed.append(kwargs["env"])
+        return type("Result", (), {"stdout": "test-access-token\n"})()
+
+    monkeypatch.setattr(session.subprocess, "run", run)
+    assert session._access_token() == "test-access-token"
+    assert "UNRELATED_SECRET" not in observed[0]
+    assert observed[0]["HOME"] == os.environ["HOME"]

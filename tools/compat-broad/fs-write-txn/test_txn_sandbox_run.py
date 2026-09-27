@@ -110,6 +110,24 @@ def test_freeze_mismatch_records_a_stopped_row_and_private_differences(tmp_path)
     assert differences["differences"]
 
 
+def test_keyboard_interrupt_still_records_a_stop_and_keeps_the_lock(tmp_path):
+    ledger = tmp_path / "sandbox-ledger.jsonl"
+    ledger.write_text(json.dumps(LAST) + "\n")
+    ledger.chmod(0o600)
+
+    def interrupted(*_args):
+        raise KeyboardInterrupt
+
+    with pytest.raises(KeyboardInterrupt):
+        runner.record_twice(
+            ledger_path=ledger, private_dir=tmp_path, pins=PINS,
+            decisions=DECISION, now=NOW, record_once=interrupted,
+        )
+    rows = [json.loads(line) for line in ledger.read_text().splitlines()]
+    assert rows[-1]["outcome"] == "stopped-needs-review"
+    assert (tmp_path / "sandbox-locks/fireemu-oracle-sbx.lock").exists()
+
+
 def test_missing_owner_approval_does_not_take_lock_or_send(tmp_path):
     ledger = tmp_path / "sandbox-ledger.jsonl"
     ledger.write_text(json.dumps(LAST) + "\n")

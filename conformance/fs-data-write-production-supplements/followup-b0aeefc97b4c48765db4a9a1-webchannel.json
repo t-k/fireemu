@@ -1,0 +1,159 @@
+{
+  "schemaVersion": 1,
+  "evidence": {
+    "corpusSha256": "ec97757b4dda284c4ee5f5e4881b1b742ee19f0304d651a02c9d85a2288c649f",
+    "project": "demo-firestore-probe",
+    "database": "(default)",
+    "recordedAt": [
+      "2026-09-27T15:26:14.340Z",
+      "2026-09-27T15:34:26.478Z"
+    ],
+    "harnessRevision": "6a5f110119df8c55bd87cdb964720c13f21f2c55",
+    "sdkVersions": {
+      "firebase": "12.18.0",
+      "firebaseAdmin": "14.3.0",
+      "firestore": "8.7.1",
+      "grpc": "1.14.4"
+    },
+    "recordingDigests": [
+      "de6fd1fdb034d8506ac257b5e0c1b3ded925b5d04a4543332b6f4c9e8463ce73",
+      "de6fd1fdb034d8506ac257b5e0c1b3ded925b5d04a4543332b6f4c9e8463ce73"
+    ],
+    "streamRecordingDigests": [],
+    "nondeterministicPrograms": []
+  },
+  "programs": {
+    "writes/limits/webchannel-request-bytes/12582912": {
+      "steps": {
+        "handshake": {
+          "status": 200,
+          "code": "OK",
+          "body": "session-opened"
+        },
+        "control": {
+          "status": 200,
+          "code": "OK",
+          "body": "forward-ack"
+        },
+        "boundary": {
+          "status": 200,
+          "code": "OK",
+          "body": "forward-ack"
+        },
+        "terminate": {
+          "status": 200,
+          "code": "OK",
+          "body": "session-terminated"
+        }
+      }
+    },
+    "writes/limits/webchannel-request-bytes/16777216": {
+      "steps": {
+        "handshake": {
+          "status": 200,
+          "code": "OK",
+          "body": "session-opened"
+        },
+        "control": {
+          "status": 200,
+          "code": "OK",
+          "body": "forward-ack"
+        },
+        "boundary": {
+          "status": 400,
+          "code": "WEBCHANNEL_HTTP",
+          "message": "<!DOCTYPE html>\n<html lang=en>\n  <meta charset=utf-8>\n  <meta name=viewport content=\"initial-scale=1, minimum-scale=1, width=device-width\">\n  <title>Error 400 (Bad Request)!!1</title>\n  <style>\n    *{margin:0;padding:0}html,code{font:15px/22px arial,sans-serif}html{background:#fff;color:#222;padding:15px}body{margin:7% auto 0;max-width:390px;min-height:180px;padding:30px 0 15px}* > body{background"
+        },
+        "terminate": {
+          "status": 400,
+          "code": "WEBCHANNEL_HTTP",
+          "message": "<!DOCTYPE html>\n<html lang=en>\n  <meta charset=utf-8>\n  <meta name=viewport content=\"initial-scale=1, minimum-scale=1, width=device-width\">\n  <title>Error 400 (Bad Request)!!1</title>\n  <style>\n    *{margin:0;padding:0}html,code{font:15px/22px arial,sans-serif}html{background:#fff;color:#222;padding:15px}body{margin:7% auto 0;max-width:390px;min-height:180px;padding:30px 0 15px}* > body{background"
+        }
+      }
+    },
+    "writes/limits/webchannel-request-bytes/16777217": {
+      "steps": {
+        "handshake": {
+          "status": 200,
+          "code": "OK",
+          "body": "session-opened"
+        },
+        "control": {
+          "status": 200,
+          "code": "OK",
+          "body": "forward-ack"
+        },
+        "boundary": {
+          "status": 400,
+          "code": "WEBCHANNEL_HTTP",
+          "message": "<!DOCTYPE html>\n<html lang=en>\n  <meta charset=utf-8>\n  <meta name=viewport content=\"initial-scale=1, minimum-scale=1, width=device-width\">\n  <title>Error 400 (Bad Request)!!1</title>\n  <style>\n    *{margin:0;padding:0}html,code{font:15px/22px arial,sans-serif}html{background:#fff;color:#222;padding:15px}body{margin:7% auto 0;max-width:390px;min-height:180px;padding:30px 0 15px}* > body{background"
+        },
+        "terminate": {
+          "status": 400,
+          "code": "WEBCHANNEL_HTTP",
+          "message": "<!DOCTYPE html>\n<html lang=en>\n  <meta charset=utf-8>\n  <meta name=viewport content=\"initial-scale=1, minimum-scale=1, width=device-width\">\n  <title>Error 400 (Bad Request)!!1</title>\n  <style>\n    *{margin:0;padding:0}html,code{font:15px/22px arial,sans-serif}html{background:#fff;color:#222;padding:15px}body{margin:7% auto 0;max-width:390px;min-height:180px;padding:30px 0 15px}* > body{background"
+        }
+      }
+    },
+    "writes/limits/webchannel-request-bytes/33554432": {
+      "steps": {
+        "handshake": {
+          "status": 200,
+          "code": "OK",
+          "body": "session-opened"
+        },
+        "control": {
+          "status": 200,
+          "code": "OK",
+          "body": "forward-ack"
+        },
+        "boundary": {
+          "status": 400,
+          "code": "WEBCHANNEL_HTTP",
+          "message": "<!DOCTYPE html>\n<html lang=en>\n  <meta charset=utf-8>\n  <meta name=viewport content=\"initial-scale=1, minimum-scale=1, width=device-width\">\n  <title>Error 400 (Bad Request)!!1</title>\n  <style>\n    *{margin:0;padding:0}html,code{font:15px/22px arial,sans-serif}html{background:#fff;color:#222;padding:15px}body{margin:7% auto 0;max-width:390px;min-height:180px;padding:30px 0 15px}* > body{background"
+        },
+        "terminate": {
+          "status": 400,
+          "code": "WEBCHANNEL_HTTP",
+          "message": "<!DOCTYPE html>\n<html lang=en>\n  <meta charset=utf-8>\n  <meta name=viewport content=\"initial-scale=1, minimum-scale=1, width=device-width\">\n  <title>Error 400 (Bad Request)!!1</title>\n  <style>\n    *{margin:0;padding:0}html,code{font:15px/22px arial,sans-serif}html{background:#fff;color:#222;padding:15px}body{margin:7% auto 0;max-width:390px;min-height:180px;padding:30px 0 15px}* > body{background"
+        }
+      }
+    },
+    "writes/limits/webchannel-request-bytes/33554433": {
+      "steps": {
+        "handshake": {
+          "status": 200,
+          "code": "OK",
+          "body": "session-opened"
+        },
+        "control": {
+          "status": 200,
+          "code": "OK",
+          "body": "forward-ack"
+        },
+        "boundary": {
+          "status": 400,
+          "code": "WEBCHANNEL_HTTP",
+          "message": "<!DOCTYPE html>\n<html lang=en>\n  <meta charset=utf-8>\n  <meta name=viewport content=\"initial-scale=1, minimum-scale=1, width=device-width\">\n  <title>Error 400 (Bad Request)!!1</title>\n  <style>\n    *{margin:0;padding:0}html,code{font:15px/22px arial,sans-serif}html{background:#fff;color:#222;padding:15px}body{margin:7% auto 0;max-width:390px;min-height:180px;padding:30px 0 15px}* > body{background"
+        },
+        "terminate": {
+          "status": 400,
+          "code": "WEBCHANNEL_HTTP",
+          "message": "<!DOCTYPE html>\n<html lang=en>\n  <meta charset=utf-8>\n  <meta name=viewport content=\"initial-scale=1, minimum-scale=1, width=device-width\">\n  <title>Error 400 (Bad Request)!!1</title>\n  <style>\n    *{margin:0;padding:0}html,code{font:15px/22px arial,sans-serif}html{background:#fff;color:#222;padding:15px}body{margin:7% auto 0;max-width:390px;min-height:180px;padding:30px 0 15px}* > body{background"
+        }
+      }
+    }
+  },
+  "streams": {},
+  "mode": "followup",
+  "recipeDigests": {
+    "programs": {
+      "writes/limits/webchannel-request-bytes/12582912": "9193304385069355ae1ca1433b1fe92222e8dfe87683469b6303f28920f9217e",
+      "writes/limits/webchannel-request-bytes/16777216": "0d7aa7bb99818d0003311633f04d21b63e522e63addcf556a8c3c8d974e2bca6",
+      "writes/limits/webchannel-request-bytes/16777217": "d8e7fcaedd4cf74f5142dd8061b570e7b613de227b623f1ee3a13cf4849fe7bf",
+      "writes/limits/webchannel-request-bytes/33554432": "d3c9536efedf43c83d55e5f5ce2448e3eab7d7bd93334bf693723657dd9906d6",
+      "writes/limits/webchannel-request-bytes/33554433": "7c4df6a164fc863a6946123c471fc2adc2a5246d5839198abe6775bca886127c"
+    },
+    "streams": {}
+  }
+}

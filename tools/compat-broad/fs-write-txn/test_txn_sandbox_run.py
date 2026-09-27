@@ -22,11 +22,11 @@ def test_two_complete_recordings_freeze_under_one_lock(tmp_path):
     checked = []
 
     def recheck():
-        checked.append((tmp_path / "sandbox-ledger.jsonl.lock").exists())
+        checked.append((tmp_path / "sandbox-locks/fireemu-oracle-sbx.lock").exists())
 
     def record(index, nonce, owner, directory):
         calls.append((index, nonce, owner, directory))
-        assert (tmp_path / "sandbox-ledger.jsonl.lock").exists()
+        assert (tmp_path / "sandbox-locks/fireemu-oracle-sbx.lock").exists()
         answer = receipt(nonce)
         answer["requestCount"] = 70 + index
         answer["sandboxRequests"] = 70 + index
@@ -45,7 +45,7 @@ def test_two_complete_recordings_freeze_under_one_lock(tmp_path):
     assert len(calls) == 2
     assert calls[0][1] != calls[1][1]
     assert calls[0][2] != calls[1][2]
-    assert not (tmp_path / "sandbox-ledger.jsonl.lock").exists()
+    assert not (tmp_path / "sandbox-locks/fireemu-oracle-sbx.lock").exists()
     assert Path(result["freezePath"]).exists()
     assert len(json.loads(Path(result["freezePath"]).read_text())["cases"]) == 13
     rows = [json.loads(line) for line in ledger.read_text().splitlines()]
@@ -79,7 +79,7 @@ def test_incomplete_first_pass_keeps_lock_and_skips_second(tmp_path):
             record_once=record,
         )
     assert calls == [0]
-    assert (tmp_path / "sandbox-ledger.jsonl.lock").exists()
+    assert (tmp_path / "sandbox-locks/fireemu-oracle-sbx.lock").exists()
     rows = [json.loads(line) for line in ledger.read_text().splitlines()]
     assert rows[-1]["outcome"] == "needs-recovery"
 
@@ -99,5 +99,24 @@ def test_missing_owner_approval_does_not_take_lock_or_send(tmp_path):
             record_once=lambda *_args: calls.append(1),
         )
     assert calls == []
-    assert not (tmp_path / "sandbox-ledger.jsonl.lock").exists()
+    assert not (tmp_path / "sandbox-locks/fireemu-oracle-sbx.lock").exists()
     assert len(ledger.read_text().splitlines()) == 1
+
+
+def test_legacy_shared_lock_prevents_any_recording(tmp_path):
+    ledger = tmp_path / "sandbox-ledger.jsonl"
+    ledger.write_text(json.dumps(LAST) + "\n")
+    ledger.chmod(0o600)
+    (tmp_path / "sandbox-ledger.jsonl.lock").write_text("legacy")
+    calls = []
+    with pytest.raises(FileExistsError, match="legacy"):
+        runner.record_twice(
+            ledger_path=ledger,
+            private_dir=tmp_path,
+            pins=PINS,
+            decisions=DECISION,
+            now=NOW,
+            record_once=lambda *_args: calls.append(1),
+        )
+    assert calls == [] and len(ledger.read_text().splitlines()) == 1
+    assert not (tmp_path / "sandbox-locks/fireemu-oracle-sbx.lock").exists()

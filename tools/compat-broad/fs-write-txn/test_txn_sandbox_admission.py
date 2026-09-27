@@ -24,6 +24,9 @@ PINS = {
     "packetPath": PATH,
     "requestsPerRecording": 95,
     "estimatedUsdPerRecording": 0.05,
+    "packetName": "expiry-retry-04",
+    "envelopeId": "FS-TRANSACTION-expiry-retry-04-001",
+    "envelopePath": "docs.local/reviews/transaction-envelope.md",
 }
 NOW = datetime(2026, 9, 27, 16, 0, tzinfo=timezone.utc)
 LAST = {
@@ -38,6 +41,22 @@ DECISION = (
     f"packetSha256={PACKET}; sourceCommit={SOURCE}; runnerSha256={RUNNER}; "
     "requestsPerRecording=95; estimatedUsdPerRecording=0.05; recordings=2 | "
     f"オーナー（直接の承認） | {PATH}\n"
+)
+ENVELOPE = (
+    "- 2026-09-28 | FS-TRANSACTION expiry-retry-04 envelope | "
+    "envelopeId=FS-TRANSACTION-expiry-retry-04-001; "
+    "project=fireemu-oracle-sbx/(default); maxRequests=190; reserveUsd=0.10; "
+    "writes=owned-five-documents; iamConfig=none; retries=none; "
+    "onStop=needs-recovery-lock-held | オーナー（直接の承認） | "
+    "docs.local/reviews/transaction-envelope.md\n"
+)
+DELEGATED = (
+    "- 2026-09-28 | FS-TRANSACTION expiry-retry-04 | decision=APPROVE; "
+    "envelopeId=FS-TRANSACTION-expiry-retry-04-001; "
+    f"packetSha256={PACKET}; sourceCommit={SOURCE}; runnerSha256={RUNNER}; "
+    "requestsPerRecording=95; estimatedUsdPerRecording=0.05; recordings=2 | "
+    "Claude（委任。枠の内の承認し直し） | "
+    f"{PATH}\n"
 )
 
 
@@ -74,6 +93,46 @@ def test_send_gate_rejects_packet_replay_and_duplicate_owner_line():
         admission.verify_send_gates([LAST], NOW, DECISION + DECISION, PINS)
 
 
+def test_unkeyed_started_row_cannot_be_closed_by_unrelated_terminal():
+    rows = [
+        {"ts": "2026-09-27T14:00:00Z", "project": "fireemu-oracle-sbx", "event": "started"},
+        {"ts": "2026-09-27T15:00:00Z", "project": "fireemu-oracle-sbx", "outcome": "recorded"},
+    ]
+    with pytest.raises(ValueError, match="open attempt"):
+        admission.verify_send_gates(rows, NOW, DECISION, PINS)
+
+
+def test_legacy_reservation_with_same_run_directory_has_a_terminal():
+    rows = [
+        {"ts": "2026-09-24T05:19:37Z", "project": "fireemu-oracle-sbx", "outcome": "reserved", "runDir": "/private/legacy-run"},
+        {"ts": "2026-09-24T08:50:18Z", "project": "fireemu-oracle-sbx", "outcome": "legacy-recovery-reservation-actual-requests", "runDir": "/private/legacy-run"},
+        LAST,
+    ]
+    assert admission.verify_send_gates(rows, NOW, DECISION, PINS) == LAST["ts"]
+
+
+def test_owner_envelope_and_delegated_exact_version_are_accepted_together():
+    assert admission.verify_send_gates([LAST], NOW, ENVELOPE + DELEGATED, PINS) == LAST["ts"]
+    with pytest.raises(ValueError, match="owner"):
+        admission.verify_send_gates([LAST], NOW, DELEGATED, PINS)
+    with pytest.raises(ValueError, match="envelope"):
+        admission.verify_send_gates(
+            [LAST], NOW, ENVELOPE.replace("maxRequests=190", "maxRequests=191") + DELEGATED,
+            PINS,
+        )
+
+
+def test_later_revocation_refuses_direct_and_envelope_paths():
+    revoked = (
+        "- 2026-09-28 | FS-TRANSACTION expiry-retry-04 | REVOKED; "
+        "envelopeId=FS-TRANSACTION-expiry-retry-04-001 | オーナー | "
+        "docs.local/reviews/transaction-envelope.md\n"
+    )
+    for decisions in (DECISION + revoked, ENVELOPE + DELEGATED + revoked):
+        with pytest.raises(ValueError, match="revoked"):
+            admission.verify_send_gates([LAST], NOW, decisions, PINS)
+
+
 def test_shared_lock_is_exclusive_and_checks_ownership_before_release(tmp_path):
     path = tmp_path / "sandbox-ledger.jsonl.lock"
     held = admission.acquire_shared_lock(path, PINS["packetId"])
@@ -97,3 +156,73 @@ def test_ledger_append_is_private_and_one_json_object_per_line(tmp_path):
         "reserved", "recorded"
     ]
     assert path.stat().st_mode & 0o777 == 0o600
+
+
+def test_existing_shared_ledger_is_admitted_inside_private_run_directory(tmp_path):
+    tmp_path.chmod(0o700)
+    path = tmp_path / "sandbox-ledger.jsonl"
+    path.write_text(json.dumps(LAST) + "\n")
+    path.chmod(0o644)
+    admission.append_ledger(path, {"outcome": "recorded", "requests": 70})
+    assert len(path.read_text().splitlines()) == 2
+
+
+def project_locks(directory, projects, **kwargs):
+    return admission.acquire_project_locks(
+        directory, projects, task_id="FS-TRANSACTION-SANDBOX",
+        packet_id=PINS["packetId"], source_commit=SOURCE, **kwargs,
+    )
+
+
+def test_project_lock_blocks_same_project_but_allows_another(tmp_path):
+    first = project_locks(tmp_path, ["fireemu-oracle-sbx"])
+    path = tmp_path / "sandbox-locks/fireemu-oracle-sbx.lock"
+    body = json.loads(path.read_text())
+    assert set(body) == {"taskId", "packetId", "sourceCommit", "pid", "acquiredAt"}
+    assert (tmp_path / "sandbox-locks").stat().st_mode & 0o777 == 0o700
+    with pytest.raises(FileExistsError):
+        project_locks(tmp_path, ["fireemu-oracle-sbx"])
+    other = project_locks(tmp_path, ["fireemu-oracle-query"])
+    admission.release_project_locks(other)
+    assert path.exists()
+    admission.release_project_locks(first)
+    assert not path.exists()
+
+
+def test_legacy_shared_lock_blocks_before_and_after_acquisition(tmp_path):
+    legacy = tmp_path / "sandbox-ledger.jsonl.lock"
+    legacy.write_text("old")
+    with pytest.raises(FileExistsError, match="legacy"):
+        project_locks(tmp_path, ["fireemu-oracle-sbx"])
+    assert not (tmp_path / "sandbox-locks/fireemu-oracle-sbx.lock").exists()
+    legacy.unlink()
+
+    def appear():
+        legacy.write_text("old")
+
+    with pytest.raises(FileExistsError, match="legacy"):
+        project_locks(tmp_path, ["fireemu-oracle-sbx"], after_acquire=appear)
+    assert not (tmp_path / "sandbox-locks/fireemu-oracle-sbx.lock").exists()
+
+
+def test_multiple_project_locks_are_sorted_and_partial_failure_releases_only_ours(tmp_path):
+    held = project_locks(tmp_path, ["fireemu-oracle-query", "fireemu-oracle-idp"])
+    assert [item.path.name for item in held] == [
+        "fireemu-oracle-idp.lock", "fireemu-oracle-query.lock"
+    ]
+    admission.release_project_locks(held)
+    foreign = project_locks(tmp_path, ["fireemu-oracle-query"])
+    with pytest.raises(FileExistsError):
+        project_locks(tmp_path, ["fireemu-oracle-query", "fireemu-oracle-idp"])
+    assert not (tmp_path / "sandbox-locks/fireemu-oracle-idp.lock").exists()
+    assert (tmp_path / "sandbox-locks/fireemu-oracle-query.lock").exists()
+    admission.release_project_locks(foreign)
+
+
+def test_releasing_a_changed_project_lock_refuses_to_remove_it(tmp_path):
+    held = project_locks(tmp_path, ["fireemu-oracle-sbx"])
+    path = held[0].path
+    path.write_text('{"foreign":true}\n')
+    with pytest.raises(ValueError, match="changed hands"):
+        admission.release_project_locks(held)
+    assert path.exists()

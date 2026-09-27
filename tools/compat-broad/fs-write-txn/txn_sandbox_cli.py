@@ -43,7 +43,7 @@ PACKET_FIELDS = {
     "schemaVersion", "packetId", "project", "database", "recordings",
     "requestsPerRecording", "estimatedUsdPerRecording", "sourceCommit",
     "runnerSha256", "closureSha256", "casesDigest", "planSourceDigest",
-    "baselineSha256",
+    "baselineSha256", "packetName", "envelopeId", "envelopePath", "envelopeSha256",
 }
 
 
@@ -57,10 +57,12 @@ def runner_source_sha256():
 
 
 def load_packet(
-    packet_path, packet_sha256, baseline_path, *, source_commit,
-    runner_sha256, closure_sha256, packet_relative,
+    packet_path, packet_sha256, baseline_path, envelope_path, *, source_commit,
+    runner_sha256, closure_sha256, packet_relative, envelope_relative,
 ):
-    packet_path, baseline_path = Path(packet_path), Path(baseline_path)
+    packet_path, baseline_path, envelope_path = map(
+        Path, (packet_path, baseline_path, envelope_path)
+    )
     raw = packet_path.read_bytes()
     if sha256(raw) != packet_sha256:
         raise ValueError("packet bytes differ from the reviewed SHA-256")
@@ -74,8 +76,17 @@ def load_packet(
         or value["recordings"] != 2
         or value["casesDigest"] != cases.cases_digest()
         or value["planSourceDigest"] != plan_module.source_digest()
+        or value["packetName"] != "expiry-retry-04"
     ):
         raise ValueError("packet scope or corpus differs from the frozen campaign")
+    if (
+        value["envelopeId"] != "FS-TRANSACTION-expiry-retry-04-001"
+        or not isinstance(value["envelopePath"], str)
+        or value["envelopePath"] != envelope_relative
+        or not value["envelopePath"].startswith("docs.local/reviews/")
+        or ".." in Path(value["envelopePath"]).parts
+    ):
+        raise ValueError("packet envelope identity or path differs")
     if value["requestsPerRecording"] != 95:
         raise ValueError("reviewed request bound must be exactly 95 per recording")
     if value["estimatedUsdPerRecording"] != 0.05:
@@ -88,6 +99,8 @@ def load_packet(
         raise ValueError("packet source, runner or closure differs")
     if sha256(baseline_path.read_bytes()) != value["baselineSha256"]:
         raise ValueError("private baseline differs from the packet")
+    if sha256(envelope_path.read_bytes()) != value["envelopeSha256"]:
+        raise ValueError("owner envelope document differs from the packet")
     if not re.fullmatch(r"[A-Za-z0-9_-]{8,100}", value["packetId"]):
         raise ValueError("bounded packet ID required")
     return {
@@ -98,6 +111,9 @@ def load_packet(
         "packetPath": packet_relative,
         "requestsPerRecording": value["requestsPerRecording"],
         "estimatedUsdPerRecording": value["estimatedUsdPerRecording"],
+        "packetName": value["packetName"],
+        "envelopeId": value["envelopeId"],
+        "envelopePath": value["envelopePath"],
     }
 
 
@@ -112,6 +128,8 @@ def verify_review(review_path, review_sha256, pins):
         f"packetSha256={pins['packetSha256']}",
         f"sourceCommit={pins['sourceCommit']}",
         f"runnerSha256={pins['runnerSha256']}",
+        f"envelopeId={pins['envelopeId']}",
+        "withinEnvelope=YES",
     }
     if not required <= set(lines[1:]):
         raise ValueError("review did not pin this packet and runner")
@@ -174,15 +192,20 @@ def main(argv=None):
     review_path = _private(args.review, root)
     baseline_path = _private(args.baseline, root)
     packet_relative = packet_path.relative_to(root).as_posix()
+    envelope_relative = json.loads(packet_path.read_bytes()).get("envelopePath")
+    if not isinstance(envelope_relative, str):
+        raise ValueError("private owner envelope path is missing")
+    envelope_path = _private(root / envelope_relative, root)
 
     def admit():
         commit = _source_commit()
         pins = load_packet(
-            packet_path, args.packet_sha256, baseline_path,
+            packet_path, args.packet_sha256, baseline_path, envelope_path,
             source_commit=commit,
             runner_sha256=runner_source_sha256(),
             closure_sha256=sha256(CLOSURE.read_bytes()),
             packet_relative=packet_relative,
+            envelope_relative=envelope_relative,
         )
         verify_review(review_path, args.review_sha256, pins)
         return pins

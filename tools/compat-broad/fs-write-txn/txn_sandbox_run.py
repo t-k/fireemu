@@ -88,8 +88,15 @@ def record_twice(*, ledger_path, private_dir, pins, decisions, now, record_once,
     admission.verify_send_gates(rows, current_now(), current_decisions, pins)
     _remaining_task_budget(rows, pins["estimatedUsdPerRecording"] * 2)
     private_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
-    held = admission.acquire_shared_lock(f"{ledger_path}.lock", pins["packetId"])
+    held = admission.acquire_project_locks(
+        private_dir,
+        [contract.PROJECT],
+        task_id=TASK_ID,
+        packet_id=pins["packetId"],
+        source_commit=pins["sourceCommit"],
+    )
     release = False
+    sent = False
     try:
         # Recheck after lock acquisition; another lane may have finished since the first read.
         if admission_check is not None:
@@ -110,6 +117,7 @@ def record_twice(*, ledger_path, private_dir, pins, decisions, now, record_once,
             )
             admission.append_ledger(ledger_path, reservation)
             try:
+                sent = True
                 receipt = record_once(index, nonce, owner, run_dir)
                 if not isinstance(receipt, dict):
                     raise ValueError("recording did not return a receipt")
@@ -149,5 +157,5 @@ def record_twice(*, ledger_path, private_dir, pins, decisions, now, record_once,
         release = True
         return {"runDir": str(run_dir), "freezePath": str(freeze_path)}
     finally:
-        if release:
-            admission.release_shared_lock(held)
+        if release or not sent:
+            admission.release_project_locks(held)

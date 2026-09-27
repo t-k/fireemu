@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { test } from "node:test";
 import { createLocalStorageSender, validateStorageRoute } from "./storage-object/sender.mjs";
 import { buildCorpus } from "./storage-object/corpus.mjs";
@@ -195,4 +196,110 @@ test("a failed journal and an outside-prefix cleanup never reach fetch", async (
   );
   assert.equal(calls, 1);
   assert.equal(failing.snapshot().total, 2);
+});
+
+test("a bound upload is deleted only at its owned generation with counted absence readbacks", async () => {
+  const events = [];
+  const body = Buffer.from("a");
+  const digest = createHash("sha256").update(body).digest("hex");
+  const object = { bucket: "example.appspot.com", name, generation: "123" };
+  let present = false;
+  let fetchCalls = 0;
+  const sender = createLocalStorageSender({
+    plan: plan(),
+    origin: "http://127.0.0.1:9199",
+    fetchImpl: async (href, init) => {
+      fetchCalls++;
+      const url = new URL(href);
+      events.push(`fetch:${init.method}:${url.searchParams.get("ifGenerationMatch") ?? ""}`);
+      if (url.pathname === "/storage/v1/b/example.appspot.com/o")
+        return Response.json({ items: [] });
+      if (init.method === "POST") {
+        present = true;
+        return Response.json(object);
+      }
+      if (init.method === "DELETE") {
+        assert.equal(url.searchParams.get("ifGenerationMatch"), "123");
+        present = false;
+        return new Response(null, { status: 204 });
+      }
+      if (!present) return Response.json({ error: "missing" }, { status: 404 });
+      if (url.searchParams.get("alt") === "media") return new Response(body);
+      return Response.json(object);
+    },
+    onStart: async () => events.push("started"),
+    onReserve: async ({ operationId }) => events.push(`reserve:${operationId}`),
+    onJournal: async ({ operationId }) => events.push(`journal:${operationId}`),
+  });
+  await sender.start();
+  await sender.admitNamespace();
+  sender.admitObject(name);
+  await sender.sendStep({
+    id: "upload",
+    dialect: "gcs",
+    method: "POST",
+    objectName: name,
+    path: "/upload/storage/v1/b/example.appspot.com/o",
+    query: { uploadType: "media", name, ifGenerationMatch: "0" },
+    body: { base64: "YQ==" },
+  });
+  await sender.sendStep({
+    id: "metadata",
+    dialect: "gcs",
+    method: "GET",
+    objectName: name,
+    path: `/storage/v1/b/example.appspot.com/o/${encodeURIComponent(name)}`,
+    query: {},
+  });
+  await sender.sendStep({
+    id: "media",
+    dialect: "gcs",
+    method: "GET",
+    objectName: name,
+    path: `/storage/v1/b/example.appspot.com/o/${encodeURIComponent(name)}`,
+    query: { alt: "media" },
+  });
+  assert.throws(
+    () =>
+      sender.confirmOwned({
+        name,
+        uploadOperationId: "upload",
+        metadataOperationId: "metadata",
+        mediaOperationId: "media",
+        expectedBytesSha256: "b".repeat(64),
+      }),
+    /bytes/i,
+  );
+  assert.equal(
+    sender.confirmOwned({
+      name,
+      uploadOperationId: "upload",
+      metadataOperationId: "metadata",
+      mediaOperationId: "media",
+      expectedBytesSha256: digest,
+    }),
+    "123",
+  );
+  sender.beginCleanup();
+  await assert.rejects(
+    sender.cleanupOwned({
+      name: "storage-object/recordtwo/x",
+      metadataOperationId: "metadata",
+      mediaOperationId: "media",
+      operationId: "outside",
+    }),
+    /prefix/i,
+  );
+  const deleted = await sender.cleanupOwned({
+    name,
+    metadataOperationId: "metadata",
+    mediaOperationId: "media",
+    operationId: "cleanup",
+  });
+  assert.equal(deleted.status, 204);
+  assert.equal(sender.unresolved().length, 0);
+  await sender.verifyRunEmpty();
+  assert.equal(sender.snapshot().total, fetchCalls);
+  assert.ok(events.indexOf("reserve:cleanup") < events.indexOf("journal:cleanup"));
+  assert.ok(events.indexOf("journal:cleanup") < events.indexOf("fetch:DELETE:123"));
 });

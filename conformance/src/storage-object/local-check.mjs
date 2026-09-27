@@ -1,4 +1,5 @@
 import { appendFile, mkdtemp, writeFile } from "node:fs/promises";
+import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { buildCorpus } from "./corpus.mjs";
@@ -37,6 +38,47 @@ const response = await sender.sendStep(recipe.preflight[0], {
 });
 if (response.status !== 404)
   throw new Error(`unexpected initial Storage status ${response.status}`);
+const baselineGcs = await sender.sendStep(recipe.preflight[1], {
+  operationId: "simple-baseline-gcs",
+});
+if (baselineGcs.status !== 404)
+  throw new Error(`unexpected initial GCS status ${baselineGcs.status}`);
+const upload = await sender.sendStep(recipe.steps[0], { operationId: "simple-upload" });
+const metadata = await sender.sendStep(recipe.steps[1], { operationId: "simple-metadata" });
+const media = await sender.sendStep(recipe.steps[2], { operationId: "simple-media" });
+const expectedBytesSha256 = createHash("sha256")
+  .update(Buffer.from(recipe.steps[0].body.base64, "base64"))
+  .digest("hex");
+sender.confirmOwned({
+  name: recipe.objects[0],
+  uploadOperationId: "simple-upload",
+  metadataOperationId: "simple-metadata",
+  mediaOperationId: "simple-media",
+  expectedBytesSha256,
+});
+sender.beginCleanup();
+const deleted = await sender.cleanupOwned({
+  name: recipe.objects[0],
+  metadataOperationId: "simple-metadata",
+  mediaOperationId: "simple-media",
+  operationId: "simple-cleanup",
+});
+await sender.verifyRunEmpty();
+sender.close();
 process.stdout.write(
-  `${JSON.stringify({ status: "LOCAL_READ_OK", requests: sender.snapshot().total, eventPath })}\n`,
+  `${JSON.stringify({
+    status: "LOCAL_SIMPLE_RECIPE_COMPLETE",
+    statuses: [
+      response.status,
+      baselineGcs.status,
+      upload.status,
+      metadata.status,
+      media.status,
+      deleted.status,
+    ],
+    mediaBytes: media.raw.length,
+    requests: sender.snapshot().total,
+    unresolved: sender.unresolved().length,
+    eventPath,
+  })}\n`,
 );

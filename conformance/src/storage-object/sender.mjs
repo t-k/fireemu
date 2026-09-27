@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { createRunOwnership } from "./ownership.mjs";
 import { createStage3RequestCounter } from "./request-counter.mjs";
 
@@ -139,6 +140,10 @@ export function createLocalStorageSender({
   const ownership = createRunOwnership({ bucket, prefix });
   const counter = createStage3RequestCounter(plan, { onStart, onReserve });
   let namespaceAdmitted = false;
+  let ordinal = 0;
+  const observed = new Map();
+  const lastMutation = new Map();
+  const confirmed = new Map();
   if (credentials === null || typeof credentials !== "object" || Array.isArray(credentials))
     throw new Error("invalid local credentials");
 
@@ -164,6 +169,43 @@ export function createLocalStorageSender({
         raw: bytes,
       };
     });
+  }
+
+  function ownedReadbacks(name, metadataOperationId, mediaOperationId) {
+    if (typeof name !== "string" || !name.startsWith(prefix) || name.length === prefix.length)
+      throw new Error("object is outside the owned run prefix");
+    const metadata = observed.get(metadataOperationId);
+    const media = observed.get(mediaOperationId);
+    if (
+      !metadata ||
+      !media ||
+      metadata.ordinal >= media.ordinal ||
+      metadata.ordinal <= (lastMutation.get(name) ?? 0) ||
+      metadata.step.objectName !== name ||
+      media.step.objectName !== name ||
+      metadata.step.method !== "GET" ||
+      media.step.method !== "GET" ||
+      metadata.step.query.alt !== undefined ||
+      media.step.query.alt !== "media" ||
+      metadata.response.status !== 200 ||
+      media.response.status !== 200
+    )
+      throw new Error("owned metadata and media readbacks are missing or stale");
+    let parsed;
+    try {
+      parsed = JSON.parse(metadata.response.raw.toString("utf8"));
+    } catch {
+      throw new Error("owned metadata is not JSON");
+    }
+    if (
+      parsed?.bucket !== bucket ||
+      parsed.name !== name ||
+      typeof parsed.generation !== "string" ||
+      !/^[1-9][0-9]{0,19}$/.test(parsed.generation)
+    )
+      throw new Error("owned metadata identity or generation differs");
+    const bytesSha256 = createHash("sha256").update(media.response.raw).digest("hex");
+    return { bucket, name, generation: parsed.generation, bytesSha256 };
   }
 
   return {
@@ -200,7 +242,8 @@ export function createLocalStorageSender({
       if (counter.snapshot().mode === "not-started") throw new Error("no durable started row");
       const route = validateStorageRoute(step, { bucket, prefix });
       if (route !== "direct") throw new Error("session reference is unresolved");
-      if (step.method === "DELETE") throw new Error("cleanup requires owned-generation proof");
+      if (observed.has(operationId) || operationId === "initial-prefix-list")
+        throw new Error("request operation ID was already used");
       const headers = { ...step.headers };
       if (step.credential !== undefined && step.credential !== "none") {
         const authorization = credentials[step.credential];
@@ -211,7 +254,9 @@ export function createLocalStorageSender({
       const body = encodeBody(step.body);
       const mutates = !["GET", "HEAD"].includes(step.method);
       if (mutates && !namespaceAdmitted) throw new Error("initial namespace is unproved");
-      return countedFetch(
+      if (mutates && counter.snapshot().mode !== "subject")
+        throw new Error("mutation outside the subject phase requires owned cleanup");
+      const response = await countedFetch(
         operationId,
         step.path,
         step.query,
@@ -229,6 +274,124 @@ export function createLocalStorageSender({
             }
           : undefined,
       );
+      observed.set(operationId, { step, response, ordinal: ++ordinal });
+      if (mutates) lastMutation.set(step.objectName, ordinal);
+      return response;
+    },
+    confirmOwned({
+      name,
+      uploadOperationId,
+      metadataOperationId,
+      mediaOperationId,
+      expectedBytesSha256,
+    } = {}) {
+      const upload = observed.get(uploadOperationId);
+      const current = ownedReadbacks(name, metadataOperationId, mediaOperationId);
+      if (
+        !upload ||
+        upload.step.objectName !== name ||
+        !["POST", "PUT"].includes(upload.step.method) ||
+        upload.response.status < 200 ||
+        upload.response.status >= 300 ||
+        upload.ordinal !== lastMutation.get(name)
+      )
+        throw new Error("owned upload response is absent or stale");
+      let uploaded;
+      try {
+        uploaded = JSON.parse(upload.response.raw.toString("utf8"));
+      } catch {
+        throw new Error("owned upload response is not JSON");
+      }
+      if (
+        uploaded?.bucket !== bucket ||
+        uploaded.name !== name ||
+        uploaded.generation !== current.generation
+      )
+        throw new Error("owned upload generation differs from readback");
+      if (
+        typeof expectedBytesSha256 !== "string" ||
+        !/^[a-f0-9]{64}$/.test(expectedBytesSha256) ||
+        current.bytesSha256 !== expectedBytesSha256
+      )
+        throw new Error("owned bytes do not match expected bytes");
+      ownership.observeOwnedGeneration(
+        name,
+        { ...current, operationId: uploadOperationId },
+        expectedBytesSha256,
+      );
+      confirmed.set(name, { ...current, mutationOrdinal: upload.ordinal });
+      return current.generation;
+    },
+    async cleanupOwned({ name, metadataOperationId, mediaOperationId, operationId } = {}) {
+      if (counter.snapshot().mode !== "cleanup") throw new Error("owned cleanup phase is required");
+      const current = ownedReadbacks(name, metadataOperationId, mediaOperationId);
+      const prior = confirmed.get(name);
+      if (
+        !prior ||
+        prior.generation !== current.generation ||
+        prior.bytesSha256 !== current.bytesSha256 ||
+        prior.mutationOrdinal !== lastMutation.get(name)
+      )
+        throw new Error("owned cleanup readbacks do not match the confirmed write");
+      const path = `/storage/v1/b/${bucket}/o/${encodeURIComponent(name)}`;
+      const deletion = await countedFetch(
+        operationId,
+        path,
+        { ifGenerationMatch: current.generation },
+        { method: "DELETE", headers: {} },
+        async () => {
+          await onJournal({
+            bucket,
+            prefix,
+            name,
+            operationId,
+            method: "DELETE",
+            ifGenerationMatch: current.generation,
+          });
+          ownership.cleanupRequest(name, current);
+        },
+      );
+      if (deletion.status !== 204) throw new Error("owned conditional delete was not confirmed");
+      const metadata = await countedFetch(
+        `${operationId}-metadata-absence`,
+        path,
+        {},
+        { method: "GET", headers: {} },
+      );
+      const media = await countedFetch(
+        `${operationId}-media-absence`,
+        path,
+        { alt: "media" },
+        { method: "GET", headers: {} },
+      );
+      ownership.noteDeleted(name, {
+        status: deletion.status,
+        metadataStatus: metadata.status,
+        mediaStatus: media.status,
+      });
+      confirmed.delete(name);
+      return deletion;
+    },
+    async verifyRunEmpty() {
+      if (ownership.unresolved().length > 0) throw new Error("owned objects remain unresolved");
+      const response = await countedFetch(
+        "final-prefix-list",
+        `/storage/v1/b/${bucket}/o`,
+        { prefix, maxResults: "1000" },
+        { method: "GET", headers: {} },
+      );
+      if (response.status !== 200) throw new Error("final prefix list failed");
+      let parsed;
+      try {
+        parsed = JSON.parse(response.raw.toString("utf8"));
+      } catch {
+        throw new Error("final prefix list is not JSON");
+      }
+      return ownership.verifyEmpty({
+        bucket,
+        prefix,
+        pages: [{ items: parsed?.items ?? [], nextPageToken: parsed?.nextPageToken ?? null }],
+      });
     },
     beginCleanup: () => counter.beginCleanup(),
     nextRecording: () => counter.nextRecording(),

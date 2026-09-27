@@ -1262,7 +1262,17 @@ fn explicit_tenant_creation_defaults_sign_in_methods_off_until_patched() {
         );
         assert_eq!(
             sign_up_status(&state, &tenant, json!({})),
-            (400, "OPERATION_NOT_ALLOWED".to_owned()),
+            // Production refuses an anonymous sign-up while anonymous sign-in is off as
+            // ADMIN_ONLY_OPERATION (settings#anonymous-off-sign-up).
+            (
+                400,
+                if profile == "strict" {
+                    "ADMIN_ONLY_OPERATION"
+                } else {
+                    "OPERATION_NOT_ALLOWED"
+                }
+                .to_owned()
+            ),
             "{profile}"
         );
         let (status, refused) = client(
@@ -1430,7 +1440,17 @@ fn tenants_take_none_of_the_project_settings_and_obey_their_own() {
         // The clients obey the tenant's settings.
         assert_eq!(
             sign_up_status(&state, &overridden, json!({})),
-            (400, "OPERATION_NOT_ALLOWED".to_owned()),
+            // Production refuses an anonymous sign-up while anonymous sign-in is off as
+            // ADMIN_ONLY_OPERATION (settings#anonymous-off-sign-up).
+            (
+                400,
+                if profile == "strict" {
+                    "ADMIN_ONLY_OPERATION"
+                } else {
+                    "OPERATION_NOT_ALLOWED"
+                }
+                .to_owned()
+            ),
             "{profile}"
         );
         let (status, refused) = client(
@@ -1440,7 +1460,16 @@ fn tenants_take_none_of_the_project_settings_and_obey_their_own() {
             json!({"email": "seven@example.com", "password": "seven77"}),
         );
         assert_eq!(status, 400, "{profile}: {refused}");
-        assert_eq!(class(&refused), "OPERATION_NOT_ALLOWED", "{profile}");
+        // Production: PASSWORD_LOGIN_DISABLED (settings#password-off-sign-in).
+        assert_eq!(
+            class(&refused),
+            if profile == "strict" {
+                "PASSWORD_LOGIN_DISABLED"
+            } else {
+                "OPERATION_NOT_ALLOWED"
+            },
+            "{profile}"
+        );
         let (status, patched) = admin(
             &state,
             "PATCH",

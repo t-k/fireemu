@@ -275,3 +275,148 @@ fn the_emulator_profile_keeps_its_answers_for_an_unknown_tenant() {
         "{status} {body}"
     );
 }
+
+/// Production's Admin create answer names no tenant, on a tenant path too
+/// (selection#create-a1: `kind`, `email`, `localId`).
+#[test]
+fn strict_admin_create_answers_without_the_tenant() {
+    let s = state(true);
+    let (status, created) = admin(
+        &s,
+        "POST",
+        TENANTS,
+        &json!({"displayName": "atb-sel-c", "allowPasswordSignup": true}),
+    );
+    assert_eq!(status, 200, "{created}");
+    let tenant = created["name"]
+        .as_str()
+        .unwrap()
+        .rsplit('/')
+        .next()
+        .unwrap()
+        .to_owned();
+    let (status, user) = admin(
+        &s,
+        "POST",
+        &format!("{V1}/projects/demo-app/tenants/{tenant}/accounts"),
+        &json!({"email": "c@example.com", "password": "password123"}),
+    );
+    assert_eq!(status, 200, "{user}");
+    let mut keys: Vec<&str> = user
+        .as_object()
+        .unwrap()
+        .keys()
+        .map(String::as_str)
+        .collect();
+    keys.sort_unstable();
+    assert_eq!(keys, ["email", "kind", "localId"], "{user}");
+}
+
+fn patch_tenant(state: &AuthState, tenant: &str, mask: &str, body: &Value) {
+    let (status, answer) = admin(
+        state,
+        "PATCH",
+        &format!("{TENANTS}/{tenant}?updateMask={mask}"),
+        body,
+    );
+    assert_eq!(status, 200, "{answer}");
+}
+
+/// A tenant's sign-in switches answer as production's (settings program).
+#[test]
+fn strict_tenant_switches_answer_as_production() {
+    let s = state(true);
+    let (t, signed) = tenant_with_user(&s, "atb-set-s");
+    let email = "atb-set-s@example.com";
+    // settings#password-off-sign-in, password-off-reset-mail.
+    patch_tenant(
+        &s,
+        &t,
+        "allowPasswordSignup",
+        &json!({"allowPasswordSignup": false}),
+    );
+    assert_eq!(
+        client(
+            &s,
+            &format!("{V1}/accounts:signInWithPassword"),
+            &json!({"tenantId": t, "email": email, "password": "password123"}),
+        ),
+        (400, v1("PASSWORD_LOGIN_DISABLED"))
+    );
+    let (status, mail) = client(
+        &s,
+        &format!("{V1}/accounts:sendOobCode"),
+        &json!({"tenantId": t, "requestType": "PASSWORD_RESET", "email": email}),
+    );
+    assert_eq!(status, 200, "{mail}");
+    patch_tenant(
+        &s,
+        &t,
+        "allowPasswordSignup",
+        &json!({"allowPasswordSignup": true}),
+    );
+    // settings#anonymous-off-sign-up.
+    assert_eq!(
+        client(
+            &s,
+            &format!("{V1}/accounts:signUp"),
+            &json!({"tenantId": t})
+        ),
+        (400, v1("ADMIN_ONLY_OPERATION"))
+    );
+    // settings#auth-off-*: sign-in, admin lookup and refresh are TENANT_DISABLED; a lookup
+    // with a token issued before is TOKEN_EXPIRED.
+    patch_tenant(&s, &t, "disableAuth", &json!({"disableAuth": true}));
+    assert_eq!(
+        client(
+            &s,
+            &format!("{V1}/accounts:signInWithPassword"),
+            &json!({"tenantId": t, "email": email, "password": "password123"}),
+        ),
+        (400, v1("TENANT_DISABLED"))
+    );
+    assert_eq!(
+        admin(
+            &s,
+            "POST",
+            &format!("{V1}/projects/demo-app/tenants/{t}/accounts:lookup"),
+            &json!({"email": [email]}),
+        ),
+        (400, v1("TENANT_DISABLED"))
+    );
+    assert_eq!(
+        client(
+            &s,
+            TOKEN,
+            &json!({"grant_type": "refresh_token", "refresh_token": signed["refreshToken"]}),
+        ),
+        (
+            400,
+            json!({"error": {"code": 400, "message": "TENANT_DISABLED", "status": "INVALID_ARGUMENT"}})
+        )
+    );
+    assert_eq!(
+        client(
+            &s,
+            &format!("{V1}/accounts:lookup"),
+            &json!({"tenantId": t, "idToken": signed["idToken"]}),
+        ),
+        (400, v1("TOKEN_EXPIRED"))
+    );
+    patch_tenant(&s, &t, "disableAuth", &json!({"disableAuth": false}));
+    // settings#phone-tenant-number: a tenant's phone code.
+    patch_tenant(
+        &s,
+        &t,
+        "testPhoneNumbers",
+        &json!({"testPhoneNumbers": {"+16505550102": "123456"}}),
+    );
+    assert_eq!(
+        client(
+            &s,
+            &format!("{V1}/accounts:sendVerificationCode"),
+            &json!({"tenantId": t, "phoneNumber": "+16505550102"}),
+        ),
+        (400, v1("UNSUPPORTED_TENANT_OPERATION"))
+    );
+}

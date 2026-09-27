@@ -2380,7 +2380,12 @@ fn dispatch_with_blocking_hook(
             return error(409, "BLOCKING_FUNCTION_CONFIGURATION_CHANGED");
         }
         if tenant.is_some() {
-            if let Some(denial) = tenant_policy_denial_with_metadata(handler, metadata, body) {
+            if let Some(denial) = tenant_policy_denial_with_metadata(
+                handler,
+                metadata,
+                body,
+                !state.stateless_refresh_tokens,
+            ) {
                 return denial;
             }
         }
@@ -3435,12 +3440,30 @@ fn handle_with_policy_inner(
         None => None,
     };
     let body = resumed_body.as_ref().unwrap_or(body);
+    let strict = !state.stateless_refresh_tokens;
     if route.class == routes::RouteClass::EndUser && store_tenant.is_some() {
-        if let Some(denial) =
-            tenant_policy_denial_with_metadata(route.handler, tenant_metadata.as_ref(), body)
-        {
+        // Production does not text a code for a tenant's phone sign-in (AUTH-TENANT-BLOCKING
+        // recording 2026-09-27, settings#phone-tenant-number).
+        if strict && route.handler == routes::Handler::SendVerificationCode {
+            return error(400, "UNSUPPORTED_TENANT_OPERATION");
+        }
+        if let Some(denial) = tenant_policy_denial_with_metadata(
+            route.handler,
+            tenant_metadata.as_ref(),
+            body,
+            strict,
+        ) {
             return denial;
         }
+    }
+    // A disabled tenant refuses its admins' lookups too (settings#auth-off-admin-lookup).
+    if strict
+        && route.handler == routes::Handler::AdminLookup
+        && tenant_metadata
+            .as_ref()
+            .is_some_and(|metadata| metadata.disable_auth)
+    {
+        return error(400, "TENANT_DISABLED");
     }
     if route.class == routes::RouteClass::EndUser && store_tenant.is_none() {
         if let Some(denial) = project_provider_denial(route.handler, store.sign_in_config(), body) {
@@ -3947,7 +3970,17 @@ fn dispatch(
         Handler::Token => {
             secure_token_error_shape(refresh(store, body, at, options.stateless_refresh_tokens))
         }
-        Handler::AdminCreate => admin_create(store, body, at),
+        Handler::AdminCreate => {
+            let mut created = admin_create(store, body, at);
+            // Production's answer names no tenant, on a tenant path too (AUTH-TENANT-BLOCKING
+            // recording 2026-09-27, selection#create-a1); the emulator profile keeps its member.
+            if !options.stateless_refresh_tokens {
+                if let Some(object) = created.body.as_object_mut() {
+                    object.remove("tenantId");
+                }
+            }
+            created
+        }
         Handler::AdminLookup => lookup(store, body, at, true),
         Handler::AdminDelete => {
             delete_account(store, body, at, true, !options.stateless_refresh_tokens)
@@ -4652,7 +4685,7 @@ fn project_provider_denial(
         enable_anonymous_user: config.anonymous_enabled,
         ..fireemu_core_auth::store::TenantMetadata::default()
     };
-    tenant_policy_denial_with_metadata(handler, Some(&metadata), body)
+    tenant_policy_denial_with_metadata(handler, Some(&metadata), body, false)
 }
 
 fn valid_blocking_config_field(field: &str) -> bool {
@@ -7107,10 +7140,17 @@ fn unknown_tenant_refusal(handler: routes::Handler, refusal: JsonResponse) -> Js
     }
 }
 
+/// A tenant's refusal of a request its settings do not allow. `strict` answers as production
+/// does (AUTH-TENANT-BLOCKING recording 2026-09-27, settings program): a disabled tenant is
+/// `TENANT_DISABLED` (a refresh in the Secure Token's shape; a lookup with an ID token issued
+/// before is `TOKEN_EXPIRED`), a password sign-in while password sign-in is off is
+/// `PASSWORD_LOGIN_DISABLED`, a password reset mail is still sent, and an anonymous sign-up
+/// while anonymous sign-in is off is `ADMIN_ONLY_OPERATION`.
 fn tenant_policy_denial_with_metadata(
     handler: routes::Handler,
     metadata: Option<&fireemu_core_auth::store::TenantMetadata>,
     body: &Value,
+    strict: bool,
 ) -> Option<JsonResponse> {
     let Some(metadata) = metadata else {
         return Some(unknown_tenant_refusal(
@@ -7133,10 +7173,26 @@ fn tenant_policy_denial_with_metadata(
             | routes::Handler::ResetPassword
     );
     if metadata.disable_auth && authenticates {
-        return Some(error(400, "PROJECT_DISABLED"));
+        if !strict {
+            return Some(error(400, "PROJECT_DISABLED"));
+        }
+        return Some(match handler {
+            routes::Handler::Lookup if body.get("idToken").is_some_and(|t| !t.is_null()) => {
+                error(400, "TOKEN_EXPIRED")
+            }
+            routes::Handler::Token => secure_token_error_shape(error(400, "TENANT_DISABLED")),
+            _ => error(400, "TENANT_DISABLED"),
+        });
     }
     if handler == routes::Handler::SignInWithPassword && !metadata.allow_password_signup {
-        return Some(error(400, "OPERATION_NOT_ALLOWED"));
+        return Some(error(
+            400,
+            if strict {
+                "PASSWORD_LOGIN_DISABLED"
+            } else {
+                "OPERATION_NOT_ALLOWED"
+            },
+        ));
     }
     if handler == routes::Handler::SignInWithEmailLink && !metadata.enable_email_link_signin {
         return Some(error(400, "OPERATION_NOT_ALLOWED"));
@@ -7145,8 +7201,10 @@ fn tenant_policy_denial_with_metadata(
         handler,
         routes::Handler::SendOobCode | routes::Handler::ResetPassword
     ) {
+        // Production still sends a password reset mail (settings#password-off-reset-mail).
         let password_operation = handler == routes::Handler::ResetPassword
-            || body.get("requestType").and_then(Value::as_str) == Some("PASSWORD_RESET");
+            || (!strict
+                && body.get("requestType").and_then(Value::as_str) == Some("PASSWORD_RESET"));
         if password_operation && !metadata.allow_password_signup {
             return Some(error(400, "OPERATION_NOT_ALLOWED"));
         }
@@ -7164,7 +7222,14 @@ fn tenant_policy_denial_with_metadata(
             return Some(error(400, "OPERATION_NOT_ALLOWED"));
         }
         if !has_email && !has_password && !links_existing_user && !metadata.enable_anonymous_user {
-            return Some(error(400, "OPERATION_NOT_ALLOWED"));
+            return Some(error(
+                400,
+                if strict {
+                    "ADMIN_ONLY_OPERATION"
+                } else {
+                    "OPERATION_NOT_ALLOWED"
+                },
+            ));
         }
     }
     None

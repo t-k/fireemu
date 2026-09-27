@@ -1542,7 +1542,7 @@
               "precision": "conservative"
             },
             {
-              "behaviour": "a callable request from a non-loopback Origin is refused with 403 at the daemon proxy; onRequest functions receive the Origin and apply their configured CORS policy in the handler",
+              "behaviour": "a callable request from a non-loopback Origin is refused with 403 at the daemon proxy; onRequest functions receive the Origin, with the official default CORS wrapper in the emulator profile unless cors: false is declared, and no default wrapper in the strict profile",
               "precision": "conservative"
             }
           ],

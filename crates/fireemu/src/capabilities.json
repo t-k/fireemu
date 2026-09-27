@@ -423,7 +423,7 @@
       "streamed v2 responses retain one bounded backpressure slot, obey the function deadline, and enforce production's 10 MiB streaming response limit cumulatively without buffering the whole response",
       "the official emulator's two 404s: `Not Found` (text/plain) for a path that is not a function route, and `Function <region>-<name> does not exist, valid functions are: <trigger keys>` (text/html) for a route whose function is unknown, with the keys in the official order (grouped by region, export order within a region)",
       "timeoutSeconds: a function that overruns it gets the official answer, HTTP 500 with the body {\"code\":\"ECONNRESET\"} and no content-type, and the emulator logs `Your function timed out after ~Ns.`",
-      "CORS for an onRequest function on a loopback origin: the preflight answer cors({origin: true}) produces (204, the origin reflected, GET,HEAD,PUT,PATCH,POST,DELETE, the requested headers, Vary), and Access-Control-Allow-Origin on the ordinary answer"
+      "in the emulator profile, a default onRequest function uses the official enableCors wrapper: a preflight answers 204 with the origin reflected, GET,HEAD,PUT,PATCH,POST,DELETE, the requested headers and Vary, and an ordinary answer reflects the origin; explicit cors: false disables this wrapper, while the strict profile leaves a default preflight to the handler"
     ],
     "notes": [
       "needs functions.source (or --functions <dir>) and the bundled Node runner; the codebase must have express installed (a dependency of firebase-functions)",
@@ -431,7 +431,7 @@
       "streaming accepts only an absent or identity Content-Encoding because the production 10 MiB quota is measured on uncompressed response data; refusing an encoded local runner response prevents compressed data from bypassing the limit",
       "conformance: functions/callable-error-envelope, functions/callable-auth-context, functions/http-routing-cors-and-timeouts (conformance/README.md); this records agreement with the official Local Emulator Suite, never with production",
       "callable preflights vary on every request field used for admission (Origin, method, requested headers, Fetch Metadata site and mode), while the official emulator varies only on Origin and requested headers; the extra members keep a shared cache from replaying an admitted response for a request the proxy would refuse",
-      "a non-loopback Origin is refused with 403 rather than reflected: the official emulator runs its runtime with enableCors and answers any origin on the internet",
+      "a callable request from a non-loopback Origin is refused with 403 rather than reflected: the official emulator answers it with CORS, while onRequest functions receive the Origin; this preserves the callable trust boundary but lets web pages reach local onRequest handlers as in the official emulator and production",
       "the timeout does not kill the runner; the official emulator kills the runtime process of the one trigger it runs per process, and one fireemu runner serves a whole codebase"
     ],
     "status": "implemented"

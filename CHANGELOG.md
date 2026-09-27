@@ -20,7 +20,7 @@ Each release is a Git tag; the binaries and the npm packages are built from that
 
 Functions HTTP and callable behavior was compared with two production recordings of 68 cases on 2026-09-27 (FUNCTIONS-HTTP).
 
-- Both profiles: an `onRequest` function receives cross-origin requests and their `Origin` header, so its handler applies the declared CORS policy; an empty request body reaches the handler as `{}`.
+- Both profiles: an `onRequest` function receives cross-origin requests and their `Origin` header; an empty request body reaches the handler as `{}`. The emulator profile enables the official emulator's default CORS wrapper, including a 204 preflight for an `onRequest` function with no `cors` option. An explicit `cors: false` disables that wrapper. The strict profile leaves a default `onRequest` preflight to the handler, as observed in production.
 - Strict profile: Functions ingress supplies one observed client hop in `X-Forwarded-For` and `https` in `X-Forwarded-Proto`, replacing client-supplied values. A 204 response and a callable stream without a declared Content-Type use the recorded `text/html` default.
 - Strict profile: a callable request with an invalid Bearer token gets production's 401 HTML response, malformed JSON gets its generic 400 HTML response, and a timed-out HTTP function gets its 504 text response. The emulator profile keeps the official emulator's malformed JSON and timeout outcomes. Its pre-existing 401 JSON refusal for invalid callable Bearer tokens differs from the official emulator's 200 but has the same status as production.
 

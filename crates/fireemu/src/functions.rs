@@ -1395,15 +1395,17 @@ async fn supervise_codebase_reloads(
     }
 }
 
-/// The debug feature the callable trusted protocol turns on, and nothing else.
+/// Debug features selected per profile and callable trust policy.
 ///
 /// `firebase-functions` reads `FIREBASE_DEBUG_MODE` once when it is first required and
 /// re-reads `FIREBASE_DEBUG_FEATURES` per lookup. `skipTokenVerification` makes the callable
 /// wrapper decode the App Check and Auth credentials locally instead of calling out to Google,
 /// which is only safe because the daemon has already verified and re-inserted both
-/// (specification section 13.4). No other feature is enabled: `enableCors`, in particular,
-/// would change what the functions themselves answer.
-const DEBUG_FEATURES: &str = r#"{"skipTokenVerification":true}"#;
+/// (specification section 13.4). The official emulator also enables `enableCors`, which
+/// wraps default `onRequest` handlers while preserving an explicit `cors: false`.
+const DEBUG_FEATURES_TRUSTED_STRICT: &str = r#"{"skipTokenVerification":true}"#;
+const DEBUG_FEATURES_UNTRUSTED_EMULATOR: &str = r#"{"enableCors":true}"#;
+const DEBUG_FEATURES_TRUSTED_EMULATOR: &str = r#"{"skipTokenVerification":true,"enableCors":true}"#;
 
 /// `FIREBASE_CONFIG`, with the three members the official emulator puts in it
 /// (`functionsEmulator.js:1010-1026` with `constructDefaultAdminSdkConfig`,
@@ -2798,14 +2800,20 @@ async fn start_codebase(
     if let Some(host) = &hosts.logging {
         env.push(("FIREBASE_LOGGING_EMULATOR_HOST".to_owned(), host.clone()));
     }
-    // Debug mode is granted only when the daemon is the sole source of both callable
-    // credentials. The runner inherits an allowlist that does not contain these names, and
-    // `SpawnSpec::env` is applied last, so neither can be shadowed from the host environment.
-    if callable_trusted_protocol {
+    // The emulator profile follows the official runtime's CORS feature. The trusted callable
+    // protocol separately enables token skipping only after daemon-side credential checks.
+    // The runner allowlist excludes these names and `SpawnSpec::env` is applied last.
+    let debug_features = match (cfg.profile, callable_trusted_protocol) {
+        (CompatibilityProfile::Emulator, true) => Some(DEBUG_FEATURES_TRUSTED_EMULATOR),
+        (CompatibilityProfile::Emulator, false) => Some(DEBUG_FEATURES_UNTRUSTED_EMULATOR),
+        (CompatibilityProfile::Strict, true) => Some(DEBUG_FEATURES_TRUSTED_STRICT),
+        (CompatibilityProfile::Strict, false) => None,
+    };
+    if let Some(debug_features) = debug_features {
         env.push(("FIREBASE_DEBUG_MODE".to_owned(), "true".to_owned()));
         env.push((
             "FIREBASE_DEBUG_FEATURES".to_owned(),
-            DEBUG_FEATURES.to_owned(),
+            debug_features.to_owned(),
         ));
     }
     let spec = SpawnSpec {

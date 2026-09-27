@@ -613,7 +613,7 @@
     },
     "functions/http-routing-cors-and-timeouts#preflight-on-a-callable-from-a-remote-origin": {
       "documents": "README.md, \"Functions\"",
-      "reason": "The official emulator starts its runtime with FIREBASE_DEBUG_FEATURES={\"skipTokenVerification\":true,\"enableCors\":true}, so firebase-functions wraps every handler in cors({origin: true}) and answers a preflight from any origin on the internet. fireemu serves the functions port to loopback origins only and answers 403 \"forbidden origin\" to the rest, the way its other ports do: a page a developer happens to have open must not be able to drive their local backend.",
+      "reason": "The official emulator starts its runtime with FIREBASE_DEBUG_FEATURES={\"skipTokenVerification\":true,\"enableCors\":true}. Its callable wrapper answers a preflight from any origin on the internet. fireemu refuses a callable from a non-loopback Origin with 403 before it reaches the runner, preserving the callable trust boundary. An onRequest handler receives the Origin and its own CORS policy applies.",
       "authority": {
         "kind": "intentional-local-policy",
         "sourceUrls": [
@@ -631,7 +631,7 @@
     },
     "functions/http-routing-cors-and-timeouts#a-cross-origin-post-to-a-callable": {
       "documents": "README.md, \"Functions\"",
-      "reason": "The same divergence on the request itself rather than the preflight: the official emulator reflects https://evil.example and hands the callable's result to it. fireemu refuses a non-loopback Origin with 403 before the request reaches the runner. An onRequest function on a loopback origin does get the CORS headers enableCors would have given it, so local browser development is unaffected.",
+      "reason": "The same callable divergence on the request itself rather than the preflight: the official emulator reflects https://evil.example and hands the callable's result to it. fireemu refuses a non-loopback callable Origin with 403 before the request reaches the runner. OnRequest functions receive the Origin, and the emulator profile enables the official CORS wrapper for a default onRequest function unless cors: false is declared.",
       "authority": {
         "kind": "intentional-local-policy",
         "sourceUrls": [

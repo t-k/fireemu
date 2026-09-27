@@ -134,6 +134,79 @@ fn exec_with_profile(source: &Path, project: &str, profile: &str) -> Output {
         .unwrap()
 }
 
+#[test]
+#[ignore = "requires tools/sdk-smoke dependencies; the SDK workflow runs this test"]
+fn on_request_cors_follows_the_selected_profile_and_explicit_option() {
+    assert!(have_sdk(), "install tools/sdk-smoke dependencies first");
+    let source = scratch_codebase("cors-profile");
+    write(
+        &source,
+        "index.js",
+        r#"
+const { onRequest } = require('firebase-functions/v2/https');
+const handler = (request, response) => response.json({ method: request.method });
+exports.defaultCors = onRequest(handler);
+exports.disabledCors = onRequest({ cors: false }, handler);
+exports.enabledCors = onRequest({ cors: true }, handler);
+"#,
+    );
+    let project = "demo-cors-profile";
+    let script = r#"
+const assert = require('node:assert/strict');
+(async () => {
+  const base = `http://${process.env.FIREEMU_FUNCTIONS_HOST}/demo-cors-profile/us-central1`;
+  const origin = 'http://localhost:3000';
+  const profile = process.argv[1];
+  for (const name of ['defaultCors', 'disabledCors', 'enabledCors']) {
+    const preflight = await fetch(`${base}/${name}`, {
+      method: 'OPTIONS',
+      headers: { origin, 'access-control-request-method': 'GET' },
+    });
+    const wrapped = name === 'enabledCors' || (profile === 'emulator' && name === 'defaultCors');
+    assert.equal(preflight.status, wrapped ? 204 : 200, `${profile} ${name} preflight`);
+    assert.equal(preflight.headers.get('access-control-allow-origin'), wrapped ? origin : null);
+    assert.equal(preflight.headers.get('access-control-allow-methods'), wrapped ? 'GET,HEAD,PUT,PATCH,POST,DELETE' : null);
+    if (wrapped) assert.equal(await preflight.text(), '');
+    else assert.deepEqual(await preflight.json(), { method: 'OPTIONS' });
+    const get = await fetch(`${base}/${name}`, { headers: { origin } });
+    assert.equal(get.status, 200, `${profile} ${name} GET`);
+    assert.equal(get.headers.get('access-control-allow-origin'), wrapped ? origin : null);
+    assert.deepEqual(await get.json(), { method: 'GET' });
+  }
+})().catch(error => { console.error(error); process.exitCode = 1; });
+"#;
+    for profile in ["emulator", "strict"] {
+        let config = source.join(format!("fireemu-{profile}.json"));
+        write(
+            &source,
+            config.file_name().unwrap().to_str().unwrap(),
+            &format!(
+                r#"{{"schemaVersion":1,"profile":"{profile}","firestore":{{"edition":"standard","apiMode":"native"}}}}"#
+            ),
+        );
+        let output = fireemu_exec(&source, project)
+            .args([
+                "--config",
+                config.to_str().unwrap(),
+                "--",
+                "node",
+                "-e",
+                script,
+                profile,
+            ])
+            .stdin(Stdio::null())
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{profile} stdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+    std::fs::remove_dir_all(source).unwrap();
+}
+
 #[cfg(unix)]
 #[test]
 #[ignore = "requires tools/sdk-smoke dependencies; the manual SDK workflow runs this test"]

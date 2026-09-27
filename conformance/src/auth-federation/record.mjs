@@ -19,7 +19,7 @@
 
 import { execFile } from "node:child_process";
 import { createHash, randomBytes } from "node:crypto";
-import { appendFile, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { appendFile, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -28,11 +28,11 @@ import { promisify } from "node:util";
 import { SANDBOX_PROJECT } from "../auth-account/harness.mjs";
 import { packetApproval } from "./approval.mjs";
 import { PROGRAMS } from "./corpus.mjs";
-import { runProvider } from "./guard.mjs";
 import {
   checkWebConfig,
   clients,
   deployIssuer,
+  endsRun,
   ledgerEntries,
   limitedFetch,
   removeIssuer,
@@ -52,8 +52,15 @@ export const RUNNER = { project: SANDBOX_PROJECT, maxRequests: 500, reserveUsd: 
 /** 500 external requests: the APIs and the issuer's host (2 read-backs, 10 after the delete). */
 export const LIMITS = { api: 488, issuer: 12 };
 const PASSES = 2;
+/** Requests a pass may use; the rest of the API limit stays for publishing and cleaning up. */
+export const PASS_LIMIT = 220;
 const ITK = "https://identitytoolkit.googleapis.com";
 const HOSTING = "https://firebasehosting.googleapis.com/v1beta1";
+const SITE_VERSIONS = `sites/${SANDBOX_PROJECT}/versions`;
+const CHANNEL = (run) =>
+  `${HOSTING}/projects/${SANDBOX_PROJECT}/sites/${SANDBOX_PROJECT}/channels/fed-${run}`;
+/** A provider the run made, whatever its prefix (a refused unprefixed ID may be accepted). */
+const ownedProvider = (run) => (id) => String(id).toLowerCase().includes(`fireemu-${run}-`);
 const USAGE = "https://serviceusage.googleapis.com/v1";
 const MAU_USD = 0.015;
 export const FIXTURE = fileURLToPath(
@@ -76,6 +83,11 @@ export const SOURCES = [
   "../auth-account/harness.mjs",
 ].map((name) => fileURLToPath(new URL(name, import.meta.url)));
 
+/** Modules run.mjs imports for its local mode only: checked committed, not digested. */
+const LOCAL_ONLY = ["../config.mjs", "../evidence.mjs"].map((name) =>
+  fileURLToPath(new URL(name, import.meta.url)),
+);
+
 export async function scriptDigest(read = (path) => readFile(path)) {
   const hash = createHash("sha256");
   for (const path of SOURCES) hash.update(await read(path));
@@ -86,6 +98,11 @@ const sha256Hex = (text) => createHash("sha256").update(text).digest("hex");
 
 /** The config paths programs may touch, and their values before the recording. */
 const TOUCHED = [...new Set(PROGRAMS.flatMap((program) => program.touches ?? []))];
+const PROVIDER_COLLECTIONS = [
+  "oauthIdpConfigs",
+  "inboundSamlConfigs",
+  "defaultSupportedIdpConfigs",
+];
 const DEFAULT_IDPS = [...new Set(PROGRAMS.flatMap((program) => program.defaultIdpWrites ?? []))];
 const valueAt = (config, path) => path.split(".").reduce((value, key) => value?.[key], config);
 
@@ -148,6 +165,43 @@ export function scanFixture(text, forbidden) {
   if (/eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\./.test(text))
     throw new Error("the fixture holds a raw JWT");
   if (/PRIVATE KEY/.test(text)) throw new Error("the fixture holds private key material");
+  if (/"(signerKey|saltSeparator|salt)"\s*:\s*"(?!<bytes>")/.test(text))
+    throw new Error("the fixture holds password-hash key material");
+  if (/"passwordHash"\s*:\s*"(?!UkVEQUNURUQ="|<bytes>")/.test(text))
+    throw new Error("the fixture holds a password hash");
+  if (/"clientSecret"\s*:\s*"(?!fireemu-|<client-secret>")/.test(text))
+    throw new Error("the fixture holds a client secret");
+  if (/GOCSPX-|ya29\.|AMf-/.test(text)) throw new Error("the fixture holds a Google credential");
+}
+
+/** A fetch that refuses more than `limit` requests (a pass's share of the API limit). */
+export function budget(api, limit, what) {
+  let used = 0;
+  return (url, init) => {
+    if (used >= limit) return Promise.reject(new Error(`${what} used its ${limit} requests`));
+    used += 1;
+    return api(url, init);
+  };
+}
+
+/**
+ * Deletes the providers the run made that are still listed (whatever their prefix, in the
+ * OIDC and SAML collections) and returns those still listed after it.
+ */
+async function removeOwnedProviders({ get, send, base, run }) {
+  const owned = ownedProvider(run);
+  const listed = async (collection) =>
+    ((await get(`${base}/${collection}?pageSize=100`, collection))[collection] ?? [])
+      .map((c) => String(c.name).split("/").at(-1))
+      .filter(owned);
+  const left = [];
+  for (const collection of ["oauthIdpConfigs", "inboundSamlConfigs"]) {
+    for (const id of await listed(collection)) {
+      await send("DELETE", `${base}/${collection}/${id}`, undefined, `delete ${id}`);
+    }
+    left.push(...(await listed(collection)));
+  }
+  return left;
 }
 
 /**
@@ -196,10 +250,12 @@ export async function recordCampaign({
   if ((channels.channels ?? []).some((c) => String(c.name).split("/").at(-1).startsWith("fed-"))) {
     throw new Error("precheck: a channel of an earlier run remains");
   }
-  for (const collection of ["oauthIdpConfigs", "inboundSamlConfigs"]) {
+  // No provider configuration at all: nothing the run did not make can be recorded (a list
+  // answers every provider) or removed by a recovery (the default IdPs the corpus writes).
+  for (const collection of PROVIDER_COLLECTIONS) {
     const listed = await get(`${base}/${collection}?pageSize=100`, collection);
-    if ((listed[collection] ?? []).some((c) => /\/(oidc|saml)\.fireemu-/.test(String(c.name)))) {
-      throw new Error(`precheck: ${collection} of an earlier run remain`);
+    if ((listed[collection] ?? []).length) {
+      throw new Error(`precheck: the project has ${collection}`);
     }
   }
   if ((await get(accountsUrl(1), "accounts")).users?.length) {
@@ -223,6 +279,8 @@ export async function recordCampaign({
     touchedBefore: Object.fromEntries(
       TOUCHED.map((path) => [path, valueAt(before.body, path) ?? false]),
     ),
+    // Checked absent above: a recovery removes only these.
+    defaultIdpsAbsentBefore: DEFAULT_IDPS,
   });
 
   const issuer = { channelAttempted: false, channelCreated: false };
@@ -238,6 +296,7 @@ export async function recordCampaign({
       forbidden: [meta.apiKey, meta.projectNumber],
       stop,
       result: issuer,
+      journal: (fields) => appendLedger({ event: "progress", action: ACTION, run, ...fields }),
     });
     for (let pass = 1; pass <= PASSES; pass += 1) {
       stop.check();
@@ -259,7 +318,7 @@ export async function recordCampaign({
         adminAuthorization: `Bearer ${meta.adminToken}`,
         adminHeaders: { "x-goog-user-project": SANDBOX_PROJECT },
         target: { kind: "production" },
-        fetch: api,
+        fetch: budget(api, PASS_LIMIT, `pass ${pass}`),
       };
       passes.push(await runPrograms(programs, ctx));
     }
@@ -295,16 +354,8 @@ export async function recordCampaign({
           removed.issuerGone !== false &&
           (!issuer.version || ["absent", "DELETED"].includes(removed.versionStatus))));
   });
-  await step("list providers", async () => {
-    cleanup.providersLeft = [];
-    for (const collection of ["oauthIdpConfigs", "inboundSamlConfigs"]) {
-      const listed = await get(`${base}/${collection}?pageSize=100`, collection);
-      cleanup.providersLeft.push(
-        ...(listed[collection] ?? [])
-          .map((c) => String(c.name).split("/").at(-1))
-          .filter((id) => runProvider(run).test(id)),
-      );
-    }
+  await step("remove providers", async () => {
+    cleanup.providersLeft = await removeOwnedProviders({ get, send, base, run });
   });
   await step("read default IdPs", async () => {
     cleanup.defaultIdpsLeft = [];
@@ -359,7 +410,8 @@ export async function recordCampaign({
     run,
     envelopeId: meta.envelopeId,
     issuerHost: issuer.issuerHost,
-    version: issuer.version,
+    // The version's ID only: its full name may hold the project number.
+    versionId: issuer.version ? String(issuer.version).split("/").at(-1) : undefined,
     passes: passes.length,
     stepRequests: passes.map((out) => out.requests),
     programFailures,
@@ -375,46 +427,51 @@ export async function recordCampaign({
 }
 
 /**
- * The recording this task left unfinished: its run, and from its started line the config
- * digests and the touched values before it, and the issuer its last line named.
+ * The recording this task left unfinished, from the ledger: the last started line of this
+ * action not followed by a line of its run that ends it cleanly (`endsRun`), with what a
+ * recovery needs: the config digests and touched values before it, the default IdPs it saw
+ * absent, and the issuer: its host, its version's ID (journalled after the create) and
+ * whether a version create was sent at all.
  */
 export function recordingToRecover(ledgerText) {
   const own = ledgerEntries(ledgerText).filter(
     (entry) => entry.project === SANDBOX_PROJECT && (entry.taskId ?? entry.task) === TASK_ID,
   );
-  const last = own.at(-1);
-  const open =
-    last &&
-    [ACTION, `${ACTION}-recover`].includes(last.action) &&
-    (last.event === "started" || last.outcome === "needs-recovery");
-  if (!open) return undefined;
-  const started = own.findLast(
-    (entry) => entry.event === "started" && entry.action === ACTION && entry.run === last.run,
-  );
-  if (!started?.configDigestBefore) throw new Error(`run ${last.run} has no started line`);
-  const named = own.findLast((entry) => entry.run === last.run && entry.issuerHost);
+  const started = own.findLast((entry) => entry.event === "started" && entry.action === ACTION);
+  if (!started) return undefined;
+  const after = own
+    .slice(own.lastIndexOf(started) + 1)
+    .filter((entry) => entry.run === started.run);
+  const last = after.at(-1);
+  if (last && endsRun(last)) return undefined;
+  if (!started.configDigestBefore) throw new Error(`run ${started.run} has no config digest`);
+  const named = (key) => [started, ...after].findLast((entry) => entry[key] !== undefined)?.[key];
   return {
-    run: last.run,
+    run: started.run,
     digest: started.scriptDigest,
     configDigestBefore: started.configDigestBefore,
     configKeyDigestsBefore: started.configKeyDigestsBefore ?? {},
     touchedBefore: started.touchedBefore ?? {},
-    issuerHost: named?.issuerHost,
-    version: named?.version,
+    defaultIdpsAbsentBefore: started.defaultIdpsAbsentBefore ?? [],
+    issuerHost: named("issuerHost"),
+    versionId: named("versionId"),
+    versionSent: after.some((entry) => entry.step === "version-create-sent"),
   };
 }
 
 /**
- * Recovers a recording: removes the run's issuer (channel and version), the run's providers,
- * the declared default IdPs (none existed when it started), the accounts of the run (their
- * address or provider names it), restores the touched config paths to the values before it,
- * and reads it all back. It writes nothing else of the config.
+ * Recovers a recording: removes the run's issuer (the channel if it is there, and the version
+ * whether or not the channel is: from the journal, or from the channel's release), the run's
+ * providers, the default IdPs it saw absent, the accounts of the run (their address or
+ * provider names it), restores the touched config paths to the values before it, and reads it
+ * all back. A version create that was sent without a journalled ID and cannot be found leaves
+ * the run needing recovery. It writes nothing else of the config.
  */
 export async function recoverCampaign({ api, target, meta, appendLedger, sleep }) {
   const { run } = target;
   const { auth, get, send } = clients(api, meta.adminToken);
   const base = `${ITK}/admin/v2/projects/${SANDBOX_PROJECT}`;
-  const own = runProvider(run);
+  const owned = ownedProvider(run);
   const cleanup = { errors: [] };
   const step = async (name, work) => {
     try {
@@ -423,39 +480,58 @@ export async function recoverCampaign({ api, target, meta, appendLedger, sleep }
       cleanup.errors.push(`${name}: ${error.message}`);
     }
   };
-  const issuer = {
-    channelAttempted: true,
-    channelCreated: false,
-    issuerHost: target.issuerHost,
-    version: target.version,
-  };
-  await step("remove issuer", async () => {
-    Object.assign(
-      cleanup,
-      (await removeIssuer({ get, send, api, sleep, run, result: issuer, deleteVersion: true }))
-        .cleanup,
-    );
+  let versionId = target.versionId;
+  let issuerHost = target.issuerHost;
+  await step("remove channel", async () => {
+    let channel;
+    try {
+      channel = await get(CHANNEL(run), "channel");
+    } catch (error) {
+      if (error.status !== 404) throw error;
+    }
+    if (!channel) {
+      cleanup.channelReadBack = "absent";
+    } else {
+      versionId ??=
+        String(channel.release?.version?.name ?? "")
+          .split("/")
+          .at(-1) || undefined;
+      if (URL.canParse(channel.url ?? "")) issuerHost ??= new URL(channel.url).host;
+      const removed = await removeIssuer({
+        get,
+        send,
+        api,
+        sleep,
+        run,
+        result: { channelAttempted: true, channelCreated: true, issuerHost },
+      });
+      Object.assign(cleanup, removed.cleanup);
+    }
+  });
+  await step("remove version", async () => {
+    if (!versionId) {
+      cleanup.versionStatus = target.versionSent ? "unknown" : "none";
+      return;
+    }
+    const version = `${HOSTING}/${SITE_VERSIONS}/${versionId}`;
+    try {
+      await send("DELETE", version, undefined, "version delete");
+    } catch (error) {
+      if (error.status !== 404) throw error;
+    }
+    try {
+      cleanup.versionStatus = (await get(version, "version")).status;
+    } catch (error) {
+      if (error.status !== 404) throw error;
+      cleanup.versionStatus = "absent";
+    }
   });
   await step("delete providers", async () => {
-    cleanup.providersLeft = [];
-    for (const collection of ["oauthIdpConfigs", "inboundSamlConfigs"]) {
-      const listed = await get(`${base}/${collection}?pageSize=100`, collection);
-      for (const id of (listed[collection] ?? [])
-        .map((c) => String(c.name).split("/").at(-1))
-        .filter((i) => own.test(i))) {
-        await send("DELETE", `${base}/${collection}/${id}`, undefined, `delete ${id}`);
-      }
-      const again = await get(`${base}/${collection}?pageSize=100`, collection);
-      cleanup.providersLeft.push(
-        ...(again[collection] ?? [])
-          .map((c) => String(c.name).split("/").at(-1))
-          .filter((i) => own.test(i)),
-      );
-    }
+    cleanup.providersLeft = await removeOwnedProviders({ get, send, base, run });
   });
   await step("delete default IdPs", async () => {
     cleanup.defaultIdpsLeft = [];
-    for (const idp of DEFAULT_IDPS) {
+    for (const idp of target.defaultIdpsAbsentBefore.filter((id) => DEFAULT_IDPS.includes(id))) {
       const response = await api(`${base}/defaultSupportedIdpConfigs/${idp}`, { headers: auth });
       await response.text();
       if (response.status === 404) continue;
@@ -467,7 +543,7 @@ export async function recoverCampaign({ api, target, meta, appendLedger, sleep }
   });
   const theRuns = (user) =>
     String(user.email ?? "").startsWith(`fireemu-fed-${run}-`) ||
-    (user.providerUserInfo ?? []).some((info) => own.test(String(info.providerId).toLowerCase()));
+    (user.providerUserInfo ?? []).some((info) => owned(info.providerId));
   await step("delete accounts", async () => {
     const listed = await get(
       `${ITK}/v1/projects/${SANDBOX_PROJECT}/accounts:batchGet?maxResults=100`,
@@ -514,7 +590,7 @@ export async function recoverCampaign({ api, target, meta, appendLedger, sleep }
     cleanup.errors.length === 0 &&
     cleanup.channelReadBack === "absent" &&
     cleanup.issuerGone !== false &&
-    (!target.version || ["absent", "DELETED"].includes(cleanup.versionStatus)) &&
+    ["absent", "DELETED", "none"].includes(cleanup.versionStatus) &&
     cleanup.providersLeft?.length === 0 &&
     cleanup.defaultIdpsLeft?.length === 0 &&
     cleanup.accountsLeft === 0 &&
@@ -524,6 +600,7 @@ export async function recoverCampaign({ api, target, meta, appendLedger, sleep }
     action: `${ACTION}-recover`,
     outcome: clean ? "recovered" : "needs-recovery",
     run,
+    ...(versionId ? { versionId } : {}),
     ...cleanup,
     estimatedUsd: 0,
   };
@@ -544,7 +621,8 @@ async function gate(needs) {
   for (const name of ["FIREBASE_TOKEN", "GOOGLE_APPLICATION_CREDENTIALS"]) {
     if (process.env[name]) throw new Error(`${name} must be unset (the owner's user ADC is used)`);
   }
-  if ((await uncommitted(SOURCES)) !== "")
+  // Also the two modules run.mjs imports for its local mode (not in the digest).
+  if ((await uncommitted([...SOURCES, ...LOCAL_ONLY])) !== "")
     throw new Error("the recording's sources have uncommitted changes");
   const digest = await scriptDigest();
   const commit = await sh("git", ["-C", dirname(SOURCES[0]), "rev-parse", "HEAD"]);
@@ -559,14 +637,36 @@ async function gate(needs) {
   return { env, digest, commit, approval };
 }
 
-const appender = (ledger, used, state) => (line) => {
+/**
+ * Appends a ledger line: the lock is kept from a started line on, and the project number and
+ * API key (an error may quote an answer) are replaced before it is written.
+ */
+export const appender = (ledger, used, state, web) => (line) => {
   // Set first: a started line half written still keeps the lock.
   if (line.event === "started") state.sent = true;
-  return appendFile(
-    ledger,
-    `${JSON.stringify({ ts: new Date().toISOString(), project: SANDBOX_PROJECT, taskId: TASK_ID, ...line, requests: { ...used } })}\n`,
-  );
+  let text = JSON.stringify({
+    ts: new Date().toISOString(),
+    project: SANDBOX_PROJECT,
+    taskId: TASK_ID,
+    ...line,
+    requests: { ...used },
+  });
+  if (web.projectNumber) text = text.replaceAll(String(web.projectNumber), "<project-number>");
+  if (web.apiKey) text = text.replaceAll(String(web.apiKey), "<api-key>");
+  return appendFile(ledger, `${text}\n`);
 };
+
+/**
+ * Writes the fixture: first privately (below the ledger's directory, mode 600), so a scan
+ * that refuses it loses no row, then scanned, then over the committed fixture.
+ */
+export async function writeFixtureFiles(fixture, { privateDir, forbidden, target = FIXTURE }) {
+  const text = `${JSON.stringify(fixture, null, 2)}\n`;
+  await mkdir(privateDir, { recursive: true, mode: 0o700 });
+  await writeFile(join(privateDir, "fixture.json"), text, { mode: 0o600 });
+  scanFixture(text, forbidden);
+  await writeFile(target, text);
+}
 
 const stopper = () => {
   let stopped;
@@ -629,12 +729,12 @@ async function recordProduction() {
             envelopeId: approval.envelopeId,
             startedAt,
           },
-          appendLedger: appender(ledger, used, state),
-          writeFixture: async (fixture) => {
-            const text = `${JSON.stringify(fixture, null, 2)}\n`;
-            scanFixture(text, [web.apiKey, web.projectNumber, adminToken]);
-            await writeFile(FIXTURE, text);
-          },
+          appendLedger: appender(ledger, used, state, web),
+          writeFixture: (fixture) =>
+            writeFixtureFiles(fixture, {
+              privateDir: join(dirname(ledger), `auth-federation-record-${run}`),
+              forbidden: [web.apiKey, web.projectNumber, adminToken],
+            }),
           stop,
           now: () => Math.floor(Date.now() / 1000),
           sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
@@ -651,8 +751,14 @@ async function recordProduction() {
 }
 
 async function recoverProduction() {
-  const { env, digest } = await gate(["FIREEMU_SANDBOX_LEDGER", "FIREEMU_OWNER_DECISIONS"]);
+  const { env, digest } = await gate([
+    "FIREEMU_SANDBOX_LEDGER",
+    "FIREEMU_OWNER_DECISIONS",
+    "FIREEMU_AUTH_SANDBOX_WEB_CONFIG",
+  ]);
   const ledger = env.FIREEMU_SANDBOX_LEDGER;
+  const web = JSON.parse(await readFile(env.FIREEMU_AUTH_SANDBOX_WEB_CONFIG, "utf8"));
+  checkWebConfig(web);
   const target = recordingToRecover(await readFile(ledger, "utf8"));
   if (!target) throw new Error("the ledger shows no recording of this task to recover");
   if (target.digest !== digest)
@@ -672,7 +778,7 @@ async function recoverProduction() {
         api: call,
         target,
         meta: { adminToken },
-        appendLedger: appender(ledger, used, state),
+        appendLedger: appender(ledger, used, state, web),
         sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
       });
       console.log(JSON.stringify(entry, null, 2));

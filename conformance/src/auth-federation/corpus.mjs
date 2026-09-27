@@ -427,6 +427,8 @@ const duplicateEmail = {
     admin("allow-duplicates", "PATCH", "config", {
       query: { updateMask: "signIn.allowDuplicateEmails" },
       body: { signIn: { allowDuplicateEmails: true } },
+      // The answer is the whole project config: only the member written is recorded.
+      record: ["signIn.allowDuplicateEmails"],
     }),
     adminCreate("create-owner", { email: "EMAIL(shared)", password: "fireemu-password-1" }),
     signIn("sign-in-with-duplicates-allowed", "d", "shared"),

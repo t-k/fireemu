@@ -70,6 +70,13 @@ function fakeToolkit(overrides = {}) {
         return reply(200, {});
       }
     }
+    if (pathname.endsWith("/defaultSupportedIdpConfigs")) {
+      return reply(200, {
+        defaultSupportedIdpConfigs: [...state.defaultIdps].map((id) => ({
+          name: `projects/p/defaultSupportedIdpConfigs/${id}`,
+        })),
+      });
+    }
     if (pathname.includes("/defaultSupportedIdpConfigs/")) {
       const idp = pathname.split("/").at(-1);
       if (method === "DELETE") state.defaultIdps.delete(idp);
@@ -202,6 +209,14 @@ test("a recording that fails while publishing the issuer cleans up and writes no
   assert.equal(result.fixtureError, undefined, "no fixture is built from an incomplete recording");
   assert.equal(ledger[0].event, "started");
   assert.deepEqual(ledger[0].touchedBefore, { "signIn.allowDuplicateEmails": false });
+  // The version create and its ID are journalled before the terminal line, for a recovery.
+  assert.deepEqual(
+    ledger
+      .filter((line) => line.event === "progress")
+      .map(({ step, versionId }) => step ?? versionId),
+    ["version-create-sent", "rehearsal"],
+  );
+  assert.equal(ledger.at(-1).versionId, "rehearsal");
   assert.ok(
     !JSON.stringify(ledger[0]).includes("IDENTITY_PLATFORM"),
     "config values stay out of the ledger",
@@ -239,49 +254,61 @@ test("a fixture with a secret, a key, a raw token or a private key is refused", 
   assert.throws(() => scanFixture("-----BEGIN PRIVATE KEY-----", []), /private key/);
 });
 
-test("recover removes the run's issuer, providers, default IdPs and accounts and restores the config", async () => {
-  const line = (extra) =>
-    JSON.stringify({ ts: "t", project: SANDBOX_PROJECT, taskId: TASK_ID, ...extra });
-  const configDigestBefore = createHash("sha256").update(CONFIG).digest("hex");
-  const started = line({
-    event: "started",
-    action: "record-oidc",
+const ledgerLine = (extra) =>
+  JSON.stringify({
+    ts: "2026-09-28T00:00:00Z",
+    project: SANDBOX_PROJECT,
+    taskId: TASK_ID,
+    ...extra,
+  });
+const CONFIG_DIGEST = createHash("sha256").update(CONFIG).digest("hex");
+const STARTED = ledgerLine({
+  event: "started",
+  action: "record-oidc",
+  run: RUN,
+  scriptDigest: "d".repeat(64),
+  configDigestBefore: CONFIG_DIGEST,
+  configKeyDigestsBefore: {},
+  touchedBefore: { "signIn.allowDuplicateEmails": false },
+  defaultIdpsAbsentBefore: ["facebook.com"],
+});
+const progress = (extra) =>
+  ledgerLine({ event: "progress", action: "record-oidc", run: RUN, ...extra });
+
+test("recover finds the unfinished recording and what it journalled", () => {
+  const sent = progress({ step: "version-create-sent" });
+  const id = progress({ versionId: "v123" });
+  assert.deepEqual(recordingToRecover(`${STARTED}\n${sent}\n${id}`), {
     run: RUN,
-    scriptDigest: "d".repeat(64),
-    configDigestBefore,
+    digest: "d".repeat(64),
+    configDigestBefore: CONFIG_DIGEST,
     configKeyDigestsBefore: {},
     touchedBefore: { "signIn.allowDuplicateEmails": false },
+    defaultIdpsAbsentBefore: ["facebook.com"],
+    issuerHost: undefined,
+    versionId: "v123",
+    versionSent: true,
   });
-  const named = line({
-    action: "record-oidc",
-    outcome: "needs-recovery",
-    run: RUN,
-    issuerHost: `${SANDBOX_PROJECT}--fed-${RUN}-rehearse.web.app`,
-    version: `sites/${SANDBOX_PROJECT}/versions/rehearsal`,
-  });
-  const target = recordingToRecover(`${started}\n${named}`);
-  assert.equal(target.run, RUN);
-  assert.equal(target.version, `sites/${SANDBOX_PROJECT}/versions/rehearsal`);
+  // Progress lines end nothing; a clean terminal line or a recovery does.
+  assert.ok(recordingToRecover(`${STARTED}\n${sent}`));
+  const done = (extra) => ledgerLine({ action: "record-oidc", run: RUN, ...extra });
+  assert.equal(recordingToRecover(`${STARTED}\n${done({ outcome: "recorded" })}`), undefined);
+  assert.ok(recordingToRecover(`${STARTED}\n${done({ outcome: "needs-recovery" })}`));
+  assert.ok(
+    recordingToRecover(
+      `${STARTED}\n${done({ outcome: "failed-cleaned", sandboxAtBaseline: false })}`,
+    ),
+  );
   assert.equal(
     recordingToRecover(
-      `${started}\n${line({ action: "record-oidc", run: RUN, outcome: "recorded" })}`,
+      `${STARTED}\n${done({ outcome: "needs-recovery" })}\n${ledgerLine({ action: "record-oidc-recover", run: RUN, outcome: "recovered" })}`,
     ),
     undefined,
   );
+  assert.equal(recordingToRecover(""), undefined);
+});
 
-  const env = sandbox();
-  env.site.state.channel = true;
-  Object.assign(env.itk.state, {
-    config: JSON.stringify({ ...JSON.parse(CONFIG), signIn: { allowDuplicateEmails: true } }),
-    oauthIdpConfigs: [`oidc.fireemu-${RUN}-a`, "oidc.corporate"],
-    inboundSamlConfigs: [`saml.fireemu-${RUN}-a`],
-    defaultIdps: new Set(["google.com"]),
-    users: [
-      { localId: "1", email: `fireemu-fed-${RUN}-link@example.com` },
-      { localId: "2", providerUserInfo: [{ providerId: `oidc.fireemu-${RUN}-v` }] },
-      { localId: "3", email: "someone@example.com" },
-    ],
-  });
+async function recover(env, target) {
   const ledger = [];
   const { call } = limitedFetch(env.fetchImpl, { run: RUN, limits: LIMITS });
   const entry = await recoverCampaign({
@@ -291,7 +318,29 @@ test("recover removes the run's issuer, providers, default IdPs and accounts and
     appendLedger: async (recorded) => ledger.push(recorded),
     sleep: async () => {},
   });
+  return { entry, ledger };
+}
+
+test("recover removes the run's issuer, providers, declared default IdPs and accounts and restores the config", async () => {
+  const env = sandbox();
+  env.site.state.channel = true;
+  env.site.state.released = true;
+  Object.assign(env.itk.state, {
+    config: JSON.stringify({ ...JSON.parse(CONFIG), signIn: { allowDuplicateEmails: true } }),
+    oauthIdpConfigs: [`oidc.fireemu-${RUN}-a`, `fireemu-${RUN}-noprefix`, "oidc.corporate"],
+    inboundSamlConfigs: [`saml.fireemu-${RUN}-a`],
+    defaultIdps: new Set(["facebook.com"]),
+    users: [
+      { localId: "1", email: `fireemu-fed-${RUN}-link@example.com` },
+      { localId: "2", providerUserInfo: [{ providerId: `oidc.fireemu-${RUN}-v` }] },
+      { localId: "3", email: "someone@example.com" },
+    ],
+  });
+  // Only a started line: the version comes from the channel's release.
+  const { entry, ledger } = await recover(env, recordingToRecover(STARTED));
   assert.equal(entry.outcome, "recovered", JSON.stringify(entry));
+  assert.equal(entry.versionId, "rehearsal");
+  assert.equal(env.site.state.versionDeleted, true);
   assert.deepEqual(
     env.itk.state.oauthIdpConfigs,
     ["oidc.corporate"],
@@ -303,7 +352,172 @@ test("recover removes the run's issuer, providers, default IdPs and accounts and
     ["3"],
     "only the run's accounts go",
   );
+  assert.equal(env.itk.state.defaultIdps.size, 0);
   assert.equal(JSON.parse(env.itk.state.config).signIn.allowDuplicateEmails, false);
-  assert.equal(env.site.state.versionDeleted, true);
   assert.equal(ledger.at(-1).action, "record-oidc-recover");
+});
+
+test("recover removes the version when the channel is already gone, and never an unknown one", async () => {
+  // The recording removed its channel; its version is known from the journal.
+  const gone = sandbox();
+  const known = await recover(
+    gone,
+    recordingToRecover(`${STARTED}\n${progress({ versionId: "rehearsal" })}`),
+  );
+  assert.equal(known.entry.outcome, "recovered", JSON.stringify(known.entry));
+  assert.equal(known.entry.channelReadBack, "absent");
+  assert.equal(gone.site.state.versionDeleted, true);
+  // A version create was sent but its ID never journalled and no channel names it.
+  const lost = await recover(
+    sandbox(),
+    recordingToRecover(`${STARTED}\n${progress({ step: "version-create-sent" })}`),
+  );
+  assert.equal(lost.entry.outcome, "needs-recovery");
+  assert.equal(lost.entry.versionStatus, "unknown");
+  // No version was ever attempted.
+  const none = await recover(sandbox(), recordingToRecover(STARTED));
+  assert.equal(none.entry.outcome, "recovered");
+  assert.equal(none.entry.versionStatus, "none");
+});
+
+test("recover never removes a default IdP the run did not see absent", async () => {
+  const env = sandbox();
+  env.itk.state.defaultIdps = new Set(["facebook.com"]);
+  const started = STARTED.replace(
+    '"defaultIdpsAbsentBefore":["facebook.com"]',
+    '"defaultIdpsAbsentBefore":[]',
+  );
+  const { entry } = await recover(env, recordingToRecover(started));
+  assert.ok(env.itk.state.defaultIdps.has("facebook.com"));
+  assert.equal(entry.outcome, "recovered");
+});
+
+test("a default IdP or any provider present before stops the recording before it writes", async () => {
+  for (const [name, state] of Object.entries({
+    "facebook.com": { defaultIdps: new Set(["facebook.com"]) },
+    "a corporate OIDC provider": { oauthIdpConfigs: ["oidc.corporate"] },
+  })) {
+    const env = sandbox();
+    Object.assign(env.itk.state, state);
+    const { result, ledger } = await campaign(env);
+    assert.match(String(result.thrown?.message), /precheck: the project has/, name);
+    assert.deepEqual(ledger, [], name);
+    assert.ok(
+      env.itk.state.calls.every(({ method }) => method === "GET"),
+      name,
+    );
+  }
+});
+
+test("a pass is held to its share of the requests", async () => {
+  const { budget } = await import("./auth-federation/record.mjs");
+  let sent = 0;
+  const api = budget(async () => (sent += 1), 2, "pass 1");
+  await api("a");
+  await api("b");
+  await assert.rejects(api("c"), /pass 1 used its 2 requests/);
+  assert.equal(sent, 2);
+});
+
+test("ledger lines never hold the project number or the API key", async () => {
+  const { appender } = await import("./auth-federation/record.mjs");
+  const { mkdtemp, readFile } = await import("node:fs/promises");
+  const { tmpdir } = await import("node:os");
+  const { join } = await import("node:path");
+  const dir = await mkdtemp(join(tmpdir(), "fed-ledger-"));
+  const path = join(dir, "ledger.jsonl");
+  const state = { sent: false };
+  const append = appender(path, { api: 1, issuer: 0 }, state, {
+    projectNumber: "123456789012",
+    apiKey: "fake-api-key-for-the-test-00",
+  });
+  await append({
+    event: "started",
+    error: "HTTP 500 projects/123456789012 key=fake-api-key-for-the-test-00",
+  });
+  const text = await readFile(path, "utf8");
+  assert.ok(!text.includes("123456789012") && !text.includes("fake-api-key-for-the-test-00"), text);
+  assert.match(text, /<project-number>.*<api-key>/);
+  assert.equal(state.sent, true, "a started line keeps the lock");
+});
+
+test("the fixture is kept privately before a scan can refuse it", async () => {
+  const { writeFixtureFiles } = await import("./auth-federation/record.mjs");
+  const { mkdtemp, readFile, stat } = await import("node:fs/promises");
+  const { existsSync } = await import("node:fs");
+  const { tmpdir } = await import("node:os");
+  const { join } = await import("node:path");
+  const dir = await mkdtemp(join(tmpdir(), "fed-fixture-"));
+  const target = join(dir, "committed.json");
+  const privateDir = join(dir, "private");
+  await assert.rejects(
+    writeFixtureFiles(
+      { programs: { x: { signerKey: "real" } } },
+      { privateDir, forbidden: [], target },
+    ),
+    /password-hash key material/,
+  );
+  assert.ok(!existsSync(target));
+  assert.match(await readFile(join(privateDir, "fixture.json"), "utf8"), /real/);
+  assert.equal((await stat(join(privateDir, "fixture.json"))).mode & 0o777, 0o600);
+  await writeFixtureFiles({ programs: {} }, { privateDir, forbidden: [], target });
+  assert.ok(existsSync(target));
+});
+
+test("the fixture scan refuses key material, real hashes, client secrets and Google credentials", () => {
+  const refused = {
+    signerKey: '{"signerKey":"QUJD"}',
+    saltSeparator: '{"saltSeparator":"Bw=="}',
+    salt: '{"salt":"c2FsdA=="}',
+    "a real password hash": '{"passwordHash":"aGFzaA=="}',
+    "a client secret": '{"clientSecret":"not-ours"}',
+    "an OAuth secret": '{"x":"GOCSPX-abc"}',
+    "an access token": '{"x":"ya29.abc"}',
+    "a refresh token": '{"x":"AMf-abc"}',
+  };
+  for (const [name, text] of Object.entries(refused))
+    assert.throws(() => scanFixture(text, []), Error, name);
+  assert.doesNotThrow(() =>
+    scanFixture(
+      '{"signerKey":"<bytes>","salt":"<bytes>","passwordHash":"UkVEQUNURUQ=","clientSecret":"fireemu-secret"}',
+      [],
+    ),
+  );
+});
+
+test("a config answer and a provider list keep no key material or foreign secret", async () => {
+  const { normalizeHttp } = await import("./auth-federation/harness.mjs");
+  const ctx = { run: RUN, project: SANDBOX_PROJECT };
+  const config = JSON.stringify({
+    signIn: {
+      allowDuplicateEmails: true,
+      hashConfig: { algorithm: "SCRYPT", signerKey: "c2VjcmV0", saltSeparator: "Bw==", rounds: 8 },
+    },
+    notification: { sendEmail: { callbackUri: "x" } },
+  });
+  const projected = normalizeHttp(200, config, ctx, ["signIn.allowDuplicateEmails"]);
+  assert.deepEqual(projected, { status: 200, body: { signIn: { allowDuplicateEmails: true } } });
+  const whole = normalizeHttp(200, config, ctx);
+  assert.equal(whole.body.signIn.hashConfig.signerKey, "<bytes>");
+  assert.equal(whole.body.signIn.hashConfig.saltSeparator, "<bytes>");
+  const list = normalizeHttp(
+    200,
+    JSON.stringify({
+      defaultSupportedIdpConfigs: [
+        { name: "google.com", clientSecret: "GOCSPX-real" },
+        { name: "facebook.com", clientSecret: "fireemu-secret" },
+      ],
+      users: [{ passwordHash: "cmVhbA==", salt: "c2FsdA==" }, { passwordHash: "UkVEQUNURUQ=" }],
+    }),
+    ctx,
+  );
+  assert.deepEqual(
+    list.body.defaultSupportedIdpConfigs.map((idp) => idp.clientSecret),
+    ["<client-secret>", "fireemu-secret"],
+  );
+  assert.deepEqual(list.body.users, [
+    { passwordHash: "<bytes>", salt: "<bytes>" },
+    { passwordHash: "UkVEQUNURUQ=" },
+  ]);
+  assert.doesNotThrow(() => scanFixture(JSON.stringify([whole, list]), []));
 });

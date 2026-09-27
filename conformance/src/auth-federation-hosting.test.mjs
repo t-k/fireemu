@@ -782,3 +782,45 @@ test("a recording publishes the issuer and later removes the channel and its ver
     !smokeFake.calls.some(({ method, url }) => method === "DELETE" && url.endsWith(VERSION)),
   );
 });
+
+test("another task's run ends only with a line that closes it at its baseline", () => {
+  const now = Date.parse("2026-09-28T12:00:00Z");
+  const line = (task, extra) =>
+    JSON.stringify({
+      ts: "2026-09-28T09:00:00Z",
+      project: SANDBOX_PROJECT,
+      taskId: task,
+      ...extra,
+    });
+  const started = line("AUTH-FS-CROSS", { event: "started" });
+  const open = {
+    "a note": line("AUTH-FS-CROSS", { event: "note" }),
+    "a change": line("AUTH-FS-CROSS", { event: "change" }),
+    "a progress line": line("AUTH-FS-CROSS", { event: "progress" }),
+    "an outcome off its baseline": line("AUTH-FS-CROSS", {
+      outcome: "aborted",
+      sandboxAtBaseline: false,
+    }),
+    "a needs-recovery outcome": line("AUTH-FS-CROSS", { outcome: "needs-recovery" }),
+  };
+  for (const [name, after] of Object.entries(open)) {
+    assert.match(
+      String(sandboxBusy(`${started}\n${after}`, now)),
+      /has not finished or recovered/,
+      name,
+    );
+  }
+  for (const [name, after] of Object.entries({
+    "an outcome": line("AUTH-FS-CROSS", { outcome: "recorded" }),
+    finished: line("AUTH-FS-CROSS", { event: "finished" }),
+    "cleanup-verified": line("AUTH-FS-CROSS", { event: "cleanup-verified" }),
+  })) {
+    assert.equal(sandboxBusy(`${started}\n${after}`, now), undefined, name);
+  }
+  // This task's own run stays open through its progress lines.
+  const own = (extra) => line(TASK_ID, extra);
+  assert.match(
+    String(sandboxBusy(`${own({ event: "started" })}\n${own({ event: "progress" })}`, now)),
+    /recover it first/,
+  );
+});

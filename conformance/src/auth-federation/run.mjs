@@ -16,7 +16,7 @@ import { CONFORMANCE_DIR } from "../config.mjs";
 import { resolveFireemuBinary } from "../evidence.mjs";
 import { SANDBOX_PROJECT } from "../auth-account/harness.mjs";
 import { PROGRAMS, resolveCorpus } from "./corpus.mjs";
-import { guardHttp, runProvider, validateFederationCorpus } from "./guard.mjs";
+import { guardHttp, validateFederationCorpus } from "./guard.mjs";
 import { normalizeHttp } from "./harness.mjs";
 import { generateSigningKey, jwksDocument, saveSigningKey, signIdToken } from "./idp.mjs";
 
@@ -256,7 +256,7 @@ export async function runPrograms(programs, ctx) {
       } catch {
         raw.set(step.id, undefined);
       }
-      steps[step.id] = normalizeHttp(response.status, text, ctx);
+      steps[step.id] = normalizeHttp(response.status, text, ctx, step.record);
     }
     results[program.id] = { steps };
     // Every account the program's answers named, and every config path it touched.
@@ -290,7 +290,8 @@ export async function runPrograms(programs, ctx) {
 
 /** The run's providers the project still lists. */
 export async function runProviderLeftovers(ctx) {
-  const own = runProvider(ctx.run);
+  // Any provider named for the run, also one whose unprefixed ID the service accepted.
+  const own = { test: (id) => String(id).toLowerCase().includes(`fireemu-${ctx.run}-`) };
   const left = [];
   for (const collection of ["oauthIdpConfigs", "inboundSamlConfigs"]) {
     const listed = await harnessJson(ctx, "GET", `${collection}?pageSize=100`);

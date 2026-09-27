@@ -67,6 +67,7 @@ export function fakeHosting(run) {
     }
     if (method === "PATCH" && path === version) return reply(200, {});
     if (method === "POST" && path.endsWith("/releases")) {
+      state.released = true;
       for (const [file, hash] of Object.entries(state.hashes)) {
         state.served[file] = gunzipSync(state.uploads[hash]).toString("utf8");
       }
@@ -77,7 +78,12 @@ export function fakeHosting(run) {
       return reply(200, {});
     }
     if (method === "GET" && path.endsWith(`/channels/fed-${run}`)) {
-      return state.channel ? reply(200, { url: `https://${host}` }) : reply(404, {});
+      return state.channel
+        ? reply(200, {
+            url: `https://${host}`,
+            ...(state.released ? { release: { version: { name: version } } } : {}),
+          })
+        : reply(404, {});
     }
     if (method === "DELETE" && path === version) {
       state.versionDeleted = true;

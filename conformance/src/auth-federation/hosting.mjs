@@ -137,28 +137,42 @@ const needsRecovery = (entry) =>
   entry?.outcome === "needs-recovery" || entry?.event === "needs-recovery";
 
 /**
- * Why the sandbox is not free for this task, or undefined: this task's own run left open
- * (recover it first), another task's open `started` line or `needs-recovery` outcome, or
- * another task's line within the last 30 minutes (a time that does not parse counts as
- * recent).
+ * Whether a line ends a run cleanly: a closing line (an outcome other than needs-recovery,
+ * `finished` or `cleanup-verified`) that does not say the sandbox was left off its baseline.
+ * Notes, changes, controls and progress lines end nothing (the rule of AUTH-FS-CROSS and
+ * AUTH-TENANT-BLOCKING).
+ */
+export function endsRun(entry) {
+  if (entry.event === "started" || needsRecovery(entry)) return false;
+  const closing =
+    entry.outcome !== undefined || entry.event === "finished" || entry.event === "cleanup-verified";
+  return closing && entry.sandboxAtBaseline !== false;
+}
+
+/**
+ * Why the sandbox is not free for this task, or undefined:
+ * - a run (this task's or another's) opened by `started` or `needs-recovery` and not followed
+ *   by a line of that task that ends it (`endsRun`), however old;
+ * - another task's line within the last 30 minutes;
+ * - a line whose time does not parse (no rule could judge it).
  */
 export function sandboxBusy(text, now = Date.now()) {
   const lines = ledgerEntries(text).filter((entry) => entry.project === SANDBOX_PROJECT);
-  const last = new Map();
-  for (const entry of lines) last.set(taskOf(entry), entry);
-  const own = last.get(TASK_ID);
-  if (own?.event === "started" || needsRecovery(own)) {
-    return `this task's run ${own.run ?? ""} at ${own.ts} was not finished; recover it first`;
+  const running = new Map();
+  for (const entry of lines) {
+    const task = taskOf(entry);
+    if (Number.isNaN(Date.parse(entry.ts))) return `${task} wrote a line whose time does not parse`;
+    if (entry.event === "started" || needsRecovery(entry)) running.set(task, entry);
+    else if (endsRun(entry)) running.delete(task);
   }
-  const unfinished = [...last.values()].find(
-    (entry) => taskOf(entry) !== TASK_ID && (entry.event === "started" || needsRecovery(entry)),
-  );
+  const own = running.get(TASK_ID);
+  if (own)
+    return `this task's run ${own.run ?? ""} at ${own.ts} was not finished; recover it first`;
+  const unfinished = [...running.values()][0];
   if (unfinished) return `${taskOf(unfinished)} at ${unfinished.ts} has not finished or recovered`;
-  const recent = lines.find((entry) => {
-    if (taskOf(entry) === TASK_ID) return false;
-    const age = now - Date.parse(entry.ts);
-    return Number.isNaN(age) || age < QUIET_MS;
-  });
+  const recent = lines.find(
+    (entry) => taskOf(entry) !== TASK_ID && now - Date.parse(entry.ts) < QUIET_MS,
+  );
   return recent ? `${taskOf(recent)} wrote a line at ${recent.ts}` : undefined;
 }
 
@@ -411,7 +425,17 @@ function cleanOf(cleanup, channelCreated) {
  * both files back. `result` records how far it got (`channelAttempted`, `channelCreated`,
  * `issuerHost`, `version`, `readback`), also when it throws.
  */
-export async function deployIssuer({ api, auth, send, run, jwks, forbidden, stop, result }) {
+export async function deployIssuer({
+  api,
+  auth,
+  send,
+  run,
+  jwks,
+  forbidden,
+  stop,
+  result,
+  journal = async () => {},
+}) {
   const channelId = `fed-${run}`;
   // From here the channel may exist even if the answer is lost: the cleanup probes it.
   result.channelAttempted = true;
@@ -431,6 +455,9 @@ export async function deployIssuer({ api, auth, send, run, jwks, forbidden, stop
   const site = issuerSite({ issuer, run, jwks, forbidden });
   stop.check();
 
+  // Journalled before and after, so a recovery knows whether a version may exist and which.
+  result.versionAttempted = true;
+  await journal({ step: "version-create-sent" });
   const version = await send(
     "POST",
     `${HOSTING}/projects/-/sites/${SITE}/versions`,
@@ -438,6 +465,7 @@ export async function deployIssuer({ api, auth, send, run, jwks, forbidden, stop
     "version create",
   );
   result.version = version.name;
+  await journal({ versionId: String(version.name).split("/").at(-1) });
   const zipped = Object.fromEntries(
     Object.entries(site.files).map(([path, text]) => [path, gzipSync(text)]),
   );

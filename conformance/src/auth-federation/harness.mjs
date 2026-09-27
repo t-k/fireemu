@@ -25,6 +25,19 @@ const MASKED = {
   localId: "<local-id>",
   user_id: "<local-id>",
   sub: "<subject>",
+  // The project's password-hash key material (a config answer), never recorded.
+  signerKey: "<bytes>",
+  saltSeparator: "<bytes>",
+  salt: "<bytes>",
+};
+
+/**
+ * Members kept only in a form known not to be secret: production's redacted password hash,
+ * and client secrets this harness made (`fireemu-…`); any other value is masked.
+ */
+const KEPT_ONLY = {
+  passwordHash: (value) => (value === "UkVEQUNURUQ=" ? value : "<bytes>"),
+  clientSecret: (value) => (value.startsWith("fireemu-") ? value : "<client-secret>"),
 };
 
 /** Account times: when a record was made or used, never the same twice. */
@@ -82,6 +95,7 @@ export function normalize(value, ctx, key = "") {
   if (typeof value === "string") {
     if (TOKEN_KEYS.has(key)) return normalize(decodeToken(value), ctx);
     if (MASKED[key]) return MASKED[key];
+    if (KEPT_ONLY[key]) return KEPT_ONLY[key](value);
     // The IdP's claims as the service echoes them, as JSON text.
     if (key === "rawUserInfo") {
       try {
@@ -106,13 +120,32 @@ export function normalize(value, ctx, key = "") {
   return value;
 }
 
-/** The recorded form of an HTTP answer. */
-export function normalizeHttp(status, text, ctx) {
+/**
+ * The recorded form of an HTTP answer. With `paths` (dotted), only those members of the body
+ * are recorded (a config write answers the whole project config).
+ */
+export function normalizeHttp(status, text, ctx, paths) {
   let body;
   try {
     body = JSON.parse(text);
   } catch {
     body = text === "" ? undefined : "<non-json>";
   }
+  if (paths && body && typeof body === "object") body = pick(body, paths);
   return { status, body: normalize(body, ctx) };
+}
+
+/** Only the members of `value` at the dotted `paths`, in their places. */
+function pick(value, paths) {
+  const out = {};
+  for (const path of paths) {
+    const keys = path.split(".");
+    const found = keys.reduce((node, key) => node?.[key], value);
+    if (found === undefined) continue;
+    keys.reduce((node, key, index) => {
+      node[key] = index === keys.length - 1 ? found : (node[key] ?? {});
+      return node[key];
+    }, out);
+  }
+  return out;
 }

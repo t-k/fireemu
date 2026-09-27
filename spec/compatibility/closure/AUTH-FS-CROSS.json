@@ -152,7 +152,7 @@
           "docs/compatibility/auth-fs-tenant-read-local.md"
         ],
         "productionExecuted": false,
-        "limits": "Local strict-profile tests refuse a deleted tenant's token (the tenant store is gone, so the token's tenant no longer matches); the default emulator profile admits the same unsigned token as a mock token. Production is unobserved."
+        "limits": "Production honours a deleted tenant's unexpired token (stage 1, 2026-09-27), and fireemu does too since 9a030f985: with Firestore's token checks it is verified against its project and keeps its tenant claim."
       },
       "verification": {
         "recordingsRequired": 2
@@ -394,7 +394,7 @@
           "docs/compatibility/auth-fs-tenant-read-local.md"
         ],
         "productionExecuted": false,
-        "limits": "Local in-process listener tests end the deleted tenant's target (REMOVE cause 16, then UNAUTHENTICATED and EOF) under the strict profile; the default emulator profile does not. Production is unobserved."
+        "limits": "Since 9a030f985 a listener on the daemon's Firestore enforcer keeps a deleted tenant's unexpired token, as unary requests do in production (stage 1); the older local test that ends the target remains for Identity Toolkit's token checks only. Production's listener is unobserved."
       },
       "verification": {
         "recordingsRequired": 2

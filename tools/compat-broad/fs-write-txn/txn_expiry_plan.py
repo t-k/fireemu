@@ -189,7 +189,6 @@ def _operations():
         ("a", "locked-a"),
         ("b", "locked-b"),
         ("c", "locked-c"),
-        ("d", "locked-d"),
     )
     for tag, role in holders:
         steps.append(
@@ -213,6 +212,15 @@ def _operations():
             role="locked-c",
             timeout=CONTENDED_REQUEST_TIMEOUT_SECONDS,
             detail="out-of-band commit while transaction c still holds the lock",
+        )
+    )
+    steps.append(
+        _op("idle/begin/d", "idle-expiry", "BeginTransaction", opens="d")
+    )
+    steps.append(
+        _op(
+            "idle/read/d", "idle-expiry", "GetDocument", role="locked-d",
+            detail="transactional read after contention so the short-idle control stays fresh",
         )
     )
     steps.append(

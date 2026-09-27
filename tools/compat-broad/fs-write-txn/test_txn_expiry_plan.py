@@ -186,6 +186,13 @@ def test_the_contended_requests_get_the_longer_timeout():
     }
 
 
+def test_short_idle_control_starts_after_the_contended_request():
+    slots = [step["slot"] for step in compiled()["operations"]]
+    assert slots.index("idle/lock-held") < slots.index("idle/begin/d")
+    assert slots.index("idle/begin/d") < slots.index("idle/read/d")
+    assert slots.index("idle/read/d") < slots.index("idle/commit-before")
+
+
 def test_timeouts_plus_waits_fit_inside_the_wall_envelope():
     value = compiled()
     worst = value["bounds"]["worstCaseSeconds"]

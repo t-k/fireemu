@@ -1173,7 +1173,9 @@ export function restoreDue(ledgerText) {
   );
   if (!last) return false;
   if (last.event === "started") return true;
-  return last.outcome !== "recorded" && !String(last.outcome).startsWith("exploration");
+  // A clean hand restore closes the run as a clean recording does (review S3).
+  const clean = ["recorded", "restored-by-hand"];
+  return !clean.includes(last.outcome) && !String(last.outcome).startsWith("exploration");
 }
 
 async function recordingRunning() {
@@ -1203,8 +1205,11 @@ export async function restoreSandbox({
   context = productionContext,
   sessionFactory = createSession,
   baselineCheck = prepareProject,
+  lockCheck = assertProductionLock,
 } = {}) {
   if (!ledger) throw new Error("FIREEMU_SANDBOX_LEDGER is required");
+  // A restore writes to production as a recording does: only under the reviewed lock (review S3).
+  await lockCheck(ledger);
   const text = existsSync(ledger) ? await readFile(ledger, "utf8") : "";
   if (!restoreDue(text)) throw new Error("the ledger shows no run of this task to restore after");
   if (await isRecordingRunning()) throw new Error("a recording of this harness is still running");
@@ -1213,6 +1218,12 @@ export async function restoreSandbox({
   const busy = otherLaneOnSandbox(text, Date.now(), [IAM_HOLD_TASK_ID]);
   if (busy) throw new Error(`another lane is on the sandbox: ${busy}`);
   const web = await webConfig();
+  // Hold the sandbox before the first request, so no lane is admitted while the restore writes;
+  // the terminal line below closes it (review S3).
+  await appendFile(
+    ledger,
+    `${JSON.stringify({ ts: new Date().toISOString(), event: "started", taskId: TASK_ID, project: SANDBOX_PROJECT, reason: "restore-sandbox is restoring the sandbox" })}\n`,
+  );
   const tokens = [];
   let outcome = "restore-failed";
   let before;

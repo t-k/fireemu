@@ -444,7 +444,7 @@ test("an IAM campaign hold survives sandbox restoration and blocks new recording
       `${row(TASK_ID, { event: "started" })}\n${row(foreignIamTask, { event: "started" })}\n`,
     );
     await assert.rejects(
-      restoreSandbox({ ledger, isRecordingRunning: async () => false }),
+      restoreSandbox({ ledger, isRecordingRunning: async () => false, lockCheck: async () => {} }),
       /another lane is on the sandbox/,
     );
     await writeFile(ledger, `${row(TASK_ID, { event: "started" })}\n${iamOnly}`);
@@ -452,6 +452,7 @@ test("an IAM campaign hold survives sandbox restoration and blocks new recording
       restoreSandbox({
         ledger,
         isRecordingRunning: async () => false,
+        lockCheck: async () => {},
         webConfig: async () => ({ projectNumber: "123456789012" }),
         context: async () => {
           throw new Error("sandbox recovery reached its context");
@@ -464,6 +465,7 @@ test("an IAM campaign hold survives sandbox restoration and blocks new recording
     await restoreSandbox({
       ledger,
       isRecordingRunning: async () => false,
+      lockCheck: async () => {},
       webConfig: async () => ({ projectNumber: "123456789012" }),
       context: async () => ({}),
       sessionFactory: () => ({
@@ -499,6 +501,7 @@ test("an early restore failure retains the sandbox hold for every later prefligh
         restoreSandbox({
           ledger,
           isRecordingRunning: async () => false,
+          lockCheck: async () => {},
           webConfig: async () => ({ projectNumber: "123456789012" }),
           context: async () => {
             if (phase === "production context") throw new Error("context unavailable");
@@ -525,5 +528,68 @@ test("an early restore failure retains the sandbox hold for every later prefligh
     } finally {
       await rm(dir, { recursive: true, force: true });
     }
+  }
+});
+
+test("restore-sandbox runs only under the reviewed lock and holds the sandbox before writing", async () => {
+  const now = Date.now();
+  const row = (fields) =>
+    JSON.stringify({
+      ts: new Date(now - 60_000).toISOString(),
+      project: "fireemu-oracle-idp",
+      taskId: TASK_ID,
+      ...fields,
+    });
+  // A clean hand restore closes the run: it is not due again.
+  assert.equal(
+    restoreDue(`${row({ event: "started" })}\n${row({ outcome: "restored-by-hand" })}\n`),
+    false,
+  );
+  const dir = await mkdtemp(join(tmpdir(), "atb-restore-lock-"));
+  const ledger = join(dir, "ledger.jsonl");
+  try {
+    await writeFile(ledger, `${row({ event: "started" })}\n`, { mode: 0o600 });
+    let reached = false;
+    await assert.rejects(
+      restoreSandbox({
+        ledger,
+        isRecordingRunning: async () => false,
+        lockCheck: async () => {
+          throw new Error("no reviewed lock");
+        },
+        webConfig: async () => {
+          reached = true;
+          return {};
+        },
+      }),
+      /no reviewed lock/,
+    );
+    assert.equal(reached, false);
+    const lines = [];
+    await assert.rejects(
+      restoreSandbox({
+        ledger,
+        isRecordingRunning: async () => false,
+        lockCheck: async () => {},
+        webConfig: async () => ({ projectNumber: "123456789012" }),
+        context: async () => {
+          // The hold is in the ledger before the first request can be sent.
+          lines.push(
+            ...(await readFile(ledger, "utf8"))
+              .trim()
+              .split("\n")
+              .map((l) => JSON.parse(l)),
+          );
+          throw new Error("stop");
+        },
+      }),
+      /stop/,
+    );
+    const hold = lines.at(-1);
+    assert.equal(hold.event, "started");
+    assert.equal(hold.taskId, TASK_ID);
+    assert.match(hold.reason, /restore-sandbox/);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
   }
 });

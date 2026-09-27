@@ -2717,8 +2717,8 @@ fn handle_with_policy(
 
 /// An Admin v2 management answer as production gives it (strict profile, AUTH-TENANT-BLOCKING
 /// recording 2026-09-27): errors in the v2 shape (`code`, `message`, `status`, no `errors`);
-/// tenant management of a project with multi-tenancy off is INVALID_PROJECT_ID whatever the
-/// tenant id; a provider config missing from the addressed scope is CONFIGURATION_NOT_FOUND,
+/// tenant management of a project with multi-tenancy off is `INVALID_PROJECT_ID` whatever the
+/// tenant id; a provider config missing from the addressed scope is `CONFIGURATION_NOT_FOUND`,
 /// and a provider config names the project by number, lists `responseType` with its true
 /// members only and answers an empty list as `{}`.
 fn management_answer(

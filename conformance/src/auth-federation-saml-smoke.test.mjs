@@ -367,11 +367,11 @@ test("recover deletes the run's provider and its accounts and checks the config 
     api: brokenCall,
     run: RUN,
     meta: { adminToken: "admin-token" },
-    appendLedger: async (line) => ledger.push(line),
+    appendLedger: async (recorded) => ledger.push(recorded),
     configDigestBefore,
   });
   assert.equal(failed.outcome, "needs-recovery");
   assert.match(failed.error, /accounts read: 503/);
-  assert.ok(ledger.every((line) => line.action === "saml-recover"));
+  assert.ok(ledger.every((recorded) => recorded.action === "saml-recover"));
   assert.ok(!fake.calls.some(({ method, url }) => method !== "GET" && url.endsWith("/config")));
 });

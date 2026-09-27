@@ -13458,15 +13458,14 @@ fn tenant_create_rejects_malformed_settings_before_publishing_and_reads_back_sup
     let registry = Arc::new(AuthRegistry::new("demo-app", s.store.clone()));
     s.registry = Some(registry.clone());
     let collection = format!("{V2}/projects/demo-app/tenants");
-    // Bodies production cannot read as a Tenant are refused before anything is published.
+    // Bodies that cannot be read as a Tenant are refused before anything is published. (An
+    // unknown member is ignored under the emulator profile, as the official Auth emulator
+    // ignores it; strict refuses it as production does.)
     let malformed = [
         json!({"client": true}),
         json!({"client": {"permissions": "invalid"}}),
-        json!({"client": {"permissions": {"unknown": true}}}),
         json!({"emailPrivacyConfig": []}),
-        json!({"emailPrivacyConfig": {"unknown": true}}),
         json!({"allowPasswordSignup": {"nested": true}}),
-        json!({"unknownField": true}),
     ];
     for body in malformed {
         let refused = handle_with(&s, "POST", &collection, &owner(), &body);
@@ -13483,6 +13482,9 @@ fn tenant_create_rejects_malformed_settings_before_publishing_and_reads_back_sup
         json!({"emailPrivacyConfig": {"enableImprovedEmailPrivacy": null}}),
         json!({"allowPasswordSignup": "true"}),
         json!({"passwordPolicyConfig": null}),
+        json!({"client": {"permissions": {"unknown": true}}}),
+        json!({"emailPrivacyConfig": {"unknown": true}}),
+        json!({"unknownField": true}),
     ] {
         let taken = handle_with(&s, "POST", &collection, &owner(), &body);
         assert_eq!(taken.status, 200, "{body}: {}", taken.body);

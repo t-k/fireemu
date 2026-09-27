@@ -6348,17 +6348,14 @@ const TENANT_TOP_LEVEL_MEMBERS: &[&str] = &[
     "mobileLinksConfig",
 ];
 
-/// A tenant body read as production reads it. The emulator profile still takes the
-/// fireemu-only `tenantId` member it always took (production does not know it).
+/// A tenant body read as production reads it. The emulator profile ignores the members a
+/// `Tenant` does not have (the fireemu-only `tenantId` among them), as the official Auth
+/// emulator does, instead of refusing them.
 fn tenant_body(body: &Value, strict: bool) -> Result<Value, JsonResponse> {
     if strict {
         return config_proto::parse_tenant_body(body);
     }
-    let mut body = body.clone();
-    if let Some(object) = body.as_object_mut() {
-        object.remove("tenantId");
-    }
-    config_proto::parse_tenant_body(&body)
+    config_proto::parse_tenant_body(&config_proto::tenant_known_members(body))
 }
 
 /// The members of a parsed tenant the tenant metadata holds.

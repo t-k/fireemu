@@ -667,6 +667,42 @@ pub(super) fn parse_tenant_body(body: &Value) -> Result<Value, JsonResponse> {
     Ok(without_empty_lists(parsed))
 }
 
+/// A tenant body without the members a `Tenant` does not have, at any depth: the official Auth
+/// emulator ignores them, so the emulator profile does not refuse them (local measurement
+/// 2026-09-28, firebase-tools 15.28.2).
+pub(super) fn tenant_known_members(body: &Value) -> Value {
+    known_members(body, Kind::Msg(TENANT))
+}
+
+fn known_members(value: &Value, kind: Kind) -> Value {
+    match (value, kind) {
+        (Value::Object(object), Kind::Msg(fields)) => Value::Object(
+            object
+                .iter()
+                .filter_map(|(key, item)| {
+                    let field = fields
+                        .iter()
+                        .find(|field| field.json == key || field.proto == key)?;
+                    Some((key.clone(), known_members(item, field.kind)))
+                })
+                .collect(),
+        ),
+        (Value::Array(items), Kind::List(inner)) => Value::Array(
+            items
+                .iter()
+                .map(|item| known_members(item, *inner))
+                .collect(),
+        ),
+        (Value::Object(object), Kind::Map(inner)) => Value::Object(
+            object
+                .iter()
+                .map(|(key, item)| (key.clone(), known_members(item, *inner)))
+                .collect(),
+        ),
+        _ => value.clone(),
+    }
+}
+
 /// Whether production knows `path` as a writable tenant path (an unknown one in an update mask
 /// is ignored, as production ignores it).
 pub(super) fn known_writable_tenant_path(path: &str) -> bool {

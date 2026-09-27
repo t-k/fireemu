@@ -284,22 +284,35 @@ fn switches_appear_only_when_on_and_written_members_are_echoed() {
 
 #[test]
 fn an_unknown_member_is_refused_with_production_message() {
-    for (label, state) in profiles() {
-        // manage#create-unknown-field.
-        let (status, body) = admin(
-            &state,
-            "POST",
-            TENANTS,
-            &json!({"displayName": "atb-man-x", "notAField": true}),
-        );
-        assert_eq!(status, 400, "{label}");
-        assert_eq!(
-            body["error"]["message"],
-            "Invalid JSON payload received. Unknown name \"notAField\" at 'tenant': Cannot find field.",
-            "{label}: {body}"
-        );
-        assert_eq!(body["error"]["status"], "INVALID_ARGUMENT");
-    }
+    // manage#create-unknown-field.
+    let strict = state(true);
+    let (status, body) = admin(
+        &strict,
+        "POST",
+        TENANTS,
+        &json!({"displayName": "atb-man-x", "notAField": true}),
+    );
+    assert_eq!(status, 400);
+    assert_eq!(
+        body["error"]["message"],
+        "Invalid JSON payload received. Unknown name \"notAField\" at 'tenant': Cannot find field.",
+        "{body}"
+    );
+    assert_eq!(body["error"]["status"], "INVALID_ARGUMENT");
+    // The official Auth emulator ignores an unknown member, at any depth; so does the
+    // emulator profile (local measurement 2026-09-28).
+    let emulator = state(false);
+    let created = create(
+        &emulator,
+        &json!({"displayName": "atb-man-x", "notAField": true,
+                "client": {"permissions": {"disabledUserSignup": true, "alsoUnknown": 1}}}),
+    );
+    assert_eq!(created["displayName"], "atb-man-x");
+    assert_eq!(
+        created["client"],
+        json!({"permissions": {"disabledUserSignup": true}})
+    );
+    assert!(created.get("notAField").is_none());
 }
 
 #[test]

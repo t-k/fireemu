@@ -230,8 +230,9 @@ export async function withSandboxLock(ledger, work, { keep = () => false, ours =
 
 /**
  * Counts requests against the limits and refuses any URL outside the reviewed ones: the
- * Hosting, Identity Toolkit (config read) and Service Usage APIs of the sandbox, the upload
- * URL populateFiles names, and the run's channel host.
+ * Hosting, Identity Toolkit, Secure Token and Service Usage APIs, the upload URL
+ * populateFiles names, and the run's channel host. (What each API may be asked is the
+ * caller's guard; the smokes read the config only, the recording runs the corpus guard.)
  */
 export function limitedFetch(fetchImpl, { run, limits = LIMITS }) {
   const used = { api: 0, issuer: 0 };
@@ -245,6 +246,7 @@ export function limitedFetch(fetchImpl, { run, limits = LIMITS }) {
             "firebasehosting.googleapis.com",
             "upload-firebasehosting.googleapis.com",
             "identitytoolkit.googleapis.com",
+            "securetoken.googleapis.com",
             "serviceusage.googleapis.com",
           ].includes(host)
         ? "api"

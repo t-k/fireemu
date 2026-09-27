@@ -1,8 +1,6 @@
-// AUTH-FEDERATION harness runner (draft). Only the local mode exists: it runs the corpus
-// against fireemu (strict profile) and writes the recorded rows under `.runs/`. The
-// production mode is added after the closure conditions are frozen, the owner decisions
-// O1 to O6 are recorded and a pre-send review passes; it will hold the shared
-// `<ledger>.lock` and write the started and terminal ledger lines as the other lanes do.
+// AUTH-FEDERATION harness runner. The local mode runs the corpus against fireemu (strict
+// profile) and writes the recorded rows under `.runs/`; the production recording
+// (`record.mjs`) runs the same programs through `runPrograms` against the sandbox.
 //
 //   node src/auth-federation/run.mjs local
 
@@ -11,6 +9,7 @@ import { createHash, randomBytes } from "node:crypto";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 
 import { CONFORMANCE_DIR } from "../config.mjs";
@@ -30,7 +29,7 @@ const OWNER = "Bearer owner";
  * A self-signed certificate of a fresh key, made with the system `openssl`, in a private
  * temporary directory. Only the certificate (public) leaves it.
  */
-async function makeCertificate(dir, name) {
+export async function makeCertificate(dir, name) {
   const key = join(dir, `${name}.key.pem`);
   const cert = join(dir, `${name}.cert.pem`);
   await execFileAsync("openssl", [
@@ -85,15 +84,16 @@ export function mintTokens(program, { issuer, keys, now }) {
   return minted;
 }
 
+/** The run's signing key and another key its issuer does not publish (negative rows). */
+export function prepareKeys() {
+  return { run: generateSigningKey(), other: generateSigningKey() };
+}
+
 /**
- * This run's key material and the corpus resolved with it. `issuerHost` is the run's preview
- * channel (the local mode names one that is never deployed).
+ * The corpus resolved for a run: placeholders filled with the run, its issuer host (the
+ * run's preview channel) and certificate, and every program's ID tokens minted at `now`.
  */
-async function prepareRun(project, run, issuerHost) {
-  const secretDir = await mkdtemp(join(tmpdir(), "fireemu-auth-federation-"));
-  const keys = { run: generateSigningKey(), other: generateSigningKey() };
-  await saveSigningKey(join(secretDir, "oidc.pem"), keys.run);
-  const now = Math.floor(Date.now() / 1000);
+export function resolveRun({ project, run, issuerHost, keys, certificatePem, now }) {
   const issuer = `https://${issuerHost}/oidc/${run}`;
   const legacy = (subject) =>
     signIdToken(keys.run, {
@@ -107,11 +107,30 @@ async function prepareRun(project, run, issuerHost) {
     project,
     run,
     issuerHost,
-    certificates: { "saml-a": await makeCertificate(secretDir, "saml-a") },
+    certificates: { "saml-a": certificatePem },
     tokens: { missing: legacy("missing"), off: legacy("off") },
   });
   for (const program of programs) program.minted = mintTokens(program, { issuer, keys, now });
   validateFederationCorpus(programs, { run });
+  return { issuer, programs };
+}
+
+/**
+ * This run's key material and the corpus resolved with it. `issuerHost` is the run's preview
+ * channel (the local mode names one that is never deployed).
+ */
+async function prepareRun(project, run, issuerHost) {
+  const secretDir = await mkdtemp(join(tmpdir(), "fireemu-auth-federation-"));
+  const keys = prepareKeys();
+  await saveSigningKey(join(secretDir, "oidc.pem"), keys.run);
+  const { issuer, programs } = resolveRun({
+    project,
+    run,
+    issuerHost,
+    keys,
+    certificatePem: await makeCertificate(secretDir, "saml-a"),
+    now: Math.floor(Date.now() / 1000),
+  });
   return {
     run,
     issuerHost,
@@ -199,7 +218,7 @@ export async function runPrograms(programs, ctx) {
       const host = step.path.startsWith("v1/token")
         ? "securetoken.googleapis.com"
         : "identitytoolkit.googleapis.com";
-      const url = `${ctx.origin}/${host}/${step.path}${query.size ? `?${query}` : ""}`;
+      const url = urlFor(ctx, host, `${step.path}${query.size ? `?${query}` : ""}`);
       const method = step.method ?? "POST";
       let body;
       try {
@@ -218,11 +237,11 @@ export async function runPrograms(programs, ctx) {
         failures.push(`${program.id}#${step.id}: guard refused: ${error.message}`);
         break;
       }
-      const response = await fetch(url, {
+      const response = await send(ctx, url, {
         method,
         headers: {
           "content-type": "application/json",
-          ...(step.auth === "admin" ? { authorization: ctx.adminAuthorization } : {}),
+          ...(step.auth === "admin" ? adminHeaders(ctx) : {}),
         },
         body,
       });
@@ -280,14 +299,38 @@ export async function runProviderLeftovers(ctx) {
   return left;
 }
 
+/**
+ * The URL of `path` on the API `host`: the host itself in production, a path below the
+ * local emulator's origin otherwise.
+ */
+function urlFor(ctx, host, path) {
+  return ctx.target.kind === "production"
+    ? `https://${host}/${path}`
+    : `${ctx.origin}/${host}/${path}`;
+}
+
+/** The headers of an administrator's request: the owner's token (and quota project). */
+function adminHeaders(ctx) {
+  return { authorization: ctx.adminAuthorization, ...ctx.adminHeaders };
+}
+
+/** Sends a request through the context's (counted) fetch; harness requests are counted too. */
+function send(ctx, url, init) {
+  return (ctx.fetch ?? fetch)(url, init);
+}
+
 /** A harness config read or write-back through the same guard; the answer's JSON. */
 async function harnessJson(ctx, method, path, body) {
-  const url = `${ctx.origin}/identitytoolkit.googleapis.com/admin/v2/projects/${ctx.project}/${path}`;
+  const url = urlFor(
+    ctx,
+    "identitytoolkit.googleapis.com",
+    `admin/v2/projects/${ctx.project}/${path}`,
+  );
   const text = body === undefined ? undefined : JSON.stringify(body);
   guardHttp({ url, method, body: text }, ctx, { role: "harness" });
-  const response = await fetch(url, {
+  const response = await send(ctx, url, {
     method,
-    headers: { authorization: ctx.adminAuthorization, "content-type": "application/json" },
+    headers: { ...adminHeaders(ctx), "content-type": "application/json" },
     ...(text === undefined ? {} : { body: text }),
   });
   return response.json().catch(() => ({}));
@@ -295,12 +338,16 @@ async function harnessJson(ctx, method, path, body) {
 
 /** Deletes an account a program created, through the same guard. */
 async function harnessAccountDelete(ctx, localId) {
-  const url = `${ctx.origin}/identitytoolkit.googleapis.com/v1/projects/${ctx.project}/accounts:delete`;
+  const url = urlFor(
+    ctx,
+    "identitytoolkit.googleapis.com",
+    `v1/projects/${ctx.project}/accounts:delete`,
+  );
   const body = JSON.stringify({ localId });
   guardHttp({ url, method: "POST", body }, ctx, { role: "harness" });
-  const response = await fetch(url, {
+  const response = await send(ctx, url, {
     method: "POST",
-    headers: { authorization: ctx.adminAuthorization, "content-type": "application/json" },
+    headers: { ...adminHeaders(ctx), "content-type": "application/json" },
     body,
   });
   await response.text();
@@ -308,9 +355,13 @@ async function harnessAccountDelete(ctx, localId) {
 
 /** A harness request (a read before a program, a delete after it) through the same guard. */
 async function harnessRequest(ctx, method, path) {
-  const url = `${ctx.origin}/identitytoolkit.googleapis.com/admin/v2/projects/${ctx.project}/${path}`;
+  const url = urlFor(
+    ctx,
+    "identitytoolkit.googleapis.com",
+    `admin/v2/projects/${ctx.project}/${path}`,
+  );
   guardHttp({ url, method }, ctx, { role: "harness" });
-  const response = await fetch(url, { method, headers: { authorization: ctx.adminAuthorization } });
+  const response = await send(ctx, url, { method, headers: adminHeaders(ctx) });
   await response.text();
   return { status: response.status };
 }
@@ -399,7 +450,7 @@ async function runLocal() {
   }
 }
 
-const mode = process.argv[2];
+const mode = process.argv[1] === fileURLToPath(import.meta.url) ? process.argv[2] : undefined;
 if (mode === "local") await runLocal();
 else if (mode === "session-local") await sessionLocal();
 else if (mode !== undefined) throw new Error(`unknown mode ${mode}`);

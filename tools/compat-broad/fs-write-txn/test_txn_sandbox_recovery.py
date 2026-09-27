@@ -329,7 +329,7 @@ def test_new_approved_packet_can_follow_a_crashed_recovery_reservation(tmp_path,
     value = fixture_context(tmp_path, monkeypatch)
     crashed = {
         **value["original"], "ts": "2027-01-15T10:00:00Z",
-        "outcome": "reserved-recovery", "recoveryPacketId": "crashed-packet",
+        "outcome": "reserved", "phase": "recovery", "recoveryPacketId": "crashed-packet",
         "estimatedUsd": 0.07,
     }
     value["ledger_path"].write_text(
@@ -341,6 +341,31 @@ def test_new_approved_packet_can_follow_a_crashed_recovery_reservation(tmp_path,
     value["now"] += dt.timedelta(minutes=5)
     assert _record(value, credential_fn=lambda: "test-token",
                    metadata_factory=NoReadsMetadata, wire_factory=_absent_wire)["complete"] is True
+
+
+def test_recovery_reservation_is_a_shared_open_attempt(tmp_path, monkeypatch):
+    value = fixture_context(tmp_path, monkeypatch)
+    observed = []
+    original_append = recovery.admission.append_ledger
+
+    def inspect_append(path, row):
+        if row.get("recoveryPacketId") == "recovery-packet" and row["outcome"] == "reserved":
+            assert row["phase"] == "recovery"
+            assert row["attemptId"] == "prior-attempt"
+            observed.append(row)
+            original_append(path, row)
+            with pytest.raises(ValueError, match="open attempt"):
+                recovery.admission.verify_send_gates(
+                    recovery.admission.read_ledger(path), value["now"], "",
+                    {"envelopeId": "unrelated-envelope", "packetId": "unrelated-packet"},
+                )
+            return None
+        return original_append(path, row)
+
+    monkeypatch.setattr(recovery.admission, "append_ledger", inspect_append)
+    assert _record(value, credential_fn=lambda: "test-token",
+                   metadata_factory=NoReadsMetadata, wire_factory=_absent_wire)["complete"] is True
+    assert len(observed) == 1
 
 
 def test_terminal_row_with_original_lock_can_finalize_without_requests(tmp_path, monkeypatch):
@@ -365,6 +390,55 @@ def test_terminal_row_with_original_lock_can_finalize_without_requests(tmp_path,
                      metadata_factory=NoReadsMetadata, wire_factory=_absent_wire)
     assert result["complete"] is True
     assert not value["lock_path"].exists()
+
+
+def test_lock_release_error_allows_request_free_finalization_only(tmp_path, monkeypatch):
+    value = fixture_context(tmp_path, monkeypatch)
+    original_unlink = Path.unlink
+    failed = False
+
+    def fail_once(path, *args, **kwargs):
+        nonlocal failed
+        if path == value["lock_path"] and not failed:
+            failed = True
+            raise OSError("simulated lock release error")
+        return original_unlink(path, *args, **kwargs)
+
+    with patch.object(Path, "unlink", fail_once):
+        with pytest.raises(OSError, match="lock release"):
+            _record(value, credential_fn=lambda: "test-token",
+                    metadata_factory=NoReadsMetadata, wire_factory=_absent_wire)
+    rows = [json.loads(line) for line in value["ledger_path"].read_text().splitlines()]
+    assert rows[-1]["reason"] == "lock-release-failed"
+    assert rows[-1]["outcome"] == "needs-recovery"
+    other = dict(value)
+    other["packet"] = {**value["packet"], "packetId": "different-recovery-packet"}
+    other["packet_path"] = "docs.local/reviews/different-recovery-packet.json"
+    other["decisions"] = value["decisions"].replace("recovery-packet.json", "different-recovery-packet.json")
+    with pytest.raises(ValueError, match="request-free finalization"):
+        _record(other, credential_fn=lambda: pytest.fail("OAuth for second cleanup"),
+                metadata_factory=NoReadsMetadata, wire_factory=_absent_wire)
+    result = _record(value, credential_fn=lambda: pytest.fail("OAuth after lock release error"),
+                     metadata_factory=NoReadsMetadata, wire_factory=_absent_wire)
+    assert result["complete"] is True
+    assert not value["lock_path"].exists()
+
+
+def test_terminal_result_sha_does_not_require_rereading_written_file(tmp_path, monkeypatch):
+    value = fixture_context(tmp_path, monkeypatch)
+    result_path = value["root"] / "docs.local/runs/fs-transaction-recovery-recovery-packet/recovery.json"
+    original_read_bytes = Path.read_bytes
+
+    def forbid_receipt_reread(path):
+        if path == result_path:
+            pytest.fail("terminal SHA reread the receipt after writing")
+        return original_read_bytes(path)
+
+    with patch.object(Path, "read_bytes", forbid_receipt_reread):
+        assert _record(value, credential_fn=lambda: "test-token",
+                       metadata_factory=NoReadsMetadata, wire_factory=_absent_wire)["complete"] is True
+    terminal = json.loads(value["ledger_path"].read_text().splitlines()[-1])
+    assert terminal["resultSha256"] == hashlib.sha256(result_path.read_bytes()).hexdigest()
 
 
 def test_receipt_directory_entries_are_durable_before_terminal_row(tmp_path, monkeypatch):

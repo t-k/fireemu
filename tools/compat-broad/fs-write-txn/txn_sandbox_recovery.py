@@ -275,12 +275,19 @@ def verify_packet(packet, *, packet_sha, snapshot_raw, baseline_raw, lock_path,
     last = original[-1]
     finalizing = (
         allow_terminal_finalization
-        and last.get("outcome") == "recovered-exact-name"
+        and (
+            last.get("outcome") == "recovered-exact-name"
+            or last.get("outcome") == "needs-recovery"
+            and last.get("reason") == "lock-release-failed"
+            and isinstance(last.get("resultSha256"), str)
+        )
         and last.get("recoveryPacketId") == packet["packetId"]
         and last.get("recoveryPacketSha256") == packet_sha
     )
+    if last.get("reason") == "lock-release-failed" and not finalizing:
+        raise ValueError("lock release needs request-free finalization of the same recovery packet")
     if not finalizing and last.get("outcome") not in (
-        "needs-recovery", "stopped-needs-review", "reserved-recovery"
+        "needs-recovery", "stopped-needs-review", "reserved"
     ):
         raise ValueError("original attempt has no open recovery responsibility")
     if (
@@ -364,7 +371,7 @@ def _record_recovery_under_guard(*, packet, packet_sha, packet_path, snapshot_ra
     if legacy_lock.exists():
         raise ValueError("legacy shared sandbox lock is held")
     result_dir = Path(private_dir) / f"fs-transaction-recovery-{packet['packetId']}"
-    if original["outcome"] == "recovered-exact-name":
+    if original["outcome"] == "recovered-exact-name" or original.get("reason") == "lock-release-failed":
         result_raw = (result_dir / "recovery.json").read_bytes()
         result = json.loads(result_raw)
         if (
@@ -388,10 +395,11 @@ def _record_recovery_under_guard(*, packet, packet_sha, packet_path, snapshot_ra
         "packetId": packet["originalPacketId"], "attemptId": packet["originalAttemptId"],
         "recoveryPacketId": packet["packetId"], "runDir": original["runDir"],
         "recoveryPacketSha256": packet_sha, "nonce": snapshot["nonce"],
+        "phase": "recovery",
         "estimatedUsd": round(original["estimatedUsd"] + packet["estimatedUsd"], 2),
         "recoveryEstimatedUsd": packet["estimatedUsd"], "requests": None,
     }
-    admission.append_ledger(ledger_path, {**row, "outcome": "reserved-recovery"})
+    admission.append_ledger(ledger_path, {**row, "outcome": "reserved"})
     budget = RecoveryBudget()
     try:
         budget.charge("credential")
@@ -405,7 +413,7 @@ def _record_recovery_under_guard(*, packet, packet_sha, packet_path, snapshot_ra
             result = {**result, "complete": False, "failure": "configuration-changed"}
         result["totalRequests"] = budget.total
         result_path = result_dir / "recovery.json"
-        runner._save_private(result_path, result)
+        result_raw = runner._save_private(result_path, result)
         _fsync_directory(result_dir)
         if result["complete"] is not True or result["recovered"] != list(ROLES):
             admission.append_ledger(ledger_path, {**row, "outcome": "needs-recovery", "requests": budget.total})
@@ -414,7 +422,7 @@ def _record_recovery_under_guard(*, packet, packet_sha, packet_path, snapshot_ra
             raise ValueError("project lock changed before verified release")
         admission.append_ledger(ledger_path, {
             **row, "outcome": "recovered-exact-name", "requests": budget.total,
-            "resultSha256": _sha(result_path.read_bytes()),
+            "resultSha256": _sha(result_raw),
         })
         try:
             lock_path.unlink()
@@ -422,12 +430,14 @@ def _record_recovery_under_guard(*, packet, packet_sha, packet_path, snapshot_ra
             admission.append_ledger(ledger_path, {
                 **row, "outcome": "needs-recovery", "requests": budget.total,
                 "reason": "lock-release-failed",
+                "resultSha256": _sha(result_raw),
             })
             raise
         return result
     except (Exception, KeyboardInterrupt):
         rows = admission.read_ledger(ledger_path)
-        if rows[-1].get("recoveryPacketId") == packet["packetId"] and rows[-1].get("outcome") == "reserved-recovery":
+        own = [entry for entry in rows if entry.get("recoveryPacketId") == packet["packetId"]]
+        if own and own[-1].get("outcome") == "reserved":
             admission.append_ledger(ledger_path, {**row, "outcome": "needs-recovery", "requests": budget.total})
         raise
 

@@ -28,6 +28,7 @@ def _save_private(path, value):
         os.fsync(fd)
     finally:
         os.close(fd)
+    return encoded
 
 
 def _remaining_task_budget(rows, estimate):

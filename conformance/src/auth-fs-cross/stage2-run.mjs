@@ -1,6 +1,7 @@
 // AUTH-FS-CROSS stage-2 runner (the listener and SDK conditions).
 //
-//   node src/auth-fs-cross/stage2-run.mjs local [--smoke]   run the window against fireemu only
+//   node src/auth-fs-cross/stage2-run.mjs local [--smoke [--skip-clients a,b]]
+//                                                         run the window against fireemu only
 //
 // A local run keeps production's timeline in real time (decision D3): about 65 minutes. The
 // `--smoke` form drops the browser clients and the waits for the tokens' expiry, so the rest of
@@ -40,26 +41,31 @@ export async function checkedProgram() {
 }
 
 /**
- * The smoke form of a program: no browser clients (and none of their steps), no waits for the
- * tokens' expiry. Only for trying the rest locally.
+ * The smoke form of a program: no browser clients (and none of their steps or references), no
+ * waits for the tokens' expiry, and none of the clients named in `skip`. Only for trying the
+ * rest locally; its rows are never compared.
  */
-export function smokeProgram(program) {
-  const browser = new Set(
-    program.steps
+export function smokeProgram(program, skip = []) {
+  const dropped = new Set([
+    ...program.steps
       .filter((s) => s.do === "client" && s.transport === "browser")
       .map((s) => s.client),
-  );
-  const usesBrowser = (step) =>
-    browser.has(step.client) ||
-    (step.observe ?? []).some((ref) => browser.has(ref.split("/")[0])) ||
-    (step.clients ?? []).some((name) => browser.has(name)) ||
-    (step.do === "server" && step.id.startsWith("b-"));
-  return {
-    ...program,
-    steps: program.steps.filter(
-      (step) => !usesBrowser(step) && step.do !== "expiry-probes" && step.do !== "sleep",
-    ),
-  };
+    ...skip,
+  ]);
+  const kept = (ref) => !dropped.has(ref.split("/")[0]);
+  const steps = [];
+  for (const step of program.steps) {
+    if (step.do === "expiry-probes" || step.do === "sleep") continue;
+    if (dropped.has(step.client)) continue;
+    if (step.id?.startsWith("b-")) continue;
+    const trimmed = { ...step };
+    if (step.observe) trimmed.observe = step.observe.filter(kept);
+    if (step.clients) trimmed.clients = step.clients.filter(kept);
+    const watches = (trimmed.observe?.length ?? 0) + (trimmed.clients?.length ?? 0);
+    if ((step.do === "probe" || step.do === "observe") && watches === 0) continue;
+    steps.push(trimmed);
+  }
+  return { ...program, steps };
 }
 
 /** fireemu's configuration for a local run. */
@@ -180,8 +186,16 @@ async function main([command, ...args]) {
     case "local": {
       const { program, cost } = await checkedProgram();
       const smoke = args.includes("--smoke");
-      console.log(JSON.stringify({ smoke, cost }));
-      const out = await runLocal(smoke ? smokeProgram(program) : program);
+      const skipAt = args.indexOf("--skip-clients");
+      const skip =
+        skipAt >= 0
+          ? String(args[skipAt + 1] ?? "")
+              .split(",")
+              .filter(Boolean)
+          : [];
+      if (skip.length && !smoke) throw new Error("--skip-clients is a smoke option");
+      console.log(JSON.stringify({ smoke, skip, cost }));
+      const out = await runLocal(smoke ? smokeProgram(program, skip) : program);
       const path = join(RUN_DIR, "rows.json");
       await writeFile(path, JSON.stringify(out, null, 2));
       console.log(JSON.stringify({ rows: Object.keys(out.rows ?? {}).length, path }));

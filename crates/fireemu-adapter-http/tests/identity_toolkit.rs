@@ -4580,6 +4580,94 @@ fn oidc_provider_update_rejects_ambiguous_update_masks_atomically() {
     }
 }
 
+/// Default supported identity provider configurations (Identity Platform REST v2
+/// `projects.defaultSupportedIdpConfigs`, and the tenant variant) are created by `idpId`,
+/// read, listed, updated by mask and deleted, with the documented members (`name`,
+/// `enabled`, `clientId`, `clientSecret`, `appleSignInConfig`).
+#[test]
+fn default_supported_idp_configs_are_managed_as_documented() {
+    let mut s = state();
+    let registry = Arc::new(AuthRegistry::new("demo-app", s.store.clone()));
+    registry.ensure_tenant("demo-app", "tenant-a").unwrap();
+    s.registry = Some(registry);
+    for (base, parent) in [
+        (
+            "/identitytoolkit.googleapis.com/admin/v2/projects/demo-app/defaultSupportedIdpConfigs",
+            "projects/demo-app",
+        ),
+        (
+            "/identitytoolkit.googleapis.com/v2/projects/demo-app/tenants/tenant-a/defaultSupportedIdpConfigs",
+            "projects/demo-app/tenants/tenant-a",
+        ),
+    ] {
+        let (status, created) = admin(
+            &s,
+            "POST",
+            &format!("{base}?idpId=google.com"),
+            &json!({"enabled": true, "clientId": "google-client", "clientSecret": "google-secret"}),
+        );
+        assert_eq!(status, 200, "{created}");
+        assert_eq!(
+            created,
+            json!({
+                "name": format!("{parent}/defaultSupportedIdpConfigs/google.com"),
+                "enabled": true,
+                "clientId": "google-client",
+                "clientSecret": "google-secret",
+            })
+        );
+        let (status, duplicate) = admin(
+            &s,
+            "POST",
+            &format!("{base}?idpId=google.com"),
+            &json!({"enabled": true, "clientId": "other"}),
+        );
+        assert_eq!(status, 409, "{duplicate}");
+        let apple = json!({"bundleIds": ["com.example.app"], "codeFlowConfig": {"teamId": "T", "keyId": "K", "privateKey": "P"}});
+        let (status, created) = admin(
+            &s,
+            "POST",
+            &format!("{base}?idpId=apple.com"),
+            &json!({"enabled": false, "clientId": "apple-client", "appleSignInConfig": apple}),
+        );
+        assert_eq!(status, 200, "{created}");
+        assert_eq!(created["appleSignInConfig"], apple, "{created}");
+
+        let (status, read) = admin(&s, "GET", &format!("{base}/google.com"), &Value::Null);
+        assert_eq!(status, 200, "{read}");
+        assert_eq!(read["clientId"], "google-client");
+        let (status, listed) = admin(&s, "GET", &format!("{base}?pageSize=1"), &Value::Null);
+        assert_eq!(status, 200, "{listed}");
+        assert_eq!(listed["defaultSupportedIdpConfigs"].as_array().map(Vec::len), Some(1));
+        let token = listed["nextPageToken"].as_str().unwrap().to_owned();
+        let (status, rest) = admin(
+            &s,
+            "GET",
+            &format!("{base}?pageSize=1&pageToken={token}"),
+            &Value::Null,
+        );
+        assert_eq!(status, 200, "{rest}");
+        assert_eq!(rest["defaultSupportedIdpConfigs"].as_array().map(Vec::len), Some(1));
+        assert!(rest.get("nextPageToken").is_none(), "{rest}");
+
+        let (status, updated) = admin(
+            &s,
+            "PATCH",
+            &format!("{base}/google.com?updateMask=enabled,clientSecret"),
+            &json!({"enabled": false, "clientSecret": "rotated", "clientId": "ignored"}),
+        );
+        assert_eq!(status, 200, "{updated}");
+        assert_eq!(updated["enabled"], false);
+        assert_eq!(updated["clientSecret"], "rotated");
+        assert_eq!(updated["clientId"], "google-client");
+
+        let (status, deleted) = admin(&s, "DELETE", &format!("{base}/google.com"), &Value::Null);
+        assert_eq!((status, deleted), (200, json!({})));
+        let (status, _) = admin(&s, "GET", &format!("{base}/google.com"), &Value::Null);
+        assert_eq!(status, 404);
+    }
+}
+
 #[test]
 fn project_provider_configs_accept_client_v2_paths() {
     let s = state();

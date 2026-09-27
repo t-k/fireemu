@@ -29,7 +29,7 @@ use fireemu_core_auth::signup_quota::{
     QuotaAlgorithm, QuotaMode, SignupQuotaConfig, SignupReservation, TemporaryQuota,
 };
 use fireemu_core_auth::store::{
-    AuthError, AuthPrincipal, AuthStore, CredentialNotice, FederatedIdentity,
+    AuthError, AuthPrincipal, AuthStore, CredentialNotice, DefaultIdpConfig, FederatedIdentity,
     InboundSamlProviderConfig, LocalId, NewUser, OAuthResponseType, OidcProviderConfig,
     OobRequestType, PendingSignInId, PhoneCodeUse, ProjectAuthConfigPatch,
     ProjectConfigStoreUpdate, RoutedStoreInstall, SecondFactorAssertion, SignInConfig,
@@ -2992,6 +2992,8 @@ fn handle_with_policy(
         };
         let provider_kind = if path.contains("/oauthIdpConfigs") {
             ProviderKind::Oidc
+        } else if path.contains("/defaultSupportedIdpConfigs") {
+            ProviderKind::DefaultSupported
         } else {
             ProviderKind::Saml
         };
@@ -5313,10 +5315,12 @@ fn with_derived_members(
     }
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 enum ProviderKind {
     Oidc,
     Saml,
+    /// `defaultSupportedIdpConfigs` (google.com, apple.com and the other built-in identity providers).
+    DefaultSupported,
 }
 
 #[allow(clippy::too_many_arguments, clippy::too_many_lines)]
@@ -5343,8 +5347,14 @@ fn provider_config_management(
     let (collection, collection_key) = match kind {
         ProviderKind::Oidc => ("oauthIdpConfigs", "oauthIdpConfigs"),
         ProviderKind::Saml => ("inboundSamlConfigs", "inboundSamlConfigs"),
+        ProviderKind::DefaultSupported => {
+            ("defaultSupportedIdpConfigs", "defaultSupportedIdpConfigs")
+        }
     };
     let name = |id: &str| format!("{path_prefix}{collection}/{id}");
+    if kind == ProviderKind::DefaultSupported {
+        return default_idp_config_management(store, handler, resource, query, body, &name);
+    }
     let response = match (kind, handler) {
         (ProviderKind::Oidc, Handler::ProviderCreate) => {
             let Some(id) = query_params(query)
@@ -5569,10 +5579,192 @@ fn provider_config_management(
     response
 }
 
+/// `defaultSupportedIdpConfigs` of a project or tenant (Identity Platform REST v2): created
+/// by `idpId`, read, listed, updated by mask and deleted. Which identity provider IDs production accepts
+/// and how it validates the members are unobserved; fireemu takes any identity provider ID of provider-ID
+/// characters and the documented members as written.
+fn default_idp_config_management(
+    store: &Arc<Mutex<AuthStore>>,
+    handler: routes::Handler,
+    resource: Option<&str>,
+    query: Option<&str>,
+    body: &Value,
+    name: &dyn Fn(&str) -> String,
+) -> JsonResponse {
+    use routes::Handler;
+    let Ok(mut store) = store.lock() else {
+        return error(500, "INTERNAL");
+    };
+    match handler {
+        Handler::ProviderCreate => {
+            let Some(id) = query_params(query)
+                .get("idpId")
+                .filter(|id| valid_idp_id(id))
+                .cloned()
+            else {
+                return error(400, "INVALID_ARGUMENT");
+            };
+            let config = match parse_default_idp(body, id) {
+                Ok(config) => config,
+                Err(response) => return response,
+            };
+            if !store.create_default_idp_config(config.clone()) {
+                return error(409, "ALREADY_EXISTS");
+            }
+            JsonResponse {
+                status: 200,
+                body: default_idp_json(&name(&config.id), &config),
+            }
+        }
+        Handler::ProviderList => {
+            let configs = store
+                .default_idp_configs()
+                .map(|config| default_idp_json(&name(&config.id), config))
+                .collect::<Vec<_>>();
+            paged_provider_list(configs, query, "defaultSupportedIdpConfigs")
+        }
+        Handler::ProviderGet | Handler::ProviderUpdate | Handler::ProviderDelete => {
+            let Some(id) = resource.filter(|id| valid_idp_id(id)) else {
+                return error(400, "INVALID_ARGUMENT");
+            };
+            let Some(existing) = store.default_idp_config(id).cloned() else {
+                return error(404, "NOT_FOUND");
+            };
+            match handler {
+                Handler::ProviderGet => JsonResponse {
+                    status: 200,
+                    body: default_idp_json(&name(id), &existing),
+                },
+                Handler::ProviderDelete => {
+                    store.delete_default_idp_config(id);
+                    JsonResponse {
+                        status: 200,
+                        body: json!({}),
+                    }
+                }
+                _ => {
+                    let updated = match patch_default_idp(existing, body, query) {
+                        Ok(updated) => updated,
+                        Err(response) => return response,
+                    };
+                    store.replace_default_idp_config(updated.clone());
+                    JsonResponse {
+                        status: 200,
+                        body: default_idp_json(&name(id), &updated),
+                    }
+                }
+            }
+        }
+        _ => error(500, "INTERNAL"),
+    }
+}
+
+/// A page of provider configurations: `pageSize` (default 20, 1 to 1000) and a `pageToken`
+/// naming the last configuration of the previous page.
+fn paged_provider_list(mut configs: Vec<Value>, query: Option<&str>, key: &str) -> JsonResponse {
+    let params = query_params(query);
+    let page_size = params
+        .get("pageSize")
+        .and_then(|value| value.parse::<usize>().ok())
+        .unwrap_or(20)
+        .clamp(1, 1_000);
+    let id_of = |config: &Value| {
+        config["name"]
+            .as_str()
+            .and_then(|value| value.rsplit('/').next())
+            .map(str::to_owned)
+    };
+    if let Some(token) = params.get("pageToken") {
+        let Some(index) = configs
+            .iter()
+            .position(|config| id_of(config).as_deref() == Some(token.as_str()))
+        else {
+            return error(400, "INVALID_ARGUMENT");
+        };
+        configs.drain(..=index);
+    }
+    let next = (configs.len() > page_size)
+        .then(|| configs.get(page_size - 1).and_then(id_of))
+        .flatten();
+    configs.truncate(page_size);
+    let mut body = json!({});
+    body[key] = json!(configs);
+    if let Some(next) = next {
+        body["nextPageToken"] = json!(next);
+    }
+    JsonResponse { status: 200, body }
+}
+
+/// An identity provider ID of provider-ID characters, as the other provider collections take theirs.
+fn valid_idp_id(id: &str) -> bool {
+    !id.is_empty()
+        && id.len() <= 128
+        && id
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'_' | b'-'))
+}
+
+fn parse_default_idp(body: &Value, id: String) -> Result<DefaultIdpConfig, JsonResponse> {
+    Ok(DefaultIdpConfig {
+        id,
+        enabled: optional_bool(body, "enabled", false)?,
+        client_id: optional_string(body, "clientId")?,
+        client_secret: optional_string(body, "clientSecret")?,
+        apple_sign_in_config: apple_sign_in_config(body)?,
+    })
+}
+
+fn apple_sign_in_config(body: &Value) -> Result<Option<String>, JsonResponse> {
+    match body.get("appleSignInConfig") {
+        None | Some(Value::Null) => Ok(None),
+        Some(config @ Value::Object(_)) => Ok(Some(config.to_string())),
+        Some(_) => Err(error(400, "INVALID_ARGUMENT")),
+    }
+}
+
+fn patch_default_idp(
+    mut current: DefaultIdpConfig,
+    body: &Value,
+    query: Option<&str>,
+) -> Result<DefaultIdpConfig, JsonResponse> {
+    for field in update_mask(query)?.unwrap_or_default() {
+        match field.as_str() {
+            "enabled" => current.enabled = optional_bool(body, "enabled", false)?,
+            "clientId" => current.client_id = optional_string(body, "clientId")?,
+            "clientSecret" => current.client_secret = optional_string(body, "clientSecret")?,
+            field if field == "appleSignInConfig" || field.starts_with("appleSignInConfig.") => {
+                current.apple_sign_in_config = apple_sign_in_config(body)?;
+            }
+            "name" => {}
+            _ => return Err(error(400, "INVALID_ARGUMENT")),
+        }
+    }
+    Ok(current)
+}
+
+fn default_idp_json(name: &str, config: &DefaultIdpConfig) -> Value {
+    let mut body = json!({"name": name, "enabled": config.enabled});
+    if let Some(client_id) = &config.client_id {
+        body["clientId"] = json!(client_id);
+    }
+    if let Some(client_secret) = &config.client_secret {
+        body["clientSecret"] = json!(client_secret);
+    }
+    if let Some(apple) = config
+        .apple_sign_in_config
+        .as_deref()
+        .and_then(|text| serde_json::from_str::<Value>(text).ok())
+    {
+        body["appleSignInConfig"] = apple;
+    }
+    body
+}
+
 fn valid_provider_id(id: &str, kind: ProviderKind) -> bool {
     let prefix = match kind {
         ProviderKind::Oidc => "oidc.",
         ProviderKind::Saml => "saml.",
+        ProviderKind::DefaultSupported => return valid_idp_id(id),
     };
     id.starts_with(prefix)
         && (prefix.len() + 1..=128).contains(&id.len())

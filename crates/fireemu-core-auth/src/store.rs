@@ -918,6 +918,40 @@ pub struct InboundSamlProviderConfig {
     pub callback_uri: String,
 }
 
+/// A project or tenant configuration of a default supported identity provider (Identity Platform
+/// `defaultSupportedIdpConfigs`, such as `google.com` or `apple.com`).
+#[derive(Clone, PartialEq, Eq)]
+pub struct DefaultIdpConfig {
+    /// The identity provider ID (`idpId`).
+    pub id: String,
+    /// Whether sign-in with this provider is enabled.
+    pub enabled: bool,
+    /// OAuth client ID.
+    pub client_id: Option<String>,
+    /// OAuth client secret.
+    pub client_secret: Option<String>,
+    /// `appleSignInConfig`, kept as written (JSON text).
+    pub apple_sign_in_config: Option<String>,
+}
+
+impl fmt::Debug for DefaultIdpConfig {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("DefaultIdpConfig")
+            .field("id", &self.id)
+            .field("enabled", &self.enabled)
+            .field("client_id", &self.client_id)
+            .field(
+                "client_secret",
+                &self.client_secret.as_ref().map(|_| "<redacted>"),
+            )
+            .field(
+                "apple_sign_in_config",
+                &self.apple_sign_in_config.as_ref().map(|_| "<redacted>"),
+            )
+            .finish()
+    }
+}
+
 /// Why an account an import artifact recorded was refused.
 #[derive(Debug, Clone, PartialEq)]
 pub enum ImportUserError {
@@ -1254,6 +1288,10 @@ pub struct AuthStore {
     saml_configs: BTreeMap<String, InboundSamlProviderConfig>,
     /// Inbound SAML configuration IDs in creation order.
     saml_order: Vec<String>,
+    /// Default supported identity provider configurations in this namespace.
+    default_idp_configs: BTreeMap<String, DefaultIdpConfig>,
+    /// Default supported identity provider configuration IDs in creation order.
+    default_idp_order: Vec<String>,
 }
 
 /// What a phone verification code was issued for, as the official emulator names it in
@@ -1551,6 +1589,8 @@ impl AuthStore {
             oidc_order: Vec::new(),
             saml_configs: BTreeMap::new(),
             saml_order: Vec::new(),
+            default_idp_configs: BTreeMap::new(),
+            default_idp_order: Vec::new(),
         }
     }
 
@@ -2274,6 +2314,47 @@ impl AuthStore {
             return false;
         }
         self.saml_order.retain(|candidate| candidate != id);
+        true
+    }
+
+    /// Lists default supported identity provider configurations in creation order.
+    pub fn default_idp_configs(&self) -> impl Iterator<Item = &DefaultIdpConfig> {
+        self.default_idp_order
+            .iter()
+            .filter_map(|id| self.default_idp_configs.get(id))
+    }
+
+    /// Gets one default supported identity provider configuration by identity provider ID.
+    #[must_use]
+    pub fn default_idp_config(&self, id: &str) -> Option<&DefaultIdpConfig> {
+        self.default_idp_configs.get(id)
+    }
+
+    /// Creates a default supported identity provider configuration. Returns `false` when its ID is used.
+    pub fn create_default_idp_config(&mut self, config: DefaultIdpConfig) -> bool {
+        if self.default_idp_configs.contains_key(&config.id) {
+            return false;
+        }
+        self.default_idp_order.push(config.id.clone());
+        self.default_idp_configs.insert(config.id.clone(), config);
+        true
+    }
+
+    /// Replaces a default supported identity provider configuration. Returns `false` when its ID is unknown.
+    pub fn replace_default_idp_config(&mut self, config: DefaultIdpConfig) -> bool {
+        if !self.default_idp_configs.contains_key(&config.id) {
+            return false;
+        }
+        self.default_idp_configs.insert(config.id.clone(), config);
+        true
+    }
+
+    /// Deletes a default supported identity provider configuration. Returns `false` when its ID is unknown.
+    pub fn delete_default_idp_config(&mut self, id: &str) -> bool {
+        if self.default_idp_configs.remove(id).is_none() {
+            return false;
+        }
+        self.default_idp_order.retain(|candidate| candidate != id);
         true
     }
 
@@ -4954,6 +5035,8 @@ impl AuthSnapshot {
         copy.oidc_order.clear();
         copy.saml_configs.clear();
         copy.saml_order.clear();
+        copy.default_idp_configs.clear();
+        copy.default_idp_order.clear();
         for user in copy.users.values_mut() {
             if user.mfa.holds_no_totp_secret() && user.mfa.holds_no_inbound_credentials() {
                 continue;
@@ -5019,6 +5102,10 @@ impl AuthSnapshot {
         restored.oidc_order.clone_from(&live.oidc_order);
         restored.saml_configs = live.saml_configs.clone();
         restored.saml_order.clone_from(&live.saml_order);
+        restored.default_idp_configs = live.default_idp_configs.clone();
+        restored
+            .default_idp_order
+            .clone_from(&live.default_idp_order);
         let namespace_matches =
             restored.project_id == live.project_id && restored.tenant_id == live.tenant_id;
         if !namespace_matches {

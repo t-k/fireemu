@@ -279,6 +279,7 @@
   "AUTH-PROVIDER-CONFIG-1": {
     "implemented": [
       "project and tenant OAuth IdP and inbound SAML provider configuration create/get/list/update/delete under the public v2 namespaces",
+      "project and tenant default supported IdP configuration (defaultSupportedIdpConfigs: enabled, clientId, clientSecret, appleSignInConfig) create/get/list/update/delete under the public v2 namespaces, from the REST reference; which IdP IDs production accepts and how it validates the members are unobserved",
       "project, tenant, OIDC and SAML stores are isolated; validation completes before mutation and snapshots never export provider configuration or OIDC client secrets",
       "bounded creation-order pagination uses a namespace-local provider cursor and rejects unknown cursors"
     ],

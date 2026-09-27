@@ -14,14 +14,8 @@ const sourceFixtures = new Map([
     "FS-DATA-WRITE/near-limit-delete-refusal",
     "conformance/fs-data-write-production-supplements/delta-v3-a14f265fea575003423c7ebd.json",
   ],
-  [
-    "FS-LIMIT-API-REQUEST-BYTES/non-commit-rest",
-    "conformance/fs-data-write-production-supplements/partial-7bfd51026a2ac56617d81504.json",
-  ],
-  [
-    "FS-LIMIT-API-REQUEST-BYTES/webchannel",
-    "conformance/fs-data-write-production-supplements/partial-7bfd51026a2ac56617d81504.json",
-  ],
+  // The request-byte transports are compared row by row in the accepted conditions since
+  // their bounds were recorded (bracket and follow-up recordings, 2026-09-27).
 ]);
 
 function canonical(value) {
@@ -48,13 +42,7 @@ function checkCondition(condition, projection) {
   const fixturePath = sourceFixtures.get(condition.conditionId);
   assert.ok(fixturePath, condition.conditionId);
   const fixture = read(fixturePath);
-  assert.equal(
-    condition.status,
-    condition.conditionId === "FS-DATA-WRITE/near-limit-delete-refusal"
-      ? "VERIFIED"
-      : "PRODUCTION_RECORDED",
-    condition.conditionId,
-  );
+  assert.equal(condition.status, "VERIFIED", condition.conditionId);
   assert.equal(condition.evidence.comparisonPath, projectionPath);
   assert.equal(condition.evidence.comparisonSha256, fileSha(projectionPath));
   assert.equal(condition.evidence.sourceHead, projection.sourceHead);
@@ -142,35 +130,14 @@ test("owner A nondeterministic delete band uses both complete recordings without
   checkCondition(condition, projection);
 });
 
-test("owner D4 inferred upper bounds retain unobserved production limits", () => {
+test("the request-byte transports are no longer terminal-bound", () => {
   const closure = read("spec/compatibility/closure/FS-DATA-WRITE.json");
   const projection = read(projectionPath);
-  for (const id of [
-    "FS-LIMIT-API-REQUEST-BYTES/non-commit-rest",
-    "FS-LIMIT-API-REQUEST-BYTES/webchannel",
-  ]) {
-    const condition = closure.conditions.find(({ conditionId }) => conditionId === id);
-    assert.equal(condition.status, "PRODUCTION_RECORDED", id);
-    assert.equal(condition.boundaryStatus, "INFERRED_UPPER_BOUND", id);
-    assert.equal(condition.estimateOwnerDecision, "2026-09-25 FS-DATA-WRITE D4");
-    assert.equal(condition.strictLimitEstimateBytes, 11 * 1024 * 1024);
-    assert.match(condition.scopeNote, /unobserved estimate/);
-    assert.match(condition.scopeNote, /production upper boundary remains unresolved/);
-    const fixture = read(sourceFixtures.get(id));
-    const selected = Object.keys(fixture.programs).filter((recipe) =>
-      condition.recipeIds.some((prefix) => recipe.startsWith(`${prefix}/`)),
-    );
-    assert.equal(selected.length, id.endsWith("non-commit-rest") ? 10 : 2);
-    assert.ok(
-      selected.every((recipe) => recipe.endsWith("/10485760") || recipe.endsWith("/10485761")),
-    );
-    checkCondition(condition, projection);
+  for (const condition of closure.conditions) {
+    if (!condition.conditionId.startsWith("FS-LIMIT-API-REQUEST-BYTES/")) continue;
+    assert.notEqual(condition.evidence?.comparisonPath, projectionPath, condition.conditionId);
+    assert.equal(projection.conditions[condition.conditionId], undefined, condition.conditionId);
   }
-  const grpc = closure.conditions.find(
-    ({ conditionId }) => conditionId === "FS-LIMIT-API-REQUEST-BYTES/grpc",
-  );
-  assert.equal(grpc.status, "MISMATCH");
-  assert.equal(grpc.boundaryStatus, "UNBRACKETED");
 });
 
 test("terminal projection binds the same release source and raw local result", () => {

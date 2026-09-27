@@ -309,7 +309,7 @@
           "writes/limits/index-entry-sum-per-document#observation-3"
         ]
       },
-      "profileNote": "Strict profile only. The emulator profile counts index entries without refusing: the pinned official emulator (firebase-tools 15.28.2, Firestore emulator v1.22.0) accepted the same write on 2026-09-27 (contract.json FS-CLAIM-LIMITS)."
+      "profileNote": "Strict profile only. Strict refuses a single-field (collection scope) entry over 5,530 bytes under the documented entry formula (own name, parent name, field name, indexed value up to 1,500 bytes, plus 32) with production's 'Index entry is too large.': production accepted 5,529 (index-entry-string-name/2641) and refused 5,531 (/2642), and every recorded write agrees. Composite and collection-group entries are unobserved in production and are not refused for their size. The empty-document pair empty-document-name/4627 and /4628 remains a known difference under owner decision D3: strict's document-name guard refuses from a name size of 5,017 bytes and production refused from 4,645. The emulator profile counts index entries without refusing, as the pinned official emulator (firebase-tools 15.28.2, Firestore emulator v1.22.0) does."
     },
     {
       "conditionId": "FS-LIMIT-INDEX-ENTRY-SUM-PER-DOCUMENT",
@@ -319,7 +319,7 @@
         "writes/limits/index-entry-sum/adjacent"
       ],
       "boundaryStatus": "BRACKETED",
-      "status": "DIVERGENCE_APPROVED",
+      "status": "VERIFIED",
       "boundaryEvidence": [
         "writes/limits/index-entry-sum/adjacent#write-500-19999",
         "writes/limits/index-entry-sum/adjacent#write-500-20000"
@@ -496,21 +496,37 @@
       "source": "spec/compatibility/broad-runs/fs-write-limits-03.json#agg-map",
       "recipeIds": [
         "writes/limits/aggregate-map",
+        "writes/limits/aggregate-map/1048487",
+        "writes/limits/aggregate-map/1048488",
         "writes/limits/aggregate-map/strict-only"
       ],
-      "boundaryStatus": "UNBRACKETED",
-      "status": "PRODUCTION_RECORDED"
+      "boundaryStatus": "NOT_APPLICABLE",
+      "status": "VERIFIED",
+      "scopeNote": "No aggregate refusal exists: production accepted a map of 1,048,488 logical bytes, one over the FS-LIMIT-FIELD-VALUE-BYTES figure (bracket recording, 2026-09-27), so neither profile refuses a map or array for its aggregate size and FS-LIMIT-DOCUMENT-BYTES bounds it (decision D-1). A single string or bytes payload over 1,048,487 bytes is refused under both profiles (FS-LIMIT-FIELD-VALUE-BYTES/scalar-refusal)."
     },
     {
       "conditionId": "FS-LIMIT-INDEXED-FIELD-VALUE-BYTES",
       "source": "spec/limits/firestore-standard-2026-08-25.json#FS-LIMIT-INDEXED-FIELD-VALUE-BYTES",
       "recipeIds": [
         "writes/limits/indexed-field-value-bytes",
-        "writes/limits/indexed-string-name"
+        "writes/limits/indexed-field-value-bytes/5200",
+        "writes/limits/indexed-field-value-bytes/6128",
+        "writes/limits/indexed-string-name/2999/1142",
+        "writes/limits/indexed-string-name/2999/1143",
+        "writes/limits/indexed-string-name/2999/1500",
+        "writes/limits/indexed-string-name/2999/1800",
+        "writes/limits/indexed-string-name/2999/2100",
+        "writes/limits/indexed-string-name/2999/2400",
+        "writes/limits/indexed-string-name/2999/2606",
+        "writes/limits/indexed-string-name/2999/2607",
+        "writes/limits/indexed-string-name/2000/2141",
+        "writes/limits/indexed-string-name/2000/2142",
+        "writes/limits/indexed-string-name/1500/2642"
       ],
-      "boundaryStatus": "UNBRACKETED",
-      "status": "PRODUCTION_RECORDED",
-      "profileNote": "Strict profile only. The emulator profile counts index entries without refusing: the pinned official emulator (firebase-tools 15.28.2, Firestore emulator v1.22.0) accepted the same write on 2026-09-27 (contract.json FS-CLAIM-LIMITS)."
+      "boundaryStatus": "NOT_APPLICABLE",
+      "status": "VERIFIED",
+      "profileNote": "Strict profile only. The emulator profile counts index entries without refusing: the pinned official emulator (firebase-tools 15.28.2, Firestore emulator v1.22.0) accepted the same write on 2026-09-27 (contract.json FS-CLAIM-LIMITS).",
+      "scopeNote": "A truncation rule, not a refusal: an indexed value over 1,500 bytes is counted as 1,500 in its index entry. It is observable only through FS-LIMIT-INDEX-ENTRY-BYTES, whose boundary is bracketed. Production accepted a 2,999-byte string where an untruncated count would exceed that boundary (indexed-string-name/2999/2607 at 5,478 bytes), which bounds the truncation point from above at 1,552 bytes at the recorded threshold; the recordings do not bound it from below, so the documented 1,500 bytes is adopted."
     },
     {
       "conditionId": "FS-WRITE-LIMITS-03/implied-map",
@@ -567,7 +583,7 @@
         "writes/limits/decoded-11x1040000"
       ],
       "boundaryStatus": "NOT_APPLICABLE",
-      "scopeNote": "Concrete REST documents:commit JSON acceptance samples only; they do not establish a decoded-protobuf 10 MiB limit. Under owner decision D4, strict non-Commit REST, gRPC, and WebChannel reuse the observed raw REST Commit 11 MiB bound as an unobserved estimate; their own production upper boundaries remain unresolved.",
+      "scopeNote": "Concrete REST documents:commit JSON acceptance samples only; they do not establish a decoded-protobuf 10 MiB limit. The other transports have their own conditions: non-Commit REST per route and gRPC unary are bracketed at 11,534,336 bytes, WebChannel has its own form-body bound, and the gRPC stream bound is an approved unobservable difference.",
       "status": "VERIFIED",
       "evidence": {
         "productionRecordings": [
@@ -602,41 +618,114 @@
       }
     },
     {
-      "conditionId": "FS-LIMIT-API-REQUEST-BYTES/non-commit-rest",
+      "conditionId": "FS-LIMIT-API-REQUEST-BYTES/non-commit-rest/batch-get",
       "source": "crates/fireemu-adapter-grpc/src/serve.rs#MAX_REST_BODY_BYTES",
       "recipeIds": [
-        "writes/limits/non-commit-rest-request-bytes"
+        "writes/limits/non-commit-rest-request-bytes/batch-get/10485760",
+        "writes/limits/non-commit-rest-request-bytes/batch-get/10485761",
+        "writes/limits/non-commit-rest-request-bytes/batch-get/11534336",
+        "writes/limits/non-commit-rest-request-bytes/batch-get/11534337"
       ],
-      "boundaryStatus": "INFERRED_UPPER_BOUND",
-      "status": "PRODUCTION_RECORDED",
-      "strictLimitEstimateBytes": 11534336,
-      "estimateOwnerDecision": "2026-09-25 FS-DATA-WRITE D4",
-      "scopeNote": "The strict 11 MiB (11,534,336-byte) upper bound is an unobserved estimate from the observed raw REST Commit boundary under owner decision D4; this transport's production upper boundary remains unresolved.",
-      "evidence": {
-        "productionRecordings": [
-          "aee842159a37e001bcab5710eb49be8d0804dd53fa7b79521aa05a018048fee1",
-          "aee842159a37e001bcab5710eb49be8d0804dd53fa7b79521aa05a018048fee1"
-        ],
-        "fixturePath": "conformance/fs-data-write-production-supplements/partial-7bfd51026a2ac56617d81504.json",
-        "fixtureSha256": "975d1f9775373c4704707c7b5bcc7c97067bcf5267911b9a38cc4c02f541f70c",
-        "finalArtifactSha256": "5c92dbc39f1b9bd5d78ff9cf37e3717e5295c64c7277d918d174bc340ab93aa3",
-        "sourceHead": "a2aec9fbc12c3bd6e35547c6239e46527fb55cd2",
-        "comparisonPath": "spec/compatibility/closure/evidence/FS-DATA-WRITE-terminal-local-digests.json",
-        "comparisonSha256": "983a93b1dee065289b1b3ec9e2c9ab07efb9ec162a4db1db02b5bb1c373ec567"
-      },
+      "boundaryStatus": "BRACKETED",
+      "status": "VERIFIED",
+      "boundaryEvidence": [
+        "writes/limits/non-commit-rest-request-bytes/batch-get/11534336#probe",
+        "writes/limits/non-commit-rest-request-bytes/batch-get/11534337#probe"
+      ],
+      "evidence": {},
+      "profileNote": "Both profiles apply the same 11,534,336-byte bound and production's 400 answer (decision D, 2026-09-27). A body far over the bound is not drained on these routes and may reset the connection instead of delivering the 400."
+    },
+    {
+      "conditionId": "FS-LIMIT-API-REQUEST-BYTES/non-commit-rest/batch-write",
+      "source": "crates/fireemu-adapter-grpc/src/serve.rs#MAX_REST_BODY_BYTES",
+      "recipeIds": [
+        "writes/limits/non-commit-rest-request-bytes/batch-write/10485760",
+        "writes/limits/non-commit-rest-request-bytes/batch-write/10485761",
+        "writes/limits/non-commit-rest-request-bytes/batch-write/11534336",
+        "writes/limits/non-commit-rest-request-bytes/batch-write/11534337"
+      ],
+      "boundaryStatus": "BRACKETED",
+      "status": "VERIFIED",
+      "boundaryEvidence": [
+        "writes/limits/non-commit-rest-request-bytes/batch-write/11534336#write",
+        "writes/limits/non-commit-rest-request-bytes/batch-write/11534337#write"
+      ],
+      "evidence": {},
+      "profileNote": "Both profiles apply the same 11,534,336-byte bound and production's 400 answer (decision D, 2026-09-27). A body far over the bound is not drained on these routes and may reset the connection instead of delivering the 400."
+    },
+    {
+      "conditionId": "FS-LIMIT-API-REQUEST-BYTES/non-commit-rest/create",
+      "source": "crates/fireemu-adapter-grpc/src/serve.rs#MAX_REST_BODY_BYTES",
+      "recipeIds": [
+        "writes/limits/non-commit-rest-request-bytes/create/10485760",
+        "writes/limits/non-commit-rest-request-bytes/create/10485761",
+        "writes/limits/non-commit-rest-request-bytes/create/11534336",
+        "writes/limits/non-commit-rest-request-bytes/create/11534337"
+      ],
+      "boundaryStatus": "BRACKETED",
+      "status": "VERIFIED",
+      "boundaryEvidence": [
+        "writes/limits/non-commit-rest-request-bytes/create/11534336#probe",
+        "writes/limits/non-commit-rest-request-bytes/create/11534337#probe"
+      ],
+      "evidence": {},
+      "profileNote": "Both profiles apply the same 11,534,336-byte bound and production's 400 answer (decision D, 2026-09-27). A body far over the bound is not drained on these routes and may reset the connection instead of delivering the 400."
+    },
+    {
+      "conditionId": "FS-LIMIT-API-REQUEST-BYTES/non-commit-rest/patch",
+      "source": "crates/fireemu-adapter-grpc/src/serve.rs#MAX_REST_BODY_BYTES",
+      "recipeIds": [
+        "writes/limits/non-commit-rest-request-bytes/patch/10485760",
+        "writes/limits/non-commit-rest-request-bytes/patch/10485761",
+        "writes/limits/non-commit-rest-request-bytes/patch/11534336",
+        "writes/limits/non-commit-rest-request-bytes/patch/11534337"
+      ],
+      "boundaryStatus": "BRACKETED",
+      "status": "VERIFIED",
+      "boundaryEvidence": [
+        "writes/limits/non-commit-rest-request-bytes/patch/11534336#probe",
+        "writes/limits/non-commit-rest-request-bytes/patch/11534337#probe"
+      ],
+      "evidence": {},
+      "profileNote": "Both profiles apply the same 11,534,336-byte bound and production's 400 answer (decision D, 2026-09-27). A body far over the bound is not drained on these routes and may reset the connection instead of delivering the 400."
+    },
+    {
+      "conditionId": "FS-LIMIT-API-REQUEST-BYTES/non-commit-rest/run-query",
+      "source": "crates/fireemu-adapter-grpc/src/serve.rs#MAX_REST_BODY_BYTES",
+      "recipeIds": [
+        "writes/limits/non-commit-rest-request-bytes/run-query/10485760",
+        "writes/limits/non-commit-rest-request-bytes/run-query/10485761",
+        "writes/limits/non-commit-rest-request-bytes/run-query/11534336",
+        "writes/limits/non-commit-rest-request-bytes/run-query/11534337"
+      ],
+      "boundaryStatus": "BRACKETED",
+      "status": "VERIFIED",
+      "boundaryEvidence": [
+        "writes/limits/non-commit-rest-request-bytes/run-query/11534336#probe",
+        "writes/limits/non-commit-rest-request-bytes/run-query/11534337#probe"
+      ],
+      "evidence": {},
       "profileNote": "Both profiles apply the same 11,534,336-byte bound and production's 400 answer (decision D, 2026-09-27). A body far over the bound is not drained on these routes and may reset the connection instead of delivering the 400."
     },
     {
       "conditionId": "FS-LIMIT-API-REQUEST-BYTES/webchannel",
-      "source": "crates/fireemu-adapter-grpc/src/webchannel.rs#MAX_FORM_BYTES",
+      "source": "crates/fireemu-adapter-grpc/src/webchannel.rs#max_form_bytes",
       "recipeIds": [
-        "writes/limits/webchannel-request-bytes"
+        "writes/limits/webchannel-request-bytes/10485760",
+        "writes/limits/webchannel-request-bytes/10485761",
+        "writes/limits/webchannel-request-bytes/11534336",
+        "writes/limits/webchannel-request-bytes/11534337",
+        "writes/limits/webchannel-request-bytes/12582912",
+        "writes/limits/webchannel-request-bytes/16777216",
+        "writes/limits/webchannel-request-bytes/16777217",
+        "writes/limits/webchannel-request-bytes/33554432",
+        "writes/limits/webchannel-request-bytes/33554433"
       ],
       "boundaryStatus": "INFERRED_UPPER_BOUND",
       "status": "PRODUCTION_RECORDED",
-      "strictLimitEstimateBytes": 11534336,
-      "estimateOwnerDecision": "2026-09-25 FS-DATA-WRITE D4",
-      "scopeNote": "The strict 11 MiB (11,534,336-byte) upper bound is an unobserved estimate from the observed raw REST Commit boundary under owner decision D4; this transport's production upper boundary remains unresolved.",
+      "strictLimitEstimateBytes": 16777215,
+      "estimateOwnerDecision": "2026-09-28 FS-DATA-WRITE D-2",
+      "scopeNote": "Production's WebChannel form-body bound lies in (12,582,912, 16,777,216]: it accepted 12,582,912 bytes on a valid session and refused 16,777,216 with its HTML 400 page, after which the session was gone (follow-up recording, 2026-09-27). Strict adopts the upper end as an estimate (16,777,215 accepted) under the D-2 code policy; bytes inside the interval are unobserved, and the closure treatment of the interval awaits the owner's decision.",
       "evidence": {
         "productionRecordings": [
           "aee842159a37e001bcab5710eb49be8d0804dd53fa7b79521aa05a018048fee1",
@@ -652,17 +741,35 @@
       "profileNote": "Strict accepts form bodies up to 16,777,215 bytes and above that answers production's HTML 400 page and ends the session (production accepted 12,582,912 and refused 16,777,216, follow-up recording 2026-09-27). The emulator profile follows the pinned official emulator: up to 16,777,216 accepted, an empty 413 above it, the session kept. An unknown session answers 400 in both profiles: production's HTML page in strict (owner decision D6), 'Error: Unknown SID' in the emulator profile."
     },
     {
-      "conditionId": "FS-LIMIT-API-REQUEST-BYTES/grpc",
+      "conditionId": "FS-LIMIT-API-REQUEST-BYTES/grpc-unary",
       "source": "crates/fireemu-adapter-grpc/src/serve.rs#MAX_GRPC_MESSAGE_BYTES",
       "recipeIds": [
-        "writes/limits/grpc-unary-request-bytes",
-        "writes/limits/grpc-stream-request-bytes"
+        "writes/limits/grpc-unary-request-bytes/10485760",
+        "writes/limits/grpc-unary-request-bytes/10485761",
+        "writes/limits/grpc-unary-request-bytes/11534336",
+        "writes/limits/grpc-unary-request-bytes/11534337"
       ],
-      "boundaryStatus": "UNBRACKETED",
-      "status": "MISMATCH",
-      "strictLimitEstimateBytes": 11534336,
-      "estimateOwnerDecision": "2026-09-25 FS-DATA-WRITE D4",
-      "scopeNote": "The strict 11 MiB (11,534,336-byte) upper bound is an unobserved estimate from the observed raw REST Commit boundary under owner decision D4; this transport's production upper boundary remains unresolved.",
+      "boundaryStatus": "BRACKETED",
+      "status": "VERIFIED",
+      "boundaryEvidence": [
+        "writes/limits/grpc-unary-request-bytes/11534336#grpc",
+        "writes/limits/grpc-unary-request-bytes/11534337#grpc"
+      ],
+      "evidence": {},
+      "profileNote": "Both profiles apply the same 11,534,336-byte decode bound and answer code 3 with production's REST Commit wording (decision D, 2026-09-27)."
+    },
+    {
+      "conditionId": "FS-LIMIT-API-REQUEST-BYTES/grpc-stream",
+      "source": "crates/fireemu-adapter-grpc/src/serve.rs#MAX_GRPC_MESSAGE_BYTES",
+      "recipeIds": [
+        "writes/limits/grpc-stream-request-bytes/10485760",
+        "writes/limits/grpc-stream-request-bytes/10485761"
+      ],
+      "boundaryStatus": "UNOBSERVABLE",
+      "status": "KNOWN_DIFFERENCE_APPROVED",
+      "ownerDecision": "2026-09-27 FS-DATA-WRITE gRPC stream upper bound",
+      "reason": "The request-size bound of a gRPC Write or Listen stream cannot be observed safely in production. Strict applies the 11,534,336-byte bound bracketed on unary GetDocument (FS-LIMIT-API-REQUEST-BYTES/grpc-unary) as an estimate, and the emulator profile adds no refusal. The recorded stream rows at 10,485,760 and 10,485,761 bytes match.",
+      "evidence": {},
       "profileNote": "Both profiles apply the same 11,534,336-byte decode bound and answer code 3 with production's REST Commit wording (decision D, 2026-09-27)."
     },
     {
@@ -1080,6 +1187,13 @@
         "sourceHead": "a2aec9fbc12c3bd6e35547c6239e46527fb55cd2",
         "integrationCommit": "7c9344b9d"
       }
+    }
+  ],
+  "approvedKnownDifferences": [
+    {
+      "conditionId": "FS-LIMIT-API-REQUEST-BYTES/grpc-stream",
+      "ownerDecision": "2026-09-27 FS-DATA-WRITE gRPC stream upper bound",
+      "reason": "The request-size bound of a gRPC Write or Listen stream cannot be observed safely in production. Strict applies the 11,534,336-byte bound bracketed on unary GetDocument (FS-LIMIT-API-REQUEST-BYTES/grpc-unary) as an estimate, and the emulator profile adds no refusal. The recorded stream rows at 10,485,760 and 10,485,761 bytes match."
     }
   ]
 }

@@ -56,9 +56,13 @@ const terminalConditionPath = fileURLToPath(
     import.meta.url,
   ),
 );
+// In the order the local checker reads the supplement directory.
 const supplements = [
-  "partial-7bfd51026a2ac56617d81504.json",
+  "bracket-fb886aa8eed899746ecf607b.json",
   "delta-v3-a14f265fea575003423c7ebd.json",
+  "followup-b0aeefc97b4c48765db4a9a1-indexed.json",
+  "followup-b0aeefc97b4c48765db4a9a1-webchannel.json",
+  "partial-7bfd51026a2ac56617d81504.json",
 ].map((name) => ({
   name,
   fixture: JSON.parse(
@@ -80,34 +84,25 @@ function currentRecordingSelection(fixture, manifest, corpus) {
   return { base, supplemental };
 }
 
-test("final write comparison keeps approved B1 rows and unresolved D5 rows explicit", () => {
+test("final write comparison keeps the approved D3 rows explicit and nothing unresolved", () => {
   const candidate = JSON.parse(readFileSync(reviewCandidatePath, "utf8"));
   assert.equal(candidate.task, "FS-DATA-WRITE");
   assert.equal(candidate.decision, "PENDING_REVIEW");
   assert.match(candidate.sourceHead, /^[0-9a-f]{40}$/);
   assert.match(candidate.executableSha256, /^[0-9a-f]{64}$/);
-  assert.equal(candidate.comparedRestPrograms, 74);
-  assert.equal(candidate.comparedGrpcStreams, 7);
+  assert.equal(candidate.comparedRestPrograms, 106);
+  assert.equal(candidate.comparedGrpcStreams, 9);
   assert.deepEqual(candidate.pendingRestIds, []);
   assert.deepEqual(candidate.pendingStreamIds, []);
   assert.deepEqual(candidate.otherDifferenceIds, []);
   assert.equal(candidate.retiredRestIds.length, 10);
-  assert.deepEqual(
-    candidate.approvedKnownDifferenceIds,
-    [
-      ...Array.from({ length: 4 }, (_, at) => `writes/limits/index-entry-bytes#observation-${at}`),
-      ...Array.from(
-        { length: 4 },
-        (_, at) => `writes/limits/index-entry-sum-per-document#observation-${at}`,
-      ),
-      "writes/limits/empty-document-name/4628#readback",
-      "writes/limits/empty-document-name/4628#write",
-    ].toSorted(),
-  );
-  assert.deepEqual(candidate.pendingOracleDifferenceIds, [
-    "writes/limits/grpc-stream-request-bytes/10485760#grpc",
-    "writes/limits/grpc-stream-request-bytes/10485761#grpc",
+  // D3 (owner decision, 2026-09-25): the documented index-entry formula explains every other
+  // former B1 row since the strict single-field threshold follows production (2026-09-28).
+  assert.deepEqual(candidate.approvedKnownDifferenceIds, [
+    "writes/limits/empty-document-name/4628#readback",
+    "writes/limits/empty-document-name/4628#write",
   ]);
+  assert.deepEqual(candidate.pendingOracleDifferenceIds, []);
   assert.equal(candidate.historicalRegression, undefined);
   assert.ok(candidate.reviewNotes.every((note) => !note.includes("remain pending integration")));
   for (const fixture of candidate.productionFixtures) {
@@ -142,7 +137,17 @@ test("current accepted conditions bind every selected row and only D3 difference
     ["FS-DATA-WRITE/write-stream-trailing-metadata", "VERIFIED"],
     ["FS-DATA-WRITE/write-stream-empty-write-response", "VERIFIED"],
     ["FS-LIMIT-INDEX-ENTRY-BYTES", "DIVERGENCE_APPROVED"],
-    ["FS-LIMIT-INDEX-ENTRY-SUM-PER-DOCUMENT", "DIVERGENCE_APPROVED"],
+    ["FS-LIMIT-INDEX-ENTRY-SUM-PER-DOCUMENT", "VERIFIED"],
+    ["FS-LIMIT-FIELD-VALUE-BYTES/aggregate-map", "VERIFIED"],
+    ["FS-LIMIT-INDEXED-FIELD-VALUE-BYTES", "VERIFIED"],
+    ...NON_COMMIT_REST_ROUTES.map((route) => [
+      `FS-LIMIT-API-REQUEST-BYTES/non-commit-rest/${route}`,
+      "VERIFIED",
+    ]),
+    ["FS-LIMIT-API-REQUEST-BYTES/grpc-unary", "VERIFIED"],
+    // Every row matches; the status records how each bound is closed, not a row difference.
+    ["FS-LIMIT-API-REQUEST-BYTES/grpc-stream", "KNOWN_DIFFERENCE_APPROVED"],
+    ["FS-LIMIT-API-REQUEST-BYTES/webchannel", "PRODUCTION_RECORDED"],
   ]);
   assert.deepEqual(new Set(Object.keys(accepted.conditions)), new Set(acceptedIds.keys()));
   assert.equal(accepted.sourceHead, candidate.sourceHead);
@@ -423,6 +428,9 @@ test("saved stream transaction recompare binds its one production campaign and c
   }
 });
 
+const NON_COMMIT_REST_ROUTES = ["batch-get", "batch-write", "create", "patch", "run-query"];
+const REQUEST_BYTE_POINTS = [10485760, 10485761, 11534336, 11534337];
+
 const requiredConditions = new Set([
   "FS-WRITE-LIMITS-03/batch-malformed-middle",
   "FS-WRITE-LIMITS-03/batch-undecodable-value",
@@ -444,9 +452,10 @@ const requiredConditions = new Set([
   "FS-WRITE-LIMITS-03/implied-array",
   "FS-LIMIT-API-REQUEST-BYTES/rest-commit-json-accepted-samples",
   "FS-LIMIT-API-REQUEST-BYTES/raw-16mib-over",
-  "FS-LIMIT-API-REQUEST-BYTES/non-commit-rest",
+  ...NON_COMMIT_REST_ROUTES.map((route) => `FS-LIMIT-API-REQUEST-BYTES/non-commit-rest/${route}`),
   "FS-LIMIT-API-REQUEST-BYTES/webchannel",
-  "FS-LIMIT-API-REQUEST-BYTES/grpc",
+  "FS-LIMIT-API-REQUEST-BYTES/grpc-unary",
+  "FS-LIMIT-API-REQUEST-BYTES/grpc-stream",
   "FS-DATA-WRITE/stream-transaction-precedence",
   "FS-DATA-WRITE/write-stream-trailing-metadata",
   "FS-DATA-WRITE/write-stream-half-close",
@@ -504,7 +513,33 @@ const requiredRecipes = new Map([
   ],
   [
     "FS-LIMIT-FIELD-VALUE-BYTES/aggregate-map",
-    new Set(["writes/limits/aggregate-map", "writes/limits/aggregate-map/strict-only"]),
+    new Set([
+      "writes/limits/aggregate-map",
+      "writes/limits/aggregate-map/1048487",
+      "writes/limits/aggregate-map/1048488",
+      "writes/limits/aggregate-map/strict-only",
+    ]),
+  ],
+  [
+    "FS-LIMIT-INDEXED-FIELD-VALUE-BYTES",
+    new Set([
+      "writes/limits/indexed-field-value-bytes",
+      "writes/limits/indexed-field-value-bytes/5200",
+      "writes/limits/indexed-field-value-bytes/6128",
+      ...[
+        "2999/1142",
+        "2999/1143",
+        "2999/1500",
+        "2999/1800",
+        "2999/2100",
+        "2999/2400",
+        "2999/2606",
+        "2999/2607",
+        "2000/2141",
+        "2000/2142",
+        "1500/2642",
+      ].map((point) => `writes/limits/indexed-string-name/${point}`),
+    ]),
   ],
   [
     "FS-LIMIT-API-REQUEST-BYTES/rest-commit-json-accepted-samples",
@@ -515,14 +550,31 @@ const requiredRecipes = new Map([
       "writes/limits/decoded-11x1040000",
     ]),
   ],
+  ...NON_COMMIT_REST_ROUTES.map((route) => [
+    `FS-LIMIT-API-REQUEST-BYTES/non-commit-rest/${route}`,
+    new Set(
+      REQUEST_BYTE_POINTS.map(
+        (bytes) => `writes/limits/non-commit-rest-request-bytes/${route}/${bytes}`,
+      ),
+    ),
+  ]),
   [
-    "FS-LIMIT-API-REQUEST-BYTES/non-commit-rest",
-    new Set(["writes/limits/non-commit-rest-request-bytes"]),
+    "FS-LIMIT-API-REQUEST-BYTES/webchannel",
+    new Set(
+      [...REQUEST_BYTE_POINTS, 12582912, 16777216, 16777217, 33554432, 33554433].map(
+        (bytes) => `writes/limits/webchannel-request-bytes/${bytes}`,
+      ),
+    ),
   ],
-  ["FS-LIMIT-API-REQUEST-BYTES/webchannel", new Set(["writes/limits/webchannel-request-bytes"])],
   [
-    "FS-LIMIT-API-REQUEST-BYTES/grpc",
-    new Set(["writes/limits/grpc-unary-request-bytes", "writes/limits/grpc-stream-request-bytes"]),
+    "FS-LIMIT-API-REQUEST-BYTES/grpc-unary",
+    new Set(REQUEST_BYTE_POINTS.map((bytes) => `writes/limits/grpc-unary-request-bytes/${bytes}`)),
+  ],
+  [
+    "FS-LIMIT-API-REQUEST-BYTES/grpc-stream",
+    new Set(
+      [10485760, 10485761].map((bytes) => `writes/limits/grpc-stream-request-bytes/${bytes}`),
+    ),
   ],
   ["FS-DATA-WRITE/write-stream-half-close", new Set(["writes/write-stream-terminal/half-close"])],
   [
@@ -620,7 +672,7 @@ test("integrated list conditions retain exact recipe ownership", () => {
     conditionId.startsWith("FS-DATA-WRITE-LIST/"),
   );
 
-  assert.equal(closure.conditions.length, 33);
+  assert.equal(closure.conditions.length, 38);
   assert.equal(listConditions.length, expected.size);
   const recipeIds = [];
   for (const condition of listConditions) {
@@ -927,45 +979,41 @@ test("final artifact closure names both saved production regression commands", (
   assert.notEqual(condition.status, "VERIFIED");
 });
 
-test("request-byte transports distinguish inferred bounds from the unresolved gRPC token mismatch", () => {
+test("request-byte transports are bracketed per route, with WebChannel inferred and the stream bound approved", () => {
   const closure = JSON.parse(readFileSync(closurePath, "utf8"));
-  const commit = closure.conditions.find(
-    (row) => row.conditionId === "FS-LIMIT-API-REQUEST-BYTES/rest-commit-json-accepted-samples",
-  );
-  assert.match(commit.scopeNote, /D4/);
-  assert.match(commit.scopeNote, /unobserved estimate/);
-  const nonCommitRest = closure.conditions.find(
-    (row) => row.conditionId === "FS-LIMIT-API-REQUEST-BYTES/non-commit-rest",
-  );
-  assert.equal(nonCommitRest.status, "PRODUCTION_RECORDED");
-  assert.equal(nonCommitRest.boundaryStatus, "INFERRED_UPPER_BOUND");
-  assert.throws(
-    () => verifyAcceptedCondition({ ...nonCommitRest, status: "VERIFIED" }),
-    /boundary/,
-  );
-  const grpc = closure.conditions.find(
-    (row) => row.conditionId === "FS-LIMIT-API-REQUEST-BYTES/grpc",
-  );
-  assert.equal(grpc.status, "MISMATCH");
-  assert.equal(grpc.boundaryStatus, "UNBRACKETED");
-  const webchannel = closure.conditions.find(
-    (row) => row.conditionId === "FS-LIMIT-API-REQUEST-BYTES/webchannel",
-  );
+  const find = (id) => closure.conditions.find((row) => row.conditionId === id);
+  const commit = find("FS-LIMIT-API-REQUEST-BYTES/rest-commit-json-accepted-samples");
+  assert.doesNotMatch(commit.scopeNote, /unobserved estimate/);
+  for (const id of [
+    ...NON_COMMIT_REST_ROUTES.map((route) => `FS-LIMIT-API-REQUEST-BYTES/non-commit-rest/${route}`),
+    "FS-LIMIT-API-REQUEST-BYTES/grpc-unary",
+  ]) {
+    const condition = find(id);
+    assert.equal(condition.status, "VERIFIED", id);
+    assert.equal(condition.boundaryStatus, "BRACKETED", id);
+    assert.deepEqual(
+      condition.boundaryEvidence.map((reference) => reference.split("#")[0].split("/").at(-1)),
+      ["11534336", "11534337"],
+      id,
+    );
+    assert.equal(condition.strictLimitEstimateBytes, undefined, id);
+  }
+  const webchannel = find("FS-LIMIT-API-REQUEST-BYTES/webchannel");
   assert.equal(webchannel.status, "PRODUCTION_RECORDED");
   assert.equal(webchannel.boundaryStatus, "INFERRED_UPPER_BOUND");
+  assert.equal(webchannel.strictLimitEstimateBytes, 16777215);
+  assert.equal(webchannel.estimateOwnerDecision, "2026-09-28 FS-DATA-WRITE D-2");
+  assert.match(webchannel.scopeNote, /\(12,582,912, 16,777,216\]/);
+  assert.match(webchannel.scopeNote, /awaits the owner/);
   assert.throws(() => verifyAcceptedCondition({ ...webchannel, status: "VERIFIED" }), /boundary/);
-  for (const condition of [nonCommitRest, webchannel, grpc]) {
-    assert.equal(condition.strictLimitEstimateBytes, 11 * 1024 * 1024);
-    assert.equal(condition.estimateOwnerDecision, "2026-09-25 FS-DATA-WRITE D4");
-    assert.match(condition.scopeNote, /unobserved estimate/);
-    assert.match(condition.scopeNote, /production upper boundary remains unresolved/);
-  }
+  const stream = find("FS-LIMIT-API-REQUEST-BYTES/grpc-stream");
+  assert.ok(isApprovedKnownDifference(closure, stream));
 });
 
 test("VERIFIED evidence never depends on a private path", () => {
   const closure = JSON.parse(readFileSync(closurePath, "utf8"));
   const verified = closure.conditions.filter(({ status }) => status === "VERIFIED");
-  assert.equal(verified.length, 24);
+  assert.equal(verified.length, 33);
   for (const condition of verified) {
     assert.ok(
       !JSON.stringify(condition.evidence ?? {}).includes("docs.local/"),
@@ -974,13 +1022,15 @@ test("VERIFIED evidence never depends on a private path", () => {
   }
 });
 
-test("new strict-only map observation is recorded for closure review", () => {
+test("the aggregate map has no refusal boundary after production accepted one byte over", () => {
   const closure = JSON.parse(readFileSync(closurePath, "utf8"));
   const condition = closure.conditions.find(
     ({ conditionId }) => conditionId === "FS-LIMIT-FIELD-VALUE-BYTES/aggregate-map",
   );
   assert.ok(condition.recipeIds.includes("writes/limits/aggregate-map/strict-only"));
-  assert.equal(condition.status, "PRODUCTION_RECORDED");
+  assert.ok(condition.recipeIds.includes("writes/limits/aggregate-map/1048488"));
+  assert.equal(condition.status, "VERIFIED");
+  assert.equal(condition.boundaryStatus, "NOT_APPLICABLE");
 });
 
 test("near-limit deletion names all six recorded route and size combinations", () => {
@@ -1019,11 +1069,7 @@ test("changed field-path and indexed-value recipes are covered by the partial su
     assert.ok(condition.recipeIds.includes(recipeId));
     assert.ok(base.pendingRestIds.includes(recipeId));
     assert.ok(!supplemental.pendingRestIds.includes(recipeId));
-    assert.equal(
-      condition.status,
-      conditionId === "FS-LIMIT-FIELD-PATH-BYTES" ? "VERIFIED" : "PRODUCTION_RECORDED",
-      conditionId,
-    );
+    assert.equal(condition.status, "VERIFIED", conditionId);
   }
 });
 
@@ -1180,7 +1226,12 @@ test("recorded conditions contain no changed or unrecorded runnable recipes", as
   const pending = new Set([...supplemental.pendingRestIds, ...supplemental.pendingStreamIds]);
   const failures = closure.conditions
     .filter(({ status }) =>
-      ["PRODUCTION_RECORDED", "VERIFIED", "DIVERGENCE_APPROVED"].includes(status),
+      [
+        "PRODUCTION_RECORDED",
+        "VERIFIED",
+        "DIVERGENCE_APPROVED",
+        "KNOWN_DIFFERENCE_APPROVED",
+      ].includes(status),
     )
     .flatMap(({ conditionId, recipeIds }) =>
       recipeIds
@@ -1408,10 +1459,7 @@ test("FS-DATA-WRITE closure inventory cannot silently omit a declared condition"
       `${conditionId}: incomplete recipe mapping`,
     );
   }
-  const approvedD3Conditions = new Set([
-    "FS-LIMIT-INDEX-ENTRY-BYTES",
-    "FS-LIMIT-INDEX-ENTRY-SUM-PER-DOCUMENT",
-  ]);
+  const approvedD3Conditions = new Set(["FS-LIMIT-INDEX-ENTRY-BYTES"]);
   for (const condition of closure.conditions) {
     if (condition.status === "KNOWN_DIFFERENCE_APPROVED") {
       assert.ok(isApprovedKnownDifference(closure, condition), condition.conditionId);

@@ -16,6 +16,7 @@ import {
   isExactPartialProductionScope,
   mutationIntentTarget,
   queryDocumentNames,
+  webchannelSessionPrerequisite,
 } from "./sandbox-session.mjs";
 
 const prefix = "projects/fireemu-oracle-sbx/databases/(default)/documents/";
@@ -424,5 +425,20 @@ test("a collection-group answer counts only rows that carry a document", () => {
     [{ document: {} }],
   ]) {
     assert.equal(queryDocumentNames(invalid), null, JSON.stringify(invalid));
+  }
+});
+
+test("a WebChannel session measures only after an acknowledged control and always terminates", () => {
+  const opened = new Map([["handshake", { sid: "SIDabcdefghijkl", gsessionid: "g-1" }]]);
+  const closed = new Map([["handshake", null]]);
+  const acked = { control: { status: 200, code: "OK", body: "forward-ack" } };
+  const refused = { control: { status: 400, code: "WEBCHANNEL_HTTP", message: "x" } };
+  assert.equal(webchannelSessionPrerequisite("handshake", new Map(), {}), null);
+  assert.equal(webchannelSessionPrerequisite("control", opened, {}), null);
+  assert.equal(webchannelSessionPrerequisite("boundary", opened, acked), null);
+  assert.match(webchannelSessionPrerequisite("boundary", opened, refused), /not acknowledged/);
+  assert.equal(webchannelSessionPrerequisite("terminate", opened, refused), null);
+  for (const kind of ["control", "boundary", "terminate"]) {
+    assert.match(webchannelSessionPrerequisite(kind, closed, acked), /did not open/);
   }
 });

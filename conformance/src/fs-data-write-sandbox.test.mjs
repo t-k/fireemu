@@ -7,6 +7,7 @@ import {
   freezeSandboxFixture,
   validateSandboxCorpus,
 } from "./fs-data-write-sandbox.mjs";
+import { webchannelSessionProgram } from "./firestore-probe/webchannel-request-bytes.mjs";
 
 test("artifact comparison distinguishes production error reasons as well as status and code", () => {
   const production = {
@@ -383,6 +384,81 @@ test("WebChannel byte probes are limited to the fixed sandbox unknown-session ro
         restPrograms: [{ ...channel, steps: [{ ...channel.steps[0], method: "GET" }] }],
       }),
     /sandbox WebChannel route/,
+  );
+});
+
+test("valid-session WebChannel programs must equal their fixed four-step shape", () => {
+  const program = webchannelSessionProgram(11_534_337);
+  const sessionCorpus = { ...corpus, restPrograms: [program], restRequestCount: 4 };
+  assert.equal(validateSandboxCorpus(sessionCorpus).requestCount, 4);
+  const altered = (change) => ({
+    ...sessionCorpus,
+    restPrograms: [change(structuredClone(program))],
+  });
+  for (const change of [
+    (value) => ({ ...value, id: "writes/limits/webchannel-request-bytes/11534338" }),
+    (value) => {
+      value.steps[2].webchannelBodyBytes = 11_534_336;
+      return value;
+    },
+    (value) => {
+      value.steps[0].path = value.steps[0].path.replace("fireemu-oracle-sbx", "fireemu-35fe6");
+      return value;
+    },
+    (value) => {
+      value.steps[3].method = "POST";
+      return value;
+    },
+    (value) => {
+      value.steps[1].body = { database: "x" };
+      return value;
+    },
+    (value) => {
+      value.steps.reverse();
+      return value;
+    },
+  ]) {
+    assert.throws(() => validateSandboxCorpus(altered(change)), /sandbox WebChannel/);
+  }
+  assert.throws(
+    () =>
+      validateSandboxCorpus({
+        ...sessionCorpus,
+        restPrograms: [{ ...program, steps: program.steps.slice(0, 3) }],
+        restRequestCount: 3,
+      }),
+    /sandbox WebChannel/,
+  );
+  assert.throws(
+    () =>
+      validateSandboxCorpus({
+        ...corpus,
+        restPrograms: [
+          {
+            id: program.id,
+            area: "writes",
+            steps: [
+              {
+                id: "read",
+                method: "GET",
+                path: "/v1/projects/fireemu-oracle-sbx/databases/(default)/documents/a/b",
+              },
+            ],
+          },
+        ],
+        restRequestCount: 1,
+      }),
+    /sandbox WebChannel/,
+  );
+  // A session step outside its program is refused too.
+  assert.throws(
+    () =>
+      validateSandboxCorpus({
+        ...corpus,
+        restPrograms: [{ id: "writes/other", area: "writes", steps: [program.steps[0]] }],
+        restRequestCount: 1,
+      }),
+    /sandbox WebChannel/,
   );
 });
 

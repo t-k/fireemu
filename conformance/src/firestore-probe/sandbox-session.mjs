@@ -23,7 +23,10 @@ import { normalizeRecordedResponse } from "./production-normalization.mjs";
 import { createRequestBudget } from "./request-budget.mjs";
 import {
   makeWebChannelFormBody,
+  makeWebChannelHandshakeBody,
+  parseWebChannelOpening,
   projectWebChannelResponse,
+  projectWebChannelSessionStep,
   WEBCHANNEL_PATH,
 } from "./webchannel-request-bytes.mjs";
 
@@ -2153,11 +2156,65 @@ export function mutationIntentTarget({ body, json, resolvedPath }) {
   return null;
 }
 
+/**
+ * One step of a valid WebChannel session. The opening's SID and session header stay in `raw`
+ * for the later paths; the recording keeps only shapes. The measured body is sent only after
+ * the control message was acknowledged, and a session that opened is always terminated.
+ */
+export function webchannelSessionPrerequisite(kind, raw, steps) {
+  if (kind === "handshake") return null;
+  if (!raw.get("handshake")) return "the WebChannel session did not open";
+  if (kind === "boundary" && steps.control?.body !== "forward-ack") {
+    return "the WebChannel control message was not acknowledged";
+  }
+  return null;
+}
+
+async function webchannelSessionStep(spec, raw, init) {
+  const kind = spec.webchannelSession;
+  const session = kind === "handshake" ? null : raw.get("handshake");
+  if (spec.method === "POST") {
+    init.headers["content-type"] = "application/x-www-form-urlencoded;charset=UTF-8";
+    init.body =
+      kind === "handshake"
+        ? makeWebChannelHandshakeBody()
+        : makeWebChannelFormBody(spec.webchannelBodyBytes);
+  }
+  init.redirect = "error";
+  init.signal = AbortSignal.timeout(REQUEST_TIMEOUT_MS);
+  let response;
+  try {
+    // Resolve the session placeholders last so that no URL rewrite can touch the SID.
+    response = await trackedFetch(resolvePath(url(spec.path), raw), init);
+  } catch (error) {
+    if (error?.name === "TimeoutError" || error?.name === "AbortError") {
+      return {
+        recorded: { status: 0, code: "no-response", message: "no response within the timeout" },
+        raw: null,
+      };
+    }
+    throw error;
+  }
+  const text = await response.text();
+  const opened =
+    kind === "handshake"
+      ? parseWebChannelOpening(response.status, response.headers.get("x-http-session-id"), text)
+      : null;
+  return {
+    recorded: projectWebChannelSessionStep(kind, response.status, text, opened ?? session),
+    raw: opened,
+  };
+}
+
 async function step(spec, raw) {
   const init = { method: spec.method, headers: { ...spec.headers } };
   const credential = selectCredential(spec, { ownerToken: TOKEN, userToken: USER_TOKEN });
   for (const name of spec.credential === undefined ? [] : Object.keys(init.headers)) {
     if (name.toLowerCase() === "authorization") delete init.headers[name];
+  }
+  if (spec.webchannelSession !== undefined) {
+    if (credential.authorization !== null) init.headers.authorization = credential.authorization;
+    return webchannelSessionStep(spec, raw, init);
   }
   if (spec.webchannelBodyBytes !== undefined) {
     if (spec.method !== "POST" || spec.path !== WEBCHANNEL_PATH || spec.body !== undefined) {
@@ -2652,6 +2709,15 @@ async function main() {
             raw.set(spec.id, null);
             continue;
           }
+        }
+        const sessionBlocked =
+          spec.webchannelSession === undefined
+            ? null
+            : webchannelSessionPrerequisite(spec.webchannelSession, raw, steps);
+        if (sessionBlocked !== null) {
+          steps[spec.id] = { status: 0, code: "not-run", message: sessionBlocked };
+          raw.set(spec.id, null);
+          continue;
         }
         let outcome;
         try {

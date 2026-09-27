@@ -20,6 +20,48 @@ DOCS = f"projects/{PROJECT}/databases/(default)/documents"
 COMMIT = f"/v1/{DOCS}:commit"
 BATCH_GET = f"/v1/{DOCS}:batchGet"
 WEBCHANNEL_PATH = "/google.firestore.v1.Firestore/Write/channel?database=projects%2Ffireemu-oracle-sbx%2Fdatabases%2F(default)&VER=8&RID=1&SID=missing-fireemu-byte-probe&AID=0"
+WEBCHANNEL_CHANNEL = "/google.firestore.v1.Firestore/Write/channel?database=projects%2Ffireemu-oracle-sbx%2Fdatabases%2F(default)&VER=8"
+WEBCHANNEL_SESSION = "SID={{handshake.sid}}&AID=0&gsessionid={{handshake.gsessionid}}"
+
+
+def _webchannel_session_program(size: int) -> dict[str, Any]:
+    """Open one valid session, acknowledge a control message, send `size` bytes, terminate.
+
+    The harness captures the SID and session header at run time; the child's
+    `webchannelSessionProgram` pins this exact shape.
+    """
+    return {
+        "id": f"writes/limits/webchannel-request-bytes/{size}",
+        "area": "writes",
+        "steps": [
+            {
+                "id": "handshake",
+                "method": "POST",
+                "path": f"{WEBCHANNEL_CHANNEL}&RID=1&CVER=22&X-HTTP-Session-Id=gsessionid",
+                "webchannelSession": "handshake",
+            },
+            {
+                "id": "control",
+                "method": "POST",
+                "path": f"{WEBCHANNEL_CHANNEL}&RID=2&{WEBCHANNEL_SESSION}",
+                "webchannelSession": "control",
+                "webchannelBodyBytes": 13,
+            },
+            {
+                "id": "boundary",
+                "method": "POST",
+                "path": f"{WEBCHANNEL_CHANNEL}&RID=3&{WEBCHANNEL_SESSION}",
+                "webchannelSession": "boundary",
+                "webchannelBodyBytes": size,
+            },
+            {
+                "id": "terminate",
+                "method": "GET",
+                "path": f"{WEBCHANNEL_CHANNEL}&RID=4&{WEBCHANNEL_SESSION}&TYPE=terminate",
+                "webchannelSession": "terminate",
+            },
+        ],
+    }
 
 
 def _invalid_collection_program(suffix: str, collection_id: str) -> dict[str, Any]:
@@ -96,6 +138,7 @@ def build_corpus() -> dict[str, Any]:
             }
             for size in (10_485_760, 10_485_761)
         ),
+        *(_webchannel_session_program(size) for size in (11_534_336, 11_534_337)),
         *index_sum_programs,
     ]
     stream_recipes = [
@@ -151,6 +194,7 @@ def build_corpus() -> dict[str, Any]:
             if not (
                 step["path"].startswith(f"/v1/{DOCS}")
                 or step["path"] == WEBCHANNEL_PATH
+                or step["path"].startswith(f"{WEBCHANNEL_CHANNEL}&RID=")
             ):
                 raise ValueError("program escaped the sandbox project")
     return {

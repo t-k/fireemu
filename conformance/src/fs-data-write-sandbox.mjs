@@ -1,6 +1,10 @@
 import { createHash } from "node:crypto";
 
-import { WEBCHANNEL_PATH } from "./firestore-probe/webchannel-request-bytes.mjs";
+import {
+  WEBCHANNEL_PATH,
+  WEBCHANNEL_SESSION_SIZES,
+  webchannelSessionProgram,
+} from "./firestore-probe/webchannel-request-bytes.mjs";
 
 const SANDBOX_DOCUMENTS = "/v1/projects/fireemu-oracle-sbx/databases/(default)/documents";
 const RECORDED_PROJECT = "demo-firestore-probe";
@@ -66,6 +70,19 @@ function assertSandboxReferences(value) {
     for (const item of value) assertSandboxReferences(item);
   } else if (value && typeof value === "object") {
     for (const item of Object.values(value)) assertSandboxReferences(item);
+  }
+}
+
+/** A valid-session WebChannel program must be exactly its fixed four steps. */
+function validateWebChannelSessionProgram(program) {
+  const size = WEBCHANNEL_SESSION_SIZES.find(
+    (candidate) => program.id === `writes/limits/webchannel-request-bytes/${candidate}`,
+  );
+  if (
+    size === undefined ||
+    JSON.stringify(program) !== JSON.stringify(webchannelSessionProgram(size))
+  ) {
+    throw new Error("invalid sandbox WebChannel session program");
   }
 }
 
@@ -175,6 +192,12 @@ export function validateSandboxCorpus(corpus) {
     }
     const isDeleteBoundary = program.id.startsWith(DELETE_BOUNDARY_PREFIX);
     if (isDeleteBoundary) validateDeleteBoundaryProgram(program);
+    const sessionProgram =
+      program.steps.some((step) => step.webchannelSession !== undefined) ||
+      WEBCHANNEL_SESSION_SIZES.some(
+        (size) => program.id === `writes/limits/webchannel-request-bytes/${size}`,
+      );
+    if (sessionProgram) validateWebChannelSessionProgram(program);
     const stepIds = new Set();
     for (const step of program.steps) {
       requestCount += 1;
@@ -189,9 +212,10 @@ export function validateSandboxCorpus(corpus) {
       ) {
         throw new Error("unsupported sandbox method");
       }
-      const webchannel = step.webchannelBodyBytes !== undefined;
+      const webchannel = sessionProgram || step.webchannelBodyBytes !== undefined;
       if (
         webchannel &&
+        !sessionProgram &&
         (![10_485_760, 10_485_761].includes(step.webchannelBodyBytes) ||
           step.method !== "POST" ||
           step.id !== "unknown-session" ||

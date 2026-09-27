@@ -80,6 +80,11 @@ function clientsSummary(clients = {}) {
  * late: such a row is indeterminate, never a different outcome.
  */
 export function comparable(row) {
+  const form = comparableForm(row);
+  return row.capped ? { ...form, capped: row.capped } : form;
+}
+
+function comparableForm(row) {
   if (row.probes)
     return {
       probes: Object.fromEntries(
@@ -101,6 +106,8 @@ export function classifyStage2({ stale, production, alternative, fireemu }) {
   if (stale) return "STALE_FIXTURE";
   if (production === undefined) return "MISSING_FIXTURE";
   if (fireemu === undefined) return "MISSING";
+  // A client's request cap refused something: the row shows the harness's limit, not behavior.
+  if ([production, alternative, fireemu].some((form) => form?.capped?.length)) return "CAPPED";
   if ([production, alternative, fireemu].some((form) => form?.late?.length)) return "INDETERMINATE";
   // The two production recordings disagree: the row is decided by the owner (C9), not here.
   if (alternative !== undefined) return "INDETERMINATE";

@@ -203,8 +203,29 @@ export function createInterpreter(program, deps) {
   }
 
   const conditionsOf = (step) => step.conditions ?? [step.condition];
+  /** The SDK clients a step's row depends on (all of them for the final row). */
+  function clientsIn(step) {
+    if (step.do === "close-all") return [...clients.keys()];
+    const names = new Set([...(step.clients ?? []), ...(step.client ? [step.client] : [])]);
+    const refs = [...(step.observe ?? []), ...(step.probes ?? []).flatMap((p) => p.observe)];
+    for (const ref of refs) if (!ref.startsWith("grpc-")) names.add(ref.split("/")[0]);
+    return [...names];
+  }
+
+  /**
+   * A row names the clients whose request cap refused something by the time it was recorded:
+   * such a row shows the harness's limit, not production's behavior, and is never compared.
+   */
   const record = (step, value) => {
-    rows[step.id] = session.mask({ id: step.id, conditions: conditionsOf(step), ...value });
+    const capped = clientsIn(step)
+      .filter((name) => clients.get(name)?.sdk.events.some((e) => e.event === "wire-refused"))
+      .toSorted();
+    rows[step.id] = session.mask({
+      id: step.id,
+      conditions: conditionsOf(step),
+      ...value,
+      ...(capped.length ? { capped } : {}),
+    });
   };
 
   async function send(step) {

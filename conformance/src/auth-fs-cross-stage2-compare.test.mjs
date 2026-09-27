@@ -229,3 +229,14 @@ test("a fixture keeps recording 2 only where it differs, and refuses recordings 
     /two recordings/,
   );
 });
+
+test("a row whose client hit its request cap is kept apart from every comparison", () => {
+  const form = comparable({ listeners: { "c/doc": { events: [] } }, clients: {}, capped: ["c"] });
+  assert.deepEqual(form.capped, ["c"]);
+  const plain = comparable({ listeners: { "c/doc": { events: [] } }, clients: {} });
+  assert.equal("capped" in plain, false);
+  assert.equal(classifyStage2({ production: plain, fireemu: form }), "CAPPED");
+  assert.equal(classifyStage2({ production: form, fireemu: plain }), "CAPPED");
+  assert.equal(classifyStage2({ production: plain, alternative: form, fireemu: plain }), "CAPPED");
+  assert.equal(classifyStage2({ stale: true, production: form, fireemu: form }), "STALE_FIXTURE");
+});

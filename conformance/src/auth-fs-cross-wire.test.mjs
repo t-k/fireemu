@@ -84,3 +84,23 @@ test("every HTTP/2 request goes through the ledger with its bearer hashed", asyn
     { n: 1, host: "127.0.0.1", path: "/google.firestore.v1.Firestore/Listen", bearer: sha("t2") },
   ]);
 });
+
+test("each refusal is reported with its host, path and reason, never its bearer", () => {
+  const refused = [];
+  const ledger = createWireLedger({
+    hosts: ["a.example"],
+    cap: 1,
+    onRefuse: (r) => refused.push(r),
+  });
+  ledger.admit("a.example", "/one", "Bearer SECRET");
+  assert.throws(() => ledger.admit("a.example", "/two", "Bearer SECRET"), /request cap 1 reached/);
+  assert.throws(
+    () => ledger.admit("b.example", "/three", "Bearer SECRET"),
+    /b.example is not an allowed host/,
+  );
+  assert.deepEqual(refused, [
+    { host: "a.example", path: "/two", reason: "request cap 1 reached" },
+    { host: "b.example", path: "/three", reason: "b.example is not an allowed host" },
+  ]);
+  assert.equal(ledger.records.length, 1);
+});

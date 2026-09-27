@@ -670,3 +670,43 @@ test("an aligned group waits once for its latest token, then probes one after an
     ["afc2-owned/a-sdk"],
   );
 });
+
+test("a row names the clients whose request cap refused something, and only those", async () => {
+  const capped = fakeClient();
+  const fine = fakeClient();
+  const spawned = [capped, fine];
+  const session = fakeSession({ principals: {} });
+  const program = {
+    steps: [
+      { do: "client", client: "a", transport: "node-sdk" },
+      { do: "client", client: "b", transport: "node-sdk" },
+      { do: "sdk", client: "a", op: "listen", name: "doc", path: "afc2-owned/x" },
+      { do: "sdk", client: "b", op: "listen", name: "doc", path: "afc2-owned/y" },
+      { do: "observe", id: "before", condition: "X", observe: ["a/doc", "b/doc"] },
+      { do: "observe", id: "after", condition: "X", observe: ["a/doc", "b/doc"] },
+      { do: "observe", id: "only-b", condition: "X", observe: ["b/doc"] },
+      { do: "close-all", id: "life", conditions: ["X"] },
+    ],
+  };
+  const interpreter = createInterpreter(program, {
+    session,
+    ctx,
+    spawnClient: () => spawned.shift(),
+    openListen: () => {},
+    sdkConfig: {},
+  });
+  const pause = session.pause;
+  let pauses = 0;
+  session.pause = async (ms) => {
+    pauses += 1;
+    // The first observation ends before the cap is hit; the second one sees it.
+    if (pauses === 1)
+      capped.deliver({ event: "wire-refused", host: "h", path: "/p", reason: "cap" });
+    return pause(ms);
+  };
+  const rows = await interpreter.run();
+  assert.deepEqual(rows.before.capped, ["a"]);
+  assert.deepEqual(rows.after.capped, ["a"]);
+  assert.equal("capped" in rows["only-b"], false);
+  assert.deepEqual(rows.life.capped, ["a"]);
+});

@@ -25,16 +25,21 @@ export const bearerHash = (value) => {
 
 /**
  * A request ledger: `admit(host, path, authorization)` refuses a host outside `hosts` or a request
- * past `cap`, and records the rest. `onRecord` sees each record as it is made.
+ * past `cap`, and records the rest. `onRecord` sees each record as it is made, `onRefuse` each
+ * refusal (host, path and reason, never the bearer).
  */
-export function createWireLedger({ hosts, cap, onRecord = () => {} }) {
+export function createWireLedger({ hosts, cap, onRecord = () => {}, onRefuse = () => {} }) {
   const allowed = new Set(hosts);
   const records = [];
+  const refuse = (host, path, reason) => {
+    onRefuse({ host, path, reason });
+    throw new Error(`wire: ${reason}`);
+  };
   return {
     records,
     admit(host, path, authorization) {
-      if (!allowed.has(host)) throw new Error(`wire: ${host} is not an allowed host`);
-      if (records.length >= cap) throw new Error(`wire: request cap ${cap} reached`);
+      if (!allowed.has(host)) refuse(host, path, `${host} is not an allowed host`);
+      if (records.length >= cap) refuse(host, path, `request cap ${cap} reached`);
       const record = { n: records.length + 1, host, path, bearer: bearerHash(authorization) };
       records.push(record);
       onRecord(record);

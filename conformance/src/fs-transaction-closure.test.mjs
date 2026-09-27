@@ -23,14 +23,22 @@ const required = new Set([
   "final-artifact-regression",
   "closure-review",
 ]);
+const statuses = new Set([
+  "PENDING_CORPUS",
+  "PENDING_RECORDING",
+  "PENDING_REVIEW",
+  "PRODUCTION_RECORDED",
+  "MISMATCH",
+  "VERIFIED",
+]);
+const requiredScopeDecisions = new Set(["T1", "T2", "T3", "T4", "T5", "T6", "T7", "T8", "T9", "OT-1"]);
 
 test("FS-TRANSACTION proposal names every acceptance boundary without claiming closure", () => {
   const closure = JSON.parse(readFileSync(closureUrl, "utf8"));
   assert.equal(closure.parent, "FS-TRANSACTION");
-  assert.equal(closure.parentStatus, "IMPLEMENTING");
-  assert.equal(closure.inventoryStatus, "PROPOSED");
-  assert.equal(closure.freezeState, "UNFROZEN");
-  assert.equal(closure.closureReview.decision, "PENDING");
+  assert.equal(closure.inventoryStatus, "FROZEN");
+  assert.equal(closure.freezeState, "FROZEN");
+  assert.match(closure.frozenOn, /^\d{4}-\d{2}-\d{2}$/);
   assert.deepEqual(new Set(closure.conditions.map(({ conditionId }) => conditionId.split("/")[1])), required);
   assert.equal(closure.conditions.length, required.size);
   const recipes = closure.conditions.flatMap(({ recipeIds }) => recipeIds);
@@ -39,8 +47,10 @@ test("FS-TRANSACTION proposal names every acceptance boundary without claiming c
     assert.ok(condition.source);
     assert.ok(condition.observation.method);
     assert.ok(condition.observation.credentials, `${condition.conditionId} must name its credential context`);
+    assert.ok(condition.note?.trim(), `${condition.conditionId} must state its remaining boundary`);
     assert.ok(condition.verification.requiredEvidence.length);
-    assert.ok(["PENDING_CORPUS", "PENDING_RECORDING", "PENDING_REVIEW"].includes(condition.status));
+    assert.ok(statuses.has(condition.status), `${condition.conditionId}: ${condition.status}`);
+    if (condition.status === "VERIFIED") assert.ok(condition.evidence, `${condition.conditionId}: evidence`);
     for (const recipe of condition.recipeIds) assert.equal(recipe, `fs-transaction/${condition.conditionId.split("/")[1]}`);
   }
   const preparedCases = closure.conditions.flatMap(({ observation }) => observation.existingCaseIds ?? []);
@@ -70,15 +80,23 @@ test("FS-TRANSACTION proposal names every acceptance boundary without claiming c
   assert.match(closure.conditions.find(({ conditionId }) => conditionId === "FS-TRANSACTION/total-lifetime-expiry").observation.limitId, /^FS-LIMIT-TRANSACTION-TOTAL-TIME$/);
   const readTime = closure.conditions.find(({ conditionId }) => conditionId === "FS-TRANSACTION/read-time-snapshot");
   assert.ok(!readTime.localEvidence.references.some((path) => path.includes("expiry-retry")));
-  assert.match(closure.scopeDecisions.find(({ id }) => id === "T5").recommendation, /do not import O7\/O8 Gate/);
   assert.equal(closure.productionPlan.preparedCampaign.project, "fireemu-oracle-sbx");
   assert.equal(closure.productionPlan.preparedCampaign.authorizesProduction, false);
   assert.equal(closure.productionPlan.preparedCampaign.recordingsNeeded, 2);
-  assert.equal(closure.productionPlan.preparedCampaign.totalRequestEstimate, 190);
   assert.ok(closure.productionPlan.unestimatedConditions.length);
   assert.ok(closure.productionPlan.unestimatedConditions.includes("FS-TRANSACTION/failed-commit-and-rollback"));
-  assert.ok(closure.scopeDecisions.every(({ status, decision, decidedBy, decidedOn }) => status === "DECIDED" && decision && decidedBy && decidedOn));
-  assert.equal(closure.scopeDecisions.find(({ id }) => id === "OT-1").decision, "PESSIMISTIC_ONLY_OPTIMISTIC_FOLLOW_UP");
+  assert.deepEqual(new Set(closure.scopeDecisions.map(({ id }) => id)), requiredScopeDecisions);
+  for (const decision of closure.scopeDecisions) {
+    assert.equal(decision.status, "DECIDED");
+    assert.ok(decision.decision?.trim());
+    assert.match(decision.decidedBy, /^(owner|coordinator)/);
+    assert.match(decision.decidedOn, /^\d{4}-\d{2}-\d{2}$/);
+  }
+  assert.match(closure.scopeDecisions.find(({ id }) => id === "T7").decisionRef, /owner-decisions/);
+  assert.equal(closure.scopeDecisions.find(({ id }) => id === "T8").movedTo, "FS-DATA-WRITE");
+  assert.equal(closure.scopeDecisions.find(({ id }) => id === "T9").movedTo, "FS-DATA-WRITE");
+  assert.match(closure.scopeDecisions.find(({ id }) => id === "OT-1").decidedBy, /^owner/);
+  assert.match(closure.scopeDecisions.find(({ id }) => id === "OT-1").decision, /PESSIMISTIC.*OPTIMISTIC/);
   assert.equal(closure.profileComparison.profile, "strict");
   assert.equal(closure.profileComparison.emulatorCompatibilityCheck, "PENDING_LOCAL_OBSERVATION");
   assert.equal(closure.parentStatus === "COMPAT_VERIFIED", closure.conditions.every(({ status }) => status === "VERIFIED") && closure.closureReview.decision === "APPROVED");

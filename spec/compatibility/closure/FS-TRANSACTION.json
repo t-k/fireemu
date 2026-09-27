@@ -2,8 +2,8 @@
   "schemaVersion": 1,
   "parent": "FS-TRANSACTION",
   "parentStatus": "IMPLEMENTING",
-  "inventoryStatus": "PROPOSED",
-  "freezeState": "UNFROZEN",
+  "inventoryStatus": "FROZEN",
+  "freezeState": "FROZEN",
   "oracleTrack": "disposable-sandbox",
   "closureReview": {
     "decision": "PENDING",
@@ -32,18 +32,18 @@
     {
       "id": "T3",
       "status": "DECIDED",
-      "recommendation": "Keep transaction commit-to-listener notification ordering as a shared acceptance row with FS-LISTEN-SDK, but count the transaction outcome here and callback delivery there.",
+      "recommendation": "Count the atomic visibility of all writes in one transaction commit on native Listen here; SDK callback delivery belongs to FS-LISTEN-SDK.",
       "ownerDecisionRequired": false,
-      "decision": "COMMIT_ATOMIC_VISIBILITY_HERE",
+      "decision": "The atomic visibility of a transaction commit on native Listen is assigned to FS-TRANSACTION; SDK callback shape is assigned to FS-LISTEN-SDK.",
       "decidedBy": "coordinator",
       "decidedOn": "2026-09-27"
     },
     {
       "id": "T4",
       "status": "DECIDED",
-      "recommendation": "Keep transaction-specific resource and timeout limits here; generic document and request limits remain with FS-DATA-WRITE.",
+      "recommendation": "Count the named idle and total transaction time limits in their expiry conditions; transaction size belongs to FS-DATA-WRITE.",
       "ownerDecisionRequired": false,
-      "decision": "TIME_LIMITS_IN_EXPIRY_SIZE_MOVED_TO_FS_DATA_WRITE",
+      "decision": "Idle and total time limits are assigned to their transaction expiry conditions; transaction size is assigned to FS-DATA-WRITE.",
       "decidedBy": "coordinator",
       "decidedOn": "2026-09-27"
     },
@@ -70,30 +70,33 @@
       "status": "DECIDED",
       "recommendation": "Keep SDK-driven retry distinct from backend retry-token semantics. Do not exclude it on the strength of REST or gRPC observations.",
       "ownerDecisionRequired": false,
-      "decision": "SDK_RETRY_SEPARATE",
+      "decision": "Keep SDK retry separate from backend retry-token behavior.",
       "decidedBy": "coordinator",
-      "decidedOn": "2026-09-27"
+      "decidedOn": "2026-09-27",
+      "decisionRef": "docs.local/instructions/owner-decisions.md#2026-09-27-FS-TRANSACTION-additional-coordinator-decision"
     },
     {
       "id": "OT-1",
       "status": "DECIDED",
-      "decision": "PESSIMISTIC_ONLY_OPTIMISTIC_FOLLOW_UP",
+      "decision": "This closure covers PESSIMISTIC mode only; OPTIMISTIC modes remain in a follow-up issue and are not known-difference exclusions.",
       "decidedBy": "owner",
       "decidedOn": "2026-09-27",
       "decisionRef": "docs.local/instructions/owner-decisions.md#2026-09-27-FS-TRANSACTION-OT-1"
     },
     {
-      "id": "M-T1",
+      "id": "T8",
       "status": "DECIDED",
-      "decision": "MOVED_TO_FS_DATA_WRITE",
-      "movedTo": "FS-DATA-WRITE/stream-transaction-precedence",
+      "decision": "Write stream precedence belongs to FS-DATA-WRITE.",
+      "movedTo": "FS-DATA-WRITE",
       "decidedBy": "coordinator",
-      "decidedOn": "2026-09-27"
+      "decidedOn": "2026-09-27",
+      "movedCondition": "FS-DATA-WRITE/stream-transaction-precedence",
+      "decisionRef": "docs.local/instructions/owner-decisions.md#2026-09-27-FS-TRANSACTION-additional-coordinator-decision"
     },
     {
-      "id": "M-T3",
+      "id": "T9",
       "status": "DECIDED",
-      "decision": "SIZE_MOVED_TO_FS_DATA_WRITE",
+      "decision": "Transaction size belongs to FS-DATA-WRITE.",
       "movedTo": "FS-DATA-WRITE",
       "decidedBy": "coordinator",
       "decidedOn": "2026-09-27"
@@ -129,7 +132,8 @@
           "A comparison against the final source-bound fireemu artifact that covers every recipe step and reports no unexplained mismatch."
         ],
         "recordingsRequired": 2
-      }
+      },
+      "note": "Historical recordings are reference only. Two new sandbox recordings and a final-artifact comparison are required for this condition."
     },
     {
       "conditionId": "FS-TRANSACTION/read-only-snapshot",
@@ -160,7 +164,8 @@
           "A comparison against the final source-bound fireemu artifact that covers every recipe step and reports no unexplained mismatch."
         ],
         "recordingsRequired": 2
-      }
+      },
+      "note": "Historical recordings are reference only. Two new sandbox recordings and a final-artifact comparison are required for this condition."
     },
     {
       "conditionId": "FS-TRANSACTION/read-time-snapshot",
@@ -192,7 +197,8 @@
           "A comparison against the final source-bound fireemu artifact that covers every recipe step and reports no unexplained mismatch."
         ],
         "recordingsRequired": 2
-      }
+      },
+      "note": "Historical recordings are reference only. Two new sandbox recordings and a final-artifact comparison are required for this condition."
     },
     {
       "conditionId": "FS-TRANSACTION/token-validation-and-ownership",
@@ -225,7 +231,8 @@
           "A comparison against the final source-bound fireemu artifact that covers every recipe step and reports no unexplained mismatch."
         ],
         "recordingsRequired": 2
-      }
+      },
+      "note": "Historical recordings are reference only. Two new sandbox recordings and a final-artifact comparison are required for this condition."
     },
     {
       "conditionId": "FS-TRANSACTION/read-set-conflict",
@@ -258,7 +265,8 @@
           "A comparison against the final source-bound fireemu artifact that covers every recipe step and reports no unexplained mismatch."
         ],
         "recordingsRequired": 2
-      }
+      },
+      "note": "Historical recordings are reference only. Two new sandbox recordings and a final-artifact comparison are required for this condition."
     },
     {
       "conditionId": "FS-TRANSACTION/write-set-atomicity",
@@ -291,7 +299,8 @@
           "A comparison against the final source-bound fireemu artifact that covers every recipe step and reports no unexplained mismatch."
         ],
         "recordingsRequired": 2
-      }
+      },
+      "note": "Historical recordings are reference only. Two new sandbox recordings and a final-artifact comparison are required for this condition."
     },
     {
       "conditionId": "FS-TRANSACTION/query-range-lock",
@@ -322,7 +331,8 @@
           "A comparison against the final source-bound fireemu artifact that covers every recipe step and reports no unexplained mismatch."
         ],
         "recordingsRequired": 2
-      }
+      },
+      "note": "A finite sandbox corpus, two recordings, complete cleanup and final-artifact comparison remain required."
     },
     {
       "conditionId": "FS-TRANSACTION/failed-commit-and-rollback",
@@ -356,7 +366,8 @@
           "A comparison against the final source-bound fireemu artifact that covers every recipe step and reports no unexplained mismatch."
         ],
         "recordingsRequired": 2
-      }
+      },
+      "note": "A finite sandbox corpus, two recordings, complete cleanup and final-artifact comparison remain required."
     },
     {
       "conditionId": "FS-TRANSACTION/retry-token-lifecycle",
@@ -367,7 +378,7 @@
       "recipeStatus": "PROPOSED",
       "status": "PENDING_RECORDING",
       "observation": {
-        "method": "REST retryTransaction after rollback, commit, read-only begin, unissued and malformed tokens; compare diagnostics and post-state. Include a representative gRPC case and the firebase-admin 14.3.0 retryTransaction wire path.",
+        "method": "REST retryTransaction after rollback, commit, read-only begin, unissued and malformed tokens; compare diagnostics and post-state. Include a representative gRPC case.",
         "existingCaseOrCampaignRefs": [
           "spec/compatibility/broad-runs/fs-transaction-expiry-retry-04-manifest-v4.json"
         ],
@@ -396,7 +407,8 @@
           "A comparison against the final source-bound fireemu artifact that covers every recipe step and reports no unexplained mismatch."
         ],
         "recordingsRequired": 2
-      }
+      },
+      "note": "Historical recordings are reference only. Two new sandbox recordings and a final-artifact comparison are required for this condition."
     },
     {
       "conditionId": "FS-TRANSACTION/idle-expiry",
@@ -435,7 +447,8 @@
           "A comparison against the final source-bound fireemu artifact that covers every recipe step and reports no unexplained mismatch."
         ],
         "recordingsRequired": 2
-      }
+      },
+      "note": "A finite sandbox corpus, two recordings, complete cleanup and final-artifact comparison remain required."
     },
     {
       "conditionId": "FS-TRANSACTION/total-lifetime-expiry",
@@ -465,7 +478,8 @@
           "A comparison against the final source-bound fireemu artifact that covers every recipe step and reports no unexplained mismatch."
         ],
         "recordingsRequired": 2
-      }
+      },
+      "note": "A finite sandbox corpus, two recordings, complete cleanup and final-artifact comparison remain required."
     },
     {
       "conditionId": "FS-TRANSACTION/read-time-retention",
@@ -494,7 +508,8 @@
           "A comparison against the final source-bound fireemu artifact that covers every recipe step and reports no unexplained mismatch."
         ],
         "recordingsRequired": 2
-      }
+      },
+      "note": "A finite sandbox corpus, two recordings, complete cleanup and final-artifact comparison remain required."
     },
     {
       "conditionId": "FS-TRANSACTION/web-sdk-optimistic-retry",
@@ -528,7 +543,8 @@
         ],
         "recordingsRequired": 2,
         "recordingsRequiredPerTransport": 2
-      }
+      },
+      "note": "A finite sandbox corpus, two recordings, complete cleanup and final-artifact comparison remain required."
     },
     {
       "conditionId": "FS-TRANSACTION/paging-and-cancellation",
@@ -557,7 +573,8 @@
           "A comparison against the final source-bound fireemu artifact that covers every recipe step and reports no unexplained mismatch."
         ],
         "recordingsRequired": 2
-      }
+      },
+      "note": "A finite sandbox corpus, two recordings, complete cleanup and final-artifact comparison remain required."
     },
     {
       "conditionId": "FS-TRANSACTION/admin-sdk-server-retry",
@@ -587,7 +604,8 @@
         ],
         "recordingsRequired": 2,
         "recordingsRequiredPerTransport": 2
-      }
+      },
+      "note": "A finite sandbox corpus, two recordings, complete cleanup and final-artifact comparison remain required."
     },
     {
       "conditionId": "FS-TRANSACTION/commit-atomic-visibility",
@@ -616,7 +634,8 @@
         ],
         "recordingsRequired": 2,
         "recordingsRequiredPerTransport": 2
-      }
+      },
+      "note": "A finite sandbox corpus, two recordings, complete cleanup and final-artifact comparison remain required."
     },
     {
       "conditionId": "FS-TRANSACTION/final-artifact-regression",
@@ -641,7 +660,8 @@
           "All conditions have source-bound comparisons and no unexplained mismatch."
         ],
         "recordingsRequired": 0
-      }
+      },
+      "note": "Independent final-artifact or closure review has no production request and remains open until its own evidence is approved."
     },
     {
       "conditionId": "FS-TRANSACTION/closure-review",
@@ -666,7 +686,8 @@
           "Independent approval of the exact final artifact and every condition."
         ],
         "recordingsRequired": 0
-      }
+      },
+      "note": "Independent final-artifact or closure review has no production request and remains open until its own evidence is approved."
     }
   ],
   "productionPlan": {
@@ -734,7 +755,7 @@
   "profileComparison": {
     "profile": "strict",
     "emulatorCompatibilityCheck": "PENDING_LOCAL_OBSERVATION",
-    "note": "Before freeze, compare official emulator behavior for idle and total expiry, token ownership, and retry-token refusal. The emulator profile must not add refusals absent from the official emulator."
+    "note": "Before closure review, compare official emulator behavior for idle and total expiry, token ownership, and retry-token refusal. The emulator profile must not add refusals absent from the official emulator."
   },
   "configProjections": {
     "databaseConcurrencyMode": "PESSIMISTIC",
@@ -746,5 +767,6 @@
     "database": "(default)",
     "credentials": "Admin OAuth for server transactions; unauthenticated Web SDK for optimistic transactions where deployed Rules permit",
     "productionExecuted": false
-  }
+  },
+  "frozenOn": "2026-09-27"
 }

@@ -53,6 +53,7 @@ def test_two_complete_recordings_freeze_under_one_lock(tmp_path):
         "reserved", "recorded", "reserved", "recorded"
     ]
     assert rows[2]["requests"] == 70 and rows[4]["requests"] == 71
+    assert all(row["envelopeId"] == PINS["envelopeId"] for row in rows[1:])
 
 
 def test_incomplete_first_pass_keeps_lock_and_skips_second(tmp_path):

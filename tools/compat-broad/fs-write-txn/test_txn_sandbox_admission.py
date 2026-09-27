@@ -36,7 +36,7 @@ LAST = {
     "outcome": "recorded",
     "attemptId": "previous",
 }
-DECISION = (
+DIRECT = (
     "- 2026-09-27 | FS-TRANSACTION | "
     f"packetSha256={PACKET}; sourceCommit={SOURCE}; runnerSha256={RUNNER}; "
     "requestsPerRecording=96; estimatedUsdPerRecording=0.05; recordings=2 | "
@@ -58,6 +58,7 @@ DELEGATED = (
     "Claude（委任。枠の内の承認し直し） | "
     f"{PATH}\n"
 )
+DECISION = ENVELOPE + DIRECT
 
 
 def test_send_gate_requires_owner_line_idle_gap_and_no_open_attempt():
@@ -91,6 +92,48 @@ def test_send_gate_rejects_packet_replay_and_duplicate_owner_line():
         admission.verify_send_gates([LAST, replay], NOW, DECISION, PINS)
     with pytest.raises(ValueError, match="owner"):
         admission.verify_send_gates([LAST], NOW, DECISION + DECISION, PINS)
+
+
+def test_envelope_is_single_use_even_with_a_new_packet_id():
+    old = {
+        **LAST,
+        "ts": "2026-09-27T14:00:00Z",
+        "taskId": "FS-TRANSACTION-SANDBOX",
+        "packetId": "older-packet",
+        "envelopeId": PINS["envelopeId"],
+        "attemptId": "older-attempt",
+        "outcome": "reserved",
+    }
+    done = {**old, "ts": "2026-09-27T15:00:00Z", "outcome": "recorded", "requests": 94}
+    with pytest.raises(ValueError, match="envelope.*already used"):
+        admission.verify_send_gates([old, done], NOW, DECISION, PINS)
+
+
+@pytest.mark.parametrize("ending", ["needs-recovery", "stopped-needs-review", "failed"])
+def test_nonterminal_outcome_does_not_close_an_attempt(ending):
+    opened = {**LAST, "ts": "2026-09-27T14:00:00Z", "outcome": "reserved"}
+    later = {**opened, "outcome": ending, "ts": "2026-09-27T15:00:00Z"}
+    with pytest.raises(ValueError, match="open attempt"):
+        admission.verify_send_gates([opened, later], NOW, DECISION, PINS)
+
+
+def test_sandbox_idle_uses_maximum_timestamp_and_rejects_unparseable_rows():
+    newer = {**LAST, "ts": "2026-09-27T15:45:00Z"}
+    older = {**LAST, "ts": "2026-09-27T14:00:00Z"}
+    with pytest.raises(ValueError, match="30 minutes"):
+        admission.verify_send_gates([newer, older], NOW, DECISION, PINS)
+    malformed = {**LAST, "event": "note", "ts": "not-an-instant"}
+    with pytest.raises(ValueError, match="timestamp"):
+        admission.verify_send_gates([older, malformed], NOW, DECISION, PINS)
+
+
+def test_parent_task_revocation_also_refuses_a_direct_approval():
+    revoked = (
+        "- 2026-09-28 | FS-TRANSACTION | REVOKED | オーナー | "
+        "docs.local/reviews/transaction-presend.md\n"
+    )
+    with pytest.raises(ValueError, match="revoked"):
+        admission.verify_send_gates([LAST], NOW, DECISION + revoked, PINS)
 
 
 def test_unkeyed_started_row_cannot_be_closed_by_unrelated_terminal():

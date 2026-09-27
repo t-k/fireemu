@@ -19,7 +19,10 @@ IDLE_GAP = dt.timedelta(minutes=30)
 def _instant(value):
     if not isinstance(value, str):
         raise ValueError("sandbox ledger timestamp is missing")
-    parsed = dt.datetime.fromisoformat(value.replace("Z", "+00:00"))
+    try:
+        parsed = dt.datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        raise ValueError("sandbox ledger timestamp is invalid") from None
     if parsed.tzinfo is None:
         raise ValueError("sandbox ledger timestamp needs a timezone")
     return parsed
@@ -43,7 +46,7 @@ def _owner_approval(decisions, pins):
         entries.append((columns, tokens))
     named_parent = f"{TASK} {pins.get('packetName', '')}".strip()
     if any(
-        columns[1] in (named_parent, f"{named_parent} envelope")
+        columns[1] in (TASK, named_parent, f"{named_parent} envelope")
         and ("REVOKED" in tokens or "decision=REVOKED" in tokens)
         for columns, tokens in entries
     ):
@@ -55,8 +58,6 @@ def _owner_approval(decisions, pins):
         and required <= tokens
         and columns[3].startswith("オーナー")
     ]
-    if len(direct) == 1:
-        return
     if len(direct) > 1:
         raise ValueError("exactly one owner approval row must pin this packet")
     envelope_id = pins.get("envelopeId")
@@ -77,7 +78,7 @@ def _owner_approval(decisions, pins):
         and {"decision=APPROVE", f"envelopeId={envelope_id}"} <= tokens
         and required <= tokens
     ]
-    if len(envelope) != 1 or len(delegated) != 1:
+    if len(envelope) != 1 or len(direct) + len(delegated) != 1:
         raise ValueError("owner envelope and delegated exact-version approval are required")
     tokens = envelope[0]
     expected = {
@@ -99,6 +100,16 @@ def _owner_approval(decisions, pins):
     packet_reserve = Decimal(str(pins["estimatedUsdPerRecording"])) * 2
     if not (packet_requests <= requests <= 192 and packet_reserve <= reserve <= Decimal("0.10")):
         raise ValueError("owner envelope exceeds the runner or does not cover the packet")
+    return requests, reserve
+
+
+def _terminal(row):
+    outcome = row.get("outcome")
+    return (
+        outcome in ("recorded", "prepared", "legacy-recovery-reservation-actual-requests")
+        or isinstance(outcome, str) and outcome.startswith("recovered-")
+        or row.get("event") == "finished" and outcome == "presend-cancelled-no-send"
+    )
 
 
 def verify_send_gates(rows, now, decisions, pins):
@@ -106,6 +117,13 @@ def verify_send_gates(rows, now, decisions, pins):
     if not isinstance(now, dt.datetime) or now.tzinfo is None:
         raise ValueError("timezone-aware current time required")
     sandbox = [row for row in rows if row.get("project") == PROJECT]
+    for row in sandbox:
+        _instant(row.get("ts"))
+    envelope_id = pins.get("envelopeId")
+    if not isinstance(envelope_id, str) or not envelope_id:
+        raise ValueError("owner envelope identity required")
+    if any(row.get("envelopeId") == envelope_id for row in rows):
+        raise ValueError("owner envelope was already used; retries are forbidden")
     if any(
         row.get("packetId") == pins["packetId"]
         and row.get("outcome") == "reserved"
@@ -122,11 +140,16 @@ def verify_send_gates(rows, now, decisions, pins):
             identity = row.get(key)
             if not identity or not any(
                 later.get(key) == identity
-                and later.get("outcome") != "reserved"
-                and later.get("event") != "started"
+                and later.get("taskId") == row.get("taskId")
+                and _terminal(later)
                 for later in sandbox[index + 1 :]
             ):
                 raise ValueError("the sandbox has an open attempt")
+    task_rows = [row for row in sandbox if row.get("taskId") == "FS-TRANSACTION-SANDBOX"]
+    if task_rows:
+        most_recent = max(task_rows, key=lambda row: _instant(row["ts"]))
+        if not _terminal(most_recent):
+            raise ValueError("the FS-TRANSACTION sandbox attempt needs recovery")
     activity = [
         row
         for row in sandbox
@@ -134,8 +157,8 @@ def verify_send_gates(rows, now, decisions, pins):
         and not str(row.get("outcome", "")).startswith("reserved")
         and row.get("outcome") != "historical-unknown-hold"
     ]
-    latest = activity[-1] if activity else None
-    if latest and now - _instant(latest.get("ts")) < IDLE_GAP:
+    latest = max(activity, key=lambda row: _instant(row["ts"])) if activity else None
+    if latest and now - _instant(latest["ts"]) < IDLE_GAP:
         raise ValueError("the sandbox must be idle for 30 minutes after its last activity")
     _owner_approval(decisions, pins)
     return latest.get("ts") if latest else None

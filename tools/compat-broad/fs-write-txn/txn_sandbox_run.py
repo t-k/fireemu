@@ -63,6 +63,7 @@ def _ledger_row(pins, attempt_id, run_dir, nonce, outcome, requests):
         "project": contract.PROJECT,
         "database": contract.DATABASE,
         "taskId": TASK_ID,
+        "envelopeId": pins["envelopeId"],
         "packetId": pins["packetId"],
         "gitSha": pins["sourceCommit"],
         "runnerSha256": pins["runnerSha256"],

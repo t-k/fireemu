@@ -85,6 +85,14 @@ export function createOperations({ fb, auth, db, emit, onToken, decodeBase64Url,
       const { user } = await fb.signInWithEmailAndPassword(auth, email, password);
       return { uid: user.uid };
     },
+    /**
+     * A read that uses the API key from this client's origin (the password policy), before the
+     * run writes anything: a key restricted by referrer or application refuses it.
+     */
+    probeKey: async () => {
+      await fb.validatePassword(auth, "afc-probe-password-1");
+      return {};
+    },
     signOut: async () => {
       await fb.signOut(auth);
       return {};

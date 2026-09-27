@@ -23,6 +23,8 @@ export const HARNESS_HOSTS = [
   "firestore.googleapis.com",
   "firebaserules.googleapis.com",
   "iam.googleapis.com",
+  // One read of the project's API keys' restrictions; never their key strings.
+  "apikeys.googleapis.com",
 ];
 /** A recording is one run; the packet approves two, in order (decision D2). */
 export const RECORDINGS = [1, 2];
@@ -50,6 +52,29 @@ export function destinationProblem(
   for (const [, project] of path.matchAll(/(?:^|\/)projects\/([^/]+)/g))
     if (!projects.includes(project)) return `undeclared project ${project}`;
   return null;
+}
+
+// ---- API keys ------------------------------------------------------------------------------
+
+/** The restrictions that would make a key refuse the browser page's origin or this host. */
+const APPLICATION_RESTRICTIONS = [
+  "browserKeyRestrictions",
+  "serverKeyRestrictions",
+  "androidKeyRestrictions",
+  "iosKeyRestrictions",
+];
+
+/**
+ * Why the project's keys may refuse the run's clients: a failed read, or any key with an
+ * application restriction (the web config's key cannot be told apart without its key string,
+ * which is never read, so every key counts).
+ */
+export function keyRestrictionProblems({ status, json }) {
+  if (status !== 200) return [`API keys read failed (HTTP ${status})`];
+  if (json?.nextPageToken) return ["API keys read has more than one page"];
+  return (json?.keys ?? [])
+    .filter((key) => APPLICATION_RESTRICTIONS.some((r) => key.restrictions?.[r] !== undefined))
+    .map((key) => `API key ${key.displayName ?? key.uid ?? "?"} has an application restriction`);
 }
 
 // ---- locks ---------------------------------------------------------------------------------

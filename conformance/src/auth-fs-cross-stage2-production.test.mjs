@@ -31,12 +31,19 @@ function world(overrides = {}) {
     rulesets: [],
     compileStatus: 200,
     deleteThrows: false,
+    keys: [
+      {
+        displayName: "Browser key (auto created by Firebase)",
+        restrictions: { apiTargets: [{ service: "identitytoolkit.googleapis.com" }] },
+      },
+    ],
     ...overrides,
   };
   const calls = [];
   const fetchJson = async (target, method, url, body) => {
     calls.push({ method, url });
     const path = new URL(url).pathname;
+    if (path.endsWith("/locations/global/keys")) return { status: 200, json: { keys: state.keys } };
     if (path.endsWith("/config"))
       return {
         status: 200,
@@ -117,6 +124,7 @@ function setup({
     target: async () => ({ refresh: async () => {} }),
     fetchJson: fake.fetchJson,
     clockOffset: async () => 0.01,
+    browserKeyProbe: async () => ({ ok: true, code: null, requests: 2 }),
     compileProbe: undefined,
     recordWindow:
       window ??
@@ -165,7 +173,8 @@ test("an approved recording writes its lines, keeps its secrets out and releases
     assert.equal(written[0].envelopeId, "AFC-S2-1");
     assert.equal(written[0].maxEstimatedUsd, 1);
     // 8 baseline reads, 3 probe requests, 120 harness, 42 SDK, 8 final reads.
-    assert.equal(written[1].requests, 8 + 3 + 120 + 42 + 8);
+    // With the API keys read (1) and the key probe's requests (2).
+    assert.equal(written[1].requests, 8 + 1 + 2 + 3 + 120 + 42 + 8);
     assert.equal(written[1].sdkRequests, 42);
     assert.equal(written[1].outcome, "recorded");
     assert.deepEqual(readdirSync(paths.lockDir), []);
@@ -324,5 +333,47 @@ test("another task's open run on the project stops the run under the lock", asyn
     assert.equal(TASK_ID, "AUTH-FS-CROSS-SANDBOX");
   } finally {
     done();
+  }
+});
+
+test("a key with an application restriction, or a refused key probe, stops the run before any write", async () => {
+  const restricted = setup({
+    worldOptions: {
+      keys: [
+        { displayName: "k", restrictions: { browserKeyRestrictions: { allowedReferrers: ["x"] } } },
+      ],
+    },
+  });
+  const refused = setup();
+  refused.deps.browserKeyProbe = async () => ({
+    ok: false,
+    code: "auth/requests-from-referer-blocked",
+    requests: 1,
+  });
+  try {
+    await assert.rejects(
+      runStage2Production(await withProbe(restricted.deps)),
+      /API key k has an application restriction/,
+    );
+    await assert.rejects(
+      runStage2Production(await withProbe(refused.deps)),
+      /browser key probe refused: auth\/requests-from-referer-blocked/,
+    );
+    for (const { paths, fake } of [restricted, refused]) {
+      assert.equal(readFileSync(paths.ledger, "utf8"), "");
+      assert.deepEqual(readdirSync(paths.lockDir), []);
+      // Reads only: the baseline, the keys, nothing that writes.
+      assert.deepEqual(
+        fake.calls.filter(
+          ({ method, url }) =>
+            method !== "GET" &&
+            !/(accounts:query|:getIamPolicy|:runQuery)$/.test(new URL(url).pathname),
+        ),
+        [],
+      );
+    }
+  } finally {
+    restricted.done();
+    refused.done();
   }
 });

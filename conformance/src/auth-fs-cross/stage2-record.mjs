@@ -16,6 +16,7 @@ import { promisify } from "node:util";
 import { CONFORMANCE_DIR } from "../config.mjs";
 import { createContext } from "../fs-rules/harness.mjs";
 import { STAGE2_PRINCIPALS, STAGE2_PROGRAM } from "./programs-stage2.mjs";
+import { DRIVERS, spawnSdk } from "./sdk-client.mjs";
 import { confirmedNoAuthRecording, recentAbort, sharedRoot } from "./run.mjs";
 import { admissionProblems } from "./sandbox.mjs";
 import { closureTransports, validateStage2 } from "./stage2-corpus.mjs";
@@ -36,8 +37,10 @@ const sha256 = (text) => createHash("sha256").update(text).digest("hex");
 
 /** Harness calls one recording may make (setup, probes, publication settling, cleanup). */
 export const HARNESS_CEILING = 700;
-/** Baseline reads at the start and the end, and the compile probe. */
-const FIXED_REQUESTS = 8 + 3 + 8;
+/** The requests the browser key probe's client may make. */
+const KEY_PROBE_CAP = 5;
+/** Baseline reads at the start (with the API keys read) and the end, the key probe, the compile probe. */
+const FIXED_REQUESTS = 8 + 1 + KEY_PROBE_CAP + 3 + 8;
 /** The Firestore and Auth spend one recording reserves in the ledger. */
 export const RESERVE_USD = 1;
 
@@ -157,6 +160,28 @@ async function ownerFetch(target, method, url, body, quotaProject = SANDBOX_PROJ
   }
   const response = await fetch(url, init);
   return { status: response.status, json: await response.json().catch(() => null) };
+}
+
+/**
+ * One browser client makes one read with the web key (the password policy) from the page's
+ * origin, and is closed. `ok: false` with the SDK's code when the key refuses it.
+ */
+export async function browserKeyProbe(sdkConfig, { spawn = spawnSdk } = {}) {
+  const sdk = spawn(
+    { ...sdkConfig, wireCap: KEY_PROBE_CAP },
+    { driver: DRIVERS.browser, timeoutMs: 60_000 },
+  );
+  try {
+    await sdk.ready();
+    const result = await sdk.send("probeKey", {});
+    return {
+      ok: result.ok,
+      code: result.ok ? null : (result.code ?? "unknown"),
+      requests: sdk.events.filter((e) => e.event === "wire").length,
+    };
+  } finally {
+    await sdk.close();
+  }
 }
 
 /** Everything checked before the lock and before any request. */
@@ -280,6 +305,7 @@ export async function recordProduction(env = process.env) {
     target: () => productionTarget(web),
     fetchJson: ownerFetch,
     clockOffset: assertClockSynchronized,
+    browserKeyProbe: () => browserKeyProbe(sdkConfig),
     compileProbe,
     recordWindow: (target) =>
       runStage2Window(STAGE2_PROGRAM, createContext({ run: String(Date.now()), target }), {

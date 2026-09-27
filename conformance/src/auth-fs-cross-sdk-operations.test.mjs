@@ -281,3 +281,22 @@ test("the browser driver reads a WebChannel bearer and allows only its target's 
     ["127.0.0.1:9099", "127.0.0.1:8080"],
   );
 });
+
+test("no event, wire record or driver log carries a password or a bearer, only hashes", async () => {
+  const { createWireLedger } = await import("./auth-fs-cross/sdk-wire.mjs");
+  const secret = "SECRET-TOKEN-VALUE";
+  const records = [];
+  const ledger = createWireLedger({ hosts: ["h"], cap: 10, onRecord: (r) => records.push(r) });
+  ledger.admit("h", "/google.firestore.v1.Firestore/Write/channel", `Bearer ${secret}`);
+  const body = new URLSearchParams({ headers: `Authorization:Bearer ${secret}\r\n` }).toString();
+  ledger.admit("h", "/x", webChannelBearer("https://h/x", body));
+  assert.equal(JSON.stringify(records).includes(secret), false);
+  assert.equal(records[0].bearer, records[1].bearer);
+  assert.match(records[0].bearer, /^[0-9a-f]{64}$/);
+
+  const sdk = fakeSdk();
+  await sdk.run({ id: "a", op: "signIn", email: "e@example.com", password: "PASSWORD-VALUE" });
+  await sdk.state.tokenListener({ uid: "u1", getIdToken: async () => TOKEN });
+  assert.equal(JSON.stringify(sdk.events).includes("PASSWORD-VALUE"), false);
+  assert.equal(JSON.stringify(sdk.events).includes(TOKEN), false);
+});

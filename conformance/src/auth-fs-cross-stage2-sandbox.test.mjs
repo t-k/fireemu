@@ -10,6 +10,7 @@ import {
   covers,
   DECLARED_PROJECTS,
   destinationProblem,
+  keyRestrictionProblems,
   packetApproval,
   recordingProblems,
   releaseProjectLock,
@@ -324,4 +325,43 @@ test("the legacy shared lock stops a run, and a lock that changed is left in pla
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
+});
+
+test("the API keys read passes only when no key has an application restriction", () => {
+  const target = { restrictions: { apiTargets: [{ service: "firestore.googleapis.com" }] } };
+  assert.deepEqual(keyRestrictionProblems({ status: 200, json: { keys: [target, {}] } }), []);
+  assert.deepEqual(keyRestrictionProblems({ status: 200, json: {} }), []);
+  for (const restriction of [
+    "browserKeyRestrictions",
+    "serverKeyRestrictions",
+    "androidKeyRestrictions",
+    "iosKeyRestrictions",
+  ])
+    assert.deepEqual(
+      keyRestrictionProblems({
+        status: 200,
+        json: { keys: [target, { displayName: "k", restrictions: { [restriction]: {} } }] },
+      }),
+      ["API key k has an application restriction"],
+      restriction,
+    );
+  assert.deepEqual(keyRestrictionProblems({ status: 403, json: null }), [
+    "API keys read failed (HTTP 403)",
+  ]);
+  assert.deepEqual(
+    keyRestrictionProblems({ status: 200, json: { keys: [], nextPageToken: "n" } }),
+    ["API keys read has more than one page"],
+  );
+  assert.equal(
+    destinationProblem(
+      `https://apikeys.googleapis.com/v2/projects/${SANDBOX_PROJECT}/locations/global/keys`,
+    ),
+    null,
+  );
+  assert.match(
+    destinationProblem(
+      "https://apikeys.googleapis.com/v2/projects/fireemu-oracle-query/locations/global/keys",
+    ),
+    /undeclared project/,
+  );
 });

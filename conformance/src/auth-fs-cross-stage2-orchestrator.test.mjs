@@ -260,6 +260,11 @@ test("a probe records only what arrived after its commit, and a stream's end in 
   assert.deepEqual(opened.targets, [
     { targetId: 1, documents: { documents: [`${ROOT}/afc2-owned/a`] } },
   ]);
+  // The password goes to the client on its stdin only: never into a row or the timeline.
+  assert.equal(
+    JSON.stringify([rows, interpreter.timeline()]).includes(client.commands[0].password),
+    false,
+  );
   assert.deepEqual(client.commands[0], {
     op: "signIn",
     email: "a@example.com",

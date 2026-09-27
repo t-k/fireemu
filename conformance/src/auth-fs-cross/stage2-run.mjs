@@ -22,6 +22,7 @@ import { createContext, SANDBOX_PROJECT } from "../fs-rules/harness.mjs";
 import { STAGE2_PRINCIPALS, STAGE2_PROGRAM } from "./programs-stage2.mjs";
 import { closureTransports, validateStage2 } from "./stage2-corpus.mjs";
 import { runStage2Window } from "./stage2-orchestrator.mjs";
+import { browserKeyProbe } from "./stage2-record.mjs";
 
 const RUN_DIR = join(CONFORMANCE_DIR, ".runs", "auth-fs-cross-stage2");
 const CLOSURE = join(
@@ -114,6 +115,9 @@ async function sessionLocal() {
   };
   let out;
   try {
+    // As in production: the browser's first request with the key is a read, before any write.
+    const keyProbe = await browserKeyProbe(localSdkConfig(target));
+    if (!keyProbe.ok) throw new Error(`browser key probe refused: ${keyProbe.code}`);
     out = await runStage2Window(program, ctx, {
       principals: STAGE2_PRINCIPALS,
       sdkConfig: localSdkConfig(target),

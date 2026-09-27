@@ -14,6 +14,7 @@ import {
   acquireProjectLocks,
   closingLines,
   DECLARED_PROJECTS,
+  keyRestrictionProblems,
   packetApproval,
   recordingProblems,
   releaseProjectLock,
@@ -25,6 +26,13 @@ import {
 import { RULESET_IDS, rulesetSource } from "./stage2-rulesets.mjs";
 
 const RULES = `${PRODUCTION.rules}/v1/projects/${SANDBOX_PROJECT}`;
+const KEYS = `https://apikeys.googleapis.com/v2/projects/${SANDBOX_PROJECT}/locations/global/keys?pageSize=300`;
+
+/** One read of the project's API keys (restrictions only, never a key string). */
+export async function readKeyRestrictions(fetchJson) {
+  const answer = await fetchJson("GET", KEYS, undefined, SANDBOX_PROJECT);
+  return { requests: 1, problems: keyRestrictionProblems(answer) };
+}
 const line = (row) => `${JSON.stringify(row)}\n`;
 
 /**
@@ -66,8 +74,9 @@ export async function compileProbe(fetchJson) {
  * `privateRoot`, `packetSha256`, `recording` (1 or 2), `runner` ({project, maxRequests,
  * reserveUsd}), `secrets` ([value, placeholder] pairs), and the functions `admission()` (→
  * {problems, sha, harness, programDigest}), `target()`, `fetchJson(target, method, url, body,
- * quotaProject)`, `clockOffset()`, `compileProbe(fetchJson)`, `recordWindow(target)`, `now()`,
- * `recentAbort(ledgerText)`, `stopRequested()` and `log()`.
+ * quotaProject)`, `clockOffset()`, `browserKeyProbe()` (→ {ok, code, requests}: a browser
+ * client's read with the web key, before anything is written), `compileProbe(fetchJson)`,
+ * `recordWindow(target)`, `now()`, `recentAbort(ledgerText)`, `stopRequested()` and `log()`.
  */
 export async function runStage2Production(deps) {
   if (JSON.stringify(DECLARED_PROJECTS) !== JSON.stringify([deps.runner.project]))
@@ -109,8 +118,14 @@ export async function runStage2Production(deps) {
       deps.fetchJson(target, method, url, body, quota);
     // Reads only: a failure here leaves nothing behind.
     const start = await readBaseline(fetchJson);
-    if (start.mismatches.length) throw new Error(`preflight: ${start.mismatches.join("; ")}`);
+    const keys = await readKeyRestrictions(fetchJson);
+    const startProblems = [...start.mismatches, ...keys.problems];
+    if (startProblems.length) throw new Error(`preflight: ${startProblems.join("; ")}`);
     const clockOffsetSeconds = await deps.clockOffset();
+    // The browser's first request with the web key is a read: a refusal ends the run here,
+    // before anything is written, and the locks are released.
+    const keyProbe = await deps.browserKeyProbe();
+    if (!keyProbe.ok) throw new Error(`browser key probe refused: ${clean(String(keyProbe.code))}`);
     // The compile probe writes: from its first request only a clean readback releases the locks.
     keepLocks = true;
     let probe;
@@ -193,6 +208,8 @@ export async function runStage2Production(deps) {
     const wire = Object.values(recording?.wire ?? {}).reduce((n, count) => n + count, 0);
     const requests =
       start.requests +
+      keys.requests +
+      keyProbe.requests +
       probe.requests +
       (recording?.harnessRequests ?? 0) +
       (recording?.requests ?? 0) +

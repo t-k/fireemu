@@ -101,3 +101,41 @@ export function issuerFiles(issuer, ...jwks) {
     "jwks.json": jwksDocument(...jwks),
   };
 }
+
+/**
+ * Writes the static site a Firebase Hosting preview channel serves for the issuer path
+ * `oidc/<run>`: the discovery document and the JWKS (public keys only), and a `firebase.json`
+ * that keeps `.well-known` and serves both as JSON. Refuses to write anything that looks like
+ * private key material.
+ */
+export async function writeIssuerSite(dir, { issuer, run, jwks }) {
+  const base = `oidc/${run}`;
+  const files = {
+    [`public/${base}/.well-known/openid-configuration`]: discoveryDocument(issuer),
+    [`public/${base}/jwks.json`]: jwksDocument(...jwks),
+    "firebase.json": {
+      hosting: {
+        public: "public",
+        ignore: ["firebase.json"],
+        headers: [
+          {
+            source: `/${base}/**`,
+            headers: [
+              { key: "Content-Type", value: "application/json" },
+              { key: "Cache-Control", value: "no-store" },
+            ],
+          },
+        ],
+      },
+    },
+  };
+  for (const [path, content] of Object.entries(files)) {
+    const text = `${JSON.stringify(content, null, 2)}\n`;
+    if (/PRIVATE KEY|"d"\s*:|"p"\s*:|"q"\s*:/.test(text)) {
+      throw new Error(`refusing to publish private key material in ${path}`);
+    }
+    await mkdir(dirname(`${dir}/${path}`), { recursive: true });
+    await writeFile(`${dir}/${path}`, text);
+  }
+  return Object.keys(files);
+}

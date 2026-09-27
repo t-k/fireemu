@@ -81,3 +81,29 @@ test("private keys are written only below docs.local or the temp dir, mode 600",
   const publicKey = createPublicKey({ key: key.jwk, format: "jwk" });
   assert.ok(verify("sha256", Buffer.from(`${h}.${p}`), publicKey, Buffer.from(s, "base64url")));
 });
+
+test("the issuer site holds only the discovery document and public keys", async () => {
+  const { writeIssuerSite } = await import("./auth-federation/idp.mjs");
+  const key = generateSigningKey({ kid: "k1" });
+  const dir = await mkdtemp(join(tmpdir(), "fed-site-"));
+  const issuer = "https://sandbox--fed-r1-abc.web.app/oidc/r1";
+  const files = await writeIssuerSite(dir, { issuer, run: "r1", jwks: [key.jwk] });
+  assert.deepEqual(files.toSorted(), [
+    "firebase.json",
+    "public/oidc/r1/.well-known/openid-configuration",
+    "public/oidc/r1/jwks.json",
+  ]);
+  const discovery = JSON.parse(await readFile(join(dir, "public/oidc/r1/.well-known/openid-configuration"), "utf8"));
+  assert.equal(discovery.issuer, issuer);
+  assert.equal(discovery.jwks_uri, `${issuer}/jwks.json`);
+  const jwks = await readFile(join(dir, "public/oidc/r1/jwks.json"), "utf8");
+  assert.doesNotMatch(jwks, /"d"\s*:/);
+  const hosting = JSON.parse(await readFile(join(dir, "firebase.json"), "utf8")).hosting;
+  assert.ok(!hosting.ignore.includes("**/.*"), "dotfiles (.well-known) are published");
+  // Private material is refused before anything is written for it.
+  const privateJwk = { ...key.privateKey.export({ format: "jwk" }), kid: "k1" };
+  await assert.rejects(
+    writeIssuerSite(dir, { issuer, run: "r2", jwks: [{ ...privateJwk, d: privateJwk.d }] }),
+    /refusing to publish private key material/,
+  );
+});

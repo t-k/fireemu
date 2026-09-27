@@ -27,6 +27,7 @@ import { createHash, generateKeyPairSync, randomBytes } from "node:crypto";
 import { existsSync } from "node:fs";
 import { appendFile, lstat, mkdir, open as openFile, readFile, writeFile } from "node:fs/promises";
 import { join, resolve as resolvePath } from "node:path";
+import { setTimeout as sleepFor } from "node:timers/promises";
 import { promisify } from "node:util";
 
 import { CONFORMANCE_DIR } from "../config.mjs";
@@ -51,6 +52,7 @@ import { PROGRAMS as TENANT_PROGRAMS } from "./corpus.mjs";
 import {
   FORCED_REFRESH_CAP,
   SIGNER_READY_ATTEMPTS,
+  withKind,
   OAUTH_ATTEMPT_WEIGHT,
   chargeExternal,
   createRequestBudget,
@@ -64,7 +66,8 @@ import { assertNoOpaqueValue } from "./harness.mjs";
 import { createSession, runCorpus, tenantIdOf } from "./session.mjs";
 
 const execFileAsyncRaw = promisify(execFile);
-const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+/** Waits `ms`, or rejects as soon as `signal` aborts. */
+const delay = (ms, signal) => sleepFor(ms, undefined, signal ? { signal } : undefined);
 /** A child process must never receive the lock capability reserved for this runner. */
 export function withoutLockCapability(source = process.env) {
   const env = { ...source };
@@ -371,39 +374,51 @@ async function readSwitches(web, tokens) {
  * Sends the signJwt preflight (`send` answers its HTTP status) until it is admitted. A new
  * binding reads back before signJwt honours it (1 to 6 minutes on this project), so a 403 is
  * retried every `intervalMs`, at most `attempts` times; each attempt is an ordinary charged
- * request. Any other answer, and a refused charge, stops at once (review MF-1).
+ * work request, whatever phase the caller is in (it never uses the cleanup reserve). Any other
+ * answer, and a refused charge, stops at once (review MF-1). A signal stops the wait at once and
+ * sends no further attempt (review-2 Should-3).
  */
 export async function waitForSigner(
   send,
-  { attempts = SIGNER_READY_ATTEMPTS, intervalMs = 30_000, sleep = delay } = {},
+  { attempts = SIGNER_READY_ATTEMPTS, intervalMs = 30_000, sleep = delay, signal } = {},
 ) {
+  const stopped = () => new Error("stopped by a signal before the recording started");
   for (let attempt = 1; ; attempt += 1) {
-    const status = await send();
+    if (signal?.aborted) throw stopped();
+    const status = await withKind("work", send);
     if (status === 200) return attempt;
     if (status !== 403 || attempt >= attempts)
       throw new Error(
         `signJwt preflight: HTTP ${status} after ${attempt} attempt${attempt === 1 ? "" : "s"} (create the signJwt binding first)`,
       );
-    await sleep(intervalMs);
+    try {
+      await sleep(intervalMs, signal);
+    } catch (error) {
+      if (signal?.aborted) throw stopped();
+      throw error;
+    }
   }
 }
 
 /** Whether the project's own signer may mint a custom token (the signJwt binding exists). */
-async function assertSignerReady(web, tokens) {
+async function assertSignerReady(web, tokens, signal) {
   const ctx = await productionContext(String(Date.now()), web, tokens);
-  const attempts = await waitForSigner(async () => {
-    const now = Math.floor(Date.now() / 1000);
-    const claims = customTokenClaims(
-      { uid: "preflight" },
-      SIGNER_ACCOUNTS.project,
-      now,
-      (text) => text,
-    );
-    const request = harnessRequest.signJwt(ctx, SIGNER_ACCOUNTS.project, claims);
-    const response = await fetch(request.url, { ...request.init, redirect: "error" });
-    await response.arrayBuffer().catch(() => undefined);
-    return response.status;
-  });
+  const attempts = await waitForSigner(
+    async () => {
+      const now = Math.floor(Date.now() / 1000);
+      const claims = customTokenClaims(
+        { uid: "preflight" },
+        SIGNER_ACCOUNTS.project,
+        now,
+        (text) => text,
+      );
+      const request = harnessRequest.signJwt(ctx, SIGNER_ACCOUNTS.project, claims);
+      const response = await fetch(request.url, { ...request.init, redirect: "error" });
+      await response.arrayBuffer().catch(() => undefined);
+      return response.status;
+    },
+    { signal },
+  );
   console.log(`signJwt preflight admitted after ${attempts} attempt(s)`);
 }
 
@@ -650,6 +665,30 @@ export function unstartedRunnerRow({ ts, budget, error }) {
   };
 }
 
+/**
+ * Runs `body` with `budget` installed on `target`'s fetch. A `body` that fails after charging
+ * requests but before its started line (`appendStartedLine` marks `progress.started`) is noted
+ * by `onUnstarted`, so those requests are on a ledger line (review SF-1).
+ */
+export async function underCampaignBudget(budget, body, { onUnstarted, target = globalThis }) {
+  const uninstall = installBudget(budget, target);
+  const progress = { started: false };
+  try {
+    return await body(progress);
+  } catch (error) {
+    if (!progress.started && budget.used() > 0) await onUnstarted(error);
+    throw error;
+  } finally {
+    uninstall();
+  }
+}
+
+/** Appends the run's started line; from here the terminal line accounts for every request. */
+export async function appendStartedLine(ledger, row, progress) {
+  await appendFile(ledger, `${JSON.stringify(row)}\n`);
+  progress.started = true;
+}
+
 /** The reserved cost survives a failed run and a later verified restore. */
 export function productionStartedRow({ ts, gitSha: sha, programs }) {
   return {
@@ -760,17 +799,8 @@ async function recordProduction() {
   };
   const web = await sandboxWebConfig();
   const tokens = [];
-  const uninstallBudget = installBudget(budget);
-  let started = false;
-  try {
-    await recordUnderBudget();
-  } catch (error) {
-    // Requests charged before the started line would otherwise be on no ledger line (SF-1).
-    if (!started && budget.used() > 0) await noteUnstarted(error);
-    throw error;
-  } finally {
-    uninstallBudget();
-  }
+  // Requests charged before the started line would otherwise be on no ledger line (SF-1).
+  await underCampaignBudget(budget, recordUnderBudget, { onUnstarted: noteUnstarted });
 
   async function noteUnstarted(error) {
     try {
@@ -786,16 +816,11 @@ async function recordProduction() {
     }
   }
 
-  async function recordUnderBudget() {
-    if (programs.some(({ tokens: minted }) => minted)) await assertSignerReady(web, tokens);
-    await assertIgnored(privateRoot);
-    const runDir = join(
-      privateRoot,
-      `auth-tenant-blocking-production-${meta.startedAt.replaceAll(":", "")}`,
-    );
-    await mkdir(runDir, { recursive: true, mode: 0o700 });
+  async function recordUnderBudget(progress) {
     // A first SIGINT, SIGTERM or SIGHUP stops at the next step; the program then deletes its
-    // tenants and restores the switches as on any other stop. A later signal only says so.
+    // tenants and restores the switches as on any other stop. A later signal only says so. The
+    // handlers are in place before the signJwt wait, so a signal there is noted too (review-2
+    // Should-3).
     const controller = new AbortController();
     let signals = 0;
     const onSignal = (name) => {
@@ -811,16 +836,30 @@ async function recordProduction() {
     };
     const signalNames = ["SIGINT", "SIGTERM", "SIGHUP"];
     for (const name of signalNames) process.on(name, onSignal);
+    if (programs.some(({ tokens: minted }) => minted))
+      await assertSignerReady(web, tokens, controller.signal);
+    if (controller.signal.aborted)
+      throw new Error("stopped by a signal before the recording started");
+    await assertIgnored(privateRoot);
+    const runDir = join(
+      privateRoot,
+      `auth-tenant-blocking-production-${meta.startedAt.replaceAll(":", "")}`,
+    );
+    await mkdir(runDir, { recursive: true, mode: 0o700 });
     const ignoreWriteError = () => {};
     process.stdout.on("error", ignoreWriteError);
     process.stderr.on("error", ignoreWriteError);
     await assertProductionLock(ledger);
     assertLedgerAdmission(await readFile(ledger, "utf8"));
-    await appendFile(
+    await appendStartedLine(
       ledger,
-      `${JSON.stringify(productionStartedRow({ ts: new Date().toISOString(), gitSha: meta.sha, programs: meta.programs }))}\n`,
+      productionStartedRow({
+        ts: new Date().toISOString(),
+        gitSha: meta.sha,
+        programs: meta.programs,
+      }),
+      progress,
     );
-    started = true;
     const recordings = [];
     const secrets = [];
     let outcome = "recorded";

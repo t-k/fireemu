@@ -15,6 +15,7 @@ import {
   restoreSandbox,
   TASK_ID,
 } from "./auth-tenant-blocking/run.mjs";
+import { createRequestBudget, installBudget } from "./auth-tenant-blocking/budget.mjs";
 
 async function admitLocal(rows, suite = "tenant", budget = "1800") {
   const dir = await mkdtemp(join(tmpdir(), "atb-admission-"));
@@ -614,7 +615,7 @@ test("the signJwt preflight waits for a new binding to propagate, within a bound
   // Never admitted: the preflight stops after the last attempt and sends nothing more.
   waits.length = 0;
   const never = answers([403]);
-  await assert.rejects(waitForSigner(never.send, { sleep }), /HTTP 403 after 14 attempts/);
+  await assert.rejects(waitForSigner(never.send, { sleep }), /HTTP 403 after 20 attempts/);
   assert.equal(never.sent(), SIGNER_READY_ATTEMPTS);
   assert.equal(waits.length, SIGNER_READY_ATTEMPTS - 1);
   // Any other answer is not propagation: it stops at once.
@@ -644,7 +645,7 @@ test("a runner that stops before its started line still records what it charged 
   const row = unstartedRunnerRow({
     ts: "2026-09-27T12:00:00.000Z",
     budget: { total: 1800, cleanupReserve: 229, used: 45, refused: 0 },
-    error: new Error("signJwt preflight: HTTP 403 after 14 attempts"),
+    error: new Error("signJwt preflight: HTTP 403 after 20 attempts"),
   });
   assert.deepEqual(row, {
     ts: "2026-09-27T12:00:00.000Z",
@@ -656,7 +657,7 @@ test("a runner that stops before its started line still records what it charged 
     requests: 45,
     requestCountSemantics: "charged before each request; a gcloud token call counts 3",
     budget: { total: 1800, cleanupReserve: 229, used: 45, refused: 0 },
-    error: "signJwt preflight: HTTP 403 after 14 attempts",
+    error: "signJwt preflight: HTTP 403 after 20 attempts",
   });
   // A control line is neither a run nor an abort: it holds nothing and costs nothing.
   const ledger = `${JSON.stringify(row)}\n`;
@@ -666,4 +667,87 @@ test("a runner that stops before its started line still records what it charged 
     unstartedRunnerRow({ ts: row.ts, budget: row.budget, error: "x".repeat(500) }).error.length,
     200,
   );
+});
+
+test("the signJwt preflight is work, even inside a cleanup phase (review-2 Should-2)", async () => {
+  const { waitForSigner } = await import("./auth-tenant-blocking/run.mjs");
+  const { currentKind, withPhase } = await import("./auth-tenant-blocking/budget.mjs");
+  const kinds = [];
+  const send = async () => {
+    kinds.push(currentKind());
+    return kinds.length < 3 ? 403 : 200;
+  };
+  await withPhase("cleanup", () => waitForSigner(send, { sleep: async () => {} }));
+  assert.deepEqual(kinds, ["work", "work", "work"]);
+});
+
+test("a signal stops the signJwt wait before the next attempt (review-2 Should-3)", async () => {
+  const { waitForSigner } = await import("./auth-tenant-blocking/run.mjs");
+  const controller = new AbortController();
+  let sent = 0;
+  const send = async () => {
+    sent += 1;
+    // The signal arrives while the preflight waits for the binding.
+    setTimeout(() => controller.abort(), 20);
+    return 403;
+  };
+  const started = Date.now();
+  await assert.rejects(
+    waitForSigner(send, { signal: controller.signal, intervalMs: 60_000 }),
+    /stopped by a signal before the recording started/,
+  );
+  assert.equal(sent, 1);
+  assert.ok(Date.now() - started < 5_000, "the wait ended at the signal");
+  // An already stopped runner sends nothing.
+  await assert.rejects(waitForSigner(send, { signal: controller.signal }), /stopped by a signal/);
+  assert.equal(sent, 1);
+});
+
+test("the budget wiring notes only a runner that stopped before its started line (review-2 Should-2)", async () => {
+  const { appendStartedLine, underCampaignBudget } = await import("./auth-tenant-blocking/run.mjs");
+  const dir = await mkdtemp(join(tmpdir(), "atb-wiring-"));
+  const ledger = join(dir, "ledger.jsonl");
+  await writeFile(ledger, "");
+  const target = { fetch: async () => new Response("{}") };
+  const run = async (body) => {
+    const notes = [];
+    const budget = createRequestBudget({ total: 100, cleanupReserve: 10 });
+    const outcome = await underCampaignBudget(budget, body, {
+      target,
+      onUnstarted: async (error) => notes.push([budget.used(), error.message]),
+    }).then(
+      () => "done",
+      (error) => error.message,
+    );
+    return { notes, outcome, budget };
+  };
+  // Charged, then stopped before the started line: one note with what it charged.
+  const early = await run(async () => {
+    await target.fetch("https://iamcredentials.googleapis.com/");
+    await target.fetch("https://iamcredentials.googleapis.com/");
+    throw new Error("signJwt preflight: HTTP 403 after 20 attempts");
+  });
+  assert.deepEqual(early.notes, [[2, "signJwt preflight: HTTP 403 after 20 attempts"]]);
+  assert.match(early.outcome, /HTTP 403/);
+  // Stopped after the started line: the terminal line accounts for it, no note.
+  const late = await run(async (progress) => {
+    await target.fetch("https://identitytoolkit.googleapis.com/");
+    await appendStartedLine(ledger, { event: "started" }, progress);
+    throw new Error("program failed");
+  });
+  assert.deepEqual(late.notes, []);
+  assert.deepEqual(
+    (await readFile(ledger, "utf8"))
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line)),
+    [{ event: "started" }],
+  );
+  // Nothing charged: nothing to note. A finished run: no note.
+  assert.deepEqual((await run(async () => Promise.reject(new Error("local")))).notes, []);
+  assert.deepEqual((await run(async () => undefined)).notes, []);
+  // The budget is uninstalled on every path.
+  const again = createRequestBudget({ total: 100, cleanupReserve: 10 });
+  const restore = installBudget(again, target);
+  restore();
 });

@@ -206,7 +206,7 @@ test("a campaign names its budget, and one that cannot carry two passes is refus
   const { OAUTH_ATTEMPT_WEIGHT, SIGNER_READY_ATTEMPTS } =
     await import("./auth-tenant-blocking/budget.mjs");
   assert.equal(plan.minimumWork, 2 * (5 + steps) + SIGNER_READY_ATTEMPTS + OAUTH_ATTEMPT_WEIGHT);
-  assert.equal(plan.minimumWork, 493);
+  assert.equal(plan.minimumWork, 499);
   assert.throws(() => planCampaignBudget(PROGRAMS, undefined), /required/);
   assert.throws(() => planCampaignBudget(PROGRAMS, "2001"), /1\.\.2000/);
   assert.throws(() => planCampaignBudget(PROGRAMS, "1800x"), /whole number/);

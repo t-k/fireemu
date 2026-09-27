@@ -21,10 +21,11 @@ export const OAUTH_ATTEMPT_WEIGHT = 3;
 /** Forced owner-token refreshes (after a 401 in a cleanup) a campaign may make. */
 export const FORCED_REFRESH_CAP = 2;
 /**
- * signJwt preflight attempts while a new binding propagates (1 to 6 minutes on this project):
- * 30 s apart, only while signJwt answers 403 (review MF-1).
+ * signJwt preflight attempts while a new binding propagates (1 to 6.4 minutes on this project,
+ * sometimes over 7 by Google's account): 30 s apart, about 9.5 minutes, only while signJwt
+ * answers 403 (review MF-1, review-2 Should-1).
  */
-export const SIGNER_READY_ATTEMPTS = 14;
+export const SIGNER_READY_ATTEMPTS = 20;
 
 const fatal = (message) => Object.assign(new Error(message), { fatal: true });
 

@@ -1,5 +1,6 @@
 """Metadata pre/postflight is bounded, pinned and never saves credential bodies."""
 
+import hashlib
 import sys
 from pathlib import Path
 
@@ -15,11 +16,13 @@ import txn_sandbox_management as management
 NONCE = "0123456789abcdef0123456789abcdef"
 OWNER = "11111111222233334444555566667777"
 TOKEN = "test-access-token"
+RULESET = "projects/fireemu-oracle-sbx/rulesets/ruleset-a"
+RULES_SOURCE = "match /conf_txn/{id} { allow read, write: if true; }"
 BASELINE = {
     "projectNumber": "123456789",
     "databaseProjectionDigest": "a" * 64,
     "authConfigDigest": "b" * 64,
-    "rulesetName": "projects/fireemu-oracle-sbx/rulesets/ruleset-a",
+    "rulesSourceSha256": hashlib.sha256(RULES_SOURCE.encode()).hexdigest(),
     "credentialPrincipal": {
         "clientId": "client-a",
         "subject": "owner@example.com",
@@ -39,15 +42,19 @@ def answer(slot):
         "project": {"projectId": "fireemu-oracle-sbx", "projectNumber": "123456789"},
         "database": {"name": "projects/fireemu-oracle-sbx/databases/(default)"},
         "auth": {"key": "redacted"},
-        "rules": {
+        "rules-release": {
             "name": "projects/fireemu-oracle-sbx/releases/cloud.firestore",
-            "rulesetName": BASELINE["rulesetName"],
+            "rulesetName": RULESET,
+        },
+        "ruleset-source": {
+            "name": RULESET,
+            "source": {"files": [{"name": "firestore.rules", "content": RULES_SOURCE}]},
         },
     }[slot]
     return {"complete": True, "workerReaped": True, "status": 200, "body": body}
 
 
-def test_pre_and_postflight_use_exact_eight_management_slots(monkeypatch):
+def test_pre_and_postflight_use_exact_nine_management_slots(monkeypatch):
     monkeypatch.setattr(management.preflight, "verify_metadata", lambda slot, body, baseline: {"bodyDigest": slot})
     monkeypatch.setattr(management.preflight, "verify_token", lambda *args, **kwargs: object())
     seen = []
@@ -56,16 +63,18 @@ def test_pre_and_postflight_use_exact_eight_management_slots(monkeypatch):
         TOKEN,
         BASELINE,
         budget,
-        request_fn=lambda slot, token: seen.append(slot) or answer(slot),
+        request_fn=lambda slot, token, resource=None: seen.append((slot, resource)) or answer(slot),
     )
     first = session.preflight()
     second = session.postflight()
     assert seen == [
-        "oauth-tokeninfo", "project", "database", "auth", "rules",
-        "project", "database", "auth",
+        ("oauth-tokeninfo", None), ("project", None), ("database", None),
+        ("auth", None), ("rules-release", None), ("ruleset-source", RULESET),
+        ("project", None), ("database", None), ("auth", None),
     ]
-    assert budget.management == 8
-    assert first["rulesetName"] == BASELINE["rulesetName"]
+    assert budget.management == 9
+    assert first["rulesetName"] == RULESET
+    assert first["rulesSourceSha256"] == BASELINE["rulesSourceSha256"]
     assert second["project"] == "project"
     assert TOKEN not in repr(first) + repr(second)
 
@@ -74,7 +83,7 @@ def test_metadata_refusal_stops_later_slots(monkeypatch):
     monkeypatch.setattr(management.preflight, "verify_token", lambda *args, **kwargs: object())
     seen = []
 
-    def request(slot, token):
+    def request(slot, token, resource=None):
         seen.append(slot)
         result = answer(slot)
         if slot == "project":
@@ -89,13 +98,13 @@ def test_metadata_refusal_stops_later_slots(monkeypatch):
     assert budget.management == 2
 
 
-def test_rules_release_mismatch_stops_before_data(monkeypatch):
+def test_rules_release_and_source_mismatch_stop_before_data(monkeypatch):
     monkeypatch.setattr(management.preflight, "verify_token", lambda *args, **kwargs: object())
     monkeypatch.setattr(management.preflight, "verify_metadata", lambda slot, body, baseline: {"bodyDigest": slot})
 
-    def request(slot, token):
+    def request(slot, token, resource=None):
         result = answer(slot)
-        if slot == "rules":
+        if slot == "rules-release":
             result["body"]["rulesetName"] = "different"
         return result
 
@@ -104,4 +113,32 @@ def test_rules_release_mismatch_stops_before_data(monkeypatch):
         request_fn=request,
     )
     with pytest.raises(ValueError, match="rules"):
+        session.preflight()
+
+    def changed_source(slot, token, resource=None):
+        result = answer(slot)
+        if slot == "ruleset-source":
+            result["body"]["source"]["files"][0]["content"] = "allow read: if false;"
+        return result
+
+    session = management.MetadataSession(
+        TOKEN, BASELINE, contract.RequestBudget(plan.compile_plan(NONCE, OWNER)),
+        request_fn=changed_source,
+    )
+    with pytest.raises(ValueError, match="source"):
+        session.preflight()
+
+    def ambiguous_source(slot, token, resource=None):
+        result = answer(slot)
+        if slot == "ruleset-source":
+            result["body"]["source"]["files"].append(
+                {"name": "extra.rules", "content": RULES_SOURCE}
+            )
+        return result
+
+    session = management.MetadataSession(
+        TOKEN, BASELINE, contract.RequestBudget(plan.compile_plan(NONCE, OWNER)),
+        request_fn=ambiguous_source,
+    )
+    with pytest.raises(ValueError, match="ambiguous"):
         session.preflight()

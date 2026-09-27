@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import http.client
+import hashlib
 import json
 import re
 import sys
@@ -21,11 +22,11 @@ PROJECT = "fireemu-oracle-sbx"
 RULES_RELEASE = f"projects/{PROJECT}/releases/cloud.firestore"
 RULES_HOST = "firebaserules.googleapis.com"
 RULES_RESPONSE_LIMIT = 65_536
-PRE_SLOTS = ("oauth-tokeninfo", "project", "database", "auth", "rules")
+PRE_SLOTS = ("oauth-tokeninfo", "project", "database", "auth", "rules-release", "ruleset-source")
 POST_SLOTS = ("project", "database", "auth")
 
 
-def _default_request(slot, token):
+def _default_request(slot, token, resource=None):
     """Send one fixed management request without returning an unbounded body."""
     if slot == "oauth-tokeninfo":
         return _private_request("tokeninfo", token, deadline=12)
@@ -45,13 +46,19 @@ def _default_request(slot, token):
             "status": http.get("status"),
             "body": response.get("body") if isinstance(response, dict) else None,
         }
-    if slot != "rules":
+    if slot not in ("rules-release", "ruleset-source"):
         raise ValueError("management request outside the fixed slots")
+    if slot == "ruleset-source" and (
+        not isinstance(resource, str)
+        or re.fullmatch(rf"projects/{PROJECT}/rulesets/[A-Za-z0-9_-]+", resource) is None
+    ):
+        raise ValueError("Rules source needs the validated release ruleset")
+    name = RULES_RELEASE if slot == "rules-release" else resource
     connection = http.client.HTTPSConnection(RULES_HOST, timeout=12)
     try:
         connection.request(
             "GET",
-            f"/v1/{RULES_RELEASE}",
+            f"/v1/{name}",
             headers={"Authorization": "Bearer " + token, "x-goog-user-project": PROJECT},
         )
         response = connection.getresponse()
@@ -72,7 +79,7 @@ def _default_request(slot, token):
 
 
 class MetadataSession:
-    """One credential and eight fixed, pre-charged management slots."""
+    """One credential and nine fixed, pre-charged management slots."""
 
     def __init__(self, token, baseline, budget, *, request_fn=None):
         if not isinstance(token, str) or not 0 < len(token) <= 8192:
@@ -80,22 +87,19 @@ class MetadataSession:
         preflight.validate_frozen_baselines(baseline)
         preflight.validate_principal(baseline.get("credentialPrincipal"))
         preflight.validate_project_number(baseline.get("projectNumber"))
-        ruleset_name = baseline.get("rulesetName")
-        if (
-            not isinstance(ruleset_name, str)
-            or re.fullmatch(rf"projects/{PROJECT}/rulesets/[A-Za-z0-9_-]+", ruleset_name) is None
-        ):
-            raise ValueError("frozen Rules release ruleset required")
+        source_sha = baseline.get("rulesSourceSha256")
+        if not isinstance(source_sha, str) or re.fullmatch(r"[a-f0-9]{64}", source_sha) is None:
+            raise ValueError("frozen Rules source SHA-256 required")
         self._token = token
         self.baseline = baseline
         self.budget = budget
         self.request = request_fn or _default_request
         self._ready = False
 
-    def _read(self, slot):
+    def _read(self, slot, resource=None):
         self.budget.charge("management")
         sent = time.monotonic()
-        result = self.request(slot, self._token)
+        result = self.request(slot, self._token, resource)
         if (
             not isinstance(result, dict)
             or result.get("complete") is not True
@@ -115,19 +119,34 @@ class MetadataSession:
             )
             return {"verified": True, "requiredSeconds": 1600}
         body = result["body"]
-        if slot == "rules":
-            if (
-                body.get("name") != RULES_RELEASE
-                or body.get("rulesetName") != self.baseline["rulesetName"]
-            ):
-                raise ValueError("rules release differs from the frozen baseline")
-            return self.baseline["rulesetName"]
+        if slot == "rules-release":
+            ruleset = body.get("rulesetName")
+            if body.get("name") != RULES_RELEASE or not isinstance(ruleset, str) or re.fullmatch(
+                rf"projects/{PROJECT}/rulesets/[A-Za-z0-9_-]+", ruleset
+            ) is None:
+                raise ValueError("rules release has no valid Rules source")
+            return ruleset
+        if slot == "ruleset-source":
+            files = (body.get("source") or {}).get("files")
+            if body.get("name") != resource or not isinstance(files, list) or len(files) != 1:
+                raise ValueError("rules source is missing or ambiguous")
+            source = files[0]
+            if not isinstance(source, dict) or not isinstance(source.get("content"), str):
+                raise ValueError("rules source content is missing")
+            content = source["content"]
+            if "match /conf_txn/{id}" not in content or "allow read, write: if true;" not in content:
+                raise ValueError("rules source does not allow the transaction collection")
+            digest = hashlib.sha256(content.encode()).hexdigest()
+            if digest != self.baseline["rulesSourceSha256"]:
+                raise ValueError("rules source differs from the frozen baseline")
+            return digest
         return preflight.verify_metadata(slot, body, self.baseline)["bodyDigest"]
 
     def preflight(self):
-        observed = {slot: self._read(slot) for slot in PRE_SLOTS}
+        observed = {slot: self._read(slot) for slot in PRE_SLOTS[:-1]}
+        observed["rulesSourceSha256"] = self._read("ruleset-source", observed["rules-release"])
         self._ready = True
-        observed["rulesetName"] = observed.pop("rules")
+        observed["rulesetName"] = observed.pop("rules-release")
         return observed
 
     def postflight(self):

@@ -25,7 +25,7 @@ def packet(baseline, envelope, *, source="b" * 40, runner="c" * 64):
         "project": "fireemu-oracle-sbx",
         "database": "(default)",
         "recordings": 2,
-        "requestsPerRecording": 95,
+        "requestsPerRecording": 96,
         "estimatedUsdPerRecording": 0.05,
         "sourceCommit": source,
         "runnerSha256": runner,
@@ -59,7 +59,7 @@ def test_exact_packet_and_review_are_required_before_owner_gate(tmp_path):
         packet_relative="docs.local/reviews/packet.json",
         envelope_relative="docs.local/reviews/transaction-envelope.md",
     )
-    assert pins["requestsPerRecording"] == 95
+    assert pins["requestsPerRecording"] == 96
     assert pins["packetSha256"] == sha(packet_path.read_bytes())
     review_path = tmp_path / "review.md"
     review_path.write_text(
@@ -82,7 +82,7 @@ def test_packet_rejects_source_budget_and_baseline_drift(tmp_path):
     envelope_path.write_text("# Approved scope\n")
     packet_path = tmp_path / "packet.json"
     value = packet(baseline_path.read_bytes(), envelope_path.read_bytes())
-    value["requestsPerRecording"] = 96
+    value["requestsPerRecording"] = 97
     packet_path.write_text(json.dumps(value))
     with pytest.raises(ValueError, match="request"):
         cli.load_packet(
@@ -91,7 +91,7 @@ def test_packet_rejects_source_budget_and_baseline_drift(tmp_path):
             closure_sha256="d" * 64, packet_relative="docs.local/reviews/packet.json",
             envelope_relative="docs.local/reviews/transaction-envelope.md",
         )
-    value["requestsPerRecording"] = 95
+    value["requestsPerRecording"] = 96
     packet_path.write_text(json.dumps(value))
     baseline_path.write_bytes(b'{"changed":true}')
     with pytest.raises(ValueError, match="baseline"):

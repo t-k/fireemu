@@ -1,4 +1,4 @@
-"""Fail-closed local admission, append-only ledger and shared sandbox lock."""
+"""Fail-closed local admission, append-only ledger and project sandbox locks."""
 
 from __future__ import annotations
 
@@ -97,7 +97,7 @@ def _owner_approval(decisions, pins):
         raise ValueError("owner envelope request or reserve bound is invalid") from None
     packet_requests = pins["requestsPerRecording"] * 2
     packet_reserve = Decimal(str(pins["estimatedUsdPerRecording"])) * 2
-    if not (packet_requests <= requests <= 190 and packet_reserve <= reserve <= Decimal("0.10")):
+    if not (packet_requests <= requests <= 192 and packet_reserve <= reserve <= Decimal("0.10")):
         raise ValueError("owner envelope exceeds the runner or does not cover the packet")
 
 

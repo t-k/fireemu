@@ -87,8 +87,8 @@ def load_packet(
         or ".." in Path(value["envelopePath"]).parts
     ):
         raise ValueError("packet envelope identity or path differs")
-    if value["requestsPerRecording"] != 95:
-        raise ValueError("reviewed request bound must be exactly 95 per recording")
+    if value["requestsPerRecording"] != 96:
+        raise ValueError("reviewed request bound must be exactly 96 per recording")
     if value["estimatedUsdPerRecording"] != 0.05:
         raise ValueError("reviewed cost reservation must be US$0.05 per recording")
     if (
@@ -181,7 +181,7 @@ def main(argv=None):
             "closureSha256": sha256(CLOSURE.read_bytes()),
             "casesDigest": cases.cases_digest(),
             "planSourceDigest": plan_module.source_digest(),
-            "requestsPerRecording": 95,
+            "requestsPerRecording": 96,
             "estimatedUsdPerRecording": 0.05,
         }, sort_keys=True))
         return 0

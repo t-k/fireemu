@@ -32,6 +32,10 @@ def receipt(nonce=NONCE):
         "timing": "wall-clock",
         "nonce": nonce,
         "requestCount": 70,
+        "preflight": {
+            "rulesetName": "projects/fireemu-oracle-sbx/rulesets/ruleset-a",
+            "rulesSourceSha256": "a" * 64,
+        },
         "missingCases": [],
         "unrecovered": [],
         "openTransactions": [],
@@ -93,7 +97,9 @@ def test_budget_reserves_recovery_even_after_observation_limit():
         budget.charge("credential")
     with pytest.raises(ValueError, match="credential"):
         budget.charge("credential")
-    assert budget.total <= frozen_plan()["budget"]["requests"]
+    assert budget.management_limit == 9
+    assert budget.total_limit == frozen_plan()["budget"]["requests"] + 1
+    assert budget.total <= budget.total_limit
 
 
 def test_freeze_requires_two_complete_independent_matching_receipts():
@@ -112,6 +118,10 @@ def test_freeze_requires_two_complete_independent_matching_receipts():
     incomplete["complete"] = False
     with pytest.raises(ValueError, match="complete"):
         sandbox.freeze(first, incomplete)
+    changed_rules = receipt(second["nonce"])
+    changed_rules["preflight"]["rulesSourceSha256"] = "b" * 64
+    with pytest.raises(ValueError, match="Rules source"):
+        sandbox.freeze(first, changed_rules)
 
 
 def test_freeze_rejects_secret_marker_and_missing_case():

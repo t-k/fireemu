@@ -1,4 +1,4 @@
-"""Two recordings use one shared lock and never repeat an incomplete pass."""
+"""Two recordings use one project lock and never repeat an incomplete pass."""
 
 import json
 import sys

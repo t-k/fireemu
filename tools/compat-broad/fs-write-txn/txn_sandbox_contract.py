@@ -61,9 +61,11 @@ class RequestBudget:
             step["phase"] == "cleanup" for step in plan["operations"]
         ):
             raise ValueError("recovery request reserve is too small")
-        self.management_limit = budget["metadataRequests"]
+        if budget["metadataRequests"] != 8 or budget["credentialRequests"] != 2:
+            raise ValueError("legacy plan request slots differ from the frozen corpus")
+        self.management_limit = 9
         self.credential_limit = budget["credentialRequests"]
-        self.total_limit = budget["requests"]
+        self.total_limit = budget["requests"] + 1
         self.observation = 0
         self.recovery = 0
         self.management = 0
@@ -157,6 +159,11 @@ def freeze(first, second):
     """Freeze only two independent, complete recordings with equal semantics."""
     if first.get("nonce") == second.get("nonce"):
         raise ValueError("recordings reused a nonce")
+    for name in ("rulesetName", "rulesSourceSha256"):
+        left = (first.get("preflight") or {}).get(name)
+        right = (second.get("preflight") or {}).get(name)
+        if not isinstance(left, str) or left != right:
+            raise ValueError("recordings have different or missing Rules source")
     left, right = _project(first), _project(second)
     if left != right:
         raise ValueError("the two sandbox recordings differ")
@@ -168,5 +175,7 @@ def freeze(first, second):
         "projectId": PROJECT,
         "database": DATABASE,
         "nonces": [first["nonce"], second["nonce"]],
+        "rulesetName": first["preflight"]["rulesetName"],
+        "rulesSourceSha256": first["preflight"]["rulesSourceSha256"],
         "cases": left,
     }

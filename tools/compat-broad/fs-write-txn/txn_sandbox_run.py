@@ -1,4 +1,4 @@
-"""Two independent sandbox recordings under one shared lock and budget."""
+"""Two independent sandbox recordings under project locks and one budget."""
 
 from __future__ import annotations
 

@@ -22,7 +22,7 @@ PINS = {
     "sourceCommit": SOURCE,
     "runnerSha256": RUNNER,
     "packetPath": PATH,
-    "requestsPerRecording": 95,
+    "requestsPerRecording": 96,
     "estimatedUsdPerRecording": 0.05,
     "packetName": "expiry-retry-04",
     "envelopeId": "FS-TRANSACTION-expiry-retry-04-001",
@@ -39,13 +39,13 @@ LAST = {
 DECISION = (
     "- 2026-09-27 | FS-TRANSACTION | "
     f"packetSha256={PACKET}; sourceCommit={SOURCE}; runnerSha256={RUNNER}; "
-    "requestsPerRecording=95; estimatedUsdPerRecording=0.05; recordings=2 | "
+    "requestsPerRecording=96; estimatedUsdPerRecording=0.05; recordings=2 | "
     f"オーナー（直接の承認） | {PATH}\n"
 )
 ENVELOPE = (
     "- 2026-09-28 | FS-TRANSACTION expiry-retry-04 envelope | "
     "envelopeId=FS-TRANSACTION-expiry-retry-04-001; "
-    "project=fireemu-oracle-sbx/(default); maxRequests=190; reserveUsd=0.10; "
+    "project=fireemu-oracle-sbx/(default); maxRequests=192; reserveUsd=0.10; "
     "writes=owned-five-documents; iamConfig=none; retries=none; "
     "onStop=needs-recovery-lock-held | オーナー（直接の承認） | "
     "docs.local/reviews/transaction-envelope.md\n"
@@ -54,7 +54,7 @@ DELEGATED = (
     "- 2026-09-28 | FS-TRANSACTION expiry-retry-04 | decision=APPROVE; "
     "envelopeId=FS-TRANSACTION-expiry-retry-04-001; "
     f"packetSha256={PACKET}; sourceCommit={SOURCE}; runnerSha256={RUNNER}; "
-    "requestsPerRecording=95; estimatedUsdPerRecording=0.05; recordings=2 | "
+    "requestsPerRecording=96; estimatedUsdPerRecording=0.05; recordings=2 | "
     "Claude（委任。枠の内の承認し直し） | "
     f"{PATH}\n"
 )
@@ -117,7 +117,7 @@ def test_owner_envelope_and_delegated_exact_version_are_accepted_together():
         admission.verify_send_gates([LAST], NOW, DELEGATED, PINS)
     with pytest.raises(ValueError, match="envelope"):
         admission.verify_send_gates(
-            [LAST], NOW, ENVELOPE.replace("maxRequests=190", "maxRequests=191") + DELEGATED,
+            [LAST], NOW, ENVELOPE.replace("maxRequests=192", "maxRequests=193") + DELEGATED,
             PINS,
         )
 

@@ -1199,6 +1199,10 @@ async function makeHttpServer(functions, manifest) {
       },
     }),
   );
+  app.use((req, _res, next) => {
+    if (Buffer.isBuffer(req.body) && req.body.length === 0) req.body = {};
+    next();
+  });
   const major = Number.parseInt(
     String(expressRequire("express/package.json").version).split(".")[0],
     10,

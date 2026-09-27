@@ -104,6 +104,7 @@ class Echo(http.server.BaseHTTPRequestHandler):
 
     do_GET = do_POST
     do_PUT = do_POST
+    do_OPTIONS = do_POST
 
     def log_message(self, *_args):
         pass

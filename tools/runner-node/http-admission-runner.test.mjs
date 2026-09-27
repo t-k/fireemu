@@ -33,7 +33,7 @@ for(const kind of ['json','text','urlencoded','raw'])module.exports[kind]=opts=>
   if(res.destroyed||res.writableEnded)return;
   try{let b=Buffer.concat(chunks);if(req.headers['content-encoding']==='gzip')b=zlib.gunzipSync(b);
    if(b.length>32*1024*1024)throw Object.assign(Error('too big'),{status:413});
-   opts.verify(req,res,b);req.body=kind==='json'?JSON.parse(b.toString()||'{}'):kind==='text'?b.toString():kind==='urlencoded'?Object.fromEntries(new URLSearchParams(b.toString())):b;
+   opts.verify(req,res,b);req.body=kind==='json'?(b.length?JSON.parse(b.toString()):Buffer.alloc(0)):kind==='text'?b.toString():kind==='urlencoded'?Object.fromEntries(new URLSearchParams(b.toString())):b;
    req.parsed=true;next();
   }catch(e){next(e);}
  });};
@@ -112,6 +112,12 @@ for(const [ctype,body] of [['application/json','{"x":"日本語"}'],['text/plain
 }
 test('parser error and route mismatch do not strand reservations',{timeout:10000},async t=>{
  const f=await start(t);for(let i=0;i<8;i++){assert.equal((await f.call({body:'{'}).result).status,400);assert.equal((await f.call({name:'missing'}).result).status,404);}assert.equal((await f.call().result).status,200);
+});
+test('an empty HTTP request reaches the handler with an object body',{timeout:10000},async t=>{
+ const f=await start(t),response=await f.call({body:'',headers:{'content-length':'0'}}).result;
+ assert.equal(response.status,200);
+ assert.deepEqual(JSON.parse(response.text).body,{});
+ assert.equal(JSON.parse(response.text).rawBytes,0);
 });
 test('response closed while callback is running must not return count capacity',{timeout:30000},async t=>{
  const f=await start(t),held=[];for(let begin=0;begin<1024;begin+=64){for(let i=begin;i<begin+64;i++)held.push(f.call({headers:{'x-mode':'hold','x-tag':'r'+i},body:'{}'}));await f.wait(async()=> (await f.events()).filter(x=>x.event==='start').length>=begin+64,'batch');}

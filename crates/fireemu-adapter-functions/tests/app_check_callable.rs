@@ -1336,6 +1336,36 @@ async fn on_request_receives_the_original_app_check_field_without_classification
     h.stop().await;
 }
 
+#[tokio::test]
+async fn on_request_runs_for_cross_origin_options_and_post_without_proxy_cors_grant() {
+    let h = start(true).await;
+    let path = format!("/{PROJECT}/us-central1/echo/echo");
+    for method in ["OPTIONS", "POST"] {
+        let response = h
+            .raw_request_with_origin(
+                method,
+                h.addr,
+                &path,
+                if method == "POST" {
+                    br#"{"probe":"cors"}"#
+                } else {
+                    b""
+                },
+                Some("https://example.com"),
+            )
+            .await;
+        assert_eq!(response.status, 200, "{method}");
+        let body: Value = serde_json::from_slice(&response.body).expect("the handler replied");
+        assert_eq!(body["method"], method);
+        assert_eq!(echoed(&body, "origin"), vec!["https://example.com"]);
+        assert_eq!(
+            response_header(&response, "access-control-allow-origin"),
+            None
+        );
+    }
+    h.stop().await;
+}
+
 // ------------------------------------------------------------------------------------------
 // Scenarios 7 and 9: callable Auth integrity (`INV-APPCHECK-010`)
 // ------------------------------------------------------------------------------------------

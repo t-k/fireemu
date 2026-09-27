@@ -237,13 +237,9 @@ fn accepts_callable_stream(headers: &hyper::HeaderMap) -> bool {
         == Some("text/event-stream")
 }
 
-fn local_request_origin(headers: &hyper::HeaderMap) -> Result<Option<String>, Refusal> {
+fn request_origin(headers: &hyper::HeaderMap) -> Result<Option<String>, Refusal> {
     let origins = field_values(headers, "origin");
-    if origins.len() > 1
-        || origins
-            .first()
-            .is_some_and(|origin| !origin_is_local(origin))
-    {
+    if origins.len() > 1 {
         return Err(Box::new(simple(StatusCode::FORBIDDEN, "forbidden origin")));
     }
     Ok(origins.into_iter().next())
@@ -1229,25 +1225,10 @@ async fn respond_support_surface(
     }
 }
 
-fn buffered_response(
-    response: ProxiedResponse,
-    plain_http: bool,
-    origin: Option<&str>,
-) -> Response<OutBody> {
+fn buffered_response(response: ProxiedResponse) -> Response<OutBody> {
     let mut builder = Response::builder().status(response.status);
-    let answered_cors = response
-        .headers
-        .iter()
-        .any(|(name, _)| name.eq_ignore_ascii_case("access-control-allow-origin"));
     for (name, value) in response.headers {
         builder = builder.header(name, value);
-    }
-    if plain_http && !answered_cors {
-        if let Some(origin) = origin {
-            builder = builder
-                .header("access-control-allow-origin", origin)
-                .header("vary", "Origin");
-        }
     }
     builder
         .body(full(Bytes::from(response.body)))
@@ -1281,17 +1262,17 @@ async fn respond(
 ) -> Result<Response<OutBody>, std::io::Error> {
     let path = req.uri().path().to_owned();
     let query = req.uri().query().map(str::to_owned);
-    // Like the other ports: a page on another site must not drive this loopback runtime. The
-    // official emulator does let it -- its runtime runs with `enableCors: true`, which wraps
-    // every handler in `cors({origin: true})` and reflects any origin, so a page anywhere on
-    // the internet can POST to a developer's callable and read the result. That is the one
-    // documented divergence of this port, recorded in
-    // `conformance/fixtures/functions/http-routing-cors-and-timeouts.json`.
-    let origin = match local_request_origin(req.headers()) {
+    let origin = match request_origin(req.headers()) {
         Ok(origin) => origin,
         Err(refusal) => return Ok(*refusal),
     };
     if surface != HttpSurface::Functions {
+        if origin
+            .as_deref()
+            .is_some_and(|value| !origin_is_local(value))
+        {
+            return Ok(simple(StatusCode::FORBIDDEN, "forbidden origin"));
+        }
         return Ok(
             respond_support_surface(runtime, req, body_limit, surface, origin.as_deref()).await,
         );
@@ -1308,19 +1289,16 @@ async fn respond(
         return Ok(simple(StatusCode::BAD_REQUEST, &error));
     }
     let method = req.method().as_str().to_owned();
-    // The CORS the official emulator's `enableCors` gives an `onRequest` function, for the
-    // loopback origins this port serves. A callable answers its own preflight (v2 `onCall`
-    // enables CORS itself, and the recorded oracle shows `POST` where an `onRequest` shows the
-    // whole method list), so a callable's request is forwarded untouched.
     let (callable, plain_http, streaming_callable) = http_trigger_kinds(&runtime, function);
+    if !plain_http
+        && origin
+            .as_deref()
+            .is_some_and(|value| !origin_is_local(value))
+    {
+        return Ok(simple(StatusCode::FORBIDDEN, "forbidden origin"));
+    }
     let streaming = streaming_callable && accepts_callable_stream(req.headers());
-    if let Some(answer) = function_preflight(
-        callable,
-        plain_http,
-        &method,
-        req.headers(),
-        origin.as_deref(),
-    ) {
+    if let Some(answer) = function_preflight(callable, &method, req.headers()) {
         return Ok(answer);
     }
     let headers: Vec<(String, String)> = req
@@ -1357,7 +1335,7 @@ async fn respond(
             .await
         {
             Ok(crate::runtime::HttpStreamStart::Buffered(response)) => {
-                Ok(buffered_response(response, plain_http, origin.as_deref()))
+                Ok(buffered_response(response))
             }
             Ok(crate::runtime::HttpStreamStart::Streaming(response)) => {
                 Ok(streaming_response(response))
@@ -1372,7 +1350,7 @@ async fn respond(
         .invoke_http(&target, &method, &path_and_query, &headers, &body)
         .await
     {
-        Ok(response) => Ok(buffered_response(response, plain_http, origin.as_deref())),
+        Ok(response) => Ok(buffered_response(response)),
         // A `dropConnection` fault: the connection closes without a response.
         Err(error) if error == crate::runtime::DROP_CONNECTION => Err(std::io::Error::other(error)),
         Err(error) => Ok(simple(StatusCode::BAD_GATEWAY, &error)),
@@ -1392,48 +1370,16 @@ fn field_values(headers: &hyper::HeaderMap, name: &str) -> Vec<String> {
         .collect()
 }
 
-/// The preflight answer `cors({origin: true})` produces, which is what the official
-/// emulator's `enableCors` debug feature puts in front of every handler.
-///
-/// Recorded from the oracle: `204`, the origin reflected, the full default method list, the
-/// requested headers echoed, and `Vary: Origin, Access-Control-Request-Headers`. The handler
-/// is not invoked.
-fn preflight_answer(origin: &str, headers: &hyper::HeaderMap) -> Response<OutBody> {
-    let mut builder = Response::builder()
-        .status(StatusCode::NO_CONTENT)
-        .header("access-control-allow-origin", origin)
-        .header(
-            "access-control-allow-methods",
-            "GET,HEAD,PUT,PATCH,POST,DELETE",
-        )
-        .header("vary", "Origin, Access-Control-Request-Headers")
-        .header("content-length", "0");
-    if let Some(requested) = headers
-        .get("access-control-request-headers")
-        .and_then(|v| v.to_str().ok())
-    {
-        builder = builder.header("access-control-allow-headers", requested);
-    }
-    builder
-        .body(full(Bytes::new()))
-        .unwrap_or_else(|_| Response::new(full(Bytes::new())))
-}
-
 fn function_preflight(
     callable: bool,
-    plain_http: bool,
     method: &str,
     headers: &hyper::HeaderMap,
-    origin: Option<&str>,
 ) -> Option<Response<OutBody>> {
     if callable && method == "OPTIONS" {
         return Some(
             callable_preflight(headers)
                 .unwrap_or_else(|| simple(StatusCode::FORBIDDEN, "forbidden callable preflight")),
         );
-    }
-    if plain_http && method == "OPTIONS" && headers.contains_key("access-control-request-method") {
-        return origin.map(|origin| preflight_answer(origin, headers));
     }
     None
 }

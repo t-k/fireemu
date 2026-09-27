@@ -1,0 +1,363 @@
+{
+  "schemaVersion": 1,
+  "parent": "AUTH-FEDERATION",
+  "parentStatus": "IMPLEMENTING",
+  "oracleTrack": "disposable-sandbox",
+  "scopeDecisions": [
+    {
+      "id": "F1",
+      "decision": "Observation is through the REST surfaces (Identity Toolkit, Secure Token, Admin v2). SDK paths only where a row needs them, within AUTH-CONFIG-SDK K1 (Admin SDK for Node, Web SDK in Node).",
+      "decidedBy": "lane",
+      "decidedOn": "2026-09-27"
+    },
+    {
+      "id": "F2",
+      "decision": "O1: the external IdP boundary is observed with IdPs the lane controls on fireemu-oracle-idp. The OIDC id_token flow uses an issuer whose discovery document and public JWKS are deployed to the sandbox's Firebase Hosting, with ID tokens signed locally. SAML uses a locally made certificate and locally signed responses (SP-initiated). Private keys, API keys and project numbers never enter git; provider configurations and the Hosting content are deleted after each campaign. Owner ledger 2026-09-27 (AUTH-FEDERATION, O1 to O6).",
+      "decidedBy": "owner (t-k)",
+      "decidedOn": "2026-09-27"
+    },
+    {
+      "id": "F3",
+      "decision": "O2: the google.com sign-in success path (a sandbox service account's generateIdToken) is out of scope; google.com is observed through its configuration and its refusals only. Owner ledger 2026-09-27 (AUTH-FEDERATION, O1 to O6).",
+      "decidedBy": "owner (t-k)",
+      "decidedOn": "2026-09-27"
+    },
+    {
+      "id": "F4",
+      "decision": "O3: the OIDC code flow (returnRefreshToken, oauthRefreshToken, oauthAuthorizationCode) is deferred to a separate budgeted stage; it needs a token endpoint service on the sandbox. Owner ledger 2026-09-27 (AUTH-FEDERATION, O1 to O6).",
+      "decidedBy": "owner (t-k)",
+      "decidedOn": "2026-09-27"
+    },
+    {
+      "id": "F5",
+      "decision": "Third-party providers (facebook.com, apple.com, twitter.com, github.com, microsoft.com, yahoo.com, playgames.google.com) are out of scope for their success paths, which need real accounts; their configuration and refusals are observed. The browser behaviour of /__/auth/handler is out of scope. Owner ledger 2026-09-27 (AUTH-FEDERATION, O1 to O6).",
+      "decidedBy": "owner (t-k)",
+      "decidedOn": "2026-09-27"
+    },
+    {
+      "id": "F6",
+      "decision": "O4: the strict profile verifies signed assertions of configured providers: OIDC ID tokens with keys given at startup (the auth.customTokenSigners pattern: a JWKS per issuer) and SAML responses with the provider's idpCertificates, with no network fetch from the issuer; strict refuses the unsigned fixture assertions. The emulator profile keeps the official emulator's fixture IdP and adds no refusal. Owner ledger 2026-09-27 (AUTH-FEDERATION, O1 to O6).",
+      "decidedBy": "owner (t-k)",
+      "decidedOn": "2026-09-27"
+    },
+    {
+      "id": "F7",
+      "decision": "O5: verifying signed SAML XML needs XML canonicalization and XMLDSig; whether that is feasible on the sandbox is checked first, and adding a crate for it is a new owner decision at that point. Owner ledger 2026-09-27 (AUTH-FEDERATION, O1 to O6).",
+      "decidedBy": "owner (t-k)",
+      "decidedOn": "2026-09-27"
+    },
+    {
+      "id": "F8",
+      "decision": "O6: tenant IdP sign-in, tenant provider configuration and blocking functions on IdP sign-in belong to AUTH-TENANT-BLOCKING (as A8, C4, K10); MFA after an IdP sign-in belongs to AUTH-MFA; Admin linkProviderUserInfo and deleteProvider are verified in AUTH-ACCOUNT. Owner ledger 2026-09-27 (AUTH-FEDERATION, O1 to O6).",
+      "decidedBy": "owner (t-k)",
+      "decidedOn": "2026-09-27"
+    },
+    {
+      "id": "F9",
+      "decision": "Budget: US$10 per observation task, as for the other sandbox lanes. Owner ledger 2026-09-27 (AUTH-FEDERATION, O1 to O6).",
+      "decidedBy": "owner (t-k)",
+      "decidedOn": "2026-09-27"
+    },
+    {
+      "id": "F10",
+      "decision": "Moved here: client signInWithIdp sign-in and linking (AUTH-ACCOUNT A4) and the IdP session claims (AUTH-CREDENTIAL C7).",
+      "decidedBy": "lane",
+      "decidedOn": "2026-09-27"
+    }
+  ],
+  "conditions": [
+    {
+      "conditionId": "AUTH-FEDERATION/provider-config-oidc",
+      "source": "docs/compatibility/ip-fs-production-compatibility.md#feature-group-status",
+      "recipeIds": [
+        "auth-federation/provider-config/oidc"
+      ],
+      "configProjections": [
+        "strict"
+      ],
+      "status": "PENDING_CORPUS",
+      "note": "Project oauthIdpConfigs create, get, list (paging), update by mask and delete: the ID rule, required members, the issuer form, the code flow and its secret, the response type, how clientSecret is returned, duplicates and missing resources."
+    },
+    {
+      "conditionId": "AUTH-FEDERATION/provider-config-saml",
+      "source": "docs/compatibility/ip-fs-production-compatibility.md#feature-group-status",
+      "recipeIds": [
+        "auth-federation/provider-config/saml"
+      ],
+      "configProjections": [
+        "strict"
+      ],
+      "status": "PENDING_CORPUS",
+      "note": "Project inboundSamlConfigs create, get, update by mask and delete: certificate PEM validation, spConfig, signRequest and the spCertificates the service adds."
+    },
+    {
+      "conditionId": "AUTH-FEDERATION/provider-config-default-supported",
+      "source": "docs/compatibility/ip-fs-production-compatibility.md#feature-group-status",
+      "recipeIds": [
+        "auth-federation/provider-config/default-supported"
+      ],
+      "configProjections": [
+        "strict"
+      ],
+      "status": "PENDING_CORPUS",
+      "note": "Project defaultSupportedIdpConfigs create by idpId, get, list, update by mask and delete, and defaultSupportedIdps.list. A default IdP the program writes must be absent at its start."
+    },
+    {
+      "conditionId": "AUTH-FEDERATION/provider-enablement",
+      "source": "docs/compatibility/ip-fs-production-compatibility.md#feature-group-status",
+      "recipeIds": [
+        "auth-federation/third-party-refusals",
+        "auth-federation/provider-enablement"
+      ],
+      "configProjections": [
+        "strict"
+      ],
+      "status": "PENDING_CORPUS",
+      "note": "signInWithIdp and createAuthUri for an unconfigured, a disabled and an enabled provider (OPERATION_NOT_ALLOWED, INVALID_PROVIDER_ID and the like)."
+    },
+    {
+      "conditionId": "AUTH-FEDERATION/oidc-token-verification",
+      "source": "docs/compatibility/ip-fs-production-compatibility.md#feature-group-status",
+      "recipeIds": [
+        "auth-federation/oidc/verification"
+      ],
+      "configProjections": [
+        "strict"
+      ],
+      "status": "PENDING_CORPUS",
+      "note": "A controlled OIDC IdP (O1): ID tokens signed with the run's key and published through the sandbox's Hosting; the signature, iss, aud (clientId), exp, iat, nbf, alg and kid matrix and malformed tokens."
+    },
+    {
+      "conditionId": "AUTH-FEDERATION/oidc-nonce",
+      "source": "docs/compatibility/ip-fs-production-compatibility.md#feature-group-status",
+      "recipeIds": [
+        "auth-federation/oidc/nonce"
+      ],
+      "configProjections": [
+        "strict"
+      ],
+      "status": "PENDING_CORPUS",
+      "note": "The nonce: absent and present, matching and not (the SHA-256 of the raw nonce in postBody)."
+    },
+    {
+      "conditionId": "AUTH-FEDERATION/oidc-replay",
+      "source": "docs/compatibility/ip-fs-production-compatibility.md#feature-group-status",
+      "recipeIds": [
+        "auth-federation/oidc/replay"
+      ],
+      "configProjections": [
+        "strict"
+      ],
+      "status": "PENDING_CORPUS",
+      "note": "The same ID token used twice."
+    },
+    {
+      "conditionId": "AUTH-FEDERATION/saml-response-verification",
+      "source": "docs/compatibility/ip-fs-production-compatibility.md#feature-group-status",
+      "recipeIds": [
+        "auth-federation/saml/verification"
+      ],
+      "configProjections": [
+        "strict"
+      ],
+      "status": "PENDING_CORPUS",
+      "note": "A controlled SAML IdP (O1): responses signed with the run's certificate; the signature placement, Audience, Destination and Recipient, NotOnOrAfter, InResponseTo and an IdP-initiated response. Subject to the O5 feasibility check; if production takes no locally signed response, the owner is asked to move this condition out of scope."
+    },
+    {
+      "conditionId": "AUTH-FEDERATION/saml-nameid-and-attributes",
+      "source": "docs/compatibility/ip-fs-production-compatibility.md#feature-group-status",
+      "recipeIds": [
+        "auth-federation/saml/attributes"
+      ],
+      "configProjections": [
+        "strict"
+      ],
+      "status": "PENDING_CORPUS",
+      "note": "NameID formats and the email of the ID token; the shape of firebase.sign_in_attributes, multi-valued attributes included. Subject to O5 as saml-response-verification."
+    },
+    {
+      "conditionId": "AUTH-FEDERATION/create-auth-uri-provider",
+      "source": "docs/compatibility/ip-fs-production-compatibility.md#feature-group-status",
+      "recipeIds": [
+        "auth-federation/create-auth-uri"
+      ],
+      "configProjections": [
+        "strict"
+      ],
+      "status": "PENDING_CORPUS",
+      "note": "createAuthUri of a configured OIDC and SAML provider: authUri, sessionId and providerId."
+    },
+    {
+      "conditionId": "AUTH-FEDERATION/request-uri-session",
+      "source": "docs/compatibility/ip-fs-production-compatibility.md#feature-group-status",
+      "recipeIds": [
+        "auth-federation/request-uri"
+      ],
+      "configProjections": [
+        "strict"
+      ],
+      "status": "PENDING_CORPUS",
+      "note": "How requestUri, sessionId and continueUri are bound: a mismatch, a missing and another session."
+    },
+    {
+      "conditionId": "AUTH-FEDERATION/idp-new-account",
+      "source": "docs/compatibility/ip-fs-production-compatibility.md#feature-group-status",
+      "recipeIds": [
+        "auth-federation/accounts/new"
+      ],
+      "configProjections": [
+        "strict"
+      ],
+      "status": "PENDING_CORPUS",
+      "note": "An account an IdP sign-in creates: isNewUser, emailVerified, profile members, providerUserInfo and the answer members."
+    },
+    {
+      "conditionId": "AUTH-FEDERATION/idp-returning-account",
+      "source": "docs/compatibility/ip-fs-production-compatibility.md#feature-group-status",
+      "recipeIds": [
+        "auth-federation/accounts/returning"
+      ],
+      "configProjections": [
+        "strict"
+      ],
+      "status": "PENDING_CORPUS",
+      "note": "A second sign-in with the same raw ID."
+    },
+    {
+      "conditionId": "AUTH-FEDERATION/collision-verified-email",
+      "source": "docs/compatibility/ip-fs-production-compatibility.md#feature-group-status",
+      "recipeIds": [
+        "auth-federation/collision/verified"
+      ],
+      "configProjections": [
+        "strict"
+      ],
+      "status": "PENDING_CORPUS",
+      "note": "A verified IdP email that an existing account holds (linking, emailRecycled)."
+    },
+    {
+      "conditionId": "AUTH-FEDERATION/collision-unverified-email",
+      "source": "docs/compatibility/ip-fs-production-compatibility.md#feature-group-status",
+      "recipeIds": [
+        "auth-federation/collision/unverified"
+      ],
+      "configProjections": [
+        "strict"
+      ],
+      "status": "PENDING_CORPUS",
+      "note": "An unverified IdP email that an existing account holds (needConfirmation, verifiedProvider)."
+    },
+    {
+      "conditionId": "AUTH-FEDERATION/link-with-id-token",
+      "source": "docs/compatibility/ip-fs-production-compatibility.md#feature-group-status",
+      "recipeIds": [
+        "auth-federation/link"
+      ],
+      "configProjections": [
+        "strict"
+      ],
+      "status": "PENDING_CORPUS",
+      "note": "Linking with an ID token: FEDERATED_USER_ID_ALREADY_LINKED and EMAIL_EXISTS, with and without returnIdpCredential."
+    },
+    {
+      "conditionId": "AUTH-FEDERATION/duplicate-email-mode",
+      "source": "docs/compatibility/ip-fs-production-compatibility.md#feature-group-status",
+      "recipeIds": [
+        "auth-federation/duplicate-email"
+      ],
+      "configProjections": [
+        "strict"
+      ],
+      "status": "PENDING_CORPUS",
+      "note": "IdP sign-in with signIn.allowDuplicateEmails on and off (the only config path this parent writes)."
+    },
+    {
+      "conditionId": "AUTH-FEDERATION/pending-token",
+      "source": "docs/compatibility/ip-fs-production-compatibility.md#feature-group-status",
+      "recipeIds": [
+        "auth-federation/pending-token"
+      ],
+      "configProjections": [
+        "strict"
+      ],
+      "status": "PENDING_CORPUS",
+      "note": "pendingToken reuse, lifetime and whether it is single-use."
+    },
+    {
+      "conditionId": "AUTH-FEDERATION/idp-claims-sign-in",
+      "source": "docs/compatibility/ip-fs-production-compatibility.md#feature-group-status",
+      "recipeIds": [
+        "auth-federation/claims/sign-in"
+      ],
+      "configProjections": [
+        "strict"
+      ],
+      "status": "PENDING_CORPUS",
+      "note": "Moved from AUTH-CREDENTIAL C7: the ID token of an IdP sign-in: firebase.identities, sign_in_provider and sign_in_attributes."
+    },
+    {
+      "conditionId": "AUTH-FEDERATION/idp-claims-refresh",
+      "source": "docs/compatibility/ip-fs-production-compatibility.md#feature-group-status",
+      "recipeIds": [
+        "auth-federation/claims/refresh"
+      ],
+      "configProjections": [
+        "strict"
+      ],
+      "status": "PENDING_CORPUS",
+      "note": "Moved from AUTH-CREDENTIAL C7: the claims after a Secure Token refresh (whether sign_in_attributes survives)."
+    },
+    {
+      "conditionId": "AUTH-FEDERATION/idp-claims-session-cookie",
+      "source": "docs/compatibility/ip-fs-production-compatibility.md#feature-group-status",
+      "recipeIds": [
+        "auth-federation/claims/session-cookie"
+      ],
+      "configProjections": [
+        "strict"
+      ],
+      "status": "PENDING_CORPUS",
+      "note": "Moved from AUTH-CREDENTIAL C7: the claims of session cookies made from the original and the refreshed ID token."
+    },
+    {
+      "conditionId": "AUTH-FEDERATION/third-party-refusals",
+      "source": "docs/compatibility/ip-fs-production-compatibility.md#feature-group-status",
+      "recipeIds": [
+        "auth-federation/third-party-refusals"
+      ],
+      "configProjections": [
+        "strict"
+      ],
+      "status": "PENDING_CORPUS",
+      "note": "Providers this parent does not sign in with (F3, F5): malformed and synthetic credentials for google.com and the other built-in providers, and their configuration."
+    },
+    {
+      "conditionId": "AUTH-FEDERATION/final-artifact-regression",
+      "source": "docs/compatibility/ip-fs-production-compatibility.md#feature-group-status",
+      "recipeIds": [
+        "auth-federation",
+        "auth-account",
+        "auth-credential",
+        "auth-action",
+        "auth-config-sdk"
+      ],
+      "configProjections": [
+        "strict"
+      ],
+      "status": "PENDING_CORPUS",
+      "note": "Every AUTH-FEDERATION row and the AUTH-ACCOUNT, AUTH-CREDENTIAL, AUTH-ACTION and AUTH-CONFIG-SDK regressions on one artifact, with the workspace tests and clippy."
+    },
+    {
+      "conditionId": "AUTH-FEDERATION/closure-review",
+      "source": "docs/compatibility/ip-fs-production-compatibility.md#feature-group-status",
+      "recipeIds": [
+        "auth-federation"
+      ],
+      "configProjections": [
+        "strict"
+      ],
+      "status": "PENDING_CORPUS",
+      "note": "An independent closure review and a safety review of the final artifact (no cargo-mutants in the reviews; the lane's own mutation evidence is checked)."
+    }
+  ]
+}

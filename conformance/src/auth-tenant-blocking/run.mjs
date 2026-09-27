@@ -48,6 +48,15 @@ import { customTokenClaims } from "../auth-credential/tokens.mjs";
 import { MFA_CONFIGS } from "../auth-mfa/guard.mjs";
 import { BLOCKING_PROGRAMS } from "./blocking-corpus.mjs";
 import { PROGRAMS as TENANT_PROGRAMS } from "./corpus.mjs";
+import {
+  FORCED_REFRESH_CAP,
+  OAUTH_ATTEMPT_WEIGHT,
+  chargeExternal,
+  createRequestBudget,
+  installBudget,
+  planCampaignBudget,
+  withPhase,
+} from "./budget.mjs";
 import { createDeployer } from "./deploy.mjs";
 import { guardTenantRequest, isHarnessDisplayName, validateTenantCorpus } from "./guard.mjs";
 import { assertNoOpaqueValue } from "./harness.mjs";
@@ -215,6 +224,8 @@ async function gitSha() {
 }
 
 async function adminToken() {
+  // A token call is charged before it runs, with its declared weight (budget.mjs, C4).
+  chargeExternal(OAUTH_ATTEMPT_WEIGHT);
   const { stdout } = await execFileAsync("gcloud", [
     "auth",
     "application-default",
@@ -307,6 +318,7 @@ async function productionContext(run, web, tokens) {
   let token = await adminToken();
   tokens.push(token);
   let fetchedAt = Date.now();
+  let forced = 0;
   const target = {
     kind: "production",
     apiKey: web.apiKey,
@@ -315,6 +327,9 @@ async function productionContext(run, web, tokens) {
     projectNumber: web.projectNumber,
     async refresh({ force = false } = {}) {
       if (!force && Date.now() - fetchedAt < 30 * 60_000) return;
+      // Forced refreshes are counted in the cleanup reserve, so they are capped (budget.mjs).
+      if (force && (forced += 1) > FORCED_REFRESH_CAP)
+        throw Object.assign(new Error("forced owner-token refreshes exhausted"), { fatal: true });
       token = await adminToken();
       tokens.push(token);
       fetchedAt = Date.now();
@@ -334,7 +349,8 @@ async function recordOnce(programs, run, web, { signal, tokens }) {
     signal,
     log: (line) => console.log(line),
   });
-  const after = await prepareProject(ctx, { apply: false });
+  // The read-backs after a pass draw on the cleanup reserve (budget.mjs `cleanupReserve`).
+  const after = await withPhase("cleanup", () => prepareProject(ctx, { apply: false }));
   return { ...out, harnessRequests: out.harnessRequests + preparation + after };
 }
 
@@ -663,8 +679,12 @@ async function admitLocal() {
   const ledger = process.env.FIREEMU_SANDBOX_LEDGER;
   if (!ledger || !existsSync(ledger)) throw new Error("the shared sandbox ledger is required");
   assertLedgerAdmission(await readFile(ledger, "utf8"));
-  validateTenantCorpus(selectedPrograms());
-  console.log("local ledger, task budget, and corpus admission passed without external requests");
+  const programs = selectedPrograms();
+  validateTenantCorpus(programs);
+  const plan = planCampaignBudget(programs, process.env.FIREEMU_AUTH_TENANT_REQUEST_BUDGET);
+  console.log(
+    `local ledger, task budget, corpus and request budget (${JSON.stringify(plan)}) admission passed without external requests`,
+  );
 }
 
 async function recordProduction() {
@@ -679,6 +699,10 @@ async function recordProduction() {
   assertLedgerAdmission(ledgerText);
   const programs = selectedPrograms();
   const corpusRequests = validateTenantCorpus(programs);
+  // One budget for every external request of the campaign, refused before anything is sent when
+  // it cannot carry two passes (issue auth-tenant-campaign-total-request-cap).
+  const plan = planCampaignBudget(programs, process.env.FIREEMU_AUTH_TENANT_REQUEST_BUDGET);
+  const budget = createRequestBudget(plan);
   const meta = {
     sha: await gitSha(),
     harness: await harnessDigest({ blocking: SUITE === "blocking" }),
@@ -688,182 +712,197 @@ async function recordProduction() {
   };
   const web = await sandboxWebConfig();
   const tokens = [];
-  if (programs.some(({ tokens: minted }) => minted)) await assertSignerReady(web, tokens);
-  await assertIgnored(privateRoot);
-  const runDir = join(
-    privateRoot,
-    `auth-tenant-blocking-production-${meta.startedAt.replaceAll(":", "")}`,
-  );
-  await mkdir(runDir, { recursive: true, mode: 0o700 });
-  // A first SIGINT, SIGTERM or SIGHUP stops at the next step; the program then deletes its
-  // tenants and restores the switches as on any other stop. A later signal only says so.
-  const controller = new AbortController();
-  let signals = 0;
-  const onSignal = (name) => {
-    signals += 1;
-    if (signals === 1) {
-      console.error(`${name}: stopping; the current program deletes its tenants and restores`);
-      controller.abort();
-    } else {
-      console.error(`${name}: cleanup is running; wait for it (restore-sandbox restores by hand)`);
-    }
-  };
-  const signalNames = ["SIGINT", "SIGTERM", "SIGHUP"];
-  for (const name of signalNames) process.on(name, onSignal);
-  const ignoreWriteError = () => {};
-  process.stdout.on("error", ignoreWriteError);
-  process.stderr.on("error", ignoreWriteError);
-  await assertProductionLock(ledger);
-  assertLedgerAdmission(await readFile(ledger, "utf8"));
-  await appendFile(
-    ledger,
-    `${JSON.stringify(productionStartedRow({ ts: new Date().toISOString(), gitSha: meta.sha, programs: meta.programs }))}\n`,
-  );
-  const recordings = [];
-  const secrets = [];
-  let outcome = "recorded";
-  let error;
-  let switchesAfter;
-  let fixture;
-  let deployer;
-  let publicDeadline;
+  const uninstallBudget = installBudget(budget);
   try {
-    if (SUITE === "blocking") {
-      // The fixture is deployed once for both recordings and removed below whenever a
-      // deployment started (TB1; pre-send review MF-1).
-      deployer = createDeployer({
-        project: SANDBOX_PROJECT,
-        number: web.projectNumber,
-        token: async () => {
-          const token = await adminToken();
-          tokens.push(token);
-          return token;
-        },
-        log: (line) => console.log(line),
-      });
-      fixture = { deployed: false, cli: await deployer.cliVersion() };
-      fixture.preflight = await deployer.preflight();
-      // The services become public during the deployment: the recording stops in time to remove
-      // them within the hour TB1 allows, counted from the start of the deployment (SF-2, SF-C2).
-      publicDeadline = setTimeout(() => controller.abort(), PUBLIC_MINUTES * 60_000);
-      await deployer.deploy(FIXTURE_SOURCE, join(runDir, "function-build"));
-      fixture.deployed = true;
-      if (controller.signal.aborted) throw new Error("stopped by a signal after the deployment");
-      fixture.registered = await deployer.verifyRegistered();
-      fixture.invokers = await deployer.invokers();
-      console.log(`fixture registered: ${JSON.stringify(fixture)}`);
-      if (!Object.values(fixture.invokers).every((admits) => admits === true))
-        throw new Error("Identity Platform cannot call every fixture function; not recording");
-    }
-    for (const offset of [0, 1]) {
-      const { secrets: seen, ...recording } = await recordOnce(
-        programs,
-        String(Date.now() + offset),
-        web,
-        { signal: controller.signal, tokens },
-      );
-      secrets.push(...seen);
-      recordings.push(recording);
-      await writeFile(join(runDir, `recording-${offset + 1}.json`), JSON.stringify(recording), {
-        mode: 0o600,
-      });
-    }
-  } catch (caught) {
-    outcome = controller.signal.aborted
-      ? "aborted-signal"
-      : caught.fatal
-        ? "aborted-fatal"
-        : "aborted";
-    error = String(caught.message ?? caught);
-    if (caught.partial) recordings.push(caught.partial);
-    secrets.push(...(caught.secrets ?? []));
-    switchesAfter = await readSwitches(web, tokens);
-    console.error(`switches after the stop: ${JSON.stringify(switchesAfter)}`);
-  }
-  if (deployer) {
-    // Removal runs on every path once a deployment started, a signal and a failed deployment
-    // included; before that it removes nothing.
-    clearTimeout(publicDeadline);
-    fixture.repository = deployer.repositoryChange() ?? "unchanged";
-    try {
-      fixture.removed = await deployer.remove(join(runDir, "function-build"));
-    } catch (caught) {
-      fixture.removed = false;
-      outcome = "aborted-fatal";
-      error = `${error ? `${error}; ` : ""}fixture removal: ${caught.message ?? caught}`;
-      console.error(`FIXTURE NOT REMOVED: ${caught.message ?? caught}`);
-    }
-    fixture.requests = deployer.requests();
-  }
-  await writeFile(
-    join(runDir, "meta.json"),
-    JSON.stringify({ ...meta, outcome, error, switchesAfter }, null, 2),
-    { mode: 0o600 },
-  );
-  const requests = recordings.reduce((n, r) => n + r.requests + r.harnessRequests, 0);
-  const tenantsCreated = recordings.reduce((n, r) => n + (r.tenantsCreated ?? 0), 0);
-  const tenantsDeleted = recordings.reduce((n, r) => n + (r.tenantsDeleted ?? 0), 0);
-  // Every project setting a recording switches and restores (sandbox-oracles.md: record every
-  // change in the ledger line).
-  const switched = [
-    "multiTenant.allowTenants",
-    ...new Set(programs.flatMap((program) => Object.keys(program.config ?? {}))),
-  ];
-  const failures = recordings.flatMap((r) => r.failures);
-  try {
-    if (!error) {
-      const nondeterministic = await writeFixture({
-        programs,
-        recordings,
-        meta,
-        secrets: [web.apiKey, ...tokens, ...secrets, SANDBOX_PROJECT, web.projectNumber],
-      });
-      if (failures.length) outcome = "recorded-with-program-failures";
-      console.log(
-        JSON.stringify(
-          { programs: programs.length, corpusRequests, requests, nondeterministic, failures },
-          null,
-          2,
-        ),
-      );
-    }
-  } catch (caught) {
-    outcome = "not-written";
-    error = `${String(caught.message ?? caught)} (recordings kept in ${runDir})`;
+    await recordUnderBudget();
   } finally {
+    uninstallBudget();
+  }
+
+  async function recordUnderBudget() {
+    if (programs.some(({ tokens: minted }) => minted)) await assertSignerReady(web, tokens);
+    await assertIgnored(privateRoot);
+    const runDir = join(
+      privateRoot,
+      `auth-tenant-blocking-production-${meta.startedAt.replaceAll(":", "")}`,
+    );
+    await mkdir(runDir, { recursive: true, mode: 0o700 });
+    // A first SIGINT, SIGTERM or SIGHUP stops at the next step; the program then deletes its
+    // tenants and restores the switches as on any other stop. A later signal only says so.
+    const controller = new AbortController();
+    let signals = 0;
+    const onSignal = (name) => {
+      signals += 1;
+      if (signals === 1) {
+        console.error(`${name}: stopping; the current program deletes its tenants and restores`);
+        controller.abort();
+      } else {
+        console.error(
+          `${name}: cleanup is running; wait for it (restore-sandbox restores by hand)`,
+        );
+      }
+    };
+    const signalNames = ["SIGINT", "SIGTERM", "SIGHUP"];
+    for (const name of signalNames) process.on(name, onSignal);
+    const ignoreWriteError = () => {};
+    process.stdout.on("error", ignoreWriteError);
+    process.stderr.on("error", ignoreWriteError);
+    await assertProductionLock(ledger);
+    assertLedgerAdmission(await readFile(ledger, "utf8"));
     await appendFile(
       ledger,
-      `${JSON.stringify({
-        ts: new Date().toISOString(),
-        project: SANDBOX_PROJECT,
-        database: null,
-        gitSha: meta.sha,
-        corpusDigest: sha256(JSON.stringify(programs)),
-        requests,
-        // The deployment's Cloud Build, storage and Cloud Run are well under a dollar (SF-7).
-        estimatedUsd: SUITE === "blocking" ? 0.5 : 0,
-        outcome,
-        taskId: TASK_ID,
-        programs: meta.programs,
-        tenantsCreated,
-        tenantsDeleted,
-        switched,
-        ...(fixture ? { fixture } : {}),
-        ...(error ? { error } : {}),
-        ...(switchesAfter ? { switchesAfter } : {}),
-      })}\n`,
+      `${JSON.stringify(productionStartedRow({ ts: new Date().toISOString(), gitSha: meta.sha, programs: meta.programs }))}\n`,
     );
-    // A fixture that could not be removed keeps every other lane off the sandbox until it is
-    // removed by hand and a terminal line follows (SF-1).
-    if (fixture?.removed === false)
+    const recordings = [];
+    const secrets = [];
+    let outcome = "recorded";
+    let error;
+    let switchesAfter;
+    let fixture;
+    let deployer;
+    let publicDeadline;
+    try {
+      if (SUITE === "blocking") {
+        // The fixture is deployed once for both recordings and removed below whenever a
+        // deployment started (TB1; pre-send review MF-1).
+        deployer = createDeployer({
+          project: SANDBOX_PROJECT,
+          number: web.projectNumber,
+          token: async () => {
+            const token = await adminToken();
+            tokens.push(token);
+            return token;
+          },
+          log: (line) => console.log(line),
+        });
+        fixture = { deployed: false, cli: await deployer.cliVersion() };
+        fixture.preflight = await deployer.preflight();
+        // The services become public during the deployment: the recording stops in time to remove
+        // them within the hour TB1 allows, counted from the start of the deployment (SF-2, SF-C2).
+        publicDeadline = setTimeout(() => controller.abort(), PUBLIC_MINUTES * 60_000);
+        await deployer.deploy(FIXTURE_SOURCE, join(runDir, "function-build"));
+        fixture.deployed = true;
+        if (controller.signal.aborted) throw new Error("stopped by a signal after the deployment");
+        fixture.registered = await deployer.verifyRegistered();
+        fixture.invokers = await deployer.invokers();
+        console.log(`fixture registered: ${JSON.stringify(fixture)}`);
+        if (!Object.values(fixture.invokers).every((admits) => admits === true))
+          throw new Error("Identity Platform cannot call every fixture function; not recording");
+      }
+      for (const offset of [0, 1]) {
+        const { secrets: seen, ...recording } = await recordOnce(
+          programs,
+          String(Date.now() + offset),
+          web,
+          { signal: controller.signal, tokens },
+        );
+        secrets.push(...seen);
+        recordings.push(recording);
+        await writeFile(join(runDir, `recording-${offset + 1}.json`), JSON.stringify(recording), {
+          mode: 0o600,
+        });
+      }
+    } catch (caught) {
+      outcome = controller.signal.aborted
+        ? "aborted-signal"
+        : caught.fatal
+          ? "aborted-fatal"
+          : "aborted";
+      error = String(caught.message ?? caught);
+      if (caught.partial) recordings.push(caught.partial);
+      secrets.push(...(caught.secrets ?? []));
+      switchesAfter = await withPhase("cleanup", () => readSwitches(web, tokens));
+      console.error(`switches after the stop: ${JSON.stringify(switchesAfter)}`);
+    }
+    if (deployer) {
+      // Removal runs on every path once a deployment started, a signal and a failed deployment
+      // included; before that it removes nothing.
+      clearTimeout(publicDeadline);
+      fixture.repository = deployer.repositoryChange() ?? "unchanged";
+      try {
+        fixture.removed = await deployer.remove(join(runDir, "function-build"));
+      } catch (caught) {
+        fixture.removed = false;
+        outcome = "aborted-fatal";
+        error = `${error ? `${error}; ` : ""}fixture removal: ${caught.message ?? caught}`;
+        console.error(`FIXTURE NOT REMOVED: ${caught.message ?? caught}`);
+      }
+      fixture.requests = deployer.requests();
+    }
+    await writeFile(
+      join(runDir, "meta.json"),
+      JSON.stringify({ ...meta, outcome, error, switchesAfter }, null, 2),
+      { mode: 0o600 },
+    );
+    const requests = recordings.reduce((n, r) => n + r.requests + r.harnessRequests, 0);
+    const tenantsCreated = recordings.reduce((n, r) => n + (r.tenantsCreated ?? 0), 0);
+    const tenantsDeleted = recordings.reduce((n, r) => n + (r.tenantsDeleted ?? 0), 0);
+    // Every project setting a recording switches and restores (sandbox-oracles.md: record every
+    // change in the ledger line).
+    const switched = [
+      "multiTenant.allowTenants",
+      ...new Set(programs.flatMap((program) => Object.keys(program.config ?? {}))),
+    ];
+    const failures = recordings.flatMap((r) => r.failures);
+    try {
+      if (!error) {
+        const nondeterministic = await writeFixture({
+          programs,
+          recordings,
+          meta,
+          secrets: [web.apiKey, ...tokens, ...secrets, SANDBOX_PROJECT, web.projectNumber],
+        });
+        if (failures.length) outcome = "recorded-with-program-failures";
+        console.log(
+          JSON.stringify(
+            { programs: programs.length, corpusRequests, requests, nondeterministic, failures },
+            null,
+            2,
+          ),
+        );
+      }
+    } catch (caught) {
+      outcome = "not-written";
+      error = `${String(caught.message ?? caught)} (recordings kept in ${runDir})`;
+    } finally {
       await appendFile(
         ledger,
-        `${JSON.stringify({ ts: new Date().toISOString(), event: "started", taskId: TASK_ID, project: SANDBOX_PROJECT, reason: "fixture not removed; restore-sandbox removes it" })}\n`,
+        `${JSON.stringify({
+          ts: new Date().toISOString(),
+          project: SANDBOX_PROJECT,
+          database: null,
+          gitSha: meta.sha,
+          corpusDigest: sha256(JSON.stringify(programs)),
+          // Every external request of the campaign as charged (token calls by their weight),
+          // and the runner's own count of its recorded and harness requests.
+          requests: budget.used(),
+          runnerRequests: requests,
+          budget: budget.snapshot(),
+          // The deployment's Cloud Build, storage and Cloud Run are well under a dollar (SF-7).
+          estimatedUsd: SUITE === "blocking" ? 0.5 : 0,
+          outcome,
+          taskId: TASK_ID,
+          programs: meta.programs,
+          tenantsCreated,
+          tenantsDeleted,
+          switched,
+          ...(fixture ? { fixture } : {}),
+          ...(error ? { error } : {}),
+          ...(switchesAfter ? { switchesAfter } : {}),
+        })}\n`,
       );
-    for (const name of signalNames) process.off(name, onSignal);
+      // A fixture that could not be removed keeps every other lane off the sandbox until it is
+      // removed by hand and a terminal line follows (SF-1).
+      if (fixture?.removed === false)
+        await appendFile(
+          ledger,
+          `${JSON.stringify({ ts: new Date().toISOString(), event: "started", taskId: TASK_ID, project: SANDBOX_PROJECT, reason: "fixture not removed; restore-sandbox removes it" })}\n`,
+        );
+      for (const name of signalNames) process.off(name, onSignal);
+    }
+    if (error) throw new Error(error);
+    if (failures.length) process.exitCode = 1;
   }
-  if (error) throw new Error(error);
-  if (failures.length) process.exitCode = 1;
 }
 
 /** Retries the fixture from a saved run directory; sends nothing to production. */

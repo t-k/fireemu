@@ -16,7 +16,7 @@ import {
   TASK_ID,
 } from "./auth-tenant-blocking/run.mjs";
 
-async function admitLocal(rows, suite = "tenant") {
+async function admitLocal(rows, suite = "tenant", budget = "1800") {
   const dir = await mkdtemp(join(tmpdir(), "atb-admission-"));
   try {
     const ledger = join(dir, "ledger.jsonl");
@@ -32,6 +32,7 @@ async function admitLocal(rows, suite = "tenant") {
         env: {
           ...process.env,
           AUTH_TENANT_SUITE: suite,
+          FIREEMU_AUTH_TENANT_REQUEST_BUDGET: budget,
           FIREEMU_SANDBOX_LEDGER: ledger,
           FIREEMU_AUTH_SANDBOX_WEB_CONFIG: "",
           FIREEMU_AUTH_TENANT_PRIVATE_DIR: "",
@@ -47,6 +48,14 @@ test("local admission accepts a clean ledger without credentials for both suites
   for (const suite of ["tenant", "blocking"]) {
     const result = await admitLocal([], suite);
     assert.equal(result.status, 0, `${suite}: ${result.stderr}`);
+  }
+});
+
+test("local admission refuses a campaign without a request budget that carries it", async () => {
+  for (const budget of ["", "2001", "300"]) {
+    const result = await admitLocal([], "tenant", budget);
+    assert.notEqual(result.status, 0, budget);
+    assert.match(result.stderr, /request budget|REQUEST_BUDGET/, budget);
   }
 });
 

@@ -28,6 +28,7 @@ import {
 } from "../auth-credential/tokens.mjs";
 import { createEnrollmentRegistry } from "../auth-mfa/harness.mjs";
 import { resolveCodes } from "../auth-mfa/session.mjs";
+import { withPhase } from "./budget.mjs";
 import { guardTenantRequest, isHarnessDisplayName, requestedDisplayNames } from "./guard.mjs";
 import { createTenantRegistry, normalizeTenantResponse } from "./harness.mjs";
 
@@ -228,6 +229,8 @@ export function createSession(
         signal: AbortSignal.timeout(timeoutMs),
       });
     } catch (error) {
+      // A refused request budget sent nothing: it stops the program, it is not an answer.
+      if (error?.fatal) throw error;
       return {
         recorded: { status: 0, transport: error?.cause?.code ?? error?.name ?? "error" },
         json: null,
@@ -334,6 +337,7 @@ export function createSession(
         signal: AbortSignal.timeout(timeoutMs),
       });
     } catch (error) {
+      if (error?.fatal) throw error;
       throw fatal(`signJwt: ${error?.cause?.code ?? error?.name ?? "error"}`);
     }
     const body = await response.json().catch(() => null);
@@ -618,52 +622,56 @@ export function createSession(
     } catch (error) {
       failure = error;
     }
-    // Cleanup always runs: accounts, then tenants (their accounts go with them), then the
-    // project settings, then multi-tenancy off, each read back.
-    const problems = [];
-    try {
-      await wipe();
-    } catch (error) {
-      problems.push(error);
-    }
-    if (registries.tenants.owned().length || multiTenant) {
+    // The cleanup is a cleanup phase of the request budget: it may use the reserve the work
+    // could not touch (budget.mjs).
+    await withPhase("cleanup", async () => {
+      // Cleanup always runs: accounts, then tenants (their accounts go with them), then the
+      // project settings, then multi-tenancy off, each read back.
+      const problems = [];
       try {
-        // Tenants can only be listed and deleted while multi-tenancy is on; a program that ran
-        // with it off switches it on for the cleanup when a step created a tenant anyway.
-        if (!multiTenant && registries.tenants.owned().length)
-          await writeConfig(
-            ["multiTenant.allowTenants"],
-            { "multiTenant.allowTenants": true },
-            { cleanup: true },
-          );
-        await deleteTenants(program, registries);
+        await wipe();
       } catch (error) {
         problems.push(error);
       }
-    }
-    if (mask.length) {
+      if (registries.tenants.owned().length || multiTenant) {
+        try {
+          // Tenants can only be listed and deleted while multi-tenancy is on; a program that ran
+          // with it off switches it on for the cleanup when a step created a tenant anyway.
+          if (!multiTenant && registries.tenants.owned().length)
+            await writeConfig(
+              ["multiTenant.allowTenants"],
+              { "multiTenant.allowTenants": true },
+              { cleanup: true },
+            );
+          await deleteTenants(program, registries);
+        } catch (error) {
+          problems.push(error);
+        }
+      }
+      if (mask.length) {
+        try {
+          const restored = await writeConfig(mask, baseline, { cleanup: true });
+          projection = { ...projection, restored: normalizeConfig(restored, ctx) };
+        } catch (error) {
+          problems.push(error);
+        }
+      }
       try {
-        const restored = await writeConfig(mask, baseline, { cleanup: true });
-        projection = { ...projection, restored: normalizeConfig(restored, ctx) };
+        await writeConfig(
+          ["multiTenant.allowTenants"],
+          { "multiTenant.allowTenants": false },
+          { cleanup: true },
+        );
       } catch (error) {
         problems.push(error);
       }
-    }
-    try {
-      await writeConfig(
-        ["multiTenant.allowTenants"],
-        { "multiTenant.allowTenants": false },
-        { cleanup: true },
-      );
-    } catch (error) {
-      problems.push(error);
-    }
-    if (problems.length) {
-      log(
-        `SANDBOX STATE UNKNOWN after ${program.id}: ${problems.map((e) => e.message).join("; ")}`,
-      );
-      throw fatal(problems.map((e) => String(e.message ?? e)).join("; "));
-    }
+      if (problems.length) {
+        log(
+          `SANDBOX STATE UNKNOWN after ${program.id}: ${problems.map((e) => e.message).join("; ")}`,
+        );
+        throw fatal(problems.map((e) => String(e.message ?? e)).join("; "));
+      }
+    });
     if (failure) throw failure;
     return { steps, ...(projection ? { config: projection } : {}) };
   }
@@ -703,6 +711,6 @@ export async function runCorpus(programs, ctx, options = {}) {
       failures.push({ program: program.id, error: String(error.message ?? error) });
     }
   }
-  await session.wipe();
+  await withPhase("cleanup", () => session.wipe());
   return { results, failures, secrets: session.secrets(), ...session.counts() };
 }

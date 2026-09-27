@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 
 import {
   WEBCHANNEL_PATH,
+  WEBCHANNEL_RESET_PHASES,
   WEBCHANNEL_SESSION_SIZES,
   webchannelSessionProgram,
 } from "./firestore-probe/webchannel-request-bytes.mjs";
@@ -489,6 +490,15 @@ export function assertCompleteRecording(corpus, rest, stream) {
     }
     for (const step of program.steps) {
       const result = recordedSteps[step.id];
+      // A WebChannel measured body may be answered by a dropped connection; that is a typed
+      // observation, and the freeze still requires both recordings to agree on it.
+      const typedReset =
+        step.webchannelSession === "boundary" &&
+        result.status === 0 &&
+        result.code === "connection-reset" &&
+        WEBCHANNEL_RESET_PHASES.includes(result.message) &&
+        Object.keys(result).length === 3;
+      if (typedReset) continue;
       if (
         !Number.isInteger(result.status) ||
         result.status < 200 ||

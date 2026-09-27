@@ -237,3 +237,19 @@ test("session steps are recorded by shape, never with the SID or session header"
   });
   assert.throws(() => projectWebChannelSessionStep("other", 200, "", session), /session step/);
 });
+
+test("only undici's dropped-connection errors count as a reset, and only with a known phase", async () => {
+  const { isDroppedConnection, projectWebChannelReset } =
+    await import("./webchannel-request-bytes.mjs");
+  assert.equal(isDroppedConnection(new TypeError("fetch failed")), true);
+  assert.equal(isDroppedConnection(new TypeError("terminated")), true);
+  assert.equal(isDroppedConnection(new Error("fetch failed")), false);
+  assert.equal(isDroppedConnection(new Error("request cap reached before network send")), false);
+  assert.equal(isDroppedConnection(new TypeError("Invalid URL")), false);
+  assert.deepEqual(projectWebChannelReset("reset-before-response"), {
+    status: 0,
+    code: "connection-reset",
+    message: "reset-before-response",
+  });
+  assert.throws(() => projectWebChannelReset("reset-anywhere"), /reset phase/);
+});

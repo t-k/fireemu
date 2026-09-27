@@ -654,3 +654,64 @@ test("an eleven-mebibyte body is stored compact and padded to its exact size bef
   assert.throws(() => padJsonBody('{"a":1', 11_534_336), /invalid padded/);
   assert.throws(() => padJsonBody("[1]", 11_534_336), /invalid padded/);
 });
+
+test("a dropped connection is a complete answer only on a WebChannel measured body", async () => {
+  const { assertCompleteRecording } = await import("./fs-data-write-sandbox.mjs");
+  const program = webchannelSessionProgram(16_777_217);
+  const sessionCorpus = { ...corpus, restPrograms: [program], restRequestCount: 4 };
+  const ok = (body) => ({ status: 200, code: "OK", body });
+  const recording = (boundary, control = ok("forward-ack")) => ({
+    [program.id]: {
+      steps: {
+        handshake: ok("session-opened"),
+        control,
+        boundary,
+        terminate: ok("session-terminated"),
+      },
+    },
+  });
+  const reset = (message) => ({ status: 0, code: "connection-reset", message });
+  for (const phase of ["reset-before-response", "reset-during-response"]) {
+    assertCompleteRecording(sessionCorpus, recording(reset(phase)), {});
+  }
+  for (const [label, rows] of [
+    ["unknown phase", recording(reset("reset-somewhere"))],
+    ["reset on the control", recording(ok("forward-ack"), reset("reset-before-response"))],
+    ["untyped failure", recording({ status: 0, code: "probe-error", message: "fetch failed" })],
+  ]) {
+    assert.throws(
+      () => assertCompleteRecording(sessionCorpus, rows, {}),
+      /failed observation/,
+      label,
+    );
+  }
+  // A reset is frozen only when both recordings answered the same way.
+  const frozen = freezeSandboxFixture({
+    corpus: sessionCorpus,
+    first: recording(reset("reset-before-response")),
+    second: recording(reset("reset-before-response")),
+    recordedAt: ["2026-09-27T00:00:00Z", "2026-09-27T00:10:00Z"],
+    harnessRevision: "a".repeat(40),
+    sdkVersions: {},
+    credentialToken: "token-for-leak-check",
+  });
+  assert.deepEqual(frozen.programs[program.id].steps.boundary, reset("reset-before-response"));
+  for (const second of [
+    recording(reset("reset-during-response")),
+    recording({ status: 400, code: "INVALID_ARGUMENT", message: "Request payload size" }),
+  ]) {
+    assert.throws(
+      () =>
+        freezeSandboxFixture({
+          corpus: sessionCorpus,
+          first: recording(reset("reset-before-response")),
+          second,
+          recordedAt: ["2026-09-27T00:00:00Z", "2026-09-27T00:10:00Z"],
+          harnessRevision: "a".repeat(40),
+          sdkVersions: {},
+          credentialToken: "token-for-leak-check",
+        }),
+      /nondeterministic/,
+    );
+  }
+});

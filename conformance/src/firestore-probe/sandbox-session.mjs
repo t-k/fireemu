@@ -22,9 +22,11 @@ import { recordingSet, padJsonBody, validateSandboxCorpus } from "../fs-data-wri
 import { normalizeRecordedResponse } from "./production-normalization.mjs";
 import { createRequestBudget } from "./request-budget.mjs";
 import {
+  isDroppedConnection,
   makeWebChannelFormBody,
   makeWebChannelHandshakeBody,
   parseWebChannelOpening,
+  projectWebChannelReset,
   projectWebChannelResponse,
   projectWebChannelSessionStep,
   WEBCHANNEL_PATH,
@@ -2357,9 +2359,21 @@ async function webchannelSessionStep(spec, raw, init) {
         raw: null,
       };
     }
+    // Only the measured body may end in a dropped connection that is itself the answer.
+    if (kind === "boundary" && isDroppedConnection(error)) {
+      return { recorded: projectWebChannelReset("reset-before-response"), raw: null };
+    }
     throw error;
   }
-  const text = await response.text();
+  let text;
+  try {
+    text = await response.text();
+  } catch (error) {
+    if (kind === "boundary" && isDroppedConnection(error)) {
+      return { recorded: projectWebChannelReset("reset-during-response"), raw: null };
+    }
+    throw error;
+  }
   const opened =
     kind === "handshake"
       ? parseWebChannelOpening(response.status, response.headers.get("x-http-session-id"), text)

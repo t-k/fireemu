@@ -144,6 +144,35 @@ export function projectWebChannelSessionStep(kind, status, text, session) {
   return projectWebChannelResponse(status, redactSession(text, session));
 }
 
+/**
+ * The phases at which a connection can drop while a measured body is sent: before any
+ * response arrived, or after the response head while its body was being read.
+ */
+export const WEBCHANNEL_RESET_PHASES = Object.freeze([
+  "reset-before-response",
+  "reset-during-response",
+]);
+
+/**
+ * A dropped connection on a session's measured body, recorded as a typed answer so that a
+ * front end that refuses an oversized body by closing the connection is an observation. Only
+ * the phase is kept: no SID, session header or transport detail.
+ */
+export function projectWebChannelReset(phase) {
+  if (!WEBCHANNEL_RESET_PHASES.includes(phase)) {
+    throw new Error("unsupported WebChannel reset phase");
+  }
+  return { status: 0, code: "connection-reset", message: phase };
+}
+
+/**
+ * undici reports a dropped connection as `TypeError: fetch failed` before a response and as
+ * `TypeError: terminated` while its body is read; nothing else counts as one.
+ */
+export function isDroppedConnection(error) {
+  return error instanceof TypeError && ["fetch failed", "terminated"].includes(error.message);
+}
+
 export function makeWebChannelFormBody(targetBytes) {
   if (!FORM_BODY_SIZES.has(targetBytes)) {
     throw new Error("unsupported WebChannel byte target");

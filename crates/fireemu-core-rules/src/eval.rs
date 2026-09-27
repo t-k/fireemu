@@ -1386,7 +1386,9 @@ fn either(
         return Ok(true);
     }
     match (own, nested) {
-        (Err(a), Err(b)) => Err(if is_hard(&a) || !is_hard(&b) { a } else { b }),
+        // Only budget and unsupported errors reach here (soft ones make an allow false), so
+        // the block's own error is the answer before a nested one.
+        (Err(own), Err(_)) => Err(own),
         (Err(e), Ok(_)) | (Ok(_), Err(e)) => Err(e),
         (Ok(_), Ok(_)) => Ok(false),
     }
@@ -1410,11 +1412,6 @@ fn stops_request(error: &EvalError) -> bool {
             ..
         }
     )
-}
-
-/// A budget or unsupported error: it decides a request when no alternative allows it.
-const fn is_hard(error: &EvalError) -> bool {
-    matches!(error, EvalError::Budget { .. } | EvalError::Unsupported(_))
 }
 
 /// One line of why an expression is undefined, for a trace.

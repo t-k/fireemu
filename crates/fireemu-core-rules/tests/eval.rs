@@ -5,8 +5,8 @@ use std::collections::BTreeMap;
 use std::fmt::Write as _;
 
 use fireemu_core_rules::eval::{
-    evaluate_request, evaluate_request_traced_owned, Decision, DenyReason, Method, RequestContext,
-    RulesService,
+    evaluate_request, evaluate_request_traced_owned, evaluate_request_with, Decision, DenyReason,
+    Method, RequestContext, RulesService,
 };
 use fireemu_core_rules::parse::parse_ruleset;
 use fireemu_core_rules::runtime::LoadedRules;
@@ -3365,5 +3365,108 @@ fn a_delete_carries_a_null_request_resource() {
     assert!(matches!(
         decision("request.resource.data.n == 1"),
         Decision::Deny(DenyReason::NoMatchingAllow)
+    ));
+}
+
+fn firestore_rules(body: &str) -> fireemu_core_rules::ast::Ruleset {
+    parse_ruleset(&format!(
+        "rules_version = '2';\nservice cloud.firestore {{\n  match /databases/{{database}}/documents {{\n{body}\n  }}\n}}"
+    ))
+    .unwrap()
+}
+
+fn exists_chain(count: usize) -> String {
+    (0..count)
+        .map(|i| format!("!exists(/databases/$(database)/documents/src/m{i})"))
+        .collect::<Vec<_>>()
+        .join(" && ")
+}
+
+/// A query's rule may read 20 distinct documents, as a multi-document request may (production
+/// and the official emulator allow 20); a single read keeps 10.
+#[test]
+fn a_list_rule_may_read_more_documents_than_a_get_rule() {
+    let ruleset = firestore_rules(&format!(
+        "    match /c/{{d}} {{ allow get, list: if {}; }}",
+        exists_chain(15)
+    ));
+    let access = MapAccess(BTreeMap::new());
+    let list = ctx(Method::List, "/databases/(default)/documents/c/d", None);
+    assert!(matches!(
+        evaluate_request_with(&ruleset, &list, Some(&access)).decision,
+        Decision::Allow
+    ));
+    let get = ctx(Method::Get, "/databases/(default)/documents/c/d", None);
+    assert!(matches!(
+        evaluate_request_with(&ruleset, &get, Some(&access)).decision,
+        Decision::Deny(DenyReason::BudgetExceeded {
+            limit_id: "RULES-DOC-ACCESS-SINGLE",
+            ..
+        })
+    ));
+}
+
+/// Once an allow holds, nested blocks are not evaluated: an expensive nested rule cannot turn
+/// the allow into a denial by exhausting the budget.
+#[test]
+fn an_allow_that_holds_is_not_undone_by_an_expensive_nested_block() {
+    let ruleset = firestore_rules(&format!(
+        "    match /c/{{d}} {{\n      allow get: if true;\n      match /{{rest=**}} {{ allow get: if {}; }}\n    }}",
+        balanced_and(1_024)
+    ));
+    let request = ctx(Method::Get, "/databases/(default)/documents/c/d", None);
+    assert!(matches!(
+        evaluate_request(&ruleset, &request).decision,
+        Decision::Allow
+    ));
+}
+
+/// When a block's own allow and a nested block both raise errors and nothing holds, the block's
+/// own error is the answer.
+#[test]
+fn the_blocks_own_error_is_reported_before_a_nested_one() {
+    let ruleset = firestore_rules(&format!(
+        "    match /c/{{d}} {{\n      allow get: if {};\n      match /{{rest=**}} {{ allow get: if 'a'.matches(resource.data.pattern); }}\n    }}",
+        exists_chain(11)
+    ));
+    let access = MapAccess(BTreeMap::new());
+    let mut request = ctx(Method::Get, "/databases/(default)/documents/c/d", None);
+    request.resource = Some(doc(&[("pattern", RulesValue::String("(".to_owned()))]));
+    assert!(matches!(
+        evaluate_request_with(&ruleset, &request, Some(&access)).decision,
+        Decision::Deny(DenyReason::BudgetExceeded {
+            limit_id: "RULES-DOC-ACCESS-SINGLE",
+            ..
+        })
+    ));
+}
+
+/// `/{a=**}/c/{b=**}` matches `/c/c` two ways, `a` empty first. An ordinary error on the first
+/// binding leaves the second free to allow; a request-wide stop on the first ends the request.
+#[test]
+fn an_error_on_one_binding_of_a_block_decides_only_if_it_stops_the_request() {
+    let path = "/databases/(default)/documents/c/c";
+    let ruleset = firestore_rules(
+        "    match /{a=**}/c/{b=**} { allow get: if a == path('/c') || 'a'.matches(resource.data.pattern); }",
+    );
+    let mut request = ctx(Method::Get, path, None);
+    request.resource = Some(doc(&[("pattern", RulesValue::String("(".to_owned()))]));
+    assert!(matches!(
+        evaluate_request(&ruleset, &request).decision,
+        Decision::Allow
+    ));
+    let exhausting = "a != path('/c') && resource.data.value.matches('(a|aa)*b')";
+    let ruleset = firestore_rules(&format!(
+        "    match /{{a=**}}/c/{{b=**}} {{\n{}      allow get: if a == path('/c');\n    }}",
+        format!("      allow get: if {exhausting};\n").repeat(5)
+    ));
+    let mut request = ctx(Method::Get, path, None);
+    request.resource = Some(doc(&[("value", RulesValue::String("a".repeat(10_000)))]));
+    assert!(matches!(
+        evaluate_request(&ruleset, &request).decision,
+        Decision::Deny(DenyReason::BudgetExceeded {
+            limit_id: "FIREEMU-REGEX-EXHAUSTIONS-PER-REQUEST",
+            ..
+        })
     ));
 }

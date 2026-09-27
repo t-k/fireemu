@@ -201,3 +201,40 @@ fn the_deepest_accepted_expressions_compile_on_a_small_thread_stack() {
         .join()
         .unwrap();
 }
+
+/// An expression bound into a path counts one level more than itself: `$(...)` in a path of a
+/// call argument, 97 levels deep, makes 99 in all and compiles; 98 makes 100 and does not.
+#[test]
+fn a_path_binding_counts_toward_the_expression_depth() {
+    let binding = |levels: usize| {
+        get_rule(&format!(
+            "exists(/databases/$(database)/documents/c/$({}'x'{}))",
+            "(".repeat(levels - 1),
+            ")".repeat(levels - 1)
+        ))
+    };
+    compiles(&binding(97)).unwrap();
+    assert_eq!(
+        compiles(&binding(98)).unwrap_err(),
+        "Expression is too complex to evaluate safely."
+    );
+}
+
+/// fireemu's parser also stops at 128 nested sub-expressions, a stack guard that production's
+/// depth limit keeps out of reach except where production counts no level: 127 indexes nested
+/// in indexes compile (their compiled depth stays small), 128 do not.
+#[test]
+fn the_parser_stops_at_128_nested_subexpressions() {
+    let nested = |k: usize| {
+        let mut expr = "0".to_owned();
+        for _ in 0..k {
+            expr = format!("[0][{expr}]");
+        }
+        get_rule(&format!("{expr} == 0"))
+    };
+    compiles(&nested(127)).unwrap();
+    assert_eq!(
+        compiles(&nested(128)).unwrap_err(),
+        "Expression is too complex to evaluate safely."
+    );
+}

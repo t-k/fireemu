@@ -26,8 +26,8 @@
 import { execFile, spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
-import { appendFile, mkdir, readFile, rm, stat, writeFile } from "node:fs/promises";
-import { join } from "node:path";
+import { mkdir, readFile, realpath, rm, stat, writeFile } from "node:fs/promises";
+import { dirname, join, resolve as resolvePath } from "node:path";
 import { promisify } from "node:util";
 
 import { scanFixture } from "../auth-account/fixture-scan.mjs";
@@ -37,21 +37,18 @@ import {
   createContext,
   diffRecordings,
   isTransient,
-  PRODUCTION,
   RECORDED_PROJECT,
   SANDBOX_PROJECT,
   sameRecording,
 } from "../fs-rules/harness.mjs";
 import { PRINCIPALS, PROGRAMS, validateCorpus } from "./corpus.mjs";
 import { RULESET_IDS, rulesetSource } from "./rulesets.mjs";
+import { compileProbe, readBaseline, readForeign, runProduction } from "./production.mjs";
 import {
-  acquireLock,
   admissionProblems,
-  closingLines,
-  finalMismatches,
+  approvalProblems,
+  approvalUsed,
   FOREIGN_PROJECT,
-  releaseLock,
-  startedLines,
   TASK_ID,
 } from "./sandbox.mjs";
 import { runCorpus } from "./session.mjs";
@@ -104,16 +101,16 @@ async function gitSha() {
 }
 
 async function assertCleanTree() {
+  // Everything the runner imports lives under src, and the fixture beside it.
   const { stdout } = await execFileAsync(
     "git",
     [
       "status",
       "--porcelain",
       "--",
-      "src/auth-fs-cross",
-      "src/fs-rules/harness.mjs",
-      "src/auth-credential/tokens.mjs",
+      "src",
       "auth-fs-cross-production.json",
+      "fs-rules-production.json",
     ],
     { cwd: CONFORMANCE_DIR },
   );
@@ -185,7 +182,11 @@ async function productionTarget(web, foreignWeb) {
     adminToken: token,
     quotaProject: SANDBOX_PROJECT,
     projectNumber: web.projectNumber,
-    foreign: { project: FOREIGN_PROJECT, apiKey: foreignWeb.apiKey },
+    foreign: {
+      project: FOREIGN_PROJECT,
+      apiKey: foreignWeb.apiKey,
+      projectNumber: foreignWeb.projectNumber,
+    },
     async refresh() {
       if (Date.now() - fetchedAt < 20 * 60_000) return;
       token = await adminToken();
@@ -222,116 +223,6 @@ async function ownerFetch(target, method, url, body, quotaProject = SANDBOX_PROJ
 }
 
 /**
- * Read-only state of the sandbox plus a compile of every ruleset. Reports whether `(default)`
- * holds documents (the lane owns it and wipes it) and refuses to go on when a database other
- * than `(default)` or a release outside `cloud.firestore` exists, or a ruleset of the corpus
- * does not compile in production.
- */
-export async function preflight(target) {
-  const rules = `${PRODUCTION.rules}/v1/projects/${SANDBOX_PROJECT}`;
-  const itk = `${PRODUCTION.itk}`;
-  const reads = {
-    releases: await ownerFetch(target, "GET", `${rules}/releases`),
-    rulesets: await ownerFetch(target, "GET", `${rules}/rulesets`),
-    databases: await ownerFetch(
-      target,
-      "GET",
-      `${PRODUCTION.firestore}/v1/projects/${SANDBOX_PROJECT}/databases`,
-    ),
-    documents: await ownerFetch(
-      target,
-      "POST",
-      `${PRODUCTION.firestore}/v1/projects/${SANDBOX_PROJECT}/databases/(default)/documents:runQuery`,
-      { structuredQuery: { from: [{ allDescendants: true }], limit: 1 } },
-    ),
-    accounts: await ownerFetch(
-      target,
-      "POST",
-      `${itk}/v1/projects/${SANDBOX_PROJECT}/accounts:query`,
-      {
-        returnUserInfo: false,
-      },
-    ),
-    config: await ownerFetch(target, "GET", `${itk}/admin/v2/projects/${SANDBOX_PROJECT}/config`),
-    tenants: await ownerFetch(
-      target,
-      "GET",
-      `${itk}/v2/projects/${SANDBOX_PROJECT}/tenants?pageSize=100`,
-    ),
-    // X9: the foreign project must offer email/password sign-up (read only; billed to it).
-    foreignConfig: await ownerFetch(
-      target,
-      "GET",
-      `${itk}/admin/v2/projects/${FOREIGN_PROJECT}/config`,
-      undefined,
-      FOREIGN_PROJECT,
-    ),
-  };
-  // Without multi-tenancy, listing tenants answers 400 INVALID_PROJECT_ID: there are none.
-  const tenantsOff =
-    reads.config.json?.multiTenant?.allowTenants !== true &&
-    reads.tenants.status === 400 &&
-    reads.tenants.json?.error?.message === "INVALID_PROJECT_ID";
-  if (tenantsOff) reads.tenants = { status: 200, json: { tenants: [] } };
-  const report = {
-    failedReads: Object.entries(reads)
-      .filter(([, { status }]) => status !== 200)
-      .map(([name, { status }]) => `${name} (HTTP ${status})`),
-    projectAccounts: Number(reads.accounts.json?.recordsCount ?? -1),
-    foreignPasswordSignUp: reads.foreignConfig.json?.signIn?.email?.enabled === true,
-    allowTenants: reads.config.json?.multiTenant?.allowTenants === true,
-    tenants: (reads.tenants.json?.tenants ?? []).length,
-    rulesets: (reads.rulesets.json?.rulesets ?? []).length,
-    releases: (reads.releases.json?.releases ?? []).map(({ name }) => name.split("/releases/")[1]),
-    databases: (reads.databases.json?.databases ?? []).map(({ name }) => name.split("/").at(-1)),
-    defaultHasDocuments: (reads.documents.json ?? []).some((e) => e.document),
-    compiled: {},
-  };
-  for (const id of RULESET_IDS) {
-    const created = await ownerFetch(target, "POST", `${rules}/rulesets`, {
-      source: { files: [{ name: "firestore.rules", content: rulesetSource(id) }] },
-    });
-    report.compiled[id] = created.status;
-    if (created.status === 200) {
-      const deleted = await ownerFetch(
-        target,
-        "DELETE",
-        `${PRODUCTION.rules}/v1/${created.json.name}`,
-      );
-      if (deleted.status !== 200) report.failedReads.push(`delete of the ${id} compile probe`);
-    }
-  }
-  return { report, problems: preflightProblems(report) };
-}
-
-/**
- * Why a recording may not start. The sandbox must be as the lanes leave it: no release, no
- * ruleset, no named database, no tenant and multi-tenancy off, no project-level account (the
- * AUTH lanes leave none when idle), no other lane active, the foreign project offering
- * email/password sign-up, the ruleset compiling, and every read answered.
- */
-export function preflightProblems(report) {
-  const foreign = report.databases.filter((db) => db !== "(default)");
-  return [
-    ...report.failedReads.map((read) => `preflight read failed: ${read}`),
-    ...(foreign.length ? [`databases other than (default) exist: ${foreign.join(", ")}`] : []),
-    ...(report.releases.length ? [`release(s) exist: ${report.releases.join(", ")}`] : []),
-    ...(report.rulesets ? [`${report.rulesets} ruleset(s) exist`] : []),
-    ...(report.allowTenants ? ["multiTenant.allowTenants is on"] : []),
-    ...(report.tenants ? [`${report.tenants} tenant(s) exist`] : []),
-    ...(report.projectAccounts !== 0
-      ? [`${report.projectAccounts} project-level account(s) exist`]
-      : []),
-    ...(report.foreignPasswordSignUp
-      ? []
-      : [`${FOREIGN_PROJECT} does not offer email/password sign-up`]),
-    ...Object.entries(report.compiled)
-      .filter(([, status]) => status !== 200)
-      .map(([id, status]) => `ruleset ${id} does not compile (HTTP ${status})`),
-  ];
-}
-
-/**
  * The AUTH lanes do not all write `started` lines, so the operator confirms that none is
  * recording on the sandbox: AFC_NO_AUTH_RECORDING=<ISO time of the check>, at most an hour
  * old. The value goes into the run's meta and its ledger `started` line.
@@ -349,13 +240,13 @@ export function confirmedNoAuthRecording(env = process.env, now = Date.now()) {
 /** Set by SIGINT or SIGTERM: the session stops before its next step and cleans up. */
 let stopRequested = false;
 
-async function recordOnce(programs, web, foreignWeb, signers) {
-  const target = await productionTarget(web, foreignWeb);
+async function recordOnce(programs, target, n) {
   const ctx = createContext({ run: String(Date.now()), target });
+  console.log(`recording ${n}`);
   return runCorpus({ programs, principals: PRINCIPALS }, ctx, {
     ...ceilings(programs),
-    signers,
-    log: (line) => console.log(line),
+    signers: {},
+    log: (entry) => console.log(entry),
     shouldStop: () => stopRequested,
   });
 }
@@ -414,254 +305,162 @@ export function recentAbort(ledgerText, now = Date.now()) {
   return now - Date.parse(last.ts) < 3_600_000 ? last : undefined;
 }
 
+/**
+ * The repository checkout that holds the shared, untracked `docs.local` (the main checkout, also
+ * for a linked worktree): the ledger, its lock and the owner ledger live there only.
+ */
+export async function sharedRoot() {
+  const { stdout } = await execFileAsync(
+    "git",
+    ["rev-parse", "--path-format=absolute", "--git-common-dir"],
+    {
+      cwd: CONFORMANCE_DIR,
+    },
+  );
+  return dirname(await realpath(stdout.trim()));
+}
+
 /** Local admission: everything checked before the lock and before any request. */
 export async function localAdmission(env = process.env, now = Date.now()) {
   const problems = [];
+  const root = await sharedRoot();
+  const sharedLedger = join(root, "docs.local", "runs", "sandbox-ledger.jsonl");
   const ledger = env.FIREEMU_SANDBOX_LEDGER;
   const privateRoot = env.FIREEMU_AUTH_FS_CROSS_PRIVATE_DIR;
-  if (!ledger || !privateRoot)
-    problems.push("FIREEMU_SANDBOX_LEDGER and FIREEMU_AUTH_FS_CROSS_PRIVATE_DIR are required");
-  const expected = env.AFC_PACKET_SOURCE_COMMIT ?? "";
-  const sha = await gitSha();
-  if (sha !== expected) problems.push(`HEAD ${sha} is not the packet's source commit ${expected}`);
   const attempt = async (run) => {
     try {
-      await run();
+      return await run();
     } catch (error) {
       problems.push(String(error.message ?? error));
+      return undefined;
     }
   };
+  // The shared ledger, not a copy: its real path is the main checkout's.
+  const ledgerText = await attempt(async () => {
+    if (!ledger) throw new Error("FIREEMU_SANDBOX_LEDGER is required");
+    if ((await realpath(ledger)) !== sharedLedger)
+      throw new Error(`FIREEMU_SANDBOX_LEDGER is not the shared ledger ${sharedLedger}`);
+    return readFile(ledger, "utf8");
+  });
+  await attempt(async () => {
+    if (!privateRoot) throw new Error("FIREEMU_AUTH_FS_CROSS_PRIVATE_DIR is required");
+    if (!resolvePath(privateRoot).startsWith(`${join(root, "docs.local")}/`))
+      throw new Error("FIREEMU_AUTH_FS_CROSS_PRIVATE_DIR must be under the shared docs.local");
+  });
+  const sha = await gitSha();
+  if (sha !== (env.AFC_PACKET_SOURCE_COMMIT ?? ""))
+    problems.push(`HEAD ${sha} is not the packet's source commit ${env.AFC_PACKET_SOURCE_COMMIT}`);
+  const harness = await harnessDigest();
+  const packetSha256 = await attempt(async () => {
+    const path = env.AFC_PACKET_FILE;
+    if (!path || !resolvePath(path).startsWith(`${join(root, "docs.local")}/`))
+      throw new Error("AFC_PACKET_FILE must name the packet under the shared docs.local");
+    return sha256(await readFile(path, "utf8"));
+  });
+  if (packetSha256) {
+    const owner = await attempt(() =>
+      readFile(join(root, "docs.local", "instructions", "owner-decisions.md"), "utf8"),
+    );
+    if (owner !== undefined)
+      problems.push(
+        ...approvalProblems(owner, { packetSha256, sourceCommit: sha, harnessDigest: harness }),
+      );
+  }
   await attempt(assertCleanTree);
   await attempt(() => confirmedNoAuthRecording(env, now));
-  await attempt(async () => validateCorpus(selectPrograms(PROGRAMS, env)));
+  const programs = await attempt(async () => selectPrograms(PROGRAMS, env));
+  if (programs) await attempt(async () => validateCorpus(programs));
   await attempt(sandboxWebConfig);
   await attempt(foreignWebConfig);
-  if (ledger) {
-    if (existsSync(`${ledger}.lock`)) problems.push("the shared lock is held");
-    const text = await readFile(ledger, "utf8").catch(() => "");
-    const aborted = recentAbort(text, now);
+  if (ledgerText !== undefined) {
+    if (existsSync(`${sharedLedger}.lock`)) problems.push("the shared lock is held");
+    const aborted = recentAbort(ledgerText, now);
     if (aborted) problems.push(`this task's last run aborted at ${aborted.ts}; wait an hour`);
+    if (packetSha256 && approvalUsed(ledgerText, packetSha256))
+      problems.push("this packet's approval was already used; a new run needs a new owner line");
     problems.push(
-      ...admissionProblems(text, SANDBOX_PROJECT, now),
-      ...admissionProblems(text, FOREIGN_PROJECT, now),
+      ...admissionProblems(ledgerText, SANDBOX_PROJECT, now),
+      ...admissionProblems(ledgerText, FOREIGN_PROJECT, now),
     );
   }
-  return { sha, problems };
-}
-
-/** The baseline readback after the recordings: FS-RULES' items and ATB's six conditions. */
-async function finalReadback(target) {
-  const rules = `${PRODUCTION.rules}/v1/projects/${SANDBOX_PROJECT}`;
-  const itk = PRODUCTION.itk;
-  const firestore = `${PRODUCTION.firestore}/v1/projects/${SANDBOX_PROJECT}/databases`;
-  const serviceAccount = `firebase-adminsdk-fbsvc@${SANDBOX_PROJECT}.iam.gserviceaccount.com`;
-  const read = (method, url, body) => ownerFetch(target, method, url, body);
-  const answers = {
-    config: await read("GET", `${itk}/admin/v2/projects/${SANDBOX_PROJECT}/config`),
-    tenants: await read("GET", `${itk}/v2/projects/${SANDBOX_PROJECT}/tenants?pageSize=100`),
-    accounts: await read("POST", `${itk}/v1/projects/${SANDBOX_PROJECT}/accounts:query`, {
-      returnUserInfo: false,
-    }),
-    policy: await read(
-      "POST",
-      `https://iam.googleapis.com/v1/projects/${SANDBOX_PROJECT}/serviceAccounts/${serviceAccount}:getIamPolicy?options.requestedPolicyVersion=3`,
-    ),
-    releases: await read("GET", `${rules}/releases?pageSize=100`),
-    rulesets: await read("GET", `${rules}/rulesets?pageSize=100`),
-    databases: await read("GET", firestore),
-    documents: await read("POST", `${firestore}/(default)/documents:runQuery`, {
-      structuredQuery: { from: [{ allDescendants: true }], limit: 1 },
-    }),
-  };
-  const unlistable =
-    answers.tenants.status === 400 && answers.tenants.json?.error?.message === "INVALID_PROJECT_ID";
-  const failed = Object.entries(answers)
-    .filter(([name, { status }]) => status !== 200 && !(name === "tenants" && unlistable))
-    .map(([name, { status }]) => `${name} (HTTP ${status})`);
-  const reads = {
-    config: answers.config.json,
-    tenantsUnlistable: unlistable,
-    tenants: unlistable ? [] : (answers.tenants.json?.tenants ?? null),
-    projectAccounts: Number(answers.accounts.json?.recordsCount ?? -1),
-    bindings: answers.policy.json?.bindings ?? [],
-    releases: answers.releases.json?.releases ?? null,
-    rulesets: answers.rulesets.json?.rulesets ?? null,
-    databases: (answers.databases.json?.databases ?? []).map(({ name }) => name.split("/").at(-1)),
-    defaultHasDocuments: (answers.documents.json ?? []).some((entry) => entry.document),
-  };
   return {
-    requests: Object.keys(answers).length,
-    mismatches: [...failed.map((name) => `readback failed: ${name}`), ...finalMismatches(reads)],
+    sha,
+    harness,
+    packetSha256,
+    problems,
+    corpusDigest: programs ? sha256(JSON.stringify(programs)) : undefined,
+    corpusDigests: programs
+      ? Object.fromEntries(programs.map((p) => [p.id, programDigest(p)]))
+      : {},
   };
 }
 
 async function recordProduction() {
-  const ledger = process.env.FIREEMU_SANDBOX_LEDGER;
-  const privateRoot = process.env.FIREEMU_AUTH_FS_CROSS_PRIVATE_DIR;
-  const admission = await localAdmission();
-  if (admission.problems.length) throw new Error(`admission: ${admission.problems.join("; ")}`);
+  const env = process.env;
   const programs = selectPrograms();
-  const corpusRequests = validateCorpus(programs);
-  const operatorConfirmation = confirmedNoAuthRecording();
   const web = await sandboxWebConfig();
   const foreignWeb = await foreignWebConfig();
+  const privateRoot = env.FIREEMU_AUTH_FS_CROSS_PRIVATE_DIR;
   await assertIgnored(privateRoot);
-  // The lock comes first: the ledger is judged, and the started lines written, while it is held.
-  const lock = await acquireLock(ledger, admission.sha);
-  let keepLock = false;
-  try {
-    const ledgerText = await readFile(ledger, "utf8");
-    const open = [
-      ...admissionProblems(ledgerText, SANDBOX_PROJECT),
-      ...admissionProblems(ledgerText, FOREIGN_PROJECT),
-    ];
-    if (open.length) throw new Error(`admission under the lock: ${open.join("; ")}`);
-    const target = await productionTarget(web, foreignWeb);
-    const { report, problems } = await preflight(target);
-    // The compile probe creates and deletes a ruleset; one left behind keeps the lock.
-    if (report.failedReads.some((failed) => failed.startsWith("delete of"))) keepLock = true;
-    if (problems.length) throw new Error(`preflight: ${problems.join("; ")}`);
-    const meta = {
-      sha: admission.sha,
-      harness: await harnessDigest(),
-      startedAt: new Date().toISOString(),
-      programs: programs.map((p) => p.id),
-      corpusDigests: Object.fromEntries(programs.map((p) => [p.id, programDigest(p)])),
-      preflight: report,
-      operatorConfirmation,
-      clockOffsetSeconds: await assertClockSynchronized(),
-      lock: { path: lock.path, sha256: lock.sha256 },
-    };
-    const runDir = join(
-      privateRoot,
-      `auth-fs-cross-production-${meta.startedAt.replaceAll(":", "")}`,
-    );
-    await mkdir(runDir, { recursive: true, mode: 0o700 });
-    // From here on the sandbox may change: only a clean, verified end releases the lock.
-    keepLock = true;
-    for (const line of startedLines({
-      ts: meta.startedAt,
-      sha: meta.sha,
-      programs: programs.length,
-      operatorConfirmation,
-      lock,
-    }))
-      await appendFile(ledger, `${JSON.stringify(line)}\n`);
-    for (const signal of ["SIGINT", "SIGTERM"]) {
-      process.on(signal, () => {
-        if (stopRequested) {
-          console.error(
-            `${signal} again: cleanup is running and is not interrupted. A kill -9 now leaves releases, rulesets, accounts, the tenants and multiTenant.allowTenants for hand cleanup (see the private run directory).`,
-          );
-          return;
-        }
-        stopRequested = true;
-        console.error(`${signal}: stopping at the next step or wait; cleanup follows`);
-      });
-    }
-    const recordings = [];
-    let outcome = "recorded";
-    let error;
-    try {
-      for (const n of [1, 2]) {
-        if (stopRequested) throw Object.assign(new Error("stopped by a signal"), { fatal: true });
-        const recording = await recordOnce(programs, web, foreignWeb, {});
-        recordings.push(recording);
-        await writeFile(join(runDir, `recording-${n}.json`), JSON.stringify(recording), {
-          mode: 0o600,
-        });
-      }
-    } catch (caught) {
-      outcome = caught.fatal ? "aborted-fatal" : "aborted";
-      error = String(caught.message ?? caught);
-      if (caught.partial) {
-        recordings.push(caught.partial);
-        await writeFile(
-          join(runDir, `recording-${recordings.length}-partial.json`),
-          JSON.stringify(caught.partial),
-          { mode: 0o600 },
+  for (const signal of ["SIGINT", "SIGTERM"]) {
+    process.on(signal, () => {
+      if (stopRequested) {
+        console.error(
+          `${signal} again: cleanup is running and is not interrupted. A kill -9 now leaves releases, rulesets, accounts, the tenants and multiTenant.allowTenants for hand cleanup (see the private run directory).`,
         );
+        return;
       }
-    }
-    const failures = recordings.flatMap((r) => r.failures ?? []);
-    const cleanupErrors = recordings.flatMap((r) => r.cleanupErrors ?? []);
-    if (cleanupErrors.length) {
-      outcome = "aborted-cleanup-incomplete";
-      console.error(`CLEANUP INCOMPLETE on ${SANDBOX_PROJECT}:\n  ${cleanupErrors.join("\n  ")}`);
-    }
-    if (!error) {
-      try {
-        const nondeterministic = await writeFixture({
-          programs,
-          recordings,
-          meta,
-          secrets: [
-            web.apiKey,
-            SANDBOX_PROJECT,
-            web.projectNumber,
-            foreignWeb.apiKey,
-            FOREIGN_PROJECT,
-            foreignWeb.projectNumber,
-          ],
-        });
-        if (failures.length) outcome = "recorded-with-program-failures";
-        console.log(
-          JSON.stringify(
-            { programs: programs.length, corpusRequests, nondeterministic, failures },
-            null,
-            2,
-          ),
-        );
-      } catch (caught) {
-        outcome = "not-written";
-        error = `${String(caught.message ?? caught)} (recordings kept in ${runDir})`;
-      }
-    }
-    // Whatever happened above, the sandbox is read back against the baseline.
-    const readback = await finalReadback(target).catch((caught) => ({
-      requests: 0,
-      mismatches: [`readback failed: ${caught.message ?? caught}`],
-    }));
-    const atBaseline = readback.mismatches.length === 0 && cleanupErrors.length === 0;
-    const foreignRequests = recordings.reduce((n, r) => n + (r.foreignRequests ?? 0), 0);
-    const allRequests = recordings.reduce((n, r) => n + r.requests + r.harnessRequests, 0);
-    // Preflight: 11 idp requests (9 reads and the compile probe's create and delete), 1 query read.
-    const idpRequests = allRequests - foreignRequests + 11 + readback.requests;
-    const queryRequests = foreignRequests + 1;
-    const lines = closingLines({
-      ts: new Date().toISOString(),
-      sha: meta.sha,
-      corpusDigest: sha256(JSON.stringify(programs)),
-      outcome,
-      atBaseline,
-      error:
-        [error, ...readback.mismatches, ...cleanupErrors].filter(Boolean).join("; ") || undefined,
-      idp: {
-        database: "(default)",
-        requests: idpRequests,
-        // Firestore reads, writes and Rules evaluations at list price; Auth MAU for a few accounts.
-        estimatedUsd: Number((idpRequests * 0.0000006 + 0.1).toFixed(4)),
-        programs: meta.programs,
-        configurationChanges: recordings.flatMap((r) => r.changes ?? []),
-        publications: recordings.flatMap((r) => r.publications ?? []).length,
-        finalReadback: readback.mismatches,
-      },
-      query: { requests: queryRequests, estimatedUsd: 0 },
+      stopRequested = true;
+      console.error(`${signal}: stopping at the next step or wait; cleanup follows`);
     });
-    for (const line of lines) await appendFile(ledger, `${JSON.stringify(line)}\n`);
-    await writeFile(
-      join(runDir, "meta.json"),
-      JSON.stringify({ ...meta, outcome, error, finalReadback: readback }, null, 2),
-      { mode: 0o600 },
-    );
-    if (atBaseline) keepLock = false;
-    else console.error(`NOT AT BASELINE; the lock stays: ${readback.mismatches.join("; ")}`);
-    if (error) throw new Error(error);
-    if (failures.length) process.exitCode = 1;
-  } finally {
-    if (!keepLock) await releaseLock(lock);
   }
+  const secrets = [
+    [web.apiKey, "api-key"],
+    [foreignWeb.apiKey, "foreign-api-key"],
+    [web.projectNumber, "project-number"],
+    [foreignWeb.projectNumber, "foreign-project-number"],
+  ];
+  const result = await runProduction({
+    ledger: env.FIREEMU_SANDBOX_LEDGER,
+    privateRoot,
+    programs,
+    operatorConfirmation: confirmedNoAuthRecording(),
+    secrets,
+    get packetSha256() {
+      return admissionResult?.packetSha256;
+    },
+    admission: async () => {
+      admissionResult = await localAdmission();
+      return admissionResult;
+    },
+    target: () => productionTarget(web, foreignWeb),
+    fetchJson: (target, method, url, body, quota) => ownerFetch(target, method, url, body, quota),
+    compileProbe,
+    clockOffset: assertClockSynchronized,
+    recordOnce: (target, n) => recordOnce(programs, target, n),
+    writeFixture: (recordings, meta) =>
+      writeFixture({
+        programs,
+        recordings,
+        meta,
+        secrets: [
+          web.apiKey,
+          SANDBOX_PROJECT,
+          web.projectNumber,
+          foreignWeb.apiKey,
+          FOREIGN_PROJECT,
+          foreignWeb.projectNumber,
+        ],
+      }),
+    recentAbort: (text) => recentAbort(text),
+    stopRequested: () => stopRequested,
+    now: () => new Date(),
+    log: (value) => console.log(JSON.stringify(value, null, 2)),
+  });
+  if (result.failures.length) process.exitCode = 1;
 }
+
+let admissionResult;
 
 async function rebuildFixture(runDir) {
   const meta = JSON.parse(await readFile(join(runDir, "meta.json"), "utf8"));
@@ -887,8 +686,16 @@ async function exportComparison(out) {
 if (import.meta.url === `file://${process.argv[1]}`) {
   const mode = process.argv[2];
   if (mode === "preflight") {
+    // Read only: the compile probe writes, and runs only under the lock in record-production.
     const target = await productionTarget(await sandboxWebConfig(), await foreignWebConfig());
-    console.log(JSON.stringify(await preflight(target), null, 2));
+    const fetchJson = (method, url, body, quota) => ownerFetch(target, method, url, body, quota);
+    console.log(
+      JSON.stringify(
+        { baseline: await readBaseline(fetchJson), foreign: await readForeign(fetchJson) },
+        null,
+        2,
+      ),
+    );
   } else if (mode === "admission") {
     const { sha, problems } = await localAdmission();
     console.log(JSON.stringify({ sha, problems }, null, 2));

@@ -8,7 +8,14 @@ export { PRINCIPALS, PROGRAMS };
 
 /** Recorded requests of one recording may not exceed this; a recording records it twice. */
 export const REQUEST_CAP = 200;
-const ACTIONS = new Set(["refresh", "publish", "seed", "sleep", "delete-tenant"]);
+const ACTIONS = new Set([
+  "refresh",
+  "publish",
+  "seed",
+  "sleep",
+  "delete-tenant",
+  "wait-since-deletion",
+]);
 const PROVIDERS = new Set(["password", "admin-password", "foreign"]);
 const TENANT_SLOTS = new Set(["t1", "t2"]);
 
@@ -49,6 +56,8 @@ export function validateCorpus(programs, principals = PRINCIPALS) {
       if (step.action) {
         if (!ACTIONS.has(step.action))
           throw new Error(`${program.id}: unknown action ${step.action}`);
+        if (step.action === "wait-since-deletion" && !deleted.has(step.tenant))
+          throw new Error(`${program.id}: waits for tenant ${step.tenant} before deleting it`);
         if (step.action === "delete-tenant") {
           if (!TENANT_SLOTS.has(step.tenant))
             throw new Error(`${program.id}: unknown tenant slot ${step.tenant}`);

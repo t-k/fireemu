@@ -75,6 +75,13 @@ export function createSession(
   let harnessRequests = 0;
   /** Harness requests sent to the other project (X9), which gets its own ledger line. */
   let foreignRequests = 0;
+  /**
+   * Every account of the other project this session may have created, named before its sign-up:
+   * `{ email, localId?, deleted }`. The runner reads each email back at the end.
+   */
+  const foreignAccounts = [];
+  /** When each tenant was deleted (Date.now()), for the probes timed from it. */
+  const tenantDeletedAt = new Map();
   /** A sleep that ends early once a stop is requested, so a signal never waits out a long wait. */
   async function pause(ms) {
     const until = Date.now() + ms;
@@ -118,6 +125,8 @@ export function createSession(
     for (const [slot, { id }] of tenants) text = text.replaceAll(id, `<tenant:${slot}>`);
     const foreign = ctx.target.foreign?.project;
     if (foreign) text = text.replaceAll(foreign, "<foreign-project>");
+    const foreignNumber = ctx.target.foreign?.projectNumber;
+    if (foreignNumber) text = text.replaceAll(String(foreignNumber), "<foreign-project-number>");
     return JSON.parse(text);
   }
   /** Rulesets this session created in production, deleted at the end. */
@@ -130,6 +139,8 @@ export function createSession(
   const superseded = new Map();
   /** Every publication with how long it took to settle, for the evidence. */
   const publications = [];
+  /** How long after a tenant's deletion each later row was answered, for the evidence. */
+  const timings = [];
   /** Sandbox configuration changes, for the ledger. */
   const changes = [];
   /** The run's tenants by slot (`t1`, `t2`): `{ id, deleted }`. */
@@ -291,11 +302,20 @@ export function createSession(
         // createUser does; a local id already taken fails the run rather than being adopted.
         const localId = spec.sameUid ? sameLocalId(ctx) : undefined;
         const email = principalEmail(ctx, name);
-        await admin("POST", "itk", accountsPath({ tenantId }), {
+        const { json: created } = await admin("POST", "itk", accountsPath({ tenantId }), {
           ...(localId ? { localId } : {}),
           email,
           password: PASSWORD,
         });
+        // Known to cleanup before the sign-in, which may still fail.
+        if (created?.localId)
+          principals.set(name, {
+            spec,
+            uid: created.localId,
+            tenantId,
+            tenantSlot: spec.tenant,
+            snapshots: new Map(),
+          });
         ({ json: answer } = await client("v1/accounts:signInWithPassword", {
           email,
           password: PASSWORD,
@@ -397,26 +417,51 @@ export function createSession(
       });
     }
     const email = principalEmail(ctx, name);
-    const adminPath = (path) => `v1/projects/${foreign.project}/${path}`;
-    const lookup = async (body) =>
-      (await foreignCall("admin", adminPath("accounts:lookup"), body)).json?.users ?? [];
-    if ((await lookup({ email: [email] })).length)
+    if ((await foreignLookup({ email: [email] })).length)
       throw fatal(`the foreign account ${name} already exists`);
-    const { json: answer } = await foreignCall("client", "v1/accounts:signUp", {
-      email,
-      password: PASSWORD,
-      returnSecureToken: true,
-    });
-    const { json: own } = await foreignCall("client", "v1/accounts:lookup", {
-      idToken: answer?.idToken,
-    });
-    if (!answer?.localId || own?.users?.[0]?.localId !== answer.localId)
-      throw fatal(`the foreign token of ${name} names another account`);
-    await foreignCall("admin", adminPath("accounts:delete"), { localId: answer.localId });
-    if ((await lookup({ localId: [answer.localId] })).length)
-      throw fatal(`the foreign account ${name} did not read back as deleted`);
+    // Named before the sign-up: a sign-up whose answer is lost is still found by its email.
+    const account = { email, deleted: false };
+    foreignAccounts.push(account);
+    let answer;
+    try {
+      ({ json: answer } = await foreignCall("client", "v1/accounts:signUp", {
+        email,
+        password: PASSWORD,
+        returnSecureToken: true,
+      }));
+      account.localId = answer?.localId;
+      const { json: own } = await foreignCall("client", "v1/accounts:lookup", {
+        idToken: answer?.idToken,
+      });
+      if (!answer?.localId || own?.users?.[0]?.localId !== answer.localId)
+        throw fatal(`the foreign token of ${name} names another account`);
+    } finally {
+      // Whatever failed above, an account the sign-up made is deleted and read back at once.
+      await deleteForeignAccount(account);
+    }
     changes.push("foreign-project test account created, token taken, deleted (read back)");
     return answer;
+  }
+
+  const foreignAdminPath = (path) => `v1/projects/${ctx.target.foreign.project}/${path}`;
+  const foreignLookup = async (body) =>
+    (await foreignCall("admin", foreignAdminPath("accounts:lookup"), body)).json?.users ?? [];
+
+  /**
+   * Deletes one account of the other project by the local id its sign-up answered, or else by
+   * looking its email up, and reads back that it is gone. Idempotent.
+   */
+  async function deleteForeignAccount(account) {
+    if (account.deleted) return;
+    const localId =
+      account.localId ?? (await foreignLookup({ email: [account.email] }))[0]?.localId;
+    if (localId) {
+      account.localId = localId;
+      await foreignCall("admin", foreignAdminPath("accounts:delete"), { localId });
+      if ((await foreignLookup({ localId: [localId] })).length)
+        throw fatal("a foreign account did not read back as deleted");
+    }
+    account.deleted = true;
   }
 
   /** One Identity Toolkit call on the foreign project, as its administrator or a client. */
@@ -557,6 +602,7 @@ export function createSession(
     if ((json?.tenants ?? []).some(({ name }) => name.endsWith(`/tenants/${tenant.id}`)))
       throw fatal(`tenant ${slot} is still listed after its deletion`);
     tenant.deleted = true;
+    tenantDeletedAt.set(slot, Date.now());
     for (const principal of principals.values())
       if (principal.tenantSlot === slot) principal.deleted = true;
     changes.push(`tenant ${slot} deleted`);
@@ -567,10 +613,21 @@ export function createSession(
     let failure;
     try {
       await eachOf([...tenants.keys()], deleteTenant);
+      // A tenant whose creation answer was lost is not in `tenants`; while multi-tenancy is on
+      // the whole list must read back empty (preflight saw none), or the flag stays on.
+      if (tenantConfigChanged) {
+        const { json } = await admin(
+          "GET",
+          "itk",
+          `v2/projects/${ctx.project}/tenants?pageSize=100`,
+        );
+        if ((json?.tenants ?? []).length)
+          throw fatal(`${json.tenants.length} tenant(s) remain; multiTenant.allowTenants left on`);
+      }
     } catch (error) {
       failure = error;
     }
-    if (tenantConfigChanged) {
+    if (tenantConfigChanged && !failure) {
       try {
         await admin(
           "PATCH",
@@ -1136,6 +1193,11 @@ export function createSession(
         return deletePrincipal(principal);
       case "delete-tenant":
         return deleteTenant(step.tenant);
+      case "wait-since-deletion": {
+        const since = tenantDeletedAt.get(step.tenant);
+        if (since === undefined) throw fatal(`tenant ${step.tenant} was not deleted`);
+        return pause(Math.max(0, since + step.ms - Date.now()));
+      }
       case "publish":
         return publish(step.ruleset, step.database ?? "default");
       case "seed":
@@ -1217,6 +1279,13 @@ export function createSession(
         }
         raw.set(step.id, outcome.json);
         steps[step.id] = outcome.recorded;
+        for (const [slot, at] of tenantDeletedAt)
+          timings.push({
+            program: program.id,
+            step: step.id,
+            tenant: slot,
+            sinceDeletionMs: Date.now() - at,
+          });
         log(
           `${program.id}#${step.id} ${outcome.recorded.status ?? `grpc ${outcome.recorded.grpc}`}`,
         );
@@ -1259,7 +1328,13 @@ export function createSession(
     },
     /** Databases whose release this session touched, `default` last. */
     touchedDatabases: () => [...touched].toSorted((a, b) => (a === "default") - (b === "default")),
-    evidence: () => ({ publications, changes }),
+    evidence: () => ({
+      publications,
+      changes,
+      timings,
+      foreignAccounts: foreignAccounts.map(({ email, deleted }) => ({ email, deleted })),
+    }),
+    deleteForeignAccounts: () => eachOf(foreignAccounts, deleteForeignAccount),
     tenants: () => tenants,
     close: async () => {
       grpcClient.close();
@@ -1315,6 +1390,7 @@ export async function runCorpus({ programs, principals: allPrincipals }, ctx, op
     () => session.wipe(),
     () => session.deleteDatabases(),
     () => session.deletePrincipals(),
+    () => session.deleteForeignAccounts(),
     () => session.deleteTenants(),
     () => session.deleteCreatedRulesets(),
     async () => {

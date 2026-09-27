@@ -7,6 +7,10 @@ import { test } from "node:test";
 import {
   acquireLock,
   admissionProblems,
+  APPROVAL_TOPIC,
+  approvalProblems,
+  approvalUsed,
+  scrub,
   ATB_AUTHORIZED_DOMAINS,
   ATB_TEST_PHONES,
   closingLines,
@@ -61,55 +65,87 @@ test("admission refuses another lane's recent line or open run on either project
   assert.match(admissionProblems(recovery, SANDBOX_PROJECT, NOW).join(), /X on .* needs recovery/);
 });
 
-test("another lane's run is open until any later line of it, for six hours", () => {
-  const started = (hours) => ({
-    ts: ago(hours * 60),
+test("another lane's run stays open until a line of it ends the run, however old", () => {
+  const started = (minutes) => ({
+    ts: ago(minutes),
     taskId: "OTHER",
     project: SANDBOX_PROJECT,
     event: "started",
   });
+  const later = (fields) => ({ ts: ago(60), taskId: "OTHER", project: SANDBOX_PROJECT, ...fields });
   assert.match(
-    admissionProblems(ledger(started(2)), SANDBOX_PROJECT, NOW).join(),
+    admissionProblems(ledger(started(120)), SANDBOX_PROJECT, NOW).join(),
     /OTHER on .* is open/,
   );
-  assert.deepEqual(admissionProblems(ledger(started(7)), SANDBOX_PROJECT, NOW), []);
-  const ended = ledger(started(2), {
-    ts: ago(60),
-    taskId: "OTHER",
-    project: SANDBOX_PROJECT,
-    outcome: "exploration-recorded",
-  });
-  assert.deepEqual(admissionProblems(ended, SANDBOX_PROJECT, NOW), []);
+  assert.match(
+    admissionProblems(ledger(started(60 * 24 * 7)), SANDBOX_PROJECT, NOW).join(),
+    /is open/,
+  );
+  for (const [label, fields] of Object.entries({
+    change: { event: "change" },
+    note: { event: "note" },
+    control: { event: "control", status: 200 },
+    "off baseline": { event: "finished", outcome: "recorded", sandboxAtBaseline: false },
+  }))
+    assert.match(
+      admissionProblems(ledger(started(120), later(fields)), SANDBOX_PROJECT, NOW).join(),
+      /is open/,
+      label,
+    );
+  for (const [label, fields] of Object.entries({
+    outcome: { outcome: "exploration-recorded" },
+    finished: { event: "finished", outcome: "recorded", sandboxAtBaseline: true },
+    verified: { event: "cleanup-verified" },
+  }))
+    assert.deepEqual(
+      admissionProblems(ledger(started(120), later(fields)), SANDBOX_PROJECT, NOW),
+      [],
+      label,
+    );
   // A line without a task id names no run.
-  const anonymous = ledger({ ts: ago(60), project: SANDBOX_PROJECT, event: "started" });
-  assert.deepEqual(admissionProblems(anonymous, SANDBOX_PROJECT, NOW), []);
+  assert.deepEqual(
+    admissionProblems(
+      ledger({ ts: ago(60), project: SANDBOX_PROJECT, event: "started" }),
+      SANDBOX_PROJECT,
+      NOW,
+    ),
+    [],
+  );
 });
 
-test("another lane's needs-recovery stays open until a line ends its run", () => {
-  const recovery = {
-    ts: ago(3000),
-    taskId: "OTHER",
-    project: SANDBOX_PROJECT,
-    event: "needs-recovery",
-  };
-  assert.match(admissionProblems(ledger(recovery), SANDBOX_PROJECT, NOW).join(), /needs recovery/);
-  const note = { ts: ago(2000), taskId: "OTHER", project: SANDBOX_PROJECT, event: "note" };
-  assert.match(
-    admissionProblems(ledger(recovery, note), SANDBOX_PROJECT, NOW).join(),
-    /needs recovery/,
+test("today's ledger shape: a started line followed only by changes keeps the other project open", () => {
+  const text = ledger(
+    { ts: ago(400), taskId: "FUNCTIONS-HTTP-SANDBOX", project: FOREIGN_PROJECT, event: "started" },
+    ...[300, 200, 100].map((m) => ({
+      ts: ago(m),
+      taskId: "FUNCTIONS-HTTP-SANDBOX",
+      project: FOREIGN_PROJECT,
+      event: "change",
+    })),
   );
-  for (const end of [
-    { event: "finished", outcome: "recovered-no-observation" },
-    { event: "cleanup-verified" },
-  ]) {
-    const closed = ledger(recovery, {
-      ts: ago(2000),
+  assert.deepEqual(admissionProblems(text, SANDBOX_PROJECT, NOW), []);
+  assert.deepEqual(admissionProblems(text, FOREIGN_PROJECT, NOW), [
+    `FUNCTIONS-HTTP-SANDBOX on ${FOREIGN_PROJECT} is open since ${ago(400)}`,
+  ]);
+});
+
+test("a line with an unreadable time is a problem, not a pass", () => {
+  const text = ledger({ ts: "garbage", taskId: "OTHER", project: SANDBOX_PROJECT, event: "note" });
+  assert.match(admissionProblems(text, SANDBOX_PROJECT, NOW).join(), /unreadable time/);
+});
+
+test("the 30-minute rule names each other task once", () => {
+  const text = ledger(
+    ...[5, 10, 15].map((m) => ({
+      ts: ago(m),
       taskId: "OTHER",
       project: SANDBOX_PROJECT,
-      ...end,
-    });
-    assert.deepEqual(admissionProblems(closed, SANDBOX_PROJECT, NOW), [], JSON.stringify(end));
-  }
+      event: "note",
+    })),
+  );
+  assert.deepEqual(admissionProblems(text, SANDBOX_PROJECT, NOW), [
+    `OTHER wrote a line on ${SANDBOX_PROJECT} at ${ago(5)}`,
+  ]);
 });
 
 test("this task's own unclean end blocks its next run", () => {
@@ -258,4 +294,51 @@ test("both projects get a started line and the same kind of closing line", () =>
     ],
   );
   assert.ok(unclean.every(({ error }) => error === "readback failed"));
+});
+
+test("an approval names this packet, commit and harness exactly once, and nothing on its topic follows", () => {
+  const binding = {
+    packetSha256: "p".repeat(64),
+    sourceCommit: "c".repeat(40),
+    harnessDigest: "h".repeat(64),
+  };
+  const approve = (extra = "") =>
+    `- 2026-09-27 | ${APPROVAL_TOPIC} | decision=APPROVE; packetSha256=${"p".repeat(64)}; sourceCommit=${"c".repeat(40)}; harnessDigest=${"h".repeat(64)}; attempts=1${extra} | オーナー（直接の返答） | docs.local/x`;
+  assert.deepEqual(
+    approvalProblems(`# header\n${approve()}\n- 2026-09-27 | OTHER | x | オーナー | y\n`, binding),
+    [],
+  );
+  const cases = {
+    missing: "",
+    "not the owner": approve().replace("オーナー（直接の返答）", "Claude（委任）"),
+    "another packet": approve().replace("p".repeat(64), "q".repeat(64)),
+    "an extra item": approve("; attempts=2"),
+    twice: `${approve()}\n${approve()}`,
+    revoked: `${approve()}\n- 2026-09-27 | ${APPROVAL_TOPIC} | decision=REVOKE | オーナー | x`,
+  };
+  for (const [label, text] of Object.entries(cases))
+    assert.notDeepEqual(approvalProblems(text, binding), [], label);
+});
+
+test("an approval is used by the run that starts under it", () => {
+  const text = ledger({
+    ts: ago(10),
+    taskId: TASK_ID,
+    project: SANDBOX_PROJECT,
+    event: "started",
+    packetSha256: "p",
+  });
+  assert.equal(approvalUsed(text, "p"), true);
+  assert.equal(approvalUsed(text, "q"), false);
+});
+
+test("records never carry the run's keys, project numbers or tokens", () => {
+  const text = "key AIzaSECRET in 592603257417 and 1049549757969 with eyJhbGciOi.eyJzdWIi.c2ln";
+  const out = scrub(text, [
+    ["AIzaSECRET", "api-key"],
+    ["592603257417", "project-number"],
+    ["1049549757969", "foreign-project-number"],
+    [undefined, "missing"],
+  ]);
+  assert.equal(out, "key <api-key> in <project-number> and <foreign-project-number> with <token>");
 });

@@ -36,18 +36,23 @@ export function isCleanTerminal(row) {
   return row.sandboxAtBaseline === true && row.outcome !== undefined;
 }
 
-/** A line that ends a run: anything but a start, a recovery request or a mid-run note or change. */
+/**
+ * A line that ends a run: a closing line (an outcome, `finished` or `cleanup-verified`) that does
+ * not say the sandbox was left off its baseline. Notes, changes and controls end nothing.
+ */
 const endsRun = (row) =>
   row.event !== "started" &&
   row.event !== "needs-recovery" &&
-  (row.outcome !== undefined || row.event === "finished" || row.event === "cleanup-verified");
+  (row.outcome !== undefined || row.event === "finished" || row.event === "cleanup-verified") &&
+  row.sandboxAtBaseline !== false;
 
 /**
- * Why this task may not start on `project` now (the FS-RULES convention on both projects):
- * - another task's `started` line of the last 6 hours with no later line of that task;
- * - another task's `needs-recovery` line (of any age) with no later line that ends the run;
+ * Why this task may not start on `project` now, on both projects alike:
+ * - another task's `started` or `needs-recovery` line not followed by a line of that task that
+ *   ends the run, however old (a run that stopped without a closing line stays open);
  * - another task's line there in the last 30 minutes;
- * - this task's own last run there not ended cleanly (`isCleanTerminal`).
+ * - this task's own last run there not ended cleanly (`isCleanTerminal`);
+ * - a line whose time cannot be read, which no rule could judge.
  * Lines without a task id name no run and are skipped.
  */
 export function admissionProblems(ledgerText, project, now = Date.now()) {
@@ -58,6 +63,10 @@ export function admissionProblems(ledgerText, project, now = Date.now()) {
   const unfinished = new Map();
   for (const entry of lines) {
     const task = entry.taskId;
+    if (!Number.isFinite(Date.parse(entry.ts)))
+      problems.push(
+        `${task} on ${project} has a line with an unreadable time ${JSON.stringify(entry.ts)}`,
+      );
     if (task === TASK_ID) {
       if (entry.event === "started" || entry.event === "needs-recovery" || !isCleanTerminal(entry))
         unfinished.set(task, entry);
@@ -65,20 +74,78 @@ export function admissionProblems(ledgerText, project, now = Date.now()) {
       continue;
     }
     if (entry.event === "started" || entry.event === "needs-recovery") unfinished.set(task, entry);
-    else if (unfinished.get(task)?.event === "started" || endsRun(entry)) unfinished.delete(task);
+    else if (endsRun(entry)) unfinished.delete(task);
   }
   for (const [task, entry] of unfinished) {
     if (task === TASK_ID)
       problems.push(`this task's run of ${entry.ts} on ${project} did not end cleanly`);
     else if (entry.event === "needs-recovery")
       problems.push(`${task} on ${project} needs recovery since ${entry.ts}`);
-    else if (now - Date.parse(entry.ts) < 6 * 3_600_000)
-      problems.push(`${task} on ${project} is open since ${entry.ts}`);
+    else problems.push(`${task} on ${project} is open since ${entry.ts}`);
   }
+  const recent = new Map();
   for (const entry of lines)
-    if (entry.taskId !== TASK_ID && now - Date.parse(entry.ts) < 30 * 60_000)
-      problems.push(`${entry.taskId} wrote a line on ${project} at ${entry.ts}`);
+    if (entry.taskId !== TASK_ID && now - Date.parse(entry.ts) < 30 * 60_000) {
+      const seen = recent.get(entry.taskId);
+      if (seen === undefined || Date.parse(entry.ts) > Date.parse(seen))
+        recent.set(entry.taskId, entry.ts);
+    }
+  for (const [task, ts] of recent) problems.push(`${task} wrote a line on ${project} at ${ts}`);
   return problems;
+}
+
+/** Whether a run of this task already started under `packetSha256`: an approval is used once. */
+export function approvalUsed(ledgerText, packetSha256) {
+  return ledgerEntries(ledgerText).some(
+    (entry) =>
+      entry.taskId === TASK_ID && entry.event === "started" && entry.packetSha256 === packetSha256,
+  );
+}
+
+// ---- owner approval ------------------------------------------------------------------------
+
+export const APPROVAL_TOPIC = "AUTH-FS-CROSS stage-1 packet";
+
+/**
+ * Why the owner ledger does not approve this packet: exactly one line
+ * `- YYYY-MM-DD | AUTH-FS-CROSS stage-1 packet | decision=APPROVE; packetSha256=…; sourceCommit=…;
+ * harnessDigest=…; attempts=1 | オーナー… | …` must name it, and no later line on the same topic
+ * (a revocation or a newer decision) may follow it.
+ */
+export function approvalProblems(ownerText, { packetSha256, sourceCommit, harnessDigest }) {
+  const required = new Set([
+    "decision=APPROVE",
+    `packetSha256=${packetSha256}`,
+    `sourceCommit=${sourceCommit}`,
+    `harnessDigest=${harnessDigest}`,
+    "attempts=1",
+  ]);
+  const topical = ownerText
+    .split("\n")
+    .map((line) => line.trim())
+    .map((line) => ({ line, fields: line.split("|").map((field) => field.trim()) }))
+    .filter(({ fields }) => fields[1] === APPROVAL_TOPIC);
+  const approves = ({ fields }) =>
+    fields.length >= 5 &&
+    /^- \d{4}-\d{2}-\d{2}$/.test(fields[0]) &&
+    fields[3].startsWith("オーナー") &&
+    fields[2].split(";").length === required.size &&
+    fields[2].split(";").every((item) => required.has(item.trim()));
+  const approvals = topical.filter(approves);
+  if (approvals.length !== 1)
+    return [`the owner ledger has ${approvals.length} approval line(s) of this packet, not one`];
+  if (topical.at(-1) !== approvals[0])
+    return ["a later owner line on this packet's topic follows its approval"];
+  return [];
+}
+
+// ---- secrets -------------------------------------------------------------------------------
+
+/** Replaces the run's secrets and anything shaped like a token before text reaches a record. */
+export function scrub(text, secrets) {
+  let out = String(text);
+  for (const [value, name] of secrets) if (value) out = out.replaceAll(String(value), `<${name}>`);
+  return out.replaceAll(/eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]*/g, "<token>");
 }
 
 // ---- lock ----------------------------------------------------------------------------------
@@ -173,7 +240,7 @@ export function finalMismatches(reads) {
 // ---- ledger lines --------------------------------------------------------------------------
 
 /** The `started` lines of both projects, written together after admission, under the lock. */
-export function startedLines({ ts, sha, programs, operatorConfirmation, lock }) {
+export function startedLines({ ts, sha, programs, operatorConfirmation, lock, packetSha256 }) {
   return [SANDBOX_PROJECT, FOREIGN_PROJECT].map((project) => ({
     ts,
     event: "started",
@@ -181,9 +248,12 @@ export function startedLines({ ts, sha, programs, operatorConfirmation, lock }) 
     project,
     stage: 1,
     gitSha: sha,
+    packetSha256,
     programs,
     operatorConfirmation,
     lockSha256: lock.sha256,
+    // The packet's reservation, counted even if the run fails.
+    maxEstimatedUsd: project === SANDBOX_PROJECT ? 1 : 0,
   }));
 }
 

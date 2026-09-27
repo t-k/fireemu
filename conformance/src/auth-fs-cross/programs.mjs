@@ -138,7 +138,8 @@ const deletedTenant = {
     // Two probes: soon after the deletion, and after a minute (C5: a probe, never silence).
     { action: "sleep", ms: 3000 },
     ...afterDeletion("3s"),
-    { action: "sleep", ms: 62_000 },
+    // Timed from the deletion's answer, not from the end of the first probe.
+    { action: "wait-since-deletion", tenant: "t1", ms: 65_000 },
     ...afterDeletion("65s"),
   ],
 };

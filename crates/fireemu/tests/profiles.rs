@@ -504,3 +504,46 @@ fn without_a_ruleset_strict_refuses_client_requests_and_the_emulator_profile_all
     assert_eq!(status, 404, "{body}");
     emulator.stop();
 }
+
+/// The daemon loads and evaluates the deepest expressions production compiles on its own
+/// runtime threads, whose stack is sized for them in a debug build too: lists and calls nested
+/// 99 levels, and 62 nested negations (evaluation stops at 64 levels, `eval::MAX_EVAL_NESTING`),
+/// are answered instead of overflowing a thread. With a 1 MiB stack the daemon does not answer.
+#[test]
+fn the_daemon_evaluates_the_deepest_accepted_expression() {
+    let daemon = Daemon::start_with("deep", "strict", "");
+    let port = daemon.firestore_port();
+    // Negations nest in the syntax tree (parentheses do not), so evaluation recurses; an even
+    // count keeps the condition true.
+    let condition = format!("{}true", "!".repeat(62));
+    let lists = format!("{}{} != null", "[".repeat(98), "]".repeat(98));
+    let calls = format!("{}true{}", "id(".repeat(98), ")".repeat(98));
+    let rules = serde_json::json!({"rules": {"files": [{"name": "firestore.rules", "content": format!(
+        "rules_version = '2';\nservice cloud.firestore {{\n  match /databases/{{database}}/documents {{\n    function id(x) {{ return x; }}\n    match /deep/{{id}} {{ allow get: if {condition}; }}\n    match /lists/{{id}} {{ allow get: if {lists}; }}\n    match /calls/{{id}} {{ allow get: if {calls}; }}\n  }}\n}}\n"
+    )}]}})
+    .to_string();
+    let (status, body) = http(
+        port,
+        "PUT",
+        "/emulator/v1/projects/demo-profile-deep:securityRules",
+        Some(&rules),
+    );
+    assert_eq!(status, 200, "{body}");
+    let (status, body) = http(
+        port,
+        "GET",
+        "/v1/projects/demo-profile-deep/databases/(default)/documents/deep/d",
+        None,
+    );
+    assert_eq!(status, 404, "the rule allows a missing document: {body}");
+    for collection in ["lists", "calls"] {
+        let (status, body) = http(
+            port,
+            "GET",
+            &format!("/v1/projects/demo-profile-deep/databases/(default)/documents/{collection}/d"),
+            None,
+        );
+        assert!(matches!(status, 403 | 404), "{collection}: {status} {body}");
+    }
+    daemon.stop();
+}

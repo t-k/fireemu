@@ -2,6 +2,7 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { buildCorpus, validateCorpus } from "./corpus.mjs";
+import { buildPublicationSources } from "./publication.mjs";
 
 const host = process.env.FIREBASE_STORAGE_EMULATOR_HOST;
 const controlBase = process.env.FIREEMU_CONTROL_URL;
@@ -113,6 +114,12 @@ try {
     const snapshot = await rulesSnapshot();
     assert.equal(snapshot.source, candidate.content, `local readback ${candidate.ref}`);
   }
+  const bundles = buildPublicationSources(corpus, binding);
+  for (const bundle of bundles) {
+    status(await activate(bundle.content), 200, `local bundle v${bundle.version}`);
+    const snapshot = await rulesSnapshot();
+    assert.equal(snapshot.source, bundle.content, `local bundle v${bundle.version} readback`);
+  }
   const priorSource = (await rulesSnapshot()).source;
   status(await activate(compile.invalidSource.content), 400, "invalid local Storage rule refused");
   assert.equal((await rulesSnapshot()).source, priorSource, "invalid local rule preserved active source");
@@ -132,7 +139,7 @@ try {
   status(await firebaseGet(switched.objectA), 403, "Firebase refuses after local clear");
   status(await adminGet(switched.objectA, true), 200, "admin bypass remains after local clear");
 
-  console.log(`storage-rules local smoke passed: ${compile.validSources.length} valid sources, 1 invalid source, 3 management recipes, ${assertions} status checks`);
+  console.log(`storage-rules local smoke passed: ${compile.validSources.length} valid sources, ${bundles.length} bundles, 1 invalid source, 3 management recipes, ${assertions} status checks`);
 } finally {
   await rules("DELETE");
   for (const name of [...owned]) await removeOwned(name);

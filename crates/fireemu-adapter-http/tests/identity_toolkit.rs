@@ -10787,11 +10787,14 @@ fn tenant_password_policy_null_without_mask_is_absent_and_list_projects_policy()
 
     let before = admin(&s, "GET", path, &Value::Null);
     assert_eq!(before.0, 200, "{}", before.1);
+    // An update answers the tenant without the scrypt parameters a read adds.
+    let mut unchanged = before.1.clone();
+    unchanged.as_object_mut().unwrap().remove("hashConfig");
 
     // A message-level ProtoJSON null without an update mask is absent and preserves the policy.
     let absent = admin(&s, "PATCH", path, &json!({"passwordPolicyConfig": null}));
     assert_eq!(absent.0, 200, "{}", absent.1);
-    assert_eq!(absent.1, before.1);
+    assert_eq!(absent.1, unchanged);
 
     // A selected null explicitly clears the message to the default policy.
     let cleared = admin(
@@ -10801,9 +10804,12 @@ fn tenant_password_policy_null_without_mask_is_absent_and_list_projects_policy()
         &json!({"passwordPolicyConfig": null}),
     );
     assert_eq!(cleared.0, 200, "{}", cleared.1);
-    assert_eq!(
-        cleared.1["passwordPolicyConfig"]["passwordPolicyEnforcementState"],
-        "OFF"
+    // A tenant without a configured policy has no passwordPolicyConfig member, as a new
+    // tenant has none (AUTH-TENANT-BLOCKING recording 2026-09-27, manage#create-minimal).
+    assert!(
+        cleared.1.get("passwordPolicyConfig").is_none(),
+        "{}",
+        cleared.1
     );
 
     let restored = admin(
@@ -13205,9 +13211,10 @@ fn tenant_config_rejects_malformed_unmasked_fields_without_mutation() {
     for (label, body) in [
         (
             "client-permissions",
+            // A message where a switch belongs; production reads "true" as a switch.
             json!({
                 "displayName": "must-not-apply",
-                "client": {"permissions": {"disabledUserSignup": "true"}}
+                "client": {"permissions": {"disabledUserSignup": {"nested": true}}}
             }),
         ),
         (
@@ -13376,6 +13383,10 @@ fn tenant_config_patch_treats_protojson_null_messages_as_absent_or_clear() {
     assert_eq!(initial.0, 200, "{}", initial.1);
     let before = admin(&s, "GET", path, &Value::Null);
     assert_eq!(before.0, 200, "{}", before.1);
+    // An update answers the tenant without the read-only scrypt parameters a read adds
+    // (AUTH-TENANT-BLOCKING recording 2026-09-27, manage#patch-name).
+    let mut unchanged = before.1.clone();
+    unchanged.as_object_mut().unwrap().remove("hashConfig");
 
     let omitted = admin(
         &s,
@@ -13389,7 +13400,7 @@ fn tenant_config_patch_treats_protojson_null_messages_as_absent_or_clear() {
         }),
     );
     assert_eq!(omitted.0, 200, "{}", omitted.1);
-    assert_eq!(omitted.1, before.1);
+    assert_eq!(omitted.1, unchanged);
 
     let nested_nulls = admin(
         &s,
@@ -13405,7 +13416,7 @@ fn tenant_config_patch_treats_protojson_null_messages_as_absent_or_clear() {
         }),
     );
     assert_eq!(nested_nulls.0, 200, "{}", nested_nulls.1);
-    assert_eq!(nested_nulls.1, before.1);
+    assert_eq!(nested_nulls.1, unchanged);
 
     let cleared = admin(
         &s,
@@ -13419,17 +13430,23 @@ fn tenant_config_patch_treats_protojson_null_messages_as_absent_or_clear() {
     );
     assert_eq!(cleared.0, 200, "{}", cleared.1);
     assert!(cleared.1["displayName"].is_null());
-    assert_eq!(
-        cleared.1["client"]["permissions"]["disabledUserSignup"],
-        false
+    // Production leaves out a false switch.
+    assert!(
+        cleared.1["client"]["permissions"]["disabledUserSignup"].is_null(),
+        "{}",
+        cleared.1
     );
-    assert_eq!(
-        cleared.1["client"]["permissions"]["disabledUserDeletion"],
-        false
+    // Production leaves out a false switch.
+    assert!(
+        cleared.1["client"]["permissions"]["disabledUserDeletion"].is_null(),
+        "{}",
+        cleared.1
     );
-    assert_eq!(
-        cleared.1["emailPrivacyConfig"]["enableImprovedEmailPrivacy"],
-        false
+    // Production leaves out a false switch.
+    assert!(
+        cleared.1["emailPrivacyConfig"]["enableImprovedEmailPrivacy"].is_null(),
+        "{}",
+        cleared.1
     );
 }
 
@@ -13441,25 +13458,37 @@ fn tenant_create_rejects_malformed_settings_before_publishing_and_reads_back_sup
     let registry = Arc::new(AuthRegistry::new("demo-app", s.store.clone()));
     s.registry = Some(registry.clone());
     let collection = format!("{V2}/projects/demo-app/tenants");
+    // Bodies production cannot read as a Tenant are refused before anything is published.
     let malformed = [
         json!({"client": true}),
-        json!({"client": null}),
         json!({"client": {"permissions": "invalid"}}),
-        json!({"client": {"permissions": null}}),
-        json!({"client": {"permissions": {"disabledUserSignup": null}}}),
         json!({"client": {"permissions": {"unknown": true}}}),
         json!({"emailPrivacyConfig": []}),
-        json!({"emailPrivacyConfig": null}),
-        json!({"emailPrivacyConfig": {"enableImprovedEmailPrivacy": null}}),
         json!({"emailPrivacyConfig": {"unknown": true}}),
-        json!({"allowPasswordSignup": "true"}),
+        json!({"allowPasswordSignup": {"nested": true}}),
         json!({"unknownField": true}),
-        json!({"passwordPolicyConfig": null}),
     ];
     for body in malformed {
         let refused = handle_with(&s, "POST", &collection, &owner(), &body);
         assert_eq!(refused.status, 400, "{}", refused.body);
         assert!(registry.tenants("demo-app").is_empty(), "{body}");
+    }
+    // A ProtoJSON null is an absent member and a switch written as text is read as one, as
+    // production reads them (AUTH-TENANT-BLOCKING recording 2026-09-27, manage#create-bad-type).
+    for body in [
+        json!({"client": null}),
+        json!({"client": {"permissions": null}}),
+        json!({"client": {"permissions": {"disabledUserSignup": null}}}),
+        json!({"emailPrivacyConfig": null}),
+        json!({"emailPrivacyConfig": {"enableImprovedEmailPrivacy": null}}),
+        json!({"allowPasswordSignup": "true"}),
+        json!({"passwordPolicyConfig": null}),
+    ] {
+        let taken = handle_with(&s, "POST", &collection, &owner(), &body);
+        assert_eq!(taken.status, 200, "{body}: {}", taken.body);
+        let name = taken.body["name"].as_str().unwrap().to_owned();
+        let id = name.rsplit('/').next().unwrap();
+        assert!(registry.delete_tenant("demo-app", id), "{body}");
     }
 
     let created = handle_with(
@@ -18140,7 +18169,8 @@ fn tenant_reads_use_their_own_project_gate() {
         &Value::Null,
     );
     assert_eq!(status, 200, "{listed}");
-    assert_eq!(listed["tenants"], json!([]));
+    // An empty list is `{}` (AUTH-TENANT-BLOCKING recording 2026-09-27).
+    assert_eq!(listed, json!({}));
 }
 
 /// Turning tenant management off hides an existing tenant from client Auth without deleting its

@@ -189,7 +189,7 @@ fn localized_notification(mut notification: Value) -> Value {
 /// The project's Firebase scrypt parameters as production reports them. fireemu hashes
 /// passwords its own way; the key is derived from the project id so that it is stable, and
 /// comparisons treat it as key material (K12).
-fn hash_config(project: &str) -> Value {
+pub(super) fn hash_config(project: &str) -> Value {
     let b64 = fireemu_core_types::hash::base64_standard;
     let key = Sha512::digest(format!("fireemu scrypt signer key {project}").as_bytes());
     json!({

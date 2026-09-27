@@ -1205,19 +1205,23 @@ fn explicit_tenant_creation_defaults_sign_in_methods_off_until_patched() {
     for (profile, state, _registry) in profiles() {
         let created = create_tenant(&state, &json!({"displayName": "Minimal"}));
         let tenant = tenant_id_of(&created);
-        assert_eq!(
-            created["allowPasswordSignup"], false,
+        // Production leaves out a false switch.
+        assert!(
+            created["allowPasswordSignup"].is_null(),
             "{profile}: {created}"
         );
-        assert_eq!(
-            created["enableEmailLinkSignin"], false,
+        // Production leaves out a false switch.
+        assert!(
+            created["enableEmailLinkSignin"].is_null(),
             "{profile}: {created}"
         );
-        assert_eq!(
-            created["enableAnonymousUser"], false,
+        // Production leaves out a false switch.
+        assert!(
+            created["enableAnonymousUser"].is_null(),
             "{profile}: {created}"
         );
-        assert_eq!(created["disableAuth"], false, "{profile}: {created}");
+        // Production leaves out a false switch.
+        assert!(created["disableAuth"].is_null(), "{profile}: {created}");
 
         let password = json!({"email": "off@example.com", "password": "hunter22"});
         assert_eq!(
@@ -1283,9 +1287,13 @@ fn explicit_tenant_creation_defaults_sign_in_methods_off_until_patched() {
 /// `mfaConfig` is a constant `DISABLED` projection that refuses PATCH. Identity Platform's
 /// `Tenant.inheritance` covers only `emailSendingConfig`, so the copied and propagated
 /// fields are spec-derived hypotheses until observed.
+/// A tenant takes none of the project's settings, at creation or later, and its clients obey
+/// the tenant's own (AUTH-TENANT-BLOCKING sandbox recording 2026-09-27, `atb/tenant/inheritance`
+/// and `atb/tenant/settings`). This replaces fireemu's earlier model, in which a tenant copied the
+/// project's privacy and client permissions until it overrode them.
 #[test]
 #[allow(clippy::too_many_lines)]
-fn tenant_settings_inherit_at_creation_and_tenant_patches_override_them() {
+fn tenants_take_none_of_the_project_settings_and_obey_their_own() {
     for (profile, state, registry) in profiles() {
         // Project: an enforced 8-character minimum and email enumeration protection.
         let (status, project) = admin(
@@ -1301,10 +1309,6 @@ fn tenant_settings_inherit_at_creation_and_tenant_patches_override_them() {
             }),
         );
         assert_eq!(status, 200, "{profile}: {project}");
-        assert_eq!(
-            project["emailPrivacyConfig"]["enableImprovedEmailPrivacy"],
-            true
-        );
 
         let enabled = json!({
             "allowPasswordSignup": true,
@@ -1319,30 +1323,20 @@ fn tenant_settings_inherit_at_creation_and_tenant_patches_override_them() {
         untouched_body["displayName"] = json!("Untouched");
         let untouched = tenant_id_of(&create_tenant(&state, &untouched_body));
 
-        // The projection at creation: privacy and client permissions copied, the password
-        // policy not copied, MFA constant.
-        assert_eq!(created["allowPasswordSignup"], true);
-        assert_eq!(created["enableAnonymousUser"], true);
-        assert_eq!(
-            created["emailPrivacyConfig"]["enableImprovedEmailPrivacy"],
-            true
-        );
-        assert_eq!(
-            created["client"]["permissions"]["disabledUserSignup"],
-            false
-        );
-        assert_eq!(min_password_length(&created), 6, "{profile}: {created}");
-        assert_eq!(
-            created["passwordPolicyConfig"]["passwordPolicyEnforcementState"],
-            "OFF"
-        );
-        assert_eq!(
-            created["mfaConfig"],
-            json!({"state": "DISABLED", "enabledProviders": []})
-        );
-
-        // The client obeys the effective values: the tenant accepts a 7-character password
-        // (its own default policy) while the project enforces 8; both hide unknown emails.
+        // Nothing of the project's shows in a new tenant.
+        for absent in [
+            "emailPrivacyConfig",
+            "client",
+            "passwordPolicyConfig",
+            "mfaConfig",
+        ] {
+            assert!(
+                created.get(absent).is_none(),
+                "{profile}: {absent}: {created}"
+            );
+        }
+        // Its clients obey the tenant's own defaults: a 7-character password (the default
+        // policy) while the project enforces 8, and unknown addresses revealed (privacy off).
         assert_eq!(
             sign_up_status(
                 &state,
@@ -1362,7 +1356,7 @@ fn tenant_settings_inherit_at_creation_and_tenant_patches_override_them() {
         assert_eq!(class(&weak), "PASSWORD_DOES_NOT_MEET_REQUIREMENTS");
         assert_eq!(
             unknown_email_sign_in_class(&state, Some(&overridden)),
-            "INVALID_LOGIN_CREDENTIALS",
+            "EMAIL_NOT_FOUND",
             "{profile}"
         );
         assert_eq!(
@@ -1370,18 +1364,13 @@ fn tenant_settings_inherit_at_creation_and_tenant_patches_override_them() {
             "INVALID_LOGIN_CREDENTIALS",
             "{profile}"
         );
-        assert_eq!(
-            sign_up_status(&state, &overridden, json!({})).0,
-            200,
-            "{profile}"
-        );
 
-        // Tenant override: no anonymous or password sign-in, a 12-character minimum, and
-        // privacy off, while the project keeps its own values.
+        // Tenant settings: no anonymous or password sign-in, a 12-character minimum, and an
+        // MFA config, which production takes for a tenant (manage#create-mfa, patch-mfa).
         let (status, patched) = admin(
             &state,
             "PATCH",
-            &format!("{ADMIN_V2}/tenants/{overridden}?updateMask=enableAnonymousUser,allowPasswordSignup,passwordPolicyConfig,emailPrivacyConfig.enableImprovedEmailPrivacy"),
+            &format!("{ADMIN_V2}/tenants/{overridden}?updateMask=enableAnonymousUser,allowPasswordSignup,passwordPolicyConfig"),
             &json!({
                 "enableAnonymousUser": false,
                 "allowPasswordSignup": false,
@@ -1389,50 +1378,27 @@ fn tenant_settings_inherit_at_creation_and_tenant_patches_override_them() {
                     "passwordPolicyEnforcementState": "ENFORCE",
                     "passwordPolicyVersions": [{"customStrengthOptions": {"minPasswordLength": 12}}]
                 },
-                "emailPrivacyConfig": {"enableImprovedEmailPrivacy": false},
             }),
         );
         assert_eq!(status, 200, "{profile}: {patched}");
-        assert_eq!(patched["enableAnonymousUser"], false);
-        assert_eq!(patched["allowPasswordSignup"], false);
+        assert!(patched.get("enableAnonymousUser").is_none(), "{patched}");
+        assert!(patched.get("allowPasswordSignup").is_none(), "{patched}");
         assert_eq!(min_password_length(&patched), 12);
-        assert_eq!(
-            patched["emailPrivacyConfig"]["enableImprovedEmailPrivacy"],
-            false
-        );
         let (status, mfa_patch) = admin(
             &state,
             "PATCH",
             &format!("{ADMIN_V2}/tenants/{overridden}?updateMask=mfaConfig"),
             &json!({"mfaConfig": {"state": "ENABLED", "enabledProviders": ["PHONE_SMS"]}}),
         );
-        assert_eq!(status, 400, "{profile}: {mfa_patch}");
-        assert_eq!(class(&mfa_patch), "INVALID_ARGUMENT");
+        assert_eq!(status, 200, "{profile}: {mfa_patch}");
         assert_eq!(
-            read_tenant(&state, &overridden)["mfaConfig"]["state"],
-            "DISABLED"
+            read_tenant(&state, &overridden)["mfaConfig"],
+            json!({"state": "ENABLED", "enabledProviders": ["PHONE_SMS"]})
         );
 
-        let (status, project_now) = admin(&state, "GET", PROJECT_CONFIG, &json!({}));
-        assert_eq!(status, 200, "{profile}: {project_now}");
-        assert_eq!(min_password_length(&project_now), 8);
-        assert_eq!(
-            project_now["emailPrivacyConfig"]["enableImprovedEmailPrivacy"],
-            true
-        );
-
-        // The client obeys the override in the tenant and the project values on the project.
+        // The clients obey the tenant's settings.
         assert_eq!(
             sign_up_status(&state, &overridden, json!({})),
-            (400, "OPERATION_NOT_ALLOWED".to_owned()),
-            "{profile}"
-        );
-        assert_eq!(
-            sign_up_status(
-                &state,
-                &overridden,
-                json!({"email": "twelve@example.com", "password": "twelve-chars-ok"})
-            ),
             (400, "OPERATION_NOT_ALLOWED".to_owned()),
             "{profile}"
         );
@@ -1443,36 +1409,7 @@ fn tenant_settings_inherit_at_creation_and_tenant_patches_override_them() {
             json!({"email": "seven@example.com", "password": "seven77"}),
         );
         assert_eq!(status, 400, "{profile}: {refused}");
-        assert_eq!(
-            class(&refused),
-            "OPERATION_NOT_ALLOWED",
-            "{profile}: {refused}"
-        );
-        let (status, anonymous) = post(
-            &state,
-            &format!("{V1}/accounts:signUp?key={KEY}"),
-            &json!({}),
-        );
-        assert_eq!(status, 200, "{profile}: {anonymous}");
-        let (status, ok) = post(
-            &state,
-            &format!("{V1}/accounts:signUp?key={KEY}"),
-            &json!({"email": "project8@example.com", "password": "eight888"}),
-        );
-        assert_eq!(status, 200, "{profile}: {ok}");
-        assert_eq!(
-            unknown_email_sign_in_class(&state, None),
-            "INVALID_LOGIN_CREDENTIALS",
-            "{profile}"
-        );
-        assert_eq!(
-            unknown_email_sign_in_class(&state, Some(&untouched)),
-            "INVALID_LOGIN_CREDENTIALS",
-            "{profile}"
-        );
-
-        // Re-enable password sign-in: the tenant's own 12-character policy applies, not the
-        // project's 8, and the tenant now reveals unknown addresses (privacy override).
+        assert_eq!(class(&refused), "OPERATION_NOT_ALLOWED", "{profile}");
         let (status, patched) = admin(
             &state,
             "PATCH",
@@ -1499,103 +1436,65 @@ fn tenant_settings_inherit_at_creation_and_tenant_patches_override_them() {
             200,
             "{profile}"
         );
-        assert_eq!(
-            unknown_email_sign_in_class(&state, Some(&overridden)),
-            "EMAIL_NOT_FOUND",
-            "{profile}"
+        let (status, ok) = post(
+            &state,
+            &format!("{V1}/accounts:signUp?key={KEY}"),
+            &json!({"email": "project8@example.com", "password": "eight888"}),
         );
+        assert_eq!(status, 200, "{profile}: {ok}");
 
-        // Later project changes: copied client config follows on the untouched tenant, the
-        // overridden field stays overridden, and the password policy never follows.
+        // Later project changes reach no tenant (inheritance#sign-up-in-tenant, get-after).
         let (status, project) = admin(
             &state,
             "PATCH",
-            &format!("{PROJECT_CONFIG}?updateMask=passwordPolicyConfig,emailPrivacyConfig.enableImprovedEmailPrivacy,client.permissions.disabledUserSignup"),
+            &format!("{PROJECT_CONFIG}?updateMask=passwordPolicyConfig,client.permissions.disabledUserSignup"),
             &json!({
                 "passwordPolicyConfig": {
                     "passwordPolicyEnforcementState": "ENFORCE",
                     "passwordPolicyVersions": [{"customStrengthOptions": {"minPasswordLength": 10}}]
                 },
-                "emailPrivacyConfig": {"enableImprovedEmailPrivacy": false},
                 "client": {"permissions": {"disabledUserSignup": true}},
             }),
         );
         assert_eq!(status, 200, "{profile}: {project}");
-        let (status, project) = admin(
-            &state,
-            "PATCH",
-            &format!("{PROJECT_CONFIG}?updateMask=emailPrivacyConfig.enableImprovedEmailPrivacy"),
-            &json!({"emailPrivacyConfig": {"enableImprovedEmailPrivacy": true}}),
-        );
-        assert_eq!(status, 200, "{profile}: {project}");
-        let overridden_now = read_tenant(&state, &overridden);
-        assert_eq!(
-            min_password_length(&overridden_now),
-            12,
-            "{profile}: {overridden_now}"
-        );
-        assert_eq!(
-            overridden_now["emailPrivacyConfig"]["enableImprovedEmailPrivacy"],
-            false
-        );
-        assert_eq!(
-            overridden_now["client"]["permissions"]["disabledUserSignup"],
-            true
-        );
-        let untouched_now = read_tenant(&state, &untouched);
-        assert_eq!(
-            min_password_length(&untouched_now),
-            6,
-            "{profile}: {untouched_now}"
-        );
-        assert_eq!(
-            untouched_now["emailPrivacyConfig"]["enableImprovedEmailPrivacy"],
-            true
-        );
-        assert_eq!(
-            untouched_now["client"]["permissions"]["disabledUserSignup"],
-            true
-        );
-        // The propagated permission is enforced by both tenant stores, not only projected,
-        // and each tenant's effective privacy decides what the client learns.
         for tenant in [&overridden, &untouched] {
-            assert_eq!(
-                sign_up_status(
-                    &state,
-                    tenant,
-                    json!({"email": "blocked@example.com", "password": "twelve-chars-ok"})
-                ),
-                (400, "ADMIN_ONLY_OPERATION".to_owned()),
-                "{profile} {tenant}"
+            let document = read_tenant(&state, tenant);
+            assert!(document.get("client").is_none(), "{profile}: {document}");
+            assert!(
+                document.get("emailPrivacyConfig").is_none(),
+                "{profile}: {document}"
             );
             assert!(
-                registry
+                !registry
                     .tenant_store("demo-app", tenant)
                     .unwrap()
                     .lock()
                     .unwrap()
                     .config()
-                    .disabled_user_signup
+                    .disabled_user_signup,
+                "{profile} {tenant}"
+            );
+            assert_eq!(
+                sign_up_status(
+                    &state,
+                    tenant,
+                    json!({"email": format!("after-{tenant}@example.com"), "password": "twelve-chars-ok"})
+                )
+                .0,
+                200,
+                "{profile} {tenant}"
             );
         }
         assert_eq!(
-            unknown_email_sign_in_class(&state, Some(&overridden)),
-            "EMAIL_NOT_FOUND",
+            min_password_length(&read_tenant(&state, &overridden)),
+            12,
             "{profile}"
         );
-        assert_eq!(
-            unknown_email_sign_in_class(&state, Some(&untouched)),
-            "INVALID_LOGIN_CREDENTIALS",
-            "{profile}"
-        );
-        assert_eq!(
-            unknown_email_sign_in_class(&state, None),
-            "INVALID_LOGIN_CREDENTIALS",
-            "{profile}"
-        );
-        // The project's own policy moved to 10 without touching either tenant: an existing
-        // project user cannot pick a 9-character password (end-user sign-up is disabled on
-        // the project now, so the check goes through a password change).
+        assert!(read_tenant(&state, &untouched)
+            .get("passwordPolicyConfig")
+            .is_none());
+        // The project enforces its own new policy: an existing project user cannot pick a
+        // 9-character password.
         let (status, weak) = post(
             &state,
             &format!("{V1}/accounts:update?key={KEY}"),

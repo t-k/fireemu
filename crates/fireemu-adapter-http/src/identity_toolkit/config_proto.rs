@@ -351,6 +351,65 @@ const CONFIG: &[Field] = &[
     ),
 ];
 
+/// `google.cloud.identitytoolkit.admin.v2.Tenant` (AUTH-TENANT-BLOCKING sandbox recording
+/// 2026-09-27). `mfaConfig` is checked by the MFA config reader, as the project's `mfa` is.
+const TENANT: &[Field] = &[
+    ro("name", "name", Kind::Str),
+    f("displayName", "display_name", Kind::Str),
+    f("allowPasswordSignup", "allow_password_signup", Kind::Bool),
+    f(
+        "enableEmailLinkSignin",
+        "enable_email_link_signin",
+        Kind::Bool,
+    ),
+    f("disableAuth", "disable_auth", Kind::Bool),
+    f("enableAnonymousUser", "enable_anonymous_user", Kind::Bool),
+    f("mfaConfig", "mfa_config", Kind::Opaque),
+    f(
+        "testPhoneNumbers",
+        "test_phone_numbers",
+        Kind::Map(&STR_KIND),
+    ),
+    ro("hashConfig", "hash_config", Kind::Opaque),
+    f(
+        "inheritance",
+        "inheritance",
+        Kind::Msg(&[f("emailSendingConfig", "email_sending_config", Kind::Bool)]),
+    ),
+    f("monitoring", "monitoring", Kind::Msg(MONITORING)),
+    f(
+        "smsRegionConfig",
+        "sms_region_config",
+        Kind::Msg(SMS_REGION),
+    ),
+    f("recaptchaConfig", "recaptcha_config", Kind::Msg(RECAPTCHA)),
+    f("client", "client", Kind::Msg(CLIENT)),
+    f(
+        "passwordPolicyConfig",
+        "password_policy_config",
+        Kind::Msg(POLICY),
+    ),
+    f(
+        "emailPrivacyConfig",
+        "email_privacy_config",
+        Kind::Msg(&[f(
+            "enableImprovedEmailPrivacy",
+            "enable_improved_email_privacy",
+            Kind::Bool,
+        )]),
+    ),
+    f(
+        "autodeleteAnonymousUsers",
+        "autodelete_anonymous_users",
+        Kind::Bool,
+    ),
+    f(
+        "mobileLinksConfig",
+        "mobile_links_config",
+        Kind::Msg(MOBILE_LINKS),
+    ),
+];
+
 /// Production's `400 INVALID_ARGUMENT` with a `google.rpc.BadRequest` field violation.
 #[allow(clippy::needless_pass_by_value)]
 fn violation(field: Option<&str>, description: String) -> JsonResponse {
@@ -568,10 +627,60 @@ pub(super) fn parse_config_body(body: &Value) -> Result<Value, JsonResponse> {
     Ok(parsed)
 }
 
+/// Leaves out every empty list, as proto3 JSON leaves out an empty repeated field.
+fn without_empty_lists(value: Value) -> Value {
+    match value {
+        Value::Object(object) => Value::Object(
+            object
+                .into_iter()
+                .filter(|(_, item)| !item.as_array().is_some_and(Vec::is_empty))
+                .map(|(key, item)| (key, without_empty_lists(item)))
+                .collect(),
+        ),
+        Value::Array(items) => Value::Array(items.into_iter().map(without_empty_lists).collect()),
+        other => other,
+    }
+}
+
+/// Parses an Admin v2 tenant body (create or update) as production does: the body production
+/// stores, with read-only members dropped, loose scalars read as their fields' types, test
+/// phone numbers in keypad digits and empty lists left out.
+pub(super) fn parse_tenant_body(body: &Value) -> Result<Value, JsonResponse> {
+    if !body.is_object() {
+        return Err(violation(
+            None,
+            "Invalid JSON payload received. Unknown name \"\": Root element must be a message."
+                .to_owned(),
+        ));
+    }
+    let mut parsed = check(body, Kind::Msg(TENANT), "tenant")?.unwrap_or_else(|| json!({}));
+    if let Some(numbers) = parsed
+        .get_mut("testPhoneNumbers")
+        .and_then(Value::as_object_mut)
+    {
+        let converted: Map<String, Value> = std::mem::take(numbers)
+            .into_iter()
+            .map(|(number, code)| (keypad_number(&number), code))
+            .collect();
+        *numbers = converted;
+    }
+    Ok(without_empty_lists(parsed))
+}
+
+/// Whether production knows `path` as a writable tenant path (an unknown one in an update mask
+/// is ignored, as production ignores it).
+pub(super) fn known_writable_tenant_path(path: &str) -> bool {
+    known_writable_path_in(TENANT, path)
+}
+
 /// Whether production knows `path` as a writable config path; an unknown or read-only path in
 /// an update mask is ignored, as production ignores it.
 pub(super) fn known_writable_path(path: &str) -> bool {
-    let mut fields = CONFIG;
+    known_writable_path_in(CONFIG, path)
+}
+
+fn known_writable_path_in(root: &'static [Field], path: &str) -> bool {
+    let mut fields = root;
     let mut segments = path.split('.').peekable();
     while let Some(segment) = segments.next() {
         let Some(field) = fields

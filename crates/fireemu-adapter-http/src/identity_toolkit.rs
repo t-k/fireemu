@@ -72,6 +72,7 @@ mod phone_region;
 mod project_config;
 pub use project_config::{exportable_config_members, restored_config_members};
 mod project_mfa;
+mod tenant_document;
 pub use password_hash::restorable_spec as restorable_imported_hash_spec;
 mod routes;
 pub mod widget;
@@ -6286,102 +6287,6 @@ fn tenant_metadata(body: &Value) -> Result<fireemu_core_auth::store::TenantMetad
     })
 }
 
-fn tenant_metadata_patch(
-    body: &Value,
-    query: Option<&str>,
-) -> Result<fireemu_core_auth::store::TenantMetadataPatch, JsonResponse> {
-    const FIELDS: [&str; 10] = [
-        "displayName",
-        "allowPasswordSignup",
-        "enableEmailLinkSignin",
-        "enableAnonymousUser",
-        "disableAuth",
-        "client.permissions.disabledUserSignup",
-        "client.permissions.disabledUserDeletion",
-        "emailPrivacyConfig.enableImprovedEmailPrivacy",
-        "client.permissions",
-        "emailPrivacyConfig",
-    ];
-    let params = query_params(query);
-    let fields: Vec<&str> = params.get("updateMask").map_or_else(
-        || {
-            FIELDS
-                .into_iter()
-                .filter(|field| match *field {
-                    "client.permissions" => body
-                        .get("client")
-                        .and_then(|value| value.get("permissions"))
-                        .is_some_and(contains_non_null_value),
-                    "emailPrivacyConfig" => body
-                        .get("emailPrivacyConfig")
-                        .is_some_and(contains_non_null_value),
-                    field => body.get(field).is_some_and(contains_non_null_value),
-                })
-                .collect()
-        },
-        |mask| mask.split(',').filter(|field| !field.is_empty()).collect(),
-    );
-    if fields
-        .iter()
-        .any(|field| !FIELDS.contains(field) && !valid_password_policy_field(field))
-    {
-        return Err(error(400, "INVALID_ARGUMENT"));
-    }
-    let mut patch = fireemu_core_auth::store::TenantMetadataPatch::default();
-    for field in fields {
-        match field {
-            "displayName" => {
-                patch.display_name = Some(match body.get(field) {
-                    None | Some(Value::Null) => None,
-                    Some(Value::String(value)) => Some(value.clone()),
-                    Some(_) => return Err(error(400, "INVALID_ARGUMENT")),
-                });
-            }
-            "allowPasswordSignup" => {
-                patch.allow_password_signup = Some(bool_update(body, field)?);
-            }
-            "enableEmailLinkSignin" => {
-                patch.enable_email_link_signin = Some(bool_update(body, field)?);
-            }
-            "enableAnonymousUser" => {
-                patch.enable_anonymous_user = Some(bool_update(body, field)?);
-            }
-            "disableAuth" => patch.disable_auth = Some(bool_update(body, field)?),
-            "client.permissions.disabledUserSignup" => {
-                patch.disabled_user_signup = Some(nested_bool_default_false_path(
-                    body,
-                    &["client", "permissions", "disabledUserSignup"],
-                )?);
-            }
-            "client.permissions.disabledUserDeletion" => {
-                patch.disabled_user_deletion = Some(nested_bool_default_false_path(
-                    body,
-                    &["client", "permissions", "disabledUserDeletion"],
-                )?);
-            }
-            "emailPrivacyConfig.enableImprovedEmailPrivacy" | "emailPrivacyConfig" => {
-                patch.enable_improved_email_privacy = Some(nested_bool_default_false_path(
-                    body,
-                    &["emailPrivacyConfig", "enableImprovedEmailPrivacy"],
-                )?);
-            }
-            "client.permissions" => {
-                patch.disabled_user_signup = Some(nested_bool_default_false_path(
-                    body,
-                    &["client", "permissions", "disabledUserSignup"],
-                )?);
-                patch.disabled_user_deletion = Some(nested_bool_default_false_path(
-                    body,
-                    &["client", "permissions", "disabledUserDeletion"],
-                )?);
-            }
-            field if valid_password_policy_field(field) => {}
-            _ => unreachable!("tenant update mask was validated"),
-        }
-    }
-    Ok(patch)
-}
-
 fn nested_bool_default_false_path(body: &Value, path: &[&str]) -> Result<bool, JsonResponse> {
     let mut value = body;
     for key in &path[..path.len().saturating_sub(1)] {
@@ -6398,52 +6303,6 @@ fn nested_bool_default_false_path(body: &Value, path: &[&str]) -> Result<bool, J
         None | Some(Value::Null) => Ok(false),
         Some(_) => Err(error(400, "INVALID_ARGUMENT")),
     }
-}
-
-fn bool_update(body: &Value, field: &str) -> Result<bool, JsonResponse> {
-    match body.get(field) {
-        None | Some(Value::Null) => Ok(false),
-        Some(Value::Bool(value)) => Ok(*value),
-        Some(_) => Err(error(400, "INVALID_ARGUMENT")),
-    }
-}
-
-fn tenant_json(
-    project: &str,
-    tenant: &str,
-    metadata: &fireemu_core_auth::store::TenantMetadata,
-) -> Value {
-    json!({
-        "name": format!("projects/{project}/tenants/{tenant}"),
-        "displayName": metadata.display_name,
-        "allowPasswordSignup": metadata.allow_password_signup,
-        "enableEmailLinkSignin": metadata.enable_email_link_signin,
-        "enableAnonymousUser": metadata.enable_anonymous_user,
-        "disableAuth": metadata.disable_auth,
-        "client": {"permissions": {
-            "disabledUserSignup": metadata.disabled_user_signup,
-            "disabledUserDeletion": metadata.disabled_user_deletion,
-        }},
-        "emailPrivacyConfig": {
-            "enableImprovedEmailPrivacy": metadata.enable_improved_email_privacy,
-        },
-        "mfaConfig": {"state": "DISABLED", "enabledProviders": []},
-    })
-}
-
-fn tenant_json_with_policy(
-    project: &str,
-    tenant: &str,
-    metadata: &fireemu_core_auth::store::TenantMetadata,
-    policy: &PasswordPolicy,
-) -> Value {
-    let mut result = tenant_json(project, tenant, metadata);
-    result["passwordPolicyConfig"] = project_config_json_with_password_policy(
-        fireemu_core_auth::store::ProjectAuthConfig::default(),
-        policy,
-    )["passwordPolicyConfig"]
-        .clone();
-    result
 }
 
 fn tenant_client_config_patch(body: &Value) -> fireemu_core_auth::store::TenantMetadataPatch {
@@ -6469,9 +6328,43 @@ fn tenant_client_config_patch(body: &Value) -> fireemu_core_auth::store::TenantM
     }
 }
 
-fn validate_tenant_update_payload(body: &Value) -> Result<(), JsonResponse> {
-    const FIELDS: [&str; 9] = [
-        "tenantId",
+/// Every writable member of a tenant: what an update without a mask replaces.
+const TENANT_TOP_LEVEL_MEMBERS: &[&str] = &[
+    "displayName",
+    "allowPasswordSignup",
+    "enableEmailLinkSignin",
+    "disableAuth",
+    "enableAnonymousUser",
+    "mfaConfig",
+    "testPhoneNumbers",
+    "inheritance",
+    "monitoring",
+    "smsRegionConfig",
+    "recaptchaConfig",
+    "client",
+    "passwordPolicyConfig",
+    "emailPrivacyConfig",
+    "autodeleteAnonymousUsers",
+    "mobileLinksConfig",
+];
+
+/// A tenant body read as production reads it. The emulator profile still takes the
+/// fireemu-only `tenantId` member it always took (production does not know it).
+fn tenant_body(body: &Value, strict: bool) -> Result<Value, JsonResponse> {
+    if strict {
+        return config_proto::parse_tenant_body(body);
+    }
+    let mut body = body.clone();
+    if let Some(object) = body.as_object_mut() {
+        object.remove("tenantId");
+    }
+    config_proto::parse_tenant_body(&body)
+}
+
+/// The members of a parsed tenant the tenant metadata holds.
+fn tenant_metadata_members(parsed: &Value) -> Value {
+    let mut members = serde_json::Map::new();
+    for key in [
         "displayName",
         "allowPasswordSignup",
         "enableEmailLinkSignin",
@@ -6479,98 +6372,130 @@ fn validate_tenant_update_payload(body: &Value) -> Result<(), JsonResponse> {
         "disableAuth",
         "client",
         "emailPrivacyConfig",
-        "passwordPolicyConfig",
-    ];
-    let object = body
-        .as_object()
-        .ok_or_else(|| error(400, "INVALID_ARGUMENT"))?;
-    if object.keys().any(|field| !FIELDS.contains(&field.as_str())) {
-        return Err(error(400, "INVALID_ARGUMENT"));
-    }
-
-    if object
-        .get("tenantId")
-        .is_some_and(|value| !value.is_null() && value.as_str().is_none_or(str::is_empty))
-    {
-        return Err(error(400, "INVALID_ARGUMENT"));
-    }
-    if object
-        .get("displayName")
-        .is_some_and(|value| !value.is_string() && !value.is_null())
-    {
-        return Err(error(400, "INVALID_ARGUMENT"));
-    }
-    for field in [
-        "allowPasswordSignup",
-        "enableEmailLinkSignin",
-        "enableAnonymousUser",
-        "disableAuth",
     ] {
-        if object
-            .get(field)
-            .is_some_and(|value| !value.is_boolean() && !value.is_null())
-        {
-            return Err(error(400, "INVALID_ARGUMENT"));
+        if let Some(value) = parsed.get(key) {
+            members.insert(key.to_owned(), value.clone());
         }
     }
+    if let Some(Value::Object(client)) = members.get_mut("client") {
+        client.retain(|key, _| key == "permissions");
+    }
+    // A client message without permissions (a ProtoJSON null) is an absent one.
+    if members
+        .get("client")
+        .is_some_and(|client| client.get("permissions").is_none())
+    {
+        members.remove("client");
+    }
+    Value::Object(members)
+}
 
-    if let Some(value) = object.get("client") {
-        if !value.is_null() {
-            let client = value
-                .as_object()
-                .ok_or_else(|| error(400, "INVALID_ARGUMENT"))?;
-            if client.keys().any(|field| field != "permissions") {
-                return Err(error(400, "INVALID_ARGUMENT"));
+/// The metadata change of an update whose mask is `fields`: a masked member absent from the
+/// body is cleared to its default.
+fn tenant_patch_from_fields(
+    body: &Value,
+    fields: &[String],
+) -> fireemu_core_auth::store::TenantMetadataPatch {
+    let flag = |path: &[&str]| {
+        path.iter()
+            .try_fold(body, |value, key| value.get(*key))
+            .and_then(Value::as_bool)
+            .unwrap_or(false)
+    };
+    let mut patch = fireemu_core_auth::store::TenantMetadataPatch::default();
+    for field in fields {
+        match field.as_str() {
+            "displayName" => {
+                patch.display_name = Some(
+                    body.get("displayName")
+                        .and_then(Value::as_str)
+                        .map(str::to_owned),
+                );
             }
-            if let Some(permissions) = client.get("permissions") {
-                if !permissions.is_null() {
-                    let permissions = permissions
-                        .as_object()
-                        .ok_or_else(|| error(400, "INVALID_ARGUMENT"))?;
-                    if permissions.keys().any(|field| {
-                        field != "disabledUserSignup" && field != "disabledUserDeletion"
-                    }) {
-                        return Err(error(400, "INVALID_ARGUMENT"));
-                    }
-                    for field in ["disabledUserSignup", "disabledUserDeletion"] {
-                        if permissions
-                            .get(field)
-                            .is_some_and(|value| !value.is_boolean() && !value.is_null())
-                        {
-                            return Err(error(400, "INVALID_ARGUMENT"));
-                        }
-                    }
-                }
+            "allowPasswordSignup" => patch.allow_password_signup = Some(flag(&[field])),
+            "enableEmailLinkSignin" => patch.enable_email_link_signin = Some(flag(&[field])),
+            "enableAnonymousUser" => patch.enable_anonymous_user = Some(flag(&[field])),
+            "disableAuth" => patch.disable_auth = Some(flag(&[field])),
+            "client" | "client.permissions" => {
+                patch.disabled_user_signup =
+                    Some(flag(&["client", "permissions", "disabledUserSignup"]));
+                patch.disabled_user_deletion =
+                    Some(flag(&["client", "permissions", "disabledUserDeletion"]));
             }
+            "client.permissions.disabledUserSignup" => {
+                patch.disabled_user_signup =
+                    Some(flag(&["client", "permissions", "disabledUserSignup"]));
+            }
+            "client.permissions.disabledUserDeletion" => {
+                patch.disabled_user_deletion =
+                    Some(flag(&["client", "permissions", "disabledUserDeletion"]));
+            }
+            "emailPrivacyConfig" | "emailPrivacyConfig.enableImprovedEmailPrivacy" => {
+                patch.enable_improved_email_privacy =
+                    Some(flag(&["emailPrivacyConfig", "enableImprovedEmailPrivacy"]));
+            }
+            _ => {}
         }
     }
+    patch
+}
 
-    if let Some(value) = object.get("emailPrivacyConfig") {
-        if !value.is_null() {
-            let privacy = value
-                .as_object()
-                .ok_or_else(|| error(400, "INVALID_ARGUMENT"))?;
-            if privacy
-                .keys()
-                .any(|field| field != "enableImprovedEmailPrivacy")
-            {
-                return Err(error(400, "INVALID_ARGUMENT"));
-            }
-            if privacy
-                .get("enableImprovedEmailPrivacy")
-                .is_some_and(|value| !value.is_boolean() && !value.is_null())
-            {
-                return Err(error(400, "INVALID_ARGUMENT"));
-            }
-        }
-    }
+/// The project as a tenant's `name` names it: by number when fireemu knows it.
+fn tenant_project_name(registry: &AuthRegistry, project: &str) -> String {
+    registry
+        .store_for(project)
+        .and_then(|store| store.lock().ok().and_then(|store| store.project_number()))
+        .map_or_else(|| project.to_owned(), |number| number.to_string())
+}
 
-    if let Some(value) = object.get("passwordPolicyConfig") {
-        if !value.is_null() {
-            password_policy_from_config_json(value, false)?;
-        }
+/// A list page token: the last tenant id listed, as hex behind a marker.
+fn tenant_page_token(last: &str) -> String {
+    format!("t{}", fireemu_core_types::hash::hex_lower(last.as_bytes()))
+}
+
+/// The tenant id a page token fireemu issued names, or `None` for any other token.
+fn tenant_page_token_id(token: &str) -> Option<String> {
+    String::from_utf8(fireemu_core_types::codec::hex_decode(
+        token.strip_prefix('t')?,
+    )?)
+    .ok()
+}
+
+/// Runs `change` on a tenant's own store.
+fn with_tenant_store(
+    registry: &AuthRegistry,
+    project: &str,
+    tenant: &str,
+    change: impl FnOnce(&mut AuthStore) -> Result<(), JsonResponse>,
+) -> Result<(), JsonResponse> {
+    let store = registry
+        .tenant_store(project, tenant)
+        .ok_or_else(|| error(404, "TENANT_NOT_FOUND"))?;
+    let mut store = store.lock().map_err(|_| error(500, "INTERNAL"))?;
+    change(&mut store)
+}
+
+/// A tenant's document, as the answer to `view`.
+fn tenant_answer(
+    registry: &AuthRegistry,
+    project: &str,
+    tenant: &str,
+    view: tenant_document::View,
+) -> JsonResponse {
+    let Some(metadata) = registry.tenant_metadata(project, tenant) else {
+        return error(404, "TENANT_NOT_FOUND");
+    };
+    let Some(store) = registry.tenant_store(project, tenant) else {
+        return error(404, "TENANT_NOT_FOUND");
+    };
+    let project_name = tenant_project_name(registry, project);
+    let Ok(store) = store.lock() else {
+        return error(500, "INTERNAL");
+    };
+    JsonResponse {
+        status: 200,
+        body: tenant_document::document(project, &project_name, tenant, &metadata, &store, view),
     }
-    Ok(())
 }
 
 fn tenant_management_disabled(state: &AuthState, registry: &AuthRegistry, project: &str) -> bool {
@@ -6610,18 +6535,54 @@ fn tenant_management(
     }
     match handler {
         Handler::TenantCreate => {
-            let metadata = match tenant_metadata(body) {
+            let strict = !state.stateless_refresh_tokens;
+            let parsed = match tenant_body(body, strict) {
+                Ok(parsed) => parsed,
+                Err(response) => return response,
+            };
+            if strict {
+                if let Some(response) =
+                    tenant_document::display_name_refusal(parsed.get("displayName"))
+                {
+                    return response;
+                }
+            }
+            let metadata = match tenant_metadata(&tenant_metadata_members(&parsed)) {
                 Ok(metadata) => metadata,
                 Err(response) => return response,
             };
-            let password_policy = match body.get("passwordPolicyConfig") {
+            let password_policy = match parsed.get("passwordPolicyConfig") {
                 None => None,
                 Some(value) => match password_policy_from_config_json(value, false) {
                     Ok(policy) => Some(policy),
                     Err(response) => return response,
                 },
             };
-            let patch = tenant_client_config_patch(body);
+            let mut written = match tenant_document::WrittenMembers::from_body(&parsed, |member| {
+                parsed.get(member).is_some_and(|value| !value.is_null())
+            }) {
+                Ok(written) => written,
+                Err(response) => return response,
+            };
+            if password_policy.is_some() {
+                written = written.with_policy_write(
+                    &parsed,
+                    vec!["passwordPolicyConfig".to_owned()],
+                    password_policy
+                        .as_ref()
+                        .is_some_and(|policy| policy.configured),
+                    now(state).to_rfc3339().ok(),
+                );
+            }
+            // A tenant takes none of the project's settings, at creation or later (AUTH-TENANT-
+            // BLOCKING recording 2026-09-27, inheritance program): every setting a tenant could
+            // inherit is written, as sent or off.
+            let mut patch = tenant_client_config_patch(&parsed);
+            patch.disabled_user_signup = Some(patch.disabled_user_signup.unwrap_or(false));
+            patch.disabled_user_deletion = Some(patch.disabled_user_deletion.unwrap_or(false));
+            patch.enable_improved_email_privacy =
+                Some(patch.enable_improved_email_privacy.unwrap_or(false));
+            patch.allow_duplicate_emails = Some(false);
             let created = if state.stateless_refresh_tokens {
                 registry.create_tenant_with_password_policy(
                     project,
@@ -6637,7 +6598,7 @@ fn tenant_management(
                     password_policy,
                 )
             };
-            let Some((tenant, metadata, policy)) = created else {
+            let Some((tenant, _, _)) = created else {
                 if tenant_management_disabled(state, registry, project) {
                     return error(400, "INVALID_PROJECT_ID");
                 }
@@ -6647,117 +6608,135 @@ fn tenant_management(
                     error(400, "INVALID_PROJECT_ID")
                 };
             };
-            JsonResponse {
-                status: 200,
-                body: tenant_json_with_policy(project, &tenant, &metadata, &policy),
+            if let Err(response) =
+                with_tenant_store(registry, project, &tenant, |store| written.apply(store))
+            {
+                return response;
             }
+            tenant_answer(registry, project, &tenant, tenant_document::View::Written)
         }
         Handler::TenantList => {
             let params = query_params(query);
+            // Production answers every tenant for a size of 0, below 0 or above 1000 (sandbox
+            // recording 2026-09-27, manage#list-size-*): the default page, at most 1000.
             let page_size = params
                 .get("pageSize")
-                .and_then(|value| value.parse::<usize>().ok())
-                .unwrap_or(20)
-                .min(1_000);
-            let page_token = params.get("pageToken").map(String::as_str);
+                .and_then(|value| value.parse::<i64>().ok())
+                .filter(|size| *size > 0)
+                .map_or(20, |size| usize::try_from(size.min(1_000)).unwrap_or(1_000));
+            let after = match params.get("pageToken").map(String::as_str) {
+                None | Some("") => None,
+                Some(token) => match tenant_page_token_id(token) {
+                    Some(id) => Some(id),
+                    // A token fireemu did not issue lists nothing (manage#list-bad-token).
+                    None => {
+                        return JsonResponse {
+                            status: 200,
+                            body: json!({}),
+                        }
+                    }
+                },
+            };
             let mut ids: Vec<String> = registry
                 .tenants(project)
                 .into_iter()
-                .filter(|id| page_token.is_none_or(|token| id.as_str() > token))
+                .filter(|id| after.as_deref().is_none_or(|after| id.as_str() > after))
                 .collect();
+            ids.sort();
             let has_more = ids.len() > page_size;
             ids.truncate(page_size);
+            let project_name = tenant_project_name(registry, project);
             let tenants: Vec<Value> = ids
                 .iter()
                 .filter_map(|id| {
                     let metadata = registry.tenant_metadata(project, id)?;
                     let store = registry.tenant_store(project, id)?;
                     let store = store.lock().ok()?;
-                    Some(tenant_json_with_policy(
+                    Some(tenant_document::document(
                         project,
+                        &project_name,
                         id,
                         &metadata,
-                        store.password_policy(),
+                        &store,
+                        tenant_document::View::Written,
                     ))
                 })
                 .collect();
-            let next = has_more.then(|| ids.last().cloned()).flatten();
+            let mut answer = serde_json::Map::new();
+            if !tenants.is_empty() {
+                answer.insert("tenants".to_owned(), Value::Array(tenants));
+            }
+            if has_more {
+                if let Some(last) = ids.last() {
+                    answer.insert("nextPageToken".to_owned(), json!(tenant_page_token(last)));
+                }
+            }
             JsonResponse {
                 status: 200,
-                body: json!({"tenants": tenants, "nextPageToken": next}),
+                body: Value::Object(answer),
             }
         }
         Handler::TenantGet => {
             let Some(tenant) = tenant else {
                 return error(400, "INVALID_TENANT_ID");
             };
-            let Some(metadata) = registry.tenant_metadata(project, tenant) else {
-                return error(404, "TENANT_NOT_FOUND");
-            };
-            let Some(store) = registry.tenant_store(project, tenant) else {
-                return error(404, "TENANT_NOT_FOUND");
-            };
-            let Ok(store) = store.lock() else {
-                return error(500, "INTERNAL");
-            };
-            JsonResponse {
-                status: 200,
-                body: tenant_json_with_policy(project, tenant, &metadata, store.password_policy()),
-            }
+            tenant_answer(registry, project, tenant, tenant_document::View::Read)
         }
         Handler::TenantUpdate => {
             let Some(tenant) = tenant else {
                 return error(400, "INVALID_TENANT_ID");
             };
-            if let Err(response) = validate_tenant_update_payload(body) {
-                return response;
-            }
-            let fields = match update_mask(query) {
-                Ok(Some(fields)) => fields,
-                Ok(None) => {
-                    let mut fields = Vec::new();
-                    for field in [
-                        "displayName",
-                        "allowPasswordSignup",
-                        "enableEmailLinkSignin",
-                        "enableAnonymousUser",
-                        "disableAuth",
-                    ] {
-                        if body.get(field).is_some() {
-                            fields.push(field.to_owned());
-                        }
-                    }
-                    if body
-                        .get("client")
-                        .and_then(|value| value.get("permissions"))
-                        .is_some()
-                    {
-                        fields.push("client.permissions".to_owned());
-                    }
-                    if body.get("emailPrivacyConfig").is_some() {
-                        fields.push("emailPrivacyConfig".to_owned());
-                    }
-                    // A message-level ProtoJSON null is absent when no update mask selects it.
-                    // An explicit mask still reaches `password_policy_from_update` and can
-                    // clear the policy.
-                    if body
-                        .get("passwordPolicyConfig")
-                        .is_some_and(contains_non_null_value)
-                    {
-                        fields.push("passwordPolicyConfig".to_owned());
-                    }
-                    fields
-                }
+            let strict = !state.stateless_refresh_tokens;
+            let parsed = match tenant_body(body, strict) {
+                Ok(parsed) => parsed,
                 Err(response) => return response,
             };
-            if fields.iter().any(|field| {
-                field.starts_with("passwordPolicyConfig") && !valid_password_policy_field(field)
-            }) {
+            let fields: Vec<String> = match update_mask(query) {
+                // A path production does not know changes nothing (manage#patch-unknown-mask).
+                Ok(Some(fields)) => fields
+                    .into_iter()
+                    .filter(|field| config_proto::known_writable_tenant_path(field))
+                    .collect(),
+                // Without a mask production replaces the whole tenant, which needs a display
+                // name (manage#patch-no-mask); the emulator profile updates what the body has.
+                Ok(None) if strict => {
+                    if tenant_document::display_name_refusal(parsed.get("displayName")).is_some() {
+                        return tenant_document::missing_display_name();
+                    }
+                    TENANT_TOP_LEVEL_MEMBERS
+                        .iter()
+                        .map(|member| (*member).to_owned())
+                        .collect()
+                }
+                Ok(None) => parsed
+                    .as_object()
+                    .map(|object| {
+                        object
+                            .iter()
+                            .filter(|(_, value)| contains_non_null_value(value))
+                            .map(|(key, _)| key.clone())
+                            .collect()
+                    })
+                    .unwrap_or_default(),
+                Err(response) => return response,
+            };
+            if strict && fields.iter().any(|field| field == "displayName") {
+                if let Some(response) =
+                    tenant_document::display_name_refusal(parsed.get("displayName"))
+                {
+                    return response;
+                }
+            }
+            let touches_policy = |field: &String| {
+                field == "passwordPolicyConfig" || field.starts_with("passwordPolicyConfig.")
+            };
+            if fields
+                .iter()
+                .any(|field| touches_policy(field) && !valid_password_policy_field(field))
+            {
                 return error(400, "INVALID_ARGUMENT");
             }
-            let current_policy = if fields.iter().any(|field| {
-                field == "passwordPolicyConfig" || field.starts_with("passwordPolicyConfig.")
-            }) {
+            let current_policy = if fields.iter().any(touches_policy) {
                 let Some(store) = registry.tenant_store(project, tenant) else {
                     return error(404, "TENANT_NOT_FOUND");
                 };
@@ -6770,17 +6749,37 @@ fn tenant_management(
             };
             let password_policy = match current_policy {
                 Some(current) => {
-                    match password_policy_from_update(&current, body, &fields, false) {
+                    match password_policy_from_update(&current, &parsed, &fields, false) {
                         Ok(policy) => policy,
                         Err(response) => return response,
                     }
                 }
                 None => None,
             };
-            let patch = match tenant_metadata_patch(body, query) {
-                Ok(patch) => patch,
+            let touched = |member: &str| {
+                fields
+                    .iter()
+                    .any(|field| field == member || field.starts_with(&format!("{member}.")))
+            };
+            let mut written = match tenant_document::WrittenMembers::from_body(&parsed, touched) {
+                Ok(written) => written,
                 Err(response) => return response,
             };
+            if fields.iter().any(touches_policy) {
+                written = written.with_policy_write(
+                    &parsed,
+                    fields
+                        .iter()
+                        .filter(|f| touches_policy(f))
+                        .cloned()
+                        .collect(),
+                    password_policy
+                        .as_ref()
+                        .is_some_and(|policy| policy.configured),
+                    now(state).to_rfc3339().ok(),
+                );
+            }
+            let patch = tenant_patch_from_fields(&parsed, &fields);
             let updated = if state.stateless_refresh_tokens {
                 registry.patch_tenant_with_password_policy(project, tenant, patch, password_policy)
             } else {
@@ -6791,16 +6790,18 @@ fn tenant_management(
                     password_policy,
                 )
             };
-            let Some((metadata, policy)) = updated else {
+            if updated.is_none() {
                 if tenant_management_disabled(state, registry, project) {
                     return error(400, "INVALID_PROJECT_ID");
                 }
                 return error(404, "TENANT_NOT_FOUND");
-            };
-            JsonResponse {
-                status: 200,
-                body: tenant_json_with_policy(project, tenant, &metadata, &policy),
             }
+            if let Err(response) =
+                with_tenant_store(registry, project, tenant, |store| written.apply(store))
+            {
+                return response;
+            }
+            tenant_answer(registry, project, tenant, tenant_document::View::Written)
         }
         Handler::TenantDelete => {
             let Some(tenant) = tenant else {
@@ -12929,15 +12930,6 @@ fn project_config_json(config: fireemu_core_auth::store::ProjectAuthConfig) -> V
         }},
         "emailPrivacyConfig": {"enableImprovedEmailPrivacy": config.enable_improved_email_privacy},
     })
-}
-
-fn project_config_json_with_password_policy(
-    config: fireemu_core_auth::store::ProjectAuthConfig,
-    policy: &PasswordPolicy,
-) -> Value {
-    let mut result = project_config_json(config);
-    result["passwordPolicyConfig"] = password_policy_config_json(policy);
-    result
 }
 
 fn password_policy_json(policy: &PasswordPolicy) -> JsonResponse {

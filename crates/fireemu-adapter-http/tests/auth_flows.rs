@@ -3413,7 +3413,8 @@ fn tenant_manager_crud_lists_and_removes_explicit_tenants() {
     let deleted = handle_with(&s, "DELETE", &item, &owner(), &json!({}));
     assert_eq!(deleted.status, 200, "{}", deleted.body);
     let listed = handle_with(&s, "GET", &collection, &owner(), &json!({}));
-    assert_eq!(listed.body["tenants"].as_array().unwrap().len(), 0);
+    // Production answers an empty list as `{}` (AUTH-TENANT-BLOCKING recording 2026-09-27).
+    assert!(listed.body.get("tenants").is_none(), "{}", listed.body);
     let implicit = handle_with(&s, "GET", &item, &owner(), &json!({}));
     assert_eq!(implicit.status, 404, "{}", implicit.body);
     assert_eq!(implicit.body["error"]["message"], "TENANT_NOT_FOUND");
@@ -4132,8 +4133,10 @@ fn admin_v2_config_empty_mask_does_not_revert_a_concurrent_update() {
     assert_eq!(result.body["signIn"]["allowDuplicateEmails"], true);
 }
 
+/// Whichever of a project update and a tenant creation wins, the project's setting never
+/// reaches the tenant: tenants inherit nothing (AUTH-TENANT-BLOCKING recording 2026-09-27).
 #[test]
-fn admin_v2_config_racing_tenant_publication_keeps_inherited_config_current() {
+fn admin_v2_config_racing_tenant_publication_never_reaches_the_tenant() {
     let mut base = state();
     let registry = Arc::new(fireemu_core_auth::store::AuthRegistry::new(
         "demo-app",
@@ -4174,16 +4177,29 @@ fn admin_v2_config_racing_tenant_publication_keeps_inherited_config_current() {
         });
         start.wait();
     });
-    assert!(registry.tenants("demo-app").iter().any(|tenant| {
+    let tenants = registry.tenants("demo-app");
+    assert_eq!(tenants.len(), 1);
+    assert!(tenants.iter().all(|tenant| {
         registry
             .tenant_store("demo-app", tenant)
             .and_then(|store| store.lock().ok().map(|store| store.config()))
-            .is_some_and(|config| config.enable_improved_email_privacy)
+            .is_some_and(|config| !config.enable_improved_email_privacy)
     }));
+    assert!(
+        state
+            .store
+            .lock()
+            .unwrap()
+            .config()
+            .enable_improved_email_privacy
+    );
 }
 
+/// A tenant created after project changes takes none of them: production tenants inherit no
+/// project setting (AUTH-TENANT-BLOCKING recording 2026-09-27, inheritance#get-after,
+/// sign-up-in-late-tenant). fireemu used to copy the project's privacy and client permissions.
 #[test]
-fn admin_v2_tenant_create_does_not_reset_omitted_inherited_config() {
+fn admin_v2_tenant_create_takes_none_of_the_project_config() {
     use fireemu_core_auth::store::AuthRegistry;
 
     let mut base = state();
@@ -4209,17 +4225,15 @@ fn admin_v2_tenant_create_does_not_reset_omitted_inherited_config() {
         "POST",
         "/identitytoolkit.googleapis.com/v2/projects/demo-app/tenants",
         &owner(),
-        &json!({"displayName": "inherited config tenant"}),
+        &json!({"displayName": "late-tenant"}),
     );
     assert_eq!(created.status, 200, "{}", created.body);
-    assert_eq!(
-        created.body["emailPrivacyConfig"]["enableImprovedEmailPrivacy"],
-        true
+    assert!(
+        created.body.get("emailPrivacyConfig").is_none(),
+        "{}",
+        created.body
     );
-    assert_eq!(
-        created.body["client"]["permissions"]["disabledUserSignup"],
-        true
-    );
+    assert!(created.body.get("client").is_none(), "{}", created.body);
     let tenant = created.body["name"]
         .as_str()
         .unwrap()
@@ -4230,48 +4244,30 @@ fn admin_v2_tenant_create_does_not_reset_omitted_inherited_config() {
         .tenant_store("demo-app", tenant)
         .and_then(|store| store.lock().ok().map(|store| store.config()))
         .is_some_and(|config| {
-            config.enable_improved_email_privacy && config.disabled_user_signup
+            !config.enable_improved_email_privacy && !config.disabled_user_signup
         }));
     assert!(registry
         .tenant_metadata("demo-app", tenant)
         .is_some_and(|metadata| {
-            metadata.enable_improved_email_privacy && metadata.disabled_user_signup
+            !metadata.enable_improved_email_privacy && !metadata.disabled_user_signup
         }));
-    let read = handle_with(
-        &state,
-        "GET",
-        &format!("/identitytoolkit.googleapis.com/v2/projects/demo-app/tenants/{tenant}"),
-        &owner(),
-        &json!({}),
-    );
-    assert_eq!(read.status, 200, "{}", read.body);
-    assert_eq!(
-        read.body["emailPrivacyConfig"]["enableImprovedEmailPrivacy"],
-        true
-    );
-    assert_eq!(
-        read.body["client"]["permissions"]["disabledUserSignup"],
-        true
-    );
-
-    let explicit_false = handle_with(
+    // A tenant's own written values show, a written message kept even when off.
+    let explicit = handle_with(
         &state,
         "POST",
         "/identitytoolkit.googleapis.com/v2/projects/demo-app/tenants",
         &owner(),
         &json!({
-            "client": {"permissions": {"disabledUserSignup": false}},
+            "displayName": "own-values",
+            "client": {"permissions": {"disabledUserSignup": true}},
             "emailPrivacyConfig": {"enableImprovedEmailPrivacy": false}
         }),
     );
-    assert_eq!(explicit_false.status, 200, "{}", explicit_false.body);
+    assert_eq!(explicit.status, 200, "{}", explicit.body);
+    assert_eq!(explicit.body["emailPrivacyConfig"], json!({}));
     assert_eq!(
-        explicit_false.body["emailPrivacyConfig"]["enableImprovedEmailPrivacy"],
-        false
-    );
-    assert_eq!(
-        explicit_false.body["client"]["permissions"]["disabledUserSignup"],
-        false
+        explicit.body["client"],
+        json!({"permissions": {"disabledUserSignup": true}})
     );
 }
 

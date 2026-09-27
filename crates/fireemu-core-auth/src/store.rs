@@ -7701,6 +7701,15 @@ impl AuthRegistry {
                 next_metadata.clone(),
             ) {
                 TenantPublication::Published(_) => {
+                    // The settings a create writes are the tenant's own, as a PATCH's are: a
+                    // later project update reapplies them instead of replacing them.
+                    let config_override = patch.config_override();
+                    if !config_override.is_empty() {
+                        let mut overrides = self.tenant_runtime_config_overrides.lock().ok()?;
+                        let key = (project.to_owned(), tenant.clone());
+                        let previous = overrides.get(&key).copied().unwrap_or_default();
+                        overrides.insert(key, previous.merge(config_override));
+                    }
                     return Some((tenant, next_metadata, next_policy));
                 }
                 TenantPublication::Existing {
@@ -9716,6 +9725,49 @@ mod compatibility_routing_tests {
             metadata.enable_improved_email_privacy,
             runtime.enable_improved_email_privacy
         );
+    }
+
+    /// The settings a create writes are the tenant's own: a later project update reapplies them,
+    /// as it does a PATCH's (AUTH-TENANT-BLOCKING recording 2026-09-27, inheritance program).
+    #[test]
+    fn a_created_tenants_written_settings_survive_later_project_updates() {
+        let registry = AuthRegistry::new("demo-app", store("demo-app", 1));
+        let (tenant, _, _) = registry
+            .create_tenant_with_password_policy(
+                "demo-app",
+                TenantMetadata::default(),
+                TenantMetadataPatch {
+                    allow_duplicate_emails: Some(false),
+                    enable_improved_email_privacy: Some(false),
+                    disabled_user_signup: Some(false),
+                    disabled_user_deletion: Some(true),
+                    ..TenantMetadataPatch::default()
+                },
+                None,
+            )
+            .unwrap();
+        assert!(registry.set_project_config(
+            "demo-app",
+            super::ProjectAuthConfig {
+                allow_duplicate_emails: true,
+                enable_improved_email_privacy: true,
+                disabled_user_signup: true,
+                disabled_user_deletion: false,
+            }
+        ));
+        let config = registry
+            .tenant_store("demo-app", &tenant)
+            .unwrap()
+            .lock()
+            .unwrap()
+            .config();
+        assert!(!config.allow_duplicate_emails);
+        assert!(!config.enable_improved_email_privacy);
+        assert!(!config.disabled_user_signup);
+        assert!(config.disabled_user_deletion);
+        let metadata = registry.tenant_metadata("demo-app", &tenant).unwrap();
+        assert!(!metadata.enable_improved_email_privacy && !metadata.disabled_user_signup);
+        assert!(metadata.disabled_user_deletion);
     }
 
     #[test]

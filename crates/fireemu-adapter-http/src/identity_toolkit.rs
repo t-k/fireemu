@@ -65,7 +65,9 @@ const QUOTA_SIMULATION_FIELDS: [&str; 4] = [
 const SIGNUP_QUOTA_FIELDS: [&str; 3] = ["quota", "startTime", "quotaDuration"];
 
 mod custom_token;
+mod idp_signers;
 pub use custom_token::{CustomTokenRefusal, CustomTokenTrust};
+pub use idp_signers::IdpSignerTrust;
 mod config_proto;
 mod password_hash;
 mod phone_region;
@@ -644,6 +646,17 @@ pub enum IdpContinuationPolicy {
     LocalBounded,
 }
 
+/// How `signInWithIdp` assertions are verified.
+#[derive(Debug, Clone)]
+pub enum IdpAssertionPolicy {
+    /// The official emulator's fixture `IdP`: assertions are parsed, never verified.
+    Fixture,
+    /// Owner decision O4 of AUTH-FEDERATION (the strict profile): only an `oidc.*` ID token that
+    /// a startup key of the provider's issuer verifies is accepted; the fixture and every other
+    /// provider are refused. An empty key set refuses every `IdP` sign-in.
+    SignedOidc(Arc<IdpSignerTrust>),
+}
+
 /// Shared Auth state behind the REST surface.
 pub struct AuthState {
     /// User store (shared with the gRPC adapter, which verifies ID tokens against it).
@@ -685,6 +698,8 @@ pub struct AuthState {
     /// Service-account keys signed custom tokens verify against (`auth.customTokenSigners`).
     /// With none, the unsigned tokens the Admin SDK mints in emulator mode are accepted.
     pub custom_token_trust: Option<Arc<CustomTokenTrust>>,
+    /// How `signInWithIdp` assertions are verified when no embedder trust is given.
+    pub idp_assertions: IdpAssertionPolicy,
     /// Profile-specific Admin query behavior.
     pub query_limits: AuthQueryLimits,
     /// Whether client routes refuse a request carrying neither an API key nor a credential.
@@ -2147,6 +2162,7 @@ fn dispatch_with_blocking_hook(
     headers: &RequestHeaders,
     at: LogicalInstant,
     quota_reservation: &mut Option<SignupReservation>,
+    idp_trust: Option<&crate::oidc::LocalOidcTrust>,
 ) -> JsonResponse {
     let pending_continuation = (handler == routes::Handler::MfaSignInFinalize)
         .then(|| str_field(body, "mfaPendingCredential"))
@@ -2373,6 +2389,19 @@ fn dispatch_with_blocking_hook(
         };
         if live.reset_generation() != reset_generation {
             return error(409, "AUTH_STATE_RESET");
+        }
+        // The provider may have been disabled, deleted or re-pointed while the hook ran
+        // unlocked: verify the assertion again against the live configuration.
+        if handler == routes::Handler::SignInWithIdp {
+            if let Some(trust) = idp_trust {
+                let params = normalized_idp_params(
+                    str_field(body, "requestUri").unwrap_or_default(),
+                    str_field(body, "postBody"),
+                );
+                if !trust.accepts(&live, &params, at) {
+                    return error(400, "INVALID_IDP_RESPONSE");
+                }
+            }
         }
         if tenant.is_none() {
             if let Some(denial) = project_provider_denial(handler, live.sign_in_config(), body) {
@@ -3048,9 +3077,20 @@ fn handle_with_policy(
     {
         return not_implemented("pendingToken requires local continuation mode.");
     }
+    // Owner decision O4 of AUTH-FEDERATION: the strict daemon verifies signed OIDC ID tokens
+    // with the issuer keys given at startup and never accepts the fixture IdP.
+    let strict_signers = match &state.idp_assertions {
+        IdpAssertionPolicy::SignedOidc(signers)
+            if route.handler == routes::Handler::SignInWithIdp && oidc_trust.is_none() =>
+        {
+            Some(signers.as_ref())
+        }
+        _ => None,
+    };
+    let strict_signed_idp = strict_signers.is_some();
     let idp_authority = (route.handler == routes::Handler::SignInWithIdp
         && state.idp_continuations == IdpContinuationPolicy::LocalBounded)
-        .then(|| idp_continuation_authority(oidc_trust));
+        .then(|| idp_continuation_authority(oidc_trust, strict_signed_idp));
     let idp_generation = store.reset_generation();
     let incoming_pending = body
         .get("pendingToken")
@@ -3087,8 +3127,15 @@ fn handle_with_policy(
         }
     }
     // Verify the selected namespace and assertion before any account or transient mutation.
+    let strict_idp_trust =
+        match strict_signers.map(|signers| strict_idp_trust(signers, &store, body)) {
+            Some(Ok(trust)) => trust,
+            Some(Err(response)) => return response,
+            None => None,
+        };
+    let idp_trust = oidc_trust.or(strict_idp_trust.as_ref());
     if route.handler == routes::Handler::SignInWithIdp {
-        if let Some(trust) = oidc_trust {
+        if let Some(trust) = idp_trust {
             let params = normalized_idp_params(
                 str_field(body, "requestUri").unwrap_or_default(),
                 str_field(body, "postBody"),
@@ -3190,6 +3237,7 @@ fn handle_with_policy(
             headers,
             at,
             &mut quota_reservation,
+            idp_trust,
         )
     } else if let Some(reservation) = quota_reservation.clone() {
         // Run quota-accounted creation on an isolated store copy. This gives the quota
@@ -11789,9 +11837,16 @@ fn validate_saml_response(raw: Option<&String>) -> Result<Option<Value>, JsonRes
     Ok(Some(parsed))
 }
 
-/// Opaque continuation authority is supplied by the trusted embedder, never by HTTP.
-fn idp_continuation_authority(trust: Option<&crate::oidc::LocalOidcTrust>) -> String {
+/// Opaque continuation authority is supplied by the trusted embedder or the daemon's profile,
+/// never by HTTP. The strict daemon's continuations are re-verified against the current
+/// configuration and keys when resumed, so one constant authority suffices; it differs from the
+/// fixture's so a fixture continuation never resumes under strict, nor the reverse.
+fn idp_continuation_authority(
+    trust: Option<&crate::oidc::LocalOidcTrust>,
+    strict_signed: bool,
+) -> String {
     match trust {
+        None if strict_signed => "strict-signed-oidc-v1".to_owned(),
         None => "fixture-idp-v1".to_owned(),
         Some(trust) => {
             let pin = json!({
@@ -11810,6 +11865,62 @@ fn idp_continuation_authority(trust: Option<&crate::oidc::LocalOidcTrust>) -> St
             )
         }
     }
+}
+
+/// The request-scoped trust the strict daemon verifies a `signInWithIdp` assertion with: the
+/// selected namespace's configuration of the named `oidc.*` provider and the startup key of its
+/// issuer that the token's `kid` names (owner decision O4). `Ok(None)` leaves a request without
+/// an absolute `requestUri` or a `providerId` to the credential parser, which refuses it with the
+/// errors answered before O4 and without mutation.
+///
+/// # Errors
+/// `INVALID_IDP_RESPONSE` (production's code for this route is unobserved) for any provider
+/// other than an existing `oidc.*` configuration whose issuer has startup keys, and for a token
+/// whose `kid` names none of them. [`crate::oidc::LocalOidcTrust::accepts`] checks the rest.
+fn strict_idp_trust(
+    signers: &IdpSignerTrust,
+    store: &AuthStore,
+    body: &Value,
+) -> Result<Option<crate::oidc::LocalOidcTrust>, JsonResponse> {
+    let refused = || error(400, "INVALID_IDP_RESPONSE");
+    let Some(request_uri) = str_field(body, "requestUri").filter(|uri| uri_is_absolute(uri)) else {
+        return Ok(None);
+    };
+    let params = normalized_idp_params(request_uri, str_field(body, "postBody"));
+    let Some(provider_id) = params.get("providerId").filter(|id| !id.is_empty()) else {
+        return Ok(None);
+    };
+    // The credential parser lowercases the provider; the verified one must be the recorded one.
+    // `LocalOidcTrust::accepts` refuses a provider other than `oidc.*`.
+    if *provider_id != provider_id.to_lowercase() {
+        return Err(refused());
+    }
+    let config = store.oidc_config(provider_id).ok_or_else(refused)?;
+    let kid = params
+        .get("id_token")
+        .and_then(|token| jws_kid(token))
+        .ok_or_else(refused)?;
+    let jwk = signers.key(&config.issuer, &kid).ok_or_else(refused)?;
+    Ok(Some(crate::oidc::LocalOidcTrust {
+        project_id: store.project_id().to_owned(),
+        tenant_id: store.tenant_id().map(str::to_owned),
+        provider_id: provider_id.clone(),
+        issuer: config.issuer.clone(),
+        client_id: config.client_id.clone(),
+        jwk: jwk.clone(),
+    }))
+}
+
+/// The `kid` of a compact JWS header, read before any verification only to select a key.
+fn jws_kid(token: &str) -> Option<String> {
+    // The verifier's bound, applied before decoding anything (verification refuses it too).
+    if token.len() > 65_536 {
+        return None;
+    }
+    let header = token.split('.').next()?;
+    let header: Value =
+        serde_json::from_slice(&fireemu_core_auth::jwt::base64url_decode(header).ok()?).ok()?;
+    header.get("kid")?.as_str().map(str::to_owned)
 }
 
 /// Resolve pendingToken *before* signup admission and assertion verification. A caller

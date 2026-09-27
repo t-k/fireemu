@@ -611,6 +611,7 @@ fn state() -> AuthState {
         fake_custom_token_expiry:
             fireemu_adapter_http::identity_toolkit::FakeCustomTokenExpiry::Ignore,
         custom_token_trust: None,
+        idp_assertions: fireemu_adapter_http::identity_toolkit::IdpAssertionPolicy::Fixture,
         app_check: None,
         app_check_policy: None,
         tenancy: None,
@@ -1431,6 +1432,7 @@ fn strict_state_with_signer() -> AuthState {
         CustomTokenTrust::from_jwks(json!({TEST_SIGNER: jwks}).as_object().unwrap()).unwrap();
     AuthState {
         custom_token_trust: Some(Arc::new(trust)),
+        idp_assertions: fireemu_adapter_http::identity_toolkit::IdpAssertionPolicy::Fixture,
         ..strict_state()
     }
 }
@@ -2048,6 +2050,7 @@ fn configured_signers_apply_production_rules_in_the_emulator_profile() {
     let trusted = strict_state_with_signer();
     let s = AuthState {
         custom_token_trust: trusted.custom_token_trust.clone(),
+        idp_assertions: fireemu_adapter_http::identity_toolkit::IdpAssertionPolicy::Fixture,
         ..state()
     };
     let now = 1_788_004_860;
@@ -8902,6 +8905,7 @@ fn signed_custom_tokens_follow_production_claim_rules() {
     let trust = CustomTokenTrust::from_jwks(json!({account: jwks}).as_object().unwrap()).unwrap();
     let s = AuthState {
         custom_token_trust: Some(Arc::new(trust)),
+        idp_assertions: fireemu_adapter_http::identity_toolkit::IdpAssertionPolicy::Fixture,
         ..strict_state()
     };
     let now = 1_788_004_860_i64;
@@ -9070,6 +9074,7 @@ fn configured_signers_admit_only_the_tokens_they_signed() {
     .unwrap();
     let s = AuthState {
         custom_token_trust: Some(Arc::new(trust)),
+        idp_assertions: fireemu_adapter_http::identity_toolkit::IdpAssertionPolicy::Fixture,
         ..strict_state()
     };
     let now = 1_788_004_860;

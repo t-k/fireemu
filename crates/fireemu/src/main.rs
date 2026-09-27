@@ -2083,6 +2083,9 @@ fn print_banner(
             if let Some(note) = daemon::custom_token_signer_note(cfg) {
                 println!("{note}");
             }
+            if let Some(note) = daemon::idp_signer_note(cfg) {
+                println!("{note}");
+            }
         }
         None => println!("  auth:             not selected by --only (nothing is bound)"),
     }

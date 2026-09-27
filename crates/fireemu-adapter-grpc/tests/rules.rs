@@ -3545,9 +3545,9 @@ service cloud.firestore {
     h.handle.abort();
 }
 
-/// Firestore honours an ID token for 30 seconds past its `exp` (FS-RULES production recording,
-/// 2026-09-25: accepted up to 26 seconds after it, refused from 30 on REST and gRPC), and
-/// then refuses it as an expired credential.
+/// Firestore honours an ID token for 30 seconds past its `exp` (FS-RULES production recordings,
+/// 2026-09-25: accepted at a nominal 29.8 s past it and refused at a nominal 30.3 s on REST,
+/// 29.3 s and 31.3 s on gRPC), and then refuses it as an expired credential.
 #[tokio::test]
 async fn an_id_token_is_honoured_for_thirty_seconds_past_its_expiry() {
     let mut h = start().await;

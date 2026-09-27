@@ -710,10 +710,11 @@ export function classify({ row, stale, production, alternative, fireemu }) {
   if (fireemu === undefined) return "MISSING";
   if ([production, alternative, fireemu].some(isTransient)) return "INDETERMINATE";
   if (alternative && !Object.hasOwn(NONDETERMINISTIC_ROWS, row)) return "INDETERMINATE";
-  // A step whose dependency was refused on both sides never ran: it confirms that refusal only.
+  // A step whose dependency was refused on both sides never ran: it confirms that refusal only,
+  // and only when both sides name the same unresolved dependency (step and path).
   if (production.unresolved !== undefined || fireemu.unresolved !== undefined) {
-    const both = production.unresolved !== undefined && fireemu.unresolved !== undefined;
-    return both && !alternative ? "DEPENDENCY_REFUSED" : "MISMATCH";
+    const same = production.unresolved === fireemu.unresolved;
+    return same && !alternative ? "DEPENDENCY_REFUSED" : "MISMATCH";
   }
   if (sameRecording(production, fireemu)) return alternative ? "MATCH_NONDETERMINISTIC" : "MATCH";
   if (alternative && sameRecording(alternative, fireemu)) return "MATCH_NONDETERMINISTIC";

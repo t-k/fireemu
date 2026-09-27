@@ -215,3 +215,27 @@ test("a verified condition is bound to the committed comparison, fixture and fin
     }
   }
 });
+
+test("a dependency-refused row depends on a compared step that matched", () => {
+  const fixture = JSON.parse(
+    readFileSync(fileURLToPath(new URL("../fs-rules-production.json", import.meta.url)), "utf8"),
+  );
+  const paths = new Set(
+    load()
+      .conditions.map(({ evidence }) => evidence?.comparisonPath)
+      .filter(Boolean),
+  );
+  assert.ok(paths.size > 0);
+  for (const path of paths) {
+    const { rows } = readRepo(path);
+    const status = new Map(rows.map(({ row, status }) => [row, status]));
+    for (const { row } of rows.filter(({ status }) => status === "DEPENDENCY_REFUSED")) {
+      const [program, step] = row.split("#");
+      const recorded = fixture.programs[program]?.steps?.[step];
+      const dependency = /^step (\S+) recorded nothing at \S+$/.exec(recorded?.unresolved ?? "")?.[1];
+      assert.ok(dependency, `${row}: production names the unresolved dependency`);
+      assert.equal(recorded.dependencyTransient, false, `${row}: the dependency was not transient`);
+      assert.equal(status.get(`${program}#${dependency}`), "MATCH", `${row}: ${dependency} was compared`);
+    }
+  }
+});

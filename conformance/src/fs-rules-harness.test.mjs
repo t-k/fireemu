@@ -266,6 +266,11 @@ test("classification needs a current fixture and a determinate answer on both si
   assert.equal(classify({ production: unresolved, fireemu: unresolved }), "DEPENDENCY_REFUSED");
   assert.equal(classify({ production: unresolved, fireemu: denied }), "MISMATCH");
   assert.equal(classify({ production: denied, fireemu: unresolved }), "MISMATCH");
+  // Another unresolved dependency on one side is a different refusal.
+  const other = { ...unresolved, unresolved: "step begin-denied recorded nothing at transaction" };
+  assert.equal(classify({ production: unresolved, fireemu: other }), "MISMATCH");
+  const elsewhere = { ...unresolved, unresolved: "step begin recorded nothing at 0.transaction" };
+  assert.equal(classify({ production: unresolved, fireemu: elsewhere }), "MISMATCH");
 });
 
 test("the corpus is valid, waits only in its last program and stays within the request cap", () => {

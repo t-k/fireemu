@@ -551,10 +551,7 @@ where
     let bytes = match read_body(req, allowance, body_deadline).await {
         Ok(bytes) => bytes,
         Err(rejection) => {
-            return json_response(
-                &body_rejection_response(rejection),
-                origin.as_deref(),
-            );
+            return json_response(&body_rejection_response(rejection), origin.as_deref());
         }
     };
     let body = String::from_utf8_lossy(&bytes).into_owned();
@@ -982,8 +979,8 @@ mod tests {
 
     use super::{
         api_request_too_large_message, normalize_transport_frame, normalize_transport_status,
-        try_admit_rest_payload_from, try_admit_rest_work, RestEnvelope, MAX_REST_BODY_BYTES,
-        MAX_COMMIT_RAW_BYTES, REST_PAYLOAD_UNIT_BYTES,
+        try_admit_rest_payload_from, try_admit_rest_work, RestEnvelope, MAX_COMMIT_RAW_BYTES,
+        MAX_REST_BODY_BYTES, REST_PAYLOAD_UNIT_BYTES,
     };
     use bytes::Bytes;
     use hyper::body::Frame;

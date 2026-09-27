@@ -177,8 +177,28 @@ test("the AuthnRequest of an authUri gives its ID and RelayState", () => {
     '<samlp:AuthnRequest xmlns:samlp="urn:oasis:names:tc:SAML:2.0:protocol" ID="_req-42" Version="2.0"/>';
   const encoded = deflateRawSync(Buffer.from(request)).toString("base64");
   const uri = `https://sso.example.test/saml?SAMLRequest=${encodeURIComponent(encoded)}&RelayState=rs-1`;
-  assert.deepEqual(readAuthnRequest(uri), { xml: request, id: "_req-42", relayState: "rs-1" });
+  assert.deepEqual(readAuthnRequest(uri), {
+    xml: request,
+    id: "_req-42",
+    acs: undefined,
+    issuer: undefined,
+    relayState: "rs-1",
+  });
   assert.throws(() => readAuthnRequest("https://sso.example.test/saml"), /no SAMLRequest/);
+  // The ACS and Issuer it names are read; a `+` of the base64 is kept, not read as a space.
+  const full =
+    '<samlp:AuthnRequest xmlns:samlp="urn:oasis:names:tc:SAML:2.0:protocol" xmlns:saml="urn:oasis:names:tc:SAML:2.0:assertion" ID="_req-43" AssertionConsumerServiceURL="https://p.firebaseapp.com/__/auth/handler"><saml:Issuer>fireemu-a1b2c3-sp</saml:Issuer></samlp:AuthnRequest>';
+  let deflated;
+  for (let pad = 0; ; pad += 1) {
+    deflated = deflateRawSync(Buffer.from(full + " ".repeat(pad))).toString("base64");
+    if (deflated.includes("+")) break;
+  }
+  const raw = `https://sso.example.test/saml?SAMLRequest=${deflated.replaceAll("/", "%2F")}&RelayState=a%2Bb`;
+  const read = readAuthnRequest(raw);
+  assert.equal(read.id, "_req-43");
+  assert.equal(read.acs, "https://p.firebaseapp.com/__/auth/handler");
+  assert.equal(read.issuer, "fireemu-a1b2c3-sp");
+  assert.equal(read.relayState, "a+b");
 });
 
 test("a prefix that is not declared is refused", () => {

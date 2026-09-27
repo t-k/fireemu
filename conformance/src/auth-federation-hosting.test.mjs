@@ -359,7 +359,16 @@ test("the smoke starts only on a free sandbox and a digest the owner approved", 
     sandboxBusy(line("FS-RULES", "2026-09-27T09:00:00Z", { event: "started" }), now),
     /FS-RULES at .* has not finished or recovered/,
   );
-  // Another task waiting for recovery holds the sandbox however old its line is.
+  // Another task waiting for recovery holds the sandbox however old its line is, whether the
+  // lane writes it as an event or as an outcome.
+  assert.match(
+    sandboxBusy(line("FS-RULES-SANDBOX", "2026-09-26T02:06:35Z", { event: "needs-recovery" }), now),
+    /FS-RULES-SANDBOX at .* has not finished or recovered/,
+  );
+  assert.match(
+    sandboxBusy(line(TASK_ID, "2026-09-26T02:06:35Z", { event: "needs-recovery" }), now),
+    /recover it first/,
+  );
   assert.match(
     sandboxBusy(line("FS-RULES", "2026-09-26T09:00:00Z", { outcome: "needs-recovery" }), now),
     /FS-RULES at .* has not finished or recovered/,

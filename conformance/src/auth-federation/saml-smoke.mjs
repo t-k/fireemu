@@ -58,6 +58,7 @@ export const SOURCES = [
   "saml.mjs",
   "guard.mjs",
   "hosting.mjs",
+  "idp.mjs",
   "harness.mjs",
   "../auth-account/harness.mjs",
 ].map((name) => fileURLToPath(new URL(name, import.meta.url)));
@@ -80,23 +81,30 @@ export function approvedAttempts(ownerDecisions, digest) {
 const sha256Hex = (text) => createHash("sha256").update(text).digest("hex");
 
 /**
- * Why attempt `attempt` may not start, or undefined. The first needs no earlier attempt; the
- * second needs exactly one, which ended cleaned without passing. There is never a third.
+ * Why attempt `attempt` may not start, or undefined. Attempts are counted by their started
+ * lines, so an attempt that ended in an exception (and was recovered) still counts. The first
+ * needs none before it; the second needs exactly one, whose own terminal line says
+ * `failed-cleaned`. There is never a third.
  */
 export function attemptRefusal(ledgerText, attempt) {
-  const earlier = ledgerEntries(ledgerText).filter(
+  const own = ledgerEntries(ledgerText).filter(
     (entry) =>
       entry.project === SANDBOX_PROJECT &&
       (entry.taskId ?? entry.task) === TASK_ID &&
-      entry.action === ACTION &&
-      entry.outcome !== undefined,
+      entry.action === ACTION,
   );
-  if (attempt === 1) return earlier.length ? `attempt ${earlier.length} already ran` : undefined;
+  const started = own.filter((entry) => entry.event === "started");
+  if (attempt === 1)
+    return started.length ? `attempt ${started.length} already started` : undefined;
   if (attempt !== 2) return `attempt ${attempt} is not 1 or 2`;
-  if (earlier.length !== 1)
-    return `attempt 2 needs exactly one earlier attempt (${earlier.length})`;
-  if (earlier[0].outcome !== "failed-cleaned")
-    return `attempt 1 ended ${earlier[0].outcome}, not failed-cleaned`;
+  if (started.length !== 1)
+    return `attempt 2 needs exactly one earlier attempt (${started.length})`;
+  const ended = own.findLast(
+    (entry) => entry.run === started[0].run && entry.outcome !== undefined,
+  );
+  if (ended?.outcome !== "failed-cleaned") {
+    return `attempt 1 ended ${ended?.outcome ?? "without a terminal line"}, not failed-cleaned`;
+  }
   return undefined;
 }
 
@@ -151,11 +159,66 @@ export function tamper(xml) {
 }
 
 /**
- * The smoke, with every effect injected. `api(url, init)` is counted; `adminToken` and
- * `apiKey` authenticate; `signer` is `{privateKey, certificatePem}`. Returns the terminal
- * ledger entry and the recorded answers.
+ * The configuration read before the attempt must allow it, or nothing is sent: the callback
+ * host is an authorized domain, no blocking function runs on sign-in (another lane's), the
+ * project is on Identity Platform, and the local clock is within 30 seconds of the server's
+ * (the response is valid from a minute before its issue).
  */
-export async function samlSmoke({ api, run, signer, meta, appendLedger, stop, attempt, now }) {
+export function precheckRefusal(config, serverDate, now) {
+  const domains = config.authorizedDomains ?? [];
+  if (!domains.includes(`${SANDBOX_PROJECT}.firebaseapp.com`)) {
+    return `${SANDBOX_PROJECT}.firebaseapp.com is not an authorized domain`;
+  }
+  if (Object.keys(config.blockingFunctions?.triggers ?? {}).length) {
+    return "a blocking function is configured";
+  }
+  if (config.subtype !== "IDENTITY_PLATFORM") return `the project subtype is ${config.subtype}`;
+  const server = Date.parse(serverDate ?? "");
+  if (Number.isNaN(server)) return "the server sent no Date";
+  const skew = Math.abs(now * 1000 - server);
+  if (skew > 30_000) return `the local clock is ${Math.round(skew / 1000)} s off the server's`;
+  return undefined;
+}
+
+/** The sha256 of each top-level member of a config: what a mismatch names, never its value. */
+export function configKeyDigests(text) {
+  let config;
+  try {
+    config = JSON.parse(text);
+  } catch {
+    return { "<unparsable>": sha256Hex(text) };
+  }
+  return Object.fromEntries(
+    Object.entries(config)
+      .toSorted(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
+      .map(([key, value]) => [key, sha256Hex(JSON.stringify(value))]),
+  );
+}
+
+/** The top-level members whose digests differ between two `configKeyDigests`. */
+export function changedKeys(before, after) {
+  return [...new Set([...Object.keys(before), ...Object.keys(after)])]
+    .filter((key) => before[key] !== after[key])
+    .toSorted();
+}
+
+/**
+ * The smoke, with every effect injected. `api(url, init)` is counted; `adminToken` and
+ * `apiKey` authenticate; `signer` is `{privateKey, certificatePem}`. `writeAnswers(recorded)`
+ * runs before the terminal ledger line, which is always written once the started line was,
+ * with the rows, whatever the cleanup met. Returns the terminal entry.
+ */
+export async function samlSmoke({
+  api,
+  run,
+  signer,
+  meta,
+  appendLedger,
+  writeAnswers = async () => {},
+  stop,
+  attempt,
+  now,
+}) {
   checkRun(run);
   const provider = `saml.fireemu-${run}-s`;
   if (!runProvider(run).test(provider)) throw new Error("provider is not the run's");
@@ -190,15 +253,23 @@ export async function samlSmoke({ api, run, signer, meta, appendLedger, stop, at
     } catch {
       parsed = {};
     }
-    return { status: response.status, text: answer, body: parsed };
+    return {
+      status: response.status,
+      text: answer,
+      body: parsed,
+      date: response.headers.get("date"),
+    };
   };
   const base = `${ITK}/admin/v2/projects/${SANDBOX_PROJECT}`;
   const accountsUrl = `${ITK}/v1/projects/${SANDBOX_PROJECT}/accounts:batchGet?maxResults=1`;
   const client = (method) => `${ITK}/v1/accounts:${method}?key=${meta.apiKey}`;
+  const spEntityId = `fireemu-${run}-sp`;
 
   // Prechecks (read only): the config before, no SAML provider of an earlier run, no account.
   const before = await request("GET", `${base}/config`);
   if (before.status !== 200) throw new Error(`config read: ${before.status}`);
+  const refusal = precheckRefusal(before.body, before.date, now());
+  if (refusal) throw new Error(`precheck: ${refusal}`);
   const providers = await request("GET", `${base}/inboundSamlConfigs?pageSize=100`);
   const left = (providers.body.inboundSamlConfigs ?? []).filter((c) =>
     String(c.name).split("/").at(-1).startsWith("saml.fireemu-"),
@@ -213,6 +284,7 @@ export async function samlSmoke({ api, run, signer, meta, appendLedger, stop, at
     throw new Error(`the project holds accounts or they cannot be listed (${accounts.status})`);
   }
   stop.check();
+  const keysBefore = configKeyDigests(before.text);
   await appendLedger({
     event: "started",
     action: ACTION,
@@ -223,8 +295,9 @@ export async function samlSmoke({ api, run, signer, meta, appendLedger, stop, at
     estimatedUsd: 0,
     gitSha: meta.gitSha,
     scriptDigest: meta.digest,
-    // The config holds keys, so the ledger keeps its digest only.
+    // The config holds keys, so the ledger keeps digests only.
     configDigestBefore: sha256Hex(before.text),
+    configKeyDigestsBefore: keysBefore,
   });
 
   const rows = {};
@@ -248,21 +321,24 @@ export async function samlSmoke({ api, run, signer, meta, appendLedger, stop, at
         "POST",
         client("createAuthUri"),
         { providerId: provider, continueUri: CALLBACK },
-        {
-          role: "step",
-          headers: {},
-        },
+        { role: "step", headers: {} },
       );
       rows[`${name}-auth-uri`] = uri;
       if (uri.status !== 200 || !uri.body.authUri) return undefined;
       const authn = readAuthnRequest(uri.body.authUri);
+      uri.authn = { acs: authn.acs, issuer: authn.issuer };
+      // A request for another ACS or audience would make the response wrong: no sign-in.
+      if ((authn.acs && authn.acs !== CALLBACK) || (authn.issuer && authn.issuer !== spEntityId)) {
+        uri.mismatch = true;
+        return undefined;
+      }
       const suffix = randomBytes(6).toString("hex");
       const { xml } = signedSamlResponse(
         {
           responseId: `_r${suffix}`,
           assertionId: `_a${suffix}`,
           issuer: providerBody(run, "").idpConfig.idpEntityId,
-          audience: `fireemu-${run}-sp`,
+          audience: spEntityId,
           destination: CALLBACK,
           inResponseTo: authn.id,
           nameId: `fireemu-fed-${run}@example.com`,
@@ -291,65 +367,99 @@ export async function samlSmoke({ api, run, signer, meta, appendLedger, stop, at
       return answer;
     };
     await signIn("tampered", { sign: "assertion", tampered: true });
-    const valid = await signIn("assertion-signed", { sign: "assertion" });
-    if (valid?.status === 200) {
-      await signIn("response-signed", { sign: "response" });
+    const assertionSigned = await signIn("assertion-signed", { sign: "assertion" });
+    // Sent whatever the assertion-signed row answered (the coordinator's decision): production
+    // may require the response to be signed.
+    const responseSigned = await signIn("response-signed", { sign: "response" });
+    if (assertionSigned?.status === 200 || responseSigned?.status === 200) {
       await signIn("both-signed", { sign: "both" });
     }
   } catch (error) {
     failure = error;
   }
 
-  // Cleanup: the accounts the answers named, the provider; then read everything back.
-  const cleanup = { accountsDeleted: [] };
+  // Cleanup: every step runs whatever an earlier one met; a step that cannot be confirmed
+  // leaves the run to recovery. Then the answers, then the terminal line with the rows.
+  const cleanup = { accountsDeleted: [], errors: [] };
+  const step = async (name, work) => {
+    try {
+      await work();
+    } catch (error) {
+      cleanup.errors.push(`${name}: ${error.message}`);
+    }
+  };
   for (const localId of localIds) {
-    const deleted = await request("POST", `${ITK}/v1/projects/${SANDBOX_PROJECT}/accounts:delete`, {
-      localId,
+    await step(`delete account`, async () => {
+      const deleted = await request(
+        "POST",
+        `${ITK}/v1/projects/${SANDBOX_PROJECT}/accounts:delete`,
+        { localId },
+      );
+      cleanup.accountsDeleted.push(deleted.status);
     });
-    cleanup.accountsDeleted.push(deleted.status);
   }
   if (providerAttempted) {
-    cleanup.providerDelete = (
-      await request("DELETE", `${base}/inboundSamlConfigs/${provider}`)
-    ).status;
-    cleanup.providerReadBack = (
-      await request("GET", `${base}/inboundSamlConfigs/${provider}`)
-    ).status;
+    await step("delete provider", async () => {
+      cleanup.providerDelete = (
+        await request("DELETE", `${base}/inboundSamlConfigs/${provider}`)
+      ).status;
+    });
+    await step("read provider", async () => {
+      cleanup.providerReadBack = (
+        await request("GET", `${base}/inboundSamlConfigs/${provider}`)
+      ).status;
+    });
   }
-  const listed = await request("GET", `${base}/inboundSamlConfigs?pageSize=100`);
-  cleanup.providersLeft = (listed.body.inboundSamlConfigs ?? [])
-    .map((c) => String(c.name).split("/").at(-1))
-    .filter((id) => runProvider(run).test(id));
-  const accountsAfter = await request("GET", accountsUrl);
-  cleanup.accountsLeft =
-    accountsAfter.status === 200 ? (accountsAfter.body.users ?? []).length : -1;
-  const after = await request("GET", `${base}/config`);
-  cleanup.configUnchanged = after.status === 200 && after.text === before.text;
+  await step("list providers", async () => {
+    const listed = await request("GET", `${base}/inboundSamlConfigs?pageSize=100`);
+    cleanup.providersListStatus = listed.status;
+    cleanup.providersLeft = (listed.body.inboundSamlConfigs ?? [])
+      .map((c) => String(c.name).split("/").at(-1))
+      .filter((id) => runProvider(run).test(id));
+  });
+  await step("list accounts", async () => {
+    const listed = await request("GET", accountsUrl);
+    cleanup.accountsLeft = listed.status === 200 ? (listed.body.users ?? []).length : -1;
+  });
+  await step("read config", async () => {
+    const after = await request("GET", `${base}/config`);
+    cleanup.configUnchanged = after.status === 200 && after.text === before.text;
+    if (after.status === 200 && !cleanup.configUnchanged) {
+      cleanup.configChangedKeys = changedKeys(keysBefore, configKeyDigests(after.text));
+    }
+  });
+  // The read-backs decide: a step whose answer was lost is clean when they confirm it.
   const clean =
     (!providerAttempted || cleanup.providerReadBack === 404) &&
-    cleanup.providersLeft.length === 0 &&
+    cleanup.providersListStatus === 200 &&
+    cleanup.providersLeft?.length === 0 &&
     cleanup.accountsLeft === 0 &&
-    cleanup.configUnchanged;
-  const accepted = rows["assertion-signed"]?.status === 200;
+    cleanup.configUnchanged === true;
+  if (!cleanup.errors.length) delete cleanup.errors;
+  const accepted = (name) => rows[name]?.status === 200;
+  const tamperedRejected = rows.tampered !== undefined && !accepted("tampered");
+  // Feasible only if production also refused the tampered signature: otherwise an accepted
+  // row says nothing about signatures.
+  const feasible =
+    tamperedRejected && (accepted("assertion-signed") || accepted("response-signed"));
   const summary = Object.fromEntries(
     Object.entries(rows).map(([name, row]) => [
       name,
-      { status: row.status, ...(row.body.error ? { error: row.body.error.message } : {}) },
+      {
+        status: row.status,
+        ...(row.body.error ? { error: row.body.error.message } : {}),
+        ...(row.authn ? { authnRequest: row.authn } : {}),
+        ...(row.mismatch ? { stopped: "the AuthnRequest names another ACS or audience" } : {}),
+      },
     ]),
   );
-  const entry = {
-    action: ACTION,
-    attempt,
-    outcome: clean ? (failure || !accepted ? "failed-cleaned" : "smoke-passed") : "needs-recovery",
-    ...(failure ? { error: failure.message } : {}),
-    run,
-    provider,
-    feasible: accepted,
-    rows: summary,
-    ...cleanup,
-    estimatedUsd: 0,
-  };
-  await appendLedger(entry);
+  const outcome = !clean
+    ? "needs-recovery"
+    : accepted("tampered")
+      ? "smoke-unexpected"
+      : feasible
+        ? "smoke-passed"
+        : "failed-cleaned";
   const recorded = Object.fromEntries(
     Object.entries(rows).map(([name, row]) => [
       name,
@@ -360,6 +470,27 @@ export async function samlSmoke({ api, run, signer, meta, appendLedger, stop, at
       }),
     ]),
   );
+  let answersWritten = true;
+  try {
+    await writeAnswers(recorded);
+  } catch {
+    answersWritten = false;
+  }
+  const entry = {
+    action: ACTION,
+    attempt,
+    outcome,
+    ...(failure ? { error: failure.message } : {}),
+    run,
+    provider,
+    feasible,
+    tamperedRejected,
+    rows: summary,
+    ...cleanup,
+    answersWritten,
+    estimatedUsd: 0,
+  };
+  await appendLedger(entry);
   return { entry, recorded };
 }
 
@@ -421,6 +552,7 @@ export function samlRunToRecover(ledgerText) {
     run: checkRun(last.run),
     digest: started.scriptDigest,
     configDigestBefore: started.configDigestBefore,
+    configKeyDigestsBefore: started.configKeyDigestsBefore ?? {},
   };
 }
 
@@ -429,7 +561,14 @@ export function samlRunToRecover(ledgerText) {
  * reads both back and compares the config with its digest before the attempt. It never
  * writes the config; a changed config stays `needs-recovery` for the owner.
  */
-export async function samlRecover({ api, run, meta, appendLedger, configDigestBefore }) {
+export async function samlRecover({
+  api,
+  run,
+  meta,
+  appendLedger,
+  configDigestBefore,
+  configKeyDigestsBefore = {},
+}) {
   checkRun(run);
   const provider = `saml.fireemu-${run}-s`;
   const admin = {
@@ -488,6 +627,12 @@ export async function samlRecover({ api, run, meta, appendLedger, configDigestBe
     const config = await request("GET", `${base}/config`);
     cleanup.configUnchanged =
       config.status === 200 && sha256Hex(config.text) === configDigestBefore;
+    if (config.status === 200 && !cleanup.configUnchanged) {
+      cleanup.configChangedKeys = changedKeys(
+        configKeyDigestsBefore,
+        configKeyDigests(config.text),
+      );
+    }
     const clean =
       cleanup.providerReadBack === 404 && cleanup.accountsLeft === 0 && cleanup.configUnchanged;
     entry = { outcome: clean ? "recovered" : "needs-recovery", ...cleanup };
@@ -555,7 +700,7 @@ async function smokeFromEnvironment(attempt) {
       };
       for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"]) process.on(signal, onSignal);
       try {
-        const { entry, recorded } = await samlSmoke({
+        const { entry } = await samlSmoke({
           api: call,
           run,
           signer,
@@ -574,11 +719,14 @@ async function smokeFromEnvironment(attempt) {
             digest,
           },
           appendLedger: appender(ledger, used, state),
-        });
-        const out = join(dirname(ledger), `auth-federation-saml-${run}`);
-        await mkdir(out, { recursive: true, mode: 0o700 });
-        await writeFile(join(out, "answers.json"), `${JSON.stringify(recorded, null, 2)}\n`, {
-          mode: 0o600,
+          // Written before the terminal line, so a failure here never outlives the ledger.
+          writeAnswers: async (answers) => {
+            const out = join(dirname(ledger), `auth-federation-saml-${run}`);
+            await mkdir(out, { recursive: true, mode: 0o700 });
+            await writeFile(join(out, "answers.json"), `${JSON.stringify(answers, null, 2)}\n`, {
+              mode: 0o600,
+            });
+          },
         });
         console.log(JSON.stringify(entry, null, 2));
         if (entry.outcome !== "smoke-passed") process.exitCode = 1;
@@ -613,6 +761,7 @@ async function recoverFromEnvironment() {
         api: call,
         run: target.run,
         configDigestBefore: target.configDigestBefore,
+        configKeyDigestsBefore: target.configKeyDigestsBefore,
         meta: { adminToken },
         appendLedger: appender(ledger, used, state),
       });

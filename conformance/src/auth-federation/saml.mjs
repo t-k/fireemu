@@ -285,16 +285,31 @@ export function signedSamlResponse(
   return { xml, base64: Buffer.from(xml, "utf8").toString("base64") };
 }
 
+/** A query parameter decoded without turning `+` into a space (base64 keeps its `+`). */
+function rawParameter(url, name) {
+  const found = new URL(url).search
+    .slice(1)
+    .split("&")
+    .find((part) => part.split("=")[0] === name);
+  return found === undefined ? undefined : decodeURIComponent(found.slice(name.length + 1));
+}
+
 /**
- * The AuthnRequest an `authUri` carries (HTTP-Redirect binding: raw DEFLATE, base64), with
- * its `ID` and the `RelayState` to send back.
+ * The AuthnRequest an `authUri` carries (HTTP-Redirect binding: raw DEFLATE, base64): its
+ * `ID`, the `AssertionConsumerServiceURL` and `Issuer` it names (when present), and the
+ * `RelayState` to send back.
  */
 export function readAuthnRequest(authUri) {
-  const url = new URL(authUri);
-  const encoded = url.searchParams.get("SAMLRequest");
+  const encoded = rawParameter(authUri, "SAMLRequest");
   if (!encoded) throw new Error("the authUri carries no SAMLRequest");
   const xml = inflateRawSync(Buffer.from(encoded, "base64")).toString("utf8");
   const id = /\sID="([^"]+)"/.exec(xml)?.[1];
   if (!id) throw new Error("the AuthnRequest has no ID");
-  return { xml, id, relayState: url.searchParams.get("RelayState") ?? undefined };
+  return {
+    xml,
+    id,
+    acs: /\sAssertionConsumerServiceURL="([^"]+)"/.exec(xml)?.[1],
+    issuer: /<(?:[\w-]+:)?Issuer(?:\s[^>]*)?>([^<]*)<\//.exec(xml)?.[1]?.trim(),
+    relayState: rawParameter(authUri, "RelayState"),
+  };
 }

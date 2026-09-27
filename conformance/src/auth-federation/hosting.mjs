@@ -132,6 +132,10 @@ export function ledgerEntries(text) {
 
 const taskOf = (entry) => entry.taskId ?? entry.task ?? "<unnamed>";
 
+/** Lanes write a pending recovery as an outcome or as an event. */
+const needsRecovery = (entry) =>
+  entry?.outcome === "needs-recovery" || entry?.event === "needs-recovery";
+
 /**
  * Why the sandbox is not free for this task, or undefined: this task's own run left open
  * (recover it first), another task's open `started` line or `needs-recovery` outcome, or
@@ -143,13 +147,11 @@ export function sandboxBusy(text, now = Date.now()) {
   const last = new Map();
   for (const entry of lines) last.set(taskOf(entry), entry);
   const own = last.get(TASK_ID);
-  if (own?.event === "started" || own?.outcome === "needs-recovery") {
+  if (own?.event === "started" || needsRecovery(own)) {
     return `this task's run ${own.run ?? ""} at ${own.ts} was not finished; recover it first`;
   }
   const unfinished = [...last.values()].find(
-    (entry) =>
-      taskOf(entry) !== TASK_ID &&
-      (entry.event === "started" || entry.outcome === "needs-recovery"),
+    (entry) => taskOf(entry) !== TASK_ID && (entry.event === "started" || needsRecovery(entry)),
   );
   if (unfinished) return `${taskOf(unfinished)} at ${unfinished.ts} has not finished or recovered`;
   const recent = lines.find((entry) => {

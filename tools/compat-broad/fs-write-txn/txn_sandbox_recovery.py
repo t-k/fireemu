@@ -3,12 +3,15 @@
 from __future__ import annotations
 
 import argparse
+import contextlib
 import datetime as dt
+import fcntl
 import hashlib
 import json
 import os
 import re
 import signal
+import stat
 import sys
 from pathlib import Path
 
@@ -181,8 +184,30 @@ def _sha(raw):
     return hashlib.sha256(raw).hexdigest()
 
 
+@contextlib.contextmanager
+def _exclusive_recovery_guard(lock_path):
+    """Keep recovery admission single-writer; the kernel releases this guard on death."""
+    path = lock_path.with_name(f"{PROJECT}.recovery-guard")
+    fd = os.open(path, os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
+    try:
+        details = os.fstat(fd)
+        if not stat.S_ISREG(details.st_mode) or details.st_mode & 0o077:
+            raise ValueError("private regular recovery guard required")
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError as error:
+            raise ValueError("another exact-name recovery holds the guard lock") from error
+        try:
+            yield
+        finally:
+            fcntl.flock(fd, fcntl.LOCK_UN)
+    finally:
+        os.close(fd)
+
+
 def verify_packet(packet, *, packet_sha, snapshot_raw, baseline_raw, lock_path,
-                  ledger_rows, now, decisions, review, packet_path):
+                  ledger_rows, now, decisions, review, packet_path,
+                  allow_terminal_finalization=False):
     """Refuse any production recovery without exact bytes and a distinct owner row."""
     if not isinstance(packet, dict) or set(packet) != PACKET_FIELDS:
         raise ValueError("closed exact-name recovery packet required")
@@ -235,21 +260,32 @@ def verify_packet(packet, *, packet_sha, snapshot_raw, baseline_raw, lock_path,
         and row.get("packetId") == packet["originalPacketId"]
         and row.get("attemptId") == packet["originalAttemptId"]
     )]
-    if not original or original[-1].get("outcome") not in ("needs-recovery", "stopped-needs-review"):
+    if not original:
+        raise ValueError("original attempt has no open recovery responsibility")
+    last = original[-1]
+    finalizing = (
+        allow_terminal_finalization
+        and last.get("outcome") == "recovered-exact-name"
+        and last.get("recoveryPacketId") == packet["packetId"]
+        and last.get("recoveryPacketSha256") == packet_sha
+    )
+    if not finalizing and last.get("outcome") not in (
+        "needs-recovery", "stopped-needs-review", "reserved-recovery"
+    ):
         raise ValueError("original attempt has no open recovery responsibility")
     if (
-        original[-1].get("nonce") != snapshot["nonce"]
-        or Path(original[-1].get("runDir", "")).resolve()
+        last.get("nonce") != snapshot["nonce"]
+        or Path(last.get("runDir", "")).resolve()
         != (cli._main_root() / packet["snapshotPath"]).parent.resolve()
     ):
         raise ValueError("responsibility snapshot differs from original attempt")
-    if any(row.get("recoveryPacketId") == packet["packetId"] for row in ledger_rows):
+    if not finalizing and any(row.get("recoveryPacketId") == packet["packetId"] for row in ledger_rows):
         raise ValueError("this exact-name recovery packet was already sent")
     latest = max(admission._instant(row["ts"]) for row in original)
     snapshot_mtime = dt.datetime.fromtimestamp(
         (cli._main_root() / packet["snapshotPath"]).stat().st_mtime, dt.timezone.utc
     )
-    if not_before < max(latest, snapshot_mtime) + RECOVERY_WAIT or now < not_before:
+    if (not finalizing and not_before < max(latest, snapshot_mtime) + RECOVERY_WAIT) or now < not_before:
         raise ValueError("exact-name recovery wait has not elapsed")
     required_review = {
         "APPROVE", f"packetSha256={packet_sha}",
@@ -281,7 +317,7 @@ def verify_packet(packet, *, packet_sha, snapshot_raw, baseline_raw, lock_path,
             owner_rows.append(columns)
     if len(owner_rows) != 1:
         raise ValueError("one exact owner recovery approval is required")
-    return snapshot, original[-1]
+    return snapshot, last
 
 
 def record_recovery(*, packet, packet_sha, packet_path, snapshot_raw, baseline_raw,
@@ -290,11 +326,27 @@ def record_recovery(*, packet, packet_sha, packet_path, snapshot_raw, baseline_r
                     metadata_factory=management.MetadataSession,
                     wire_factory=wire_module.FixedDataWire):
     """Send one separately approved bounded recovery and release only a verified lock."""
+    with _exclusive_recovery_guard(lock_path):
+        return _record_recovery_under_guard(
+            packet=packet, packet_sha=packet_sha, packet_path=packet_path,
+            snapshot_raw=snapshot_raw, baseline_raw=baseline_raw,
+            lock_path=lock_path, ledger_path=ledger_path, private_dir=private_dir,
+            now=now, decisions=decisions, review=review,
+            credential_fn=credential_fn, metadata_factory=metadata_factory,
+            wire_factory=wire_factory,
+        )
+
+
+def _record_recovery_under_guard(*, packet, packet_sha, packet_path, snapshot_raw,
+                                 baseline_raw, lock_path, ledger_path, private_dir,
+                                 now, decisions, review, credential_fn,
+                                 metadata_factory, wire_factory):
     ledger_rows = admission.read_ledger(ledger_path)
     snapshot, original = verify_packet(
         packet, packet_sha=packet_sha, snapshot_raw=snapshot_raw,
         baseline_raw=baseline_raw, lock_path=lock_path, ledger_rows=ledger_rows,
         now=now, decisions=decisions, review=review, packet_path=packet_path,
+        allow_terminal_finalization=True,
     )
     lock_inode = lock_path.stat().st_ino
     lock_raw = lock_path.read_bytes()
@@ -302,12 +354,29 @@ def record_recovery(*, packet, packet_sha, packet_path, snapshot_raw, baseline_r
     if legacy_lock.exists():
         raise ValueError("legacy shared sandbox lock is held")
     result_dir = Path(private_dir) / f"fs-transaction-recovery-{packet['packetId']}"
+    if original["outcome"] == "recovered-exact-name":
+        result_raw = (result_dir / "recovery.json").read_bytes()
+        result = json.loads(result_raw)
+        if (
+            _sha(result_raw) != original.get("resultSha256")
+            or result.get("complete") is not True
+            or result.get("recovered") != list(ROLES)
+            or not isinstance(result.get("totalRequests"), int)
+            or not 0 <= result["totalRequests"] <= MAX_TOTAL_REQUESTS
+        ):
+            raise ValueError("terminal recovery receipt differs from verified result")
+        if lock_path.stat().st_ino != lock_inode or lock_path.read_bytes() != lock_raw:
+            raise ValueError("project lock changed before finalization")
+        lock_path.unlink()
+        return result
+    runner._remaining_task_budget(ledger_rows, packet["estimatedUsd"])
     result_dir.mkdir(mode=0o700)
     row = {
         "ts": now.isoformat().replace("+00:00", "Z"),
         "project": PROJECT, "database": DATABASE, "taskId": runner.TASK_ID,
         "packetId": packet["originalPacketId"], "attemptId": packet["originalAttemptId"],
         "recoveryPacketId": packet["packetId"], "runDir": original["runDir"],
+        "recoveryPacketSha256": packet_sha, "nonce": snapshot["nonce"],
         "estimatedUsd": round(original["estimatedUsd"] + packet["estimatedUsd"], 2),
         "recoveryEstimatedUsd": packet["estimatedUsd"], "requests": None,
     }
@@ -324,13 +393,17 @@ def record_recovery(*, packet, packet_sha, packet_path, snapshot_raw, baseline_r
         if result["complete"] and any(before[slot] != after[slot] for slot in ("project", "database")):
             result = {**result, "complete": False, "failure": "configuration-changed"}
         result["totalRequests"] = budget.total
-        runner._save_private(result_dir / "recovery.json", result)
+        result_path = result_dir / "recovery.json"
+        runner._save_private(result_path, result)
         if result["complete"] is not True or result["recovered"] != list(ROLES):
             admission.append_ledger(ledger_path, {**row, "outcome": "needs-recovery", "requests": budget.total})
             raise ValueError("exact-name recovery is incomplete")
         if lock_path.stat().st_ino != lock_inode or lock_path.read_bytes() != lock_raw:
             raise ValueError("project lock changed before verified release")
-        admission.append_ledger(ledger_path, {**row, "outcome": "recovered-exact-name", "requests": budget.total})
+        admission.append_ledger(ledger_path, {
+            **row, "outcome": "recovered-exact-name", "requests": budget.total,
+            "resultSha256": _sha(result_path.read_bytes()),
+        })
         try:
             lock_path.unlink()
         except OSError:

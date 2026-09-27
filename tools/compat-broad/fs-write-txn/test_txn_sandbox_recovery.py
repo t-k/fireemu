@@ -7,6 +7,7 @@ import json
 import os
 import sys
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 
@@ -253,3 +254,123 @@ def test_unverified_recovery_keeps_lock_and_records_need(tmp_path, monkeypatch):
     rows = [json.loads(line) for line in value["ledger_path"].read_text().splitlines()]
     assert rows[-1]["outcome"] == "needs-recovery"
     assert rows[-1]["requests"] == 2
+
+
+def _record(value, *, credential_fn, metadata_factory, wire_factory):
+    return recovery.record_recovery(
+        packet=value["packet"], packet_sha=value["packet_sha"],
+        packet_path=value["packet_path"], snapshot_raw=value["snapshot_raw"],
+        baseline_raw=value["baseline_raw"], lock_path=value["lock_path"],
+        ledger_path=value["ledger_path"], private_dir=value["root"] / "docs.local/runs",
+        now=value["now"], decisions=value["decisions"], review=value["review"],
+        credential_fn=credential_fn, metadata_factory=metadata_factory, wire_factory=wire_factory,
+    )
+
+
+class NoReadsMetadata:
+    def __init__(self, token, baseline, budget):
+        self.budget = budget
+
+    def preflight(self):
+        return {"project": "same", "database": "same"}
+
+    def postflight(self):
+        return {"project": "same", "database": "same"}
+
+
+def _absent_wire(token, budget):
+    def send(request):
+        budget.charge("data", phase="recovery")
+        return {"complete": True, "code": 5, "body": {}}
+    return send
+
+
+def test_second_recovery_cannot_enter_while_first_holds_exclusive_guard(tmp_path, monkeypatch):
+    value = fixture_context(tmp_path, monkeypatch)
+
+    def nested_attempt():
+        other = dict(value)
+        other["packet"] = {**value["packet"], "packetId": "another-packet"}
+        other["decisions"] = value["decisions"].replace("recovery-packet.json", "another-packet.json")
+        other["packet_path"] = "docs.local/reviews/another-packet.json"
+        with pytest.raises((BlockingIOError, ValueError), match="lock|guard|active"):
+            _record(other, credential_fn=lambda: pytest.fail("second OAuth"),
+                    metadata_factory=NoReadsMetadata, wire_factory=_absent_wire)
+        return "test-token"
+
+    result = _record(value, credential_fn=nested_attempt,
+                     metadata_factory=NoReadsMetadata, wire_factory=_absent_wire)
+    assert result["complete"] is True
+
+
+def test_new_approved_packet_can_follow_incomplete_recovery(tmp_path, monkeypatch):
+    value = fixture_context(tmp_path, monkeypatch)
+
+    def incomplete_wire(token, budget):
+        def send(request):
+            budget.charge("data", phase="recovery")
+            return {"complete": False, "code": None, "body": None}
+        return send
+
+    with pytest.raises(ValueError, match="incomplete"):
+        _record(value, credential_fn=lambda: "test-token",
+                metadata_factory=NoReadsMetadata, wire_factory=incomplete_wire)
+    later = dict(value)
+    later["packet"] = {**value["packet"], "packetId": "approved-retry", "notBefore": "2027-01-15T10:04:00Z"}
+    later["packet_path"] = "docs.local/reviews/approved-retry.json"
+    later["decisions"] = value["decisions"].replace("recovery-packet.json", "approved-retry.json")
+    later["now"] = value["now"] + dt.timedelta(minutes=5)
+    assert _record(later, credential_fn=lambda: "test-token",
+                   metadata_factory=NoReadsMetadata, wire_factory=_absent_wire)["complete"] is True
+
+
+def test_new_approved_packet_can_follow_a_crashed_recovery_reservation(tmp_path, monkeypatch):
+    value = fixture_context(tmp_path, monkeypatch)
+    crashed = {
+        **value["original"], "ts": "2027-01-15T10:00:00Z",
+        "outcome": "reserved-recovery", "recoveryPacketId": "crashed-packet",
+        "estimatedUsd": 0.07,
+    }
+    value["ledger_path"].write_text(
+        json.dumps(value["original"]) + "\n" + json.dumps(crashed) + "\n"
+    )
+    value["packet"] = {**value["packet"], "packetId": "approved-retry", "notBefore": "2027-01-15T10:04:00Z"}
+    value["packet_path"] = "docs.local/reviews/approved-retry.json"
+    value["decisions"] = value["decisions"].replace("recovery-packet.json", "approved-retry.json")
+    value["now"] += dt.timedelta(minutes=5)
+    assert _record(value, credential_fn=lambda: "test-token",
+                   metadata_factory=NoReadsMetadata, wire_factory=_absent_wire)["complete"] is True
+
+
+def test_terminal_row_with_original_lock_can_finalize_without_requests(tmp_path, monkeypatch):
+    value = fixture_context(tmp_path, monkeypatch)
+    original_unlink = Path.unlink
+    interrupted = False
+
+    def interrupted_unlink(path, *args, **kwargs):
+        nonlocal interrupted
+        if path == value["lock_path"] and not interrupted:
+            interrupted = True
+            raise KeyboardInterrupt
+        return original_unlink(path, *args, **kwargs)
+
+    with patch.object(Path, "unlink", interrupted_unlink):
+        with pytest.raises(KeyboardInterrupt):
+            _record(value, credential_fn=lambda: "test-token",
+                    metadata_factory=NoReadsMetadata, wire_factory=_absent_wire)
+    assert value["lock_path"].exists()
+    assert json.loads(value["ledger_path"].read_text().splitlines()[-1])["outcome"] == "recovered-exact-name"
+    result = _record(value, credential_fn=lambda: pytest.fail("OAuth during finalization"),
+                     metadata_factory=NoReadsMetadata, wire_factory=_absent_wire)
+    assert result["complete"] is True
+    assert not value["lock_path"].exists()
+
+
+def test_recovery_budget_cap_rejects_before_credentials(tmp_path, monkeypatch):
+    value = fixture_context(tmp_path, monkeypatch)
+    value["original"]["estimatedUsd"] = 10.0
+    value["ledger_path"].write_text(json.dumps(value["original"]) + "\n")
+    with pytest.raises(ValueError, match="budget"):
+        _record(value, credential_fn=lambda: pytest.fail("OAuth after exhausted budget"),
+                metadata_factory=NoReadsMetadata, wire_factory=_absent_wire)
+    assert value["lock_path"].exists()

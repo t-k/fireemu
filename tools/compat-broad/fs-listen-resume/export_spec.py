@@ -14,9 +14,9 @@ from typing import Any
 from . import cases, observation
 from .campaign import BUDGET, campaign_digest, compile_campaign
 
-CASES_SPEC = "spec/compatibility/fs-listen-sdk-cases.json"
-BUDGET_SPEC = "spec/compatibility/fs-listen-sdk-budget.json"
-SHADOW_CAMPAIGN_SPEC = "spec/compatibility/fs-listen-sdk-local-shadow-campaign.json"
+CASES_SPEC = "spec/compatibility/fs-listen-sdk-cases-conf.json"
+BUDGET_SPEC = "spec/compatibility/fs-listen-sdk-budget-conf.json"
+SHADOW_CAMPAIGN_SPEC = "spec/compatibility/fs-listen-sdk-local-shadow-campaign-conf.json"
 
 
 def cases_document() -> dict[str, Any]:
@@ -27,7 +27,7 @@ def cases_document() -> dict[str, Any]:
 
 def budget_document() -> dict[str, Any]:
     return {
-        "schema": "o6-listen-sdk-budget-v2",
+        "schema": "o6-listen-sdk-budget-v3",
         "note": "Local shadow runs use these same bounds; production adds a permission.",
         "budget": dict(BUDGET),
         # The collector reads this list so a widened contract cannot silently
@@ -45,7 +45,7 @@ def campaign_document(nonce: str) -> dict[str, Any]:
     """
     campaign = compile_campaign(nonce)
     return {
-        "schema": "o6-listen-sdk-shadow-campaign-v1",
+        "schema": "o6-listen-sdk-shadow-campaign-v2",
         "nonce": nonce,
         "campaignDigest": campaign_digest(campaign),
         "campaign": campaign,

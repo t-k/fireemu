@@ -13,6 +13,7 @@ from o6_listen_resume.cases import (
 
 
 def test_case_identifiers_are_unique_and_namespaced():
+    assert catalog()["schema"] == "o6-listen-sdk-cases-v2"
     ids = case_ids()
     assert len(ids) == len(set(ids))
     assert all(identifier.startswith("FS-LISTEN-SDK-") for identifier in ids)
@@ -152,15 +153,13 @@ def test_only_the_default_subscription_cases_skip_the_collapse():
     assert skipping == {"FS-LISTEN-SDK-107", "FS-LISTEN-SDK-107C"}
 
 
-def test_required_rules_fragment_denies_unauthenticated_access():
+def test_required_rules_fragment_matches_existing_public_and_owner_collections():
     fragment = cases.REQUIRED_RULES_FRAGMENT
     assert "request.auth != null" in fragment
     assert "request.auth.uid == uid" in fragment
-    # The run prefix is bound to the calling principal, so a merged ruleset
-    # cannot grant one principal access to another principal's runs.
-    assert "uid == request.auth.uid" in fragment
-    assert "match /o6_listen/{uid}/runs/{runId}/docs/{docId}" in fragment
-    assert "if true" not in fragment
+    assert "match /conf_listen/{id}" in fragment
+    assert "match /conf_rules_owner/{uid}" in fragment
+    assert "allow read, write: if true" in fragment
     assert "{document=**}" not in fragment
 
 

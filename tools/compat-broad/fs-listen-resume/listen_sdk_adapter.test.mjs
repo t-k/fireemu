@@ -78,7 +78,7 @@ const fakeSdk = calls => ({
   deleteDoc: async ref => calls.push(['deleteDoc', ref.docPath]),
   getDocFromServer: async ref => ({
     metadata: { fromCache: false, hasPendingWrites: false },
-    exists: () => ref.docPath.endsWith('alpha'),
+    exists: () => ref.docPath.endsWith('_alpha'),
     data: () => ({ owner: 'o6-listen:x' }),
   }),
   onSnapshot: (target, options, handlers) => {
@@ -96,13 +96,13 @@ test('the query listener binds the declared filter, order and limit', () => {
   const deps = createDeps(fakeSdk(calls), { primary: { db: 'db', auth: 'auth' } });
   deps.firestore.onQuerySnapshot(
     'primary',
-    { parent: 'o6_listen/abc', target: 'docs', where: ['rank', '<', 10], orderBy: ['rank', 'asc'], limit: 10 },
+    { collectionPath: 'conf_listen', where: ['rank', '<', 10], orderBy: ['rank', 'asc'], limit: 10 },
     { includeMetadataChanges: true },
     () => {},
     () => {},
   );
   const [, target, options] = calls.find(entry => entry[0] === 'onSnapshot');
-  assert.equal(target.collection.collectionPath, 'o6_listen/abc/docs');
+  assert.equal(target.collection.collectionPath, 'conf_listen');
   assert.deepEqual(
     target.constraints.map(constraint => constraint.kind),
     ['where', 'orderBy', 'limit'],
@@ -113,8 +113,8 @@ test('the query listener binds the declared filter, order and limit', () => {
 
 test('getDoc reports absence without inventing fields', async () => {
   const deps = createDeps(fakeSdk([]), { primary: { db: 'db', auth: 'auth' } });
-  const present = await deps.firestore.getDoc('primary', 'o6_listen/abc/docs/alpha');
-  const absent = await deps.firestore.getDoc('primary', 'o6_listen/abc/docs/beta');
+  const present = await deps.firestore.getDoc('primary', 'conf_listen/abc_alpha');
+  const absent = await deps.firestore.getDoc('primary', 'conf_listen/abc_beta');
   assert.equal(present.exists, true);
   assert.deepEqual(absent, { exists: false, fields: null, updateTime: null });
 });

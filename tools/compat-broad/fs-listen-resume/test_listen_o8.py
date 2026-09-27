@@ -33,7 +33,7 @@ def test_descriptor_compiles_positive_plan_and_permission_shape():
     permission = value.permission_bindings(plan, "a" * 40, "b" * 64, source_inputs)
 
     assert plan["campaignId"] == "FS-LISTEN-SDK"
-    assert plan["project"] == "fireemu-35fe6"
+    assert plan["project"] == "fireemu-oracle-query"
     assert plan["database"] == "(default)"
     assert permission["sdk"]["firebase"] == "12.18.0"
     assert permission["budget"] == value.budget

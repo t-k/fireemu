@@ -57,7 +57,10 @@ const assembled = (overrides = {}) => assembleReceipt({
   nonce: '0'.repeat(32), mode: 'long-polling', pageResult: pageResult(),
   accountCleanup: { complete: true, outcome: 'deleted-and-absent' }, localAdminRequests: 4,
   browser: { name: 'chromium', version: '151.0.0.0' }, webchannel,
-  sdkBundleDigests: { '12.18.0/firebase-app.js': 'e'.repeat(64) }, ...overrides,
+  sdkBundleDigests: { '12.18.0/firebase-app.js': 'e'.repeat(64) },
+  wireRequests: { maxRequests: 2000, cleanupReserve: 500, phase: 'cleanup',
+    observation: 2, cleanup: 4, total: 6, transports: { browser: 2, admin: 4 }, exhausted: false },
+  ...overrides,
 });
 
 test('both WebChannel modes are accepted, nothing else', () => {
@@ -95,7 +98,7 @@ test('a page result is validated by shape and a page error is surfaced as a code
 
 test('the browser receipt keeps the Node receipt shape and adds the transport evidence', () => {
   const receipt = assembled();
-  assert.equal(receipt.schema, 'o6-listen-observation-v1');
+  assert.equal(receipt.schema, 'o6-listen-observation-v2');
   assert.equal(receipt.caseId, 'FS-LISTEN-SDK');
   assert.equal(receipt.productionExecuted, false);
   assert.equal(receipt.transport, TRANSPORT);
@@ -144,7 +147,9 @@ const fakeChromium = (result, { onGoto = () => {} } = {}) => {
     evaluate: async (_fn, config) => { calls.push(['evaluate', config]); return typeof result === 'function' ? result(config) : result; },
     close: async () => calls.push(['page-close']),
   };
-  const context = { newPage: async () => page, close: async () => calls.push(['context-close']) };
+  const context = { newPage: async () => page,
+    route: async (pattern, handler) => calls.push(['route', pattern, handler]),
+    close: async () => calls.push(['context-close']) };
   return { calls, exposed, chromium: { name: 'chromium', version: '151', browser: { newContext: async () => context } } };
 };
 const modeInput = (chromium, request) => ({
@@ -152,7 +157,8 @@ const modeInput = (chromium, request) => ({
   firestore: { host: '127.0.0.1', port: 8080 }, auth: { host: '127.0.0.1', port: 9099, raw: '127.0.0.1:9099' },
   projectId: 'demo-o6', nonce: '0'.repeat(32), account: { name: 'throwaway', email: EMAIL, password: 'hunter2' },
   secondaryAccount: { name: 'second', email: EMAIL_B, password: 'hunter3' },
-  catalog, campaignRecord, budgetSpec: { cleanupReserveSeconds: 1 }, boundSources: [], mode: 'streaming',
+  catalog, campaignRecord, budgetSpec: { cleanupReserveSeconds: 1,
+    maxWireRequests: 2000, wireCleanupReserve: 500 }, boundSources: [], mode: 'streaming',
   stepTimeoutMs: 100, deadlineMs: 1000, request,
 });
 const managementDouble = (script) => {
@@ -205,6 +211,8 @@ test('runMode hands the page both accounts in memory, deletes both afterwards an
   assert.equal(receipt.lifecycle.accountCleanup.outcome, 'deleted-and-absent');
   assert.deepEqual(Object.keys(receipt.lifecycle.accountCleanup.accounts), ['primary', 'secondary']);
   assert.equal(receipt.lifecycle.localAdminRequests, 8);
+  assert.equal(receipt.wireRequests.total, 8);
+  assert.equal(calls.filter(call => call[0] === 'route').length, 1);
   assert.deepEqual(log.map(row => row.operation),
     ['lookup', 'lookup', 'lookup', 'delete', 'lookup', 'lookup', 'delete', 'lookup']);
   assert.deepEqual(log[3].body, { localId: 'uid-1' });
@@ -266,7 +274,7 @@ test('a page that reports a lifecycle error is surfaced by code and the page is 
 });
 
 test('the shadow document schema and transport are fixed names', () => {
-  assert.equal(SCHEMA, 'o6-listen-browser-shadow-v1');
+  assert.equal(SCHEMA, 'o6-listen-browser-shadow-v2');
   assert.equal(TRANSPORT, 'browser-webchannel');
 });
 

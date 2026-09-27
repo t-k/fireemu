@@ -18,25 +18,21 @@ from typing import Any
 
 from .manifest import digest
 
-SCHEMA = "o6-listen-sdk-cases-v1"
+SCHEMA = "o6-listen-sdk-cases-v2"
 
-# Owned data lives under a run document scoped first by the authenticated
-# principal and then by the run nonce, so the Rules precondition can be written
-# once without embedding a per-run nonce and still refuse one principal access
-# to another principal's runs.
-RUN_COLLECTION = "o6_listen"
-DOCS_SUBCOLLECTION = "docs"
-PRIVATE_COLLECTION = "o6_listen_private"
+# The deployed oracle Rules allow flat documents in these two collections.
+# Public document IDs carry the run nonce; owner documents use the Auth UID.
+RUN_COLLECTION = "conf_listen"
+DOCS_SUBCOLLECTION = None
+PRIVATE_COLLECTION = "conf_rules_owner"
 
-# Additive Rules fragment the owner must merge into the oracle project before a
-# campaign. It grants nothing to unauthenticated callers and nothing outside the
-# two owned prefixes. It deliberately contains no catch-all deny, because the
-# oracle project is shared with other lanes.
+# Existing deployed Rules, read back before a campaign. The campaign never
+# publishes Rules or grants a new permission.
 REQUIRED_RULES_FRAGMENT = """\
-match /o6_listen/{uid}/runs/{runId}/docs/{docId} {
-  allow read, write: if request.auth != null && uid == request.auth.uid;
+match /conf_listen/{id} {
+  allow read, write: if true;
 }
-match /o6_listen_private/{uid} {
+match /conf_rules_owner/{uid} {
   allow read, write: if request.auth != null && request.auth.uid == uid;
 }
 """
@@ -211,7 +207,7 @@ def _query_listener(name: str, *, metadata: bool = False) -> dict[str, Any]:
     return {
         "name": name,
         "kind": "query",
-        "target": DOCS_SUBCOLLECTION,
+        "target": RUN_COLLECTION,
         "where": ["rank", "<", 10],
         "orderBy": ["rank", "asc"],
         "limit": 10,

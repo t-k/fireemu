@@ -142,7 +142,8 @@ const createDeps = (clients) => ({
       });
     },
     onQuerySnapshot(client, spec, options, onNext, onError) {
-      const target = collection(clients[client].db, `${spec.parent}/${spec.target}`);
+      if (spec.collectionPath !== 'conf_listen') throw new Error('unexpected listen collection');
+      const target = collection(clients[client].db, spec.collectionPath);
       const constraints = [
         where(spec.where[0], spec.where[1], spec.where[2]),
         orderBy(spec.orderBy?.[0] ?? spec.where[0], spec.orderBy?.[1] ?? "asc"),
@@ -281,6 +282,14 @@ const runLifecycle = async (config) => {
       listeners: 0,
     },
   });
+  const wireCleanupBudget = {
+    ...cleanupBudget,
+    withPhase: (work) => cleanupBudget.withPhase(async () => {
+      await window.__o6WirePhase('cleanup');
+      try { return await work(); }
+      finally { await window.__o6WirePhase('observation'); }
+    }),
+  };
   const clients = {};
   // Both principals share one lifecycle: A is the case client, B owns privateB.
   const principals = {
@@ -342,7 +351,7 @@ const runLifecycle = async (config) => {
     await checkpoint("documents-at-risk");
     catalogStarted = true;
     outcome = await runCatalog(deps, {
-      catalog, budget, cleanupBudget, paths, nonce, client: "primary", clientFor: CLEANUP_CLIENT_FOR,
+      catalog, budget, cleanupBudget: wireCleanupBudget, paths, nonce, client: "primary", clientFor: CLEANUP_CLIENT_FOR,
       contextFor: () => ({
         client: "primary",
         clients: { primary: "primary", witness: "witness", secondary: "secondary" },
@@ -358,7 +367,7 @@ const runLifecycle = async (config) => {
   } finally {
     if (catalogStarted && !catalogReturned) {
       try {
-        outcome.cleanup = await cleanupBudget.withPhase(async () => {
+        outcome.cleanup = await wireCleanupBudget.withPhase(async () => {
           const signed = await signInWithEmailAndPassword(
             clients.primary.auth, account.email, account.password);
           if (signed?.user?.uid !== principals.primary.uid) throw new Error("cleanup principal changed");

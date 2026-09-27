@@ -13,7 +13,7 @@
 
 import { createHash } from 'node:crypto';
 
-export const RECEIPT_SCHEMA = 'o6-listen-observation-v1';
+export const RECEIPT_SCHEMA = 'o6-listen-observation-v2';
 
 const SECRET_KEY = /(password|secret|idtoken|id_token|accesstoken|access_token|refreshtoken|refresh_token|bearer|authorization|apikey|api_key|credential|assertion)/i;
 const REDACTED = '[redacted]';
@@ -141,15 +141,14 @@ export const ownedPaths = (nonce, uid) => {
   if (typeof uid !== 'string' || !/^[a-zA-Z0-9_-]{1,128}$/.test(uid)) {
     throw new Error('safe uid is required to bind the private path');
   }
-  const run = `o6_listen/${uid}/runs/${nonce}`;
-  const docs = `${run}/docs`;
+  const run = `conf_listen/${nonce}_run`;
   return {
     run,
-    alpha: `${docs}/alpha`,
-    beta: `${docs}/beta`,
-    gamma: `${docs}/gamma`,
-    absent: `${docs}/absent`,
-    private: `o6_listen_private/${uid}`,
+    alpha: `conf_listen/${nonce}_alpha`,
+    beta: `conf_listen/${nonce}_beta`,
+    gamma: `conf_listen/${nonce}_gamma`,
+    absent: `conf_listen/${nonce}_absent`,
+    private: `conf_rules_owner/${uid}`,
   };
 };
 
@@ -163,7 +162,7 @@ export const secondaryPaths = (nonce, uid) => {
   if (typeof uid !== 'string' || !/^[a-zA-Z0-9_-]{1,128}$/.test(uid)) {
     throw new Error('safe uid is required to bind the second private path');
   }
-  return { privateB: `o6_listen_private/${uid}` };
+  return { privateB: `conf_rules_owner/${uid}` };
 };
 
 /** Digest of an owned path, so a receipt never publishes a nonce or a uid. */
@@ -548,7 +547,7 @@ export const runCase = async (deps, caseSpec, ctx) => {
     const unsubscribe =
       spec.kind === 'document'
         ? deps.firestore.onDocSnapshot(owner, paths[spec.target], options, onNext, onError)
-        : deps.firestore.onQuerySnapshot(owner, { ...spec, parent: paths.run }, options, onNext, onError);
+        : deps.firestore.onQuerySnapshot(owner, { ...spec, collectionPath: paths.run.split('/')[0] }, options, onNext, onError);
     registered.set(name, unsubscribe);
   };
 

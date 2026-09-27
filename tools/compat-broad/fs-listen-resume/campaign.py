@@ -17,9 +17,9 @@ from typing import Any
 from . import cases
 from .manifest import digest
 
-SCHEMA = "o6-listen-sdk-campaign-v1"
+SCHEMA = "o6-listen-sdk-campaign-v2"
 CASE_ID = "FS-LISTEN-SDK"
-PROJECT = "fireemu-35fe6"
+PROJECT = "fireemu-oracle-query"
 DATABASE = "(default)"
 
 _NONCE = re.compile(r"^[0-9a-f]{32}$")
@@ -87,6 +87,8 @@ BUDGET = MappingProxyType(
         "cleanupReserveReads": 300,
         "cleanupReserveDeletes": 150,
         "maxSnapshots": 120,
+        "maxWireRequests": 2000,
+        "wireCleanupReserve": 500,
         "estimatedCostUsd": 0.01,
         "hardCostCeilingUsd": 0.5,
     }
@@ -159,14 +161,13 @@ def owned_paths(nonce: str, uid_placeholder: str = "{uid}") -> dict[str, str]:
     """
     if not isinstance(nonce, str) or not _NONCE.fullmatch(nonce):
         raise ValueError("nonce must be exactly 128-bit lowercase hexadecimal")
-    run = f"{cases.RUN_COLLECTION}/{uid_placeholder}/runs/{nonce}"
-    docs = f"{run}/{cases.DOCS_SUBCOLLECTION}"
+    run = f"{cases.RUN_COLLECTION}/{nonce}_run"
     return {
         "run": run,
-        "alpha": f"{docs}/alpha",
-        "beta": f"{docs}/beta",
-        "gamma": f"{docs}/gamma",
-        "absent": f"{docs}/absent",
+        "alpha": f"{cases.RUN_COLLECTION}/{nonce}_alpha",
+        "beta": f"{cases.RUN_COLLECTION}/{nonce}_beta",
+        "gamma": f"{cases.RUN_COLLECTION}/{nonce}_gamma",
+        "absent": f"{cases.RUN_COLLECTION}/{nonce}_absent",
         "private": f"{cases.PRIVATE_COLLECTION}/{uid_placeholder}",
     }
 
@@ -310,13 +311,9 @@ def validate_campaign(campaign: Any) -> bool:
     try:
         run = campaign["owner"]["paths"]["run"]
         segments = run.split("/")
-        if (
-            len(segments) != 4
-            or segments[0] != cases.RUN_COLLECTION
-            or segments[2] != "runs"
-        ):
+        if len(segments) != 2 or segments[0] != cases.RUN_COLLECTION or not segments[1].endswith("_run"):
             return False
-        nonce = segments[3]
+        nonce = segments[1][:-4]
         if (
             not _NONCE.fullmatch(nonce)
             or digest(nonce) != campaign["owner"]["nonceDigest"]

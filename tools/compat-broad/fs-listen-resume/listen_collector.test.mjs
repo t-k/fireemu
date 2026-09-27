@@ -49,11 +49,11 @@ const createFake = ({ denyPrivate = false } = {}) => {
   let stamp = 0;
 
   const allowed = (client, path) =>
-    !path.startsWith('o6_listen_private/') ||
+    !path.startsWith('conf_rules_owner/') ||
     (!denyPrivate && auth.get(client) === path.split('/')[1]);
 
   const queryDocs = spec => {
-    const prefix = `${spec.parent}/${spec.target}/`;
+    const prefix = `${spec.collectionPath}/`;
     return [...store.entries()]
       .filter(([path]) => path.startsWith(prefix))
       .filter(([, value]) => value.fields.rank < spec.where[2])
@@ -320,8 +320,8 @@ test('the budget refuses a charge past its cap and past its deadline', () => {
 
 test('owned paths are nonce scoped and require a uid for the private document', () => {
   const paths = ownedPaths(NONCE, UID);
-  assert.equal(paths.run, `o6_listen/${UID}/runs/${NONCE}`);
-  assert.equal(paths.private, `o6_listen_private/${UID}`);
+  assert.equal(paths.run, `conf_listen/${NONCE}_run`);
+  assert.equal(paths.private, `conf_rules_owner/${UID}`);
   assert.throws(() => ownedPaths('nope', UID), /128-bit/);
   assert.throws(() => ownedPaths(NONCE, ''), /uid/);
 });
@@ -622,7 +622,7 @@ test('a document that survives its delete is recorded as still present', async (
   const deps = {
     firestore: {
       async getDoc(_client, path) {
-        return path.endsWith('/alpha')
+        return path.endsWith('_alpha')
           ? { exists: true, fields: { owner: ownerMarker(NONCE) }, updateTime: 't1' }
           : { exists: false, fields: null, updateTime: null };
       },
@@ -1063,7 +1063,7 @@ const twoPrincipalContext = (fake, clock, caseSpec, overrides = {}) => {
 };
 
 test('secondaryPaths binds the second private document to the second uid only', () => {
-  assert.deepEqual(secondaryPaths(NONCE, UID_B), { privateB: `o6_listen_private/${UID_B}` });
+  assert.deepEqual(secondaryPaths(NONCE, UID_B), { privateB: `conf_rules_owner/${UID_B}` });
   assert.throws(() => secondaryPaths('short', UID_B), /nonce/);
   assert.throws(() => secondaryPaths(NONCE, '../x'), /uid/);
 });
@@ -1088,7 +1088,7 @@ test('a listener on the other principal\'s private document errors without a ser
   assert.equal(record.complete, true);
   assert.deepEqual(record.invariantViolations, []);
   assert.equal(record.observed.at(-1).error, 'permission-denied');
-  assert.ok(fake.store.has(`o6_listen_private/${UID_B}`), 'the second principal wrote its document');
+  assert.ok(fake.store.has(`conf_rules_owner/${UID_B}`), 'the second principal wrote its document');
 });
 
 test('a listener declared for the secondary client subscribes through that client', async () => {

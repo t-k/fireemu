@@ -56,7 +56,7 @@ def test_campaign_rejects_a_non_128_bit_hex_nonce(nonce):
 
 
 @pytest.mark.parametrize(
-    "project,database", [("other-project", "(default)"), ("fireemu-35fe6", "other")]
+    "project,database", [("other-project", "(default)"), ("fireemu-oracle-query", "other")]
 )
 def test_campaign_restricts_project_and_database(project, database):
     with pytest.raises(ValueError, match="project/database"):
@@ -65,10 +65,10 @@ def test_campaign_restricts_project_and_database(project, database):
 
 def test_owned_paths_are_nonce_scoped_and_do_not_collide_with_other_lanes():
     paths = owned_paths(NONCE)
-    assert paths["run"] == f"o6_listen/{{uid}}/runs/{NONCE}"
+    assert paths["run"] == f"conf_listen/{NONCE}_run"
     for key in ("alpha", "beta", "gamma", "absent"):
-        assert paths[key].startswith(f"o6_listen/{{uid}}/runs/{NONCE}/docs/")
-    assert paths["private"] == "o6_listen_private/{uid}"
+        assert paths[key] == f"conf_listen/{NONCE}_{key}"
+    assert paths["private"] == "conf_rules_owner/{uid}"
     assert len(set(paths.values())) == len(paths)
 
 
@@ -95,6 +95,8 @@ def test_estimated_cost_stays_far_below_one_dollar():
 
 def test_budget_bounds_runs_concurrency_accounts_and_deadline():
     budget = compile_campaign(NONCE)["budget"]
+    assert budget["maxWireRequests"] == 2000
+    assert budget["wireCleanupReserve"] == 500
     assert budget["maxRuns"] == 1
     assert budget["maxConcurrency"] == 1
     # Two principals: the case client's account and the second principal of

@@ -14,7 +14,9 @@ export const createWireBudget = ({ maxRequests, cleanupReserve }) => {
   const transports = {};
   return Object.freeze({
     claim(requestPhase, transport) {
-      if (requestPhase !== phase) throw new Error('invalid wire request phase');
+      if (requestPhase !== 'cleanup' && requestPhase !== phase) {
+        throw new Error('invalid wire request phase');
+      }
       if (!TRANSPORTS.has(transport)) throw new Error('invalid wire transport');
       if (requestPhase === 'observation' && observation >= maxRequests - cleanupReserve ||
           requestPhase === 'cleanup' && observation + cleanup >= maxRequests ||

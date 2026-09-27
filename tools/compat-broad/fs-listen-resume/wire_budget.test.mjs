@@ -34,11 +34,23 @@ test('wire budget rejects invalid bounds and phase changes without a claim', () 
     assert.throws(() => module.createWireBudget(limits), /wire request bounds/);
   }
   const budget = module.createWireBudget({ maxRequests: 3, cleanupReserve: 1 });
-  assert.throws(() => budget.claim('cleanup', 'grpc'), /wire request phase/);
+  budget.claim('cleanup', 'grpc');
   assert.throws(() => budget.claim('observation', 'unknown'), /wire transport/);
-  assert.equal(budget.snapshot().total, 0);
+  assert.equal(budget.snapshot().total, 1);
   budget.beginCleanup();
   assert.throws(() => budget.claim('observation', 'grpc'), /wire request phase/);
   assert.throws(() => budget.beginCleanup(), /wire request phase/);
-  assert.equal(budget.snapshot().total, 0);
+  assert.equal(budget.snapshot().total, 1);
+});
+
+test('between-case cleanup can spend its reserve before later observation', () => {
+  const budget = module.createWireBudget({ maxRequests: 5, cleanupReserve: 2 });
+  budget.claim('observation', 'grpc');
+  budget.claim('cleanup', 'grpc');
+  budget.claim('observation', 'grpc');
+  budget.claim('observation', 'auth');
+  assert.throws(() => budget.claim('observation', 'grpc'), /wire request budget exhausted/);
+  budget.beginCleanup();
+  budget.claim('cleanup', 'admin');
+  assert.equal(budget.snapshot().total, 5);
 });

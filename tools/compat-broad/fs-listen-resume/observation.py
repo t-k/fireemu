@@ -27,7 +27,7 @@ from . import cases
 from .campaign import STATUS_PREPARED, campaign_digest, validate_campaign
 from .manifest import digest
 
-SCHEMA = "o6-listen-observation-v1"
+SCHEMA = "o6-listen-observation-v2"
 COMPARISON_SCHEMA = "o6-listen-observation-comparison-v1"
 
 MATCH = "MATCH"
@@ -39,6 +39,8 @@ REFUSED = "REFUSED"
 BOUND_SOURCES = (
     "tools/compat-broad/fs-listen-resume/listen_collector.mjs",
     "tools/compat-broad/fs-listen-resume/listen_sdk_adapter.mjs",
+    "tools/compat-broad/fs-listen-resume/wire_budget.mjs",
+    "tools/compat-broad/fs-listen-resume/wire_transport.mjs",
     "tools/compat-broad/fs-listen-resume/listen_journal.mjs",
     "tools/compat-broad/fs-listen-resume/cases.py",
     "tools/compat-broad/fs-listen-resume/campaign.py",

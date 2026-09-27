@@ -79,9 +79,9 @@ def plan_compiler(nonce: str) -> dict:
 def lock_scopes(plan: dict) -> list[dict]:
     nonce = plan.get("nonce")
     return [
-        {"key": "project/fireemu-35fe6/firestore/(default)/documents/o6_listen/*", "mode": "EXCLUSIVE"},
-        {"key": "project/fireemu-35fe6/firestore/(default)/documents/o6_listen_private/*", "mode": "EXCLUSIVE"},
-        {"key": f"project/fireemu-35fe6/listen/{nonce}", "mode": "EXCLUSIVE"},
+        {"key": "project/fireemu-oracle-query/firestore/(default)/documents/conf_listen/*", "mode": "EXCLUSIVE"},
+        {"key": "project/fireemu-oracle-query/firestore/(default)/documents/conf_rules_owner/*", "mode": "EXCLUSIVE"},
+        {"key": f"project/fireemu-oracle-query/listen/{nonce}", "mode": "EXCLUSIVE"},
     ]
 
 

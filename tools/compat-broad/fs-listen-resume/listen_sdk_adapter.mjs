@@ -19,10 +19,13 @@ import { pathToFileURL } from 'node:url';
 import { readFileSync } from 'node:fs';
 import { createHash, randomBytes } from 'node:crypto';
 import { request as httpRequest } from 'node:http';
+import http2 from 'node:http2';
 import { performance } from 'node:perf_hooks';
 import path from 'node:path';
 import { createLifecycleJournal } from './listen_journal.mjs';
 import { parseEvidence } from './local_shadow_check.mjs';
+import { createWireBudget } from './wire_budget.mjs';
+import { installNodeWireGuard } from './wire_transport.mjs';
 
 import {
   argvIsClean,
@@ -144,7 +147,8 @@ export const createDeps = (sdk, clients, { revoke = null } = {}) => ({
       });
     },
     onQuerySnapshot(client, spec, options, onNext, onError) {
-      const collection = sdk.collection(clients[client].db, `${spec.parent}/${spec.target}`);
+      if (spec.collectionPath !== 'conf_listen') throw new Error('unexpected listen collection');
+      const collection = sdk.collection(clients[client].db, spec.collectionPath);
       const constraints = [
         sdk.where(spec.where[0], spec.where[1], spec.where[2]),
         sdk.orderBy(spec.orderBy?.[0] ?? spec.where[0], spec.orderBy?.[1] ?? 'asc'),
@@ -352,7 +356,7 @@ export const executeLocalLifecycle = async (sdk, config, {
   request = localAccountRequest, run = runCatalog, checkpoint = () => {},
 } = {}) => {
   const { projectId, firestoreHost, authHost, account, secondaryAccount, nonce, catalog,
-    budget, cleanupBudget, stepTimeoutMs } = config;
+    budget, cleanupBudget, stepTimeoutMs, wireBudget = null } = config;
   localEmulatorEndpoint(firestoreHost); localEmulatorEndpoint(authHost);
   if (!/^[0-9a-f]{32}$/.test(nonce) || !/^[a-zA-Z0-9_-]{1,128}$/.test(projectId)) {
     throw new Error('local namespace required');
@@ -379,6 +383,7 @@ export const executeLocalLifecycle = async (sdk, config, {
     const remaining = recovery ? cleanupBudget.remainingMs() : budget.remainingMs();
     if (remaining <= 0) throw new Error('local account phase expired');
     accountCalls++;
+    if (wireBudget) wireBudget.claim(recovery ? 'cleanup' : 'observation', 'admin');
     const response = await request(authHost, projectId, operation, body, Math.min(12000, remaining));
     if ((recovery ? cleanupBudget : budget).remainingMs() <= 0) throw new Error('late account response');
     return response;
@@ -497,6 +502,7 @@ export const executeLocalLifecycle = async (sdk, config, {
     lifecycle.failure = lifecycleFailure(error);
     outcome.thrown = lifecycle.failure;
   } finally {
+    if (wireBudget && wireBudget.snapshot().phase === 'observation') wireBudget.beginCleanup();
     // Catch failures outside the catalog's own recovery boundary as well.
     if (catalogStarted && !catalogReturned) {
       try {
@@ -562,7 +568,7 @@ export const main = async ({ env = process.env, argv = process.argv,
 
   const catalog = JSON.parse(
     readFileSync(
-      env.O6_LISTEN_CATALOG_PATH ?? path.join(repoRoot, 'spec/compatibility/fs-listen-sdk-cases.json'),
+      env.O6_LISTEN_CATALOG_PATH ?? path.join(repoRoot, 'spec/compatibility/fs-listen-sdk-cases-conf.json'),
       'utf8',
     ),
   );
@@ -574,7 +580,7 @@ export const main = async ({ env = process.env, argv = process.argv,
   }
   const { budget: limitsSpec, boundSources } = JSON.parse(
     readFileSync(
-      env.O6_LISTEN_BUDGET_PATH ?? path.join(repoRoot, 'spec/compatibility/fs-listen-sdk-budget.json'),
+      env.O6_LISTEN_BUDGET_PATH ?? path.join(repoRoot, 'spec/compatibility/fs-listen-sdk-budget-conf.json'),
       'utf8',
     ),
   );
@@ -621,6 +627,19 @@ export const main = async ({ env = process.env, argv = process.argv,
       listeners: 0,
     },
   });
+  const wireBudget = createWireBudget({
+    maxRequests: limitsSpec.maxWireRequests,
+    cleanupReserve: limitsSpec.wireCleanupReserve,
+  });
+  let wirePhase = 'observation';
+  const wireCleanupBudget = {
+    ...cleanupBudget,
+    withPhase: work => cleanupBudget.withPhase(async () => {
+      wirePhase = 'cleanup';
+      try { return await work(); }
+      finally { wirePhase = wireBudget.snapshot().phase; }
+    }),
+  };
 
   // All file parsing and finite budget validation above is inert. A missing
   // campaign or malformed limit must not strand a newly created account.
@@ -630,9 +649,20 @@ export const main = async ({ env = process.env, argv = process.argv,
   const account = { name: 'throwaway', email: `o6-${nonce}@example.test`, password };
   const secondaryAccount = secondaryAccountFor(nonce,
     readPasswordFromFd(env.O6_LISTEN_SECONDARY_PASSWORD_FD) ?? randomBytes(24).toString('hex'));
-  const sdk = await sdkLoader(moduleDir);
-  const outcome = await executeLocalLifecycle(sdk, { projectId, firestoreHost, authHost,
-    account, secondaryAccount, nonce, catalog, budget, cleanupBudget, stepTimeoutMs }, { request, checkpoint });
+  const allowedHosts = new Set([`http://${firestoreHost}`, `http://${authHost}`]);
+  const wireGuard = installNodeWireGuard({ http2, globals: globalThis, budget: wireBudget,
+    phase: () => wirePhase,
+    allowUrl: value => [...allowedHosts].some(origin => value === origin || value.startsWith(`${origin}/`)),
+  });
+  let outcome;
+  try {
+    const sdk = await sdkLoader(moduleDir);
+    outcome = await executeLocalLifecycle(sdk, { projectId, firestoreHost, authHost,
+      account, secondaryAccount, nonce, catalog, budget, cleanupBudget: wireCleanupBudget,
+      stepTimeoutMs, wireBudget }, { request, checkpoint });
+  } finally {
+    wireGuard.close();
+  }
   const { caseRecords, cleanup } = outcome;
 
   const receipt = buildReceipt({
@@ -682,7 +712,9 @@ export const main = async ({ env = process.env, argv = process.argv,
   receipt.sourceDigests = sourceDigests(repoRoot, boundSources);
 
   receipt.lifecycle = outcome.lifecycle;
+  receipt.wireRequests = wireBudget.snapshot();
   receipt.complete = receipt.complete && outcome.lifecycle.complete &&
+    !receipt.wireRequests.exhausted &&
     caseRecords.length === catalog.cases.length && caseRecords.every((row, index) =>
       row.caseId === catalog.cases[index].caseId);
   await emit(receipt);

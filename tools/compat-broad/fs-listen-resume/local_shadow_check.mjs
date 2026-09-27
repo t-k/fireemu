@@ -75,11 +75,13 @@ export const checkShadow = (receipt, catalog, { legacyLifecycle = false } = {}) 
     currentArtifactVerified: false, productionCompatibilityVerified: false,
     legacyLifecycle: !Object.hasOwn(receipt ?? {}, 'lifecycle'), issues });
   if (!require(object(receipt) && object(catalog), 'object-input-required')) return result();
-  if (!require(catalog.schema === 'o6-listen-sdk-cases-v1' &&
+  if (!require(['o6-listen-sdk-cases-v1', 'o6-listen-sdk-cases-v2'].includes(catalog.schema) &&
       Array.isArray(catalog.cases) && catalog.cases.length > 0, 'catalog-invalid')) return result();
   const { catalogDigest, ...payload } = catalog;
   require(hex(catalogDigest) && digest(payload) === catalogDigest, 'catalog-digest-mismatch');
-  require(receipt.schema === 'o6-listen-observation-v1' && receipt.caseId === 'FS-LISTEN-SDK', 'receipt-contract');
+  const expectedReceiptSchema = catalog.schema === 'o6-listen-sdk-cases-v2'
+    ? 'o6-listen-observation-v2' : 'o6-listen-observation-v1';
+  require(receipt.schema === expectedReceiptSchema && receipt.caseId === 'FS-LISTEN-SDK', 'receipt-contract');
   require(receipt.productionExecuted === false && receipt.environment?.kind === 'local-fireemu', 'not-local-evidence');
   require(receipt.complete === true && receipt.thrown === null, 'collection-incomplete');
   require(receipt.catalogDigest === catalogDigest, 'receipt-catalog-mismatch');
@@ -141,7 +143,7 @@ export const main = (args = process.argv.slice(2), env = process.env) => {
   if (args.length !== 1) { console.error('Usage: local_shadow_check.mjs [--legacy-lifecycle] <receipt.json>'); return 2; }
   try {
     const report = checkShadow(readEvidence(args[0]), readEvidence(env.O6_LISTEN_CATALOG_PATH ??
-      'spec/compatibility/fs-listen-sdk-cases.json'), { legacyLifecycle });
+      'spec/compatibility/fs-listen-sdk-cases-conf.json'), { legacyLifecycle });
     console.log(JSON.stringify(report));
     return report.complete ? 0 : 1;
   } catch {

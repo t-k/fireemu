@@ -43,6 +43,8 @@ import {
   sourceDigests,
 } from './listen_sdk_adapter.mjs';
 import { argvIsClean, buildReceipt, redact } from './listen_collector.mjs';
+import { createWireBudget } from './wire_budget.mjs';
+import { installBrowserWireGuard } from './wire_browser.mjs';
 import {
   REQUEST_ROW_COLUMNS,
   captureWebChannel,
@@ -52,13 +54,14 @@ import {
   serveStatic,
 } from '../../sdk-smoke-browser/browser_harness.mjs';
 
-export const SCHEMA = 'o6-listen-browser-shadow-v1';
+export const SCHEMA = 'o6-listen-browser-shadow-v2';
 export const TRANSPORT = 'browser-webchannel';
 export const MODES = Object.freeze(['long-polling', 'streaming']);
 export const SDK_BUNDLE_ORIGIN = 'https://www.gstatic.com/firebasejs/';
 /** Browser-only sources bound by the receipt in addition to the campaign's list. */
 export const BROWSER_BOUND_SOURCES = Object.freeze([
   'tools/compat-broad/fs-listen-resume/listen_browser_adapter.mjs',
+  'tools/compat-broad/fs-listen-resume/wire_browser.mjs',
   'tools/sdk-smoke-browser/browser_harness.mjs',
   'tools/sdk-smoke/web/listen-catalog.html',
   'tools/sdk-smoke/web/listen-catalog.js',
@@ -127,7 +130,8 @@ export const validatePageResult = (result, catalog) => {
 
 /** Assemble one mode's receipt in the Node receipt shape plus transport evidence. */
 export const assembleReceipt = ({ env, repoRoot, campaignRecord, catalog, boundSources, projectId,
-  nonce, mode, pageResult, accountCleanup, localAdminRequests, browser, webchannel, sdkBundleDigests }) => {
+  nonce, mode, pageResult, accountCleanup, localAdminRequests, browser, webchannel, sdkBundleDigests,
+  wireRequests = null }) => {
   const lifecycle = {
     failure: pageResult.lifecycle.failure ?? null,
     accountCleanup,
@@ -180,7 +184,9 @@ export const assembleReceipt = ({ env, repoRoot, campaignRecord, catalog, boundS
     .sort((left, right) => left.atMs - right.atMs);
   receipt.sourceDigests = sourceDigests(repoRoot, [...boundSources, ...BROWSER_BOUND_SOURCES]);
   receipt.lifecycle = lifecycle;
+  receipt.wireRequests = wireRequests;
   receipt.complete = receipt.complete && lifecycle.complete &&
+    wireRequests?.exhausted === false &&
     pageResult.caseRecords.length === catalog.cases.length &&
     pageResult.caseRecords.every((row, index) => row.caseId === catalog.cases[index].caseId);
   return receipt;
@@ -201,8 +207,14 @@ export const runMode = async ({ env, repoRoot, chromium, serverOrigin, firestore
   nonce, account, secondaryAccount, catalog, campaignRecord, budgetSpec, boundSources, mode,
   stepTimeoutMs, deadlineMs, request = localAccountRequest, checkpoint = null }) => {
   let accountCalls = 0;
+  const wireBudget = createWireBudget({
+    maxRequests: budgetSpec.maxWireRequests,
+    cleanupReserve: budgetSpec.wireCleanupReserve,
+  });
+  let wirePhase = 'observation';
   const call = async (operation, body) => {
     if (accountCalls >= LOCAL_ADMIN_REQUEST_LIMIT) throw new Error('local account request budget exhausted');
+    wireBudget.claim(wirePhase, 'admin');
     accountCalls++;
     return request(auth.raw, projectId, operation, body, 12000);
   };
@@ -226,7 +238,13 @@ export const runMode = async ({ env, repoRoot, chromium, serverOrigin, firestore
     if (!plainObject(updated) || updated.status !== 200 || !plainObject(updated.body) ||
         'error' in updated.body || updated.body.localId !== uid) throw new Error('revocation unconfirmed');
   };
-  const context = await chromium.browser.newContext();
+  const context = await chromium.browser.newContext({ serviceWorkers: 'block' });
+  const allowedOrigins = [`${serverOrigin}/`, `http://${firestore.host}:${firestore.port}/`,
+    `http://${auth.host}:${auth.port}/`, SDK_BUNDLE_ORIGIN];
+  const wireGuard = await installBrowserWireGuard({ context, budget: wireBudget,
+    phase: () => wirePhase,
+    allowUrl: value => allowedOrigins.some(origin => value.startsWith(origin)),
+  });
   const page = await context.newPage();
   const webchannel = captureWebChannel(page, firestore.port);
   const sdkBundleDigests = {};
@@ -249,6 +267,10 @@ export const runMode = async ({ env, repoRoot, chromium, serverOrigin, firestore
       });
     }
     await page.exposeFunction('__o6Revoke', revoke);
+    await page.exposeFunction('__o6WirePhase', value => {
+      if (value !== 'observation' && value !== 'cleanup') throw new Error('invalid wire phase');
+      wirePhase = value;
+    });
     await page.goto(`${serverOrigin}/listen-catalog.html`, { waitUntil: 'load' });
     await page.waitForSelector('body[data-catalog-ready="true"]', { timeout: 30000 });
     const config = { projectId, firestorePort: firestore.port, authPort: auth.port, account,
@@ -259,6 +281,8 @@ export const runMode = async ({ env, repoRoot, chromium, serverOrigin, firestore
       'browser catalog run exceeded its deadline',
     );
     pageResult = validatePageResult(raw, catalog);
+    wireBudget.beginCleanup();
+    wirePhase = 'cleanup';
     accountCleanup = await cleanupAccounts({ call, accounts, pageResult });
     if (checkpoint) {
       checkpoint('lifecycle-result', {
@@ -275,7 +299,11 @@ export const runMode = async ({ env, repoRoot, chromium, serverOrigin, firestore
   }
   const receipt = assembleReceipt({ env, repoRoot, campaignRecord, catalog, boundSources, projectId,
     nonce, mode, pageResult, accountCleanup, localAdminRequests: accountCalls,
-    browser: chromium, webchannel, sdkBundleDigests });
+    browser: chromium, webchannel, sdkBundleDigests, wireRequests: wireBudget.snapshot() });
+  if (wireGuard.failure()) {
+    receipt.complete = false;
+    receipt.thrown = receipt.thrown ?? wireGuard.failure();
+  }
   if (pageErrors.length) {
     receipt.complete = false;
     receipt.thrown = receipt.thrown ?? `page-error:${pageErrors[0]}`;
@@ -352,11 +380,11 @@ export const main = async ({ env = process.env, argv = process.argv,
   const projectId = env.GOOGLE_CLOUD_PROJECT ?? 'demo-app';
 
   const catalog = JSON.parse(readFileSync(
-    env.O6_LISTEN_CATALOG_PATH ?? path.join(repoRoot, 'spec/compatibility/fs-listen-sdk-cases.json'), 'utf8'));
+    env.O6_LISTEN_CATALOG_PATH ?? path.join(repoRoot, 'spec/compatibility/fs-listen-sdk-cases-conf.json'), 'utf8'));
   if (!env.O6_LISTEN_CAMPAIGN_PATH) throw new Error('set O6_LISTEN_CAMPAIGN_PATH to a compiled campaign record');
   const campaignRecord = JSON.parse(readFileSync(env.O6_LISTEN_CAMPAIGN_PATH, 'utf8'));
   const { budget: budgetSpec, boundSources } = JSON.parse(readFileSync(
-    env.O6_LISTEN_BUDGET_PATH ?? path.join(repoRoot, 'spec/compatibility/fs-listen-sdk-budget.json'), 'utf8'));
+    env.O6_LISTEN_BUDGET_PATH ?? path.join(repoRoot, 'spec/compatibility/fs-listen-sdk-budget-conf.json'), 'utf8'));
   const nonce = env.O6_LISTEN_NONCE ?? campaignRecord.nonce ?? randomBytes(16).toString('hex');
   if (!/^[0-9a-f]{32}$/.test(nonce) || !/^[a-zA-Z0-9_-]{1,128}$/.test(projectId) ||
       (typeof campaignRecord.nonce === 'string' && campaignRecord.nonce !== nonce) ||

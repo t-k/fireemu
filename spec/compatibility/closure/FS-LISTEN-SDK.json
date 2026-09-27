@@ -12,40 +12,89 @@
   "scopeDecisions": [
     {
       "id": "L1",
-      "status": "PROPOSED",
+      "status": "DECIDED",
       "recommendation": "Require firebase 12.18.0 Web SDK in Node gRPC and a real browser in both WebChannel modes. Mobile SDKs remain outside the declared SDK matrix. Correct the stale parent-row mobile wording before freezing.",
-      "ownerDecisionRequired": true,
-      "source": "docs/compatibility/emulator-scope.md#profiles-and-sdks"
+      "ownerDecisionRequired": false,
+      "source": "docs/compatibility/emulator-scope.md#profiles-and-sdks",
+      "decision": "WEB_NODE_AND_BROWSER_MOBILE_EXCLUDED",
+      "decidedBy": "owner via OL-1",
+      "decidedOn": "2026-09-27"
     },
     {
       "id": "L2",
-      "status": "PROPOSED",
+      "status": "DECIDED",
       "recommendation": "Assign cross-tenant principal/claim decisions to AUTH-FS-CROSS and FS-RULES; retain the catalog 108/108C default-tenant cross-principal listener delivery here.",
-      "ownerDecisionRequired": true
+      "ownerDecisionRequired": false,
+      "decision": "AUTH_STATE_CHANGE_MOVED_TO_AUTH_FS_CROSS",
+      "decidedBy": "coordinator applying FS-RULES R2",
+      "decidedOn": "2026-09-27"
     },
     {
       "id": "L3",
-      "status": "PROPOSED",
+      "status": "DECIDED",
       "recommendation": "Keep direct gRPC raw resume-token behavior as a separate condition; SDK-managed resume cannot establish it.",
-      "ownerDecisionRequired": true
+      "ownerDecisionRequired": false,
+      "decision": "RAW_RESUME_SEPARATE",
+      "decidedBy": "coordinator",
+      "decidedOn": "2026-09-27"
     },
     {
       "id": "L4",
-      "status": "PROPOSED",
+      "status": "DECIDED",
       "recommendation": "Keep real browser tab lifecycle as a separate condition because the 18-case browser shadows do not close or reload a tab.",
-      "ownerDecisionRequired": true
+      "ownerDecisionRequired": false,
+      "decision": "BACKEND_VISIBLE_TAB_LIFECYCLE_ONLY",
+      "decidedBy": "coordinator",
+      "decidedOn": "2026-09-27"
     },
     {
       "id": "L5",
-      "status": "PROPOSED",
+      "status": "DECIDED",
       "recommendation": "Record production behavior for case 109 before deciding whether the local post-revocation unauthenticated event is a defect or an accepted divergence.",
-      "ownerDecisionRequired": true
+      "ownerDecisionRequired": false,
+      "decision": "REVOCATION_MOVED_TO_AUTH_FS_CROSS_PENDING_PRODUCTION",
+      "decidedBy": "coordinator",
+      "decidedOn": "2026-09-27"
     },
     {
       "id": "L6",
-      "status": "PROPOSED",
+      "status": "DECIDED",
       "recommendation": "Use the Identity Platform sandbox only with the FS-RULES owner of its Firestore and Rules state; otherwise select a separately authorized sandbox configuration. Do not reuse the historical-project manifest.",
-      "ownerDecisionRequired": true
+      "ownerDecisionRequired": false,
+      "decision": "QUERY_DEFAULT_EXISTING_RULES",
+      "decidedBy": "owner via OL-3",
+      "decidedOn": "2026-09-27"
+    },
+    {
+      "id": "OL-1",
+      "status": "DECIDED",
+      "decision": "MOBILE_SDK_EXCLUDED",
+      "decidedBy": "owner",
+      "decidedOn": "2026-09-27",
+      "decisionRef": "owner-decisions.md#FS-LISTEN-SDK-OL-1"
+    },
+    {
+      "id": "OL-2",
+      "status": "DECIDED",
+      "decision": "SDK_INTERNAL_CACHE_EXCLUDED_BACKEND_CACHE_INCLUDED",
+      "decidedBy": "owner",
+      "decidedOn": "2026-09-27",
+      "decisionRef": "owner-decisions.md#FS-LISTEN-SDK-OL-2"
+    },
+    {
+      "id": "OL-3",
+      "status": "DECIDED",
+      "decision": "QUERY_DEFAULT_CONF_COLLECTIONS_NO_RULES_CHANGE",
+      "decidedBy": "owner",
+      "decidedOn": "2026-09-27",
+      "decisionRef": "owner-decisions.md#FS-LISTEN-SDK-OL-3"
+    },
+    {
+      "id": "Q1-Q4c",
+      "status": "DECIDED",
+      "decision": "LIMIT_TO_LAST_CACHE_AND_LISTEN_TARGETS_HERE",
+      "decidedBy": "owner via FS-QUERY-INDEX Q1 and Q4c",
+      "decidedOn": "2026-09-24"
     }
   ],
   "conditions": [
@@ -65,7 +114,8 @@
           "browser-webchannel-long-polling",
           "browser-webchannel-streaming"
         ],
-        "sdkVersion": "firebase 12.18.0"
+        "sdkVersion": "firebase 12.18.0",
+        "credentials": "Two throwaway Firebase Auth users for private-owner cases; unauthenticated client for public conf_listen cases."
       },
       "localEvidence": {
         "references": [
@@ -74,7 +124,7 @@
           "docs/compatibility/fs-listen-sdk-campaign-preparation.md"
         ],
         "productionExecuted": false,
-        "note": "Complete local Node and browser shadows are executable evidence only; they do not establish production parity."
+        "note": "Existing local shadows bind the historical o6_listen catalog paths; they are not evidence for the conf_* migration or production."
       },
       "verification": {
         "recordingsRequiredPerTransport": 2,
@@ -82,7 +132,8 @@
           "Two complete, independently recorded sandbox receipts for each required transport and case/control pair.",
           "Bounded all-wire request accounting, closed listeners/clients, deleted and absent owned documents and accounts.",
           "A final source-bound artifact comparison with no unexplained mismatch."
-        ]
+        ],
+        "recordingsRequired": 2
       }
     },
     {
@@ -101,7 +152,8 @@
           "browser-webchannel-long-polling",
           "browser-webchannel-streaming"
         ],
-        "sdkVersion": "firebase 12.18.0"
+        "sdkVersion": "firebase 12.18.0",
+        "credentials": "Two throwaway Firebase Auth users for private-owner cases; unauthenticated client for public conf_listen cases."
       },
       "localEvidence": {
         "references": [
@@ -110,7 +162,7 @@
           "docs/compatibility/fs-listen-sdk-campaign-preparation.md"
         ],
         "productionExecuted": false,
-        "note": "Complete local Node and browser shadows are executable evidence only; they do not establish production parity."
+        "note": "Existing local shadows bind the historical o6_listen catalog paths; they are not evidence for the conf_* migration or production."
       },
       "verification": {
         "recordingsRequiredPerTransport": 2,
@@ -118,7 +170,8 @@
           "Two complete, independently recorded sandbox receipts for each required transport and case/control pair.",
           "Bounded all-wire request accounting, closed listeners/clients, deleted and absent owned documents and accounts.",
           "A final source-bound artifact comparison with no unexplained mismatch."
-        ]
+        ],
+        "recordingsRequired": 2
       }
     },
     {
@@ -131,13 +184,14 @@
       "recipeStatus": "EXISTING_CATALOG_PROPOSED_MAPPING",
       "status": "PENDING_RECORDING",
       "observation": {
-        "method": "Query added, modified, reordered and removed changes with old/new indexes versus an outside-predicate silent control.",
+        "method": "Query added, modified, reordered and removed changes with old/new indexes versus an outside-predicate silent control. Include limitToLast reversal and its document change indexes after a bounded update.",
         "transports": [
           "node-grpc",
           "browser-webchannel-long-polling",
           "browser-webchannel-streaming"
         ],
-        "sdkVersion": "firebase 12.18.0"
+        "sdkVersion": "firebase 12.18.0",
+        "credentials": "Two throwaway Firebase Auth users for private-owner cases; unauthenticated client for public conf_listen cases."
       },
       "localEvidence": {
         "references": [
@@ -146,7 +200,7 @@
           "docs/compatibility/fs-listen-sdk-campaign-preparation.md"
         ],
         "productionExecuted": false,
-        "note": "Complete local Node and browser shadows are executable evidence only; they do not establish production parity."
+        "note": "Existing local shadows bind the historical o6_listen catalog paths; they are not evidence for the conf_* migration or production."
       },
       "verification": {
         "recordingsRequiredPerTransport": 2,
@@ -154,7 +208,8 @@
           "Two complete, independently recorded sandbox receipts for each required transport and case/control pair.",
           "Bounded all-wire request accounting, closed listeners/clients, deleted and absent owned documents and accounts.",
           "A final source-bound artifact comparison with no unexplained mismatch."
-        ]
+        ],
+        "recordingsRequired": 2
       }
     },
     {
@@ -173,7 +228,8 @@
           "browser-webchannel-long-polling",
           "browser-webchannel-streaming"
         ],
-        "sdkVersion": "firebase 12.18.0"
+        "sdkVersion": "firebase 12.18.0",
+        "credentials": "Two throwaway Firebase Auth users for private-owner cases; unauthenticated client for public conf_listen cases."
       },
       "localEvidence": {
         "references": [
@@ -182,7 +238,7 @@
           "docs/compatibility/fs-listen-sdk-campaign-preparation.md"
         ],
         "productionExecuted": false,
-        "note": "Complete local Node and browser shadows are executable evidence only; they do not establish production parity."
+        "note": "Existing local shadows bind the historical o6_listen catalog paths; they are not evidence for the conf_* migration or production."
       },
       "verification": {
         "recordingsRequiredPerTransport": 2,
@@ -190,7 +246,8 @@
           "Two complete, independently recorded sandbox receipts for each required transport and case/control pair.",
           "Bounded all-wire request accounting, closed listeners/clients, deleted and absent owned documents and accounts.",
           "A final source-bound artifact comparison with no unexplained mismatch."
-        ]
+        ],
+        "recordingsRequired": 2
       }
     },
     {
@@ -209,7 +266,8 @@
           "browser-webchannel-long-polling",
           "browser-webchannel-streaming"
         ],
-        "sdkVersion": "firebase 12.18.0"
+        "sdkVersion": "firebase 12.18.0",
+        "credentials": "Two throwaway Firebase Auth users for private-owner cases; unauthenticated client for public conf_listen cases."
       },
       "localEvidence": {
         "references": [
@@ -218,7 +276,7 @@
           "docs/compatibility/fs-listen-sdk-campaign-preparation.md"
         ],
         "productionExecuted": false,
-        "note": "Complete local Node and browser shadows are executable evidence only; they do not establish production parity."
+        "note": "Existing local shadows bind the historical o6_listen catalog paths; they are not evidence for the conf_* migration or production."
       },
       "verification": {
         "recordingsRequiredPerTransport": 2,
@@ -226,26 +284,27 @@
           "Two complete, independently recorded sandbox receipts for each required transport and case/control pair.",
           "Bounded all-wire request accounting, closed listeners/clients, deleted and absent owned documents and accounts.",
           "A final source-bound artifact comparison with no unexplained mismatch."
-        ]
+        ],
+        "recordingsRequired": 2
       }
     },
     {
-      "conditionId": "FS-LISTEN-SDK/auth-sign-out",
+      "conditionId": "FS-LISTEN-SDK/initial-unauthenticated-refusal",
       "source": "docs/compatibility/ip-fs-production-compatibility.md#feature-group-status",
       "recipeIds": [
-        "FS-LISTEN-SDK-106",
         "FS-LISTEN-SDK-106N"
       ],
       "recipeStatus": "EXISTING_CATALOG_PROPOSED_MAPPING",
       "status": "PENDING_RECORDING",
       "observation": {
-        "method": "Sign-out of a Rules-protected active listener versus a listener started without a principal.",
+        "method": "A listener started after sign-out refuses its initial target; no in-flight Auth state change is tested here. Case 106 belongs to AUTH-FS-CROSS.",
         "transports": [
           "node-grpc",
           "browser-webchannel-long-polling",
           "browser-webchannel-streaming"
         ],
-        "sdkVersion": "firebase 12.18.0"
+        "sdkVersion": "firebase 12.18.0",
+        "credentials": "Two throwaway Firebase Auth users for private-owner cases; unauthenticated client for public conf_listen cases."
       },
       "localEvidence": {
         "references": [
@@ -254,7 +313,7 @@
           "docs/compatibility/fs-listen-sdk-campaign-preparation.md"
         ],
         "productionExecuted": false,
-        "note": "Complete local Node and browser shadows are executable evidence only; they do not establish production parity."
+        "note": "Existing local shadows bind the historical o6_listen catalog paths; they are not evidence for the conf_* migration or production."
       },
       "verification": {
         "recordingsRequiredPerTransport": 2,
@@ -262,7 +321,8 @@
           "Two complete, independently recorded sandbox receipts for each required transport and case/control pair.",
           "Bounded all-wire request accounting, closed listeners/clients, deleted and absent owned documents and accounts.",
           "A final source-bound artifact comparison with no unexplained mismatch."
-        ]
+        ],
+        "recordingsRequired": 2
       }
     },
     {
@@ -275,13 +335,14 @@
       "recipeStatus": "EXISTING_CATALOG_PROPOSED_MAPPING",
       "status": "PENDING_RECORDING",
       "observation": {
-        "method": "Raw callback count without metadata-change subscription, including a same-data silent control.",
+        "method": "Raw callback count without metadata-change subscription, including a same-data silent control. Compare includeMetadataChanges: true with the default false case 107; record backend CURRENT and NO_CHANGE timing.",
         "transports": [
           "node-grpc",
           "browser-webchannel-long-polling",
           "browser-webchannel-streaming"
         ],
-        "sdkVersion": "firebase 12.18.0"
+        "sdkVersion": "firebase 12.18.0",
+        "credentials": "Two throwaway Firebase Auth users for private-owner cases; unauthenticated client for public conf_listen cases."
       },
       "localEvidence": {
         "references": [
@@ -290,7 +351,7 @@
           "docs/compatibility/fs-listen-sdk-campaign-preparation.md"
         ],
         "productionExecuted": false,
-        "note": "Complete local Node and browser shadows are executable evidence only; they do not establish production parity."
+        "note": "Existing local shadows bind the historical o6_listen catalog paths; they are not evidence for the conf_* migration or production."
       },
       "verification": {
         "recordingsRequiredPerTransport": 2,
@@ -298,7 +359,8 @@
           "Two complete, independently recorded sandbox receipts for each required transport and case/control pair.",
           "Bounded all-wire request accounting, closed listeners/clients, deleted and absent owned documents and accounts.",
           "A final source-bound artifact comparison with no unexplained mismatch."
-        ]
+        ],
+        "recordingsRequired": 2
       }
     },
     {
@@ -311,13 +373,14 @@
       "recipeStatus": "EXISTING_CATALOG_PROPOSED_MAPPING",
       "status": "PENDING_RECORDING",
       "observation": {
-        "method": "Default-tenant owner and nonowner listeners on a private document, with server snapshot and permission-denied ordering.",
+        "method": "Default-tenant owner and nonowner listeners on a private document, with server snapshot and permission-denied ordering. Use two static principals only; Auth state changes belong to AUTH-FS-CROSS.",
         "transports": [
           "node-grpc",
           "browser-webchannel-long-polling",
           "browser-webchannel-streaming"
         ],
-        "sdkVersion": "firebase 12.18.0"
+        "sdkVersion": "firebase 12.18.0",
+        "credentials": "Two throwaway Firebase Auth users for private-owner cases; unauthenticated client for public conf_listen cases."
       },
       "localEvidence": {
         "references": [
@@ -326,7 +389,7 @@
           "docs/compatibility/fs-listen-sdk-campaign-preparation.md"
         ],
         "productionExecuted": false,
-        "note": "Complete local Node and browser shadows are executable evidence only; they do not establish production parity."
+        "note": "Existing local shadows bind the historical o6_listen catalog paths; they are not evidence for the conf_* migration or production."
       },
       "verification": {
         "recordingsRequiredPerTransport": 2,
@@ -334,43 +397,8 @@
           "Two complete, independently recorded sandbox receipts for each required transport and case/control pair.",
           "Bounded all-wire request accounting, closed listeners/clients, deleted and absent owned documents and accounts.",
           "A final source-bound artifact comparison with no unexplained mismatch."
-        ]
-      }
-    },
-    {
-      "conditionId": "FS-LISTEN-SDK/token-revocation",
-      "source": "docs/compatibility/ip-fs-production-compatibility.md#feature-group-status",
-      "recipeIds": [
-        "FS-LISTEN-SDK-109",
-        "FS-LISTEN-SDK-109C"
-      ],
-      "recipeStatus": "EXISTING_CATALOG_PROPOSED_MAPPING",
-      "status": "PENDING_RECORDING",
-      "observation": {
-        "method": "Listener behavior after session revocation and a later commit versus an unrevoked silent/owner-update control.",
-        "transports": [
-          "node-grpc",
-          "browser-webchannel-long-polling",
-          "browser-webchannel-streaming"
         ],
-        "sdkVersion": "firebase 12.18.0"
-      },
-      "localEvidence": {
-        "references": [
-          "spec/compatibility/fs-listen-sdk-local-shadow.json",
-          "spec/compatibility/fs-listen-sdk-browser-local-shadow.json",
-          "docs/compatibility/fs-listen-sdk-campaign-preparation.md"
-        ],
-        "productionExecuted": false,
-        "note": "Complete local Node and browser shadows are executable evidence only; they do not establish production parity."
-      },
-      "verification": {
-        "recordingsRequiredPerTransport": 2,
-        "requiredEvidence": [
-          "Two complete, independently recorded sandbox receipts for each required transport and case/control pair.",
-          "Bounded all-wire request accounting, closed listeners/clients, deleted and absent owned documents and accounts.",
-          "A final source-bound artifact comparison with no unexplained mismatch."
-        ]
+        "recordingsRequired": 2
       }
     },
     {
@@ -385,20 +413,23 @@
         "method": "Direct gRPC Listen with chosen current, stale and invalid resume tokens, RESET/TargetChange and a fresh-target control.",
         "transports": [
           "native-grpc"
-        ]
+        ],
+        "credentials": "Two throwaway Firebase Auth users for private-owner cases; unauthenticated client for public conf_listen cases."
       },
       "localEvidence": {
         "references": [
           "docs/compatibility/fs-listen-sdk-campaign-preparation.md"
         ],
-        "productionExecuted": false
+        "productionExecuted": false,
+        "note": "Existing local shadows bind the historical o6_listen catalog paths; they are not evidence for the conf_* migration or production."
       },
       "verification": {
         "recordingsRequiredPerTransport": 2,
         "requiredEvidence": [
           "Frozen direct gRPC corpus and two sandbox recordings of token and control outcomes.",
           "Final-artifact comparison with complete target state and cleanup."
-        ]
+        ],
+        "recordingsRequired": 2
       }
     },
     {
@@ -410,24 +441,115 @@
       "recipeStatus": "PROPOSED",
       "status": "PENDING_CORPUS",
       "observation": {
-        "method": "Real browser tab close, reload and new-tab reconnect while a witness writes, with no-reload control and complete listener/process cleanup.",
+        "method": "In a real browser, observe backend-visible WebChannel terminate on tab close and the first server snapshot in a new session after reload or a new tab, with a no-reload control and complete process cleanup.",
         "transports": [
           "browser-webchannel-long-polling",
           "browser-webchannel-streaming"
-        ]
+        ],
+        "credentials": "Two throwaway Firebase Auth users for private-owner cases; unauthenticated client for public conf_listen cases."
       },
       "localEvidence": {
         "references": [
           "docs/compatibility/fs-listen-sdk-campaign-preparation.md"
         ],
-        "productionExecuted": false
+        "productionExecuted": false,
+        "note": "Existing local shadows bind the historical o6_listen catalog paths; they are not evidence for the conf_* migration or production."
       },
       "verification": {
         "recordingsRequiredPerTransport": 2,
         "requiredEvidence": [
           "A frozen real-browser lifecycle corpus and two sandbox recordings in each of long-polling and streaming WebChannel modes.",
           "Final-artifact comparison of server-backed state after reconnect, with complete listener, client and tab cleanup."
-        ]
+        ],
+        "recordingsRequired": 2
+      }
+    },
+    {
+      "conditionId": "FS-LISTEN-SDK/existence-filter-reconnect",
+      "source": "docs/compatibility/fs-listen-sdk-campaign-preparation.md#what-remains-unobserved",
+      "recipeIds": [
+        "fs-listen-sdk/existence-filter-reconnect"
+      ],
+      "recipeStatus": "PROPOSED",
+      "status": "PENDING_CORPUS",
+      "observation": {
+        "method": "On native gRPC and SDK reconnection, delete a document while disconnected; observe ExistenceFilter count, BloomFilter unchanged_names and SDK removal of the stale document, with a no-deletion control.",
+        "transports": [
+          "native-grpc",
+          "node-grpc",
+          "browser-webchannel-long-polling",
+          "browser-webchannel-streaming"
+        ],
+        "credentials": "Unauthenticated public conf_listen target unless the case explicitly needs a Firebase Auth user."
+      },
+      "localEvidence": {
+        "references": [],
+        "productionExecuted": false
+      },
+      "verification": {
+        "recordingsRequiredPerTransport": 2,
+        "requiredEvidence": [
+          "Frozen direct gRPC corpus and two sandbox recordings of token and control outcomes.",
+          "Final-artifact comparison with complete target state and cleanup."
+        ],
+        "recordingsRequired": 2
+      }
+    },
+    {
+      "conditionId": "FS-LISTEN-SDK/backend-cache-transitions",
+      "source": "docs/compatibility/fs-listen-sdk-campaign-preparation.md#what-remains-unobserved",
+      "recipeIds": [
+        "fs-listen-sdk/backend-cache-transitions"
+      ],
+      "recipeStatus": "PROPOSED",
+      "status": "PENDING_CORPUS",
+      "observation": {
+        "method": "Observe fromCache-to-server snapshot timing and a persistent-cache resume after browser restart: compare backend resume token and read-time response with a cold-cache control. SDK-internal-only cache behavior is excluded.",
+        "transports": [
+          "browser-webchannel-long-polling",
+          "browser-webchannel-streaming"
+        ],
+        "credentials": "Unauthenticated public conf_listen target unless the case explicitly needs a Firebase Auth user."
+      },
+      "localEvidence": {
+        "references": [],
+        "productionExecuted": false
+      },
+      "verification": {
+        "recordingsRequiredPerTransport": 2,
+        "requiredEvidence": [
+          "Frozen direct gRPC corpus and two sandbox recordings of token and control outcomes.",
+          "Final-artifact comparison with complete target state and cleanup."
+        ],
+        "recordingsRequired": 2
+      }
+    },
+    {
+      "conditionId": "FS-LISTEN-SDK/native-target-protocol",
+      "source": "docs/compatibility/fs-listen-sdk-campaign-preparation.md#what-remains-unobserved",
+      "recipeIds": [
+        "fs-listen-sdk/native-target-protocol"
+      ],
+      "recipeStatus": "PROPOSED",
+      "status": "PENDING_CORPUS",
+      "observation": {
+        "method": "On one native gRPC Listen stream, test AddTarget and RemoveTarget, duplicate and invalid target_id, once, read_time, expected_count, missing-index refusal and a collection-group target; include valid controls and exact target lifecycle.",
+        "transports": [
+          "native-grpc"
+        ],
+        "credentials": "Unauthenticated public conf_listen target unless the case explicitly needs a Firebase Auth user."
+      },
+      "localEvidence": {
+        "references": [],
+        "productionExecuted": false
+      },
+      "verification": {
+        "recordingsRequiredPerTransport": 2,
+        "requiredEvidence": [
+          "Frozen direct gRPC corpus and two sandbox recordings of token and control outcomes.",
+          "Final-artifact comparison with complete target state and cleanup."
+        ],
+        "recordingsRequired": 2
       }
     },
     {
@@ -439,7 +561,8 @@
       "recipeStatus": "PROPOSED",
       "status": "PENDING_REVIEW",
       "observation": {
-        "method": "Replay every saved and new Listen recipe against one final source-bound artifact on all declared transports."
+        "method": "Replay every saved and new Listen recipe against one final source-bound artifact on all declared transports.",
+        "credentials": "N/A: no production request."
       },
       "localEvidence": {
         "references": [],
@@ -449,7 +572,8 @@
         "recordingsRequiredPerTransport": 0,
         "requiredEvidence": [
           "Complete source-bound comparisons and independent approval before parent promotion."
-        ]
+        ],
+        "recordingsRequired": 0
       }
     },
     {
@@ -461,7 +585,8 @@
       "recipeStatus": "PROPOSED",
       "status": "PENDING_REVIEW",
       "observation": {
-        "method": "Independent review of the exact condition map, scope decisions, receipts, divergences, request accounting and cleanup."
+        "method": "Independent review of the exact condition map, scope decisions, receipts, divergences, request accounting and cleanup.",
+        "credentials": "N/A: no production request."
       },
       "localEvidence": {
         "references": [],
@@ -471,17 +596,18 @@
         "recordingsRequiredPerTransport": 0,
         "requiredEvidence": [
           "Complete source-bound comparisons and independent approval before parent promotion."
-        ]
+        ],
+        "recordingsRequired": 0
       }
     }
   ],
   "productionPlan": {
     "status": "PROPOSAL_ONLY",
     "authorizesProduction": false,
-    "selectedProject": null,
-    "candidateProject": "fireemu-oracle-idp",
+    "selectedProject": "fireemu-oracle-query",
+    "candidateProject": "fireemu-oracle-query",
     "database": "(default)",
-    "projectSelectionReason": "The existing 18-case catalog needs two Auth accounts and Firestore Rules; the Identity Platform sandbox has both but FS-RULES owns its Firestore configuration.",
+    "projectSelectionReason": "Owner OL-3 selected query/(default), deployed conformance/firestore.rules and existing Auth. Serialize with STORAGE and FUNCTIONS via shared lock.",
     "historicalManifestProject": "fireemu-35fe6",
     "existingAdaptersRejectProduction": true,
     "catalogCases": 18,
@@ -508,13 +634,51 @@
     "totalWireRequestCap": null,
     "provisionalExistingPerExecutionCostCeilingUsd": 0.5,
     "provisionalSixExecutionCeilingUsd": 3,
-    "additionalCorpusEstimate": "Raw resume-token and tab-lifecycle case counts, wire requests and costs remain unestimated until runners and controls are defined.",
-    "cleanup": "Close every listener and client; conditionally delete owned documents and both throwaway accounts, read back absence, and preserve unknown resources for recovery.",
+    "additionalCorpusEstimate": "ExistenceFilter/BloomFilter, backend-mediated cache, native target protocol, metadata changes, limitToLast and browser tab lifecycle remain unestimated until finite runners and controls are defined.",
+    "cleanup": "Close every listener, client and browser process; conditionally delete owned conf_* documents and both throwaway accounts, then read back typed absence and preserve unknown resources for recovery. Deployed Rules are unchanged.",
     "prerequisites": [
-      "FS-DATA-WRITE closure and sandbox project/Rules ownership decision",
-      "Production-capable source-bound SDK and browser adapters with all-wire accounting",
-      "Twice-recorded sandbox packet, clean-context review, ledger admission and owner permission"
+      "FS-DATA-WRITE closure and exclusive query/(default) scheduling with STORAGE and FUNCTIONS",
+      "Migrate the catalog and all local adapters to conf_listen and conf_rules_owner without changing deployed Rules; preserve historical receipts",
+      "Production-capable source-bound SDK and browser adapters with all-wire accounting and finite request cap",
+      "Finite native target, cache, ExistenceFilter, metadata and limitToLast corpus with local shadow and clean-context review",
+      "Twice-recorded sandbox packet, JSONL ledger admission and owner permission"
     ],
-    "productionExecuted": false
-  }
+    "productionExecuted": false,
+    "project": "fireemu-oracle-query",
+    "changesRules": false,
+    "rulesCollections": [
+      "conf_listen",
+      "conf_rules_owner"
+    ],
+    "retainedCatalogCases": 15,
+    "movedCatalogCases": 3
+  },
+  "note": "The shared 18-case catalog uses case IDs as recipe IDs; 15 belong to this parent and 106, 109 and 109C belong to AUTH-FS-CROSS under R2. Additional recipes use fs-listen-sdk/<condition>. Historical local shadows bind the old o6_listen paths and remain immutable. No production recording or closure is claimed.",
+  "profileComparison": {
+    "profile": "strict",
+    "localOutcome": "Strict revocation and tenant deletion listeners end on refresh; emulator profile listeners continue in focused local checks.",
+    "officialEmulatorComparison": "PENDING",
+    "productionComparison": "PENDING",
+    "note": "A strict-only refusal is not yet a production compatibility claim. AUTH-FS-CROSS owns the state-change observations."
+  },
+  "movedCatalogCases": [
+    {
+      "caseId": "FS-LISTEN-SDK-106",
+      "movedTo": "AUTH-FS-CROSS",
+      "decisionRef": "FS-RULES R2",
+      "status": "MOVED"
+    },
+    {
+      "caseId": "FS-LISTEN-SDK-109",
+      "movedTo": "AUTH-FS-CROSS",
+      "decisionRef": "FS-RULES R2",
+      "status": "MOVED"
+    },
+    {
+      "caseId": "FS-LISTEN-SDK-109C",
+      "movedTo": "AUTH-FS-CROSS",
+      "decisionRef": "FS-RULES R2",
+      "status": "MOVED"
+    }
+  ]
 }

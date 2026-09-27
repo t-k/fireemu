@@ -2546,6 +2546,13 @@ export function requireBracketArguments(args = []) {
   };
 }
 
+/** Both attempts get a fresh credential; a fixed ambient token could expire between them. */
+export function assertNoAmbientProductionToken(env) {
+  if (Object.hasOwn(env, "FIREEMU_PRODUCTION_TOKEN")) {
+    throw new Error("a bracket recording refuses FIREEMU_PRODUCTION_TOKEN; unset it");
+  }
+}
+
 /**
  * The recording corpus split by its set's freeze groups. A set with one group keeps its gRPC
  * recipes in that group; a split set carries none.
@@ -2575,7 +2582,7 @@ export function completeBracketGroups(recordingCorpus, setName, rest, stream) {
   return bracketGroupCorpora(recordingCorpus, setName)
     .filter(({ corpus }) => {
       try {
-        assertCompleteRecording(corpus, rest, stream);
+        assertCompleteRecording(corpus, rest, stream, { refuseAuthFailures: true });
         return true;
       } catch {
         return false;
@@ -2593,6 +2600,7 @@ export async function recordBracketProduction(admissionArgs, mode = "bracket") {
   const estimate = set.attemptEstimateUsd;
   const pins = requireBracketArguments(admissionArgs);
   assertNoProxyEnvironment(process.env);
+  assertNoAmbientProductionToken(process.env);
   const gitCommonDir = (
     await execFileAsync("git", ["rev-parse", "--path-format=absolute", "--git-common-dir"], {
       cwd: ROOT,
@@ -2735,6 +2743,7 @@ export async function recordBracketProduction(admissionArgs, mode = "bracket") {
             harnessRevision: gitSha,
             sdkVersions: recordingSdkVersions(),
             credentialToken: recordings[0].token,
+            refuseAuthFailures: true,
           });
         } catch (error) {
           refused.push({ group, reason: String(error.message).slice(0, 400) });

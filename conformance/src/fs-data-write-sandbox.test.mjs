@@ -715,3 +715,61 @@ test("a dropped connection is a complete answer only on a WebChannel measured bo
     );
   }
 });
+
+test("with auth failures refused, a 401 or 403 on an owner step is a failed observation", async () => {
+  const { assertCompleteRecording } = await import("./fs-data-write-sandbox.mjs");
+  const program = {
+    id: "writes/example",
+    area: "writes",
+    steps: [
+      {
+        id: "write",
+        method: "POST",
+        path: "/v1/projects/fireemu-oracle-sbx/databases/(default)/documents:commit",
+        body: { writes: [] },
+      },
+    ],
+  };
+  const exampleCorpus = { ...corpus, restPrograms: [program], restRequestCount: 1 };
+  const answered = (status, code) => ({
+    [program.id]: { steps: { write: { status, code, message: "x" } } },
+  });
+  for (const [status, code] of [
+    [401, "UNAUTHENTICATED"],
+    [403, "PERMISSION_DENIED"],
+  ]) {
+    // Without the option the older modes keep accepting a typed answer.
+    assertCompleteRecording(exampleCorpus, answered(status, code), {});
+    assert.throws(
+      () =>
+        assertCompleteRecording(
+          exampleCorpus,
+          answered(status, code),
+          {},
+          {
+            refuseAuthFailures: true,
+          },
+        ),
+      /failed observation/,
+    );
+  }
+  assertCompleteRecording(
+    exampleCorpus,
+    answered(400, "INVALID_ARGUMENT"),
+    {},
+    {
+      refuseAuthFailures: true,
+    },
+  );
+  // A step that deliberately sends another credential may expect a refusal.
+  const credentialed = structuredClone(exampleCorpus);
+  credentialed.restPrograms[0].steps[0].credential = "user";
+  assertCompleteRecording(
+    credentialed,
+    answered(403, "PERMISSION_DENIED"),
+    {},
+    {
+      refuseAuthFailures: true,
+    },
+  );
+});

@@ -124,3 +124,73 @@ test("only a dropped measured body is a typed reset; timeouts while reading are 
     await rm(dir, { recursive: true, force: true });
   }
 });
+
+test("past the attempt deadline only terminates run, so cleanup starts in time", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "webchannel-deadline-"));
+  const seen = [];
+  let opened = 0;
+  const server = createServer((request, response) => {
+    const url = new URL(request.url, "http://127.0.0.1");
+    request.on("data", () => {});
+    request.on("end", () => {
+      if (request.method === "DELETE") return response.end("{}");
+      if (url.searchParams.get("TYPE") === "terminate") {
+        seen.push("terminate");
+        return response.end("ok");
+      }
+      const rid = url.searchParams.get("RID");
+      seen.push(`rid${rid}`);
+      if (rid === "1") {
+        opened += 1;
+        response.setHeader("x-http-session-id", GSESSIONID);
+        return response.end(frame([[0, ["c", `SIDtest${opened}xabcdefghij`, "", 8, 14, 30000]]]));
+      }
+      // The first session's control stalls past the deadline.
+      response.writeHead(200, { "content-type": "text/plain" });
+      return response.write("5\n[1,0");
+    });
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  try {
+    const input = join(dir, "corpus.json");
+    const output = join(dir, "rest.json");
+    const programs = [12_582_912, 16_777_216].map(webchannelSessionProgram);
+    await writeFile(input, JSON.stringify({ schemaVersion: 1, restPrograms: programs }));
+    await execFileAsync("node", [new URL("./sandbox-session.mjs", import.meta.url).pathname], {
+      env: {
+        ...process.env,
+        FIRESTORE_PROBE_HOST: `127.0.0.1:${server.address().port}`,
+        FIRESTORE_PROBE_PROJECT: "fireemu-oracle-sbx",
+        FIRESTORE_PROBE_IN: input,
+        FIRESTORE_PROBE_OUT: output,
+        FIRESTORE_PROBE_TOKEN: "owner",
+        FIRESTORE_PROBE_TIMEOUT_MS: "1500",
+        // Loopback only: the attempt deadline, shortened for the test.
+        FIRESTORE_PROBE_ATTEMPT_DEADLINE_MS: "500",
+      },
+      maxBuffer: 1024 * 1024,
+    });
+    const rows = JSON.parse(await readFile(output, "utf8"));
+    const first = rows["writes/limits/webchannel-request-bytes/12582912"].steps;
+    const second = rows["writes/limits/webchannel-request-bytes/16777216"].steps;
+    // The first session started before the deadline, timed out on its control, and was still
+    // terminated after the deadline.
+    assert.equal(first.control.code, "no-response");
+    assert.equal(first.boundary.code, "not-run");
+    assert.deepEqual(first.terminate, { status: 200, code: "OK", body: "session-terminated" });
+    // No new session starts after the deadline.
+    assert.deepEqual(second.handshake, {
+      status: 0,
+      code: "not-run",
+      message: "the attempt deadline passed",
+    });
+    for (const step of ["control", "boundary", "terminate"]) {
+      assert.equal(second[step].code, "not-run", step);
+    }
+    assert.deepEqual(seen, ["rid1", "rid2", "terminate"]);
+  } finally {
+    server.closeAllConnections();
+    server.close();
+    await rm(dir, { recursive: true, force: true });
+  }
+});

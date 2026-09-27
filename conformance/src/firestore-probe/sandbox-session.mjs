@@ -44,12 +44,23 @@ const META_OUT = process.env.FIRESTORE_PROBE_META_OUT;
 const MAX_REQUESTS = process.env.FIRESTORE_PROBE_MAX_REQUESTS;
 const REQUEST_TIMEOUT_MS = Number(process.env.FIRESTORE_PROBE_TIMEOUT_MS ?? 20_000);
 // A WebChannel measured body of up to 33,554,433 bytes: about 150 s at the upload rate seen on
-// 2026-09-27, so it gets its own timeout. Only a loopback run may shorten it (tests).
+// 2026-09-27, so it gets its own timeout, four times that. Only a loopback run may shorten it.
 const BOUNDARY_TIMEOUT_MS =
   /^127\.0\.0\.1:\d+$/.test(process.env.FIRESTORE_PROBE_HOST ?? "") &&
   process.env.FIRESTORE_PROBE_BOUNDARY_TIMEOUT_MS !== undefined
     ? Number(process.env.FIRESTORE_PROBE_BOUNDARY_TIMEOUT_MS)
-    : 900_000;
+    : 600_000;
+// A bracket attempt must reach its cleanup while its access token (about an hour) is valid:
+// 30 minutes after the child starts, only terminates still run. Only a loopback run may set
+// another deadline (tests), and outside bracket mode there is none unless it does.
+const LOOPBACK_DEADLINE =
+  /^127\.0\.0\.1:\d+$/.test(process.env.FIRESTORE_PROBE_HOST ?? "") &&
+  process.env.FIRESTORE_PROBE_ATTEMPT_DEADLINE_MS !== undefined
+    ? Number(process.env.FIRESTORE_PROBE_ATTEMPT_DEADLINE_MS)
+    : undefined;
+const ATTEMPT_DEADLINE_MS =
+  LOOPBACK_DEADLINE ?? (process.env.FIRESTORE_PROBE_BRACKET === "1" ? 1_800_000 : undefined);
+const CHILD_STARTED_AT = Date.now();
 const MANAGED_CLEAR_JOURNAL =
   process.env.FIRESTORE_PROBE_DELTA_JOURNAL ?? process.env.FIRESTORE_PROBE_MANAGED_CLEAR_JOURNAL;
 const MANAGED_CLEAR_NAMES = process.env.FIRESTORE_PROBE_MANAGED_CLEAR_NAMES;
@@ -2936,6 +2947,15 @@ async function main() {
             raw.set(spec.id, null);
             continue;
           }
+        }
+        if (
+          ATTEMPT_DEADLINE_MS !== undefined &&
+          Date.now() - CHILD_STARTED_AT >= ATTEMPT_DEADLINE_MS &&
+          spec.webchannelSession !== "terminate"
+        ) {
+          steps[spec.id] = { status: 0, code: "not-run", message: "the attempt deadline passed" };
+          raw.set(spec.id, null);
+          continue;
         }
         const sessionBlocked =
           spec.webchannelSession === undefined

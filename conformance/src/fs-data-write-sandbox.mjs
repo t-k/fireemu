@@ -516,7 +516,7 @@ export function compareSandboxArtifact(production, localPrograms, localStreams, 
  * The freeze applies it to both recordings; a runner applies it to its first recording so a
  * failed attempt stops before the second is sent.
  */
-export function assertCompleteRecording(corpus, rest, stream) {
+export function assertCompleteRecording(corpus, rest, stream, { refuseAuthFailures = false } = {}) {
   for (const program of corpus.restPrograms) {
     const recordedSteps = rest?.[program.id]?.steps;
     if (!recordedSteps || program.steps.some((step) => !recordedSteps[step.id])) {
@@ -533,7 +533,12 @@ export function assertCompleteRecording(corpus, rest, stream) {
         WEBCHANNEL_RESET_PHASES.includes(result.message) &&
         Object.keys(result).length === 3;
       if (typedReset) continue;
+      // A recording whose own credential stopped working (for example an expired token) has
+      // not observed the recipe; only a step that sends another credential may expect it.
+      const authFailure =
+        refuseAuthFailures && step.credential === undefined && [401, 403].includes(result.status);
       if (
+        authFailure ||
         !Number.isInteger(result.status) ||
         result.status < 200 ||
         result.status > 599 ||
@@ -573,6 +578,7 @@ export function freezeSandboxFixture({
   sdkVersions,
   credentialToken,
   mode,
+  refuseAuthFailures = false,
 }) {
   validateSandboxCorpus(corpus);
   if (typeof credentialToken !== "string" || credentialToken.length === 0) {
@@ -590,8 +596,8 @@ export function freezeSandboxFixture({
   const nondeterministicPrograms = [
     ...new Set(differences.map((id) => id.split("#", 1)[0])),
   ].toSorted();
-  assertCompleteRecording(corpus, first, firstStream);
-  assertCompleteRecording(corpus, second, secondStream);
+  assertCompleteRecording(corpus, first, firstStream, { refuseAuthFailures });
+  assertCompleteRecording(corpus, second, secondStream, { refuseAuthFailures });
   const liveStreams = (corpus.streamRecipes ?? []).filter((recipe) => recipe.transport === "grpc");
   if (liveStreams.length > 0) {
     if (JSON.stringify(canonical(firstStream)) !== JSON.stringify(canonical(secondStream))) {

@@ -509,3 +509,12 @@ test("the follow-up freezes WebChannel and indexed rows apart, and bracket as on
   };
   assert.deepEqual(completeBracketGroups(followup, "followup", none, {}), []);
 });
+
+test("a bracket recording refuses an ambient production token", async () => {
+  const { assertNoAmbientProductionToken } = await import("./fs-data-write-sandbox-run.mjs");
+  assert.doesNotThrow(() => assertNoAmbientProductionToken({}));
+  assert.throws(
+    () => assertNoAmbientProductionToken({ FIREEMU_PRODUCTION_TOKEN: "ya29.example" }),
+    /FIREEMU_PRODUCTION_TOKEN/,
+  );
+});

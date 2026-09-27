@@ -38,6 +38,7 @@ import {
   removeIssuer,
   sandboxBusy,
   uncommitted,
+  versionsOfRun,
 } from "./hosting.mjs";
 import { withProjectLocks } from "./project-locks.mjs";
 import { makeCertificate, prepareKeys, resolveRun, runPrograms } from "./run.mjs";
@@ -336,6 +337,13 @@ export async function recordCampaign({
     }
   };
   let issuerRemoved = false;
+  await step("find a version whose create answer was lost", async () => {
+    if (issuer.versionAttempted && !issuer.version) {
+      const [found, ...more] = await versionsOfRun(get, run);
+      if (more.length) throw new Error(`several versions are labelled with run ${run}`);
+      if (found) issuer.version = found;
+    }
+  });
   await step("remove issuer", async () => {
     const { created, cleanup: removed } = await removeIssuer({
       get,
@@ -347,12 +355,12 @@ export async function recordCampaign({
       deleteVersion: true,
     });
     Object.assign(cleanup, removed);
+    // A version create that was sent must end with its version found and removed.
     issuerRemoved =
       removed.channelProbe === undefined &&
-      (!created ||
-        (removed.channelReadBack === "absent" &&
-          removed.issuerGone !== false &&
-          (!issuer.version || ["absent", "DELETED"].includes(removed.versionStatus))));
+      (!issuer.versionAttempted || Boolean(issuer.version)) &&
+      (!issuer.version || ["absent", "DELETED"].includes(removed.versionStatus)) &&
+      (!created || (removed.channelReadBack === "absent" && removed.issuerGone !== false));
   });
   await step("remove providers", async () => {
     cleanup.providersLeft = await removeOwnedProviders({ get, send, base, run });
@@ -509,6 +517,13 @@ export async function recoverCampaign({ api, target, meta, appendLedger, sleep }
     }
   });
   await step("remove version", async () => {
+    if (!versionId && target.versionSent) {
+      // The create's answer was lost: the run's label finds the version, if it exists.
+      const [found, ...more] = await versionsOfRun(get, run);
+      if (more.length) throw new Error(`several versions are labelled with run ${run}`);
+      versionId = found ? found.split("/").at(-1) : undefined;
+      if (!found) cleanup.versionSearch = "no version labelled with the run";
+    }
     if (!versionId) {
       cleanup.versionStatus = target.versionSent ? "unknown" : "none";
       return;

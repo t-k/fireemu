@@ -458,10 +458,11 @@ export async function deployIssuer({
   // Journalled before and after, so a recovery knows whether a version may exist and which.
   result.versionAttempted = true;
   await journal({ step: "version-create-sent" });
+  // Labelled with the run, so a version whose create answer was lost can still be found.
   const version = await send(
     "POST",
     `${HOSTING}/projects/-/sites/${SITE}/versions`,
-    {},
+    { labels: { "fireemu-run": run } },
     "version create",
   );
   result.version = version.name;
@@ -520,6 +521,27 @@ export async function deployIssuer({
       throw new Error(`read back of ${path}: ${response.status} ${type} same=${same}`);
     }
   }
+}
+
+/**
+ * The versions of the site labelled with `run` (read in at most three pages of 100), by name.
+ * The listing is filtered here, by the label the run set when it created the version.
+ */
+export async function versionsOfRun(get, run) {
+  const found = [];
+  let pageToken = "";
+  for (let page = 0; page < 3; page += 1) {
+    const query = `pageSize=100${pageToken ? `&pageToken=${encodeURIComponent(pageToken)}` : ""}`;
+    const listed = await get(`${HOSTING}/sites/${SITE}/versions?${query}`, "versions");
+    for (const version of listed.versions ?? []) {
+      if (version.labels?.["fireemu-run"] === run && version.status !== "DELETED") {
+        found.push(String(version.name));
+      }
+    }
+    pageToken = listed.nextPageToken ?? "";
+    if (!pageToken) return found;
+  }
+  throw new Error("the site has more than 300 versions; the run's could not all be read");
 }
 
 /**

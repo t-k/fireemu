@@ -57,7 +57,18 @@ export function fakeHosting(run) {
       state.channel = true;
       return reply(200, { name: `${path}/fed-${run}`, url: `https://${host}` });
     }
-    if (method === "POST" && path.endsWith("/versions")) return reply(200, { name: version });
+    if (method === "POST" && path.endsWith("/versions")) {
+      state.versionLabels = JSON.parse(init.body ?? "{}").labels ?? {};
+      state.versionCreated = true;
+      return reply(200, { name: version });
+    }
+    if (method === "GET" && path === `sites/${SANDBOX_PROJECT}/versions`) {
+      const versions = [...(state.otherVersions ?? [])];
+      if (state.versionCreated && !state.versionDeleted) {
+        versions.push({ name: version, labels: state.versionLabels, status: "CREATED" });
+      }
+      return reply(200, { versions });
+    }
     if (path.endsWith(":populateFiles")) {
       state.hashes = JSON.parse(init.body).files;
       return reply(200, {

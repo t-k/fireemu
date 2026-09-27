@@ -521,3 +521,77 @@ test("a config answer and a provider list keep no key material or foreign secret
   ]);
   assert.doesNotThrow(() => scanFixture(JSON.stringify([whole, list]), []));
 });
+
+test("a version whose create answer was lost is found by the run's label and removed", async () => {
+  // The service made the version, the answer never came.
+  const lostAnswer = (env) => (url, init) => {
+    const { pathname } = new URL(url);
+    if ((init?.method ?? "GET") === "POST" && pathname.endsWith("/versions")) {
+      return env.site.handle(url, init).then(() => {
+        throw new TypeError("fetch failed");
+      });
+    }
+    return env.site.handle(url, init);
+  };
+  const base = sandbox();
+  const env = sandbox({ hosting: lostAnswer(base) });
+  env.site = base.site;
+  const { result, ledger } = await campaign(env);
+  assert.deepEqual(base.site.state.versionLabels, { "fireemu-run": RUN });
+  assert.equal(base.site.state.versionDeleted, true, "the labelled version is removed");
+  assert.equal(result.outcome, "failed-cleaned", JSON.stringify(result));
+  assert.equal(result.versionStatus, "absent");
+  assert.ok(ledger.some((line) => line.step === "version-create-sent"));
+
+  // When no version carries the label (the listing does not show it yet), the run stays open.
+  const hidden = sandbox();
+  const unseen = sandbox({
+    hosting: (url, init) => {
+      const { pathname } = new URL(url);
+      if ((init?.method ?? "GET") === "POST" && pathname.endsWith("/versions")) {
+        return Promise.reject(new TypeError("fetch failed"));
+      }
+      return hidden.site.handle(url, init);
+    },
+  });
+  unseen.site = hidden.site;
+  const open = await campaign(unseen);
+  assert.equal(open.result.outcome, "needs-recovery", JSON.stringify(open.result));
+  const text = open.ledger
+    .map((line) =>
+      JSON.stringify({
+        ts: "2026-09-28T00:00:00Z",
+        project: SANDBOX_PROJECT,
+        taskId: TASK_ID,
+        ...line,
+      }),
+    )
+    .join("\n");
+  const target = recordingToRecover(text);
+  assert.equal(target?.run, RUN);
+  assert.equal(target.versionSent, true);
+});
+
+test("recover finds a version by the run's label and leaves other runs' versions", async () => {
+  const env = sandbox();
+  env.site.state.versionCreated = true;
+  env.site.state.versionLabels = { "fireemu-run": RUN };
+  env.site.state.otherVersions = [
+    {
+      name: `sites/${SANDBOX_PROJECT}/versions/other`,
+      labels: { "fireemu-run": "d4e5f6" },
+      status: "CREATED",
+    },
+  ];
+  const { entry } = await recover(
+    env,
+    recordingToRecover(`${STARTED}\n${progress({ step: "version-create-sent" })}`),
+  );
+  assert.equal(entry.outcome, "recovered", JSON.stringify(entry));
+  assert.equal(entry.versionId, "rehearsal");
+  assert.equal(env.site.state.versionDeleted, true);
+  assert.deepEqual(
+    env.site.state.otherVersions.map((v) => v.name.split("/").at(-1)),
+    ["other"],
+  );
+});

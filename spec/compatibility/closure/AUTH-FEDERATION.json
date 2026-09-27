@@ -317,7 +317,7 @@
         "strict"
       ],
       "status": "PENDING_CORPUS",
-      "note": "Moved from AUTH-CREDENTIAL C7: the claims of session cookies made from the original and the refreshed ID token."
+      "note": "Moved from AUTH-CREDENTIAL C7: the claims of session cookies made from the original and the refreshed ID token. The cookie's auth_time is the sign-in's and its iat the cookie's: recorded relative to the cookie's iat, it is iat+0 or iat-1 by the second boundary (rehearsal, 2026-09-28) and may be lower in production, so the comparison accepts any auth_time <= iat on these rows instead of the exact value (pre-send review 2 of record-oidc)."
     },
     {
       "conditionId": "AUTH-FEDERATION/third-party-refusals",

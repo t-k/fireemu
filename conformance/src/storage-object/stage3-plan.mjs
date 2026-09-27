@@ -8,7 +8,10 @@ const PER_RECORDING_CLEANUP_RESERVE = 600;
 const RECOVERY_RESERVE = 600;
 const TASK_REQUEST_CAP = 2 * PER_RECORDING_CAP + RECOVERY_RESERVE;
 const TASK_USD_RESERVATION = 9;
-const EXPECTED_REMAINING = ["storage-object/errors/authorization", "storage-object/auth/firebase-id-token"];
+const EXPECTED_REMAINING = [
+  "storage-object/errors/authorization",
+  "storage-object/auth/firebase-id-token",
+];
 
 const digest = (value) => createHash("sha256").update(JSON.stringify(value)).digest("hex");
 
@@ -42,6 +45,19 @@ export function buildStage3DraftPlan({ projectId, bucket, runIds } = {}) {
       0,
     );
     const staticSubjectEntries = staticRequestEntries - staticCleanupEntries;
+    const invalidNameProof = corpus.recipes.find(
+      (recipe) => recipe.id === "storage-object/errors/object-name",
+    )?.invalidNameAbsenceProof;
+    if (
+      invalidNameProof?.dialect !== "gcs" ||
+      invalidNameProof.scopePrefix !== prefix ||
+      invalidNameProof.delimiter !== null ||
+      invalidNameProof.maxPagesPerRefusal !== 32 ||
+      invalidNameProof.maxRefusals !== 4 ||
+      invalidNameProof.maxRequests !== 128 ||
+      invalidNameProof.requiresExactKnownOwnedNames !== true
+    )
+      throw new Error("invalid-name absence proof budget differs");
     if (staticRequestEntries !== corpus.requestsPerRecording)
       throw new Error("static request accounting is inconsistent");
     if (
@@ -55,6 +71,11 @@ export function buildStage3DraftPlan({ projectId, bucket, runIds } = {}) {
     const combinedSubjectEntries = staticSubjectEntries + authCorpus.subjectEntries;
     const combinedCleanupEntries = staticCleanupEntries + authCorpus.cleanupEntries;
     const combinedRequestEntries = staticRequestEntries + authCorpus.requestsPerRecording;
+    if (
+      combinedSubjectEntries + invalidNameProof.maxRequests >
+      PER_RECORDING_CAP - PER_RECORDING_CLEANUP_RESERVE
+    )
+      throw new Error("supplemental invalid-name proof exceeds the subject cap");
     return {
       runId,
       prefix,
@@ -68,10 +89,15 @@ export function buildStage3DraftPlan({ projectId, bucket, runIds } = {}) {
       staticRequestEntries: combinedRequestEntries,
       staticCleanupEntries: combinedCleanupEntries,
       staticSubjectEntries: combinedSubjectEntries,
+      supplementalSubjectMaxRequests: invalidNameProof.maxRequests,
       maxRequests: PER_RECORDING_CAP,
       cleanupReserveRequests: PER_RECORDING_CLEANUP_RESERVE,
       subjectCapRequests: PER_RECORDING_CAP - PER_RECORDING_CLEANUP_RESERVE,
-      subjectAllowance: PER_RECORDING_CAP - PER_RECORDING_CLEANUP_RESERVE - combinedSubjectEntries,
+      subjectAllowance:
+        PER_RECORDING_CAP -
+        PER_RECORDING_CLEANUP_RESERVE -
+        combinedSubjectEntries -
+        invalidNameProof.maxRequests,
       cleanupAllowance: PER_RECORDING_CLEANUP_RESERVE - combinedCleanupEntries,
       sendAuthorized: false,
     };

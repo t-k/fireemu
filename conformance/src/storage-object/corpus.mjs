@@ -313,6 +313,21 @@ export function buildCorpus({ bucket, prefix }) {
     maxPages: 4,
     exhaustedOnlyWhenNoNextPageToken: true,
   };
+  objectNameRecipe.invalidNameAbsenceProof = {
+    dialect: "gcs",
+    scopePrefix: prefix,
+    delimiter: null,
+    maxPagesPerRefusal: 32,
+    maxRefusals: objectNameRecipe.objects.length,
+    maxRequests: 32 * objectNameRecipe.objects.length,
+    requiresExactKnownOwnedNames: true,
+  };
+  objectNameRecipe.observationAspects = [
+    "invalid-name-create-refusal",
+    "listed-name-or-url-encoded-form",
+    "normalized-name-or-no-created-object",
+    "malformed-prefix-list-status",
+  ];
   objectNameRecipe.coverage = "partial-missing-name-and-list-path-semantics";
   recipes.push(objectNameRecipe);
 

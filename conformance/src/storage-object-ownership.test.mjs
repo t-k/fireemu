@@ -181,3 +181,59 @@ test("subject deletion and repeated absent refusal require fresh absence and exa
   });
   assert.deepEqual(ownership.unresolved(), []);
 });
+
+test("invalid-name refusal needs a complete run list equal to known owned names", () => {
+  const ownership = createRunOwnership(options);
+  const invalid = `${options.prefix}bad\nname.bin`;
+  ownership.assertInitialEmpty({ ...options, pages: emptyPages });
+  ownership.noteInitialAbsent(name, absent);
+  ownership.noteInitialAbsent(invalid, absent);
+  ownership.noteMutationAttempt(name, "upload");
+  ownership.observeOwnedGeneration(name, { ...owned, operationId: "upload" }, owned.bytesSha256);
+  ownership.noteMutationAttempt(invalid, "invalid-upload");
+  const proof = {
+    ...options,
+    operationId: "invalid-upload",
+    status: 400,
+    pages: [
+      { pageToken: null, items: [{ bucket: options.bucket, name }], nextPageToken: "next" },
+      { pageToken: "next", items: [], nextPageToken: null },
+    ],
+  };
+  assert.throws(
+    () =>
+      ownership.noteRefusedAbsentFromRunList(invalid, {
+        ...proof,
+        pages: [
+          { ...proof.pages[0], nextPageToken: null },
+          { ...proof.pages[1], pageToken: "unexpected" },
+        ],
+      }),
+    /page|token|complete/i,
+  );
+  assert.throws(
+    () =>
+      ownership.noteRefusedAbsentFromRunList(invalid, {
+        ...proof,
+        pages: [
+          {
+            pageToken: null,
+            items: [{ bucket: options.bucket, name: `${options.prefix}bad%0Aname.bin` }],
+            nextPageToken: null,
+          },
+        ],
+      }),
+    /owned|unexpected|names/i,
+  );
+  assert.throws(
+    () =>
+      ownership.noteRefusedAbsentFromRunList(invalid, {
+        ...proof,
+        pages: [{ pageToken: null, items: [], nextPageToken: null }],
+      }),
+    /owned|missing|names/i,
+  );
+  assert.deepEqual(ownership.unresolved(), [invalid, name]);
+  ownership.noteRefusedAbsentFromRunList(invalid, proof);
+  assert.deepEqual(ownership.unresolved(), [name]);
+});

@@ -48,12 +48,194 @@ test("collection requests use a scoped prefix without inventing an object name",
     assert.throws(() => validateStorageRoute(changed, boundary));
 });
 
+test("invalid-name refusal uses a counted complete run list after fresh failed reads", async () => {
+  const scope = `${prefix}errors/object-name/`;
+  const invalid = `${scope}gcs-line\nbreak.bin`;
+  const path = `/storage/v1/b/example.appspot.com/o/${encodeURIComponent(invalid)}`;
+  const reservations = [];
+  let lists = 0;
+  let listMode = "normal";
+  const sender = createLocalStorageSender({
+    plan: plan(),
+    origin: "http://127.0.0.1:9199",
+    credentials: { admin: "Bearer owner" },
+    fetchImpl: async (href, init) => {
+      const url = new URL(href);
+      if (url.pathname === "/storage/v1/b/example.appspot.com/o" && init.method === "GET") {
+        assert.equal(init.headers.authorization, "Bearer owner");
+        lists++;
+        assert.equal(url.searchParams.get("prefix"), prefix);
+        assert.equal(url.searchParams.get("delimiter"), null);
+        if (listMode === "alias")
+          return Response.json({
+            items: [
+              {
+                bucket: "example.appspot.com",
+                name: `${scope}gcs-line%0Abreak.bin`,
+              },
+            ],
+          });
+        if (lists === 1) return Response.json({ items: [] });
+        if (lists === 2) return Response.json({ items: [], nextPageToken: "opaque" });
+        assert.equal(url.searchParams.get("pageToken"), "opaque");
+        return Response.json({ items: [] });
+      }
+      if (init.method === "POST") return Response.json({ error: "invalid name" }, { status: 400 });
+      return Response.json({ error: "invalid name" }, { status: 400 });
+    },
+    onStart: async () => {},
+    onReserve: async ({ operationId }) => reservations.push(operationId),
+    onJournal: async () => {},
+  });
+  await sender.start();
+  await sender.admitNamespace();
+  sender.admitObject(invalid);
+  await sender.sendStep({
+    id: "upload",
+    dialect: "gcs",
+    method: "POST",
+    objectName: invalid,
+    path: "/upload/storage/v1/b/example.appspot.com/o",
+    query: { name: invalid, uploadType: "media" },
+    headers: { "content-type": "application/octet-stream" },
+    body: { base64: "YQ==" },
+    malformedObjectName: { kind: "linefeed", attemptedName: invalid, scopePrefix: scope },
+  });
+  await assert.rejects(
+    sender.confirmRefusedInvalidName({
+      name: invalid,
+      mutationOperationId: "upload",
+      metadataOperationId: "metadata",
+      mediaOperationId: "media",
+    }),
+    /readback/i,
+  );
+  await sender.sendStep({
+    id: "metadata",
+    dialect: "gcs",
+    method: "GET",
+    objectName: invalid,
+    path,
+    query: {},
+  });
+  await sender.sendStep({
+    id: "media",
+    dialect: "gcs",
+    method: "GET",
+    objectName: invalid,
+    path,
+    query: { alt: "media" },
+  });
+  assert.equal(
+    await sender.confirmRefusedInvalidName({
+      name: invalid,
+      mutationOperationId: "upload",
+      metadataOperationId: "metadata",
+      mediaOperationId: "media",
+    }),
+    "absent-by-run-list",
+  );
+  assert.deepEqual(sender.unresolved(), []);
+  assert.equal(lists, 3);
+  assert.equal(sender.snapshot().total, reservations.length);
+  await assert.rejects(
+    sender.confirmRefusedInvalidName({
+      name: invalid,
+      mutationOperationId: "upload",
+      metadataOperationId: "metadata",
+      mediaOperationId: "media",
+    }),
+    /already|budget/i,
+  );
+  assert.equal(lists, 3);
+  listMode = "alias";
+  const aliasName = `${scope}gcs-other\nname.bin`;
+  const aliasPath = `/storage/v1/b/example.appspot.com/o/${encodeURIComponent(aliasName)}`;
+  sender.admitObject(aliasName);
+  await sender.sendStep({
+    id: "upload-again",
+    dialect: "gcs",
+    method: "POST",
+    objectName: aliasName,
+    path: "/upload/storage/v1/b/example.appspot.com/o",
+    query: { name: aliasName, uploadType: "media" },
+    headers: { "content-type": "application/octet-stream" },
+    body: { base64: "YQ==" },
+    malformedObjectName: { kind: "linefeed", attemptedName: aliasName, scopePrefix: scope },
+  });
+  await sender.sendStep({
+    id: "metadata-again",
+    dialect: "gcs",
+    method: "GET",
+    objectName: aliasName,
+    path: aliasPath,
+    query: {},
+  });
+  await sender.sendStep({
+    id: "media-again",
+    dialect: "gcs",
+    method: "GET",
+    objectName: aliasName,
+    path: aliasPath,
+    query: { alt: "media" },
+  });
+  await assert.rejects(
+    sender.confirmRefusedInvalidName({
+      name: aliasName,
+      mutationOperationId: "upload-again",
+      metadataOperationId: "metadata-again",
+      mediaOperationId: "media-again",
+    }),
+    /unexpected|names/i,
+  );
+  assert.deepEqual(sender.unresolved(), [aliasName]);
+  const another = `${scope}firebase-other\nname.bin`;
+  const anotherPath = `/v0/b/example.appspot.com/o/${encodeURIComponent(another)}`;
+  sender.admitObject(another);
+  await sender.sendStep({
+    id: "wrong-route",
+    dialect: "firebase",
+    method: "POST",
+    objectName: another,
+    path: anotherPath,
+    query: {},
+    body: { base64: "YQ==" },
+    malformedObjectName: { kind: "linefeed", attemptedName: another, scopePrefix: scope },
+  });
+  await sender.sendStep({
+    id: "wrong-route-metadata",
+    dialect: "firebase",
+    method: "GET",
+    objectName: another,
+    path: anotherPath,
+    query: {},
+  });
+  await sender.sendStep({
+    id: "wrong-route-media",
+    dialect: "firebase",
+    method: "GET",
+    objectName: another,
+    path: anotherPath,
+    query: { alt: "media" },
+  });
+  await assert.rejects(
+    sender.confirmRefusedInvalidName({
+      name: another,
+      mutationOperationId: "wrong-route",
+      metadataOperationId: "wrong-route-metadata",
+      mediaOperationId: "wrong-route-media",
+    }),
+    /route|upload/i,
+  );
+});
+
 function fixture() {
   const events = [];
   let fetchCalls = 0;
   const sender = createLocalStorageSender({
     plan: plan(),
     origin: "http://127.0.0.1:9199",
+    credentials: { admin: "Bearer owner" },
     fetchImpl: async (url, init) => {
       fetchCalls++;
       events.push(`fetch:${init.method}:${new URL(url).pathname}`);
@@ -169,6 +351,7 @@ test("a failed journal and an outside-prefix cleanup never reach fetch", async (
   const failing = createLocalStorageSender({
     plan: plan(),
     origin: "http://127.0.0.1:9199",
+    credentials: { admin: "Bearer owner" },
     fetchImpl: async () => {
       calls++;
       return new Response('{"items":[]}', { status: 200 });
@@ -208,6 +391,7 @@ test("a bound upload is deleted only at its owned generation with counted absenc
   const sender = createLocalStorageSender({
     plan: plan(),
     origin: "http://127.0.0.1:9199",
+    credentials: { admin: "Bearer owner" },
     fetchImpl: async (href, init) => {
       fetchCalls++;
       const url = new URL(href);
@@ -368,6 +552,7 @@ test("subject deletion and repeated 404 are bound to complete absence reads", as
   const sender = createLocalStorageSender({
     plan: plan(),
     origin: "http://127.0.0.1:9199",
+    credentials: { admin: "Bearer owner" },
     fetchImpl: async (href, init) => {
       calls++;
       const url = new URL(href);

@@ -1,5 +1,10 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
+import {
+  assertAcceptedNamesListed,
+  assertNameScopePageExhaustion,
+  listedNameScopeEntries,
+} from "./storage-object/name-scope.mjs";
 import { buildCorpus } from "./storage-object/corpus.mjs";
 
 const input = { bucket: "example.firebasestorage.app", prefix: "owned/run-012345/" };
@@ -48,6 +53,44 @@ test("object-name recipe declares owned names and bounded preflight listing", ()
   }
   assert.equal(entry.nameScopePagination.maxPages, 4);
   assert.equal(entry.nameScopePagination.exhaustedOnlyWhenNoNextPageToken, true);
+});
+
+test("the last declared name-scope page cannot leave an unseen continuation", () => {
+  const entry = recipe();
+  const page2 = entry.preflight.find((step) => step.id === "baseline-list-gcs-page-2");
+  const page3 = entry.preflight.find((step) => step.id === "baseline-list-gcs-page-3");
+  assert.doesNotThrow(() =>
+    assertNameScopePageExhaustion(page2, "next", entry.nameScopePagination),
+  );
+  assert.doesNotThrow(() => assertNameScopePageExhaustion(page3, null, entry.nameScopePagination));
+  assert.throws(
+    () => assertNameScopePageExhaustion(page3, "unseen", entry.nameScopePagination),
+    /not exhausted/,
+  );
+});
+
+test("name-scope pages retain exact names and reject missing accepted or alternate objects", () => {
+  const name = `${scope}gcs-line\nbreak.bin`;
+  const encoded = encodeURI(name);
+  const entries = listedNameScopeEntries(
+    { items: [{ name: encoded, bucket: input.bucket }] },
+    { bucket: input.bucket, scopePrefix: scope },
+  );
+  assert.deepEqual(entries.names, [encoded]);
+  assert.doesNotThrow(() => assertAcceptedNamesListed(new Set(entries.names), [name]));
+  assert.throws(() => assertAcceptedNamesListed(new Set(), [name]), /missing/);
+  assert.throws(
+    () => assertAcceptedNamesListed(new Set([encoded, `${scope}alias.bin`]), [name]),
+    /unowned/,
+  );
+  assert.throws(
+    () =>
+      listedNameScopeEntries(
+        { items: [{ name: "outside" }] },
+        { bucket: input.bucket, scopePrefix: scope },
+      ),
+    /invalid object/,
+  );
 });
 
 test("both dialects observe owned linefeed and oversized names without fixed status assumptions", () => {

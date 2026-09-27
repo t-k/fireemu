@@ -197,6 +197,81 @@ export function createRunOwnership({ bucket, prefix } = {}) {
       object.bytesSha256 = null;
       object.previous = null;
     },
+    noteRefusedAbsentFromRunList(name, proof) {
+      checkName(name);
+      const object = objects.get(name);
+      if (
+        !object ||
+        object.state !== "pending" ||
+        object.previous?.state !== "absent" ||
+        proof?.operationId !== object.operationId ||
+        !Number.isInteger(proof.status) ||
+        proof.status < 400 ||
+        proof.status > 499 ||
+        proof.bucket !== bucket ||
+        proof.prefix !== prefix
+      )
+        throw new Error("invalid-name refusal is not bound to an absent owned attempt");
+      if (!Array.isArray(proof.pages) || proof.pages.length === 0 || proof.pages.length > 32)
+        throw new Error("complete run prefix pages are missing or over bound");
+      const listed = new Set();
+      const tokens = new Set();
+      let expectedToken = null;
+      for (const [index, page] of proof.pages.entries()) {
+        if (
+          page?.pageToken !== expectedToken ||
+          !Array.isArray(page.items) ||
+          page.items.length > 1000
+        )
+          throw new Error("run prefix page token or items are invalid");
+        for (const item of page.items) {
+          if (
+            item?.bucket !== bucket ||
+            typeof item.name !== "string" ||
+            !item.name.startsWith(prefix) ||
+            listed.has(item.name)
+          )
+            throw new Error("run prefix has an unexpected or duplicate name");
+          listed.add(item.name);
+        }
+        const next = page.nextPageToken;
+        if (index === proof.pages.length - 1) {
+          if (next !== null) throw new Error("run prefix pages are incomplete");
+        } else {
+          if (
+            typeof next !== "string" ||
+            !next ||
+            Buffer.byteLength(next) > 4096 ||
+            [...next].some((character) => {
+              const code = character.codePointAt(0);
+              return code < 32 || code === 127;
+            }) ||
+            tokens.has(next)
+          )
+            throw new Error("run prefix page token is invalid");
+          tokens.add(next);
+        }
+        expectedToken = next;
+      }
+      const expected = [...objects.entries()]
+        .filter(([, item]) => item.state === "written")
+        .map(([ownedName]) => ownedName);
+      if (
+        [...objects.entries()].some(
+          ([ownedName, item]) =>
+            ownedName !== name && !["absent", "deleted", "written"].includes(item.state),
+        ) ||
+        listed.size !== expected.length ||
+        expected.some((ownedName) => !listed.has(ownedName))
+      )
+        throw new Error("run prefix names differ from confirmed owned names");
+      object.state = "absent";
+      object.operationId = null;
+      object.generation = null;
+      object.bytesSha256 = null;
+      object.previous = null;
+      return true;
+    },
     cleanupRequest(name, current) {
       checkName(name);
       const object = objects.get(name);

@@ -141,11 +141,20 @@ export function createLocalStorageSender({
   const counter = createStage3RequestCounter(plan, { onStart, onReserve });
   let namespaceAdmitted = false;
   let ordinal = 0;
+  let runListProofSerial = 0;
+  const attemptedInvalidProofNames = new Set();
   const observed = new Map();
   const lastMutation = new Map();
   const confirmed = new Map();
   if (credentials === null || typeof credentials !== "object" || Array.isArray(credentials))
     throw new Error("invalid local credentials");
+
+  function adminHeaders() {
+    const authorization = credentials.admin;
+    if (typeof authorization !== "string" || !/^Bearer [^\s]+$/.test(authorization))
+      throw new Error("admin OAuth credential is unresolved");
+    return { authorization };
+  }
 
   async function countedFetch(operationId, path, query, init, beforeFetch = async () => {}) {
     const url = new URL(path, base);
@@ -219,7 +228,7 @@ export function createLocalStorageSender({
         "initial-prefix-list",
         `/storage/v1/b/${bucket}/o`,
         { prefix, maxResults: "1000" },
-        { method: "GET", headers: {} },
+        { method: "GET", headers: adminHeaders() },
       );
       if (response.status !== 200) throw new Error("initial prefix list failed");
       let parsed;
@@ -382,7 +391,7 @@ export function createLocalStorageSender({
         `subject-absence-${ordinal + 1}`,
         `/storage/v1/b/${bucket}/o`,
         { prefix: name, maxResults: "1000" },
-        { method: "GET", headers: {} },
+        { method: "GET", headers: adminHeaders() },
       );
       if (listing.status !== 200) throw new Error("subject absence prefix list failed");
       let parsed;
@@ -407,6 +416,127 @@ export function createLocalStorageSender({
       ownership.noteRefusedAbsent(name, proof);
       return "already-absent";
     },
+    async confirmRefusedInvalidName({
+      name,
+      mutationOperationId,
+      metadataOperationId,
+      mediaOperationId,
+    } = {}) {
+      if (counter.snapshot().mode !== "subject")
+        throw new Error("invalid-name refusal proof requires the subject phase");
+      if (typeof name !== "string" || !name.startsWith(prefix) || name.length === prefix.length)
+        throw new Error("invalid-name target is outside the owned run prefix");
+      const mutation = observed.get(mutationOperationId);
+      const metadata = observed.get(metadataOperationId);
+      const media = observed.get(mediaOperationId);
+      const malformed = mutation?.step.malformedObjectName;
+      const uploadStep = mutation?.step;
+      const uploadPath =
+        uploadStep?.dialect === "firebase"
+          ? `/v0/b/${bucket}/o`
+          : `/upload/storage/v1/b/${bucket}/o`;
+      const uploadQueryKeys =
+        uploadStep?.dialect === "firebase" ? ["name"] : ["name", "uploadType"];
+      if (
+        !mutation ||
+        mutation.step.objectName !== name ||
+        mutation.step.method !== "POST" ||
+        mutation.response.status < 400 ||
+        mutation.response.status > 499 ||
+        mutation.ordinal !== lastMutation.get(name) ||
+        !["firebase", "gcs"].includes(uploadStep.dialect) ||
+        uploadStep.path !== uploadPath ||
+        Object.keys(uploadStep.query).toSorted().join(",") !==
+          uploadQueryKeys.toSorted().join(",") ||
+        uploadStep.query.name !== name ||
+        (uploadStep.dialect === "gcs" && uploadStep.query.uploadType !== "media") ||
+        uploadStep.headers?.["content-type"] !== "application/octet-stream" ||
+        typeof uploadStep.body?.base64 !== "string" ||
+        !malformed ||
+        malformed.attemptedName !== name ||
+        malformed.scopePrefix !== `${prefix}errors/object-name/` ||
+        !name.startsWith(malformed.scopePrefix) ||
+        !["linefeed", "oversized"].includes(malformed.kind) ||
+        (malformed.kind === "linefeed" && !name.includes("\n")) ||
+        (malformed.kind === "oversized" && Buffer.byteLength(name) <= 1024)
+      )
+        throw new Error("invalid-name refusal is not bound to the declared upload route and name");
+      if (
+        !metadata ||
+        !media ||
+        metadata.ordinal <= mutation.ordinal ||
+        media.ordinal <= metadata.ordinal ||
+        metadata.step.objectName !== name ||
+        media.step.objectName !== name ||
+        metadata.step.method !== "GET" ||
+        media.step.method !== "GET" ||
+        Object.keys(metadata.step.query).length !== 0 ||
+        Object.keys(media.step.query).length !== 1 ||
+        media.step.query.alt !== "media" ||
+        Object.keys(media.step.headers ?? {}).some((header) => header.toLowerCase() === "range") ||
+        metadata.response.status < 400 ||
+        metadata.response.status > 499 ||
+        media.response.status < 400 ||
+        media.response.status > 499
+      )
+        throw new Error("fresh invalid-name readbacks are missing");
+      if (attemptedInvalidProofNames.has(name) || attemptedInvalidProofNames.size >= 4)
+        throw new Error("invalid-name proof was already attempted or exceeds its budget");
+      attemptedInvalidProofNames.add(name);
+      const pages = [];
+      const serial = ++runListProofSerial;
+      const seenTokens = new Set();
+      let pageToken = null;
+      for (let pageIndex = 0; pageIndex < 32; pageIndex++) {
+        const response = await countedFetch(
+          `invalid-name-run-list-${serial}-${pageIndex}`,
+          `/storage/v1/b/${bucket}/o`,
+          { prefix, maxResults: "1000", ...(pageToken ? { pageToken } : {}) },
+          { method: "GET", headers: adminHeaders() },
+        );
+        if (response.status !== 200) throw new Error("invalid-name run prefix list failed");
+        let body;
+        try {
+          body = JSON.parse(response.raw.toString("utf8"));
+        } catch {
+          throw new Error("invalid-name run prefix list is not JSON");
+        }
+        if (
+          !body ||
+          typeof body !== "object" ||
+          Array.isArray(body) ||
+          (body.kind !== undefined && body.kind !== "storage#objects") ||
+          (body.items !== undefined && !Array.isArray(body.items)) ||
+          (body.prefixes !== undefined && (!Array.isArray(body.prefixes) || body.prefixes.length))
+        )
+          throw new Error("invalid-name run prefix list is malformed");
+        const next = body.nextPageToken ?? null;
+        if (
+          next !== null &&
+          (typeof next !== "string" ||
+            !next ||
+            Buffer.byteLength(next) > 4096 ||
+            [...next].some((character) => {
+              const code = character.codePointAt(0);
+              return code < 32 || code === 127;
+            }) ||
+            seenTokens.has(next))
+        )
+          throw new Error("invalid-name run prefix list token is invalid");
+        if (next !== null) seenTokens.add(next);
+        pages.push({ pageToken, items: body.items ?? [], nextPageToken: next });
+        if (next === null) break;
+        pageToken = next;
+      }
+      ownership.noteRefusedAbsentFromRunList(name, {
+        operationId: mutationOperationId,
+        status: mutation.response.status,
+        bucket,
+        prefix,
+        pages,
+      });
+      return "absent-by-run-list";
+    },
     async cleanupOwned({ name, metadataOperationId, mediaOperationId, operationId } = {}) {
       if (counter.snapshot().mode !== "cleanup") throw new Error("owned cleanup phase is required");
       const current = ownedReadbacks(name, metadataOperationId, mediaOperationId);
@@ -423,7 +553,7 @@ export function createLocalStorageSender({
         operationId,
         path,
         { ifGenerationMatch: current.generation },
-        { method: "DELETE", headers: {} },
+        { method: "DELETE", headers: adminHeaders() },
         async () => {
           await onJournal({
             bucket,
@@ -441,13 +571,13 @@ export function createLocalStorageSender({
         `${operationId}-metadata-absence`,
         path,
         {},
-        { method: "GET", headers: {} },
+        { method: "GET", headers: adminHeaders() },
       );
       const media = await countedFetch(
         `${operationId}-media-absence`,
         path,
         { alt: "media" },
-        { method: "GET", headers: {} },
+        { method: "GET", headers: adminHeaders() },
       );
       ownership.noteDeleted(name, {
         status: deletion.status,
@@ -463,7 +593,7 @@ export function createLocalStorageSender({
         "final-prefix-list",
         `/storage/v1/b/${bucket}/o`,
         { prefix, maxResults: "1000" },
-        { method: "GET", headers: {} },
+        { method: "GET", headers: adminHeaders() },
       );
       if (response.status !== 200) throw new Error("final prefix list failed");
       let parsed;

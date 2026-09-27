@@ -100,10 +100,14 @@ test("the issuer site holds only the discovery document and public keys", async 
   assert.doesNotMatch(jwks, /"d"\s*:/);
   const hosting = JSON.parse(await readFile(join(dir, "firebase.json"), "utf8")).hosting;
   assert.ok(!hosting.ignore.includes("**/.*"), "dotfiles (.well-known) are published");
-  // Private material is refused before anything is written for it.
-  const privateJwk = { ...key.privateKey.export({ format: "jwk" }), kid: "k1" };
+  // A private JWK is published as its public members only.
+  const privateJwk = { ...key.privateKey.export({ format: "jwk" }), kid: "k2", alg: "RS256", use: "sig" };
+  await writeIssuerSite(dir, { issuer, run: "r2", jwks: [privateJwk] });
+  const published = await readFile(join(dir, "public/oidc/r2/jwks.json"), "utf8");
+  assert.doesNotMatch(published, /"(d|p|q|dp|dq|qi)"\s*:/);
+  // Anything else that looks like private key material is refused.
   await assert.rejects(
-    writeIssuerSite(dir, { issuer, run: "r2", jwks: [{ ...privateJwk, d: privateJwk.d }] }),
+    writeIssuerSite(dir, { issuer: "https://x.web.app/-----BEGIN PRIVATE KEY-----", run: "r3", jwks: [key.jwk] }),
     /refusing to publish private key material/,
   );
 });

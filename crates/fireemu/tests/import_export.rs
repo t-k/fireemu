@@ -2534,6 +2534,126 @@ fn a_failed_export_on_exit_warns_and_preserves_the_command_exit_code() {
 /// Issue strict-multi-tenancy-switch-lost-on-export-import: the project's written config
 /// members, the multi-tenancy switch among them, survive an export and an import, so a tenant
 /// restored by the import is reachable under the strict profile.
+/// Sets the first member named `key` found in `value` (depth first) to `to`.
+fn set_first_key(value: &mut serde_json::Value, key: &str, to: &serde_json::Value) -> bool {
+    match value {
+        serde_json::Value::Object(map) => {
+            if let Some(member) = map.get_mut(key) {
+                *member = to.clone();
+                return true;
+            }
+            map.values_mut().any(|value| set_first_key(value, key, to))
+        }
+        serde_json::Value::Array(items) => {
+            items.iter_mut().any(|value| set_first_key(value, key, to))
+        }
+        _ => false,
+    }
+}
+
+/// The private members behind the Admin config's password policy and sign-up quota, and a
+/// tenant's written members (issue strict-multi-tenancy-switch-lost-on-export-import): the
+/// documents read back after an import exactly as before the export.
+#[test]
+fn private_and_tenant_config_members_survive_the_round_trip() {
+    let dir = scratch("private-config-members-round-trip");
+    let out = dir.join("out");
+    let base = "http://$FIREBASE_AUTH_EMULATOR_HOST/identitytoolkit.googleapis.com";
+    let admin = "-H 'Authorization: Bearer owner' -H 'Content-Type: application/json'";
+    let config = format!("{base}/admin/v2/projects/demo-export/config");
+    let tenants = format!("{base}/v2/projects/demo-export/tenants");
+    let policy = r#"{"passwordPolicyConfig":{"passwordPolicyEnforcementState":"ENFORCE","passwordPolicyVersions":[{"customStrengthOptions":{"minPasswordLength":8,"containsNumericCharacter":false}}]}}"#;
+    let quota = r#"{"quota":{"signUpQuotaConfig":{"quota":"10","startTime":"2026-09-25T00:00:00Z","quotaDuration":"3600s"}}}"#;
+    let tenant_body = r#"{"displayName":"members","monitoring":{"requestLogging":{"enabled":true}},"emailPrivacyConfig":{"enableImprovedEmailPrivacy":false},"client":{"permissions":{"disabledUserSignup":false}}}"#;
+    let write = format!(
+        r#"set -e
+curl -s -X PATCH "{config}?updateMask=multiTenant.allowTenants" {admin} -d '{{"multiTenant":{{"allowTenants":true}}}}' >/dev/null
+curl -s -X PATCH "{config}?updateMask=passwordPolicyConfig" {admin} -d '{policy}' >/dev/null
+curl -s -X PATCH "{config}?updateMask=quota.signUpQuotaConfig" {admin} -d '{quota}' >/dev/null
+tenant=$(curl -s -X POST "{tenants}" {admin} -d '{tenant_body}' | sed -n 's/.*"name":"projects\/demo-export\/tenants\/\([^"]*\)".*/\1/p')
+curl -s -X PATCH "{tenants}/$tenant?updateMask=passwordPolicyConfig" {admin} -d '{policy}' >/dev/null
+echo "TENANT $tenant"
+echo "CONFIG $(curl -s "{config}" {admin})"
+echo "DOC $(curl -s "{tenants}/$tenant" {admin})""#
+    );
+    let output = exec()
+        .args(["--only", "auth", "--export-on-exit"])
+        .arg(&out)
+        .args(["--", "sh", "-c"])
+        .arg(&write)
+        .output()
+        .unwrap();
+    let log = text(&output);
+    assert!(output.status.success(), "{log}");
+    let field = |log: &str, prefix: &str| -> String {
+        log.lines()
+            .find_map(|line| line.strip_prefix(prefix))
+            .unwrap_or_else(|| panic!("{prefix} was printed: {log}"))
+            .to_owned()
+    };
+    let tenant = field(&log, "TENANT ");
+    assert!(!tenant.is_empty(), "the tenant was created: {log}");
+    let before_config: serde_json::Value = serde_json::from_str(&field(&log, "CONFIG ")).unwrap();
+    let before_doc: serde_json::Value = serde_json::from_str(&field(&log, "DOC ")).unwrap();
+    // The written values are part of what must survive.
+    assert!(
+        before_config["passwordPolicyConfig"]["lastUpdateTime"].is_string(),
+        "{before_config}"
+    );
+    assert!(
+        before_config["quota"]["signUpQuotaConfig"].is_object(),
+        "{before_config}"
+    );
+    assert_eq!(
+        before_doc["emailPrivacyConfig"],
+        serde_json::json!({}),
+        "{before_doc}"
+    );
+    assert_eq!(
+        before_doc["monitoring"],
+        serde_json::json!({"requestLogging": {"enabled": true}}),
+        "{before_doc}"
+    );
+
+    let read = format!(
+        r#"echo "CONFIG $(curl -s "{config}" {admin})"; echo "DOC $(curl -s "{tenants}/{tenant}" {admin})""#
+    );
+    let again = exec()
+        .args(["--only", "auth", "--import"])
+        .arg(&out)
+        .args(["--", "sh", "-c"])
+        .arg(&read)
+        .output()
+        .unwrap();
+    let log = text(&again);
+    assert!(again.status.success(), "{log}");
+    let after_config: serde_json::Value = serde_json::from_str(&field(&log, "CONFIG ")).unwrap();
+    let after_doc: serde_json::Value = serde_json::from_str(&field(&log, "DOC ")).unwrap();
+    assert_eq!(after_config, before_config);
+    assert_eq!(after_doc, before_doc);
+
+    // A tenant member no write could have stored refuses the import before startup.
+    let sidecar = out.join("auth_export/fireemu-auth-settings.json");
+    let mut settings: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&sidecar).unwrap()).unwrap();
+    assert!(
+        set_first_key(
+            &mut settings,
+            "tenantClientWritten",
+            &serde_json::json!(false)
+        ),
+        "the tenant's marker was exported: {settings}"
+    );
+    std::fs::write(&sidecar, settings.to_string()).unwrap();
+    let refused = exec()
+        .args(["--only", "auth", "--import"])
+        .arg(&out)
+        .args(["--", "true"])
+        .output()
+        .unwrap();
+    assert_refused(&refused, "auth", "fireemu-auth-settings.json");
+}
+
 #[test]
 fn written_config_members_and_the_tenant_switch_survive_the_round_trip() {
     let dir = scratch("config-members-round-trip");

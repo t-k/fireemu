@@ -206,6 +206,111 @@ impl WrittenMembers {
     }
 }
 
+/// The private markers of a tenant an export carries, with the project's exported private
+/// members ([`project_config::EXPORTED_PRIVATE_MEMBERS`]) a tenant's password policy derives.
+const EXPORTED_MARKERS: &[&str] = &[PRIVACY_WRITTEN, CLIENT_WRITTEN];
+
+/// A tenant's written members, as `(member, JSON text)` in member order, for an export: the
+/// members kept as written, the markers of a written `emailPrivacyConfig` and `client`, and the
+/// password policy's derived members. An import restores them ([`restore_tenant_members`]).
+#[must_use]
+pub fn exportable_tenant_members(members: &StoredConfigMembers) -> Vec<(String, String)> {
+    WRITTEN_MEMBERS
+        .iter()
+        .chain(EXPORTED_MARKERS)
+        .chain(project_config::EXPORTED_PRIVATE_MEMBERS)
+        .filter_map(|member| {
+            members.get(member).map(|text| {
+                (
+                    project_config::exported_name(member).to_owned(),
+                    text.to_owned(),
+                )
+            })
+        })
+        .collect()
+}
+
+/// Installs a tenant's exported members in `store`, the tenant's own and still empty of them.
+/// Each written member is parsed and checked as a tenant write of it is, and installed as that
+/// write installs it (`mfaConfig` and `testPhoneNumbers` also where sign-in reads them); a
+/// marker must be `true` and a derived member a value a write could have stored. `Err` names
+/// the first member refused, before anything is installed.
+pub fn restore_tenant_members(
+    store: &mut AuthStore,
+    members: &[(String, String)],
+) -> Result<(), String> {
+    let PreparedTenantMembers {
+        written,
+        private,
+        refused,
+    } = prepared_tenant_members(members)?;
+    // `apply` refuses before it changes anything.
+    written.apply(store).map_err(|_| refused)?;
+    let mut installed = store.stored_config_members().clone();
+    for (member, value) in private {
+        installed.set(&member, Some(value.to_string()));
+    }
+    store.set_stored_config_members(installed);
+    Ok(())
+}
+
+/// A tenant's exported members, checked and ready to install.
+struct PreparedTenantMembers {
+    written: WrittenMembers,
+    /// The private members, by their stored names.
+    private: Vec<(String, Value)>,
+    /// The refusal naming the first written member, for a store that refuses them.
+    refused: String,
+}
+
+fn prepared_tenant_members(members: &[(String, String)]) -> Result<PreparedTenantMembers, String> {
+    let mut body = Map::new();
+    let mut private = Vec::new();
+    let private_members: Vec<&str> = EXPORTED_MARKERS
+        .iter()
+        .chain(project_config::EXPORTED_PRIVATE_MEMBERS)
+        .copied()
+        .collect();
+    for (name, text) in members {
+        let member = &project_config::stored_name(name, &private_members).to_owned();
+        let is_private = name != member;
+        if body.contains_key(member) || private.iter().any(|(seen, _)| seen == member) {
+            return Err(format!("tenant member {member:?} is repeated"));
+        }
+        let value: Value = serde_json::from_str(text)
+            .map_err(|_| format!("tenant member {member:?} is not JSON"))?;
+        let written = !is_private && WRITTEN_MEMBERS.contains(&member.as_str());
+        let valid = if written {
+            !value.is_null()
+        } else if !is_private {
+            return Err(format!("tenant member {member:?} is not a written member"));
+        } else if EXPORTED_MARKERS.contains(&member.as_str()) {
+            value == Value::Bool(true)
+        } else {
+            project_config::valid_private_member(member, &value)
+        };
+        if !valid {
+            return Err(format!("tenant member {member:?} is not a valid value"));
+        }
+        if written {
+            body.insert(member.clone(), value);
+        } else {
+            private.push((member.clone(), value));
+        }
+    }
+    let first = body.keys().next().cloned().unwrap_or_default();
+    let refused = format!("tenant member {first:?} is not a valid value");
+    let parsed = super::config_proto::parse_tenant_body(&Value::Object(body.clone()))
+        .map_err(|_| refused.clone())?;
+    let written = WrittenMembers::from_body(&parsed, |member| body.contains_key(member))
+        .map_err(|_| refused.clone())?;
+    Ok(PreparedTenantMembers {
+        written,
+        private,
+        refused,
+    })
+}
+
 /// A provider config's members in production's order (`totpProviderConfig`, then `state`).
 fn ordered_member(value: Value) -> Value {
     let Value::Object(mut object) = value else {
@@ -364,7 +469,86 @@ pub(super) fn document(
 
 #[cfg(test)]
 mod tests {
-    use super::valid_display_name;
+    use super::{exportable_tenant_members, restore_tenant_members, valid_display_name};
+    use fireemu_core_auth::mfa::TotpPolicy;
+    use fireemu_core_auth::mfa_config::MfaConfigState;
+    use fireemu_core_auth::store::AuthStore;
+    use fireemu_core_types::determinism::SplitMix64;
+    use serde_json::json;
+
+    fn member(name: &str, value: &serde_json::Value) -> (String, String) {
+        (name.to_owned(), value.to_string())
+    }
+
+    /// Issue strict-multi-tenancy-switch-lost-on-export-import: a tenant's written members.
+    #[test]
+    fn a_tenants_members_restore_as_written_and_install_what_sign_in_reads() {
+        let members = vec![
+            member(
+                "mfaConfig",
+                &json!({"state": "ENABLED", "enabledProviders": ["PHONE_SMS"]}),
+            ),
+            member("testPhoneNumbers", &json!({"+15555550100": "123456"})),
+            member("monitoring", &json!({"requestLogging": {"enabled": true}})),
+            member("tenantEmailPrivacyConfigWritten", &json!(true)),
+            member("tenantClientWritten", &json!(true)),
+            member(
+                "passwordPolicyLastUpdateTime",
+                &json!("2026-09-27T17:26:19.375Z"),
+            ),
+        ];
+        let mut store = AuthStore::new("demo-app", SplitMix64::new(5), TotpPolicy::default());
+        restore_tenant_members(&mut store, &members).expect("valid members restore");
+        assert_eq!(store.mfa_config().state, MfaConfigState::Enabled);
+        assert!(store.mfa_config().phone_sms);
+        assert_eq!(
+            store
+                .sign_in_config()
+                .test_phone_numbers
+                .get("+15555550100")
+                .map(String::as_str),
+            Some("123456")
+        );
+        assert_eq!(
+            store.stored_config_members().get("_tenantClientWritten"),
+            Some("true")
+        );
+        let mut exported = exportable_tenant_members(store.stored_config_members());
+        let mut expected = members.clone();
+        exported.sort();
+        expected.sort();
+        assert_eq!(exported, expected);
+    }
+
+    #[test]
+    fn a_tenant_member_a_write_would_refuse_refuses_the_import() {
+        for members in [
+            vec![member("mfaConfig", &json!({"state": "SOMETIMES"}))],
+            vec![member(
+                "testPhoneNumbers",
+                &json!({"not a number": "123456"}),
+            )],
+            vec![member("mfaConfig", &json!(null))],
+            vec![member("displayName", &json!("atb-x"))],
+            vec![member("_tenantClientWritten", &json!(true))],
+            vec![member("tenantClientWritten", &json!(false))],
+            vec![member("tenantEmailPrivacyConfigWritten", &json!("true"))],
+            vec![member("passwordPolicyLastUpdateTime", &json!("never"))],
+            vec![("monitoring".to_owned(), "not json".to_owned())],
+            vec![
+                member("monitoring", &json!({})),
+                member("monitoring", &json!({})),
+            ],
+        ] {
+            let mut store = AuthStore::new("demo-app", SplitMix64::new(5), TotpPolicy::default());
+            let before = store.stored_config_members().clone();
+            assert!(
+                restore_tenant_members(&mut store, &members).is_err(),
+                "{members:?}"
+            );
+            assert_eq!(store.stored_config_members(), &before, "{members:?}");
+        }
+    }
 
     #[test]
     fn display_names_follow_production_rule() {

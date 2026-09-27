@@ -676,6 +676,11 @@ fn apply_auth(auth: &PreparedAuth, endpoints: &Endpoints) -> Result<(), Artifact
                         )
                     })?;
             }
+            fireemu_adapter_http::identity_toolkit::restore_tenant_members(
+                &mut candidate,
+                &settings.settings.config_members,
+            )
+            .map_err(|error| ArtifactError::new("auth", &settings_path, error))?;
         }
         let fallback = current_tenant_policies
             .get(tenant)
@@ -3356,7 +3361,9 @@ fn export_auth(
                 quota: (tenant_quota != SignupQuotaConfig::default())
                     .then(|| exported_quota_settings(&tenant_quota)),
                 blocking: None,
-                config_members: Vec::new(),
+                config_members: fireemu_adapter_http::identity_toolkit::exportable_tenant_members(
+                    tenant_store.stored_config_members(),
+                ),
             },
             config_is_explicit: tenant_config_override.is_some(),
             metadata: Some(exported_tenant_metadata(tenant_metadata)),

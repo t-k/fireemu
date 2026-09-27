@@ -74,6 +74,7 @@ pub use project_config::{exportable_config_members, restored_config_members};
 mod project_mfa;
 mod tenant_document;
 pub use password_hash::restorable_spec as restorable_imported_hash_spec;
+pub use tenant_document::{exportable_tenant_members, restore_tenant_members};
 mod routes;
 pub mod widget;
 mod widget_templates;

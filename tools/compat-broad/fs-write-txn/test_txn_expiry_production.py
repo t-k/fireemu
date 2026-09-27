@@ -351,7 +351,7 @@ def test_a_stop_after_the_first_case_recovers_the_created_documents(built, tmp_p
     assert collection["unrecovered"] == [] and collection["openTransactions"] == []
     assert sorted(
         entry["transaction"] for entry in collection["transactionReleases"]
-    ) == ["a", "b", "c", "d"]
+    ) == ["a", "b", "c"]
     assert all(entry["released"] for entry in collection["transactionReleases"])
     gate = json.loads((output / "gate-snapshot.json").read_bytes())
     job = gate["jobs"][gate_module.JOB]

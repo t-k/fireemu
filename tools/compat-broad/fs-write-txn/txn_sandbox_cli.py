@@ -34,6 +34,7 @@ SOURCE_FILES = (
     "tools/compat-broad/fs-write-txn/txn_sandbox_management.py",
     "tools/compat-broad/fs-write-txn/txn_sandbox_session.py",
     "tools/compat-broad/fs-write-txn/txn_sandbox_run.py",
+    "tools/compat-broad/fs-write-txn/txn_sandbox_recovery.py",
     "tools/compat-broad/fs-write-txn/txn_sandbox_cli.py",
     "tools/compat-broad/fs-request-bytes-boundary/request_bytes_preflight.py",
     "tools/compat-broad/fs-write-txn/credential_prep.py",

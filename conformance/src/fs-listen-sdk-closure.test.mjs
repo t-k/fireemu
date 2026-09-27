@@ -9,12 +9,14 @@ const required = new Set([
   "query-change-order",
   "reconnect-resume",
   "unsubscribe",
-  "auth-sign-out",
+  "initial-unauthenticated-refusal",
   "default-subscription",
   "cross-principal-rules",
-  "token-revocation",
   "raw-resume-token",
   "browser-tab-lifecycle",
+  "existence-filter-reconnect",
+  "backend-cache-transitions",
+  "native-target-protocol",
   "final-artifact-regression",
   "closure-review",
 ]);
@@ -30,19 +32,32 @@ test("FS-LISTEN-SDK proposal covers its 18-case catalog and leaves unobserved pa
   assert.deepEqual(new Set(closure.conditions.map(({ conditionId }) => conditionId.split("/")[1])), required);
   assert.equal(closure.conditions.length, required.size);
   const actualCases = closure.conditions.flatMap(({ recipeIds }) => recipeIds).filter((id) => /^FS-LISTEN-SDK-\d/.test(id));
-  assert.deepEqual(new Set(actualCases), new Set(catalog.cases.map(({ caseId }) => caseId)));
-  assert.equal(actualCases.length, 18, "each catalog case belongs to one proposed condition");
+  const movedCases = closure.movedCatalogCases.map(({ caseId, movedTo }) => {
+    assert.equal(movedTo, "AUTH-FS-CROSS");
+    return caseId;
+  });
+  assert.deepEqual(new Set([...actualCases, ...movedCases]), new Set(catalog.cases.map(({ caseId }) => caseId)));
+  assert.equal(actualCases.length, 15, "each retained catalog case belongs to one proposed condition");
+  assert.deepEqual(new Set(movedCases), new Set(["FS-LISTEN-SDK-106", "FS-LISTEN-SDK-109", "FS-LISTEN-SDK-109C"]));
   const tab = closure.conditions.find(({ conditionId }) => conditionId === "FS-LISTEN-SDK/browser-tab-lifecycle");
   assert.deepEqual(tab.observation.transports, ["browser-webchannel-long-polling", "browser-webchannel-streaming"]);
   assert.equal(tab.verification.recordingsRequiredPerTransport, 2);
   for (const condition of closure.conditions) {
     assert.ok(condition.source && condition.observation.method);
     assert.ok(condition.verification.requiredEvidence.length);
+    assert.equal(condition.verification.recordingsRequired, condition.status === "PENDING_REVIEW" ? 0 : 2);
     assert.notEqual(condition.status, "VERIFIED");
     assert.equal(condition.localEvidence.productionExecuted, false);
   }
   assert.equal(closure.productionPlan.authorizesProduction, false);
   assert.equal(closure.productionPlan.browserWireBaselineForTwoRecordings, 2776);
   assert.ok(closure.productionPlan.totalWireRequestCapRequired);
-  assert.ok(closure.scopeDecisions.every(({ status }) => status === "PROPOSED"));
+  assert.equal(closure.productionPlan.project, "fireemu-oracle-query");
+  assert.equal(closure.productionPlan.database, "(default)");
+  assert.equal(closure.productionPlan.changesRules, false);
+  assert.equal(closure.profileComparison.profile, "strict");
+  assert.ok(closure.scopeDecisions.every(({ status, decision, decidedBy, decidedOn }) => status === "DECIDED" && decision && decidedBy && decidedOn));
+  assert.match(closure.conditions.find(({ conditionId }) => conditionId.endsWith("/query-change-order")).observation.method, /limitToLast/);
+  assert.match(closure.conditions.find(({ conditionId }) => conditionId.endsWith("/default-subscription")).observation.method, /includeMetadataChanges/);
+  assert.equal(closure.parentStatus === "COMPAT_VERIFIED", closure.conditions.every(({ status }) => status === "VERIFIED") && closure.closureReview.decision === "APPROVED");
 });

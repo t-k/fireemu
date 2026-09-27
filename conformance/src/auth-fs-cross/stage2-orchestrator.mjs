@@ -11,7 +11,7 @@ import { decodeJwt } from "../auth-credential/tokens.mjs";
 import { documentsName, PASSWORD } from "../fs-rules/harness.mjs";
 import { openListen as openListenDefault } from "./listen-grpc.mjs";
 import { WINDOW_MS } from "./programs-stage2.mjs";
-import { spawnSdk } from "./sdk-client.mjs";
+import { DRIVERS, spawnSdk } from "./sdk-client.mjs";
 import { createSession as createSessionDefault, fatal } from "./stage2-session.mjs";
 
 const require = createRequire(import.meta.url);
@@ -421,8 +421,9 @@ export async function runStage2Window(program, ctx, options = {}) {
   const {
     createSession = createSessionDefault,
     spawnClient = (transport, config) => {
-      if (transport !== "node-sdk") throw fatal(`no driver for ${transport}`);
-      return spawnSdk(config, { timeoutMs: 90_000 });
+      const driver = DRIVERS[transport];
+      if (!driver) throw fatal(`no driver for ${transport}`);
+      return spawnSdk(config, { timeoutMs: 90_000, driver });
     },
     openListen = openListenDefault,
     sdkConfig,

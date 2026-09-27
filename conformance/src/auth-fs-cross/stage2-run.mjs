@@ -1,6 +1,11 @@
 // AUTH-FS-CROSS stage-2 runner (the listener and SDK conditions).
 //
-//   node src/auth-fs-cross/stage2-run.mjs local [--smoke [--skip-clients a,b]]
+//   node src/auth-fs-cross/stage2-run.mjs admission          the checks made before any request,
+//                                                         printed; nothing is sent
+//   node src/auth-fs-cross/stage2-run.mjs record-production  one recording (AFC2_RECORDING=1 or 2)
+//                                                         against the idp sandbox, under the
+//                                                         packet's approval (see stage2-record.mjs)
+//   node src/auth-fs-cross/stage2-run.mjs local [--smoke [--with-browser] [--skip-clients a,b]]
 //                                                         run the window against fireemu only
 //
 // A local run keeps production's timeline in real time (decision D3): about 65 minutes. The
@@ -43,10 +48,10 @@ export async function checkedProgram() {
  * waits for the tokens' expiry, and none of the clients named in `skip`. Only for trying the
  * rest locally; its rows are never compared.
  */
-export function smokeProgram(program, skip = []) {
+export function smokeProgram(program, skip = [], { browser = false } = {}) {
   const dropped = new Set([
     ...program.steps
-      .filter((s) => s.do === "client" && s.transport === "browser")
+      .filter((s) => !browser && s.do === "client" && s.transport === "browser")
       .map((s) => s.client),
     ...skip,
   ]);
@@ -55,7 +60,7 @@ export function smokeProgram(program, skip = []) {
   for (const step of program.steps) {
     if (step.do === "expiry-probes" || step.do === "sleep") continue;
     if (dropped.has(step.client)) continue;
-    if (step.id?.startsWith("b-")) continue;
+    if (!browser && step.id?.startsWith("b-")) continue;
     const trimmed = { ...step };
     if (step.observe) trimmed.observe = step.observe.filter(kept);
     if (step.clients) trimmed.clients = step.clients.filter(kept);
@@ -180,6 +185,31 @@ async function main([command, ...args]) {
   switch (command) {
     case "session-local":
       return sessionLocal();
+    case "admission": {
+      const { stage2Admission, runnerLimits } = await import("./stage2-record.mjs");
+      const result = await stage2Admission();
+      console.log(
+        JSON.stringify(
+          {
+            sha: result.sha,
+            harness: result.harness,
+            programDigest: result.programDigest,
+            packetSha256: result.packetSha256,
+            recording: result.recording,
+            runner: result.cost ? runnerLimits(result.cost) : null,
+            problems: result.problems,
+          },
+          null,
+          2,
+        ),
+      );
+      if (result.problems.length) process.exitCode = 1;
+      return undefined;
+    }
+    case "record-production": {
+      const { recordProduction } = await import("./stage2-record.mjs");
+      return recordProduction();
+    }
     case "local": {
       const { program, cost } = await checkedProgram();
       const smoke = args.includes("--smoke");
@@ -192,7 +222,9 @@ async function main([command, ...args]) {
           : [];
       if (skip.length && !smoke) throw new Error("--skip-clients is a smoke option");
       console.log(JSON.stringify({ smoke, skip, cost }));
-      const out = await runLocal(smoke ? smokeProgram(program, skip) : program);
+      const browser = args.includes("--with-browser");
+      if (browser && !smoke) throw new Error("--with-browser is a smoke option");
+      const out = await runLocal(smoke ? smokeProgram(program, skip, { browser }) : program);
       const path = join(RUN_DIR, "rows.json");
       await writeFile(path, JSON.stringify(out, null, 2));
       console.log(JSON.stringify({ rows: Object.keys(out.rows ?? {}).length, path }));

@@ -73,3 +73,21 @@ test("an exit fails every wait, and close kills a driver that does not stop", as
   await other.close();
   assert.deepEqual(stuck.child.killed, ["SIGKILL"]);
 });
+
+test("a client runs the Node driver unless told to run the browser driver", async () => {
+  const { DRIVERS } = await import("./auth-fs-cross/sdk-client.mjs");
+  const seen = [];
+  const spawnImpl = (command, args, options) => {
+    seen.push([args[0], JSON.parse(options.env.AFC_SDK_CONFIG)]);
+    return fakeSpawn().spawnImpl();
+  };
+  spawnSdk({ mode: "local" }, { spawnImpl });
+  spawnSdk({ mode: "local", wireCap: 7 }, { spawnImpl, driver: DRIVERS.browser });
+  assert.deepEqual(
+    seen.map(([driver, config]) => [driver.split("/").at(-1), config.wireCap ?? null]),
+    [
+      ["sdk-driver.mjs", null],
+      ["browser-driver.mjs", 7],
+    ],
+  );
+});

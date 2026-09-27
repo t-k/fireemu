@@ -6,10 +6,17 @@ import { spawn } from "node:child_process";
 import { createInterface } from "node:readline";
 import { fileURLToPath } from "node:url";
 
-const DRIVER = fileURLToPath(new URL("./sdk-driver.mjs", import.meta.url));
+/** The Node driver, and the headless Chromium driver of the same protocol. */
+export const DRIVERS = {
+  "node-sdk": fileURLToPath(new URL("./sdk-driver.mjs", import.meta.url)),
+  browser: fileURLToPath(new URL("./browser-driver.mjs", import.meta.url)),
+};
 
-export function spawnSdk(config, { timeoutMs = 60_000, spawnImpl = spawn } = {}) {
-  const child = spawnImpl(process.execPath, [DRIVER], {
+export function spawnSdk(
+  config,
+  { timeoutMs = 60_000, spawnImpl = spawn, driver = DRIVERS["node-sdk"] } = {},
+) {
+  const child = spawnImpl(process.execPath, [driver], {
     env: { ...process.env, AFC_SDK_CONFIG: JSON.stringify(config) },
     stdio: ["pipe", "pipe", "pipe"],
   });

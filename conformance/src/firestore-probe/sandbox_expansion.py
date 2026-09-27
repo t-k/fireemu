@@ -12,19 +12,35 @@ BATCH_WRITE = f"/v1/{DOCS}:batchWrite"
 BATCH_GET = f"/v1/{DOCS}:batchGet"
 
 
-# (string bytes, relative document-name bytes) for the indexed-string follow-up.
+# (string bytes, relative document-name bytes, last document-ID bytes or None for the even
+# split of `name_of_length`) for the indexed-string follow-up.
 INDEXED_STRING_NAME_POINTS = (
-    (2999, 1142),
-    (2999, 1143),
-    (2999, 1500),
-    (2999, 1800),
-    (2999, 2100),
-    (2999, 2400),
-    (2999, 2606),
-    (2999, 2607),
-    (2000, 2141),
-    (2000, 2142),
+    (2999, 1142, None),
+    (2999, 1143, None),
+    (2999, 1500, None),
+    (2999, 1800, None),
+    (2999, 2100, None),
+    (2999, 2400, None),
+    (2999, 2606, None),
+    (2999, 2607, None),
+    (2000, 2141, None),
+    (2000, 2142, None),
+    # Own name alone refuses this write; own plus parent name would not.
+    (1500, 2642, 1500),
 )
+
+
+def name_with_last_id(target: int, tag: str, last_id_bytes: int) -> str:
+    """`c/<tag padded>/c/<last>`: a two-pair name of exact length with a fixed last ID."""
+    first = target - last_id_bytes - 5
+    if not 1 <= first <= 1500 or not 1 <= last_id_bytes <= 1500:
+        raise ValueError(
+            f"cannot form a {target}-byte name with a {last_id_bytes}-byte last ID"
+        )
+    name = f"c/{tag[:first].ljust(first, 'd')}/c/{'d' * last_id_bytes}"
+    if len(name.encode()) != target:
+        raise ValueError("name fixture length")
+    return name
 
 
 def name_of_length(target: int, tag: str) -> str:
@@ -491,8 +507,14 @@ def build_programs() -> list[dict[str, Any]]:
         )
     # The follow-up to the bracket recording: accepted-side observations for an indexed
     # string longer than 1,500 bytes, in the same shape as the pair above.
-    for string_bytes, name_bytes in INDEXED_STRING_NAME_POINTS:
-        name = f"{DOCS}/{name_of_length(name_bytes, f's{string_bytes}n{name_bytes}')}"
+    for string_bytes, name_bytes, last_id_bytes in INDEXED_STRING_NAME_POINTS:
+        tag = f"s{string_bytes}n{name_bytes}"
+        relative = (
+            name_of_length(name_bytes, tag)
+            if last_id_bytes is None
+            else name_with_last_id(name_bytes, tag, last_id_bytes)
+        )
+        name = f"{DOCS}/{relative}"
         write = _field_update(name, {"s": {"stringValue": "x" * string_bytes}})
         programs.append(
             _commit_program(

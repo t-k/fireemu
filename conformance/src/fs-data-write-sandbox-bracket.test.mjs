@@ -375,7 +375,7 @@ test("a failed or incomplete first attempt stops before the second is sent", asy
   );
 });
 
-test("the follow-up set records five WebChannel sessions and ten indexed strings, twice", async () => {
+test("the follow-up set records five WebChannel sessions and eleven indexed strings, twice", async () => {
   const { RECORDING_SETS } = await import("./fs-data-write-sandbox.mjs");
   const set = RECORDING_SETS.followup;
   const { corpus } = await prepareSandboxCorpus();
@@ -384,24 +384,29 @@ test("the follow-up set records five WebChannel sessions and ten indexed strings
     recordingCorpus.restPrograms.map((program) => program.id).toSorted(),
     [...set.restIds].toSorted(),
   );
-  assert.equal(recordingCorpus.restPrograms.length, 15);
+  assert.equal(recordingCorpus.restPrograms.length, 16);
   assert.deepEqual(recordingCorpus.streamRecipes, []);
-  assert.equal(recordingCorpus.restRequestCount, 40);
+  assert.equal(recordingCorpus.restRequestCount, 42);
   assert.deepEqual(ownedMutationNamesForPrograms(recordingCorpus.restPrograms), [
     ...set.ownedNames,
   ]);
-  assert.equal(set.ownedNames.length, 10);
-  // One typed-missing read before, 40 recipe requests, ten deletes and one typed-missing read.
+  assert.equal(set.ownedNames.length, 11);
+  // One typed-missing read before, 42 recipe requests, 11 deletes and one typed-missing read.
   assert.deepEqual(bracketRequestBound(recordingCorpus, "followup"), {
-    declaredHttp: 40,
+    declaredHttp: 42,
     preflightHttp: 1,
-    cleanupHttp: 11,
-    maxHttpRequests: 52,
+    cleanupHttp: 12,
+    maxHttpRequests: 55,
     maxStreamFrames: 0,
   });
+  // D-2 and D-3 freeze separately, and the groups cover the set exactly once.
+  assert.deepEqual(Object.keys(set.freezeGroups), ["webchannel", "indexed"]);
+  assert.deepEqual(Object.values(set.freezeGroups).flat().toSorted(), [...set.restIds].toSorted());
+  assert.ok(set.freezeGroups.webchannel.every((id) => id.includes("/webchannel-request-bytes/")));
+  assert.deepEqual(Object.keys(RECORDING_SETS.bracket.freezeGroups), ["all"]);
   const plan = productionAdmissionPlan("followup", selectBracketRecipes(corpus, "followup"));
   assert.equal(plan.mode, "followup");
-  assert.equal(plan.attemptEstimateUsd, 0.2);
+  assert.equal(plan.attemptEstimateUsd, 0.1);
   assert.deepEqual(plan.managedNames, [...set.ownedNames]);
   assert.deepEqual(plan.streamIds, []);
   // The two sets never mix.
@@ -415,17 +420,17 @@ test("the child admits the follow-up scope only with its own names and cap", asy
   const env = productionRestEnvironment({
     ...common,
     managedNames: [...set.ownedNames],
-    bracket: { maxHttpRequests: 52, set: "followup" },
+    bracket: { maxHttpRequests: 55, set: "followup" },
   });
   assert.equal(env.FIRESTORE_PROBE_RECORDING_SET, "followup");
-  assert.equal(env.FIRESTORE_PROBE_MAX_REQUESTS, "52");
+  assert.equal(env.FIRESTORE_PROBE_MAX_REQUESTS, "55");
   assert.deepEqual(productionScopeFromEnvironment(env), {
     delta: false,
     partial: false,
     bracket: true,
   });
   for (const change of [
-    { FIRESTORE_PROBE_MAX_REQUESTS: "53" },
+    { FIRESTORE_PROBE_MAX_REQUESTS: "56" },
     { FIRESTORE_PROBE_RECORDING_SET: "bracket" },
     { FIRESTORE_PROBE_RECORDING_SET: "other" },
     { FIRESTORE_PROBE_MANAGED_CLEAR_NAMES: JSON.stringify(BRACKET_OWNED_NAMES) },
@@ -437,7 +442,7 @@ test("the child admits the follow-up scope only with its own names and cap", asy
       productionRestEnvironment({
         ...common,
         managedNames: [...BRACKET_OWNED_NAMES],
-        bracket: { maxHttpRequests: 52, set: "followup" },
+        bracket: { maxHttpRequests: 55, set: "followup" },
       }),
     /managed-clear names/,
   );
@@ -446,8 +451,61 @@ test("the child admits the follow-up scope only with its own names and cap", asy
       productionRestEnvironment({
         ...common,
         managedNames: [...set.ownedNames],
-        bracket: { maxHttpRequests: 53, set: "followup" },
+        bracket: { maxHttpRequests: 56, set: "followup" },
       }),
     /HTTP cap/,
   );
+});
+
+test("the follow-up freezes WebChannel and indexed rows apart, and bracket as one", async () => {
+  const { bracketGroupCorpora, completeBracketGroups } =
+    await import("./fs-data-write-sandbox-run.mjs");
+  const { corpus } = await prepareSandboxCorpus();
+  const followup = selectBracketRecipes(corpus, "followup").recordingCorpus;
+  const groups = bracketGroupCorpora(followup, "followup");
+  assert.deepEqual(
+    groups.map(({ group, corpus: part }) => [
+      group,
+      part.restPrograms.length,
+      part.restRequestCount,
+    ]),
+    [
+      ["webchannel", 5, 20],
+      ["indexed", 11, 22],
+    ],
+  );
+  const bracket = selectBracketRecipes(corpus, "bracket").recordingCorpus;
+  const [all] = bracketGroupCorpora(bracket, "bracket");
+  assert.equal(all.group, "all");
+  assert.deepEqual(all.corpus.streamRecipes, bracket.streamRecipes);
+  assert.equal(all.corpus.restRequestCount, bracket.restRequestCount);
+
+  const answered = (programs) =>
+    Object.fromEntries(
+      programs.map((program) => [
+        program.id,
+        {
+          steps: Object.fromEntries(
+            program.steps.map((step) => [step.id, { status: 200, code: "OK", body: {} }]),
+          ),
+        },
+      ]),
+    );
+  const rest = answered(followup.restPrograms);
+  assert.deepEqual(completeBracketGroups(followup, "followup", rest, {}), [
+    "webchannel",
+    "indexed",
+  ]);
+  const webchannel = "writes/limits/webchannel-request-bytes/16777216";
+  const failed = structuredClone(rest);
+  failed[webchannel].steps.boundary = { status: 0, code: "no-response", message: "timeout" };
+  // A failed WebChannel row keeps the indexed group, which still goes on to the second attempt.
+  assert.deepEqual(completeBracketGroups(followup, "followup", failed, {}), ["indexed"]);
+  const none = structuredClone(failed);
+  none[followup.restPrograms.find((program) => program.id.includes("indexed")).id].steps.write = {
+    status: 0,
+    code: "probe-error",
+    message: "x",
+  };
+  assert.deepEqual(completeBracketGroups(followup, "followup", none, {}), []);
 });

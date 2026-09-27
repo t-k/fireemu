@@ -17,11 +17,15 @@ import { createHash, randomUUID } from "node:crypto";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { credentialMetadata, selectCredential } from "./credentials.mjs";
-import { requireChildProductionAdmission } from "../fs-data-write-admission.mjs";
+import {
+  parseAdmissionEnvironment,
+  requireChildProductionAdmission,
+} from "../fs-data-write-admission.mjs";
 import { recordingSet, padJsonBody, validateSandboxCorpus } from "../fs-data-write-sandbox.mjs";
 import { normalizeRecordedResponse } from "./production-normalization.mjs";
 import { createRequestBudget } from "./request-budget.mjs";
 import {
+  assertNoProxyEnvironment,
   isDroppedConnection,
   makeWebChannelFormBody,
   makeWebChannelHandshakeBody,
@@ -39,6 +43,13 @@ const OUT = process.env.FIRESTORE_PROBE_OUT;
 const META_OUT = process.env.FIRESTORE_PROBE_META_OUT;
 const MAX_REQUESTS = process.env.FIRESTORE_PROBE_MAX_REQUESTS;
 const REQUEST_TIMEOUT_MS = Number(process.env.FIRESTORE_PROBE_TIMEOUT_MS ?? 20_000);
+// A WebChannel measured body of up to 33,554,433 bytes: about 150 s at the upload rate seen on
+// 2026-09-27, so it gets its own timeout. Only a loopback run may shorten it (tests).
+const BOUNDARY_TIMEOUT_MS =
+  /^127\.0\.0\.1:\d+$/.test(process.env.FIRESTORE_PROBE_HOST ?? "") &&
+  process.env.FIRESTORE_PROBE_BOUNDARY_TIMEOUT_MS !== undefined
+    ? Number(process.env.FIRESTORE_PROBE_BOUNDARY_TIMEOUT_MS)
+    : 900_000;
 const MANAGED_CLEAR_JOURNAL =
   process.env.FIRESTORE_PROBE_DELTA_JOURNAL ?? process.env.FIRESTORE_PROBE_MANAGED_CLEAR_JOURNAL;
 const MANAGED_CLEAR_NAMES = process.env.FIRESTORE_PROBE_MANAGED_CLEAR_NAMES;
@@ -1144,6 +1155,13 @@ async function writeDeltaCleanupJournal(status, extra = {}) {
     deletedNames: [...(managedClearState.cleanupDeletedNames ?? [])],
     ...extra,
   });
+}
+
+/** The reviewed admission must name the recording set this child was told to run. */
+export function assertAdmissionNamesRecordingSet(env, setName) {
+  if (parseAdmissionEnvironment(env)?.mode !== setName) {
+    throw new Error("the admission's mode differs from the requested recording set");
+  }
 }
 
 /** The bracket child runs only the fixed bracket recipes. */
@@ -2347,18 +2365,18 @@ async function webchannelSessionStep(spec, raw, init) {
         : makeWebChannelFormBody(spec.webchannelBodyBytes);
   }
   init.redirect = "error";
-  init.signal = AbortSignal.timeout(REQUEST_TIMEOUT_MS);
+  init.signal = AbortSignal.timeout(kind === "boundary" ? BOUNDARY_TIMEOUT_MS : REQUEST_TIMEOUT_MS);
+  const noResponse = {
+    recorded: { status: 0, code: "no-response", message: "no response within the timeout" },
+    raw: null,
+  };
+  const timedOut = (error) => error?.name === "TimeoutError" || error?.name === "AbortError";
   let response;
   try {
     // Resolve the session placeholders last so that no URL rewrite can touch the SID.
     response = await trackedFetch(resolvePath(url(spec.path), raw), init);
   } catch (error) {
-    if (error?.name === "TimeoutError" || error?.name === "AbortError") {
-      return {
-        recorded: { status: 0, code: "no-response", message: "no response within the timeout" },
-        raw: null,
-      };
-    }
+    if (timedOut(error)) return noResponse;
     // Only the measured body may end in a dropped connection that is itself the answer.
     if (kind === "boundary" && isDroppedConnection(error)) {
       return { recorded: projectWebChannelReset("reset-before-response"), raw: null };
@@ -2369,6 +2387,8 @@ async function webchannelSessionStep(spec, raw, init) {
   try {
     text = await response.text();
   } catch (error) {
+    // A timeout while the answer's body arrives is no answer, whatever the step.
+    if (timedOut(error)) return noResponse;
     if (kind === "boundary" && isDroppedConnection(error)) {
       return { recorded: projectWebChannelReset("reset-during-response"), raw: null };
     }
@@ -2784,6 +2804,10 @@ async function main() {
       throw new Error("the bracket child requires its exact scope, names and journal");
     }
     validateBracketCorpus(corpusInput, BRACKET_SET_NAME);
+    if (PRODUCTION) {
+      assertNoProxyEnvironment(process.env);
+      assertAdmissionNamesRecordingSet(process.env, BRACKET_SET_NAME);
+    }
     try {
       await bracketPreflight();
     } finally {

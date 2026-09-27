@@ -20,6 +20,7 @@ import {
   batchGetProvesAbsent,
   runQueryProvesEmpty,
   validateBracketCorpus,
+  assertAdmissionNamesRecordingSet,
 } from "./sandbox-session.mjs";
 
 const prefix = "projects/fireemu-oracle-sbx/databases/(default)/documents/";
@@ -490,4 +491,13 @@ test("the bracket child refuses any corpus but the fixed bracket recipes", async
       }),
     /fixed bracket recipes/,
   );
+});
+
+test("a bracket child runs only the recording set its admission names", () => {
+  const env = (mode) => ({ FIRESTORE_PROBE_ADMISSION: JSON.stringify({ mode }) });
+  assertAdmissionNamesRecordingSet(env("followup"), "followup");
+  assertAdmissionNamesRecordingSet(env("bracket"), "bracket");
+  assert.throws(() => assertAdmissionNamesRecordingSet(env("bracket"), "followup"), /mode/);
+  assert.throws(() => assertAdmissionNamesRecordingSet(env("partial"), "bracket"), /mode/);
+  assert.throws(() => assertAdmissionNamesRecordingSet({}, "bracket"), /mode/);
 });

@@ -165,12 +165,40 @@ export function projectWebChannelReset(phase) {
   return { status: 0, code: "connection-reset", message: phase };
 }
 
+const DROPPED_CONNECTION_CODES = new Set(["ECONNRESET", "EPIPE", "UND_ERR_SOCKET"]);
+
 /**
  * undici reports a dropped connection as `TypeError: fetch failed` before a response and as
- * `TypeError: terminated` while its body is read; nothing else counts as one.
+ * `TypeError: terminated` while its body is read. The same messages also cover a refused
+ * connection, DNS, TLS, redirects and proxies, which are local failures, so only a cause code
+ * of an open socket closed by the peer counts.
  */
 export function isDroppedConnection(error) {
-  return error instanceof TypeError && ["fetch failed", "terminated"].includes(error.message);
+  return (
+    error instanceof TypeError &&
+    ["fetch failed", "terminated"].includes(error.message) &&
+    DROPPED_CONNECTION_CODES.has(error.cause?.code)
+  );
+}
+
+const PROXY_VARIABLES = [
+  "HTTP_PROXY",
+  "HTTPS_PROXY",
+  "ALL_PROXY",
+  "http_proxy",
+  "https_proxy",
+  "all_proxy",
+  "NODE_USE_ENV_PROXY",
+];
+
+/** A proxy would answer for production; a recording refuses to run through one. */
+export function assertNoProxyEnvironment(env) {
+  const set = PROXY_VARIABLES.filter((name) => typeof env[name] === "string" && env[name] !== "");
+  if (set.length > 0) {
+    throw new Error(
+      `a production recording refuses to run with proxy variables: ${set.join(", ")}`,
+    );
+  }
 }
 
 export function makeWebChannelFormBody(targetBytes) {

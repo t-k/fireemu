@@ -460,3 +460,22 @@ def test_indexed_string_name_points_vary_only_the_string_and_the_name_length() -
         assert program["steps"][1]["body"] == {"documents": [update["name"]]}
         names.add(update["name"])
     assert len(names) == len(FOLLOWUP_INDEXED_POINTS)
+
+
+def test_indexed_string_name_separates_own_name_from_own_plus_parent_name() -> None:
+    """1,500-byte string, relative name 2,642 whose last document ID is 1,500 bytes.
+
+    H (own name): 2,659 + 1 + 1,500 = 4,160, refused. G (own plus parent name): the parent
+    `c/<1,137>` is short, so the same write stays under G's threshold and is accepted.
+    """
+    programs = {program["id"]: program for program in _module().build_programs()}
+    program = programs["writes/limits/indexed-string-name/1500/2642"]
+    update = program["steps"][0]["body"]["writes"][0]["update"]
+    relative = update["name"].removeprefix(
+        "projects/fireemu-oracle-sbx/databases/(default)/documents/"
+    )
+    segments = relative.split("/")
+    assert len(relative.encode()) == 2642
+    assert [len(segment) for segment in segments] == [1, 1137, 1, 1500]
+    assert segments[1].startswith("s1500n2642")
+    assert update["fields"] == {"s": {"stringValue": "x" * 1500}}

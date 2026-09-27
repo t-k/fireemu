@@ -241,8 +241,20 @@ test("session steps are recorded by shape, never with the SID or session header"
 test("only undici's dropped-connection errors count as a reset, and only with a known phase", async () => {
   const { isDroppedConnection, projectWebChannelReset } =
     await import("./webchannel-request-bytes.mjs");
-  assert.equal(isDroppedConnection(new TypeError("fetch failed")), true);
-  assert.equal(isDroppedConnection(new TypeError("terminated")), true);
+  const dropped = (message, code) => {
+    const error = new TypeError(message);
+    error.cause = Object.assign(new Error("socket"), { code });
+    return error;
+  };
+  for (const code of ["ECONNRESET", "EPIPE", "UND_ERR_SOCKET"]) {
+    assert.equal(isDroppedConnection(dropped("fetch failed", code)), true, code);
+    assert.equal(isDroppedConnection(dropped("terminated", code)), true, code);
+  }
+  // A local failure has the same message but another cause: never a production answer.
+  for (const code of ["ECONNREFUSED", "ENOTFOUND", "CERT_HAS_EXPIRED", undefined]) {
+    assert.equal(isDroppedConnection(dropped("fetch failed", code)), false, String(code));
+  }
+  assert.equal(isDroppedConnection(new TypeError("fetch failed")), false);
   assert.equal(isDroppedConnection(new Error("fetch failed")), false);
   assert.equal(isDroppedConnection(new Error("request cap reached before network send")), false);
   assert.equal(isDroppedConnection(new TypeError("Invalid URL")), false);
@@ -252,4 +264,21 @@ test("only undici's dropped-connection errors count as a reset, and only with a 
     message: "reset-before-response",
   });
   assert.throws(() => projectWebChannelReset("reset-anywhere"), /reset phase/);
+});
+
+test("a production WebChannel recording refuses to run through a proxy", async () => {
+  const { assertNoProxyEnvironment } = await import("./webchannel-request-bytes.mjs");
+  assert.doesNotThrow(() => assertNoProxyEnvironment({ PATH: "/bin", NO_PROXY: "*" }));
+  for (const name of [
+    "HTTP_PROXY",
+    "HTTPS_PROXY",
+    "ALL_PROXY",
+    "http_proxy",
+    "https_proxy",
+    "all_proxy",
+    "NODE_USE_ENV_PROXY",
+  ]) {
+    assert.throws(() => assertNoProxyEnvironment({ [name]: "http://proxy:3128" }), /proxy/, name);
+  }
+  assert.doesNotThrow(() => assertNoProxyEnvironment({ HTTPS_PROXY: "" }));
 });

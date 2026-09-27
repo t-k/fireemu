@@ -27,6 +27,7 @@ import {
   validateSandboxCorpus,
 } from "./fs-data-write-sandbox.mjs";
 import { validateStreamRecipes } from "./firestore-probe/stream-session.mjs";
+import { assertNoProxyEnvironment } from "./firestore-probe/webchannel-request-bytes.mjs";
 import {
   legacyManagedClearNames,
   managedClearScope,
@@ -2546,6 +2547,44 @@ export function requireBracketArguments(args = []) {
 }
 
 /**
+ * The recording corpus split by its set's freeze groups. A set with one group keeps its gRPC
+ * recipes in that group; a split set carries none.
+ */
+export function bracketGroupCorpora(recordingCorpus, setName) {
+  const groups = Object.entries(recordingSet(setName).freezeGroups);
+  if (groups.length > 1 && recordingCorpus.streamRecipes.length > 0) {
+    throw new Error("a recording set with gRPC recipes freezes as one group");
+  }
+  return groups.map(([group, ids]) => {
+    const wanted = new Set(ids);
+    const restPrograms = recordingCorpus.restPrograms.filter((program) => wanted.has(program.id));
+    return {
+      group,
+      corpus: {
+        ...recordingCorpus,
+        restPrograms,
+        streamRecipes: groups.length === 1 ? recordingCorpus.streamRecipes : [],
+        restRequestCount: restPrograms.reduce((total, program) => total + program.steps.length, 0),
+      },
+    };
+  });
+}
+
+/** The freeze groups a single recording answered completely. */
+export function completeBracketGroups(recordingCorpus, setName, rest, stream) {
+  return bracketGroupCorpora(recordingCorpus, setName)
+    .filter(({ corpus }) => {
+      try {
+        assertCompleteRecording(corpus, rest, stream);
+        return true;
+      } catch {
+        return false;
+      }
+    })
+    .map(({ group }) => group);
+}
+
+/**
  * Record the fixed boundary pairs twice with the same bytes, prove each attempt cleaned its
  * owned names, and freeze a supplement only when both recordings agree row by row.
  */
@@ -2553,6 +2592,7 @@ export async function recordBracketProduction(admissionArgs, mode = "bracket") {
   const set = recordingSet(mode);
   const estimate = set.attemptEstimateUsd;
   const pins = requireBracketArguments(admissionArgs);
+  assertNoProxyEnvironment(process.env);
   const gitCommonDir = (
     await execFileAsync("git", ["rev-parse", "--path-format=absolute", "--git-common-dir"], {
       cwd: ROOT,
@@ -2614,6 +2654,7 @@ export async function recordBracketProduction(admissionArgs, mode = "bracket") {
         throw new Error("the bracket packet changed after admission");
       }
       const recordings = [];
+      let completeGroups = [];
       for (let index = 0; index < 2; index += 1) {
         sent = true;
         const recording = await productionRecording({
@@ -2632,12 +2673,23 @@ export async function recordBracketProduction(admissionArgs, mode = "bracket") {
           streamFrameLimit: bound.maxStreamFrames,
         });
         // The second attempt starts only after the first proved its owned names absent and
-        // answered every step; a failed row would make the freeze refuse both.
+        // answered every step of at least one freeze group; a group with a failed row cannot
+        // be frozen, so the attempt is not repeated for nothing.
         const journal = JSON.parse(await readFile(recording.journal, "utf8"));
         if (journal.status !== "complete" || journal.mode !== "cleanup-bracket") {
           throw new Error("bracket cleanup is unresolved; preserve the lock and journal");
         }
-        assertCompleteRecording(recordingCorpus, recording.rest, recording.stream);
+        if (index === 0) {
+          completeGroups = completeBracketGroups(
+            recordingCorpus,
+            mode,
+            recording.rest,
+            recording.stream,
+          );
+          if (completeGroups.length === 0) {
+            throw new Error("the first attempt answered no freeze group completely; stopping");
+          }
+        }
         recordings.push(recording);
       }
       if (recordings[0].runId === recordings[1].runId) {
@@ -2662,30 +2714,64 @@ export async function recordBracketProduction(admissionArgs, mode = "bracket") {
         )}\n`,
         { mode: 0o600 },
       );
-      const fixture = freezeSandboxFixture({
-        corpus: recordingCorpus,
-        first: recordings[0].rest,
-        second: recordings[1].rest,
-        firstStream: recordings[0].stream,
-        secondStream: recordings[1].stream,
-        recordedAt: recordings.map((recording) => recording.startedAt),
-        harnessRevision: gitSha,
-        sdkVersions: recordingSdkVersions(),
-        credentialToken: recordings[0].token,
-      });
-      const fixtureText = JSON.stringify(fixture);
-      if (recordings.some(({ tokens }) => tokens.some((t) => fixtureText.includes(t)))) {
-        throw new Error("recorded response contains a credential token");
+      const pick = (entries, programs) =>
+        Object.fromEntries(programs.map((program) => [program.id, entries[program.id]]));
+      const outputs = [];
+      const refused = [];
+      for (const { group, corpus: groupCorpus } of bracketGroupCorpora(recordingCorpus, mode)) {
+        if (!completeGroups.includes(group)) {
+          refused.push({ group, reason: "the first attempt did not answer every step" });
+          continue;
+        }
+        let fixture;
+        try {
+          fixture = freezeSandboxFixture({
+            corpus: groupCorpus,
+            first: pick(recordings[0].rest, groupCorpus.restPrograms),
+            second: pick(recordings[1].rest, groupCorpus.restPrograms),
+            firstStream: groupCorpus.streamRecipes.length > 0 ? recordings[0].stream : {},
+            secondStream: groupCorpus.streamRecipes.length > 0 ? recordings[1].stream : {},
+            recordedAt: recordings.map((recording) => recording.startedAt),
+            harnessRevision: gitSha,
+            sdkVersions: recordingSdkVersions(),
+            credentialToken: recordings[0].token,
+          });
+        } catch (error) {
+          refused.push({ group, reason: String(error.message).slice(0, 400) });
+          continue;
+        }
+        const fixtureText = JSON.stringify(fixture);
+        if (recordings.some(({ tokens }) => tokens.some((t) => fixtureText.includes(t)))) {
+          throw new Error("recorded response contains a credential token");
+        }
+        const name =
+          group === "all"
+            ? `${mode}-${admission.nonce}.json`
+            : `${mode}-${admission.nonce}-${group}.json`;
+        const output = join(generatedDir, name);
+        await writeFile(
+          output,
+          `${JSON.stringify({ ...fixture, mode, recipeDigests: supplementRecipeDigests(groupCorpus) }, null, 2)}\n`,
+          { flag: "wx" },
+        );
+        outputs.push({ group, output });
       }
-      const output = join(generatedDir, `${mode}-${admission.nonce}.json`);
+      const summary = {
+        outputs,
+        refused,
+        generatedDir,
+        httpRequests: recordings.map((recording) => recording.requestCount),
+        bounds: bound,
+      };
       await writeFile(
-        output,
-        `${JSON.stringify({ ...fixture, mode, recipeDigests: supplementRecipeDigests(recordingCorpus) }, null, 2)}\n`,
-        { flag: "wx" },
+        join(generatedDir, `${mode}-freeze-summary.json`),
+        `${JSON.stringify(summary, null, 2)}\n`,
+        { mode: 0o600 },
       );
-      process.stdout.write(
-        `${JSON.stringify({ output, generatedDir, httpRequests: recordings.map((recording) => recording.requestCount), bounds: bound })}\n`,
-      );
+      process.stdout.write(`${JSON.stringify(summary)}\n`);
+      if (outputs.length === 0) {
+        throw new Error("no freeze group could be frozen; the recordings stay for review");
+      }
     });
   }
 }

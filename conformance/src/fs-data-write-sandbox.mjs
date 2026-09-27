@@ -87,19 +87,40 @@ export function nameOfLength(target, tag) {
   throw new Error(`cannot form a document name of ${target} bytes`);
 }
 
-/** (string bytes, relative name bytes) of the indexed-string follow-up points. */
+/** `sandbox_expansion.name_with_last_id`: `c/<tag padded>/c/<last>` of exact length. */
+export function nameWithLastId(target, tag, lastIdBytes) {
+  const first = target - lastIdBytes - 5;
+  if (!(first >= 1 && first <= 1500 && lastIdBytes >= 1 && lastIdBytes <= 1500)) {
+    throw new Error(`cannot form a ${target}-byte name with a ${lastIdBytes}-byte last ID`);
+  }
+  return `c/${tag.slice(0, first).padEnd(first, "d")}/c/${"d".repeat(lastIdBytes)}`;
+}
+
+/**
+ * (string bytes, relative name bytes, last document-ID bytes or null for the even split) of
+ * the indexed-string follow-up points. The last one separates a threshold on the document's
+ * own name from one on its own plus its parent's name.
+ */
 export const INDEXED_STRING_NAME_POINTS = Object.freeze([
-  [2999, 1142],
-  [2999, 1143],
-  [2999, 1500],
-  [2999, 1800],
-  [2999, 2100],
-  [2999, 2400],
-  [2999, 2606],
-  [2999, 2607],
-  [2000, 2141],
-  [2000, 2142],
+  [2999, 1142, null],
+  [2999, 1143, null],
+  [2999, 1500, null],
+  [2999, 1800, null],
+  [2999, 2100, null],
+  [2999, 2400, null],
+  [2999, 2606, null],
+  [2999, 2607, null],
+  [2000, 2141, null],
+  [2000, 2142, null],
+  [1500, 2642, 1500],
 ]);
+
+const indexedPointName = ([stringBytes, nameBytes, lastIdBytes]) => {
+  const tag = `s${stringBytes}n${nameBytes}`;
+  return lastIdBytes === null
+    ? nameOfLength(nameBytes, tag)
+    : nameWithLastId(nameBytes, tag, lastIdBytes);
+};
 
 const FOLLOWUP_WEBCHANNEL_SIZES = [12_582_912, 16_777_216, 16_777_217, 33_554_432, 33_554_433];
 
@@ -111,10 +132,14 @@ export const FOLLOWUP_REST_IDS = Object.freeze([
   ),
 ]);
 
+const FOLLOWUP_WEBCHANNEL_IDS = FOLLOWUP_REST_IDS.filter((id) =>
+  id.startsWith("writes/limits/webchannel-request-bytes/"),
+);
+
 export const FOLLOWUP_OWNED_NAMES = Object.freeze(
   INDEXED_STRING_NAME_POINTS.map(
-    ([stringBytes, nameBytes]) =>
-      `projects/fireemu-oracle-sbx/databases/(default)/documents/${nameOfLength(nameBytes, `s${stringBytes}n${nameBytes}`)}`,
+    (point) =>
+      `projects/fireemu-oracle-sbx/databases/(default)/documents/${indexedPointName(point)}`,
   ).toSorted(),
 );
 
@@ -131,15 +156,24 @@ export const RECORDING_SETS = Object.freeze({
     queriedCollection: BRACKET_QUERIED_COLLECTION,
     httpCap: BRACKET_HTTP_CAP,
     attemptEstimateUsd: 0.5,
+    freezeGroups: Object.freeze({ all: BRACKET_REST_IDS }),
   }),
-  // Owner-approved follow-up: US$0.20 per attempt, two attempts within the remaining budget.
+  // Owner-approved follow-up: US$0.10 per attempt, so that it and the bracket recording
+  // (US$1.00) stay within the owner's US$1.20 for the boundary probes.
   followup: Object.freeze({
     restIds: FOLLOWUP_REST_IDS,
     streamIds: Object.freeze([]),
     ownedNames: FOLLOWUP_OWNED_NAMES,
     queriedCollection: null,
-    httpCap: 52,
-    attemptEstimateUsd: 0.2,
+    httpCap: 55,
+    attemptEstimateUsd: 0.1,
+    // A WebChannel front end may answer nondeterministically; the indexed strings freeze apart.
+    freezeGroups: Object.freeze({
+      webchannel: Object.freeze(FOLLOWUP_WEBCHANNEL_IDS),
+      indexed: Object.freeze(
+        FOLLOWUP_REST_IDS.filter((id) => !FOLLOWUP_WEBCHANNEL_IDS.includes(id)),
+      ),
+    }),
   }),
 });
 

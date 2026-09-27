@@ -1,0 +1,6 @@
+{
+  "schemaVersion": 1,
+  "profile": "emulator",
+  "storage": {},
+  "firestore": {}
+}

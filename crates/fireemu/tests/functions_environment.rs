@@ -142,16 +142,16 @@ fn on_request_cors_follows_the_selected_profile_and_explicit_option() {
     write(
         &source,
         "index.js",
-        r#"
+        r"
 const { onRequest } = require('firebase-functions/v2/https');
 const handler = (request, response) => response.json({ method: request.method });
 exports.defaultCors = onRequest(handler);
 exports.disabledCors = onRequest({ cors: false }, handler);
 exports.enabledCors = onRequest({ cors: true }, handler);
-"#,
+",
     );
     let project = "demo-cors-profile";
-    let script = r#"
+    let script = r"
 const assert = require('node:assert/strict');
 (async () => {
   const base = `http://${process.env.FIREEMU_FUNCTIONS_HOST}/demo-cors-profile/us-central1`;
@@ -174,7 +174,7 @@ const assert = require('node:assert/strict');
     assert.deepEqual(await get.json(), { method: 'GET' });
   }
 })().catch(error => { console.error(error); process.exitCode = 1; });
-"#;
+";
     for profile in ["emulator", "strict"] {
         let config = source.join(format!("fireemu-{profile}.json"));
         write(

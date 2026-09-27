@@ -75,25 +75,28 @@ def _ledger_row(pins, attempt_id, run_dir, nonce, outcome, requests):
     }
 
 
-def record_twice(*, ledger_path, private_dir, pins, decisions, now, record_once):
+def record_twice(*, ledger_path, private_dir, pins, decisions, now, record_once, admission_check=None):
     """Run exactly two fresh acquisitions or preserve the lock for review."""
     ledger_path, private_dir = Path(ledger_path), Path(private_dir)
     if not re.fullmatch(r"[A-Za-z0-9_-]{8,100}", pins.get("packetId", "")):
         raise ValueError("bounded packet ID required")
     if not callable(record_once):
         raise ValueError("recording function required")
+    current_now = now if callable(now) else lambda: now
     current_decisions = decisions() if callable(decisions) else decisions
     rows = admission.read_ledger(ledger_path)
-    admission.verify_send_gates(rows, now, current_decisions, pins)
+    admission.verify_send_gates(rows, current_now(), current_decisions, pins)
     _remaining_task_budget(rows, pins["estimatedUsdPerRecording"] * 2)
     private_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
     held = admission.acquire_shared_lock(f"{ledger_path}.lock", pins["packetId"])
     release = False
     try:
         # Recheck after lock acquisition; another lane may have finished since the first read.
+        if admission_check is not None:
+            admission_check()
         current_decisions = decisions() if callable(decisions) else decisions
         rows = admission.read_ledger(ledger_path)
-        admission.verify_send_gates(rows, now, current_decisions, pins)
+        admission.verify_send_gates(rows, current_now(), current_decisions, pins)
         _remaining_task_budget(rows, pins["estimatedUsdPerRecording"] * 2)
         run_dir = private_dir / f"fs-transaction-{secrets.token_hex(8)}"
         run_dir.mkdir(mode=0o700)

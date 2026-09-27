@@ -19,6 +19,10 @@ def test_two_complete_recordings_freeze_under_one_lock(tmp_path):
     ledger.write_text(json.dumps(LAST) + "\n")
     ledger.chmod(0o600)
     calls = []
+    checked = []
+
+    def recheck():
+        checked.append((tmp_path / "sandbox-ledger.jsonl.lock").exists())
 
     def record(index, nonce, owner, directory):
         calls.append((index, nonce, owner, directory))
@@ -33,9 +37,11 @@ def test_two_complete_recordings_freeze_under_one_lock(tmp_path):
         private_dir=tmp_path,
         pins=PINS,
         decisions=DECISION,
-        now=NOW,
+        now=lambda: NOW,
         record_once=record,
+        admission_check=recheck,
     )
+    assert checked == [True]
     assert len(calls) == 2
     assert calls[0][1] != calls[1][1]
     assert calls[0][2] != calls[1][2]

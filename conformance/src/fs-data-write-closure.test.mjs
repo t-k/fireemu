@@ -1190,6 +1190,158 @@ test("recorded conditions contain no changed or unrecorded runnable recipes", as
   assert.deepEqual(failures, []);
 });
 
+/**
+ * The owner approved closing the parent without one condition VERIFIED: the gRPC stream's
+ * request upper bound cannot be observed safely in production (owner-decisions, 2026-09-27).
+ * Such a condition carries its reason and decision, and the closure lists it by name.
+ */
+const APPROVED_KNOWN_DIFFERENCES = new Map([
+  ["FS-LIMIT-API-REQUEST-BYTES/grpc-stream", "2026-09-27 FS-DATA-WRITE gRPC stream upper bound"],
+]);
+
+function isApprovedKnownDifference(closure, condition) {
+  const decision = APPROVED_KNOWN_DIFFERENCES.get(condition.conditionId);
+  const listed = (closure.approvedKnownDifferences ?? []).filter(
+    (entry) => entry.conditionId === condition.conditionId,
+  );
+  return (
+    decision !== undefined &&
+    condition.status === "KNOWN_DIFFERENCE_APPROVED" &&
+    condition.boundaryStatus === "UNOBSERVABLE" &&
+    condition.ownerDecision === decision &&
+    typeof condition.reason === "string" &&
+    condition.reason.length > 0 &&
+    listed.length === 1 &&
+    listed[0].ownerDecision === decision &&
+    listed[0].reason === condition.reason
+  );
+}
+
+test("only the owner-approved unobservable condition may close without VERIFIED", () => {
+  const condition = {
+    conditionId: "FS-LIMIT-API-REQUEST-BYTES/grpc-stream",
+    status: "KNOWN_DIFFERENCE_APPROVED",
+    boundaryStatus: "UNOBSERVABLE",
+    ownerDecision: "2026-09-27 FS-DATA-WRITE gRPC stream upper bound",
+    reason: "the upper bound cannot be observed safely in production",
+  };
+  const closure = {
+    approvedKnownDifferences: [
+      {
+        conditionId: condition.conditionId,
+        ownerDecision: condition.ownerDecision,
+        reason: condition.reason,
+      },
+    ],
+  };
+  assert.equal(isApprovedKnownDifference(closure, condition), true);
+  for (const change of [
+    { conditionId: "FS-LIMIT-API-REQUEST-BYTES/webchannel" },
+    { status: "MISMATCH" },
+    { boundaryStatus: "UNBRACKETED" },
+    { ownerDecision: "2026-09-27 other" },
+    { reason: "" },
+  ]) {
+    assert.equal(isApprovedKnownDifference(closure, { ...condition, ...change }), false);
+  }
+  assert.equal(isApprovedKnownDifference({}, condition), false);
+  assert.equal(
+    isApprovedKnownDifference(
+      { approvedKnownDifferences: [{ ...closure.approvedKnownDifferences[0], reason: "x" }] },
+      condition,
+    ),
+    false,
+  );
+});
+
+const SIZE_REFUSAL = /^Request payload size exceeds the limit: \d+ bytes\.$/;
+
+/**
+ * Boundary evidence is two references in one recipe family. `programId#stepId` names a REST
+ * step, where the accepted side answers below 300 and the refused side 400 or more (or a typed
+ * dropped connection on a WebChannel measured body). `programId#grpc` names a gRPC recording,
+ * where the accepted side passed the size gate (any answer but the size refusal) and the refused
+ * side is production's size refusal.
+ */
+function checkBoundaryEvidence(condition, allPrograms, allStreams) {
+  const id = condition.conditionId;
+  assert.equal(condition.boundaryEvidence?.length, 2, id);
+  const shape = (reference) => reference.split("#")[0].replace(/\/[^/]+$/, "");
+  assert.equal(
+    shape(condition.boundaryEvidence[0]),
+    shape(condition.boundaryEvidence[1]),
+    `${id}: evidence must keep the same recipe family`,
+  );
+  const pair = condition.boundaryEvidence.map((reference) => {
+    const [programId, stepId] = reference.split("#");
+    if (stepId === "grpc") {
+      const status = allStreams[programId]?.status;
+      assert.ok(Number.isInteger(status?.code), `${id}: missing gRPC recording ${reference}`);
+      const refused = status.code === 3 && SIZE_REFUSAL.test(status.details ?? "");
+      return { accepted: !refused, refused, message: status.details };
+    }
+    const step = allPrograms[programId]?.steps[stepId];
+    assert.ok(step, `${id}: missing fixture step ${reference}`);
+    const reset = step.status === 0 && step.code === "connection-reset";
+    return {
+      accepted: step.status >= 200 && step.status < 300,
+      refused: step.status >= 400 || reset,
+      message: step.message,
+    };
+  });
+  if (condition.boundaryStatus === "BRACKETED") {
+    assert.ok(
+      pair.some((step) => step.accepted),
+      `${id}: no accepted side`,
+    );
+    assert.ok(
+      pair.some((step) => step.refused),
+      `${id}: no refused side`,
+    );
+  } else {
+    assert.ok(
+      pair.every((step) => step.refused),
+      id,
+    );
+    assert.notEqual(pair[0].message, pair[1].message, id);
+  }
+}
+
+test("boundary evidence brackets REST steps, gRPC recordings and typed dropped connections", () => {
+  const programs = {
+    "writes/x/1": { steps: { write: { status: 200, code: "OK", body: {} } } },
+    "writes/x/2": { steps: { write: { status: 400, code: "INVALID_ARGUMENT", message: "no" } } },
+    "writes/x/3": {
+      steps: {
+        boundary: { status: 0, code: "connection-reset", message: "reset-before-response" },
+      },
+    },
+    "writes/x/4": {
+      steps: { boundary: { status: 0, code: "probe-error", message: "fetch failed" } },
+    },
+  };
+  const size = "Request payload size exceeds the limit: 11534336 bytes.";
+  const streams = {
+    "writes/g/1": { status: { code: 3, details: "Invalid transaction." } },
+    "writes/g/2": { status: { code: 3, details: size } },
+    "writes/g/3": { status: { code: 3, details: "Invalid transaction." } },
+  };
+  const bracket = (boundaryEvidence) => ({
+    conditionId: "example",
+    boundaryStatus: "BRACKETED",
+    boundaryEvidence,
+  });
+  const check = (condition) => checkBoundaryEvidence(condition, programs, streams);
+  check(bracket(["writes/x/1#write", "writes/x/2#write"]));
+  check(bracket(["writes/x/1#write", "writes/x/3#boundary"]));
+  check(bracket(["writes/g/1#grpc", "writes/g/2#grpc"]));
+  assert.throws(() => check(bracket(["writes/x/1#write", "writes/x/4#boundary"])), /refused/);
+  assert.throws(() => check(bracket(["writes/g/1#grpc", "writes/g/3#grpc"])), /refused/);
+  assert.throws(() => check(bracket(["writes/x/2#write", "writes/g/2#grpc"])), /family/);
+  assert.throws(() => check(bracket(["writes/g/1#grpc", "writes/g/9#grpc"])), /missing gRPC/);
+  assert.throws(() => check(bracket(["writes/x/1#write"])));
+});
+
 test("FS-DATA-WRITE closure inventory cannot silently omit a declared condition", () => {
   const closure = JSON.parse(readFileSync(closurePath, "utf8"));
   const fixture = JSON.parse(readFileSync(fixturePath, "utf8"));
@@ -1197,6 +1349,11 @@ test("FS-DATA-WRITE closure inventory cannot silently omit a declared condition"
     {},
     fixture.programs,
     ...supplements.map(({ fixture: additional }) => additional.programs),
+  );
+  const allStreams = Object.assign(
+    {},
+    fixture.streams,
+    ...supplements.map(({ fixture: additional }) => additional.streams ?? {}),
   );
   assert.equal(closure.parent, "FS-DATA-WRITE");
   const ids = closure.conditions.map(({ conditionId }) => conditionId);
@@ -1216,39 +1373,12 @@ test("FS-DATA-WRITE closure inventory cannot silently omit a declared condition"
         "NOT_APPLICABLE",
         "PENDING_RECORDING",
         "OBSERVED (page size 300)",
+        "UNOBSERVABLE",
       ].includes(condition.boundaryStatus),
       `${condition.conditionId}: missing boundary classification`,
     );
     if (["BRACKETED", "RULE_TRANSITION"].includes(condition.boundaryStatus)) {
-      assert.equal(condition.boundaryEvidence?.length, 2, condition.conditionId);
-      const shape = (reference) => reference.split("#")[0].replace(/\/[^/]+$/, "");
-      assert.equal(
-        shape(condition.boundaryEvidence[0]),
-        shape(condition.boundaryEvidence[1]),
-        `${condition.conditionId}: evidence must keep the same recipe family`,
-      );
-      const pair = condition.boundaryEvidence.map((reference) => {
-        const [programId, stepId] = reference.split("#");
-        const step = allPrograms[programId]?.steps[stepId];
-        assert.ok(step, `${condition.conditionId}: missing fixture step ${reference}`);
-        return step;
-      });
-      if (condition.boundaryStatus === "BRACKETED") {
-        assert.ok(
-          pair.some((step) => step.status < 300),
-          condition.conditionId,
-        );
-        assert.ok(
-          pair.some((step) => step.status >= 400),
-          condition.conditionId,
-        );
-      } else {
-        assert.ok(
-          pair.every((step) => step.status >= 400),
-          condition.conditionId,
-        );
-        assert.notEqual(pair[0].message, pair[1].message, condition.conditionId);
-      }
+      checkBoundaryEvidence(condition, allPrograms, allStreams);
     }
     if (condition.recipeIds.some((recipe) => allPrograms[recipe])) {
       assert.notEqual(condition.status, "PENDING_CORPUS", condition.conditionId);
@@ -1264,6 +1394,7 @@ test("FS-DATA-WRITE closure inventory cannot silently omit a declared condition"
         "DIVERGENCE_APPROVED",
         "PENDING_REVIEW",
         "PENDING_INTEGRATION",
+        "KNOWN_DIFFERENCE_APPROVED",
       ].includes(condition.status),
       `${condition.conditionId}: unknown status`,
     );
@@ -1281,10 +1412,17 @@ test("FS-DATA-WRITE closure inventory cannot silently omit a declared condition"
     "FS-LIMIT-INDEX-ENTRY-BYTES",
     "FS-LIMIT-INDEX-ENTRY-SUM-PER-DOCUMENT",
   ]);
+  for (const condition of closure.conditions) {
+    if (condition.status === "KNOWN_DIFFERENCE_APPROVED") {
+      assert.ok(isApprovedKnownDifference(closure, condition), condition.conditionId);
+    }
+  }
   const allVerified = closure.conditions.every(
-    ({ conditionId, status }) =>
-      status === "VERIFIED" ||
-      (approvedD3Conditions.has(conditionId) && status === "DIVERGENCE_APPROVED"),
+    (condition) =>
+      condition.status === "VERIFIED" ||
+      (approvedD3Conditions.has(condition.conditionId) &&
+        condition.status === "DIVERGENCE_APPROVED") ||
+      isApprovedKnownDifference(closure, condition),
   );
   assert.equal(
     closure.parentStatus === "COMPAT_VERIFIED",

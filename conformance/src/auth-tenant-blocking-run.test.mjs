@@ -839,3 +839,48 @@ test("a stop during the preflight deploys nothing (review S4)", async () => {
   assert.equal(clean.deployed, true);
   assert.equal(clean.cli, "15.28.2");
 });
+
+test("restore-sandbox charges every request to its own budget and records it", async () => {
+  const now = Date.now();
+  const dir = await mkdtemp(join(tmpdir(), "atb-restore-budget-"));
+  const ledger = join(dir, "ledger.jsonl");
+  const started = JSON.stringify({
+    ts: new Date(now - 60_000).toISOString(),
+    project: "fireemu-oracle-idp",
+    taskId: TASK_ID,
+    event: "started",
+  });
+  try {
+    await writeFile(ledger, `${started}\n`, { mode: 0o600 });
+    let sent = 0;
+    const target = { fetch: async () => ((sent += 1), new Response("{}")) };
+    await assert.rejects(
+      restoreSandbox({
+        ledger,
+        isRecordingRunning: async () => false,
+        lockCheck: async () => {},
+        webConfig: async () => ({ projectNumber: "123456789012" }),
+        budgetTotal: 3,
+        fetchTarget: target,
+        context: async () => {
+          for (let i = 0; i < 5; i += 1) await target.fetch("https://example.invalid/");
+        },
+      }),
+      /request budget/,
+    );
+    assert.equal(sent, 3, "the fourth request was refused before it was sent");
+    const lines = (await readFile(ledger, "utf8"))
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line));
+    const terminal = lines.find((line) => line.outcome === "restore-failed");
+    assert.equal(terminal.requests, 3);
+    assert.deepEqual(terminal.budget, { total: 3, cleanupReserve: 0, used: 3, refused: 1 });
+    assert.equal(lines.at(-1).event, "started", "the failed restore keeps the sandbox hold");
+    // The budget is uninstalled: a later request is not charged.
+    await target.fetch("https://example.invalid/");
+    assert.equal(sent, 4);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});

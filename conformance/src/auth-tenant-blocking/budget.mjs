@@ -44,6 +44,13 @@ export const FIXTURE_FUNCTION_COUNT = 4;
 /** A removal deletes at most this many source and upload objects; more are left for a hand check. */
 export const MAX_FIXTURE_OBJECTS = 16;
 /**
+ * The external requests one `restore-sandbox` may send: the fixture removal (REST and its CLI
+ * call), the owner token, the session's cleanup (its own caps are 80 and 200) and the baseline
+ * read-back. Every one is charged before it is sent; past it the restore stops and keeps the
+ * sandbox hold (the recovery envelope names this number).
+ */
+export const RESTORE_REQUEST_BUDGET = 700;
+/**
  * The function listings a removal makes while a fixture function is still `DEPLOYING` (a
  * deployment the CLI's timeout stopped goes on at the server; deleting it then fails, review S6),
  * 30 s apart.

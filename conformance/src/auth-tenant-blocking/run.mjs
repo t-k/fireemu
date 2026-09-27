@@ -54,6 +54,7 @@ import {
   SIGNER_READY_ATTEMPTS,
   withKind,
   OAUTH_ATTEMPT_WEIGHT,
+  RESTORE_REQUEST_BUDGET,
   chargeExternal,
   createRequestBudget,
   installBudget,
@@ -1373,6 +1374,8 @@ export async function restoreSandbox({
   sessionFactory = createSession,
   baselineCheck = prepareProject,
   lockCheck = assertProductionLock,
+  budgetTotal = RESTORE_REQUEST_BUDGET,
+  fetchTarget = globalThis,
 } = {}) {
   if (!ledger) throw new Error("FIREEMU_SANDBOX_LEDGER is required");
   // A restore writes to production as a recording does: only under the reviewed lock (review S3).
@@ -1391,6 +1394,10 @@ export async function restoreSandbox({
     ledger,
     `${JSON.stringify({ ts: new Date().toISOString(), event: "started", taskId: TASK_ID, project: SANDBOX_PROJECT, reason: "restore-sandbox is restoring the sandbox" })}\n`,
   );
+  // Every external request of the restore is charged before it is sent, the fixture's CLI call
+  // its whole allowance (the recovery envelope's request limit).
+  const budget = createRequestBudget({ total: budgetTotal, cleanupReserve: 0 });
+  const uninstall = installBudget(budget, fetchTarget);
   const tokens = [];
   let outcome = "restore-failed";
   let before;
@@ -1455,7 +1462,8 @@ export async function restoreSandbox({
   } catch (caught) {
     error = String(caught?.message ?? caught);
   } finally {
-    requests = session?.counts().harnessRequests ?? 0;
+    uninstall();
+    requests = budget.used();
     const terminal = {
       ts: new Date().toISOString(),
       project: SANDBOX_PROJECT,
@@ -1467,6 +1475,8 @@ export async function restoreSandbox({
       namelessTenants: nameless,
       ...(fixtureRemoved !== undefined ? { fixtureRemoved } : {}),
       requests,
+      requestCountSemantics: REQUEST_COUNT_SEMANTICS,
+      budget: budget.snapshot(),
       ...(error ? { error } : {}),
     };
     // Keep the previous sandbox hold on every failed restore, including failures before a

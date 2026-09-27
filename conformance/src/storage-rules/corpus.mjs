@@ -1,5 +1,6 @@
 import { renderRules } from "./rulesets.mjs";
 import { buildFirestorePrograms, countFirestoreProgramRequests } from "./cross_service.mjs";
+import { buildManagementPrograms } from "./management_programs.mjs";
 
 const RECIPES = [
   "method-grants",
@@ -596,7 +597,8 @@ export function buildCorpus(binding) {
   validateBinding(binding);
   const cases = specifications().map((spec) => materialize(binding, spec));
   const firestorePrograms = buildFirestorePrograms(binding);
-  const declaredRecipes = [...new Set([...cases, ...firestorePrograms].map((c) => c.recipeId))];
+  const managementPrograms = buildManagementPrograms(binding, cases, firestorePrograms);
+  const declaredRecipes = [...new Set([...cases, ...firestorePrograms, ...managementPrograms].map((c) => c.recipeId))];
   return {
     schemaVersion: 1,
     parent: "STORAGE-RULES",
@@ -611,6 +613,7 @@ export function buildCorpus(binding) {
     pendingRecipes: RECIPES.filter((id) => !declaredRecipes.includes(id)),
     cases,
     firestorePrograms,
+    managementPrograms,
   };
 }
 
@@ -641,6 +644,7 @@ export function validateCorpus(corpus, closure) {
   );
   const specs = specifications();
   const byId = new Map(specs.map((s) => [s.id, s]));
+  const expectedCases = specs.map((spec) => materialize(corpus.binding, spec));
   requireValue(
     Array.isArray(corpus.cases) &&
       corpus.cases.length === specs.length &&
@@ -648,7 +652,8 @@ export function validateCorpus(corpus, closure) {
     "missing or duplicate cases",
   );
   const expectedFirestorePrograms = buildFirestorePrograms(corpus.binding);
-  const declared = [...new Set([...specs, ...expectedFirestorePrograms].map((s) => s.recipeId))];
+  const expectedManagementPrograms = buildManagementPrograms(corpus.binding, expectedCases, expectedFirestorePrograms);
+  const declared = [...new Set([...specs, ...expectedFirestorePrograms, ...expectedManagementPrograms].map((s) => s.recipeId))];
   requireValue(
     equal(corpus.declaredRecipes, declared) &&
       equal(
@@ -705,6 +710,7 @@ export function validateCorpus(corpus, closure) {
     "missing Firestore programs",
   );
   requireExactData(corpus.firestorePrograms, expectedFirestorePrograms, "firestorePrograms");
+  requireExactData(corpus.managementPrograms, expectedManagementPrograms, "managementPrograms");
   const crossServiceRequests = countFirestoreProgramRequests(expectedFirestorePrograms);
   requests += crossServiceRequests.storage;
   requireExactData(corpus, buildCorpus(corpus.binding), "corpus");
@@ -713,6 +719,7 @@ export function validateCorpus(corpus, closure) {
     declaredRecipes: declared.length,
     pendingRecipes: RECIPES.length - declared.length,
     firestorePrograms: expectedFirestorePrograms.length,
+    managementPrograms: expectedManagementPrograms.length,
     declaredObjectRequestsPerRecording: requests,
     declaredFirestoreRequestsPerRecording: crossServiceRequests.firestore,
     includesReleaseAuthOrRecoveryBudget: false,

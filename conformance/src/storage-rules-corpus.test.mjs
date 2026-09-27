@@ -20,9 +20,10 @@ test("partial declaration preserves every frozen behavior recipe without claimin
   const corpus = build();
   const result = validateCorpus(corpus, closure);
   assert.equal(result.cases, 344);
-  assert.equal(result.declaredRecipes, 19);
-  assert.equal(result.pendingRecipes, 3);
+  assert.equal(result.declaredRecipes, 22);
+  assert.equal(result.pendingRecipes, 0);
   assert.equal(result.firestorePrograms, 5);
+  assert.equal(result.managementPrograms, 3);
   assert.equal(result.declaredObjectRequestsPerRecording, 3883);
   assert.equal(result.declaredFirestoreRequestsPerRecording, 60);
   assert.equal(corpus.productionRecordingsRequired, 2);
@@ -33,6 +34,98 @@ test("partial declaration preserves every frozen behavior recipe without claimin
     .filter((id) => !["storage-rules/final-artifact", "storage-rules/closure-review"].includes(id));
   assert.deepEqual(new Set([...corpus.declaredRecipes, ...corpus.pendingRecipes]), new Set(ids));
   assert.deepEqual(build(), corpus);
+});
+
+test("Storage compile declaration retains every distinct Rules source and the invalid control", () => {
+  const corpus = build();
+  const program = corpus.managementPrograms.find((entry) => entry.id === "storage-service-compile");
+  const switched = corpus.managementPrograms.find((entry) => entry.id === "release-switch");
+  assert.equal(program.recipeId, "storage-rules/storage-service-compile");
+  assert.equal(program.sendAuthorized, false);
+  assert.equal(program.observationStatus, "PENDING_PRODUCTION");
+  assert.equal(program.releaseName, `projects/fireemu-oracle-query/releases/firebase.storage/${input.bucket}`);
+  const referenced = [
+    ...[...corpus.cases, ...corpus.firestorePrograms].map((entry) => entry.rulesSource),
+    switched.sourceA,
+    switched.sourceB,
+  ];
+  assert.equal(program.validSources.length, referenced.length);
+  assert.deepEqual(new Set(program.validSources.map((entry) => entry.content)), new Set(referenced));
+  assert.equal(new Set(program.validSources.map((entry) => entry.sha256)).size, referenced.length);
+  assert.ok(program.validSources.every((entry) => entry.content.includes("service firebase.storage")));
+  assert.ok(program.invalidSource.content.includes("allow get: if ;"));
+  assert.ok(!referenced.includes(program.invalidSource.content));
+  assert.deepEqual(program.validSequence.map((step) => step.id), [
+    "release-before",
+    "create-ruleset",
+    "read-source",
+    "delete-unreleased-ruleset",
+    "confirm-ruleset-absent",
+    "release-after",
+  ]);
+  assert.ok(program.validSequence.every((step) => step.service === "firebase-rules"));
+  assert.equal(program.invalidSequence.at(-1).id, "release-after-invalid");
+  assert.equal(program.invalidSequence[1].id, "create-invalid-ruleset");
+  assert.ok(program.invalidSequence.some((step) => step.id === "delete-if-unexpectedly-created"));
+  assert.equal(Object.hasOwn(program, "expectedStatus"), false);
+});
+
+test("release switch declares two opposite decisions and verified absence restoration", () => {
+  const program = build().managementPrograms.find((entry) => entry.id === "release-switch");
+  assert.equal(program.recipeId, "storage-rules/release-switch");
+  assert.equal(program.expectedBaseline, "bucket-specific-and-bucketless-release-absent");
+  assert.ok(program.objectA.startsWith(input.prefix));
+  assert.ok(program.objectB.startsWith(input.prefix));
+  assert.notEqual(program.objectA, program.objectB);
+  assert.match(program.sourceA, /service firebase\.storage/);
+  assert.match(program.sourceB, /service firebase\.storage/);
+  assert.ok(program.sourceA.includes(program.objectA));
+  assert.ok(program.sourceB.includes(program.objectB));
+  assert.ok(!program.sourceA.includes(program.objectB));
+  assert.ok(!program.sourceB.includes(program.objectA));
+  assert.deepEqual(program.decisionOrder, [
+    { release: "A", object: "A", role: "old-allow" },
+    { release: "A", object: "B", role: "new-not-yet-allow" },
+    { release: "B", object: "A", role: "old-no-longer-allow" },
+    { release: "B", object: "B", role: "new-allow" },
+  ]);
+  assert.deepEqual(program.restore, ["delete-owned-release", "confirm-release-absent", "confirm-bucketless-absent", "delete-unreferenced-rulesets", "confirm-rulesets-absent", "owned-object-cleanup"]);
+  assert.equal(program.sendAuthorized, false);
+  assert.equal(Object.hasOwn(program, "expectedStatus"), false);
+});
+
+test("no-release declaration pairs Firebase refusal with Admin readback and owned cleanup", () => {
+  const program = build().managementPrograms.find((entry) => entry.id === "no-release");
+  assert.equal(program.recipeId, "storage-rules/no-release");
+  assert.equal(program.expectedBaseline, "bucket-specific-and-bucketless-release-absent");
+  assert.ok(program.objectName.startsWith(input.prefix));
+  assert.deepEqual(program.stepOrder, [
+    "confirm-releases-absent",
+    "confirm-object-absent",
+    "admin-seed",
+    "admin-read-before",
+    "firebase-get-without-release",
+    "admin-read-after",
+    "owned-admin-delete",
+    "confirm-object-absent-after",
+    "confirm-releases-still-absent",
+  ]);
+  assert.equal(program.sendAuthorized, false);
+  assert.equal(Object.hasOwn(program, "expectedStatus"), false);
+});
+
+test("management declarations reject missing sources or changed restoration claims", () => {
+  const mutations = [
+    (corpus) => corpus.managementPrograms[0].validSources.pop(),
+    (corpus) => (corpus.managementPrograms[0].invalidSource.content = "allow get: if true;"),
+    (corpus) => (corpus.managementPrograms[1].restore[1] = "skip-readback"),
+    (corpus) => (corpus.managementPrograms[2].stepOrder[4] = "admin-get"),
+  ];
+  for (const mutate of mutations) {
+    const corpus = build();
+    mutate(corpus);
+    assert.throws(() => validateCorpus(corpus, closure));
+  }
 });
 
 test("Firestore cross-service programs cover document transitions and distinct access budgets", () => {
@@ -881,7 +974,7 @@ test("denial and bypass controls preserve raw observations under the same deny r
 test("declaration guards reject loss of recipes/cases, unsafe requests and changed rules", () => {
   const changes = [
     (c) => c.cases.pop(),
-    (c) => c.pendingRecipes.pop(),
+    (c) => c.pendingRecipes.push("storage-rules/unreviewed"),
     (c) => c.cases.push(structuredClone(c.cases[0])),
     (c) => {
       c.cases[0].subject.path = "https://example.com/";

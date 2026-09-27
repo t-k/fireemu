@@ -5721,6 +5721,9 @@ pub struct AuthRegistry {
     /// Non-password settings changed through the tenant management API. These are scoped to the
     /// current tenant lifetime and are discarded when that tenant is deleted.
     tenant_runtime_config_overrides: Mutex<BTreeMap<TenantKey, AuthNamespaceConfigPatch>>,
+    /// Tenants deleted in this run: production answers requests naming them `TENANT_DELETED`
+    /// rather than as unknown ids (AUTH-TENANT-BLOCKING recording 2026-09-27, deletion program).
+    deleted_tenants: Mutex<BTreeSet<TenantKey>>,
     operation_gates: Mutex<BTreeMap<TenantKey, Weak<Mutex<()>>>>,
     membership_generation: AtomicU64,
     lifecycle_incarnation: Option<u128>,
@@ -5924,6 +5927,7 @@ impl AuthRegistry {
             password_policy_overrides: Mutex::new(BTreeMap::new()),
             tenant_config_overrides: Mutex::new(BTreeMap::new()),
             tenant_runtime_config_overrides: Mutex::new(BTreeMap::new()),
+            deleted_tenants: Mutex::new(BTreeSet::new()),
             operation_gates: Mutex::new(BTreeMap::new()),
             membership_generation: AtomicU64::new(0),
             lifecycle_incarnation: None,
@@ -8558,8 +8562,32 @@ impl AuthRegistry {
         }
         if removed == Some(true) {
             self.membership_generation.fetch_add(1, Ordering::Release);
+            if let Ok(mut deleted) = self.deleted_tenants.lock() {
+                deleted.insert(key);
+            }
         }
         removed.unwrap_or(false)
+    }
+
+    /// Whether `tenant` of `project` was deleted in this run (and is not live).
+    #[must_use]
+    pub fn tenant_deleted(&self, project: &str, tenant: &str) -> bool {
+        let key = (project.to_owned(), tenant.to_owned());
+        self.deleted_tenants
+            .lock()
+            .is_ok_and(|deleted| deleted.contains(&key))
+            && self
+                .tenants
+                .lock()
+                .is_ok_and(|tenants| !tenants.contains_key(&key))
+    }
+
+    /// The `(project, tenant)` a refresh token this version issued names, when it names a
+    /// tenant.
+    #[must_use]
+    pub fn refresh_token_tenant(token: &str) -> Option<(String, String)> {
+        let (project, tenant) = refresh_token_namespace(token)?;
+        Some((project.to_owned(), tenant?.to_owned()))
     }
 
     /// The first store (the default first, then the registered ones in name order) that
@@ -9725,6 +9753,33 @@ mod compatibility_routing_tests {
             metadata.enable_improved_email_privacy,
             runtime.enable_improved_email_privacy
         );
+    }
+
+    /// A deleted tenant is remembered as deleted, not unknown, until one with its id is live
+    /// again (AUTH-TENANT-BLOCKING recording 2026-09-27, deletion program).
+    #[test]
+    fn a_deleted_tenant_is_told_from_an_unknown_one() {
+        let registry = AuthRegistry::new("demo-app", store("demo-app", 1));
+        registry.ensure_tenant("demo-app", "gone").unwrap();
+        registry.ensure_tenant("demo-app", "kept").unwrap();
+        assert!(!registry.tenant_deleted("demo-app", "gone"));
+        assert!(registry.delete_tenant("demo-app", "gone"));
+        assert!(registry.tenant_deleted("demo-app", "gone"));
+        assert!(!registry.tenant_deleted("demo-app", "kept"));
+        assert!(!registry.tenant_deleted("demo-app", "never"));
+        assert!(!registry.tenant_deleted("other-app", "gone"));
+        registry.ensure_tenant("demo-app", "gone").unwrap();
+        assert!(!registry.tenant_deleted("demo-app", "gone"));
+    }
+
+    #[test]
+    fn a_refresh_token_names_its_tenant() {
+        assert_eq!(
+            AuthRegistry::refresh_token_tenant("rt1.8.4.demo-appabcd.entropy"),
+            Some(("demo-app".to_owned(), "abcd".to_owned()))
+        );
+        assert_eq!(AuthRegistry::refresh_token_tenant("rt1.8.0.demo-app.entropy"), None);
+        assert_eq!(AuthRegistry::refresh_token_tenant("opaque"), None);
     }
 
     /// The settings a create writes are the tenant's own: a later project update reapplies them,

@@ -2810,6 +2810,126 @@ fn management_answer(
     response
 }
 
+/// The tenant an account or Secure Token request names, read as production reads it (strict
+/// profile; AUTH-TENANT-BLOCKING recording 2026-09-27, selection, deletion and switch-off
+/// programs):
+///
+/// - a `tenantId` that is not a string is `INVALID_TENANT_ID`, and `""` names the project;
+/// - an ID token of another tenant than the one named is `TENANT_ID_MISMATCH`, before the
+///   named tenant's existence is checked; a tenant ID token without a `tenantId` names its own
+///   tenant;
+/// - a tenant that does not exist is `INVALID_TENANT_ID`, or `TENANT_DELETED` when it was
+///   deleted in this run (a refresh token of a deleted tenant too, in the Secure Token's shape).
+///
+/// `Ok(Some(body))` is the body the request continues with.
+fn strict_named_tenant(
+    state: &AuthState,
+    path: &str,
+    query: Option<&str>,
+    body: &Value,
+) -> Result<Option<Value>, JsonResponse> {
+    const MISMATCH: &str = "TENANT_ID_MISMATCH : Specified tenant ID mismatches with the ID token.";
+    if state.stateless_refresh_tokens {
+        return Ok(None);
+    }
+    let Some(registry) = state.registry.as_ref() else {
+        return Ok(None);
+    };
+    // The Admin query (`accounts:query`, `:queryAccounts`) reads its tenant from the body with
+    // rules of its own; production's answer to an unknown one there was not recorded, so it
+    // keeps fireemu's.
+    let account_api = path.starts_with("/identitytoolkit.googleapis.com/v1/")
+        && !path.ends_with(":queryAccounts")
+        && !path.ends_with("/accounts:query");
+    let secure_token = path.starts_with("/securetoken.googleapis.com/");
+    if !account_api && !secure_token {
+        return Ok(None);
+    }
+    let scoped = routes::scoped_target(path);
+    // A client call's project is its API key's, when a project owns the key.
+    let key_project = query_selectors(query)
+        .ok()
+        .and_then(|(key, _)| key)
+        .and_then(|key| {
+            let tenancy = state.tenancy.as_ref()?.read().ok()?;
+            tenancy.project_of_api_key(&key).map(str::to_owned)
+        });
+    let project = match (scoped, key_project) {
+        (Some((project, _)), _) => project.to_owned(),
+        (None, Some(project)) => project,
+        (None, None) => match state.store.lock() {
+            Ok(store) => store.project_id().to_owned(),
+            Err(_) => return Err(error(500, "INTERNAL")),
+        },
+    };
+    let missing = |tenant: &str, v2: bool| {
+        let message = if registry.tenant_deleted(&project, tenant) {
+            "TENANT_DELETED"
+        } else {
+            "INVALID_TENANT_ID"
+        };
+        let refused = error(400, message);
+        if v2 {
+            secure_token_error_shape(refused)
+        } else {
+            refused
+        }
+    };
+    if secure_token {
+        if let Some((token_project, tenant)) = str_field(body, "refresh_token")
+            .and_then(fireemu_core_auth::store::AuthRegistry::refresh_token_tenant)
+        {
+            if token_project == project && registry.tenant_store(&project, &tenant).is_none() {
+                return Err(missing(&tenant, true));
+            }
+        }
+        return Ok(None);
+    }
+    let mut rewritten = None;
+    let mut named = scoped.and_then(|(_, tenant)| tenant).map(str::to_owned);
+    match body.get("tenantId") {
+        None | Some(Value::Null) => {}
+        Some(Value::String(tenant)) if tenant.is_empty() => {
+            let mut without = body.clone();
+            if let Some(object) = without.as_object_mut() {
+                object.remove("tenantId");
+            }
+            rewritten = Some(without);
+        }
+        Some(Value::String(tenant)) => named = Some(tenant.clone()),
+        Some(_) => return Err(error(400, "INVALID_TENANT_ID")),
+    }
+    let token_tenant = str_field(body, "idToken").and_then(|token| {
+        let signer = state.store.lock().ok().and_then(|s| s.signer_arc());
+        let decoded = fireemu_core_auth::jwt::decode_token(token, signer.as_deref()).ok()?;
+        decoded
+            .payload
+            .get("firebase")
+            .and_then(|firebase| firebase.get("tenant"))
+            .and_then(fireemu_core_types::json::JsonValue::as_str)
+            .map(str::to_owned)
+    });
+    match (&named, &token_tenant) {
+        (Some(named), Some(token)) if named != token => return Err(error(400, MISMATCH)),
+        (None, Some(token)) if scoped.is_none() => {
+            // A client call with a tenant's ID token and no tenantId is in that tenant.
+            let mut with_tenant = rewritten.take().unwrap_or_else(|| body.clone());
+            if let Some(object) = with_tenant.as_object_mut() {
+                object.insert("tenantId".to_owned(), json!(token));
+            }
+            rewritten = Some(with_tenant);
+            named = Some(token.clone());
+        }
+        _ => {}
+    }
+    if let Some(named) = named {
+        if registry.tenant_store(&project, &named).is_none() {
+            return Err(missing(&named, false));
+        }
+    }
+    Ok(rewritten)
+}
+
 /// An error in the Admin v2 shape: `code`, `message` and the canonical `status`, no `errors`.
 fn v2_error(mut response: JsonResponse) -> JsonResponse {
     let status = match response.status {
@@ -2866,6 +2986,16 @@ fn handle_with_policy_inner(
     if let Err(response) = declared_api_key_check(state, path, query) {
         return response;
     }
+    // Production's reading of the tenant a request names (strict profile).
+    let named_tenant_body;
+    let body = match strict_named_tenant(state, path, query, body) {
+        Ok(Some(rewritten)) => {
+            named_tenant_body = rewritten;
+            &named_tenant_body
+        }
+        Ok(None) => body,
+        Err(response) => return response,
+    };
     let emulator_clear = matches!(
         resolution,
         routes::Resolution::Matched {

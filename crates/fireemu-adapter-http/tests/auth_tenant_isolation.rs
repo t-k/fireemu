@@ -374,7 +374,13 @@ fn a_tenant_id_token_is_refused_on_every_other_tenant_route_without_mutation() {
                 // The class depends on which selector picked the store: the API key routes
                 // the request into tenant B, whose verifier rejects the tenant-A token; the
                 // bare body or query tenant is compared with the token's tenant first.
+                // Strict answers a v1 account call as production does: the token's tenant is
+                // compared with the named one first (AUTH-TENANT-BLOCKING recording 2026-09-27,
+                // selection#lookup-tenant-b).
                 let expected = match selector {
+                    Selector::KeyAndBody if profile == "strict" && route.contains("/v1/") => {
+                        "TENANT_ID_MISMATCH"
+                    }
                     Selector::KeyAndBody => "INVALID_ID_TOKEN",
                     Selector::BodyOnly | Selector::QueryOnly => "TENANT_ID_MISMATCH",
                 };
@@ -1755,8 +1761,15 @@ fn deleting_a_tenant_invalidates_its_credentials_and_leaves_the_sibling_and_proj
             &tenant_admin_path(TENANT_A, "accounts:batchGet?maxResults=1000"),
             &json!({}),
         );
-        assert_eq!(status, 404, "{profile}: {missing}");
-        assert_eq!(class(&missing), "TENANT_NOT_FOUND");
+        // Strict answers an account call on a deleted tenant as production does
+        // (deletion#admin-lookup-after-delete).
+        if profile == "strict" {
+            assert_eq!(status, 400, "{profile}: {missing}");
+            assert_eq!(class(&missing), "TENANT_DELETED");
+        } else {
+            assert_eq!(status, 404, "{profile}: {missing}");
+            assert_eq!(class(&missing), "TENANT_NOT_FOUND");
+        }
 
         // Issued credentials of the deleted tenant no longer authenticate anywhere. The
         // class depends on the selector: the API key resolves the named tenant and finds
@@ -1790,6 +1803,14 @@ fn deleting_a_tenant_invalidates_its_credentials_and_leaves_the_sibling_and_proj
         .into_iter()
         .filter(|row| Selector::admitted(&state).contains(&row.0))
         {
+            // Strict answers a deleted tenant as production does (AUTH-TENANT-BLOCKING
+            // recording 2026-09-27, deletion#lookup-after-delete, refresh-after-delete).
+            let (lookup_status, lookup_class, refresh_status, refresh_class) =
+                if profile == "strict" {
+                    (400, "TENANT_DELETED", 400, "TENANT_DELETED")
+                } else {
+                    (lookup_status, lookup_class, refresh_status, refresh_class)
+                };
             let (status, refused) = selector.request(
                 &state,
                 &format!("{V1}/accounts:lookup"),
@@ -1828,8 +1849,17 @@ fn deleting_a_tenant_invalidates_its_credentials_and_leaves_the_sibling_and_proj
             &format!("{V1}/accounts:lookup?key={KEY}"),
             &json!({"idToken": token_a}),
         );
+        let strict = profile == "strict";
         assert_eq!(status, 400, "{profile}: {refused}");
-        assert_eq!(class(&refused), "INVALID_ID_TOKEN", "{profile}: {refused}");
+        assert_eq!(
+            class(&refused),
+            if strict {
+                "TENANT_DELETED"
+            } else {
+                "INVALID_ID_TOKEN"
+            },
+            "{profile}: {refused}"
+        );
         let (status, refused) = post(
             &state,
             &format!("{SECURE_TOKEN}?key={KEY}"),
@@ -1838,7 +1868,11 @@ fn deleting_a_tenant_invalidates_its_credentials_and_leaves_the_sibling_and_proj
         assert_eq!(status, 400, "{profile}: {refused}");
         assert_eq!(
             class(&refused),
-            "INVALID_REFRESH_TOKEN",
+            if strict {
+                "TENANT_DELETED"
+            } else {
+                "INVALID_REFRESH_TOKEN"
+            },
             "{profile}: {refused}"
         );
         let (status, refused) = client(
@@ -1848,7 +1882,15 @@ fn deleting_a_tenant_invalidates_its_credentials_and_leaves_the_sibling_and_proj
             json!({"idToken": token_a}),
         );
         assert_eq!(status, 400, "{profile}: {refused}");
-        assert_eq!(class(&refused), "INVALID_ID_TOKEN", "{profile}: {refused}");
+        assert_eq!(
+            class(&refused),
+            if strict {
+                "TENANT_ID_MISMATCH"
+            } else {
+                "INVALID_ID_TOKEN"
+            },
+            "{profile}: {refused}"
+        );
 
         // The sibling tenant and the project are untouched and their credentials still work.
         assert_eq!(snapshot(&state, Some(TENANT_B)), before_b, "{profile}");

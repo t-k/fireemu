@@ -2,7 +2,7 @@
 //! verification, read authorization and native in-memory listeners; they are not SDK or production evidence.
 
 use fireemu_adapter_grpc::decode::Parent;
-use fireemu_adapter_grpc::rules::{Principal, RulesEnforcer};
+use fireemu_adapter_grpc::rules::{Principal, RulesEnforcer, TokenSemantics};
 use fireemu_core_auth::claims::CustomClaims;
 use fireemu_core_auth::jwt::{encode_unsigned, TokenAcceptance};
 use fireemu_core_auth::mfa::TotpPolicy;
@@ -14,6 +14,7 @@ use fireemu_core_firestore::store::{CommitVersion, Document};
 use fireemu_core_firestore::value::Value;
 use fireemu_core_rules::eval::NoDocumentAccess;
 use fireemu_core_rules::runtime::{LoadedRules, RulesetSlot};
+use fireemu_core_rules::value::RulesValue;
 use fireemu_core_session::clock::VirtualClock;
 use fireemu_core_types::determinism::SplitMix64;
 use fireemu_core_types::ids::{CollectionId, DatabaseId, ProjectId};
@@ -52,6 +53,13 @@ struct Fixture {
 
 impl Fixture {
     fn new() -> Self {
+        Self::with_semantics(TokenSemantics::IdToken)
+    }
+    /// The daemon's Firestore enforcer (FS-RULES: Firestore's token checks).
+    fn firestore() -> Self {
+        Self::with_semantics(TokenSemantics::Firestore)
+    }
+    fn with_semantics(semantics: TokenSemantics) -> Self {
         let parent = Arc::new(Mutex::new(AuthStore::new(
             PROJECT,
             SplitMix64::new(3),
@@ -93,7 +101,8 @@ impl Fixture {
             Arc::new(Mutex::new(VirtualClock::new(START))),
         )
         .with_registry(registry.clone())
-        .with_token_acceptance(TokenAcceptance::Verified);
+        .with_token_acceptance(TokenAcceptance::Verified)
+        .with_token_semantics(semantics);
         Self {
             enforcer: Arc::new(enforcer),
             registry,
@@ -123,6 +132,15 @@ fn parent() -> Parent {
         document: None,
     }
 }
+/// The parent project's document of the shared uid (no tenant).
+fn project_document() -> Document {
+    let mut doc = document(TENANTS[0]);
+    doc.path =
+        DocumentPath::parse(&parent().project, &parent().database, "tenantDocs/project").unwrap();
+    doc.fields.insert("tenant".to_owned(), Value::Null);
+    doc
+}
+
 fn document(tenant: &str) -> Document {
     let parent = parent();
     Document {
@@ -279,6 +297,44 @@ fn a_multi_document_get_refuses_a_foreign_tenant_with_the_same_owner_uid() {
             );
         }
     }
+}
+
+/// Production keeps honouring an unexpired ID token of a deleted tenant on Firestore: about 3 s
+/// and 66 s after the deletion every get, query and create of the tenant principal was answered
+/// as before (AUTH-FS-CROSS stage 1, 2026-09-27). The token keeps its tenant claim, so it is not
+/// the same uid of the parent project.
+#[test]
+fn a_deleted_tenants_unexpired_token_keeps_its_tenant_on_firestore() {
+    let fixture = Fixture::firestore();
+    assert!(fixture.registry.delete_tenant(PROJECT, TENANTS[0]));
+    let principal = fixture.principal(fixture.reader(TENANTS[0]));
+    let Principal::User(ctx) = &principal else {
+        panic!("a deleted tenant's token is a user");
+    };
+    assert_eq!(ctx.uid, UID);
+    let Some(RulesValue::Map(firebase)) = ctx.token.get("firebase") else {
+        panic!("the token keeps its firebase claims");
+    };
+    assert_eq!(
+        firebase.get("tenant"),
+        Some(&RulesValue::String(TENANTS[0].to_owned()))
+    );
+    let own = document(TENANTS[0]);
+    fixture
+        .enforcer
+        .authorize_get(&principal, &own.path, Some(&own), &NoDocumentAccess)
+        .unwrap();
+    // The parent project's document of the same uid stays out of reach.
+    let parent_doc = project_document();
+    assert!(fixture
+        .enforcer
+        .authorize_get(
+            &principal,
+            &parent_doc.path,
+            Some(&parent_doc),
+            &NoDocumentAccess
+        )
+        .is_err());
 }
 
 #[test]
@@ -505,6 +561,27 @@ mod listeners {
                 ..Default::default()
             })
             .unwrap();
+    }
+
+    /// On the daemon's Firestore enforcer a listener re-verifies its token as unary requests do,
+    /// so a deleted tenant's unexpired token keeps its listener, as production kept the unary
+    /// requests (AUTH-FS-CROSS stage 1). Production's listener after a tenant deletion is
+    /// recorded in stage 2.
+    #[tokio::test]
+    async fn a_deleted_tenants_listener_keeps_its_unexpired_token_on_firestore() {
+        let fixture = Fixture::firestore();
+        let (gateway, local) = backend();
+        commit(&local, "initial");
+        let mut kept = Listener::open(&fixture, &local, &gateway, TENANTS[0], 1).await;
+        let mut sibling = Listener::open(&fixture, &local, &gateway, TENANTS[1], 2).await;
+        kept.snapshot(TENANTS[0], 1, "initial", true).await;
+        sibling.snapshot(TENANTS[1], 2, "initial", true).await;
+        assert!(fixture.registry.delete_tenant(PROJECT, TENANTS[0]));
+        commit(&local, "after-delete");
+        kept.snapshot(TENANTS[0], 1, "after-delete", false).await;
+        sibling.snapshot(TENANTS[1], 2, "after-delete", false).await;
+        kept.finish().await;
+        sibling.finish().await;
     }
 
     #[tokio::test]

@@ -90,6 +90,13 @@ Behavior below was measured against a real Firestore database with end-user ID t
 - Changed, strict profile: an end user, signed in or not, may not open a read-write transaction, whether by `BeginTransaction` (whose default is read-write) or by the `newTransaction` of `BatchGetDocuments`, `RunQuery` or `RunAggregationQuery`. It is refused with `Missing or insufficient permissions.` whatever the rules say, as production refuses it. A read-only transaction still opens, and the owner credential is unaffected. The emulator profile opens every transaction, as the official emulator does.
 - Changed, strict profile (the default): while a database has no ruleset, every client request is refused with `PERMISSION_DENIED`, because production refuses every client request when there is no `cloud.firestore` release. A daemon started without rules therefore refuses SDK requests until rules are loaded (`rules.source`, `firebase.json`, `PUT /v1/rules`); the owner credential is unaffected. The emulator profile still allows everything until rules are loaded, as the official emulator does. The startup banner says which applies.
 
+### Auth observed through Firestore (AUTH-FS-CROSS)
+
+Behavior below was measured against a real Firestore database with end-user ID tokens, including one of another Firebase project, on 2026-09-27 (AUTH-FS-CROSS stage 1).
+
+- Changed, both profiles: Firestore honours an unexpired ID token of a deleted tenant, as production did about 3 s and 66 s after the deletion, for reads, queries and writes, and so do listeners, which verify their token as other requests do. The token keeps its tenant claim, so Security Rules still tell it apart from the project's user of the same uid. fireemu refused it once the tenant was gone.
+- Changed, strict profile: an ID token of another project is refused with production's `PERMISSION_DENIED` `Missing or insufficient permissions.` (gRPC 7), even on an open document, instead of `UNAUTHENTICATED` with an audience message. The emulator profile keeps its audience refusal (a token never crosses a project boundary there; the official emulator admits it).
+
 ## [0.7.1] - 2026-09-10
 
 ### Fixed

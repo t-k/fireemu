@@ -37,8 +37,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::sync::{Arc, Mutex};
 
 use fireemu_core_auth::jwt::{
-    verify_firestore_rules_token, verify_rules_token, verify_rules_token_for_project, JwtError,
-    TokenAcceptance,
+    verify_firestore_rules_token, verify_firestore_rules_token_of_removed_tenant,
+    verify_rules_token, verify_rules_token_for_project, JwtError, TokenAcceptance,
 };
 use fireemu_core_auth::store::AuthStore;
 use fireemu_core_firestore::field_path::FieldPath;
@@ -332,11 +332,19 @@ pub fn allow_all(_: &FirestoreState, _: &[Write], _: LogicalInstant) -> Result<(
 /// whose `aud` names another project (another session's) is refused before any rule
 /// runs, so `request.auth != null` never holds across sessions.
 pub fn check_audience(principal: &Principal, project: &str) -> Result<(), Status> {
+    audience_refusal(principal, project, false)
+}
+
+/// Why a user token is not for `project`: production answers another project's ID token with
+/// its permission denial, even on an open document (AUTH-FS-CROSS stage 1, 2026-09-27); the
+/// emulator profile keeps the audience text it has always answered with.
+fn audience_refusal(principal: &Principal, project: &str, production: bool) -> Result<(), Status> {
     let Principal::User(ctx) = principal else {
         return Ok(());
     };
     match ctx.token.get("aud") {
         Some(fireemu_core_rules::value::RulesValue::String(aud)) if aud == project => Ok(()),
+        _ if production => Err(Status::permission_denied(PERMISSION_DENIED_MESSAGE)),
         Some(fireemu_core_rules::value::RulesValue::String(aud)) => Err(Status::unauthenticated(
             format!("ID token audience {aud:?} does not match project {project:?}"),
         )),
@@ -607,7 +615,9 @@ impl RulesEnforcer {
             return Err(Status::unauthenticated(INVALID_CREDENTIALS_MESSAGE));
         }
         let now = self.now()?;
-        // The token's audience names its project: verify against that project's store.
+        // The token's audience names its project: verify against that project's store. A token
+        // whose tenant no longer exists is checked against its project (`removed_tenant`).
+        let mut removed_tenant = false;
         let store_arc = match &self.registry {
             Some(registry) => {
                 let default = self
@@ -633,7 +643,10 @@ impl RulesEnforcer {
                 drop(default);
                 target
                     .and_then(|(project, tenant)| match tenant {
-                        Some(tenant) => registry.tenant_store(&project, &tenant),
+                        Some(tenant) => registry.tenant_store(&project, &tenant).or_else(|| {
+                            removed_tenant = true;
+                            registry.store_for(&project)
+                        }),
                         None => registry.store_for(&project),
                     })
                     .unwrap_or_else(|| self.auth.clone())
@@ -644,6 +657,16 @@ impl RulesEnforcer {
             .lock()
             .map_err(|_| Status::internal("auth store lock poisoned"))?;
         let verified = match (self.token_semantics, expected_project) {
+            // Firestore does not look a token's tenant up (AUTH-FS-CROSS stage 1).
+            (TokenSemantics::Firestore, _) if removed_tenant => {
+                verify_firestore_rules_token_of_removed_tenant(
+                    token,
+                    &store,
+                    now,
+                    self.acceptance,
+                    expected_project,
+                )
+            }
             (TokenSemantics::Firestore, _) => {
                 verify_firestore_rules_token(token, &store, now, self.acceptance, expected_project)
             }
@@ -668,6 +691,15 @@ impl RulesEnforcer {
             }
         })?;
         Ok(Principal::User(ctx))
+    }
+
+    /// Whether a user token is for `project`, refused in this enforcer's profile's shape.
+    pub fn check_audience(&self, principal: &Principal, project: &str) -> Result<(), Status> {
+        audience_refusal(
+            principal,
+            project,
+            self.acceptance == TokenAcceptance::Verified,
+        )
     }
 
     /// Owner-only surfaces (collection enumeration) while rules are loaded.
@@ -737,7 +769,7 @@ impl RulesEnforcer {
         snapshot: Option<&Document>,
         access: &dyn DocumentAccess,
     ) -> Result<(), Status> {
-        check_audience(principal, path.project().as_str())?;
+        self.check_audience(principal, path.project().as_str())?;
         self.evaluate(principal, Method::Get, path, snapshot, None, access)
     }
 
@@ -751,7 +783,7 @@ impl RulesEnforcer {
         access: &dyn DocumentAccess,
     ) -> Result<(), Status> {
         if let Some((first, _)) = items.first() {
-            check_audience(principal, first.project().as_str())?;
+            self.check_audience(principal, first.project().as_str())?;
         }
         if matches!(principal, Principal::Owner) {
             return Ok(());
@@ -819,7 +851,7 @@ impl RulesEnforcer {
         query: &Query,
         access: &dyn DocumentAccess,
     ) -> Result<(), Status> {
-        check_audience(principal, parent.project.as_str())?;
+        self.check_audience(principal, parent.project.as_str())?;
         if matches!(principal, Principal::Owner) {
             return Ok(());
         }
@@ -902,7 +934,7 @@ impl RulesEnforcer {
         writes: &[Write],
         now: LogicalInstant,
     ) -> Result<(), Status> {
-        check_audience(principal, parent.project.as_str())?;
+        self.check_audience(principal, parent.project.as_str())?;
         if matches!(principal, Principal::Owner) {
             return Ok(());
         }

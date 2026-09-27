@@ -204,12 +204,12 @@ impl GatewayService {
     /// A user token must be minted for the project of `database` (transaction requests
     /// carry no document the guards could check).
     fn check_database_audience(&self, caller: &Caller, database: &str) -> Result<(), Status> {
-        if self.rules.is_none() {
+        let Some(rules) = &self.rules else {
             return Ok(());
-        }
+        };
         let parent = crate::decode::parse_parent(&format!("{database}/documents"))
             .map_err(|e| crate::gateway::Rejection::Decode(e).to_status())?;
-        crate::rules::check_audience(&caller.principal, parent.project.as_str())
+        rules.check_audience(&caller.principal, parent.project.as_str())
     }
 
     /// Read guard for the local backend (runs inside the read's critical section, after

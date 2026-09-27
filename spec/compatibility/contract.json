@@ -981,8 +981,12 @@
               "precision": "documented-divergence"
             },
             {
-              "behaviour": "three strict-profile-only refusals, as production refuses (FS-RULES sandbox, 2026-09-24): every client request while its database has no ruleset, an unusable credential in production's shapes (an expired token UNAUTHENTICATED, a bearer value that is not a JWT the front end's OAuth refusal, any other PERMISSION_DENIED), and an end user's read-write transaction (BeginTransaction or a read's newTransaction; read-only ones open); the emulator profile allows all three as the official emulator does",
+              "behaviour": "three strict-profile-only refusals, as production refuses (FS-RULES sandbox, 2026-09-24): every client request while its database has no ruleset, an unusable credential in production's shapes (an expired token UNAUTHENTICATED, a bearer value that is not a JWT the front end's OAuth refusal, any other PERMISSION_DENIED, including an ID token of another project, even on an open document, AUTH-FS-CROSS sandbox, 2026-09-27), and an end user's read-write transaction (BeginTransaction or a read's newTransaction; read-only ones open); the emulator profile allows all three as the official emulator does, except that it keeps refusing another project's token with its recorded audience text",
               "precision": "documented-divergence"
+            },
+            {
+              "behaviour": "an unexpired ID token of a deleted tenant is honoured on Firestore in both profiles, as production honoured it about 3 s and 66 s after the deletion (AUTH-FS-CROSS sandbox, 2026-09-27): the tenant is not looked up, and the token keeps its tenant claim, so Security Rules still tell it apart from the project's user of the same uid",
+              "precision": "exact-for-local-semantics"
             }
           ],
           "productionOnly": [],

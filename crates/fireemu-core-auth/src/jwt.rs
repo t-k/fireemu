@@ -695,7 +695,7 @@ pub fn verify_id_token_decoded_with_leeway(
     now: LogicalInstant,
     leeway_seconds: i64,
 ) -> Result<(TokenVerification, DecodedToken), JwtError> {
-    let decoded = verify_token_claims(token, store, now, leeway_seconds)?;
+    let decoded = verify_token_claims(token, store, now, leeway_seconds, TenantRule::Store)?;
     let sub = decoded.sub().ok_or(JwtError::Malformed)?;
     let user = store.user_by_id(sub).ok_or(JwtError::UnknownUser)?;
     let auth_time = check_auth_time(&decoded, now)?;
@@ -731,9 +731,54 @@ pub fn verify_firestore_token(
     store: &AuthStore,
     now: LogicalInstant,
 ) -> Result<DecodedToken, JwtError> {
-    let decoded = verify_token_claims(token, store, now, FIRESTORE_EXPIRY_LEEWAY_SECONDS)?;
+    let decoded = verify_token_claims(
+        token,
+        store,
+        now,
+        FIRESTORE_EXPIRY_LEEWAY_SECONDS,
+        TenantRule::Store,
+    )?;
     check_auth_time(&decoded, now)?;
     Ok(decoded)
+}
+
+/// [`verify_firestore_rules_token`] for a token whose tenant no longer exists, checked against
+/// its project's `store`. Firestore does not look the tenant up either: an unexpired token of a
+/// deleted tenant was honoured about 3 s and 66 s after the deletion (AUTH-FS-CROSS stage 1,
+/// 2026-09-27). The token must still carry a tenant claim, so it never passes for the project's
+/// user of the same uid.
+pub fn verify_firestore_rules_token_of_removed_tenant(
+    token: &str,
+    store: &AuthStore,
+    now: LogicalInstant,
+    acceptance: TokenAcceptance,
+    expected_project: Option<&str>,
+) -> Result<DecodedToken, JwtError> {
+    let expected_project = match expected_project {
+        Some(project) => ProjectId::try_new(project.to_owned())
+            .map_err(|_| JwtError::Malformed)?
+            .as_str()
+            .to_owned(),
+        None => store.project_id().to_owned(),
+    };
+    let verified = verify_token_claims(
+        token,
+        store,
+        now,
+        FIRESTORE_EXPIRY_LEEWAY_SECONDS,
+        TenantRule::Removed,
+    )
+    .and_then(|decoded| check_auth_time(&decoded, now).map(|_| decoded));
+    mock_fallback(token, store, acceptance, &expected_project, verified)
+}
+
+/// Which tenant claim a store accepts.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum TenantRule {
+    /// Exactly the store's own tenant (none for a project store).
+    Store,
+    /// Any tenant, from a project store whose tenant was removed: the claim must be present.
+    Removed,
 }
 
 /// How long past `exp` Firestore still honours an ID token. In two recordings each (FS-RULES,
@@ -748,6 +793,7 @@ fn verify_token_claims(
     store: &AuthStore,
     now: LogicalInstant,
     leeway_seconds: i64,
+    tenant_rule: TenantRule,
 ) -> Result<DecodedToken, JwtError> {
     let decoded = decode_token(token, store.signer())?;
     let expected_iss = format!("https://securetoken.google.com/{}", store.project_id());
@@ -772,7 +818,11 @@ fn verify_token_claims(
         .and_then(JsonValue::as_str)
         .map(str::to_owned);
     let expected_tenant = store.tenant_id().map(str::to_owned);
-    if actual_tenant != expected_tenant {
+    let tenant_ok = match tenant_rule {
+        TenantRule::Store => actual_tenant == expected_tenant,
+        TenantRule::Removed => expected_tenant.is_none() && actual_tenant.is_some(),
+    };
+    if !tenant_ok {
         return Err(JwtError::WrongTenant {
             expected: expected_tenant,
             actual: actual_tenant,

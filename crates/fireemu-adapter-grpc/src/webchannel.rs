@@ -57,8 +57,8 @@ const LONG_POLL_WAIT: Duration = Duration::from_secs(30);
 const LONG_POLL_MAX: Duration = Duration::from_secs(60);
 /// Streaming back channels send a keep-alive after this much silence.
 const KEEPALIVE: Duration = Duration::from_secs(30);
-/// Maximum accepted form body (`FS-LIMIT-API-REQUEST-BYTES`).
-pub const MAX_FORM_BYTES: usize = crate::serve::API_REQUEST_BYTES;
+/// Maximum accepted form body ([`crate::serve::MAX_REQUEST_BYTES`]).
+pub const MAX_FORM_BYTES: usize = crate::serve::MAX_REQUEST_BYTES;
 /// Maximum concurrent sessions.
 pub const MAX_SESSIONS: usize = 256;
 /// Maximum unacknowledged arrays per session before it is closed.

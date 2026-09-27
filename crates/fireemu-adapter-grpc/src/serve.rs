@@ -24,48 +24,34 @@ use tonic::Status;
 use crate::rest::{RestRequest, RestResponse, RestState};
 use crate::webchannel::{ChannelRequest, ChannelResponse, Hub, StreamKind};
 
-/// `FS-LIMIT-API-REQUEST-BYTES`: the largest API request Firestore accepts, measured on the
-/// message payload before protocol decode. It is an inclusive maximum, so a request of
-/// exactly this many bytes is accepted and one more byte is refused.
-///
-/// The normal REST, `WebChannel`, and gRPC paths each apply it at their own decode boundary:
-/// [`MAX_REST_BODY_BYTES`] on a REST body, [`crate::webchannel::MAX_FORM_BYTES`] on a
-/// `WebChannel` form body, and [`MAX_GRPC_MESSAGE_BYTES`] on a gRPC message. The strict REST
-/// `:commit` route has a separate production-observed raw allowance; it does not apply a
-/// second decoded-protobuf bound.
+/// `FS-LIMIT-API-REQUEST-BYTES` as the limits catalog publishes it: 10 MiB. Production does
+/// not refuse there (it accepted 10,485,761 bytes on every transport, FS-DATA-WRITE partial
+/// supplement), so no transport enforces this figure; [`MAX_REQUEST_BYTES`] is the bound.
 pub const API_REQUEST_BYTES: usize = 10 * 1024 * 1024;
 
-/// Maximum accepted REST request body (`FS-LIMIT-API-REQUEST-BYTES`). The body is read
-/// through a bounded stream, so an over-long request is refused without ever being held
-/// whole in memory.
-pub const MAX_REST_BODY_BYTES: usize = API_REQUEST_BYTES;
-
 /// Production accepts an 11 MiB raw REST Commit body and refuses one more byte.
-pub const MAX_STRICT_COMMIT_RAW_BYTES: usize = 11 * 1024 * 1024;
+pub const MAX_COMMIT_RAW_BYTES: usize = 11 * 1024 * 1024;
 
-/// The request bound the strict profile applies on every transport (owner decision D4,
-/// 2026-09-25). Production accepted 10,485,761 bytes on the non-commit REST routes, a gRPC
-/// unary request, the `Write` stream and `WebChannel` (FS-DATA-WRITE partial supplement), so
-/// the 10 MiB catalog figure is not their limit. Their own limits are unobserved; this reuses
-/// the one production-observed REST figure, REST `:commit`, as an estimate, keeping every
-/// transport bounded.
-pub const MAX_STRICT_REQUEST_BYTES: usize = MAX_STRICT_COMMIT_RAW_BYTES;
+/// The request bound every transport applies at its own decode boundary, in both profiles:
+/// [`MAX_REST_BODY_BYTES`] on a REST body, [`crate::webchannel::MAX_FORM_BYTES`] on a
+/// `WebChannel` form body and [`MAX_GRPC_MESSAGE_BYTES`] on a gRPC message. It is an
+/// inclusive maximum measured before protocol decode.
+///
+/// Owner decision D4 (2026-09-25) reuses the one production-observed figure, REST `:commit`,
+/// as the estimate for the transports whose own limit is unobserved. Decision D (2026-09-27)
+/// applies it in the emulator profile too: a lower local bound would refuse requests
+/// production accepts, and the emulator profile adds no refusal.
+pub const MAX_REQUEST_BYTES: usize = MAX_COMMIT_RAW_BYTES;
 
-/// The gRPC request bound for a profile: [`MAX_STRICT_REQUEST_BYTES`] in strict, the catalog
-/// figure in the emulator profile.
-#[must_use]
-pub const fn max_grpc_message_bytes(enforce_limits: bool) -> usize {
-    if enforce_limits {
-        MAX_STRICT_REQUEST_BYTES
-    } else {
-        MAX_GRPC_MESSAGE_BYTES
-    }
-}
-const MAX_STRICT_COMMIT_REJECTION_DRAIN_BYTES: usize = 32 * 1024 * 1024;
+/// Maximum accepted REST request body. The body is read through a bounded stream, so an
+/// over-long request is refused without ever being held whole in memory.
+pub const MAX_REST_BODY_BYTES: usize = MAX_REQUEST_BYTES;
 
-/// Maximum accepted gRPC message (`FS-LIMIT-API-REQUEST-BYTES`), applied by tonic before the
-/// protobuf is decoded. This is the request direction only.
-pub const MAX_GRPC_MESSAGE_BYTES: usize = API_REQUEST_BYTES;
+const MAX_COMMIT_REJECTION_DRAIN_BYTES: usize = 32 * 1024 * 1024;
+
+/// Maximum accepted gRPC message, applied by tonic before the protobuf is decoded. This is
+/// the request direction only.
+pub const MAX_GRPC_MESSAGE_BYTES: usize = MAX_REQUEST_BYTES;
 
 /// Maximum gRPC message this runtime will encode in a response.
 ///
@@ -91,56 +77,20 @@ const REST_PAYLOAD_UNIT_BYTES: usize = 1024 * 1024;
 /// magnitude and only ever fires on a stalled or malicious sender.
 pub const BODY_READ_DEADLINE: std::time::Duration = std::time::Duration::from_secs(30);
 
-/// The refusal a request over [`API_REQUEST_BYTES`] gets.
-///
-/// Documented, production observation pending. The Firestore quotas page states the 10 MiB
-/// maximum but not the answer to exceeding it, and no production receipt for that refusal
-/// exists in this repository (`tools/compat-broad/fs-request-bytes-boundary/README.md` says
-/// as much about its own sources). The strict profile therefore answers, on every transport,
-/// the shape Google's API infrastructure documents for an oversized payload: HTTP 400 with
-/// the canonical code `INVALID_ARGUMENT`, which is the `google.rpc.Code` that maps to 400.
-/// One shape on all three transports is one thing for the request-byte campaign to confirm
-/// or correct.
-///
-/// The `emulator` profile keeps the 413 the local runtime has always answered. The boundary
-/// is identical under both: only the shape of the refusal differs.
+/// The refusal a request over [`MAX_REQUEST_BYTES`] gets, in both profiles and on every
+/// transport: production's recorded REST `:commit` answer, HTTP 400 `INVALID_ARGUMENT` (gRPC
+/// code 3) with this message. No official-emulator recording shows another shape, so the
+/// emulator profile answers the same (decision D, 2026-09-27).
 fn api_request_too_large_message() -> String {
-    format!("Request payload size exceeds the limit: {MAX_STRICT_REQUEST_BYTES} bytes.")
+    format!("Request payload size exceeds the limit: {MAX_REQUEST_BYTES} bytes.")
 }
 
-/// The legacy refusal, kept for the `emulator` profile.
-pub const API_REQUEST_TOO_LARGE_LEGACY: &str = "request body too large";
-
-fn api_request_too_large(enforce_limits: bool) -> RestResponse {
-    if enforce_limits {
-        RestResponse {
-            status: 400,
-            body: fireemu_adapter_support::api_error::google_rpc(
-                400,
-                &api_request_too_large_message(),
-                "INVALID_ARGUMENT",
-            ),
-        }
-    } else {
-        RestResponse {
-            status: 413,
-            body: fireemu_adapter_support::api_error::google_rpc(
-                413,
-                API_REQUEST_TOO_LARGE_LEGACY,
-                "INVALID_ARGUMENT",
-            ),
-        }
-    }
-}
-
-fn strict_commit_raw_too_large() -> RestResponse {
+fn api_request_too_large() -> RestResponse {
     RestResponse {
         status: 400,
         body: fireemu_adapter_support::api_error::google_rpc(
             400,
-            &format!(
-                "Request payload size exceeds the limit: {MAX_STRICT_COMMIT_RAW_BYTES} bytes."
-            ),
+            &api_request_too_large_message(),
             "INVALID_ARGUMENT",
         ),
     }
@@ -262,13 +212,13 @@ fn header<'a, B>(req: &'a Request<B>, name: &str) -> Option<&'a str> {
 /// Why a request body was not read.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum BodyRejection {
-    /// Over [`API_REQUEST_BYTES`], or the connection failed mid-body. A broken connection has
+    /// Over [`MAX_REQUEST_BYTES`], or the connection failed mid-body. A broken connection has
     /// always been answered this way and keeps that answer; nothing reaches the client anyway.
     TooLarge,
     /// The sender held the request open past [`BODY_READ_DEADLINE`] without finishing it.
     Deadline,
     /// The request declared no body and sent one anyway. Distinct from [`Self::TooLarge`] so
-    /// that a single stray byte is not reported as a 10 MiB overflow.
+    /// that a single stray byte is not reported as an 11 MiB overflow.
     Undeclared,
 }
 
@@ -340,10 +290,14 @@ where
     }
 }
 
-/// A strict Commit over its raw limit is drained without retaining the overflow. Replying
-/// while the client is still uploading can reset the HTTP/1 connection before it sees the
+/// A Commit over its raw limit is drained without retaining the overflow. Replying while the
+/// client is still uploading can reset the HTTP/1 connection before it sees the
 /// production-shaped 400. The finite drain cap and deadline still bound hostile senders.
-async fn read_strict_commit_body(
+///
+/// Only `:commit` drains. Other REST routes and `WebChannel` stop reading at the bound, so a
+/// body far over it may reset the connection instead of delivering the 400; production's
+/// answer there is unobserved beyond one byte over.
+async fn read_commit_body(
     req: Request<Incoming>,
     deadline: std::time::Duration,
 ) -> Result<Bytes, BodyRejection> {
@@ -356,10 +310,10 @@ async fn read_strict_commit_body(
             let frame = frame.map_err(|_| BodyRejection::TooLarge)?;
             if let Ok(data) = frame.into_data() {
                 total = total.saturating_add(data.len());
-                if total > MAX_STRICT_COMMIT_REJECTION_DRAIN_BYTES {
+                if total > MAX_COMMIT_REJECTION_DRAIN_BYTES {
                     return Err(BodyRejection::TooLarge);
                 }
-                if total > MAX_STRICT_COMMIT_RAW_BYTES {
+                if total > MAX_COMMIT_RAW_BYTES {
                     too_large = true;
                     retained.clear();
                 } else if !too_large {
@@ -410,14 +364,9 @@ fn undeclared_body() -> RestResponse {
     }
 }
 
-fn body_rejection_response(
-    rejection: BodyRejection,
-    enforce_limits: bool,
-    strict_commit: bool,
-) -> RestResponse {
+fn body_rejection_response(rejection: BodyRejection) -> RestResponse {
     match rejection {
-        BodyRejection::TooLarge if strict_commit => strict_commit_raw_too_large(),
-        BodyRejection::TooLarge => api_request_too_large(enforce_limits),
+        BodyRejection::TooLarge => api_request_too_large(),
         BodyRejection::Deadline => body_read_deadline_exceeded(),
         BodyRejection::Undeclared => undeclared_body(),
     }
@@ -453,12 +402,9 @@ async fn rest_call(
         .iter()
         .map(|v| v.to_str().unwrap_or_default().to_owned())
         .collect();
-    let strict_commit =
-        state.gateway.enforce_limits && crate::rest::is_strict_commit_route(&method, &path);
-    let body_limit = if strict_commit {
-        MAX_STRICT_COMMIT_RAW_BYTES
-    } else if state.gateway.enforce_limits {
-        MAX_STRICT_REQUEST_BYTES
+    let commit = crate::rest::is_commit_route(&method, &path);
+    let body_limit = if commit {
+        MAX_COMMIT_RAW_BYTES
     } else {
         MAX_REST_BODY_BYTES
     };
@@ -475,15 +421,15 @@ async fn rest_call(
             ));
         }
     };
-    let bytes = match if strict_commit {
-        read_strict_commit_body(req, body_deadline).await
+    let bytes = match if commit {
+        read_commit_body(req, body_deadline).await
     } else {
         read_body(req, BodyAllowance::Declared(body_limit), body_deadline).await
     } {
         Ok(bytes) => bytes,
         Err(rejection) => {
             return Ok(json_response(
-                &body_rejection_response(rejection, state.gateway.enforce_limits, strict_commit),
+                &body_rejection_response(rejection),
                 origin.as_deref(),
             ));
         }
@@ -555,7 +501,6 @@ async fn channel_call<B>(
     hub: Arc<Hub>,
     kind: StreamKind,
     req: Request<B>,
-    enforce_limits: bool,
     limiter: &Arc<tokio::sync::Semaphore>,
     body_deadline: std::time::Duration,
 ) -> Response<OutBody>
@@ -602,19 +547,12 @@ where
         .iter()
         .map(|v| v.to_str().unwrap_or_default().to_owned())
         .collect();
-    let allowance = BodyAllowance::for_request(
-        declared,
-        if enforce_limits {
-            MAX_STRICT_REQUEST_BYTES
-        } else {
-            crate::webchannel::MAX_FORM_BYTES
-        },
-    );
+    let allowance = BodyAllowance::for_request(declared, crate::webchannel::MAX_FORM_BYTES);
     let bytes = match read_body(req, allowance, body_deadline).await {
         Ok(bytes) => bytes,
         Err(rejection) => {
             return json_response(
-                &body_rejection_response(rejection, enforce_limits, false),
+                &body_rejection_response(rejection),
                 origin.as_deref(),
             );
         }
@@ -743,14 +681,14 @@ fn is_decoded_message_too_large(status: &Status) -> bool {
             .starts_with("Error, decoded message length too large")
 }
 
-fn normalize_transport_status(headers: &mut HeaderMap, enforce_limits: bool) {
+fn normalize_transport_status(headers: &mut HeaderMap) {
     crate::production_status::respec_grpc_message(headers);
     let Some(status) = Status::from_header_map(headers) else {
         return;
     };
     let replacement = if is_prost_recursion(&status) {
         Status::invalid_argument(status.message().to_owned())
-    } else if enforce_limits && is_decoded_message_too_large(&status) {
+    } else if is_decoded_message_too_large(&status) {
         Status::invalid_argument(api_request_too_large_message())
     } else {
         return;
@@ -821,7 +759,7 @@ fn normalize_transport_frame(
     responded: bool,
 ) -> Frame<Bytes> {
     if let Some(trailers) = frame.trailers_mut() {
-        normalize_transport_status(trailers, enforce_limits);
+        normalize_transport_status(trailers);
         let write_terminal = enforce_limits
             && write_stream
             && Status::from_header_map(trailers).is_some_and(|status| {
@@ -921,7 +859,7 @@ where
                             Err(never) => match never {},
                         };
                         let enforce_limits = rest.gateway.enforce_limits;
-                        normalize_transport_status(response.headers_mut(), enforce_limits);
+                        normalize_transport_status(response.headers_mut());
                         if response
                             .headers()
                             .contains_key(crate::local::DROP_CONNECTION_KEY)
@@ -956,12 +894,10 @@ where
                         return Ok(readiness(header(&req, "origin")));
                     }
                     if let Some(kind) = channel_kind(req.uri().path()) {
-                        let enforce_limits = rest.gateway.enforce_limits;
                         return Ok(channel_call(
                             hub,
                             kind,
                             req,
-                            enforce_limits,
                             rest_work_limiter(),
                             body_deadline,
                         )
@@ -1047,7 +983,7 @@ mod tests {
     use super::{
         api_request_too_large_message, normalize_transport_frame, normalize_transport_status,
         try_admit_rest_payload_from, try_admit_rest_work, RestEnvelope, MAX_REST_BODY_BYTES,
-        MAX_STRICT_COMMIT_RAW_BYTES, REST_PAYLOAD_UNIT_BYTES,
+        MAX_COMMIT_RAW_BYTES, REST_PAYLOAD_UNIT_BYTES,
     };
     use bytes::Bytes;
     use hyper::body::Frame;
@@ -1095,7 +1031,7 @@ mod tests {
             Bytes::from_static(b"details"),
         );
         let mut ordinary_headers = headers(&ordinary);
-        normalize_transport_status(&mut ordinary_headers, true);
+        normalize_transport_status(&mut ordinary_headers);
         let unchanged = Status::from_header_map(&ordinary_headers).unwrap();
         assert_eq!(unchanged.code(), Code::Internal);
         assert_eq!(unchanged.message(), "backend failed");
@@ -1104,7 +1040,7 @@ mod tests {
         let already_client_error =
             Status::invalid_argument("failed to decode Protobuf message: recursion limit reached");
         let mut client_headers = headers(&already_client_error);
-        normalize_transport_status(&mut client_headers, true);
+        normalize_transport_status(&mut client_headers);
         assert_eq!(
             Status::from_header_map(&client_headers).unwrap().message(),
             already_client_error.message()
@@ -1116,7 +1052,7 @@ mod tests {
             Bytes::from_static(b"stale-internal-details"),
         );
         let mut prost_headers = headers(&prost);
-        normalize_transport_status(&mut prost_headers, true);
+        normalize_transport_status(&mut prost_headers);
         let normalized = Status::from_header_map(&prost_headers).unwrap();
         assert_eq!(normalized.code(), Code::InvalidArgument);
         assert_eq!(
@@ -1126,27 +1062,18 @@ mod tests {
         assert!(normalized.details().is_empty());
     }
 
-    /// The decode-size refusal keeps tonic's own answer under the `emulator` profile and
-    /// takes the documented production shape under `strict`. Only the shape changes: the
-    /// boundary tonic enforces is the same one either way.
+    /// The decode-size refusal takes production's shape in both profiles (decision D,
+    /// 2026-09-27): the bound tonic enforces is the same either way.
     #[test]
-    fn the_decode_size_refusal_is_reshaped_only_in_the_strict_profile() {
+    fn the_decode_size_refusal_is_reshaped_in_both_profiles() {
         let tonic_wording =
-            "Error, decoded message length too large: found 10485761 bytes, the limit is: 10485760 bytes";
-        let too_large = || Status::new(Code::OutOfRange, tonic_wording);
-
-        let mut emulator = headers(&too_large());
-        normalize_transport_status(&mut emulator, false);
-        let kept = Status::from_header_map(&emulator).unwrap();
-        assert_eq!(kept.code(), Code::OutOfRange);
-        assert_eq!(kept.message(), tonic_wording);
-
-        let mut strict = headers(&too_large());
-        normalize_transport_status(&mut strict, true);
-        let reshaped = Status::from_header_map(&strict).unwrap();
+            "Error, decoded message length too large: found 11534337 bytes, the limit is: 11534336 bytes";
+        let mut decoded = headers(&Status::new(Code::OutOfRange, tonic_wording));
+        normalize_transport_status(&mut decoded);
+        let reshaped = Status::from_header_map(&decoded).unwrap();
         assert_eq!(reshaped.code(), Code::InvalidArgument);
         assert_eq!(reshaped.message(), api_request_too_large_message());
-        // Strict states its own bound (owner decision D4), not the 10 MiB catalog figure.
+        // The message states the enforced bound, not the 10 MiB catalog figure.
         assert_eq!(
             api_request_too_large_message(),
             "Request payload size exceeds the limit: 11534336 bytes."
@@ -1155,23 +1082,19 @@ mod tests {
         // The encode direction is never touched. `MAX_GRPC_RESPONSE_BYTES` is a local memory
         // guard, not `FS-LIMIT-API-REQUEST-BYTES`, so a response this runtime could not encode
         // must not be dressed up as production refusing the client's request.
-        for enforce_limits in [true, false] {
-            let encode_side = "Error, encoded message length too large: found 10485761 bytes, the limit is: 10485760 bytes";
-            let mut encoded = headers(&Status::new(Code::OutOfRange, encode_side));
-            normalize_transport_status(&mut encoded, enforce_limits);
-            let kept = Status::from_header_map(&encoded).unwrap();
-            assert_eq!(kept.code(), Code::OutOfRange);
-            assert_eq!(kept.message(), encode_side);
-        }
+        let encode_side = "Error, encoded message length too large: found 10485761 bytes, the limit is: 10485760 bytes";
+        let mut encoded = headers(&Status::new(Code::OutOfRange, encode_side));
+        normalize_transport_status(&mut encoded);
+        let kept = Status::from_header_map(&encoded).unwrap();
+        assert_eq!(kept.code(), Code::OutOfRange);
+        assert_eq!(kept.message(), encode_side);
 
-        // An unrelated OUT_OF_RANGE is never touched, in either profile.
-        for enforce_limits in [true, false] {
-            let mut unrelated = headers(&Status::new(Code::OutOfRange, "cursor past the end"));
-            normalize_transport_status(&mut unrelated, enforce_limits);
-            let kept = Status::from_header_map(&unrelated).unwrap();
-            assert_eq!(kept.code(), Code::OutOfRange);
-            assert_eq!(kept.message(), "cursor past the end");
-        }
+        // An unrelated OUT_OF_RANGE is never touched.
+        let mut unrelated = headers(&Status::new(Code::OutOfRange, "cursor past the end"));
+        normalize_transport_status(&mut unrelated);
+        let kept = Status::from_header_map(&unrelated).unwrap();
+        assert_eq!(kept.code(), Code::OutOfRange);
+        assert_eq!(kept.message(), "cursor past the end");
     }
 
     /// A `WebChannel` form body is up to the same 10 MiB a REST body is, so it draws on the
@@ -1335,7 +1258,6 @@ mod tests {
                     hub(),
                     StreamKind::Write,
                     forward_channel_request(),
-                    true,
                     &exhausted,
                     BODY_READ_DEADLINE,
                 )
@@ -1365,7 +1287,6 @@ mod tests {
                     hub.clone(),
                     StreamKind::Listen,
                     listen_handshake_request(),
-                    true,
                     &one,
                     BODY_READ_DEADLINE,
                 )
@@ -1383,7 +1304,6 @@ mod tests {
                     hub.clone(),
                     StreamKind::Listen,
                     backchannel_request(&session),
-                    true,
                     &one,
                     BODY_READ_DEADLINE,
                 )
@@ -1401,7 +1321,6 @@ mod tests {
                     hub,
                     StreamKind::Write,
                     forward_channel_request(),
-                    true,
                     &one,
                     BODY_READ_DEADLINE,
                 )
@@ -1428,7 +1347,6 @@ mod tests {
                     hub.clone(),
                     StreamKind::Listen,
                     listen_handshake_request(),
-                    true,
                     &open,
                     BODY_READ_DEADLINE,
                 )
@@ -1445,7 +1363,6 @@ mod tests {
                     hub,
                     StreamKind::Listen,
                     backchannel_request(&session),
-                    true,
                     &exhausted,
                     BODY_READ_DEADLINE,
                 )
@@ -1482,7 +1399,6 @@ mod tests {
                         hub(),
                         StreamKind::Listen,
                         request,
-                        true,
                         &exhausted,
                         BODY_READ_DEADLINE,
                     )
@@ -1525,7 +1441,6 @@ mod tests {
                         hub(),
                         StreamKind::Write,
                         request,
-                        true,
                         &exhausted,
                         BODY_READ_DEADLINE,
                     )
@@ -1562,7 +1477,6 @@ mod tests {
                         hub(),
                         StreamKind::Write,
                         request,
-                        true,
                         &exhausted,
                         BODY_READ_DEADLINE,
                     )
@@ -1598,7 +1512,6 @@ mod tests {
                     hub(),
                     StreamKind::Write,
                     request,
-                    true,
                     &one,
                     std::time::Duration::from_millis(50),
                 )
@@ -1635,7 +1548,6 @@ mod tests {
                         hub.clone(),
                         StreamKind::Write,
                         forward_channel_request(),
-                        true,
                         &one,
                         BODY_READ_DEADLINE,
                     )
@@ -1740,10 +1652,7 @@ mod tests {
 
     #[test]
     fn every_rest_body_read_is_charged_at_its_selected_wire_limit() {
-        assert_eq!(MAX_REST_BODY_BYTES.div_ceil(REST_PAYLOAD_UNIT_BYTES), 10);
-        assert_eq!(
-            MAX_STRICT_COMMIT_RAW_BYTES.div_ceil(REST_PAYLOAD_UNIT_BYTES),
-            11
-        );
+        assert_eq!(MAX_REST_BODY_BYTES.div_ceil(REST_PAYLOAD_UNIT_BYTES), 11);
+        assert_eq!(MAX_COMMIT_RAW_BYTES.div_ceil(REST_PAYLOAD_UNIT_BYTES), 11);
     }
 }

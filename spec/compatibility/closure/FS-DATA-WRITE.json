@@ -395,7 +395,8 @@
       "nondeterministicRows": [
         "writes/limits/near-limit-delete-refusal/rest/12112",
         "writes/limits/near-limit-delete-refusal/batch-write/12112"
-      ]
+      ],
+      "profileNote": "Strict profile only. The emulator profile adds no delete-budget refusal, since no official-emulator measurement shows one (contract.json FS-CLAIM-LIMITS)."
     },
     {
       "conditionId": "FS-LIMIT-FIELD-PATH-BYTES",
@@ -547,7 +548,8 @@
         ],
         "finalArtifactSha256": "d6db62596e71c152883dc5b83bf8dc48b79b703777d49bab10874c1fae6dfc6d",
         "comparisonPath": "spec/compatibility/broad-runs/fs-implied-array-3d7ceabb8-saved-comparison.json"
-      }
+      },
+      "profileNote": "The 1,494-byte key rule for a map held by an array is strict profile only; the emulator profile accepts the key (contract.json FS-CLAIM-LIMITS)."
     },
     {
       "conditionId": "FS-LIMIT-API-REQUEST-BYTES/rest-commit-json-accepted-samples",
@@ -615,7 +617,8 @@
         "sourceHead": "a2aec9fbc12c3bd6e35547c6239e46527fb55cd2",
         "comparisonPath": "spec/compatibility/closure/evidence/FS-DATA-WRITE-terminal-local-digests.json",
         "comparisonSha256": "983a93b1dee065289b1b3ec9e2c9ab07efb9ec162a4db1db02b5bb1c373ec567"
-      }
+      },
+      "profileNote": "Both profiles apply the same 11,534,336-byte bound and production's 400 answer (decision D, 2026-09-27). A body far over the bound is not drained on these routes and may reset the connection instead of delivering the 400."
     },
     {
       "conditionId": "FS-LIMIT-API-REQUEST-BYTES/webchannel",
@@ -639,7 +642,8 @@
         "sourceHead": "a2aec9fbc12c3bd6e35547c6239e46527fb55cd2",
         "comparisonPath": "spec/compatibility/closure/evidence/FS-DATA-WRITE-terminal-local-digests.json",
         "comparisonSha256": "983a93b1dee065289b1b3ec9e2c9ab07efb9ec162a4db1db02b5bb1c373ec567"
-      }
+      },
+      "profileNote": "Both profiles apply the same 11,534,336-byte form bound and production's 400 answer (decision D, 2026-09-27). An unknown session answers 400 in both profiles: production's HTML page in strict (owner decision D6), 'Error: Unknown SID' in the emulator profile."
     },
     {
       "conditionId": "FS-LIMIT-API-REQUEST-BYTES/grpc",
@@ -652,7 +656,8 @@
       "status": "MISMATCH",
       "strictLimitEstimateBytes": 11534336,
       "estimateOwnerDecision": "2026-09-25 FS-DATA-WRITE D4",
-      "scopeNote": "The strict 11 MiB (11,534,336-byte) upper bound is an unobserved estimate from the observed raw REST Commit boundary under owner decision D4; this transport's production upper boundary remains unresolved."
+      "scopeNote": "The strict 11 MiB (11,534,336-byte) upper bound is an unobserved estimate from the observed raw REST Commit boundary under owner decision D4; this transport's production upper boundary remains unresolved.",
+      "profileNote": "Both profiles apply the same 11,534,336-byte decode bound and answer code 3 with production's REST Commit wording (decision D, 2026-09-27)."
     },
     {
       "conditionId": "FS-DATA-WRITE/stream-transaction-precedence",
@@ -699,7 +704,8 @@
         "sourceHead": "a2aec9fbc12c3bd6e35547c6239e46527fb55cd2",
         "comparisonPath": "spec/compatibility/closure/evidence/FS-DATA-WRITE-current-accepted-conditions.json",
         "comparisonSha256": "f4a4ecc2dd860725ca450b447a5003ecda70cc84806bcb30e5f7a3f0d7200241"
-      }
+      },
+      "profileNote": "The trailer shaping (trailers-only split, content-disposition after a response) is strict profile only; the emulator profile keeps tonic's answer and its fireemu-reason diagnostic trailer (contract.json FS-CLAIM-RPC)."
     },
     {
       "conditionId": "FS-DATA-WRITE/write-stream-half-close",
@@ -725,7 +731,8 @@
         ],
         "finalArtifactSha256": "2af3f08c4d453459af86c9258f2283cb38fc7e74d83d388018cbdbb29e892a6a",
         "comparisonPath": "spec/compatibility/broad-runs/fs-stream-half-close-1cb475837-current-comparison.json"
-      }
+      },
+      "profileNote": "The content-disposition trailer after a response is strict profile only; the emulator profile keeps tonic's answer (contract.json FS-CLAIM-RPC)."
     },
     {
       "conditionId": "FS-DATA-WRITE/write-stream-empty-write-response",

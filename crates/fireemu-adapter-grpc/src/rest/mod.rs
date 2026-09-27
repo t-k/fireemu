@@ -1882,9 +1882,9 @@ fn database_of(resource: &str) -> Result<String, Status> {
         })
 }
 
-/// Recognizes only the strict REST Commit resource route. The custom-method suffix is
+/// Recognizes only the REST Commit resource route. The custom-method suffix is
 /// checked before decoding so encoded colons remain document data rather than routing syntax.
-pub(crate) fn is_strict_commit_route(method: &str, raw_path: &str) -> bool {
+pub(crate) fn is_commit_route(method: &str, raw_path: &str) -> bool {
     if method != "POST" {
         return false;
     }
@@ -2007,7 +2007,7 @@ fn precondition_from_params(
 
 #[cfg(test)]
 mod strict_commit_route_tests {
-    use super::is_strict_commit_route;
+    use super::is_commit_route;
 
     #[test]
     fn encoded_slash_path_error_uses_the_shared_contract() {
@@ -2019,23 +2019,23 @@ mod strict_commit_route_tests {
 
     #[test]
     fn recognizes_only_the_documents_root_commit_route() {
-        assert!(is_strict_commit_route(
+        assert!(is_commit_route(
             "POST",
             "/v1/projects/demo/databases/(default)/documents:commit"
         ));
-        assert!(!is_strict_commit_route(
+        assert!(!is_commit_route(
             "GET",
             "/v1/projects/demo/databases/(default)/documents:commit"
         ));
-        assert!(!is_strict_commit_route(
+        assert!(!is_commit_route(
             "POST",
             "/v1/projects/demo/databases/(default)/documents/cases:commit"
         ));
-        assert!(!is_strict_commit_route(
+        assert!(!is_commit_route(
             "POST",
             "/v1/projects/demo/databases/(default)/documents%3Acommit"
         ));
-        assert!(!is_strict_commit_route(
+        assert!(!is_commit_route(
             "POST",
             "/v1/projects/demo/databases/(default)/documents:commit?x=1"
         ));

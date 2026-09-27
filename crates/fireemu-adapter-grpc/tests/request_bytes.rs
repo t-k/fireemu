@@ -1,6 +1,7 @@
 //! `FS-LIMIT-API-REQUEST-BYTES`: transport payload boundaries at each Firestore protocol's
-//! decode boundary. The normal REST and `WebChannel` profiles retain the 10 MiB inclusive
-//! raw-body bound; the strict REST `:commit` route has a production-observed 11 MiB raw guard.
+//! decode boundary. Production accepts an 11 MiB raw REST `:commit` body and refuses one more
+//! byte; every transport takes that bound in both profiles (owner decisions D4, 2026-09-25,
+//! and D, 2026-09-27), above the catalog's 10 MiB figure, which production does not enforce.
 //! Production also accepts REST Commit requests whose decoded protobuf exceeds 10 MiB.
 //!
 //! The limit is measured on the message payload before protocol decode, so it is refused
@@ -16,9 +17,8 @@ use fireemu_adapter_grpc::gateway::Gateway;
 use fireemu_adapter_grpc::local::LocalBackend;
 use fireemu_adapter_grpc::rest::RestState;
 use fireemu_adapter_grpc::serve::{
-    max_grpc_message_bytes, serve_multiplexed, serve_multiplexed_with, API_REQUEST_BYTES,
-    MAX_GRPC_MESSAGE_BYTES, MAX_REST_BODY_BYTES, MAX_STRICT_COMMIT_RAW_BYTES,
-    MAX_STRICT_REQUEST_BYTES,
+    serve_multiplexed, serve_multiplexed_with, API_REQUEST_BYTES, MAX_COMMIT_RAW_BYTES,
+    MAX_GRPC_MESSAGE_BYTES, MAX_REQUEST_BYTES, MAX_REST_BODY_BYTES,
 };
 use fireemu_adapter_grpc::service::GatewayService;
 use fireemu_adapter_grpc::webchannel::MAX_FORM_BYTES;
@@ -45,29 +45,20 @@ const CHANNEL: &str = "/google.firestore.v1.Firestore/Write/channel";
 const DOCUMENTS: usize = 12;
 
 #[test]
-fn every_transport_bound_is_the_catalog_maximum() {
+fn every_transport_takes_the_production_bound_above_the_catalog_figure() {
     let limit = FIRESTORE_STANDARD_2026_08_25
         .find("FS-LIMIT-API-REQUEST-BYTES")
         .expect("the catalog defines the API request limit");
     assert_eq!(limit.maximum, LimitMaximum::Fixed(10_485_760));
     assert_eq!(API_REQUEST_BYTES, 10_485_760);
-    assert_eq!(MAX_REST_BODY_BYTES, API_REQUEST_BYTES);
-    assert_eq!(MAX_FORM_BYTES, API_REQUEST_BYTES);
-    assert_eq!(MAX_GRPC_MESSAGE_BYTES, API_REQUEST_BYTES);
-    // Owner decision D4 (2026-09-25): strict answers every transport at the 11 MiB production
+    // Owner decision D4 (2026-09-25): every transport answers at the 11 MiB production
     // observed on REST `:commit`; production accepted 10,485,761 bytes on the others.
-    assert_eq!(MAX_STRICT_REQUEST_BYTES, 11 * 1024 * 1024);
-    assert_eq!(max_grpc_message_bytes(true), MAX_STRICT_REQUEST_BYTES);
-    assert_eq!(max_grpc_message_bytes(false), API_REQUEST_BYTES);
-}
-
-/// The request bound each profile applies on every transport.
-fn request_limit(enforce_limits: bool) -> usize {
-    if enforce_limits {
-        MAX_STRICT_REQUEST_BYTES
-    } else {
-        API_REQUEST_BYTES
-    }
+    // Decision D (2026-09-27): the emulator profile takes the same bound.
+    assert_eq!(MAX_COMMIT_RAW_BYTES, 11 * 1024 * 1024);
+    assert_eq!(MAX_REQUEST_BYTES, MAX_COMMIT_RAW_BYTES);
+    assert_eq!(MAX_REST_BODY_BYTES, MAX_REQUEST_BYTES);
+    assert_eq!(MAX_FORM_BYTES, MAX_REQUEST_BYTES);
+    assert_eq!(MAX_GRPC_MESSAGE_BYTES, MAX_REQUEST_BYTES);
 }
 
 // ---------------------------------------------------------------------------
@@ -218,12 +209,9 @@ fn gateway(enforce_limits: bool) -> Gateway {
     }
 }
 
-/// The refusal each profile answers for a request over the boundary.
-///
-/// The boundary is the same under both. Only the shape differs: the strict profile answers
-/// the documented production shape on every transport, the emulator profile keeps the 413 and
-/// tonic's own `OUT_OF_RANGE` that the local runtime has always answered. Neither is a
-/// production observation.
+/// The refusal both profiles answer for a request over the boundary: production's REST
+/// Commit answer, on every transport. No official-emulator recording shows another shape, so
+/// the emulator profile answers the same (decision D, 2026-09-27).
 struct ExpectedRefusal {
     http_status: &'static str,
     http_message: String,
@@ -231,27 +219,14 @@ struct ExpectedRefusal {
     grpc_message: String,
 }
 
-fn expected_refusal(enforce_limits: bool) -> ExpectedRefusal {
+fn expected_refusal() -> ExpectedRefusal {
     let production_shape =
-        format!("Request payload size exceeds the limit: {MAX_STRICT_REQUEST_BYTES} bytes.");
-    if enforce_limits {
-        ExpectedRefusal {
-            http_status: "HTTP/1.1 400",
-            http_message: production_shape.clone(),
-            grpc_code: tonic::Code::InvalidArgument,
-            grpc_message: production_shape,
-        }
-    } else {
-        ExpectedRefusal {
-            http_status: "HTTP/1.1 413",
-            http_message: "request body too large".to_owned(),
-            grpc_code: tonic::Code::OutOfRange,
-            grpc_message: format!(
-                "Error, decoded message length too large: found {} bytes, the limit is: {} bytes",
-                API_REQUEST_BYTES + 1,
-                API_REQUEST_BYTES
-            ),
-        }
+        format!("Request payload size exceeds the limit: {MAX_REQUEST_BYTES} bytes.");
+    ExpectedRefusal {
+        http_status: "HTTP/1.1 400",
+        http_message: production_shape.clone(),
+        grpc_code: tonic::Code::InvalidArgument,
+        grpc_message: production_shape,
     }
 }
 
@@ -286,86 +261,46 @@ async fn exists(addr: std::net::SocketAddr, name: &str) -> bool {
     head.starts_with("HTTP/1.1 200")
 }
 
-/// REST `:commit`: the inclusive maximum writes twelve documents, one more byte is refused
-/// before any write is applied.
+/// REST `:commit`: the inclusive raw maximum is accepted, including a body whose decoded
+/// protobuf is over 10 MiB, and one more byte is refused before any write is applied. Every
+/// other REST route takes the same bound.
 async fn rest_boundary(addr: std::net::SocketAddr, expected: &ExpectedRefusal) {
-    if expected.http_status == "HTTP/1.1 400" {
-        assert_eq!(MAX_STRICT_COMMIT_RAW_BYTES, 11 * 1024 * 1024);
-        let compact = r#"{"writes":[]}"#;
-        let accepted_body = format!(
-            "{}{}",
-            compact,
-            " ".repeat(MAX_STRICT_COMMIT_RAW_BYTES - compact.len())
-        );
-        let accepted = http(addr, "POST", COMMIT, &accepted_body).await;
-        assert!(accepted.starts_with("HTTP/1.1 200"), "{accepted}");
-        let decoded_over = http(
-            addr,
-            "POST",
-            COMMIT,
-            &rest_commit_of(MAX_STRICT_COMMIT_RAW_BYTES, "decoded-over"),
-        )
-        .await;
-        assert!(decoded_over.starts_with("HTTP/1.1 200"), "{decoded_over}");
-        assert!(exists(addr, "decoded-over-0").await);
-        assert!(exists(addr, &format!("decoded-over-{}", DOCUMENTS - 1)).await);
-        let refused_body = format!(
-            "{}{}",
-            compact,
-            " ".repeat(MAX_STRICT_COMMIT_RAW_BYTES + 1 - compact.len())
-        );
-        let refused = http(addr, "POST", COMMIT, &refused_body).await;
-        assert!(refused.starts_with("HTTP/1.1 400"), "{refused}");
-        assert!(refused.contains("Request payload size exceeds the limit: 11534336 bytes."));
-        let sentinel = format!(
-            "{}{}",
-            compact,
-            " ".repeat(16 * 1024 * 1024 + 1 - compact.len())
-        );
-        let refused_sentinel = http(addr, "POST", COMMIT, &sentinel).await;
-        assert!(
-            refused_sentinel.starts_with("HTTP/1.1 400"),
-            "{refused_sentinel}"
-        );
-        // Every other REST route takes the same 11 MiB in strict (owner decision D4):
-        // production accepted a 10,485,761-byte batchWrite (non-commit-rest-request-bytes).
-        let batch_write = "/v1/projects/demo-app/databases/(default)/documents:batchWrite";
-        let padded = |bytes: usize| format!("{compact}{}", " ".repeat(bytes - compact.len()));
-        let accepted = http(addr, "POST", batch_write, &padded(API_REQUEST_BYTES + 1)).await;
-        assert!(accepted.starts_with("HTTP/1.1 200"), "{accepted}");
-        let refused = http(
-            addr,
-            "POST",
-            batch_write,
-            &padded(MAX_STRICT_REQUEST_BYTES + 1),
-        )
-        .await;
-        assert!(refused.starts_with("HTTP/1.1 400"), "{refused}");
-        assert!(refused.contains("Request payload size exceeds the limit: 11534336 bytes."));
-        return;
-    }
-    let accepted = http(
+    let compact = r#"{"writes":[]}"#;
+    let padded = |bytes: usize| format!("{compact}{}", " ".repeat(bytes - compact.len()));
+    let accepted = http(addr, "POST", COMMIT, &padded(MAX_COMMIT_RAW_BYTES)).await;
+    assert!(accepted.starts_with("HTTP/1.1 200"), "{accepted}");
+    let decoded_over = http(
         addr,
         "POST",
         COMMIT,
-        &rest_commit_of(API_REQUEST_BYTES, "rest-at"),
+        &rest_commit_of(MAX_COMMIT_RAW_BYTES, "decoded-over"),
     )
     .await;
-    assert!(accepted.starts_with("HTTP/1.1 200"), "{accepted}");
-    assert!(exists(addr, "rest-at-0").await);
-    assert!(exists(addr, &format!("rest-at-{}", DOCUMENTS - 1)).await);
-
+    assert!(decoded_over.starts_with("HTTP/1.1 200"), "{decoded_over}");
+    assert!(exists(addr, "decoded-over-0").await);
+    assert!(exists(addr, &format!("decoded-over-{}", DOCUMENTS - 1)).await);
     let refused = http(
         addr,
         "POST",
         COMMIT,
-        &rest_commit_of(API_REQUEST_BYTES + 1, "rest-over"),
+        &rest_commit_of(MAX_COMMIT_RAW_BYTES + 1, "rest-over"),
     )
     .await;
     assert!(refused.starts_with(expected.http_status), "{refused}");
     assert!(refused.contains(&expected.http_message), "{refused}");
     assert!(refused.contains("INVALID_ARGUMENT"), "{refused}");
     assert_nothing_published(addr, "rest-over").await;
+    // A body far over the bound is drained, so the refusal reaches the client instead of a
+    // connection reset.
+    let sentinel = http(addr, "POST", COMMIT, &padded(16 * 1024 * 1024 + 1)).await;
+    assert!(sentinel.starts_with(expected.http_status), "{sentinel}");
+    // Production accepted a 10,485,761-byte batchWrite (non-commit-rest-request-bytes).
+    let batch_write = "/v1/projects/demo-app/databases/(default)/documents:batchWrite";
+    let accepted = http(addr, "POST", batch_write, &padded(MAX_REQUEST_BYTES)).await;
+    assert!(accepted.starts_with("HTTP/1.1 200"), "{accepted}");
+    let refused = http(addr, "POST", batch_write, &padded(MAX_REQUEST_BYTES + 1)).await;
+    assert!(refused.starts_with(expected.http_status), "{refused}");
+    assert!(refused.contains(&expected.http_message), "{refused}");
 }
 
 /// gRPC unary `Commit`: tonic refuses the over-boundary message before prost decodes it.
@@ -436,7 +371,7 @@ async fn assert_nothing_published(addr: std::net::SocketAddr, scope: &str) {
 }
 
 async fn boundary_cases(enforce_limits: bool) {
-    let expected = expected_refusal(enforce_limits);
+    let expected = expected_refusal();
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     let backend = Arc::new(LocalBackend::new(
@@ -456,7 +391,7 @@ async fn boundary_cases(enforce_limits: bool) {
     let server = tokio::spawn(serve_multiplexed(
         listener,
         FirestoreServer::new(GatewayService::local(gateway(enforce_limits), backend))
-            .max_decoding_message_size(max_grpc_message_bytes(enforce_limits))
+            .max_decoding_message_size(MAX_GRPC_MESSAGE_BYTES)
             .max_encoding_message_size(MAX_GRPC_MESSAGE_BYTES),
         rest,
     ));
@@ -472,9 +407,9 @@ async fn boundary_cases(enforce_limits: bool) {
     // the side that refuses it.
     let mut client = FirestoreClient::new(channel)
         .max_decoding_message_size(MAX_GRPC_MESSAGE_BYTES)
-        .max_encoding_message_size(request_limit(enforce_limits) + 1);
+        .max_encoding_message_size(MAX_REQUEST_BYTES + 1);
 
-    let limit = request_limit(enforce_limits);
+    let limit = MAX_REQUEST_BYTES;
     grpc_unary_boundary(addr, &mut client, &expected, limit).await;
     write_stream_boundary(addr, &mut client, &expected, limit).await;
     webchannel_boundary(addr, &expected, limit).await;
@@ -546,7 +481,7 @@ fn the_api_request_boundary_is_refused_at_the_transport_and_the_daemon_survives(
 }
 
 #[test]
-fn the_emulator_profile_keeps_its_own_over_boundary_refusal_shape() {
+fn the_emulator_profile_takes_the_same_boundary_and_refusal() {
     std::thread::Builder::new()
         .name("request-bytes-emulator".to_owned())
         .stack_size(4 * 1024 * 1024)

@@ -3,7 +3,7 @@
   "recordedAgainst": {
     "target": "production Identity Toolkit (v1, v2 tenant management) and Secure Token REST, Identity Platform sandbox, with multi-tenancy switched on per program and the program's own tenants created and deleted (owner decision TB2); phones are configured test numbers only (no SMS is sent, M3) and addresses @example.com (E1); the blocking programs (atb/blocking/*) run while the blocking-function fixture is deployed and registered (TB1) and compare the decoded events it echoes (TB5)",
     "project": "demo-auth-account",
-    "note": "Two recordings per program. Tenants are named per program: <tenant:label:shape> for a tenant the harness created, <tenant:N:shape> for one a step created, where shape is the display-name prefix and the length of the random suffix, or `other`. TOTP secrets, session infos, pending credentials and refresh tokens are placeholders; codes are never recorded. Tokens are recorded as their decoded header shape and claims, with times relative to the token's own iat. Generated ids, run-window times, the project id, its number and the API key are placeholders. `second` holds the other recording of rows that differed.",
+    "note": "Two recordings per program. createAuthUri's sessionId and the state and nonce of its authUri are masked (<sessionId>, <state>, <nonce>). Tenants are named per program: <tenant:label:shape> for a tenant the harness created, <tenant:N:shape> for one a step created, where shape is the display-name prefix and the length of the random suffix, or `other`. TOTP secrets, session infos, pending credentials and refresh tokens are placeholders; codes are never recorded. Tokens are recorded as their decoded header shape and claims, with times relative to the token's own iat. Generated ids, run-window times, the project id, its number and the API key are placeholders. `second` holds the other recording of rows that differed.",
     "baselineConfig": {
       "signIn.email.enabled": true,
       "signIn.email.passwordRequired": true,
@@ -3289,9 +3289,9 @@
           "status": 200,
           "body": {
             "kind": "identitytoolkit#CreateAuthUriResponse",
-            "authUri": "https://accounts.google.com/o/oauth2/v2/auth?response_type=id_token&client_id=atb-client&redirect_uri=http://localhost&state=AMbdmDlKSnqwftTzgUGr1JZFZGJdAG8c9U_4MzyJ8aMY4__IqgJhCIZ4VAnd9E264WSkgBMZhOGmqZEqbY8PWuuRaBojCOiwvn_dehuDXGhMXm1Iswh51CiUeQbC_ksSyOP5Rb8Fa5DUwnGjLdO9MvTneBKAwvahRZlQJ4AchSEyFx-fNTcumhbabNtXBbC3yXzzs5imRjhXGSzWUt9ULw2qAfGsJz1Imox9nkawmoaYrDDbiNlKuR2-r7U6bEMFuuKMQXVdUb3zVd1y&scope=openid+email+profile&nonce=98fec5f5dbd74e1bb0e0ef1e2c2145c1deba4f22a0fe9a74b320880ca17be7fb",
+            "authUri": "https://accounts.google.com/o/oauth2/v2/auth?response_type=id_token&client_id=atb-client&redirect_uri=http://localhost&state=<state>&scope=openid+email+profile&nonce=<nonce>",
             "providerId": "oidc.atb-a",
-            "sessionId": "Bq2wwrp0Sc0zxvkG7APC_VGFCRE"
+            "sessionId": "<sessionId>"
           }
         },
         "auth-uri-b": {
@@ -3332,17 +3332,6 @@
               "message": "CONFIGURATION_NOT_FOUND",
               "status": "NOT_FOUND"
             }
-          }
-        }
-      },
-      "second": {
-        "auth-uri-a": {
-          "status": 200,
-          "body": {
-            "kind": "identitytoolkit#CreateAuthUriResponse",
-            "authUri": "https://accounts.google.com/o/oauth2/v2/auth?response_type=id_token&client_id=atb-client&redirect_uri=http://localhost&state=AMbdmDk5_wBYi_ex-JLmlHU0v1ELg1j8QU0VxQf3h3GGfXU15xoTNbasiYe4WqcGPhBUBLQpXFxAfudP98MP9xQne7-GoehCUre-aFUQnlX-UHeTB49wKLH4HmdmAsaOWFreJLu9mcWUXoss9RsFFyDyVTLtGRV8WbJ-g6DvK_CCn8vDuHVQTIvatep0ESgFwcr05HgSDrg4eUXCztAI2Jc4j_455Q6NTvGiBTUrJK3LCZfVDZ2lOrI1QARrA036RAVZiOjea5txLKeO&scope=openid+email+profile&nonce=a954813c424fc83e87301163c2798d92b98cf5715c55b87ca929042eb9906468",
-            "providerId": "oidc.atb-a",
-            "sessionId": "sBN0fDhY3dpJSf7t5iH3uOVru50"
           }
         }
       }
@@ -3909,7 +3898,7 @@
               "password"
             ],
             "registered": true,
-            "sessionId": "Y4BLTfxM_2QkGQU80Eh0VWgAVrA",
+            "sessionId": "<sessionId>",
             "signinMethods": [
               "password"
             ]
@@ -3923,37 +3912,7 @@
               "password"
             ],
             "registered": true,
-            "sessionId": "5-FCd-K8XQlQPNRrr0TDZvcJM50",
-            "signinMethods": [
-              "password"
-            ]
-          }
-        }
-      },
-      "second": {
-        "create-auth-uri-a": {
-          "status": 200,
-          "body": {
-            "kind": "identitytoolkit#CreateAuthUriResponse",
-            "allProviders": [
-              "password"
-            ],
-            "registered": true,
-            "sessionId": "QWu6yKdchf_XEurwSoTEZ1QRfcs",
-            "signinMethods": [
-              "password"
-            ]
-          }
-        },
-        "create-auth-uri-b": {
-          "status": 200,
-          "body": {
-            "kind": "identitytoolkit#CreateAuthUriResponse",
-            "allProviders": [
-              "password"
-            ],
-            "registered": true,
-            "sessionId": "7OWJf2g71zZVTsx5pmahM624E8g",
+            "sessionId": "<sessionId>",
             "signinMethods": [
               "password"
             ]
@@ -4422,7 +4381,7 @@
               "password"
             ],
             "registered": true,
-            "sessionId": "HlwtPRAmXway3g4w0vkr81WItrs",
+            "sessionId": "<sessionId>",
             "signinMethods": [
               "password"
             ]
@@ -4549,22 +4508,6 @@
                 "disabledUserDeletion": true
               }
             }
-          }
-        }
-      },
-      "second": {
-        "privacy-off-create-auth-uri": {
-          "status": 200,
-          "body": {
-            "kind": "identitytoolkit#CreateAuthUriResponse",
-            "allProviders": [
-              "password"
-            ],
-            "registered": true,
-            "sessionId": "hXuN8gLlru3lTaHYXdkIflq54V4",
-            "signinMethods": [
-              "password"
-            ]
           }
         }
       }

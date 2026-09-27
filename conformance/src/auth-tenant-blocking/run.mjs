@@ -64,6 +64,7 @@ import { createDeployer } from "./deploy.mjs";
 import { guardTenantRequest, isHarnessDisplayName, validateTenantCorpus } from "./guard.mjs";
 import { assertNoOpaqueValue } from "./harness.mjs";
 import { createSession, runCorpus, tenantIdOf } from "./session.mjs";
+import { assertNoVolatileValue, maskVolatile } from "./volatile.mjs";
 
 const execFileAsyncRaw = promisify(execFile);
 /** Waits `ms`, or rejects as soon as `signal` aborts. */
@@ -424,7 +425,11 @@ async function assertSignerReady(web, tokens, signal) {
 }
 
 async function writeFixture({ programs, recordings, meta, secrets }) {
-  const [first, second] = recordings;
+  // Values production draws anew on every answer are masked before the recordings are compared.
+  const [first, second] = recordings.map((recording) => ({
+    ...recording,
+    results: maskVolatile(recording.results),
+  }));
   const fixture = existsSync(FIXTURE)
     ? JSON.parse(await readFile(FIXTURE, "utf8"))
     : { version: 1, recordedAgainst: {}, programs: {} };
@@ -432,7 +437,7 @@ async function writeFixture({ programs, recordings, meta, secrets }) {
     target:
       "production Identity Toolkit (v1, v2 tenant management) and Secure Token REST, Identity Platform sandbox, with multi-tenancy switched on per program and the program's own tenants created and deleted (owner decision TB2); phones are configured test numbers only (no SMS is sent, M3) and addresses @example.com (E1); the blocking programs (atb/blocking/*) run while the blocking-function fixture is deployed and registered (TB1) and compare the decoded events it echoes (TB5)",
     project: RECORDED_PROJECT,
-    note: "Two recordings per program. Tenants are named per program: <tenant:label:shape> for a tenant the harness created, <tenant:N:shape> for one a step created, where shape is the display-name prefix and the length of the random suffix, or `other`. TOTP secrets, session infos, pending credentials and refresh tokens are placeholders; codes are never recorded. Tokens are recorded as their decoded header shape and claims, with times relative to the token's own iat. Generated ids, run-window times, the project id, its number and the API key are placeholders. `second` holds the other recording of rows that differed.",
+    note: "Two recordings per program. createAuthUri's sessionId and the state and nonce of its authUri are masked (<sessionId>, <state>, <nonce>). Tenants are named per program: <tenant:label:shape> for a tenant the harness created, <tenant:N:shape> for one a step created, where shape is the display-name prefix and the length of the random suffix, or `other`. TOTP secrets, session infos, pending credentials and refresh tokens are placeholders; codes are never recorded. Tokens are recorded as their decoded header shape and claims, with times relative to the token's own iat. Generated ids, run-window times, the project id, its number and the API key are placeholders. `second` holds the other recording of rows that differed.",
     baselineConfig: BASELINE_CONFIG,
     authorizedDomains: AUTHORIZED_DOMAINS,
   };
@@ -459,6 +464,7 @@ async function writeFixture({ programs, recordings, meta, secrets }) {
   const text = `${JSON.stringify(fixture, null, 2)}\n`;
   scanFixture(text, [...secrets, SIGNER_ACCOUNTS.project]);
   assertNoOpaqueValue(text);
+  assertNoVolatileValue(text);
   if (/otpauth:|"[A-Z2-7]{32}"/.test(text)) throw new Error("fixture holds a TOTP secret");
   await writeFile(FIXTURE, text);
   return diffRecordings(first.results, second.results);
@@ -1200,7 +1206,7 @@ async function check() {
     for (const step of program.steps) {
       const production = saved?.steps?.[step.id];
       const alternative = saved?.second?.[step.id];
-      const fireemu = local.results[program.id]?.steps?.[step.id];
+      const fireemu = maskVolatile(local.results[program.id]?.steps?.[step.id]);
       rows.push({
         row: `${program.id}#${step.id}`,
         status: classify({ stale, production, alternative, fireemu }),

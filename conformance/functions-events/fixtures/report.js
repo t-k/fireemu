@@ -9,7 +9,6 @@ function snapshot(value) {
     data: value.exists ? value.data() : null,
     createTime: value.createTime ?? null,
     updateTime: value.updateTime ?? null,
-    readTime: value.readTime ?? null,
   };
 }
 

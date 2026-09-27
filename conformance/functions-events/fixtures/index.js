@@ -1,4 +1,6 @@
 const { createHash } = require("node:crypto");
+const { assertLocalEnvironment, requireRetryFirestoreHost } = require("./local-host");
+assertLocalEnvironment();
 const { getApps, initializeApp } = require("firebase-admin/app");
 const { getFirestore } = require("firebase-admin/firestore");
 const functions = require("firebase-functions/v1");
@@ -59,6 +61,9 @@ exports.fsWrittenWithAuthContextV2 = onDocumentWrittenWithAuthContext(document, 
 );
 
 exports.fsRetryV2 = onDocumentWritten({ document, retry: true }, async (event) => {
+  const data = firestoreData(event.data);
+  if (data?.after?.data?.fixtureKind !== "retry") return;
+  requireRetryFirestoreHost();
   const app = getApps()[0] ?? initializeApp();
   const db = getFirestore(app);
   const markerId = createHash("sha256").update(event.id).digest("hex");
@@ -66,11 +71,15 @@ exports.fsRetryV2 = onDocumentWritten({ document, retry: true }, async (event) =
   const firstAttempt = await db.runTransaction(async (transaction) => {
     const previous = await transaction.get(marker);
     if (previous.exists) return false;
-    transaction.create(marker, { eventId: event.id, source: event.source });
+    transaction.create(marker, {
+      eventId: event.id,
+      source: event.source,
+      documentPath: data.after.path,
+    });
     return true;
   });
   await v2("fsRetryV2", "firestore", event, {
-    ...firestoreData(event.data),
+    ...data,
     fixtureAttempt: firstAttempt ? "failed" : "succeeded",
   });
   if (firstAttempt) throw new Error("intentional first delivery failure");

@@ -6,6 +6,13 @@ import { fileURLToPath } from "node:url";
 
 const require = createRequire(import.meta.url);
 process.env.GCLOUD_PROJECT = "demo-conformance";
+for (const name of [
+  "FIRESTORE_EMULATOR_HOST",
+  "FIREBASE_STORAGE_EMULATOR_HOST",
+  "FIREBASE_AUTH_EMULATOR_HOST",
+  "PUBSUB_EMULATOR_HOST",
+])
+  process.env[name] = "127.0.0.1:1";
 const fixturePath = fileURLToPath(
   new URL("../functions-events/fixtures/index.js", import.meta.url),
 );
@@ -139,4 +146,99 @@ test("the fixture retains raw event identity, time, resource, and document field
   assert.equal(event.id, "raw-v2-id");
   assert.equal(event.time, "2026-09-27T00:00:01.456Z");
   assert.equal(event.data.after.data.value, "after");
+});
+
+test("Firestore snapshots do not require the local SDK readTime getter", () => {
+  const { firestoreData } = require(reportPath);
+  const value = {
+    exists: true,
+    id: "doc-1",
+    ref: { path: "fe_events_primary/doc-1" },
+    data: () => ({ value: "after" }),
+    createTime: { seconds: 101 },
+    updateTime: { seconds: 102 },
+    get readTime() {
+      throw new Error("readTime is unavailable on a local document");
+    },
+  };
+  const captured = firestoreData(value);
+  assert.deepEqual(captured.updateTime, { seconds: 102 });
+  assert.equal(Object.hasOwn(captured, "readTime"), false);
+});
+
+test("the retry handler ignores other Firestore programs", async () => {
+  const fixture = require(fixturePath);
+  await fixture.fsRetryV2.run({
+    id: "ordinary-event",
+    time: "2026-09-27T00:00:00Z",
+    data: {
+      before: null,
+      after: {
+        exists: true,
+        id: "ordinary-doc",
+        ref: { path: "fe_events_primary/ordinary-doc" },
+        data: () => ({ value: "ordinary" }),
+      },
+    },
+  });
+});
+
+test("retry cannot initialize Admin Firestore without a loopback emulator", async () => {
+  const fixture = require(fixturePath);
+  const original = process.env.FIRESTORE_EMULATOR_HOST;
+  const retry = {
+    id: "retry-event",
+    time: "2026-09-27T00:00:00Z",
+    data: {
+      before: null,
+      after: {
+        exists: true,
+        id: "retry-doc",
+        ref: { path: "fe_events_primary/retry-doc" },
+        data: () => ({ fixtureKind: "retry" }),
+      },
+    },
+  };
+  try {
+    for (const host of [undefined, "firestore.googleapis.com:443", "localhost.evil.com:8080"]) {
+      if (host === undefined) delete process.env.FIRESTORE_EMULATOR_HOST;
+      else process.env.FIRESTORE_EMULATOR_HOST = host;
+      await assert.rejects(fixture.fsRetryV2.run(retry), /loopback Firestore emulator/);
+    }
+  } finally {
+    if (original === undefined) delete process.env.FIRESTORE_EMULATOR_HOST;
+    else process.env.FIRESTORE_EMULATOR_HOST = original;
+  }
+});
+
+test("fixture service hosts must all be loopback before SDK initialization", () => {
+  const { assertLocalEnvironment } = require("../functions-events/fixtures/local-host.js");
+  const valid = Object.fromEntries(
+    [
+      "FIRESTORE_EMULATOR_HOST",
+      "FIREBASE_STORAGE_EMULATOR_HOST",
+      "FIREBASE_AUTH_EMULATOR_HOST",
+      "PUBSUB_EMULATOR_HOST",
+    ].map((name) => [name, "127.0.0.1:1234"]),
+  );
+  assert.doesNotThrow(() => assertLocalEnvironment(valid));
+  assert.doesNotThrow(() =>
+    assertLocalEnvironment({
+      ...valid,
+      STORAGE_EMULATOR_HOST: "http://fireemu:synthetic-local-secret@127.0.0.1:1234",
+    }),
+  );
+  for (const name of Object.keys(valid)) {
+    for (const bad of [undefined, "firestore.googleapis.com:443", "localhost.evil.com:8080"]) {
+      assert.throws(() => assertLocalEnvironment({ ...valid, [name]: bad }), /loopback emulator/);
+    }
+  }
+  assert.throws(
+    () =>
+      assertLocalEnvironment({
+        ...valid,
+        STORAGE_EMULATOR_HOST: "https://storage.googleapis.com",
+      }),
+    /loopback emulator/,
+  );
 });

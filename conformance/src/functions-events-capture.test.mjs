@@ -175,6 +175,13 @@ test("the public allowlists match every fixed handler and SDK event type", async
   );
   assert.deepEqual(publicHandlerNames, names);
   process.env.GCLOUD_PROJECT = "demo-conformance";
+  for (const name of [
+    "FIRESTORE_EMULATOR_HOST",
+    "FIREBASE_STORAGE_EMULATOR_HOST",
+    "FIREBASE_AUTH_EMULATOR_HOST",
+    "PUBSUB_EMULATOR_HOST",
+  ])
+    process.env[name] = "127.0.0.1:1";
   const fixture = require("../functions-events/fixtures/index.js");
   const types = new Set(
     Object.values(fixture).map((handler) => handler.__endpoint.eventTrigger.eventType),

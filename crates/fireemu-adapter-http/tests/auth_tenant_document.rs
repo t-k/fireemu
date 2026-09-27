@@ -12,7 +12,7 @@ use fireemu_adapter_http::identity_toolkit::{
     IdpContinuationPolicy, RequestHeaders,
 };
 use fireemu_core_auth::mfa::TotpPolicy;
-use fireemu_core_auth::store::{AuthRegistry, AuthStore};
+use fireemu_core_auth::store::{AuthRegistry, AuthStore, TenantMetadata, TenantMetadataPatch};
 use fireemu_core_session::clock::VirtualClock;
 use fireemu_core_types::determinism::SplitMix64;
 use fireemu_core_types::time::LogicalInstant;
@@ -313,6 +313,51 @@ fn an_unknown_member_is_refused_with_production_message() {
         json!({"permissions": {"disabledUserSignup": true}})
     );
     assert!(created.get("notAField").is_none());
+    // Inside a list's elements too.
+    let listed = create(
+        &emulator,
+        &json!({"displayName": "atb-man-list",
+                "passwordPolicyConfig": {"passwordPolicyEnforcementState": "ENFORCE",
+                    "passwordPolicyVersions": [{"customStrengthOptions": {"minPasswordLength": 8},
+                                                "alsoUnknown": 1}]}}),
+    );
+    assert_eq!(
+        listed["passwordPolicyConfig"]["passwordPolicyVersions"][0]["customStrengthOptions"],
+        json!({"minPasswordLength": 8}),
+        "{listed}"
+    );
+    assert!(
+        listed["passwordPolicyConfig"]["passwordPolicyVersions"][0]
+            .get("alsoUnknown")
+            .is_none(),
+        "{listed}"
+    );
+    // A create with a test phone number production refuses is refused whole: no tenant is left.
+    for (label, state) in profiles() {
+        let (_, before) = admin(&state, "GET", TENANTS, &json!({}));
+        let (status, refused) = admin(
+            &state,
+            "POST",
+            TENANTS,
+            &json!({"displayName": "atb-man-phone", "testPhoneNumbers": {"not a number": "123456"}}),
+        );
+        assert_eq!(status, 400, "{label}: {refused}");
+        let (_, after) = admin(&state, "GET", TENANTS, &json!({}));
+        assert_eq!(after, before, "{label}");
+    }
+    // An output-only client member in the body is dropped; the permissions it came with stay.
+    for (label, state) in profiles() {
+        let created = create(
+            &state,
+            &json!({"displayName": "atb-man-key",
+                    "client": {"apiKey": "ignored", "permissions": {"disabledUserSignup": true}}}),
+        );
+        assert_eq!(
+            created["client"],
+            json!({"permissions": {"disabledUserSignup": true}}),
+            "{label}: {created}"
+        );
+    }
 }
 
 #[test]
@@ -436,6 +481,86 @@ fn a_patch_applies_exactly_its_mask() {
             phones["testPhoneNumbers"],
             json!({"+16505550102": "123456"}),
             "{label}"
+        );
+        // An emptied map is not answered (ProtoJSON leaves an empty map out).
+        let (status, emptied) = admin(
+            &state,
+            "PATCH",
+            &format!("{TENANTS}/{id}?updateMask=testPhoneNumbers"),
+            &json!({"testPhoneNumbers": {}}),
+        );
+        assert_eq!(status, 200, "{label}: {emptied}");
+        assert!(
+            emptied.get("testPhoneNumbers").is_none(),
+            "{label}: {emptied}"
+        );
+    }
+}
+
+#[test]
+fn a_switch_client_or_read_only_mask_applies_alone() {
+    for (label, state) in profiles() {
+        let open = create(
+            &state,
+            &json!({"displayName": "atb-man-mask", "allowPasswordSignup": true,
+                    "enableEmailLinkSignin": true, "enableAnonymousUser": true}),
+        );
+        let id = id_of(&open);
+        // Each switch's mask clears only that switch.
+        let (status, links_off) = admin(
+            &state,
+            "PATCH",
+            &format!("{TENANTS}/{id}?updateMask=enableEmailLinkSignin"),
+            &json!({}),
+        );
+        assert_eq!(status, 200, "{label}: {links_off}");
+        assert!(
+            links_off.get("enableEmailLinkSignin").is_none(),
+            "{label}: {links_off}"
+        );
+        assert_eq!(
+            links_off["allowPasswordSignup"], true,
+            "{label}: {links_off}"
+        );
+        // The client mask sets both permissions from the body, and clears them when absent.
+        for mask in ["client", "client.permissions"] {
+            let (status, closed) = admin(
+                &state,
+                "PATCH",
+                &format!("{TENANTS}/{id}?updateMask={mask}"),
+                &json!({"client": {"permissions": {"disabledUserSignup": true}}}),
+            );
+            assert_eq!(status, 200, "{label} {mask}: {closed}");
+            assert_eq!(
+                closed["client"]["permissions"],
+                json!({"disabledUserSignup": true}),
+                "{label} {mask}: {closed}"
+            );
+            let (status, reopened) = admin(
+                &state,
+                "PATCH",
+                &format!("{TENANTS}/{id}?updateMask={mask}"),
+                &json!({}),
+            );
+            assert_eq!(status, 200, "{label} {mask}: {reopened}");
+            assert!(
+                reopened["client"]["permissions"]
+                    .get("disabledUserSignup")
+                    .is_none(),
+                "{label} {mask}: {reopened}"
+            );
+        }
+        // A read-only path in the mask is ignored as an unknown one is.
+        let (status, ignored) = admin(
+            &state,
+            "PATCH",
+            &format!("{TENANTS}/{id}?updateMask=passwordPolicyConfig.lastUpdateTime"),
+            &json!({"passwordPolicyConfig": {"lastUpdateTime": "2026-09-28T00:00:00Z"}}),
+        );
+        assert_eq!(status, 200, "{label}: {ignored}");
+        assert!(
+            ignored.get("passwordPolicyConfig").is_none(),
+            "{label}: {ignored}"
         );
     }
 }
@@ -585,5 +710,36 @@ fn strict_provider_configs_answer_as_production() {
             &json!({}),
         );
         assert_eq!((status, body), (404, missing.clone()), "{method}");
+    }
+}
+
+/// A tenant whose permissions are on without a written `client` (one made from metadata, as an
+/// import of an export without its written members makes it) still answers them.
+#[test]
+fn permissions_are_answered_without_a_written_client() {
+    for (label, state) in profiles() {
+        let registry = state.registry.clone().expect("a registry");
+        // An explicit switch, as a store-level create or an import sets it; no client member.
+        let (id, _, _) = registry
+            .create_tenant_with_password_policy(
+                "demo-app",
+                TenantMetadata {
+                    display_name: Some("atb-man-meta".to_owned()),
+                    ..TenantMetadata::default()
+                },
+                TenantMetadataPatch {
+                    disabled_user_signup: Some(true),
+                    ..TenantMetadataPatch::default()
+                },
+                None,
+            )
+            .expect("a tenant");
+        let (status, document) = admin(&state, "GET", &format!("{TENANTS}/{id}"), &json!({}));
+        assert_eq!(status, 200, "{label}: {document}");
+        assert_eq!(
+            document["client"],
+            json!({"permissions": {"disabledUserSignup": true}}),
+            "{label}: {document}"
+        );
     }
 }

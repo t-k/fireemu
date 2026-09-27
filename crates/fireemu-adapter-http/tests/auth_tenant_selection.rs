@@ -403,6 +403,16 @@ fn strict_tenant_switches_answer_as_production() {
         ),
         (400, v1("TOKEN_EXPIRED"))
     );
+    // Only a lookup with a token is TOKEN_EXPIRED; without one the disabled tenant refuses as
+    // it does every other request (production's answer for this request is not recorded).
+    assert_eq!(
+        client(
+            &s,
+            &format!("{V1}/accounts:lookup"),
+            &json!({"tenantId": t})
+        ),
+        (400, v1("TENANT_DISABLED"))
+    );
     patch_tenant(&s, &t, "disableAuth", &json!({"disableAuth": false}));
     // settings#phone-tenant-number: a tenant's phone code.
     patch_tenant(
@@ -459,6 +469,33 @@ fn strict_selection_details_answer_as_production() {
         &json!({"tenantId": b, "email": "z@example.com", "password": "password123"}),
     );
     assert_eq!(status, 200, "{created}");
+    // The account is the path's tenant's.
+    let lookup = |tenant: &str| {
+        admin(
+            &s,
+            "POST",
+            &format!("{V1}/projects/demo-app/tenants/{tenant}/accounts:lookup"),
+            &json!({"email": ["z@example.com"]}),
+        )
+    };
+    assert_eq!(lookup(&a).1["users"][0]["tenantId"], json!(a));
+    assert!(lookup(&b).1.get("users").is_none());
+    // Only the create takes a different body tenant: another Admin call on a tenant path that
+    // names another tenant keeps the emulator's TENANT_ID_MISMATCH (production's answer for it
+    // is not recorded).
+    let (status, refused) = admin(
+        &s,
+        "POST",
+        &format!("{V1}/projects/demo-app/tenants/{a}/accounts:lookup"),
+        &json!({"tenantId": b, "email": ["z@example.com"]}),
+    );
+    assert_eq!(status, 400, "{refused}");
+    assert!(
+        refused["error"]["message"]
+            .as_str()
+            .is_some_and(|message| message.starts_with("TENANT_ID_MISMATCH")),
+        "{refused}"
+    );
 }
 
 /// In a tenant, production's Admin email sign-in link needs no continueUrl

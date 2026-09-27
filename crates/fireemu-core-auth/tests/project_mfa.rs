@@ -520,6 +520,13 @@ fn a_tenant_with_its_mfa_off_asks_for_no_factor() {
     );
     let uid = enrolled(&mut tenant);
     assert!(!tenant.second_factor_required_for(&uid));
+    // With the tenant's MFA on, production's rules ask for the factor.
+    tenant.set_mfa_config(enabled(None));
+    assert!(tenant.second_factor_required_for(&uid));
+    // The official emulator's rules always ask, whatever the MFA config.
+    tenant.set_mfa_config(fireemu_core_auth::mfa_config::MfaProjectConfig::default());
+    tenant.set_production_mfa(false);
+    assert!(tenant.second_factor_required_for(&uid));
     let mut project = fireemu_core_auth::store::AuthStore::new(
         "demo-app",
         SplitMix64::new(3),

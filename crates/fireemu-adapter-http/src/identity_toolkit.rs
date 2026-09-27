@@ -6707,10 +6707,8 @@ fn tenant_metadata_members(parsed: &Value) -> Value {
             members.insert(key.to_owned(), value.clone());
         }
     }
-    if let Some(Value::Object(client)) = members.get_mut("client") {
-        client.retain(|key, _| key == "permissions");
-    }
-    // A client message without permissions (a ProtoJSON null) is an absent one.
+    // The parsed client holds only `permissions` (its other members are output-only and the
+    // parse drops them); a client message without permissions (a ProtoJSON null) is absent.
     if members
         .get("client")
         .is_some_and(|client| client.get("permissions").is_none())
@@ -13413,6 +13411,40 @@ mod tests {
     use super::*;
     use fireemu_core_auth::mfa::TotpPolicy;
     use fireemu_core_types::determinism::SplitMix64;
+
+    /// A management error without a `status` gets the v2 status of its HTTP code; one with a
+    /// status keeps it, and the v1 `errors` list is dropped.
+    #[test]
+    fn v2_errors_name_the_status_of_their_code() {
+        for (code, status) in [
+            (400, "INVALID_ARGUMENT"),
+            (401, "UNAUTHENTICATED"),
+            (403, "PERMISSION_DENIED"),
+            (404, "NOT_FOUND"),
+            (409, "ALREADY_EXISTS"),
+            (429, "RESOURCE_EXHAUSTED"),
+            (501, "NOT_IMPLEMENTED"),
+            (503, "UNAVAILABLE"),
+            (500, "INTERNAL"),
+            (418, "INTERNAL"),
+        ] {
+            let answer = v2_error(JsonResponse {
+                status: code,
+                body: json!({"error": {"code": code, "message": "X", "errors": [{"reason": "x"}]}}),
+            });
+            assert_eq!(answer.status, code);
+            assert_eq!(
+                answer.body,
+                json!({"error": {"code": code, "message": "X", "status": status}}),
+                "{code}"
+            );
+        }
+        let kept = v2_error(JsonResponse {
+            status: 400,
+            body: json!({"error": {"code": 400, "message": "X", "status": "FAILED_PRECONDITION"}}),
+        });
+        assert_eq!(kept.body["error"]["status"], "FAILED_PRECONDITION");
+    }
 
     #[test]
     fn an_absolute_uri_host_is_its_lower_cased_authority_host() {

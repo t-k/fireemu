@@ -2,8 +2,8 @@
   "schemaVersion": 1,
   "parent": "FS-LISTEN-SDK",
   "parentStatus": "IMPLEMENTING",
-  "inventoryStatus": "PROPOSED",
-  "freezeState": "UNFROZEN",
+  "inventoryStatus": "FROZEN",
+  "freezeState": "FROZEN",
   "oracleTrack": "disposable-sandbox",
   "closureReview": {
     "decision": "PENDING",
@@ -13,19 +13,19 @@
     {
       "id": "L1",
       "status": "DECIDED",
-      "recommendation": "Require firebase 12.18.0 Web SDK in Node gRPC and a real browser in both WebChannel modes. Mobile SDKs remain outside the declared SDK matrix. Correct the stale parent-row mobile wording before freezing.",
+      "recommendation": "Use firebase 12.18.0 Web SDK in Node gRPC and a real browser in both WebChannel modes. Mobile SDKs are outside the declared matrix; the public parent row reflects that boundary.",
       "ownerDecisionRequired": false,
       "source": "docs/compatibility/emulator-scope.md#profiles-and-sdks",
-      "decision": "WEB_NODE_AND_BROWSER_MOBILE_EXCLUDED",
+      "decision": "The declared Web SDK matrix covers Node and browser paths; mobile SDKs are outside this parent.",
       "decidedBy": "owner via OL-1",
       "decidedOn": "2026-09-27"
     },
     {
       "id": "L2",
       "status": "DECIDED",
-      "recommendation": "Assign cross-tenant principal/claim decisions to AUTH-FS-CROSS and FS-RULES; retain the catalog 108/108C default-tenant cross-principal listener delivery here.",
+      "recommendation": "Assign Auth state changes to AUTH-FS-CROSS; keep static two-principal cases 108/108C and initial unauthenticated refusal 106N here. Static cross-tenant listener authorization is covered by FS-RULES/tenant together with case 108.",
       "ownerDecisionRequired": false,
-      "decision": "AUTH_STATE_CHANGE_MOVED_TO_AUTH_FS_CROSS",
+      "decision": "Auth state changes belong to AUTH-FS-CROSS; static listener principals and initial refusal belong here.",
       "decidedBy": "coordinator applying FS-RULES R2",
       "decidedOn": "2026-09-27"
     },
@@ -50,7 +50,7 @@
     {
       "id": "L5",
       "status": "DECIDED",
-      "recommendation": "Record production behavior for case 109 before deciding whether the local post-revocation unauthenticated event is a defect or an accepted divergence.",
+      "recommendation": "AUTH-FS-CROSS owns the production observation of case 109 and the comparison of revocation behavior; this parent retains no revocation state-change condition.",
       "ownerDecisionRequired": false,
       "decision": "REVOCATION_MOVED_TO_AUTH_FS_CROSS_PENDING_PRODUCTION",
       "decidedBy": "coordinator",
@@ -59,9 +59,9 @@
     {
       "id": "L6",
       "status": "DECIDED",
-      "recommendation": "Use the Identity Platform sandbox only with the FS-RULES owner of its Firestore and Rules state; otherwise select a separately authorized sandbox configuration. Do not reuse the historical-project manifest.",
+      "recommendation": "Use fireemu-oracle-query/(default), deployed conformance/firestore.rules, public conf_listen and owner-only conf_rules_owner. Do not change Rules; serialize with STORAGE and FUNCTIONS through the shared lock.",
       "ownerDecisionRequired": false,
-      "decision": "QUERY_DEFAULT_EXISTING_RULES",
+      "decision": "Use query/(default) with existing Rules and no Rules change.",
       "decidedBy": "owner via OL-3",
       "decidedOn": "2026-09-27"
     },
@@ -92,7 +92,7 @@
     {
       "id": "Q1-Q4c",
       "status": "DECIDED",
-      "decision": "LIMIT_TO_LAST_CACHE_AND_LISTEN_TARGETS_HERE",
+      "decision": "limitToLast, backend-mediated cache and native Listen targets belong to FS-LISTEN-SDK.",
       "decidedBy": "owner via FS-QUERY-INDEX Q1 and Q4c",
       "decidedOn": "2026-09-24"
     }
@@ -134,7 +134,8 @@
           "A final source-bound artifact comparison with no unexplained mismatch."
         ],
         "recordingsRequired": 2
-      }
+      },
+      "note": "Existing local receipts use the historical catalog. New conf_* sandbox recordings, complete cleanup and final-artifact comparison are still required."
     },
     {
       "conditionId": "FS-LISTEN-SDK/pending-writes",
@@ -172,7 +173,8 @@
           "A final source-bound artifact comparison with no unexplained mismatch."
         ],
         "recordingsRequired": 2
-      }
+      },
+      "note": "Existing local receipts use the historical catalog. New conf_* sandbox recordings, complete cleanup and final-artifact comparison are still required."
     },
     {
       "conditionId": "FS-LISTEN-SDK/query-change-order",
@@ -184,7 +186,7 @@
       "recipeStatus": "EXISTING_CATALOG_PROPOSED_MAPPING",
       "status": "PENDING_RECORDING",
       "observation": {
-        "method": "Query added, modified, reordered and removed changes with old/new indexes versus an outside-predicate silent control. Include limitToLast reversal and its document change indexes after a bounded update.",
+        "method": "Query added, modified, reordered and removed changes with old/new indexes versus an outside-predicate silent control. Include limitToLast reversal and its document change indexes after a bounded update. Compare one multi-document transaction commit delivered in one SDK callback against separate commits that produce distinct callbacks.",
         "transports": [
           "node-grpc",
           "browser-webchannel-long-polling",
@@ -210,7 +212,8 @@
           "A final source-bound artifact comparison with no unexplained mismatch."
         ],
         "recordingsRequired": 2
-      }
+      },
+      "note": "Existing local receipts use the historical catalog. New conf_* sandbox recordings, complete cleanup and final-artifact comparison are still required."
     },
     {
       "conditionId": "FS-LISTEN-SDK/reconnect-resume",
@@ -248,7 +251,8 @@
           "A final source-bound artifact comparison with no unexplained mismatch."
         ],
         "recordingsRequired": 2
-      }
+      },
+      "note": "Existing local receipts use the historical catalog. New conf_* sandbox recordings, complete cleanup and final-artifact comparison are still required."
     },
     {
       "conditionId": "FS-LISTEN-SDK/unsubscribe",
@@ -286,7 +290,8 @@
           "A final source-bound artifact comparison with no unexplained mismatch."
         ],
         "recordingsRequired": 2
-      }
+      },
+      "note": "Existing local receipts use the historical catalog. New conf_* sandbox recordings, complete cleanup and final-artifact comparison are still required."
     },
     {
       "conditionId": "FS-LISTEN-SDK/initial-unauthenticated-refusal",
@@ -323,7 +328,8 @@
           "A final source-bound artifact comparison with no unexplained mismatch."
         ],
         "recordingsRequired": 2
-      }
+      },
+      "note": "Existing local receipts use the historical catalog. New conf_* sandbox recordings, complete cleanup and final-artifact comparison are still required."
     },
     {
       "conditionId": "FS-LISTEN-SDK/default-subscription",
@@ -361,7 +367,8 @@
           "A final source-bound artifact comparison with no unexplained mismatch."
         ],
         "recordingsRequired": 2
-      }
+      },
+      "note": "Existing local receipts use the historical catalog. New conf_* sandbox recordings, complete cleanup and final-artifact comparison are still required."
     },
     {
       "conditionId": "FS-LISTEN-SDK/cross-principal-rules",
@@ -399,7 +406,8 @@
           "A final source-bound artifact comparison with no unexplained mismatch."
         ],
         "recordingsRequired": 2
-      }
+      },
+      "note": "Existing local receipts use the historical catalog. New conf_* sandbox recordings, complete cleanup and final-artifact comparison are still required."
     },
     {
       "conditionId": "FS-LISTEN-SDK/raw-resume-token",
@@ -430,7 +438,8 @@
           "Final-artifact comparison with complete target state and cleanup."
         ],
         "recordingsRequired": 2
-      }
+      },
+      "note": "Existing local receipts use the historical catalog. New conf_* sandbox recordings, complete cleanup and final-artifact comparison are still required."
     },
     {
       "conditionId": "FS-LISTEN-SDK/browser-tab-lifecycle",
@@ -462,7 +471,8 @@
           "Final-artifact comparison of server-backed state after reconnect, with complete listener, client and tab cleanup."
         ],
         "recordingsRequired": 2
-      }
+      },
+      "note": "Existing local receipts use the historical catalog. New conf_* sandbox recordings, complete cleanup and final-artifact comparison are still required."
     },
     {
       "conditionId": "FS-LISTEN-SDK/existence-filter-reconnect",
@@ -493,7 +503,8 @@
           "Final-artifact comparison with complete target state and cleanup."
         ],
         "recordingsRequired": 2
-      }
+      },
+      "note": "A finite sandbox corpus, two recordings per declared transport, complete cleanup and final-artifact comparison remain required."
     },
     {
       "conditionId": "FS-LISTEN-SDK/backend-cache-transitions",
@@ -522,7 +533,8 @@
           "Final-artifact comparison with complete target state and cleanup."
         ],
         "recordingsRequired": 2
-      }
+      },
+      "note": "A finite sandbox corpus, two recordings per declared transport, complete cleanup and final-artifact comparison remain required."
     },
     {
       "conditionId": "FS-LISTEN-SDK/native-target-protocol",
@@ -550,7 +562,8 @@
           "Final-artifact comparison with complete target state and cleanup."
         ],
         "recordingsRequired": 2
-      }
+      },
+      "note": "A finite sandbox corpus, two recordings per declared transport, complete cleanup and final-artifact comparison remain required."
     },
     {
       "conditionId": "FS-LISTEN-SDK/final-artifact-regression",
@@ -574,7 +587,8 @@
           "Complete source-bound comparisons and independent approval before parent promotion."
         ],
         "recordingsRequired": 0
-      }
+      },
+      "note": "Final-artifact or independent closure review has no production request and remains open until its own evidence is approved."
     },
     {
       "conditionId": "FS-LISTEN-SDK/closure-review",
@@ -598,7 +612,8 @@
           "Complete source-bound comparisons and independent approval before parent promotion."
         ],
         "recordingsRequired": 0
-      }
+      },
+      "note": "Final-artifact or independent closure review has no production request and remains open until its own evidence is approved."
     }
   ],
   "productionPlan": {
@@ -680,5 +695,12 @@
       "decisionRef": "FS-RULES R2",
       "status": "MOVED"
     }
-  ]
+  ],
+  "frozenOn": "2026-09-27",
+  "oracle": {
+    "project": "fireemu-oracle-query",
+    "database": "(default)",
+    "credentials": "Unauthenticated Web SDK for public conf_listen cases and two throwaway Email/Password Firebase Auth accounts for conf_rules_owner cases.",
+    "productionExecuted": false
+  }
 }

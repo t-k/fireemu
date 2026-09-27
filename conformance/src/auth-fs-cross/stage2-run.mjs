@@ -5,6 +5,12 @@
 //   node src/auth-fs-cross/stage2-run.mjs record-production  one recording (AFC2_RECORDING=1 or 2)
 //                                                         against the idp sandbox, under the
 //                                                         packet's approval (see stage2-record.mjs)
+//   node src/auth-fs-cross/stage2-run.mjs build-fixture <dir1> <dir2>
+//                                                         the fixture from the private run
+//                                                         directories of recordings 1 and 2
+//   node src/auth-fs-cross/stage2-run.mjs check [--rows <fireemu.json>]
+//                                                         run the window against fireemu (or
+//                                                         read a saved local run) and compare
 //   node src/auth-fs-cross/stage2-run.mjs local [--smoke [--with-browser] [--skip-clients a,b]]
 //                                                         run the window against fireemu only
 //
@@ -21,10 +27,13 @@ import { resolveFireemuBinary } from "../evidence.mjs";
 import { createContext, SANDBOX_PROJECT } from "../fs-rules/harness.mjs";
 import { STAGE2_PRINCIPALS, STAGE2_PROGRAM } from "./programs-stage2.mjs";
 import { closureTransports, validateStage2 } from "./stage2-corpus.mjs";
+import { scanFixture } from "../auth-account/fixture-scan.mjs";
+import { buildFixture, classifyStage2, comparable } from "./stage2-compare.mjs";
 import { runStage2Window } from "./stage2-orchestrator.mjs";
 import { browserKeyProbe } from "./stage2-record.mjs";
 
 const RUN_DIR = join(CONFORMANCE_DIR, ".runs", "auth-fs-cross-stage2");
+const FIXTURE = join(CONFORMANCE_DIR, "auth-fs-cross-stage2-production.json");
 const CLOSURE = join(
   CONFORMANCE_DIR,
   "..",
@@ -185,10 +194,87 @@ export async function runLocal(program, { profile = "strict" } = {}) {
   return { binary, ...out };
 }
 
+/** Builds the fixture from the private run directories of recordings 1 and 2. */
+async function writeStage2Fixture(dirs) {
+  if (dirs.length !== 2)
+    throw new Error("usage: build-fixture <recording-1 dir> <recording-2 dir>");
+  const { stage2HarnessDigest, stage2ProgramDigest } = await import("./stage2-record.mjs");
+  const loaded = await Promise.all(
+    dirs.map(async (dir) => ({
+      meta: JSON.parse(await readFile(join(dir, "meta.json"), "utf8")),
+      recording: JSON.parse(await readFile(join(dir, "recording.json"), "utf8")),
+    })),
+  );
+  const metas = loaded.map(({ meta }) => meta);
+  if (metas.map((m) => m.recording).join() !== "1,2")
+    throw new Error("the directories are not recordings 1 and 2");
+  if (metas.some((m) => m.outcome !== "recorded"))
+    throw new Error("both recordings must be recorded");
+  const fixture = buildFixture({
+    recordings: loaded.map(({ recording }) => recording),
+    metas,
+    programDigest: stage2ProgramDigest(),
+    harnessDigest: await stage2HarnessDigest(),
+  });
+  const text = `${JSON.stringify(fixture, null, 2)}\n`;
+  const web = JSON.parse(await readFile(process.env.FIREEMU_AUTH_SANDBOX_WEB_CONFIG, "utf8"));
+  scanFixture(text, [web.apiKey, SANDBOX_PROJECT, web.projectNumber, web.appId]);
+  await writeFile(FIXTURE, text);
+  const differing = Object.entries(fixture.rows)
+    .filter(([, row]) => "second" in row)
+    .map(([id]) => id);
+  console.log(JSON.stringify({ rows: Object.keys(fixture.rows).length, differing }, null, 2));
+}
+
+/** Compares fireemu's rows (a fresh window, or a saved local run) with the fixture. */
+async function check(args) {
+  const { stage2HarnessDigest, stage2ProgramDigest } = await import("./stage2-record.mjs");
+  const fixture = JSON.parse(await readFile(FIXTURE, "utf8"));
+  const stale =
+    fixture.programDigest !== stage2ProgramDigest() ||
+    fixture.harnessDigest !== (await stage2HarnessDigest());
+  const rowsAt = args.indexOf("--rows");
+  const local =
+    rowsAt >= 0
+      ? JSON.parse(await readFile(args[rowsAt + 1], "utf8"))
+      : await runLocal((await checkedProgram()).program);
+  const ids = [
+    ...new Set([...Object.keys(fixture.rows), ...Object.keys(local.rows ?? {})]),
+  ].toSorted();
+  const rows = ids.map((id) => {
+    const saved = fixture.rows[id];
+    const fireemu = local.rows?.[id] === undefined ? undefined : comparable(local.rows[id]);
+    const alternative = saved === undefined || !("second" in saved) ? undefined : saved.second;
+    const status = classifyStage2({ stale, production: saved?.production, alternative, fireemu });
+    const out = { row: id, status, production: saved?.production, fireemu };
+    if (alternative !== undefined) out.alternative = alternative;
+    return out;
+  });
+  const summary = {};
+  for (const { status } of rows) summary[status] = (summary[status] ?? 0) + 1;
+  await mkdir(RUN_DIR, { recursive: true, mode: 0o700 });
+  await writeFile(
+    join(RUN_DIR, "comparison.json"),
+    `${JSON.stringify({ summary, cleanupErrors: local.cleanupErrors ?? [], rows }, null, 2)}\n`,
+  );
+  for (const row of rows.filter((r) => r.status !== "MATCH")) {
+    console.log(`\n${row.status} ${row.row}`);
+    console.log(`  production ${String(JSON.stringify(row.production)).slice(0, 400)}`);
+    console.log(`  fireemu    ${String(JSON.stringify(row.fireemu)).slice(0, 400)}`);
+  }
+  console.log(JSON.stringify({ summary, cleanupErrors: local.cleanupErrors ?? [] }, null, 2));
+  if (rows.some((r) => r.status !== "MATCH") || (local.cleanupErrors ?? []).length)
+    process.exitCode = 1;
+}
+
 async function main([command, ...args]) {
   switch (command) {
     case "session-local":
       return sessionLocal();
+    case "build-fixture":
+      return writeStage2Fixture(args);
+    case "check":
+      return check(args);
     case "admission": {
       const { stage2Admission, runnerLimits } = await import("./stage2-record.mjs");
       const result = await stage2Admission();

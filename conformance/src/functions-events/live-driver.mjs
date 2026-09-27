@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { createRequire } from "node:module";
 import { setTimeout as delay } from "node:timers/promises";
+import { runStorageScenario } from "./storage-driver.mjs";
 
 const require = createRequire(import.meta.url);
 const { assertLocalEnvironment } = require("../../functions-events/fixtures/local-host.js");
@@ -400,16 +401,18 @@ async function runFirestoreScenario({ scenario, program, capture, firestore, aut
 export async function createLiveDriver({ projectId }) {
   assertLocalEnvironment();
   assert.match(projectId, /^demo-[a-z0-9-]+$/, "local project ID required");
-  const [{ initializeApp, deleteApp }, { getFirestore }, { getAuth }, { PubSub }] =
+  const [{ initializeApp, deleteApp }, { getFirestore }, { getAuth }, { getStorage }, { PubSub }] =
     await Promise.all([
       import("firebase-admin/app"),
       import("firebase-admin/firestore"),
       import("firebase-admin/auth"),
+      import("firebase-admin/storage"),
       import("@google-cloud/pubsub"),
     ]);
   const app = initializeApp({ projectId }, `functions-events-${randomUUID()}`);
   const firestore = getFirestore(app);
   const auth = getAuth(app);
+  const storage = getStorage(app);
   const pubsub = new PubSub({ projectId });
   return {
     async runScenario({ scenario, program, capture }) {
@@ -422,6 +425,9 @@ export async function createLiveDriver({ projectId }) {
       }
       if (scenario.source === "pubsub") {
         return runPubsubScenario({ scenario, capture, pubsub });
+      }
+      if (scenario.source === "storage") {
+        return runStorageScenario({ scenario, capture, storage });
       }
       throw new Error(`local driver for ${scenario.source} is not yet implemented`);
     },

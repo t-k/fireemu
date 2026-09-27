@@ -136,7 +136,7 @@ test("the issuer site refuses a bad run, a foreign issuer path and any secret", 
   }
   assert.throws(() => site("a1b2c3", "https://h.web.app/oidc/d4e5f6"), /is not \/oidc\/a1b2c3/);
   assert.throws(() => site("a1b2c3", "https://h.web.app/oidc/a1b2c3", ["h.web"]), /sandbox secret/);
-  assert.throws(() => scanPublished('{"x":"AIzaSyA0123456789abcdefghijklmnop"}'), /API key/);
+  assert.throws(() => scanPublished(`{"x":"${"AIza"}${"Sy".padEnd(35, "0")}"}`), /API key/);
   assert.throws(() => scanPublished("-----BEGIN PRIVATE KEY-----"), /private key material/);
   assert.throws(() => scanPublished('{"k": "secret"}'), /private key material/);
   assert.throws(

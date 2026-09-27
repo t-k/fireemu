@@ -20,7 +20,7 @@ const handlerNames = {
 };
 const budgetKeys = ["deploy", "sourceMutation", "captureRead", "cleanup"];
 const unique = (values) => [...new Set(values)];
-const sorted = (values) => [...values].sort();
+const sorted = (values) => values.toSorted();
 
 /** Validate the local program inventory; this grants no production send permission. */
 export function validatePrograms(value, corpus, closure) {
@@ -66,7 +66,10 @@ export function validatePrograms(value, corpus, closure) {
     const rows = corpus.cases.filter((row) => row.recipeId === program.recipeId);
     const condition = behavioral.find(({ recipeIds }) => recipeIds[0] === program.recipeId);
     assert.ok(condition && rows.length > 0, program.recipeId);
-    assert.deepEqual(program.caseIds, rows.map((row) => row.id));
+    assert.deepEqual(
+      program.caseIds,
+      rows.map((row) => row.id),
+    );
     assert.deepEqual(program.scenarioIds, unique(rows.map((row) => row.scenario)));
     assert.deepEqual(program.sourceOrder, program.scenarioIds);
     assert.deepEqual(program.generations, condition.generations);
@@ -92,10 +95,7 @@ export function validatePrograms(value, corpus, closure) {
       assert.ok(program.generations.includes(row.generation));
       assert.ok(program.scenarioIds.includes(row.scenario));
     }
-    assert.deepEqual(
-      sorted(Object.keys(program.productionRequestBudgetDraft)),
-      sorted(budgetKeys),
-    );
+    assert.deepEqual(sorted(Object.keys(program.productionRequestBudgetDraft)), sorted(budgetKeys));
     for (const key of budgetKeys) {
       const count = program.productionRequestBudgetDraft[key];
       assert.ok(Number.isSafeInteger(count) && count >= 0 && count <= 10_000, key);

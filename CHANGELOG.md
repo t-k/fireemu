@@ -65,6 +65,7 @@ These follow production Firestore as recorded on 2026-09-24 (FS-QUERY-INDEX). Un
 Firestore write limits: the emulator profile adds no refusal the pinned official emulator (firebase-tools 15.28.2, Firestore emulator v1.22.0) does not make, measured on 2026-09-27.
 
 - Both profiles: every transport (REST, WebChannel, gRPC unary and streamed) accepts requests up to 11,534,336 bytes and refuses a larger one with production's REST Commit answer, HTTP 400 `INVALID_ARGUMENT` `Request payload size exceeds the limit: 11534336 bytes.` (gRPC code 3). The emulator profile used to refuse from 10,485,761 bytes with HTTP 413 `request body too large` or gRPC `OUT_OF_RANGE`.
+- Strict profile: a map or array value is no longer refused for its aggregate size. Production accepted a map of 1,048,488 logical bytes, one over the 1,048,487-byte field-value figure, so only the 1 MiB document limit bounds an aggregate value. A single string or bytes payload over 1,048,487 bytes is still refused under both profiles.
 - Strict profile only: index accounting (more than 40,000 index entries, an index entry over 7,680 bytes, the indexed-string and document-name guards, and the create transaction budget) refuses a write as production does. The emulator profile now counts these without refusing, as the official emulator accepted every such write. An implied field path over 1,500 bytes is still refused under both profiles.
 ### Fixed
 

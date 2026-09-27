@@ -5186,19 +5186,10 @@ fn validate_value(
         }
         _ => scalar_size(value)?,
     };
-    // `FS-LIMIT-FIELD-VALUE-BYTES` on an aggregate. The catalog's unit is logical bytes, so
-    // a map or an array is measured with the official storage-size formula; a string or a
-    // bytes payload keeps the raw-payload metric observed above. The saved aggregate-map
-    // observations establish that map accounting does not add 32 bytes. The aggregate
-    // threshold itself is not bracketed, so only the strict profile refuses one: the
-    // compatibility contract forbids adding a refusal to the `emulator` profile. The check
-    // runs after the recursion so that the innermost violation is the one reported.
-    if scope == LimitScope::Production
-        && matches!(value, Value::Array(_) | Value::Map(_))
-        && size > limits::MAX_FIELD_PAYLOAD_BYTES as u64
-    {
-        return Err(field_value_too_long(property_path));
-    }
+    // `FS-LIMIT-FIELD-VALUE-BYTES` is not applied to a map or an array as a whole: production
+    // accepted a map of 1,048,488 logical bytes, one over the catalog figure (FS-DATA-WRITE
+    // bracket recording, 2026-09-27), so only `FS-LIMIT-DOCUMENT-BYTES` bounds an aggregate.
+    // A string or a bytes payload keeps the raw-payload limit observed above.
     Ok(size)
 }
 

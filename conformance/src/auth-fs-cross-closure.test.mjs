@@ -27,7 +27,22 @@ const statuses = new Set([
   "VERIFIED",
   "PENDING_REVIEW",
 ]);
-const requiredScopeDecisions = ["C1", "C2", "C3", "C4", "C5", "C6", "C7", "C8", "C9", "OX-1", "OX-2", "OX-3", "X3", "X9"];
+const requiredScopeDecisions = [
+  "C1",
+  "C2",
+  "C3",
+  "C4",
+  "C5",
+  "C6",
+  "C7",
+  "C8",
+  "C9",
+  "OX-1",
+  "OX-2",
+  "OX-3",
+  "X3",
+  "X9",
+];
 // Conditions that C1 moved to FS-RULES, where they are VERIFIED; they must not come back.
 const movedToFsRules = [
   "principal-get-query",
@@ -41,7 +56,12 @@ test("AUTH-FS-CROSS closure inventory cannot silently omit or add a condition", 
   const closure = load();
   assert.equal(closure.parent, "AUTH-FS-CROSS");
   const ids = closure.conditions.map(({ conditionId }) => conditionId);
-  assert.deepEqual(ids.toSorted(), Object.keys(conditions).map((id) => `AUTH-FS-CROSS/${id}`).toSorted());
+  assert.deepEqual(
+    ids.toSorted(),
+    Object.keys(conditions)
+      .map((id) => `AUTH-FS-CROSS/${id}`)
+      .toSorted(),
+  );
   for (const moved of movedToFsRules) assert.ok(!ids.includes(`AUTH-FS-CROSS/${moved}`), moved);
 });
 
@@ -61,7 +81,11 @@ test("every AUTH-FS-CROSS condition names its scope, stage, recipe and status", 
   assert.deepEqual(closure.productionPlan.stages, stages);
   // Catalog cases that FS-RULES R2 moved from FS-LISTEN-SDK are each owned by exactly one condition.
   const cases = closure.conditions.flatMap(({ observation }) => observation.catalogCases ?? []);
-  assert.deepEqual(cases.toSorted(), ["FS-LISTEN-SDK-106", "FS-LISTEN-SDK-109", "FS-LISTEN-SDK-109C"]);
+  assert.deepEqual(cases.toSorted(), [
+    "FS-LISTEN-SDK-106",
+    "FS-LISTEN-SDK-109",
+    "FS-LISTEN-SDK-109C",
+  ]);
 });
 
 test("AUTH-FS-CROSS scope decisions are recorded, not implied", () => {
@@ -70,12 +94,17 @@ test("AUTH-FS-CROSS scope decisions are recorded, not implied", () => {
   for (const id of requiredScopeDecisions) assert.ok(decided.has(id), `scope decision ${id}`);
   for (const decision of closure.scopeDecisions) {
     assert.ok(decision.decision?.trim(), decision.id);
-    assert.match(decision.decidedBy, /^(owner|coordinator)/, `${decision.id}: owner or delegated coordinator`);
+    assert.match(
+      decision.decidedBy,
+      /^(owner|coordinator)/,
+      `${decision.id}: owner or delegated coordinator`,
+    );
     assert.match(decision.decidedOn, /^\d{4}-\d{2}-\d{2}$/, decision.id);
     if (decision.id.startsWith("OX-") || decision.id === "X3" || decision.id === "X9")
       assert.match(decision.decidedBy, /^owner/, `${decision.id}: only the owner decides it`);
     for (const key of ["movedTo", "movedFrom"])
-      if (decision[key]) assert.match(decision[key], /^(AUTH|FS)-[A-Z-]+$/, `${decision.id}: ${key}`);
+      if (decision[key])
+        assert.match(decision[key], /^(AUTH|FS)-[A-Z-]+$/, `${decision.id}: ${key}`);
   }
   assert.equal(closure.scopeDecisions.find(({ id }) => id === "C1").movedTo, "FS-RULES");
   assert.equal(closure.scopeDecisions.find(({ id }) => id === "C3").movedFrom, "FS-LISTEN-SDK");

@@ -44,6 +44,7 @@ function fakeCloud({
   sources = [],
   uploads = [],
   repository = { cleanupPolicies: { [CLEANUP_POLICY.id]: CLEANUP_POLICY } },
+  now,
 } = {}) {
   const state = {
     functions: [...functions],
@@ -107,11 +108,13 @@ function fakeCloud({
     return json(404, {});
   };
   const runs = [];
+  const runOptions = [];
   const run = async (file, args, options = {}) => {
     // As execFile: a missing working directory fails the spawn.
     if (options.cwd && !existsSync(options.cwd))
       throw Object.assign(new Error("spawn ENOENT"), { code: "ENOENT" });
     runs.push([file.split("/").at(-1), ...args].join(" "));
+    runOptions.push(options);
     if (args[0] === "deploy") {
       state.functions.push(...Object.values(FIXTURE_FUNCTIONS));
       state.blocking = {
@@ -135,8 +138,9 @@ function fakeCloud({
     fetchImpl,
     run,
     retryMs: 0,
+    ...(now ? { now } : {}),
   });
-  return { state, calls, runs, deployer };
+  return { state, calls, runs, runOptions, deployer };
 }
 
 const buildDir = async () => join(await mkdtemp(join(tmpdir(), "atb-deploy-")), "build");
@@ -357,4 +361,50 @@ test("a restore removal works without a build copy (confirmation SF-C1)", async 
   await deployer.remove(dir);
   assert.deepEqual(state.functions, []);
   assert.deepEqual(state.blocking, {});
+});
+
+test(
+  "a removal cannot hang on a request that never answers (review S4)",
+  { timeout: 15_000 },
+  async () => {
+    const { deployer, state } = fakeCloud();
+    const dir = join(await mkdtemp(join(tmpdir(), "atb-hang-")), "build");
+    await deployer.preflight();
+    await deployer.deploy(source, dir);
+    // From here every REST request hangs until its signal aborts it.
+    const hanging = createDeployer({
+      project: PROJECT,
+      number: NUMBER,
+      token: async () => "ya29.fake",
+      fetchImpl: (_url, init = {}) =>
+        new Promise((_resolve, reject) => {
+          if (!init.signal) return; // never settles: the test would time out
+          init.signal.addEventListener("abort", () => reject(init.signal.reason), { once: true });
+        }),
+      run: async () => ({ stdout: "", stderr: "" }),
+      retryMs: 0,
+      requestTimeoutMs: 20,
+    });
+    hanging.adoptLeftovers();
+    const started = Date.now();
+    await assert.rejects(hanging.remove(dir));
+    assert.ok(Date.now() - started < 10_000, "the removal ended");
+    assert.ok(state.functions.length > 0, "the fake cloud was not reached");
+  },
+);
+
+test("functions:delete gets at most the time left until the public deadline (review S4)", async () => {
+  let clock = Date.parse("2026-09-27T12:00:00Z");
+  const { deployer, runs, runOptions } = fakeCloud({ now: () => clock });
+  const dir = join(await mkdtemp(join(tmpdir(), "atb-deadline-")), "build");
+  await deployer.preflight();
+  await deployer.deploy(source, dir);
+  clock += 55 * 60_000;
+  await deployer.remove(dir);
+  const index = runs.findIndex((r) => r.startsWith("firebase functions:delete"));
+  assert.ok(index >= 0);
+  assert.equal(runOptions[index].timeout, 5 * 60_000);
+  // Past the deadline the deletion still runs, with the shortest timeout.
+  clock += 60 * 60_000;
+  assert.equal(deployer.deletionTimeoutMs(), 60_000);
 });

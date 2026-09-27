@@ -75,6 +75,8 @@ export function deploymentCliEnv(source = process.env) {
   return env;
 }
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+/** The fixture's services are public for at most about this long from the deployment (TB1). */
+export const PUBLIC_DEADLINE_MINUTES = 60;
 
 /**
  * The cleanup policy firebase-tools expects on `gcf-artifacts` (functions/artifacts.js): with it
@@ -155,6 +157,9 @@ export function createDeployer({
   fetchImpl = fetch,
   run = execFileAsync,
   retryMs = 5000,
+  // Every REST request is abandoned after this long, so no removal step can hang (review S4).
+  requestTimeoutMs = 30_000,
+  now = Date.now,
 }) {
   if (project !== "fireemu-oracle-idp")
     throw new Error("the fixture is deployed only to the sandbox");
@@ -170,6 +175,7 @@ export function createDeployer({
     const response = await fetchImpl(url, {
       method,
       redirect: "error",
+      signal: AbortSignal.timeout(requestTimeoutMs),
       headers: {
         authorization: `Bearer ${await token()}`,
         "x-goog-user-project": project,
@@ -185,6 +191,17 @@ export function createDeployer({
       /* not JSON */
     }
     return { status: response.status, json };
+  }
+
+  /**
+   * The CLI deletion gets the time left until the public deadline (TB1: about an hour from the
+   * start of the deployment), at most 20 minutes and at least one: past the deadline the
+   * functions are still deleted, as fast as the CLI can (review S4).
+   */
+  function deletionTimeoutMs() {
+    const started = deployStarted?.getTime() ?? now();
+    const left = started + PUBLIC_DEADLINE_MINUTES * 60_000 - now();
+    return Math.min(20 * 60_000, Math.max(60_000, left));
   }
 
   /** The CLI in its own process group (a terminal signal does not kill it, SF-3). */
@@ -318,7 +335,7 @@ export function createDeployer({
       throw cliFailure("npm ci", error, project, number);
     }
     log("deploying the blocking fixture (pinned firebase-tools)");
-    deployStarted = new Date();
+    deployStarted = new Date(now());
     try {
       await cli(
         [
@@ -359,6 +376,7 @@ export function createDeployer({
       await fetchImpl(triggers[event].functionUri, {
         method: "POST",
         redirect: "error",
+        signal: AbortSignal.timeout(requestTimeoutMs),
         headers: { "content-type": "application/json" },
         body: "{}",
       }).catch(() => undefined);
@@ -456,7 +474,7 @@ export function createDeployer({
             // (a non-interactive run otherwise aborts); it changes no policy.
             "--force",
           ],
-          { cwd: buildDir, timeout: 1_200_000 },
+          { cwd: buildDir, timeout: deletionTimeoutMs() },
         );
       } catch (error) {
         throw cliFailure("firebase functions:delete", error, project, number);
@@ -556,6 +574,7 @@ export function createDeployer({
     remove,
     cliVersion,
     deployStarted: () => deployStarted,
+    deletionTimeoutMs,
     /** What the preflight changed on gcf-artifacts, also when it failed afterwards (SF-C3). */
     repositoryChange: () => repositoryChange,
     requests: () => requests,

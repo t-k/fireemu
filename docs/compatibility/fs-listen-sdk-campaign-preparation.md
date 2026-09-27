@@ -209,18 +209,7 @@ the permission and transport bindings.
 
 ## Local shadow
 
-The current shadow receipt was regenerated from commit `b691969d997a34319f5b6fa87c01eea6a498cb05`
-with the pinned Firebase SDK `12.18.0`. All eighteen cases agreed with their
-expected local result, both throwaway accounts were deleted and proved absent,
-and the revocation case ended the listener with `unauthenticated` as recorded. The collector ran
-the full catalog against an owned local `fireemu` instance
-started by `fireemu exec` with the Firestore and Auth emulators on OS-assigned
-ports. The runtime was built from this worktree with `cargo build -p fireemu`,
-never taken from another checkout: a prebuilt binary elsewhere can predate
-branch-only fixes and describe a different commit. The receipt therefore names
-the binary it ran, its SHA-256 and the commit it was built from. Every listener
-closed, no invariant was violated, and cleanup proved absence for every owned
-path.
+The current Node and browser shadow receipts were regenerated from commit `cc29cdb46170a557c18286a4d568d87edfb32c94` with the pinned Firebase SDK `12.18.0`. All eighteen cases agreed with their expected local result in each recording, both throwaway accounts were deleted and proved absent, and the revocation case ended the listener with `unauthenticated` as recorded. The collectors ran the full catalog against owned local `fireemu` instances started by `fireemu exec` with the Firestore and Auth emulators on OS-assigned ports. The runtime was built from this worktree with `cargo build -p fireemu`, never taken from another checkout: a prebuilt binary elsewhere can predate branch-only fixes and describe a different commit. The receipts therefore name the binary they ran, its SHA-256 and the commit it was built from. Every listener closed, no invariant was violated, and cleanup proved absence for every owned path.
 
 The current receipt is checked in at `spec/compatibility/fs-listen-sdk-local-shadow.json`,
 with the campaign it ran under at `fs-listen-sdk-local-shadow-campaign.json`. The

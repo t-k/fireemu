@@ -1,21 +1,21 @@
 {
   "schema": "o6-listen-observation-v1",
   "caseId": "FS-LISTEN-SDK",
-  "campaignDigest": "de3e2eb7733344e776caac54417f62708dfe2841d2edf79b0dd643542d9c4a3b",
+  "campaignDigest": "8482929315034c25e68006590262fc55971b7a2d8d256e886f384755ebc738c0",
   "catalogDigest": "a91a671ae9e65518d11fa0ab1e442492eeebb06ca9baaced76289f377f07713f",
   "productionExecuted": false,
   "environment": {
     "kind": "local-fireemu",
     "node": "24.14.0",
-    "sourceCommit": "e0d53f912eb425d6c4f725be46e2452d08ed6634",
-    "firebaseSdk": null,
+    "sourceCommit": "cc29cdb46170a557c18286a4d568d87edfb32c94",
+    "firebaseSdk": "12.18.0",
     "fireemuBinary": "target/debug/fireemu",
-    "fireemuBinaryDigest": "d13c45c8b29b75336ea735a533f17c68e27cbdf4dfa4144b85e8b54f08a89fa4",
-    "fireemuSourceCommit": "e0d53f912eb425d6c4f725be46e2452d08ed6634",
+    "fireemuBinaryDigest": "5fdeb6e754e57f5cbba0f92bf22b5626ede4f48460887ebd428525bbd5e268ec",
+    "fireemuSourceCommit": "cc29cdb46170a557c18286a4d568d87edfb32c94",
     "rulesPath": "tools/compat-broad/fs-listen-resume/fs-listen-sdk.rules",
     "rulesDigest": "f60a988c929ea7e26feb4645e1d8134979b91adea56d3ccb9a747cbeb1e41f34",
     "projectId": "demo-o6",
-    "nonceDigest": "a0e7b5b94d995a42ccf6a247caec1e69851da094baa61344185274e929073357"
+    "nonceDigest": "8d40c9f7b5d5574141adc5c167907c8bad32f3d2a43148f0e52c7eb753d348de"
   },
   "budget": {
     "used": {
@@ -60,37 +60,37 @@
     "rows": [
       {
         "name": "alpha",
-        "pathDigest": "ca6b046571be27b38fd8438d0a5be94ffe7343c8761b28fea6d3311b0016ca3f",
+        "pathDigest": "d6b9fca94b2905d1b33eb1e603ecffb812f6c1e0c759c86835b37d7daabea037",
         "outcome": "already-deleted-earlier",
         "detail": null
       },
       {
         "name": "beta",
-        "pathDigest": "d092c377e56c48c6f2e246c8f8a2ae5f280be9ee155c18941d6aa41025adecb9",
+        "pathDigest": "a042c618ec3af4854ea7b0446a784c23be2cdd1925a526df5bc72ede2f4cb87b",
         "outcome": "already-deleted-earlier",
         "detail": null
       },
       {
         "name": "gamma",
-        "pathDigest": "90c3d6eff6ab46f50d9e2c7c5ef14a1f19de162e22e28e0c223efa5ffd9ae666",
+        "pathDigest": "3b00c9024d356fb6eddbeafd9c845d3da63833c4d3f12aa8ed90eaaf47d873c6",
         "outcome": "already-deleted-earlier",
         "detail": null
       },
       {
         "name": "absent",
-        "pathDigest": "b16b5bfe5e493bb593ab4998a2ef3247a638537c30df1c55819d3a0ff6cd8bc7",
+        "pathDigest": "274930f53e56e980754d5665656b2d6251b3fde84d1e5e2c892a439f2d9e6c15",
         "outcome": "not-created",
         "detail": null
       },
       {
         "name": "private",
-        "pathDigest": "f44727d88307c4f19cfa8cb1e09531e02a58bef1db03dd7b3eac7850cfcc2d63",
+        "pathDigest": "29747790825af79954d5d5dfc5bbf5c884aadf583d212c345e616e1f4918d142",
         "outcome": "already-deleted-earlier",
         "detail": null
       },
       {
         "name": "privateB",
-        "pathDigest": "ef5ffb2bbb8fbc598348307bc51ea7d74f79670a0f6d4aff6c445f7058bc0cd6",
+        "pathDigest": "3fe73c5990ff912f82174779232097be837ab9ba1cd6b02383fe6f5e124d94ee",
         "outcome": "already-deleted-earlier",
         "detail": null
       }
@@ -106,37 +106,37 @@
       "rows": [
         {
           "name": "alpha",
-          "pathDigest": "ca6b046571be27b38fd8438d0a5be94ffe7343c8761b28fea6d3311b0016ca3f",
+          "pathDigest": "d6b9fca94b2905d1b33eb1e603ecffb812f6c1e0c759c86835b37d7daabea037",
           "outcome": "deleted-and-absent",
           "detail": null
         },
         {
           "name": "beta",
-          "pathDigest": "d092c377e56c48c6f2e246c8f8a2ae5f280be9ee155c18941d6aa41025adecb9",
+          "pathDigest": "a042c618ec3af4854ea7b0446a784c23be2cdd1925a526df5bc72ede2f4cb87b",
           "outcome": "not-created",
           "detail": null
         },
         {
           "name": "gamma",
-          "pathDigest": "90c3d6eff6ab46f50d9e2c7c5ef14a1f19de162e22e28e0c223efa5ffd9ae666",
+          "pathDigest": "3b00c9024d356fb6eddbeafd9c845d3da63833c4d3f12aa8ed90eaaf47d873c6",
           "outcome": "not-created",
           "detail": null
         },
         {
           "name": "absent",
-          "pathDigest": "b16b5bfe5e493bb593ab4998a2ef3247a638537c30df1c55819d3a0ff6cd8bc7",
+          "pathDigest": "274930f53e56e980754d5665656b2d6251b3fde84d1e5e2c892a439f2d9e6c15",
           "outcome": "not-created",
           "detail": null
         },
         {
           "name": "private",
-          "pathDigest": "f44727d88307c4f19cfa8cb1e09531e02a58bef1db03dd7b3eac7850cfcc2d63",
+          "pathDigest": "29747790825af79954d5d5dfc5bbf5c884aadf583d212c345e616e1f4918d142",
           "outcome": "not-created",
           "detail": null
         },
         {
           "name": "privateB",
-          "pathDigest": "ef5ffb2bbb8fbc598348307bc51ea7d74f79670a0f6d4aff6c445f7058bc0cd6",
+          "pathDigest": "3fe73c5990ff912f82174779232097be837ab9ba1cd6b02383fe6f5e124d94ee",
           "outcome": "not-created",
           "detail": null
         }
@@ -149,37 +149,37 @@
       "rows": [
         {
           "name": "alpha",
-          "pathDigest": "ca6b046571be27b38fd8438d0a5be94ffe7343c8761b28fea6d3311b0016ca3f",
+          "pathDigest": "d6b9fca94b2905d1b33eb1e603ecffb812f6c1e0c759c86835b37d7daabea037",
           "outcome": "already-deleted-earlier",
           "detail": null
         },
         {
           "name": "beta",
-          "pathDigest": "d092c377e56c48c6f2e246c8f8a2ae5f280be9ee155c18941d6aa41025adecb9",
+          "pathDigest": "a042c618ec3af4854ea7b0446a784c23be2cdd1925a526df5bc72ede2f4cb87b",
           "outcome": "not-created",
           "detail": null
         },
         {
           "name": "gamma",
-          "pathDigest": "90c3d6eff6ab46f50d9e2c7c5ef14a1f19de162e22e28e0c223efa5ffd9ae666",
+          "pathDigest": "3b00c9024d356fb6eddbeafd9c845d3da63833c4d3f12aa8ed90eaaf47d873c6",
           "outcome": "not-created",
           "detail": null
         },
         {
           "name": "absent",
-          "pathDigest": "b16b5bfe5e493bb593ab4998a2ef3247a638537c30df1c55819d3a0ff6cd8bc7",
+          "pathDigest": "274930f53e56e980754d5665656b2d6251b3fde84d1e5e2c892a439f2d9e6c15",
           "outcome": "not-created",
           "detail": null
         },
         {
           "name": "private",
-          "pathDigest": "f44727d88307c4f19cfa8cb1e09531e02a58bef1db03dd7b3eac7850cfcc2d63",
+          "pathDigest": "29747790825af79954d5d5dfc5bbf5c884aadf583d212c345e616e1f4918d142",
           "outcome": "not-created",
           "detail": null
         },
         {
           "name": "privateB",
-          "pathDigest": "ef5ffb2bbb8fbc598348307bc51ea7d74f79670a0f6d4aff6c445f7058bc0cd6",
+          "pathDigest": "3fe73c5990ff912f82174779232097be837ab9ba1cd6b02383fe6f5e124d94ee",
           "outcome": "not-created",
           "detail": null
         }
@@ -192,37 +192,37 @@
       "rows": [
         {
           "name": "alpha",
-          "pathDigest": "ca6b046571be27b38fd8438d0a5be94ffe7343c8761b28fea6d3311b0016ca3f",
+          "pathDigest": "d6b9fca94b2905d1b33eb1e603ecffb812f6c1e0c759c86835b37d7daabea037",
           "outcome": "already-deleted-earlier",
           "detail": null
         },
         {
           "name": "beta",
-          "pathDigest": "d092c377e56c48c6f2e246c8f8a2ae5f280be9ee155c18941d6aa41025adecb9",
+          "pathDigest": "a042c618ec3af4854ea7b0446a784c23be2cdd1925a526df5bc72ede2f4cb87b",
           "outcome": "deleted-and-absent",
           "detail": null
         },
         {
           "name": "gamma",
-          "pathDigest": "90c3d6eff6ab46f50d9e2c7c5ef14a1f19de162e22e28e0c223efa5ffd9ae666",
+          "pathDigest": "3b00c9024d356fb6eddbeafd9c845d3da63833c4d3f12aa8ed90eaaf47d873c6",
           "outcome": "not-created",
           "detail": null
         },
         {
           "name": "absent",
-          "pathDigest": "b16b5bfe5e493bb593ab4998a2ef3247a638537c30df1c55819d3a0ff6cd8bc7",
+          "pathDigest": "274930f53e56e980754d5665656b2d6251b3fde84d1e5e2c892a439f2d9e6c15",
           "outcome": "not-created",
           "detail": null
         },
         {
           "name": "private",
-          "pathDigest": "f44727d88307c4f19cfa8cb1e09531e02a58bef1db03dd7b3eac7850cfcc2d63",
+          "pathDigest": "29747790825af79954d5d5dfc5bbf5c884aadf583d212c345e616e1f4918d142",
           "outcome": "not-created",
           "detail": null
         },
         {
           "name": "privateB",
-          "pathDigest": "ef5ffb2bbb8fbc598348307bc51ea7d74f79670a0f6d4aff6c445f7058bc0cd6",
+          "pathDigest": "3fe73c5990ff912f82174779232097be837ab9ba1cd6b02383fe6f5e124d94ee",
           "outcome": "not-created",
           "detail": null
         }
@@ -235,37 +235,37 @@
       "rows": [
         {
           "name": "alpha",
-          "pathDigest": "ca6b046571be27b38fd8438d0a5be94ffe7343c8761b28fea6d3311b0016ca3f",
+          "pathDigest": "d6b9fca94b2905d1b33eb1e603ecffb812f6c1e0c759c86835b37d7daabea037",
           "outcome": "already-deleted-earlier",
           "detail": null
         },
         {
           "name": "beta",
-          "pathDigest": "d092c377e56c48c6f2e246c8f8a2ae5f280be9ee155c18941d6aa41025adecb9",
+          "pathDigest": "a042c618ec3af4854ea7b0446a784c23be2cdd1925a526df5bc72ede2f4cb87b",
           "outcome": "deleted-and-absent",
           "detail": null
         },
         {
           "name": "gamma",
-          "pathDigest": "90c3d6eff6ab46f50d9e2c7c5ef14a1f19de162e22e28e0c223efa5ffd9ae666",
+          "pathDigest": "3b00c9024d356fb6eddbeafd9c845d3da63833c4d3f12aa8ed90eaaf47d873c6",
           "outcome": "not-created",
           "detail": null
         },
         {
           "name": "absent",
-          "pathDigest": "b16b5bfe5e493bb593ab4998a2ef3247a638537c30df1c55819d3a0ff6cd8bc7",
+          "pathDigest": "274930f53e56e980754d5665656b2d6251b3fde84d1e5e2c892a439f2d9e6c15",
           "outcome": "not-created",
           "detail": null
         },
         {
           "name": "private",
-          "pathDigest": "f44727d88307c4f19cfa8cb1e09531e02a58bef1db03dd7b3eac7850cfcc2d63",
+          "pathDigest": "29747790825af79954d5d5dfc5bbf5c884aadf583d212c345e616e1f4918d142",
           "outcome": "not-created",
           "detail": null
         },
         {
           "name": "privateB",
-          "pathDigest": "ef5ffb2bbb8fbc598348307bc51ea7d74f79670a0f6d4aff6c445f7058bc0cd6",
+          "pathDigest": "3fe73c5990ff912f82174779232097be837ab9ba1cd6b02383fe6f5e124d94ee",
           "outcome": "not-created",
           "detail": null
         }
@@ -278,37 +278,37 @@
       "rows": [
         {
           "name": "alpha",
-          "pathDigest": "ca6b046571be27b38fd8438d0a5be94ffe7343c8761b28fea6d3311b0016ca3f",
+          "pathDigest": "d6b9fca94b2905d1b33eb1e603ecffb812f6c1e0c759c86835b37d7daabea037",
           "outcome": "already-deleted-earlier",
           "detail": null
         },
         {
           "name": "beta",
-          "pathDigest": "d092c377e56c48c6f2e246c8f8a2ae5f280be9ee155c18941d6aa41025adecb9",
+          "pathDigest": "a042c618ec3af4854ea7b0446a784c23be2cdd1925a526df5bc72ede2f4cb87b",
           "outcome": "deleted-and-absent",
           "detail": null
         },
         {
           "name": "gamma",
-          "pathDigest": "90c3d6eff6ab46f50d9e2c7c5ef14a1f19de162e22e28e0c223efa5ffd9ae666",
+          "pathDigest": "3b00c9024d356fb6eddbeafd9c845d3da63833c4d3f12aa8ed90eaaf47d873c6",
           "outcome": "not-created",
           "detail": null
         },
         {
           "name": "absent",
-          "pathDigest": "b16b5bfe5e493bb593ab4998a2ef3247a638537c30df1c55819d3a0ff6cd8bc7",
+          "pathDigest": "274930f53e56e980754d5665656b2d6251b3fde84d1e5e2c892a439f2d9e6c15",
           "outcome": "not-created",
           "detail": null
         },
         {
           "name": "private",
-          "pathDigest": "f44727d88307c4f19cfa8cb1e09531e02a58bef1db03dd7b3eac7850cfcc2d63",
+          "pathDigest": "29747790825af79954d5d5dfc5bbf5c884aadf583d212c345e616e1f4918d142",
           "outcome": "not-created",
           "detail": null
         },
         {
           "name": "privateB",
-          "pathDigest": "ef5ffb2bbb8fbc598348307bc51ea7d74f79670a0f6d4aff6c445f7058bc0cd6",
+          "pathDigest": "3fe73c5990ff912f82174779232097be837ab9ba1cd6b02383fe6f5e124d94ee",
           "outcome": "not-created",
           "detail": null
         }
@@ -321,37 +321,37 @@
       "rows": [
         {
           "name": "alpha",
-          "pathDigest": "ca6b046571be27b38fd8438d0a5be94ffe7343c8761b28fea6d3311b0016ca3f",
+          "pathDigest": "d6b9fca94b2905d1b33eb1e603ecffb812f6c1e0c759c86835b37d7daabea037",
           "outcome": "deleted-and-absent",
           "detail": null
         },
         {
           "name": "beta",
-          "pathDigest": "d092c377e56c48c6f2e246c8f8a2ae5f280be9ee155c18941d6aa41025adecb9",
+          "pathDigest": "a042c618ec3af4854ea7b0446a784c23be2cdd1925a526df5bc72ede2f4cb87b",
           "outcome": "already-deleted-earlier",
           "detail": null
         },
         {
           "name": "gamma",
-          "pathDigest": "90c3d6eff6ab46f50d9e2c7c5ef14a1f19de162e22e28e0c223efa5ffd9ae666",
+          "pathDigest": "3b00c9024d356fb6eddbeafd9c845d3da63833c4d3f12aa8ed90eaaf47d873c6",
           "outcome": "deleted-and-absent",
           "detail": null
         },
         {
           "name": "absent",
-          "pathDigest": "b16b5bfe5e493bb593ab4998a2ef3247a638537c30df1c55819d3a0ff6cd8bc7",
+          "pathDigest": "274930f53e56e980754d5665656b2d6251b3fde84d1e5e2c892a439f2d9e6c15",
           "outcome": "not-created",
           "detail": null
         },
         {
           "name": "private",
-          "pathDigest": "f44727d88307c4f19cfa8cb1e09531e02a58bef1db03dd7b3eac7850cfcc2d63",
+          "pathDigest": "29747790825af79954d5d5dfc5bbf5c884aadf583d212c345e616e1f4918d142",
           "outcome": "not-created",
           "detail": null
         },
         {
           "name": "privateB",
-          "pathDigest": "ef5ffb2bbb8fbc598348307bc51ea7d74f79670a0f6d4aff6c445f7058bc0cd6",
+          "pathDigest": "3fe73c5990ff912f82174779232097be837ab9ba1cd6b02383fe6f5e124d94ee",
           "outcome": "not-created",
           "detail": null
         }
@@ -364,37 +364,37 @@
       "rows": [
         {
           "name": "alpha",
-          "pathDigest": "ca6b046571be27b38fd8438d0a5be94ffe7343c8761b28fea6d3311b0016ca3f",
+          "pathDigest": "d6b9fca94b2905d1b33eb1e603ecffb812f6c1e0c759c86835b37d7daabea037",
           "outcome": "deleted-and-absent",
           "detail": null
         },
         {
           "name": "beta",
-          "pathDigest": "d092c377e56c48c6f2e246c8f8a2ae5f280be9ee155c18941d6aa41025adecb9",
+          "pathDigest": "a042c618ec3af4854ea7b0446a784c23be2cdd1925a526df5bc72ede2f4cb87b",
           "outcome": "deleted-and-absent",
           "detail": null
         },
         {
           "name": "gamma",
-          "pathDigest": "90c3d6eff6ab46f50d9e2c7c5ef14a1f19de162e22e28e0c223efa5ffd9ae666",
+          "pathDigest": "3b00c9024d356fb6eddbeafd9c845d3da63833c4d3f12aa8ed90eaaf47d873c6",
           "outcome": "deleted-and-absent",
           "detail": null
         },
         {
           "name": "absent",
-          "pathDigest": "b16b5bfe5e493bb593ab4998a2ef3247a638537c30df1c55819d3a0ff6cd8bc7",
+          "pathDigest": "274930f53e56e980754d5665656b2d6251b3fde84d1e5e2c892a439f2d9e6c15",
           "outcome": "not-created",
           "detail": null
         },
         {
           "name": "private",
-          "pathDigest": "f44727d88307c4f19cfa8cb1e09531e02a58bef1db03dd7b3eac7850cfcc2d63",
+          "pathDigest": "29747790825af79954d5d5dfc5bbf5c884aadf583d212c345e616e1f4918d142",
           "outcome": "not-created",
           "detail": null
         },
         {
           "name": "privateB",
-          "pathDigest": "ef5ffb2bbb8fbc598348307bc51ea7d74f79670a0f6d4aff6c445f7058bc0cd6",
+          "pathDigest": "3fe73c5990ff912f82174779232097be837ab9ba1cd6b02383fe6f5e124d94ee",
           "outcome": "not-created",
           "detail": null
         }
@@ -407,37 +407,37 @@
       "rows": [
         {
           "name": "alpha",
-          "pathDigest": "ca6b046571be27b38fd8438d0a5be94ffe7343c8761b28fea6d3311b0016ca3f",
+          "pathDigest": "d6b9fca94b2905d1b33eb1e603ecffb812f6c1e0c759c86835b37d7daabea037",
           "outcome": "deleted-and-absent",
           "detail": null
         },
         {
           "name": "beta",
-          "pathDigest": "d092c377e56c48c6f2e246c8f8a2ae5f280be9ee155c18941d6aa41025adecb9",
+          "pathDigest": "a042c618ec3af4854ea7b0446a784c23be2cdd1925a526df5bc72ede2f4cb87b",
           "outcome": "deleted-and-absent",
           "detail": null
         },
         {
           "name": "gamma",
-          "pathDigest": "90c3d6eff6ab46f50d9e2c7c5ef14a1f19de162e22e28e0c223efa5ffd9ae666",
+          "pathDigest": "3b00c9024d356fb6eddbeafd9c845d3da63833c4d3f12aa8ed90eaaf47d873c6",
           "outcome": "deleted-and-absent",
           "detail": null
         },
         {
           "name": "absent",
-          "pathDigest": "b16b5bfe5e493bb593ab4998a2ef3247a638537c30df1c55819d3a0ff6cd8bc7",
+          "pathDigest": "274930f53e56e980754d5665656b2d6251b3fde84d1e5e2c892a439f2d9e6c15",
           "outcome": "not-created",
           "detail": null
         },
         {
           "name": "private",
-          "pathDigest": "f44727d88307c4f19cfa8cb1e09531e02a58bef1db03dd7b3eac7850cfcc2d63",
+          "pathDigest": "29747790825af79954d5d5dfc5bbf5c884aadf583d212c345e616e1f4918d142",
           "outcome": "not-created",
           "detail": null
         },
         {
           "name": "privateB",
-          "pathDigest": "ef5ffb2bbb8fbc598348307bc51ea7d74f79670a0f6d4aff6c445f7058bc0cd6",
+          "pathDigest": "3fe73c5990ff912f82174779232097be837ab9ba1cd6b02383fe6f5e124d94ee",
           "outcome": "not-created",
           "detail": null
         }
@@ -450,37 +450,37 @@
       "rows": [
         {
           "name": "alpha",
-          "pathDigest": "ca6b046571be27b38fd8438d0a5be94ffe7343c8761b28fea6d3311b0016ca3f",
+          "pathDigest": "d6b9fca94b2905d1b33eb1e603ecffb812f6c1e0c759c86835b37d7daabea037",
           "outcome": "deleted-and-absent",
           "detail": null
         },
         {
           "name": "beta",
-          "pathDigest": "d092c377e56c48c6f2e246c8f8a2ae5f280be9ee155c18941d6aa41025adecb9",
+          "pathDigest": "a042c618ec3af4854ea7b0446a784c23be2cdd1925a526df5bc72ede2f4cb87b",
           "outcome": "already-deleted-earlier",
           "detail": null
         },
         {
           "name": "gamma",
-          "pathDigest": "90c3d6eff6ab46f50d9e2c7c5ef14a1f19de162e22e28e0c223efa5ffd9ae666",
+          "pathDigest": "3b00c9024d356fb6eddbeafd9c845d3da63833c4d3f12aa8ed90eaaf47d873c6",
           "outcome": "already-deleted-earlier",
           "detail": null
         },
         {
           "name": "absent",
-          "pathDigest": "b16b5bfe5e493bb593ab4998a2ef3247a638537c30df1c55819d3a0ff6cd8bc7",
+          "pathDigest": "274930f53e56e980754d5665656b2d6251b3fde84d1e5e2c892a439f2d9e6c15",
           "outcome": "not-created",
           "detail": null
         },
         {
           "name": "private",
-          "pathDigest": "f44727d88307c4f19cfa8cb1e09531e02a58bef1db03dd7b3eac7850cfcc2d63",
+          "pathDigest": "29747790825af79954d5d5dfc5bbf5c884aadf583d212c345e616e1f4918d142",
           "outcome": "not-created",
           "detail": null
         },
         {
           "name": "privateB",
-          "pathDigest": "ef5ffb2bbb8fbc598348307bc51ea7d74f79670a0f6d4aff6c445f7058bc0cd6",
+          "pathDigest": "3fe73c5990ff912f82174779232097be837ab9ba1cd6b02383fe6f5e124d94ee",
           "outcome": "not-created",
           "detail": null
         }
@@ -493,37 +493,37 @@
       "rows": [
         {
           "name": "alpha",
-          "pathDigest": "ca6b046571be27b38fd8438d0a5be94ffe7343c8761b28fea6d3311b0016ca3f",
+          "pathDigest": "d6b9fca94b2905d1b33eb1e603ecffb812f6c1e0c759c86835b37d7daabea037",
           "outcome": "deleted-and-absent",
           "detail": null
         },
         {
           "name": "beta",
-          "pathDigest": "d092c377e56c48c6f2e246c8f8a2ae5f280be9ee155c18941d6aa41025adecb9",
+          "pathDigest": "a042c618ec3af4854ea7b0446a784c23be2cdd1925a526df5bc72ede2f4cb87b",
           "outcome": "already-deleted-earlier",
           "detail": null
         },
         {
           "name": "gamma",
-          "pathDigest": "90c3d6eff6ab46f50d9e2c7c5ef14a1f19de162e22e28e0c223efa5ffd9ae666",
+          "pathDigest": "3b00c9024d356fb6eddbeafd9c845d3da63833c4d3f12aa8ed90eaaf47d873c6",
           "outcome": "already-deleted-earlier",
           "detail": null
         },
         {
           "name": "absent",
-          "pathDigest": "b16b5bfe5e493bb593ab4998a2ef3247a638537c30df1c55819d3a0ff6cd8bc7",
+          "pathDigest": "274930f53e56e980754d5665656b2d6251b3fde84d1e5e2c892a439f2d9e6c15",
           "outcome": "not-created",
           "detail": null
         },
         {
           "name": "private",
-          "pathDigest": "f44727d88307c4f19cfa8cb1e09531e02a58bef1db03dd7b3eac7850cfcc2d63",
+          "pathDigest": "29747790825af79954d5d5dfc5bbf5c884aadf583d212c345e616e1f4918d142",
           "outcome": "not-created",
           "detail": null
         },
         {
           "name": "privateB",
-          "pathDigest": "ef5ffb2bbb8fbc598348307bc51ea7d74f79670a0f6d4aff6c445f7058bc0cd6",
+          "pathDigest": "3fe73c5990ff912f82174779232097be837ab9ba1cd6b02383fe6f5e124d94ee",
           "outcome": "not-created",
           "detail": null
         }
@@ -536,37 +536,37 @@
       "rows": [
         {
           "name": "alpha",
-          "pathDigest": "ca6b046571be27b38fd8438d0a5be94ffe7343c8761b28fea6d3311b0016ca3f",
+          "pathDigest": "d6b9fca94b2905d1b33eb1e603ecffb812f6c1e0c759c86835b37d7daabea037",
           "outcome": "already-deleted-earlier",
           "detail": null
         },
         {
           "name": "beta",
-          "pathDigest": "d092c377e56c48c6f2e246c8f8a2ae5f280be9ee155c18941d6aa41025adecb9",
+          "pathDigest": "a042c618ec3af4854ea7b0446a784c23be2cdd1925a526df5bc72ede2f4cb87b",
           "outcome": "already-deleted-earlier",
           "detail": null
         },
         {
           "name": "gamma",
-          "pathDigest": "90c3d6eff6ab46f50d9e2c7c5ef14a1f19de162e22e28e0c223efa5ffd9ae666",
+          "pathDigest": "3b00c9024d356fb6eddbeafd9c845d3da63833c4d3f12aa8ed90eaaf47d873c6",
           "outcome": "already-deleted-earlier",
           "detail": null
         },
         {
           "name": "absent",
-          "pathDigest": "b16b5bfe5e493bb593ab4998a2ef3247a638537c30df1c55819d3a0ff6cd8bc7",
+          "pathDigest": "274930f53e56e980754d5665656b2d6251b3fde84d1e5e2c892a439f2d9e6c15",
           "outcome": "not-created",
           "detail": null
         },
         {
           "name": "private",
-          "pathDigest": "f44727d88307c4f19cfa8cb1e09531e02a58bef1db03dd7b3eac7850cfcc2d63",
+          "pathDigest": "29747790825af79954d5d5dfc5bbf5c884aadf583d212c345e616e1f4918d142",
           "outcome": "deleted-and-absent",
           "detail": null
         },
         {
           "name": "privateB",
-          "pathDigest": "ef5ffb2bbb8fbc598348307bc51ea7d74f79670a0f6d4aff6c445f7058bc0cd6",
+          "pathDigest": "3fe73c5990ff912f82174779232097be837ab9ba1cd6b02383fe6f5e124d94ee",
           "outcome": "not-created",
           "detail": null
         }
@@ -579,37 +579,37 @@
       "rows": [
         {
           "name": "alpha",
-          "pathDigest": "ca6b046571be27b38fd8438d0a5be94ffe7343c8761b28fea6d3311b0016ca3f",
+          "pathDigest": "d6b9fca94b2905d1b33eb1e603ecffb812f6c1e0c759c86835b37d7daabea037",
           "outcome": "already-deleted-earlier",
           "detail": null
         },
         {
           "name": "beta",
-          "pathDigest": "d092c377e56c48c6f2e246c8f8a2ae5f280be9ee155c18941d6aa41025adecb9",
+          "pathDigest": "a042c618ec3af4854ea7b0446a784c23be2cdd1925a526df5bc72ede2f4cb87b",
           "outcome": "already-deleted-earlier",
           "detail": null
         },
         {
           "name": "gamma",
-          "pathDigest": "90c3d6eff6ab46f50d9e2c7c5ef14a1f19de162e22e28e0c223efa5ffd9ae666",
+          "pathDigest": "3b00c9024d356fb6eddbeafd9c845d3da63833c4d3f12aa8ed90eaaf47d873c6",
           "outcome": "already-deleted-earlier",
           "detail": null
         },
         {
           "name": "absent",
-          "pathDigest": "b16b5bfe5e493bb593ab4998a2ef3247a638537c30df1c55819d3a0ff6cd8bc7",
+          "pathDigest": "274930f53e56e980754d5665656b2d6251b3fde84d1e5e2c892a439f2d9e6c15",
           "outcome": "not-created",
           "detail": null
         },
         {
           "name": "private",
-          "pathDigest": "f44727d88307c4f19cfa8cb1e09531e02a58bef1db03dd7b3eac7850cfcc2d63",
+          "pathDigest": "29747790825af79954d5d5dfc5bbf5c884aadf583d212c345e616e1f4918d142",
           "outcome": "already-deleted-earlier",
           "detail": null
         },
         {
           "name": "privateB",
-          "pathDigest": "ef5ffb2bbb8fbc598348307bc51ea7d74f79670a0f6d4aff6c445f7058bc0cd6",
+          "pathDigest": "3fe73c5990ff912f82174779232097be837ab9ba1cd6b02383fe6f5e124d94ee",
           "outcome": "not-created",
           "detail": null
         }
@@ -622,37 +622,37 @@
       "rows": [
         {
           "name": "alpha",
-          "pathDigest": "ca6b046571be27b38fd8438d0a5be94ffe7343c8761b28fea6d3311b0016ca3f",
+          "pathDigest": "d6b9fca94b2905d1b33eb1e603ecffb812f6c1e0c759c86835b37d7daabea037",
           "outcome": "deleted-and-absent",
           "detail": null
         },
         {
           "name": "beta",
-          "pathDigest": "d092c377e56c48c6f2e246c8f8a2ae5f280be9ee155c18941d6aa41025adecb9",
+          "pathDigest": "a042c618ec3af4854ea7b0446a784c23be2cdd1925a526df5bc72ede2f4cb87b",
           "outcome": "already-deleted-earlier",
           "detail": null
         },
         {
           "name": "gamma",
-          "pathDigest": "90c3d6eff6ab46f50d9e2c7c5ef14a1f19de162e22e28e0c223efa5ffd9ae666",
+          "pathDigest": "3b00c9024d356fb6eddbeafd9c845d3da63833c4d3f12aa8ed90eaaf47d873c6",
           "outcome": "already-deleted-earlier",
           "detail": null
         },
         {
           "name": "absent",
-          "pathDigest": "b16b5bfe5e493bb593ab4998a2ef3247a638537c30df1c55819d3a0ff6cd8bc7",
+          "pathDigest": "274930f53e56e980754d5665656b2d6251b3fde84d1e5e2c892a439f2d9e6c15",
           "outcome": "not-created",
           "detail": null
         },
         {
           "name": "private",
-          "pathDigest": "f44727d88307c4f19cfa8cb1e09531e02a58bef1db03dd7b3eac7850cfcc2d63",
+          "pathDigest": "29747790825af79954d5d5dfc5bbf5c884aadf583d212c345e616e1f4918d142",
           "outcome": "already-deleted-earlier",
           "detail": null
         },
         {
           "name": "privateB",
-          "pathDigest": "ef5ffb2bbb8fbc598348307bc51ea7d74f79670a0f6d4aff6c445f7058bc0cd6",
+          "pathDigest": "3fe73c5990ff912f82174779232097be837ab9ba1cd6b02383fe6f5e124d94ee",
           "outcome": "not-created",
           "detail": null
         }
@@ -665,37 +665,37 @@
       "rows": [
         {
           "name": "alpha",
-          "pathDigest": "ca6b046571be27b38fd8438d0a5be94ffe7343c8761b28fea6d3311b0016ca3f",
+          "pathDigest": "d6b9fca94b2905d1b33eb1e603ecffb812f6c1e0c759c86835b37d7daabea037",
           "outcome": "deleted-and-absent",
           "detail": null
         },
         {
           "name": "beta",
-          "pathDigest": "d092c377e56c48c6f2e246c8f8a2ae5f280be9ee155c18941d6aa41025adecb9",
+          "pathDigest": "a042c618ec3af4854ea7b0446a784c23be2cdd1925a526df5bc72ede2f4cb87b",
           "outcome": "already-deleted-earlier",
           "detail": null
         },
         {
           "name": "gamma",
-          "pathDigest": "90c3d6eff6ab46f50d9e2c7c5ef14a1f19de162e22e28e0c223efa5ffd9ae666",
+          "pathDigest": "3b00c9024d356fb6eddbeafd9c845d3da63833c4d3f12aa8ed90eaaf47d873c6",
           "outcome": "already-deleted-earlier",
           "detail": null
         },
         {
           "name": "absent",
-          "pathDigest": "b16b5bfe5e493bb593ab4998a2ef3247a638537c30df1c55819d3a0ff6cd8bc7",
+          "pathDigest": "274930f53e56e980754d5665656b2d6251b3fde84d1e5e2c892a439f2d9e6c15",
           "outcome": "not-created",
           "detail": null
         },
         {
           "name": "private",
-          "pathDigest": "f44727d88307c4f19cfa8cb1e09531e02a58bef1db03dd7b3eac7850cfcc2d63",
+          "pathDigest": "29747790825af79954d5d5dfc5bbf5c884aadf583d212c345e616e1f4918d142",
           "outcome": "already-deleted-earlier",
           "detail": null
         },
         {
           "name": "privateB",
-          "pathDigest": "ef5ffb2bbb8fbc598348307bc51ea7d74f79670a0f6d4aff6c445f7058bc0cd6",
+          "pathDigest": "3fe73c5990ff912f82174779232097be837ab9ba1cd6b02383fe6f5e124d94ee",
           "outcome": "not-created",
           "detail": null
         }
@@ -708,37 +708,37 @@
       "rows": [
         {
           "name": "alpha",
-          "pathDigest": "ca6b046571be27b38fd8438d0a5be94ffe7343c8761b28fea6d3311b0016ca3f",
+          "pathDigest": "d6b9fca94b2905d1b33eb1e603ecffb812f6c1e0c759c86835b37d7daabea037",
           "outcome": "already-deleted-earlier",
           "detail": null
         },
         {
           "name": "beta",
-          "pathDigest": "d092c377e56c48c6f2e246c8f8a2ae5f280be9ee155c18941d6aa41025adecb9",
+          "pathDigest": "a042c618ec3af4854ea7b0446a784c23be2cdd1925a526df5bc72ede2f4cb87b",
           "outcome": "already-deleted-earlier",
           "detail": null
         },
         {
           "name": "gamma",
-          "pathDigest": "90c3d6eff6ab46f50d9e2c7c5ef14a1f19de162e22e28e0c223efa5ffd9ae666",
+          "pathDigest": "3b00c9024d356fb6eddbeafd9c845d3da63833c4d3f12aa8ed90eaaf47d873c6",
           "outcome": "already-deleted-earlier",
           "detail": null
         },
         {
           "name": "absent",
-          "pathDigest": "b16b5bfe5e493bb593ab4998a2ef3247a638537c30df1c55819d3a0ff6cd8bc7",
+          "pathDigest": "274930f53e56e980754d5665656b2d6251b3fde84d1e5e2c892a439f2d9e6c15",
           "outcome": "not-created",
           "detail": null
         },
         {
           "name": "private",
-          "pathDigest": "f44727d88307c4f19cfa8cb1e09531e02a58bef1db03dd7b3eac7850cfcc2d63",
+          "pathDigest": "29747790825af79954d5d5dfc5bbf5c884aadf583d212c345e616e1f4918d142",
           "outcome": "already-deleted-earlier",
           "detail": null
         },
         {
           "name": "privateB",
-          "pathDigest": "ef5ffb2bbb8fbc598348307bc51ea7d74f79670a0f6d4aff6c445f7058bc0cd6",
+          "pathDigest": "3fe73c5990ff912f82174779232097be837ab9ba1cd6b02383fe6f5e124d94ee",
           "outcome": "deleted-and-absent",
           "detail": null
         }
@@ -751,37 +751,37 @@
       "rows": [
         {
           "name": "alpha",
-          "pathDigest": "ca6b046571be27b38fd8438d0a5be94ffe7343c8761b28fea6d3311b0016ca3f",
+          "pathDigest": "d6b9fca94b2905d1b33eb1e603ecffb812f6c1e0c759c86835b37d7daabea037",
           "outcome": "already-deleted-earlier",
           "detail": null
         },
         {
           "name": "beta",
-          "pathDigest": "d092c377e56c48c6f2e246c8f8a2ae5f280be9ee155c18941d6aa41025adecb9",
+          "pathDigest": "a042c618ec3af4854ea7b0446a784c23be2cdd1925a526df5bc72ede2f4cb87b",
           "outcome": "already-deleted-earlier",
           "detail": null
         },
         {
           "name": "gamma",
-          "pathDigest": "90c3d6eff6ab46f50d9e2c7c5ef14a1f19de162e22e28e0c223efa5ffd9ae666",
+          "pathDigest": "3b00c9024d356fb6eddbeafd9c845d3da63833c4d3f12aa8ed90eaaf47d873c6",
           "outcome": "already-deleted-earlier",
           "detail": null
         },
         {
           "name": "absent",
-          "pathDigest": "b16b5bfe5e493bb593ab4998a2ef3247a638537c30df1c55819d3a0ff6cd8bc7",
+          "pathDigest": "274930f53e56e980754d5665656b2d6251b3fde84d1e5e2c892a439f2d9e6c15",
           "outcome": "not-created",
           "detail": null
         },
         {
           "name": "private",
-          "pathDigest": "f44727d88307c4f19cfa8cb1e09531e02a58bef1db03dd7b3eac7850cfcc2d63",
+          "pathDigest": "29747790825af79954d5d5dfc5bbf5c884aadf583d212c345e616e1f4918d142",
           "outcome": "already-deleted-earlier",
           "detail": null
         },
         {
           "name": "privateB",
-          "pathDigest": "ef5ffb2bbb8fbc598348307bc51ea7d74f79670a0f6d4aff6c445f7058bc0cd6",
+          "pathDigest": "3fe73c5990ff912f82174779232097be837ab9ba1cd6b02383fe6f5e124d94ee",
           "outcome": "deleted-and-absent",
           "detail": null
         }
@@ -794,37 +794,37 @@
       "rows": [
         {
           "name": "alpha",
-          "pathDigest": "ca6b046571be27b38fd8438d0a5be94ffe7343c8761b28fea6d3311b0016ca3f",
+          "pathDigest": "d6b9fca94b2905d1b33eb1e603ecffb812f6c1e0c759c86835b37d7daabea037",
           "outcome": "already-deleted-earlier",
           "detail": null
         },
         {
           "name": "beta",
-          "pathDigest": "d092c377e56c48c6f2e246c8f8a2ae5f280be9ee155c18941d6aa41025adecb9",
+          "pathDigest": "a042c618ec3af4854ea7b0446a784c23be2cdd1925a526df5bc72ede2f4cb87b",
           "outcome": "already-deleted-earlier",
           "detail": null
         },
         {
           "name": "gamma",
-          "pathDigest": "90c3d6eff6ab46f50d9e2c7c5ef14a1f19de162e22e28e0c223efa5ffd9ae666",
+          "pathDigest": "3b00c9024d356fb6eddbeafd9c845d3da63833c4d3f12aa8ed90eaaf47d873c6",
           "outcome": "already-deleted-earlier",
           "detail": null
         },
         {
           "name": "absent",
-          "pathDigest": "b16b5bfe5e493bb593ab4998a2ef3247a638537c30df1c55819d3a0ff6cd8bc7",
+          "pathDigest": "274930f53e56e980754d5665656b2d6251b3fde84d1e5e2c892a439f2d9e6c15",
           "outcome": "not-created",
           "detail": null
         },
         {
           "name": "private",
-          "pathDigest": "f44727d88307c4f19cfa8cb1e09531e02a58bef1db03dd7b3eac7850cfcc2d63",
+          "pathDigest": "29747790825af79954d5d5dfc5bbf5c884aadf583d212c345e616e1f4918d142",
           "outcome": "deleted-and-absent",
           "detail": null
         },
         {
           "name": "privateB",
-          "pathDigest": "ef5ffb2bbb8fbc598348307bc51ea7d74f79670a0f6d4aff6c445f7058bc0cd6",
+          "pathDigest": "3fe73c5990ff912f82174779232097be837ab9ba1cd6b02383fe6f5e124d94ee",
           "outcome": "deleted-and-absent",
           "detail": null
         }
@@ -837,37 +837,37 @@
       "rows": [
         {
           "name": "alpha",
-          "pathDigest": "ca6b046571be27b38fd8438d0a5be94ffe7343c8761b28fea6d3311b0016ca3f",
+          "pathDigest": "d6b9fca94b2905d1b33eb1e603ecffb812f6c1e0c759c86835b37d7daabea037",
           "outcome": "already-deleted-earlier",
           "detail": null
         },
         {
           "name": "beta",
-          "pathDigest": "d092c377e56c48c6f2e246c8f8a2ae5f280be9ee155c18941d6aa41025adecb9",
+          "pathDigest": "a042c618ec3af4854ea7b0446a784c23be2cdd1925a526df5bc72ede2f4cb87b",
           "outcome": "already-deleted-earlier",
           "detail": null
         },
         {
           "name": "gamma",
-          "pathDigest": "90c3d6eff6ab46f50d9e2c7c5ef14a1f19de162e22e28e0c223efa5ffd9ae666",
+          "pathDigest": "3b00c9024d356fb6eddbeafd9c845d3da63833c4d3f12aa8ed90eaaf47d873c6",
           "outcome": "already-deleted-earlier",
           "detail": null
         },
         {
           "name": "absent",
-          "pathDigest": "b16b5bfe5e493bb593ab4998a2ef3247a638537c30df1c55819d3a0ff6cd8bc7",
+          "pathDigest": "274930f53e56e980754d5665656b2d6251b3fde84d1e5e2c892a439f2d9e6c15",
           "outcome": "not-created",
           "detail": null
         },
         {
           "name": "private",
-          "pathDigest": "f44727d88307c4f19cfa8cb1e09531e02a58bef1db03dd7b3eac7850cfcc2d63",
+          "pathDigest": "29747790825af79954d5d5dfc5bbf5c884aadf583d212c345e616e1f4918d142",
           "outcome": "deleted-and-absent",
           "detail": null
         },
         {
           "name": "privateB",
-          "pathDigest": "ef5ffb2bbb8fbc598348307bc51ea7d74f79670a0f6d4aff6c445f7058bc0cd6",
+          "pathDigest": "3fe73c5990ff912f82174779232097be837ab9ba1cd6b02383fe6f5e124d94ee",
           "outcome": "deleted-and-absent",
           "detail": null
         }
@@ -880,37 +880,37 @@
       "rows": [
         {
           "name": "alpha",
-          "pathDigest": "ca6b046571be27b38fd8438d0a5be94ffe7343c8761b28fea6d3311b0016ca3f",
+          "pathDigest": "d6b9fca94b2905d1b33eb1e603ecffb812f6c1e0c759c86835b37d7daabea037",
           "outcome": "already-deleted-earlier",
           "detail": null
         },
         {
           "name": "beta",
-          "pathDigest": "d092c377e56c48c6f2e246c8f8a2ae5f280be9ee155c18941d6aa41025adecb9",
+          "pathDigest": "a042c618ec3af4854ea7b0446a784c23be2cdd1925a526df5bc72ede2f4cb87b",
           "outcome": "already-deleted-earlier",
           "detail": null
         },
         {
           "name": "gamma",
-          "pathDigest": "90c3d6eff6ab46f50d9e2c7c5ef14a1f19de162e22e28e0c223efa5ffd9ae666",
+          "pathDigest": "3b00c9024d356fb6eddbeafd9c845d3da63833c4d3f12aa8ed90eaaf47d873c6",
           "outcome": "already-deleted-earlier",
           "detail": null
         },
         {
           "name": "absent",
-          "pathDigest": "b16b5bfe5e493bb593ab4998a2ef3247a638537c30df1c55819d3a0ff6cd8bc7",
+          "pathDigest": "274930f53e56e980754d5665656b2d6251b3fde84d1e5e2c892a439f2d9e6c15",
           "outcome": "not-created",
           "detail": null
         },
         {
           "name": "private",
-          "pathDigest": "f44727d88307c4f19cfa8cb1e09531e02a58bef1db03dd7b3eac7850cfcc2d63",
+          "pathDigest": "29747790825af79954d5d5dfc5bbf5c884aadf583d212c345e616e1f4918d142",
           "outcome": "already-deleted-earlier",
           "detail": null
         },
         {
           "name": "privateB",
-          "pathDigest": "ef5ffb2bbb8fbc598348307bc51ea7d74f79670a0f6d4aff6c445f7058bc0cd6",
+          "pathDigest": "3fe73c5990ff912f82174779232097be837ab9ba1cd6b02383fe6f5e124d94ee",
           "outcome": "already-deleted-earlier",
           "detail": null
         }
@@ -979,7 +979,7 @@
       "transportTimeline": [
         {
           "kind": "connect",
-          "atMs": 147,
+          "atMs": 187,
           "derivedFrom": "first server-backed snapshot"
         }
       ],
@@ -1039,7 +1039,7 @@
       "transportTimeline": [
         {
           "kind": "connect",
-          "atMs": 205,
+          "atMs": 249,
           "derivedFrom": "first server-backed snapshot"
         }
       ],
@@ -1139,7 +1139,7 @@
       "transportTimeline": [
         {
           "kind": "connect",
-          "atMs": 247,
+          "atMs": 290,
           "derivedFrom": "first server-backed snapshot"
         }
       ],
@@ -1215,7 +1215,7 @@
       "transportTimeline": [
         {
           "kind": "connect",
-          "atMs": 322,
+          "atMs": 367,
           "derivedFrom": "first server-backed snapshot"
         }
       ],
@@ -1396,7 +1396,7 @@
       "transportTimeline": [
         {
           "kind": "connect",
-          "atMs": 406,
+          "atMs": 453,
           "derivedFrom": "first server-backed snapshot"
         }
       ],
@@ -1458,7 +1458,7 @@
       "transportTimeline": [
         {
           "kind": "connect",
-          "atMs": 540,
+          "atMs": 586,
           "derivedFrom": "first server-backed snapshot"
         }
       ],
@@ -1598,27 +1598,27 @@
       "transportTimeline": [
         {
           "kind": "connect",
-          "atMs": 3599,
+          "atMs": 3643,
           "derivedFrom": "first server-backed snapshot"
         },
         {
           "kind": "break-requested",
-          "atMs": 3624,
+          "atMs": 3668,
           "derivedFrom": "collector called disableNetwork"
         },
         {
           "kind": "disconnect",
-          "atMs": 3627,
+          "atMs": 3669,
           "derivedFrom": "listener fell back to the local cache"
         },
         {
           "kind": "resume-requested",
-          "atMs": 3628,
+          "atMs": 3672,
           "derivedFrom": "collector called enableNetwork"
         },
         {
           "kind": "reconnect",
-          "atMs": 3632,
+          "atMs": 3676,
           "derivedFrom": "first server-backed snapshot"
         }
       ],
@@ -1759,7 +1759,7 @@
       "transportTimeline": [
         {
           "kind": "connect",
-          "atMs": 8664,
+          "atMs": 8710,
           "derivedFrom": "first server-backed snapshot"
         }
       ],
@@ -1861,7 +1861,7 @@
       "transportTimeline": [
         {
           "kind": "connect",
-          "atMs": 13728,
+          "atMs": 13773,
           "derivedFrom": "first server-backed snapshot"
         }
       ],
@@ -1987,7 +1987,7 @@
       "transportTimeline": [
         {
           "kind": "connect",
-          "atMs": 16804,
+          "atMs": 16854,
           "derivedFrom": "first server-backed snapshot"
         }
       ],
@@ -2097,17 +2097,17 @@
       "transportTimeline": [
         {
           "kind": "connect",
-          "atMs": 16880,
+          "atMs": 16933,
           "derivedFrom": "first server-backed snapshot"
         },
         {
           "kind": "disconnect",
-          "atMs": 16932,
+          "atMs": 16988,
           "derivedFrom": "listener fell back to the local cache"
         },
         {
           "kind": "connect",
-          "atMs": 16934,
+          "atMs": 16990,
           "derivedFrom": "first server-backed snapshot"
         }
       ],
@@ -2239,7 +2239,7 @@
       "transportTimeline": [
         {
           "kind": "connect",
-          "atMs": 20027,
+          "atMs": 20089,
           "derivedFrom": "first server-backed snapshot"
         }
       ],
@@ -2397,7 +2397,7 @@
       "transportTimeline": [
         {
           "kind": "connect",
-          "atMs": 29128,
+          "atMs": 29220,
           "derivedFrom": "first server-backed snapshot"
         }
       ],
@@ -2471,12 +2471,12 @@
       "transportTimeline": [
         {
           "kind": "connect",
-          "atMs": 30379,
+          "atMs": 30487,
           "derivedFrom": "first server-backed snapshot"
         },
         {
           "kind": "revoke-requested",
-          "atMs": 30403,
+          "atMs": 30510,
           "derivedFrom": "collector asked the adapter to revoke the session"
         }
       ],
@@ -2554,7 +2554,7 @@
       "transportTimeline": [
         {
           "kind": "connect",
-          "atMs": 31664,
+          "atMs": 31771,
           "derivedFrom": "first server-backed snapshot"
         }
       ],
@@ -2573,140 +2573,140 @@
   "transportTimeline": [
     {
       "kind": "connect",
-      "atMs": 147,
+      "atMs": 187,
       "derivedFrom": "first server-backed snapshot",
       "caseId": "FS-LISTEN-SDK-101"
     },
     {
       "kind": "connect",
-      "atMs": 205,
+      "atMs": 249,
       "derivedFrom": "first server-backed snapshot",
       "caseId": "FS-LISTEN-SDK-101C"
     },
     {
       "kind": "connect",
-      "atMs": 247,
+      "atMs": 290,
       "derivedFrom": "first server-backed snapshot",
       "caseId": "FS-LISTEN-SDK-102"
     },
     {
       "kind": "connect",
-      "atMs": 322,
+      "atMs": 367,
       "derivedFrom": "first server-backed snapshot",
       "caseId": "FS-LISTEN-SDK-102C"
     },
     {
       "kind": "connect",
-      "atMs": 406,
+      "atMs": 453,
       "derivedFrom": "first server-backed snapshot",
       "caseId": "FS-LISTEN-SDK-103"
     },
     {
       "kind": "connect",
-      "atMs": 540,
+      "atMs": 586,
       "derivedFrom": "first server-backed snapshot",
       "caseId": "FS-LISTEN-SDK-103C"
     },
     {
       "kind": "connect",
-      "atMs": 3599,
+      "atMs": 3643,
       "derivedFrom": "first server-backed snapshot",
       "caseId": "FS-LISTEN-SDK-104"
     },
     {
       "kind": "break-requested",
-      "atMs": 3624,
+      "atMs": 3668,
       "derivedFrom": "collector called disableNetwork",
       "caseId": "FS-LISTEN-SDK-104"
     },
     {
       "kind": "disconnect",
-      "atMs": 3627,
+      "atMs": 3669,
       "derivedFrom": "listener fell back to the local cache",
       "caseId": "FS-LISTEN-SDK-104"
     },
     {
       "kind": "resume-requested",
-      "atMs": 3628,
+      "atMs": 3672,
       "derivedFrom": "collector called enableNetwork",
       "caseId": "FS-LISTEN-SDK-104"
     },
     {
       "kind": "reconnect",
-      "atMs": 3632,
+      "atMs": 3676,
       "derivedFrom": "first server-backed snapshot",
       "caseId": "FS-LISTEN-SDK-104"
     },
     {
       "kind": "connect",
-      "atMs": 8664,
+      "atMs": 8710,
       "derivedFrom": "first server-backed snapshot",
       "caseId": "FS-LISTEN-SDK-104C"
     },
     {
       "kind": "connect",
-      "atMs": 13728,
+      "atMs": 13773,
       "derivedFrom": "first server-backed snapshot",
       "caseId": "FS-LISTEN-SDK-105"
     },
     {
       "kind": "connect",
-      "atMs": 16804,
+      "atMs": 16854,
       "derivedFrom": "first server-backed snapshot",
       "caseId": "FS-LISTEN-SDK-105C"
     },
     {
       "kind": "connect",
-      "atMs": 16880,
+      "atMs": 16933,
       "derivedFrom": "first server-backed snapshot",
       "caseId": "FS-LISTEN-SDK-106"
     },
     {
       "kind": "disconnect",
-      "atMs": 16932,
+      "atMs": 16988,
       "derivedFrom": "listener fell back to the local cache",
       "caseId": "FS-LISTEN-SDK-106"
     },
     {
       "kind": "connect",
-      "atMs": 16934,
+      "atMs": 16990,
       "derivedFrom": "first server-backed snapshot",
       "caseId": "FS-LISTEN-SDK-106"
     },
     {
       "kind": "connect",
-      "atMs": 20027,
+      "atMs": 20089,
       "derivedFrom": "first server-backed snapshot",
       "caseId": "FS-LISTEN-SDK-107"
     },
     {
       "kind": "connect",
-      "atMs": 29128,
+      "atMs": 29220,
       "derivedFrom": "first server-backed snapshot",
       "caseId": "FS-LISTEN-SDK-108C"
     },
     {
       "kind": "connect",
-      "atMs": 30379,
+      "atMs": 30487,
       "derivedFrom": "first server-backed snapshot",
       "caseId": "FS-LISTEN-SDK-109"
     },
     {
       "kind": "revoke-requested",
-      "atMs": 30403,
+      "atMs": 30510,
       "derivedFrom": "collector asked the adapter to revoke the session",
       "caseId": "FS-LISTEN-SDK-109"
     },
     {
       "kind": "connect",
-      "atMs": 31664,
+      "atMs": 31771,
       "derivedFrom": "first server-backed snapshot",
       "caseId": "FS-LISTEN-SDK-109C"
     }
   ],
   "sourceDigests": {
     "tools/compat-broad/fs-listen-resume/listen_collector.mjs": "1c641bfcc9ffa2720ff2fe6cdc94c23911c5b10d4fa149b5cd1fba15e8780893",
-    "tools/compat-broad/fs-listen-resume/listen_sdk_adapter.mjs": "1cd755958d1fe8293ecefc0c0d0d18ba455db803e6dbaad7eb4d2545af3c3e19",
+    "tools/compat-broad/fs-listen-resume/listen_sdk_adapter.mjs": "387b38cf87c618cf6ac8a23782c5dae76160239017e81c8bc489a39bdb7b3952",
     "tools/compat-broad/fs-listen-resume/listen_journal.mjs": "c3c11ba199ace9cf6eecbb40cefc86134bbf1a92d8514148674a44ccb06847dc",
     "tools/compat-broad/fs-listen-resume/cases.py": "272cb5f3f6ed2af93748184549f552ed08528f984097acccfadcc161ca5750d7",
     "tools/compat-broad/fs-listen-resume/campaign.py": "553c3196acdd69e324ab5abef1c8acaec9d70c771eefcd0f38a8ad286d3a6f49",

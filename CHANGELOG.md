@@ -61,6 +61,11 @@ These follow production Firestore as recorded on 2026-09-24 (FS-QUERY-INDEX). Un
 - REST listDocuments takes the last value of a repeated query parameter (a repeated one was refused before), reads `showMissing` as the front end reads booleans (`1`, `yes`, `True`), and refuses a bad `pageSize` or `showMissing` in the transcoder's words with a `BadRequest` detail. Strict only, as production: the proto names (`page_size`, `order_by`, `mask.field_paths`, `show_missing`, `read_time`) bind like the JSON names, an unknown query parameter is refused, and `readTime` goes through the transcoder's timestamp check; the emulator profile ignores the proto names and unknown parameters and reads `readTime` with fireemu's own parser, as before.
 - Strict only: a REST listCollectionIds body goes through production's transcoder check. A timestamp with more than nine fractional digits is refused as out of range.
 
+
+Firestore write limits: the emulator profile adds no refusal the pinned official emulator (firebase-tools 15.28.2, Firestore emulator v1.22.0) does not make, measured on 2026-09-27.
+
+- Both profiles: every transport (REST, WebChannel, gRPC unary and streamed) accepts requests up to 11,534,336 bytes and refuses a larger one with production's REST Commit answer, HTTP 400 `INVALID_ARGUMENT` `Request payload size exceeds the limit: 11534336 bytes.` (gRPC code 3). The emulator profile used to refuse from 10,485,761 bytes with HTTP 413 `request body too large` or gRPC `OUT_OF_RANGE`.
+- Strict profile only: index accounting (more than 40,000 index entries, an index entry over 7,680 bytes, the indexed-string and document-name guards, and the create transaction budget) refuses a write as production does. The emulator profile now counts these without refusing, as the official emulator accepted every such write. An implied field path over 1,500 bytes is still refused under both profiles.
 ### Fixed
 
 - A refusal echoes at most 1 KiB of the value, key, path or property path it names, and a transcoder refusal lists at most 16 violations, so a large request cannot grow the response or the daemon's memory many times its size.

@@ -208,7 +208,8 @@
         ],
         "finalArtifactSha256": "d6db62596e71c152883dc5b83bf8dc48b79b703777d49bab10874c1fae6dfc6d",
         "comparisonPath": "spec/compatibility/broad-runs/fs-document-name-bytes-3d7ceabb8-saved-comparison.json"
-      }
+      },
+      "profileNote": "Strict profile only. The emulator profile counts index entries without refusing: the pinned official emulator (firebase-tools 15.28.2, Firestore emulator v1.22.0) accepted the same write on 2026-09-27 (contract.json FS-CLAIM-LIMITS)."
     },
     {
       "conditionId": "FS-LIMIT-INDEX-ENTRIES-PER-DOCUMENT",
@@ -243,7 +244,8 @@
         "sourceHead": "a2aec9fbc12c3bd6e35547c6239e46527fb55cd2",
         "comparisonPath": "spec/compatibility/closure/evidence/FS-DATA-WRITE-current-accepted-conditions.json",
         "comparisonSha256": "f4a4ecc2dd860725ca450b447a5003ecda70cc84806bcb30e5f7a3f0d7200241"
-      }
+      },
+      "profileNote": "Strict profile only. The emulator profile counts index entries without refusing: the pinned official emulator (firebase-tools 15.28.2, Firestore emulator v1.22.0) accepted the same write on 2026-09-27 (contract.json FS-CLAIM-LIMITS)."
     },
     {
       "conditionId": "FS-LIMIT-INDEX-ENTRY-BYTES",
@@ -306,7 +308,8 @@
           "writes/limits/index-entry-sum-per-document#observation-2",
           "writes/limits/index-entry-sum-per-document#observation-3"
         ]
-      }
+      },
+      "profileNote": "Strict profile only. The emulator profile counts index entries without refusing: the pinned official emulator (firebase-tools 15.28.2, Firestore emulator v1.22.0) accepted the same write on 2026-09-27 (contract.json FS-CLAIM-LIMITS)."
     },
     {
       "conditionId": "FS-LIMIT-INDEX-ENTRY-SUM-PER-DOCUMENT",
@@ -357,7 +360,8 @@
           "writes/limits/index-entry-sum-per-document#observation-2",
           "writes/limits/index-entry-sum-per-document#observation-3"
         ]
-      }
+      },
+      "profileNote": "Strict profile only. The emulator profile counts index entries without refusing: the pinned official emulator (firebase-tools 15.28.2, Firestore emulator v1.22.0) accepted the same write on 2026-09-27 (contract.json FS-CLAIM-LIMITS)."
     },
     {
       "conditionId": "FS-DATA-WRITE/near-limit-delete-refusal",
@@ -504,7 +508,8 @@
         "writes/limits/indexed-field-value-bytes"
       ],
       "boundaryStatus": "UNBRACKETED",
-      "status": "PRODUCTION_RECORDED"
+      "status": "PRODUCTION_RECORDED",
+      "profileNote": "Strict profile only. The emulator profile counts index entries without refusing: the pinned official emulator (firebase-tools 15.28.2, Firestore emulator v1.22.0) accepted the same write on 2026-09-27 (contract.json FS-CLAIM-LIMITS)."
     },
     {
       "conditionId": "FS-WRITE-LIMITS-03/implied-map",

@@ -6,7 +6,7 @@ use crate::field_path::{implied_path_too_long_message, FieldPath, FieldPathError
 use crate::index::{IndexFieldMode, IndexQueryScope, IndexSet};
 use crate::path::DocumentPath;
 use crate::size::{document_name_size, index_entry_size, IndexEntryScope};
-use crate::store::{get_field, FirestoreError};
+use crate::store::{get_field, FirestoreError, LimitScope};
 use crate::value::{IndexValue, Value};
 
 /// The RPC a write arrived through. Production charges a delete's transaction differently per
@@ -65,15 +65,21 @@ pub struct IndexUsage {
 }
 
 impl IndexUsage {
+    /// Counts `count` entries of `bytes` each. With `enforce`, refuses a document over the
+    /// production entry limits; the emulator profile only counts.
     fn add(
         &mut self,
         bytes: u64,
         count: u64,
         document: &DocumentPath,
+        enforce: bool,
     ) -> Result<(), FirestoreError> {
         self.entries = self.entries.saturating_add(count);
         self.total_bytes = self.total_bytes.saturating_add(bytes.saturating_mul(count));
         self.maximum_entry_bytes = self.maximum_entry_bytes.max(bytes);
+        if !enforce {
+            return Ok(());
+        }
         for (id, current, maximum) in [
             (
                 crate::limits::INDEX_ENTRIES_PER_DOCUMENT,
@@ -126,14 +132,32 @@ fn stored_bytes(
 }
 
 impl IndexSet {
-    /// Accounts for every index entry before any document or event is published.
+    /// Accounts for every index entry before any document or event is published, refusing
+    /// what production refuses.
     pub fn document_index_usage(
         &self,
         document: &DocumentPath,
         fields: &BTreeMap<String, Value>,
     ) -> Result<IndexUsage, FirestoreError> {
-        let usage = self.index_usage_of(document, fields)?;
-        usage.finish(stored_bytes(document, fields)?)?;
+        self.document_index_usage_in(document, fields, LimitScope::Production)
+    }
+
+    /// [`Self::document_index_usage`] under a limit scope. The index-entry limits, the name
+    /// and indexed-string guards and the create transaction budget are production refusals
+    /// the pinned official emulator does not make (measured 2026-09-27), so the emulator
+    /// profile only counts them. An implied field path over its limit and an invalid
+    /// composite index are refused under both scopes.
+    pub fn document_index_usage_in(
+        &self,
+        document: &DocumentPath,
+        fields: &BTreeMap<String, Value>,
+        scope: LimitScope,
+    ) -> Result<IndexUsage, FirestoreError> {
+        let enforce = scope == LimitScope::Production;
+        let usage = self.index_usage_of(document, fields, enforce)?;
+        if enforce {
+            usage.finish(stored_bytes(document, fields)?)?;
+        }
         Ok(usage)
     }
 
@@ -148,7 +172,7 @@ impl IndexSet {
             return Ok(());
         };
         let create = self
-            .index_usage_of(document, fields)?
+            .index_usage_of(document, fields, true)?
             .total_bytes
             .saturating_add(stored_bytes(document, fields)?);
         let charged = u128::from(create) * u128::from(numerator) / u128::from(denominator);
@@ -162,6 +186,7 @@ impl IndexSet {
         &self,
         document: &DocumentPath,
         fields: &BTreeMap<String, Value>,
+        enforce: bool,
     ) -> Result<IndexUsage, FirestoreError> {
         let mut usage = IndexUsage::default();
         let parent = document.parent_document();
@@ -171,12 +196,12 @@ impl IndexSet {
         // document_name_size includes 17 bytes beyond the relative name length.
         let name_bytes = document_name_size(document)
             .map_err(|error| FirestoreError::InvalidArgument(error.to_string()))?;
-        if name_bytes >= 5_017 {
+        if enforce && name_bytes >= 5_017 {
             return Err(FirestoreError::InvalidArgument(
                 "Index entry is too large.".into(),
             ));
         }
-        self.automatic_usage(document, fields, &mut Vec::new(), &mut usage)?;
+        self.automatic_usage(document, fields, &mut Vec::new(), &mut usage, enforce)?;
         for index in self
             .composites()
             .iter()
@@ -233,6 +258,7 @@ impl IndexSet {
                         entry_size(scope, document, parent.as_ref(), &values)?,
                         1,
                         document,
+                        enforce,
                     )?;
                 }
             } else {
@@ -240,6 +266,7 @@ impl IndexSet {
                     entry_size(scope, document, parent.as_ref(), &values)?,
                     1,
                     document,
+                    enforce,
                 )?;
             }
         }
@@ -252,6 +279,7 @@ impl IndexSet {
         fields: &BTreeMap<String, Value>,
         path: &mut Vec<String>,
         usage: &mut IndexUsage,
+        enforce: bool,
     ) -> Result<(), FirestoreError> {
         let parent = document.parent_document();
         for (name, value) in fields {
@@ -275,7 +303,8 @@ impl IndexSet {
                 // a 2,600-byte relative name and refuses the same shape at 2,642 bytes.
                 // The transition inside that interval remains unobserved, so only guard
                 // the recorded refusal range for this indexed string shape.
-                if scope == IndexEntryScope::SingleFieldCollection
+                if enforce
+                    && scope == IndexEntryScope::SingleFieldCollection
                     && matches!(mode, IndexFieldMode::Ascending | IndexFieldMode::Descending)
                     && matches!(value, Value::String(text) if text.len() >= 1_500)
                     && document_name_size(document)
@@ -298,6 +327,7 @@ impl IndexSet {
                             // plus two ordered entries, but rejects 20,000 elements.
                             2,
                             document,
+                            enforce,
                         )?;
                     }
                 } else {
@@ -305,11 +335,12 @@ impl IndexSet {
                         entry_size(scope, document, parent.as_ref(), &[(&canonical, value)])?,
                         1,
                         document,
+                        enforce,
                     )?;
                 }
             }
             if let Value::Map(fields) = value {
-                self.automatic_usage(document, fields, path, usage)?;
+                self.automatic_usage(document, fields, path, usage, enforce)?;
             }
             path.pop();
         }
@@ -342,14 +373,22 @@ mod tests {
         )
         .unwrap();
         let mut count = IndexUsage::default();
-        assert!(count.add(1, 40_000, &document).is_ok());
-        assert!(count.add(1, 1, &document).is_err());
-        assert!(IndexUsage::default().add(7_680, 1, &document).is_ok());
-        assert!(IndexUsage::default().add(7_681, 1, &document).is_err());
+        assert!(count.add(1, 40_000, &document, true).is_ok());
+        assert!(count.add(1, 1, &document, true).is_err());
+        assert!(IndexUsage::default().add(7_680, 1, &document, true).is_ok());
+        assert!(IndexUsage::default()
+            .add(7_681, 1, &document, true)
+            .is_err());
         let mut sum = IndexUsage::default();
-        assert!(sum.add(4_096, 2_048, &document).is_ok());
+        assert!(sum.add(4_096, 2_048, &document, true).is_ok());
         assert!(sum.finish(super::TRANSACTION_BYTES - 8_388_608).is_ok());
-        assert!(sum.add(1, 1, &document).is_ok());
+        assert!(sum.add(1, 1, &document, true).is_ok());
+        // Without enforcement the same usage is only counted.
+        let mut counted = IndexUsage::default();
+        assert!(counted.add(1, 40_001, &document, false).is_ok());
+        assert!(counted.add(7_681, 1, &document, false).is_ok());
+        assert_eq!(counted.entries, 40_002);
+        assert_eq!(counted.maximum_entry_bytes, 7_681);
         assert!(matches!(
             sum.finish(super::TRANSACTION_BYTES - 8_388_608),
             Err(crate::store::FirestoreError::InvalidArgument(message))
@@ -452,7 +491,13 @@ mod tests {
         ));
         let mut usage = IndexUsage::default();
         crate::index::IndexSet::default()
-            .automatic_usage(&document, &fields(19_999), &mut Vec::new(), &mut usage)
+            .automatic_usage(
+                &document,
+                &fields(19_999),
+                &mut Vec::new(),
+                &mut usage,
+                true,
+            )
             .expect("19,999 elements stay within the entry count");
         assert_eq!(usage.entries, 40_000);
     }

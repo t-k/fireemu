@@ -2007,8 +2007,11 @@ impl FirestoreState {
                 version: next_version,
             };
             validate_document(&document, self.limit_scope)?;
-            self.index_catalog
-                .document_index_usage(&document.path, &document.fields)?;
+            self.index_catalog.document_index_usage_in(
+                &document.path,
+                &document.fields,
+                self.limit_scope,
+            )?;
             staged.insert(imported.path, document);
         }
         self.last_commit_time = Some(commit_time);
@@ -3361,8 +3364,11 @@ impl FirestoreState {
             let (next, mut result) = apply_write(write, current, commit_time, next_version)?;
             if let Some(Cow::Owned(doc)) = &next {
                 validate_document(doc, self.limit_scope)?;
-                self.index_catalog
-                    .document_index_usage(&doc.path, &doc.fields)?;
+                self.index_catalog.document_index_usage_in(
+                    &doc.path,
+                    &doc.fields,
+                    self.limit_scope,
+                )?;
             }
             if matches!(write.op, WriteOp::Verify { .. }) {
                 // A verify changes nothing and reports the document's current update time,

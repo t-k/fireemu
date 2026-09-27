@@ -560,3 +560,108 @@ fn the_reviewed_array_field_path_fixture_is_emulator_ok_and_strict_refused() {
     );
     assert!(store.get(&path("a/b")).is_none());
 }
+
+// ---------------------------------------------------------------------------
+// Index accounting: production refusals the official emulator does not make
+// ---------------------------------------------------------------------------
+
+/// A relative document name of exactly `total` bytes: units `k/<id>` joined by `/`, each id
+/// between 1 and 1,500 bytes.
+fn name_of(total: usize) -> String {
+    let units = (total + 1).div_ceil(1_503);
+    let id_bytes = total + 1 - 3 * units;
+    let name = (0..units)
+        .map(|index| {
+            let id = id_bytes / units + usize::from(index < id_bytes % units);
+            format!("k/{}", "i".repeat(id))
+        })
+        .collect::<Vec<_>>()
+        .join("/");
+    assert_eq!(name.len(), total, "the name fixture must be exact");
+    name
+}
+
+fn integers(count: i64) -> Value {
+    Value::Array((0..count).map(Value::Integer).collect())
+}
+
+/// Index accounting refuses these in production (the FS-DATA-WRITE recordings); the pinned
+/// official emulator (firebase-tools 15.28.2, cloud-firestore-emulator v1.22.0) accepted every
+/// one of them on 2026-09-27, so only the strict profile refuses them.
+#[test]
+fn index_accounting_refusals_are_strict_profile_only() {
+    let cases = [
+        // The create transaction budget (owner decision D1).
+        (name_of(2_000), "a", integers(7_300), "Transaction too big."),
+        // FS-LIMIT-INDEX-ENTRIES-PER-DOCUMENT: 20,000 distinct elements are 40,002 entries.
+        (
+            "ie3/arr20000".to_owned(),
+            "a",
+            integers(20_000),
+            "too many index entries",
+        ),
+        // The indexed-string guard: a 1,500-byte string under a long name.
+        (
+            name_of(2_642),
+            "s",
+            Value::String("x".repeat(1_500)),
+            "Index entry is too large.",
+        ),
+        // FS-LIMIT-INDEX-ENTRY-BYTES reached by a bytes value, which is not truncated first.
+        (
+            name_of(3_668),
+            "b",
+            Value::Bytes(vec![7; 1_500]),
+            "FS-LIMIT-INDEX-ENTRY-BYTES",
+        ),
+        // The whole-name guard.
+        (
+            name_of(5_000),
+            "v",
+            Value::Integer(1),
+            "Index entry is too large.",
+        ),
+    ];
+    for (name, field, value, message) in cases {
+        let mut strict = state(LimitScope::Production);
+        let refused = strict.commit(&[set(&name, field, value.clone())], None, t(0));
+        assert!(
+            matches!(refused, Err(FirestoreError::InvalidArgument(ref m)) if m.starts_with(message)),
+            "strict {message}: {}",
+            outcome(&refused)
+        );
+        assert!(strict.get(&path(&name)).is_none());
+
+        let mut emulator = state(LimitScope::OfficialEmulator);
+        emulator
+            .commit(&[set(&name, field, value.clone())], None, t(0))
+            .unwrap_or_else(|error| panic!("emulator {message}: {error}"));
+        assert!(emulator.get(&path(&name)).is_some());
+
+        // An import is validated by the same rules.
+        let mut imported = state(LimitScope::OfficialEmulator);
+        imported
+            .import_documents(
+                vec![ImportedDocument {
+                    path: path(&name),
+                    fields: BTreeMap::from([(field.to_owned(), value.clone())]),
+                    create_time: None,
+                    update_time: None,
+                }],
+                t(0),
+            )
+            .unwrap_or_else(|error| panic!("emulator import {message}: {error}"));
+        let mut strict_import = state(LimitScope::Production);
+        assert!(strict_import
+            .import_documents(
+                vec![ImportedDocument {
+                    path: path(&name),
+                    fields: BTreeMap::from([(field.to_owned(), value)]),
+                    create_time: None,
+                    update_time: None,
+                }],
+                t(0),
+            )
+            .is_err());
+    }
+}

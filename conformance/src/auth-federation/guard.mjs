@@ -226,6 +226,17 @@ export function validateFederationCorpus(programs) {
     for (const step of program.steps) {
       if (steps.has(step.id)) throw new Error(`${program.id}: duplicate step ${step.id}`);
       steps.add(step.id);
+      // Whatever a step may create is declared, so the harness deletes it after the program.
+      const created = step.query?.oauthIdpConfigId ?? step.query?.inboundSamlConfigId;
+      if (step.method === "POST" && RUN_PROVIDER.test(created ?? "")) {
+        if (!program.providers?.includes(created)) {
+          throw new Error(`${program.id}#${step.id}: creates undeclared ${created}`);
+        }
+      }
+      const idp = step.query?.idpId;
+      if (idp !== undefined && !program.defaultIdpWrites?.includes(idp)) {
+        throw new Error(`${program.id}#${step.id}: writes undeclared default IdP ${idp}`);
+      }
     }
     for (const touched of program.touches ?? []) {
       if (touched !== "signIn.allowDuplicateEmails") {

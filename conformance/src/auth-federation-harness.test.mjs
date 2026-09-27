@@ -78,6 +78,14 @@ test("a corpus declares its providers, default IdPs and config paths", () => {
   assert.throws(() => validateFederationCorpus([{ id: "auth-federation/x", providers: ["oidc.corp"], steps: [] }]), /provider oidc.corp/);
   assert.throws(() => validateFederationCorpus([{ id: "auth-federation/x", steps: [{ id: "a" }, { id: "a" }] }]), /duplicate step/);
   assert.throws(() => validateFederationCorpus([{ id: "auth-federation/x", touches: ["mfa"], steps: [] }]), /touches mfa/);
+  assert.throws(
+    () => validateFederationCorpus([{ id: "auth-federation/x", providers: [], steps: [{ id: "c", method: "POST", query: { oauthIdpConfigId: "oidc.fireemu-x" } }] }]),
+    /creates undeclared oidc.fireemu-x/,
+  );
+  assert.throws(
+    () => validateFederationCorpus([{ id: "auth-federation/x", steps: [{ id: "c", method: "POST", query: { idpId: "google.com" } }] }]),
+    /undeclared default IdP google.com/,
+  );
 });
 
 test("the draft corpus resolves to requests the guard lets through", async () => {

@@ -69,7 +69,7 @@ const oidcConfig = {
 
 const samlConfig = {
   id: "auth-federation/provider-config/saml",
-  providers: ["saml.fireemu-RUN-a"],
+  providers: ["saml.fireemu-RUN-a", "saml.fireemu-RUN-b"],
   steps: [
     admin("create", "POST", "inboundSamlConfigs", {
       query: { inboundSamlConfigId: "saml.fireemu-RUN-a" },

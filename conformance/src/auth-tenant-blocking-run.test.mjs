@@ -8,6 +8,7 @@ import { test } from "node:test";
 
 import {
   assertReviewedLock,
+  deployFixture,
   productionStartedRow,
   otherLaneOnSandbox,
   recentAbort,
@@ -803,4 +804,38 @@ test("the budget wiring notes only a runner that stopped before its started line
   const again = createRequestBudget({ total: 100, cleanupReserve: 10 });
   const restore = installBudget(again, target);
   restore();
+});
+
+test("a stop during the preflight deploys nothing (review S4)", async () => {
+  const events = [];
+  const controller = new AbortController();
+  const deployer = {
+    cliVersion: async () => "15.28.2",
+    preflight: async () => {
+      events.push("preflight");
+      controller.abort();
+      return {};
+    },
+    deploy: async () => events.push("deploy"),
+  };
+  const fixture = { deployed: false };
+  await assert.rejects(
+    deployFixture(fixture, deployer, {
+      signal: controller.signal,
+      buildDir: "/nonexistent",
+      onDeploy: () => events.push("deadline"),
+    }),
+    /before the deployment/,
+  );
+  assert.deepEqual(events, ["preflight"]);
+  assert.equal(fixture.deployed, false);
+  // Without a stop the deadline starts, then the deployment.
+  const clean = { deployed: false };
+  const preflight = async () => (events.push("preflight"), {});
+  const signal = new AbortController().signal;
+  const onDeploy = () => events.push("deadline");
+  await deployFixture(clean, { ...deployer, preflight }, { signal, buildDir: "/x", onDeploy });
+  assert.deepEqual(events.slice(1), ["preflight", "deadline", "deploy"]);
+  assert.equal(clean.deployed, true);
+  assert.equal(clean.cli, "15.28.2");
 });

@@ -716,6 +716,25 @@ const PROJECT_ID = /^[a-z][a-z0-9-]{4,28}[a-z0-9]$/;
  * lock is the legacy shared one (`<ledger>.lock`), or with `scope.project` that project's own
  * (`sandbox-locks/<project>.lock`, owner decision A, 2026-09-28), while no shared lock stands.
  */
+/**
+ * Deploys the blocking fixture into `fixture` (its CLI version, preflight and `deployed`). A stop
+ * requested by `signal` before the deployment deploys nothing (review S4); `onDeploy` runs just
+ * before the deployment starts.
+ */
+export async function deployFixture(
+  fixture,
+  deployer,
+  { signal, buildDir, source = FIXTURE_SOURCE, onDeploy = () => {} },
+) {
+  fixture.cli = await deployer.cliVersion();
+  fixture.preflight = await deployer.preflight();
+  if (signal.aborted) throw new Error("stopped by a signal before the deployment");
+  onDeploy();
+  await deployer.deploy(source, buildDir);
+  fixture.deployed = true;
+  if (signal.aborted) throw new Error("stopped by a signal after the deployment");
+}
+
 export async function assertReviewedLock(
   ledger,
   expectedLedger,
@@ -916,14 +935,17 @@ async function recordProduction() {
           },
           log: (line) => console.log(line),
         });
-        fixture = { deployed: false, cli: await deployer.cliVersion() };
-        fixture.preflight = await deployer.preflight();
-        // The services become public during the deployment: the recording stops in time to remove
-        // them within the hour TB1 allows, counted from the start of the deployment (SF-2, SF-C2).
-        publicDeadline = setTimeout(() => controller.abort(), PUBLIC_MINUTES * 60_000);
-        await deployer.deploy(FIXTURE_SOURCE, join(runDir, "function-build"));
-        fixture.deployed = true;
-        if (controller.signal.aborted) throw new Error("stopped by a signal after the deployment");
+        fixture = { deployed: false };
+        await deployFixture(fixture, deployer, {
+          signal: controller.signal,
+          buildDir: join(runDir, "function-build"),
+          // The services become public during the deployment: the recording stops in time to
+          // remove them within the hour TB1 allows, counted from the start of the deployment
+          // (SF-2, SF-C2).
+          onDeploy: () => {
+            publicDeadline = setTimeout(() => controller.abort(), PUBLIC_MINUTES * 60_000);
+          },
+        });
         fixture.registered = await deployer.verifyRegistered();
         fixture.invokers = await deployer.invokers();
         console.log(`fixture registered: ${JSON.stringify(fixture)}`);

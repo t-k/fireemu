@@ -13,6 +13,7 @@ import {
   FIXTURE_FUNCTION_COUNT,
   MAX_FIXTURE_OBJECTS,
   REMOVAL_REST_BOUND,
+  SETTLE_READS,
 } from "./auth-tenant-blocking/budget.mjs";
 import {
   CLEANUP_POLICY,
@@ -64,7 +65,10 @@ function fakeCloud({
   events = [],
   deleteSticks = false,
   repositoryLag = 0,
+  // The fixture functions answer `DEPLOYING` to this many function listings (review S6).
+  deployingReads = 0,
 } = {}) {
+  let deploying = deployingReads;
   let lag = repositoryLag;
   const state = {
     functions: [...functions],
@@ -84,13 +88,17 @@ function fakeCloud({
       return json(200, {
         state: apis.includes(pathname.split("/").at(-1)) ? "ENABLED" : "DISABLED",
       });
-    if (hostname === "cloudfunctions.googleapis.com")
+    if (hostname === "cloudfunctions.googleapis.com") {
+      const functionState = deploying > 0 ? "DEPLOYING" : "ACTIVE";
+      if (deploying > 0) deploying -= 1;
       return json(200, {
         functions: state.functions.map((name) => ({
           name: `x/functions/${name}`,
+          state: functionState,
           serviceConfig: { uri: fn(name).functionUri },
         })),
       });
+    }
     if (pathname.endsWith("/config")) {
       if (method === "PATCH") state.blocking = JSON.parse(init.body).blockingFunctions;
       return json(200, { blockingFunctions: state.blocking });
@@ -168,6 +176,7 @@ function fakeCloud({
     fetchImpl,
     run,
     retryMs: 0,
+    settleMs: 0,
     ...(now ? { now } : {}),
     ...(charge ? { charge } : {}),
   });
@@ -307,6 +316,15 @@ test("a restore cannot claim a Run trigger without its live fixture service", as
 test("fixture artifacts are recognised by function name only", () => {
   assert.ok(isFixtureArtifact("fireemu--oracle--idp__us--central1__atb_before_create"));
   assert.ok(isFixtureArtifact("fireemu--oracle--idp__us--central1__atb_before_send_sms/cache"));
+  // Artifact Registry names a package with its slash encoded (review S5).
+  const packages = "projects/x/locations/us-central1/repositories/gcf-artifacts/packages";
+  assert.ok(
+    isFixtureArtifact(
+      `${packages}/fireemu--oracle--idp__us--central1__atb_before_send_sms%2Fcache`,
+    ),
+  );
+  assert.ok(!isFixtureArtifact(`${packages}/fireemu--oracle--idp__us--central1__hello%2Fcache`));
+  assert.ok(!isFixtureArtifact("projects/x/packages/%E0%A4%A"));
   assert.ok(isFixtureArtifact("atbBeforeSignIn/function-source.zip"));
   assert.ok(!isFixtureArtifact("fireemu--oracle--idp__us--central1__hello"));
   assert.ok(!isFixtureArtifact("fireemu--oracle--idp__us--central1__atb_before_create_other"));
@@ -480,6 +498,8 @@ test("every CLI call is charged its allowance before it runs, under the meter (t
   assert.deepEqual(limits, ["0", "0", String(CLI_DEPLOY_ALLOWANCE), String(CLI_DELETE_ALLOWANCE)]);
   for (const options of runOptions) {
     assert.equal(options.env.NODE_OPTIONS, `--require=${CLI_METER}`);
+    // The CLI bills the sandbox, never the ADC file's quota project (review S2).
+    assert.equal(options.env.GOOGLE_CLOUD_QUOTA_PROJECT, PROJECT);
     assert.equal(options.env.NO_UPDATE_NOTIFIER, "1");
     assert.equal(options.env.CI, "1");
     assert.equal(options.env.FIREEMU_CLI_METER_COUNT_LOOPBACK, undefined);
@@ -578,6 +598,7 @@ test("a removal sends at most REMOVAL_REST_BOUND REST requests (total cap)", asy
     packages: images,
     sources: objects,
     deleteSticks: true,
+    deployingReads: Number.POSITIVE_INFINITY,
   });
   deployer.adoptLeftovers();
   const error = await deployer.remove(await buildDir()).catch((caught) => caught);
@@ -590,6 +611,60 @@ test("a removal sends at most REMOVAL_REST_BOUND REST requests (total cap)", asy
   assert.equal(calls.filter((c) => c.startsWith("DELETE storage")).length, MAX_FIXTURE_OBJECTS);
   assert.equal(calls.length, REMOVAL_REST_BOUND);
   assert.equal(state.functions.length, 0);
+});
+
+test("the CLI's extensions API is required before a deployment (review M1)", async () => {
+  // The pinned CLI enables firebaseextensions for every functions deployment without asking.
+  assert.ok(REQUIRED_APIS.includes("firebaseextensions.googleapis.com"));
+  const { deployer, runs } = fakeCloud({
+    apis: REQUIRED_APIS.filter((api) => api !== "firebaseextensions.googleapis.com"),
+  });
+  await assert.rejects(deployer.preflight(), /firebaseextensions\.googleapis\.com/);
+  await assert.rejects(deployer.deploy(source, await buildDir()));
+  assert.deepEqual(runs, []);
+});
+
+test("an encoded cache image is removed and read back (review S5)", async () => {
+  const cache = "fireemu--oracle--idp__us--central1__atb_before_create%2Fcache";
+  const other = "fireemu--oracle--idp__us--central1__hello%2Fcache";
+  const { deployer, state } = fakeCloud({
+    functions: Object.values(FIXTURE_FUNCTIONS),
+    packages: [cache, other],
+  });
+  deployer.adoptLeftovers();
+  await deployer.remove(await buildDir());
+  assert.deepEqual(state.packages, [other]);
+});
+
+test("a removal waits while a function is still deploying (review S6)", async () => {
+  const events = [];
+  const { deployer, state, calls } = fakeCloud({
+    functions: Object.values(FIXTURE_FUNCTIONS),
+    deployingReads: 3,
+    events,
+  });
+  deployer.adoptLeftovers();
+  await deployer.remove(await buildDir());
+  assert.deepEqual(state.functions, []);
+  // The URI read and two settling reads answer DEPLOYING; the delete follows the first ACTIVE
+  // listing.
+  const lists = calls.filter((c) => c.startsWith("GET cloudfunctions"));
+  assert.ok(lists.length >= 5, calls.join("\n"));
+  assert.deepEqual(events, ["run functions:delete"]);
+});
+
+test("a removal stops waiting after its bound and deletes anyway (review S6)", async () => {
+  const listings = async (deployingReads) => {
+    const { deployer, state, calls } = fakeCloud({
+      functions: Object.values(FIXTURE_FUNCTIONS),
+      deployingReads,
+    });
+    deployer.adoptLeftovers();
+    await deployer.remove(await buildDir());
+    assert.deepEqual(state.functions, []);
+    return calls.filter((c) => c.startsWith("GET cloudfunctions")).length;
+  };
+  assert.equal((await listings(Number.POSITIVE_INFINITY)) - (await listings(0)), SETTLE_READS);
 });
 
 test("the pinned CLI starts without sending anything (allowance zero)", async () => {

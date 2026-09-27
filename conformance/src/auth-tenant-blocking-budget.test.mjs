@@ -293,7 +293,7 @@ test("a blocking campaign reserves the fixture removal and plans the deployment"
   );
   assert.deepEqual(
     [b.DEPLOY_REST_BOUND, b.REMOVAL_REST_BOUND, b.CLI_DEPLOY_ALLOWANCE, b.CLI_DELETE_ALLOWANCE],
-    [35, 54, 400, 300],
+    [36, 64, 400, 300],
   );
   // 1800 carries the blocking campaign; the smallest budget that does is refused one below.
   const least = blocking.cleanupReserve + blocking.minimumWork;

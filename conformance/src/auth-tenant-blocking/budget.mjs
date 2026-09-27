@@ -44,20 +44,27 @@ export const FIXTURE_FUNCTION_COUNT = 4;
 /** A removal deletes at most this many source and upload objects; more are left for a hand check. */
 export const MAX_FIXTURE_OBJECTS = 16;
 /**
- * The deployer's REST requests before the recordings: the preflight (8 API states, the function
+ * The function listings a removal makes while a fixture function is still `DEPLOYING` (a
+ * deployment the CLI's timeout stopped goes on at the server; deleting it then fails, review S6),
+ * 30 s apart.
+ */
+export const SETTLE_READS = 10;
+/**
+ * The deployer's REST requests before the recordings: the preflight (9 API states, the function
  * list, the blocking config, the upload objects, the repository read, its creation and 12
  * read-backs), the registration check (the config, the function list, a wake-up of each of the
  * four functions) and the invoker policy of each.
  */
-export const DEPLOY_REST_BOUND = 8 + 3 + 14 + 6 + 4;
+export const DEPLOY_REST_BOUND = 9 + 3 + 14 + 6 + 4;
 /**
- * The removal's REST requests: the function URIs, the list before and after functions:delete,
+ * The removal's REST requests: the function URIs, the list before and after functions:delete and
+ * the listings while a function is still deploying,
  * the config read, restore and read-back, the image list, the deletion of each fixture image and
  * 6 read-backs, the
  * object listings (a restore reads the functions first, 3), their deletions and 6 read-backs.
  */
 export const REMOVAL_REST_BOUND =
-  1 + 2 + 3 + (1 + FIXTURE_FUNCTION_COUNT + 6) + (3 + MAX_FIXTURE_OBJECTS + 6 * 3);
+  1 + 2 + SETTLE_READS + 3 + (1 + FIXTURE_FUNCTION_COUNT + 6) + (3 + MAX_FIXTURE_OBJECTS + 6 * 3);
 
 const fatal = (message) => Object.assign(new Error(message), { fatal: true });
 

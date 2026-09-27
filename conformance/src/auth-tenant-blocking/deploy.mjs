@@ -26,6 +26,7 @@ import {
   CLI_DELETE_ALLOWANCE,
   CLI_DEPLOY_ALLOWANCE,
   MAX_FIXTURE_OBJECTS,
+  SETTLE_READS,
   chargeExternal,
 } from "./budget.mjs";
 
@@ -67,6 +68,9 @@ export const REQUIRED_APIS = [
   "pubsub.googleapis.com",
   "storage.googleapis.com",
   "identitytoolkit.googleapis.com",
+  // The pinned CLI prepares extensions for every functions deployment (firebase-functions
+  // always declares `extensions: {}`) and enables this API without asking (review M1).
+  "firebaseextensions.googleapis.com",
 ];
 /** The pinned Firebase CLI (conformance/package.json), never the one on PATH. */
 export const FIREBASE_CLI = join(CONFORMANCE_DIR, "node_modules", ".bin", "firebase");
@@ -92,10 +96,15 @@ export function deploymentCliEnv(source = process.env) {
   for (const name of DROPPED_ENV) delete env[name];
   return env;
 }
-/** A deployment subprocess's environment: counted into `file`, stopped past `limit`. */
-function meteredEnv(file, limit) {
+/**
+ * A deployment subprocess's environment: counted into `file`, stopped past `limit`, and billed to
+ * `project` (the CLI sends `x-goog-user-project` from it, so a fallback to the ADC never bills
+ * the ADC file's quota project, review S2).
+ */
+function meteredEnv(file, limit, project) {
   return {
     ...deploymentCliEnv(),
+    GOOGLE_CLOUD_QUOTA_PROJECT: project,
     NODE_OPTIONS: `--require=${CLI_METER}`,
     FIREEMU_CLI_METER_FILE: file,
     FIREEMU_CLI_METER_LIMIT: String(limit),
@@ -129,9 +138,14 @@ export function hasCleanupPolicy(repository) {
 /** Whether an Artifact Registry package or a source object belongs to the fixture. */
 export function isFixtureArtifact(name) {
   const path = String(name);
-  const packageId = (path.includes("/packages/") ? path.split("/packages/").at(-1) : path).split(
-    "/",
-  )[0];
+  let packageName = path.includes("/packages/") ? path.split("/packages/").at(-1) : path;
+  // Artifact Registry encodes the slash of a cache image's package (`…%2Fcache`, review S5).
+  try {
+    packageName = decodeURIComponent(packageName);
+  } catch {
+    return false;
+  }
+  const packageId = packageName.split("/")[0];
   const sourcePrefix = path.split("/")[0].toLowerCase();
   return PACKAGE_IDS.has(packageId) || NAMES.some((fn) => sourcePrefix === fn.toLowerCase());
 }
@@ -188,6 +202,8 @@ export function createDeployer({
   fetchImpl = fetch,
   run = execFileAsync,
   retryMs = 5000,
+  // The wait between listings while a fixture function is still deploying (review S6).
+  settleMs = 30_000,
   // Every REST request is abandoned after this long, so no removal step can hang (review S4).
   requestTimeoutMs = 30_000,
   now = Date.now,
@@ -270,7 +286,7 @@ export function createDeployer({
       return await run(file, args, {
         cwd,
         timeout,
-        env: meteredEnv(counter, allowance),
+        env: meteredEnv(counter, allowance, project),
         detached: true,
         maxBuffer: 16 * 1024 * 1024,
       });
@@ -546,7 +562,20 @@ export function createDeployer({
       }
     });
     await step("functions:delete", async () => {
-      const present = (await listFunctions()).filter((fn) => NAMES.includes(fn));
+      const fixture = (resources) =>
+        resources.filter((resource) => NAMES.includes(resource.name.split("/").at(-1)));
+      let resources = fixture(await listFunctionResources());
+      // A deployment the CLI's timeout stopped goes on at the server, and deleting a function
+      // that is still deploying fails: wait, within a bound, then delete anyway (review S6).
+      for (
+        let reads = 0;
+        reads < SETTLE_READS && resources.some((resource) => resource.state === "DEPLOYING");
+        reads += 1
+      ) {
+        await sleep(settleMs);
+        resources = fixture(await listFunctionResources());
+      }
+      const present = resources.map((resource) => resource.name.split("/").at(-1));
       if (present.length === 0) return;
       try {
         await cli(

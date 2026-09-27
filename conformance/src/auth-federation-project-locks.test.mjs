@@ -3,6 +3,7 @@ import { existsSync } from "node:fs";
 import { mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { spawnSync } from "node:child_process";
 import { test } from "node:test";
 
 import {
@@ -143,4 +144,46 @@ test("locks stay after a failure once something was sent, and another's lock is 
   await writeFile(path, text);
   await releaseProjectLocks(recreated);
   assert.ok(existsSync(path));
+});
+
+test("a recovery adopts only this run's lock whose process is gone", async () => {
+  const ledger = await ledgerDir();
+  const path = projectLockPath(ledger, "fireemu-oracle-idp");
+  const adopt = (body) => body.taskId === HOLDER.taskId && body.run === HOLDER.run;
+  const leave = async (pid, extra = {}) => {
+    await rm(path, { force: true });
+    await takeProjectLocks(ledger, ["fireemu-oracle-idp"], HOLDER);
+    await writeFile(path, `${JSON.stringify({ ...HOLDER, pid, ...extra })}\n`);
+  };
+  const gone = spawnSync(process.execPath, ["-e", "0"]).pid;
+  // A lock whose recording still runs (this process) is not adopted.
+  await leave(process.pid);
+  await assert.rejects(
+    takeProjectLocks(ledger, ["fireemu-oracle-idp"], HOLDER, { adopt }),
+    /is locked/,
+  );
+  // Another run's or another task's lock is not adopted, even with its process gone.
+  await leave(gone, { run: "d4e5f6" });
+  await assert.rejects(
+    takeProjectLocks(ledger, ["fireemu-oracle-idp"], HOLDER, { adopt }),
+    /is locked/,
+  );
+  await leave(gone, { taskId: "OTHER" });
+  await assert.rejects(
+    takeProjectLocks(ledger, ["fireemu-oracle-idp"], HOLDER, { adopt }),
+    /is locked/,
+  );
+  await leave("not-a-pid");
+  await assert.rejects(
+    takeProjectLocks(ledger, ["fireemu-oracle-idp"], HOLDER, { adopt }),
+    /is locked/,
+  );
+  // Without adopt nothing is taken over.
+  await leave(gone);
+  await assert.rejects(takeProjectLocks(ledger, ["fireemu-oracle-idp"], HOLDER), /is locked/);
+  // This run's lock with its process gone is adopted, rewritten, and released by its new holder.
+  const adopted = await takeProjectLocks(ledger, ["fireemu-oracle-idp"], HOLDER, { adopt });
+  assert.equal(JSON.parse(await readFile(path, "utf8")).pid, process.pid);
+  await releaseProjectLocks(adopted);
+  assert.ok(!existsSync(path));
 });

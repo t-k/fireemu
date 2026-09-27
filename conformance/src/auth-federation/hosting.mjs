@@ -304,7 +304,7 @@ function stopSignals() {
  * The channel is deleted whenever it was created, and the deletion is read back.
  */
 /** Authenticated JSON requests to the sandbox's APIs through the counted `api`. */
-function clients(api, token) {
+export function clients(api, token) {
   const auth = { authorization: `Bearer ${token}`, "x-goog-user-project": SANDBOX_PROJECT };
   const get = async (url, what) => json(await api(url, { headers: auth }), what);
   const send = async (method, url, body, what) =>

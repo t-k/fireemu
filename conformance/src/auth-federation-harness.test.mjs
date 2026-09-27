@@ -435,3 +435,64 @@ test("recordings replace the run's identifiers in object keys as well as in valu
   // A key the replacement would merge with another is refused rather than silently lost.
   assert.throws(() => normalize({ [`a-${RUN}`]: 1, "a-<run>": 2 }, ctx), /collides/);
 });
+
+test("recordings keep no absolute time: echoed claims are relative to iat, account times masked", async () => {
+  const { normalize } = await import("./auth-federation/harness.mjs");
+  const ctx = { run: RUN, project: SANDBOX_PROJECT };
+  const claims = {
+    aud: "client-a",
+    iat: 1_790_528_974,
+    exp: 1_790_532_574,
+    nbf: 1_790_528_970,
+    sub: "s",
+  };
+  assert.deepEqual(
+    normalize(
+      {
+        signInAttributes: { ...claims },
+        rawUserInfo: JSON.stringify(claims),
+        users: [
+          {
+            createdAt: "1790528975104",
+            lastLoginAt: "1790528975104",
+            lastRefreshAt: "2026-09-28T01:02:03.456Z",
+            passwordUpdatedAt: 1_790_528_975_104,
+            validSince: "1790528975",
+            email: "x@example.com",
+          },
+        ],
+      },
+      ctx,
+    ),
+    {
+      signInAttributes: {
+        aud: "client-a",
+        iat: "<iat>",
+        exp: "iat+3600",
+        nbf: "iat-4",
+        sub: "<subject>",
+      },
+      rawUserInfo: {
+        "<json>": {
+          aud: "client-a",
+          iat: "<iat>",
+          exp: "iat+3600",
+          nbf: "iat-4",
+          sub: "<subject>",
+        },
+      },
+      users: [
+        {
+          createdAt: "<time>",
+          lastLoginAt: "<time>",
+          lastRefreshAt: "<time>",
+          passwordUpdatedAt: "<time>",
+          validSince: "<time>",
+          email: "x@example.com",
+        },
+      ],
+    },
+  );
+  // A rawUserInfo that is not JSON stays text.
+  assert.deepEqual(normalize({ rawUserInfo: "not json" }, ctx), { rawUserInfo: "not json" });
+});

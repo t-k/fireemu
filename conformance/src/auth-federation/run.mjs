@@ -190,6 +190,8 @@ export async function runPrograms(programs, ctx) {
   const results = {};
   const failures = [];
   let requests = 0;
+  // Every account an answer named (the MAU a production pass costs).
+  let accountsDeleted = 0;
   for (const program of programs) {
     const steps = {};
     const stepCtx = { ...ctx, defaultIdpWrites: program.defaultIdpWrites ?? [] };
@@ -260,6 +262,7 @@ export async function runPrograms(programs, ctx) {
     // Every account the program's answers named, and every config path it touched.
     for (const localId of accounts) {
       await harnessAccountDelete(stepCtx, localId);
+      accountsDeleted += 1;
     }
     for (const { path, value } of restore) {
       const body = {};
@@ -282,7 +285,7 @@ export async function runPrograms(programs, ctx) {
   for (const leftover of await runProviderLeftovers(ctx)) {
     failures.push(`provider ${leftover} is left after the run`);
   }
-  return { results, failures, requests };
+  return { results, failures, requests, accountsDeleted };
 }
 
 /** The run's providers the project still lists. */

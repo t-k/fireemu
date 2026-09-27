@@ -37,7 +37,7 @@ export async function takeProjectLocks(
   ledger,
   projects,
   holder,
-  { afterEach = async () => {} } = {},
+  { afterEach = async () => {}, adopt } = {},
 ) {
   const legacy = `${ledger}.lock`;
   if (await exists(legacy)) throw new Error(`the legacy shared lock ${legacy} exists`);
@@ -61,7 +61,12 @@ export async function takeProjectLocks(
       } catch (error) {
         if (error.code !== "EEXIST") throw error;
         const other = await readFile(path, "utf8").catch(() => "unreadable");
-        throw new Error(`${project} is locked: ${other.trim()}`, { cause: error });
+        if (!adoptable(other, adopt)) {
+          throw new Error(`${project} is locked: ${other.trim()}`, { cause: error });
+        }
+        // A lock this task left for recovery, whose process is gone: taken over in place.
+        handle = await open(path, "r+");
+        await handle.truncate(0);
       }
       try {
         await handle.writeFile(text);
@@ -77,6 +82,27 @@ export async function takeProjectLocks(
     throw error;
   }
   return { taken, text };
+}
+
+/**
+ * Whether a held lock may be taken over: `adopt(body)` accepts its holder (this task's run
+ * left it for recovery) and the process it names no longer runs.
+ */
+function adoptable(text, adopt) {
+  if (!adopt) return false;
+  let body;
+  try {
+    body = JSON.parse(text);
+  } catch {
+    return false;
+  }
+  if (!adopt(body)) return false;
+  try {
+    process.kill(Number(body.pid), 0);
+    return false;
+  } catch (error) {
+    return error.code === "ESRCH";
+  }
 }
 
 /** Removes only locks that are still the ones taken: the same inode and the same text. */
@@ -106,9 +132,9 @@ export async function withProjectLocks(
   projects,
   holder,
   work,
-  { keep = () => false } = {},
+  { keep = () => false, adopt } = {},
 ) {
-  const handle = await takeProjectLocks(ledger, projects, holder);
+  const handle = await takeProjectLocks(ledger, projects, holder, { adopt });
   const state = { sent: false };
   let result;
   try {

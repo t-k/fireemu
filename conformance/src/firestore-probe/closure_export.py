@@ -138,7 +138,18 @@ def build_corpus() -> dict[str, Any]:
             }
             for size in (10_485_760, 10_485_761)
         ),
-        *(_webchannel_session_program(size) for size in (11_534_336, 11_534_337)),
+        *(
+            _webchannel_session_program(size)
+            for size in (
+                11_534_336,
+                11_534_337,
+                12_582_912,
+                16_777_216,
+                16_777_217,
+                33_554_432,
+                33_554_433,
+            )
+        ),
         *index_sum_programs,
     ]
     stream_recipes = [

@@ -425,3 +425,38 @@ def test_indexed_value_pair_charges_one_byte_over_the_entry_limit_only_on_the_up
         assert text == "x" * 2_999
         assert name_sum + (len(field) + 1) + 32 + min(len(text) + 1, 1_500) == entry
         assert readback["body"]["documents"] == [update["name"]]
+
+
+FOLLOWUP_INDEXED_POINTS = (
+    (2999, 1142),
+    (2999, 1143),
+    (2999, 1500),
+    (2999, 1800),
+    (2999, 2100),
+    (2999, 2400),
+    (2999, 2606),
+    (2999, 2607),
+    (2000, 2141),
+    (2000, 2142),
+)
+
+
+def test_indexed_string_name_points_vary_only_the_string_and_the_name_length() -> None:
+    programs = {program["id"]: program for program in _module().build_programs()}
+    prefix = "projects/fireemu-oracle-sbx/databases/(default)/documents/"
+    names = set()
+    for string_bytes, name_bytes in FOLLOWUP_INDEXED_POINTS:
+        program = programs[
+            f"writes/limits/indexed-string-name/{string_bytes}/{name_bytes}"
+        ]
+        assert [step["id"] for step in program["steps"]] == ["write", "readback"]
+        update = program["steps"][0]["body"]["writes"][0]["update"]
+        relative = update["name"].removeprefix(prefix)
+        assert len(relative.encode()) == name_bytes
+        # The same shape as the recorded index-entry-string-name pair: collection `c`.
+        assert relative.split("/")[0] == "c"
+        assert relative.split("/")[1].startswith(f"s{string_bytes}n{name_bytes}")
+        assert update["fields"] == {"s": {"stringValue": "x" * string_bytes}}
+        assert program["steps"][1]["body"] == {"documents": [update["name"]]}
+        names.add(update["name"])
+    assert len(names) == len(FOLLOWUP_INDEXED_POINTS)

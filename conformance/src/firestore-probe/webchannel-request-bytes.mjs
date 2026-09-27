@@ -7,7 +7,13 @@ const CHANNEL =
   "/google.firestore.v1.Firestore/Write/channel?database=projects%2Ffireemu-oracle-sbx%2Fdatabases%2F(default)&VER=8";
 const SESSION = "SID={{handshake.sid}}&AID=0&gsessionid={{handshake.gsessionid}}";
 const CONTROL_BODY_BYTES = 13;
-export const WEBCHANNEL_SESSION_SIZES = Object.freeze([11_534_336, 11_534_337]);
+/**
+ * The bracket recording's pair at the REST Commit bound, then the follow-up's ladder above it:
+ * 12 MiB and the exact pairs at 16 MiB and 32 MiB.
+ */
+export const WEBCHANNEL_SESSION_SIZES = Object.freeze([
+  11_534_336, 11_534_337, 12_582_912, 16_777_216, 16_777_217, 33_554_432, 33_554_433,
+]);
 const FORM_BODY_SIZES = new Set([
   CONTROL_BODY_BYTES,
   10_485_760,

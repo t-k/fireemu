@@ -18,14 +18,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { credentialMetadata, selectCredential } from "./credentials.mjs";
 import { requireChildProductionAdmission } from "../fs-data-write-admission.mjs";
-import {
-  BRACKET_HTTP_CAP,
-  BRACKET_OWNED_NAMES,
-  BRACKET_QUERIED_COLLECTION,
-  BRACKET_REST_IDS,
-  padJsonBody,
-  validateSandboxCorpus,
-} from "../fs-data-write-sandbox.mjs";
+import { recordingSet, padJsonBody, validateSandboxCorpus } from "../fs-data-write-sandbox.mjs";
 import { normalizeRecordedResponse } from "./production-normalization.mjs";
 import { createRequestBudget } from "./request-budget.mjs";
 import {
@@ -62,6 +55,8 @@ const DELTA_LOCK_HELD = process.env.FIRESTORE_PROBE_DELTA_LOCK_HELD === "1";
 const DELTA_V3_CANCEL_BULK_DELETE = process.env.FIRESTORE_PROBE_DELTA_V3_CANCEL_BULK_DELETE === "1";
 const PARTIAL_MODE = process.env.FIRESTORE_PROBE_PARTIAL === "1";
 const BRACKET_MODE = process.env.FIRESTORE_PROBE_BRACKET === "1";
+// Which pinned recording set a bracket-mode child runs (`bracket` or `followup`).
+const BRACKET_SET_NAME = process.env.FIRESTORE_PROBE_RECORDING_SET ?? "bracket";
 const PARTIAL_BOUNDARY_ID = "writes/limits/index-entry-sum/adjacent";
 const CORPUS_DIGEST = process.env.FIRESTORE_PROBE_CORPUS_DIGEST;
 const SOURCE_GIT_SHA = process.env.FIRESTORE_PROBE_SOURCE_GIT_SHA;
@@ -213,7 +208,14 @@ export function isExactBracketProductionScope({
   maxRequests,
   managedClearJournal,
   names,
+  set = "bracket",
 }) {
+  let pinned;
+  try {
+    pinned = recordingSet(set);
+  } catch {
+    return false;
+  }
   return (
     mode === true &&
     lockHeld === true &&
@@ -223,11 +225,11 @@ export function isExactBracketProductionScope({
     project === "fireemu-oracle-sbx" &&
     Number.isSafeInteger(maxRequests) &&
     maxRequests >= 1 &&
-    maxRequests <= BRACKET_HTTP_CAP &&
+    maxRequests <= pinned.httpCap &&
     typeof managedClearJournal === "string" &&
     managedClearJournal.length > 0 &&
     Array.isArray(names) &&
-    JSON.stringify(names.toSorted()) === JSON.stringify(BRACKET_OWNED_NAMES)
+    JSON.stringify(names.toSorted()) === JSON.stringify(pinned.ownedNames)
   );
 }
 
@@ -326,6 +328,7 @@ export function productionScopeFromEnvironment(env) {
       mode: env.FIRESTORE_PROBE_BRACKET === "1",
       lockHeld: env.FIRESTORE_PROBE_BRACKET_LOCK_HELD === "1",
       otherMode: env.FIRESTORE_PROBE_DELTA_V3 === "1" || env.FIRESTORE_PROBE_PARTIAL === "1",
+      set: env.FIRESTORE_PROBE_RECORDING_SET ?? "bracket",
     }),
   };
 }
@@ -1142,10 +1145,10 @@ async function writeDeltaCleanupJournal(status, extra = {}) {
 }
 
 /** The bracket child runs only the fixed bracket recipes. */
-export function validateBracketCorpus(corpus) {
+export function validateBracketCorpus(corpus, set = "bracket") {
   validateSandboxCorpus(corpus);
   const ids = corpus.restPrograms.map((program) => program.id).toSorted();
-  if (JSON.stringify(ids) !== JSON.stringify([...BRACKET_REST_IDS].toSorted())) {
+  if (JSON.stringify(ids) !== JSON.stringify([...recordingSet(set).restIds].toSorted())) {
     throw new Error("the bracket child accepts only the fixed bracket recipes");
   }
 }
@@ -1208,20 +1211,23 @@ async function writeBracketJournal(status, extra = {}) {
     runId: deleteRunId,
     corpusDigest: CORPUS_DIGEST,
     sourceGitSha: SOURCE_GIT_SHA,
-    names: [...BRACKET_OWNED_NAMES],
+    recordingSet: BRACKET_SET_NAME,
+    names: [...recordingSet(BRACKET_SET_NAME).ownedNames],
     ...extra,
   });
 }
 
 /** Before any write: every owned name is absent and the queried collection is empty. */
 async function bracketPreflight() {
-  if (!(await bracketOwnedNamesAbsent([...BRACKET_OWNED_NAMES]))) {
+  const set = recordingSet(BRACKET_SET_NAME);
+  if (!(await bracketOwnedNamesAbsent([...set.ownedNames]))) {
     throw new Error("bracket preflight: an owned document exists or absence is unproven");
   }
+  if (!set.queriedCollection) return;
   const { status, body } = await bracketJson(`${bracketDocuments()}:runQuery`, {
     method: "POST",
     body: JSON.stringify({
-      structuredQuery: { from: [{ collectionId: BRACKET_QUERIED_COLLECTION }], limit: 1 },
+      structuredQuery: { from: [{ collectionId: set.queriedCollection }], limit: 1 },
     }),
   });
   if (!runQueryProvesEmpty(status, body)) {
@@ -1233,7 +1239,8 @@ async function bracketPreflight() {
 async function bracketCleanup() {
   await writeBracketJournal("cleaning");
   let failedDeletes = 0;
-  for (const name of BRACKET_OWNED_NAMES) {
+  const owned = recordingSet(BRACKET_SET_NAME).ownedNames;
+  for (const name of owned) {
     const relative = name.slice(name.indexOf("/documents/") + "/documents/".length);
     try {
       const { status } = await bracketJson(`${bracketDocuments()}/${relative}`, {
@@ -1244,7 +1251,7 @@ async function bracketCleanup() {
       failedDeletes += 1;
     }
   }
-  const absent = failedDeletes === 0 && (await bracketOwnedNamesAbsent([...BRACKET_OWNED_NAMES]));
+  const absent = failedDeletes === 0 && (await bracketOwnedNamesAbsent([...owned]));
   await writeBracketJournal(absent ? "complete" : "cleanup-failed", { failedDeletes });
   if (!absent) {
     throw new Error("bracket cleanup did not prove every owned document absent; keep the lock");
@@ -2756,12 +2763,13 @@ async function main() {
     if (
       (PRODUCTION ? !bracketScope : !isLoopbackHost(HOST)) ||
       !Array.isArray(names) ||
-      JSON.stringify(names.toSorted()) !== JSON.stringify(BRACKET_OWNED_NAMES) ||
+      JSON.stringify(names.toSorted()) !==
+        JSON.stringify(recordingSet(BRACKET_SET_NAME).ownedNames) ||
       !MANAGED_CLEAR_JOURNAL
     ) {
       throw new Error("the bracket child requires its exact scope, names and journal");
     }
-    validateBracketCorpus(corpusInput);
+    validateBracketCorpus(corpusInput, BRACKET_SET_NAME);
     try {
       await bracketPreflight();
     } finally {

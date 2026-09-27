@@ -70,6 +70,84 @@ export const BRACKET_HTTP_CAP = 55;
 /** The one collection a bracket probe reads whole; it must be empty before a recording. */
 export const BRACKET_QUERIED_COLLECTION = "rawQuery";
 
+/** `sandbox_expansion.name_of_length`: an even-segment relative name of exact UTF-8 length. */
+export function nameOfLength(target, tag) {
+  for (let pairs = 1; pairs < 12; pairs += 1) {
+    const documentBytes = target - (2 * pairs - 1) - pairs;
+    if (!(pairs <= documentBytes && documentBytes <= pairs * 1500)) continue;
+    const segments = [];
+    for (let index = 0; index < pairs; index += 1) {
+      const length = Math.floor(documentBytes / pairs) + (index < documentBytes % pairs ? 1 : 0);
+      segments.push("c", (index === 0 ? tag : "d").slice(0, length).padEnd(length, "d"));
+    }
+    const name = segments.join("/");
+    if (Buffer.byteLength(name) === target) return name;
+  }
+  throw new Error(`cannot form a document name of ${target} bytes`);
+}
+
+/** (string bytes, relative name bytes) of the indexed-string follow-up points. */
+export const INDEXED_STRING_NAME_POINTS = Object.freeze([
+  [2999, 1142],
+  [2999, 1143],
+  [2999, 1500],
+  [2999, 1800],
+  [2999, 2100],
+  [2999, 2400],
+  [2999, 2606],
+  [2999, 2607],
+  [2000, 2141],
+  [2000, 2142],
+]);
+
+const FOLLOWUP_WEBCHANNEL_SIZES = [12_582_912, 16_777_216, 16_777_217, 33_554_432, 33_554_433];
+
+/** The follow-up to the bracket recording (D-2 WebChannel ladder, D-3 indexed strings). */
+export const FOLLOWUP_REST_IDS = Object.freeze([
+  ...FOLLOWUP_WEBCHANNEL_SIZES.map((size) => `writes/limits/webchannel-request-bytes/${size}`),
+  ...INDEXED_STRING_NAME_POINTS.map(
+    ([stringBytes, nameBytes]) => `writes/limits/indexed-string-name/${stringBytes}/${nameBytes}`,
+  ),
+]);
+
+export const FOLLOWUP_OWNED_NAMES = Object.freeze(
+  INDEXED_STRING_NAME_POINTS.map(
+    ([stringBytes, nameBytes]) =>
+      `projects/fireemu-oracle-sbx/databases/(default)/documents/${nameOfLength(nameBytes, `s${stringBytes}n${nameBytes}`)}`,
+  ).toSorted(),
+);
+
+/**
+ * A recording set pins its recipes, the documents its cleanup owns, its per-attempt HTTP cap
+ * and its per-attempt ledger estimate. The runner and the child both check a recording
+ * against exactly one set.
+ */
+export const RECORDING_SETS = Object.freeze({
+  bracket: Object.freeze({
+    restIds: BRACKET_REST_IDS,
+    streamIds: BRACKET_STREAM_IDS,
+    ownedNames: BRACKET_OWNED_NAMES,
+    queriedCollection: BRACKET_QUERIED_COLLECTION,
+    httpCap: BRACKET_HTTP_CAP,
+    attemptEstimateUsd: 0.5,
+  }),
+  // Owner-approved follow-up: US$0.20 per attempt, two attempts within the remaining budget.
+  followup: Object.freeze({
+    restIds: FOLLOWUP_REST_IDS,
+    streamIds: Object.freeze([]),
+    ownedNames: FOLLOWUP_OWNED_NAMES,
+    queriedCollection: null,
+    httpCap: 52,
+    attemptEstimateUsd: 0.2,
+  }),
+});
+
+export function recordingSet(name) {
+  const set = Object.hasOwn(RECORDING_SETS, name) ? RECORDING_SETS[name] : undefined;
+  if (!set) throw new Error(`unknown recording set: ${name}`);
+  return set;
+}
+
 function canonical(value) {
   if (Array.isArray(value)) return value.map(canonical);
   if (value && typeof value === "object") {

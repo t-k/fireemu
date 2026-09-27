@@ -12,6 +12,21 @@ BATCH_WRITE = f"/v1/{DOCS}:batchWrite"
 BATCH_GET = f"/v1/{DOCS}:batchGet"
 
 
+# (string bytes, relative document-name bytes) for the indexed-string follow-up.
+INDEXED_STRING_NAME_POINTS = (
+    (2999, 1142),
+    (2999, 1143),
+    (2999, 1500),
+    (2999, 1800),
+    (2999, 2100),
+    (2999, 2400),
+    (2999, 2606),
+    (2999, 2607),
+    (2000, 2141),
+    (2000, 2142),
+)
+
+
 def name_of_length(target: int, tag: str) -> str:
     """Build an even-segment relative document name of exact UTF-8 length."""
     for pairs in range(1, 12):
@@ -472,6 +487,18 @@ def build_programs() -> list[dict[str, Any]]:
         programs.append(
             _commit_program(
                 f"writes/limits/index-entry-string-name/{length}", [write], [name]
+            )
+        )
+    # The follow-up to the bracket recording: accepted-side observations for an indexed
+    # string longer than 1,500 bytes, in the same shape as the pair above.
+    for string_bytes, name_bytes in INDEXED_STRING_NAME_POINTS:
+        name = f"{DOCS}/{name_of_length(name_bytes, f's{string_bytes}n{name_bytes}')}"
+        write = _field_update(name, {"s": {"stringValue": "x" * string_bytes}})
+        programs.append(
+            _commit_program(
+                f"writes/limits/indexed-string-name/{string_bytes}/{name_bytes}",
+                [write],
+                [name],
             )
         )
     for length in (4627, 4628, 6127, 6128):

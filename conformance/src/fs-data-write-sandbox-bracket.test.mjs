@@ -374,3 +374,80 @@ test("a failed or incomplete first attempt stops before the second is sent", asy
     /incomplete stream/,
   );
 });
+
+test("the follow-up set records five WebChannel sessions and ten indexed strings, twice", async () => {
+  const { RECORDING_SETS } = await import("./fs-data-write-sandbox.mjs");
+  const set = RECORDING_SETS.followup;
+  const { corpus } = await prepareSandboxCorpus();
+  const { recordingCorpus } = selectBracketRecipes(corpus, "followup");
+  assert.deepEqual(
+    recordingCorpus.restPrograms.map((program) => program.id).toSorted(),
+    [...set.restIds].toSorted(),
+  );
+  assert.equal(recordingCorpus.restPrograms.length, 15);
+  assert.deepEqual(recordingCorpus.streamRecipes, []);
+  assert.equal(recordingCorpus.restRequestCount, 40);
+  assert.deepEqual(ownedMutationNamesForPrograms(recordingCorpus.restPrograms), [
+    ...set.ownedNames,
+  ]);
+  assert.equal(set.ownedNames.length, 10);
+  // One typed-missing read before, 40 recipe requests, ten deletes and one typed-missing read.
+  assert.deepEqual(bracketRequestBound(recordingCorpus, "followup"), {
+    declaredHttp: 40,
+    preflightHttp: 1,
+    cleanupHttp: 11,
+    maxHttpRequests: 52,
+    maxStreamFrames: 0,
+  });
+  const plan = productionAdmissionPlan("followup", selectBracketRecipes(corpus, "followup"));
+  assert.equal(plan.mode, "followup");
+  assert.equal(plan.attemptEstimateUsd, 0.2);
+  assert.deepEqual(plan.managedNames, [...set.ownedNames]);
+  assert.deepEqual(plan.streamIds, []);
+  // The two sets never mix.
+  assert.throws(() => bracketRequestBound(recordingCorpus, "bracket"), /bracket recipe/);
+  assert.throws(() => selectBracketRecipes(corpus, "unknown"), /recording set/);
+});
+
+test("the child admits the follow-up scope only with its own names and cap", async () => {
+  const { RECORDING_SETS } = await import("./fs-data-write-sandbox.mjs");
+  const set = RECORDING_SETS.followup;
+  const env = productionRestEnvironment({
+    ...common,
+    managedNames: [...set.ownedNames],
+    bracket: { maxHttpRequests: 52, set: "followup" },
+  });
+  assert.equal(env.FIRESTORE_PROBE_RECORDING_SET, "followup");
+  assert.equal(env.FIRESTORE_PROBE_MAX_REQUESTS, "52");
+  assert.deepEqual(productionScopeFromEnvironment(env), {
+    delta: false,
+    partial: false,
+    bracket: true,
+  });
+  for (const change of [
+    { FIRESTORE_PROBE_MAX_REQUESTS: "53" },
+    { FIRESTORE_PROBE_RECORDING_SET: "bracket" },
+    { FIRESTORE_PROBE_RECORDING_SET: "other" },
+    { FIRESTORE_PROBE_MANAGED_CLEAR_NAMES: JSON.stringify(BRACKET_OWNED_NAMES) },
+  ]) {
+    assert.equal(productionScopeFromEnvironment({ ...env, ...change }).bracket, false);
+  }
+  assert.throws(
+    () =>
+      productionRestEnvironment({
+        ...common,
+        managedNames: [...BRACKET_OWNED_NAMES],
+        bracket: { maxHttpRequests: 52, set: "followup" },
+      }),
+    /managed-clear names/,
+  );
+  assert.throws(
+    () =>
+      productionRestEnvironment({
+        ...common,
+        managedNames: [...set.ownedNames],
+        bracket: { maxHttpRequests: 53, set: "followup" },
+      }),
+    /HTTP cap/,
+  );
+});

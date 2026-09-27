@@ -505,7 +505,8 @@
       "conditionId": "FS-LIMIT-INDEXED-FIELD-VALUE-BYTES",
       "source": "spec/limits/firestore-standard-2026-08-25.json#FS-LIMIT-INDEXED-FIELD-VALUE-BYTES",
       "recipeIds": [
-        "writes/limits/indexed-field-value-bytes"
+        "writes/limits/indexed-field-value-bytes",
+        "writes/limits/indexed-string-name"
       ],
       "boundaryStatus": "UNBRACKETED",
       "status": "PRODUCTION_RECORDED",

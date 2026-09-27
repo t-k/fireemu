@@ -49,7 +49,9 @@ const CHANNEL =
 const SESSION = "SID={{handshake.sid}}&AID=0&gsessionid={{handshake.gsessionid}}";
 
 test("a valid-session WebChannel program opens, checks, measures and closes one session", () => {
-  for (const size of [11_534_336, 11_534_337]) {
+  for (const size of [
+    11_534_336, 11_534_337, 12_582_912, 16_777_216, 16_777_217, 33_554_432, 33_554_433,
+  ]) {
     assert.deepEqual(webchannelSessionProgram(size), {
       id: `writes/limits/webchannel-request-bytes/${size}`,
       area: "writes",
@@ -84,6 +86,7 @@ test("a valid-session WebChannel program opens, checks, measures and closes one 
     });
   }
   assert.throws(() => webchannelSessionProgram(10_485_760), /unsupported WebChannel session size/);
+  assert.throws(() => webchannelSessionProgram(33_554_434), /unsupported WebChannel session size/);
 });
 
 test("session bodies carry the database once and the size only in the pad value", () => {
@@ -93,7 +96,7 @@ test("session bodies carry the database once and the size only in the pad value"
   );
   assert.equal(Buffer.byteLength(makeWebChannelHandshakeBody()), 114);
   assert.equal(makeWebChannelFormBody(13), "count=0&pad=a");
-  for (const size of [11_534_336, 11_534_337]) {
+  for (const size of [11_534_336, 11_534_337, 16_777_217, 33_554_433]) {
     const body = makeWebChannelFormBody(size);
     assert.equal(Buffer.byteLength(body), size);
     assert.match(body, /^count=0&pad=a+$/);

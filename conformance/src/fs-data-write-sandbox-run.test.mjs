@@ -320,8 +320,8 @@ test("delete pair classification is route-local and requires typed target and ou
 
 test("the runnable sandbox corpus combines bounded REST and live gRPC recipes", async () => {
   const { corpus, restRequestCount, liveStreamCount } = await prepareSandboxCorpus();
-  assert.equal(corpus.restPrograms.length, 90);
-  assert.equal(restRequestCount, 305);
+  assert.equal(corpus.restPrograms.length, 105);
+  assert.equal(restRequestCount, 345);
   assert.equal(liveStreamCount, 9);
   assert.equal(MAX_STREAM_FRAMES, 11);
   assert.equal(
@@ -375,16 +375,16 @@ test("production REST session fixes project, endpoint, managed scope and all-att
 test("production cleanup is blocked before send when exact ownership exceeds fixed caps", async () => {
   const { corpus } = await prepareSandboxCorpus();
   assert.deepEqual(productionCleanupRequestBound(corpus), {
-    mutationNameCount: 195,
+    mutationNameCount: 205,
     rootCollectionCount: 29,
-    nestedTargetCount: 111,
-    managedRequestBound: 483,
-    perProgramCleanupRequestBound: 645,
-    totalRequestBound: 1433,
+    nestedTargetCount: 118,
+    managedRequestBound: 500,
+    perProgramCleanupRequestBound: 687,
+    totalRequestBound: 1532,
   });
   assert.throws(
     () => requireBoundedProductionCleanup(corpus),
-    /483 initial managed requests and 1433 total requests.*caps are 400 and 1000.*generic broad clear is disabled/,
+    /500 initial managed requests and 1532 total requests.*caps are 400 and 1000.*generic broad clear is disabled/,
   );
   let networkCalls = 0;
   await assert.rejects(

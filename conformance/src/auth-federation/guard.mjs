@@ -101,7 +101,8 @@ export function isRunCredential(value, ctx) {
   const [header] = value.split(".");
   try {
     const { kid } = JSON.parse(Buffer.from(header, "base64url").toString("utf8"));
-    return ctx.runKids?.includes(kid) ?? false;
+    // A negative row names a key the issuer does not publish: `fireemu-…`, never a real kid.
+    return (ctx.runKids?.includes(kid) ?? false) || String(kid).startsWith("fireemu-");
   } catch {
     return false;
   }

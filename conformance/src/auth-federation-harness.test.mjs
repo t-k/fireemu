@@ -90,20 +90,52 @@ test("a corpus declares its providers, default IdPs and config paths", () => {
 
 test("the draft corpus resolves to requests the guard lets through", async () => {
   const { PROGRAMS, resolveCorpus } = await import("./auth-federation/corpus.mjs");
-  const key = generateSigningKey({ kid: "run-kid" });
+  const { materialize, mintTokens } = await import("./auth-federation/run.mjs");
+  const keys = { run: generateSigningKey({ kid: "run-kid" }), other: generateSigningKey() };
   const resolved = resolveCorpus(PROGRAMS, {
     project: SANDBOX_PROJECT,
     run: "r1",
     certificates: { "saml-a": "-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----" },
-    tokens: { missing: signIdToken(key, { sub: "m" }), off: signIdToken(key, { sub: "o" }) },
+    tokens: { missing: signIdToken(keys.run, { sub: "m" }), off: signIdToken(keys.run, { sub: "o" }) },
   });
   assert.doesNotThrow(() => validateFederationCorpus(resolved));
+  const earlier = signIdToken(keys.run, { sub: "earlier" });
+  // Every earlier answer holds what a later step may read from it.
+  const raw = {
+    get: () => ({
+      localId: "local-1",
+      idToken: earlier,
+      id_token: earlier,
+      refreshToken: "fireemu-refresh",
+      pendingToken: "fireemu-pending",
+      sessionId: "fireemu-session",
+    }),
+  };
   for (const program of resolved) {
+    const minted = mintTokens(program, {
+      issuer: `https://${SANDBOX_PROJECT}.web.app/oidc/r1`,
+      keys,
+      now: 1_800_000_000,
+    });
     const ctx = production({ runKids: ["run-kid"], defaultIdpWrites: program.defaultIdpWrites ?? [] });
     for (const step of program.steps) {
       const query = step.query ? `?${new URLSearchParams(step.query)}` : "";
+      const body = step.body === undefined ? undefined : materialize(step.body, raw, minted);
+      const path = step.path.startsWith("v1/token") ? null : `/${step.path}${query}`;
+      if (path === null) {
+        assert.doesNotThrow(
+          () =>
+            guardHttp(
+              { url: `https://securetoken.googleapis.com/${step.path}`, method: "POST", body: JSON.stringify(body) },
+              ctx,
+              { role: "step" },
+            ),
+          `${program.id}#${step.id}`,
+        );
+        continue;
+      }
       assert.doesNotThrow(
-        () => send(ctx, step.method ?? "POST", `/${step.path}${query}`, step.body),
+        () => send(ctx, step.method ?? "POST", path, body),
         `${program.id}#${step.id}`,
       );
     }

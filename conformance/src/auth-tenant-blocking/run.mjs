@@ -26,7 +26,7 @@ import { execFile, spawn } from "node:child_process";
 import { createHash, generateKeyPairSync, randomBytes } from "node:crypto";
 import { existsSync } from "node:fs";
 import { appendFile, lstat, mkdir, open as openFile, readFile, writeFile } from "node:fs/promises";
-import { join, resolve as resolvePath } from "node:path";
+import { dirname, join, resolve as resolvePath } from "node:path";
 import { setTimeout as sleepFor } from "node:timers/promises";
 import { promisify } from "node:util";
 
@@ -709,9 +709,24 @@ export function productionStartedRow({ ts, gitSha: sha, programs }) {
   };
 }
 
-/** Only the reviewed wrapper and its campaign child may authorize a production recording. */
-export async function assertReviewedLock(ledger, expectedLedger, nonce, wrapperPid, campaignPid) {
+const PROJECT_ID = /^[a-z][a-z0-9-]{4,28}[a-z0-9]$/;
+
+/**
+ * Only the reviewed wrapper and its campaign child may authorize a production recording. The
+ * lock is the legacy shared one (`<ledger>.lock`), or with `scope.project` that project's own
+ * (`sandbox-locks/<project>.lock`, owner decision A, 2026-09-28), while no shared lock stands.
+ */
+export async function assertReviewedLock(
+  ledger,
+  expectedLedger,
+  nonce,
+  wrapperPid,
+  campaignPid,
+  scope = {},
+) {
   if (ledger !== expectedLedger) throw new Error("the reviewed shared sandbox ledger is required");
+  if (scope.project !== undefined && !PROJECT_ID.test(scope.project))
+    throw new Error(`${scope.project} is not a project ID`);
   if (!/^[0-9a-f]{64}$/.test(nonce ?? ""))
     throw new Error("the reviewed sandbox lock nonce is missing");
   if (
@@ -724,7 +739,12 @@ export async function assertReviewedLock(ledger, expectedLedger, nonce, wrapperP
   const ledgerStat = await lstat(ledger);
   if (!ledgerStat.isFile() || ledgerStat.isSymbolicLink())
     throw new Error("the reviewed shared sandbox ledger must be a regular file");
-  const lockPath = `${ledger}.lock`;
+  const lockPath =
+    scope.project === undefined
+      ? `${ledger}.lock`
+      : join(dirname(ledger), "sandbox-locks", `${scope.project}.lock`);
+  if (scope.project !== undefined && existsSync(`${ledger}.lock`))
+    throw new Error("the legacy shared lock stands; no project-locked run starts");
   const lockStat = await lstat(lockPath);
   if (!lockStat.isFile() || lockStat.isSymbolicLink())
     throw new Error("the reviewed sandbox lock must be a regular file");
@@ -760,12 +780,15 @@ async function assertProductionLock(ledger) {
     "runs",
     "sandbox-ledger.jsonl",
   );
+  // The blocking suite runs under its project's own lock (owner decision A, 2026-09-28); the
+  // tenant suite keeps the shared lock its approval named.
   await assertReviewedLock(
     ledger,
     expectedLedger,
     process.env.FIREEMU_SANDBOX_LOCK_NONCE,
     process.env.FIREEMU_SANDBOX_WRAPPER_PID,
     process.env.FIREEMU_AUTH_CAMPAIGN_PID,
+    SUITE === "blocking" ? { project: SANDBOX_PROJECT } : {},
   );
 }
 

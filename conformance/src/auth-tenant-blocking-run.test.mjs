@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
@@ -267,6 +267,59 @@ test("the reviewed lock binds its ledger, nonce, wrapper, and campaign process",
     await assert.rejects(
       assertReviewedLock(ledger, join(dir, "other.jsonl"), nonce, process.pid, process.ppid),
       /shared sandbox ledger/,
+    );
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("the reviewed project lock binds its file, nonce and processes, and no shared lock stands", async () => {
+  // Project-scoped locks (owner decision A, 2026-09-28), used by the blocking suite.
+  const dir = await mkdtemp(join(tmpdir(), "atb-project-lock-"));
+  try {
+    const ledger = join(dir, "ledger.jsonl");
+    const nonce = "a".repeat(64);
+    await writeFile(ledger, "");
+    await mkdir(join(dir, "sandbox-locks"), { mode: 0o700 });
+    const lock = join(dir, "sandbox-locks", "fireemu-oracle-idp.lock");
+    const scope = { project: "fireemu-oracle-idp" };
+    await writeFile(
+      lock,
+      `${JSON.stringify({
+        taskId: "AUTH-BLOCKING-SANDBOX",
+        packetId: "blocking-record",
+        sourceCommit: "c".repeat(40),
+        pid: process.pid,
+        nonceSha256: createHash("sha256").update(nonce).digest("hex"),
+        acquiredAt: "2026-09-28T00:00:00.000Z",
+      })}\n`,
+    );
+    await assertReviewedLock(ledger, ledger, nonce, process.pid, process.ppid, scope);
+    await assert.rejects(
+      assertReviewedLock(ledger, ledger, "b".repeat(64), process.pid, process.ppid, scope),
+      /lock owner/,
+    );
+    await assert.rejects(
+      assertReviewedLock(ledger, ledger, nonce, process.pid, process.ppid, {
+        project: "fireemu-oracle-sbx",
+      }),
+      /ENOENT/,
+    );
+    // The shared lock is not a project lock's stand-in, and while it stands nothing starts.
+    await assert.rejects(
+      assertReviewedLock(ledger, ledger, nonce, process.pid, process.ppid),
+      /ENOENT/,
+    );
+    await writeFile(`${ledger}.lock`, "FS-RULES\n");
+    await assert.rejects(
+      assertReviewedLock(ledger, ledger, nonce, process.pid, process.ppid, scope),
+      /legacy shared lock/,
+    );
+    await assert.rejects(
+      assertReviewedLock(ledger, ledger, nonce, process.pid, process.ppid, {
+        project: "../escape",
+      }),
+      /not a project ID/,
     );
   } finally {
     await rm(dir, { recursive: true, force: true });

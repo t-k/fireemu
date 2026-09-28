@@ -161,7 +161,7 @@
         "strict"
       ],
       "status": "PENDING_CORPUS",
-      "note": "A controlled SAML IdP (O1): responses signed with the run's certificate; the signature placement, Audience, Destination and Recipient, NotOnOrAfter, InResponseTo and an IdP-initiated response. Subject to the O5 feasibility check; if production takes no locally signed response, the owner is asked to move this condition out of scope. Until strict verifies signed SAML responses (after O5), strict refuses every SAML sign-in with INVALID_IDP_RESPONSE (O4, 3ed31eb80): a known divergence recorded here, not an observation."
+      "note": "A controlled SAML IdP (O1): responses signed with the run's certificate; the signature placement, Audience, Destination and Recipient, NotOnOrAfter, InResponseTo and an IdP-initiated response. Subject to the O5 feasibility check; if production takes no locally signed response, the owner is asked to move this condition out of scope. Stage A (saml-smoke, 2026-09-27) found production accepting a locally signed response in all three positions and refusing a tampered signature with INVALID_IDP_RESPONSE : Failed to verify the signature in SAMLResponse; stage B (R2, owner-approved 2026-09-28) verifies signed responses in strict (crates/fireemu-adapter-http/src/saml.rs). Refusals rest on that observation and the public documentation (a missing signature or NameID); audience, destination, recipient, time windows, InResponseTo, issuer and the SHA-1 algorithms are not enforced until a record-saml recording observes them (list U1-U18)."
     },
     {
       "conditionId": "AUTH-FEDERATION/saml-nameid-and-attributes",

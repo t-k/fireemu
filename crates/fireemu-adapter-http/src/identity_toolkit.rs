@@ -66,6 +66,7 @@ const SIGNUP_QUOTA_FIELDS: [&str; 3] = ["quota", "startTime", "quotaDuration"];
 
 mod custom_token;
 mod idp_signers;
+mod strict_saml;
 pub use custom_token::{CustomTokenRefusal, CustomTokenTrust};
 pub use idp_signers::IdpSignerTrust;
 mod config_proto;
@@ -651,9 +652,10 @@ pub enum IdpContinuationPolicy {
 pub enum IdpAssertionPolicy {
     /// The official emulator's fixture `IdP`: assertions are parsed, never verified.
     Fixture,
-    /// Owner decision O4 of AUTH-FEDERATION (the strict profile): only an `oidc.*` ID token that
-    /// a startup key of the provider's issuer verifies is accepted; the fixture and every other
-    /// provider are refused. An empty key set refuses every `IdP` sign-in.
+    /// The strict profile (AUTH-FEDERATION owner decisions O4 and O5): an `oidc.*` ID token
+    /// is accepted only when a startup key of the provider's issuer verifies it (an empty key
+    /// set refuses every OIDC sign-in), a `saml.*` response only when the provider's configured
+    /// certificates verify its signature; the fixture and every other provider are refused.
     SignedOidc(Arc<IdpSignerTrust>),
 }
 
@@ -2163,6 +2165,7 @@ fn dispatch_with_blocking_hook(
     at: LogicalInstant,
     quota_reservation: &mut Option<SignupReservation>,
     idp_trust: Option<&crate::oidc::LocalOidcTrust>,
+    saml_trust: Option<&strict_saml::StrictSaml>,
 ) -> JsonResponse {
     let pending_continuation = (handler == routes::Handler::MfaSignInFinalize)
         .then(|| str_field(body, "mfaPendingCredential"))
@@ -2399,6 +2402,11 @@ fn dispatch_with_blocking_hook(
                     str_field(body, "postBody"),
                 );
                 if !trust.accepts(&live, &params, at) {
+                    return error(400, "INVALID_IDP_RESPONSE");
+                }
+            }
+            if let Some(trust) = saml_trust {
+                if !trust.accepts(&live) {
                     return error(400, "INVALID_IDP_RESPONSE");
                 }
             }
@@ -3126,13 +3134,32 @@ fn handle_with_policy(
             return denial;
         }
     }
-    // Verify the selected namespace and assertion before any account or transient mutation.
-    let strict_idp_trust =
-        match strict_signers.map(|signers| strict_idp_trust(signers, &store, body)) {
-            Some(Ok(trust)) => trust,
-            Some(Err(response)) => return response,
-            None => None,
-        };
+    // Verify the selected namespace and assertion before any account or transient mutation:
+    // OIDC ID tokens with the startup issuer keys (O4), SAML responses with the provider's
+    // certificates (O5 stage B). A verified SAML response reaches the credential parser only
+    // as what it says (`saml_body`); the original body is kept for a continuation, which is
+    // verified again when resumed.
+    let mut strict_saml_trust = None;
+    let mut saml_body = None;
+    let strict_idp_trust = match strict_signers {
+        Some(_) if strict_saml::names_saml_provider(body) => {
+            match strict_saml::strict_saml(&store, body) {
+                Ok(Some((trust, verified_body))) => {
+                    strict_saml_trust = Some(trust);
+                    saml_body = Some(verified_body);
+                    None
+                }
+                Ok(None) => None,
+                Err(response) => return response,
+            }
+        }
+        Some(signers) => match strict_idp_trust(signers, &store, body) {
+            Ok(trust) => trust,
+            Err(response) => return response,
+        },
+        None => None,
+    };
+    let dispatch_body = saml_body.as_ref().unwrap_or(body);
     let idp_trust = oidc_trust.or(strict_idp_trust.as_ref());
     if route.handler == routes::Handler::SignInWithIdp {
         if let Some(trust) = idp_trust {
@@ -3152,7 +3179,7 @@ fn handle_with_policy(
     // past its lifetime is observable (`AUTH-TRANSIENT-01`, `-02`).
     store.sweep_transient_credentials(at);
     let quota_request = route.class == routes::RouteClass::EndUser
-        && request_may_create_end_user(route.handler, &store, body, at);
+        && request_may_create_end_user(route.handler, &store, dispatch_body, at);
     let mut quota_reservation = if quota_request {
         let peer_ip = headers.peer_ip.as_deref().unwrap_or("127.0.0.1");
         match store.reserve_signup(AuthPrincipal::EndUser, peer_ip, at) {
@@ -3233,11 +3260,12 @@ fn handle_with_policy(
             &state.operation_gate,
             operation_gate.as_ref(),
             query,
-            body,
+            dispatch_body,
             headers,
             at,
             &mut quota_reservation,
             idp_trust,
+            strict_saml_trust.as_ref(),
         )
     } else if let Some(reservation) = quota_reservation.clone() {
         // Run quota-accounted creation on an isolated store copy. This gives the quota
@@ -3248,7 +3276,7 @@ fn handle_with_policy(
             route.handler,
             &mut candidate,
             query,
-            body,
+            dispatch_body,
             headers,
             at,
             &state.into(),
@@ -3290,7 +3318,7 @@ fn handle_with_policy(
             route.handler,
             &mut store,
             query,
-            body,
+            dispatch_body,
             headers,
             at,
             &state.into(),
@@ -3312,6 +3340,9 @@ fn handle_with_policy(
         response
     };
     let mut response = finish_token_response(response, signer.as_deref(), &store_arc, at);
+    if let Some(trust) = &strict_saml_trust {
+        trust.shape_answer(&mut response);
+    }
     if let Some(reservation) = quota_reservation.take() {
         // Blocking dispatch commits a successful new-account reservation at its typed
         // per-request creation boundary. Any reservation left here belongs to a failed or

@@ -478,8 +478,9 @@ pub(crate) fn custom_token_signer_note(cfg: &RuntimeConfig) -> Option<&'static s
     )
 }
 
-/// The startup notice for a strict profile without `IdP` signers: strict verifies `IdP` ID
-/// tokens only with `auth.idpSigners` keys, so without them it refuses every `IdP` sign-in.
+/// The startup notice for a strict profile without `IdP` signers: strict verifies OIDC ID
+/// tokens only with `auth.idpSigners` keys, so without them it refuses every OIDC sign-in (SAML
+/// responses are verified with each provider's configured certificates).
 pub(crate) fn idp_signer_note(cfg: &RuntimeConfig) -> Option<&'static str> {
     idp_signer_note_for(cfg.profile, cfg.auth_idp_signers.is_some())
 }
@@ -489,7 +490,7 @@ fn idp_signer_note_for(
     configured: bool,
 ) -> Option<&'static str> {
     (profile == crate::config::CompatibilityProfile::Strict && !configured).then_some(
-        "  identity providers: refused (strict accepts only signed OIDC ID tokens: set auth.idpSigners to the issuers' public JWK sets, or use profile \"emulator\" for the fixture IdP)",
+        "  identity providers: OIDC refused (strict accepts only signed OIDC ID tokens: set auth.idpSigners to the issuers' public JWK sets); SAML responses are verified with each provider's certificates; use profile \"emulator\" for the fixture IdP",
     )
 }
 

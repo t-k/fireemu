@@ -1175,3 +1175,29 @@ fn the_emulator_profile_does_not_check_the_conditions() {
     );
     assert_eq!(valid.body["error"], refused.body["error"]);
 }
+
+#[test]
+fn a_refresh_keeps_the_sign_in_auth_time() {
+    // record-saml 7789f0: production's refreshed token carried `auth_time` one second before its
+    // `iat`, because the refresh came a second after the sign-in. A refresh keeps the sign-in's
+    // `auth_time` and issues a new `iat`, so the row differs only by when it was sent.
+    let s = state(true);
+    let first = sign_in(&s, &request(&fixture("assertion-signed.xml")));
+    assert_eq!(first.status, 200, "{}", first.body);
+    let signed_in = claims(&first.body["idToken"]);
+    assert_eq!(signed_in["auth_time"], VECTOR_NOW);
+    assert_eq!(signed_in["iat"], VECTOR_NOW);
+    *s.clock.lock().unwrap() = VirtualClock::new(LogicalInstant::from_unix_seconds(VECTOR_NOW + 2));
+    let refreshed = handle(
+        &s,
+        "POST",
+        "/securetoken.googleapis.com/v1/token",
+        &json!({"grant_type": "refresh_token", "refresh_token": first.body["refreshToken"]}),
+    );
+    assert_eq!(refreshed.status, 200, "{}", refreshed.body);
+    for token in ["id_token", "access_token"] {
+        let refreshed = claims(&refreshed.body[token]);
+        assert_eq!(refreshed["auth_time"], VECTOR_NOW, "{token}");
+        assert_eq!(refreshed["iat"], VECTOR_NOW + 2, "{token}");
+    }
+}

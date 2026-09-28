@@ -1,9 +1,9 @@
 {
   "kind": "auth-tenant-blocking-comparison-v1",
-  "artifactSha256": "78599a77c92aeba9698228990d934beaec8f9c05ec602928bef07c0f85badf51",
+  "artifactSha256": "3edcde560bd05adbbd631073a0776620f15e6cd64c12aa7c3e52e5e9694b4bc8",
   "fixtureSha256": "259136913f5232749b6cf9aae1111a7f2fd2894447c30f9c45cfe81c74674d07",
   "runnerSha256": "99d40d71bc9c68a36b05a4c449455de38d34909f44fe6894cf45d73dbd7f938d",
-  "sourceCommit": "a94e7915fb8a7fe6f4ee392b5f91174cc332e88d",
+  "sourceCommit": "b0c13fc9b4c1bcea4cc165408fce5468a40d7afe",
   "treeClean": true,
   "summary": {
     "MATCH": 88,

@@ -45,6 +45,12 @@
     "spec/compatibility/closure/evidence/AUTH-MFA-action-regression.json": "008870ad918862b31086dd1b235d1f9b28b8a9b7cff97425e0392819b0f86d55",
     "spec/compatibility/closure/evidence/AUTH-MFA-comparison.json": "9193fc482f88ecb3f27d3a309caa8651c82103916e575c48c6beff970aaf4951",
     "spec/compatibility/closure/evidence/AUTH-MFA-credential-regression.json": "42eb0bccb178125a64a09d80230400dfeb5e5c9554d9f55518af3f1114a9c40f",
+    "spec/compatibility/closure/evidence/AUTH-TENANT-BLOCKING-account-regression.json": "2d4b45e0ff01233a096d07803ac9c05e6104231c7f5d5907b78c362f259712cf",
+    "spec/compatibility/closure/evidence/AUTH-TENANT-BLOCKING-action-regression.json": "615f6696de0f0ade823e1cc29cdc73cf83fb19d19b63a541f36ac81bb3eec9a1",
+    "spec/compatibility/closure/evidence/AUTH-TENANT-BLOCKING-blocking-comparison.json": "26c38c8e858cf6c000dc5decb06022390eb51c2e054b2021c3cccf7852784f46",
+    "spec/compatibility/closure/evidence/AUTH-TENANT-BLOCKING-credential-regression.json": "f181f10ddc0f1ad1890827c8ad4f8db21360d20b3833ee84b86ea06593934a0a",
+    "spec/compatibility/closure/evidence/AUTH-TENANT-BLOCKING-mfa-regression.json": "03f6fa8b67d5043da65a942c66afc6f21a1968b70ad8860ac50ac5984299ff3c",
+    "spec/compatibility/closure/evidence/AUTH-TENANT-BLOCKING-tenant-comparison.json": "50c6ecc491ff0c51c15dc7bc844198112bafc852239c44ae49b73d9cce508ecf",
     "spec/compatibility/closure/evidence/FS-CONFIG-LIFECYCLE-comparison.json": "3ed1df56800142cdf2e9e1c45c8cc9c870571d6592490382892be87fe91211e7",
     "spec/compatibility/closure/evidence/FS-DATA-WRITE-LIST-comparison.json": "8a76294de3d75e651a9999736f7fbfe2a1c38a6540f9954154fb106895a5d8ec",
     "spec/compatibility/closure/evidence/FS-DATA-WRITE-current-accepted-conditions.json": "64c3ee1f361944c780f7601ece224d9fc8e2cf11e8c58e4309237814e47e9976",
@@ -72,7 +78,7 @@
     "spec/compatibility/closure/evidence/integration-v0.8.0/FS-RULES-comparison.json": "1f6fdd5ccbab7f135bb7302b3b83ef7bf5fa5947e59ee4f1b0984ef55d3e61b6",
     "spec/compatibility/closure/evidence/integration-v0.8.0/FUNCTIONS-HTTP-comparison.json": "73215bfc9eff6bf583d7ef41a0179a8791dd0c2e0f15ba68a2d4f5a7b701a701",
     "spec/compatibility/closure/evidence/integration-v0.8.0/release-artifact.json": "439d1f55b447d2621661077fc8c130df1fba8f38d996b0a952adef0d4d8bcd1c",
-    "spec/compatibility/contract.json": "a73e71f1baa7b746741bdbfc7e6d048defd0aa94222ec64425b51757c90ce8da",
+    "spec/compatibility/contract.json": "bd821dd63a746707c972e14b4220f2b36f44320e3d2a8f58e1fdcec18e247d03",
     "spec/compatibility/gaps.json": "bc22d5f813b12d99682a2a05bd3e2a47d930767c79be57f35d1f481e42b46a7e",
     "spec/limits/firestore-standard-2026-08-25.json": "8f2a4c383aa17a838d1e87ca8c404595d6bb7f55c683e1cbe1c77cee2a2be48f"
   }

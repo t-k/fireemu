@@ -3146,6 +3146,16 @@ fn handle_with_policy(
     body: &Value,
     oidc_trust: Option<&crate::oidc::LocalOidcTrust>,
 ) -> JsonResponse {
+    if !state.stateless_refresh_tokens && method == "GET" {
+        let (bare_path, query) = path
+            .split_once('?')
+            .map_or((path, None), |(bare, query)| (bare, Some(query)));
+        if bare_path == SUPPORTED_IDPS_PATH {
+            let api_key = query_selectors(query).is_ok_and(|(key, _)| key.is_some());
+            return admin_request_guard(headers, method, api_key)
+                .map_or_else(|refusal| refusal, |()| supported_idps());
+        }
+    }
     let response = handle_with_policy_inner(state, method, path, headers, body, oidc_trust);
     if state.stateless_refresh_tokens {
         return response;
@@ -3164,7 +3174,9 @@ fn handle_with_policy(
 /// tenant management of a project with multi-tenancy off is `INVALID_PROJECT_ID` whatever the
 /// tenant id; a provider config missing from the addressed scope is `CONFIGURATION_NOT_FOUND`,
 /// and a provider config names the project by number, lists `responseType` with its true
-/// members only and answers an empty list as `{}`.
+/// members only and answers an empty list as `{}`. The same holds for the SAML and
+/// default-supported collections, and a false `enabled` or `idpConfig.signRequest` is left out
+/// (AUTH-FEDERATION record-oidc 39209e and record-saml 7789f0).
 fn management_answer(
     state: &AuthState,
     handler: routes::Handler,
@@ -3187,7 +3199,9 @@ fn management_answer(
             | Handler::ProviderGet
             | Handler::ProviderUpdate
             | Handler::ProviderDelete
-    ) && path.contains("/oauthIdpConfigs");
+    ) && PROVIDER_COLLECTIONS
+        .iter()
+        .any(|collection| path.contains(&format!("/{collection}")));
     if !tenant_management && !provider_management {
         return response;
     }
@@ -3236,16 +3250,27 @@ fn management_answer(
         if let Some(Value::Object(types)) = config.get_mut("responseType") {
             types.retain(|_, value| value != &Value::Bool(false));
         }
+        if let Some(config) = config.as_object_mut() {
+            config.retain(|key, value| !(key == "enabled" && value == &Value::Bool(false)));
+        }
+        if let Some(Value::Object(idp)) = config.get_mut("idpConfig") {
+            idp.retain(|key, value| !(key == "signRequest" && value == &Value::Bool(false)));
+        }
     };
-    if let Some(configs) = response
-        .body
-        .get_mut("oauthIdpConfigs")
-        .and_then(Value::as_array_mut)
-    {
-        configs.iter_mut().for_each(rewrite);
-        if configs.is_empty() {
-            if let Some(object) = response.body.as_object_mut() {
-                object.remove("oauthIdpConfigs");
+    let collection = PROVIDER_COLLECTIONS
+        .iter()
+        .find(|collection| response.body.get(**collection).is_some_and(Value::is_array));
+    if let Some(collection) = collection {
+        if let Some(configs) = response
+            .body
+            .get_mut(*collection)
+            .and_then(Value::as_array_mut)
+        {
+            configs.iter_mut().for_each(rewrite);
+            if configs.is_empty() {
+                if let Some(object) = response.body.as_object_mut() {
+                    object.remove(*collection);
+                }
             }
         }
     } else if response.body.get("name").is_some() {
@@ -3253,6 +3278,38 @@ fn management_answer(
     }
     response
 }
+
+/// The Admin v2 list of the identity providers a `defaultSupportedIdpConfigs` entry may name.
+const SUPPORTED_IDPS_PATH: &str = "/identitytoolkit.googleapis.com/admin/v2/defaultSupportedIdps";
+
+/// Production's list of supported identity providers (strict profile, AUTH-FEDERATION
+/// record-oidc 39209e, `provider-config/default-supported#list-supported`), whole: paging it is
+/// unobserved. The official emulator does not serve it, so the emulator profile does not.
+fn supported_idps() -> JsonResponse {
+    const IDS: [&str; 10] = [
+        "apple.com",
+        "facebook.com",
+        "gc.apple.com",
+        "github.com",
+        "google.com",
+        "linkedin.com",
+        "microsoft.com",
+        "playgames.google.com",
+        "twitter.com",
+        "yahoo.com",
+    ];
+    JsonResponse {
+        status: 200,
+        body: json!({"defaultSupportedIdps": IDS.iter().map(|id| json!({"idpId": id})).collect::<Vec<_>>()}),
+    }
+}
+
+/// The Admin v2 provider configuration collections.
+const PROVIDER_COLLECTIONS: [&str; 3] = [
+    "oauthIdpConfigs",
+    "inboundSamlConfigs",
+    "defaultSupportedIdpConfigs",
+];
 
 /// The tenant an account or Secure Token request names, read as production reads it (strict
 /// profile; AUTH-TENANT-BLOCKING recording 2026-09-27, selection, deletion and switch-off
@@ -3841,6 +3898,7 @@ fn handle_with_policy_inner(
             resource,
             query,
             body,
+            !state.stateless_refresh_tokens,
         );
         if response.status == 200
             && matches!(
@@ -6538,11 +6596,17 @@ fn provider_config_management(
     resource: Option<&str>,
     query: Option<&str>,
     body: &Value,
+    strict: bool,
 ) -> JsonResponse {
     use routes::Handler;
     let Some(project) = project else {
         return error(400, "INVALID_PROJECT_ID");
     };
+    if strict && kind == ProviderKind::Oidc && handler == Handler::ProviderCreate {
+        if let Some(refusal) = strict_oidc_create_refusal(store, query, body) {
+            return refusal;
+        }
+    }
     let path_prefix = format!("projects/{project}/");
     let path_prefix = if let Some(tenant) = tenant {
         format!("{path_prefix}tenants/{tenant}/")
@@ -6782,6 +6846,70 @@ fn provider_config_management(
         _ => error(500, "INTERNAL"),
     };
     response
+}
+
+/// Production's refusals of an OIDC provider configuration it does not create (strict profile,
+/// AUTH-FEDERATION record-oidc 39209e, `provider-config/oidc`): an ID that is not `oidc.` and a
+/// lowercase-led name, an ID already configured, no client ID, an issuer that is not an https
+/// URL, both response types, and the code flow without a client secret. Each was observed
+/// alone; the order in which they are checked when several apply is fireemu's.
+fn strict_oidc_create_refusal(
+    store: &Arc<Mutex<AuthStore>>,
+    query: Option<&str>,
+    body: &Value,
+) -> Option<JsonResponse> {
+    let id = query_params(query).get("oauthIdpConfigId").cloned();
+    let Some(id) = id.filter(|id| valid_provider_id(id, ProviderKind::Oidc)) else {
+        return Some(error(
+            400,
+            "INVALID_CONFIG_ID : Oauth_idp_config_id must start with 'oidc.' and can only have alphanumeric characters, hyphens, underscores or periods. The part after 'oidc.' must also start with a lowercase letter, end with an alphanumeric character, and have at least 2 characters.",
+        ));
+    };
+    if store
+        .lock()
+        .ok()
+        .is_some_and(|store| store.oidc_config(&id).is_some())
+    {
+        return Some(error(
+            409,
+            &format!(
+                "CONFIGURATION_EXISTS : The OAuthIdpConfig already exists with config_id: {id}"
+            ),
+        ));
+    }
+    if str_field(body, "clientId").is_none_or(str::is_empty) {
+        return Some(error(
+            400,
+            "MISSING_OAUTH_CLIENT_ID : Client_id in OAuthIdpConfig cannot be empty.",
+        ));
+    }
+    if str_field(body, "issuer")
+        .is_some_and(|issuer| !(issuer.starts_with("https://") && valid_url(issuer)))
+    {
+        return Some(error(
+            400,
+            "INVALID_ISSUER : Issuer in OAuthIdpConfig should be a valid URL.",
+        ));
+    }
+    let response_type = |member: &str| {
+        body.get("responseType")
+            .and_then(|types| types.get(member))
+            .and_then(Value::as_bool)
+            == Some(true)
+    };
+    if response_type("idToken") && response_type("code") {
+        return Some(error(
+            400,
+            "INVALID_CONFIG : response_type should have exactly one of 'idToken' and 'code' being true. Setting both types to be true ('{code: true, idToken: true}') is not yet supported.",
+        ));
+    }
+    if response_type("code") && str_field(body, "clientSecret").is_none_or(str::is_empty) {
+        return Some(error(
+            400,
+            "INVALID_CONFIG : client_secret cannot be empty for code flow.",
+        ));
+    }
+    None
 }
 
 /// `defaultSupportedIdpConfigs` of a project or tenant (Identity Platform REST v2): created

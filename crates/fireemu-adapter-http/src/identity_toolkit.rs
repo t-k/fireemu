@@ -2763,8 +2763,9 @@ fn dispatch_with_blocking_hook(
                         // If another account took that uid after the clear, the creation below
                         // answers 400 DUPLICATE_LOCAL_ID, as it does when no clear came between
                         // and as the official emulator's signUp does (closure re-review S1'',
-                        // 2026-09-28).
-                        if revision_guarded || !cleared {
+                        // 2026-09-28). The strict profile answered a clear above, and without a
+                        // clear the request's own ticket is only released when it returns.
+                        if !cleared {
                             return error(409, "AUTH_STATE_CHANGED");
                         }
                         committed.use_reserved_generated_local_id(uid);

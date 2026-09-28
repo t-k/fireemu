@@ -2780,6 +2780,207 @@
             ]
           }
         }
+      },
+      {
+        "date": "2026-09-29",
+        "branch": "work/auth-federation-saml-r2",
+        "baseCommit": "c79b6ec2d4afe2f75c370fe22a06ab2406bbe474",
+        "branchDiffBase": "44a0db62ed4a0fad8156e3f92401afaa0ec6cdbc",
+        "commitReplacements": 34,
+        "digestReplacements": 0,
+        "digestRounds": [],
+        "labels": [],
+        "referencedOutsideHistory": [],
+        "files": {
+          "conformance/auth-federation-production.json": {
+            "preRebindSha256": "95bbab962d3859ce94cc9489fc3351edf09f264cdb26a27d1c7db36f557d9372",
+            "postRebindSha256": "501c6a34a9e35eba0b054597850df285a95e2e9740fcd515ab2c595aa7961e12",
+            "replacements": [
+              [
+                1433,
+                "67c1335bf795b95fa92b23d540f89d5285cf50d8",
+                "94d7251e3bfedddc489022f8c358527ef545a0db"
+              ],
+              [
+                11105,
+                "67c1335bf795b95fa92b23d540f89d5285cf50d8",
+                "94d7251e3bfedddc489022f8c358527ef545a0db"
+              ],
+              [
+                18102,
+                "67c1335bf795b95fa92b23d540f89d5285cf50d8",
+                "94d7251e3bfedddc489022f8c358527ef545a0db"
+              ],
+              [
+                24744,
+                "67c1335bf795b95fa92b23d540f89d5285cf50d8",
+                "94d7251e3bfedddc489022f8c358527ef545a0db"
+              ],
+              [
+                34196,
+                "67c1335bf795b95fa92b23d540f89d5285cf50d8",
+                "94d7251e3bfedddc489022f8c358527ef545a0db"
+              ],
+              [
+                38016,
+                "67c1335bf795b95fa92b23d540f89d5285cf50d8",
+                "94d7251e3bfedddc489022f8c358527ef545a0db"
+              ],
+              [
+                41431,
+                "67c1335bf795b95fa92b23d540f89d5285cf50d8",
+                "94d7251e3bfedddc489022f8c358527ef545a0db"
+              ],
+              [
+                45964,
+                "67c1335bf795b95fa92b23d540f89d5285cf50d8",
+                "94d7251e3bfedddc489022f8c358527ef545a0db"
+              ],
+              [
+                47608,
+                "67c1335bf795b95fa92b23d540f89d5285cf50d8",
+                "94d7251e3bfedddc489022f8c358527ef545a0db"
+              ],
+              [
+                52116,
+                "67c1335bf795b95fa92b23d540f89d5285cf50d8",
+                "94d7251e3bfedddc489022f8c358527ef545a0db"
+              ],
+              [
+                61043,
+                "67c1335bf795b95fa92b23d540f89d5285cf50d8",
+                "94d7251e3bfedddc489022f8c358527ef545a0db"
+              ],
+              [
+                67873,
+                "67c1335bf795b95fa92b23d540f89d5285cf50d8",
+                "94d7251e3bfedddc489022f8c358527ef545a0db"
+              ],
+              [
+                72803,
+                "67c1335bf795b95fa92b23d540f89d5285cf50d8",
+                "94d7251e3bfedddc489022f8c358527ef545a0db"
+              ],
+              [
+                87754,
+                "67c1335bf795b95fa92b23d540f89d5285cf50d8",
+                "94d7251e3bfedddc489022f8c358527ef545a0db"
+              ],
+              [
+                96345,
+                "67c1335bf795b95fa92b23d540f89d5285cf50d8",
+                "94d7251e3bfedddc489022f8c358527ef545a0db"
+              ],
+              [
+                98808,
+                "67c1335bf795b95fa92b23d540f89d5285cf50d8",
+                "94d7251e3bfedddc489022f8c358527ef545a0db"
+              ],
+              [
+                104214,
+                "67c1335bf795b95fa92b23d540f89d5285cf50d8",
+                "94d7251e3bfedddc489022f8c358527ef545a0db"
+              ],
+              [
+                108746,
+                "67c1335bf795b95fa92b23d540f89d5285cf50d8",
+                "94d7251e3bfedddc489022f8c358527ef545a0db"
+              ],
+              [
+                112457,
+                "67c1335bf795b95fa92b23d540f89d5285cf50d8",
+                "94d7251e3bfedddc489022f8c358527ef545a0db"
+              ],
+              [
+                122086,
+                "67c1335bf795b95fa92b23d540f89d5285cf50d8",
+                "94d7251e3bfedddc489022f8c358527ef545a0db"
+              ]
+            ]
+          },
+          "conformance/auth-federation-saml-production.json": {
+            "preRebindSha256": "63e8dca0b504e284b04fb22cdbdbc7586949c924511357c7dc4a9705ddbb5ed2",
+            "postRebindSha256": "605e36b6a6e752ada1897aa90f66ae5162add9417d4a0c6c9508a68c1b2d24ee",
+            "replacements": [
+              [
+                1550,
+                "a969e9f537c388e0c624934bd3d2ca65f48bd184",
+                "fe5314b0b9bfa063833501251d141a63f2e9dd16"
+              ],
+              [
+                7020,
+                "a969e9f537c388e0c624934bd3d2ca65f48bd184",
+                "fe5314b0b9bfa063833501251d141a63f2e9dd16"
+              ],
+              [
+                12260,
+                "a969e9f537c388e0c624934bd3d2ca65f48bd184",
+                "fe5314b0b9bfa063833501251d141a63f2e9dd16"
+              ],
+              [
+                14360,
+                "a969e9f537c388e0c624934bd3d2ca65f48bd184",
+                "fe5314b0b9bfa063833501251d141a63f2e9dd16"
+              ],
+              [
+                25569,
+                "a969e9f537c388e0c624934bd3d2ca65f48bd184",
+                "fe5314b0b9bfa063833501251d141a63f2e9dd16"
+              ],
+              [
+                27683,
+                "a969e9f537c388e0c624934bd3d2ca65f48bd184",
+                "fe5314b0b9bfa063833501251d141a63f2e9dd16"
+              ],
+              [
+                35189,
+                "a969e9f537c388e0c624934bd3d2ca65f48bd184",
+                "fe5314b0b9bfa063833501251d141a63f2e9dd16"
+              ],
+              [
+                39069,
+                "a969e9f537c388e0c624934bd3d2ca65f48bd184",
+                "fe5314b0b9bfa063833501251d141a63f2e9dd16"
+              ],
+              [
+                60670,
+                "a969e9f537c388e0c624934bd3d2ca65f48bd184",
+                "fe5314b0b9bfa063833501251d141a63f2e9dd16"
+              ],
+              [
+                71434,
+                "a969e9f537c388e0c624934bd3d2ca65f48bd184",
+                "fe5314b0b9bfa063833501251d141a63f2e9dd16"
+              ]
+            ]
+          },
+          "spec/compatibility/closure/AUTH-FEDERATION.json": {
+            "preRebindSha256": "61b3016d6b931af15b34be7099bfad8c37daf5727d00af829194c57569de3302",
+            "postRebindSha256": "ff755990cf11daba67172c5691a14a44e03798062b04fc3186dd29086536918e",
+            "replacements": [
+              [
+                6399,
+                "3ed31eb80",
+                "f5d0831ff"
+              ],
+              [
+                7142,
+                "3ed31eb80",
+                "f5d0831ff"
+              ],
+              [
+                16319,
+                "3ed31eb80",
+                "f5d0831ff"
+              ],
+              [
+                17738,
+                "3ed31eb80",
+                "f5d0831ff"
+              ]
+            ]
+          }
+        }
       }
     ]
   }

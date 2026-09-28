@@ -14,7 +14,7 @@
       "corpusDigest": "7c08c02175f1474d6ce0ac2b582eff030d4af183a8e0068b3ab239e4c24d97e3",
       "harnessDigest": "fe348ab3abe3470c6f537596045a267302c61f1bb7da15f7e72743dd08eec450",
       "recordedAt": "2026-09-28T07:35:45.406Z",
-      "gitSha": "a969e9f537c388e0c624934bd3d2ca65f48bd184",
+      "gitSha": "fe5314b0b9bfa063833501251d141a63f2e9dd16",
       "steps": {
         "create-provider": {
           "status": 200,
@@ -176,7 +176,7 @@
       "corpusDigest": "87d9a6075ce7449150c1763c9aece2491b209d4da99f05b6699e3d4faa809162",
       "harnessDigest": "fe348ab3abe3470c6f537596045a267302c61f1bb7da15f7e72743dd08eec450",
       "recordedAt": "2026-09-28T07:35:45.406Z",
-      "gitSha": "a969e9f537c388e0c624934bd3d2ca65f48bd184",
+      "gitSha": "fe5314b0b9bfa063833501251d141a63f2e9dd16",
       "steps": {
         "create-provider": {
           "status": 200,
@@ -335,7 +335,7 @@
       "corpusDigest": "f8f492ea3122457b00dbe32f3136ff267601654ec3973de5964cf1b2f96c46db",
       "harnessDigest": "fe348ab3abe3470c6f537596045a267302c61f1bb7da15f7e72743dd08eec450",
       "recordedAt": "2026-09-28T07:35:45.406Z",
-      "gitSha": "a969e9f537c388e0c624934bd3d2ca65f48bd184",
+      "gitSha": "fe5314b0b9bfa063833501251d141a63f2e9dd16",
       "steps": {
         "create-provider": {
           "status": 200,
@@ -389,7 +389,7 @@
       "corpusDigest": "339448c351080b8448dd9a6dd4bd556d938aab81afa2ae8c6c5b0ebfeda98d93",
       "harnessDigest": "fe348ab3abe3470c6f537596045a267302c61f1bb7da15f7e72743dd08eec450",
       "recordedAt": "2026-09-28T07:35:45.406Z",
-      "gitSha": "a969e9f537c388e0c624934bd3d2ca65f48bd184",
+      "gitSha": "fe5314b0b9bfa063833501251d141a63f2e9dd16",
       "steps": {
         "create-provider": {
           "status": 200,
@@ -730,7 +730,7 @@
       "corpusDigest": "65d6ee0c74ea3a2d2fe65d22e5a5007b9466f49f0c68294264377fb65a30b7a9",
       "harnessDigest": "fe348ab3abe3470c6f537596045a267302c61f1bb7da15f7e72743dd08eec450",
       "recordedAt": "2026-09-28T07:35:45.406Z",
-      "gitSha": "a969e9f537c388e0c624934bd3d2ca65f48bd184",
+      "gitSha": "fe5314b0b9bfa063833501251d141a63f2e9dd16",
       "steps": {
         "create-provider": {
           "status": 200,
@@ -773,7 +773,7 @@
       "corpusDigest": "7aee32ed1ac54701ca05f8f18e27a22a5e31552d08d1eac178a6058b43de1f80",
       "harnessDigest": "fe348ab3abe3470c6f537596045a267302c61f1bb7da15f7e72743dd08eec450",
       "recordedAt": "2026-09-28T07:35:45.406Z",
-      "gitSha": "a969e9f537c388e0c624934bd3d2ca65f48bd184",
+      "gitSha": "fe5314b0b9bfa063833501251d141a63f2e9dd16",
       "steps": {
         "create-provider": {
           "status": 200,
@@ -957,7 +957,7 @@
       "corpusDigest": "23b4465f31d9029dd468782a64b7adc1eb3eac885b91a40d38f6f18e32a4693e",
       "harnessDigest": "fe348ab3abe3470c6f537596045a267302c61f1bb7da15f7e72743dd08eec450",
       "recordedAt": "2026-09-28T07:35:45.406Z",
-      "gitSha": "a969e9f537c388e0c624934bd3d2ca65f48bd184",
+      "gitSha": "fe5314b0b9bfa063833501251d141a63f2e9dd16",
       "steps": {
         "create-provider": {
           "status": 200,
@@ -1047,7 +1047,7 @@
       "corpusDigest": "cc1993ade4e7c8ebb5bee1a60848ef922b37c71188197af2b23fc7a638964a19",
       "harnessDigest": "fe348ab3abe3470c6f537596045a267302c61f1bb7da15f7e72743dd08eec450",
       "recordedAt": "2026-09-28T07:35:45.406Z",
-      "gitSha": "a969e9f537c388e0c624934bd3d2ca65f48bd184",
+      "gitSha": "fe5314b0b9bfa063833501251d141a63f2e9dd16",
       "steps": {
         "create-provider": {
           "status": 200,
@@ -1477,7 +1477,7 @@
       "corpusDigest": "c9e104c8a16b2d8afe93441f94da883e2f7fdccf257f58d5f34973b2ab2893be",
       "harnessDigest": "fe348ab3abe3470c6f537596045a267302c61f1bb7da15f7e72743dd08eec450",
       "recordedAt": "2026-09-28T07:35:45.406Z",
-      "gitSha": "a969e9f537c388e0c624934bd3d2ca65f48bd184",
+      "gitSha": "fe5314b0b9bfa063833501251d141a63f2e9dd16",
       "steps": {
         "create-provider": {
           "status": 200,
@@ -1747,7 +1747,7 @@
       "corpusDigest": "cb2ca0e5d1d45cfd569163ecc0c400d2f66c7903287834024f9e8f76e674ceea",
       "harnessDigest": "fe348ab3abe3470c6f537596045a267302c61f1bb7da15f7e72743dd08eec450",
       "recordedAt": "2026-09-28T07:35:45.406Z",
-      "gitSha": "a969e9f537c388e0c624934bd3d2ca65f48bd184",
+      "gitSha": "fe5314b0b9bfa063833501251d141a63f2e9dd16",
       "steps": {
         "create-google": {
           "status": 200,

@@ -113,7 +113,7 @@
         "strict"
       ],
       "status": "PENDING_CORPUS",
-      "note": "signInWithIdp and createAuthUri for an unconfigured, a disabled and an enabled provider (OPERATION_NOT_ALLOWED, INVALID_PROVIDER_ID and the like). Strict refuses an unconfigured and a disabled provider with INVALID_IDP_RESPONSE since O4 (3ed31eb80) without a production observation; third-party-refusals steps unconfigured-oidc and disabled-oidc and provider-enablement step disabled observe the code."
+      "note": "signInWithIdp and createAuthUri for an unconfigured, a disabled and an enabled provider (OPERATION_NOT_ALLOWED, INVALID_PROVIDER_ID and the like). Strict refuses an unconfigured and a disabled provider with INVALID_IDP_RESPONSE since O4 (f5d0831ff) without a production observation; third-party-refusals steps unconfigured-oidc and disabled-oidc and provider-enablement step disabled observe the code."
     },
     {
       "conditionId": "AUTH-FEDERATION/oidc-token-verification",
@@ -125,7 +125,7 @@
         "strict"
       ],
       "status": "PENDING_CORPUS",
-      "note": "A controlled OIDC IdP (O1): ID tokens signed with the run's key and published through the sandbox's Hosting; the signature, iss, aud (clientId), exp, iat, nbf, alg and kid matrix and malformed tokens. Strict refusals added by O4 (3ed31eb80) without a production observation, each answered INVALID_IDP_RESPONSE, whose code this recipe checks: a mixed-case providerId (step mixed-case-provider) and an issuer without configured keys, observed as an issuer that publishes nothing (step unpublished-issuer; production fetches discovery where fireemu reads auth.idpSigners, so a difference in the answer is a known divergence of O4, not a defect)."
+      "note": "A controlled OIDC IdP (O1): ID tokens signed with the run's key and published through the sandbox's Hosting; the signature, iss, aud (clientId), exp, iat, nbf, alg and kid matrix and malformed tokens. Strict refusals added by O4 (f5d0831ff) without a production observation, each answered INVALID_IDP_RESPONSE, whose code this recipe checks: a mixed-case providerId (step mixed-case-provider) and an issuer without configured keys, observed as an issuer that publishes nothing (step unpublished-issuer; production fetches discovery where fireemu reads auth.idpSigners, so a difference in the answer is a known divergence of O4, not a defect)."
     },
     {
       "conditionId": "AUTH-FEDERATION/oidc-nonce",
@@ -329,7 +329,7 @@
         "strict"
       ],
       "status": "PENDING_CORPUS",
-      "note": "Providers this parent does not sign in with (F3, F5): malformed and synthetic credentials for google.com and the other built-in providers, and their configuration. Strict refuses every built-in provider with INVALID_IDP_RESPONSE since O4 (3ed31eb80), unobserved; steps google-garbage-id-token and facebook-garbage-access-token observe production's answer to credentials it cannot verify. A genuine built-in credential cannot be observed (F3), so accepting one stays a known divergence: fireemu fetches no Google or Facebook key."
+      "note": "Providers this parent does not sign in with (F3, F5): malformed and synthetic credentials for google.com and the other built-in providers, and their configuration. Strict refuses every built-in provider with INVALID_IDP_RESPONSE since O4 (f5d0831ff), unobserved; steps google-garbage-id-token and facebook-garbage-access-token observe production's answer to credentials it cannot verify. A genuine built-in credential cannot be observed (F3), so accepting one stays a known divergence: fireemu fetches no Google or Facebook key."
     },
     {
       "conditionId": "AUTH-FEDERATION/final-artifact-regression",
@@ -357,7 +357,7 @@
         "strict"
       ],
       "status": "PENDING_CORPUS",
-      "note": "An independent closure review and a safety review of the final artifact (no cargo-mutants in the reviews; the lane's own mutation evidence is checked). The safety review focuses on strict IdP verification (O4, 3ed31eb80): the signature check, key selection by kid, alg, the exp, iat, nbf, aud, azp, iss and nonce checks, the key size bounds, auth.idpSigners validation, the re-verification in the blocking-function commit and the continuation authority."
+      "note": "An independent closure review and a safety review of the final artifact (no cargo-mutants in the reviews; the lane's own mutation evidence is checked). The safety review focuses on strict IdP verification (O4, f5d0831ff): the signature check, key selection by kid, alg, the exp, iat, nbf, aud, azp, iss and nonce checks, the key size bounds, auth.idpSigners validation, the re-verification in the blocking-function commit and the continuation authority."
     }
   ]
 }

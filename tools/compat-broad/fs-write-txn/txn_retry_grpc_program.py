@@ -68,7 +68,7 @@ def compile_plan(nonce, owner_id):
         raise ValueError("canonical run owner required")
     steps = [dict(zip(("id", "rpc", "tokenInput", "tokenOutput", "state", "caseId"), row, strict=True)) for row in _STEPS]
     database = f"projects/{PROJECT}/databases/{DATABASE}"
-    return {"kind": "txn-retry-grpc-plan-v1", "program": PROGRAM, "project": PROJECT, "database": database, "nonce": nonce, "ownerId": owner_id, "document": f"{database}/documents/oracle/{nonce}/txn-p09/control", "steps": steps, "cases": [row["caseId"] for row in steps if row["caseId"]], "caps": dict(_CAPS), "maxRequests": MAX_REQUESTS, "observationSeconds": OBSERVATION_SECONDS, "recoverySeconds": RECOVERY_SECONDS, "iamConfig": "none", "retries": "none", "sourceDigest": source_digest(), "corpusDigest": corpus_digest()}
+    return {"kind": "txn-retry-grpc-plan-v1", "program": PROGRAM, "project": PROJECT, "database": database, "nonce": nonce, "ownerId": owner_id, "document": f"{database}/documents/oracle/{nonce}/txn-p09/control", "steps": steps, "cases": [row["caseId"] for row in steps if row["caseId"]], "conditionalSkips": ["committed/snapshot", "committed/rollback-retry", "rolled-back/snapshot", "rolled-back/rollback-retry"], "skipBasis": "definitive-earlier-begin-refusal-only", "caps": dict(_CAPS), "maxRequests": MAX_REQUESTS, "observationSeconds": OBSERVATION_SECONDS, "recoverySeconds": RECOVERY_SECONDS, "iamConfig": "none", "retries": "none", "sourceDigest": source_digest(), "corpusDigest": corpus_digest()}
 
 
 def validate_plan(value):

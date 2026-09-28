@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { replayLocalBasic } from "./storage-object/basic-replay.mjs";
 import { replayLocalAdmin } from "./storage-object/admin-replay.mjs";
 import { replayLocalList } from "./storage-object/list-replay.mjs";
@@ -275,4 +276,113 @@ test("local list gap admission requires capture before start and stops if captur
   assert.equal(failed.reservations.at(-1).operationId, "offset-filter");
   assert.equal(failed.deleted.length, 0);
   assert.equal(failed.sender.unresolved().length, 6);
+});
+
+async function seedConfirmed(f) {
+  await f.sender.start();
+  await f.sender.admitNamespace();
+  const name = f.recipe.objects[0];
+  f.sender.admitObject(name);
+  const [upload, metadata, media] = f.recipe.steps;
+  for (const step of [upload, metadata, media]) await f.sender.sendStep(step);
+  f.sender.confirmOwned({
+    name,
+    uploadOperationId: upload.id,
+    metadataOperationId: metadata.id,
+    mediaOperationId: media.id,
+    expectedBytesSha256: createHash("sha256")
+      .update(Buffer.from(upload.body.base64, "base64"))
+      .digest("hex"),
+  });
+  return name;
+}
+
+test("exception cleanup uses fresh metadata and full media before conditional deletion", async () => {
+  const f = fixture();
+  await seedConfirmed(f);
+  f.sender.beginCleanup();
+  const result = await f.sender.cleanupConfirmedOwned();
+  assert.equal(result.cleanedNames.length, 1);
+  assert.deepEqual(result.cleanupFailures, []);
+  assert.deepEqual(result.unresolved, []);
+  assert.deepEqual(
+    f.reservations.slice(-5).map((row) => row.operationId),
+    [
+      "exception-cleanup-0-metadata",
+      "exception-cleanup-0-media",
+      "exception-cleanup-0-delete",
+      "exception-cleanup-0-delete-metadata-absence",
+      "exception-cleanup-0-delete-media-absence",
+    ],
+  );
+  assert.ok(f.reservations.slice(-5).every((row) => row.phase === "cleanup"));
+  await f.sender.verifyRunEmpty();
+  f.sender.close();
+});
+
+test("exception cleanup retains changed ownership and never deletes the replacement", async () => {
+  const f = fixture({ driftBeforeCleanup: true });
+  const name = await seedConfirmed(f);
+  f.sender.beginCleanup();
+  const result = await f.sender.cleanupConfirmedOwned();
+  assert.equal(f.deleted.length, 0);
+  assert.equal(result.cleanupFailures.length, 1);
+  assert.deepEqual(result.unresolved, [name]);
+  assert.ok(!f.reservations.some((row) => row.operationId === "exception-cleanup-0-delete"));
+});
+
+test("an unconfirmed later mutation cannot borrow the previous cleanup proof", async () => {
+  const f = fixture();
+  const name = await seedConfirmed(f);
+  await f.sender.sendStep({
+    id: "unknown-later-write",
+    dialect: "gcs",
+    method: "PATCH",
+    objectName: name,
+    path: `/storage/v1/b/${f.bucket}/o/${encodeURIComponent(name)}`,
+    query: {},
+    credential: "admin",
+    body: { json: { metadata: { changed: "yes" } } },
+  });
+  f.sender.beginCleanup();
+  const requests = f.reservations.length;
+  const result = await f.sender.cleanupConfirmedOwned();
+  assert.equal(f.reservations.length, requests);
+  assert.equal(f.deleted.length, 0);
+  assert.deepEqual(result.unresolved, [name]);
+});
+
+test("a halted provider forbids every new exception cleanup request", async () => {
+  const f = fixture();
+  const name = await seedConfirmed(f);
+  f.sender.beginCleanup();
+  const requests = f.reservations.length;
+  const result = await f.sender.cleanupConfirmedOwned({ canSend: () => false });
+  assert.equal(f.reservations.length, requests);
+  assert.equal(f.deleted.length, 0);
+  assert.deepEqual(result.unresolved, [name]);
+});
+
+test("exhausting the subject cap still leaves exception cleanup and final absence available", async () => {
+  const f = fixture();
+  const name = await seedConfirmed(f);
+  const read = {
+    dialect: "gcs",
+    method: "GET",
+    objectName: name,
+    path: `/storage/v1/b/${f.bucket}/o/${encodeURIComponent(name)}`,
+    query: {},
+    credential: "admin",
+  };
+  for (let i = f.reservations.length; i < 2000; i++)
+    await f.sender.sendStep({ ...read, id: `bounded-read-${i}` });
+  await assert.rejects(f.sender.sendStep({ ...read, id: "one-extra" }), /subject cap exhausted/);
+  assert.equal(f.reservations.length, 2000);
+  f.sender.beginCleanup();
+  const result = await f.sender.cleanupConfirmedOwned();
+  assert.deepEqual(result.unresolved, []);
+  assert.deepEqual(result.cleanupFailures, []);
+  await f.sender.verifyRunEmpty();
+  f.sender.close();
+  assert.deepEqual(f.sender.snapshot().recordings[0], { subject: 2000, cleanup: 6 });
 });

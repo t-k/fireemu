@@ -1094,6 +1094,60 @@ export function createLocalStorageSender({
       });
       return "absent-by-run-list";
     },
+    async cleanupConfirmedOwned({
+      operationPrefix = "exception-cleanup",
+      canSend = () => true,
+    } = {}) {
+      if (
+        counter.snapshot().mode !== "cleanup" ||
+        typeof canSend !== "function" ||
+        typeof operationPrefix !== "string" ||
+        !/^[A-Za-z0-9][A-Za-z0-9._/-]{0,63}$/.test(operationPrefix)
+      )
+        throw new Error("invalid confirmed exception cleanup");
+      const cleanedNames = [],
+        cleanupFailures = [];
+      const names = [...confirmed.keys()].toSorted();
+      for (const [index, name] of names.entries()) {
+        if (!canSend()) break;
+        if (
+          !ownership.unresolved().includes(name) ||
+          confirmed.get(name).mutationOrdinal !== lastMutation.get(name)
+        )
+          continue;
+        const metadataOperationId = `${operationPrefix}-${index}-metadata`;
+        const mediaOperationId = `${operationPrefix}-${index}-media`;
+        const path = `/storage/v1/b/${bucket}/o/${encodeURIComponent(name)}`;
+        try {
+          for (const [id, query] of [
+            [metadataOperationId, {}],
+            [mediaOperationId, { alt: "media" }],
+          ]) {
+            if (!canSend()) throw new Error("cleanup transport unavailable");
+            await sender.sendStep({
+              id,
+              dialect: "gcs",
+              method: "GET",
+              objectName: name,
+              path,
+              query,
+              credential: "admin",
+            });
+          }
+          if (!canSend()) throw new Error("cleanup transport unavailable");
+          await sender.cleanupOwned({
+            name,
+            metadataOperationId,
+            mediaOperationId,
+            operationId: `${operationPrefix}-${index}-delete`,
+          });
+          cleanedNames.push(name);
+        } catch {
+          cleanupFailures.push({ name, reason: "CONFIRMED_EXCEPTION_CLEANUP_FAILED" });
+        }
+      }
+      return { cleanedNames, cleanupFailures, unresolved: sender.unresolved() };
+    },
     async cleanupOwned({ name, metadataOperationId, mediaOperationId, operationId } = {}) {
       if (counter.snapshot().mode !== "cleanup") throw new Error("owned cleanup phase is required");
       const current = ownedReadbacks(name, metadataOperationId, mediaOperationId);

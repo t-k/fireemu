@@ -91,7 +91,7 @@
     },
     {
       "id": "TB12",
-      "decision": "The AUTH-ACCOUNT regression row auth-account/admin/custom-attributes#invalid-json (gson's parser message) is carried as a known difference on this pre-integration branch, as A12 (which the owner resolved in f534ecd56), AUTH-MFA M11 and AUTH-CONFIG-SDK K18; the INVALID_CLAIMS refusal itself must match, and on the integrated artifact the row must match and TB12 is removed.",
+      "decision": "The AUTH-ACCOUNT regression row auth-account/admin/custom-attributes#invalid-json (gson's parser message) is carried as a known difference on this pre-integration branch, as A12 (which the owner resolved in cb2ccf23f), AUTH-MFA M11 and AUTH-CONFIG-SDK K18; the INVALID_CLAIMS refusal itself must match, and on the integrated artifact the row must match and TB12 is removed.",
       "decidedBy": "Claude under the owner's delegation to the coordinator (owner ledger, 2026-09-28, AUTH-TENANT-BLOCKING, closure review S2)",
       "decidedOn": "2026-09-28"
     }
@@ -824,7 +824,7 @@
         "sourceCommit": "a94e7915fb8a7fe6f4ee392b5f91174cc332e88d",
         "localEvidence": {
           "fixedIn": [
-            "34f4d2c78"
+            "293a3a5e7"
           ],
           "tests": [
             {
@@ -867,8 +867,10 @@
         "sourceCommit": "a94e7915fb8a7fe6f4ee392b5f91174cc332e88d",
         "localEvidence": {
           "fixedIn": [
-            "2ec3d4234",
-            "e7e9419b9"
+            "c802ff26d",
+            "477088a14",
+            "e53ba276c",
+            "9eb4f2300"
           ],
           "tests": [
             {
@@ -906,6 +908,18 @@
             {
               "path": "crates/fireemu/src/functions.rs",
               "name": "the_emulator_profile_serves_a_function_slower_than_seven_seconds"
+            },
+            {
+              "path": "crates/fireemu/src/functions.rs",
+              "name": "the_daemon_bridge_follows_the_profile"
+            },
+            {
+              "path": "crates/fireemu-adapter-http/tests/identity_toolkit.rs",
+              "name": "a_clear_during_a_blocking_hook_is_refused_in_strict_and_committed_in_the_emulator"
+            },
+            {
+              "path": "crates/fireemu-adapter-http/tests/identity_toolkit.rs",
+              "name": "a_cleared_request_does_not_take_a_uid_another_account_took"
             }
           ]
         }
@@ -925,7 +939,7 @@
         "default"
       ],
       "status": "PRODUCTION_RECORDED",
-      "note": "This parent's comparison (the tenant and the blocking suites) and, as regressions, every AUTH-MFA, AUTH-ACTION, AUTH-CREDENTIAL and AUTH-ACCOUNT row, on one artifact. Every regression row matches except auth-account/admin/custom-attributes#invalid-json, the documented A12 message-text divergence. It is verified on the integrated artifact: the two parent rows that wait for another lane (pendingAfterIntegration) are compared again then, and the workspace tests are run on it. The documented divergence (TB12) applies to this pre-integration branch only: on the integrated artifact the row must match and the divergence is removed.",
+      "note": "This parent's comparison (the tenant and the blocking suites) and, as regressions, every AUTH-MFA, AUTH-ACTION, AUTH-CREDENTIAL and AUTH-ACCOUNT row, on one artifact. Every regression row matches except auth-account/admin/custom-attributes#invalid-json, the documented TB12 message-text divergence (AUTH-ACCOUNT A12 carried on this branch). It is verified on the integrated artifact: the two parent rows that wait for another lane (pendingAfterIntegration) are compared again then, and the workspace tests are run on it. The documented divergence (TB12) applies to this pre-integration branch only: on the integrated artifact the row must match and the divergence is removed.",
       "evidence": {
         "productionRecordings": [
           {
@@ -966,7 +980,7 @@
             "decidedBy": "owner",
             "decidedOn": "2026-09-24",
             "scopeDecision": "TB12",
-            "reason": "AUTH-ACCOUNT scope decision A12, carried on this pre-integration branch as TB12 (as AUTH-MFA M11 and AUTH-CONFIG-SDK K18): production returns gson's parser message for malformed customAttributes JSON; the INVALID_CLAIMS refusal itself matches. On the integrated artifact this row must match (f534ecd56) and the divergence is removed."
+            "reason": "AUTH-ACCOUNT scope decision A12, carried on this pre-integration branch as TB12 (as AUTH-MFA M11 and AUTH-CONFIG-SDK K18): production returns gson's parser message for malformed customAttributes JSON; the INVALID_CLAIMS refusal itself matches. On the integrated artifact this row must match (cb2ccf23f) and the divergence is removed."
           }
         ],
         "pendingAfterIntegration": [
@@ -981,8 +995,8 @@
             "reason": "a blocking call after an earlier one timed out waits on the runner restart; FUNCTIONS-HTTP recover_blocking_auth_runner_for recovers the runner for the next call, and this row is compared again on the integrated artifact"
           }
         ],
-        "buildTree": "clean (git status --porcelain empty at build, source a94e7915f); artifact copy, sha256, source commit, fmt and clippy logs (command and exit code) and check logs in docs.local/runs/auth-tenant-blocking-final-20260928b/ (private). The comparisons run the checkout build (target/debug/fireemu, the same sha256) with the checkout runner named explicitly (FIREEMU_RUNNER_NODE), refusing a blocking comparison unless every fixture function was served; this parent's comparisons record the runner digest and the clean source tree",
-        "mutation": "docs.local/runs/auth-tenant-blocking-final-20260928/mutants/ (private), every cargo-mutants output of the lane since the recording: the fix commits 066b13be9 (7: 6 caught, 1 unviable) and 6d20aad78 (8 caught); the beforeSendEmail, blockingFunctions and review-fix sources 65bc68d24..e422abae9 (139: 105 caught, 15 unviable, 2 missed and killed by tests in 40139e2eb, 17 timed out under load and run again alone: 19 run, 12 caught, 7 missed, of which 4 were killed by tests or simplified in e422abae9 and 3 are equivalent); 40139e2eb (6: 5 caught, 1 unviable); and, for the event, failure and hook-selection fixes 7b97b3c2f, 86bc3ecbd and 9575ce12a, every mutant of their functions (blocking_auth_user_record, blocking_auth_claims, unsigned_jwt, epoch_millis, blocking_auth_wait, blocking_auth_elapsed, BlockingFunctionFailure, the runs_hooks lines) selected by a synthetic diff (44: 37 caught, 7 unviable). The runner's JavaScript (7b97b3c2f, 13f0cc55c) was mutated by hand: 34 mutations, all caught after 5 edge tests were added (runner-js-manual.json)"
+        "buildTree": "clean (git status --porcelain empty at build, source ef1e76ebe); artifact copy, sha256, source commit, fmt and clippy logs (command and exit code) and check logs in docs.local/runs/auth-tenant-blocking-final-20260928b/ (private). The comparisons run the checkout build (target/debug/fireemu, the same sha256) with the checkout runner named explicitly (FIREEMU_RUNNER_NODE), refusing a blocking comparison unless every fixture function was served; this parent's comparisons record the runner digest and the clean source tree",
+        "mutation": "docs.local/runs/auth-tenant-blocking-final-20260928/mutants/ (private), every cargo-mutants output of the lane since the recording: the fix commits b93c6bdda (7: 6 caught, 1 unviable) and bace0a3f1 (8 caught); the beforeSendEmail, blockingFunctions and review-fix sources f519e1cb8..cac19bae1 (139: 105 caught, 15 unviable, 2 missed and killed by tests in fe9e2dbb3, 17 timed out under load and run again alone: 19 run, 12 caught, 7 missed, of which 4 were killed by tests or simplified in cac19bae1, 1 (an updateTime condition of validate_project_config_payload) is caught by the_emulator_profile_refuses_an_update_time_before_the_bridge_sees_it (validate-update-time: every mutant of that line, 6 caught) and 2 are equivalent); fe9e2dbb3 (6: 5 caught, 1 unviable); and, for the event, failure and hook-selection fixes e957deaff, ed615e82c and debc9052a, every mutant of their functions (blocking_auth_user_record, blocking_auth_claims, unsigned_jwt, epoch_millis, blocking_auth_wait, blocking_auth_elapsed, BlockingFunctionFailure, the runs_hooks lines) selected by a synthetic diff (44: 37 caught, 7 unviable). The runner's JavaScript (e957deaff, 989061a2e) was mutated by hand: 34 mutations, all caught after 5 edge tests were added (runner-js-manual.json); and, for the closure re-review, every mutant of blocking_account, account_providers and invoke_matching_namespace, and of the lines c802ff26d and e53ba276c changed, selected by a synthetic diff at 9eb4f2300 on a clean tree (s1p, 58: 45 caught, 10 unviable, 3 missed). The additional_user_info survivor of an earlier run that an edit made during the run contaminated (kept as s1p-contaminated-aborted) is caught at the clean tree by the test of 923b06b87. The 3 missed (blocking_account returning no providers or factors, the cleared-account condition of the emulator profile's commit, and a provider condition of account_providers) were killed by tests of 785a9f465: s1p-recheck ran the 9 mutants of their lines again (8 caught, 1 missed), and s1p-account-providers ran every mutant of account_providers after one more test (5 caught)"
       }
     },
     {

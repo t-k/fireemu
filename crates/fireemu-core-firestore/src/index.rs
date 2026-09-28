@@ -177,7 +177,11 @@ impl IndexSet {
 
     /// Removes a literal field's override, so it inherits again (an Admin `fields.patch` that
     /// clears `indexConfig`); returns whether there was one.
-    pub fn clear_single_field_override(&mut self, collection: &CollectionId, field: &FieldPath) -> bool {
+    pub fn clear_single_field_override(
+        &mut self,
+        collection: &CollectionId,
+        field: &FieldPath,
+    ) -> bool {
         self.single_fields
             .remove(&(collection.as_str().to_owned(), field.segments().to_vec()))
             .is_some()

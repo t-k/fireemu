@@ -184,6 +184,7 @@ fn state() -> AuthState {
         fake_custom_token_expiry:
             fireemu_adapter_http::identity_toolkit::FakeCustomTokenExpiry::Ignore,
         custom_token_trust: None,
+        idp_assertions: fireemu_adapter_http::identity_toolkit::IdpAssertionPolicy::Fixture,
         app_check: None,
         app_check_policy: None,
         tenancy: None,
@@ -758,6 +759,7 @@ fn strict_profile_password_reset_revokes_the_existing_refresh_token() {
         fake_custom_token_expiry:
             fireemu_adapter_http::identity_toolkit::FakeCustomTokenExpiry::Reject,
         custom_token_trust: None,
+        idp_assertions: fireemu_adapter_http::identity_toolkit::IdpAssertionPolicy::Fixture,
         ..state()
     };
     let signed_up = sign_up(&s, "strict-reset@example.com");
@@ -9306,4 +9308,180 @@ fn an_email_link_sign_in_lists_the_password_provider_for_an_account_without_one(
         json!([{"providerId": "password", "rawId": "link-later@example.com", "federatedId": "link-later@example.com", "email": "link-later@example.com"}]),
         "{providers}"
     );
+}
+
+fn saml_fixture_cookie(s: &AuthState, tenant: Option<&str>, id_token: &Value) -> Value {
+    let namespace = tenant.map_or_else(
+        || format!("{V1}/projects/demo-app"),
+        |id| format!("{V1}/projects/demo-app/tenants/{id}"),
+    );
+    let (status, response) = admin(
+        s,
+        &format!("{namespace}:createSessionCookie"),
+        &json!({"idToken": id_token, "validDuration": "3600"}),
+    );
+    assert_eq!(status, 200, "{response}");
+    response["sessionCookie"].clone()
+}
+
+/// The sign-in attributes a SAML sign-in answers: stateful (strict) answers leave empty ones
+/// out, as production does (record-saml 7789f0); the emulator profile keeps the official
+/// emulator's empty object.
+fn answered_attributes(stateless_refresh: bool, attributes: Option<&Value>) -> Option<&Value> {
+    attributes.filter(|a| stateless_refresh || a.as_object().is_none_or(|m| !m.is_empty()))
+}
+
+/// A state of the given refresh-token profile, with `tenant` created and tenants allowed (strict
+/// serves a tenant only while the project allows tenants, as production does).
+fn saml_fixture_state(tenant: Option<&str>, stateless_refresh: bool) -> AuthState {
+    use fireemu_core_auth::store::AuthRegistry;
+
+    let mut s = state();
+    s.stateless_refresh_tokens = stateless_refresh;
+    if let Some(tenant) = tenant {
+        let registry = Arc::new(AuthRegistry::new("demo-app", s.store.clone()));
+        registry.ensure_tenant("demo-app", tenant).unwrap();
+        s.registry = Some(registry);
+        let r = handle_with(
+            &s,
+            "PATCH",
+            "/identitytoolkit.googleapis.com/admin/v2/projects/demo-app/config?updateMask=multiTenant.allowTenants",
+            &owner(),
+            &json!({"multiTenant": {"allowTenants": true}}),
+        );
+        assert_eq!(r.status, 200, "{}", r.body);
+    }
+    s
+}
+
+// Fixture-only SAML handoffs: these JSON assertions are not signed XML evidence.
+fn assert_saml_fixture_cookie_lifecycle(
+    tenant: Option<&str>,
+    stateless_refresh: bool,
+    attributes: Option<&Value>,
+) {
+    const SIGNED_AT: i64 = 1_788_004_860;
+    let s = saml_fixture_state(tenant, stateless_refresh);
+    let mut saml = json!({"assertion":{"subject":{"nameId":"lifecycle@saml.example.com"}}});
+    if let Some(attributes) = attributes {
+        saml["assertion"]["attributeStatements"] = attributes.clone();
+    }
+    let mut body = json!({"requestUri": DUMMY_URI, "postBody": format!(
+        "providerId=saml.lifecycle&id_token={}&SAMLResponse={}",
+        percent(&json!({"sub":"saml-lifecycle-subject"}).to_string()),
+        percent(&saml.to_string()))});
+    if let Some(tenant) = tenant {
+        body["tenantId"] = json!(tenant);
+    }
+    let (status, signed) = post(&s, &format!("{V1}/accounts:signInWithIdp"), &body);
+    assert_eq!(status, 200, "{signed}");
+    let uid = signed["localId"].clone();
+    let assert_token =
+        |encoded: &Value, issuer: &str, issued_at: i64, expected_attributes: Option<&Value>| {
+            let c = claims(encoded.as_str().unwrap());
+            assert_eq!(c["sub"], uid);
+            assert_eq!(c["aud"], "demo-app");
+            assert_eq!(c["iss"], issuer);
+            assert_eq!(c["iat"], issued_at);
+            assert_eq!(c["exp"], issued_at + 3600);
+            assert_eq!(c["auth_time"], SIGNED_AT);
+            assert_eq!(c["email"], "lifecycle@saml.example.com");
+            assert_eq!(c["email_verified"], true);
+            assert_eq!(c["firebase"]["sign_in_provider"], "saml.lifecycle");
+            assert_eq!(
+                c["firebase"]["identities"]["saml.lifecycle"],
+                json!(["saml-lifecycle-subject"])
+            );
+            assert_eq!(c["firebase"].get("sign_in_attributes"), expected_attributes);
+            assert_eq!(
+                c["firebase"].get("tenant").cloned(),
+                tenant.map(|id| json!(id))
+            );
+        };
+    let cookie = |id_token: &Value| saml_fixture_cookie(&s, tenant, id_token);
+    let attributes = answered_attributes(stateless_refresh, attributes);
+    assert_token(
+        &signed["idToken"],
+        "https://securetoken.google.com/demo-app",
+        SIGNED_AT,
+        attributes,
+    );
+    let before_cookie = cookie(&signed["idToken"]);
+    assert_token(
+        &before_cookie,
+        "https://session.firebase.google.com/demo-app",
+        SIGNED_AT,
+        attributes,
+    );
+    s.clock
+        .lock()
+        .unwrap()
+        .advance_to(LogicalInstant::from_unix_seconds(SIGNED_AT + 30))
+        .unwrap();
+    let mut refresh = json!({"grant_type":"refresh_token", "refresh_token":signed["refreshToken"]});
+    if let Some(tenant) = tenant {
+        refresh["tenantId"] = json!(tenant);
+    }
+    let (status, refreshed) = post(&s, "/securetoken.googleapis.com/v1/token", &refresh);
+    assert_eq!(status, 200, "{refreshed}");
+    // Stateful refresh keeps a SAML sign-in's attributes (record-saml 7789f0).
+    let refreshed_attributes = attributes.filter(|_| !stateless_refresh);
+    assert_token(
+        &refreshed["id_token"],
+        "https://securetoken.google.com/demo-app",
+        SIGNED_AT + 30,
+        refreshed_attributes,
+    );
+    assert_token(
+        &cookie(&signed["idToken"]),
+        "https://session.firebase.google.com/demo-app",
+        SIGNED_AT + 30,
+        attributes,
+    );
+    assert_token(
+        &cookie(&refreshed["id_token"]),
+        "https://session.firebase.google.com/demo-app",
+        SIGNED_AT + 30,
+        refreshed_attributes,
+    );
+    // Refresh does not rewrite a cookie that was already minted.
+    assert_token(
+        &before_cookie,
+        "https://session.firebase.google.com/demo-app",
+        SIGNED_AT,
+        attributes,
+    );
+    if tenant.is_some() {
+        assert!(s.store.lock().unwrap().users_by_creation().is_empty());
+    }
+}
+
+#[test]
+fn saml_fixture_project_claims_survive_cookie_handoffs_with_refresh() {
+    for stateless_refresh in [false, true] {
+        for attributes in [
+            None,
+            Some(json!({})),
+            Some(json!({"role":["reader"],"enabled":true,"rank":3,"nested":{"region":"west"}})),
+        ] {
+            assert_saml_fixture_cookie_lifecycle(None, stateless_refresh, attributes.as_ref());
+        }
+    }
+}
+
+#[test]
+fn saml_fixture_tenant_claims_survive_cookie_handoffs_with_refresh() {
+    for stateless_refresh in [false, true] {
+        for attributes in [
+            None,
+            Some(json!({})),
+            Some(json!({"role":["reader"],"enabled":true,"rank":3,"nested":{"region":"west"}})),
+        ] {
+            assert_saml_fixture_cookie_lifecycle(
+                Some("customer-a"),
+                stateless_refresh,
+                attributes.as_ref(),
+            );
+        }
+    }
 }

@@ -1317,7 +1317,10 @@
           "evidence": {
             "tests": [],
             "integration": [
-              "crates/fireemu-adapter-http/tests/auth_oidc_assertions.rs"
+              "crates/fireemu-adapter-http/tests/auth_oidc_assertions.rs",
+              "crates/fireemu-adapter-http/tests/auth_strict_idp_signers.rs",
+              "crates/fireemu-adapter-http/tests/auth_strict_saml.rs",
+              "crates/fireemu-adapter-http/tests/saml_signature.rs"
             ],
             "conformance": []
           },
@@ -1325,6 +1328,10 @@
           "fireemuOnly": [
             {
               "behaviour": "the opt-in test boundary accepts one explicitly pinned local RS256 JWK and performs no discovery or external identity-provider traffic",
+              "precision": "exact-for-local-semantics"
+            },
+            {
+              "behaviour": "the strict profile's signInWithIdp accepts only an ID token of an enabled oidc.* provider that a key auth.idpSigners lists for the provider's issuer verifies (selected by kid, RS256, with the same issuer, audience, time and nonce checks), or a SAMLResponse of an enabled saml.* provider whose XML signature (enveloped, exclusive canonicalization, on the response, the assertion or both) one of the provider's configured certificates verifies, reading only an assertion that signature covers; a SAML signature that does not verify, or none, is refused with production's INVALID_IDP_RESPONSE : Failed to verify the signature in SAMLResponse (sandbox recording 2026-09-27) and a missing NameID is refused, while audience, destination, validity window and InResponseTo are not checked (unobserved); it re-verifies when a blocking function commits and when a pendingToken resumes, and refuses the fixture IdP, the built-in providers and every OIDC IdP without a configured key with INVALID_IDP_RESPONSE (AUTH-FEDERATION owner decisions O4 and O5; production's refusal codes for these cases are not yet observed); no key is fetched from an issuer; the emulator profile keeps the official emulator's fixture IdP",
               "precision": "exact-for-local-semantics"
             }
           ],

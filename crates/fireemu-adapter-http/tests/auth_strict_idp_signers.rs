@@ -1,0 +1,1130 @@
+//! The strict profile verifies signed OIDC ID tokens with the issuer keys given at startup
+//! (`auth.idpSigners`, owner decision O4 of AUTH-FEDERATION) and refuses the unsigned fixture
+//! `IdP`; the emulator profile keeps the fixture. No key is fetched from an issuer.
+use fireemu_adapter_http::identity_toolkit::{
+    handle, handle_with, AuthState, IdpAssertionPolicy, IdpContinuationPolicy, IdpSignerTrust,
+    JsonResponse, RequestHeaders,
+};
+use fireemu_adapter_http::signing::RsaSigner;
+use fireemu_core_auth::jwt::encode_payload_with;
+use fireemu_core_auth::mfa::TotpPolicy;
+use fireemu_core_auth::store::{
+    AuthRegistry, AuthStore, OAuthResponseType, OidcProviderConfig, UserRecord,
+};
+use fireemu_core_session::clock::VirtualClock;
+use fireemu_core_types::determinism::SplitMix64;
+use fireemu_core_types::time::LogicalInstant;
+use serde_json::{json, Value};
+use std::sync::{Arc, Mutex, OnceLock};
+
+const V1: &str = "/identitytoolkit.googleapis.com/v1";
+const NOW: i64 = 1_788_004_860;
+const ISSUER: &str = "https://issuer.example.test/oidc/run";
+const PROVIDER: &str = "oidc.strict";
+const CLIENT: &str = "strict-client";
+// Production's refusals (AUTH-FEDERATION record-oidc, run 39209e, 2026-09-28).
+const SIGNATURE: &str = "INVALID_IDP_RESPONSE : Unable to verify the ID Token signature.";
+const UNPARSABLE: &str = "INVALID_IDP_RESPONSE : Unable to parse the ID Token.";
+const NOT_FOUND: &str = "OPERATION_NOT_ALLOWED : The identity provider configuration is not found.";
+const DISABLED: &str = "OPERATION_NOT_ALLOWED : The identity provider configuration is disabled.";
+const UNREACHABLE: &str =
+    "INVALID_IDP_RESPONSE : Error connecting to the given credential's issuer.";
+const NONCE_MISSING: &str = "MISSING_OR_INVALID_NONCE : Nonce is missing in the request.";
+const DUPLICATE: &str =
+    "MISSING_OR_INVALID_NONCE : Duplicate credential received. Please try again with a new credential.";
+/// Refusals whose production message is unobserved.
+const UNOBSERVED: &str = "INVALID_IDP_RESPONSE";
+
+fn stale(iat: i64) -> String {
+    format!("INVALID_IDP_RESPONSE : ID Token issued at {iat} is stale to sign-in.")
+}
+
+// Public deterministic test fixtures only; these seeds are not deployment signing keys.
+fn signer() -> &'static Arc<RsaSigner> {
+    static SIGNER: OnceLock<Arc<RsaSigner>> = OnceLock::new();
+    SIGNER.get_or_init(|| RsaSigner::from_seed(4401).unwrap())
+}
+fn other_signer() -> &'static Arc<RsaSigner> {
+    static SIGNER: OnceLock<Arc<RsaSigner>> = OnceLock::new();
+    SIGNER.get_or_init(|| RsaSigner::from_seed(4402).unwrap())
+}
+
+fn signers(issuer: &str, keys: Value) -> Arc<IdpSignerTrust> {
+    let mut map = serde_json::Map::new();
+    map.insert(issuer.to_owned(), keys);
+    Arc::new(IdpSignerTrust::from_jwks(&map).unwrap())
+}
+
+fn provider(enabled: bool, issuer: &str) -> OidcProviderConfig {
+    OidcProviderConfig {
+        id: PROVIDER.into(),
+        display_name: None,
+        enabled,
+        client_id: CLIENT.into(),
+        issuer: issuer.into(),
+        client_secret: None,
+        response_type: OAuthResponseType {
+            id_token: true,
+            code: false,
+            token: false,
+        },
+    }
+}
+
+fn new_store() -> AuthStore {
+    AuthStore::new("demo-app", SplitMix64::new(5), TotpPolicy::default())
+}
+
+/// A strict daemon state (stateful refresh sessions) with the run issuer's signer configured.
+fn strict_state() -> AuthState {
+    let s = AuthState {
+        store: Arc::new(Mutex::new(new_store())),
+        clock: Arc::new(Mutex::new(VirtualClock::new(
+            LogicalInstant::from_unix_seconds(NOW),
+        ))),
+        wall_clock: None,
+        totp_extension_enabled: false,
+        barrier: None,
+        events: None,
+        notices: None,
+        blocking: None,
+        operation_gate: Arc::new(Mutex::new(())),
+        control_token: None,
+        registry: None,
+        allow_routed_projects: false,
+        stateless_refresh_tokens: false,
+        idp_continuations: IdpContinuationPolicy::Disabled,
+        query_limits: fireemu_adapter_http::identity_toolkit::AuthQueryLimits::EmulatorUnbounded,
+        client_api_key: fireemu_adapter_http::identity_toolkit::ClientApiKeyPolicy::Optional,
+        fake_custom_token_expiry:
+            fireemu_adapter_http::identity_toolkit::FakeCustomTokenExpiry::Ignore,
+        custom_token_trust: None,
+        idp_assertions: IdpAssertionPolicy::SignedOidc(signers(ISSUER, signer().jwks())),
+        app_check: None,
+        app_check_policy: None,
+        tenancy: None,
+    };
+    assert!(s
+        .store
+        .lock()
+        .unwrap()
+        .create_oidc_config(provider(true, ISSUER)));
+    s
+}
+
+fn claims() -> Value {
+    json!({"sub": "strict-subject", "iss": ISSUER, "aud": CLIENT, "iat": NOW, "exp": NOW + 60})
+}
+
+fn token_by(signer: &RsaSigner, claims: &Value) -> String {
+    encode_payload_with(&claims.to_string(), Some(signer))
+}
+
+fn token(claims: &Value) -> String {
+    token_by(signer(), claims)
+}
+
+fn request_for(provider: &str, token: &str) -> Value {
+    json!({
+        "requestUri": "http://localhost",
+        "postBody": format!("providerId={provider}&id_token={token}"),
+        "returnSecureToken": true,
+    })
+}
+
+fn request(token: &str) -> Value {
+    request_for(PROVIDER, token)
+}
+
+fn sign_in(s: &AuthState, body: &Value) -> JsonResponse {
+    handle(s, "POST", &format!("{V1}/accounts:signInWithIdp"), body)
+}
+
+fn assert_refused(s: &AuthState, body: &Value, message: &str, case: &str) {
+    let response = sign_in(s, body);
+    assert_eq!(response.status, 400, "{case}: {}", response.body);
+    assert_eq!(response.body["error"]["message"], message, "{case}");
+    assert!(response.body.get("idToken").is_none(), "{case}");
+    assert!(response.body.get("pendingToken").is_none(), "{case}");
+    let store = s.store.lock().unwrap();
+    assert_eq!(store.user_count(), 0, "{case}");
+    assert_eq!(store.pending_idp_count(), 0, "{case}");
+}
+
+/// The fixture `IdP`'s unsigned forms: a JSON credential and an unsigned JWT.
+fn fixture_requests(provider: &str) -> Vec<Value> {
+    let unsigned = encode_payload_with(&claims().to_string(), None);
+    vec![
+        request_for(provider, &unsigned),
+        json!({
+            "requestUri": "http://localhost",
+            "postBody": format!(
+                "providerId={provider}&id_token={}",
+                json!({"sub": "strict-subject", "email": "fixture@example.test"})
+            ),
+            "returnSecureToken": true,
+        }),
+    ]
+}
+
+#[test]
+fn strict_signs_in_with_a_token_the_configured_issuer_key_verifies() {
+    let s = strict_state();
+    let first = sign_in(&s, &request(&token(&claims())));
+    assert_eq!(first.status, 200, "{}", first.body);
+    assert_eq!(first.body["isNewUser"], true);
+    assert_eq!(first.body["providerId"], PROVIDER);
+    let second = sign_in(&s, &request(&token(&claims())));
+    assert_eq!(second.status, 200, "{}", second.body);
+    // Production leaves `isNewUser` out when it is false (record-oidc 39209e).
+    assert!(second.body.get("isNewUser").is_none(), "{}", second.body);
+    assert_eq!(second.body["localId"], first.body["localId"]);
+    assert!(s
+        .store
+        .lock()
+        .unwrap()
+        .user_by_federated(PROVIDER, "strict-subject")
+        .is_some());
+}
+
+#[test]
+fn strict_refuses_the_unsigned_fixture_idp() {
+    let s = strict_state();
+    let [unsigned, json_credential] = fixture_requests(PROVIDER).try_into().unwrap();
+    assert_refused(&s, &unsigned, SIGNATURE, "an unsigned JWT");
+    assert_refused(&s, &json_credential, UNPARSABLE, "a JSON credential");
+}
+
+#[test]
+fn strict_without_signers_refuses_every_idp_sign_in() {
+    let mut s = strict_state();
+    s.idp_assertions = IdpAssertionPolicy::SignedOidc(Arc::new(IdpSignerTrust::default()));
+    assert_refused(
+        &s,
+        &request(&token(&claims())),
+        UNREACHABLE,
+        "signed without signers",
+    );
+    let [unsigned, json_credential] = fixture_requests(PROVIDER).try_into().unwrap();
+    assert_refused(&s, &unsigned, UNREACHABLE, "unsigned without signers");
+    assert_refused(&s, &json_credential, UNREACHABLE, "JSON without signers");
+    // The Emulator UI proxy's entry point is gated the same way.
+    let response = handle_with(
+        &s,
+        "POST",
+        &format!("{V1}/accounts:signInWithIdp"),
+        &RequestHeaders::default(),
+        &request(&token(&claims())),
+    );
+    assert_eq!(response.status, 400);
+    assert_eq!(s.store.lock().unwrap().user_count(), 0);
+}
+
+#[test]
+fn strict_refuses_tokens_the_configured_keys_do_not_verify() {
+    let s = strict_state();
+    let mut wrong_iss = claims();
+    wrong_iss["iss"] = json!("https://other.example.test/oidc/run");
+    let mut wrong_aud = claims();
+    wrong_aud["aud"] = json!("other-client");
+    let mut expired = claims();
+    expired["exp"] = json!(NOW);
+    let mut future = claims();
+    future["iat"] = json!(NOW + 1);
+    future["exp"] = json!(NOW + 61);
+    let mut empty_sub = claims();
+    empty_sub["sub"] = json!("");
+    let mut bad_signature = token(&claims());
+    let start = bad_signature.rfind('.').unwrap() + 1;
+    let replacement = if &bad_signature[start..=start] == "A" {
+        "B"
+    } else {
+        "A"
+    };
+    bad_signature.replace_range(start..=start, replacement);
+    let cases = [
+        (
+            "other key",
+            request(&token_by(other_signer(), &claims())),
+            SIGNATURE.to_owned(),
+        ),
+        ("bad signature", request(&bad_signature), SIGNATURE.to_owned()),
+        (
+            "wrong iss",
+            request(&token(&wrong_iss)),
+            format!("INVALID_IDP_RESPONSE : The issuer in ID Token https://other.example.test/oidc/run does not match the expected one in config: {ISSUER}."),
+        ),
+        (
+            "wrong aud",
+            request(&token(&wrong_aud)),
+            format!("INVALID_IDP_RESPONSE : The audience in ID Token [other-client] does not match the expected audience {CLIENT}."),
+        ),
+        ("expired", request(&token(&expired)), stale(NOW)),
+        ("issued in the future", request(&token(&future)), stale(NOW + 1)),
+        (
+            "empty sub",
+            request(&token(&empty_sub)),
+            format!("INVALID_IDP_RESPONSE : ID Token does not contain user's identity in 'sub' claim: {}", json!({"aud": CLIENT, "exp": NOW + 60, "iat": NOW, "iss": ISSUER, "sub": ""})),
+        ),
+        (
+            "access token alongside",
+            json!({
+                "requestUri": "http://localhost",
+                "postBody": format!(
+                    "providerId={PROVIDER}&id_token={}&access_token=at",
+                    token(&claims())
+                ),
+                "returnSecureToken": true,
+            }),
+            UNOBSERVED.to_owned(),
+        ),
+        (
+            "access token only",
+            json!({
+                "requestUri": "http://localhost",
+                "postBody": format!("providerId={PROVIDER}&access_token=at"),
+                "returnSecureToken": true,
+            }),
+            format!("INVALID_CREDENTIAL_OR_PROVIDER_ID : Invalid IdP response/credential: http://localhost?providerId={PROVIDER}&access_token=at"),
+        ),
+        (
+            "no token",
+            json!({
+                "requestUri": "http://localhost",
+                "postBody": format!("providerId={PROVIDER}"),
+                "returnSecureToken": true,
+            }),
+            format!("INVALID_CREDENTIAL_OR_PROVIDER_ID : Invalid IdP response/credential: http://localhost?providerId={PROVIDER}"),
+        ),
+        (
+            "mixed-case provider",
+            request_for("oidc.Strict", &token(&claims())),
+            NOT_FOUND.to_owned(),
+        ),
+    ];
+    for (case, body, message) in cases {
+        assert_refused(&s, &body, &message, case);
+    }
+    // Even with a configuration stored under the mixed-case ID: the credential parser
+    // lowercases the provider, so the verified provider would not be the one recorded.
+    let mut mixed = provider(true, ISSUER);
+    mixed.id = "oidc.Strict".into();
+    assert!(s.store.lock().unwrap().create_oidc_config(mixed));
+    assert_refused(
+        &s,
+        &request_for("oidc.Strict", &token(&claims())),
+        NOT_FOUND,
+        "mixed-case provider with a configuration",
+    );
+}
+
+#[test]
+fn strict_selects_the_key_by_kid_and_refuses_a_key_under_the_wrong_kid() {
+    // The configured key carries the token's kid but is another key: verification must fail.
+    let mut relabelled = other_signer().jwks();
+    relabelled["keys"][0]["kid"] = signer().jwks()["keys"][0]["kid"].clone();
+    let mut s = strict_state();
+    s.idp_assertions = IdpAssertionPolicy::SignedOidc(signers(ISSUER, relabelled));
+    assert_refused(&s, &request(&token(&claims())), SIGNATURE, "relabelled key");
+    // A kid the issuer does not list.
+    s.idp_assertions = IdpAssertionPolicy::SignedOidc(signers(ISSUER, other_signer().jwks()));
+    assert_refused(&s, &request(&token(&claims())), SIGNATURE, "unknown kid");
+    // Both keys listed: the kid picks the verifying one.
+    let mut both = signer().jwks();
+    both["keys"]
+        .as_array_mut()
+        .unwrap()
+        .push(other_signer().jwks()["keys"][0].clone());
+    s.idp_assertions = IdpAssertionPolicy::SignedOidc(signers(ISSUER, both));
+    let response = sign_in(&s, &request(&token(&claims())));
+    assert_eq!(response.status, 200, "{}", response.body);
+}
+
+#[test]
+fn strict_refuses_a_provider_that_is_unconfigured_disabled_or_of_another_issuer() {
+    let s = strict_state();
+    s.store
+        .lock()
+        .unwrap()
+        .replace_oidc_config(provider(false, ISSUER));
+    assert_refused(&s, &request(&token(&claims())), DISABLED, "disabled");
+    // The provider points at an issuer without configured keys.
+    s.store
+        .lock()
+        .unwrap()
+        .replace_oidc_config(provider(true, "https://unlisted.example.test"));
+    let mut claims = claims();
+    claims["iss"] = json!("https://unlisted.example.test");
+    assert_refused(
+        &s,
+        &request(&token(&claims)),
+        UNREACHABLE,
+        "unlisted issuer",
+    );
+    assert_refused(
+        &s,
+        &request_for("oidc.unconfigured", &token(&self::claims())),
+        NOT_FOUND,
+        "unconfigured",
+    );
+}
+
+#[test]
+fn strict_refuses_providers_it_cannot_verify_without_a_network_fetch() {
+    let s = strict_state();
+    for provider in ["google.com", "facebook.com", "saml.strict"] {
+        for body in fixture_requests(provider) {
+            assert_refused(&s, &body, NOT_FOUND, provider);
+        }
+        assert_refused(
+            &s,
+            &request_for(provider, &token(&claims())),
+            NOT_FOUND,
+            provider,
+        );
+    }
+}
+
+#[test]
+fn strict_keeps_the_request_shape_errors_it_answered_before() {
+    let s = strict_state();
+    let missing_uri = json!({
+        "postBody": format!("providerId={PROVIDER}&id_token={}", token(&claims())),
+        "returnSecureToken": true,
+    });
+    let response = sign_in(&s, &missing_uri);
+    assert_eq!(response.status, 400);
+    assert_eq!(response.body["error"]["message"], "MISSING_REQUEST_URI");
+    let missing_provider = json!({
+        "requestUri": "http://localhost",
+        "postBody": format!("id_token={}", token(&claims())),
+        "returnSecureToken": true,
+    });
+    let response = sign_in(&s, &missing_provider);
+    assert_eq!(response.status, 400);
+    assert!(response.body["error"]["message"]
+        .as_str()
+        .unwrap()
+        .starts_with("INVALID_CREDENTIAL_OR_PROVIDER_ID"));
+    assert_eq!(s.store.lock().unwrap().user_count(), 0);
+}
+
+#[test]
+fn the_fixture_policy_of_the_emulator_profile_accepts_the_fixture_idp() {
+    // The daemon selects this policy for the emulator profile (`idp_assertion_policy`).
+    let mut s = strict_state();
+    s.stateless_refresh_tokens = true;
+    s.idp_assertions = IdpAssertionPolicy::Fixture;
+    for body in fixture_requests("google.com") {
+        let response = sign_in(&s, &body);
+        assert_eq!(response.status, 200, "{}", response.body);
+        // The official emulator's answer fields stay.
+        assert!(response.body.get("rawId").is_some(), "{}", response.body);
+        assert!(response.body.get("context").is_some(), "{}", response.body);
+    }
+    let response = sign_in(&s, &fixture_requests("oidc.unconfigured")[1]);
+    assert_eq!(response.status, 200, "{}", response.body);
+    // The emulator profile links another identity of a provider the account has (the official
+    // emulator's behaviour; strict refuses it as production does).
+    let other = json!({
+        "requestUri": "http://localhost",
+        "postBody": format!(
+            "providerId=oidc.unconfigured&id_token={}",
+            json!({"sub": "another-subject"})
+        ),
+        "idToken": response.body["idToken"],
+        "returnSecureToken": true,
+    });
+    let linked = sign_in(&s, &other);
+    assert_eq!(linked.status, 200, "{}", linked.body);
+    assert!(linked.body.get("errorMessage").is_none(), "{}", linked.body);
+    assert!(linked.body.get("idToken").is_some(), "{}", linked.body);
+}
+
+#[test]
+fn strict_verifies_on_the_selected_tenant_with_that_tenants_provider() {
+    let mut s = strict_state();
+    let registry = Arc::new(AuthRegistry::new("demo-app", s.store.clone()));
+    let tenant = registry.ensure_tenant("demo-app", "customer-a").unwrap();
+    // The tenant's provider of the same ID names another issuer.
+    assert!(tenant
+        .lock()
+        .unwrap()
+        .create_oidc_config(provider(true, "https://tenant.example.test")));
+    s.registry = Some(registry);
+    allow_tenants(&s);
+    let mut body = request(&token(&claims()));
+    body["tenantId"] = json!("customer-a");
+    let response = sign_in(&s, &body);
+    assert_eq!(response.status, 400, "{}", response.body);
+    assert_eq!(response.body["error"]["message"], UNREACHABLE);
+    assert_eq!(tenant.lock().unwrap().user_count(), 0);
+    // With the tenant's provider on the configured issuer, the tenant accepts it.
+    tenant
+        .lock()
+        .unwrap()
+        .replace_oidc_config(provider(true, ISSUER));
+    let response = sign_in(&s, &body);
+    assert_eq!(response.status, 200, "{}", response.body);
+    assert_eq!(tenant.lock().unwrap().user_count(), 1);
+    assert_eq!(s.store.lock().unwrap().user_count(), 0);
+}
+
+fn continuation(value: &Value) -> Value {
+    json!({"requestUri": "http://localhost", "pendingToken": value, "returnSecureToken": true})
+}
+
+#[test]
+fn strict_continuations_are_reverified_and_do_not_cross_with_the_fixture() {
+    let mut strict = strict_state();
+    strict.idp_continuations = IdpContinuationPolicy::LocalBounded;
+    let first = sign_in(&strict, &request(&token(&claims())));
+    assert_eq!(first.status, 200, "{}", first.body);
+    let pending = first.body["pendingToken"].clone();
+    assert!(pending.is_string());
+    let resumed = sign_in(&strict, &continuation(&pending));
+    assert_eq!(resumed.status, 200, "{}", resumed.body);
+    assert_eq!(resumed.body["localId"], first.body["localId"]);
+
+    // The same store under the emulator profile mints a fixture continuation, which strict
+    // must not resume, and the emulator must not resume strict's.
+    let mut emulator = strict_state();
+    emulator.store = strict.store.clone();
+    emulator.stateless_refresh_tokens = true;
+    emulator.idp_assertions = IdpAssertionPolicy::Fixture;
+    emulator.idp_continuations = IdpContinuationPolicy::LocalBounded;
+    let fixture = sign_in(&emulator, &fixture_requests("google.com")[1]);
+    assert_eq!(fixture.status, 200, "{}", fixture.body);
+    let refused = sign_in(&strict, &continuation(&fixture.body["pendingToken"]));
+    assert_eq!(refused.status, 400);
+    assert_eq!(refused.body["error"]["message"], "INVALID_PENDING_TOKEN");
+    let refused = sign_in(&emulator, &continuation(&pending));
+    assert_eq!(refused.status, 400);
+
+    // A disabled provider refuses the resume; the original token's expiry is re-checked.
+    strict
+        .store
+        .lock()
+        .unwrap()
+        .replace_oidc_config(provider(false, ISSUER));
+    let refused = sign_in(&strict, &continuation(&pending));
+    assert_eq!(refused.body["error"]["message"], DISABLED);
+    strict
+        .store
+        .lock()
+        .unwrap()
+        .replace_oidc_config(provider(true, ISSUER));
+    strict
+        .clock
+        .lock()
+        .unwrap()
+        .advance_to(LogicalInstant::from_unix_seconds(NOW + 60))
+        .unwrap();
+    let refused = sign_in(&strict, &continuation(&pending));
+    assert_eq!(refused.body["error"]["message"], stale(NOW));
+}
+
+/// A blocking hook that disables the provider while it runs, as a concurrent Admin PATCH
+/// would between the first verification and the commit.
+struct DisableProviderDuringHook {
+    store: Arc<Mutex<AuthStore>>,
+}
+
+impl fireemu_adapter_http::identity_toolkit::AuthBlockingHook for DisableProviderDuringHook {
+    fn invoke(
+        &self,
+        _event: fireemu_core_functions::manifest::BlockingAuthEvent,
+        _user: &UserRecord,
+    ) -> Result<Value, fireemu_adapter_http::identity_toolkit::BlockingFunctionFailure> {
+        Ok(json!({}))
+    }
+
+    fn invoke_for_with_context(
+        &self,
+        _project: &str,
+        _tenant: Option<&str>,
+        _event: fireemu_core_functions::manifest::BlockingAuthEvent,
+        _user: &UserRecord,
+        _context: &fireemu_adapter_http::identity_toolkit::AuthBlockingContext,
+    ) -> Result<Option<Value>, fireemu_adapter_http::identity_toolkit::BlockingFunctionFailure>
+    {
+        self.store
+            .lock()
+            .unwrap()
+            .replace_oidc_config(provider(false, ISSUER));
+        Ok(Some(json!({})))
+    }
+}
+
+#[test]
+fn strict_reverifies_when_a_blocking_hook_commits() {
+    let mut s = strict_state();
+    s.blocking = Some(Arc::new(DisableProviderDuringHook {
+        store: s.store.clone(),
+    }));
+    let response = sign_in(&s, &request(&token(&claims())));
+    assert_eq!(response.status, 400, "{}", response.body);
+    assert_eq!(response.body["error"]["message"], "INVALID_IDP_RESPONSE");
+    assert!(response.body.get("idToken").is_none());
+    assert_eq!(s.store.lock().unwrap().user_count(), 0);
+}
+
+#[test]
+fn strict_accepts_what_production_accepts() {
+    // Several audiences without `azp`, and an `nbf` in the future (record-oidc 39209e).
+    let s = strict_state();
+    let mut several = claims();
+    several["aud"] = json!([CLIENT, "other-client"]);
+    several["sub"] = json!("several");
+    let mut not_yet = claims();
+    not_yet["nbf"] = json!(NOW + 3600);
+    not_yet["sub"] = json!("not-yet");
+    // An `azp` naming another party (record-saml 7789f0).
+    let mut other_party = claims();
+    other_party["azp"] = json!("other-client");
+    other_party["sub"] = json!("other-party");
+    for (case, claims) in [
+        ("several audiences", several),
+        ("future nbf", not_yet),
+        ("azp of another party", other_party),
+    ] {
+        let response = sign_in(&s, &request(&token(&claims)));
+        assert_eq!(response.status, 200, "{case}: {}", response.body);
+    }
+}
+
+fn with_nonce(token: &str, nonce: Option<&str>) -> Value {
+    let mut body = request(token);
+    if let Some(nonce) = nonce {
+        body["postBody"] = json!(format!(
+            "{}&nonce={nonce}",
+            body["postBody"].as_str().unwrap()
+        ));
+    }
+    body
+}
+
+fn hashed(nonce: &str) -> String {
+    fireemu_core_types::hash::hex_lower(&fireemu_core_types::hash::sha256(nonce.as_bytes()))
+}
+
+#[test]
+fn strict_checks_the_nonce_as_production_does() {
+    let s = strict_state();
+    let mut claimed = claims();
+    claimed["nonce"] = json!(hashed("nonce-a"));
+    let nonce_token = token(&claimed);
+    // The token carries a nonce the request does not.
+    assert_refused(
+        &s,
+        &with_nonce(&nonce_token, None),
+        NONCE_MISSING,
+        "no request nonce",
+    );
+    // The request carries a nonce the token does not: accepted.
+    let response = sign_in(&s, &with_nonce(&token(&claims()), Some("nonce-a")));
+    assert_eq!(response.status, 200, "{}", response.body);
+    // A matching nonce signs in once; the same credential again is a duplicate, before the
+    // nonce is even compared.
+    let s = strict_state();
+    let first = sign_in(&s, &with_nonce(&nonce_token, Some("nonce-a")));
+    assert_eq!(first.status, 200, "{}", first.body);
+    assert_refused_after(&s, &with_nonce(&nonce_token, Some("nonce-a")), DUPLICATE);
+    assert_refused_after(&s, &with_nonce(&nonce_token, Some("nonce-b")), DUPLICATE);
+    // A new token with the same nonce for the same subject is the same credential.
+    let mut reissued = claimed.clone();
+    reissued["iat"] = json!(NOW - 1);
+    assert_refused_after(
+        &s,
+        &with_nonce(&token(&reissued), Some("nonce-a")),
+        DUPLICATE,
+    );
+    // Another subject's token with the same nonce is another credential.
+    let mut other = claimed.clone();
+    other["sub"] = json!("other-subject");
+    let response = sign_in(&s, &with_nonce(&token(&other), Some("nonce-a")));
+    assert_eq!(response.status, 200, "{}", response.body);
+    // A nonce that does not match (record-saml 7789f0).
+    let mut fresh = claims();
+    fresh["nonce"] = json!(hashed("nonce-c"));
+    fresh["sub"] = json!("fresh-subject");
+    assert_refused_after(
+        &s,
+        &with_nonce(&token(&fresh), Some("nonce-d")),
+        &format!(
+            "MISSING_OR_INVALID_NONCE : The nonce in ID Token \"{}\" does not match the SHA256 hash of the raw nonce \"nonce-d\" in the request.",
+            hashed("nonce-c")
+        ),
+    );
+    // Without a nonce, the same token signs in again (production's replay rows).
+    let again = sign_in(&s, &request(&token(&claims())));
+    assert_eq!(again.status, 200, "{}", again.body);
+    let again = sign_in(&s, &request(&token(&claims())));
+    assert_eq!(again.status, 200, "{}", again.body);
+}
+
+/// A refusal that changes nothing, in a store that already holds accounts.
+fn assert_refused_after(s: &AuthState, body: &Value, message: &str) {
+    let users = s.store.lock().unwrap().user_count();
+    let response = sign_in(s, body);
+    assert_eq!(response.status, 400, "{}", response.body);
+    assert_eq!(response.body["error"]["message"], message);
+    assert_eq!(s.store.lock().unwrap().user_count(), users);
+}
+
+#[test]
+fn a_refused_or_reset_sign_in_uses_no_nonce() {
+    let s = strict_state();
+    let mut claimed = claims();
+    claimed["nonce"] = json!(hashed("nonce-a"));
+    let nonce_token = token(&claimed);
+    // A refusal after the nonce check (the provider disabled) records nothing.
+    s.store
+        .lock()
+        .unwrap()
+        .replace_oidc_config(provider(false, ISSUER));
+    assert_refused(
+        &s,
+        &with_nonce(&nonce_token, Some("nonce-a")),
+        DISABLED,
+        "disabled",
+    );
+    s.store
+        .lock()
+        .unwrap()
+        .replace_oidc_config(provider(true, ISSUER));
+    let first = sign_in(&s, &with_nonce(&nonce_token, Some("nonce-a")));
+    assert_eq!(first.status, 200, "{}", first.body);
+    // Resetting the emulator's accounts forgets the credentials used.
+    let reset = handle(
+        &s,
+        "DELETE",
+        "/emulator/v1/projects/demo-app/accounts",
+        &Value::Null,
+    );
+    assert_eq!(reset.status, 200, "{}", reset.body);
+    s.store
+        .lock()
+        .unwrap()
+        .replace_oidc_config(provider(true, ISSUER));
+    let again = sign_in(&s, &with_nonce(&nonce_token, Some("nonce-a")));
+    assert_eq!(again.status, 200, "{}", again.body);
+}
+
+fn id_token_claims(response: &JsonResponse) -> Value {
+    let payload = response.body["idToken"]
+        .as_str()
+        .unwrap()
+        .split('.')
+        .nth(1)
+        .unwrap();
+    serde_json::from_slice(&fireemu_core_auth::jwt::base64url_decode(payload).unwrap()).unwrap()
+}
+
+#[test]
+fn strict_answers_a_sign_in_in_productions_shape() {
+    // record-oidc 39209e: the federated ID names the provider, the answer carries no context,
+    // raw ID or access token for an ID-token credential, `isNewUser` only when true, and the
+    // sign-in attributes are the claims beyond the standard ones.
+    let s = strict_state();
+    let mut rich = claims();
+    rich["email"] = json!("rich@example.com");
+    rich["email_verified"] = json!(true);
+    rich["name"] = json!("Rich User");
+    rich["picture"] = json!("https://example.com/p.png");
+    rich["department"] = json!("fireemu");
+    let first = sign_in(&s, &request(&token(&rich)));
+    assert_eq!(first.status, 200, "{}", first.body);
+    assert_eq!(
+        first.body["federatedId"],
+        format!("{PROVIDER}/strict-subject")
+    );
+    for absent in ["context", "rawId", "oauthAccessToken"] {
+        assert!(first.body.get(absent).is_none(), "{absent}: {}", first.body);
+    }
+    assert_eq!(first.body["isNewUser"], true);
+    assert_eq!(
+        id_token_claims(&first)["firebase"]["sign_in_attributes"],
+        json!({"department": "fireemu"})
+    );
+    let again = sign_in(&s, &request(&token(&claims())));
+    assert_eq!(again.status, 200, "{}", again.body);
+    assert!(again.body.get("isNewUser").is_none(), "{}", again.body);
+    assert!(
+        id_token_claims(&again)["firebase"]
+            .get("sign_in_attributes")
+            .is_none(),
+        "only standard claims: no attributes"
+    );
+}
+
+#[test]
+fn strict_keeps_the_sign_in_attributes_across_refresh_and_session_cookies() {
+    // record-oidc 39209e: a refreshed ID token, and a session cookie minted from it, carry the
+    // sign-in's attributes.
+    let s = strict_state();
+    let mut rich = claims();
+    rich["department"] = json!("fireemu");
+    let signed = sign_in(&s, &request(&token(&rich)));
+    assert_eq!(signed.status, 200, "{}", signed.body);
+    let refreshed = handle(
+        &s,
+        "POST",
+        "/securetoken.googleapis.com/v1/token",
+        &json!({"grant_type": "refresh_token", "refresh_token": signed.body["refreshToken"]}),
+    );
+    assert_eq!(refreshed.status, 200, "{}", refreshed.body);
+    let payload = |jwt: &Value| -> Value {
+        let part = jwt.as_str().unwrap().split('.').nth(1).unwrap();
+        serde_json::from_slice(&fireemu_core_auth::jwt::base64url_decode(part).unwrap()).unwrap()
+    };
+    let expected = json!({"department": "fireemu"});
+    assert_eq!(
+        payload(&refreshed.body["id_token"])["firebase"]["sign_in_attributes"],
+        expected
+    );
+    let cookie = handle_with(
+        &s,
+        "POST",
+        &format!("{V1}/projects/demo-app:createSessionCookie"),
+        &RequestHeaders {
+            authorization: Some(
+                fireemu_adapter_http::identity_toolkit::OWNER_CREDENTIAL.to_owned(),
+            ),
+            ..RequestHeaders::default()
+        },
+        &json!({"idToken": refreshed.body["id_token"], "validDuration": "3600"}),
+    );
+    assert_eq!(cookie.status, 200, "{}", cookie.body);
+    assert_eq!(
+        payload(&cookie.body["sessionCookie"])["firebase"]["sign_in_attributes"],
+        expected
+    );
+}
+
+fn link_request(token: &str, id_token: &Value, return_credential: bool) -> Value {
+    let mut body = request(token);
+    body["idToken"] = id_token.clone();
+    body["returnIdpCredential"] = json!(return_credential);
+    body
+}
+
+#[test]
+fn strict_refuses_links_as_production_does() {
+    // record-oidc 39209e: an account that has the provider keeps its identity, and an identity
+    // whose email another account holds is refused first. Both refusals carry a continuation.
+    let mut s = strict_state();
+    s.idp_continuations = IdpContinuationPolicy::LocalBounded;
+    let mut first_claims = claims();
+    first_claims["sub"] = json!("sub-first");
+    let first = sign_in(&s, &request(&token(&first_claims)));
+    assert_eq!(first.status, 200, "{}", first.body);
+    let signup = handle(
+        &s,
+        "POST",
+        &format!("{V1}/accounts:signUp"),
+        &json!({"email": "taken@example.com", "password": "hunter22", "returnSecureToken": true}),
+    );
+    assert_eq!(signup.status, 200, "{}", signup.body);
+    let mut second = claims();
+    second["sub"] = json!("sub-second");
+    let mut taken = claims();
+    taken["sub"] = json!("sub-taken");
+    taken["email"] = json!("taken@example.com");
+    taken["email_verified"] = json!(true);
+    for (case, claims, message) in [
+        ("second identity", &second, "PROVIDER_ALREADY_LINKED"),
+        ("taken email", &taken, "EMAIL_EXISTS"),
+    ] {
+        let answer = sign_in(
+            &s,
+            &link_request(&token(claims), &first.body["idToken"], true),
+        );
+        assert_eq!(answer.status, 200, "{case}: {}", answer.body);
+        assert_eq!(answer.body["errorMessage"], message, "{case}");
+        assert!(
+            answer.body["pendingToken"].is_string(),
+            "{case}: {}",
+            answer.body
+        );
+        for absent in ["idToken", "refreshToken", "localId"] {
+            assert!(
+                answer.body.get(absent).is_none(),
+                "{case} {absent}: {}",
+                answer.body
+            );
+        }
+        let refused = sign_in(
+            &s,
+            &link_request(&token(claims), &first.body["idToken"], false),
+        );
+        assert_eq!(refused.status, 400, "{case}: {}", refused.body);
+        assert_eq!(refused.body["error"]["message"], message, "{case}");
+    }
+    // The account keeps its first identity only.
+    let store = s.store.lock().unwrap();
+    let user = store.user_by_federated(PROVIDER, "sub-first").unwrap();
+    assert_eq!(user.federated.len(), 1);
+    assert!(store.user_by_federated(PROVIDER, "sub-second").is_none());
+    assert!(store.user_by_federated(PROVIDER, "sub-taken").is_none());
+}
+
+#[test]
+fn an_account_an_oidc_sign_in_created_reports_its_valid_since() {
+    // record-oidc 39209e: production's lookup of such an account carries `validSince`.
+    let s = strict_state();
+    let signed = sign_in(&s, &request(&token(&claims())));
+    assert_eq!(signed.status, 200, "{}", signed.body);
+    let lookup = handle(
+        &s,
+        "POST",
+        &format!("{V1}/accounts:lookup"),
+        &json!({"idToken": signed.body["idToken"]}),
+    );
+    assert_eq!(lookup.status, 200, "{}", lookup.body);
+    assert_eq!(lookup.body["users"][0]["validSince"], NOW.to_string());
+}
+
+#[test]
+fn a_returning_oidc_sign_in_leaves_the_account_profile_as_it_was() {
+    // record-oidc 39209e: the answer carries the IdP's new name, the account and its
+    // provider information do not.
+    let s = strict_state();
+    let first = sign_in(&s, &request(&token(&claims())));
+    assert_eq!(first.status, 200, "{}", first.body);
+    let mut renamed = claims();
+    renamed["name"] = json!("Renamed");
+    renamed["iat"] = json!(NOW - 1);
+    let second = sign_in(&s, &request(&token(&renamed)));
+    assert_eq!(second.status, 200, "{}", second.body);
+    assert_eq!(second.body["displayName"], "Renamed");
+    assert!(
+        id_token_claims(&second).get("name").is_none(),
+        "{}",
+        second.body
+    );
+    let store = s.store.lock().unwrap();
+    let user = store.user_by_federated(PROVIDER, "strict-subject").unwrap();
+    assert_eq!(user.display_name, None);
+    assert_eq!(user.federated[0].display_name, None);
+}
+
+const AUTHORIZE: &str = "https://issuer.example.test/oidc/run/authorize";
+const CONTINUE: &str = "https://demo-app.firebaseapp.com/__/auth/handler";
+
+fn create_auth_uri(s: &AuthState, body: &Value) -> JsonResponse {
+    handle(s, "POST", &format!("{V1}/accounts:createAuthUri"), body)
+}
+
+/// A strict state whose issuer names its authorization endpoint.
+fn strict_state_with_endpoint() -> AuthState {
+    let mut s = strict_state();
+    let mut jwks = signer().jwks();
+    jwks["authorization_endpoint"] = json!(AUTHORIZE);
+    s.idp_assertions = IdpAssertionPolicy::SignedOidc(signers(ISSUER, jwks));
+    s
+}
+
+#[test]
+fn strict_answers_create_auth_uri_for_an_oidc_provider_as_production_does() {
+    // record-oidc 39209e: the issuer's authorization endpoint with the ID-token flow's
+    // parameters, a state and a nonce the service makes, and a session ID.
+    let s = strict_state_with_endpoint();
+    let answer = create_auth_uri(
+        &s,
+        &json!({"providerId": PROVIDER, "continueUri": CONTINUE}),
+    );
+    assert_eq!(answer.status, 200, "{}", answer.body);
+    let mut keys: Vec<&str> = answer
+        .body
+        .as_object()
+        .unwrap()
+        .keys()
+        .map(String::as_str)
+        .collect();
+    keys.sort_unstable();
+    assert_eq!(keys, ["authUri", "kind", "providerId", "sessionId"]);
+    assert_eq!(answer.body["kind"], "identitytoolkit#CreateAuthUriResponse");
+    assert_eq!(answer.body["providerId"], PROVIDER);
+    assert!(!answer.body["sessionId"].as_str().unwrap().is_empty());
+    let uri = answer.body["authUri"].as_str().unwrap();
+    let prefix = format!(
+        "{AUTHORIZE}?response_type=id_token&client_id={CLIENT}&redirect_uri={CONTINUE}&state="
+    );
+    assert!(uri.starts_with(&prefix), "{uri}");
+    let rest = &uri[prefix.len()..];
+    let (state, rest) = rest.split_once("&scope=openid&nonce=").unwrap();
+    assert!(!state.is_empty() && !state.contains('&'), "{uri}");
+    assert_eq!(rest.len(), 64, "{uri}");
+    assert!(
+        rest.chars()
+            .all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase()),
+        "{uri}"
+    );
+    // Each answer is its own session.
+    let again = create_auth_uri(
+        &s,
+        &json!({"providerId": PROVIDER, "continueUri": CONTINUE}),
+    );
+    assert_ne!(again.body["sessionId"], answer.body["sessionId"]);
+    assert_ne!(again.body["authUri"], answer.body["authUri"]);
+    // Production signs in with or without the session, as the ID-token flow needs none.
+    let mut body = request(&token(&claims()));
+    body["sessionId"] = answer.body["sessionId"].clone();
+    assert_eq!(sign_in(&s, &body).status, 200);
+}
+
+#[test]
+fn strict_create_auth_uri_refuses_as_production_does() {
+    let s = strict_state_with_endpoint();
+    let missing = create_auth_uri(&s, &json!({"providerId": PROVIDER}));
+    assert_eq!(missing.status, 400, "{}", missing.body);
+    assert_eq!(missing.body["error"]["message"], "MISSING_CONTINUE_URI");
+    let unknown = create_auth_uri(
+        &s,
+        &json!({"providerId": "oidc.unknown", "continueUri": CONTINUE}),
+    );
+    assert_eq!(unknown.status, 400, "{}", unknown.body);
+    assert_eq!(unknown.body["error"]["message"], NOT_FOUND);
+    s.store
+        .lock()
+        .unwrap()
+        .replace_oidc_config(provider(false, ISSUER));
+    let disabled = create_auth_uri(
+        &s,
+        &json!({"providerId": PROVIDER, "continueUri": CONTINUE}),
+    );
+    assert_eq!(disabled.status, 400, "{}", disabled.body);
+    assert_eq!(disabled.body["error"]["message"], DISABLED);
+}
+
+#[test]
+fn create_auth_uri_without_an_authorization_endpoint_stays_unimplemented() {
+    // Strict never fetches the discovery document: without a configured endpoint it cannot
+    // build the URI. The emulator profile answers as the official emulator does.
+    let strict = strict_state();
+    let answer = create_auth_uri(
+        &strict,
+        &json!({"providerId": PROVIDER, "continueUri": CONTINUE}),
+    );
+    assert_eq!(answer.status, 501, "{}", answer.body);
+    let mut emulator = strict_state_with_endpoint();
+    emulator.stateless_refresh_tokens = true;
+    emulator.idp_assertions = IdpAssertionPolicy::Fixture;
+    let answer = create_auth_uri(
+        &emulator,
+        &json!({"providerId": PROVIDER, "continueUri": CONTINUE}),
+    );
+    assert_eq!(answer.status, 501, "{}", answer.body);
+}
+
+#[test]
+fn strict_refuses_a_configured_google_provider_it_cannot_verify_as_production_does() {
+    // record-saml 7789f0: a garbage ID token for a configured google.com.
+    let s = strict_state();
+    assert!(s.store.lock().unwrap().create_default_idp_config(
+        fireemu_core_auth::store::DefaultIdpConfig {
+            id: "google.com".into(),
+            enabled: true,
+            client_id: Some("fireemu-client".into()),
+            client_secret: Some("fireemu-secret".into()),
+            apple_sign_in_config: None,
+        }
+    ));
+    assert_refused(
+        &s,
+        &request_for("google.com", "fireemu-garbage"),
+        "INVALID_IDP_RESPONSE : Unable to parse Google id_token: fireemu-garbage",
+        "configured google.com",
+    );
+}
+
+#[test]
+fn a_new_account_whose_email_another_holds_has_no_email() {
+    // record-saml 7789f0 (duplicate-email-lookup): with duplicate emails allowed, an OIDC
+    // sign-in whose email a password account holds creates an account without an email. The
+    // answer names the email; the ID token and the lookup do not, and the provider information
+    // keeps it.
+    let s = strict_state();
+    allow_duplicate_emails(&s);
+    let owner = handle(
+        &s,
+        "POST",
+        &format!("{V1}/accounts:signUp"),
+        &json!({"email": "shared@example.com", "password": "fireemu-password", "returnSecureToken": true}),
+    );
+    assert_eq!(owner.status, 200, "{}", owner.body);
+    let mut shared = claims();
+    shared["email"] = json!("shared@example.com");
+    shared["email_verified"] = json!(true);
+    let signed = sign_in(&s, &request(&token(&shared)));
+    assert_eq!(signed.status, 200, "{}", signed.body);
+    assert_eq!(signed.body["isNewUser"], true);
+    assert_eq!(signed.body["email"], "shared@example.com");
+    assert_eq!(signed.body["emailVerified"], true);
+    assert_ne!(signed.body["localId"], owner.body["localId"]);
+    let token_claims = id_token_claims(&signed);
+    assert!(token_claims.get("email").is_none(), "{token_claims}");
+    assert!(
+        token_claims.get("email_verified").is_none(),
+        "{token_claims}"
+    );
+    assert_eq!(
+        token_claims["firebase"]["identities"],
+        json!({PROVIDER: ["strict-subject"]})
+    );
+    let lookup = handle(
+        &s,
+        "POST",
+        &format!("{V1}/accounts:lookup"),
+        &json!({"idToken": signed.body["idToken"]}),
+    );
+    let user = &lookup.body["users"][0];
+    assert!(user.get("email").is_none(), "{user}");
+    assert!(user.get("emailVerified").is_none(), "{user}");
+    assert_eq!(user["providerUserInfo"][0]["email"], "shared@example.com");
+    // The owner keeps the email.
+    let store = s.store.lock().unwrap();
+    assert_eq!(
+        store
+            .user_by_email("shared@example.com")
+            .unwrap()
+            .local_id
+            .as_str(),
+        owner.body["localId"].as_str().unwrap()
+    );
+}
+
+#[test]
+fn a_new_account_whose_email_nobody_holds_keeps_it() {
+    let s = strict_state();
+    allow_duplicate_emails(&s);
+    let mut own = claims();
+    own["email"] = json!("own@example.com");
+    own["email_verified"] = json!(true);
+    let signed = sign_in(&s, &request(&token(&own)));
+    assert_eq!(signed.status, 200, "{}", signed.body);
+    assert_eq!(id_token_claims(&signed)["email"], "own@example.com");
+}
+
+fn allow_duplicate_emails(s: &AuthState) {
+    let mut store = s.store.lock().unwrap();
+    let mut config = store.config();
+    config.allow_duplicate_emails = true;
+    store.set_config(config);
+}
+
+/// Strict serves a tenant only while the project allows tenants, as production does.
+fn allow_tenants(s: &AuthState) {
+    let r = fireemu_adapter_http::identity_toolkit::handle_with(
+        s,
+        "PATCH",
+        "/identitytoolkit.googleapis.com/admin/v2/projects/demo-app/config?updateMask=multiTenant.allowTenants",
+        &fireemu_adapter_http::identity_toolkit::RequestHeaders {
+            authorization: Some(fireemu_adapter_http::identity_toolkit::OWNER_CREDENTIAL.to_owned()),
+            ..fireemu_adapter_http::identity_toolkit::RequestHeaders::default()
+        },
+        &serde_json::json!({"multiTenant": {"allowTenants": true}}),
+    );
+    assert_eq!(r.status, 200, "{}", r.body);
+}

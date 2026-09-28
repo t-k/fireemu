@@ -15,7 +15,7 @@ use fireemu_core_types::determinism::{DeterministicRng, SplitMix64};
 use fireemu_core_types::hash::sha256;
 use fireemu_core_types::time::{LogicalDuration, LogicalInstant};
 
-use crate::claims::{CustomClaims, FirebaseClaims, IdTokenClaims};
+use crate::claims::{ClaimValue, CustomClaims, FirebaseClaims, IdTokenClaims};
 use crate::federation::PendingIdpCache;
 use crate::mfa::{
     match_code, CodeMatch, EnrolledFactor, MfaError, MfaState, PendingEnrollment, PendingSignIn,
@@ -166,6 +166,17 @@ pub enum IdpSignIn {
         /// The federated providers already linked to that account (`verifiedProvider`).
         verified_providers: Vec<String>,
     },
+}
+
+/// How a federated sign-in's new account holds an email another account already holds (with
+/// `allowDuplicateEmails`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DuplicateIdpEmail {
+    /// The new account holds the email too, as the official emulator does.
+    Stored,
+    /// The new account holds no email; its provider information keeps it (production,
+    /// AUTH-FEDERATION record-saml 7789f0, 2026-09-28).
+    Omitted,
 }
 
 /// Out-of-band (email action) code kinds.
@@ -331,6 +342,9 @@ pub struct RefreshSession {
     pub claims: CustomClaims,
     /// Second factor of the session.
     pub second_factor: Option<SecondFactorAssertion>,
+    /// The sign-in's `firebase.sign_in_attributes`, for a caller that carries them into
+    /// refreshed ID tokens (production does, for an OIDC sign-in).
+    pub sign_in_attributes: Option<ClaimValue>,
 }
 
 /// User record.
@@ -920,6 +934,40 @@ pub struct InboundSamlProviderConfig {
     pub callback_uri: String,
 }
 
+/// A project or tenant configuration of a default supported identity provider (Identity Platform
+/// `defaultSupportedIdpConfigs`, such as `google.com` or `apple.com`).
+#[derive(Clone, PartialEq, Eq)]
+pub struct DefaultIdpConfig {
+    /// The identity provider ID (`idpId`).
+    pub id: String,
+    /// Whether sign-in with this provider is enabled.
+    pub enabled: bool,
+    /// OAuth client ID.
+    pub client_id: Option<String>,
+    /// OAuth client secret.
+    pub client_secret: Option<String>,
+    /// `appleSignInConfig`, kept as written (JSON text).
+    pub apple_sign_in_config: Option<String>,
+}
+
+impl fmt::Debug for DefaultIdpConfig {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("DefaultIdpConfig")
+            .field("id", &self.id)
+            .field("enabled", &self.enabled)
+            .field("client_id", &self.client_id)
+            .field(
+                "client_secret",
+                &self.client_secret.as_ref().map(|_| "<redacted>"),
+            )
+            .field(
+                "apple_sign_in_config",
+                &self.apple_sign_in_config.as_ref().map(|_| "<redacted>"),
+            )
+            .finish()
+    }
+}
+
 /// Why an account an import artifact recorded was refused.
 #[derive(Debug, Clone, PartialEq)]
 pub enum ImportUserError {
@@ -1259,6 +1307,10 @@ pub struct AuthStore {
     saml_configs: BTreeMap<String, InboundSamlProviderConfig>,
     /// Inbound SAML configuration IDs in creation order.
     saml_order: Vec<String>,
+    /// Default supported identity provider configurations in this namespace.
+    default_idp_configs: BTreeMap<String, DefaultIdpConfig>,
+    /// Default supported identity provider configuration IDs in creation order.
+    default_idp_order: Vec<String>,
 }
 
 /// What a phone verification code was issued for, as the official emulator names it in
@@ -1589,6 +1641,8 @@ impl AuthStore {
             oidc_order: Vec::new(),
             saml_configs: BTreeMap::new(),
             saml_order: Vec::new(),
+            default_idp_configs: BTreeMap::new(),
+            default_idp_order: Vec::new(),
         }
     }
 
@@ -1753,6 +1807,12 @@ impl AuthStore {
             self.secret_u64(),
             self.counter % 10_000
         )
+    }
+
+    /// A fresh opaque value of the bearer-credential shape, for a value the service makes and
+    /// the caller hands back unread (a `createAuthUri` session ID, state or nonce).
+    pub fn next_opaque_value(&mut self) -> String {
+        self.next_id("")
     }
 
     fn next_refresh_token(&mut self) -> String {
@@ -2376,6 +2436,47 @@ impl AuthStore {
             return false;
         }
         self.saml_order.retain(|candidate| candidate != id);
+        true
+    }
+
+    /// Lists default supported identity provider configurations in creation order.
+    pub fn default_idp_configs(&self) -> impl Iterator<Item = &DefaultIdpConfig> {
+        self.default_idp_order
+            .iter()
+            .filter_map(|id| self.default_idp_configs.get(id))
+    }
+
+    /// Gets one default supported identity provider configuration by identity provider ID.
+    #[must_use]
+    pub fn default_idp_config(&self, id: &str) -> Option<&DefaultIdpConfig> {
+        self.default_idp_configs.get(id)
+    }
+
+    /// Creates a default supported identity provider configuration. Returns `false` when its ID is used.
+    pub fn create_default_idp_config(&mut self, config: DefaultIdpConfig) -> bool {
+        if self.default_idp_configs.contains_key(&config.id) {
+            return false;
+        }
+        self.default_idp_order.push(config.id.clone());
+        self.default_idp_configs.insert(config.id.clone(), config);
+        true
+    }
+
+    /// Replaces a default supported identity provider configuration. Returns `false` when its ID is unknown.
+    pub fn replace_default_idp_config(&mut self, config: DefaultIdpConfig) -> bool {
+        if !self.default_idp_configs.contains_key(&config.id) {
+            return false;
+        }
+        self.default_idp_configs.insert(config.id.clone(), config);
+        true
+    }
+
+    /// Deletes a default supported identity provider configuration. Returns `false` when its ID is unknown.
+    pub fn delete_default_idp_config(&mut self, id: &str) -> bool {
+        if self.default_idp_configs.remove(id).is_none() {
+            return false;
+        }
+        self.default_idp_order.retain(|candidate| candidate != id);
         true
     }
 
@@ -3817,6 +3918,18 @@ impl AuthStore {
         email_verified: bool,
         now: LogicalInstant,
     ) -> Result<IdpSignIn, AuthError> {
+        self.sign_in_with_idp_as(identity, email_verified, now, DuplicateIdpEmail::Stored)
+    }
+
+    /// [`Self::sign_in_with_idp`], with how a new account holds an email another account
+    /// already holds (only possible with `allowDuplicateEmails`).
+    pub fn sign_in_with_idp_as(
+        &mut self,
+        identity: FederatedIdentity,
+        email_verified: bool,
+        now: LogicalInstant,
+        duplicate_email: DuplicateIdpEmail,
+    ) -> Result<IdpSignIn, AuthError> {
         // Before anything is created, recycled or copied into a profile.
         identity.validate()?;
         // 1. An account already linking this exact provider identity signs straight in.
@@ -3876,9 +3989,12 @@ impl AuthStore {
             }
         }
         // 3. No match: a new account, linked to the identity.
+        let email = identity.email.clone().filter(|email| {
+            duplicate_email == DuplicateIdpEmail::Stored || !self.email_owned_by_other(email, None)
+        });
         let new_user = NewUser {
-            email: identity.email.clone(),
-            email_verified: identity.email.is_some() && email_verified,
+            email_verified: email.is_some() && email_verified,
+            email,
             provider: Provider::Federated(identity.provider_id.clone()),
         };
         let uid = if self.config.allow_duplicate_emails {
@@ -3921,7 +4037,11 @@ impl AuthStore {
             })
             .unwrap_or_default();
         if let Some(user) = self.users.get_mut(uid).map(Arc::make_mut) {
-            user.password = None;
+            // The password's change time stays, as after an Admin password removal
+            // (AUTH-FEDERATION record-oidc 39209e).
+            if let Some(updated_at) = user.password.take().and_then(|p| p.updated_at) {
+                user.removed_password_updated_at = Some(updated_at);
+            }
             user.phone_number = None;
             user.federated.clear();
             user.provider = Provider::Federated(provider_id.to_owned());
@@ -4582,6 +4702,7 @@ impl AuthStore {
                 provider,
                 claims,
                 second_factor,
+                sign_in_attributes: None,
             },
         );
         Arc::make_mut(&mut self.tokens_by_user)
@@ -4622,6 +4743,22 @@ impl AuthStore {
             }
         }
         Ok(committed)
+    }
+
+    /// Records the sign-in attributes of the session behind a refresh token.
+    ///
+    /// # Errors
+    /// [`AuthError::InvalidRefreshToken`] for a token without a session.
+    pub fn set_refresh_sign_in_attributes(
+        &mut self,
+        token: &str,
+        attributes: Option<ClaimValue>,
+    ) -> Result<(), AuthError> {
+        let session = Arc::make_mut(&mut self.refresh_tokens)
+            .get_mut(token)
+            .ok_or(AuthError::InvalidRefreshToken)?;
+        session.sign_in_attributes = attributes;
+        Ok(())
     }
 
     /// The session behind a refresh token (validated like [`Self::redeem_refresh_token`]).
@@ -5373,6 +5510,8 @@ impl AuthSnapshot {
         copy.oidc_order.clear();
         copy.saml_configs.clear();
         copy.saml_order.clear();
+        copy.default_idp_configs.clear();
+        copy.default_idp_order.clear();
         for user in copy.users.values_mut() {
             if user.mfa.holds_no_totp_secret() && user.mfa.holds_no_inbound_credentials() {
                 continue;
@@ -5437,6 +5576,10 @@ impl AuthSnapshot {
         restored.oidc_order.clone_from(&live.oidc_order);
         restored.saml_configs = live.saml_configs.clone();
         restored.saml_order.clone_from(&live.saml_order);
+        restored.default_idp_configs = live.default_idp_configs.clone();
+        restored
+            .default_idp_order
+            .clone_from(&live.default_idp_order);
         let namespace_matches =
             restored.project_id == live.project_id && restored.tenant_id == live.tenant_id;
         if !namespace_matches {

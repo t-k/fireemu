@@ -44,7 +44,17 @@ All scenarios below are in `crates/fireemu-adapter-http/tests/auth_oidc_assertio
 AUTH-CREDENTIAL scope decision C7 (owner, 2026-09-24) moves these token-claim conditions here; they are required conditions of this parent and are not verified anywhere else:
 
 - The ID token of an IdP sign-in (`accounts:signInWithIdp`) carries `firebase.identities` for the provider, `firebase.sign_in_provider` and, for SAML, `firebase.sign_in_attributes`, as production issues them.
-- A refresh of that session and a session cookie made from it keep those claims.
+- A refresh of that session and session cookies made from both the original and refreshed ID tokens must match the production claim lifecycle. Presence, value changes and omission require evidence at each transition; sign-in claims must not be assumed to persist unconditionally.
+
+The current local coverage distinguishes these paths:
+
+| Path | Local claim behavior | Evidence and remaining obligation |
+| --- | --- | --- |
+| Signed OIDC sign-in → refresh | Provider identity, subject, project audience and original authentication time persist. The tenant claim persists for a tenant-scoped sign-in. The initial token carries the verified OIDC claims in `firebase.sign_in_attributes`; the refreshed token omits these one-time attributes. | `signed_oidc_project_claims_survive_refresh_and_cookie_handoffs` and `signed_oidc_tenant_claims_survive_refresh_and_cookie_handoffs` cover stateful and stateless refresh modes with a 30-second clock advance. Production observation remains required. |
+| Signed OIDC original/refreshed ID token → session cookie | The same provider, identity, subject, audience, authentication time and optional tenant remain; the cookie uses the session issuer. An original-token cookie retains the OIDC attributes, while a refreshed-token cookie omits them. | The same two tests cover cookies from both ID-token generations in both refresh modes. This is local handoff coverage, not external IdP or Firebase production evidence. |
+| JSON SAML fixture sign-in → refresh | The initial ID token carries the fixture attributes; the refreshed token omits `firebase.sign_in_attributes`. | Existing `a_saml_assertion_signs_in_and_carries_the_attribute_statements` covers this local behavior. Its official-emulator rationale is not evidence of production parity. Production SAML lifecycle and signed XML assertions remain unverified. |
+
+The previous blanket persistence wording did not match the existing SAML refresh regression. This clarification preserves C7's production-matching obligation instead of treating either local SAML behavior or unconditional persistence as an observed production fact. SAML cookie coverage now includes local fixture cookies minted before refresh and from both original/refreshed tokens after a 30-second clock advance. `saml_fixture_project_claims_survive_cookie_handoffs_with_refresh` and `saml_fixture_tenant_claims_survive_cookie_handoffs_with_refresh` cover project/tenant namespaces, stateful/stateless refresh and absent, empty or nested typed attributes (twelve combinations). Initial-token cookies retain the fixture attributes; refreshed-token cookies omit them. All tokens retain subject, audience, email verification, provider identity, original authentication time and optional tenant. Cookie issue/expiry times follow mint time, and a cookie minted before refresh remains unchanged. These are JSON fixture regressions, not signed XML or production observations; the production SAML lifecycle remains required.
 
 AUTH-CREDENTIAL's harness (`conformance/src/auth-credential/`) records a token as its header shape and every claim, and can be reused for these rows.
 

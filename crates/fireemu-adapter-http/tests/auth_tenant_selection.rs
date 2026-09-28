@@ -71,6 +71,7 @@ fn state(strict: bool) -> AuthState {
             FakeCustomTokenExpiry::Ignore
         },
         custom_token_trust: None,
+        idp_assertions: fireemu_adapter_http::identity_toolkit::IdpAssertionPolicy::Fixture,
         app_check: None,
         app_check_policy: None,
         tenancy: None,

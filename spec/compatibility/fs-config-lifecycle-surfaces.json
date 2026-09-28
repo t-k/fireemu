@@ -976,7 +976,7 @@
       ],
       "class": "data-plane-contract",
       "fixApplied": true,
-      "fixedAt": "74e9c8c31528a4696d3e17ae1ded280cbe1e2bb4",
+      "fixedAt": "5b1aa63dea75eb1178fd657c3013380ad1038495",
       "id": "FS-CONFIG-RT-004",
       "reproduction": "Issue PATCH on projects/{project}/databases/(default)/collectionGroups/{group}/fields/{field} with updateMask=indexConfig and observe UNIMPLEMENTED, while production applies the exemption and reports usesAncestorConfig false on the next get.",
       "resolution": "A patch of indexConfig is applied at runtime through an operation: it reads back the configuration it asks for while pending and changes which queries are refused once applied, matching production as recorded on 2026-09-24 (FS-CONFIG-LIFECYCLE field-index-config).",

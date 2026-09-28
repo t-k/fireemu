@@ -251,7 +251,7 @@ test("AUTH-ACCOUNT A12 and final regression bind to the current attested artifac
     regression.evidence.finalArtifactSha256,
     "a8bfc5dc1737dee01bae028b2e3dd421f04326e12640cb4936d896ebfcfa358a",
   );
-  assert.equal(regression.evidence.sourceCommit, "c86b8490c1717bce2881eac051bef94388a84001");
+  assert.equal(regression.evidence.sourceCommit, "9f012a27b5ed5596b5da0af6891f6c2fe9e25393");
   assert.equal(
     closure.conditions.find(
       ({ conditionId }) => conditionId === "AUTH-ACCOUNT/closure-review",

@@ -784,7 +784,7 @@ test("integrated list conditions retain exact recipe ownership", () => {
       condition.evidence.comparisonPath,
       "spec/compatibility/closure/evidence/FS-DATA-WRITE-LIST-comparison.json",
     );
-    assert.equal(condition.evidence.sourceHead, "da47b5e137a275576d00f6cd75be7e29e5aaa160");
+    assert.equal(condition.evidence.sourceHead, "dd0c4e6fed38d09646fb2575c2fc11251724e0f4");
     assert.equal(
       condition.evidence.finalArtifactSha256,
       "eec383e576e5de8c63fd934ef55dde6592bb6b69888a7f00bb4129c6a9338593",
@@ -867,7 +867,7 @@ test("verified conditions are bound to their saved comparisons", async () => {
         createHash("sha256").update(readFileSync(comparisonPath)).digest("hex"),
       );
       assert.equal(condition.evidence.finalArtifactSha256, comparison.artifactSha256);
-      assert.equal(condition.evidence.sourceHead, "da47b5e137a275576d00f6cd75be7e29e5aaa160");
+      assert.equal(condition.evidence.sourceHead, "dd0c4e6fed38d09646fb2575c2fc11251724e0f4");
       assert.deepEqual(
         new Set(
           comparison.rows
@@ -1285,7 +1285,7 @@ test("half-close accepts the source-bound current run without rewriting historic
       "spec/compatibility/broad-runs/fs-stream-half-close-542b868b7-saved-comparison.json",
   });
   assert.deepEqual(comparison.sourceBinding, {
-    sourceHead: "1cb4758372f21a467306a0a701994b7c1a02a8bb",
+    sourceHead: "281003db604be07f8425fa58142572ec88b86454",
     executableSha256: "2af3f08c4d453459af86c9258f2283cb38fc7e74d83d388018cbdbb29e892a6a",
     executableSha256After: "2af3f08c4d453459af86c9258f2283cb38fc7e74d83d388018cbdbb29e892a6a",
     bindingFileSha256: "ea1c8bf15deb90fb70723e7a9a0ca3e1854779da79fb3473c6f8ab6451f7d37d",

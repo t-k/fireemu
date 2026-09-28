@@ -256,7 +256,7 @@ Both profiles now answer the same bound with production's shape: HTTP 400 `INVAL
 
 The recorded run is published as
 `spec/compatibility/broad-runs/fs-request-bytes-local-shadow-11mib.json`, at source
-`db925e4cf6ac974cd5558bde40c48e6380133c8d`, artifact SHA-256
+`e8295273217a0a556e3d7c6f21910d4f2ba8d185`, artifact SHA-256
 `f60429291f02d6608adfc2f4da7a1d3698c77a96519079e1d09d5112a1be780a`, nonce `232d7c54140c40209ee0330a4400dc3c`.
 
 | Property | Value |

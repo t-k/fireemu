@@ -14,10 +14,10 @@
     "decision": "APPROVED",
     "decidedOn": "2026-09-24",
     "reviewer": "independent clean-context confirmation review of the follow-up directive fixes (round 2 APPROVE, after round 1 REQUEST_CHANGES; closure rounds 1-4 before)",
-    "reviewedCommit": "b25c1f3f9",
+    "reviewedCommit": "1fb38fc6f",
     "finalArtifactSha256": "9efb81bb90334471d66c347f24c8dd0aee273969274ea4d969f70b05f573439c",
     "followUps": "Non-blocking items that need a production observation are tracked outside the closure: echo length and check order of property-path refusals, Explain entry counts for multi-range composites, the equality-ordered merge rule, root-collection routing of other methods, the JSON context window and legacy escapes, several transcoder violations and their key order, map and scalar type labels, and the array wrap of probe-only refusals.",
-    "note": "Round 2 approved de8e7ac8a; 1b4220339 answers its non-blocking items and this evidence names its release build (9efb81bb), with the comparison unchanged. The owner decided on 2026-09-24 (ledger) that S4/S5 close the parent as known differences, withdrawing the row that reverted the parent, and approved keeping the refusal of a read time before database creation in both profiles."
+    "note": "Round 2 approved f08a07607; da163fb53 answers its non-blocking items and this evidence names its release build (9efb81bb), with the comparison unchanged. The owner decided on 2026-09-24 (ledger) that S4/S5 close the parent as known differences, withdrawing the row that reverted the parent, and approved keeping the refusal of a read time before database creation in both profiles."
   },
   "scopeDecisions": [
     {
@@ -112,13 +112,13 @@
         "productionRecordings": [
           {
             "recordedAt": "2026-09-24T00:54:33.874Z",
-            "gitSha": "c66f4d8aeeea5baa2ca50b6f2e0863df51dadb46",
+            "gitSha": "94c626ce6b530637ad8e43e0df956e2f245cf697",
             "recordings": 2,
             "project": "fireemu-oracle-query"
           }
         ],
         "finalArtifactSha256": "9efb81bb90334471d66c347f24c8dd0aee273969274ea4d969f70b05f573439c",
-        "sourceCommit": "1b4220339365972621569f4e0c9f6f71bf3c400e",
+        "sourceCommit": "da163fb5370ee79ab2ec28b918f4f5dd94c49097",
         "comparisonPath": "spec/compatibility/closure/evidence/FS-QUERY-INDEX-comparison.json",
         "rows": {
           "MATCH": 83
@@ -137,13 +137,13 @@
         "productionRecordings": [
           {
             "recordedAt": "2026-09-24T00:54:33.874Z",
-            "gitSha": "c66f4d8aeeea5baa2ca50b6f2e0863df51dadb46",
+            "gitSha": "94c626ce6b530637ad8e43e0df956e2f245cf697",
             "recordings": 2,
             "project": "fireemu-oracle-query"
           }
         ],
         "finalArtifactSha256": "9efb81bb90334471d66c347f24c8dd0aee273969274ea4d969f70b05f573439c",
-        "sourceCommit": "1b4220339365972621569f4e0c9f6f71bf3c400e",
+        "sourceCommit": "da163fb5370ee79ab2ec28b918f4f5dd94c49097",
         "comparisonPath": "spec/compatibility/closure/evidence/FS-QUERY-INDEX-comparison.json",
         "rows": {
           "MATCH": 12
@@ -162,13 +162,13 @@
         "productionRecordings": [
           {
             "recordedAt": "2026-09-24T00:54:33.874Z",
-            "gitSha": "c66f4d8aeeea5baa2ca50b6f2e0863df51dadb46",
+            "gitSha": "94c626ce6b530637ad8e43e0df956e2f245cf697",
             "recordings": 2,
             "project": "fireemu-oracle-query"
           }
         ],
         "finalArtifactSha256": "9efb81bb90334471d66c347f24c8dd0aee273969274ea4d969f70b05f573439c",
-        "sourceCommit": "1b4220339365972621569f4e0c9f6f71bf3c400e",
+        "sourceCommit": "da163fb5370ee79ab2ec28b918f4f5dd94c49097",
         "comparisonPath": "spec/compatibility/closure/evidence/FS-QUERY-INDEX-comparison.json",
         "rows": {
           "MATCH": 19
@@ -187,19 +187,19 @@
         "productionRecordings": [
           {
             "recordedAt": "2026-09-24T00:54:33.874Z",
-            "gitSha": "c66f4d8aeeea5baa2ca50b6f2e0863df51dadb46",
+            "gitSha": "94c626ce6b530637ad8e43e0df956e2f245cf697",
             "recordings": 2,
             "project": "fireemu-oracle-query"
           },
           {
             "recordedAt": "2026-09-24T01:46:37.110Z",
-            "gitSha": "faa6d4e06ebe5c96e43948f26f6bfd99c527845e",
+            "gitSha": "c9130cc31987eee8019525d60b7dc2e7d8047feb",
             "recordings": 2,
             "project": "fireemu-oracle-query"
           }
         ],
         "finalArtifactSha256": "9efb81bb90334471d66c347f24c8dd0aee273969274ea4d969f70b05f573439c",
-        "sourceCommit": "1b4220339365972621569f4e0c9f6f71bf3c400e",
+        "sourceCommit": "da163fb5370ee79ab2ec28b918f4f5dd94c49097",
         "comparisonPath": "spec/compatibility/closure/evidence/FS-QUERY-INDEX-comparison.json",
         "rows": {
           "MATCH": 67
@@ -218,19 +218,19 @@
         "productionRecordings": [
           {
             "recordedAt": "2026-09-24T00:54:33.874Z",
-            "gitSha": "c66f4d8aeeea5baa2ca50b6f2e0863df51dadb46",
+            "gitSha": "94c626ce6b530637ad8e43e0df956e2f245cf697",
             "recordings": 2,
             "project": "fireemu-oracle-query"
           },
           {
             "recordedAt": "2026-09-24T01:46:37.110Z",
-            "gitSha": "faa6d4e06ebe5c96e43948f26f6bfd99c527845e",
+            "gitSha": "c9130cc31987eee8019525d60b7dc2e7d8047feb",
             "recordings": 2,
             "project": "fireemu-oracle-query"
           }
         ],
         "finalArtifactSha256": "9efb81bb90334471d66c347f24c8dd0aee273969274ea4d969f70b05f573439c",
-        "sourceCommit": "1b4220339365972621569f4e0c9f6f71bf3c400e",
+        "sourceCommit": "da163fb5370ee79ab2ec28b918f4f5dd94c49097",
         "comparisonPath": "spec/compatibility/closure/evidence/FS-QUERY-INDEX-comparison.json",
         "rows": {
           "MATCH": 28,
@@ -280,13 +280,13 @@
         "productionRecordings": [
           {
             "recordedAt": "2026-09-24T00:54:33.874Z",
-            "gitSha": "c66f4d8aeeea5baa2ca50b6f2e0863df51dadb46",
+            "gitSha": "94c626ce6b530637ad8e43e0df956e2f245cf697",
             "recordings": 2,
             "project": "fireemu-oracle-query"
           }
         ],
         "finalArtifactSha256": "9efb81bb90334471d66c347f24c8dd0aee273969274ea4d969f70b05f573439c",
-        "sourceCommit": "1b4220339365972621569f4e0c9f6f71bf3c400e",
+        "sourceCommit": "da163fb5370ee79ab2ec28b918f4f5dd94c49097",
         "comparisonPath": "spec/compatibility/closure/evidence/FS-QUERY-INDEX-comparison.json",
         "rows": {
           "MATCH": 40
@@ -305,13 +305,13 @@
         "productionRecordings": [
           {
             "recordedAt": "2026-09-24T00:54:33.874Z",
-            "gitSha": "c66f4d8aeeea5baa2ca50b6f2e0863df51dadb46",
+            "gitSha": "94c626ce6b530637ad8e43e0df956e2f245cf697",
             "recordings": 2,
             "project": "fireemu-oracle-query"
           }
         ],
         "finalArtifactSha256": "9efb81bb90334471d66c347f24c8dd0aee273969274ea4d969f70b05f573439c",
-        "sourceCommit": "1b4220339365972621569f4e0c9f6f71bf3c400e",
+        "sourceCommit": "da163fb5370ee79ab2ec28b918f4f5dd94c49097",
         "comparisonPath": "spec/compatibility/closure/evidence/FS-QUERY-INDEX-comparison.json",
         "rows": {
           "MATCH": 35
@@ -330,13 +330,13 @@
         "productionRecordings": [
           {
             "recordedAt": "2026-09-24T00:54:33.874Z",
-            "gitSha": "c66f4d8aeeea5baa2ca50b6f2e0863df51dadb46",
+            "gitSha": "94c626ce6b530637ad8e43e0df956e2f245cf697",
             "recordings": 2,
             "project": "fireemu-oracle-query"
           }
         ],
         "finalArtifactSha256": "9efb81bb90334471d66c347f24c8dd0aee273969274ea4d969f70b05f573439c",
-        "sourceCommit": "1b4220339365972621569f4e0c9f6f71bf3c400e",
+        "sourceCommit": "da163fb5370ee79ab2ec28b918f4f5dd94c49097",
         "comparisonPath": "spec/compatibility/closure/evidence/FS-QUERY-INDEX-comparison.json",
         "rows": {
           "MATCH": 20
@@ -355,13 +355,13 @@
         "productionRecordings": [
           {
             "recordedAt": "2026-09-24T00:54:33.874Z",
-            "gitSha": "c66f4d8aeeea5baa2ca50b6f2e0863df51dadb46",
+            "gitSha": "94c626ce6b530637ad8e43e0df956e2f245cf697",
             "recordings": 2,
             "project": "fireemu-oracle-query"
           }
         ],
         "finalArtifactSha256": "9efb81bb90334471d66c347f24c8dd0aee273969274ea4d969f70b05f573439c",
-        "sourceCommit": "1b4220339365972621569f4e0c9f6f71bf3c400e",
+        "sourceCommit": "da163fb5370ee79ab2ec28b918f4f5dd94c49097",
         "comparisonPath": "spec/compatibility/closure/evidence/FS-QUERY-INDEX-comparison.json",
         "rows": {
           "MATCH": 17
@@ -380,13 +380,13 @@
         "productionRecordings": [
           {
             "recordedAt": "2026-09-24T00:54:33.874Z",
-            "gitSha": "c66f4d8aeeea5baa2ca50b6f2e0863df51dadb46",
+            "gitSha": "94c626ce6b530637ad8e43e0df956e2f245cf697",
             "recordings": 2,
             "project": "fireemu-oracle-query"
           }
         ],
         "finalArtifactSha256": "9efb81bb90334471d66c347f24c8dd0aee273969274ea4d969f70b05f573439c",
-        "sourceCommit": "1b4220339365972621569f4e0c9f6f71bf3c400e",
+        "sourceCommit": "da163fb5370ee79ab2ec28b918f4f5dd94c49097",
         "comparisonPath": "spec/compatibility/closure/evidence/FS-QUERY-INDEX-comparison.json",
         "rows": {
           "MATCH": 32
@@ -405,13 +405,13 @@
         "productionRecordings": [
           {
             "recordedAt": "2026-09-24T00:54:33.874Z",
-            "gitSha": "c66f4d8aeeea5baa2ca50b6f2e0863df51dadb46",
+            "gitSha": "94c626ce6b530637ad8e43e0df956e2f245cf697",
             "recordings": 2,
             "project": "fireemu-oracle-query"
           }
         ],
         "finalArtifactSha256": "9efb81bb90334471d66c347f24c8dd0aee273969274ea4d969f70b05f573439c",
-        "sourceCommit": "1b4220339365972621569f4e0c9f6f71bf3c400e",
+        "sourceCommit": "da163fb5370ee79ab2ec28b918f4f5dd94c49097",
         "comparisonPath": "spec/compatibility/closure/evidence/FS-QUERY-INDEX-comparison.json",
         "rows": {
           "MATCH": 64
@@ -430,19 +430,19 @@
         "productionRecordings": [
           {
             "recordedAt": "2026-09-24T00:54:33.874Z",
-            "gitSha": "c66f4d8aeeea5baa2ca50b6f2e0863df51dadb46",
+            "gitSha": "94c626ce6b530637ad8e43e0df956e2f245cf697",
             "recordings": 2,
             "project": "fireemu-oracle-query"
           },
           {
             "recordedAt": "2026-09-24T01:46:37.110Z",
-            "gitSha": "faa6d4e06ebe5c96e43948f26f6bfd99c527845e",
+            "gitSha": "c9130cc31987eee8019525d60b7dc2e7d8047feb",
             "recordings": 2,
             "project": "fireemu-oracle-query"
           }
         ],
         "finalArtifactSha256": "9efb81bb90334471d66c347f24c8dd0aee273969274ea4d969f70b05f573439c",
-        "sourceCommit": "1b4220339365972621569f4e0c9f6f71bf3c400e",
+        "sourceCommit": "da163fb5370ee79ab2ec28b918f4f5dd94c49097",
         "comparisonPath": "spec/compatibility/closure/evidence/FS-QUERY-INDEX-comparison.json",
         "rows": {
           "MATCH": 49
@@ -461,13 +461,13 @@
         "productionRecordings": [
           {
             "recordedAt": "2026-09-24T00:54:33.874Z",
-            "gitSha": "c66f4d8aeeea5baa2ca50b6f2e0863df51dadb46",
+            "gitSha": "94c626ce6b530637ad8e43e0df956e2f245cf697",
             "recordings": 2,
             "project": "fireemu-oracle-query"
           }
         ],
         "finalArtifactSha256": "9efb81bb90334471d66c347f24c8dd0aee273969274ea4d969f70b05f573439c",
-        "sourceCommit": "1b4220339365972621569f4e0c9f6f71bf3c400e",
+        "sourceCommit": "da163fb5370ee79ab2ec28b918f4f5dd94c49097",
         "comparisonPath": "spec/compatibility/closure/evidence/FS-QUERY-INDEX-comparison.json",
         "rows": {
           "MATCH": 26,
@@ -587,19 +587,19 @@
         "productionRecordings": [
           {
             "recordedAt": "2026-09-24T00:54:33.874Z",
-            "gitSha": "c66f4d8aeeea5baa2ca50b6f2e0863df51dadb46",
+            "gitSha": "94c626ce6b530637ad8e43e0df956e2f245cf697",
             "recordings": 2,
             "project": "fireemu-oracle-query"
           },
           {
             "recordedAt": "2026-09-24T02:59:40.983Z",
-            "gitSha": "665e5e63afb571eaf5ed973c73d8571881924ab0",
+            "gitSha": "34577270929f60c5d763f1beeeb5f84f4e1bfe9f",
             "recordings": 2,
             "project": "fireemu-oracle-query"
           }
         ],
         "finalArtifactSha256": "9efb81bb90334471d66c347f24c8dd0aee273969274ea4d969f70b05f573439c",
-        "sourceCommit": "1b4220339365972621569f4e0c9f6f71bf3c400e",
+        "sourceCommit": "da163fb5370ee79ab2ec28b918f4f5dd94c49097",
         "comparisonPath": "spec/compatibility/closure/evidence/FS-QUERY-INDEX-comparison.json",
         "rows": {
           "MATCH": 60,
@@ -719,13 +719,13 @@
         "productionRecordings": [
           {
             "recordedAt": "2026-09-24T00:54:33.874Z",
-            "gitSha": "c66f4d8aeeea5baa2ca50b6f2e0863df51dadb46",
+            "gitSha": "94c626ce6b530637ad8e43e0df956e2f245cf697",
             "recordings": 2,
             "project": "fireemu-oracle-query"
           }
         ],
         "finalArtifactSha256": "9efb81bb90334471d66c347f24c8dd0aee273969274ea4d969f70b05f573439c",
-        "sourceCommit": "1b4220339365972621569f4e0c9f6f71bf3c400e",
+        "sourceCommit": "da163fb5370ee79ab2ec28b918f4f5dd94c49097",
         "comparisonPath": "spec/compatibility/closure/evidence/FS-QUERY-INDEX-comparison.json",
         "rows": {
           "MATCH": 44
@@ -744,13 +744,13 @@
         "productionRecordings": [
           {
             "recordedAt": "2026-09-24T00:54:33.874Z",
-            "gitSha": "c66f4d8aeeea5baa2ca50b6f2e0863df51dadb46",
+            "gitSha": "94c626ce6b530637ad8e43e0df956e2f245cf697",
             "recordings": 2,
             "project": "fireemu-oracle-query"
           }
         ],
         "finalArtifactSha256": "9efb81bb90334471d66c347f24c8dd0aee273969274ea4d969f70b05f573439c",
-        "sourceCommit": "1b4220339365972621569f4e0c9f6f71bf3c400e",
+        "sourceCommit": "da163fb5370ee79ab2ec28b918f4f5dd94c49097",
         "comparisonPath": "spec/compatibility/closure/evidence/FS-QUERY-INDEX-comparison.json",
         "rows": {
           "MATCH": 16
@@ -769,13 +769,13 @@
         "productionRecordings": [
           {
             "recordedAt": "2026-09-24T01:46:37.110Z",
-            "gitSha": "faa6d4e06ebe5c96e43948f26f6bfd99c527845e",
+            "gitSha": "c9130cc31987eee8019525d60b7dc2e7d8047feb",
             "recordings": 2,
             "project": "fireemu-oracle-query"
           }
         ],
         "finalArtifactSha256": "9efb81bb90334471d66c347f24c8dd0aee273969274ea4d969f70b05f573439c",
-        "sourceCommit": "1b4220339365972621569f4e0c9f6f71bf3c400e",
+        "sourceCommit": "da163fb5370ee79ab2ec28b918f4f5dd94c49097",
         "comparisonPath": "spec/compatibility/closure/evidence/FS-QUERY-INDEX-comparison.json",
         "rows": {
           "MATCH": 28
@@ -794,13 +794,13 @@
         "productionRecordings": [
           {
             "recordedAt": "2026-09-24T00:54:33.874Z",
-            "gitSha": "c66f4d8aeeea5baa2ca50b6f2e0863df51dadb46",
+            "gitSha": "94c626ce6b530637ad8e43e0df956e2f245cf697",
             "recordings": 2,
             "project": "fireemu-oracle-query"
           }
         ],
         "finalArtifactSha256": "9efb81bb90334471d66c347f24c8dd0aee273969274ea4d969f70b05f573439c",
-        "sourceCommit": "1b4220339365972621569f4e0c9f6f71bf3c400e",
+        "sourceCommit": "da163fb5370ee79ab2ec28b918f4f5dd94c49097",
         "comparisonPath": "spec/compatibility/closure/evidence/FS-QUERY-INDEX-comparison.json",
         "rows": {
           "MATCH": 4
@@ -819,13 +819,13 @@
         "productionRecordings": [
           {
             "recordedAt": "2026-09-24T00:54:33.874Z",
-            "gitSha": "c66f4d8aeeea5baa2ca50b6f2e0863df51dadb46",
+            "gitSha": "94c626ce6b530637ad8e43e0df956e2f245cf697",
             "recordings": 2,
             "project": "fireemu-oracle-query"
           }
         ],
         "finalArtifactSha256": "9efb81bb90334471d66c347f24c8dd0aee273969274ea4d969f70b05f573439c",
-        "sourceCommit": "1b4220339365972621569f4e0c9f6f71bf3c400e",
+        "sourceCommit": "da163fb5370ee79ab2ec28b918f4f5dd94c49097",
         "comparisonPath": "spec/compatibility/closure/evidence/FS-QUERY-INDEX-comparison.json",
         "rows": {
           "MATCH": 31,
@@ -868,25 +868,25 @@
         "productionRecordings": [
           {
             "recordedAt": "2026-09-24T00:54:33.874Z",
-            "gitSha": "c66f4d8aeeea5baa2ca50b6f2e0863df51dadb46",
+            "gitSha": "94c626ce6b530637ad8e43e0df956e2f245cf697",
             "recordings": 2,
             "project": "fireemu-oracle-query"
           },
           {
             "recordedAt": "2026-09-24T01:46:37.110Z",
-            "gitSha": "faa6d4e06ebe5c96e43948f26f6bfd99c527845e",
+            "gitSha": "c9130cc31987eee8019525d60b7dc2e7d8047feb",
             "recordings": 2,
             "project": "fireemu-oracle-query"
           },
           {
             "recordedAt": "2026-09-24T02:59:40.983Z",
-            "gitSha": "665e5e63afb571eaf5ed973c73d8571881924ab0",
+            "gitSha": "34577270929f60c5d763f1beeeb5f84f4e1bfe9f",
             "recordings": 2,
             "project": "fireemu-oracle-query"
           }
         ],
         "finalArtifactSha256": "9efb81bb90334471d66c347f24c8dd0aee273969274ea4d969f70b05f573439c",
-        "sourceCommit": "1b4220339365972621569f4e0c9f6f71bf3c400e",
+        "sourceCommit": "da163fb5370ee79ab2ec28b918f4f5dd94c49097",
         "comparisonPath": "spec/compatibility/closure/evidence/FS-QUERY-INDEX-comparison.json",
         "rows": {
           "MATCH": 675,
@@ -919,25 +919,25 @@
         "productionRecordings": [
           {
             "recordedAt": "2026-09-24T00:54:33.874Z",
-            "gitSha": "c66f4d8aeeea5baa2ca50b6f2e0863df51dadb46",
+            "gitSha": "94c626ce6b530637ad8e43e0df956e2f245cf697",
             "recordings": 2,
             "project": "fireemu-oracle-query"
           },
           {
             "recordedAt": "2026-09-24T01:46:37.110Z",
-            "gitSha": "faa6d4e06ebe5c96e43948f26f6bfd99c527845e",
+            "gitSha": "c9130cc31987eee8019525d60b7dc2e7d8047feb",
             "recordings": 2,
             "project": "fireemu-oracle-query"
           },
           {
             "recordedAt": "2026-09-24T02:59:40.983Z",
-            "gitSha": "665e5e63afb571eaf5ed973c73d8571881924ab0",
+            "gitSha": "34577270929f60c5d763f1beeeb5f84f4e1bfe9f",
             "recordings": 2,
             "project": "fireemu-oracle-query"
           }
         ],
         "finalArtifactSha256": "9efb81bb90334471d66c347f24c8dd0aee273969274ea4d969f70b05f573439c",
-        "sourceCommit": "1b4220339365972621569f4e0c9f6f71bf3c400e",
+        "sourceCommit": "da163fb5370ee79ab2ec28b918f4f5dd94c49097",
         "comparisonPath": "spec/compatibility/closure/evidence/FS-QUERY-INDEX-comparison.json",
         "rows": {
           "MATCH": 675,
@@ -951,21 +951,21 @@
   ],
   "integratedRegression": {
     "release": "v0.8.0",
-    "integrationCommit": "2079e0146f4eb6ad72da4449f5e2557fc81000e5",
+    "integrationCommit": "f8f0611ac35185a0719ae7660601ed4ac584dcad",
     "releaseBinarySha256": "c258b022c5f452a60a9bc60de68e6de26b3f5aeaf846623cf1bf7e33f28d31df",
     "buildReceiptPath": "spec/compatibility/closure/evidence/integration-v0.8.0/release-artifact.json",
-    "buildReceiptSha256": "b6aeba829940617796300d16807b5e9aeac39d9fb9fc165f7e84e57d92a8c86e",
+    "buildReceiptSha256": "439d1f55b447d2621661077fc8c130df1fba8f38d996b0a952adef0d4d8bcd1c",
     "comparisons": [
       {
         "path": "spec/compatibility/closure/evidence/integration-v0.8.0/FS-QUERY-INDEX-comparison.json",
-        "sha256": "37d93ecb6b2c942dd8bf1d1bb4a1a10dbdabbfc6e0936478383b58d2914a437e",
+        "sha256": "64bf5068e840993a9369deab599877130771676fe162311454a636ca4dd049b3",
         "rows": 710,
         "summary": {
           "MATCH": 675,
           "DIVERGENCE_APPROVED": 35
         },
         "laneComparisonPath": "spec/compatibility/closure/evidence/FS-QUERY-INDEX-comparison.json",
-        "laneComparisonSha256": "2d08d383fa9f7a1a722f9de4fb667e6663bc905f94daaf66863f6e437f678060",
+        "laneComparisonSha256": "64ac72dde847fe402f00559058d9c923dcb83442f6a338c621a5ca3bb00b3d1d",
         "identicalRows": 710,
         "changedRows": []
       }

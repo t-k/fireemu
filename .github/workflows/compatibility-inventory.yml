@@ -25,10 +25,10 @@ env:
   # sandbox corpora replaced them. Code and published records stay; the
   # compat-broad-retired job runs them on demand (workflow_dispatch, run_retired).
   # Each entry is one file whose failure was traced to one of:
-  #   - 866bb0634 moving the shared request_bytes_preflight.py to the sandbox project
-  #     (the file passes at 866bb0634^ and fails at 866bb0634);
+  #   - 9e673b632 moving the shared request_bytes_preflight.py to the sandbox project
+  #     (the file passes at 9e673b632^ and fails at 9e673b632);
   #   - an O7/O8 local shadow or runtime binding that predates later source changes
-  #     (already failing before 866bb0634);
+  #     (already failing before 9e673b632);
   #   - an O7/O8 campaign test that fails only on the CI runner;
   #   - an O7/O8 campaign test that alone runs longer than the 45-minute job limit
   #     (test_request_bytes_admission.py, about 56 minutes on the CI runner);

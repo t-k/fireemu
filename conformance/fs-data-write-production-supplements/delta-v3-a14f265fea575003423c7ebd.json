@@ -8,7 +8,7 @@
       "2026-09-25T10:07:02.952Z",
       "2026-09-25T10:09:08.140Z"
     ],
-    "harnessRevision": "0825489a4680f67c1c75f95fcf5021fe366c61b6",
+    "harnessRevision": "ddc5b4a2665f8a47467c24a777b45d9c15094efd",
     "sdkVersions": {
       "firebase": "12.18.0",
       "firebaseAdmin": "14.3.0",
@@ -509527,8 +509527,8 @@
   },
   "offlineFreeze": {
     "reason": "Two complete production recordings differed only at six owner-approved near-limit DELETE rows. No requests were resent.",
-    "recordedAtCommit": "0825489a4680f67c1c75f95fcf5021fe366c61b6",
-    "freezeCommit": "78024ae28",
+    "recordedAtCommit": "ddc5b4a2665f8a47467c24a777b45d9c15094efd",
+    "freezeCommit": "977cf06fc",
     "recordingsFileSha256": "c2c177314220f9a2f12fb9e977a3a28b18ec4429bc9b3e8744a49fbf9a241b11",
     "corpusFileSha256": "df9de21e85e001276b466b3b3aabc58b5945a97dc274a2a78b2776fcea67255b",
     "recordingDigests": [

@@ -1,7 +1,7 @@
 {
   "kind": "auth-config-sdk-comparison-v1",
   "artifactSha256": "8c698a58c71af5779d6e94c33e89a8d0b8a1a600b6b6a1990d3373a0b79aa631",
-  "fixtureSha256": "8b7374e00864b1b6ca3a5eaf1fb04d7905d5f7f03dc3adf93b8f47b5811b1058",
+  "fixtureSha256": "22f11938c7a443c03723fbb2a185122c333e9a9007b3004a9021c3a0bb968d6f",
   "summary": {
     "MATCH": 351,
     "MISMATCH": 8

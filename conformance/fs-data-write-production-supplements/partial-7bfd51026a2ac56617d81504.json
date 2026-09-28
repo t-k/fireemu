@@ -8,7 +8,7 @@
       "2026-09-25T09:32:35.490Z",
       "2026-09-25T09:46:26.091Z"
     ],
-    "harnessRevision": "0825489a4680f67c1c75f95fcf5021fe366c61b6",
+    "harnessRevision": "ddc5b4a2665f8a47467c24a777b45d9c15094efd",
     "sdkVersions": {
       "firebase": "12.18.0",
       "firebaseAdmin": "14.3.0",
@@ -275414,8 +275414,8 @@
   },
   "offlineFreeze": {
     "reason": "The production run froze nothing: its freeze refused unary gRPC byte probes (no stream events). The two saved recordings were frozen offline, without resending.",
-    "recordedAtCommit": "0825489a4680f67c1c75f95fcf5021fe366c61b6",
-    "freezeCommit": "a94a11592",
+    "recordedAtCommit": "ddc5b4a2665f8a47467c24a777b45d9c15094efd",
+    "freezeCommit": "03d58d013",
     "recordingsFileSha256": "351b69b40479493870ae99f68f004b1826a55375cee3799dcc60c65af9d0ac10",
     "recordingDigests": [
       {

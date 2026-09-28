@@ -99,7 +99,7 @@ _TTL = "crates/fireemu-core-firestore/src/ttl.rs"
 _INDEX_REST = "crates/fireemu-adapter-grpc/src/admin/index_rest.rs"
 _INDEX_REGISTRY = "crates/fireemu-adapter-grpc/src/admin/indexes.rs"
 _FIELD_REGISTRY = "crates/fireemu-adapter-grpc/src/admin/fields.rs"
-COMMIT_RUNTIME_FIELD_PATCH = "74e9c8c31528a4696d3e17ae1ded280cbe1e2bb4"
+COMMIT_RUNTIME_FIELD_PATCH = "5b1aa63dea75eb1178fd657c3013380ad1038495"
 
 
 def _at(path: str, anchor: str) -> str:

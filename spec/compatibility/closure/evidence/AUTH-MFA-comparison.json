@@ -1,7 +1,7 @@
 {
   "kind": "auth-mfa-comparison-v1",
   "artifactSha256": "86172226d07d1f6e850a58934c24c650b05eda345361ab4058aaea174f921356",
-  "fixtureSha256": "fbfe5dcb4f3af72c849a48dc28d3829d6205e74833439589f98b03cbf1163155",
+  "fixtureSha256": "8fe6cc8ebcaf0f9056fc09ce4804ba1fe229fd6993e3efea7639d62c56b97026",
   "summary": {
     "MATCH": 441,
     "MATCH_NONDETERMINISTIC": 5,

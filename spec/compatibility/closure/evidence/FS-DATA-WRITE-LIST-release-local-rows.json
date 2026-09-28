@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
   "kind": "fs-data-write-list-release-local-projection",
-  "sourceCommit": "da47b5e137a275576d00f6cd75be7e29e5aaa160",
+  "sourceCommit": "dd0c4e6fed38d09646fb2575c2fc11251724e0f4",
   "binarySha256": "eec383e576e5de8c63fd934ef55dde6592bb6b69888a7f00bb4129c6a9338593",
   "sourceResultSha256": "fa23b02d5be95957f32f91a4556c688d6e4344924cc3cc7f290a6531c8eac4d6",
   "rows": {

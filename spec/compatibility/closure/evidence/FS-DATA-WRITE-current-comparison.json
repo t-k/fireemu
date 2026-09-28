@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "task": "FS-DATA-WRITE",
   "decision": "PENDING_REVIEW",
-  "sourceHead": "da47b5e137a275576d00f6cd75be7e29e5aaa160",
+  "sourceHead": "dd0c4e6fed38d09646fb2575c2fc11251724e0f4",
   "executableSha256": "eec383e576e5de8c63fd934ef55dde6592bb6b69888a7f00bb4129c6a9338593",
   "configSha256": "0f15f02dbfef3f0ee5cd6302684e8bb547b8c49dea5a825deeb57b2938545f0b",
   "runtimeInputs": {
@@ -41,7 +41,7 @@
   "productionFixtures": [
     {
       "path": "conformance/fs-data-write-production-matrix.json",
-      "sha256": "69ddfa897d2f22f76bece8c0b243e45912f0ba3ca10eb790a59f9cd6c1468b42",
+      "sha256": "5dab01cb3d21b375efc1604e9de1f5537f543dab8502f7a2a539a16fe9bd5b19",
       "recordingDigests": [
         "7c794af67119e745072ceae3d742bd463df28c0aa804998c2155b1333b1625d9",
         "7c794af67119e745072ceae3d742bd463df28c0aa804998c2155b1333b1625d9"
@@ -49,7 +49,7 @@
     },
     {
       "path": "conformance/fs-data-write-production-supplements/bracket-fb886aa8eed899746ecf607b.json",
-      "sha256": "065d51be06a9287386f81e5d229eb65cbf29cc8e8265937d8399431bc21c0c83",
+      "sha256": "b53c5752636ad291610a9da08ffb952a7668fac77fb1a6fd81aeb2195265eed2",
       "recordingDigests": [
         "c1088a2b2cb864dc32cd06c231802c8a042b13b606b274a7d733b32359a5e5b8",
         "c1088a2b2cb864dc32cd06c231802c8a042b13b606b274a7d733b32359a5e5b8"
@@ -57,7 +57,7 @@
     },
     {
       "path": "conformance/fs-data-write-production-supplements/delta-v3-a14f265fea575003423c7ebd.json",
-      "sha256": "9b41137069ca71393659e5ff8e5bc8f867d6ca33eaaaf3594275d6e2ce1c1788",
+      "sha256": "04943e81c95077ba8a594b76dc10bfed979b45bada1c0d7bebf81addaa95605e",
       "recordingDigests": [
         "2522c51a52ca00b46b92dc7ac776029dc93e6c6ffcfbeac588ac1b62ae30575f",
         "74f98b04241975ffe4b0f3a20da4c7b90a679eb761fc0b18d4f919b6ea07b106"
@@ -65,7 +65,7 @@
     },
     {
       "path": "conformance/fs-data-write-production-supplements/followup-b0aeefc97b4c48765db4a9a1-indexed.json",
-      "sha256": "f86db2f3f65e49966daea134cd15e1318b6379e63830b5b69e5f3bf6b7e43cea",
+      "sha256": "e3deb44e2b24947d64507e82b1f5fed4eda2a32d6c528671f055f3a22fbcc611",
       "recordingDigests": [
         "45a754c835d85bbbb0c566468cdfedfd0e60fea2e3f7575f7ef1affe82c67c2e",
         "45a754c835d85bbbb0c566468cdfedfd0e60fea2e3f7575f7ef1affe82c67c2e"
@@ -73,7 +73,7 @@
     },
     {
       "path": "conformance/fs-data-write-production-supplements/followup-b0aeefc97b4c48765db4a9a1-webchannel.json",
-      "sha256": "4cfdc75c0795fc39a011df290c292dfa66c2fa5016cb7b3de301201aa60bb882",
+      "sha256": "a9de619df92403a0d707f9ac5dc842babc2338d788caf78958b57c2b8247619b",
       "recordingDigests": [
         "de6fd1fdb034d8506ac257b5e0c1b3ded925b5d04a4543332b6f4c9e8463ce73",
         "de6fd1fdb034d8506ac257b5e0c1b3ded925b5d04a4543332b6f4c9e8463ce73"
@@ -81,7 +81,7 @@
     },
     {
       "path": "conformance/fs-data-write-production-supplements/partial-7bfd51026a2ac56617d81504.json",
-      "sha256": "975d1f9775373c4704707c7b5bcc7c97067bcf5267911b9a38cc4c02f541f70c",
+      "sha256": "4867fbf7837f16ecd3e4ada73aa91655686e9c37bcafb36c171ab491ed5a2582",
       "recordingDigests": [
         "aee842159a37e001bcab5710eb49be8d0804dd53fa7b79521aa05a018048fee1",
         "aee842159a37e001bcab5710eb49be8d0804dd53fa7b79521aa05a018048fee1"

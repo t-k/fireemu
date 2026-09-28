@@ -162,7 +162,7 @@ Reproduction: Issue PATCH on projects/{project}/databases/(default)/collectionGr
 
 Class: data-plane-contract. Status: FIXED. Evidence: `crates/fireemu-adapter-grpc/src/rest/admin_fields.rs:536` `crates/fireemu/src/control.rs:148` `crates/fireemu-core-firestore/src/index.rs:235`
 
-Resolution (`74e9c8c31`): A patch of indexConfig is applied at runtime through an operation: it reads back the configuration it asks for while pending and changes which queries are refused once applied, matching production as recorded on 2026-09-24 (FS-CONFIG-LIFECYCLE field-index-config).
+Resolution (`5b1aa63de`): A patch of indexConfig is applied at runtime through an operation: it reads back the configuration it asks for while pending and changes which queries are refused once applied, matching production as recorded on 2026-09-24 (FS-CONFIG-LIFECYCLE field-index-config).
 
 ### FS-CONFIG-RT-005: An invalid database id is answered NOT_FOUND rather than INVALID_ARGUMENT
 

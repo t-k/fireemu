@@ -1,7 +1,7 @@
 {
   "kind": "fs-config-lifecycle-comparison-v1",
   "artifactSha256": "f471d56912fd0f69bc806744173d51796651ac9f0688fbbf7a26a45cbcb8acf7",
-  "fixtureSha256": "c227a4e579d2e47e41f9b07fafcdcf2c68002254ded4bf64fb79bcea8aacecda",
+  "fixtureSha256": "2a6801fc1c338b8ac91b4ec0a8471cec1f0d0823a6f9c89fb86172f9eab95abc",
   "summary": {
     "MATCH": 264,
     "MATCH_RELABELED": 3,

@@ -10,7 +10,7 @@
       "corpusDigest": "d496c7834da51c121241495615ec8b845337503258d531f1a15da4bf996a0f77",
       "harnessDigest": "d6391ae0739204b68ff395caf3141f4b43729afb6bb1b986b05ec610bad7acfc",
       "recordedAt": "2026-09-25T01:50:53.794Z",
-      "gitSha": "d4cf6c69e80aea497f36ed166e1ba9bb53829e99",
+      "gitSha": "07a33ab871b6cad12a61e949b1289ae75abcdfe6",
       "steps": {
         "commit-one-denied": {
           "status": 403,
@@ -274,7 +274,7 @@
       "corpusDigest": "2c8492bf1cb8e037a86198790a3728b37e9986ad3b5a803d9fc2551085eed674",
       "harnessDigest": "d6391ae0739204b68ff395caf3141f4b43729afb6bb1b986b05ec610bad7acfc",
       "recordedAt": "2026-09-25T01:50:53.794Z",
-      "gitSha": "d4cf6c69e80aea497f36ed166e1ba9bb53829e99",
+      "gitSha": "07a33ab871b6cad12a61e949b1289ae75abcdfe6",
       "steps": {
         "none-auth-null": {
           "status": 404,
@@ -6522,7 +6522,7 @@
       "corpusDigest": "26f6cc5e21217fce3bf6985bc0ceafc854ae09cf6a5859162ffb1cb2267aaddb",
       "harnessDigest": "d6391ae0739204b68ff395caf3141f4b43729afb6bb1b986b05ec610bad7acfc",
       "recordedAt": "2026-09-25T01:50:53.794Z",
-      "gitSha": "d4cf6c69e80aea497f36ed166e1ba9bb53829e99",
+      "gitSha": "07a33ab871b6cad12a61e949b1289ae75abcdfe6",
       "steps": {
         "before-change": {
           "status": 403,
@@ -6570,7 +6570,7 @@
       "corpusDigest": "cdfc2997f7807fe09f90c08dd70eb9d1575d4d758016ec7fb1a3b8ce2e795d28",
       "harnessDigest": "d6391ae0739204b68ff395caf3141f4b43729afb6bb1b986b05ec610bad7acfc",
       "recordedAt": "2026-09-25T01:50:53.794Z",
-      "gitSha": "d4cf6c69e80aea497f36ed166e1ba9bb53829e99",
+      "gitSha": "07a33ab871b6cad12a61e949b1289ae75abcdfe6",
       "steps": {
         "get-10": {
           "status": 404,
@@ -6915,7 +6915,7 @@
       "corpusDigest": "d36dad2361e27e500cbeb99b87139dcb018d1632ffb723e2643a81a2284dc11b",
       "harnessDigest": "d6391ae0739204b68ff395caf3141f4b43729afb6bb1b986b05ec610bad7acfc",
       "recordedAt": "2026-09-25T01:50:53.794Z",
-      "gitSha": "d4cf6c69e80aea497f36ed166e1ba9bb53829e99",
+      "gitSha": "07a33ab871b6cad12a61e949b1289ae75abcdfe6",
       "steps": {
         "valid": {
           "compiled": true
@@ -7094,7 +7094,7 @@
       "corpusDigest": "cd8482e7dd4fabff28b1dbe2bba99e569d1b2feabb951c04f937efd08ea25481",
       "harnessDigest": "d6391ae0739204b68ff395caf3141f4b43729afb6bb1b986b05ec610bad7acfc",
       "recordedAt": "2026-09-25T01:50:53.794Z",
-      "gitSha": "d4cf6c69e80aea497f36ed166e1ba9bb53829e99",
+      "gitSha": "07a33ab871b6cad12a61e949b1289ae75abcdfe6",
       "steps": {
         "get-present": {
           "status": 404,
@@ -7353,7 +7353,7 @@
       "corpusDigest": "e5d016c124510dd21c651bb44f02b29742bc3b71f7118fe153094e469937d8f0",
       "harnessDigest": "d6391ae0739204b68ff395caf3141f4b43729afb6bb1b986b05ec610bad7acfc",
       "recordedAt": "2026-09-25T01:50:53.794Z",
-      "gitSha": "d4cf6c69e80aea497f36ed166e1ba9bb53829e99",
+      "gitSha": "07a33ab871b6cad12a61e949b1289ae75abcdfe6",
       "steps": {
         "begin": {
           "status": 403,
@@ -7466,7 +7466,7 @@
       "corpusDigest": "37fa8f2ffe77d08c76dbd46a74d61a690277f5e9872d3b5ff046231f105544bd",
       "harnessDigest": "d6391ae0739204b68ff395caf3141f4b43729afb6bb1b986b05ec610bad7acfc",
       "recordedAt": "2026-09-25T09:07:58.182Z",
-      "gitSha": "fc1826b1357cee55f58f2645e533dfbe177fd577",
+      "gitSha": "77fce3a86e52f86f19aa576b7fae708440fcee89",
       "steps": {
         "exp-minus-60-rest": {
           "status": 404,
@@ -7778,7 +7778,7 @@
       "corpusDigest": "3f2c44e0ad6f7661dbbee229b003ab1ed8c45dbedc6b01a89de612d557d2647b",
       "harnessDigest": "d6391ae0739204b68ff395caf3141f4b43729afb6bb1b986b05ec610bad7acfc",
       "recordedAt": "2026-09-25T01:50:53.794Z",
-      "gitSha": "d4cf6c69e80aea497f36ed166e1ba9bb53829e99",
+      "gitSha": "07a33ab871b6cad12a61e949b1289ae75abcdfe6",
       "steps": {
         "default-open": {
           "status": 200,
@@ -7920,7 +7920,7 @@
       "corpusDigest": "34c62e23dd987060976d5a6d2a7e2a0fa285d12cdb78a417e0157886d0e31eb7",
       "harnessDigest": "d6391ae0739204b68ff395caf3141f4b43729afb6bb1b986b05ec610bad7acfc",
       "recordedAt": "2026-09-25T01:50:53.794Z",
-      "gitSha": "d4cf6c69e80aea497f36ed166e1ba9bb53829e99",
+      "gitSha": "07a33ab871b6cad12a61e949b1289ae75abcdfe6",
       "steps": {
         "none-get-a-own": {
           "grpc": 7,
@@ -8039,7 +8039,7 @@
       "corpusDigest": "0f86bbd3bcc9ea3f8327a22eaf4eb8a8fe66c69f4984993f7e0ecddb5f9cb470",
       "harnessDigest": "d6391ae0739204b68ff395caf3141f4b43729afb6bb1b986b05ec610bad7acfc",
       "recordedAt": "2026-09-25T01:50:53.794Z",
-      "gitSha": "d4cf6c69e80aea497f36ed166e1ba9bb53829e99",
+      "gitSha": "07a33ab871b6cad12a61e949b1289ae75abcdfe6",
       "steps": {
         "none-get-a-own": {
           "status": 403,
@@ -8668,7 +8668,7 @@
       "corpusDigest": "8760fbe5ad14fedf9cd62e8be7cfc8421fd6fe69066ef05e2db72ed5cb3ab215",
       "harnessDigest": "d6391ae0739204b68ff395caf3141f4b43729afb6bb1b986b05ec610bad7acfc",
       "recordedAt": "2026-09-25T01:50:53.794Z",
-      "gitSha": "d4cf6c69e80aea497f36ed166e1ba9bb53829e99",
+      "gitSha": "07a33ab871b6cad12a61e949b1289ae75abcdfe6",
       "steps": {
         "get-unauthenticated": {
           "status": 403,
@@ -8736,7 +8736,7 @@
       "corpusDigest": "8f50a56dd20db39ed52bcd04cc5f72cc785a325f6ddb00d83a89a27139a9edeb",
       "harnessDigest": "d6391ae0739204b68ff395caf3141f4b43729afb6bb1b986b05ec610bad7acfc",
       "recordedAt": "2026-09-25T01:50:53.794Z",
-      "gitSha": "d4cf6c69e80aea497f36ed166e1ba9bb53829e99",
+      "gitSha": "07a33ab871b6cad12a61e949b1289ae75abcdfe6",
       "steps": {
         "alt-refuses-owner": {
           "status": 403,
@@ -8830,7 +8830,7 @@
       "corpusDigest": "da0dabfc4c4499e8b902d8b08e288d3e1300290f62cbae786b2279705ddb56ab",
       "harnessDigest": "d6391ae0739204b68ff395caf3141f4b43729afb6bb1b986b05ec610bad7acfc",
       "recordedAt": "2026-09-25T01:50:53.794Z",
-      "gitSha": "d4cf6c69e80aea497f36ed166e1ba9bb53829e99",
+      "gitSha": "07a33ab871b6cad12a61e949b1289ae75abcdfe6",
       "steps": {
         "owner-filter-own": {
           "status": 200,
@@ -10130,7 +10130,7 @@
       "corpusDigest": "aee8de3069eb59b0d65a44139a67a83bf1ca3791cfd0b94709ff90b41509fda9",
       "harnessDigest": "d6391ae0739204b68ff395caf3141f4b43729afb6bb1b986b05ec610bad7acfc",
       "recordedAt": "2026-09-25T01:50:53.794Z",
-      "gitSha": "d4cf6c69e80aea497f36ed166e1ba9bb53829e99",
+      "gitSha": "07a33ab871b6cad12a61e949b1289ae75abcdfe6",
       "steps": {
         "denied-rest": {
           "status": 403,
@@ -10306,7 +10306,7 @@
       "corpusDigest": "f095c4f0afad75df102b6f02b223eb6281cff77add0e6bd7072ca802cc7f3c59",
       "harnessDigest": "d6391ae0739204b68ff395caf3141f4b43729afb6bb1b986b05ec610bad7acfc",
       "recordedAt": "2026-09-25T01:50:53.794Z",
-      "gitSha": "d4cf6c69e80aea497f36ed166e1ba9bb53829e99",
+      "gitSha": "07a33ab871b6cad12a61e949b1289ae75abcdfe6",
       "steps": {
         "create-shape": {
           "status": 200,
@@ -10866,7 +10866,7 @@
       "corpusDigest": "e9f3b86da132bf21694d5698e2c7136b132dd4c2c758a349e0b5c9312fb18e52",
       "harnessDigest": "d6391ae0739204b68ff395caf3141f4b43729afb6bb1b986b05ec610bad7acfc",
       "recordedAt": "2026-09-25T01:50:53.794Z",
-      "gitSha": "d4cf6c69e80aea497f36ed166e1ba9bb53829e99",
+      "gitSha": "07a33ab871b6cad12a61e949b1289ae75abcdfe6",
       "steps": {
         "terms-100": {
           "status": 200,
@@ -11582,7 +11582,7 @@
       "corpusDigest": "b67ede6ba1b6f66d573d9fd41541a27a14322ebbaab89086137be5e5e9821c71",
       "harnessDigest": "d6391ae0739204b68ff395caf3141f4b43729afb6bb1b986b05ec610bad7acfc",
       "recordedAt": "2026-09-25T01:50:53.794Z",
-      "gitSha": "d4cf6c69e80aea497f36ed166e1ba9bb53829e99",
+      "gitSha": "07a33ab871b6cad12a61e949b1289ae75abcdfe6",
       "steps": {
         "tenant-tenant-rule": {
           "status": 200,
@@ -11675,7 +11675,7 @@
       "corpusDigest": "933dc1dcfa3e770ecd86e9f59fddbd7c338d95f4379b24b06c638d67fe850a6b",
       "harnessDigest": "d6391ae0739204b68ff395caf3141f4b43729afb6bb1b986b05ec610bad7acfc",
       "recordedAt": "2026-09-25T01:50:53.794Z",
-      "gitSha": "d4cf6c69e80aea497f36ed166e1ba9bb53829e99",
+      "gitSha": "07a33ab871b6cad12a61e949b1289ae75abcdfe6",
       "steps": {
         "revoked-before": {
           "status": 404,

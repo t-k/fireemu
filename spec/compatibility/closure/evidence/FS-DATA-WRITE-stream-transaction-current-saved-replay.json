@@ -4,7 +4,7 @@
   "conditionId": "FS-DATA-WRITE/stream-transaction-precedence",
   "recipeId": "writes/write-stream-transaction",
   "recipeDigest": "1299c03ce0b34ea87b01da2cd42f947b898cae10cc3bbbffdaa70fcf3747eb7b",
-  "sourceCommit": "da47b5e137a275576d00f6cd75be7e29e5aaa160",
+  "sourceCommit": "dd0c4e6fed38d09646fb2575c2fc11251724e0f4",
   "binarySha256": "eec383e576e5de8c63fd934ef55dde6592bb6b69888a7f00bb4129c6a9338593",
   "buildManifestSha256": "b49fbcf26188206406e9aed1620df1f145e9e7910503384547813966f6595cd5",
   "localReceiptSha256": "76ad88cb065ce666305b0d71f0763d21e0b84d4254bc5c5a17d3e62a107e0d12",

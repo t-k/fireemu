@@ -13,10 +13,10 @@
     "decision": "APPROVED",
     "decidedOn": "2026-09-27",
     "reviewer": "independent clean-context closure review, round 2 APPROVE (round 1 REQUEST_CHANGES), with a separate safety review of the widening changes",
-    "reviewedCommit": "3aad4c4c2",
+    "reviewedCommit": "3ac1f31f6",
     "finalArtifactSha256": "82b0c4271e533d199456a44b2aa7a51574f11229e614743fc9a3776d5ccc8a18",
     "followUps": "Not observed in production and tracked outside the closure: the exact batchGet budget boundary within (18, 25], a commit's get() and getAfter() of one path across writes, read-side getAfter()/existsAfter() counting, the evaluation of a call chain longer than 20, and the actual dispatch times of the expiry requests. The sandbox resources of an interrupted 2026-09-26 expiry timing probe (whose second pass is not evidence) were removed by a bounded cleanup on 2026-09-27 and read back as the pre-run baseline; the probe does not affect this evidence.",
-    "note": "Round 2 approved 3aad4c4c2 on the condition that two texts be corrected (the run-time call-chain limit and the stale open items in the compatibility table); this commit corrects them, qualifies the expiry and budget texts, and requires DEPENDENCY_REFUSED rows to name the same unresolved dependency on both sides, which leaves the committed comparison unchanged (1144 MATCH, 5 DEPENDENCY_REFUSED on 82b0c427). The mutant daemon.rs:1300 that survived the first mutation pass is caught at f8555a8ef."
+    "note": "Round 2 approved 3ac1f31f6 on the condition that two texts be corrected (the run-time call-chain limit and the stale open items in the compatibility table); this commit corrects them, qualifies the expiry and budget texts, and requires DEPENDENCY_REFUSED rows to name the same unresolved dependency on both sides, which leaves the committed comparison unchanged (1144 MATCH, 5 DEPENDENCY_REFUSED on 82b0c427). The mutant daemon.rs:1300 that survived the first mutation pass is caught at 234de575c."
   },
   "scopeDecisions": [
     {
@@ -99,13 +99,13 @@
         "productionRecordings": [
           {
             "recordedAt": "2026-09-25T01:50:53.794Z",
-            "gitSha": "d4cf6c69e80aea497f36ed166e1ba9bb53829e99",
+            "gitSha": "07a33ab871b6cad12a61e949b1289ae75abcdfe6",
             "recordings": 2,
             "project": "fireemu-oracle-idp"
           }
         ],
         "finalArtifactSha256": "82b0c4271e533d199456a44b2aa7a51574f11229e614743fc9a3776d5ccc8a18",
-        "sourceCommit": "f8555a8ef6a1b948cb7f3fc88972682df3f259e5",
+        "sourceCommit": "234de575c2a9397e15de54ccd424b3c4f274b5a3",
         "comparisonPath": "spec/compatibility/closure/evidence/FS-RULES-comparison.json",
         "rows": {
           "MATCH": 72
@@ -127,13 +127,13 @@
         "productionRecordings": [
           {
             "recordedAt": "2026-09-25T01:50:53.794Z",
-            "gitSha": "d4cf6c69e80aea497f36ed166e1ba9bb53829e99",
+            "gitSha": "07a33ab871b6cad12a61e949b1289ae75abcdfe6",
             "recordings": 2,
             "project": "fireemu-oracle-idp"
           }
         ],
         "finalArtifactSha256": "82b0c4271e533d199456a44b2aa7a51574f11229e614743fc9a3776d5ccc8a18",
-        "sourceCommit": "f8555a8ef6a1b948cb7f3fc88972682df3f259e5",
+        "sourceCommit": "234de575c2a9397e15de54ccd424b3c4f274b5a3",
         "comparisonPath": "spec/compatibility/closure/evidence/FS-RULES-comparison.json",
         "rows": {
           "MATCH": 628
@@ -150,18 +150,18 @@
         "default"
       ],
       "status": "VERIFIED",
-      "note": "A tenant principal carries request.auth.token.firebase.tenant; tenant and project-level principals with the same rule are separated. The tenant ID in request.auth.token.firebase.tenant has production's shape (display name, '-', five characters of [a-z0-9]) since caa632bda, a cherry-pick of the AUTH-CONFIG-SDK tenant-only commit fefda2b2f (coordinator decision 2026-09-25).",
+      "note": "A tenant principal carries request.auth.token.firebase.tenant; tenant and project-level principals with the same rule are separated. The tenant ID in request.auth.token.firebase.tenant has production's shape (display name, '-', five characters of [a-z0-9]) since 6c0d5ec3a, a cherry-pick of the AUTH-CONFIG-SDK tenant-only commit 4c9a926c4 (coordinator decision 2026-09-25).",
       "evidence": {
         "productionRecordings": [
           {
             "recordedAt": "2026-09-25T01:50:53.794Z",
-            "gitSha": "d4cf6c69e80aea497f36ed166e1ba9bb53829e99",
+            "gitSha": "07a33ab871b6cad12a61e949b1289ae75abcdfe6",
             "recordings": 2,
             "project": "fireemu-oracle-idp"
           }
         ],
         "finalArtifactSha256": "82b0c4271e533d199456a44b2aa7a51574f11229e614743fc9a3776d5ccc8a18",
-        "sourceCommit": "f8555a8ef6a1b948cb7f3fc88972682df3f259e5",
+        "sourceCommit": "234de575c2a9397e15de54ccd424b3c4f274b5a3",
         "comparisonPath": "spec/compatibility/closure/evidence/FS-RULES-comparison.json",
         "rows": {
           "MATCH": 10
@@ -183,13 +183,13 @@
         "productionRecordings": [
           {
             "recordedAt": "2026-09-25T01:50:53.794Z",
-            "gitSha": "d4cf6c69e80aea497f36ed166e1ba9bb53829e99",
+            "gitSha": "07a33ab871b6cad12a61e949b1289ae75abcdfe6",
             "recordings": 2,
             "project": "fireemu-oracle-idp"
           }
         ],
         "finalArtifactSha256": "82b0c4271e533d199456a44b2aa7a51574f11229e614743fc9a3776d5ccc8a18",
-        "sourceCommit": "f8555a8ef6a1b948cb7f3fc88972682df3f259e5",
+        "sourceCommit": "234de575c2a9397e15de54ccd424b3c4f274b5a3",
         "comparisonPath": "spec/compatibility/closure/evidence/FS-RULES-comparison.json",
         "rows": {
           "MATCH": 47
@@ -211,13 +211,13 @@
         "productionRecordings": [
           {
             "recordedAt": "2026-09-25T01:50:53.794Z",
-            "gitSha": "d4cf6c69e80aea497f36ed166e1ba9bb53829e99",
+            "gitSha": "07a33ab871b6cad12a61e949b1289ae75abcdfe6",
             "recordings": 2,
             "project": "fireemu-oracle-idp"
           }
         ],
         "finalArtifactSha256": "82b0c4271e533d199456a44b2aa7a51574f11229e614743fc9a3776d5ccc8a18",
-        "sourceCommit": "f8555a8ef6a1b948cb7f3fc88972682df3f259e5",
+        "sourceCommit": "234de575c2a9397e15de54ccd424b3c4f274b5a3",
         "comparisonPath": "spec/compatibility/closure/evidence/FS-RULES-comparison.json",
         "rows": {
           "MATCH": 33,
@@ -240,13 +240,13 @@
         "productionRecordings": [
           {
             "recordedAt": "2026-09-25T01:50:53.794Z",
-            "gitSha": "d4cf6c69e80aea497f36ed166e1ba9bb53829e99",
+            "gitSha": "07a33ab871b6cad12a61e949b1289ae75abcdfe6",
             "recordings": 2,
             "project": "fireemu-oracle-idp"
           }
         ],
         "finalArtifactSha256": "82b0c4271e533d199456a44b2aa7a51574f11229e614743fc9a3776d5ccc8a18",
-        "sourceCommit": "f8555a8ef6a1b948cb7f3fc88972682df3f259e5",
+        "sourceCommit": "234de575c2a9397e15de54ccd424b3c4f274b5a3",
         "comparisonPath": "spec/compatibility/closure/evidence/FS-RULES-comparison.json",
         "rows": {
           "MATCH": 85
@@ -268,13 +268,13 @@
         "productionRecordings": [
           {
             "recordedAt": "2026-09-25T01:50:53.794Z",
-            "gitSha": "d4cf6c69e80aea497f36ed166e1ba9bb53829e99",
+            "gitSha": "07a33ab871b6cad12a61e949b1289ae75abcdfe6",
             "recordings": 2,
             "project": "fireemu-oracle-idp"
           }
         ],
         "finalArtifactSha256": "82b0c4271e533d199456a44b2aa7a51574f11229e614743fc9a3776d5ccc8a18",
-        "sourceCommit": "f8555a8ef6a1b948cb7f3fc88972682df3f259e5",
+        "sourceCommit": "234de575c2a9397e15de54ccd424b3c4f274b5a3",
         "comparisonPath": "spec/compatibility/closure/evidence/FS-RULES-comparison.json",
         "rows": {
           "MATCH": 30
@@ -296,13 +296,13 @@
         "productionRecordings": [
           {
             "recordedAt": "2026-09-25T01:50:53.794Z",
-            "gitSha": "d4cf6c69e80aea497f36ed166e1ba9bb53829e99",
+            "gitSha": "07a33ab871b6cad12a61e949b1289ae75abcdfe6",
             "recordings": 2,
             "project": "fireemu-oracle-idp"
           }
         ],
         "finalArtifactSha256": "82b0c4271e533d199456a44b2aa7a51574f11229e614743fc9a3776d5ccc8a18",
-        "sourceCommit": "f8555a8ef6a1b948cb7f3fc88972682df3f259e5",
+        "sourceCommit": "234de575c2a9397e15de54ccd424b3c4f274b5a3",
         "comparisonPath": "spec/compatibility/closure/evidence/FS-RULES-comparison.json",
         "rows": {
           "MATCH": 57
@@ -324,13 +324,13 @@
         "productionRecordings": [
           {
             "recordedAt": "2026-09-25T01:50:53.794Z",
-            "gitSha": "d4cf6c69e80aea497f36ed166e1ba9bb53829e99",
+            "gitSha": "07a33ab871b6cad12a61e949b1289ae75abcdfe6",
             "recordings": 2,
             "project": "fireemu-oracle-idp"
           }
         ],
         "finalArtifactSha256": "82b0c4271e533d199456a44b2aa7a51574f11229e614743fc9a3776d5ccc8a18",
-        "sourceCommit": "f8555a8ef6a1b948cb7f3fc88972682df3f259e5",
+        "sourceCommit": "234de575c2a9397e15de54ccd424b3c4f274b5a3",
         "comparisonPath": "spec/compatibility/closure/evidence/FS-RULES-comparison.json",
         "rows": {
           "MATCH": 45
@@ -352,13 +352,13 @@
         "productionRecordings": [
           {
             "recordedAt": "2026-09-25T01:50:53.794Z",
-            "gitSha": "d4cf6c69e80aea497f36ed166e1ba9bb53829e99",
+            "gitSha": "07a33ab871b6cad12a61e949b1289ae75abcdfe6",
             "recordings": 2,
             "project": "fireemu-oracle-idp"
           }
         ],
         "finalArtifactSha256": "82b0c4271e533d199456a44b2aa7a51574f11229e614743fc9a3776d5ccc8a18",
-        "sourceCommit": "f8555a8ef6a1b948cb7f3fc88972682df3f259e5",
+        "sourceCommit": "234de575c2a9397e15de54ccd424b3c4f274b5a3",
         "comparisonPath": "spec/compatibility/closure/evidence/FS-RULES-comparison.json",
         "rows": {
           "MATCH": 21,
@@ -381,13 +381,13 @@
         "productionRecordings": [
           {
             "recordedAt": "2026-09-25T01:50:53.794Z",
-            "gitSha": "d4cf6c69e80aea497f36ed166e1ba9bb53829e99",
+            "gitSha": "07a33ab871b6cad12a61e949b1289ae75abcdfe6",
             "recordings": 2,
             "project": "fireemu-oracle-idp"
           }
         ],
         "finalArtifactSha256": "82b0c4271e533d199456a44b2aa7a51574f11229e614743fc9a3776d5ccc8a18",
-        "sourceCommit": "f8555a8ef6a1b948cb7f3fc88972682df3f259e5",
+        "sourceCommit": "234de575c2a9397e15de54ccd424b3c4f274b5a3",
         "comparisonPath": "spec/compatibility/closure/evidence/FS-RULES-comparison.json",
         "rows": {
           "MATCH": 21
@@ -409,13 +409,13 @@
         "productionRecordings": [
           {
             "recordedAt": "2026-09-25T01:50:53.794Z",
-            "gitSha": "d4cf6c69e80aea497f36ed166e1ba9bb53829e99",
+            "gitSha": "07a33ab871b6cad12a61e949b1289ae75abcdfe6",
             "recordings": 2,
             "project": "fireemu-oracle-idp"
           }
         ],
         "finalArtifactSha256": "82b0c4271e533d199456a44b2aa7a51574f11229e614743fc9a3776d5ccc8a18",
-        "sourceCommit": "f8555a8ef6a1b948cb7f3fc88972682df3f259e5",
+        "sourceCommit": "234de575c2a9397e15de54ccd424b3c4f274b5a3",
         "comparisonPath": "spec/compatibility/closure/evidence/FS-RULES-comparison.json",
         "rows": {
           "MATCH": 24
@@ -437,19 +437,19 @@
         "productionRecordings": [
           {
             "recordedAt": "2026-09-25T01:50:53.794Z",
-            "gitSha": "d4cf6c69e80aea497f36ed166e1ba9bb53829e99",
+            "gitSha": "07a33ab871b6cad12a61e949b1289ae75abcdfe6",
             "recordings": 2,
             "project": "fireemu-oracle-idp"
           },
           {
             "recordedAt": "2026-09-25T09:07:58.182Z",
-            "gitSha": "fc1826b1357cee55f58f2645e533dfbe177fd577",
+            "gitSha": "77fce3a86e52f86f19aa576b7fae708440fcee89",
             "recordings": 2,
             "project": "fireemu-oracle-idp"
           }
         ],
         "finalArtifactSha256": "82b0c4271e533d199456a44b2aa7a51574f11229e614743fc9a3776d5ccc8a18",
-        "sourceCommit": "f8555a8ef6a1b948cb7f3fc88972682df3f259e5",
+        "sourceCommit": "234de575c2a9397e15de54ccd424b3c4f274b5a3",
         "comparisonPath": "spec/compatibility/closure/evidence/FS-RULES-comparison.json",
         "rows": {
           "MATCH": 43
@@ -471,13 +471,13 @@
         "productionRecordings": [
           {
             "recordedAt": "2026-09-25T01:50:53.794Z",
-            "gitSha": "d4cf6c69e80aea497f36ed166e1ba9bb53829e99",
+            "gitSha": "07a33ab871b6cad12a61e949b1289ae75abcdfe6",
             "recordings": 2,
             "project": "fireemu-oracle-idp"
           }
         ],
         "finalArtifactSha256": "82b0c4271e533d199456a44b2aa7a51574f11229e614743fc9a3776d5ccc8a18",
-        "sourceCommit": "f8555a8ef6a1b948cb7f3fc88972682df3f259e5",
+        "sourceCommit": "234de575c2a9397e15de54ccd424b3c4f274b5a3",
         "comparisonPath": "spec/compatibility/closure/evidence/FS-RULES-comparison.json",
         "rows": {
           "MATCH": 16
@@ -499,13 +499,13 @@
         "productionRecordings": [
           {
             "recordedAt": "2026-09-25T01:50:53.794Z",
-            "gitSha": "d4cf6c69e80aea497f36ed166e1ba9bb53829e99",
+            "gitSha": "07a33ab871b6cad12a61e949b1289ae75abcdfe6",
             "recordings": 2,
             "project": "fireemu-oracle-idp"
           }
         ],
         "finalArtifactSha256": "82b0c4271e533d199456a44b2aa7a51574f11229e614743fc9a3776d5ccc8a18",
-        "sourceCommit": "f8555a8ef6a1b948cb7f3fc88972682df3f259e5",
+        "sourceCommit": "234de575c2a9397e15de54ccd424b3c4f274b5a3",
         "comparisonPath": "spec/compatibility/closure/evidence/FS-RULES-comparison.json",
         "rows": {
           "MATCH": 12
@@ -528,7 +528,7 @@
       "note": "The final artifact's FS-RULES comparison, with the AUTH-ACCOUNT, AUTH-CREDENTIAL and FS-QUERY-INDEX (owner decision 2026-09-25) comparisons re-run on the same artifact; their summaries are recorded with the artifact's sha256.",
       "evidence": {
         "finalArtifactSha256": "82b0c4271e533d199456a44b2aa7a51574f11229e614743fc9a3776d5ccc8a18",
-        "sourceCommit": "f8555a8ef6a1b948cb7f3fc88972682df3f259e5",
+        "sourceCommit": "234de575c2a9397e15de54ccd424b3c4f274b5a3",
         "comparisonPath": "spec/compatibility/closure/evidence/FS-RULES-comparison.json",
         "rows": {
           "MATCH": 1144,
@@ -576,19 +576,19 @@
         "productionRecordings": [
           {
             "recordedAt": "2026-09-25T01:50:53.794Z",
-            "gitSha": "d4cf6c69e80aea497f36ed166e1ba9bb53829e99",
+            "gitSha": "07a33ab871b6cad12a61e949b1289ae75abcdfe6",
             "recordings": 2,
             "project": "fireemu-oracle-idp"
           },
           {
             "recordedAt": "2026-09-25T09:07:58.182Z",
-            "gitSha": "fc1826b1357cee55f58f2645e533dfbe177fd577",
+            "gitSha": "77fce3a86e52f86f19aa576b7fae708440fcee89",
             "recordings": 2,
             "project": "fireemu-oracle-idp"
           }
         ],
         "finalArtifactSha256": "82b0c4271e533d199456a44b2aa7a51574f11229e614743fc9a3776d5ccc8a18",
-        "sourceCommit": "f8555a8ef6a1b948cb7f3fc88972682df3f259e5",
+        "sourceCommit": "234de575c2a9397e15de54ccd424b3c4f274b5a3",
         "comparisonPath": "spec/compatibility/closure/evidence/FS-RULES-comparison.json",
         "rows": {
           "MATCH": 1144,
@@ -602,60 +602,60 @@
   ],
   "integratedRegression": {
     "release": "v0.8.0",
-    "integrationCommit": "2079e0146f4eb6ad72da4449f5e2557fc81000e5",
+    "integrationCommit": "f8f0611ac35185a0719ae7660601ed4ac584dcad",
     "releaseBinarySha256": "c258b022c5f452a60a9bc60de68e6de26b3f5aeaf846623cf1bf7e33f28d31df",
     "buildReceiptPath": "spec/compatibility/closure/evidence/integration-v0.8.0/release-artifact.json",
-    "buildReceiptSha256": "b6aeba829940617796300d16807b5e9aeac39d9fb9fc165f7e84e57d92a8c86e",
+    "buildReceiptSha256": "439d1f55b447d2621661077fc8c130df1fba8f38d996b0a952adef0d4d8bcd1c",
     "comparisons": [
       {
         "path": "spec/compatibility/closure/evidence/integration-v0.8.0/FS-RULES-comparison.json",
-        "sha256": "99f56c2c48a56be2b4e358c434504e83ecc5ca90643785538f8341d7fb73255b",
+        "sha256": "1f6fdd5ccbab7f135bb7302b3b83ef7bf5fa5947e59ee4f1b0984ef55d3e61b6",
         "rows": 1149,
         "summary": {
           "MATCH": 1144,
           "DEPENDENCY_REFUSED": 5
         },
         "laneComparisonPath": "spec/compatibility/closure/evidence/FS-RULES-comparison.json",
-        "laneComparisonSha256": "b0b767ad95602347d7eef176436427c92417e363fdf5be0d1ecaa4e94d4caac2",
+        "laneComparisonSha256": "e492410720a2c1c626a422e0c6f4852af0a54c530d514fe5f4c7fc6e4525125a",
         "identicalRows": 1149,
         "changedRows": []
       },
       {
         "path": "spec/compatibility/closure/evidence/integration-v0.8.0/AUTH-ACCOUNT-comparison.json",
-        "sha256": "f5ecd67769ee337e8d34035083ade6bc233cce4c9a91cc13483f6924df6d5134",
+        "sha256": "00455bf3da54088e3cc9498fb9717d5f5221e20ec03af4e62ef19cf8ee963603",
         "rows": 631,
         "summary": {
           "MATCH": 631
         },
         "laneComparisonPath": "spec/compatibility/closure/evidence/FS-RULES-auth-account-regression.json",
-        "laneComparisonSha256": "8e4bf9b804592114a17c5f08d7d1f44665a7d68893eeab5f896259bca6da0b58",
+        "laneComparisonSha256": "d80b4bcc7f74c54742f4f1e58cb85fd9b70bf41db1a08e9317d838626d6be171",
         "identicalRows": 631,
         "changedRows": [],
         "inherited": "AUTH-ACCOUNT"
       },
       {
         "path": "spec/compatibility/closure/evidence/integration-v0.8.0/AUTH-CREDENTIAL-comparison.json",
-        "sha256": "9b68f53d7b82a9b6cd6765187c029c7d1a266e0600d3db45d90c95439565dac5",
+        "sha256": "422bb6e490555819eeced8d0c1853077c38cefb378e8f90123bef78de665ed58",
         "rows": 222,
         "summary": {
           "MATCH": 222
         },
         "laneComparisonPath": "spec/compatibility/closure/evidence/FS-RULES-auth-credential-regression.json",
-        "laneComparisonSha256": "8f34542faa816bc2942da3038bd350a13662f4d0b9cdcc470678554879966641",
+        "laneComparisonSha256": "a2f85e8ddc7b88bdeb0d079e093558d977117efdf52c57ec76033b310d322980",
         "identicalRows": 222,
         "changedRows": [],
         "inherited": "AUTH-CREDENTIAL"
       },
       {
         "path": "spec/compatibility/closure/evidence/integration-v0.8.0/FS-QUERY-INDEX-comparison.json",
-        "sha256": "37d93ecb6b2c942dd8bf1d1bb4a1a10dbdabbfc6e0936478383b58d2914a437e",
+        "sha256": "64bf5068e840993a9369deab599877130771676fe162311454a636ca4dd049b3",
         "rows": 710,
         "summary": {
           "MATCH": 675,
           "DIVERGENCE_APPROVED": 35
         },
         "laneComparisonPath": "spec/compatibility/closure/evidence/FS-RULES-fs-query-index-regression.json",
-        "laneComparisonSha256": "2972f48a501d19d746000f9a4d7c7aa1ff2c88be2e0b2df3f19c7813b4180a67",
+        "laneComparisonSha256": "5220c029a10cedf0fea5e7789f778110ac2293c2dab20f1532d23a054558c5a2",
         "identicalRows": 710,
         "changedRows": [],
         "inherited": "FS-QUERY-INDEX"

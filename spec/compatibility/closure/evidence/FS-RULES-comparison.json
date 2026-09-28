@@ -1,7 +1,7 @@
 {
   "kind": "fs-rules-comparison-v1",
   "artifactSha256": "82b0c4271e533d199456a44b2aa7a51574f11229e614743fc9a3776d5ccc8a18",
-  "fixtureSha256": "b4f282ac4677b4adeb3c85f7c81abec220ffd751cf17641de0254fb14bbf479a",
+  "fixtureSha256": "ad41b84221e4b6a6f92a2dece0ff7ecc9f3ae0417b744b2dce1f4403c14e98e4",
   "summary": {
     "MATCH": 1144,
     "DEPENDENCY_REFUSED": 5

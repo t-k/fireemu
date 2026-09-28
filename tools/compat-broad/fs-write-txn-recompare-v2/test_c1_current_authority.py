@@ -288,7 +288,7 @@ def test_private_saved_pair_is_bound_and_comparison_is_preserved(
     }
     assert (
         summary["bindings"]["runtimeSourceCommit"]
-        == "c1d24250a62d23b38bcfed6da51f1ba4ed5798bb"
+        == "83fd0307b727b3c13164daaf19f2f8dd6a5f0ac2"
     )
     assert summary["bindings"]["runtimeInputCount"] == 434
     assert stat.S_IMODE((tmp_path / "out.json").stat().st_mode) == 0o600

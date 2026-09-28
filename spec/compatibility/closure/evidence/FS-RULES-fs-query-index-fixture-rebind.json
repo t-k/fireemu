@@ -1,8 +1,8 @@
 {
   "kind": "fs-rules-query-fixture-provenance-rebind-v1",
   "fixturePath": "conformance/fs-query-index-production.json",
-  "sourceFixtureSha256": "4db70b360ab433bdd8d4f700073eb70b09e4d23b5b1d9c699c461889964eaec7",
-  "currentFixtureSha256": "8df55045119be7c30e63e9109ad614dae2be0cbc3a644b54c60f98cc962110d3",
+  "sourceFixtureSha256": "d4f38d3314a395d6150e4ade3e5a2a7a09cc7cffbe09c0803b7fd90a4e464afd",
+  "currentFixtureSha256": "0a48fd8813a6ceac5191d78c1b256aadad4950a849a44e26a1fefb140f231a35",
   "sourceRecordedAgainstNote": "Two recordings per program. Run-window times, execution durations, page and transaction tokens and the project id are placeholders; missing-index links keep their encoded index with the project id replaced. `second` holds the other recording of rows that differed.",
   "sourceHarnessDigests": {
     "fs-query-index/aggregation/aliases-and-refusals": "d20b1c6d101ee06ee6539d766ab3163a0d82d70980d47ae63fb0ad1c87fbf346",

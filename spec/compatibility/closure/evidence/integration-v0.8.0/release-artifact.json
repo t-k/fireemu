@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "kind": "integration-release-artifact",
   "release": "v0.8.0",
-  "sourceCommit": "2079e0146f4eb6ad72da4449f5e2557fc81000e5",
+  "sourceCommit": "f8f0611ac35185a0719ae7660601ed4ac584dcad",
   "command": [
     "cargo",
     "build",

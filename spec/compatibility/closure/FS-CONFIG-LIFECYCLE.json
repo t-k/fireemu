@@ -6,10 +6,10 @@
   "closureReview": {
     "decision": "APPROVED",
     "decidedOn": "2026-09-24",
-    "reviewer": "independent clean-context confirmation reviews: round 2 of the 2026-09-24 re-promotion (998fee820) and the 2026-09-25 follow-up directive 2 confirmation (bafd7ed91)",
-    "reviewedCommit": "bafd7ed91",
+    "reviewer": "independent clean-context confirmation reviews: round 2 of the 2026-09-24 re-promotion (357f911a9) and the 2026-09-25 follow-up directive 2 confirmation (22273f584)",
+    "reviewedCommit": "22273f584",
     "finalArtifactSha256": "f471d56912fd0f69bc806744173d51796651ac9f0688fbbf7a26a45cbcb8acf7",
-    "history": "First promoted at 255274d76 and sent back by the 2026-09-24 promotion review (single valid observations in two programs, ten gRPC Admin methods unimplemented, owner decisions not in the ledger, bisection project not an evidence project); fixed per the owner's follow-up directive and re-recorded.",
+    "history": "First promoted at 1eab61d32 and sent back by the 2026-09-24 promotion review (single valid observations in two programs, ten gRPC Admin methods unimplemented, owner decisions not in the ledger, bisection project not an evidence project); fixed per the owner's follow-up directive and re-recorded.",
     "followUps": "Non-blocking notes are tracked outside the closure: gRPC ListIndexes/ListOperations beyond the representative observations rest on REST parity tests; the concurrent-change retry covers REST only; production's wording for a bucket of another project and for a malformed gRPC resource name is unobserved. After follow-up directive 2 (2026-09-25): a managed import still claims its bucket before its documents are written, and a check and a claim of a bucket are not one step (tracked outside the closure)."
   },
   "scopeDecisions": [
@@ -140,13 +140,13 @@
         "productionRecordings": [
           {
             "recordedAt": "2026-09-24T12:14:29.389Z",
-            "gitSha": "5b641c87336cd5c63e3f38312e1536ed33e986e7",
+            "gitSha": "e87e0c2e5644da6795b566475c4f5ce83a01d669",
             "recordings": 2,
             "project": "fireemu-oracle-query"
           }
         ],
         "finalArtifactSha256": "f471d56912fd0f69bc806744173d51796651ac9f0688fbbf7a26a45cbcb8acf7",
-        "sourceCommit": "7a8a1db770bab7e3adeb67e10a77f78fc7e4d0eb",
+        "sourceCommit": "0c4f22d231390761dd209565571cbf9fa3c8d689",
         "comparisonPath": "spec/compatibility/closure/evidence/FS-CONFIG-LIFECYCLE-comparison.json",
         "rows": {
           "MATCH": 4,
@@ -166,13 +166,13 @@
         "productionRecordings": [
           {
             "recordedAt": "2026-09-24T12:14:29.389Z",
-            "gitSha": "5b641c87336cd5c63e3f38312e1536ed33e986e7",
+            "gitSha": "e87e0c2e5644da6795b566475c4f5ce83a01d669",
             "recordings": 2,
             "project": "fireemu-oracle-query"
           }
         ],
         "finalArtifactSha256": "f471d56912fd0f69bc806744173d51796651ac9f0688fbbf7a26a45cbcb8acf7",
-        "sourceCommit": "7a8a1db770bab7e3adeb67e10a77f78fc7e4d0eb",
+        "sourceCommit": "0c4f22d231390761dd209565571cbf9fa3c8d689",
         "comparisonPath": "spec/compatibility/closure/evidence/FS-CONFIG-LIFECYCLE-comparison.json",
         "rows": {
           "MATCH": 27,
@@ -192,13 +192,13 @@
         "productionRecordings": [
           {
             "recordedAt": "2026-09-24T12:14:29.389Z",
-            "gitSha": "5b641c87336cd5c63e3f38312e1536ed33e986e7",
+            "gitSha": "e87e0c2e5644da6795b566475c4f5ce83a01d669",
             "recordings": 2,
             "project": "fireemu-oracle-query"
           }
         ],
         "finalArtifactSha256": "f471d56912fd0f69bc806744173d51796651ac9f0688fbbf7a26a45cbcb8acf7",
-        "sourceCommit": "7a8a1db770bab7e3adeb67e10a77f78fc7e4d0eb",
+        "sourceCommit": "0c4f22d231390761dd209565571cbf9fa3c8d689",
         "comparisonPath": "spec/compatibility/closure/evidence/FS-CONFIG-LIFECYCLE-comparison.json",
         "rows": {
           "MATCH": 16,
@@ -218,13 +218,13 @@
         "productionRecordings": [
           {
             "recordedAt": "2026-09-24T12:14:29.389Z",
-            "gitSha": "5b641c87336cd5c63e3f38312e1536ed33e986e7",
+            "gitSha": "e87e0c2e5644da6795b566475c4f5ce83a01d669",
             "recordings": 2,
             "project": "fireemu-oracle-query"
           }
         ],
         "finalArtifactSha256": "f471d56912fd0f69bc806744173d51796651ac9f0688fbbf7a26a45cbcb8acf7",
-        "sourceCommit": "7a8a1db770bab7e3adeb67e10a77f78fc7e4d0eb",
+        "sourceCommit": "0c4f22d231390761dd209565571cbf9fa3c8d689",
         "comparisonPath": "spec/compatibility/closure/evidence/FS-CONFIG-LIFECYCLE-comparison.json",
         "rows": {
           "MATCH": 13
@@ -243,13 +243,13 @@
         "productionRecordings": [
           {
             "recordedAt": "2026-09-24T12:14:29.389Z",
-            "gitSha": "5b641c87336cd5c63e3f38312e1536ed33e986e7",
+            "gitSha": "e87e0c2e5644da6795b566475c4f5ce83a01d669",
             "recordings": 2,
             "project": "fireemu-oracle-query"
           }
         ],
         "finalArtifactSha256": "f471d56912fd0f69bc806744173d51796651ac9f0688fbbf7a26a45cbcb8acf7",
-        "sourceCommit": "7a8a1db770bab7e3adeb67e10a77f78fc7e4d0eb",
+        "sourceCommit": "0c4f22d231390761dd209565571cbf9fa3c8d689",
         "comparisonPath": "spec/compatibility/closure/evidence/FS-CONFIG-LIFECYCLE-comparison.json",
         "rows": {
           "MATCH": 16
@@ -268,13 +268,13 @@
         "productionRecordings": [
           {
             "recordedAt": "2026-09-24T14:20:05.351Z",
-            "gitSha": "5c9970184ce6186c56467ab436caa4a1b4a70562",
+            "gitSha": "dee575a8884088e05afcf15702f137f752c329c2",
             "recordings": 2,
             "project": "fireemu-fs-bisect-0924a"
           }
         ],
         "finalArtifactSha256": "f471d56912fd0f69bc806744173d51796651ac9f0688fbbf7a26a45cbcb8acf7",
-        "sourceCommit": "7a8a1db770bab7e3adeb67e10a77f78fc7e4d0eb",
+        "sourceCommit": "0c4f22d231390761dd209565571cbf9fa3c8d689",
         "comparisonPath": "spec/compatibility/closure/evidence/FS-CONFIG-LIFECYCLE-comparison.json",
         "rows": {
           "MATCH": 14,
@@ -294,13 +294,13 @@
         "productionRecordings": [
           {
             "recordedAt": "2026-09-24T12:14:29.389Z",
-            "gitSha": "5b641c87336cd5c63e3f38312e1536ed33e986e7",
+            "gitSha": "e87e0c2e5644da6795b566475c4f5ce83a01d669",
             "recordings": 2,
             "project": "fireemu-oracle-query"
           }
         ],
         "finalArtifactSha256": "f471d56912fd0f69bc806744173d51796651ac9f0688fbbf7a26a45cbcb8acf7",
-        "sourceCommit": "7a8a1db770bab7e3adeb67e10a77f78fc7e4d0eb",
+        "sourceCommit": "0c4f22d231390761dd209565571cbf9fa3c8d689",
         "comparisonPath": "spec/compatibility/closure/evidence/FS-CONFIG-LIFECYCLE-comparison.json",
         "rows": {
           "MATCH": 8
@@ -319,13 +319,13 @@
         "productionRecordings": [
           {
             "recordedAt": "2026-09-24T12:14:29.389Z",
-            "gitSha": "5b641c87336cd5c63e3f38312e1536ed33e986e7",
+            "gitSha": "e87e0c2e5644da6795b566475c4f5ce83a01d669",
             "recordings": 2,
             "project": "fireemu-oracle-query"
           }
         ],
         "finalArtifactSha256": "f471d56912fd0f69bc806744173d51796651ac9f0688fbbf7a26a45cbcb8acf7",
-        "sourceCommit": "7a8a1db770bab7e3adeb67e10a77f78fc7e4d0eb",
+        "sourceCommit": "0c4f22d231390761dd209565571cbf9fa3c8d689",
         "comparisonPath": "spec/compatibility/closure/evidence/FS-CONFIG-LIFECYCLE-comparison.json",
         "rows": {
           "MATCH": 5
@@ -344,13 +344,13 @@
         "productionRecordings": [
           {
             "recordedAt": "2026-09-24T12:14:29.389Z",
-            "gitSha": "5b641c87336cd5c63e3f38312e1536ed33e986e7",
+            "gitSha": "e87e0c2e5644da6795b566475c4f5ce83a01d669",
             "recordings": 2,
             "project": "fireemu-oracle-query"
           }
         ],
         "finalArtifactSha256": "f471d56912fd0f69bc806744173d51796651ac9f0688fbbf7a26a45cbcb8acf7",
-        "sourceCommit": "7a8a1db770bab7e3adeb67e10a77f78fc7e4d0eb",
+        "sourceCommit": "0c4f22d231390761dd209565571cbf9fa3c8d689",
         "comparisonPath": "spec/compatibility/closure/evidence/FS-CONFIG-LIFECYCLE-comparison.json",
         "rows": {
           "MATCH": 22
@@ -369,13 +369,13 @@
         "productionRecordings": [
           {
             "recordedAt": "2026-09-24T12:14:29.389Z",
-            "gitSha": "5b641c87336cd5c63e3f38312e1536ed33e986e7",
+            "gitSha": "e87e0c2e5644da6795b566475c4f5ce83a01d669",
             "recordings": 2,
             "project": "fireemu-oracle-query"
           }
         ],
         "finalArtifactSha256": "f471d56912fd0f69bc806744173d51796651ac9f0688fbbf7a26a45cbcb8acf7",
-        "sourceCommit": "7a8a1db770bab7e3adeb67e10a77f78fc7e4d0eb",
+        "sourceCommit": "0c4f22d231390761dd209565571cbf9fa3c8d689",
         "comparisonPath": "spec/compatibility/closure/evidence/FS-CONFIG-LIFECYCLE-comparison.json",
         "rows": {
           "MATCH": 9
@@ -394,13 +394,13 @@
         "productionRecordings": [
           {
             "recordedAt": "2026-09-24T12:14:29.389Z",
-            "gitSha": "5b641c87336cd5c63e3f38312e1536ed33e986e7",
+            "gitSha": "e87e0c2e5644da6795b566475c4f5ce83a01d669",
             "recordings": 2,
             "project": "fireemu-oracle-query"
           }
         ],
         "finalArtifactSha256": "f471d56912fd0f69bc806744173d51796651ac9f0688fbbf7a26a45cbcb8acf7",
-        "sourceCommit": "7a8a1db770bab7e3adeb67e10a77f78fc7e4d0eb",
+        "sourceCommit": "0c4f22d231390761dd209565571cbf9fa3c8d689",
         "comparisonPath": "spec/compatibility/closure/evidence/FS-CONFIG-LIFECYCLE-comparison.json",
         "rows": {
           "MATCH": 20
@@ -419,13 +419,13 @@
         "productionRecordings": [
           {
             "recordedAt": "2026-09-24T12:14:29.389Z",
-            "gitSha": "5b641c87336cd5c63e3f38312e1536ed33e986e7",
+            "gitSha": "e87e0c2e5644da6795b566475c4f5ce83a01d669",
             "recordings": 2,
             "project": "fireemu-oracle-query"
           }
         ],
         "finalArtifactSha256": "f471d56912fd0f69bc806744173d51796651ac9f0688fbbf7a26a45cbcb8acf7",
-        "sourceCommit": "7a8a1db770bab7e3adeb67e10a77f78fc7e4d0eb",
+        "sourceCommit": "0c4f22d231390761dd209565571cbf9fa3c8d689",
         "comparisonPath": "spec/compatibility/closure/evidence/FS-CONFIG-LIFECYCLE-comparison.json",
         "rows": {
           "MATCH": 13
@@ -444,13 +444,13 @@
         "productionRecordings": [
           {
             "recordedAt": "2026-09-24T12:14:29.389Z",
-            "gitSha": "5b641c87336cd5c63e3f38312e1536ed33e986e7",
+            "gitSha": "e87e0c2e5644da6795b566475c4f5ce83a01d669",
             "recordings": 2,
             "project": "fireemu-oracle-query"
           }
         ],
         "finalArtifactSha256": "f471d56912fd0f69bc806744173d51796651ac9f0688fbbf7a26a45cbcb8acf7",
-        "sourceCommit": "7a8a1db770bab7e3adeb67e10a77f78fc7e4d0eb",
+        "sourceCommit": "0c4f22d231390761dd209565571cbf9fa3c8d689",
         "comparisonPath": "spec/compatibility/closure/evidence/FS-CONFIG-LIFECYCLE-comparison.json",
         "rows": {
           "MATCH": 16
@@ -469,13 +469,13 @@
         "productionRecordings": [
           {
             "recordedAt": "2026-09-24T12:14:29.389Z",
-            "gitSha": "5b641c87336cd5c63e3f38312e1536ed33e986e7",
+            "gitSha": "e87e0c2e5644da6795b566475c4f5ce83a01d669",
             "recordings": 2,
             "project": "fireemu-oracle-query"
           }
         ],
         "finalArtifactSha256": "f471d56912fd0f69bc806744173d51796651ac9f0688fbbf7a26a45cbcb8acf7",
-        "sourceCommit": "7a8a1db770bab7e3adeb67e10a77f78fc7e4d0eb",
+        "sourceCommit": "0c4f22d231390761dd209565571cbf9fa3c8d689",
         "comparisonPath": "spec/compatibility/closure/evidence/FS-CONFIG-LIFECYCLE-comparison.json",
         "rows": {
           "MATCH": 39
@@ -494,13 +494,13 @@
         "productionRecordings": [
           {
             "recordedAt": "2026-09-24T12:14:29.389Z",
-            "gitSha": "5b641c87336cd5c63e3f38312e1536ed33e986e7",
+            "gitSha": "e87e0c2e5644da6795b566475c4f5ce83a01d669",
             "recordings": 2,
             "project": "fireemu-oracle-query"
           }
         ],
         "finalArtifactSha256": "f471d56912fd0f69bc806744173d51796651ac9f0688fbbf7a26a45cbcb8acf7",
-        "sourceCommit": "7a8a1db770bab7e3adeb67e10a77f78fc7e4d0eb",
+        "sourceCommit": "0c4f22d231390761dd209565571cbf9fa3c8d689",
         "comparisonPath": "spec/compatibility/closure/evidence/FS-CONFIG-LIFECYCLE-comparison.json",
         "rows": {
           "MATCH": 15,
@@ -520,13 +520,13 @@
         "productionRecordings": [
           {
             "recordedAt": "2026-09-24T12:14:29.389Z",
-            "gitSha": "5b641c87336cd5c63e3f38312e1536ed33e986e7",
+            "gitSha": "e87e0c2e5644da6795b566475c4f5ce83a01d669",
             "recordings": 2,
             "project": "fireemu-oracle-query"
           }
         ],
         "finalArtifactSha256": "f471d56912fd0f69bc806744173d51796651ac9f0688fbbf7a26a45cbcb8acf7",
-        "sourceCommit": "7a8a1db770bab7e3adeb67e10a77f78fc7e4d0eb",
+        "sourceCommit": "0c4f22d231390761dd209565571cbf9fa3c8d689",
         "comparisonPath": "spec/compatibility/closure/evidence/FS-CONFIG-LIFECYCLE-comparison.json",
         "rows": {
           "MATCH": 26
@@ -545,13 +545,13 @@
         "productionRecordings": [
           {
             "recordedAt": "2026-09-24T12:14:29.389Z",
-            "gitSha": "5b641c87336cd5c63e3f38312e1536ed33e986e7",
+            "gitSha": "e87e0c2e5644da6795b566475c4f5ce83a01d669",
             "recordings": 2,
             "project": "fireemu-oracle-query"
           }
         ],
         "finalArtifactSha256": "f471d56912fd0f69bc806744173d51796651ac9f0688fbbf7a26a45cbcb8acf7",
-        "sourceCommit": "7a8a1db770bab7e3adeb67e10a77f78fc7e4d0eb",
+        "sourceCommit": "0c4f22d231390761dd209565571cbf9fa3c8d689",
         "comparisonPath": "spec/compatibility/closure/evidence/FS-CONFIG-LIFECYCLE-comparison.json",
         "rows": {
           "MATCH": 8
@@ -570,13 +570,13 @@
         "productionRecordings": [
           {
             "recordedAt": "2026-09-24T12:14:29.389Z",
-            "gitSha": "5b641c87336cd5c63e3f38312e1536ed33e986e7",
+            "gitSha": "e87e0c2e5644da6795b566475c4f5ce83a01d669",
             "recordings": 2,
             "project": "fireemu-oracle-query"
           }
         ],
         "finalArtifactSha256": "f471d56912fd0f69bc806744173d51796651ac9f0688fbbf7a26a45cbcb8acf7",
-        "sourceCommit": "7a8a1db770bab7e3adeb67e10a77f78fc7e4d0eb",
+        "sourceCommit": "0c4f22d231390761dd209565571cbf9fa3c8d689",
         "comparisonPath": "spec/compatibility/closure/evidence/FS-CONFIG-LIFECYCLE-comparison.json",
         "rows": {
           "MATCH": 19
@@ -597,19 +597,19 @@
         "productionRecordings": [
           {
             "recordedAt": "2026-09-24T12:14:29.389Z",
-            "gitSha": "5b641c87336cd5c63e3f38312e1536ed33e986e7",
+            "gitSha": "e87e0c2e5644da6795b566475c4f5ce83a01d669",
             "recordings": 2,
             "project": "fireemu-oracle-query"
           },
           {
             "recordedAt": "2026-09-24T14:20:05.351Z",
-            "gitSha": "5c9970184ce6186c56467ab436caa4a1b4a70562",
+            "gitSha": "dee575a8884088e05afcf15702f137f752c329c2",
             "recordings": 2,
             "project": "fireemu-fs-bisect-0924a"
           }
         ],
         "finalArtifactSha256": "f471d56912fd0f69bc806744173d51796651ac9f0688fbbf7a26a45cbcb8acf7",
-        "sourceCommit": "7a8a1db770bab7e3adeb67e10a77f78fc7e4d0eb",
+        "sourceCommit": "0c4f22d231390761dd209565571cbf9fa3c8d689",
         "comparisonPath": "spec/compatibility/closure/evidence/FS-CONFIG-LIFECYCLE-comparison.json",
         "rows": {
           "MATCH": 264,
@@ -626,7 +626,7 @@
             "MATCH": 675,
             "DIVERGENCE_APPROVED": 35
           },
-          "note": "conformance/src/fs-query-index/run.mjs check on the same artifact, after merging work/fs-query-index bc1e32930"
+          "note": "conformance/src/fs-query-index/run.mjs check on the same artifact, after merging work/fs-query-index 7ee53ce76"
         },
         "workspaceTests": {
           "command": "cargo nextest run --workspace --profile pr",
@@ -679,19 +679,19 @@
         "productionRecordings": [
           {
             "recordedAt": "2026-09-24T12:14:29.389Z",
-            "gitSha": "5b641c87336cd5c63e3f38312e1536ed33e986e7",
+            "gitSha": "e87e0c2e5644da6795b566475c4f5ce83a01d669",
             "recordings": 2,
             "project": "fireemu-oracle-query"
           },
           {
             "recordedAt": "2026-09-24T14:20:05.351Z",
-            "gitSha": "5c9970184ce6186c56467ab436caa4a1b4a70562",
+            "gitSha": "dee575a8884088e05afcf15702f137f752c329c2",
             "recordings": 2,
             "project": "fireemu-fs-bisect-0924a"
           }
         ],
         "finalArtifactSha256": "f471d56912fd0f69bc806744173d51796651ac9f0688fbbf7a26a45cbcb8acf7",
-        "sourceCommit": "7a8a1db770bab7e3adeb67e10a77f78fc7e4d0eb",
+        "sourceCommit": "0c4f22d231390761dd209565571cbf9fa3c8d689",
         "comparisonPath": "spec/compatibility/closure/evidence/FS-CONFIG-LIFECYCLE-comparison.json",
         "rows": {
           "MATCH": 264,
@@ -703,14 +703,14 @@
   ],
   "integratedRegression": {
     "release": "v0.8.0",
-    "integrationCommit": "2079e0146f4eb6ad72da4449f5e2557fc81000e5",
+    "integrationCommit": "f8f0611ac35185a0719ae7660601ed4ac584dcad",
     "releaseBinarySha256": "c258b022c5f452a60a9bc60de68e6de26b3f5aeaf846623cf1bf7e33f28d31df",
     "buildReceiptPath": "spec/compatibility/closure/evidence/integration-v0.8.0/release-artifact.json",
-    "buildReceiptSha256": "b6aeba829940617796300d16807b5e9aeac39d9fb9fc165f7e84e57d92a8c86e",
+    "buildReceiptSha256": "439d1f55b447d2621661077fc8c130df1fba8f38d996b0a952adef0d4d8bcd1c",
     "comparisons": [
       {
         "path": "spec/compatibility/closure/evidence/integration-v0.8.0/FS-CONFIG-LIFECYCLE-comparison.json",
-        "sha256": "af24ae7980442ac6040e7fb114944462722b19d22fbdf07e324da73bee97ca31",
+        "sha256": "3524995aaec25e9852ef2cc022f57cb7f97bbbfd13aae0462da97564b4b2eff9",
         "rows": 270,
         "summary": {
           "MATCH": 264,
@@ -718,7 +718,7 @@
           "MATCH_NONDETERMINISTIC": 3
         },
         "laneComparisonPath": "spec/compatibility/closure/evidence/FS-CONFIG-LIFECYCLE-comparison.json",
-        "laneComparisonSha256": "3e9570fea280a2ffc14831877a87656bc6e52856068e1937aedd19c5ea3b1da3",
+        "laneComparisonSha256": "3ed1df56800142cdf2e9e1c45c8cc9c870571d6592490382892be87fe91211e7",
         "identicalRows": 270,
         "changedRows": []
       }

@@ -95,7 +95,7 @@ function verifySeries(bundle, name, programs, fixturePath, expectedSummary, muta
 
 test("one release artifact binds write, list, query and saved transaction evidence", () => {
   const bundle = read(bundlePath);
-  assert.equal(bundle.sourceCommit, "da47b5e137a275576d00f6cd75be7e29e5aaa160");
+  assert.equal(bundle.sourceCommit, "dd0c4e6fed38d09646fb2575c2fc11251724e0f4");
   assert.equal(
     bundle.binarySha256,
     "eec383e576e5de8c63fd934ef55dde6592bb6b69888a7f00bb4129c6a9338593",

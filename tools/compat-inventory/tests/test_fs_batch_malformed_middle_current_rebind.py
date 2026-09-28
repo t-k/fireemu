@@ -55,11 +55,11 @@ def source_blob_sha256(commit: str, path: str) -> str:
 
 
 def test_the_rebind_is_bound_to_its_recorded_source_blobs_and_saved_provenance():
-    """Static provenance of the 8a0f205 rebind: it no longer needs the tree to equal that commit."""
+    """Static provenance of the f35f7b8 rebind: it no longer needs the tree to equal that commit."""
     artifact = read_json(ARTIFACT_PATH)
     assert artifact["schemaVersion"] == 1
     assert artifact["conditionId"] == "FS-WRITE-LIMITS-03/batch-malformed-middle"
-    assert artifact["sourceCommit"] == "8a0f20599bab98bb094a74e00d6b2df9f6cd60e8"
+    assert artifact["sourceCommit"] == "f35f7b83e8a17133817c533decf67e0f242550e2"
     assert artifact["savedComparison"] == {
         "path": "spec/compatibility/broad-runs/fs-batch-malformed-middle-3d7ceabb8-saved-comparison.json",
         "sha256": sha256(SAVED_PATH),

@@ -18,23 +18,28 @@ pub struct IdpSignerTrust {
     issuers: BTreeMap<String, BTreeMap<String, Value>>,
     /// Each issuer's `authorization_endpoint`, as its discovery document gives it.
     authorization_endpoints: BTreeMap<String, String>,
+    /// Each issuer's `scopes_supported`, as its discovery document gives it.
+    scopes_supported: BTreeMap<String, Vec<String>>,
     used: Arc<Mutex<UsedCredentials>>,
     saml_requests: Arc<Mutex<Expiring<String>>>,
 }
 
 impl IdpSignerTrust {
     /// Reads `{"<issuer>": {"keys": [<RS256 RSA public JWK with a kid>, …],
-    /// "authorization_endpoint"?: "<https URL>"}}` (the endpoint as the issuer's discovery
-    /// document names it, for `createAuthUri`).
+    /// "authorization_endpoint"?: "<https URL>", "scopes_supported"?: ["<scope>", …]}}` (the
+    /// endpoint and scopes as the issuer's discovery document names them, for `createAuthUri`).
     ///
     /// # Errors
     /// A message naming the first issuer that is not an https URL without a query or fragment,
     /// or whose set is empty, holds a key that is not an RS256 RSA public key of at least 2048
     /// bits, carries private members, or lacks a unique `kid`, or whose
-    /// `authorization_endpoint` is not an https URL without a query or fragment.
+    /// `authorization_endpoint` is not an https URL without a query or fragment, or whose
+    /// `scopes_supported` is not a list of 1 to 32 scope tokens of 1 to 128 letters, digits and
+    /// `._:/-`.
     pub fn from_jwks(signers: &serde_json::Map<String, Value>) -> Result<Self, String> {
         let mut issuers = BTreeMap::new();
         let mut authorization_endpoints = BTreeMap::new();
+        let mut scopes_supported = BTreeMap::new();
         for (issuer, jwks) in signers {
             if !valid_issuer(issuer) {
                 return Err(format!(
@@ -76,10 +81,18 @@ impl IdpSignerTrust {
                     })?;
                 authorization_endpoints.insert(issuer.clone(), endpoint.to_owned());
             }
+            if let Some(scopes) = jwks.get("scopes_supported") {
+                scopes_supported.insert(issuer.clone(), valid_scopes(scopes).ok_or_else(|| {
+                    format!(
+                        "{issuer}: scopes_supported must list 1 to 32 scopes of 1 to 128 letters, digits and ._:/-"
+                    )
+                })?);
+            }
         }
         Ok(Self {
             issuers,
             authorization_endpoints,
+            scopes_supported,
             used: Arc::default(),
             saml_requests: Arc::default(),
         })
@@ -95,6 +108,12 @@ impl IdpSignerTrust {
     #[must_use]
     pub fn authorization_endpoint(&self, issuer: &str) -> Option<&str> {
         self.authorization_endpoints.get(issuer).map(String::as_str)
+    }
+
+    /// The scopes configured as `issuer`'s `scopes_supported`, if any.
+    #[must_use]
+    pub fn scopes_supported(&self, issuer: &str) -> Option<&[String]> {
+        self.scopes_supported.get(issuer).map(Vec::as_slice)
     }
 
     /// Whether any key of `issuer` is configured.
@@ -232,6 +251,27 @@ fn check_signing_key(key: &Value) -> Result<(), String> {
     super::custom_token::validate_public_jwk(key)
 }
 
+/// Scope tokens that go into an authorization URL unescaped.
+fn valid_scopes(value: &Value) -> Option<Vec<String>> {
+    let scopes = value
+        .as_array()
+        .filter(|scopes| (1..=32).contains(&scopes.len()))?;
+    scopes
+        .iter()
+        .map(|scope| {
+            scope
+                .as_str()
+                .filter(|scope| {
+                    (1..=128).contains(&scope.len())
+                        && scope
+                            .chars()
+                            .all(|c| c.is_ascii_alphanumeric() || "._:/-".contains(c))
+                })
+                .map(str::to_owned)
+        })
+        .collect()
+}
+
 fn valid_issuer(issuer: &str) -> bool {
     issuer.strip_prefix("https://").is_some_and(|rest| {
         let host = rest.split('/').next().unwrap_or_default();
@@ -361,6 +401,51 @@ mod tests {
             )]))
             .expect_err("refused");
             assert!(error.contains("authorization_endpoint"), "{error}");
+        }
+    }
+
+    #[test]
+    fn an_issuer_may_name_its_supported_scopes() {
+        // What the issuer's discovery document lists as `scopes_supported` (never fetched).
+        let issuer = "https://idp.example/oidc/run";
+        let key = public_jwk(4, "k1");
+        let trust = IdpSignerTrust::from_jwks(&signers(&[(
+            issuer,
+            json!({"keys": [key.clone()], "scopes_supported": ["openid", "email", "profile"]}),
+        )]))
+        .expect("trust");
+        assert_eq!(
+            trust.scopes_supported(issuer),
+            Some(
+                &[
+                    "openid".to_owned(),
+                    "email".to_owned(),
+                    "profile".to_owned()
+                ][..]
+            )
+        );
+        let without =
+            IdpSignerTrust::from_jwks(&signers(&[(issuer, json!({"keys": [key.clone()]}))]))
+                .expect("trust");
+        assert_eq!(without.scopes_supported(issuer), None);
+        // Only scope tokens that need no escaping in the authorization URL.
+        for bad in [
+            json!("openid"),
+            json!([]),
+            json!([""]),
+            json!(["openid", 7]),
+            json!(["open id"]),
+            json!(["openid&x=1"]),
+            json!(["openid+email"]),
+            json!(["a".repeat(129)]),
+            json!(vec!["openid"; 33]),
+        ] {
+            let error = IdpSignerTrust::from_jwks(&signers(&[(
+                issuer,
+                json!({"keys": [key.clone()], "scopes_supported": bad}),
+            )]))
+            .expect_err("refused");
+            assert!(error.contains("scopes_supported"), "{error}");
         }
     }
 

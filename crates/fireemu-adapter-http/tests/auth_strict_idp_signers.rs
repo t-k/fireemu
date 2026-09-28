@@ -975,6 +975,26 @@ fn strict_answers_create_auth_uri_for_an_oidc_provider_as_production_does() {
 }
 
 #[test]
+fn strict_create_auth_uri_requests_the_scopes_the_issuer_supports() {
+    // Production asked accounts.google.com, whose discovery document lists openid, email and
+    // profile, for those three (AUTH-TENANT-BLOCKING atb/tenant/providers#auth-uri-a) and the
+    // run's issuer, which lists none, for openid (record-oidc 39209e). That the scope comes
+    // from the discovery document is inferred from these two observations.
+    let mut s = strict_state();
+    let mut jwks = signer().jwks();
+    jwks["authorization_endpoint"] = json!(AUTHORIZE);
+    jwks["scopes_supported"] = json!(["openid", "email", "profile"]);
+    s.idp_assertions = IdpAssertionPolicy::SignedOidc(signers(ISSUER, jwks));
+    let answer = create_auth_uri(
+        &s,
+        &json!({"providerId": PROVIDER, "continueUri": CONTINUE}),
+    );
+    assert_eq!(answer.status, 200, "{}", answer.body);
+    let uri = answer.body["authUri"].as_str().unwrap();
+    assert!(uri.contains("&scope=openid+email+profile&nonce="), "{uri}");
+}
+
+#[test]
 fn strict_create_auth_uri_refuses_as_production_does() {
     let s = strict_state_with_endpoint();
     let missing = create_auth_uri(&s, &json!({"providerId": PROVIDER}));

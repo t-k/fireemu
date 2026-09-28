@@ -8,6 +8,8 @@ Each release is a Git tag; the binaries and the npm packages are built from that
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-09-28
+
 ### Added
 
 - Both profiles: the Admin config API holds the project's `mfa` member (`state`, `enabledProviders`, `providerConfigs`) and reads it back in production's shape, starting from `{"state": "DISABLED"}` as a new production project does. A value whose TOTP provider is enabled enables TOTP enrollment and sign-in without `auth.totp`, with its `adjacentIntervals` as the acceptance window (fireemu-only in the emulator profile, which has no project `mfa` config in the official emulator; that profile leaves the member out of its config document while it is a new project's).
@@ -287,7 +289,8 @@ Security Rules (FS-RULES): behavior below was measured against a real Firestore 
 - The `strict` and `firebase` compatibility profiles, the Capability Manifest, and the Compatibility Contract pinned to firebase-tools 15.28.2.
 - `fireemu init`, `up`, `exec`, `emulators:export`, `doctor`, and `capabilities` commands, with the official `emulators:start` and `emulators:exec` spellings as aliases.
 
-[Unreleased]: https://github.com/t-k/fireemu/compare/v0.7.1...HEAD
+[Unreleased]: https://github.com/t-k/fireemu/compare/v0.8.0...HEAD
+[0.8.0]: https://github.com/t-k/fireemu/compare/v0.7.1...v0.8.0
 [0.7.1]: https://github.com/t-k/fireemu/compare/v0.7.0...v0.7.1
 [0.7.0]: https://github.com/t-k/fireemu/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/t-k/fireemu/compare/v0.5.0...v0.6.0

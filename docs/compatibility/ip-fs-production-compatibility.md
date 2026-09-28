@@ -145,7 +145,7 @@ The owner added `FUNCTIONS-HTTP` to the production-compatibility parents on 2026
 
 | Feature group | Required conditions | Current evidence | Parent state | Remaining completion work |
 | --- | --- | --- | --- | --- |
-| FUNCTIONS-HTTP | 2nd gen HTTP and callable request and response behavior, errors, Auth context, timeout and streaming in one Node.js region | The copied final artifact matches both production recordings in all 68 cases. Workspace regression passed 3,513 tests with 99 skips; the Node runner passed 747 with two skips. The emulator profile adds no new refusal. The owner accepted its pre-existing 401 JSON callable Bearer refusals as a production-first exception on 2026-09-28 (B7), while the official emulator returns 200. | `IMPLEMENTING` | Obtain independent coordinator closure approval before promotion. |
+| FUNCTIONS-HTTP | 2nd gen HTTP and callable request and response behavior, errors, Auth context, timeout and streaming in one Node.js region | The copied final artifact matches both production recordings in all 68 cases. Workspace regression passed 3,521 tests with 99 skips; the Node runner passed 747 with two skips. The emulator profile adds no new refusal. Both profiles admit external and LAN callable Origins under the owner's 2026-09-28 decision, verified locally against the pinned SDK and retained official fixture. The owner also accepted the pre-existing 401 JSON callable Bearer refusals as a production-first exception (B7), while the official emulator returns 200. | `IMPLEMENTING` | Obtain independent coordinator closure approval before promotion. |
 
 ## Existing evidence boundaries
 

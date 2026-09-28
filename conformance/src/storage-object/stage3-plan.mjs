@@ -7,7 +7,7 @@ const PER_RECORDING_CAP = 3000;
 const PER_RECORDING_CLEANUP_RESERVE = 1000;
 const RECOVERY_RESERVE = 600;
 const TASK_REQUEST_CAP = 2 * PER_RECORDING_CAP + RECOVERY_RESERVE;
-const TASK_USD_RESERVATION = 9;
+const TASK_USD_RESERVATION = 1;
 const EXPECTED_REMAINING = [
   "storage-object/errors/authorization",
   "storage-object/auth/firebase-id-token",
@@ -113,6 +113,10 @@ export function buildStage3DraftPlan({ projectId, bucket, runIds } = {}) {
     maxRequests: TASK_REQUEST_CAP,
     recoveryReserveRequests: RECOVERY_RESERVE,
     maxUsdReservation: TASK_USD_RESERVATION,
+    estimatedUsd: 0.3,
+    maxRequestBytes: 32 * 1024 * 1024,
+    maxResponseBytes: 256 * 1024 * 1024,
+    maxOwnedAuthAccounts: 8,
     budgetStatus: "PROPOSED_NOT_APPROVED",
     sendAuthorized: false,
   };

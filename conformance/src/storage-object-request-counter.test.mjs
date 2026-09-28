@@ -116,3 +116,52 @@ test("journal failure prevents dispatch and concurrent requests cannot race the 
   assert.equal(calls, 1);
   assert.equal(counter.snapshot().total, 1);
 });
+
+for (const [label, delta] of [
+  ["reservation below the estimate", { maxUsdReservation: 0.299999 }],
+  ["estimate below the full quote", { estimatedUsd: 0.287299 }],
+  ["invalid reservation", { maxUsdReservation: NaN }],
+  ["invalid estimate", { estimatedUsd: Infinity }],
+  ["unbounded ingress", { maxResponseBytes: Number.MAX_SAFE_INTEGER }],
+]) {
+  test(`${label} cannot write started or reach transport`, async () => {
+    let started = 0,
+      wire = 0;
+    const counter = createStage3RequestCounter(
+      { ...makePlan(), ...delta },
+      {
+        onStart: async () => started++,
+        onReserve: async () => {},
+      },
+    );
+    await assert.rejects(counter.start(), /budget|reservation|estimate|bound/);
+    await assert.rejects(
+      counter.send("blocked", async () => wire++),
+      /started/,
+    );
+    assert.equal(started, 0);
+    assert.equal(wire, 0);
+  });
+}
+
+test("an exact estimate-sized reservation admits, and caller changes cannot raise fixed limits", async () => {
+  const plan = { ...makePlan(), maxUsdReservation: 0.3 };
+  let started;
+  const counter = createStage3RequestCounter(plan, {
+    onStart: async (row) => {
+      started = row;
+    },
+    onReserve: async () => {},
+  });
+  plan.maxUsdReservation = Infinity;
+  plan.estimatedUsd = NaN;
+  plan.recordings[0].subjectCapRequests = 9000;
+  await counter.start();
+  assert.equal(started.maxUsdReservation, 0.3);
+  assert.equal(started.estimatedUsd, 0.3);
+  for (let i = 0; i < 2000; i++) await counter.send("bounded", async () => {});
+  await assert.rejects(
+    counter.send("extra", async () => assert.fail("wire")),
+    /subject cap/,
+  );
+});

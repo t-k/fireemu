@@ -15,7 +15,11 @@ test("two distinct recordings retain the frozen corpus and a single total reques
   assert.equal(plan.sendAuthorized, false);
   assert.equal(plan.recordings.length, 2);
   assert.equal(plan.maxRequests, 6600);
-  assert.equal(plan.maxUsdReservation, 9);
+  assert.equal(plan.maxUsdReservation, 1);
+  assert.equal(plan.estimatedUsd, 0.3);
+  assert.equal(plan.maxRequestBytes, 32 * 1024 * 1024);
+  assert.equal(plan.maxResponseBytes, 256 * 1024 * 1024);
+  assert.equal(plan.maxOwnedAuthAccounts, 8);
   assert.equal(plan.recoveryReserveRequests, 600);
   assert.equal(
     plan.recordings.reduce((sum, record) => sum + record.maxRequests, 0),

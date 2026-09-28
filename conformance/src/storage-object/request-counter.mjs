@@ -1,7 +1,10 @@
+import { estimateStage3Budget } from "./budget-model.mjs";
+
 /** Count every outbound attempt before dispatch, with protected cleanup and recovery capacity. */
 export function createStage3RequestCounter(plan, { onStart, onReserve } = {}) {
   if (typeof onStart !== "function" || typeof onReserve !== "function")
     throw new Error("durable started and request-reservation writers are required");
+  plan = structuredClone(plan);
   let mode = "not-started";
   let recording = 0;
   let busy = false;
@@ -15,7 +18,9 @@ export function createStage3RequestCounter(plan, { onStart, onReserve } = {}) {
   function checkEnvelope() {
     if (plan?.status !== "LOCAL_DRAFT_NO_SEND" || plan.recordings?.length !== 2)
       throw new Error("invalid two-recording plan");
-    const reserved = plan.recordings.reduce((sum, item) => sum + item.maxRequests, 0) +
+    estimateStage3Budget(plan);
+    const reserved =
+      plan.recordings.reduce((sum, item) => sum + item.maxRequests, 0) +
       plan.recoveryReserveRequests;
     if (plan.maxRequests !== reserved)
       throw new Error("total cap cannot carry two recordings and recovery reserve");
@@ -46,7 +51,12 @@ export function createStage3RequestCounter(plan, { onStart, onReserve } = {}) {
       checkEnvelope();
       busy = true;
       try {
-        await onStart({ maxRequests: plan.maxRequests, recordings: 2 });
+        await onStart({
+          maxRequests: plan.maxRequests,
+          recordings: 2,
+          estimatedUsd: plan.estimatedUsd,
+          maxUsdReservation: plan.maxUsdReservation,
+        });
         mode = "subject";
       } finally {
         busy = false;
@@ -103,7 +113,7 @@ export function createStage3RequestCounter(plan, { onStart, onReserve } = {}) {
     snapshot() {
       return {
         total,
-        recordings: recordings.map((item) => ({ ...item })),
+        recordings: recordings.map((item) => ({ subject: item.subject, cleanup: item.cleanup })),
         recovery,
         mode,
       };

@@ -667,3 +667,54 @@ fn a_refused_mail_leaves_no_notice_and_keeps_the_earlier_code() {
     assert_eq!(status, 200, "{checked}");
     assert_eq!(checked["requestType"], "PASSWORD_RESET");
 }
+
+/// The strict profile's mail conflicts are never answered in the emulator profile, which runs
+/// no email event: the account is not touched by a mail function, and a mail function or a
+/// configuration that changes after admission is not waited for.
+#[test]
+fn the_emulator_profile_never_answers_the_mail_conflicts() {
+    let (mut s, _) = state(false, true);
+    let (status, body) = admin(
+        &s,
+        "PATCH",
+        "/identitytoolkit.googleapis.com/admin/v2/projects/demo-app/config?updateMask=emailPrivacyConfig.enableImprovedEmailPrivacy",
+        &json!({"emailPrivacyConfig": {"enableImprovedEmailPrivacy": true}}),
+    );
+    assert_eq!(status, 200, "{body}");
+    create_account(
+        &s,
+        &format!("{V1}/projects/demo-app/accounts"),
+        "kept@example.com",
+    );
+    s.blocking = Some(Arc::new(DeletingHook {
+        store: s.store.clone(),
+    }));
+    let (status, body) = client(
+        &s,
+        &format!("{V1}/accounts:sendOobCode"),
+        &json!({"requestType": "PASSWORD_RESET", "email": "kept@example.com"}),
+    );
+    assert_eq!(status, 200, "{body}");
+    assert!(s
+        .store
+        .lock()
+        .unwrap()
+        .user_by_email("kept@example.com")
+        .is_some());
+
+    for bump_revision in [false, true] {
+        s.blocking = Some(Arc::new(LateHook {
+            handles_calls: AtomicUsize::new(0),
+            revision_calls: AtomicUsize::new(0),
+            bump_revision,
+        }));
+        let (status, body) = admin(
+            &s,
+            "POST",
+            &format!("{V1}/projects/demo-app/accounts:sendOobCode"),
+            &json!({"requestType": "PASSWORD_RESET", "email": "kept@example.com", "returnOobLink": true}),
+        );
+        assert_eq!(status, 200, "revision {bump_revision}: {body}");
+        assert!(body["oobLink"].is_string(), "{body}");
+    }
+}

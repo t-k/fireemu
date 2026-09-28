@@ -200,6 +200,11 @@
             "type": "object",
             "required": ["keys"],
             "properties": {
+              "authorization_endpoint": {
+                "type": "string",
+                "pattern": "^https://[^/?#\\s]+(/[^?#\\s]*)?$",
+                "description": "The issuer's authorization endpoint, as its discovery document names it. With it, the strict profile answers createAuthUri for the issuer's oidc.* providers (the ID-token flow); no discovery document is fetched."
+              },
               "keys": {
                 "type": "array",
                 "minItems": 1,

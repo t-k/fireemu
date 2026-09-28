@@ -15,18 +15,24 @@ const PRIVATE_MEMBERS: &[&str] = &["d", "p", "q", "dp", "dq", "qi", "oth", "k"];
 #[derive(Debug, Clone, Default)]
 pub struct IdpSignerTrust {
     issuers: BTreeMap<String, BTreeMap<String, Value>>,
+    /// Each issuer's `authorization_endpoint`, as its discovery document gives it.
+    authorization_endpoints: BTreeMap<String, String>,
     used: Arc<Mutex<UsedCredentials>>,
 }
 
 impl IdpSignerTrust {
-    /// Reads `{"<issuer>": {"keys": [<RS256 RSA public JWK with a kid>, …]}}`.
+    /// Reads `{"<issuer>": {"keys": [<RS256 RSA public JWK with a kid>, …],
+    /// "authorization_endpoint"?: "<https URL>"}}` (the endpoint as the issuer's discovery
+    /// document names it, for `createAuthUri`).
     ///
     /// # Errors
     /// A message naming the first issuer that is not an https URL without a query or fragment,
     /// or whose set is empty, holds a key that is not an RS256 RSA public key of at least 2048
-    /// bits, carries private members, or lacks a unique `kid`.
+    /// bits, carries private members, or lacks a unique `kid`, or whose
+    /// `authorization_endpoint` is not an https URL without a query or fragment.
     pub fn from_jwks(signers: &serde_json::Map<String, Value>) -> Result<Self, String> {
         let mut issuers = BTreeMap::new();
+        let mut authorization_endpoints = BTreeMap::new();
         for (issuer, jwks) in signers {
             if !valid_issuer(issuer) {
                 return Err(format!(
@@ -57,9 +63,21 @@ impl IdpSignerTrust {
                 }
             }
             issuers.insert(issuer.clone(), by_kid);
+            if let Some(endpoint) = jwks.get("authorization_endpoint") {
+                let endpoint = endpoint
+                    .as_str()
+                    .filter(|endpoint| valid_issuer(endpoint))
+                    .ok_or_else(|| {
+                        format!(
+                            "{issuer}: authorization_endpoint must be an https URL without a query or fragment"
+                        )
+                    })?;
+                authorization_endpoints.insert(issuer.clone(), endpoint.to_owned());
+            }
         }
         Ok(Self {
             issuers,
+            authorization_endpoints,
             used: Arc::default(),
         })
     }
@@ -68,6 +86,12 @@ impl IdpSignerTrust {
     #[must_use]
     pub fn key(&self, issuer: &str, kid: &str) -> Option<&Value> {
         self.issuers.get(issuer)?.get(kid)
+    }
+
+    /// The authorization endpoint configured for `issuer`, if any.
+    #[must_use]
+    pub fn authorization_endpoint(&self, issuer: &str) -> Option<&str> {
+        self.authorization_endpoints.get(issuer).map(String::as_str)
     }
 
     /// Whether any key of `issuer` is configured.
@@ -258,6 +282,38 @@ mod tests {
         assert_eq!(trust.key(issuer, "k1"), Some(&key));
         assert_eq!(trust.key(issuer, "k2"), None);
         assert_eq!(trust.key("https://other.example", "k1"), None);
+    }
+
+    #[test]
+    fn an_issuer_may_name_its_authorization_endpoint() {
+        // What the issuer's discovery document says, for createAuthUri (never fetched).
+        let issuer = "https://idp.example/oidc/run";
+        let key = public_jwk(3, "k1");
+        let endpoint = "https://idp.example/oidc/run/authorize";
+        let trust = IdpSignerTrust::from_jwks(&signers(&[(
+            issuer,
+            json!({"keys": [key.clone()], "authorization_endpoint": endpoint}),
+        )]))
+        .expect("trust");
+        assert_eq!(trust.authorization_endpoint(issuer), Some(endpoint));
+        let without =
+            IdpSignerTrust::from_jwks(&signers(&[(issuer, json!({"keys": [key.clone()]}))]))
+                .expect("trust");
+        assert_eq!(without.authorization_endpoint(issuer), None);
+        for bad in [
+            json!("http://idp.example/authorize"),
+            json!("https://idp.example/authorize?x=1"),
+            json!("https://idp.example/authorize#f"),
+            json!(""),
+            json!(7),
+        ] {
+            let error = IdpSignerTrust::from_jwks(&signers(&[(
+                issuer,
+                json!({"keys": [key.clone()], "authorization_endpoint": bad}),
+            )]))
+            .expect_err("refused");
+            assert!(error.contains("authorization_endpoint"), "{error}");
+        }
     }
 
     #[test]

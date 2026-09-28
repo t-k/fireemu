@@ -892,3 +892,112 @@ fn a_returning_oidc_sign_in_leaves_the_account_profile_as_it_was() {
     assert_eq!(user.display_name, None);
     assert_eq!(user.federated[0].display_name, None);
 }
+
+const AUTHORIZE: &str = "https://issuer.example.test/oidc/run/authorize";
+const CONTINUE: &str = "https://demo-app.firebaseapp.com/__/auth/handler";
+
+fn create_auth_uri(s: &AuthState, body: &Value) -> JsonResponse {
+    handle(s, "POST", &format!("{V1}/accounts:createAuthUri"), body)
+}
+
+/// A strict state whose issuer names its authorization endpoint.
+fn strict_state_with_endpoint() -> AuthState {
+    let mut s = strict_state();
+    let mut jwks = signer().jwks();
+    jwks["authorization_endpoint"] = json!(AUTHORIZE);
+    s.idp_assertions = IdpAssertionPolicy::SignedOidc(signers(ISSUER, jwks));
+    s
+}
+
+#[test]
+fn strict_answers_create_auth_uri_for_an_oidc_provider_as_production_does() {
+    // record-oidc 39209e: the issuer's authorization endpoint with the ID-token flow's
+    // parameters, a state and a nonce the service makes, and a session ID.
+    let s = strict_state_with_endpoint();
+    let answer = create_auth_uri(
+        &s,
+        &json!({"providerId": PROVIDER, "continueUri": CONTINUE}),
+    );
+    assert_eq!(answer.status, 200, "{}", answer.body);
+    let mut keys: Vec<&str> = answer
+        .body
+        .as_object()
+        .unwrap()
+        .keys()
+        .map(String::as_str)
+        .collect();
+    keys.sort_unstable();
+    assert_eq!(keys, ["authUri", "kind", "providerId", "sessionId"]);
+    assert_eq!(answer.body["kind"], "identitytoolkit#CreateAuthUriResponse");
+    assert_eq!(answer.body["providerId"], PROVIDER);
+    assert!(!answer.body["sessionId"].as_str().unwrap().is_empty());
+    let uri = answer.body["authUri"].as_str().unwrap();
+    let prefix = format!(
+        "{AUTHORIZE}?response_type=id_token&client_id={CLIENT}&redirect_uri={CONTINUE}&state="
+    );
+    assert!(uri.starts_with(&prefix), "{uri}");
+    let rest = &uri[prefix.len()..];
+    let (state, rest) = rest.split_once("&scope=openid&nonce=").unwrap();
+    assert!(!state.is_empty() && !state.contains('&'), "{uri}");
+    assert_eq!(rest.len(), 64, "{uri}");
+    assert!(
+        rest.chars()
+            .all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase()),
+        "{uri}"
+    );
+    // Each answer is its own session.
+    let again = create_auth_uri(
+        &s,
+        &json!({"providerId": PROVIDER, "continueUri": CONTINUE}),
+    );
+    assert_ne!(again.body["sessionId"], answer.body["sessionId"]);
+    assert_ne!(again.body["authUri"], answer.body["authUri"]);
+    // Production signs in with or without the session, as the ID-token flow needs none.
+    let mut body = request(&token(&claims()));
+    body["sessionId"] = answer.body["sessionId"].clone();
+    assert_eq!(sign_in(&s, &body).status, 200);
+}
+
+#[test]
+fn strict_create_auth_uri_refuses_as_production_does() {
+    let s = strict_state_with_endpoint();
+    let missing = create_auth_uri(&s, &json!({"providerId": PROVIDER}));
+    assert_eq!(missing.status, 400, "{}", missing.body);
+    assert_eq!(missing.body["error"]["message"], "MISSING_CONTINUE_URI");
+    let unknown = create_auth_uri(
+        &s,
+        &json!({"providerId": "oidc.unknown", "continueUri": CONTINUE}),
+    );
+    assert_eq!(unknown.status, 400, "{}", unknown.body);
+    assert_eq!(unknown.body["error"]["message"], NOT_FOUND);
+    s.store
+        .lock()
+        .unwrap()
+        .replace_oidc_config(provider(false, ISSUER));
+    let disabled = create_auth_uri(
+        &s,
+        &json!({"providerId": PROVIDER, "continueUri": CONTINUE}),
+    );
+    assert_eq!(disabled.status, 400, "{}", disabled.body);
+    assert_eq!(disabled.body["error"]["message"], DISABLED);
+}
+
+#[test]
+fn create_auth_uri_without_an_authorization_endpoint_stays_unimplemented() {
+    // Strict never fetches the discovery document: without a configured endpoint it cannot
+    // build the URI. The emulator profile answers as the official emulator does.
+    let strict = strict_state();
+    let answer = create_auth_uri(
+        &strict,
+        &json!({"providerId": PROVIDER, "continueUri": CONTINUE}),
+    );
+    assert_eq!(answer.status, 501, "{}", answer.body);
+    let mut emulator = strict_state_with_endpoint();
+    emulator.stateless_refresh_tokens = true;
+    emulator.idp_assertions = IdpAssertionPolicy::Fixture;
+    let answer = create_auth_uri(
+        &emulator,
+        &json!({"providerId": PROVIDER, "continueUri": CONTINUE}),
+    );
+    assert_eq!(answer.status, 501, "{}", answer.body);
+}

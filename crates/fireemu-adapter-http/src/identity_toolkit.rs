@@ -3481,6 +3481,8 @@ struct DispatchOptions {
     legacy_tokens: bool,
     query_limits: AuthQueryLimits,
     inbound_credential_policy: fireemu_core_functions::manifest::BlockingAuthTokenPolicy,
+    /// The strict daemon's OIDC issuers (keys and authorization endpoints).
+    idp_signers: Option<Arc<IdpSignerTrust>>,
 }
 
 /// The options of a request whose blocking trigger is selected: it keeps secure tokens.
@@ -3500,6 +3502,10 @@ impl From<&AuthState> for DispatchOptions {
             custom_token_trust: state.custom_token_trust.clone(),
             legacy_tokens: !state.stateless_refresh_tokens,
             query_limits: state.query_limits,
+            idp_signers: match &state.idp_assertions {
+                IdpAssertionPolicy::SignedOidc(signers) => Some(signers.clone()),
+                IdpAssertionPolicy::Fixture => None,
+            },
             inbound_credential_policy: state.blocking.as_deref().map_or_else(
                 fireemu_core_functions::manifest::BlockingAuthTokenPolicy::default,
                 |blocking| {
@@ -3596,7 +3602,12 @@ fn dispatch(
             options.inbound_credential_policy,
             !options.stateless_refresh_tokens,
         ),
-        Handler::CreateAuthUri => create_auth_uri(store, body, !options.stateless_refresh_tokens),
+        Handler::CreateAuthUri => create_auth_uri(
+            store,
+            body,
+            !options.stateless_refresh_tokens,
+            options.idp_signers.as_deref(),
+        ),
         Handler::Projects => client_project_config(store, !options.stateless_refresh_tokens),
         Handler::RecaptchaParams => {
             let mut body = json!({
@@ -12364,6 +12375,52 @@ fn stored_email_verified(store: &AuthStore, uid: &LocalId, info: &IdpUserInfo, b
     }
 }
 
+/// Production's `createAuthUri` for an OIDC provider (record-oidc 39209e): the issuer's
+/// authorization endpoint with the ID-token flow's parameters (the continue URI as the redirect
+/// URI, a state, `openid` scope and the SHA-256 of a raw nonce the service keeps), and a
+/// session ID. A sign-in reads neither back (production signed in with a wrong or no session).
+/// `None` for a provider strict does not answer: not OIDC, an issuer without a configured
+/// authorization endpoint (no discovery document is fetched), or the code flow.
+fn strict_oidc_auth_uri(
+    store: &mut AuthStore,
+    provider_id: &str,
+    body: &Value,
+    signers: Option<&IdpSignerTrust>,
+) -> Option<JsonResponse> {
+    let config = store.oidc_config(provider_id)?.clone();
+    let Some(continue_uri) = str_field(body, "continueUri").filter(|uri| !uri.is_empty()) else {
+        return Some(error(400, "MISSING_CONTINUE_URI"));
+    };
+    if !uri_is_absolute(continue_uri) {
+        return Some(error(400, "INVALID_CONTINUE_URI"));
+    }
+    if !config.enabled {
+        return Some(error(400, crate::oidc::DISABLED_REFUSAL));
+    }
+    let endpoint = signers?.authorization_endpoint(&config.issuer)?;
+    if !config.response_type.id_token {
+        return None;
+    }
+    let state = store.next_opaque_value();
+    let raw_nonce = store.next_opaque_value();
+    let nonce = fireemu_core_types::hash::hex_lower(&fireemu_core_types::hash::sha256(
+        raw_nonce.as_bytes(),
+    ));
+    let session_id = store.next_opaque_value();
+    Some(JsonResponse {
+        status: 200,
+        body: json!({
+            "kind": "identitytoolkit#CreateAuthUriResponse",
+            "authUri": format!(
+                "{endpoint}?response_type=id_token&client_id={}&redirect_uri={continue_uri}&state={state}&scope=openid&nonce={nonce}",
+                config.client_id
+            ),
+            "providerId": provider_id,
+            "sessionId": session_id,
+        }),
+    })
+}
+
 /// The OIDC claims that are not sign-in attributes: the ID token's own and the standard user
 /// claims (production kept a custom claim and left out `iss`, `aud`, `sub`, `iat`, `exp`,
 /// `email`, `email_verified`, `name` and `picture`, record-oidc 39209e; the rest of the list
@@ -12527,7 +12584,12 @@ fn normalized_idp_params(request_uri: &str, post_body: Option<&str>) -> BTreeMap
 /// `accounts:createAuthUri`. Strict answers as production does (sandbox recording
 /// 2026-09-25, auth-config-sdk/email-privacy): a provider that is not configured is refused,
 /// and empty provider lists are left out.
-fn create_auth_uri(store: &AuthStore, body: &Value, strict: bool) -> JsonResponse {
+fn create_auth_uri(
+    store: &mut AuthStore,
+    body: &Value,
+    strict: bool,
+    signers: Option<&IdpSignerTrust>,
+) -> JsonResponse {
     let session_id = str_field(body, "sessionId")
         .filter(|s| !s.is_empty())
         .unwrap_or("fireemu-session")
@@ -12544,6 +12606,13 @@ fn create_auth_uri(store: &AuthStore, body: &Value, strict: bool) -> JsonRespons
                 400,
                 "OPERATION_NOT_ALLOWED : The identity provider configuration is not found.",
             );
+        }
+        if strict {
+            if let Some(answer) =
+                strict_oidc_auth_uri(store, provider.as_str().unwrap_or_default(), body, signers)
+            {
+                return answer;
+            }
         }
         return not_implemented("Sign-in with IDP is not yet supported.");
     }

@@ -23,6 +23,7 @@ Behavior below was measured against a real Identity Platform project on 2026-09-
 - `auth.apiKeys` declares the project's Web API keys. A client request with any other key is refused with production's `400 API_KEY_INVALID` envelope (unlike the official emulator, which validates no key). An unknown key under a registered session now gets the same envelope instead of `INVALID_API_KEY`.
 
 - `auth.idpSigners` maps OIDC issuer URLs to their public JWK sets (RS256 signing keys with a unique `kid`, no private members). The strict profile verifies `signInWithIdp` ID tokens with them; no key is fetched from an issuer. The emulator profile ignores the setting.
+- `auth.idpSigners` entries may name the issuer's `authorization_endpoint`, as its discovery document gives it. With it, the strict profile answers `accounts:createAuthUri` for the issuer's `oidc.*` providers in production's shape (recorded 2026-09-28): the endpoint with `response_type=id_token`, `client_id`, the continue URI as `redirect_uri`, a `state`, `scope=openid` and a SHA-256 `nonce`, plus a `sessionId`. `MISSING_CONTINUE_URI` and a disabled provider's `OPERATION_NOT_ALLOWED : The identity provider configuration is disabled.` are refused as production refuses them. Without an endpoint, createAuthUri for a provider stays unimplemented, as in the emulator profile.
 
 ### Changed
 

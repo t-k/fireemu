@@ -1760,6 +1760,12 @@ impl AuthStore {
         )
     }
 
+    /// A fresh opaque value of the bearer-credential shape, for a value the service makes and
+    /// the caller hands back unread (a `createAuthUri` session ID, state or nonce).
+    pub fn next_opaque_value(&mut self) -> String {
+        self.next_id("")
+    }
+
     fn next_refresh_token(&mut self) -> String {
         let entropy = self.next_id("");
         let tenant = self.tenant_id.as_deref().unwrap_or_default();

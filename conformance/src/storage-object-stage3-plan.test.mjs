@@ -14,12 +14,12 @@ test("two distinct recordings retain the frozen corpus and a single total reques
   assert.equal(plan.status, "LOCAL_DRAFT_NO_SEND");
   assert.equal(plan.sendAuthorized, false);
   assert.equal(plan.recordings.length, 2);
-  assert.equal(plan.maxRequests, 5600);
+  assert.equal(plan.maxRequests, 6600);
   assert.equal(plan.maxUsdReservation, 9);
   assert.equal(plan.recoveryReserveRequests, 600);
   assert.equal(
     plan.recordings.reduce((sum, record) => sum + record.maxRequests, 0),
-    5000,
+    6000,
   );
   for (const [index, record] of plan.recordings.entries()) {
     assert.equal(record.runId, input.runIds[index]);
@@ -31,12 +31,12 @@ test("two distinct recordings retain the frozen corpus and a single total reques
     assert.equal(record.staticRequestEntries, 2103);
     assert.equal(record.staticCleanupEntries, 439);
     assert.equal(record.staticSubjectEntries, 1664);
-    assert.equal(record.maxRequests, 2500);
-    assert.equal(record.cleanupReserveRequests, 600);
-    assert.equal(record.subjectCapRequests, 1900);
+    assert.equal(record.maxRequests, 3000);
+    assert.equal(record.cleanupReserveRequests, 1000);
+    assert.equal(record.subjectCapRequests, 2000);
     assert.equal(record.supplementalSubjectMaxRequests, 128);
-    assert.equal(record.subjectAllowance, 108);
-    assert.equal(record.cleanupAllowance, 161);
+    assert.equal(record.subjectAllowance, 208);
+    assert.equal(record.cleanupAllowance, 561);
     assert.match(record.corpusDigest, /^[a-f0-9]{64}$/);
     assert.match(record.authCorpusDigest, /^[a-f0-9]{64}$/);
     assert.match(record.authPlanDigest, /^[a-f0-9]{64}$/);

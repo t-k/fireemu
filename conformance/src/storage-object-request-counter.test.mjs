@@ -59,26 +59,26 @@ test("subject cannot consume cleanup or recovery reserves, and the total cap hol
   let calls = 0;
   const send = () => counter.send("bounded-request", async () => calls++);
   await counter.start();
-  for (let index = 0; index < 1900; index++) await send();
+  for (let index = 0; index < 2000; index++) await send();
   await assert.rejects(send(), /subject cap/i);
-  assert.equal(calls, 1900);
+  assert.equal(calls, 2000);
   counter.beginCleanup();
-  for (let index = 0; index < 600; index++) await send();
+  for (let index = 0; index < 1000; index++) await send();
   await assert.rejects(send(), /cleanup cap/i);
   counter.nextRecording();
-  for (let index = 0; index < 1900; index++) await send();
+  for (let index = 0; index < 2000; index++) await send();
   counter.beginCleanup();
-  for (let index = 0; index < 600; index++) await send();
+  for (let index = 0; index < 1000; index++) await send();
   counter.enterRecovery();
   for (let index = 0; index < 600; index++) await send();
   await assert.rejects(send(), /recovery cap|total cap/i);
-  assert.equal(calls, 5600);
+  assert.equal(calls, 6600);
   assert.deepEqual(counter.snapshot().recordings, [
-    { subject: 1900, cleanup: 600 },
-    { subject: 1900, cleanup: 600 },
+    { subject: 2000, cleanup: 1000 },
+    { subject: 2000, cleanup: 1000 },
   ]);
   assert.equal(counter.snapshot().recovery, 600);
-  assert.equal(counter.snapshot().total, 5600);
+  assert.equal(counter.snapshot().total, 6600);
 });
 
 test("journal failure prevents dispatch and concurrent requests cannot race the counter", async () => {
@@ -90,18 +90,27 @@ test("journal failure prevents dispatch and concurrent requests cannot race the 
   });
   await failed.start();
   let calls = 0;
-  await assert.rejects(failed.send("first", async () => calls++), /journal unavailable/);
+  await assert.rejects(
+    failed.send("first", async () => calls++),
+    /journal unavailable/,
+  );
   assert.equal(calls, 0);
   assert.equal(failed.snapshot().total, 0);
 
   let release;
   const counter = createStage3RequestCounter(makePlan(), {
     onStart: async () => {},
-    onReserve: async () => new Promise((resolve) => { release = resolve; }),
+    onReserve: async () =>
+      new Promise((resolve) => {
+        release = resolve;
+      }),
   });
   await counter.start();
   const first = counter.send("first", async () => calls++);
-  await assert.rejects(counter.send("second", async () => calls++), /concurrent/i);
+  await assert.rejects(
+    counter.send("second", async () => calls++),
+    /concurrent/i,
+  );
   release();
   await first;
   assert.equal(calls, 1);

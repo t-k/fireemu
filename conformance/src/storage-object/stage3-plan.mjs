@@ -3,8 +3,8 @@ import { FIXED_PRODUCTION_RULES_SHA256, buildSymbolicStorageAuthPlan } from "./a
 import { buildAuthCorpus } from "./auth-corpus.mjs";
 import { buildCorpus } from "./corpus.mjs";
 
-const PER_RECORDING_CAP = 2500;
-const PER_RECORDING_CLEANUP_RESERVE = 600;
+const PER_RECORDING_CAP = 3000;
+const PER_RECORDING_CLEANUP_RESERVE = 1000;
 const RECOVERY_RESERVE = 600;
 const TASK_REQUEST_CAP = 2 * PER_RECORDING_CAP + RECOVERY_RESERVE;
 const TASK_USD_RESERVATION = 9;

@@ -14,7 +14,7 @@ test("plan command prints a bounded non-sending two-recording draft", () => {
   const plan = JSON.parse(output);
   assert.equal(plan.status, "LOCAL_DRAFT_NO_SEND");
   assert.equal(plan.sendAuthorized, false);
-  assert.equal(plan.maxRequests, 5600);
+  assert.equal(plan.maxRequests, 6600);
   assert.equal(plan.recordings.length, 2);
 });
 

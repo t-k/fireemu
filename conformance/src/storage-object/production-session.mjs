@@ -24,6 +24,27 @@ function dataRecord(value, keys) {
   return result;
 }
 
+/** Classify only a validated continuation; the factory supplies the original canonical step. */
+export function productionSessionCapturePhase(value) {
+  try {
+    const step = dataRecord(value);
+    if (!["firebase", "gcs"].includes(step.dialect)) throw new Error();
+    continuationMutation(step);
+    const headers = dataRecord(step.headers);
+    if (step.dialect === "firebase")
+      return { query: "query", cancel: "cancel", upload: "upload", "upload, finalize": "finalize" }[
+        headers["x-goog-upload-command"]
+      ];
+    if (step.method === "DELETE") return "cancel";
+    const range = headers["content-range"];
+    if (range.startsWith("bytes */")) return "query";
+    const [, , end, total] = /^bytes ([0-9]+)-([0-9]+)\/([0-9]+)$/.exec(range);
+    return BigInt(end) + 1n === BigInt(total) ? "finalize" : "upload";
+  } catch {
+    throw new Error("invalid production session capture phase");
+  }
+}
+
 function sessionBoundary(value) {
   const config = dataRecord(value, ["dialect", "bucket", "prefix", "objectName"]);
   if (

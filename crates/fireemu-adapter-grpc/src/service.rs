@@ -507,6 +507,13 @@ impl Firestore for GatewayService {
             // An empty batch never reaches the guard: the audience is checked here so a
             // token of another project cannot open a transaction in this one.
             self.check_database_audience(&caller, &request.get_ref().database)?;
+            if let (
+                Some(rules),
+                Some(pb::batch_get_documents_request::ConsistencySelector::NewTransaction(options)),
+            ) = (&self.rules, &request.get_ref().consistency_selector)
+            {
+                rules.check_new_transaction(&caller.principal, Some(options))?;
+            }
             let local = local.clone();
             let rules = self.rules.clone();
             let request = request.into_inner();
@@ -562,6 +569,10 @@ impl Firestore for GatewayService {
                 "BeginTransaction",
             )?;
             self.check_database_audience(&caller, &request.get_ref().database)?;
+            if let Some(rules) = &self.rules {
+                rules
+                    .check_new_transaction(&caller.principal, request.get_ref().options.as_ref())?;
+            }
             let transaction = local.begin_transaction(request.get_ref())?;
             return Ok(Response::new(pb::BeginTransactionResponse { transaction }));
         }
@@ -610,6 +621,13 @@ impl Firestore for GatewayService {
         request: Request<pb::RunQueryRequest>,
     ) -> Result<Response<Self::RunQueryStream>, Status> {
         let caller = self.caller(request.metadata(), &request.get_ref().parent, "RunQuery")?;
+        if let (
+            Some(rules),
+            Some(pb::run_query_request::ConsistencySelector::NewTransaction(options)),
+        ) = (&self.rules, &request.get_ref().consistency_selector)
+        {
+            rules.check_new_transaction(&caller.principal, Some(options))?;
+        }
         self.run_query_with_caller(caller, request.into_inner())
             .await
     }
@@ -693,6 +711,15 @@ impl Firestore for GatewayService {
                 &request.get_ref().parent,
                 "RunAggregationQuery",
             )?;
+            if let (
+                Some(rules),
+                Some(pb::run_aggregation_query_request::ConsistencySelector::NewTransaction(
+                    options,
+                )),
+            ) = (&self.rules, &request.get_ref().consistency_selector)
+            {
+                rules.check_new_transaction(&caller.principal, Some(options))?;
+            }
             let local = local.clone();
             let rules = self.rules.clone();
             let request = request.into_inner();
@@ -811,6 +838,10 @@ impl Firestore for GatewayService {
                 &request.get_ref().database,
                 "BatchWrite",
             )?;
+            // End users may not call BatchWrite at all (FS-RULES, 2026-09-24).
+            if let Some(rules) = &self.rules {
+                rules.require_owner(&caller.principal, "BatchWrite")?;
+            }
             let guard = self.write_guard(&caller);
             return local
                 .batch_write_with(request.get_ref(), &*guard)

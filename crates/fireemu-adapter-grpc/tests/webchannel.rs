@@ -7,7 +7,7 @@ use std::sync::{Arc, Mutex};
 use fireemu_adapter_grpc::gateway::Gateway;
 use fireemu_adapter_grpc::local::LocalBackend;
 use fireemu_adapter_grpc::rest::RestState;
-use fireemu_adapter_grpc::rules::RulesEnforcer;
+use fireemu_adapter_grpc::rules::{RulesEnforcer, TokenSemantics};
 use fireemu_adapter_grpc::webchannel::{
     ChannelRequest, ChannelResponse, Hub, StreamKind, EMULATOR_UNKNOWN_SESSION_BODY,
     STRICT_UNKNOWN_SESSION_BODY,
@@ -75,6 +75,7 @@ fn hub_and_local_with_profile(
                 auth,
                 clock,
             )
+            .with_token_semantics(TokenSemantics::Firestore)
             .with_token_acceptance(acceptance),
         )
     });
@@ -117,8 +118,9 @@ async fn webchannel_binds_unknown_mock_tokens_to_the_requested_project() {
     assert_eq!(auth_handshake(&firebase, "demo-app-w0", &token).0, 200);
     assert_eq!(auth_handshake(&firebase, "demo-app", &token).0, 401);
 
+    // The strict profile refuses a token it cannot verify in production's words.
     let strict = hub_with_acceptance(Some(RULES_ALLOW_ALL), TokenAcceptance::Verified);
-    assert_eq!(auth_handshake(&strict, "demo-app-w0", &token).0, 401);
+    assert_eq!(auth_handshake(&strict, "demo-app-w0", &token).0, 403);
 
     let header = base64url_encode(br#"{"alg":"RS256","typ":"JWT","kid":"nope"}"#);
     let payload = base64url_encode(br#"{"aud":"demo-app-w0","exp":3600,"iat":0,"sub":"alice"}"#);

@@ -164,8 +164,8 @@ pub fn drops_connection(response: &RestResponse) -> bool {
 }
 
 /// Production answers an error of a streaming REST method (`runQuery`, `runAggregationQuery`,
-/// `executePipeline`) inside the JSON array that would have carried its results. A fault that
-/// drops the connection keeps its own path.
+/// `executePipeline`, `batchGet`) inside the JSON array that would have carried its results,
+/// body decoding errors included. A fault that drops the connection keeps its own path.
 fn stream_errors(result: Result<RestResponse, Status>) -> Result<RestResponse, Status> {
     result.or_else(|status| {
         if status
@@ -576,6 +576,33 @@ impl RestState {
             None => Principal::Owner,
         };
         Ok(Caller { principal, epoch })
+    }
+
+    /// The caller of a data-plane request, with a credential refusal in the shape REST
+    /// answers it (see `front_end_refusal`).
+    fn request_principal(
+        &self,
+        req: &RestRequest,
+        path: &str,
+        action: Option<&str>,
+    ) -> Result<Caller, Status> {
+        self.principal(
+            req.authorization.as_deref(),
+            crate::service::project_of_resource(path),
+        )
+        .map_err(|status| front_end_refusal(status, &req.method, action))
+    }
+
+    /// Refuses an end user a read-write transaction where production does (see
+    /// `RulesEnforcer::check_new_transaction`).
+    fn check_new_transaction(
+        &self,
+        caller: &Caller,
+        options: Option<&pb::TransactionOptions>,
+    ) -> Result<(), Status> {
+        self.rules.as_ref().map_or(Ok(()), |rules| {
+            rules.check_new_transaction(&caller.principal, options)
+        })
     }
 
     fn write_guard<'a>(&'a self, caller: &'a Caller) -> rules::BoxedWriteGuard<'a> {
@@ -1010,10 +1037,7 @@ impl RestState {
         // App Check, once the route and the target project are resolved and before the
         // Firebase Auth credential, Security Rules and every mutation (spec 7.4).
         self.admit_app_check(req, path, action)?;
-        let principal = self.principal(
-            req.authorization.as_deref(),
-            crate::service::project_of_resource(path),
-        )?;
+        let principal = self.request_principal(req, path, action)?;
         if let Some(action) = action {
             if req.method != "POST" {
                 return Ok(not_found_text());
@@ -1219,6 +1243,28 @@ impl RestState {
         Ok(ok(json!({})))
     }
 
+    fn begin_transaction(
+        &self,
+        principal: &Caller,
+        resource: &str,
+        body: &Value,
+    ) -> Result<RestResponse, Status> {
+        json::strict_keys(body, &["options", "requestOptions"]).map_err(|e| bad(&e))?;
+        let database = database_of(resource)?;
+        self.check_database_audience(principal, &database)?;
+        let options =
+            transaction_options_from_json(body.get("options"), "options").map_err(|e| bad(&e))?;
+        let request_options =
+            request_options_from_json(body.get("requestOptions")).map_err(|e| bad(&e))?;
+        self.check_new_transaction(principal, Some(&options))?;
+        let token = self.local.begin_transaction(&pb::BeginTransactionRequest {
+            database,
+            options: Some(options),
+            request_options,
+        })?;
+        Ok(ok(json!({"transaction": base64_encode(&token)})))
+    }
+
     fn custom_method(
         &self,
         principal: &Caller,
@@ -1230,22 +1276,8 @@ impl RestState {
         match action {
             "commit" => self.commit(principal, resource, body),
             "batchWrite" => self.batch_write(principal, resource, body, batch_field_order),
-            "batchGet" => self.batch_get(principal, resource, body),
-            "beginTransaction" => {
-                json::strict_keys(body, &["options", "requestOptions"]).map_err(|e| bad(&e))?;
-                let database = database_of(resource)?;
-                self.check_database_audience(principal, &database)?;
-                let token = self.local.begin_transaction(&pb::BeginTransactionRequest {
-                    database,
-                    options: Some(
-                        transaction_options_from_json(body.get("options"), "options")
-                            .map_err(|e| bad(&e))?,
-                    ),
-                    request_options: request_options_from_json(body.get("requestOptions"))
-                        .map_err(|e| bad(&e))?,
-                })?;
-                Ok(ok(json!({"transaction": base64_encode(&token)})))
-            }
+            "batchGet" => stream_errors(self.batch_get(principal, resource, body)),
+            "beginTransaction" => self.begin_transaction(principal, resource, body),
             "rollback" => {
                 let database = database_of(resource)?;
                 self.check_database_audience(principal, &database)?;
@@ -1495,6 +1527,10 @@ impl RestState {
             labels: labels_from_json(body)?,
             request_options: None,
         };
+        // End users may not call batchWrite at all (FS-RULES, 2026-09-24).
+        if let Some(rules) = &self.rules {
+            rules.require_owner(principal, "batchWrite")?;
+        }
         let guard = self.write_guard(principal);
         let response = self.local.batch_write_with(&req, &*guard)?;
         Ok(ok(json::without_empty(json!({
@@ -1561,6 +1597,11 @@ impl RestState {
             request_options: None,
             consistency_selector,
         };
+        if let Some(pb::batch_get_documents_request::ConsistencySelector::NewTransaction(options)) =
+            &req.consistency_selector
+        {
+            self.check_new_transaction(principal, Some(options))?;
+        }
         let guard = self.read_guard(principal);
         let outcome = self.local.batch_get_documents(&req, &*guard)?;
         let read_time = optional_timestamp_to_json(Some(&encode_instant(outcome.read_time)));
@@ -1640,6 +1681,11 @@ impl RestState {
             )),
             consistency_selector,
         };
+        if let Some(pb::run_query_request::ConsistencySelector::NewTransaction(options)) =
+            &req.consistency_selector
+        {
+            self.check_new_transaction(principal, Some(options))?;
+        }
         let guard = self.read_guard(principal);
         let (responses, _warnings) = self.local.run_query(&req, &*guard)?;
         let out: Vec<Value> = responses
@@ -1744,6 +1790,12 @@ impl RestState {
             ),
             consistency_selector,
         };
+        if let Some(pb::run_aggregation_query_request::ConsistencySelector::NewTransaction(
+            options,
+        )) = &req.consistency_selector
+        {
+            self.check_new_transaction(principal, Some(options))?;
+        }
         let guard = self.read_guard(principal);
         let response = self.local.run_aggregation_query(&req, &*guard)?;
         let fields: serde_json::Map<String, Value> = response
@@ -1872,6 +1924,43 @@ const CUSTOM_METHODS: &[&str] = &[
     "partitionQuery",
     "executePipeline",
 ];
+
+/// The gRPC method a REST route transcodes to, as production's front end names it in the
+/// `ErrorInfo` of a refused credential. A document read is `GetOrListDocuments` (recorded);
+/// the others are the methods of the Firestore service.
+fn transcoded_method(http_method: &str, action: Option<&str>) -> Option<&'static str> {
+    Some(match (http_method, action) {
+        ("GET", None) => "GetOrListDocuments",
+        ("POST", None) => "CreateDocument",
+        ("PATCH", None) => "UpdateDocument",
+        ("DELETE", None) => "DeleteDocument",
+        ("POST", Some("commit")) => "Commit",
+        ("POST", Some("batchWrite")) => "BatchWrite",
+        ("POST", Some("batchGet")) => "BatchGetDocuments",
+        ("POST", Some("beginTransaction")) => "BeginTransaction",
+        ("POST", Some("rollback")) => "Rollback",
+        ("POST", Some("runQuery")) => "RunQuery",
+        ("POST", Some("runAggregationQuery")) => "RunAggregationQuery",
+        ("POST", Some("listCollectionIds")) => "ListCollectionIds",
+        ("POST", Some("partitionQuery")) => "PartitionQuery",
+        ("POST", Some("executePipeline")) => "ExecutePipeline",
+        _ => return None,
+    })
+}
+
+/// A credential refusal as REST carries it: the front end's OAuth refusal gains the
+/// `ErrorInfo` production attaches; every other refusal is unchanged.
+fn front_end_refusal(status: Status, http_method: &str, action: Option<&str>) -> Status {
+    match transcoded_method(http_method, action) {
+        Some(method)
+            if status.code() == Code::Unauthenticated
+                && status.message() == rules::INVALID_CREDENTIALS_MESSAGE =>
+        {
+            crate::production_status::credentials_missing(status.message(), method)
+        }
+        _ => status,
+    }
+}
 
 fn database_of(resource: &str) -> Result<String, Status> {
     resource

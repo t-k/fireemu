@@ -16,7 +16,7 @@
 //!   `duration`, `latlng`, `math` and `hashing` namespaces, `map.diff()`, and the
 //!   `firestore.get()` / `firestore.exists()` namespace of Storage rules.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
@@ -230,6 +230,15 @@ struct Budget {
 }
 
 impl Budget {
+    /// One node, plus one evaluation for each pair of parentheses around it: production
+    /// counts a parenthesised expression as an expression of its own (FS-RULES 2026-09-24).
+    fn charge_node(&mut self, expr: &Expr) -> Result<(), EvalError> {
+        for _ in 0..=expr.parens {
+            self.charge()?;
+        }
+        Ok(())
+    }
+
     fn charge(&mut self) -> Result<(), EvalError> {
         self.expressions = self.expressions.saturating_add(1);
         if self.expressions > self.expression_max {
@@ -368,8 +377,9 @@ pub trait DocumentAccess {
     fn get(&self, segments: &[String]) -> Option<RulesValue>;
 
     /// `getAfter()`: the document as it will be once the current write (every write of the
-    /// batch or transaction) has completed. `None` = not available (reads, query proofs:
-    /// `getAfter()` then fails closed); `Some(None)` = it will not exist.
+    /// batch or transaction) has completed. `None` = no write applies (reads, query proofs):
+    /// Firestore rules then read the current state, Storage rules refuse the call;
+    /// `Some(None)` = it will not exist.
     fn get_after(&self, _segments: &[String]) -> Option<Option<RulesValue>> {
         None
     }
@@ -394,12 +404,18 @@ struct Evaluator<'a> {
     query_proof: bool,
     /// `get()` / `exists()` provider (`None` = unsupported).
     access: Option<&'a dyn DocumentAccess>,
+    /// The service: in Firestore rules the FS-RULES observations (a missing document is null,
+    /// `getAfter()` in a read is the current state) apply; Storage rules keep their answers.
+    service: RulesService,
     /// Documents read so far, keyed by (`getAfter`?, path): a path is charged once per
     /// request and kind, as in production.
     doc_cache: BTreeMap<(bool, Vec<String>), Option<RulesValue>>,
     /// Successful and failed dynamic pattern compilations retained only for this request.
     regex_cache: BTreeMap<String, Result<Arc<crate::regex::Regex>, crate::regex::RegexError>>,
     regex_diagnostics: RegexEvaluationDiagnostics,
+    /// Matches in this request that exhausted the regex step budget (see
+    /// [`REGEX_EXHAUSTIONS_PER_REQUEST_MAX`]).
+    regex_exhaustions: u64,
     projected_member_reads: u64,
     doc_reads_max: u64,
     /// `rules_version = '2'`: `**` matches zero or more segments.
@@ -509,8 +525,11 @@ pub fn evaluate_request_traced_owned(
 }
 
 /// Evaluates a request against a ruleset; `access` serves `get()` / `exists()` within the
-/// Maximum `eval` recursion depth (stack safety; parenthesised nesting is bounded by the
-/// parser, left-nested operator chains are bounded here).
+/// Maximum `eval` recursion depth: a stack-safety bound of fireemu's, not production's.
+/// Production evaluates every expression it compiles (99 levels, see
+/// `parse::MAX_COMPILED_EXPR_DEPTH`, and up to 20 nested calls); an evaluation deeper than
+/// this is an error here, which makes its condition false (fails closed). The daemon gives its
+/// request threads a stack that holds this depth in a debug build.
 pub const MAX_EVAL_NESTING: u32 = 64;
 
 /// `RULES-DOC-ACCESS-SINGLE` budget.
@@ -602,11 +621,18 @@ fn evaluate_prepared(
             resource: Arc::clone(resource),
             query_proof: ctx.abstract_path,
             access,
+            service: ctx.service,
             doc_cache: BTreeMap::new(),
             regex_cache: BTreeMap::new(),
+            regex_exhaustions: 0,
             regex_diagnostics: RegexEvaluationDiagnostics::default(),
             projected_member_reads: 0,
             doc_reads_max: limit_max(match ctx.service {
+                // A query's rule may read as many documents as a multi-document request
+                // (20: production and the official emulator allow 20 and refuse 21, FS-RULES).
+                RulesService::Firestore if ctx.method == Method::List => {
+                    "RULES-DOC-ACCESS-MULTI-TOTAL"
+                }
                 RulesService::Firestore => "RULES-DOC-ACCESS-SINGLE",
                 // Storage rules may call firestore.get() / exists() twice per request.
                 RulesService::Storage => "STORAGE-RULES-FIRESTORE-ACCESS",
@@ -738,6 +764,9 @@ fn build_request_with_resource(
     // runtime, and `request.keys()` does not list them (recorded, area `detail`).
     if let Some(resource) = request_resource {
         m.insert("resource".to_owned(), resource);
+    } else if ctx.method == Method::Delete && ctx.service == RulesService::Firestore {
+        // A delete has no incoming document; production presents it as null (FS-RULES).
+        m.insert("resource".to_owned(), RulesValue::Null);
     }
     if let Some(query) = ctx.request_query.clone() {
         m.insert("query".to_owned(), query);
@@ -754,19 +783,21 @@ fn walk_items<'a>(
     ev: &mut Evaluator<'a>,
     matched_any: &mut bool,
 ) -> Result<bool, EvalError> {
-    let mut allowed = false;
+    let mut raised = None;
     for item in items {
         if let Item::Match(block) = item {
             match walk_match(block, remaining, ctx, ev, matched_any) {
-                Ok(true) => allowed = true,
+                Ok(true) => return Ok(true),
                 Ok(false) | Err(EvalError::Soft(_) | EvalError::Unknown) => {}
-                Err(EvalError::Budget { limit_id, .. })
-                    if allowed && limit_id == "FIREEMU-RULES-MATCH-WORK" => {}
-                Err(e @ (EvalError::Budget { .. } | EvalError::Unsupported(_))) => return Err(e),
+                // A request-wide budget stops the walk: nothing after it is known.
+                Err(e) if stops_request(&e) => return Err(e),
+                Err(e @ (EvalError::Budget { .. } | EvalError::Unsupported(_))) => {
+                    raised.get_or_insert(e);
+                }
             }
         }
     }
-    Ok(allowed)
+    raised.map_or(Ok(false), Err)
 }
 
 fn function_key(function: &FunctionDecl) -> usize {
@@ -993,6 +1024,7 @@ fn walk_match<'a>(
             .then_some(reachability.complete_offsets.as_slice())
     });
     let mut outcome: Result<bool, EvalError> = Ok(false);
+    let mut raised: Option<EvalError> = None;
     let zero_or_more = ev.wildcard_zero_or_more;
     let match_work = Arc::clone(&ev.match_path_work);
     let prefilter_work = Arc::clone(&ev.match_prefilter_work);
@@ -1051,25 +1083,11 @@ fn walk_match<'a>(
             *matched_any = true;
             result = evaluate_allows(&block.allows, ctx, ev);
         }
-        if !matches!(
-            result,
-            Err(EvalError::Budget { .. } | EvalError::Unsupported(_))
-        ) {
+        // An allow that holds decides; otherwise the nested blocks may still allow, and only
+        // when nothing does is a raised error the answer.
+        if !matches!(result, Ok(true)) && !result.as_ref().is_err_and(stops_request) {
             let nested = walk_items(&block.items, &rest, ctx, ev, matched_any);
-            result = match (result, nested) {
-                (
-                    Ok(true),
-                    Err(EvalError::Budget {
-                        limit_id: "FIREEMU-RULES-MATCH-WORK",
-                        ..
-                    }),
-                ) => Ok(true),
-                (Err(e @ (EvalError::Budget { .. } | EvalError::Unsupported(_))), _)
-                | (_, Err(e @ (EvalError::Budget { .. } | EvalError::Unsupported(_)))) => Err(e),
-                (Ok(true), _) | (_, Ok(true)) => Ok(true),
-                (Err(e), _) | (_, Err(e)) => Err(e),
-                (Ok(false), Ok(false)) => Ok(false),
-            };
+            result = either(result, nested);
         }
         ev.scope.functions.truncate(functions_before);
         ev.scope.bindings.truncate(bindings_before);
@@ -1079,7 +1097,13 @@ fn walk_match<'a>(
                 Ok(true)
             }
             Ok(false) => Ok(false),
-            Err(e @ (EvalError::Budget { .. } | EvalError::Unsupported(_))) => Err(e),
+            // A request-wide budget stops enumerating paths; a rule's own error only decides
+            // when no other path allows.
+            Err(e) if stops_request(&e) => Err(e),
+            Err(e @ (EvalError::Budget { .. } | EvalError::Unsupported(_))) => {
+                raised.get_or_insert(e);
+                Ok(false)
+            }
             Err(e) => {
                 if matches!(outcome, Ok(false)) {
                     outcome = Err(e);
@@ -1099,6 +1123,8 @@ fn walk_match<'a>(
     )?;
     if matched {
         Ok(true)
+    } else if let Some(e) = raised {
+        Err(e)
     } else {
         outcome
     }
@@ -1320,22 +1346,72 @@ fn evaluate_allows<'a>(
     ctx: &RequestContext,
     ev: &mut Evaluator<'a>,
 ) -> Result<bool, EvalError> {
-    let mut allowed = false;
+    // Allow statements are alternatives: the first that holds allows the request whatever the
+    // others raise (production and the official emulator, FS-RULES 2026-09-24). A budget or
+    // unsupported error only decides when nothing holds.
+    let mut raised = None;
     for allow in allows {
         if !allow.methods.iter().any(|m| ctx.method.covered_by(*m)) {
             continue;
         }
         let Some(cond) = &allow.condition else {
-            allowed = true;
-            continue;
+            return Ok(true);
         };
         match ev.eval(cond) {
-            Ok(RulesValue::Bool(true)) => allowed = true,
+            Ok(RulesValue::Bool(true)) => return Ok(true),
             Ok(_) | Err(EvalError::Soft(_) | EvalError::Unknown) => {}
-            Err(e @ (EvalError::Budget { .. } | EvalError::Unsupported(_))) => return Err(e),
+            Err(e) if stops_request(&e) => return Err(e),
+            Err(e @ (EvalError::Budget { .. } | EvalError::Unsupported(_))) => {
+                raised.get_or_insert(e);
+            }
         }
     }
-    Ok(allowed)
+    raised.map_or(Ok(false), Err)
+}
+
+/// A block's own allows together with its nested blocks: one that holds decides; otherwise a
+/// budget or unsupported error outranks an ordinary one, which outranks `false`.
+fn either(
+    own: Result<bool, EvalError>,
+    nested: Result<bool, EvalError>,
+) -> Result<bool, EvalError> {
+    for result in [&own, &nested] {
+        if let Err(e) = result {
+            if stops_request(e) {
+                return Err(e.clone());
+            }
+        }
+    }
+    if matches!(own, Ok(true)) || matches!(nested, Ok(true)) {
+        return Ok(true);
+    }
+    match (own, nested) {
+        // Only budget and unsupported errors reach here (soft ones make an allow false), so
+        // the block's own error is the answer before a nested one.
+        (Err(own), Err(_)) => Err(own),
+        (Err(e), Ok(_)) | (Ok(_), Err(e)) => Err(e),
+        (Ok(_), Ok(_)) => Ok(false),
+    }
+}
+
+/// Regex matches per request that may exhaust the step budget before the request stops. An
+/// exhausted match no longer ends the request (another allow may hold), so without a cap a
+/// ruleset of many regex allows would multiply the work one request may cost.
+const REGEX_EXHAUSTIONS_PER_REQUEST_MAX: u64 = 4;
+
+/// A budget that ends the whole request, whatever other allows would say: production treats
+/// running out of the per-request expression budget as fatal (FS-RULES: `terms-500-then-true`
+/// is denied), and fireemu's own matcher-work and regex-exhaustion caps bound the request.
+fn stops_request(error: &EvalError) -> bool {
+    matches!(
+        error,
+        EvalError::Budget {
+            limit_id: "RULES-EXPRESSIONS-PER-REQUEST"
+                | "FIREEMU-RULES-MATCH-WORK"
+                | "FIREEMU-REGEX-EXHAUSTIONS-PER-REQUEST",
+            ..
+        }
+    )
 }
 
 /// One line of why an expression is undefined, for a trace.
@@ -3619,7 +3695,15 @@ impl<'a> Evaluator<'a> {
                     .into(),
             ));
         };
-        let reads = self.doc_cache.len() as u64 + 1;
+        // The budget counts documents, not calls: get() and getAfter() of one path are one
+        // access, as production counts them (FS-RULES, 2026-09-24).
+        let reads = self
+            .doc_cache
+            .keys()
+            .map(|(_, cached)| cached)
+            .chain(core::iter::once(&key.1))
+            .collect::<BTreeSet<_>>()
+            .len() as u64;
         if reads > self.doc_reads_max {
             return Err(EvalError::Budget {
                 limit_id: "RULES-DOC-ACCESS-SINGLE",
@@ -3627,12 +3711,18 @@ impl<'a> Evaluator<'a> {
                 maximum: self.doc_reads_max,
             });
         }
+        // In a Firestore read no write is applied, so the state after it is the current state.
+        // Storage rules have no write to apply either and do not offer it.
         let doc = if after {
-            access.get_after(&key.1).ok_or_else(|| {
-                EvalError::Unsupported(
-                    "getAfter() is only available while a write is authorized".into(),
-                )
-            })?
+            match access.get_after(&key.1) {
+                Some(doc) => doc,
+                None if self.service == RulesService::Firestore => access.get(&key.1),
+                None => {
+                    return Err(EvalError::Unsupported(
+                        "getAfter()/existsAfter() are only available in Firestore rules".into(),
+                    ))
+                }
+            }
         } else {
             access.get(&key.1)
         };
@@ -3640,7 +3730,7 @@ impl<'a> Evaluator<'a> {
         Ok(doc)
     }
 
-    /// `get()` / `exists()` / `getAfter()` with the evaluated path argument.
+    /// `get()` / `exists()` / `getAfter()` / `existsAfter()` with the evaluated path argument.
     fn document_call(&mut self, name: &str, args: &[RulesValue]) -> Result<RulesValue, EvalError> {
         let [a] = args else {
             return Err(soft(format!("{name}() takes one path")));
@@ -3655,10 +3745,13 @@ impl<'a> Evaluator<'a> {
                 )))
             }
         };
-        let doc = self.read_document(path, name == "getAfter")?;
+        let doc = self.read_document(path, matches!(name, "getAfter" | "existsAfter"))?;
         Ok(match (name, doc) {
-            ("exists", d) => RulesValue::Bool(d.is_some()),
+            ("exists" | "existsAfter", d) => RulesValue::Bool(d.is_some()),
             (_, Some(d)) => d,
+            // Production Firestore answers null for a missing document (FS-RULES, 2026-09-24);
+            // reading a member of it is the error. Storage rules keep the error.
+            (_, None) if self.service == RulesService::Firestore => RulesValue::Null,
             (_, None) => return Err(soft(format!("{name}() of a missing document"))),
         })
     }
@@ -3940,7 +4033,7 @@ impl<'a> Evaluator<'a> {
                 return result;
             }
         }
-        self.budget.charge()?;
+        self.budget.charge_node(expr)?;
         match expr.kind() {
             ExprKind::Literal(l) => Ok(match l {
                 Literal::Null => RulesValue::Null,
@@ -4217,8 +4310,8 @@ impl<'a> Evaluator<'a> {
                 if *inner != op {
                     break;
                 }
-                // Each nested node is one expression evaluation.
-                self.budget.charge()?;
+                // Each nested node is one expression evaluation (and one per parentheses).
+                self.budget.charge_node(cursor)?;
                 operands.push(r);
                 cursor = l;
             }
@@ -4594,7 +4687,7 @@ impl<'a> Evaluator<'a> {
                     );
                 }
                 match name.as_str() {
-                    "get" | "exists" | "getAfter" => {
+                    "get" | "exists" | "getAfter" | "existsAfter" => {
                         let values = args
                             .iter()
                             .map(|a| self.eval(a))
@@ -4792,6 +4885,25 @@ impl<'a> Evaluator<'a> {
         })
     }
 
+    /// A failed match: a step-budget exhaustion counts toward the request's cap, and past it the
+    /// request stops.
+    fn regex_failure(&mut self, error: crate::regex::RegexRuntimeError) -> EvalError {
+        if matches!(
+            error,
+            crate::regex::RegexRuntimeError::StepBudgetExceeded { .. }
+        ) {
+            self.regex_exhaustions = self.regex_exhaustions.saturating_add(1);
+            if self.regex_exhaustions > REGEX_EXHAUSTIONS_PER_REQUEST_MAX {
+                return EvalError::Budget {
+                    limit_id: "FIREEMU-REGEX-EXHAUSTIONS-PER-REQUEST",
+                    current: self.regex_exhaustions,
+                    maximum: REGEX_EXHAUSTIONS_PER_REQUEST_MAX,
+                };
+            }
+        }
+        regex_runtime_error(error)
+    }
+
     fn string_regex_call(
         &mut self,
         receiver: &RulesValue,
@@ -4805,18 +4917,18 @@ impl<'a> Evaluator<'a> {
         match (name, args) {
             ("matches", [RulesValue::String(pattern)]) => {
                 let regex = self.regex_for(pattern, compiled_regex)?;
+                let matched = regex.is_full_match(subject);
                 Ok(RulesValue::Bool(
-                    regex.is_full_match(subject).map_err(regex_runtime_error)?,
+                    matched.map_err(|e| self.regex_failure(e))?,
                 ))
             }
             ("matches", [_]) => Err(soft("matches() expects a string pattern")),
             ("matches", _) => Err(soft("matches() takes 1 argument(s)")),
             ("replace", [RulesValue::String(pattern), RulesValue::String(replacement)]) => {
                 let regex = self.regex_for(pattern, compiled_regex)?;
+                let replaced = regex.replace_all(subject, replacement);
                 Ok(RulesValue::String(
-                    regex
-                        .replace_all(subject, replacement)
-                        .map_err(regex_runtime_error)?,
+                    replaced.map_err(|e| self.regex_failure(e))?,
                 ))
             }
             ("replace", [_, _]) => Err(soft("replace() expects a pattern and a replacement")),

@@ -19,7 +19,15 @@ pub const MAX_PARSE_BYTES: usize = 4 * 1024 * 1024;
 /// several stack frames per level, so this stays well below what an 8 MiB stack holds in a
 /// debug build (a hostile ruleset must be refused, never overflow the stack); real rulesets
 /// nest a handful of levels.
-pub const MAX_EXPR_DEPTH: u32 = 32;
+pub const MAX_EXPR_DEPTH: u32 = 128;
+/// The deepest expression production compiles (FS-RULES, 2026-09-24): 99 levels, where each
+/// operator of a left-leaning binary chain, `!`, `-`, a pair of parentheses, a ternary, a list
+/// or map literal, a call's arguments and `is` add one, and member access and indexing add
+/// none. 100 levels are refused with [`TOO_COMPLEX`]. [`MAX_EXPR_DEPTH`] only has to leave
+/// room for it.
+pub const MAX_COMPILED_EXPR_DEPTH: u32 = 99;
+/// The compiler's message for an expression past [`MAX_COMPILED_EXPR_DEPTH`].
+pub const TOO_COMPLEX: &str = "Expression is too complex to evaluate safely.";
 /// Maximum structural depth of a completed expression tree. Binary parsing is iterative, so
 /// a long operator chain does not consume parser recursion while it is being built; this
 /// separate bound protects cloning, coverage reporting, and every other tree consumer.
@@ -115,6 +123,29 @@ fn compile_literal_pattern(
 
 /// Parses a complete ruleset.
 pub fn parse_ruleset(src: &str) -> Result<Ruleset, ParseError> {
+    // Production compiles expressions 99 levels deep, which the recursive-descent parser
+    // follows through about ten frames a level: more than a request thread's stack holds in a
+    // debug build. Loading a ruleset is rare, so the parse gets a thread of its own.
+    std::thread::scope(|scope| {
+        std::thread::Builder::new()
+            .name("rules-parse".to_owned())
+            .stack_size(PARSE_STACK_BYTES)
+            .spawn_scoped(scope, || parse_ruleset_on_this_thread(src))
+            .map_or_else(
+                |_| parse_ruleset_on_this_thread(src),
+                |handle| {
+                    handle
+                        .join()
+                        .unwrap_or_else(|panic| std::panic::resume_unwind(panic))
+                },
+            )
+    })
+}
+
+/// The stack of the thread a ruleset is parsed on.
+pub const PARSE_STACK_BYTES: usize = 16 * 1024 * 1024;
+
+fn parse_ruleset_on_this_thread(src: &str) -> Result<Ruleset, ParseError> {
     if src.len() > MAX_PARSE_BYTES {
         return Err(ParseError {
             message: format!("source exceeds the {MAX_PARSE_BYTES} byte parse budget"),
@@ -141,6 +172,7 @@ pub fn parse_ruleset(src: &str) -> Result<Ruleset, ParseError> {
     };
     let mut ruleset = p.ruleset()?;
     check_expression_tree_depth(&ruleset)?;
+    check_duplicate_functions(&ruleset)?;
     ruleset.value_dependencies = analyze_value_dependencies(&ruleset);
     Ok(ruleset)
 }
@@ -245,7 +277,7 @@ fn check_expression_tree_depth(ruleset: &Ruleset) -> Result<(), ParseError> {
         }
     }
 
-    let mut pending: Vec<(&Expr, u32)> = roots.into_iter().map(|expr| (expr, 1)).collect();
+    let mut pending: Vec<(&Expr, u32)> = roots.iter().map(|expr| (*expr, 1)).collect();
     while let Some((expr, depth)) = pending.pop() {
         if depth > MAX_EXPR_TREE_DEPTH {
             return Err(ParseError {
@@ -263,7 +295,85 @@ fn check_expression_tree_depth(ruleset: &Ruleset) -> Result<(), ParseError> {
                 .map(|child| (child, depth.saturating_add(1))),
         );
     }
+    // The tree is now known to be at most MAX_EXPR_TREE_DEPTH deep, which bounds the
+    // recursion below.
+    for root in roots {
+        if compiled_depth(root) > MAX_COMPILED_EXPR_DEPTH {
+            return Err(ParseError {
+                message: TOO_COMPLEX.to_owned(),
+                line: root.span.line,
+                column: root.span.column,
+                offset: root.span.offset,
+            });
+        }
+    }
     Ok(())
+}
+
+/// A scope may define a function name once, whatever the parameters ("Function d is already
+/// defined."); an inner scope may shadow an outer one.
+fn check_duplicate_functions(ruleset: &Ruleset) -> Result<(), ParseError> {
+    let mut scopes: Vec<&[Item]> = ruleset
+        .services
+        .iter()
+        .map(|service| service.items.as_slice())
+        .collect();
+    while let Some(items) = scopes.pop() {
+        let mut names = std::collections::BTreeSet::new();
+        for item in items {
+            match item {
+                Item::Function(function) => {
+                    if !names.insert(function.name.as_str()) {
+                        return Err(ParseError {
+                            message: format!("Function {} is already defined.", function.name),
+                            line: function.span.line,
+                            column: function.span.column,
+                            offset: function.span.offset,
+                        });
+                    }
+                }
+                Item::Match(block) => scopes.push(&block.items),
+            }
+        }
+    }
+    Ok(())
+}
+
+/// The nesting depth production's compiler counts (see [`MAX_COMPILED_EXPR_DEPTH`]).
+fn compiled_depth(expr: &Expr) -> u32 {
+    let deepest =
+        |exprs: &mut dyn Iterator<Item = &Expr>| exprs.map(compiled_depth).max().unwrap_or(0);
+    let own = match expr.kind() {
+        ExprKind::Literal(_) | ExprKind::Ident(_) => 1,
+        ExprKind::Path(segments) => {
+            1 + deepest(&mut segments.iter().filter_map(|segment| match segment {
+                PathSegment::Binding(expr) => Some(expr),
+                _ => None,
+            }))
+        }
+        ExprKind::Member { object, .. } => compiled_depth(object),
+        ExprKind::Index { object, index } => compiled_depth(object).max(compiled_depth(index)),
+        ExprKind::Slice { object, start, end } => compiled_depth(object)
+            .max(compiled_depth(start))
+            .max(compiled_depth(end)),
+        ExprKind::Call { callee, args, .. } => {
+            compiled_depth(callee).max(1 + deepest(&mut args.iter()))
+        }
+        ExprKind::Unary { expr, .. } | ExprKind::Is { expr, .. } => 1 + compiled_depth(expr),
+        ExprKind::Binary { left, right, .. } => 1 + compiled_depth(left).max(compiled_depth(right)),
+        ExprKind::Ternary {
+            cond,
+            then,
+            otherwise,
+        } => {
+            1 + compiled_depth(cond)
+                .max(compiled_depth(then))
+                .max(compiled_depth(otherwise))
+        }
+        ExprKind::List(items) => 1 + deepest(&mut items.iter()),
+        ExprKind::Map(entries) => 1 + deepest(&mut entries.iter().map(|(_, value)| value)),
+    };
+    own.saturating_add(expr.parens)
 }
 
 impl<'a> Parser<'a> {
@@ -508,7 +618,10 @@ impl<'a> Parser<'a> {
                     )
                 }
             }
-            self.expect_punct(";")?;
+            let save = self.pos;
+            if self.next()? != Token::Punct(";") {
+                self.pos = save;
+            }
         }
         let mut services = Vec::new();
         loop {
@@ -660,16 +773,12 @@ impl<'a> Parser<'a> {
     fn allow(&mut self, at: usize) -> Result<Allow, ParseError> {
         let mut methods = Vec::new();
         loop {
-            let (word, span) = self.expect_ident("access method")?;
-            match Method::parse(&word) {
-                Some(m) => methods.push(m),
-                None => {
-                    return Err(ParseError {
-                        message: format!("unknown access method `{word}`"),
-                        line: span.line,
-                        column: span.column,
-                        offset: span.offset,
-                    })
+            let (word, _) = self.expect_ident("access method")?;
+            // The compiler reads methods case-insensitively and only warns about one it does
+            // not know, which then grants nothing (FS-RULES, 2026-09-24).
+            if let Some(m) = Method::parse(&word.to_ascii_lowercase()) {
+                if !methods.contains(&m) {
+                    methods.push(m);
                 }
             }
             let save = self.pos;
@@ -689,7 +798,11 @@ impl<'a> Parser<'a> {
             self.pos = save;
             None
         };
-        self.expect_punct(";")?;
+        // The terminating semicolon is optional, as for the compiler.
+        let save = self.pos;
+        if self.next()? != Token::Punct(";") {
+            self.pos = save;
+        }
         Ok(Allow {
             methods,
             condition,
@@ -752,7 +865,7 @@ impl<'a> Parser<'a> {
     fn enter(&mut self) -> Result<(), ParseError> {
         self.expr_depth += 1;
         if self.expr_depth > MAX_EXPR_DEPTH {
-            return Err(self.error("expression nesting exceeds the parser budget"));
+            return Err(self.error(TOO_COMPLEX));
         }
         Ok(())
     }
@@ -1025,8 +1138,9 @@ impl<'a> Parser<'a> {
                 _ => node!(ExprKind::Ident(w)),
             }),
             Token::Punct("(") => {
-                let e = self.expr()?;
+                let mut e = self.expr()?;
                 self.expect_punct(")")?;
+                e.parens = e.parens.saturating_add(1);
                 Ok(e)
             }
             Token::Punct("[") => {

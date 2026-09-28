@@ -24,6 +24,3646 @@
     ]
   },
   "programs": {
+    "atb/blocking/claims": {
+      "corpusDigest": "3b77cdfc9289b9f409dba813bdac7e1c5074f654b750df979676284c57a56615",
+      "harnessDigest": "ddbb587b5ec33d5e5e4d5226acb52de902eb2d414d2ffffcae67285b7462b88d",
+      "recordedAt": "2026-09-28T00:48:21.242Z",
+      "gitSha": "b993d1cbf8dc42c764cb534b49233bdec4fe0808",
+      "steps": {
+        "create-big-claims": {
+          "status": 400,
+          "body": {
+            "error": {
+              "code": 400,
+              "message": "BLOCKING_FUNCTION_ERROR_RESPONSE : HTTP Cloud Function returned an error: {\"error\":{\"message\":\"The customClaims payload should not exceed 1000 characters.\",\"status\":\"INVALID_ARGUMENT\"}}",
+              "errors": [
+                {
+                  "message": "BLOCKING_FUNCTION_ERROR_RESPONSE : HTTP Cloud Function returned an error: {\"error\":{\"message\":\"The customClaims payload should not exceed 1000 characters.\",\"status\":\"INVALID_ARGUMENT\"}}",
+                  "domain": "global",
+                  "reason": "invalid"
+                }
+              ]
+            }
+          }
+        },
+        "create-reserved-claim": {
+          "status": 400,
+          "body": {
+            "error": {
+              "code": 400,
+              "message": "BLOCKING_FUNCTION_ERROR_RESPONSE : HTTP Cloud Function returned an error: {\"error\":{\"message\":\"The customClaims claims \\\"aud\\\" are reserved and cannot be specified.\",\"status\":\"INVALID_ARGUMENT\"}}",
+              "errors": [
+                {
+                  "message": "BLOCKING_FUNCTION_ERROR_RESPONSE : HTTP Cloud Function returned an error: {\"error\":{\"message\":\"The customClaims claims \\\"aud\\\" are reserved and cannot be specified.\",\"status\":\"INVALID_ARGUMENT\"}}",
+                  "domain": "global",
+                  "reason": "invalid"
+                }
+              ]
+            }
+          }
+        },
+        "admin-create-big-session": {
+          "status": 200,
+          "body": {
+            "kind": "identitytoolkit#SignupNewUserResponse",
+            "email": "fireemu-aa-<run>-l3-sbig@example.com",
+            "localId": "aa-<run>-l3"
+          }
+        },
+        "sign-in-big-session": {
+          "status": 400,
+          "body": {
+            "error": {
+              "code": 400,
+              "message": "BLOCKING_FUNCTION_ERROR_RESPONSE : HTTP Cloud Function returned an error: {\"error\":{\"message\":\"The sessionClaims payload should not exceed 1000 characters.\",\"status\":\"INVALID_ARGUMENT\"}}",
+              "errors": [
+                {
+                  "message": "BLOCKING_FUNCTION_ERROR_RESPONSE : HTTP Cloud Function returned an error: {\"error\":{\"message\":\"The sessionClaims payload should not exceed 1000 characters.\",\"status\":\"INVALID_ARGUMENT\"}}",
+                  "domain": "global",
+                  "reason": "invalid"
+                }
+              ]
+            }
+          }
+        },
+        "admin-create-reserved-session": {
+          "status": 200,
+          "body": {
+            "kind": "identitytoolkit#SignupNewUserResponse",
+            "email": "fireemu-aa-<run>-l4-sreserved@example.com",
+            "localId": "aa-<run>-l4"
+          }
+        },
+        "sign-in-reserved-session": {
+          "status": 400,
+          "body": {
+            "error": {
+              "code": 400,
+              "message": "BLOCKING_FUNCTION_ERROR_RESPONSE : HTTP Cloud Function returned an error: {\"error\":{\"message\":\"The sessionClaims claims \\\"iss\\\" are reserved and cannot be specified.\",\"status\":\"INVALID_ARGUMENT\"}}",
+              "errors": [
+                {
+                  "message": "BLOCKING_FUNCTION_ERROR_RESPONSE : HTTP Cloud Function returned an error: {\"error\":{\"message\":\"The sessionClaims claims \\\"iss\\\" are reserved and cannot be specified.\",\"status\":\"INVALID_ARGUMENT\"}}",
+                  "domain": "global",
+                  "reason": "invalid"
+                }
+              ]
+            }
+          }
+        },
+        "sign-up-l5": {
+          "status": 200,
+          "body": {
+            "kind": "identitytoolkit#SignupNewUserResponse",
+            "idToken": {
+              "<jwt>": {
+                "header": {
+                  "alg": "RS256",
+                  "kid": "<present>",
+                  "typ": "JWT"
+                },
+                "signature": "<present>",
+                "claims": {
+                  "atbC": {
+                    "t": "providers/cloud.auth/eventTypes/user.beforeCreate:password",
+                    "at": "USER",
+                    "rn": "projects/demo-auth-account",
+                    "au": [
+                      "isNewUser",
+                      "providerId"
+                    ],
+                    "nu": true,
+                    "pi": "password",
+                    "cr": null,
+                    "cx": [
+                      "string",
+                      "string",
+                      "string",
+                      "string",
+                      "string"
+                    ],
+                    "u": [
+                      "disabled",
+                      "email",
+                      "emailVerified",
+                      "metadata",
+                      "multiFactor",
+                      "providerData",
+                      "tokensValidAfterTime",
+                      "uid"
+                    ],
+                    "ev": false,
+                    "dis": false,
+                    "pd": [
+                      "password"
+                    ],
+                    "mf": null,
+                    "cc": [],
+                    "tn": "u"
+                  },
+                  "atbS": {
+                    "t": "providers/cloud.auth/eventTypes/user.beforeSignIn:password",
+                    "at": "USER",
+                    "rn": "projects/demo-auth-account",
+                    "au": [
+                      "isNewUser",
+                      "providerId"
+                    ],
+                    "nu": false,
+                    "pi": "password",
+                    "cr": null,
+                    "cx": [
+                      "string",
+                      "string",
+                      "string",
+                      "string",
+                      "string"
+                    ],
+                    "u": [
+                      "customClaims",
+                      "disabled",
+                      "email",
+                      "emailVerified",
+                      "metadata",
+                      "multiFactor",
+                      "providerData",
+                      "tokensValidAfterTime",
+                      "uid"
+                    ],
+                    "ev": false,
+                    "dis": false,
+                    "pd": [
+                      "password"
+                    ],
+                    "mf": null,
+                    "cc": [
+                      "atbC"
+                    ],
+                    "tn": "u"
+                  },
+                  "iss": "https://securetoken.google.com/demo-auth-account",
+                  "aud": "demo-auth-account",
+                  "auth_time": "<auth_time>",
+                  "user_id": "<generated-localId>",
+                  "sub": "<generated-localId>",
+                  "iat": "<iat>",
+                  "exp": "iat+3600",
+                  "email": "fireemu-aa-<run>-l5@example.com",
+                  "email_verified": false,
+                  "firebase": {
+                    "identities": {
+                      "email": [
+                        "fireemu-aa-<run>-l5@example.com"
+                      ]
+                    },
+                    "sign_in_provider": "password"
+                  }
+                },
+                "subIsUserId": true,
+                "subIsLocalId": true,
+                "userIdIsLocalId": true
+              }
+            },
+            "email": "fireemu-aa-<run>-l5@example.com",
+            "refreshToken": "<refreshToken>",
+            "expiresIn": "3600",
+            "localId": "<generated-localId>"
+          }
+        },
+        "refresh-l5": {
+          "status": 200,
+          "body": {
+            "access_token": {
+              "<jwt>": {
+                "header": {
+                  "alg": "RS256",
+                  "kid": "<present>",
+                  "typ": "JWT"
+                },
+                "signature": "<present>",
+                "claims": {
+                  "atbC": {
+                    "t": "providers/cloud.auth/eventTypes/user.beforeCreate:password",
+                    "at": "USER",
+                    "rn": "projects/demo-auth-account",
+                    "au": [
+                      "isNewUser",
+                      "providerId"
+                    ],
+                    "nu": true,
+                    "pi": "password",
+                    "cr": null,
+                    "cx": [
+                      "string",
+                      "string",
+                      "string",
+                      "string",
+                      "string"
+                    ],
+                    "u": [
+                      "disabled",
+                      "email",
+                      "emailVerified",
+                      "metadata",
+                      "multiFactor",
+                      "providerData",
+                      "tokensValidAfterTime",
+                      "uid"
+                    ],
+                    "ev": false,
+                    "dis": false,
+                    "pd": [
+                      "password"
+                    ],
+                    "mf": null,
+                    "cc": [],
+                    "tn": "u"
+                  },
+                  "atbS": {
+                    "t": "providers/cloud.auth/eventTypes/user.beforeSignIn:password",
+                    "at": "USER",
+                    "rn": "projects/demo-auth-account",
+                    "au": [
+                      "isNewUser",
+                      "providerId"
+                    ],
+                    "nu": false,
+                    "pi": "password",
+                    "cr": null,
+                    "cx": [
+                      "string",
+                      "string",
+                      "string",
+                      "string",
+                      "string"
+                    ],
+                    "u": [
+                      "customClaims",
+                      "disabled",
+                      "email",
+                      "emailVerified",
+                      "metadata",
+                      "multiFactor",
+                      "providerData",
+                      "tokensValidAfterTime",
+                      "uid"
+                    ],
+                    "ev": false,
+                    "dis": false,
+                    "pd": [
+                      "password"
+                    ],
+                    "mf": null,
+                    "cc": [
+                      "atbC"
+                    ],
+                    "tn": "u"
+                  },
+                  "iss": "https://securetoken.google.com/demo-auth-account",
+                  "aud": "demo-auth-account",
+                  "auth_time": "<auth_time>",
+                  "user_id": "<generated-localId>",
+                  "sub": "<generated-localId>",
+                  "iat": "<iat>",
+                  "exp": "iat+3600",
+                  "email": "fireemu-aa-<run>-l5@example.com",
+                  "email_verified": false,
+                  "firebase": {
+                    "identities": {
+                      "email": [
+                        "fireemu-aa-<run>-l5@example.com"
+                      ]
+                    },
+                    "sign_in_provider": "password"
+                  }
+                },
+                "subIsUserId": true,
+                "subIsLocalId": true,
+                "userIdIsLocalId": true
+              }
+            },
+            "expires_in": "3600",
+            "token_type": "Bearer",
+            "refresh_token": "<refresh_token>",
+            "id_token": {
+              "<jwt>": {
+                "header": {
+                  "alg": "RS256",
+                  "kid": "<present>",
+                  "typ": "JWT"
+                },
+                "signature": "<present>",
+                "claims": {
+                  "atbC": {
+                    "t": "providers/cloud.auth/eventTypes/user.beforeCreate:password",
+                    "at": "USER",
+                    "rn": "projects/demo-auth-account",
+                    "au": [
+                      "isNewUser",
+                      "providerId"
+                    ],
+                    "nu": true,
+                    "pi": "password",
+                    "cr": null,
+                    "cx": [
+                      "string",
+                      "string",
+                      "string",
+                      "string",
+                      "string"
+                    ],
+                    "u": [
+                      "disabled",
+                      "email",
+                      "emailVerified",
+                      "metadata",
+                      "multiFactor",
+                      "providerData",
+                      "tokensValidAfterTime",
+                      "uid"
+                    ],
+                    "ev": false,
+                    "dis": false,
+                    "pd": [
+                      "password"
+                    ],
+                    "mf": null,
+                    "cc": [],
+                    "tn": "u"
+                  },
+                  "atbS": {
+                    "t": "providers/cloud.auth/eventTypes/user.beforeSignIn:password",
+                    "at": "USER",
+                    "rn": "projects/demo-auth-account",
+                    "au": [
+                      "isNewUser",
+                      "providerId"
+                    ],
+                    "nu": false,
+                    "pi": "password",
+                    "cr": null,
+                    "cx": [
+                      "string",
+                      "string",
+                      "string",
+                      "string",
+                      "string"
+                    ],
+                    "u": [
+                      "customClaims",
+                      "disabled",
+                      "email",
+                      "emailVerified",
+                      "metadata",
+                      "multiFactor",
+                      "providerData",
+                      "tokensValidAfterTime",
+                      "uid"
+                    ],
+                    "ev": false,
+                    "dis": false,
+                    "pd": [
+                      "password"
+                    ],
+                    "mf": null,
+                    "cc": [
+                      "atbC"
+                    ],
+                    "tn": "u"
+                  },
+                  "iss": "https://securetoken.google.com/demo-auth-account",
+                  "aud": "demo-auth-account",
+                  "auth_time": "<auth_time>",
+                  "user_id": "<generated-localId>",
+                  "sub": "<generated-localId>",
+                  "iat": "<iat>",
+                  "exp": "iat+3600",
+                  "email": "fireemu-aa-<run>-l5@example.com",
+                  "email_verified": false,
+                  "firebase": {
+                    "identities": {
+                      "email": [
+                        "fireemu-aa-<run>-l5@example.com"
+                      ]
+                    },
+                    "sign_in_provider": "password"
+                  }
+                },
+                "subIsUserId": true,
+                "subIsLocalId": true,
+                "userIdIsLocalId": true
+              }
+            },
+            "user_id": "<generated-localId>",
+            "project_id": "<project-number>"
+          }
+        },
+        "admin-claims-l5": {
+          "status": 200,
+          "body": {
+            "kind": "identitytoolkit#SetAccountInfoResponse",
+            "localId": "<generated-localId>",
+            "email": "fireemu-aa-<run>-l5@example.com",
+            "providerUserInfo": [
+              {
+                "providerId": "password",
+                "federatedId": "fireemu-aa-<run>-l5@example.com",
+                "email": "fireemu-aa-<run>-l5@example.com",
+                "rawId": "fireemu-aa-<run>-l5@example.com"
+              }
+            ],
+            "passwordHash": "UkVEQUNURUQ=",
+            "emailVerified": false
+          }
+        },
+        "sign-in-l5-with-claims": {
+          "status": 200,
+          "body": {
+            "kind": "identitytoolkit#VerifyPasswordResponse",
+            "localId": "<generated-localId>",
+            "email": "fireemu-aa-<run>-l5@example.com",
+            "displayName": "",
+            "idToken": {
+              "<jwt>": {
+                "header": {
+                  "alg": "RS256",
+                  "kid": "<present>",
+                  "typ": "JWT"
+                },
+                "signature": "<present>",
+                "claims": {
+                  "atbS": {
+                    "t": "providers/cloud.auth/eventTypes/user.beforeSignIn:password",
+                    "at": "USER",
+                    "rn": "projects/demo-auth-account",
+                    "au": [
+                      "isNewUser",
+                      "providerId"
+                    ],
+                    "nu": false,
+                    "pi": "password",
+                    "cr": null,
+                    "cx": [
+                      "string",
+                      "string",
+                      "string",
+                      "string",
+                      "string"
+                    ],
+                    "u": [
+                      "customClaims",
+                      "disabled",
+                      "email",
+                      "emailVerified",
+                      "metadata",
+                      "multiFactor",
+                      "providerData",
+                      "tokensValidAfterTime",
+                      "uid"
+                    ],
+                    "ev": false,
+                    "dis": false,
+                    "pd": [
+                      "password"
+                    ],
+                    "mf": null,
+                    "cc": [
+                      "atbAdmin",
+                      "atbS"
+                    ],
+                    "tn": "u"
+                  },
+                  "atbAdmin": true,
+                  "iss": "https://securetoken.google.com/demo-auth-account",
+                  "aud": "demo-auth-account",
+                  "auth_time": "<auth_time>",
+                  "user_id": "<generated-localId>",
+                  "sub": "<generated-localId>",
+                  "iat": "<iat>",
+                  "exp": "iat+3600",
+                  "email": "fireemu-aa-<run>-l5@example.com",
+                  "email_verified": false,
+                  "firebase": {
+                    "identities": {
+                      "email": [
+                        "fireemu-aa-<run>-l5@example.com"
+                      ]
+                    },
+                    "sign_in_provider": "password"
+                  }
+                },
+                "subIsUserId": true,
+                "subIsLocalId": true,
+                "userIdIsLocalId": true
+              }
+            },
+            "registered": true,
+            "refreshToken": "<refreshToken>",
+            "expiresIn": "3600"
+          }
+        },
+        "lookup-l5": {
+          "status": 200,
+          "body": {
+            "kind": "identitytoolkit#GetAccountInfoResponse",
+            "users": [
+              {
+                "localId": "<generated-localId>",
+                "email": "fireemu-aa-<run>-l5@example.com",
+                "passwordHash": "UkVEQUNURUQ=",
+                "emailVerified": false,
+                "passwordUpdatedAt": "<run-time:number:ms>",
+                "providerUserInfo": [
+                  {
+                    "providerId": "password",
+                    "federatedId": "fireemu-aa-<run>-l5@example.com",
+                    "email": "fireemu-aa-<run>-l5@example.com",
+                    "rawId": "fireemu-aa-<run>-l5@example.com"
+                  }
+                ],
+                "validSince": "<run-time:string:s>",
+                "lastLoginAt": "<run-time:string:ms>",
+                "createdAt": "<run-time:string:ms>",
+                "customAttributes": "{\"atbS\":\"admin\",\"atbAdmin\":true}",
+                "lastRefreshAt": "<run-time:instant>"
+              }
+            ]
+          }
+        }
+      }
+    },
+    "atb/blocking/config": {
+      "corpusDigest": "08a3bfb5f4cd16adbcf7245b50df0c3bf3564d04d94eb8fd33b21406a9dbdbdc",
+      "harnessDigest": "ddbb587b5ec33d5e5e4d5226acb52de902eb2d414d2ffffcae67285b7462b88d",
+      "recordedAt": "2026-09-28T00:48:21.242Z",
+      "gitSha": "b993d1cbf8dc42c764cb534b49233bdec4fe0808",
+      "steps": {
+        "config-blocking": {
+          "status": 200,
+          "body": {
+            "blockingFunctions": {
+              "triggers": {
+                "beforeCreate": {
+                  "functionUri": "<functionUri:cloudfunctions.net>",
+                  "updateTime": "<run-time:instant>"
+                },
+                "beforeSignIn": {
+                  "functionUri": "<functionUri:cloudfunctions.net>",
+                  "updateTime": "<run-time:instant>"
+                },
+                "beforeSendEmail": {
+                  "functionUri": "<functionUri:cloudfunctions.net>",
+                  "updateTime": "<run-time:instant>"
+                },
+                "beforeSendSms": {
+                  "functionUri": "<functionUri:cloudfunctions.net>",
+                  "updateTime": "<run-time:instant>"
+                }
+              },
+              "forwardInboundCredentials": {}
+            }
+          }
+        },
+        "tenant-get": {
+          "status": 200,
+          "body": {
+            "name": "projects/<project-number>/tenants/<tenant:c:atb-blk-config-*5>",
+            "displayName": "atb-blk-config",
+            "allowPasswordSignup": true,
+            "enableEmailLinkSignin": true,
+            "hashConfig": {
+              "algorithm": "SCRYPT",
+              "signerKey": "<bytes>",
+              "saltSeparator": "<bytes>",
+              "rounds": 8,
+              "memoryCost": 14
+            },
+            "enableAnonymousUser": true,
+            "inheritance": {}
+          }
+        },
+        "tenant-patch-blocking": {
+          "status": 400,
+          "body": {
+            "error": {
+              "code": 400,
+              "message": "Invalid JSON payload received. Unknown name \"blockingFunctions\" at 'tenant': Cannot find field.",
+              "status": "INVALID_ARGUMENT",
+              "details": [
+                {
+                  "@type": "type.googleapis.com/google.rpc.BadRequest",
+                  "fieldViolations": [
+                    {
+                      "field": "tenant",
+                      "description": "Invalid JSON payload received. Unknown name \"blockingFunctions\" at 'tenant': Cannot find field."
+                    }
+                  ]
+                }
+              ]
+            }
+          }
+        }
+      }
+    },
+    "atb/blocking/custom-token": {
+      "corpusDigest": "55f5420599c20d17ad7ca2efd46ef6ece1f8bf42c58cf8450ba9a1fc3d62be64",
+      "harnessDigest": "ddbb587b5ec33d5e5e4d5226acb52de902eb2d414d2ffffcae67285b7462b88d",
+      "recordedAt": "2026-09-28T00:48:21.242Z",
+      "gitSha": "b993d1cbf8dc42c764cb534b49233bdec4fe0808",
+      "steps": {
+        "custom-new": {
+          "status": 200,
+          "body": {
+            "kind": "identitytoolkit#VerifyCustomTokenResponse",
+            "idToken": {
+              "<jwt>": {
+                "header": {
+                  "alg": "RS256",
+                  "kid": "<present>",
+                  "typ": "JWT"
+                },
+                "signature": "<present>",
+                "claims": {
+                  "iss": "https://securetoken.google.com/demo-auth-account",
+                  "aud": "demo-auth-account",
+                  "auth_time": "<auth_time>",
+                  "user_id": "aa-<run>-c1",
+                  "sub": "aa-<run>-c1",
+                  "iat": "<iat>",
+                  "exp": "iat+3600",
+                  "firebase": {
+                    "identities": {},
+                    "sign_in_provider": "custom"
+                  }
+                },
+                "subIsUserId": true
+              }
+            },
+            "refreshToken": "<refreshToken>",
+            "expiresIn": "3600",
+            "isNewUser": true
+          }
+        },
+        "custom-existing": {
+          "status": 200,
+          "body": {
+            "kind": "identitytoolkit#VerifyCustomTokenResponse",
+            "idToken": {
+              "<jwt>": {
+                "header": {
+                  "alg": "RS256",
+                  "kid": "<present>",
+                  "typ": "JWT"
+                },
+                "signature": "<present>",
+                "claims": {
+                  "iss": "https://securetoken.google.com/demo-auth-account",
+                  "aud": "demo-auth-account",
+                  "auth_time": "<auth_time>",
+                  "user_id": "aa-<run>-c1",
+                  "sub": "aa-<run>-c1",
+                  "iat": "<iat>",
+                  "exp": "iat+3600",
+                  "firebase": {
+                    "identities": {},
+                    "sign_in_provider": "custom"
+                  }
+                },
+                "subIsUserId": true
+              }
+            },
+            "refreshToken": "<refreshToken>",
+            "expiresIn": "3600",
+            "isNewUser": false
+          }
+        },
+        "admin-lookup-custom": {
+          "status": 200,
+          "body": {
+            "kind": "identitytoolkit#GetAccountInfoResponse",
+            "users": [
+              {
+                "localId": "aa-<run>-c1",
+                "validSince": "<run-time:string:s>",
+                "lastLoginAt": "<run-time:string:ms>",
+                "createdAt": "<run-time:string:ms>",
+                "customAuth": true,
+                "lastRefreshAt": "<run-time:instant>"
+              }
+            ]
+          }
+        }
+      }
+    },
+    "atb/blocking/email-link": {
+      "corpusDigest": "61fc98e4e93a85ba5fe3caccc814f084d3c51cb45477b5cab1514e11404da1fd",
+      "harnessDigest": "ddbb587b5ec33d5e5e4d5226acb52de902eb2d414d2ffffcae67285b7462b88d",
+      "recordedAt": "2026-09-28T00:48:21.242Z",
+      "gitSha": "b993d1cbf8dc42c764cb534b49233bdec4fe0808",
+      "steps": {
+        "link-code-new": {
+          "status": 200,
+          "body": {
+            "kind": "identitytoolkit#GetOobConfirmationCodeResponse",
+            "oobCode": "<oobCode>",
+            "email": "fireemu-aa-<run>-k1@example.com",
+            "oobLink": "<oobLink>"
+          }
+        },
+        "link-sign-in-new": {
+          "status": 200,
+          "body": {
+            "kind": "identitytoolkit#EmailLinkSigninResponse",
+            "idToken": {
+              "<jwt>": {
+                "header": {
+                  "alg": "RS256",
+                  "kid": "<present>",
+                  "typ": "JWT"
+                },
+                "signature": "<present>",
+                "claims": {
+                  "atbC": {
+                    "t": "providers/cloud.auth/eventTypes/user.beforeCreate:emailLink",
+                    "at": "USER",
+                    "rn": "projects/demo-auth-account/tenants/<tenant:l:atb-blk-link-*5>",
+                    "au": [
+                      "isNewUser",
+                      "providerId"
+                    ],
+                    "nu": true,
+                    "pi": "password",
+                    "cr": null,
+                    "cx": [
+                      "string",
+                      "string",
+                      "string",
+                      "string",
+                      "string"
+                    ],
+                    "u": [
+                      "disabled",
+                      "email",
+                      "emailVerified",
+                      "metadata",
+                      "multiFactor",
+                      "providerData",
+                      "tenantId",
+                      "tokensValidAfterTime",
+                      "uid"
+                    ],
+                    "ev": true,
+                    "dis": false,
+                    "pd": [
+                      "password"
+                    ],
+                    "mf": null,
+                    "cc": [],
+                    "tn": "string"
+                  },
+                  "atbS": {
+                    "t": "providers/cloud.auth/eventTypes/user.beforeSignIn:emailLink",
+                    "at": "USER",
+                    "rn": "projects/demo-auth-account/tenants/<tenant:l:atb-blk-link-*5>",
+                    "au": [
+                      "isNewUser",
+                      "providerId"
+                    ],
+                    "nu": false,
+                    "pi": "password",
+                    "cr": null,
+                    "cx": [
+                      "string",
+                      "string",
+                      "string",
+                      "string",
+                      "string"
+                    ],
+                    "u": [
+                      "customClaims",
+                      "disabled",
+                      "email",
+                      "emailVerified",
+                      "metadata",
+                      "multiFactor",
+                      "providerData",
+                      "tenantId",
+                      "tokensValidAfterTime",
+                      "uid"
+                    ],
+                    "ev": true,
+                    "dis": false,
+                    "pd": [
+                      "password"
+                    ],
+                    "mf": null,
+                    "cc": [
+                      "atbC"
+                    ],
+                    "tn": "string"
+                  },
+                  "iss": "https://securetoken.google.com/demo-auth-account",
+                  "aud": "demo-auth-account",
+                  "auth_time": "<auth_time>",
+                  "user_id": "<generated-localId>",
+                  "sub": "<generated-localId>",
+                  "iat": "<iat>",
+                  "exp": "iat+3600",
+                  "email": "fireemu-aa-<run>-k1@example.com",
+                  "email_verified": true,
+                  "firebase": {
+                    "identities": {
+                      "email": [
+                        "fireemu-aa-<run>-k1@example.com"
+                      ]
+                    },
+                    "sign_in_provider": "password",
+                    "tenant": "<tenant:l:atb-blk-link-*5>"
+                  }
+                },
+                "subIsUserId": true,
+                "subIsLocalId": true,
+                "userIdIsLocalId": true
+              }
+            },
+            "email": "fireemu-aa-<run>-k1@example.com",
+            "refreshToken": "<refreshToken>",
+            "expiresIn": "3600",
+            "localId": "<generated-localId>",
+            "isNewUser": true
+          }
+        },
+        "link-code-existing": {
+          "status": 200,
+          "body": {
+            "kind": "identitytoolkit#GetOobConfirmationCodeResponse",
+            "oobCode": "<oobCode>",
+            "email": "fireemu-aa-<run>-k1@example.com",
+            "oobLink": "<oobLink>"
+          }
+        },
+        "link-sign-in-existing": {
+          "status": 200,
+          "body": {
+            "kind": "identitytoolkit#EmailLinkSigninResponse",
+            "idToken": {
+              "<jwt>": {
+                "header": {
+                  "alg": "RS256",
+                  "kid": "<present>",
+                  "typ": "JWT"
+                },
+                "signature": "<present>",
+                "claims": {
+                  "atbC": {
+                    "t": "providers/cloud.auth/eventTypes/user.beforeCreate:emailLink",
+                    "at": "USER",
+                    "rn": "projects/demo-auth-account/tenants/<tenant:l:atb-blk-link-*5>",
+                    "au": [
+                      "isNewUser",
+                      "providerId"
+                    ],
+                    "nu": true,
+                    "pi": "password",
+                    "cr": null,
+                    "cx": [
+                      "string",
+                      "string",
+                      "string",
+                      "string",
+                      "string"
+                    ],
+                    "u": [
+                      "disabled",
+                      "email",
+                      "emailVerified",
+                      "metadata",
+                      "multiFactor",
+                      "providerData",
+                      "tenantId",
+                      "tokensValidAfterTime",
+                      "uid"
+                    ],
+                    "ev": true,
+                    "dis": false,
+                    "pd": [
+                      "password"
+                    ],
+                    "mf": null,
+                    "cc": [],
+                    "tn": "string"
+                  },
+                  "atbS": {
+                    "t": "providers/cloud.auth/eventTypes/user.beforeSignIn:emailLink",
+                    "at": "USER",
+                    "rn": "projects/demo-auth-account/tenants/<tenant:l:atb-blk-link-*5>",
+                    "au": [
+                      "isNewUser",
+                      "providerId"
+                    ],
+                    "nu": false,
+                    "pi": "password",
+                    "cr": null,
+                    "cx": [
+                      "string",
+                      "string",
+                      "string",
+                      "string",
+                      "string"
+                    ],
+                    "u": [
+                      "customClaims",
+                      "disabled",
+                      "email",
+                      "emailVerified",
+                      "metadata",
+                      "multiFactor",
+                      "providerData",
+                      "tenantId",
+                      "tokensValidAfterTime",
+                      "uid"
+                    ],
+                    "ev": true,
+                    "dis": false,
+                    "pd": [
+                      "password"
+                    ],
+                    "mf": null,
+                    "cc": [
+                      "atbC"
+                    ],
+                    "tn": "string"
+                  },
+                  "iss": "https://securetoken.google.com/demo-auth-account",
+                  "aud": "demo-auth-account",
+                  "auth_time": "<auth_time>",
+                  "user_id": "<generated-localId>",
+                  "sub": "<generated-localId>",
+                  "iat": "<iat>",
+                  "exp": "iat+3600",
+                  "email": "fireemu-aa-<run>-k1@example.com",
+                  "email_verified": true,
+                  "firebase": {
+                    "identities": {
+                      "email": [
+                        "fireemu-aa-<run>-k1@example.com"
+                      ]
+                    },
+                    "sign_in_provider": "password",
+                    "tenant": "<tenant:l:atb-blk-link-*5>"
+                  }
+                },
+                "subIsUserId": true,
+                "subIsLocalId": true,
+                "userIdIsLocalId": true
+              }
+            },
+            "email": "fireemu-aa-<run>-k1@example.com",
+            "refreshToken": "<refreshToken>",
+            "expiresIn": "3600",
+            "localId": "<generated-localId>",
+            "isNewUser": false
+          }
+        }
+      }
+    },
+    "atb/blocking/events": {
+      "corpusDigest": "4126d2c20a2b6099aa791841bd943c38150244cce2c71ec662d0a5de1e49e429",
+      "harnessDigest": "ddbb587b5ec33d5e5e4d5226acb52de902eb2d414d2ffffcae67285b7462b88d",
+      "recordedAt": "2026-09-28T00:48:21.242Z",
+      "gitSha": "b993d1cbf8dc42c764cb534b49233bdec4fe0808",
+      "steps": {
+        "sign-up-password": {
+          "status": 200,
+          "body": {
+            "kind": "identitytoolkit#SignupNewUserResponse",
+            "idToken": {
+              "<jwt>": {
+                "header": {
+                  "alg": "RS256",
+                  "kid": "<present>",
+                  "typ": "JWT"
+                },
+                "signature": "<present>",
+                "claims": {
+                  "atbC": {
+                    "t": "providers/cloud.auth/eventTypes/user.beforeCreate:password",
+                    "at": "USER",
+                    "rn": "projects/demo-auth-account",
+                    "au": [
+                      "isNewUser",
+                      "providerId"
+                    ],
+                    "nu": true,
+                    "pi": "password",
+                    "cr": null,
+                    "cx": [
+                      "string",
+                      "string",
+                      "string",
+                      "string",
+                      "string"
+                    ],
+                    "u": [
+                      "disabled",
+                      "email",
+                      "emailVerified",
+                      "metadata",
+                      "multiFactor",
+                      "providerData",
+                      "tokensValidAfterTime",
+                      "uid"
+                    ],
+                    "ev": false,
+                    "dis": false,
+                    "pd": [
+                      "password"
+                    ],
+                    "mf": null,
+                    "cc": [],
+                    "tn": "u"
+                  },
+                  "atbS": {
+                    "t": "providers/cloud.auth/eventTypes/user.beforeSignIn:password",
+                    "at": "USER",
+                    "rn": "projects/demo-auth-account",
+                    "au": [
+                      "isNewUser",
+                      "providerId"
+                    ],
+                    "nu": false,
+                    "pi": "password",
+                    "cr": null,
+                    "cx": [
+                      "string",
+                      "string",
+                      "string",
+                      "string",
+                      "string"
+                    ],
+                    "u": [
+                      "customClaims",
+                      "disabled",
+                      "email",
+                      "emailVerified",
+                      "metadata",
+                      "multiFactor",
+                      "providerData",
+                      "tokensValidAfterTime",
+                      "uid"
+                    ],
+                    "ev": false,
+                    "dis": false,
+                    "pd": [
+                      "password"
+                    ],
+                    "mf": null,
+                    "cc": [
+                      "atbC"
+                    ],
+                    "tn": "u"
+                  },
+                  "iss": "https://securetoken.google.com/demo-auth-account",
+                  "aud": "demo-auth-account",
+                  "auth_time": "<auth_time>",
+                  "user_id": "<generated-localId>",
+                  "sub": "<generated-localId>",
+                  "iat": "<iat>",
+                  "exp": "iat+3600",
+                  "email": "fireemu-aa-<run>-e1@example.com",
+                  "email_verified": false,
+                  "firebase": {
+                    "identities": {
+                      "email": [
+                        "fireemu-aa-<run>-e1@example.com"
+                      ]
+                    },
+                    "sign_in_provider": "password"
+                  }
+                },
+                "subIsUserId": true,
+                "subIsLocalId": true,
+                "userIdIsLocalId": true
+              }
+            },
+            "email": "fireemu-aa-<run>-e1@example.com",
+            "refreshToken": "<refreshToken>",
+            "expiresIn": "3600",
+            "localId": "<generated-localId>"
+          }
+        },
+        "sign-in-password": {
+          "status": 200,
+          "body": {
+            "kind": "identitytoolkit#VerifyPasswordResponse",
+            "localId": "<generated-localId>",
+            "email": "fireemu-aa-<run>-e1@example.com",
+            "displayName": "",
+            "idToken": {
+              "<jwt>": {
+                "header": {
+                  "alg": "RS256",
+                  "kid": "<present>",
+                  "typ": "JWT"
+                },
+                "signature": "<present>",
+                "claims": {
+                  "atbC": {
+                    "t": "providers/cloud.auth/eventTypes/user.beforeCreate:password",
+                    "at": "USER",
+                    "rn": "projects/demo-auth-account",
+                    "au": [
+                      "isNewUser",
+                      "providerId"
+                    ],
+                    "nu": true,
+                    "pi": "password",
+                    "cr": null,
+                    "cx": [
+                      "string",
+                      "string",
+                      "string",
+                      "string",
+                      "string"
+                    ],
+                    "u": [
+                      "disabled",
+                      "email",
+                      "emailVerified",
+                      "metadata",
+                      "multiFactor",
+                      "providerData",
+                      "tokensValidAfterTime",
+                      "uid"
+                    ],
+                    "ev": false,
+                    "dis": false,
+                    "pd": [
+                      "password"
+                    ],
+                    "mf": null,
+                    "cc": [],
+                    "tn": "u"
+                  },
+                  "atbS": {
+                    "t": "providers/cloud.auth/eventTypes/user.beforeSignIn:password",
+                    "at": "USER",
+                    "rn": "projects/demo-auth-account",
+                    "au": [
+                      "isNewUser",
+                      "providerId"
+                    ],
+                    "nu": false,
+                    "pi": "password",
+                    "cr": null,
+                    "cx": [
+                      "string",
+                      "string",
+                      "string",
+                      "string",
+                      "string"
+                    ],
+                    "u": [
+                      "customClaims",
+                      "disabled",
+                      "email",
+                      "emailVerified",
+                      "metadata",
+                      "multiFactor",
+                      "providerData",
+                      "tokensValidAfterTime",
+                      "uid"
+                    ],
+                    "ev": false,
+                    "dis": false,
+                    "pd": [
+                      "password"
+                    ],
+                    "mf": null,
+                    "cc": [
+                      "atbC"
+                    ],
+                    "tn": "u"
+                  },
+                  "iss": "https://securetoken.google.com/demo-auth-account",
+                  "aud": "demo-auth-account",
+                  "auth_time": "<auth_time>",
+                  "user_id": "<generated-localId>",
+                  "sub": "<generated-localId>",
+                  "iat": "<iat>",
+                  "exp": "iat+3600",
+                  "email": "fireemu-aa-<run>-e1@example.com",
+                  "email_verified": false,
+                  "firebase": {
+                    "identities": {
+                      "email": [
+                        "fireemu-aa-<run>-e1@example.com"
+                      ]
+                    },
+                    "sign_in_provider": "password"
+                  }
+                },
+                "subIsUserId": true,
+                "subIsLocalId": true,
+                "userIdIsLocalId": true
+              }
+            },
+            "registered": true,
+            "refreshToken": "<refreshToken>",
+            "expiresIn": "3600"
+          }
+        },
+        "refresh-password": {
+          "status": 200,
+          "body": {
+            "access_token": {
+              "<jwt>": {
+                "header": {
+                  "alg": "RS256",
+                  "kid": "<present>",
+                  "typ": "JWT"
+                },
+                "signature": "<present>",
+                "claims": {
+                  "atbC": {
+                    "t": "providers/cloud.auth/eventTypes/user.beforeCreate:password",
+                    "at": "USER",
+                    "rn": "projects/demo-auth-account",
+                    "au": [
+                      "isNewUser",
+                      "providerId"
+                    ],
+                    "nu": true,
+                    "pi": "password",
+                    "cr": null,
+                    "cx": [
+                      "string",
+                      "string",
+                      "string",
+                      "string",
+                      "string"
+                    ],
+                    "u": [
+                      "disabled",
+                      "email",
+                      "emailVerified",
+                      "metadata",
+                      "multiFactor",
+                      "providerData",
+                      "tokensValidAfterTime",
+                      "uid"
+                    ],
+                    "ev": false,
+                    "dis": false,
+                    "pd": [
+                      "password"
+                    ],
+                    "mf": null,
+                    "cc": [],
+                    "tn": "u"
+                  },
+                  "atbS": {
+                    "t": "providers/cloud.auth/eventTypes/user.beforeSignIn:password",
+                    "at": "USER",
+                    "rn": "projects/demo-auth-account",
+                    "au": [
+                      "isNewUser",
+                      "providerId"
+                    ],
+                    "nu": false,
+                    "pi": "password",
+                    "cr": null,
+                    "cx": [
+                      "string",
+                      "string",
+                      "string",
+                      "string",
+                      "string"
+                    ],
+                    "u": [
+                      "customClaims",
+                      "disabled",
+                      "email",
+                      "emailVerified",
+                      "metadata",
+                      "multiFactor",
+                      "providerData",
+                      "tokensValidAfterTime",
+                      "uid"
+                    ],
+                    "ev": false,
+                    "dis": false,
+                    "pd": [
+                      "password"
+                    ],
+                    "mf": null,
+                    "cc": [
+                      "atbC"
+                    ],
+                    "tn": "u"
+                  },
+                  "iss": "https://securetoken.google.com/demo-auth-account",
+                  "aud": "demo-auth-account",
+                  "auth_time": "<auth_time>",
+                  "user_id": "<generated-localId>",
+                  "sub": "<generated-localId>",
+                  "iat": "<iat>",
+                  "exp": "iat+3600",
+                  "email": "fireemu-aa-<run>-e1@example.com",
+                  "email_verified": false,
+                  "firebase": {
+                    "identities": {
+                      "email": [
+                        "fireemu-aa-<run>-e1@example.com"
+                      ]
+                    },
+                    "sign_in_provider": "password"
+                  }
+                },
+                "subIsUserId": true,
+                "subIsLocalId": true,
+                "userIdIsLocalId": true
+              }
+            },
+            "expires_in": "3600",
+            "token_type": "Bearer",
+            "refresh_token": "<refresh_token>",
+            "id_token": {
+              "<jwt>": {
+                "header": {
+                  "alg": "RS256",
+                  "kid": "<present>",
+                  "typ": "JWT"
+                },
+                "signature": "<present>",
+                "claims": {
+                  "atbC": {
+                    "t": "providers/cloud.auth/eventTypes/user.beforeCreate:password",
+                    "at": "USER",
+                    "rn": "projects/demo-auth-account",
+                    "au": [
+                      "isNewUser",
+                      "providerId"
+                    ],
+                    "nu": true,
+                    "pi": "password",
+                    "cr": null,
+                    "cx": [
+                      "string",
+                      "string",
+                      "string",
+                      "string",
+                      "string"
+                    ],
+                    "u": [
+                      "disabled",
+                      "email",
+                      "emailVerified",
+                      "metadata",
+                      "multiFactor",
+                      "providerData",
+                      "tokensValidAfterTime",
+                      "uid"
+                    ],
+                    "ev": false,
+                    "dis": false,
+                    "pd": [
+                      "password"
+                    ],
+                    "mf": null,
+                    "cc": [],
+                    "tn": "u"
+                  },
+                  "atbS": {
+                    "t": "providers/cloud.auth/eventTypes/user.beforeSignIn:password",
+                    "at": "USER",
+                    "rn": "projects/demo-auth-account",
+                    "au": [
+                      "isNewUser",
+                      "providerId"
+                    ],
+                    "nu": false,
+                    "pi": "password",
+                    "cr": null,
+                    "cx": [
+                      "string",
+                      "string",
+                      "string",
+                      "string",
+                      "string"
+                    ],
+                    "u": [
+                      "customClaims",
+                      "disabled",
+                      "email",
+                      "emailVerified",
+                      "metadata",
+                      "multiFactor",
+                      "providerData",
+                      "tokensValidAfterTime",
+                      "uid"
+                    ],
+                    "ev": false,
+                    "dis": false,
+                    "pd": [
+                      "password"
+                    ],
+                    "mf": null,
+                    "cc": [
+                      "atbC"
+                    ],
+                    "tn": "u"
+                  },
+                  "iss": "https://securetoken.google.com/demo-auth-account",
+                  "aud": "demo-auth-account",
+                  "auth_time": "<auth_time>",
+                  "user_id": "<generated-localId>",
+                  "sub": "<generated-localId>",
+                  "iat": "<iat>",
+                  "exp": "iat+3600",
+                  "email": "fireemu-aa-<run>-e1@example.com",
+                  "email_verified": false,
+                  "firebase": {
+                    "identities": {
+                      "email": [
+                        "fireemu-aa-<run>-e1@example.com"
+                      ]
+                    },
+                    "sign_in_provider": "password"
+                  }
+                },
+                "subIsUserId": true,
+                "subIsLocalId": true,
+                "userIdIsLocalId": true
+              }
+            },
+            "user_id": "<generated-localId>",
+            "project_id": "<project-number>"
+          }
+        },
+        "sign-up-anonymous": {
+          "status": 200,
+          "body": {
+            "kind": "identitytoolkit#SignupNewUserResponse",
+            "idToken": {
+              "<jwt>": {
+                "header": {
+                  "alg": "RS256",
+                  "kid": "<present>",
+                  "typ": "JWT"
+                },
+                "signature": "<present>",
+                "claims": {
+                  "provider_id": "anonymous",
+                  "iss": "https://securetoken.google.com/demo-auth-account",
+                  "aud": "demo-auth-account",
+                  "auth_time": "<auth_time>",
+                  "user_id": "<generated-localId>",
+                  "sub": "<generated-localId>",
+                  "iat": "<iat>",
+                  "exp": "iat+3600",
+                  "firebase": {
+                    "identities": {},
+                    "sign_in_provider": "anonymous"
+                  }
+                },
+                "subIsUserId": true,
+                "subIsLocalId": true,
+                "userIdIsLocalId": true
+              }
+            },
+            "refreshToken": "<refreshToken>",
+            "expiresIn": "3600",
+            "localId": "<generated-localId>"
+          }
+        },
+        "admin-create": {
+          "status": 200,
+          "body": {
+            "kind": "identitytoolkit#SignupNewUserResponse",
+            "email": "fireemu-aa-<run>-e2@example.com",
+            "localId": "aa-<run>-e2"
+          }
+        },
+        "admin-lookup-created": {
+          "status": 200,
+          "body": {
+            "kind": "identitytoolkit#GetAccountInfoResponse",
+            "users": [
+              {
+                "localId": "aa-<run>-e2",
+                "email": "fireemu-aa-<run>-e2@example.com",
+                "passwordHash": "UkVEQUNURUQ=",
+                "emailVerified": true,
+                "passwordUpdatedAt": "<run-time:number:ms>",
+                "providerUserInfo": [
+                  {
+                    "providerId": "password",
+                    "federatedId": "fireemu-aa-<run>-e2@example.com",
+                    "email": "fireemu-aa-<run>-e2@example.com",
+                    "rawId": "fireemu-aa-<run>-e2@example.com"
+                  }
+                ],
+                "validSince": "<run-time:string:s>",
+                "disabled": false,
+                "createdAt": "<run-time:string:ms>"
+              }
+            ]
+          }
+        },
+        "sign-in-admin-created": {
+          "status": 200,
+          "body": {
+            "kind": "identitytoolkit#VerifyPasswordResponse",
+            "localId": "aa-<run>-e2",
+            "email": "fireemu-aa-<run>-e2@example.com",
+            "displayName": "",
+            "idToken": {
+              "<jwt>": {
+                "header": {
+                  "alg": "RS256",
+                  "kid": "<present>",
+                  "typ": "JWT"
+                },
+                "signature": "<present>",
+                "claims": {
+                  "atbS": {
+                    "t": "providers/cloud.auth/eventTypes/user.beforeSignIn:password",
+                    "at": "USER",
+                    "rn": "projects/demo-auth-account",
+                    "au": [
+                      "isNewUser",
+                      "providerId"
+                    ],
+                    "nu": false,
+                    "pi": "password",
+                    "cr": null,
+                    "cx": [
+                      "string",
+                      "string",
+                      "string",
+                      "string",
+                      "string"
+                    ],
+                    "u": [
+                      "disabled",
+                      "email",
+                      "emailVerified",
+                      "metadata",
+                      "multiFactor",
+                      "providerData",
+                      "tokensValidAfterTime",
+                      "uid"
+                    ],
+                    "ev": true,
+                    "dis": false,
+                    "pd": [
+                      "password"
+                    ],
+                    "mf": null,
+                    "cc": [],
+                    "tn": "u"
+                  },
+                  "iss": "https://securetoken.google.com/demo-auth-account",
+                  "aud": "demo-auth-account",
+                  "auth_time": "<auth_time>",
+                  "user_id": "aa-<run>-e2",
+                  "sub": "aa-<run>-e2",
+                  "iat": "<iat>",
+                  "exp": "iat+3600",
+                  "email": "fireemu-aa-<run>-e2@example.com",
+                  "email_verified": true,
+                  "firebase": {
+                    "identities": {
+                      "email": [
+                        "fireemu-aa-<run>-e2@example.com"
+                      ]
+                    },
+                    "sign_in_provider": "password"
+                  }
+                },
+                "subIsUserId": true,
+                "subIsLocalId": true,
+                "userIdIsLocalId": true
+              }
+            },
+            "registered": true,
+            "refreshToken": "<refreshToken>",
+            "expiresIn": "3600"
+          }
+        },
+        "admin-import": {
+          "status": 200,
+          "body": {
+            "kind": "identitytoolkit#UploadAccountResponse"
+          }
+        },
+        "admin-lookup-imported": {
+          "status": 200,
+          "body": {
+            "kind": "identitytoolkit#GetAccountInfoResponse",
+            "users": [
+              {
+                "localId": "aa-<run>-e3",
+                "email": "fireemu-aa-<run>-e3@example.com",
+                "emailVerified": false,
+                "validSince": "<run-time:string:s>",
+                "disabled": false,
+                "createdAt": "<run-time:string:ms>"
+              }
+            ]
+          }
+        },
+        "update-profile": {
+          "status": 200,
+          "body": {
+            "kind": "identitytoolkit#SetAccountInfoResponse",
+            "localId": "<generated-localId>",
+            "email": "fireemu-aa-<run>-e1@example.com",
+            "displayName": "Updated",
+            "providerUserInfo": [
+              {
+                "providerId": "password",
+                "displayName": "Updated",
+                "federatedId": "fireemu-aa-<run>-e1@example.com",
+                "email": "fireemu-aa-<run>-e1@example.com",
+                "rawId": "fireemu-aa-<run>-e1@example.com"
+              }
+            ],
+            "passwordHash": "UkVEQUNURUQ=",
+            "emailVerified": false
+          }
+        },
+        "phone-code-new": {
+          "status": 200,
+          "body": {
+            "sessionInfo": "<sessionInfo>"
+          }
+        },
+        "phone-sign-in-new": {
+          "status": 200,
+          "body": {
+            "idToken": {
+              "<jwt>": {
+                "header": {
+                  "alg": "RS256",
+                  "kid": "<present>",
+                  "typ": "JWT"
+                },
+                "signature": "<present>",
+                "claims": {
+                  "atbC": {
+                    "t": "providers/cloud.auth/eventTypes/user.beforeCreate:phone",
+                    "at": "USER",
+                    "rn": "projects/demo-auth-account",
+                    "au": [
+                      "isNewUser",
+                      "providerId"
+                    ],
+                    "nu": true,
+                    "pi": "phone",
+                    "cr": null,
+                    "cx": [
+                      "string",
+                      "string",
+                      "string",
+                      "string",
+                      "string"
+                    ],
+                    "u": [
+                      "disabled",
+                      "metadata",
+                      "multiFactor",
+                      "phoneNumber",
+                      "providerData",
+                      "tokensValidAfterTime",
+                      "uid"
+                    ],
+                    "dis": false,
+                    "pd": [
+                      "phone"
+                    ],
+                    "mf": null,
+                    "cc": [],
+                    "tn": "u"
+                  },
+                  "atbS": {
+                    "t": "providers/cloud.auth/eventTypes/user.beforeSignIn:phone",
+                    "at": "USER",
+                    "rn": "projects/demo-auth-account",
+                    "au": [
+                      "isNewUser",
+                      "providerId"
+                    ],
+                    "nu": false,
+                    "pi": "phone",
+                    "cr": null,
+                    "cx": [
+                      "string",
+                      "string",
+                      "string",
+                      "string",
+                      "string"
+                    ],
+                    "u": [
+                      "customClaims",
+                      "disabled",
+                      "metadata",
+                      "multiFactor",
+                      "phoneNumber",
+                      "providerData",
+                      "tokensValidAfterTime",
+                      "uid"
+                    ],
+                    "dis": false,
+                    "pd": [
+                      "phone"
+                    ],
+                    "mf": null,
+                    "cc": [
+                      "atbC"
+                    ],
+                    "tn": "u"
+                  },
+                  "iss": "https://securetoken.google.com/demo-auth-account",
+                  "aud": "demo-auth-account",
+                  "auth_time": "<auth_time>",
+                  "user_id": "<generated-localId>",
+                  "sub": "<generated-localId>",
+                  "iat": "<iat>",
+                  "exp": "iat+3600",
+                  "phone_number": "+16505550104",
+                  "firebase": {
+                    "identities": {
+                      "phone": [
+                        "+16505550104"
+                      ]
+                    },
+                    "sign_in_provider": "phone"
+                  }
+                },
+                "subIsUserId": true,
+                "subIsLocalId": true,
+                "userIdIsLocalId": true
+              }
+            },
+            "refreshToken": "<refreshToken>",
+            "expiresIn": "3600",
+            "localId": "<generated-localId>",
+            "isNewUser": true,
+            "phoneNumber": "+16505550104"
+          }
+        },
+        "phone-code-existing": {
+          "status": 200,
+          "body": {
+            "sessionInfo": "<sessionInfo>"
+          }
+        },
+        "phone-sign-in-existing": {
+          "status": 200,
+          "body": {
+            "idToken": {
+              "<jwt>": {
+                "header": {
+                  "alg": "RS256",
+                  "kid": "<present>",
+                  "typ": "JWT"
+                },
+                "signature": "<present>",
+                "claims": {
+                  "atbC": {
+                    "t": "providers/cloud.auth/eventTypes/user.beforeCreate:phone",
+                    "at": "USER",
+                    "rn": "projects/demo-auth-account",
+                    "au": [
+                      "isNewUser",
+                      "providerId"
+                    ],
+                    "nu": true,
+                    "pi": "phone",
+                    "cr": null,
+                    "cx": [
+                      "string",
+                      "string",
+                      "string",
+                      "string",
+                      "string"
+                    ],
+                    "u": [
+                      "disabled",
+                      "metadata",
+                      "multiFactor",
+                      "phoneNumber",
+                      "providerData",
+                      "tokensValidAfterTime",
+                      "uid"
+                    ],
+                    "dis": false,
+                    "pd": [
+                      "phone"
+                    ],
+                    "mf": null,
+                    "cc": [],
+                    "tn": "u"
+                  },
+                  "atbS": {
+                    "t": "providers/cloud.auth/eventTypes/user.beforeSignIn:phone",
+                    "at": "USER",
+                    "rn": "projects/demo-auth-account",
+                    "au": [
+                      "isNewUser",
+                      "providerId"
+                    ],
+                    "nu": false,
+                    "pi": "phone",
+                    "cr": null,
+                    "cx": [
+                      "string",
+                      "string",
+                      "string",
+                      "string",
+                      "string"
+                    ],
+                    "u": [
+                      "customClaims",
+                      "disabled",
+                      "metadata",
+                      "multiFactor",
+                      "phoneNumber",
+                      "providerData",
+                      "tokensValidAfterTime",
+                      "uid"
+                    ],
+                    "dis": false,
+                    "pd": [
+                      "phone"
+                    ],
+                    "mf": null,
+                    "cc": [
+                      "atbC"
+                    ],
+                    "tn": "u"
+                  },
+                  "iss": "https://securetoken.google.com/demo-auth-account",
+                  "aud": "demo-auth-account",
+                  "auth_time": "<auth_time>",
+                  "user_id": "<generated-localId>",
+                  "sub": "<generated-localId>",
+                  "iat": "<iat>",
+                  "exp": "iat+3600",
+                  "phone_number": "+16505550104",
+                  "firebase": {
+                    "identities": {
+                      "phone": [
+                        "+16505550104"
+                      ]
+                    },
+                    "sign_in_provider": "phone"
+                  }
+                },
+                "subIsUserId": true,
+                "subIsLocalId": true,
+                "userIdIsLocalId": true
+              }
+            },
+            "refreshToken": "<refreshToken>",
+            "expiresIn": "3600",
+            "localId": "<generated-localId>",
+            "isNewUser": false,
+            "phoneNumber": "+16505550104"
+          }
+        }
+      }
+    },
+    "atb/blocking/mfa": {
+      "corpusDigest": "7adc63aae5a8f48732caf04e84ba460e8d23e6270397c456014f972c6c3d0683",
+      "harnessDigest": "ddbb587b5ec33d5e5e4d5226acb52de902eb2d414d2ffffcae67285b7462b88d",
+      "recordedAt": "2026-09-28T00:48:21.242Z",
+      "gitSha": "b993d1cbf8dc42c764cb534b49233bdec4fe0808",
+      "steps": {
+        "create-m1": {
+          "status": 200,
+          "body": {
+            "kind": "identitytoolkit#SignupNewUserResponse",
+            "email": "fireemu-aa-<run>-m1@example.com",
+            "localId": "aa-<run>-m1"
+          }
+        },
+        "sign-in-m1": {
+          "status": 200,
+          "body": {
+            "kind": "identitytoolkit#VerifyPasswordResponse",
+            "localId": "aa-<run>-m1",
+            "email": "fireemu-aa-<run>-m1@example.com",
+            "displayName": "",
+            "idToken": {
+              "<jwt>": {
+                "header": {
+                  "alg": "RS256",
+                  "kid": "<present>",
+                  "typ": "JWT"
+                },
+                "signature": "<present>",
+                "claims": {
+                  "atbS": {
+                    "t": "providers/cloud.auth/eventTypes/user.beforeSignIn:password",
+                    "at": "USER",
+                    "rn": "projects/demo-auth-account",
+                    "au": [
+                      "isNewUser",
+                      "providerId"
+                    ],
+                    "nu": false,
+                    "pi": "password",
+                    "cr": null,
+                    "cx": [
+                      "string",
+                      "string",
+                      "string",
+                      "string",
+                      "string"
+                    ],
+                    "u": [
+                      "disabled",
+                      "email",
+                      "emailVerified",
+                      "metadata",
+                      "multiFactor",
+                      "providerData",
+                      "tokensValidAfterTime",
+                      "uid"
+                    ],
+                    "ev": true,
+                    "dis": false,
+                    "pd": [
+                      "password"
+                    ],
+                    "mf": null,
+                    "cc": [],
+                    "tn": "u"
+                  },
+                  "iss": "https://securetoken.google.com/demo-auth-account",
+                  "aud": "demo-auth-account",
+                  "auth_time": "<auth_time>",
+                  "user_id": "aa-<run>-m1",
+                  "sub": "aa-<run>-m1",
+                  "iat": "<iat>",
+                  "exp": "iat+3600",
+                  "email": "fireemu-aa-<run>-m1@example.com",
+                  "email_verified": true,
+                  "firebase": {
+                    "identities": {
+                      "email": [
+                        "fireemu-aa-<run>-m1@example.com"
+                      ]
+                    },
+                    "sign_in_provider": "password"
+                  }
+                },
+                "subIsUserId": true,
+                "subIsLocalId": true,
+                "userIdIsLocalId": true
+              }
+            },
+            "registered": true,
+            "refreshToken": "<refreshToken>",
+            "expiresIn": "3600"
+          }
+        },
+        "phone-start": {
+          "status": 200,
+          "body": {
+            "phoneSessionInfo": {
+              "sessionInfo": "<sessionInfo>"
+            }
+          }
+        },
+        "phone-finalize": {
+          "status": 200,
+          "body": {
+            "idToken": {
+              "<jwt>": {
+                "header": {
+                  "alg": "RS256",
+                  "kid": "<present>",
+                  "typ": "JWT"
+                },
+                "signature": "<present>",
+                "claims": {
+                  "iss": "https://securetoken.google.com/demo-auth-account",
+                  "aud": "demo-auth-account",
+                  "auth_time": "<auth_time>",
+                  "user_id": "aa-<run>-m1",
+                  "sub": "aa-<run>-m1",
+                  "iat": "<iat>",
+                  "exp": "iat+3600",
+                  "email": "fireemu-aa-<run>-m1@example.com",
+                  "email_verified": true,
+                  "firebase": {
+                    "identities": {
+                      "email": [
+                        "fireemu-aa-<run>-m1@example.com"
+                      ]
+                    },
+                    "sign_in_provider": "password",
+                    "sign_in_second_factor": "phone",
+                    "second_factor_identifier": "<enrollment:1:uuid>"
+                  }
+                },
+                "subIsUserId": true
+              }
+            },
+            "refreshToken": "<refreshToken>"
+          }
+        },
+        "first-factor": {
+          "status": 200,
+          "body": {
+            "kind": "identitytoolkit#VerifyPasswordResponse",
+            "localId": "aa-<run>-m1",
+            "email": "fireemu-aa-<run>-m1@example.com",
+            "displayName": "",
+            "registered": true,
+            "mfaPendingCredential": "<mfaPendingCredential>",
+            "mfaInfo": [
+              {
+                "phoneInfo": "+*******0105",
+                "mfaEnrollmentId": "<enrollment:1:uuid>",
+                "displayName": "Phone",
+                "enrolledAt": "<run-time:instant:fraction-6>"
+              }
+            ]
+          }
+        },
+        "second-factor-start": {
+          "status": 200,
+          "body": {
+            "phoneResponseInfo": {
+              "sessionInfo": "<sessionInfo>"
+            }
+          }
+        },
+        "second-factor-finalize": {
+          "status": 200,
+          "body": {
+            "idToken": {
+              "<jwt>": {
+                "header": {
+                  "alg": "RS256",
+                  "kid": "<present>",
+                  "typ": "JWT"
+                },
+                "signature": "<present>",
+                "claims": {
+                  "atbS": {
+                    "t": "providers/cloud.auth/eventTypes/user.beforeSignIn:password",
+                    "at": "USER",
+                    "rn": "projects/demo-auth-account",
+                    "au": [
+                      "isNewUser",
+                      "providerId"
+                    ],
+                    "nu": false,
+                    "pi": "password",
+                    "cr": null,
+                    "cx": [
+                      "string",
+                      "string",
+                      "string",
+                      "string",
+                      "string"
+                    ],
+                    "u": [
+                      "disabled",
+                      "email",
+                      "emailVerified",
+                      "metadata",
+                      "multiFactor",
+                      "providerData",
+                      "tokensValidAfterTime",
+                      "uid"
+                    ],
+                    "ev": true,
+                    "dis": false,
+                    "pd": [
+                      "password"
+                    ],
+                    "mf": [
+                      "phone"
+                    ],
+                    "cc": [],
+                    "tn": "u"
+                  },
+                  "iss": "https://securetoken.google.com/demo-auth-account",
+                  "aud": "demo-auth-account",
+                  "auth_time": "<auth_time>",
+                  "user_id": "aa-<run>-m1",
+                  "sub": "aa-<run>-m1",
+                  "iat": "<iat>",
+                  "exp": "iat+3600",
+                  "email": "fireemu-aa-<run>-m1@example.com",
+                  "email_verified": true,
+                  "firebase": {
+                    "identities": {
+                      "email": [
+                        "fireemu-aa-<run>-m1@example.com"
+                      ]
+                    },
+                    "sign_in_provider": "password",
+                    "sign_in_second_factor": "phone",
+                    "second_factor_identifier": "<enrollment:1:uuid>"
+                  }
+                },
+                "subIsUserId": true
+              }
+            },
+            "refreshToken": "<refreshToken>"
+          }
+        }
+      },
+      "config": {
+        "baseline": {
+          "mfa": {
+            "state": "DISABLED"
+          }
+        },
+        "applied": {
+          "mfa": {
+            "state": "ENABLED",
+            "enabledProviders": [
+              "PHONE_SMS"
+            ]
+          }
+        },
+        "restored": {
+          "mfa": {
+            "state": "DISABLED"
+          }
+        }
+      }
+    },
+    "atb/blocking/ordering": {
+      "corpusDigest": "9c5400616c9f836f0096d413115dedeee698af3a1996d6da8b312c18643456cd",
+      "harnessDigest": "ddbb587b5ec33d5e5e4d5226acb52de902eb2d414d2ffffcae67285b7462b88d",
+      "recordedAt": "2026-09-28T00:48:21.242Z",
+      "gitSha": "b993d1cbf8dc42c764cb534b49233bdec4fe0808",
+      "steps": {
+        "sign-up-profile": {
+          "status": 200,
+          "body": {
+            "kind": "identitytoolkit#SignupNewUserResponse",
+            "idToken": {
+              "<jwt>": {
+                "header": {
+                  "alg": "RS256",
+                  "kid": "<present>",
+                  "typ": "JWT"
+                },
+                "signature": "<present>",
+                "claims": {
+                  "name": "ATB Profile",
+                  "atbC": {
+                    "t": "providers/cloud.auth/eventTypes/user.beforeCreate:password",
+                    "at": "USER",
+                    "rn": "projects/demo-auth-account",
+                    "au": [
+                      "isNewUser",
+                      "providerId"
+                    ],
+                    "nu": true,
+                    "pi": "password",
+                    "cr": null,
+                    "cx": [
+                      "string",
+                      "string",
+                      "string",
+                      "string",
+                      "string"
+                    ],
+                    "u": [
+                      "disabled",
+                      "email",
+                      "emailVerified",
+                      "metadata",
+                      "multiFactor",
+                      "providerData",
+                      "tokensValidAfterTime",
+                      "uid"
+                    ],
+                    "ev": false,
+                    "dis": false,
+                    "pd": [
+                      "password"
+                    ],
+                    "mf": null,
+                    "cc": [],
+                    "tn": "u"
+                  },
+                  "atbS": {
+                    "t": "providers/cloud.auth/eventTypes/user.beforeSignIn:password",
+                    "at": "USER",
+                    "rn": "projects/demo-auth-account",
+                    "au": [
+                      "isNewUser",
+                      "providerId"
+                    ],
+                    "nu": false,
+                    "pi": "password",
+                    "cr": null,
+                    "cx": [
+                      "string",
+                      "string",
+                      "string",
+                      "string",
+                      "string"
+                    ],
+                    "u": [
+                      "customClaims",
+                      "disabled",
+                      "displayName",
+                      "email",
+                      "emailVerified",
+                      "metadata",
+                      "multiFactor",
+                      "providerData",
+                      "tokensValidAfterTime",
+                      "uid"
+                    ],
+                    "ev": true,
+                    "dn": "ATB Profile",
+                    "dis": false,
+                    "pd": [
+                      "password"
+                    ],
+                    "mf": null,
+                    "cc": [
+                      "atbC"
+                    ],
+                    "tn": "u"
+                  },
+                  "iss": "https://securetoken.google.com/demo-auth-account",
+                  "aud": "demo-auth-account",
+                  "auth_time": "<auth_time>",
+                  "user_id": "<generated-localId>",
+                  "sub": "<generated-localId>",
+                  "iat": "<iat>",
+                  "exp": "iat+3600",
+                  "email": "fireemu-aa-<run>-o1-cprofile@example.com",
+                  "email_verified": true,
+                  "firebase": {
+                    "identities": {
+                      "email": [
+                        "fireemu-aa-<run>-o1-cprofile@example.com"
+                      ]
+                    },
+                    "sign_in_provider": "password"
+                  }
+                },
+                "subIsUserId": true,
+                "subIsLocalId": true,
+                "userIdIsLocalId": true
+              }
+            },
+            "displayName": "ATB Profile",
+            "email": "fireemu-aa-<run>-o1-cprofile@example.com",
+            "refreshToken": "<refreshToken>",
+            "expiresIn": "3600",
+            "localId": "<generated-localId>"
+          }
+        },
+        "lookup-profile": {
+          "status": 200,
+          "body": {
+            "kind": "identitytoolkit#GetAccountInfoResponse",
+            "users": [
+              {
+                "localId": "<generated-localId>",
+                "email": "fireemu-aa-<run>-o1-cprofile@example.com",
+                "displayName": "ATB Profile",
+                "passwordHash": "UkVEQUNURUQ=",
+                "emailVerified": true,
+                "passwordUpdatedAt": "<run-time:number:ms>",
+                "providerUserInfo": [
+                  {
+                    "providerId": "password",
+                    "displayName": "ATB Profile",
+                    "federatedId": "fireemu-aa-<run>-o1-cprofile@example.com",
+                    "email": "fireemu-aa-<run>-o1-cprofile@example.com",
+                    "rawId": "fireemu-aa-<run>-o1-cprofile@example.com"
+                  }
+                ],
+                "validSince": "<run-time:string:s>",
+                "lastLoginAt": "<run-time:string:ms>",
+                "createdAt": "<run-time:string:ms>",
+                "customAttributes": "{\"atbC\":{\"t\":\"providers/cloud.auth/eventTypes/user.beforeCreate:password\",\"at\":\"USER\",\"rn\":\"projects/demo-auth-account\",\"au\":[\"isNewUser\",\"providerId\"],\"nu\":true,\"pi\":\"password\",\"cr\":null,\"cx\":[\"string\",\"string\",\"string\",\"string\",\"string\"],\"u\":[\"disabled\",\"email\",\"emailVerified\",\"metadata\",\"multiFactor\",\"providerData\",\"tokensValidAfterTime\",\"uid\"],\"ev\":false,\"dis\":false,\"pd\":[\"password\"],\"mf\":null,\"cc\":[],\"tn\":\"u\"}}",
+                "lastRefreshAt": "<run-time:instant>"
+              }
+            ]
+          }
+        },
+        "sign-in-profile": {
+          "status": 200,
+          "body": {
+            "kind": "identitytoolkit#VerifyPasswordResponse",
+            "localId": "<generated-localId>",
+            "email": "fireemu-aa-<run>-o1-cprofile@example.com",
+            "displayName": "ATB Profile",
+            "idToken": {
+              "<jwt>": {
+                "header": {
+                  "alg": "RS256",
+                  "kid": "<present>",
+                  "typ": "JWT"
+                },
+                "signature": "<present>",
+                "claims": {
+                  "name": "ATB Profile",
+                  "atbC": {
+                    "t": "providers/cloud.auth/eventTypes/user.beforeCreate:password",
+                    "at": "USER",
+                    "rn": "projects/demo-auth-account",
+                    "au": [
+                      "isNewUser",
+                      "providerId"
+                    ],
+                    "nu": true,
+                    "pi": "password",
+                    "cr": null,
+                    "cx": [
+                      "string",
+                      "string",
+                      "string",
+                      "string",
+                      "string"
+                    ],
+                    "u": [
+                      "disabled",
+                      "email",
+                      "emailVerified",
+                      "metadata",
+                      "multiFactor",
+                      "providerData",
+                      "tokensValidAfterTime",
+                      "uid"
+                    ],
+                    "ev": false,
+                    "dis": false,
+                    "pd": [
+                      "password"
+                    ],
+                    "mf": null,
+                    "cc": [],
+                    "tn": "u"
+                  },
+                  "atbS": {
+                    "t": "providers/cloud.auth/eventTypes/user.beforeSignIn:password",
+                    "at": "USER",
+                    "rn": "projects/demo-auth-account",
+                    "au": [
+                      "isNewUser",
+                      "providerId"
+                    ],
+                    "nu": false,
+                    "pi": "password",
+                    "cr": null,
+                    "cx": [
+                      "string",
+                      "string",
+                      "string",
+                      "string",
+                      "string"
+                    ],
+                    "u": [
+                      "customClaims",
+                      "disabled",
+                      "displayName",
+                      "email",
+                      "emailVerified",
+                      "metadata",
+                      "multiFactor",
+                      "providerData",
+                      "tokensValidAfterTime",
+                      "uid"
+                    ],
+                    "ev": true,
+                    "dn": "ATB Profile",
+                    "dis": false,
+                    "pd": [
+                      "password"
+                    ],
+                    "mf": null,
+                    "cc": [
+                      "atbC"
+                    ],
+                    "tn": "u"
+                  },
+                  "iss": "https://securetoken.google.com/demo-auth-account",
+                  "aud": "demo-auth-account",
+                  "auth_time": "<auth_time>",
+                  "user_id": "<generated-localId>",
+                  "sub": "<generated-localId>",
+                  "iat": "<iat>",
+                  "exp": "iat+3600",
+                  "email": "fireemu-aa-<run>-o1-cprofile@example.com",
+                  "email_verified": true,
+                  "firebase": {
+                    "identities": {
+                      "email": [
+                        "fireemu-aa-<run>-o1-cprofile@example.com"
+                      ]
+                    },
+                    "sign_in_provider": "password"
+                  }
+                },
+                "subIsUserId": true,
+                "subIsLocalId": true,
+                "userIdIsLocalId": true
+              }
+            },
+            "registered": true,
+            "refreshToken": "<refreshToken>",
+            "expiresIn": "3600"
+          }
+        }
+      }
+    },
+    "atb/blocking/refusal": {
+      "corpusDigest": "dc86f0bd7867f2238ed08e69c1e61cb449e15cfc757448e7f28855fa4f2472a3",
+      "harnessDigest": "ddbb587b5ec33d5e5e4d5226acb52de902eb2d414d2ffffcae67285b7462b88d",
+      "recordedAt": "2026-09-28T00:48:21.242Z",
+      "gitSha": "b993d1cbf8dc42c764cb534b49233bdec4fe0808",
+      "steps": {
+        "create-permission-denied": {
+          "status": 400,
+          "body": {
+            "error": {
+              "code": 400,
+              "message": "BLOCKING_FUNCTION_ERROR_RESPONSE : HTTP Cloud Function returned an error: {\"error\":{\"message\":\"atb c refused\",\"status\":\"PERMISSION_DENIED\"}}",
+              "errors": [
+                {
+                  "message": "BLOCKING_FUNCTION_ERROR_RESPONSE : HTTP Cloud Function returned an error: {\"error\":{\"message\":\"atb c refused\",\"status\":\"PERMISSION_DENIED\"}}",
+                  "domain": "global",
+                  "reason": "invalid"
+                }
+              ]
+            }
+          }
+        },
+        "create-invalid-argument": {
+          "status": 400,
+          "body": {
+            "error": {
+              "code": 400,
+              "message": "BLOCKING_FUNCTION_ERROR_RESPONSE : HTTP Cloud Function returned an error: {\"error\":{\"message\":\"atb c refused\",\"status\":\"INVALID_ARGUMENT\"}}",
+              "errors": [
+                {
+                  "message": "BLOCKING_FUNCTION_ERROR_RESPONSE : HTTP Cloud Function returned an error: {\"error\":{\"message\":\"atb c refused\",\"status\":\"INVALID_ARGUMENT\"}}",
+                  "domain": "global",
+                  "reason": "invalid"
+                }
+              ]
+            }
+          }
+        },
+        "create-unavailable": {
+          "status": 503,
+          "body": {
+            "error": {
+              "code": 503,
+              "message": "Error code: 47",
+              "errors": [
+                {
+                  "message": "Error code: 47",
+                  "domain": "global",
+                  "reason": "backendError"
+                }
+              ]
+            }
+          }
+        },
+        "create-resource-exhausted": {
+          "status": 503,
+          "body": {
+            "error": {
+              "code": 503,
+              "message": "Error code: 47",
+              "errors": [
+                {
+                  "message": "Error code: 47",
+                  "domain": "global",
+                  "reason": "backendError"
+                }
+              ]
+            }
+          }
+        },
+        "create-unhandled": {
+          "status": 503,
+          "body": {
+            "error": {
+              "code": 503,
+              "message": "Error code: 47",
+              "errors": [
+                {
+                  "message": "Error code: 47",
+                  "domain": "global",
+                  "reason": "backendError"
+                }
+              ]
+            }
+          }
+        },
+        "lookup-refused-creates": {
+          "status": 200,
+          "body": {
+            "kind": "identitytoolkit#GetAccountInfoResponse"
+          }
+        },
+        "admin-create-refused": {
+          "status": 200,
+          "body": {
+            "kind": "identitytoolkit#SignupNewUserResponse",
+            "email": "fireemu-aa-<run>-r9-cdenypd@example.com",
+            "localId": "aa-<run>-r9"
+          }
+        },
+        "admin-create-sign-in-refused": {
+          "status": 200,
+          "body": {
+            "kind": "identitytoolkit#SignupNewUserResponse",
+            "email": "fireemu-aa-<run>-r6-sdenypd@example.com",
+            "localId": "aa-<run>-r6"
+          }
+        },
+        "sign-in-permission-denied": {
+          "status": 400,
+          "body": {
+            "error": {
+              "code": 400,
+              "message": "BLOCKING_FUNCTION_ERROR_RESPONSE : HTTP Cloud Function returned an error: {\"error\":{\"message\":\"atb s refused\",\"status\":\"PERMISSION_DENIED\"}}",
+              "errors": [
+                {
+                  "message": "BLOCKING_FUNCTION_ERROR_RESPONSE : HTTP Cloud Function returned an error: {\"error\":{\"message\":\"atb s refused\",\"status\":\"PERMISSION_DENIED\"}}",
+                  "domain": "global",
+                  "reason": "invalid"
+                }
+              ]
+            }
+          }
+        },
+        "admin-create-sign-in-internal": {
+          "status": 200,
+          "body": {
+            "kind": "identitytoolkit#SignupNewUserResponse",
+            "email": "fireemu-aa-<run>-r8-sdenyin@example.com",
+            "localId": "aa-<run>-r8"
+          }
+        },
+        "sign-in-internal": {
+          "status": 503,
+          "body": {
+            "error": {
+              "code": 503,
+              "message": "Error code: 47",
+              "errors": [
+                {
+                  "message": "Error code: 47",
+                  "domain": "global",
+                  "reason": "backendError"
+                }
+              ]
+            }
+          }
+        },
+        "admin-create-sign-in-unhandled": {
+          "status": 200,
+          "body": {
+            "kind": "identitytoolkit#SignupNewUserResponse",
+            "email": "fireemu-aa-<run>-r7-sthrow@example.com",
+            "localId": "aa-<run>-r7"
+          }
+        },
+        "sign-in-unhandled": {
+          "status": 503,
+          "body": {
+            "error": {
+              "code": 503,
+              "message": "Error code: 47",
+              "errors": [
+                {
+                  "message": "Error code: 47",
+                  "domain": "global",
+                  "reason": "backendError"
+                }
+              ]
+            }
+          }
+        },
+        "lookup-after-refused-sign-ins": {
+          "status": 200,
+          "body": {
+            "kind": "identitytoolkit#GetAccountInfoResponse",
+            "users": [
+              {
+                "localId": "aa-<run>-r6",
+                "email": "fireemu-aa-<run>-r6-sdenypd@example.com",
+                "passwordHash": "UkVEQUNURUQ=",
+                "emailVerified": true,
+                "passwordUpdatedAt": "<run-time:number:ms>",
+                "providerUserInfo": [
+                  {
+                    "providerId": "password",
+                    "federatedId": "fireemu-aa-<run>-r6-sdenypd@example.com",
+                    "email": "fireemu-aa-<run>-r6-sdenypd@example.com",
+                    "rawId": "fireemu-aa-<run>-r6-sdenypd@example.com"
+                  }
+                ],
+                "validSince": "<run-time:string:s>",
+                "disabled": false,
+                "createdAt": "<run-time:string:ms>"
+              },
+              {
+                "localId": "aa-<run>-r7",
+                "email": "fireemu-aa-<run>-r7-sthrow@example.com",
+                "passwordHash": "UkVEQUNURUQ=",
+                "emailVerified": true,
+                "passwordUpdatedAt": "<run-time:number:ms>",
+                "providerUserInfo": [
+                  {
+                    "providerId": "password",
+                    "federatedId": "fireemu-aa-<run>-r7-sthrow@example.com",
+                    "email": "fireemu-aa-<run>-r7-sthrow@example.com",
+                    "rawId": "fireemu-aa-<run>-r7-sthrow@example.com"
+                  }
+                ],
+                "validSince": "<run-time:string:s>",
+                "disabled": false,
+                "createdAt": "<run-time:string:ms>"
+              },
+              {
+                "localId": "aa-<run>-r8",
+                "email": "fireemu-aa-<run>-r8-sdenyin@example.com",
+                "passwordHash": "UkVEQUNURUQ=",
+                "emailVerified": true,
+                "passwordUpdatedAt": "<run-time:number:ms>",
+                "providerUserInfo": [
+                  {
+                    "providerId": "password",
+                    "federatedId": "fireemu-aa-<run>-r8-sdenyin@example.com",
+                    "email": "fireemu-aa-<run>-r8-sdenyin@example.com",
+                    "rawId": "fireemu-aa-<run>-r8-sdenyin@example.com"
+                  }
+                ],
+                "validSince": "<run-time:string:s>",
+                "disabled": false,
+                "createdAt": "<run-time:string:ms>"
+              }
+            ]
+          }
+        }
+      }
+    },
+    "atb/blocking/response": {
+      "corpusDigest": "bcb959bf2189f25591da9dcd97f042c1f30e21c006309b2edd4f6c2b838fa0da",
+      "harnessDigest": "ddbb587b5ec33d5e5e4d5226acb52de902eb2d414d2ffffcae67285b7462b88d",
+      "recordedAt": "2026-09-28T00:48:21.242Z",
+      "gitSha": "b993d1cbf8dc42c764cb534b49233bdec4fe0808",
+      "steps": {
+        "create-bad-type": {
+          "status": 200,
+          "body": {
+            "kind": "identitytoolkit#SignupNewUserResponse",
+            "idToken": {
+              "<jwt>": {
+                "header": {
+                  "alg": "RS256",
+                  "kid": "<present>",
+                  "typ": "JWT"
+                },
+                "signature": "<present>",
+                "claims": {
+                  "name": "42",
+                  "atbS": {
+                    "t": "providers/cloud.auth/eventTypes/user.beforeSignIn:password",
+                    "at": "USER",
+                    "rn": "projects/demo-auth-account",
+                    "au": [
+                      "isNewUser",
+                      "providerId"
+                    ],
+                    "nu": false,
+                    "pi": "password",
+                    "cr": null,
+                    "cx": [
+                      "string",
+                      "string",
+                      "string",
+                      "string",
+                      "string"
+                    ],
+                    "u": [
+                      "disabled",
+                      "displayName",
+                      "email",
+                      "emailVerified",
+                      "metadata",
+                      "multiFactor",
+                      "providerData",
+                      "tokensValidAfterTime",
+                      "uid"
+                    ],
+                    "ev": false,
+                    "dn": "42",
+                    "dis": false,
+                    "pd": [
+                      "password"
+                    ],
+                    "mf": null,
+                    "cc": [],
+                    "tn": "u"
+                  },
+                  "iss": "https://securetoken.google.com/demo-auth-account",
+                  "aud": "demo-auth-account",
+                  "auth_time": "<auth_time>",
+                  "user_id": "<generated-localId>",
+                  "sub": "<generated-localId>",
+                  "iat": "<iat>",
+                  "exp": "iat+3600",
+                  "email": "fireemu-aa-<run>-v1-cbadtype@example.com",
+                  "email_verified": false,
+                  "firebase": {
+                    "identities": {
+                      "email": [
+                        "fireemu-aa-<run>-v1-cbadtype@example.com"
+                      ]
+                    },
+                    "sign_in_provider": "password"
+                  }
+                },
+                "subIsUserId": true,
+                "subIsLocalId": true,
+                "userIdIsLocalId": true
+              }
+            },
+            "displayName": "42",
+            "email": "fireemu-aa-<run>-v1-cbadtype@example.com",
+            "refreshToken": "<refreshToken>",
+            "expiresIn": "3600",
+            "localId": "<generated-localId>"
+          }
+        },
+        "create-unknown-member": {
+          "status": 200,
+          "body": {
+            "kind": "identitytoolkit#SignupNewUserResponse",
+            "idToken": {
+              "<jwt>": {
+                "header": {
+                  "alg": "RS256",
+                  "kid": "<present>",
+                  "typ": "JWT"
+                },
+                "signature": "<present>",
+                "claims": {
+                  "atbS": {
+                    "t": "providers/cloud.auth/eventTypes/user.beforeSignIn:password",
+                    "at": "USER",
+                    "rn": "projects/demo-auth-account",
+                    "au": [
+                      "isNewUser",
+                      "providerId"
+                    ],
+                    "nu": false,
+                    "pi": "password",
+                    "cr": null,
+                    "cx": [
+                      "string",
+                      "string",
+                      "string",
+                      "string",
+                      "string"
+                    ],
+                    "u": [
+                      "disabled",
+                      "email",
+                      "emailVerified",
+                      "metadata",
+                      "multiFactor",
+                      "providerData",
+                      "tokensValidAfterTime",
+                      "uid"
+                    ],
+                    "ev": false,
+                    "dis": false,
+                    "pd": [
+                      "password"
+                    ],
+                    "mf": null,
+                    "cc": [],
+                    "tn": "u"
+                  },
+                  "iss": "https://securetoken.google.com/demo-auth-account",
+                  "aud": "demo-auth-account",
+                  "auth_time": "<auth_time>",
+                  "user_id": "<generated-localId>",
+                  "sub": "<generated-localId>",
+                  "iat": "<iat>",
+                  "exp": "iat+3600",
+                  "email": "fireemu-aa-<run>-v2-cunknown@example.com",
+                  "email_verified": false,
+                  "firebase": {
+                    "identities": {
+                      "email": [
+                        "fireemu-aa-<run>-v2-cunknown@example.com"
+                      ]
+                    },
+                    "sign_in_provider": "password"
+                  }
+                },
+                "subIsUserId": true,
+                "subIsLocalId": true,
+                "userIdIsLocalId": true
+              }
+            },
+            "email": "fireemu-aa-<run>-v2-cunknown@example.com",
+            "refreshToken": "<refreshToken>",
+            "expiresIn": "3600",
+            "localId": "<generated-localId>"
+          }
+        },
+        "lookup-bad-answers": {
+          "status": 200,
+          "body": {
+            "kind": "identitytoolkit#GetAccountInfoResponse",
+            "users": [
+              {
+                "localId": "<generated-localId>",
+                "email": "fireemu-aa-<run>-v1-cbadtype@example.com",
+                "displayName": "42",
+                "passwordHash": "UkVEQUNURUQ=",
+                "emailVerified": false,
+                "passwordUpdatedAt": "<run-time:number:ms>",
+                "providerUserInfo": [
+                  {
+                    "providerId": "password",
+                    "displayName": "42",
+                    "federatedId": "fireemu-aa-<run>-v1-cbadtype@example.com",
+                    "email": "fireemu-aa-<run>-v1-cbadtype@example.com",
+                    "rawId": "fireemu-aa-<run>-v1-cbadtype@example.com"
+                  }
+                ],
+                "validSince": "<run-time:string:s>",
+                "lastLoginAt": "<run-time:string:ms>",
+                "createdAt": "<run-time:string:ms>",
+                "lastRefreshAt": "<run-time:instant>"
+              },
+              {
+                "localId": "<generated-localId>",
+                "email": "fireemu-aa-<run>-v2-cunknown@example.com",
+                "passwordHash": "UkVEQUNURUQ=",
+                "emailVerified": false,
+                "passwordUpdatedAt": "<run-time:number:ms>",
+                "providerUserInfo": [
+                  {
+                    "providerId": "password",
+                    "federatedId": "fireemu-aa-<run>-v2-cunknown@example.com",
+                    "email": "fireemu-aa-<run>-v2-cunknown@example.com",
+                    "rawId": "fireemu-aa-<run>-v2-cunknown@example.com"
+                  }
+                ],
+                "validSince": "<run-time:string:s>",
+                "lastLoginAt": "<run-time:string:ms>",
+                "createdAt": "<run-time:string:ms>",
+                "lastRefreshAt": "<run-time:instant>"
+              }
+            ]
+          }
+        }
+      }
+    },
+    "atb/blocking/rollback": {
+      "corpusDigest": "2a33345938f26b315fca8db25abc18430c8c030bb7200f3bf80be84aacd8a928",
+      "harnessDigest": "ddbb587b5ec33d5e5e4d5226acb52de902eb2d414d2ffffcae67285b7462b88d",
+      "recordedAt": "2026-09-28T00:48:21.242Z",
+      "gitSha": "b993d1cbf8dc42c764cb534b49233bdec4fe0808",
+      "steps": {
+        "sign-up-refused-at-sign-in": {
+          "status": 400,
+          "body": {
+            "error": {
+              "code": 400,
+              "message": "BLOCKING_FUNCTION_ERROR_RESPONSE : HTTP Cloud Function returned an error: {\"error\":{\"message\":\"atb s refused\",\"status\":\"PERMISSION_DENIED\"}}",
+              "errors": [
+                {
+                  "message": "BLOCKING_FUNCTION_ERROR_RESPONSE : HTTP Cloud Function returned an error: {\"error\":{\"message\":\"atb s refused\",\"status\":\"PERMISSION_DENIED\"}}",
+                  "domain": "global",
+                  "reason": "invalid"
+                }
+              ]
+            }
+          }
+        },
+        "lookup-refused-at-sign-in": {
+          "status": 200,
+          "body": {
+            "kind": "identitytoolkit#GetAccountInfoResponse",
+            "users": [
+              {
+                "localId": "<generated-localId>",
+                "email": "fireemu-aa-<run>-k1-sdenypd@example.com",
+                "passwordHash": "UkVEQUNURUQ=",
+                "emailVerified": false,
+                "passwordUpdatedAt": "<run-time:number:ms>",
+                "providerUserInfo": [
+                  {
+                    "providerId": "password",
+                    "federatedId": "fireemu-aa-<run>-k1-sdenypd@example.com",
+                    "email": "fireemu-aa-<run>-k1-sdenypd@example.com",
+                    "rawId": "fireemu-aa-<run>-k1-sdenypd@example.com"
+                  }
+                ],
+                "validSince": "<run-time:string:s>",
+                "lastLoginAt": "<run-time:string:ms>",
+                "createdAt": "<run-time:string:ms>",
+                "customAttributes": "{\"atbC\":{\"t\":\"providers/cloud.auth/eventTypes/user.beforeCreate:password\",\"at\":\"USER\",\"rn\":\"projects/demo-auth-account\",\"au\":[\"isNewUser\",\"providerId\"],\"nu\":true,\"pi\":\"password\",\"cr\":null,\"cx\":[\"string\",\"string\",\"string\",\"string\",\"string\"],\"u\":[\"disabled\",\"email\",\"emailVerified\",\"metadata\",\"multiFactor\",\"providerData\",\"tokensValidAfterTime\",\"uid\"],\"ev\":false,\"dis\":false,\"pd\":[\"password\"],\"mf\":null,\"cc\":[],\"tn\":\"u\"}}",
+                "lastRefreshAt": "<run-time:instant>"
+              }
+            ]
+          }
+        },
+        "sign-up-again": {
+          "status": 400,
+          "body": {
+            "error": {
+              "code": 400,
+              "message": "EMAIL_EXISTS",
+              "errors": [
+                {
+                  "message": "EMAIL_EXISTS",
+                  "domain": "global",
+                  "reason": "invalid"
+                }
+              ]
+            }
+          }
+        },
+        "sign-up-create-disabled": {
+          "status": 400,
+          "body": {
+            "error": {
+              "code": 400,
+              "message": "USER_DISABLED",
+              "errors": [
+                {
+                  "message": "USER_DISABLED",
+                  "domain": "global",
+                  "reason": "invalid"
+                }
+              ]
+            }
+          }
+        },
+        "lookup-create-disabled": {
+          "status": 200,
+          "body": {
+            "kind": "identitytoolkit#GetAccountInfoResponse",
+            "users": [
+              {
+                "localId": "<generated-localId>",
+                "email": "fireemu-aa-<run>-k2-cdisable@example.com",
+                "passwordHash": "UkVEQUNURUQ=",
+                "emailVerified": false,
+                "passwordUpdatedAt": "<run-time:number:ms>",
+                "providerUserInfo": [
+                  {
+                    "providerId": "password",
+                    "federatedId": "fireemu-aa-<run>-k2-cdisable@example.com",
+                    "email": "fireemu-aa-<run>-k2-cdisable@example.com",
+                    "rawId": "fireemu-aa-<run>-k2-cdisable@example.com"
+                  }
+                ],
+                "validSince": "<run-time:string:s>",
+                "disabled": true,
+                "lastLoginAt": "<run-time:string:ms>",
+                "createdAt": "<run-time:string:ms>",
+                "lastRefreshAt": "<run-time:instant>"
+              }
+            ]
+          }
+        },
+        "sign-up-sign-in-disabled": {
+          "status": 400,
+          "body": {
+            "error": {
+              "code": 400,
+              "message": "USER_DISABLED",
+              "errors": [
+                {
+                  "message": "USER_DISABLED",
+                  "domain": "global",
+                  "reason": "invalid"
+                }
+              ]
+            }
+          }
+        },
+        "lookup-sign-in-disabled": {
+          "status": 200,
+          "body": {
+            "kind": "identitytoolkit#GetAccountInfoResponse",
+            "users": [
+              {
+                "localId": "<generated-localId>",
+                "email": "fireemu-aa-<run>-k3-sdisable@example.com",
+                "passwordHash": "UkVEQUNURUQ=",
+                "emailVerified": false,
+                "passwordUpdatedAt": "<run-time:number:ms>",
+                "providerUserInfo": [
+                  {
+                    "providerId": "password",
+                    "federatedId": "fireemu-aa-<run>-k3-sdisable@example.com",
+                    "email": "fireemu-aa-<run>-k3-sdisable@example.com",
+                    "rawId": "fireemu-aa-<run>-k3-sdisable@example.com"
+                  }
+                ],
+                "validSince": "<run-time:string:s>",
+                "disabled": true,
+                "lastLoginAt": "<run-time:string:ms>",
+                "createdAt": "<run-time:string:ms>",
+                "customAttributes": "{\"atbC\":{\"t\":\"providers/cloud.auth/eventTypes/user.beforeCreate:password\",\"at\":\"USER\",\"rn\":\"projects/demo-auth-account\",\"au\":[\"isNewUser\",\"providerId\"],\"nu\":true,\"pi\":\"password\",\"cr\":null,\"cx\":[\"string\",\"string\",\"string\",\"string\",\"string\"],\"u\":[\"disabled\",\"email\",\"emailVerified\",\"metadata\",\"multiFactor\",\"providerData\",\"tokensValidAfterTime\",\"uid\"],\"ev\":false,\"dis\":false,\"pd\":[\"password\"],\"mf\":null,\"cc\":[],\"tn\":\"u\"}}",
+                "lastRefreshAt": "<run-time:instant>"
+              }
+            ]
+          }
+        }
+      }
+    },
+    "atb/blocking/send": {
+      "corpusDigest": "586866df9979c719c243f583e8ae1ecb3212020f98be37142020b64651a59a00",
+      "harnessDigest": "ddbb587b5ec33d5e5e4d5226acb52de902eb2d414d2ffffcae67285b7462b88d",
+      "recordedAt": "2026-09-28T00:48:21.242Z",
+      "gitSha": "b993d1cbf8dc42c764cb534b49233bdec4fe0808",
+      "steps": {
+        "create-s1": {
+          "status": 200,
+          "body": {
+            "kind": "identitytoolkit#SignupNewUserResponse",
+            "email": "fireemu-aa-<run>-s1-eecho@example.com",
+            "localId": "aa-<run>-s1"
+          }
+        },
+        "reset-mail-echo": {
+          "status": 400,
+          "body": {
+            "error": {
+              "code": 400,
+              "message": "BLOCKING_FUNCTION_ERROR_RESPONSE : HTTP Cloud Function returned an error: {\"error\":{\"message\":\"{\\\"t\\\":\\\"providers/cloud.auth/eventTypes/user.beforeSendEmail\\\",\\\"at\\\":\\\"UNAUTHENTICATED\\\",\\\"rn\\\":\\\"projects/demo-auth-account\\\",\\\"au\\\":[\\\"email\\\",\\\"isNewUser\\\"],\\\"nu\\\":false,\\\"cr\\\":null,\\\"cx\\\":[\\\"string\\\",\\\"string\\\",\\\"string\\\",\\\"string\\\",\\\"string\\\"],\\\"et\\\":\\\"PASSWORD_RESET\\\",\\\"u\\\":null,\\\"pd\\\":null,\\\"mf\\\":null,\\\"cc\\\":null,\\\"tn\\\":\\\"u\\\"}\",\"status\":\"FAILED_PRECONDITION\"}}",
+              "errors": [
+                {
+                  "message": "BLOCKING_FUNCTION_ERROR_RESPONSE : HTTP Cloud Function returned an error: {\"error\":{\"message\":\"{\\\"t\\\":\\\"providers/cloud.auth/eventTypes/user.beforeSendEmail\\\",\\\"at\\\":\\\"UNAUTHENTICATED\\\",\\\"rn\\\":\\\"projects/demo-auth-account\\\",\\\"au\\\":[\\\"email\\\",\\\"isNewUser\\\"],\\\"nu\\\":false,\\\"cr\\\":null,\\\"cx\\\":[\\\"string\\\",\\\"string\\\",\\\"string\\\",\\\"string\\\",\\\"string\\\"],\\\"et\\\":\\\"PASSWORD_RESET\\\",\\\"u\\\":null,\\\"pd\\\":null,\\\"mf\\\":null,\\\"cc\\\":null,\\\"tn\\\":\\\"u\\\"}\",\"status\":\"FAILED_PRECONDITION\"}}",
+                  "domain": "global",
+                  "reason": "invalid"
+                }
+              ]
+            }
+          }
+        },
+        "create-s2": {
+          "status": 200,
+          "body": {
+            "kind": "identitytoolkit#SignupNewUserResponse",
+            "email": "fireemu-aa-<run>-s2-edenypd@example.com",
+            "localId": "aa-<run>-s2"
+          }
+        },
+        "reset-mail-refused": {
+          "status": 400,
+          "body": {
+            "error": {
+              "code": 400,
+              "message": "BLOCKING_FUNCTION_ERROR_RESPONSE : HTTP Cloud Function returned an error: {\"error\":{\"message\":\"atb e refused\",\"status\":\"PERMISSION_DENIED\"}}",
+              "errors": [
+                {
+                  "message": "BLOCKING_FUNCTION_ERROR_RESPONSE : HTTP Cloud Function returned an error: {\"error\":{\"message\":\"atb e refused\",\"status\":\"PERMISSION_DENIED\"}}",
+                  "domain": "global",
+                  "reason": "invalid"
+                }
+              ]
+            }
+          }
+        },
+        "create-s3": {
+          "status": 200,
+          "body": {
+            "kind": "identitytoolkit#SignupNewUserResponse",
+            "email": "fireemu-aa-<run>-s3-eblock@example.com",
+            "localId": "aa-<run>-s3"
+          }
+        },
+        "reset-mail-blocked": {
+          "status": 200,
+          "body": {
+            "kind": "identitytoolkit#GetOobConfirmationCodeResponse",
+            "email": "fireemu-aa-<run>-s3-eblock@example.com"
+          }
+        },
+        "sign-in-s1": {
+          "status": 200,
+          "body": {
+            "kind": "identitytoolkit#VerifyPasswordResponse",
+            "localId": "aa-<run>-s1",
+            "email": "fireemu-aa-<run>-s1-eecho@example.com",
+            "displayName": "",
+            "idToken": {
+              "<jwt>": {
+                "header": {
+                  "alg": "RS256",
+                  "kid": "<present>",
+                  "typ": "JWT"
+                },
+                "signature": "<present>",
+                "claims": {
+                  "atbS": {
+                    "t": "providers/cloud.auth/eventTypes/user.beforeSignIn:password",
+                    "at": "USER",
+                    "rn": "projects/demo-auth-account",
+                    "au": [
+                      "isNewUser",
+                      "providerId"
+                    ],
+                    "nu": false,
+                    "pi": "password",
+                    "cr": null,
+                    "cx": [
+                      "string",
+                      "string",
+                      "string",
+                      "string",
+                      "string"
+                    ],
+                    "u": [
+                      "disabled",
+                      "email",
+                      "emailVerified",
+                      "metadata",
+                      "multiFactor",
+                      "providerData",
+                      "tokensValidAfterTime",
+                      "uid"
+                    ],
+                    "ev": true,
+                    "dis": false,
+                    "pd": [
+                      "password"
+                    ],
+                    "mf": null,
+                    "cc": [],
+                    "tn": "u"
+                  },
+                  "iss": "https://securetoken.google.com/demo-auth-account",
+                  "aud": "demo-auth-account",
+                  "auth_time": "<auth_time>",
+                  "user_id": "aa-<run>-s1",
+                  "sub": "aa-<run>-s1",
+                  "iat": "<iat>",
+                  "exp": "iat+3600",
+                  "email": "fireemu-aa-<run>-s1-eecho@example.com",
+                  "email_verified": true,
+                  "firebase": {
+                    "identities": {
+                      "email": [
+                        "fireemu-aa-<run>-s1-eecho@example.com"
+                      ]
+                    },
+                    "sign_in_provider": "password"
+                  }
+                },
+                "subIsUserId": true,
+                "subIsLocalId": true,
+                "userIdIsLocalId": true
+              }
+            },
+            "registered": true,
+            "refreshToken": "<refreshToken>",
+            "expiresIn": "3600"
+          }
+        },
+        "verify-mail-echo": {
+          "status": 200,
+          "body": {
+            "kind": "identitytoolkit#GetOobConfirmationCodeResponse",
+            "email": "fireemu-aa-<run>-s1-eecho@example.com"
+          }
+        },
+        "admin-reset-link-echo": {
+          "status": 400,
+          "body": {
+            "error": {
+              "code": 400,
+              "message": "BLOCKING_FUNCTION_ERROR_RESPONSE : HTTP Cloud Function returned an error: {\"error\":{\"message\":\"{\\\"t\\\":\\\"providers/cloud.auth/eventTypes/user.beforeSendEmail\\\",\\\"at\\\":\\\"UNAUTHENTICATED\\\",\\\"rn\\\":\\\"projects/demo-auth-account\\\",\\\"au\\\":[\\\"email\\\",\\\"isNewUser\\\"],\\\"nu\\\":false,\\\"cr\\\":null,\\\"cx\\\":[\\\"string\\\",\\\"string\\\",\\\"string\\\",\\\"string\\\",\\\"string\\\"],\\\"et\\\":\\\"PASSWORD_RESET\\\",\\\"u\\\":null,\\\"pd\\\":null,\\\"mf\\\":null,\\\"cc\\\":null,\\\"tn\\\":\\\"u\\\"}\",\"status\":\"FAILED_PRECONDITION\"}}",
+              "errors": [
+                {
+                  "message": "BLOCKING_FUNCTION_ERROR_RESPONSE : HTTP Cloud Function returned an error: {\"error\":{\"message\":\"{\\\"t\\\":\\\"providers/cloud.auth/eventTypes/user.beforeSendEmail\\\",\\\"at\\\":\\\"UNAUTHENTICATED\\\",\\\"rn\\\":\\\"projects/demo-auth-account\\\",\\\"au\\\":[\\\"email\\\",\\\"isNewUser\\\"],\\\"nu\\\":false,\\\"cr\\\":null,\\\"cx\\\":[\\\"string\\\",\\\"string\\\",\\\"string\\\",\\\"string\\\",\\\"string\\\"],\\\"et\\\":\\\"PASSWORD_RESET\\\",\\\"u\\\":null,\\\"pd\\\":null,\\\"mf\\\":null,\\\"cc\\\":null,\\\"tn\\\":\\\"u\\\"}\",\"status\":\"FAILED_PRECONDITION\"}}",
+                  "domain": "global",
+                  "reason": "invalid"
+                }
+              ]
+            }
+          }
+        },
+        "link-mail-echo-in-tenant": {
+          "status": 400,
+          "body": {
+            "error": {
+              "code": 400,
+              "message": "BLOCKING_FUNCTION_ERROR_RESPONSE : HTTP Cloud Function returned an error: {\"error\":{\"message\":\"{\\\"t\\\":\\\"providers/cloud.auth/eventTypes/user.beforeSendEmail\\\",\\\"at\\\":\\\"UNAUTHENTICATED\\\",\\\"rn\\\":\\\"projects/demo-auth-account\\\",\\\"au\\\":[\\\"email\\\",\\\"isNewUser\\\"],\\\"nu\\\":false,\\\"cr\\\":null,\\\"cx\\\":[\\\"string\\\",\\\"string\\\",\\\"string\\\",\\\"string\\\",\\\"string\\\"],\\\"et\\\":\\\"EMAIL_SIGN_IN\\\",\\\"u\\\":null,\\\"pd\\\":null,\\\"mf\\\":null,\\\"cc\\\":null,\\\"tn\\\":\\\"u\\\"}\",\"status\":\"FAILED_PRECONDITION\"}}",
+              "errors": [
+                {
+                  "message": "BLOCKING_FUNCTION_ERROR_RESPONSE : HTTP Cloud Function returned an error: {\"error\":{\"message\":\"{\\\"t\\\":\\\"providers/cloud.auth/eventTypes/user.beforeSendEmail\\\",\\\"at\\\":\\\"UNAUTHENTICATED\\\",\\\"rn\\\":\\\"projects/demo-auth-account\\\",\\\"au\\\":[\\\"email\\\",\\\"isNewUser\\\"],\\\"nu\\\":false,\\\"cr\\\":null,\\\"cx\\\":[\\\"string\\\",\\\"string\\\",\\\"string\\\",\\\"string\\\",\\\"string\\\"],\\\"et\\\":\\\"EMAIL_SIGN_IN\\\",\\\"u\\\":null,\\\"pd\\\":null,\\\"mf\\\":null,\\\"cc\\\":null,\\\"tn\\\":\\\"u\\\"}\",\"status\":\"FAILED_PRECONDITION\"}}",
+                  "domain": "global",
+                  "reason": "invalid"
+                }
+              ]
+            }
+          }
+        },
+        "sms-echo": {
+          "status": 200,
+          "body": {
+            "sessionInfo": "<sessionInfo>"
+          }
+        },
+        "sms-plain": {
+          "status": 200,
+          "body": {
+            "sessionInfo": "<sessionInfo>"
+          }
+        }
+      }
+    },
+    "atb/blocking/tenant": {
+      "corpusDigest": "205ee4010011771838cb5ccc636ad1abb69ce9ca0371970c807edda45609f76c",
+      "harnessDigest": "ddbb587b5ec33d5e5e4d5226acb52de902eb2d414d2ffffcae67285b7462b88d",
+      "recordedAt": "2026-09-28T00:48:21.242Z",
+      "gitSha": "b993d1cbf8dc42c764cb534b49233bdec4fe0808",
+      "steps": {
+        "tenant-sign-up": {
+          "status": 200,
+          "body": {
+            "kind": "identitytoolkit#SignupNewUserResponse",
+            "idToken": {
+              "<jwt>": {
+                "header": {
+                  "alg": "RS256",
+                  "kid": "<present>",
+                  "typ": "JWT"
+                },
+                "signature": "<present>",
+                "claims": {
+                  "atbC": {
+                    "t": "providers/cloud.auth/eventTypes/user.beforeCreate:password",
+                    "at": "USER",
+                    "rn": "projects/demo-auth-account/tenants/<tenant:t:atb-blk-tenant-*5>",
+                    "au": [
+                      "isNewUser",
+                      "providerId"
+                    ],
+                    "nu": true,
+                    "pi": "password",
+                    "cr": null,
+                    "cx": [
+                      "string",
+                      "string",
+                      "string",
+                      "string",
+                      "string"
+                    ],
+                    "u": [
+                      "disabled",
+                      "email",
+                      "emailVerified",
+                      "metadata",
+                      "multiFactor",
+                      "providerData",
+                      "tenantId",
+                      "tokensValidAfterTime",
+                      "uid"
+                    ],
+                    "ev": false,
+                    "dis": false,
+                    "pd": [
+                      "password"
+                    ],
+                    "mf": null,
+                    "cc": [],
+                    "tn": "string"
+                  },
+                  "atbS": {
+                    "t": "providers/cloud.auth/eventTypes/user.beforeSignIn:password",
+                    "at": "USER",
+                    "rn": "projects/demo-auth-account/tenants/<tenant:t:atb-blk-tenant-*5>",
+                    "au": [
+                      "isNewUser",
+                      "providerId"
+                    ],
+                    "nu": false,
+                    "pi": "password",
+                    "cr": null,
+                    "cx": [
+                      "string",
+                      "string",
+                      "string",
+                      "string",
+                      "string"
+                    ],
+                    "u": [
+                      "customClaims",
+                      "disabled",
+                      "email",
+                      "emailVerified",
+                      "metadata",
+                      "multiFactor",
+                      "providerData",
+                      "tenantId",
+                      "tokensValidAfterTime",
+                      "uid"
+                    ],
+                    "ev": false,
+                    "dis": false,
+                    "pd": [
+                      "password"
+                    ],
+                    "mf": null,
+                    "cc": [
+                      "atbC"
+                    ],
+                    "tn": "string"
+                  },
+                  "iss": "https://securetoken.google.com/demo-auth-account",
+                  "aud": "demo-auth-account",
+                  "auth_time": "<auth_time>",
+                  "user_id": "<generated-localId>",
+                  "sub": "<generated-localId>",
+                  "iat": "<iat>",
+                  "exp": "iat+3600",
+                  "email": "fireemu-aa-<run>-t1@example.com",
+                  "email_verified": false,
+                  "firebase": {
+                    "identities": {
+                      "email": [
+                        "fireemu-aa-<run>-t1@example.com"
+                      ]
+                    },
+                    "sign_in_provider": "password",
+                    "tenant": "<tenant:t:atb-blk-tenant-*5>"
+                  }
+                },
+                "subIsUserId": true,
+                "subIsLocalId": true,
+                "userIdIsLocalId": true
+              }
+            },
+            "email": "fireemu-aa-<run>-t1@example.com",
+            "refreshToken": "<refreshToken>",
+            "expiresIn": "3600",
+            "localId": "<generated-localId>"
+          }
+        },
+        "tenant-sign-in": {
+          "status": 200,
+          "body": {
+            "kind": "identitytoolkit#VerifyPasswordResponse",
+            "localId": "<generated-localId>",
+            "email": "fireemu-aa-<run>-t1@example.com",
+            "displayName": "",
+            "idToken": {
+              "<jwt>": {
+                "header": {
+                  "alg": "RS256",
+                  "kid": "<present>",
+                  "typ": "JWT"
+                },
+                "signature": "<present>",
+                "claims": {
+                  "atbC": {
+                    "t": "providers/cloud.auth/eventTypes/user.beforeCreate:password",
+                    "at": "USER",
+                    "rn": "projects/demo-auth-account/tenants/<tenant:t:atb-blk-tenant-*5>",
+                    "au": [
+                      "isNewUser",
+                      "providerId"
+                    ],
+                    "nu": true,
+                    "pi": "password",
+                    "cr": null,
+                    "cx": [
+                      "string",
+                      "string",
+                      "string",
+                      "string",
+                      "string"
+                    ],
+                    "u": [
+                      "disabled",
+                      "email",
+                      "emailVerified",
+                      "metadata",
+                      "multiFactor",
+                      "providerData",
+                      "tenantId",
+                      "tokensValidAfterTime",
+                      "uid"
+                    ],
+                    "ev": false,
+                    "dis": false,
+                    "pd": [
+                      "password"
+                    ],
+                    "mf": null,
+                    "cc": [],
+                    "tn": "string"
+                  },
+                  "atbS": {
+                    "t": "providers/cloud.auth/eventTypes/user.beforeSignIn:password",
+                    "at": "USER",
+                    "rn": "projects/demo-auth-account/tenants/<tenant:t:atb-blk-tenant-*5>",
+                    "au": [
+                      "isNewUser",
+                      "providerId"
+                    ],
+                    "nu": false,
+                    "pi": "password",
+                    "cr": null,
+                    "cx": [
+                      "string",
+                      "string",
+                      "string",
+                      "string",
+                      "string"
+                    ],
+                    "u": [
+                      "customClaims",
+                      "disabled",
+                      "email",
+                      "emailVerified",
+                      "metadata",
+                      "multiFactor",
+                      "providerData",
+                      "tenantId",
+                      "tokensValidAfterTime",
+                      "uid"
+                    ],
+                    "ev": false,
+                    "dis": false,
+                    "pd": [
+                      "password"
+                    ],
+                    "mf": null,
+                    "cc": [
+                      "atbC"
+                    ],
+                    "tn": "string"
+                  },
+                  "iss": "https://securetoken.google.com/demo-auth-account",
+                  "aud": "demo-auth-account",
+                  "auth_time": "<auth_time>",
+                  "user_id": "<generated-localId>",
+                  "sub": "<generated-localId>",
+                  "iat": "<iat>",
+                  "exp": "iat+3600",
+                  "email": "fireemu-aa-<run>-t1@example.com",
+                  "email_verified": false,
+                  "firebase": {
+                    "identities": {
+                      "email": [
+                        "fireemu-aa-<run>-t1@example.com"
+                      ]
+                    },
+                    "sign_in_provider": "password",
+                    "tenant": "<tenant:t:atb-blk-tenant-*5>"
+                  }
+                },
+                "subIsUserId": true,
+                "subIsLocalId": true,
+                "userIdIsLocalId": true
+              }
+            },
+            "registered": true,
+            "refreshToken": "<refreshToken>",
+            "expiresIn": "3600"
+          }
+        },
+        "tenant-lookup": {
+          "status": 200,
+          "body": {
+            "kind": "identitytoolkit#GetAccountInfoResponse",
+            "users": [
+              {
+                "localId": "<generated-localId>",
+                "email": "fireemu-aa-<run>-t1@example.com",
+                "passwordHash": "UkVEQUNURUQ=",
+                "emailVerified": false,
+                "passwordUpdatedAt": "<run-time:number:ms>",
+                "providerUserInfo": [
+                  {
+                    "providerId": "password",
+                    "federatedId": "fireemu-aa-<run>-t1@example.com",
+                    "email": "fireemu-aa-<run>-t1@example.com",
+                    "rawId": "fireemu-aa-<run>-t1@example.com"
+                  }
+                ],
+                "validSince": "<run-time:string:s>",
+                "lastLoginAt": "<run-time:string:ms>",
+                "createdAt": "<run-time:string:ms>",
+                "customAttributes": "{\"atbC\":{\"t\":\"providers/cloud.auth/eventTypes/user.beforeCreate:password\",\"at\":\"USER\",\"rn\":\"projects/demo-auth-account/tenants/<tenant:t:atb-blk-tenant-*5>\",\"au\":[\"isNewUser\",\"providerId\"],\"nu\":true,\"pi\":\"password\",\"cr\":null,\"cx\":[\"string\",\"string\",\"string\",\"string\",\"string\"],\"u\":[\"disabled\",\"email\",\"emailVerified\",\"metadata\",\"multiFactor\",\"providerData\",\"tenantId\",\"tokensValidAfterTime\",\"uid\"],\"ev\":false,\"dis\":false,\"pd\":[\"password\"],\"mf\":null,\"cc\":[],\"tn\":\"string\"}}",
+                "tenantId": "<tenant:t:atb-blk-tenant-*5>",
+                "lastRefreshAt": "<run-time:instant>"
+              }
+            ]
+          }
+        }
+      }
+    },
+    "atb/blocking/timeout": {
+      "corpusDigest": "c43f073234af8a3b839ad225f1605d0b00f2f97684311c30aa4fa8258e92da4f",
+      "harnessDigest": "ddbb587b5ec33d5e5e4d5226acb52de902eb2d414d2ffffcae67285b7462b88d",
+      "recordedAt": "2026-09-28T00:48:21.242Z",
+      "gitSha": "b993d1cbf8dc42c764cb534b49233bdec4fe0808",
+      "steps": {
+        "sign-up-slow-create": {
+          "status": 400,
+          "body": {
+            "error": {
+              "code": 400,
+              "message": "BLOCKING_FUNCTION_ERROR_RESPONSE : Cloud function deadline exceeded.",
+              "errors": [
+                {
+                  "message": "BLOCKING_FUNCTION_ERROR_RESPONSE : Cloud function deadline exceeded.",
+                  "domain": "global",
+                  "reason": "invalid"
+                }
+              ]
+            }
+          }
+        },
+        "lookup-slow-create": {
+          "status": 200,
+          "body": {
+            "kind": "identitytoolkit#GetAccountInfoResponse"
+          }
+        },
+        "admin-create-slow-sign-in": {
+          "status": 200,
+          "body": {
+            "kind": "identitytoolkit#SignupNewUserResponse",
+            "email": "fireemu-aa-<run>-w2-sslow@example.com",
+            "localId": "aa-<run>-w2"
+          }
+        },
+        "sign-in-slow": {
+          "status": 400,
+          "body": {
+            "error": {
+              "code": 400,
+              "message": "BLOCKING_FUNCTION_ERROR_RESPONSE : Cloud function deadline exceeded.",
+              "errors": [
+                {
+                  "message": "BLOCKING_FUNCTION_ERROR_RESPONSE : Cloud function deadline exceeded.",
+                  "domain": "global",
+                  "reason": "invalid"
+                }
+              ]
+            }
+          }
+        },
+        "lookup-slow-sign-in": {
+          "status": 200,
+          "body": {
+            "kind": "identitytoolkit#GetAccountInfoResponse",
+            "users": [
+              {
+                "localId": "aa-<run>-w2",
+                "email": "fireemu-aa-<run>-w2-sslow@example.com",
+                "passwordHash": "UkVEQUNURUQ=",
+                "emailVerified": true,
+                "passwordUpdatedAt": "<run-time:number:ms>",
+                "providerUserInfo": [
+                  {
+                    "providerId": "password",
+                    "federatedId": "fireemu-aa-<run>-w2-sslow@example.com",
+                    "email": "fireemu-aa-<run>-w2-sslow@example.com",
+                    "rawId": "fireemu-aa-<run>-w2-sslow@example.com"
+                  }
+                ],
+                "validSince": "<run-time:string:s>",
+                "disabled": false,
+                "createdAt": "<run-time:string:ms>"
+              }
+            ]
+          }
+        }
+      }
+    },
     "atb/tenant/actions": {
       "corpusDigest": "55800444f5e4c4b9b1de61707bf59ee8e508179202c73179159c775eef1066d2",
       "harnessDigest": "a5c28a586d8857e2214d51c377718ceb937d15a706b1bbc74d59c518843f6b29",

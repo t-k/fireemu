@@ -435,3 +435,37 @@ test("a later line naming the version or envelope that is not an approval withdr
     /malformed percent-encoding/,
   );
 });
+
+test("another task's unknown events count only for spacing, and its recovery lines close its runs", async () => {
+  const { admissionProblems } = await import("./auth-fs-cross/sandbox.mjs");
+  const line = (entry) => JSON.stringify({ project: SANDBOX_PROJECT, ...entry });
+  const text = [
+    line({ ts: "2026-09-28T01:00:00Z", taskId: "OTHER", event: "started" }),
+    line({ ts: "2026-09-28T01:10:00Z", taskId: "OTHER", event: "progress", step: "x" }),
+    line({
+      ts: "2026-09-28T01:20:00Z",
+      taskId: "EVENTS",
+      event: "needs-recovery",
+      sandboxAtBaseline: false,
+    }),
+    line({
+      ts: "2026-09-28T01:30:00Z",
+      taskId: "EVENTS",
+      event: "finished",
+      outcome: "recovered-no-observation",
+      sandboxAtBaseline: true,
+      baselineRedefined: { enabledServices: 54 },
+    }),
+  ].join("\n");
+  const at = (iso) => Date.parse(iso);
+  // A progress line never ends a run: OTHER stays open, however late.
+  assert.deepEqual(admissionProblems(text, SANDBOX_PROJECT, at("2026-09-28T09:00:00Z")), [
+    `OTHER on ${SANDBOX_PROJECT} is open since 2026-09-28T01:00:00Z`,
+  ]);
+  // Once OTHER closes, only the 30-minute spacing is left, and a progress line counts toward it.
+  const closed = `${text}\n${line({ ts: "2026-09-28T01:40:00Z", taskId: "OTHER", event: "progress" })}\n${line({ ts: "2026-09-28T01:41:00Z", taskId: "OTHER", event: "finished", outcome: "recorded", sandboxAtBaseline: true })}\n${line({ ts: "2026-09-28T01:50:00Z", taskId: "OTHER", event: "progress" })}`;
+  assert.deepEqual(admissionProblems(closed, SANDBOX_PROJECT, at("2026-09-28T02:10:00Z")), [
+    `OTHER wrote a line on ${SANDBOX_PROJECT} at 2026-09-28T01:50:00Z`,
+  ]);
+  assert.deepEqual(admissionProblems(closed, SANDBOX_PROJECT, at("2026-09-28T02:21:00Z")), []);
+});

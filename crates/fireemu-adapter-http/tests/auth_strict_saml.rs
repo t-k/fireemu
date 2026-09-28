@@ -533,3 +533,138 @@ fn no_other_field_or_parameter_names_the_subject() {
     }
     assert_eq!(s.store.lock().unwrap().user_count(), 1);
 }
+
+/// The data of raw DEFLATE stored blocks (what fireemu's SAML requests use).
+fn inflate_stored(mut bytes: &[u8]) -> Vec<u8> {
+    let mut out = Vec::new();
+    loop {
+        let (header, rest) = bytes.split_first().unwrap();
+        assert_eq!(header & 0b110, 0, "a stored block");
+        let len = usize::from(u16::from_le_bytes([rest[0], rest[1]]));
+        let nlen = u16::from_le_bytes([rest[2], rest[3]]);
+        assert_eq!(!nlen, u16::try_from(len).unwrap());
+        out.extend_from_slice(&rest[4..4 + len]);
+        bytes = &rest[4 + len..];
+        if header & 1 == 1 {
+            assert!(bytes.is_empty());
+            return out;
+        }
+    }
+}
+
+fn percent_decoded(text: &str) -> String {
+    let bytes = text.as_bytes();
+    let mut out = Vec::new();
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'%' {
+            out.push(u8::from_str_radix(&text[i + 1..i + 3], 16).unwrap());
+            i += 3;
+        } else {
+            out.push(bytes[i]);
+            i += 1;
+        }
+    }
+    String::from_utf8(out).unwrap()
+}
+
+fn create_auth_uri(s: &AuthState, body: &Value) -> JsonResponse {
+    handle(s, "POST", &format!("{V1}/accounts:createAuthUri"), body)
+}
+
+#[test]
+fn strict_answers_create_auth_uri_for_a_saml_provider_as_production_does() {
+    // saml-smoke (run efe0ef, 2026-09-27): the provider's SSO URL with a deflated, base64
+    // AuthnRequest for the HTTP-POST binding and a relay state, and a session ID.
+    let s = state(true);
+    let answer = create_auth_uri(
+        &s,
+        &json!({"providerId": PROVIDER, "continueUri": CALLBACK}),
+    );
+    assert_eq!(answer.status, 200, "{}", answer.body);
+    let mut keys: Vec<&str> = answer
+        .body
+        .as_object()
+        .unwrap()
+        .keys()
+        .map(String::as_str)
+        .collect();
+    keys.sort_unstable();
+    assert_eq!(keys, ["authUri", "kind", "providerId", "sessionId"]);
+    assert_eq!(answer.body["kind"], "identitytoolkit#CreateAuthUriResponse");
+    assert_eq!(answer.body["providerId"], PROVIDER);
+    let uri = answer.body["authUri"].as_str().unwrap();
+    let query = uri
+        .strip_prefix("https://idp.example.test/saml/fixture/sso?SAMLRequest=")
+        .unwrap_or_else(|| panic!("{uri}"));
+    let (request, relay) = query.split_once("&RelayState=").unwrap();
+    assert!(!relay.is_empty() && !relay.contains('&'), "{uri}");
+    assert!(
+        !request.contains(['+', '/', '=']),
+        "percent-encoded: {request}"
+    );
+    let deflated = fireemu_core_auth::jwt::base64url_decode(
+        percent_decoded(request)
+            .replace('+', "-")
+            .replace('/', "_")
+            .trim_end_matches('='),
+    )
+    .unwrap();
+    let xml = String::from_utf8(inflate_stored(&deflated)).unwrap();
+    let (head, rest) = xml.split_once(" ID=\"_").unwrap_or_else(|| panic!("{xml}"));
+    assert_eq!(
+        head,
+        "<?xml version=\"1.0\" encoding=\"UTF-8\"?><saml2p:AuthnRequest xmlns:saml2p=\"urn:oasis:names:tc:SAML:2.0:protocol\" AssertionConsumerServiceURL=\"https://another.example.test/__/auth/handler\" Destination=\"https://idp.example.test/saml/fixture/sso\""
+    );
+    let (id, rest) = rest.split_once('"').unwrap();
+    assert_eq!(id.len(), 32, "{xml}");
+    assert!(
+        id.chars()
+            .all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase()),
+        "{xml}"
+    );
+    assert_eq!(
+        rest,
+        " IssueInstant=\"2026-08-29T12:01:00.000Z\" ProtocolBinding=\"urn:oasis:names:tc:SAML:2.0:bindings:HTTP-POST\" Version=\"2.0\"><saml2:Issuer xmlns:saml2=\"urn:oasis:names:tc:SAML:2.0:assertion\">another-sp</saml2:Issuer></saml2p:AuthnRequest>"
+    );
+    let again = create_auth_uri(
+        &s,
+        &json!({"providerId": PROVIDER, "continueUri": CALLBACK}),
+    );
+    assert_ne!(again.body["sessionId"], answer.body["sessionId"]);
+    assert_ne!(again.body["authUri"], answer.body["authUri"]);
+}
+
+#[test]
+fn strict_create_auth_uri_for_a_saml_provider_refuses_as_for_oidc() {
+    let s = state(true);
+    let missing = create_auth_uri(&s, &json!({"providerId": PROVIDER}));
+    assert_eq!(missing.status, 400, "{}", missing.body);
+    assert_eq!(missing.body["error"]["message"], "MISSING_CONTINUE_URI");
+    s.store
+        .lock()
+        .unwrap()
+        .replace_saml_config(provider(false, "idp.cert.pem"));
+    let disabled = create_auth_uri(
+        &s,
+        &json!({"providerId": PROVIDER, "continueUri": CALLBACK}),
+    );
+    assert_eq!(disabled.status, 400, "{}", disabled.body);
+    assert_eq!(disabled.body["error"]["message"], DISABLED);
+    // A signed request needs the SP's key, which fireemu does not make: not implemented.
+    let mut signing = provider(true, "idp.cert.pem");
+    signing.sign_request = true;
+    s.store.lock().unwrap().replace_saml_config(signing);
+    let signed = create_auth_uri(
+        &s,
+        &json!({"providerId": PROVIDER, "continueUri": CALLBACK}),
+    );
+    assert_eq!(signed.status, 501, "{}", signed.body);
+    // The emulator profile answers as the official emulator does.
+    let emulator = state(false);
+    let answer = create_auth_uri(
+        &emulator,
+        &json!({"providerId": PROVIDER, "continueUri": CALLBACK}),
+    );
+    assert_eq!(answer.status, 501, "{}", answer.body);
+}

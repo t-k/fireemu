@@ -3636,6 +3636,7 @@ fn dispatch(
         Handler::CreateAuthUri => create_auth_uri(
             store,
             body,
+            at,
             !options.stateless_refresh_tokens,
             options.idp_signers.as_deref(),
         ),
@@ -12618,6 +12619,7 @@ fn normalized_idp_params(request_uri: &str, post_body: Option<&str>) -> BTreeMap
 fn create_auth_uri(
     store: &mut AuthStore,
     body: &Value,
+    at: LogicalInstant,
     strict: bool,
     signers: Option<&IdpSignerTrust>,
 ) -> JsonResponse {
@@ -12639,8 +12641,9 @@ fn create_auth_uri(
             );
         }
         if strict {
-            if let Some(answer) =
-                strict_oidc_auth_uri(store, provider.as_str().unwrap_or_default(), body, signers)
+            let provider_id = provider.as_str().unwrap_or_default();
+            if let Some(answer) = strict_oidc_auth_uri(store, provider_id, body, signers)
+                .or_else(|| strict_saml::strict_saml_auth_uri(store, provider_id, body, at))
             {
                 return answer;
             }

@@ -14,6 +14,7 @@
 use std::collections::BTreeMap;
 
 use fireemu_core_auth::store::AuthStore;
+use fireemu_core_types::time::LogicalInstant;
 use serde_json::{json, Value};
 
 use super::{error, form_encode, normalized_idp_params, str_field, uri_is_absolute, JsonResponse};
@@ -196,4 +197,121 @@ fn credential_body(
         object.insert("postBody".to_owned(), json!(post_body));
     }
     rewritten
+}
+
+/// Production's `createAuthUri` for a SAML provider (saml-smoke, run efe0ef): the provider's
+/// SSO URL with an unsigned `AuthnRequest` for the HTTP-POST binding (to the provider's
+/// callback URI, from its SP entity ID), raw-deflated and base64-encoded, and a relay state;
+/// and a session ID. `None` for a provider whose requests are signed (fireemu makes no SP key;
+/// not implemented).
+pub(super) fn strict_saml_auth_uri(
+    store: &mut AuthStore,
+    provider_id: &str,
+    body: &Value,
+    at: LogicalInstant,
+) -> Option<JsonResponse> {
+    let config = store.saml_config(provider_id)?.clone();
+    let Some(continue_uri) = str_field(body, "continueUri").filter(|uri| !uri.is_empty()) else {
+        return Some(error(400, "MISSING_CONTINUE_URI"));
+    };
+    if !uri_is_absolute(continue_uri) {
+        return Some(error(400, "INVALID_CONTINUE_URI"));
+    }
+    if !config.enabled {
+        return Some(error(400, crate::oidc::DISABLED_REFUSAL));
+    }
+    if config.sign_request {
+        return None;
+    }
+    let id = fireemu_core_types::hash::hex_lower(&fireemu_core_types::hash::sha256(
+        store.next_opaque_value().as_bytes(),
+    ));
+    let request = format!(
+        "<?xml version=\"1.0\" encoding=\"UTF-8\"?><saml2p:AuthnRequest xmlns:saml2p=\"urn:oasis:names:tc:SAML:2.0:protocol\" AssertionConsumerServiceURL=\"{}\" Destination=\"{}\" ID=\"_{}\" IssueInstant=\"{}\" ProtocolBinding=\"urn:oasis:names:tc:SAML:2.0:bindings:HTTP-POST\" Version=\"2.0\"><saml2:Issuer xmlns:saml2=\"urn:oasis:names:tc:SAML:2.0:assertion\">{}</saml2:Issuer></saml2p:AuthnRequest>",
+        xml_escape(&config.callback_uri),
+        xml_escape(&config.sso_url),
+        &id[..32],
+        issue_instant(at)?,
+        xml_escape(&config.sp_entity_id),
+    );
+    let encoded = fireemu_core_types::hash::base64_standard(&deflate_stored(request.as_bytes()));
+    let relay_state = store.next_opaque_value();
+    let session_id = store.next_opaque_value();
+    Some(JsonResponse {
+        status: 200,
+        body: json!({
+            "kind": "identitytoolkit#CreateAuthUriResponse",
+            "authUri": format!(
+                "{}?SAMLRequest={}&RelayState={relay_state}",
+                config.sso_url,
+                encoded.replace('+', "%2B").replace('/', "%2F").replace('=', "%3D"),
+            ),
+            "providerId": provider_id,
+            "sessionId": session_id,
+        }),
+    })
+}
+
+/// An `IssueInstant` as production writes it: UTC with milliseconds.
+fn issue_instant(at: LogicalInstant) -> Option<String> {
+    let nanos = at.as_nanos();
+    let seconds = LogicalInstant::from_nanos(nanos - nanos.rem_euclid(1_000_000_000));
+    let whole = seconds.to_rfc3339().ok()?;
+    let millis = nanos.rem_euclid(1_000_000_000) / 1_000_000;
+    Some(format!("{}.{millis:03}Z", whole.strip_suffix('Z')?))
+}
+
+/// XML text or attribute content with the markup characters escaped.
+fn xml_escape(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    for c in text.chars() {
+        match c {
+            '&' => out.push_str("&amp;"),
+            '<' => out.push_str("&lt;"),
+            '>' => out.push_str("&gt;"),
+            '"' => out.push_str("&quot;"),
+            _ => out.push(c),
+        }
+    }
+    out
+}
+
+/// Raw DEFLATE (RFC 1951) of `data` in stored blocks: valid for any inflater, with no
+/// compression library (the SAML verifier's dependencies stay roxmltree only).
+fn deflate_stored(data: &[u8]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(data.len() + 5 * (data.len() / 65_535 + 1));
+    let mut chunks = data.chunks(65_535).peekable();
+    if chunks.peek().is_none() {
+        return vec![0x01, 0x00, 0x00, 0xff, 0xff];
+    }
+    while let Some(chunk) = chunks.next() {
+        out.push(u8::from(chunks.peek().is_none()));
+        let len = u16::try_from(chunk.len()).unwrap_or(u16::MAX);
+        out.extend_from_slice(&len.to_le_bytes());
+        out.extend_from_slice(&(!len).to_le_bytes());
+        out.extend_from_slice(chunk);
+    }
+    out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::deflate_stored;
+
+    #[test]
+    fn stored_deflate_blocks_are_what_zlib_inflates() {
+        // Vectors checked with an independent inflater (Python's zlib, raw window).
+        assert_eq!(deflate_stored(b""), [0x01, 0x00, 0x00, 0xff, 0xff]);
+        assert_eq!(
+            deflate_stored(b"abc"),
+            [0x01, 0x03, 0x00, 0xfc, 0xff, b'a', b'b', b'c']
+        );
+        let long: Vec<u8> = (0..300).flat_map(|_| 0..=255_u8).collect();
+        let encoded = deflate_stored(&long);
+        assert_eq!(encoded.len(), 76_810);
+        assert_eq!(encoded[..5], [0x00, 0xff, 0xff, 0x00, 0x00]);
+        assert_eq!(encoded[65_540..65_545], [0x01, 0x01, 0x2c, 0xfe, 0xd3]);
+        assert_eq!(encoded[5..65_540], long[..65_535]);
+        assert_eq!(encoded[65_545..], long[65_535..]);
+    }
 }

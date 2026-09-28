@@ -1124,9 +1124,9 @@ mod tests {
         assert_eq!(kept.message(), "cursor past the end");
     }
 
-    /// A `WebChannel` form body is up to the same 10 MiB a REST body is, so it draws on the
-    /// same admission pool. Before this, `channel_call` had no gate at all and peak body
-    /// memory on that path was bounded only by the connection rate.
+    /// A `WebChannel` form body is up to 16 MiB (`max_form_bytes`), larger than a REST body,
+    /// and draws on the same admission pool. Before this, `channel_call` had no gate at all
+    /// and peak body memory on that path was bounded only by the connection rate.
     mod channel_admission {
         use super::super::{
             channel_call, rest_work_limiter, too_many_concurrent_requests, BODY_READ_DEADLINE,

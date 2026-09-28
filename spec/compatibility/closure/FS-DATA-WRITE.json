@@ -35,7 +35,13 @@
         "comparisonPath": "spec/compatibility/broad-runs/fs-batch-malformed-middle-8a0f205-current-comparison.json",
         "comparisonSha256": "b53a0b912cd4275c3b913f47d1e5180765ca9a26f09b9d8901bc562cf77aeb6a",
         "sourceCommit": "8a0f20599bab98bb094a74e00d6b2df9f6cd60e8",
-        "sourceBindingSha256": "73b823461ad2933db06acd5fd9d5bf6f933ba4fb713e63042ab27a21b5d3f15a"
+        "sourceBindingSha256": "73b823461ad2933db06acd5fd9d5bf6f933ba4fb713e63042ab27a21b5d3f15a",
+        "currentCoverage": {
+          "comparisonPath": "spec/compatibility/closure/evidence/FS-DATA-WRITE-current-comparison.json",
+          "comparisonSha256": "582c9004b55e5c0c0ac8a1731584c90a67981f9eefe1c8a97b37340cd5f22678",
+          "finalArtifactSha256": "eec383e576e5de8c63fd934ef55dde6592bb6b69888a7f00bb4129c6a9338593",
+          "sourceHead": "da47b5e137a275576d00f6cd75be7e29e5aaa160"
+        }
       },
       "historicalEvidence": {
         "productionRecordings": [
@@ -139,7 +145,13 @@
           "7c794af67119e745072ceae3d742bd463df28c0aa804998c2155b1333b1625d9"
         ],
         "finalArtifactSha256": "d6db62596e71c152883dc5b83bf8dc48b79b703777d49bab10874c1fae6dfc6d",
-        "comparisonPath": "spec/compatibility/broad-runs/fs-batch-duplicate-document-3d7ceabb8-saved-comparison.json"
+        "comparisonPath": "spec/compatibility/broad-runs/fs-batch-duplicate-document-3d7ceabb8-saved-comparison.json",
+        "currentCoverage": {
+          "comparisonPath": "spec/compatibility/closure/evidence/FS-DATA-WRITE-current-comparison.json",
+          "comparisonSha256": "582c9004b55e5c0c0ac8a1731584c90a67981f9eefe1c8a97b37340cd5f22678",
+          "finalArtifactSha256": "eec383e576e5de8c63fd934ef55dde6592bb6b69888a7f00bb4129c6a9338593",
+          "sourceHead": "da47b5e137a275576d00f6cd75be7e29e5aaa160"
+        }
       }
     },
     {
@@ -164,7 +176,13 @@
           "7c794af67119e745072ceae3d742bd463df28c0aa804998c2155b1333b1625d9"
         ],
         "finalArtifactSha256": "d6db62596e71c152883dc5b83bf8dc48b79b703777d49bab10874c1fae6dfc6d",
-        "comparisonPath": "spec/compatibility/broad-runs/fs-collection-id-3d7ceabb8-saved-comparison.json"
+        "comparisonPath": "spec/compatibility/broad-runs/fs-collection-id-3d7ceabb8-saved-comparison.json",
+        "currentCoverage": {
+          "comparisonPath": "spec/compatibility/closure/evidence/FS-DATA-WRITE-current-comparison.json",
+          "comparisonSha256": "582c9004b55e5c0c0ac8a1731584c90a67981f9eefe1c8a97b37340cd5f22678",
+          "finalArtifactSha256": "eec383e576e5de8c63fd934ef55dde6592bb6b69888a7f00bb4129c6a9338593",
+          "sourceHead": "da47b5e137a275576d00f6cd75be7e29e5aaa160"
+        }
       }
     },
     {
@@ -185,7 +203,13 @@
           "7c794af67119e745072ceae3d742bd463df28c0aa804998c2155b1333b1625d9"
         ],
         "finalArtifactSha256": "d6db62596e71c152883dc5b83bf8dc48b79b703777d49bab10874c1fae6dfc6d",
-        "comparisonPath": "spec/compatibility/broad-runs/fs-subcollection-depth-3d7ceabb8-saved-comparison.json"
+        "comparisonPath": "spec/compatibility/broad-runs/fs-subcollection-depth-3d7ceabb8-saved-comparison.json",
+        "currentCoverage": {
+          "comparisonPath": "spec/compatibility/closure/evidence/FS-DATA-WRITE-current-comparison.json",
+          "comparisonSha256": "582c9004b55e5c0c0ac8a1731584c90a67981f9eefe1c8a97b37340cd5f22678",
+          "finalArtifactSha256": "eec383e576e5de8c63fd934ef55dde6592bb6b69888a7f00bb4129c6a9338593",
+          "sourceHead": "da47b5e137a275576d00f6cd75be7e29e5aaa160"
+        }
       }
     },
     {
@@ -207,9 +231,15 @@
           "7c794af67119e745072ceae3d742bd463df28c0aa804998c2155b1333b1625d9"
         ],
         "finalArtifactSha256": "d6db62596e71c152883dc5b83bf8dc48b79b703777d49bab10874c1fae6dfc6d",
-        "comparisonPath": "spec/compatibility/broad-runs/fs-document-name-bytes-3d7ceabb8-saved-comparison.json"
+        "comparisonPath": "spec/compatibility/broad-runs/fs-document-name-bytes-3d7ceabb8-saved-comparison.json",
+        "currentCoverage": {
+          "comparisonPath": "spec/compatibility/closure/evidence/FS-DATA-WRITE-current-comparison.json",
+          "comparisonSha256": "582c9004b55e5c0c0ac8a1731584c90a67981f9eefe1c8a97b37340cd5f22678",
+          "finalArtifactSha256": "eec383e576e5de8c63fd934ef55dde6592bb6b69888a7f00bb4129c6a9338593",
+          "sourceHead": "da47b5e137a275576d00f6cd75be7e29e5aaa160"
+        }
       },
-      "profileNote": "Strict profile only. The emulator profile counts index entries without refusing: the pinned official emulator (firebase-tools 15.28.2, Firestore emulator v1.22.0) accepted the same write on 2026-09-27 (contract.json FS-CLAIM-LIMITS)."
+      "profileNote": "A document name over 6,144 bytes is refused in both profiles ('The document name is longer than 6144 bytes.', empty-document-name/6128). The document-name guard that refuses a name size over 4,644 bytes with 'Index entry is too large.' (empty-document-name/6127) is strict profile only; the emulator profile accepts that name, as the pinned official emulator (firebase-tools 15.28.2, Firestore emulator v1.22.0) does."
     },
     {
       "conditionId": "FS-LIMIT-INDEX-ENTRIES-PER-DOCUMENT",
@@ -447,7 +477,13 @@
           "7c794af67119e745072ceae3d742bd463df28c0aa804998c2155b1333b1625d9"
         ],
         "finalArtifactSha256": "d6db62596e71c152883dc5b83bf8dc48b79b703777d49bab10874c1fae6dfc6d",
-        "comparisonPath": "spec/compatibility/broad-runs/fs-scalar-refusal-3d7ceabb8-saved-comparison.json"
+        "comparisonPath": "spec/compatibility/broad-runs/fs-scalar-refusal-3d7ceabb8-saved-comparison.json",
+        "currentCoverage": {
+          "comparisonPath": "spec/compatibility/closure/evidence/FS-DATA-WRITE-current-comparison.json",
+          "comparisonSha256": "582c9004b55e5c0c0ac8a1731584c90a67981f9eefe1c8a97b37340cd5f22678",
+          "finalArtifactSha256": "eec383e576e5de8c63fd934ef55dde6592bb6b69888a7f00bb4129c6a9338593",
+          "sourceHead": "da47b5e137a275576d00f6cd75be7e29e5aaa160"
+        }
       }
     },
     {
@@ -468,7 +504,13 @@
           "7c794af67119e745072ceae3d742bd463df28c0aa804998c2155b1333b1625d9"
         ],
         "finalArtifactSha256": "d6db62596e71c152883dc5b83bf8dc48b79b703777d49bab10874c1fae6dfc6d",
-        "comparisonPath": "spec/compatibility/broad-runs/fs-aggregate-string-3d7ceabb8-saved-comparison.json"
+        "comparisonPath": "spec/compatibility/broad-runs/fs-aggregate-string-3d7ceabb8-saved-comparison.json",
+        "currentCoverage": {
+          "comparisonPath": "spec/compatibility/closure/evidence/FS-DATA-WRITE-current-comparison.json",
+          "comparisonSha256": "582c9004b55e5c0c0ac8a1731584c90a67981f9eefe1c8a97b37340cd5f22678",
+          "finalArtifactSha256": "eec383e576e5de8c63fd934ef55dde6592bb6b69888a7f00bb4129c6a9338593",
+          "sourceHead": "da47b5e137a275576d00f6cd75be7e29e5aaa160"
+        }
       }
     },
     {
@@ -535,7 +577,7 @@
       ],
       "boundaryStatus": "NOT_APPLICABLE",
       "status": "VERIFIED",
-      "profileNote": "Strict profile only. The emulator profile counts index entries without refusing: the pinned official emulator (firebase-tools 15.28.2, Firestore emulator v1.22.0) accepted the same write on 2026-09-27 (contract.json FS-CLAIM-LIMITS).",
+      "profileNote": "No refusal of its own in either profile: truncation only sets the counted entry size. Strict refuses an entry over its limit through FS-LIMIT-INDEX-ENTRY-BYTES; the emulator profile counts without refusing, as the pinned official emulator (firebase-tools 15.28.2, Firestore emulator v1.22.0) does.",
       "scopeNote": "A truncation rule, not a refusal: an indexed value over 1,500 bytes is counted as 1,500 in its index entry. It is observable only through FS-LIMIT-INDEX-ENTRY-BYTES, whose boundary is bracketed. Production accepted a 2,999-byte string where an untruncated count would exceed that boundary (indexed-string-name/2999/2607 at 5,478 bytes), which bounds the truncation point from above at 1,552 bytes at the recorded threshold; the recordings do not bound it from below, so the documented 1,500 bytes is adopted.",
       "evidence": {
         "productionRecordings": [
@@ -595,7 +637,13 @@
           "7c794af67119e745072ceae3d742bd463df28c0aa804998c2155b1333b1625d9"
         ],
         "finalArtifactSha256": "d6db62596e71c152883dc5b83bf8dc48b79b703777d49bab10874c1fae6dfc6d",
-        "comparisonPath": "spec/compatibility/broad-runs/fs-implied-map-3d7ceabb8-saved-comparison.json"
+        "comparisonPath": "spec/compatibility/broad-runs/fs-implied-map-3d7ceabb8-saved-comparison.json",
+        "currentCoverage": {
+          "comparisonPath": "spec/compatibility/closure/evidence/FS-DATA-WRITE-current-comparison.json",
+          "comparisonSha256": "582c9004b55e5c0c0ac8a1731584c90a67981f9eefe1c8a97b37340cd5f22678",
+          "finalArtifactSha256": "eec383e576e5de8c63fd934ef55dde6592bb6b69888a7f00bb4129c6a9338593",
+          "sourceHead": "da47b5e137a275576d00f6cd75be7e29e5aaa160"
+        }
       }
     },
     {
@@ -618,7 +666,13 @@
           "7c794af67119e745072ceae3d742bd463df28c0aa804998c2155b1333b1625d9"
         ],
         "finalArtifactSha256": "d6db62596e71c152883dc5b83bf8dc48b79b703777d49bab10874c1fae6dfc6d",
-        "comparisonPath": "spec/compatibility/broad-runs/fs-implied-array-3d7ceabb8-saved-comparison.json"
+        "comparisonPath": "spec/compatibility/broad-runs/fs-implied-array-3d7ceabb8-saved-comparison.json",
+        "currentCoverage": {
+          "comparisonPath": "spec/compatibility/closure/evidence/FS-DATA-WRITE-current-comparison.json",
+          "comparisonSha256": "582c9004b55e5c0c0ac8a1731584c90a67981f9eefe1c8a97b37340cd5f22678",
+          "finalArtifactSha256": "eec383e576e5de8c63fd934ef55dde6592bb6b69888a7f00bb4129c6a9338593",
+          "sourceHead": "da47b5e137a275576d00f6cd75be7e29e5aaa160"
+        }
       },
       "profileNote": "The 1,494-byte key rule for a map held by an array is strict profile only; the emulator profile accepts the key (contract.json FS-CLAIM-LIMITS)."
     },
@@ -640,7 +694,13 @@
           "7c794af67119e745072ceae3d742bd463df28c0aa804998c2155b1333b1625d9"
         ],
         "finalArtifactSha256": "d6db62596e71c152883dc5b83bf8dc48b79b703777d49bab10874c1fae6dfc6d",
-        "comparisonPath": "spec/compatibility/broad-runs/fs-rest-commit-json-samples-3d7ceabb8-saved-comparison.json"
+        "comparisonPath": "spec/compatibility/broad-runs/fs-rest-commit-json-samples-3d7ceabb8-saved-comparison.json",
+        "currentCoverage": {
+          "comparisonPath": "spec/compatibility/closure/evidence/FS-DATA-WRITE-current-comparison.json",
+          "comparisonSha256": "582c9004b55e5c0c0ac8a1731584c90a67981f9eefe1c8a97b37340cd5f22678",
+          "finalArtifactSha256": "eec383e576e5de8c63fd934ef55dde6592bb6b69888a7f00bb4129c6a9338593",
+          "sourceHead": "da47b5e137a275576d00f6cd75be7e29e5aaa160"
+        }
       }
     },
     {
@@ -663,7 +723,13 @@
           "7c794af67119e745072ceae3d742bd463df28c0aa804998c2155b1333b1625d9"
         ],
         "finalArtifactSha256": "d6db62596e71c152883dc5b83bf8dc48b79b703777d49bab10874c1fae6dfc6d",
-        "comparisonPath": "spec/compatibility/broad-runs/fs-raw-request-bytes-3d7ceabb8-saved-comparison.json"
+        "comparisonPath": "spec/compatibility/broad-runs/fs-raw-request-bytes-3d7ceabb8-saved-comparison.json",
+        "currentCoverage": {
+          "comparisonPath": "spec/compatibility/closure/evidence/FS-DATA-WRITE-current-comparison.json",
+          "comparisonSha256": "582c9004b55e5c0c0ac8a1731584c90a67981f9eefe1c8a97b37340cd5f22678",
+          "finalArtifactSha256": "eec383e576e5de8c63fd934ef55dde6592bb6b69888a7f00bb4129c6a9338593",
+          "sourceHead": "da47b5e137a275576d00f6cd75be7e29e5aaa160"
+        }
       }
     },
     {
@@ -958,7 +1024,7 @@
         "comparisonPath": "spec/compatibility/closure/evidence/FS-DATA-WRITE-current-accepted-conditions.json",
         "comparisonSha256": "f5468d57749b41f0bf577a729601dba914f204d119ebbe5236a56cd4288b2d0a"
       },
-      "profileNote": "Strict accepts form bodies up to 16,777,215 bytes and above that answers production's HTML 400 page and ends the session (production accepted 12,582,912 and refused 16,777,216, follow-up recording 2026-09-27). The emulator profile follows the pinned official emulator: up to 16,777,216 accepted, an empty 413 above it, the session kept. An unknown session answers 400 in both profiles: production's HTML page in strict (owner decision D6), 'Error: Unknown SID' in the emulator profile.",
+      "profileNote": "Strict accepts form bodies up to 16,777,215 bytes and above that answers production's HTML 400 page and ends the session (production accepted 12,582,912 and refused 16,777,216, follow-up recording 2026-09-27). The emulator profile follows the pinned official emulator: up to 16,777,216 accepted, an empty 413 above it, the session kept. A request naming an unknown session answers 400 in both profiles: production's HTML page in strict (owner decision D6), 'Error: Unknown SID' in the emulator profile. A terminate of an unknown session gets the same page in strict and 200 in the emulator profile.",
       "ownerDecision": "2026-09-28 FS-DATA-WRITE D-2",
       "boundaryEvidence": [
         "writes/limits/webchannel-request-bytes/12582912#boundary",
@@ -1023,7 +1089,7 @@
       "boundaryStatus": "UNOBSERVABLE",
       "status": "KNOWN_DIFFERENCE_APPROVED",
       "ownerDecision": "2026-09-27 FS-DATA-WRITE gRPC stream upper bound",
-      "reason": "The request-size bound of a gRPC Write or Listen stream cannot be observed safely in production. Strict applies the 11,534,336-byte bound bracketed on unary GetDocument (FS-LIMIT-API-REQUEST-BYTES/grpc-unary) as an estimate, and the emulator profile adds no refusal. The recorded stream rows at 10,485,760 and 10,485,761 bytes match.",
+      "reason": "The request-size bound of a gRPC Write or Listen stream cannot be observed safely in production. Both profiles apply the 11,534,336-byte bound bracketed on unary GetDocument (FS-LIMIT-API-REQUEST-BYTES/grpc-unary) as an estimate (decision D, 2026-09-27); the emulator profile adds no refusal beyond that production bound. The recorded stream rows at 10,485,760 and 10,485,761 bytes match.",
       "evidence": {
         "productionRecordings": [
           "9d64c5740de946a945a7c2234e9bc23b6dda50275bab639692678612ba470808",
@@ -1118,7 +1184,13 @@
           "ba880dc6feb56588256298deba48c9cbfd53de115e2f9381968867a28279d56f"
         ],
         "finalArtifactSha256": "2af3f08c4d453459af86c9258f2283cb38fc7e74d83d388018cbdbb29e892a6a",
-        "comparisonPath": "spec/compatibility/broad-runs/fs-stream-half-close-1cb475837-current-comparison.json"
+        "comparisonPath": "spec/compatibility/broad-runs/fs-stream-half-close-1cb475837-current-comparison.json",
+        "currentCoverage": {
+          "comparisonPath": "spec/compatibility/closure/evidence/FS-DATA-WRITE-current-comparison.json",
+          "comparisonSha256": "582c9004b55e5c0c0ac8a1731584c90a67981f9eefe1c8a97b37340cd5f22678",
+          "finalArtifactSha256": "eec383e576e5de8c63fd934ef55dde6592bb6b69888a7f00bb4129c6a9338593",
+          "sourceHead": "da47b5e137a275576d00f6cd75be7e29e5aaa160"
+        }
       },
       "profileNote": "The content-disposition trailer after a response is strict profile only; the emulator profile keeps tonic's answer (contract.json FS-CLAIM-RPC)."
     },
@@ -1468,7 +1540,7 @@
     {
       "conditionId": "FS-LIMIT-API-REQUEST-BYTES/grpc-stream",
       "ownerDecision": "2026-09-27 FS-DATA-WRITE gRPC stream upper bound",
-      "reason": "The request-size bound of a gRPC Write or Listen stream cannot be observed safely in production. Strict applies the 11,534,336-byte bound bracketed on unary GetDocument (FS-LIMIT-API-REQUEST-BYTES/grpc-unary) as an estimate, and the emulator profile adds no refusal. The recorded stream rows at 10,485,760 and 10,485,761 bytes match."
+      "reason": "The request-size bound of a gRPC Write or Listen stream cannot be observed safely in production. Both profiles apply the 11,534,336-byte bound bracketed on unary GetDocument (FS-LIMIT-API-REQUEST-BYTES/grpc-unary) as an estimate (decision D, 2026-09-27); the emulator profile adds no refusal beyond that production bound. The recorded stream rows at 10,485,760 and 10,485,761 bytes match."
     },
     {
       "conditionId": "FS-LIMIT-API-REQUEST-BYTES/webchannel",

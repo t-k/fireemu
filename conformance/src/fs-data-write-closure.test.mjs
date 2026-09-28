@@ -110,7 +110,7 @@ test("final write comparison has no known or unresolved difference", () => {
   }
 });
 
-test("current accepted conditions bind every selected row and only D3 differences", async () => {
+test("current accepted conditions bind every selected row and no difference", async () => {
   const closure = JSON.parse(readFileSync(closurePath, "utf8"));
   const candidate = JSON.parse(readFileSync(reviewCandidatePath, "utf8"));
   const accepted = JSON.parse(readFileSync(acceptedConditionsPath, "utf8"));
@@ -333,6 +333,50 @@ test("current accepted conditions bind every selected row and only D3 difference
   assert.deepEqual(new Set(Object.keys(localRows.rows)), usedLocalRows);
   assert.deepEqual(new Set(accepted.approvedDifferenceIds), b1Rows);
   assert.deepEqual(accepted.unresolvedDifferenceIds, candidate.pendingOracleDifferenceIds);
+});
+
+test("conditions bound to older comparisons are covered by the release comparison", async () => {
+  const closure = JSON.parse(readFileSync(closurePath, "utf8"));
+  const candidate = JSON.parse(readFileSync(reviewCandidatePath, "utf8"));
+  const { corpus } = await prepareSandboxCorpus();
+  const restIds = new Set(corpus.restPrograms.map(({ id }) => id));
+  const streamIds = new Set(
+    corpus.streamRecipes.filter(({ transport }) => transport === "grpc").map(({ id }) => id),
+  );
+  // The release comparison compared every current recipe and found no difference at all.
+  assert.equal(candidate.comparedRestPrograms, restIds.size);
+  assert.equal(candidate.comparedGrpcStreams, streamIds.size);
+  assert.deepEqual(candidate.pendingRestIds, []);
+  assert.deepEqual(candidate.pendingStreamIds, []);
+  assert.deepEqual(candidate.approvedKnownDifferenceIds, []);
+  assert.deepEqual(candidate.pendingOracleDifferenceIds, []);
+  assert.deepEqual(candidate.otherDifferenceIds, []);
+  const releaseBound = new Set(
+    [acceptedConditionsPath, terminalConditionPath, listComparisonPath, savedStreamReplayPath].map(
+      (path) => path.slice(path.indexOf("spec/compatibility/")),
+    ),
+  );
+  const coverage = {
+    comparisonPath: "spec/compatibility/closure/evidence/FS-DATA-WRITE-current-comparison.json",
+    comparisonSha256: createHash("sha256").update(readFileSync(reviewCandidatePath)).digest("hex"),
+    finalArtifactSha256: candidate.executableSha256,
+    sourceHead: candidate.sourceHead,
+  };
+  const covered = [];
+  for (const condition of closure.conditions) {
+    if (!["VERIFIED", "KNOWN_DIFFERENCE_APPROVED"].includes(condition.status)) continue;
+    if (releaseBound.has(condition.evidence?.comparisonPath)) {
+      assert.equal(condition.evidence.currentCoverage, undefined, condition.conditionId);
+      continue;
+    }
+    assert.deepEqual(condition.evidence?.currentCoverage, coverage, condition.conditionId);
+    for (const recipeId of condition.recipeIds) {
+      assert.ok(restIds.has(recipeId) || streamIds.has(recipeId), `${recipeId}: not compared`);
+      assert.ok(!candidate.retiredRestIds.includes(recipeId), `${recipeId}: retired`);
+    }
+    covered.push(condition.conditionId);
+  }
+  assert.equal(covered.length, 12);
 });
 
 test("saved stream transaction recompare binds its one production campaign and current local artifact", () => {
@@ -1471,19 +1515,16 @@ test("FS-DATA-WRITE closure inventory cannot silently omit a declared condition"
       `${conditionId}: incomplete recipe mapping`,
     );
   }
-  // D3's rows all match since the strict index-entry rules follow production (2026-09-28).
-  const approvedD3Conditions = new Set();
+  // No condition keeps a DIVERGENCE_APPROVED row: the former D3 rows match since the strict
+  // index-entry rules follow production (2026-09-28).
+  assert.ok(closure.conditions.every(({ status }) => status !== "DIVERGENCE_APPROVED"));
   for (const condition of closure.conditions) {
     if (condition.status === "KNOWN_DIFFERENCE_APPROVED") {
       assert.ok(isApprovedKnownDifference(closure, condition), condition.conditionId);
     }
   }
   const allVerified = closure.conditions.every(
-    (condition) =>
-      condition.status === "VERIFIED" ||
-      (approvedD3Conditions.has(condition.conditionId) &&
-        condition.status === "DIVERGENCE_APPROVED") ||
-      isApprovedKnownDifference(closure, condition),
+    (condition) => condition.status === "VERIFIED" || isApprovedKnownDifference(closure, condition),
   );
   assert.equal(
     closure.parentStatus === "COMPAT_VERIFIED",

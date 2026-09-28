@@ -39,7 +39,11 @@ function fixture({
     fetchImpl: async (href, init) => {
       const url = new URL(href);
       if (init.method === "GET" && url.pathname === `/storage/v1/b/${bucket}/o`)
-        return Response.json({ items: [...objects.values()].map((row) => row.metadata) });
+        return Response.json({
+          items: [...objects.values()]
+            .map((row) => row.metadata)
+            .filter((row) => row.name.startsWith(url.searchParams.get("prefix"))),
+        });
       const root = url.pathname.includes("/o/")
         ? url.pathname.slice(url.pathname.indexOf("/o/") + 3)
         : undefined;

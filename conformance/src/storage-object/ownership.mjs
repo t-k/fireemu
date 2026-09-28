@@ -211,6 +211,27 @@ export function createRunOwnership({ bucket, prefix } = {}) {
       object.bytesSha256 = null;
       object.previous = null;
     },
+    noteCancelledSessionAbsent(name, proof) {
+      checkName(name);
+      const object = objects.get(name);
+      if (
+        !object ||
+        object.state !== "pending" ||
+        object.previous?.state !== "absent" ||
+        proof?.operationId !== object.operationId ||
+        proof.sessionCancelled !== true ||
+        proof.metadataStatus !== 404 ||
+        proof.mediaStatus !== 404 ||
+        proof.prefixPagesComplete !== true ||
+        proof.nameFound !== false
+      )
+        throw new Error("cancelled owned session and object absence are unproved");
+      object.state = "absent";
+      object.operationId = null;
+      object.generation = null;
+      object.bytesSha256 = null;
+      object.previous = null;
+    },
     noteRefusedAbsentFromRunList(name, proof) {
       checkName(name);
       const object = objects.get(name);

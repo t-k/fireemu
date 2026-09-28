@@ -338,7 +338,8 @@
       },
       "localEvidence": {
         "references": [],
-        "productionExecuted": false
+        "productionExecuted": false,
+        "limits": "Production closed every held native stream 3,600.17-3,600.19 s after it opened (packet v7, 2026-09-28, twelve streams, INTERNAL from an HTTP/2 RST_STREAM), and the strict profile closes an end user's stream an hour after it opened. Unobserved: a stream opened with an older token (whether production closes it at the token's exp or at its hour); the strict profile adds no close at exp. One earlier close (packet v6, recording 2, stream grpc-ten-t2, before its exp-60 s probe, time not recorded) is an unexplained single observation, not reproduced in the twelve v7 streams."
       },
       "verification": {
         "recordingsRequired": 2

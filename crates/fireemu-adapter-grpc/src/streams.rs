@@ -401,34 +401,34 @@ pub(crate) async fn listen_stream_observed(
     let mut database_hash_cache = None;
     let mut last_snapshot_version = None;
     let mut events = ctx.local.subscribe();
-    let token_deadline = ctx
+    let stream_deadline = ctx
         .rules
         .as_ref()
-        .and_then(|rules| rules.listen_token_deadline(&ctx.principal));
+        .and_then(|rules| rules.listen_stream_deadline(&ctx.principal));
     loop {
         let mut out: Vec<pb::ListenResponse> = Vec::new();
         let mut request = None;
-        let until_expiry = until_token_expiry(&ctx, token_deadline);
-        if until_expiry == Some(Duration::ZERO) {
-            let _ = tx.send(Err(token_expired())).await;
+        let until_deadline = until_stream_deadline(&ctx, stream_deadline);
+        if until_deadline == Some(Duration::ZERO) {
+            let _ = tx.send(Err(lifetime_reached())).await;
             return;
         }
         // At most a second at a time: a pinned clock moved past the deadline is noticed without
         // waiting for a commit, as the wall is.
-        let expiry = async {
-            match until_expiry {
-                Some(wait) => tokio::time::sleep(wait.min(TOKEN_EXPIRY_CHECK)).await,
+        let deadline = async {
+            match until_deadline {
+                Some(wait) => tokio::time::sleep(wait.min(DEADLINE_CHECK)).await,
                 None => std::future::pending().await,
             }
         };
         let outcome: Result<bool, Status> = tokio::select! {
             () = tx.closed() => Ok(false),
             // Woken at the deadline or to look again: the loop's head decides.
-            () = expiry => Ok(true),
+            () = deadline => Ok(true),
             msg = inbound.next() => match msg {
                 None => Ok(false),
                 Some(Err(e)) => Err(e),
-                Some(Ok(_)) if token_has_expired(&ctx, token_deadline) => Err(token_expired()),
+                Some(Ok(_)) if deadline_reached(&ctx, stream_deadline) => Err(lifetime_reached()),
                 Some(Ok(req)) => {
                     let result = handle_listen_request(
                         &ctx,
@@ -444,9 +444,9 @@ pub(crate) async fn listen_stream_observed(
                 },
             },
             // A commit met after the deadline (a pinned clock moved past it) ends the stream
-            // as the deadline does, not through the refresh's own token check.
-            ev = events.recv() => if token_has_expired(&ctx, token_deadline) {
-                Err(token_expired())
+            // as the deadline does.
+            ev = events.recv() => if deadline_reached(&ctx, stream_deadline) {
+                Err(lifetime_reached())
             } else { match ev {
                 Ok(first) => {
                     // Coalesce: every commit already queued behind this one is covered by
@@ -766,12 +766,15 @@ fn decode_target(
     }
 }
 
-/// The longest a held stream waits before it looks at its token's deadline again.
-const TOKEN_EXPIRY_CHECK: Duration = Duration::from_secs(1);
+/// The longest a held stream waits before it looks at its deadline again.
+const DEADLINE_CHECK: Duration = Duration::from_secs(1);
 
-/// How long until the stream's ID token expires on the session clock: zero once it has,
-/// `None` when the stream has no such deadline. A clock that cannot be read counts as expired.
-fn until_token_expiry(ctx: &StreamContext, deadline: Option<LogicalInstant>) -> Option<Duration> {
+/// How long until the stream's deadline on the session clock: zero once it has passed, `None`
+/// when the stream has none. A clock that cannot be read counts as passed.
+fn until_stream_deadline(
+    ctx: &StreamContext,
+    deadline: Option<LogicalInstant>,
+) -> Option<Duration> {
     let deadline = deadline?;
     let Some(now) = ctx
         .rules
@@ -791,14 +794,14 @@ fn until_token_expiry(ctx: &StreamContext, deadline: Option<LogicalInstant>) -> 
     )
 }
 
-fn token_has_expired(ctx: &StreamContext, deadline: Option<LogicalInstant>) -> bool {
-    until_token_expiry(ctx, deadline) == Some(Duration::ZERO)
+fn deadline_reached(ctx: &StreamContext, deadline: Option<LogicalInstant>) -> bool {
+    until_stream_deadline(ctx, deadline) == Some(Duration::ZERO)
 }
 
-/// How production ended every held stream around its token's expiry (AUTH-FS-CROSS stage 2:
-/// code 13, before any later commit).
-fn token_expired() -> Status {
-    Status::internal("the stream's credential expired")
+/// How a held stream ends at its deadline. Production's front end resets the HTTP/2 stream
+/// (`RST_STREAM`, `INTERNAL_ERROR`), which gRPC clients report as `INTERNAL` with their own text.
+fn lifetime_reached() -> Status {
+    Status::internal("the stream reached its one-hour lifetime")
 }
 
 /// Refreshes every target against one snapshot, then emits the global boundary. Targets

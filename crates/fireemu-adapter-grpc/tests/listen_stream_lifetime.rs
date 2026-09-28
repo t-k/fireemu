@@ -1,13 +1,12 @@
-//! How a held `Listen` stream ends when its ID token expires (AUTH-FS-CROSS stage 2).
+//! How long a held `Listen` stream lives (AUTH-FS-CROSS stage 2).
 //!
-//! Production (two recordings, 2026-09-28) ended every held native stream with `INTERNAL`
-//! (code 13) around its token's expiry, without waiting for a later commit: all six were gone
-//! 35 seconds after expiry, and one was already gone a minute before it. When exactly the
-//! stream closes is not settled by that evidence, so these tests only bound it: open while
-//! the token is fresh, closed with `INTERNAL` once the session clock is 35 seconds past expiry,
-//! with no commit at all. The official emulator never ends a stream for an expired token, and
-//! neither does the `emulator` profile. Socket-free: the stream runs in-process on a pinned
-//! session clock the tests move.
+//! Production ended every held native stream with `INTERNAL` (code 13) 3,600.17-3,600.19 s after
+//! it opened, in all twelve streams of the two packet-v7 recordings (2026-09-28); each token had
+//! been issued seconds before its stream, so its exp fell 0.65-2.67 s earlier and does not
+//! explain the close. A stream opened with an older token was not observed, so the strict
+//! profile invents no close at the token's exp. The official emulator never ends a stream this
+//! way, and neither does the `emulator` profile. Socket-free: the stream runs in-process on a
+//! pinned session clock the tests move.
 
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -34,10 +33,8 @@ use tonic::{Code, Status};
 const PROJECT: &str = "demo-app";
 const DB: &str = "projects/demo-app/databases/(default)";
 const START: LogicalInstant = LogicalInstant::from_unix_seconds(1_788_004_860);
-/// Firebase ID tokens live one hour.
-const TOKEN_LIFE_SECONDS: i64 = 3600;
-/// Production had ended every held stream by the probe 35 seconds after expiry.
-const LATEST_END_AFTER_EXPIRY_SECONDS: i64 = 35;
+/// Production closed a held stream 3,600 s after it opened.
+const LIFETIME_SECONDS: i64 = 3600;
 /// Longer than the stream's own look at its deadline (at most a second apart).
 const NOTICE: Duration = Duration::from_secs(3);
 const RULES: &str = r"
@@ -98,8 +95,9 @@ fn commit(backend: &LocalBackend, marker: &str) {
 }
 
 impl Held {
-    /// A stream opened at `START` with a token issued at `START`, listening to one document.
-    async fn open(profile: Profile) -> Self {
+    /// A stream opened `opened_after` seconds after `START` with a token issued at `START`,
+    /// listening to one document.
+    async fn open(profile: Profile, opened_after: i64) -> Self {
         let auth = Arc::new(Mutex::new(AuthStore::new(
             PROJECT,
             SplitMix64::new(5),
@@ -125,7 +123,16 @@ impl Held {
             TokenAcceptance::EmulatorMock
         })
         .with_token_semantics(TokenSemantics::Firestore)
-        .with_listen_token_expiry(strict);
+        .with_listen_stream_lifetime(strict);
+        clock
+            .lock()
+            .unwrap()
+            .advance_to(
+                START
+                    .checked_add(LogicalDuration::from_seconds(opened_after))
+                    .unwrap(),
+            )
+            .unwrap();
         let authorization = format!("Bearer {token}");
         let principal = enforcer
             .principal_from_authorization_for_project(Some(&authorization), PROJECT)
@@ -252,40 +259,52 @@ impl Held {
 }
 
 #[tokio::test]
-async fn a_held_stream_stays_open_while_its_token_is_fresh() {
-    let mut held = Held::open(Profile::Strict).await;
-    held.clock_at(TOKEN_LIFE_SECONDS / 2);
+async fn a_held_stream_stays_open_until_its_hour_is_up() {
+    let mut held = Held::open(Profile::Strict, 0).await;
+    held.clock_at(LIFETIME_SECONDS - 1);
     assert!(held.within(NOTICE).await.is_none());
-    commit(&held.backend, "half-life");
-    held.snapshot("half-life").await;
+    commit(&held.backend, "last-second");
+    held.snapshot("last-second").await;
     held.input.take();
 }
 
 #[tokio::test]
-async fn a_held_stream_ends_with_internal_after_its_token_expires_without_a_commit() {
-    let mut held = Held::open(Profile::Strict).await;
-    held.clock_at(TOKEN_LIFE_SECONDS + LATEST_END_AFTER_EXPIRY_SECONDS);
+async fn a_held_stream_ends_with_internal_once_its_hour_is_up_without_a_commit() {
+    let mut held = Held::open(Profile::Strict, 0).await;
+    held.clock_at(LIFETIME_SECONDS + 1);
     assert_eq!(held.end_within(NOTICE).await, Some(Code::Internal));
     // Nothing follows the end.
     assert!(matches!(held.within(NOTICE).await, Some(None)));
 }
 
-/// A commit that meets the stream past its token's Firestore allowance ends it the same way,
-/// not as an unauthenticated refresh with a target removal.
+/// A commit that meets the stream past its hour ends it the same way, not with a snapshot.
 #[tokio::test]
-async fn a_commit_after_expiry_meets_an_ended_stream_not_an_unauthenticated_one() {
-    let mut held = Held::open(Profile::Strict).await;
-    held.clock_at(TOKEN_LIFE_SECONDS + LATEST_END_AFTER_EXPIRY_SECONDS);
+async fn a_commit_after_the_hour_meets_an_ended_stream() {
+    let mut held = Held::open(Profile::Strict, 0).await;
+    held.clock_at(LIFETIME_SECONDS + 1);
     commit(&held.backend, "late");
     assert_eq!(held.end_within(NOTICE).await, Some(Code::Internal));
 }
 
+/// The hour counts from the stream's opening, not from the token's issue: a stream opened ten
+/// minutes after its token outlives the token's exp (nothing closes it there; a stream opened
+/// with an older token was not observed in production).
 #[tokio::test]
-async fn the_emulator_profile_keeps_a_held_stream_past_its_token_expiry() {
-    let mut held = Held::open(Profile::Emulator).await;
-    held.clock_at(TOKEN_LIFE_SECONDS + LATEST_END_AFTER_EXPIRY_SECONDS);
+async fn the_hour_counts_from_the_opening_and_the_tokens_exp_closes_nothing() {
+    let opened = 600;
+    let mut held = Held::open(Profile::Strict, opened).await;
+    held.clock_at(LIFETIME_SECONDS + 20);
     assert!(held.within(NOTICE).await.is_none());
-    commit(&held.backend, "after-expiry");
-    held.snapshot("after-expiry").await;
+    held.clock_at(opened + LIFETIME_SECONDS - 1);
+    assert!(held.within(NOTICE).await.is_none());
+    held.clock_at(opened + LIFETIME_SECONDS + 1);
+    assert_eq!(held.end_within(NOTICE).await, Some(Code::Internal));
+}
+
+#[tokio::test]
+async fn the_emulator_profile_keeps_a_held_stream_past_its_hour() {
+    let mut held = Held::open(Profile::Emulator, 0).await;
+    held.clock_at(LIFETIME_SECONDS + 1);
+    assert!(held.within(NOTICE).await.is_none());
     held.input.take();
 }

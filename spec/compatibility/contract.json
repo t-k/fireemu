@@ -993,7 +993,7 @@
               "precision": "exact-for-local-semantics"
             },
             {
-              "behaviour": "a strict-profile Listen stream ends with INTERNAL once its ID token expires, without waiting for a later commit, as production ended every held native stream around its token's expiry (AUTH-FS-CROSS stage 2, 2026-09-28, two recordings); when production closes it relative to expiry is not settled yet (one stream ended before exp-60 s, all by exp+35 s), so closing at exp is provisional: the close-time rule is decided from the streamEnds of the next stage-2 recording (packet v7); a commit met after a pinned clock was moved past exp ends it the same way; the emulator profile keeps the stream, as the official emulator does",
+              "behaviour": "a strict-profile Listen stream of an end user ends with INTERNAL 3,600 s after it opened, without waiting for a commit, as production closed all twelve held native streams of the AUTH-FS-CROSS stage-2 packet-v7 recordings (2026-09-28) 3,600.17-3,600.19 s after opening (0.65-2.67 s past their tokens' exp, so not at exp); production resets the HTTP/2 stream (RST_STREAM INTERNAL_ERROR), which clients report as INTERNAL with their own text; unobserved and left as they were: a stream opened with an older token (no close is added at its exp), owner and anonymous streams; one earlier close (packet v6, recording 2, stream t2, before exp-60 s) is an unexplained single observation not reproduced in the twelve; the emulator profile keeps the stream, as the official emulator does",
               "precision": "exact-for-local-semantics"
             }
           ],

@@ -773,7 +773,7 @@ fn firestore_profile_settings(
         .with_token_acceptance(cfg.token_acceptance)
         .with_refusal_without_ruleset(cfg.refuse_without_ruleset)
         .with_end_user_transactions(cfg.end_user_transactions)
-        .with_listen_token_expiry(cfg.listen_token_expiry)
+        .with_listen_stream_lifetime(cfg.listen_stream_lifetime)
 }
 
 fn assemble_suite(assembly: ServiceAssembly, exec_mode: bool) -> Result<ReadySuite, String> {
@@ -1726,20 +1726,19 @@ mod tests {
         assert!(super::firestore_wall_source(CompatibilityProfile::Strict, None).is_none());
         assert!(super::firestore_wall_source(CompatibilityProfile::Emulator, Some(wall)).is_none());
     }
-    /// Only the strict profile's Firestore ends a held `Listen` stream at its token's expiry.
+    /// Only the strict profile's Firestore ends an end user's `Listen` stream an hour after it
+    /// opened.
     #[test]
-    fn only_the_strict_profile_ends_a_listen_stream_at_its_token_expiry() {
+    fn only_the_strict_profile_ends_a_listen_stream_after_an_hour() {
         use fireemu_adapter_grpc::rules::{Principal, RulesEnforcer};
         use fireemu_core_rules::runtime::RulesetSlot;
-        use fireemu_core_rules::value::{AuthContext, RulesValue};
+        use fireemu_core_rules::value::AuthContext;
         use fireemu_core_session::clock::VirtualClock;
 
         let start = LogicalInstant::from_unix_seconds(1_788_004_860);
         let user = Principal::User(AuthContext {
             uid: "held".to_owned(),
-            token: [("exp".to_owned(), RulesValue::Int(1_788_008_460))]
-                .into_iter()
-                .collect(),
+            token: std::collections::BTreeMap::new(),
         });
         for (profile, deadline) in [
             (
@@ -1764,8 +1763,13 @@ mod tests {
                 ),
                 &cfg,
             );
-            assert_eq!(enforcer.listen_token_deadline(&user), deadline, "{profile}");
-            assert_eq!(enforcer.listen_token_deadline(&Principal::Anonymous), None);
+            assert_eq!(
+                enforcer.listen_stream_deadline(&user),
+                deadline,
+                "{profile}"
+            );
+            assert_eq!(enforcer.listen_stream_deadline(&Principal::Anonymous), None);
+            assert_eq!(enforcer.listen_stream_deadline(&Principal::Owner), None);
         }
     }
 

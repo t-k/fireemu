@@ -374,6 +374,9 @@ pub enum TokenSemantics {
     Firestore,
 }
 
+/// How long production kept an end user's `Listen` stream open (AUTH-FS-CROSS stage 2).
+pub const LISTEN_STREAM_LIFETIME_SECONDS: i64 = 3600;
+
 /// The wall time a real-time session follows (see [`RulesEnforcer::with_wall_clock`]).
 pub type WallSource = Arc<dyn Fn() -> LogicalInstant + Send + Sync>;
 
@@ -401,9 +404,10 @@ pub struct RulesEnforcer {
     /// The wall time an unpinned strict session follows; `None` keeps the clock where it is
     /// told to be.
     wall_clock: Option<WallSource>,
-    /// Whether a `Listen` stream ends on its own once its ID token expires, as production
-    /// ends it (the `strict` profile); the official emulator keeps it (the `emulator` profile).
-    listen_token_expiry: bool,
+    /// Whether an end user's `Listen` stream ends on its own an hour after it opened, as
+    /// production ends it (the `strict` profile); the official emulator keeps it (the `emulator`
+    /// profile).
+    listen_stream_lifetime: bool,
 }
 
 impl RulesEnforcer {
@@ -425,7 +429,7 @@ impl RulesEnforcer {
             end_user_transactions: true,
             token_semantics: TokenSemantics::default(),
             wall_clock: None,
-            listen_token_expiry: false,
+            listen_stream_lifetime: false,
         }
     }
 
@@ -439,31 +443,29 @@ impl RulesEnforcer {
         self
     }
 
-    /// Makes a `Listen` stream end on its own once its caller's ID token expires (the
-    /// `strict` profile). See [`Self::listen_token_deadline`].
+    /// Makes an end user's `Listen` stream end on its own an hour after it opened (the `strict`
+    /// profile). See [`Self::listen_stream_deadline`].
     #[must_use]
-    pub const fn with_listen_token_expiry(mut self, ends: bool) -> Self {
-        self.listen_token_expiry = ends;
+    pub const fn with_listen_stream_lifetime(mut self, ends: bool) -> Self {
+        self.listen_stream_lifetime = ends;
         self
     }
 
-    /// When a `Listen` stream held by `principal` ends on its own: the `exp` of its ID token,
-    /// in a session built [`Self::with_listen_token_expiry`]. `None` for the owner, an
-    /// anonymous caller, a token without `exp`, and the `emulator` profile.
+    /// When a `Listen` stream held by `principal` and opening now ends on its own: an hour on,
+    /// in a session built [`Self::with_listen_stream_lifetime`]. Production closed every held
+    /// end-user stream 3,600 s after it opened (AUTH-FS-CROSS stage 2, packet v7, twelve
+    /// streams), whatever its token's exp; `None` for the owner and an anonymous caller (not
+    /// observed), and for the `emulator` profile.
     #[must_use]
-    pub fn listen_token_deadline(&self, principal: &Principal) -> Option<LogicalInstant> {
-        if !self.listen_token_expiry {
+    pub fn listen_stream_deadline(&self, principal: &Principal) -> Option<LogicalInstant> {
+        if !self.listen_stream_lifetime || !matches!(principal, Principal::User(_)) {
             return None;
         }
-        let Principal::User(ctx) = principal else {
-            return None;
-        };
-        match ctx.token.get("exp") {
-            Some(fireemu_core_rules::value::RulesValue::Int(exp)) => {
-                Some(LogicalInstant::from_unix_seconds(*exp))
-            }
-            _ => None,
-        }
+        self.now()
+            .ok()?
+            .checked_add(fireemu_core_types::time::LogicalDuration::from_seconds(
+                LISTEN_STREAM_LIFETIME_SECONDS,
+            ))
     }
 
     /// The session time tokens are judged at (the wall's, in an unpinned `strict` session).

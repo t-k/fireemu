@@ -770,6 +770,8 @@ fn apply_auth(auth: &PreparedAuth, endpoints: &Endpoints) -> Result<(), Artifact
 /// generation or compare-and-swap operation. The comparison avoids overwriting a concurrent
 /// settings update in the usual interleaving; a hook implementation needs a generation-aware
 /// API to make this boundary fully atomic against a writer that races after the comparison.
+///
+/// [`AuthBlockingHook`]: fireemu_adapter_http::identity_toolkit::AuthBlockingHook
 fn restore_blocking_settings_if_unchanged(
     blocking: &dyn fireemu_adapter_http::identity_toolkit::AuthBlockingHook,
     snapshot: &serde_json::Value,

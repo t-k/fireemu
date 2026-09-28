@@ -176,7 +176,8 @@ fn strict_signs_in_with_a_token_the_configured_issuer_key_verifies() {
     assert_eq!(first.body["providerId"], PROVIDER);
     let second = sign_in(&s, &request(&token(&claims())));
     assert_eq!(second.status, 200, "{}", second.body);
-    assert_eq!(second.body["isNewUser"], false);
+    // Production leaves `isNewUser` out when it is false (record-oidc 39209e).
+    assert!(second.body.get("isNewUser").is_none(), "{}", second.body);
     assert_eq!(second.body["localId"], first.body["localId"]);
     assert!(s
         .store
@@ -417,6 +418,9 @@ fn the_fixture_policy_of_the_emulator_profile_accepts_the_fixture_idp() {
     for body in fixture_requests("google.com") {
         let response = sign_in(&s, &body);
         assert_eq!(response.status, 200, "{}", response.body);
+        // The official emulator's answer fields stay.
+        assert!(response.body.get("rawId").is_some(), "{}", response.body);
+        assert!(response.body.get("context").is_some(), "{}", response.body);
     }
     let response = sign_in(&s, &fixture_requests("oidc.unconfigured")[1]);
     assert_eq!(response.status, 200, "{}", response.body);
@@ -674,4 +678,51 @@ fn a_refused_or_reset_sign_in_uses_no_nonce() {
         .replace_oidc_config(provider(true, ISSUER));
     let again = sign_in(&s, &with_nonce(&nonce_token, Some("nonce-a")));
     assert_eq!(again.status, 200, "{}", again.body);
+}
+
+fn id_token_claims(response: &JsonResponse) -> Value {
+    let payload = response.body["idToken"]
+        .as_str()
+        .unwrap()
+        .split('.')
+        .nth(1)
+        .unwrap();
+    serde_json::from_slice(&fireemu_core_auth::jwt::base64url_decode(payload).unwrap()).unwrap()
+}
+
+#[test]
+fn strict_answers_a_sign_in_in_productions_shape() {
+    // record-oidc 39209e: the federated ID names the provider, the answer carries no context,
+    // raw ID or access token for an ID-token credential, `isNewUser` only when true, and the
+    // sign-in attributes are the claims beyond the standard ones.
+    let s = strict_state();
+    let mut rich = claims();
+    rich["email"] = json!("rich@example.com");
+    rich["email_verified"] = json!(true);
+    rich["name"] = json!("Rich User");
+    rich["picture"] = json!("https://example.com/p.png");
+    rich["department"] = json!("fireemu");
+    let first = sign_in(&s, &request(&token(&rich)));
+    assert_eq!(first.status, 200, "{}", first.body);
+    assert_eq!(
+        first.body["federatedId"],
+        format!("{PROVIDER}/strict-subject")
+    );
+    for absent in ["context", "rawId", "oauthAccessToken"] {
+        assert!(first.body.get(absent).is_none(), "{absent}: {}", first.body);
+    }
+    assert_eq!(first.body["isNewUser"], true);
+    assert_eq!(
+        id_token_claims(&first)["firebase"]["sign_in_attributes"],
+        json!({"department": "fireemu"})
+    );
+    let again = sign_in(&s, &request(&token(&claims())));
+    assert_eq!(again.status, 200, "{}", again.body);
+    assert!(again.body.get("isNewUser").is_none(), "{}", again.body);
+    assert!(
+        id_token_claims(&again)["firebase"]
+            .get("sign_in_attributes")
+            .is_none(),
+        "only standard claims: no attributes"
+    );
 }

@@ -183,10 +183,15 @@ fn assert_signed_oidc_claim_lifecycle(tenant: Option<&str>, stateless_refresh: b
             tenant.map(|id| json!(id))
         );
     };
+    // The emulator profile keeps every claim as sign-in attributes (the official emulator);
+    // strict keeps only the claims beyond the standard ones, as production does (record-oidc
+    // 39209e), and these are all standard.
+    let initial_attributes = claims();
+    let initial = stateless_refresh.then_some(&initial_attributes);
     assert_claims(
         &signed.body["idToken"],
         "https://securetoken.google.com/demo-app",
-        Some(&claims()),
+        initial,
     );
     s.clock
         .lock()
@@ -215,9 +220,8 @@ fn assert_signed_oidc_claim_lifecycle(tenant: Option<&str>, stateless_refresh: b
         || format!("{V1}/projects/demo-app"),
         |tenant| format!("{V1}/projects/demo-app/tenants/{tenant}"),
     );
-    let initial_attributes = claims();
     for (id_token, attributes) in [
-        (&signed.body["idToken"], Some(&initial_attributes)),
+        (&signed.body["idToken"], initial),
         (&refreshed.body["id_token"], None),
     ] {
         let cookie = handle_with(

@@ -3579,9 +3579,13 @@ fn dispatch(
             send_verification_code(store, body, at)
         }
         Handler::SignInWithPhoneNumber => sign_in_with_phone_number(store, body, at),
-        Handler::SignInWithIdp => {
-            sign_in_with_idp(store, body, at, options.inbound_credential_policy)
-        }
+        Handler::SignInWithIdp => sign_in_with_idp(
+            store,
+            body,
+            at,
+            options.inbound_credential_policy,
+            !options.stateless_refresh_tokens,
+        ),
         Handler::CreateAuthUri => create_auth_uri(store, body, !options.stateless_refresh_tokens),
         Handler::Projects => client_project_config(store, !options.stateless_refresh_tokens),
         Handler::RecaptchaParams => {
@@ -12146,15 +12150,19 @@ fn sign_in_with_idp(
     body: &Value,
     at: LogicalInstant,
     inbound_credential_policy: fireemu_core_functions::manifest::BlockingAuthTokenPolicy,
+    strict: bool,
 ) -> JsonResponse {
     let ResolvedIdp {
         provider_id,
-        info,
+        mut info,
         mut base,
     } = match resolve_idp_credential(body) {
         Ok(resolved) => resolved,
         Err(r) => return r,
     };
+    if strict && provider_id.starts_with("oidc.") {
+        strict_oidc_answer(&provider_id, &mut info, &mut base);
+    }
     let identity = FederatedIdentity {
         provider_id: provider_id.clone(),
         raw_id: info.raw_id.clone(),
@@ -12199,7 +12207,16 @@ fn sign_in_with_idp(
                 // No tokens and no state change: the client must confirm the account.
                 base.push(("localId", json!(uid.as_str())));
                 base.push(("needConfirmation", json!(true)));
-                base.push(("verifiedProvider", json!(verified_providers)));
+                // Production leaves an empty list out (record-oidc 39209e).
+                let omit = strict && verified_providers.is_empty();
+                base.push((
+                    "verifiedProvider",
+                    if omit {
+                        Value::Null
+                    } else {
+                        json!(verified_providers)
+                    },
+                ));
                 let mut obj = serde_json::Map::new();
                 for (k, v) in base {
                     obj.insert((*k).to_owned(), v);
@@ -12212,18 +12229,17 @@ fn sign_in_with_idp(
             Err(e) => return auth_error(&e),
         }
     };
-    base.push(("isNewUser", json!(is_new)));
+    // Production answers `isNewUser` only when it is true (record-oidc 39209e).
+    base.push((
+        "isNewUser",
+        if strict && !is_new {
+            Value::Null
+        } else {
+            json!(is_new)
+        },
+    ));
 
-    // The stored account decides the final emailVerified when its email is the assertion's.
-    if let Some(u) = store.user(&uid) {
-        if u.email == info.email {
-            for entry in &mut base {
-                if entry.0 == "emailVerified" {
-                    entry.1 = json!(u.email_verified);
-                }
-            }
-        }
-    }
+    stored_email_verified(store, &uid, &info, &mut base);
 
     let inbound_credentials = inbound_credential_policy
         .any()
@@ -12238,6 +12254,86 @@ fn sign_in_with_idp(
         info.sign_in_attributes.as_ref(),
         inbound_credentials.as_ref(),
     )
+}
+
+/// The stored account decides the final `emailVerified` when its email is the assertion's.
+fn stored_email_verified(store: &AuthStore, uid: &LocalId, info: &IdpUserInfo, base: &mut IdpBase) {
+    if let Some(u) = store.user(uid) {
+        if u.email == info.email {
+            for entry in base.iter_mut() {
+                if entry.0 == "emailVerified" {
+                    entry.1 = json!(u.email_verified);
+                }
+            }
+        }
+    }
+}
+
+/// The OIDC claims that are not sign-in attributes: the ID token's own and the standard user
+/// claims (production kept a custom claim and left out `iss`, `aud`, `sub`, `iat`, `exp`,
+/// `email`, `email_verified`, `name` and `picture`, record-oidc 39209e; the rest of the list
+/// follows the OIDC core specification and is unobserved).
+const OIDC_STANDARD_CLAIMS: &[&str] = &[
+    "iss",
+    "sub",
+    "aud",
+    "exp",
+    "iat",
+    "auth_time",
+    "nonce",
+    "acr",
+    "amr",
+    "azp",
+    "at_hash",
+    "c_hash",
+    "nbf",
+    "jti",
+    "sid",
+    "name",
+    "given_name",
+    "family_name",
+    "middle_name",
+    "nickname",
+    "preferred_username",
+    "profile",
+    "picture",
+    "website",
+    "email",
+    "email_verified",
+    "gender",
+    "birthdate",
+    "zoneinfo",
+    "locale",
+    "phone_number",
+    "phone_number_verified",
+    "address",
+    "updated_at",
+];
+
+/// Production's answer to a verified OIDC sign-in (record-oidc 39209e): the federated ID names
+/// the provider, no context, raw ID or access token for an ID-token credential, and the
+/// sign-in attributes are the claims beyond the standard ones (none: no attributes).
+fn strict_oidc_answer(provider_id: &str, info: &mut IdpUserInfo, base: &mut IdpBase) {
+    let federated_id = format!("{provider_id}/{}", info.raw_id);
+    for (key, value) in base.iter_mut() {
+        match *key {
+            "federatedId" => *value = json!(federated_id),
+            "context" | "rawId" | "oauthAccessToken" => *value = Value::Null,
+            _ => {}
+        }
+    }
+    let custom: serde_json::Map<String, Value> = serde_json::from_str::<Value>(&info.raw_user_info)
+        .ok()
+        .and_then(|claims| claims.as_object().cloned())
+        .into_iter()
+        .flatten()
+        .filter(|(name, _)| !OIDC_STANDARD_CLAIMS.contains(&name.as_str()))
+        .collect();
+    info.sign_in_attributes = if custom.is_empty() {
+        None
+    } else {
+        idp_claim_value(&Value::Object(custom))
+    };
 }
 
 /// When `returnIdpCredential` is set the client wants the credential and the error together, so

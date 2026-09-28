@@ -516,10 +516,11 @@ fn scattered_declarations(count: usize) -> String {
 fn namespace_declarations_are_bounded_before_the_document_is_parsed() {
     // Parsing resolves every declaring element's scope against its parent's, a cost quadratic
     // in the namespaces in scope: the declarations of the document are bounded before it is
-    // parsed. The signed vector declares four.
-    assert!(verify_saml_response(&scattered_declarations(252), &idp()).is_ok());
+    // parsed. The signed vector declares four; an identity provider that declares `xs` and
+    // `xsi` on every attribute value stays far below the bound.
+    assert!(verify_saml_response(&scattered_declarations(508), &idp()).is_ok());
     assert!(matches!(
-        verify_saml_response(&scattered_declarations(253), &idp()),
+        verify_saml_response(&scattered_declarations(509), &idp()),
         Err(SamlError::Unsupported(_))
     ));
     let declarations = (0..2_000).fold(String::new(), |mut out, n| {
@@ -573,4 +574,29 @@ fn character_references_and_cdata_inside_a_signed_value_read_as_signed() {
             "{to}"
         );
     }
+}
+
+/// `assertion-signed.xml` with `count` more attributes on an element beside the assertion.
+fn with_attributes(count: usize) -> String {
+    let attributes = (0..count).fold(String::new(), |mut out, n| {
+        let _ = write!(out, " a{n}=\"\"");
+        out
+    });
+    fixture("assertion-signed.xml").replacen(
+        "<saml:Assertion ",
+        &format!("<e{attributes}/><saml:Assertion "),
+        1,
+    )
+}
+
+#[test]
+fn attributes_are_bounded_before_the_document_is_parsed() {
+    // Parsing checks an element's attributes for duplicates pairwise: every `=` written (each
+    // attribute has one) is bounded before the document is parsed.
+    let written = fixture("assertion-signed.xml").matches('=').count();
+    assert!(verify_saml_response(&with_attributes(8_192 - written), &idp()).is_ok());
+    assert!(matches!(
+        verify_saml_response(&with_attributes(8_193 - written), &idp()),
+        Err(SamlError::Unsupported(_))
+    ));
 }

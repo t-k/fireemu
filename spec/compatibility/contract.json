@@ -985,7 +985,7 @@
               "precision": "documented-divergence"
             },
             {
-              "behaviour": "an unexpired ID token of a deleted tenant is honoured on Firestore in both profiles, as production honoured it about 3 s and 66 s after the deletion (AUTH-FS-CROSS sandbox, 2026-09-27): the tenant is not looked up, and the token keeps its tenant claim, so Security Rules still tell it apart from the project's user of the same uid",
+              "behaviour": "an unexpired ID token of a deleted tenant is honoured on Firestore in both profiles, as production honoured it about 3 s and 66 s after the deletion (AUTH-FS-CROSS sandbox, 2026-09-27): the tenant is not looked up, and the token keeps its tenant claim, so Security Rules still tell it apart from the project's user of the same uid; in a registered (non-default) project of a daemon session the token is checked against the session epoch its tenant had, until the project is reset",
               "precision": "exact-for-local-semantics"
             },
             {
@@ -997,7 +997,7 @@
               "precision": "exact-for-local-semantics"
             },
             {
-              "behaviour": "a strict-profile Listen stream of an end user ends with INTERNAL 3,600 s after it opened, without waiting for a commit, as production closed all twelve held native streams of the AUTH-FS-CROSS stage-2 packet-v7 recordings (2026-09-28) 3,600.17-3,600.19 s after opening (0.65-2.67 s past their tokens' exp, so not at exp); production resets the HTTP/2 stream (RST_STREAM INTERNAL_ERROR), which clients report as INTERNAL with their own text; unobserved and left as they were: a stream opened with an older token (no close is added at its exp), owner and anonymous streams; one earlier close (packet v6, recording 2, stream t2, before exp-60 s) is an unexplained single observation not reproduced in the twelve; the emulator profile keeps the stream, as the official emulator does",
+              "behaviour": "a strict-profile native gRPC Listen stream of an end user ends with INTERNAL 3,600 s after it opened, without waiting for a commit, as production closed all twelve held native streams of the AUTH-FS-CROSS stage-2 packet-v7 recordings (2026-09-28) 3,600.17-3,600.19 s after opening (0.65-2.67 s past their tokens' exp, so not at exp); production resets the HTTP/2 stream (RST_STREAM INTERNAL_ERROR), which clients report as INTERNAL with their own text; unobserved and left as they were: a WebChannel Listen held for an hour (it stays open), a stream opened with an older token (no close is added at its exp; the first commit past its allowance still ends it), owner and anonymous streams; one earlier close (packet v6, recording 2, stream t2, before exp-60 s) is an unexplained single observation not reproduced in the twelve; the emulator profile keeps the stream, as the official emulator does",
               "precision": "exact-for-local-semantics"
             }
           ],

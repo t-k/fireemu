@@ -158,7 +158,7 @@
           "docs/compatibility/auth-fs-tenant-read-local.md"
         ],
         "productionExecuted": false,
-        "limits": "Production honours a deleted tenant's unexpired token (stage 1, 2026-09-27), and fireemu does too since 9a030f985: with Firestore's token checks it is verified against its project and keeps its tenant claim."
+        "limits": "Production honours a deleted tenant's unexpired token (stage 1, 2026-09-27), and fireemu does too since bf99f6132: with Firestore's token checks it is verified against its project and keeps its tenant claim, and in a registered project against its tenant's last session epoch."
       },
       "verification": {
         "recordingsRequired": 2
@@ -174,11 +174,14 @@
         ],
         "fixturePath": "conformance/auth-fs-cross-production.json",
         "note": "Both recordings agree on every row; the final artifact matches all 89 rows of the stage-1 programs. Commit SHAs of the recordings are as the sandbox ledger wrote them; commits before 2026-09-28 09:40Z were rewritten that day (tree unchanged), and spec/compatibility/history-rewrite-2026-09-28.json on main maps the old SHAs to the new ones.",
-        "finalArtifactSha256": "023db733b2f17016383d2f5241ea7ef6bf59ff33465334f61fd188ac41bf58d4",
-        "sourceCommit": "782d847dfe1fe618b1dd98da1cd35e40f3fcc9b4",
+        "finalArtifactSha256": "890a38d8b8827ca3980522151b69c9bbad4230a674ccf73a7123470910094021",
+        "sourceCommit": "857db2612a2f0980335ed43932d43b270c0f3c59",
         "comparisonPath": "spec/compatibility/closure/evidence/AUTH-FS-CROSS-stage1-comparison.json",
         "rows": {
           "MATCH": 89
+        },
+        "conditionRows": {
+          "MATCH": 61
         }
       }
     },
@@ -220,11 +223,14 @@
         ],
         "fixturePath": "conformance/auth-fs-cross-production.json",
         "note": "Both recordings agree on every row; the final artifact matches all 89 rows of the stage-1 programs. Commit SHAs of the recordings are as the sandbox ledger wrote them; commits before 2026-09-28 09:40Z were rewritten that day (tree unchanged), and spec/compatibility/history-rewrite-2026-09-28.json on main maps the old SHAs to the new ones.",
-        "finalArtifactSha256": "023db733b2f17016383d2f5241ea7ef6bf59ff33465334f61fd188ac41bf58d4",
-        "sourceCommit": "782d847dfe1fe618b1dd98da1cd35e40f3fcc9b4",
+        "finalArtifactSha256": "890a38d8b8827ca3980522151b69c9bbad4230a674ccf73a7123470910094021",
+        "sourceCommit": "857db2612a2f0980335ed43932d43b270c0f3c59",
         "comparisonPath": "spec/compatibility/closure/evidence/AUTH-FS-CROSS-stage1-comparison.json",
         "rows": {
           "MATCH": 89
+        },
+        "conditionRows": {
+          "MATCH": 18
         }
       }
     },
@@ -266,11 +272,14 @@
         ],
         "fixturePath": "conformance/auth-fs-cross-production.json",
         "note": "Both recordings agree on every row; the final artifact matches all 89 rows of the stage-1 programs. Commit SHAs of the recordings are as the sandbox ledger wrote them; commits before 2026-09-28 09:40Z were rewritten that day (tree unchanged), and spec/compatibility/history-rewrite-2026-09-28.json on main maps the old SHAs to the new ones.",
-        "finalArtifactSha256": "023db733b2f17016383d2f5241ea7ef6bf59ff33465334f61fd188ac41bf58d4",
-        "sourceCommit": "782d847dfe1fe618b1dd98da1cd35e40f3fcc9b4",
+        "finalArtifactSha256": "890a38d8b8827ca3980522151b69c9bbad4230a674ccf73a7123470910094021",
+        "sourceCommit": "857db2612a2f0980335ed43932d43b270c0f3c59",
         "comparisonPath": "spec/compatibility/closure/evidence/AUTH-FS-CROSS-stage1-comparison.json",
         "rows": {
           "MATCH": 89
+        },
+        "conditionRows": {
+          "MATCH": 10
         }
       }
     },
@@ -311,8 +320,8 @@
           }
         ],
         "fixturePath": "conformance/auth-fs-cross-stage2-production.json",
-        "finalArtifactSha256": "023db733b2f17016383d2f5241ea7ef6bf59ff33465334f61fd188ac41bf58d4",
-        "sourceCommit": "782d847dfe1fe618b1dd98da1cd35e40f3fcc9b4",
+        "finalArtifactSha256": "890a38d8b8827ca3980522151b69c9bbad4230a674ccf73a7123470910094021",
+        "sourceCommit": "857db2612a2f0980335ed43932d43b270c0f3c59",
         "harness": {
           "commit": "4be4e58d47a377060f6edcf485e6cc0c9db01637",
           "digest": "ba7ba895011de42dc2826ba51008da0cb566e721534f2216beb47c986295b1ac",
@@ -322,7 +331,7 @@
         "rows": {
           "MATCH": 7
         },
-        "note": "Packet v7's two recordings agree on every row. The comparison ran the harness that recorded them (the fixture's commit) against the final artifact; the later harness commit 3a7777242 changes only how a run stops (resume streams closed on a stop or fatal), how approvals and revocations are read, the deleted tenant's allowed set and run-directory tests, not the window's requests or rows. Packet v6's two recordings (2026-09-28 04:21Z and 05:59Z) found the differences fixed since and are not evidence. Commit SHAs of the recordings are as the sandbox ledger wrote them; commits before 2026-09-28 09:40Z were rewritten that day (tree unchanged), and spec/compatibility/history-rewrite-2026-09-28.json on main maps the old SHAs to the new ones."
+        "note": "Packet v7's two recordings agree on every row. The comparison ran the harness that recorded them (the fixture's commit) against the final artifact, built at 857db2612 (whose last runtime change is 0eca89b23); the later harness commit 3a7777242 changes only how a run stops (resume streams closed on a stop or fatal), how approvals and revocations are read, the deleted tenant's allowed set and run-directory tests, not the window's requests or rows. Packet v6's two recordings (2026-09-28 04:21Z and 05:59Z) found the differences fixed since and are not evidence. Commit SHAs of the recordings are as the sandbox ledger wrote them; commits before 2026-09-28 09:40Z were rewritten that day (tree unchanged), and spec/compatibility/history-rewrite-2026-09-28.json on main maps the old SHAs to the new ones."
       }
     },
     {
@@ -368,8 +377,8 @@
           }
         ],
         "fixturePath": "conformance/auth-fs-cross-stage2-production.json",
-        "finalArtifactSha256": "023db733b2f17016383d2f5241ea7ef6bf59ff33465334f61fd188ac41bf58d4",
-        "sourceCommit": "782d847dfe1fe618b1dd98da1cd35e40f3fcc9b4",
+        "finalArtifactSha256": "890a38d8b8827ca3980522151b69c9bbad4230a674ccf73a7123470910094021",
+        "sourceCommit": "857db2612a2f0980335ed43932d43b270c0f3c59",
         "harness": {
           "commit": "4be4e58d47a377060f6edcf485e6cc0c9db01637",
           "digest": "ba7ba895011de42dc2826ba51008da0cb566e721534f2216beb47c986295b1ac",
@@ -379,7 +388,7 @@
         "rows": {
           "MATCH": 20
         },
-        "note": "Packet v7's two recordings agree on every row. The comparison ran the harness that recorded them (the fixture's commit) against the final artifact; the later harness commit 3a7777242 changes only how a run stops (resume streams closed on a stop or fatal), how approvals and revocations are read, the deleted tenant's allowed set and run-directory tests, not the window's requests or rows. Packet v6's two recordings (2026-09-28 04:21Z and 05:59Z) found the differences fixed since and are not evidence. Commit SHAs of the recordings are as the sandbox ledger wrote them; commits before 2026-09-28 09:40Z were rewritten that day (tree unchanged), and spec/compatibility/history-rewrite-2026-09-28.json on main maps the old SHAs to the new ones."
+        "note": "Packet v7's two recordings agree on every row. The comparison ran the harness that recorded them (the fixture's commit) against the final artifact, built at 857db2612 (whose last runtime change is 0eca89b23); the later harness commit 3a7777242 changes only how a run stops (resume streams closed on a stop or fatal), how approvals and revocations are read, the deleted tenant's allowed set and run-directory tests, not the window's requests or rows. Packet v6's two recordings (2026-09-28 04:21Z and 05:59Z) found the differences fixed since and are not evidence. Commit SHAs of the recordings are as the sandbox ledger wrote them; commits before 2026-09-28 09:40Z were rewritten that day (tree unchanged), and spec/compatibility/history-rewrite-2026-09-28.json on main maps the old SHAs to the new ones."
       }
     },
     {
@@ -405,7 +414,7 @@
       "localEvidence": {
         "references": [],
         "productionExecuted": true,
-        "limits": "Production closed every held native stream 3,600.17-3,600.19 s after it opened (packet v7, 2026-09-28, twelve streams, INTERNAL from an HTTP/2 RST_STREAM), and the strict profile closes an end user's stream an hour after it opened. Unobserved: a stream opened with an older token (whether production closes it at the token's exp or at its hour); the strict profile adds no close at exp. One earlier close (packet v6, recording 2, stream grpc-ten-t2, before its exp-60 s probe, time not recorded) is an unexplained single observation, not reproduced in the twelve v7 streams."
+        "limits": "Production closed every held native gRPC stream 3,600.17-3,600.19 s after it opened (packet v7, 2026-09-28, twelve streams, INTERNAL from an HTTP/2 RST_STREAM), and the strict profile closes an end user's native gRPC Listen stream an hour after it opened. Unobserved and left as they were: a WebChannel Listen held for an hour (no browser client was held that long; the strict profile keeps it open), a stream opened with an older token (whether production closes it at the token's exp or at its hour; the strict profile adds no close at exp, and the first commit past the token's allowance still ends it), and owner and anonymous streams. One earlier close (packet v6, recording 2, stream grpc-ten-t2, before its exp-60 s probe, time not recorded) is an unexplained single observation, not reproduced in the twelve v7 streams."
       },
       "verification": {
         "recordingsRequired": 2
@@ -421,8 +430,8 @@
           }
         ],
         "fixturePath": "conformance/auth-fs-cross-stage2-production.json",
-        "finalArtifactSha256": "023db733b2f17016383d2f5241ea7ef6bf59ff33465334f61fd188ac41bf58d4",
-        "sourceCommit": "782d847dfe1fe618b1dd98da1cd35e40f3fcc9b4",
+        "finalArtifactSha256": "890a38d8b8827ca3980522151b69c9bbad4230a674ccf73a7123470910094021",
+        "sourceCommit": "857db2612a2f0980335ed43932d43b270c0f3c59",
         "harness": {
           "commit": "4be4e58d47a377060f6edcf485e6cc0c9db01637",
           "digest": "ba7ba895011de42dc2826ba51008da0cb566e721534f2216beb47c986295b1ac",
@@ -433,7 +442,7 @@
           "MATCH": 9,
           "MATCH_NONDETERMINISTIC": 1
         },
-        "note": "Packet v7's two recordings agree on every row. The comparison ran the harness that recorded them (the fixture's commit) against the final artifact; the later harness commit 3a7777242 changes only how a run stops (resume streams closed on a stop or fatal), how approvals and revocations are read, the deleted tenant's allowed set and run-directory tests, not the window's requests or rows. Packet v6's two recordings (2026-09-28 04:21Z and 05:59Z) found the differences fixed since and are not evidence. Commit SHAs of the recordings are as the sandbox ledger wrote them; commits before 2026-09-28 09:40Z were rewritten that day (tree unchanged), and spec/compatibility/history-rewrite-2026-09-28.json on main maps the old SHAs to the new ones."
+        "note": "Packet v7's two recordings agree on every row. The comparison ran the harness that recorded them (the fixture's commit) against the final artifact, built at 857db2612 (whose last runtime change is 0eca89b23); the later harness commit 3a7777242 changes only how a run stops (resume streams closed on a stop or fatal), how approvals and revocations are read, the deleted tenant's allowed set and run-directory tests, not the window's requests or rows. Packet v6's two recordings (2026-09-28 04:21Z and 05:59Z) found the differences fixed since and are not evidence. Commit SHAs of the recordings are as the sandbox ledger wrote them; commits before 2026-09-28 09:40Z were rewritten that day (tree unchanged), and spec/compatibility/history-rewrite-2026-09-28.json on main maps the old SHAs to the new ones."
       }
     },
     {
@@ -477,8 +486,8 @@
           }
         ],
         "fixturePath": "conformance/auth-fs-cross-stage2-production.json",
-        "finalArtifactSha256": "023db733b2f17016383d2f5241ea7ef6bf59ff33465334f61fd188ac41bf58d4",
-        "sourceCommit": "782d847dfe1fe618b1dd98da1cd35e40f3fcc9b4",
+        "finalArtifactSha256": "890a38d8b8827ca3980522151b69c9bbad4230a674ccf73a7123470910094021",
+        "sourceCommit": "857db2612a2f0980335ed43932d43b270c0f3c59",
         "harness": {
           "commit": "4be4e58d47a377060f6edcf485e6cc0c9db01637",
           "digest": "ba7ba895011de42dc2826ba51008da0cb566e721534f2216beb47c986295b1ac",
@@ -489,7 +498,7 @@
           "MATCH": 6,
           "MATCH_NONDETERMINISTIC": 1
         },
-        "note": "Packet v7's two recordings agree on every row. The comparison ran the harness that recorded them (the fixture's commit) against the final artifact; the later harness commit 3a7777242 changes only how a run stops (resume streams closed on a stop or fatal), how approvals and revocations are read, the deleted tenant's allowed set and run-directory tests, not the window's requests or rows. Packet v6's two recordings (2026-09-28 04:21Z and 05:59Z) found the differences fixed since and are not evidence. Commit SHAs of the recordings are as the sandbox ledger wrote them; commits before 2026-09-28 09:40Z were rewritten that day (tree unchanged), and spec/compatibility/history-rewrite-2026-09-28.json on main maps the old SHAs to the new ones."
+        "note": "Packet v7's two recordings agree on every row. The comparison ran the harness that recorded them (the fixture's commit) against the final artifact, built at 857db2612 (whose last runtime change is 0eca89b23); the later harness commit 3a7777242 changes only how a run stops (resume streams closed on a stop or fatal), how approvals and revocations are read, the deleted tenant's allowed set and run-directory tests, not the window's requests or rows. Packet v6's two recordings (2026-09-28 04:21Z and 05:59Z) found the differences fixed since and are not evidence. Commit SHAs of the recordings are as the sandbox ledger wrote them; commits before 2026-09-28 09:40Z were rewritten that day (tree unchanged), and spec/compatibility/history-rewrite-2026-09-28.json on main maps the old SHAs to the new ones."
       }
     },
     {
@@ -517,7 +526,7 @@
           "docs/compatibility/auth-fs-tenant-read-local.md"
         ],
         "productionExecuted": true,
-        "limits": "Since 9a030f985 a listener on the daemon's Firestore enforcer keeps a deleted tenant's unexpired token, as unary requests do in production (stage 1); the older local test that ends the target remains for Identity Toolkit's token checks only. Production's listener is unobserved."
+        "limits": "Since bf99f6132 a listener on the daemon's Firestore enforcer keeps a deleted tenant's unexpired token, as unary requests do in production (stage 1); the older local test that ends the target remains for Identity Toolkit's token checks only. Production's listener was observed in packet v7's two recordings: after the tenant's deletion the native stream of the deleted tenant's principal kept delivering (n:2, n:3 and n:4) until it closed with the other held streams at its hour, and the SDK client's listeners received nothing at exp + 35 s while the client kept retrying. In a registered (non-default) project of a daemon session the deleted tenant's token is checked against the session epoch its tenant had, until the project is reset."
       },
       "verification": {
         "recordingsRequired": 2
@@ -533,8 +542,8 @@
           }
         ],
         "fixturePath": "conformance/auth-fs-cross-stage2-production.json",
-        "finalArtifactSha256": "023db733b2f17016383d2f5241ea7ef6bf59ff33465334f61fd188ac41bf58d4",
-        "sourceCommit": "782d847dfe1fe618b1dd98da1cd35e40f3fcc9b4",
+        "finalArtifactSha256": "890a38d8b8827ca3980522151b69c9bbad4230a674ccf73a7123470910094021",
+        "sourceCommit": "857db2612a2f0980335ed43932d43b270c0f3c59",
         "harness": {
           "commit": "4be4e58d47a377060f6edcf485e6cc0c9db01637",
           "digest": "ba7ba895011de42dc2826ba51008da0cb566e721534f2216beb47c986295b1ac",
@@ -545,7 +554,7 @@
           "MATCH": 6,
           "MATCH_NONDETERMINISTIC": 1
         },
-        "note": "Packet v7's two recordings agree on every row. The comparison ran the harness that recorded them (the fixture's commit) against the final artifact; the later harness commit 3a7777242 changes only how a run stops (resume streams closed on a stop or fatal), how approvals and revocations are read, the deleted tenant's allowed set and run-directory tests, not the window's requests or rows. Packet v6's two recordings (2026-09-28 04:21Z and 05:59Z) found the differences fixed since and are not evidence. Commit SHAs of the recordings are as the sandbox ledger wrote them; commits before 2026-09-28 09:40Z were rewritten that day (tree unchanged), and spec/compatibility/history-rewrite-2026-09-28.json on main maps the old SHAs to the new ones."
+        "note": "Packet v7's two recordings agree on every row. The comparison ran the harness that recorded them (the fixture's commit) against the final artifact, built at 857db2612 (whose last runtime change is 0eca89b23); the later harness commit 3a7777242 changes only how a run stops (resume streams closed on a stop or fatal), how approvals and revocations are read, the deleted tenant's allowed set and run-directory tests, not the window's requests or rows. Packet v6's two recordings (2026-09-28 04:21Z and 05:59Z) found the differences fixed since and are not evidence. Commit SHAs of the recordings are as the sandbox ledger wrote them; commits before 2026-09-28 09:40Z were rewritten that day (tree unchanged), and spec/compatibility/history-rewrite-2026-09-28.json on main maps the old SHAs to the new ones."
       }
     },
     {
@@ -586,8 +595,8 @@
           }
         ],
         "fixturePath": "conformance/auth-fs-cross-stage2-production.json",
-        "finalArtifactSha256": "023db733b2f17016383d2f5241ea7ef6bf59ff33465334f61fd188ac41bf58d4",
-        "sourceCommit": "782d847dfe1fe618b1dd98da1cd35e40f3fcc9b4",
+        "finalArtifactSha256": "890a38d8b8827ca3980522151b69c9bbad4230a674ccf73a7123470910094021",
+        "sourceCommit": "857db2612a2f0980335ed43932d43b270c0f3c59",
         "harness": {
           "commit": "4be4e58d47a377060f6edcf485e6cc0c9db01637",
           "digest": "ba7ba895011de42dc2826ba51008da0cb566e721534f2216beb47c986295b1ac",
@@ -597,7 +606,7 @@
         "rows": {
           "MATCH": 21
         },
-        "note": "Packet v7's two recordings agree on every row. The comparison ran the harness that recorded them (the fixture's commit) against the final artifact; the later harness commit 3a7777242 changes only how a run stops (resume streams closed on a stop or fatal), how approvals and revocations are read, the deleted tenant's allowed set and run-directory tests, not the window's requests or rows. Packet v6's two recordings (2026-09-28 04:21Z and 05:59Z) found the differences fixed since and are not evidence. Commit SHAs of the recordings are as the sandbox ledger wrote them; commits before 2026-09-28 09:40Z were rewritten that day (tree unchanged), and spec/compatibility/history-rewrite-2026-09-28.json on main maps the old SHAs to the new ones."
+        "note": "Packet v7's two recordings agree on every row. The comparison ran the harness that recorded them (the fixture's commit) against the final artifact, built at 857db2612 (whose last runtime change is 0eca89b23); the later harness commit 3a7777242 changes only how a run stops (resume streams closed on a stop or fatal), how approvals and revocations are read, the deleted tenant's allowed set and run-directory tests, not the window's requests or rows. Packet v6's two recordings (2026-09-28 04:21Z and 05:59Z) found the differences fixed since and are not evidence. Commit SHAs of the recordings are as the sandbox ledger wrote them; commits before 2026-09-28 09:40Z were rewritten that day (tree unchanged), and spec/compatibility/history-rewrite-2026-09-28.json on main maps the old SHAs to the new ones."
       }
     },
     {
@@ -625,8 +634,8 @@
         "recordingsRequired": 0
       },
       "evidence": {
-        "finalArtifactSha256": "023db733b2f17016383d2f5241ea7ef6bf59ff33465334f61fd188ac41bf58d4",
-        "sourceCommit": "782d847dfe1fe618b1dd98da1cd35e40f3fcc9b4",
+        "finalArtifactSha256": "890a38d8b8827ca3980522151b69c9bbad4230a674ccf73a7123470910094021",
+        "sourceCommit": "857db2612a2f0980335ed43932d43b270c0f3c59",
         "comparisons": {
           "stage1": {
             "comparisonPath": "spec/compatibility/closure/evidence/AUTH-FS-CROSS-stage1-comparison.json",
@@ -648,7 +657,7 @@
         },
         "regressions": {
           "fs-rules": {
-            "artifactSha256": "023db733b2f17016383d2f5241ea7ef6bf59ff33465334f61fd188ac41bf58d4",
+            "artifactSha256": "890a38d8b8827ca3980522151b69c9bbad4230a674ccf73a7123470910094021",
             "summary": {
               "MATCH": 1144,
               "DEPENDENCY_REFUSED": 5
@@ -658,7 +667,8 @@
         },
         "emulatorProfile": {
           "kind": "differential",
-          "note": "The release corpus under the emulator profile (the gate commit 97a2f94cd applied without committing) gave the same 12 findings with and without the fixes of this lane (at 782d847df and at a9e6b719b, the commit before them); none is in a Listen scenario, and firestore/listen-sequence-with-resume and firestore/listener-replacement-handoff pass. The 12 come from this branch predating main's Auth fixes."
+          "note": "The release corpus under the emulator profile (the gate commit 97a2f94cd applied without committing) gave the same 12 findings with and without the fixes of this lane (at 782d847df, the lane's fixes before the closure review's, and at a9e6b719b, the commit before them; the later b3f91ee85 and 0eca89b23 change only a deleted tenant's token in a registered project and a WebChannel Listen held past an hour, which were not re-run through the corpus; the round-2 run on main covers them); none is in a Listen scenario, and firestore/listen-sequence-with-resume and firestore/listener-replacement-handoff pass. The 12 come from this branch predating main's Auth fixes.",
+          "outputs": "docs.local/runs/auth-fs-cross-emulator-corpus/ (both runs and their identical 12-finding lists; private)"
         },
         "pendingIntegration": "0 findings of the emulator-profile release corpus on main after the round-2 merge of this lane."
       }

@@ -6,8 +6,8 @@
     "programDigest": "9b9a699a96f25a21cee7954f184c64ceaee55441ec05dea1106140bcf9b0fb4a"
   },
   "fireemu": {
-    "commit": "782d847dfe1fe618b1dd98da1cd35e40f3fcc9b4",
-    "artifactSha256": "023db733b2f17016383d2f5241ea7ef6bf59ff33465334f61fd188ac41bf58d4"
+    "commit": "857db2612a2f0980335ed43932d43b270c0f3c59",
+    "artifactSha256": "890a38d8b8827ca3980522151b69c9bbad4230a674ccf73a7123470910094021"
   },
   "fixtureSha256": "c55f8b94e7e7235e0418c3c895823c157616b0c9408d7788b8b4fc11a3c06ca8",
   "summary": {

@@ -99,6 +99,26 @@ test("all eight absent-state subjects remain unproven even when responses are su
   assert.equal(checked, 8);
 });
 
+test("Firebase metadata can omit the GCS kind while GCS metadata must retain it", () => {
+  const input = fixture(
+    findSubject("generation-preconditions", (s) => s.preconditionCase?.sample === "current"),
+  );
+  for (const id of input.step.requires.metadata) {
+    const original = input.responses.get(id);
+    const body = JSON.parse(Buffer.from(original.bodyBase64, "base64"));
+    delete body.kind;
+    input.responses.set(id, { status: 200, bodyBase64: encode(body) });
+    if (input.source(id).dialect === "firebase") {
+      assert.equal(evaluate(input).status, "MATCHED_SUPPLIED_RECORDS");
+      input.responses.set(id, { status: 200, bodyBase64: encode({ ...body, kind: null }) });
+      assert.throws(() => evaluate(input), errorCode("INVALID_EVIDENCE"));
+    } else {
+      assert.throws(() => evaluate(input), errorCode("INVALID_EVIDENCE"));
+    }
+    input.responses.set(id, original);
+  }
+});
+
 test("missing and unsuccessful metadata or media reads cannot establish presence", () => {
   const input = fixture(
     findSubject("generation-preconditions", (s) => s.preconditionCase?.sample === "current"),

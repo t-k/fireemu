@@ -37,7 +37,7 @@ function rawBytes(response) {
   return bytes;
 }
 
-function metadataBody(response, name, bucket) {
+function metadataBody(response, name, bucket, dialect = "gcs") {
   let body;
   try {
     body = JSON.parse(decoder.decode(rawBytes(response)));
@@ -46,13 +46,17 @@ function metadataBody(response, name, bucket) {
   }
   if (
     !plainObject(body) ||
-    typeof body.kind !== "string" ||
+    ((dialect === "gcs" || Object.hasOwn(body, "kind")) && typeof body.kind !== "string") ||
     typeof body.name !== "string" ||
     typeof body.bucket !== "string"
   ) {
     reject("INVALID_EVIDENCE");
   }
-  if (body.kind !== "storage#object" || body.name !== name || body.bucket !== bucket) {
+  if (
+    (body.kind !== undefined && body.kind !== "storage#object") ||
+    body.name !== name ||
+    body.bucket !== bucket
+  ) {
     reject("EVIDENCE_IDENTITY_MISMATCH");
   }
   return body;
@@ -150,7 +154,7 @@ export function evaluatePresentRequires({ recipe, stepIndex, responses, bucket }
     const row = source(id, "metadata");
     if (metadataDialects.has(row.dialect)) reject("INVALID_DECLARATION");
     metadataDialects.add(row.dialect);
-    const body = metadataBody(responses.get(id), step.objectName, bucket);
+    const body = metadataBody(responses.get(id), step.objectName, bucket, row.dialect);
     if (required.metadataSubset && !subsetMatches(body, required.metadataSubset))
       reject("STATE_MISMATCH");
   }

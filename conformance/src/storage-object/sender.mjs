@@ -289,6 +289,18 @@ export function createLocalStorageSender({
       if (mutates) lastMutation.set(step.objectName, ordinal);
       return response;
     },
+    assertOwnedReadbacks({ name, metadataOperationId, mediaOperationId } = {}) {
+      const current = ownedReadbacks(name, metadataOperationId, mediaOperationId);
+      const prior = confirmed.get(name);
+      if (
+        !prior ||
+        prior.generation !== current.generation ||
+        prior.bytesSha256 !== current.bytesSha256 ||
+        prior.mutationOrdinal !== lastMutation.get(name)
+      )
+        throw new Error("prerequisite readbacks differ from confirmed ownership");
+      return current.generation;
+    },
     confirmOwned({
       name,
       uploadOperationId,

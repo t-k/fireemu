@@ -870,7 +870,8 @@
             "c802ff26d",
             "477088a14",
             "e53ba276c",
-            "9eb4f2300"
+            "9eb4f2300",
+            "55c61b18b"
           ],
           "tests": [
             {
@@ -920,6 +921,14 @@
             {
               "path": "crates/fireemu-adapter-http/tests/identity_toolkit.rs",
               "name": "a_request_whose_uid_another_account_took_is_a_duplicate"
+            },
+            {
+              "path": "crates/fireemu-adapter-http/tests/identity_toolkit.rs",
+              "name": "the_emulator_profile_creates_a_cleared_idp_account_with_the_uid_its_function_saw"
+            },
+            {
+              "path": "crates/fireemu-core-auth/src/store.rs",
+              "name": "a_reset_keeps_an_in_flight_reservation_until_it_is_released"
             }
           ]
         }

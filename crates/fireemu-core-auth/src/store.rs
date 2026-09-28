@@ -2995,10 +2995,10 @@ impl AuthStore {
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
             let entries = reservations.entry(candidate.clone()).or_default();
-            if entries
-                .iter()
-                .any(|(reserved_generation, _)| *reserved_generation == generation)
-            {
+            // A reservation from before a reset still holds the id until its request returns:
+            // the emulator profile commits that request into the reset state (closure re-review
+            // S1'', 2026-09-28), as the official emulator's account wipe keeps pendingLocalIds.
+            if !entries.is_empty() {
                 continue;
             }
             if entries.insert((generation, ticket)) {
@@ -3160,12 +3160,9 @@ impl AuthStore {
                     .lock()
                     .unwrap_or_else(std::sync::PoisonError::into_inner)
                     .get(&candidate)
-                    .is_some_and(|entries| {
-                        entries
-                            .iter()
-                            .any(|(generation, _)| *generation == self.reset_generation())
-                    });
-                // An in-flight blocking request keeps the id it reserved: this account skips it.
+                    .is_some_and(|entries| !entries.is_empty());
+                // An in-flight blocking request keeps the id it reserved, across a reset too:
+                // this account skips it.
                 if !self.users.contains_key(&candidate) && !reserved {
                     break candidate;
                 }
@@ -12115,19 +12112,41 @@ mod generated_id_tests {
         assert_ne!(nested_admin.as_str(), reserved);
     }
 
+    fn held(live: &AuthStore, id: &str) -> bool {
+        live.generated_local_id_reservations
+            .lock()
+            .unwrap()
+            .contains_key(&LocalId(id.to_owned()))
+    }
+
+    /// A reset keeps the id of a request still in flight: the emulator profile commits that
+    /// request into the reset state, as the official emulator's account wipe keeps its
+    /// pendingLocalIds (closure re-review S1'', 2026-09-28). Released, the id is free again.
     #[test]
-    fn clearing_a_store_releases_reservations() {
+    fn a_reset_keeps_an_in_flight_reservation_until_it_is_released() {
         let mut live = AuthStore::new("demo-app", SplitMix64::new(7), TotpPolicy::default());
         let mut candidate = live.clone();
-        let reserved = candidate.reserve_next_generated_local_id();
+        let (reserved, generation) = candidate.reserve_next_generated_local_id_with_generation();
         live.clear();
 
-        let fresh_reserved = live.clone().reserve_next_generated_local_id();
-        assert_eq!(fresh_reserved, reserved);
+        let (fresh, fresh_generation) = live
+            .clone()
+            .reserve_next_generated_local_id_with_generation();
+        assert_ne!(fresh, reserved);
+        let created = live
+            .create_user(NewUser::email("after-reset@example.test"), NOW)
+            .expect("an account created after the reset succeeds");
+        assert_ne!(created.as_str(), reserved);
+        assert_ne!(created.as_str(), fresh);
+
+        live.release_reserved_generated_local_id_at_generation(&reserved, generation);
+        live.release_reserved_generated_local_id_at_generation(&fresh, fresh_generation);
+        assert!(!held(&live, &reserved), "a released id is free again");
+        assert!(!held(&live, &fresh));
     }
 
     #[test]
-    fn restoring_a_snapshot_releases_stale_reservations() {
+    fn a_restore_keeps_an_in_flight_reservation_until_it_is_released() {
         let mut live = AuthStore::new("demo-app", SplitMix64::new(7), TotpPolicy::default());
         let mut candidate = live.clone();
         let reserved = candidate.reserve_next_generated_local_id();
@@ -12135,24 +12154,24 @@ mod generated_id_tests {
         let report = snapshot.restore_into(&mut live);
         assert_eq!(report, super::RestoreReport::default());
         let fresh_reserved = live.clone().reserve_next_generated_local_id();
-        assert_eq!(fresh_reserved, reserved);
+        assert_ne!(fresh_reserved, reserved);
         live.release_reserved_generated_local_id(&reserved);
-        let next_reserved = live.clone().reserve_next_generated_local_id();
-        assert_ne!(next_reserved, fresh_reserved);
+        assert!(!held(&live, &reserved));
+        assert!(held(&live, &fresh_reserved));
     }
 
     #[test]
-    fn releasing_a_pre_reset_reservation_keeps_the_new_same_id_reservation() {
+    fn releasing_a_pre_reset_reservation_keeps_the_newer_reservation() {
         let mut live = AuthStore::new("demo-app", SplitMix64::new(7), TotpPolicy::default());
         let old_reservation = live.clone().reserve_next_generated_local_id();
 
         live.clear();
         let new_reservation = live.clone().reserve_next_generated_local_id();
-        assert_eq!(new_reservation, old_reservation);
+        assert_ne!(new_reservation, old_reservation);
 
         live.release_reserved_generated_local_id(&old_reservation);
-        let next_reservation = live.clone().reserve_next_generated_local_id();
-        assert_ne!(next_reservation, new_reservation);
+        assert!(!held(&live, &old_reservation));
+        assert!(held(&live, &new_reservation));
     }
 
     #[test]
@@ -12166,18 +12185,19 @@ mod generated_id_tests {
         let (new_id, new_generation) = live
             .clone()
             .reserve_next_generated_local_id_with_generation();
-        assert_eq!(new_id, old_id);
+        assert_ne!(new_id, old_id);
         assert_ne!(new_generation, old_generation);
 
-        // This models the old guard being dropped after the newer reservation was created.
+        // This models the old guard being dropped after the newer reservation was created. A
+        // release naming the wrong generation removes nothing.
+        live.release_reserved_generated_local_id_at_generation(&new_id, old_generation);
+        assert!(held(&live, &new_id));
         live.release_reserved_generated_local_id_at_generation(&old_id, old_generation);
-        let (next_id, next_generation) = live
-            .clone()
-            .reserve_next_generated_local_id_with_generation();
-        assert_ne!(next_id, new_id);
+        assert!(!held(&live, &old_id));
+        assert!(held(&live, &new_id));
 
         live.release_reserved_generated_local_id_at_generation(&new_id, new_generation);
-        live.release_reserved_generated_local_id_at_generation(&next_id, next_generation);
+        assert!(!held(&live, &new_id));
     }
 
     #[test]
@@ -12191,10 +12211,10 @@ mod generated_id_tests {
         let (new_id, new_generation) = live
             .clone()
             .reserve_next_generated_local_id_with_generation();
-        assert_eq!(new_id, old_id);
+        assert_ne!(new_id, old_id);
 
-        // The newer guard may be dropped before the older one. Its exact ticket must not be
-        // confused with the older reservation, which remains in the shared ledger.
+        // The newer guard may be dropped before the older one; the older reservation remains
+        // in the shared ledger.
         live.release_reserved_generated_local_id_at_generation(&new_id, new_generation);
         assert!(live
             .generated_local_id_reservations
@@ -12209,11 +12229,7 @@ mod generated_id_tests {
             }));
 
         live.release_reserved_generated_local_id_at_generation(&old_id, old_generation);
-        assert!(!live
-            .generated_local_id_reservations
-            .lock()
-            .unwrap()
-            .contains_key(&LocalId(old_id)));
+        assert!(!held(&live, &old_id));
     }
 
     #[test]

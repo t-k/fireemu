@@ -3894,11 +3894,21 @@ struct ClearingThenTakingHook {
     clear: bool,
     /// Then create an account with the event's uid through the Admin API.
     take: bool,
+    /// Then create an unrelated account with a generated uid through the Admin API.
+    bystander: bool,
+    /// The uid of each beforeCreate event.
+    seen: Mutex<Vec<String>>,
 }
 
 impl ClearingThenTakingHook {
     fn new(state: std::sync::Weak<AuthState>, clear: bool, take: bool) -> Self {
-        Self { state, clear, take }
+        Self {
+            state,
+            clear,
+            take,
+            bystander: false,
+            seen: Mutex::new(Vec::new()),
+        }
     }
 }
 
@@ -3909,6 +3919,10 @@ impl AuthBlockingHook for ClearingThenTakingHook {
         user: &fireemu_core_auth::store::UserRecord,
     ) -> Result<Value, BlockingFunctionFailure> {
         if event == BlockingAuthEvent::BeforeCreate {
+            self.seen
+                .lock()
+                .unwrap()
+                .push(user.local_id.as_str().to_owned());
             let state = self
                 .state
                 .upgrade()
@@ -3933,6 +3947,18 @@ impl AuthBlockingHook for ClearingThenTakingHook {
                     &json!({"localId": user.local_id.as_str(), "email": "taker@example.com"}),
                 );
                 if taken.status != 200 {
+                    return Err(BlockingFunctionFailure::unhandled());
+                }
+            }
+            if self.bystander {
+                let created = handle_with(
+                    &state,
+                    "POST",
+                    &format!("{ADMIN}/accounts"),
+                    &owner(),
+                    &json!({"email": "bystander@example.com"}),
+                );
+                if created.status != 200 {
                     return Err(BlockingFunctionFailure::unhandled());
                 }
             }
@@ -4461,6 +4487,56 @@ fn a_request_whose_uid_another_account_took_is_a_duplicate() {
         assert!(store.user_by_email("taker@example.com").is_some());
         assert!(store.user_by_email("wiped@example.com").is_none());
     }
+}
+
+/// Accounts cleared while beforeCreate runs for an identity-provider sign-in, and another account
+/// created after the clear: the emulator profile creates the account with the uid the function
+/// saw, not the next generated one (closure re-review S1'', 2026-09-28).
+#[test]
+fn the_emulator_profile_creates_a_cleared_idp_account_with_the_uid_its_function_saw() {
+    let hook = std::sync::OnceLock::new();
+    let state = Arc::new_cyclic(|weak| {
+        let mut state = state();
+        let clearing = Arc::new(ClearingThenTakingHook {
+            bystander: true,
+            ..ClearingThenTakingHook::new(weak.clone(), true, false)
+        });
+        hook.set(Arc::clone(&clearing)).ok().unwrap();
+        state.blocking = Some(clearing);
+        state
+    });
+    let assertion = json!({"sub": "g-cleared", "email": "cleared-idp@example.com"}).to_string();
+    let encoded: String = assertion
+        .bytes()
+        .map(|b| {
+            if b.is_ascii_alphanumeric() {
+                (b as char).to_string()
+            } else {
+                format!("%{b:02X}")
+            }
+        })
+        .collect();
+    let (status, signed) = post(
+        &state,
+        &format!("{V1}/accounts:signInWithIdp"),
+        &json!({
+            "postBody": format!("id_token={encoded}&providerId=google.com"),
+            "requestUri": "http://localhost",
+            "returnSecureToken": true,
+        }),
+    );
+    assert_eq!(status, 200, "{signed}");
+    let seen = hook.get().unwrap().seen.lock().unwrap().clone();
+    assert_eq!(seen.len(), 1);
+    assert_eq!(signed["localId"], seen[0]);
+    let store = state.store.lock().unwrap();
+    assert_eq!(store.user_count(), 2);
+    assert!(store
+        .user_by_email("bystander@example.com")
+        .is_some_and(|user| user.local_id.as_str() != seen[0]));
+    assert!(store
+        .user_by_email("cleared-idp@example.com")
+        .is_some_and(|user| user.local_id.as_str() == seen[0]));
 }
 
 /// A function switched on after admission: a retryable 409 in the strict profile; the

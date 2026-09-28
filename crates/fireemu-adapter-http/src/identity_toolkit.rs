@@ -8049,7 +8049,7 @@ fn user_json(store: &AuthStore, uid: &LocalId) -> Value {
     // `providerUserInfo`, `emailVerified` only with an address. `disabled` and `validSince`
     // are present for an account the Admin API created (the sandbox recording of 2026-09-23),
     // and otherwise `disabled` only when true and `validSince` once tokens were ever revoked
-    // or a password set. The password hash is the
+    // or a password set, and for an account an OIDC sign-in created (record-oidc 39209e). The password hash is the
     // redacted marker production sends a caller without hash-config permission
     // (conformance/auth-production-matrix.json, password/sign-up-and-sign-in#lookup).
     let has_password = store.has_password(uid);
@@ -8057,7 +8057,8 @@ fn user_json(store: &AuthStore, uid: &LocalId) -> Value {
         || u.tokens_revoked
         || u.admin_created
         || u.custom_auth
-        || u.email_link_created)
+        || u.email_link_created
+        || matches!(&u.provider, fireemu_core_auth::store::Provider::Federated(id) if id.starts_with("oidc.")))
         .then_some(u.tokens_valid_after);
     json!({
         "localId": u.local_id.as_str(),
@@ -12189,22 +12190,16 @@ fn sign_in_with_idp(
 
     // Linking to the session's user (`idToken` present) or a create-or-link sign-in.
     let (uid, is_new) = if body.get("idToken").is_some_and(|t| !t.is_null()) {
-        let uid = match verify(store, body, at) {
-            Ok(uid) => uid,
+        match link_idp_identity(store, body, at, &base, &info, identity, strict_oidc) {
+            Ok(uid) => (uid, false),
             Err(r) => return r,
-        };
-        // The identity may not already be linked to a different account.
-        if store
-            .user_by_federated(&provider_id, &info.raw_id)
-            .is_some_and(|u| u.local_id != uid)
-        {
-            return maybe_idp_credential_error(body, &base, "FEDERATED_USER_ID_ALREADY_LINKED");
         }
-        if let Err(e) = store.link_federated(&uid, identity) {
-            return auth_error(&e);
-        }
-        (uid, false)
     } else {
+        let identity = if strict_oidc {
+            stored_identity_or(store, identity)
+        } else {
+            identity
+        };
         match store.sign_in_with_idp(identity, info.email_verified, at) {
             Ok(fireemu_core_auth::store::IdpSignIn::SignedIn {
                 uid,
@@ -12270,6 +12265,85 @@ fn sign_in_with_idp(
         info.sign_in_attributes.as_ref(),
         inbound_credentials.as_ref(),
     )
+}
+
+/// Links `identity` to the account of the request's `idToken`.
+///
+/// # Errors
+/// The session's refusal, `FEDERATED_USER_ID_ALREADY_LINKED` for an identity another account
+/// links, strict OIDC's link refusals, and the store's.
+fn link_idp_identity(
+    store: &mut AuthStore,
+    body: &Value,
+    at: LogicalInstant,
+    base: &IdpBase,
+    info: &IdpUserInfo,
+    identity: FederatedIdentity,
+    strict_oidc: bool,
+) -> Result<LocalId, JsonResponse> {
+    let uid = verify(store, body, at)?;
+    // The identity may not already be linked to a different account.
+    if store
+        .user_by_federated(&identity.provider_id, &info.raw_id)
+        .is_some_and(|u| u.local_id != uid)
+    {
+        return Err(maybe_idp_credential_error(
+            body,
+            base,
+            "FEDERATED_USER_ID_ALREADY_LINKED",
+        ));
+    }
+    if strict_oidc {
+        if let Some(refusal) = strict_oidc_link_refusal(store, &uid, &identity.provider_id, info) {
+            return Err(maybe_idp_credential_error(body, base, refusal));
+        }
+    }
+    store
+        .link_federated(&uid, identity)
+        .map_err(|e| auth_error(&e))?;
+    Ok(uid)
+}
+
+/// The identity an account already links for `identity`'s provider and subject, or `identity`
+/// itself: production leaves a returning account's profile and provider information as they
+/// were (record-oidc 39209e), so the stored identity signs in unchanged.
+fn stored_identity_or(store: &AuthStore, identity: FederatedIdentity) -> FederatedIdentity {
+    store
+        .user_by_federated(&identity.provider_id, &identity.raw_id)
+        .and_then(|user| {
+            user.federated
+                .iter()
+                .find(|f| f.provider_id == identity.provider_id && f.raw_id == identity.raw_id)
+                .cloned()
+        })
+        .unwrap_or(identity)
+}
+
+/// Production's refusals of a verified OIDC link (record-oidc 39209e): an identity whose email
+/// another account holds (`EMAIL_EXISTS`, checked first), and another identity of a provider
+/// the account already has (`PROVIDER_ALREADY_LINKED`; the account keeps its identity).
+fn strict_oidc_link_refusal(
+    store: &AuthStore,
+    uid: &LocalId,
+    provider_id: &str,
+    info: &IdpUserInfo,
+) -> Option<&'static str> {
+    if info
+        .email
+        .as_deref()
+        .and_then(|email| store.user_by_email(&canonicalize_email(email)))
+        .is_some_and(|owner| owner.local_id != *uid)
+    {
+        return Some("EMAIL_EXISTS");
+    }
+    store
+        .user(uid)
+        .is_some_and(|user| {
+            user.federated
+                .iter()
+                .any(|f| f.provider_id == provider_id && f.raw_id != info.raw_id)
+        })
+        .then_some("PROVIDER_ALREADY_LINKED")
 }
 
 /// The stored account decides the final `emailVerified` when its email is the assertion's.

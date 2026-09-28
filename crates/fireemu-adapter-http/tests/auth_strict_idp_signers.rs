@@ -424,6 +424,21 @@ fn the_fixture_policy_of_the_emulator_profile_accepts_the_fixture_idp() {
     }
     let response = sign_in(&s, &fixture_requests("oidc.unconfigured")[1]);
     assert_eq!(response.status, 200, "{}", response.body);
+    // The emulator profile links another identity of a provider the account has (the official
+    // emulator's behaviour; strict refuses it as production does).
+    let other = json!({
+        "requestUri": "http://localhost",
+        "postBody": format!(
+            "providerId=oidc.unconfigured&id_token={}",
+            json!({"sub": "another-subject"})
+        ),
+        "idToken": response.body["idToken"],
+        "returnSecureToken": true,
+    });
+    let linked = sign_in(&s, &other);
+    assert_eq!(linked.status, 200, "{}", linked.body);
+    assert!(linked.body.get("errorMessage").is_none(), "{}", linked.body);
+    assert!(linked.body.get("idToken").is_some(), "{}", linked.body);
 }
 
 #[test]
@@ -769,4 +784,105 @@ fn strict_keeps_the_sign_in_attributes_across_refresh_and_session_cookies() {
         payload(&cookie.body["sessionCookie"])["firebase"]["sign_in_attributes"],
         expected
     );
+}
+
+fn link_request(token: &str, id_token: &Value, return_credential: bool) -> Value {
+    let mut body = request(token);
+    body["idToken"] = id_token.clone();
+    body["returnIdpCredential"] = json!(return_credential);
+    body
+}
+
+#[test]
+fn strict_refuses_links_as_production_does() {
+    // record-oidc 39209e: an account that has the provider keeps its identity, and an identity
+    // whose email another account holds is refused first.
+    let s = strict_state();
+    let mut first_claims = claims();
+    first_claims["sub"] = json!("sub-first");
+    let first = sign_in(&s, &request(&token(&first_claims)));
+    assert_eq!(first.status, 200, "{}", first.body);
+    let signup = handle(
+        &s,
+        "POST",
+        &format!("{V1}/accounts:signUp"),
+        &json!({"email": "taken@example.com", "password": "hunter22", "returnSecureToken": true}),
+    );
+    assert_eq!(signup.status, 200, "{}", signup.body);
+    let mut second = claims();
+    second["sub"] = json!("sub-second");
+    let mut taken = claims();
+    taken["sub"] = json!("sub-taken");
+    taken["email"] = json!("taken@example.com");
+    taken["email_verified"] = json!(true);
+    for (case, claims, message) in [
+        ("second identity", &second, "PROVIDER_ALREADY_LINKED"),
+        ("taken email", &taken, "EMAIL_EXISTS"),
+    ] {
+        let answer = sign_in(
+            &s,
+            &link_request(&token(claims), &first.body["idToken"], true),
+        );
+        assert_eq!(answer.status, 200, "{case}: {}", answer.body);
+        assert_eq!(answer.body["errorMessage"], message, "{case}");
+        for absent in ["idToken", "refreshToken", "localId"] {
+            assert!(
+                answer.body.get(absent).is_none(),
+                "{case} {absent}: {}",
+                answer.body
+            );
+        }
+        let refused = sign_in(
+            &s,
+            &link_request(&token(claims), &first.body["idToken"], false),
+        );
+        assert_eq!(refused.status, 400, "{case}: {}", refused.body);
+        assert_eq!(refused.body["error"]["message"], message, "{case}");
+    }
+    // The account keeps its first identity only.
+    let store = s.store.lock().unwrap();
+    let user = store.user_by_federated(PROVIDER, "sub-first").unwrap();
+    assert_eq!(user.federated.len(), 1);
+    assert!(store.user_by_federated(PROVIDER, "sub-second").is_none());
+    assert!(store.user_by_federated(PROVIDER, "sub-taken").is_none());
+}
+
+#[test]
+fn an_account_an_oidc_sign_in_created_reports_its_valid_since() {
+    // record-oidc 39209e: production's lookup of such an account carries `validSince`.
+    let s = strict_state();
+    let signed = sign_in(&s, &request(&token(&claims())));
+    assert_eq!(signed.status, 200, "{}", signed.body);
+    let lookup = handle(
+        &s,
+        "POST",
+        &format!("{V1}/accounts:lookup"),
+        &json!({"idToken": signed.body["idToken"]}),
+    );
+    assert_eq!(lookup.status, 200, "{}", lookup.body);
+    assert_eq!(lookup.body["users"][0]["validSince"], NOW.to_string());
+}
+
+#[test]
+fn a_returning_oidc_sign_in_leaves_the_account_profile_as_it_was() {
+    // record-oidc 39209e: the answer carries the IdP's new name, the account and its
+    // provider information do not.
+    let s = strict_state();
+    let first = sign_in(&s, &request(&token(&claims())));
+    assert_eq!(first.status, 200, "{}", first.body);
+    let mut renamed = claims();
+    renamed["name"] = json!("Renamed");
+    renamed["iat"] = json!(NOW - 1);
+    let second = sign_in(&s, &request(&token(&renamed)));
+    assert_eq!(second.status, 200, "{}", second.body);
+    assert_eq!(second.body["displayName"], "Renamed");
+    assert!(
+        id_token_claims(&second).get("name").is_none(),
+        "{}",
+        second.body
+    );
+    let store = s.store.lock().unwrap();
+    let user = store.user_by_federated(PROVIDER, "strict-subject").unwrap();
+    assert_eq!(user.display_name, None);
+    assert_eq!(user.federated[0].display_name, None);
 }

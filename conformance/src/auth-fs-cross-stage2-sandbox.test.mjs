@@ -332,24 +332,73 @@ test("the legacy shared lock stops a run, and a lock that changed is left in pla
   }
 });
 
-test("the API keys read passes only when no key has an application restriction", () => {
-  const target = { restrictions: { apiTargets: [{ service: "firestore.googleapis.com" }] } };
-  assert.deepEqual(keyRestrictionProblems({ status: 200, json: { keys: [target, {}] } }), []);
+test("the API keys read passes only when every key serves the run's clients", () => {
+  const services = [
+    "identitytoolkit.googleapis.com",
+    "securetoken.googleapis.com",
+    "firestore.googleapis.com",
+  ];
+  const targets = [...services, "firebaseinstallations.googleapis.com"].map((service) => ({
+    service,
+  }));
+  const key = (restrictions) => ({ displayName: "k", uid: "u", restrictions });
+  const problems = (...keys) => keyRestrictionProblems({ status: 200, json: { keys } });
+  // No restriction at all, or the one Firebase creates: a browser restriction without
+  // referrers (it limits nothing) and API targets that include the three services.
+  assert.deepEqual(problems(key(undefined), {}), []);
   assert.deepEqual(keyRestrictionProblems({ status: 200, json: {} }), []);
-  for (const restriction of [
-    "browserKeyRestrictions",
-    "serverKeyRestrictions",
-    "androidKeyRestrictions",
-    "iosKeyRestrictions",
+  assert.deepEqual(problems(key({ browserKeyRestrictions: {}, apiTargets: targets })), []);
+  assert.deepEqual(
+    problems(key({ browserKeyRestrictions: { allowedReferrers: [] }, apiTargets: targets })),
+    [],
+  );
+  assert.deepEqual(
+    problems(key({ apiTargets: targets.map((t) => ({ ...t, methods: [] })) })),
+    [],
+  );
+  // A browser restriction with referrers refuses the page and this host.
+  assert.deepEqual(
+    problems(key({ browserKeyRestrictions: { allowedReferrers: ["x.example"] } })),
+    ["API key k may refuse the run's clients (browser-referrers)"],
+  );
+  // Any other application restriction refuses them, even when it names nothing.
+  for (const [restriction, why] of [
+    ["serverKeyRestrictions", "server"],
+    ["androidKeyRestrictions", "android"],
+    ["iosKeyRestrictions", "ios"],
   ])
     assert.deepEqual(
-      keyRestrictionProblems({
-        status: 200,
-        json: { keys: [target, { displayName: "k", restrictions: { [restriction]: {} } }] },
-      }),
-      ["API key k has an application restriction"],
+      problems(key({ [restriction]: {} })),
+      [`API key k may refuse the run's clients (${why})`],
       restriction,
     );
+  // API targets that leave out a service the run uses, or limit it to some methods.
+  for (const service of services)
+    assert.deepEqual(
+      problems(key({ apiTargets: targets.filter((t) => t.service !== service) })),
+      [`API key k may refuse the run's clients (api-target-missing:${service})`],
+      service,
+    );
+  assert.deepEqual(problems(key({ apiTargets: [] })), [
+    `API key k may refuse the run's clients (${services
+      .map((s) => `api-target-missing:${s}`)
+      .join(", ")})`,
+  ]);
+  assert.deepEqual(
+    problems(
+      key({
+        apiTargets: targets.map((t) =>
+          t.service === services[2] ? { ...t, methods: ["Listen"] } : t,
+        ),
+      }),
+    ),
+    [`API key k may refuse the run's clients (api-target-methods:${services[2]})`],
+  );
+  // Every key counts: the web config's key cannot be told apart without its string.
+  assert.deepEqual(
+    problems(key(undefined), { restrictions: { serverKeyRestrictions: {} }, uid: "v" }),
+    ["API key v may refuse the run's clients (server)"],
+  );
   assert.deepEqual(keyRestrictionProblems({ status: 403, json: null }), [
     "API keys read failed (HTTP 403)",
   ]);

@@ -146,7 +146,7 @@ export async function runStage2Production(deps) {
       );
     };
     if (keys.restricted.length)
-      await stop("api-key-application-restriction", { keys: keys.restricted }, start.requests + 1);
+      await stop("api-key-restriction", { keys: keys.restricted }, start.requests + 1);
     if (startProblems.length) throw new Error(`preflight: ${startProblems.join("; ")}`);
     const clockOffsetSeconds = await deps.clockOffset();
     // The browser's first request with the web key is a read: a refusal ends the run here,

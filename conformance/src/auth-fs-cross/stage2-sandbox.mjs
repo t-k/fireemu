@@ -61,32 +61,65 @@ export function destinationProblem(
 
 // ---- API keys ------------------------------------------------------------------------------
 
-/** The restrictions that would make a key refuse the browser page's origin or this host. */
+/** The application restrictions that refuse this host and the browser page whatever they name. */
 const APPLICATION_RESTRICTIONS = [
-  "browserKeyRestrictions",
-  "serverKeyRestrictions",
-  "androidKeyRestrictions",
-  "iosKeyRestrictions",
+  ["serverKeyRestrictions", "server"],
+  ["androidKeyRestrictions", "android"],
+  ["iosKeyRestrictions", "ios"],
+];
+
+/** The services the run's clients reach with the web key. */
+const KEY_SERVICES = [
+  "identitytoolkit.googleapis.com",
+  "securetoken.googleapis.com",
+  "firestore.googleapis.com",
 ];
 
 /**
- * Why the project's keys may refuse the run's clients: a failed read, or any key with an
- * application restriction (the web config's key cannot be told apart without its key string,
+ * Why one key may refuse the run's clients. A browser restriction refuses them only when it
+ * lists referrers (Firebase creates its browser key with an empty one); any other application
+ * restriction refuses them. API targets must include every service the run uses, each without
+ * a method list.
+ */
+function keyRefusals(restrictions) {
+  const why = [];
+  if ((restrictions?.browserKeyRestrictions?.allowedReferrers ?? []).length)
+    why.push("browser-referrers");
+  for (const [field, name] of APPLICATION_RESTRICTIONS)
+    if (restrictions?.[field] !== undefined) why.push(name);
+  const targets = restrictions?.apiTargets;
+  if (targets !== undefined)
+    for (const service of KEY_SERVICES) {
+      const target = targets.find((t) => t.service === service);
+      if (!target) why.push(`api-target-missing:${service}`);
+      else if ((target.methods ?? []).length) why.push(`api-target-methods:${service}`);
+    }
+  return why;
+}
+
+/**
+ * Why the project's keys may refuse the run's clients: a failed read, or any key whose
+ * restrictions refuse them (the web config's key cannot be told apart without its key string,
  * which is never read, so every key counts).
  */
 export function keyRestrictionProblems({ status, json }) {
   if (status !== 200) return [`API keys read failed (HTTP ${status})`];
   if (json?.nextPageToken) return ["API keys read has more than one page"];
   return restrictedKeys(json).map(
-    ({ displayName, uid }) => `API key ${displayName ?? uid ?? "?"} has an application restriction`,
+    ({ displayName, uid, why }) =>
+      `API key ${displayName ?? uid ?? "?"} may refuse the run's clients (${why.join(", ")})`,
   );
 }
 
-/** The keys with an application restriction, by display name and uid (never the key string). */
+/** The keys that may refuse the run's clients, by display name and uid (never the key string). */
 export function restrictedKeys(json) {
   return (json?.keys ?? [])
-    .filter((key) => APPLICATION_RESTRICTIONS.some((r) => key.restrictions?.[r] !== undefined))
-    .map((key) => ({ displayName: key.displayName ?? null, uid: key.uid ?? null }));
+    .map((key) => ({
+      displayName: key.displayName ?? null,
+      uid: key.uid ?? null,
+      why: keyRefusals(key.restrictions),
+    }))
+    .filter(({ why }) => why.length);
 }
 
 // ---- locks ---------------------------------------------------------------------------------

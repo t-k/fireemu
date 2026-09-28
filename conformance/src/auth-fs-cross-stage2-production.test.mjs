@@ -34,7 +34,15 @@ function world(overrides = {}) {
     keys: [
       {
         displayName: "Browser key (auto created by Firebase)",
-        restrictions: { apiTargets: [{ service: "identitytoolkit.googleapis.com" }] },
+        // The shape the sandbox's key has: a browser restriction without referrers.
+        restrictions: {
+          browserKeyRestrictions: {},
+          apiTargets: [
+            { service: "identitytoolkit.googleapis.com" },
+            { service: "securetoken.googleapis.com" },
+            { service: "firestore.googleapis.com" },
+          ],
+        },
       },
     ],
     ...overrides,
@@ -339,7 +347,7 @@ test("another task's open run on the project stops the run under the lock", asyn
   }
 });
 
-test("a key with an application restriction, or a refused key probe, stops the run before any write", async () => {
+test("a key that may refuse the clients, or a refused key probe, stops the run before any write", async () => {
   const restricted = setup({
     worldOptions: {
       keys: [
@@ -356,7 +364,7 @@ test("a key with an application restriction, or a refused key probe, stops the r
   try {
     await assert.rejects(
       runStage2Production(await withProbe(restricted.deps)),
-      /API key k has an application restriction/,
+      /API key k may refuse the run's clients \(browser-referrers\)/,
     );
     await assert.rejects(
       runStage2Production(await withProbe(refused.deps)),
@@ -378,8 +386,8 @@ test("a key with an application restriction, or a refused key probe, stops the r
         "finished",
         "stopped-before-write",
         true,
-        "api-key-application-restriction",
-        [{ displayName: "k", uid: null }],
+        "api-key-restriction",
+        [{ displayName: "k", uid: null, why: ["browser-referrers"] }],
         0,
       ],
     );

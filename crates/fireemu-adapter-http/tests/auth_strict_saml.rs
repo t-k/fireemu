@@ -484,3 +484,49 @@ fn the_encoded_response_limit_counts_what_is_sent() {
         "one character over",
     );
 }
+
+#[test]
+fn no_other_field_or_parameter_names_the_subject() {
+    let injected = "%7B%22sub%22%3A%22victim-subject%22%7D";
+    let encoded = base64_standard(fixture("assertion-signed.xml").as_bytes())
+        .replace('+', "%2B")
+        .replace('/', "%2F")
+        .replace('=', "%3D");
+    let s = state(true);
+    let genuine = sign_in(&s, &request(&fixture("assertion-signed.xml")));
+    assert_eq!(genuine.status, 200, "{}", genuine.body);
+    let cases = [
+        (
+            "id_token after the response",
+            json!({"requestUri": CALLBACK, "postBody": format!("providerId={PROVIDER}&SAMLResponse={encoded}&id_token={injected}"), "returnSecureToken": true}),
+        ),
+        (
+            "access and refresh tokens",
+            json!({"requestUri": CALLBACK, "postBody": format!("providerId={PROVIDER}&SAMLResponse={encoded}&access_token={injected}&refresh_token=r"), "returnSecureToken": true}),
+        ),
+        (
+            "an encoded fragment and query in the path",
+            json!({"requestUri": format!("{CALLBACK}%23id_token={injected}%3Fid_token={injected}"), "postBody": format!("providerId={PROVIDER}&SAMLResponse={encoded}"), "returnSecureToken": true}),
+        ),
+        (
+            "the response in the fragment, a token in the query",
+            json!({"requestUri": format!("{CALLBACK}?id_token={injected}#providerId={PROVIDER}&SAMLResponse={encoded}"), "postBody": "", "returnSecureToken": true}),
+        ),
+        (
+            "top-level fields",
+            json!({"requestUri": CALLBACK, "postBody": format!("providerId={PROVIDER}&SAMLResponse={encoded}"), "id_token": {"sub": "victim-subject"}, "email": "victim@example.com", "sessionId": "victim", "returnSecureToken": true}),
+        ),
+    ];
+    for (case, body) in cases {
+        let response = sign_in(&s, &body);
+        assert_eq!(response.status, 200, "{case}: {}", response.body);
+        assert_eq!(response.body["localId"], genuine.body["localId"], "{case}");
+        assert_eq!(response.body["email"], "fixture-user@example.com", "{case}");
+        assert_eq!(
+            claims(&response.body["idToken"])["firebase"]["identities"][PROVIDER],
+            json!(["fixture-user@example.com"]),
+            "{case}"
+        );
+    }
+    assert_eq!(s.store.lock().unwrap().user_count(), 1);
+}

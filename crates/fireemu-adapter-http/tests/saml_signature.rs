@@ -541,3 +541,36 @@ fn namespace_declarations_are_bounded_before_the_document_is_parsed() {
         started.elapsed()
     );
 }
+
+#[test]
+fn character_references_and_cdata_inside_a_signed_value_read_as_signed() {
+    // Both leave the canonical text unchanged, so the signature still verifies and the value
+    // read is the one signed.
+    let signed = fixture("assertion-signed.xml");
+    for (from, to) in [
+        (
+            ">fixture-user@example.com<",
+            ">fixture-user&#64;example&#x2e;com<",
+        ),
+        (
+            ">fixture-user@example.com<",
+            "><![CDATA[fixture-user@]]>example<!----><![CDATA[.com]]><",
+        ),
+        (">Fixture \"User\"<", "><![CDATA[Fixture \"User\"]]><"),
+    ] {
+        let rewritten = signed.replace(from, to);
+        assert_ne!(rewritten, signed, "{to}");
+        let verified =
+            verify_saml_response(&rewritten, &idp()).unwrap_or_else(|e| panic!("{to}: {e:?}"));
+        assert_eq!(
+            verified.name_id.as_deref(),
+            Some("fixture-user@example.com"),
+            "{to}"
+        );
+        assert_eq!(
+            verified.attributes["display name"],
+            ["Fixture \"User\""],
+            "{to}"
+        );
+    }
+}

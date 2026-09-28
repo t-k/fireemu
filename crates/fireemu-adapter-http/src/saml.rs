@@ -33,10 +33,12 @@ const ENVELOPED: &str = "http://www.w3.org/2000/09/xmldsig#enveloped-signature";
 pub const MAX_RESPONSE_BYTES: usize = 256 * 1024;
 const MAX_NODES: u32 = 20_000;
 const MAX_DEPTH: usize = 64;
-/// Bounds on the canonicalization input no identity provider comes near, so that its cost
-/// stays linear in the document: namespaces in scope of an element, distinct prefixes of an
-/// `InclusiveNamespaces` list, and nodes of a `SignedInfo` (canonicalized before its signature
-/// is known to verify). Beyond them a response is [`SamlError::Unsupported`].
+/// Bounds no identity provider comes near, so that parsing and canonicalization cost little
+/// before a signature is known to verify: namespace declarations of the document (counted as
+/// written, before parsing, whose namespace resolution is quadratic in the declarations in
+/// scope), namespaces in scope of an element, distinct prefixes of an `InclusiveNamespaces`
+/// list, and nodes of a `SignedInfo`. Beyond them a response is [`SamlError::Unsupported`].
+const MAX_DECLARATIONS: usize = 256;
 const MAX_NAMESPACES: usize = 64;
 const MAX_INCLUSIVE_PREFIXES: usize = 64;
 const MAX_SIGNED_INFO_NODES: usize = 128;
@@ -99,6 +101,12 @@ pub struct VerifiedSaml {
 pub fn verify_saml_response(xml: &str, certificates: &[String]) -> Result<VerifiedSaml, SamlError> {
     if xml.len() > MAX_RESPONSE_BYTES {
         return Err(SamlError::Malformed("the response is too large"));
+    }
+    // Every `xmlns` written counts, a declaration or not, so the bound errs on the safe side.
+    if xml.matches("xmlns").count() > MAX_DECLARATIONS {
+        return Err(SamlError::Unsupported(format!(
+            "more than {MAX_DECLARATIONS} namespace declarations"
+        )));
     }
     let keys: Vec<RsaPublicKey> = certificates
         .iter()

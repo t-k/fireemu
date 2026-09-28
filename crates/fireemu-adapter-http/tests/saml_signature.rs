@@ -497,3 +497,47 @@ fn canonicalization_renders_only_namespaces_in_use_and_escapes_attributes() {
         );
     }
 }
+
+/// `assertion-signed.xml` with `count` elements beside the assertion, each declaring a
+/// namespace of its own (none in scope of the signed assertion).
+fn scattered_declarations(count: usize) -> String {
+    let elements = (0..count).fold(String::new(), |mut out, n| {
+        let _ = write!(out, "<e xmlns:p{n}=\"urn:p{n}\"/>");
+        out
+    });
+    fixture("assertion-signed.xml").replacen(
+        "<saml:Assertion ",
+        &format!("{elements}<saml:Assertion "),
+        1,
+    )
+}
+
+#[test]
+fn namespace_declarations_are_bounded_before_the_document_is_parsed() {
+    // Parsing resolves every declaring element's scope against its parent's, a cost quadratic
+    // in the namespaces in scope: the declarations of the document are bounded before it is
+    // parsed. The signed vector declares four.
+    assert!(verify_saml_response(&scattered_declarations(252), &idp()).is_ok());
+    assert!(matches!(
+        verify_saml_response(&scattered_declarations(253), &idp()),
+        Err(SamlError::Unsupported(_))
+    ));
+    let declarations = (0..2_000).fold(String::new(), |mut out, n| {
+        let _ = write!(out, " xmlns:q{n}=\"u\"");
+        out
+    });
+    let bomb = format!(
+        "<samlp:Response xmlns:samlp=\"urn:oasis:names:tc:SAML:2.0:protocol\"{declarations}>{}</samlp:Response>",
+        "<a xmlns=\"u\"/>".repeat(500)
+    );
+    let started = std::time::Instant::now();
+    assert!(matches!(
+        verify_saml_response(&bomb, &idp()),
+        Err(SamlError::Unsupported(_))
+    ));
+    assert!(
+        started.elapsed() < std::time::Duration::from_secs(2),
+        "{:?}",
+        started.elapsed()
+    );
+}

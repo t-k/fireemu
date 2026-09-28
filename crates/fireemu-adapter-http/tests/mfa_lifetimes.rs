@@ -549,9 +549,7 @@ fn crossing_each_lifetime_alone_leaves_the_other_objects_usable() {
                     status, 200,
                     "{context}: continuation should be live: {resumed}"
                 );
-                // Strict leaves `isNewUser` out when it is false, as production does.
-                let returning = if strict { Value::Null } else { json!(false) };
-                assert_eq!(resumed["isNewUser"], returning, "{context}");
+                assert_eq!(resumed["isNewUser"], false);
                 assert_eq!(resumed["pendingToken"], objects.idp_token);
             }
             if crossed != Object::Oob {

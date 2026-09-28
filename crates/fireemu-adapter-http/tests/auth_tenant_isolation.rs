@@ -996,13 +996,7 @@ fn federated_sign_in_creates_separate_accounts_per_tenant() {
             body,
         );
         assert_eq!(status, 200, "{profile}: {again}");
-        // Strict leaves `isNewUser` out when it is false, as production does.
-        let returning = if profile == "strict" {
-            Value::Null
-        } else {
-            json!(false)
-        };
-        assert_eq!(again["isNewUser"], returning, "{profile}");
+        assert_eq!(again["isNewUser"], false);
         assert_eq!(again["localId"], in_a["localId"]);
         assert_eq!(
             snapshot(&state, Some(TENANT_A))["users"]

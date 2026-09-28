@@ -12160,7 +12160,9 @@ fn sign_in_with_idp(
         Ok(resolved) => resolved,
         Err(r) => return r,
     };
-    if strict && provider_id.starts_with("oidc.") {
+    // Production's answer shape is recorded for OIDC only (record-oidc 39209e).
+    let strict_oidc = strict && provider_id.starts_with("oidc.");
+    if strict_oidc {
         strict_oidc_answer(&provider_id, &mut info, &mut base);
     }
     let identity = FederatedIdentity {
@@ -12208,7 +12210,7 @@ fn sign_in_with_idp(
                 base.push(("localId", json!(uid.as_str())));
                 base.push(("needConfirmation", json!(true)));
                 // Production leaves an empty list out (record-oidc 39209e).
-                let omit = strict && verified_providers.is_empty();
+                let omit = strict_oidc && verified_providers.is_empty();
                 base.push((
                     "verifiedProvider",
                     if omit {
@@ -12232,7 +12234,7 @@ fn sign_in_with_idp(
     // Production answers `isNewUser` only when it is true (record-oidc 39209e).
     base.push((
         "isNewUser",
-        if strict && !is_new {
+        if strict_oidc && !is_new {
             Value::Null
         } else {
             json!(is_new)

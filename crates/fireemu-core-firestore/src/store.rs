@@ -656,6 +656,7 @@ enum TransactionState {
     Active,
     RetryableAborted,
     RolledBack,
+    Committed,
     Retried,
     Finished,
 }
@@ -2081,7 +2082,7 @@ impl FirestoreState {
         };
         if previous_attempt.read_only {
             return Err(FirestoreError::InvalidArgument(
-                "read-only transaction cannot be retried as read-write".into(),
+                "Cannot retry a read-only transaction".into(),
             ));
         }
         // A client retrying an attempt that is still active (its commit was held back by
@@ -2098,7 +2099,9 @@ impl FirestoreState {
         };
         if !matches!(
             previous_attempt.state,
-            TransactionState::RetryableAborted | TransactionState::RolledBack
+            TransactionState::RetryableAborted
+                | TransactionState::RolledBack
+                | TransactionState::Committed
         ) {
             return Err(FirestoreError::InvalidArgument(
                 "Invalid retry transaction.".into(),
@@ -3246,8 +3249,17 @@ impl FirestoreState {
         Ok(self.transaction(id)?.queries.len())
     }
 
-    /// Rolls back (finishes) a transaction.
+    /// Rolls back an active transaction. Repeated rollback and rollback after expiry are
+    /// successful no-ops; a committed or consumed predecessor remains unusable.
     pub fn rollback(&mut self, id: &TransactionId) -> Result<(), FirestoreError> {
+        if self.transactions.get(id).is_some_and(|transaction| {
+            matches!(
+                transaction.state,
+                TransactionState::RolledBack | TransactionState::Finished
+            )
+        }) {
+            return Ok(());
+        }
         self.transaction(id)?;
         self.finish_transaction(id, TransactionState::RolledBack);
         Ok(())
@@ -3428,7 +3440,7 @@ impl FirestoreState {
             }
         }
         if let Some(id) = transaction {
-            self.finish_transaction(id, TransactionState::Finished);
+            self.finish_transaction(id, TransactionState::Committed);
         }
         // Retention is owned by the store: every commit drops the history that has fallen
         // out of the read window and is not pinned by an active transaction.

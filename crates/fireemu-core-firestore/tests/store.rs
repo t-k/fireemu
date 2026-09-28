@@ -817,7 +817,7 @@ fn a_read_write_transaction_locks_what_it_read_until_it_finishes() {
         Err(FirestoreError::InvalidArgument(_))
     ));
     s.rollback(&ro).unwrap();
-    assert!(s.rollback(&ro).is_err());
+    s.rollback(&ro).unwrap();
 }
 
 #[test]
@@ -921,6 +921,148 @@ fn a_rolled_back_read_write_transaction_can_seed_one_retry() {
         state.retry_transaction(&original, t(2)),
         Err(FirestoreError::InvalidArgument(_))
     ));
+}
+
+#[test]
+fn sandbox_recorded_rollback_after_rollback_is_idempotent() {
+    let mut state = FirestoreState::new();
+    let transaction = state.begin_transaction(false, t(0)).unwrap();
+    state
+        .get_in_transaction(&transaction, &path("rollback/locked"))
+        .unwrap();
+    let before = state.transaction_releases();
+    state.rollback(&transaction).unwrap();
+    let released = state.transaction_releases();
+    assert_eq!(released, before + 1);
+
+    state.rollback(&transaction).unwrap();
+    assert_eq!(state.transaction_releases(), released);
+    assert!(!state.transaction_is_active(&transaction));
+    state
+        .commit(&[set("rollback/locked", &[])], None, t(1))
+        .unwrap();
+    assert!(state.retry_transaction(&transaction, t(2)).is_ok());
+}
+
+#[test]
+fn sandbox_recorded_rollback_after_idle_does_not_revive_expired_lineage() {
+    let mut state = FirestoreState::new();
+    let transaction = state.begin_transaction(false, t(0)).unwrap();
+    state
+        .get_in_transaction(&transaction, &path("expired/locked"))
+        .unwrap();
+    assert!(matches!(
+        state.touch_transaction(&transaction, t(90)),
+        Err(FirestoreError::Aborted(_))
+    ));
+    let released = state.transaction_releases();
+
+    state.rollback(&transaction).unwrap();
+    assert_eq!(state.transaction_releases(), released);
+    assert!(matches!(
+        state.retry_transaction(&transaction, t(91)),
+        Err(FirestoreError::InvalidArgument(message)) if message == "Invalid retry transaction."
+    ));
+    assert!(matches!(
+        state.commit(&[], Some(&transaction), t(92)),
+        Err(FirestoreError::Aborted(_))
+    ));
+    state
+        .commit(&[set("expired/locked", &[])], None, t(93))
+        .unwrap();
+}
+
+#[test]
+fn sandbox_recorded_committed_transaction_can_seed_one_retry() {
+    let mut state = FirestoreState::new();
+    let transaction = state.begin_transaction(false, t(0)).unwrap();
+    state
+        .commit(
+            &[set("retry/document", &[("value", Value::Integer(1))])],
+            Some(&transaction),
+            t(1),
+        )
+        .unwrap();
+    assert!(matches!(
+        state.rollback(&transaction),
+        Err(FirestoreError::Aborted(message))
+            if message == "The referenced transaction has expired or is no longer valid."
+    ));
+    state
+        .commit(
+            &[set("retry/document", &[("value", Value::Integer(2))])],
+            None,
+            t(2),
+        )
+        .unwrap();
+
+    let retry = state.retry_transaction(&transaction, t(3)).unwrap();
+    assert_ne!(transaction, retry);
+    let document = state
+        .get_in_transaction(&retry, &path("retry/document"))
+        .unwrap()
+        .unwrap();
+    assert_eq!(document.fields["value"], Value::Integer(2));
+    assert!(matches!(
+        state.retry_transaction(&transaction, t(4)),
+        Err(FirestoreError::InvalidArgument(_))
+    ));
+    assert!(matches!(
+        state.rollback(&transaction),
+        Err(FirestoreError::Aborted(_))
+    ));
+    state.rollback(&retry).unwrap();
+}
+
+#[test]
+fn sandbox_recorded_read_only_retry_keeps_its_diagnostic_and_snapshot() {
+    let mut state = FirestoreState::new();
+    state
+        .commit(
+            &[set("readonly/document", &[("value", Value::Integer(1))])],
+            None,
+            t(0),
+        )
+        .unwrap();
+    let transaction = state.begin_transaction(true, t(1)).unwrap();
+    state
+        .commit(
+            &[set("readonly/document", &[("value", Value::Integer(2))])],
+            None,
+            t(2),
+        )
+        .unwrap();
+
+    assert!(matches!(
+        state.retry_transaction(&transaction, t(3)),
+        Err(FirestoreError::InvalidArgument(message)) if message == "Cannot retry a read-only transaction"
+    ));
+    let document = state
+        .get_in_transaction(&transaction, &path("readonly/document"))
+        .unwrap()
+        .unwrap();
+    assert_eq!(document.fields["value"], Value::Integer(1));
+    state.rollback(&transaction).unwrap();
+    assert!(matches!(
+        state.retry_transaction(&transaction, t(4)),
+        Err(FirestoreError::InvalidArgument(message)) if message == "Cannot retry a read-only transaction"
+    ));
+}
+
+#[test]
+fn committed_retry_lineage_expires_at_the_original_total_deadline() {
+    for elapsed in [269, 270] {
+        let mut state = FirestoreState::new();
+        let original = state.begin_transaction(false, t(0)).unwrap();
+        state.commit(&[], Some(&original), t(1)).unwrap();
+        let result = state.retry_transaction(&original, t(elapsed));
+        if elapsed == 269 {
+            let retry = result.unwrap();
+            state.rollback(&retry).unwrap();
+        } else {
+            assert!(matches!(result, Err(FirestoreError::InvalidArgument(_))));
+        }
+    }
 }
 
 #[test]

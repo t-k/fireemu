@@ -2555,15 +2555,14 @@ fn dispatch_with_blocking_hook(
     // sign-in (AUTH-TENANT-BLOCKING recording 2026-09-28, events#sign-up-anonymous and
     // custom-token#custom-*; the official Auth emulator runs none either).
     let runs_hooks = !matches!(sign_in_method.as_deref(), Some("anonymous" | "custom"));
-    // The mail the speculative request is about to send, when this profile runs
-    // beforeSendEmail for it; the commit below must send the same one (security review S1).
-    let speculative_mail = (response.status == 200
-        && !state.stateless_refresh_tokens
-        && matches!(
-            handler,
-            routes::Handler::SendOobCode | routes::Handler::AdminSendOobCode
-        )
-        && blocking.handles(fireemu_core_functions::manifest::BlockingAuthEvent::BeforeSendEmail))
+    // The mail the speculative request is about to send; the commit below must send the same
+    // one (security review S1). A mail request reaches this path only where beforeSendEmail
+    // runs (the strict profile, with a function for it: `handler_runs_blocking_auth`), and a
+    // refused or failed request has created no code.
+    let speculative_mail = matches!(
+        handler,
+        routes::Handler::SendOobCode | routes::Handler::AdminSendOobCode
+    )
     .then(|| mail_about_to_be_sent(&live_snapshot, &candidate));
     if let Some(Some(mail)) = &speculative_mail {
         if let Err(refusal) = before_send_email(blocking, mail, &project) {

@@ -419,6 +419,14 @@ fn no_event_runs_without_a_reset_or_sign_in_mail_or_in_the_emulator_profile() {
             &json!({"requestType": "PASSWORD_RESET", "email": "refused@example.com"}),
         );
         assert_eq!(status, 200, "strict {strict}, handles {handles}: {body}");
+        let (status, body) = admin(
+            &s,
+            "POST",
+            &format!("{V1}/projects/demo-app/accounts:sendOobCode"),
+            &json!({"requestType": "PASSWORD_RESET", "email": "refused@example.com", "returnOobLink": true}),
+        );
+        assert_eq!(status, 200, "strict {strict}, handles {handles}: {body}");
+        assert!(body["oobLink"].is_string(), "{body}");
         assert!(
             mails.lock().unwrap().is_empty(),
             "strict {strict}, handles {handles}"

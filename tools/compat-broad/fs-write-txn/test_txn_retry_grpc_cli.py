@@ -3,6 +3,7 @@
 import copy
 import hashlib
 import json
+from pathlib import Path
 
 import pytest
 
@@ -57,3 +58,91 @@ def test_exact_approve_without_must_or_should_and_explicit_go_are_required(packe
         review.write_text(changed)
         with pytest.raises(ValueError): cli.verify_review(review, cli.sha(review.read_bytes()), pins)
     with pytest.raises(ValueError): cli.verify_go('0' * 64, pins)
+
+
+@pytest.mark.parametrize('initial', ['unreviewed-runtime', 'oversize'])
+def test_initial_packet_snapshot_is_hash_checked_before_runtime_is_retained(packet, tmp_path, monkeypatch, initial):
+    path, baseline, envelope, value, _load = packet
+    private = tmp_path / 'docs.local/reviews'
+    private.mkdir(parents=True)
+    reviewed = private / 'packet.json'
+    reviewed.write_bytes(path.read_bytes())
+    (private / 'p09-envelope.md').write_bytes(envelope.read_bytes())
+    digest = cli.sha(reviewed.read_bytes())
+    unreviewed = json.dumps({**value, 'runtime': {'unreviewed': True}}).encode()
+    if initial == 'oversize': unreviewed = b' ' * 65536 + reviewed.read_bytes()
+    decoded = []
+    loads = json.loads
+    def observed_decode(raw, *args, **kwargs):
+        if raw == unreviewed: decoded.append(True)
+        return loads(raw, *args, **kwargs)
+    monkeypatch.setattr(cli.json, 'loads', observed_decode)
+    read_bytes = Path.read_bytes
+    reads = 0
+    def replaced_first_read(self):
+        nonlocal reads
+        if self == reviewed:
+            reads += 1
+            if reads == 1: return unreviewed
+        return read_bytes(self)
+    monkeypatch.setattr(Path, 'read_bytes', replaced_first_read)
+    # Isolate packet admission; no credential, ledger, lock, or wire is accessed.
+    monkeypatch.setattr(cli, '_git', lambda *_args: str(tmp_path / '.git'))
+    monkeypatch.setattr(cli, '_private', lambda path, _root: Path(path))
+    monkeypatch.setattr(cli, 'signed_source_commit', lambda: value['sourceCommit'])
+    monkeypatch.setattr(cli, 'assert_clean_environment', lambda: None)
+    monkeypatch.setattr(cli, 'verify_review', lambda *_args: None)
+    invoked = []
+    def record(**kwargs):
+        invoked.append(True)
+        kwargs['record_once'](0, 'a' * 32, 'b' * 32, tmp_path)
+        return {}
+    monkeypatch.setattr(cli, 'record_twice', record)
+    monkeypatch.setattr(cli, 'run_once', lambda *_args, **kwargs: invoked.append(kwargs['runtime']))
+    argv = ['record-production', '--packet', str(reviewed), '--packet-sha256', digest, '--baseline', str(baseline), '--review', str(tmp_path / 'review.txt'), '--review-sha256', 'a' * 64, '--go-packet-sha256', digest]
+    with pytest.raises(ValueError, match='packet bytes differ'):
+        cli.main(argv)
+    assert invoked == []
+    assert decoded == []
+
+
+@pytest.mark.parametrize('changed_read', [1, 2])
+def test_baseline_snapshot_cannot_differ_from_its_packet_pin(packet, tmp_path, monkeypatch, changed_read):
+    path, baseline, envelope, value, _load = packet
+    private = tmp_path / 'docs.local/reviews'
+    private.mkdir(parents=True)
+    reviewed = private / 'packet.json'
+    reviewed.write_bytes(path.read_bytes())
+    (private / 'p09-envelope.md').write_bytes(envelope.read_bytes())
+    digest = cli.sha(reviewed.read_bytes())
+    read_bytes = Path.read_bytes
+    reads = 0
+    def replaced_read(self):
+        nonlocal reads
+        if self == baseline:
+            reads += 1
+            if reads == changed_read: return b'{"unreviewed": true}'
+        return read_bytes(self)
+    monkeypatch.setattr(Path, 'read_bytes', replaced_read)
+    monkeypatch.setattr(cli, '_git', lambda *_args: str(tmp_path / '.git'))
+    monkeypatch.setattr(cli, '_private', lambda path, _root: Path(path))
+    monkeypatch.setattr(cli, 'signed_source_commit', lambda: value['sourceCommit'])
+    monkeypatch.setattr(cli, 'assert_clean_environment', lambda: None)
+    monkeypatch.setattr(cli, 'verify_review', lambda *_args: None)
+    invoked = []
+    def run(*_args, **kwargs):
+        kwargs['check']()
+        invoked.append(kwargs['baseline'])
+    def record(**kwargs):
+        kwargs['record_once'](0, 'a' * 32, 'b' * 32, tmp_path)
+        return {}
+    monkeypatch.setattr(cli, 'record_twice', record)
+    monkeypatch.setattr(cli, 'run_once', run)
+    monkeypatch.setattr(cli, 'authorize', lambda *_args: None)
+    monkeypatch.setattr(cli, 'remaining_task_budget', lambda *_args: 10)
+    monkeypatch.setattr(cli, 'read_ledger', lambda *_args: [])
+    (tmp_path / 'docs.local/instructions').mkdir()
+    (tmp_path / 'docs.local/instructions/owner-decisions.md').write_text('local test only')
+    argv = ['record-production', '--packet', str(reviewed), '--packet-sha256', digest, '--baseline', str(baseline), '--review', str(tmp_path / 'review.txt'), '--review-sha256', 'a' * 64, '--go-packet-sha256', digest]
+    with pytest.raises(ValueError): cli.main(argv)
+    assert invoked == []

@@ -79,10 +79,14 @@ def packet_value(*, source_commit, runtime, baseline_sha256, envelope_sha256, pa
     return {'schemaVersion': 1, 'program': PROGRAM, 'packetName': 'p09-grpc-retry', 'packetId': packet_id, 'project': 'fireemu-oracle-sbx', 'database': '(default)', 'recordings': 2, 'requestsPerRecording': 48, 'estimatedUsdPerRecording': 0.01, 'sourceCommit': source_commit, 'runnerSha256': runner_sha256(), 'closureSha256': sha(CLOSURE.read_bytes()), 'corpusDigest': corpus_digest(), 'planSourceDigest': source_digest(), 'baselineSha256': baseline_sha256, 'envelopeId': ENVELOPE_ID, 'envelopePath': envelope_relative, 'envelopeSha256': envelope_sha256, 'runtime': runtime, 'iamConfig': 'none', 'retries': 'none', 'onStop': 'needs-recovery-lock-held'}
 
 
-def load_packet(path, digest, baseline_path, envelope_path, *, source_commit, packet_relative, envelope_relative):
+def _read_packet(path, digest, *, label='packet'):
     raw = Path(path).read_bytes()
-    if len(raw) > 65536 or sha(raw) != digest: raise ValueError('P09 packet bytes differ from review')
-    value = json.loads(raw)
+    if len(raw) > 65536 or sha(raw) != digest: raise ValueError(f'P09 {label} bytes differ from review')
+    return json.loads(raw)
+
+
+def load_packet(path, digest, baseline_path, envelope_path, *, source_commit, packet_relative, envelope_relative):
+    value = _read_packet(path, digest)
     if not isinstance(value, dict) or set(value) != FIELDS or type(value['schemaVersion']) is not int or type(value['recordings']) is not int or type(value['requestsPerRecording']) is not int:
         raise ValueError('closed P09 packet schema differs')
     if not isinstance(value['packetId'], str) or not re.fullmatch(r'fs-transaction-p09-[A-Za-z0-9_-]{4,64}', value['packetId']): raise ValueError('P09 packet identity differs')
@@ -152,10 +156,11 @@ def main(argv=None):
     packet = _private(args.packet, main_root)
     review = _private(args.review, main_root)
     baseline = _private(args.baseline, main_root)
-    value = json.loads(packet.read_bytes())
+    value = _read_packet(packet, args.packet_sha256)
     envelope_relative = value.get('envelopePath')
     if not isinstance(envelope_relative, str): raise ValueError('P09 envelope path missing')
     envelope = _private(main_root / envelope_relative, main_root)
+    baseline_value = _read_packet(baseline, value['baselineSha256'], label='baseline')
     decisions_path = main_root / 'docs.local/instructions/owner-decisions.md'
     ledger = main_root / 'docs.local/runs/sandbox-ledger.jsonl'
     def admit():
@@ -171,7 +176,7 @@ def main(argv=None):
     def interrupted(_signum, _frame): raise KeyboardInterrupt
     previous = signal.signal(signal.SIGTERM, interrupted)
     try:
-        result = record_twice(ledger_path=ledger, private_dir=ledger.parent, pins=pins, decisions=lambda: decisions_path.read_text(), now=lambda: dt.datetime.now(dt.timezone.utc), admission_check=admit, record_once=lambda index, nonce, owner, directory: run_once(index, nonce, owner, directory, baseline=json.loads(baseline.read_bytes()), runtime=value['runtime'], check=check))
+        result = record_twice(ledger_path=ledger, private_dir=ledger.parent, pins=pins, decisions=lambda: decisions_path.read_text(), now=lambda: dt.datetime.now(dt.timezone.utc), admission_check=admit, record_once=lambda index, nonce, owner, directory: run_once(index, nonce, owner, directory, baseline=baseline_value, runtime=value['runtime'], check=check))
         print(json.dumps({key: str(path) for key, path in result.items()}, sort_keys=True))
     finally: signal.signal(signal.SIGTERM, previous)
     return 0

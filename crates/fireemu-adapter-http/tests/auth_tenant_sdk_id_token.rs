@@ -53,6 +53,7 @@ fn emulator_state() -> AuthState {
         allow_routed_projects: false,
         stateless_refresh_tokens: true,
         idp_continuations: IdpContinuationPolicy::Disabled,
+        idp_assertions: fireemu_adapter_http::identity_toolkit::IdpAssertionPolicy::Fixture,
         query_limits: AuthQueryLimits::EmulatorUnbounded,
         client_api_key: ClientApiKeyPolicy::Optional,
         fake_custom_token_expiry: FakeCustomTokenExpiry::Ignore,

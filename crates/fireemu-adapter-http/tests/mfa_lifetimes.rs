@@ -71,6 +71,7 @@ fn state(strict: bool) -> AuthState {
         client_api_key: fireemu_adapter_http::identity_toolkit::ClientApiKeyPolicy::Optional,
         fake_custom_token_expiry: FakeCustomTokenExpiry::Ignore,
         custom_token_trust: None,
+        idp_assertions: fireemu_adapter_http::identity_toolkit::IdpAssertionPolicy::Fixture,
         app_check: None,
         app_check_policy: None,
         tenancy: None,

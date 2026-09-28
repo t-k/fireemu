@@ -1187,6 +1187,10 @@ pub struct RuntimeConfig {
     /// (`auth.customTokenSigners`). When set, only tokens they signed are accepted, as in
     /// production; when absent, the unsigned tokens of the Admin SDK's emulator mode are.
     pub auth_custom_token_signers: Option<serde_json::Map<String, Value>>,
+    /// OIDC issuers whose signed ID tokens the strict profile verifies, each with its public
+    /// JWK set (`auth.idpSigners`, AUTH-FEDERATION owner decision O4). No key is fetched from
+    /// an issuer; without an entry, strict refuses the issuer's sign-ins.
+    pub auth_idp_signers: Option<serde_json::Map<String, Value>>,
     /// The default project's API keys (`auth.apiKeys`). When any is declared, client requests
     /// with another key are refused as production's API front end refuses them; when none is,
     /// any key is accepted, as by the official emulator.
@@ -1409,6 +1413,7 @@ impl Default for RuntimeConfig {
             scheduler_catch_up: "all".to_owned(),
             id_token_signing: fireemu_core_auth::jwt::SigningMode::UnsignedEmulator,
             auth_custom_token_signers: None,
+            auth_idp_signers: None,
             auth_api_keys: Vec::new(),
             app_check: AppCheckConfig::disabled(),
         }
@@ -1416,12 +1421,13 @@ impl Default for RuntimeConfig {
 }
 
 /// The keys of the `auth` section (spec/config/fireemu.schema.json).
-pub(crate) const AUTH_KEYS: [&str; 18] = [
+pub(crate) const AUTH_KEYS: [&str; 19] = [
     "enabled",
     "apiKeys",
     "projectIssuer",
     "idTokenSigning",
     "customTokenSigners",
+    "idpSigners",
     "totp",
     "secretMaterialization",
     "forwardInboundCredentials",
@@ -3465,6 +3471,14 @@ impl RuntimeConfig {
                     .map_err(|e| ConfigError(format!("auth.customTokenSigners: {e}")))?;
                 cfg.auth_custom_token_signers = Some(signers.clone());
             }
+            if let Some(signers) = auth.get("idpSigners") {
+                let signers = signers
+                    .as_object()
+                    .ok_or_else(|| ConfigError("auth.idpSigners must be an object".to_owned()))?;
+                fireemu_adapter_http::identity_toolkit::IdpSignerTrust::from_jwks(signers)
+                    .map_err(|e| ConfigError(format!("auth.idpSigners: {e}")))?;
+                cfg.auth_idp_signers = Some(signers.clone());
+            }
             if let Some(forward) = auth.get("forwardInboundCredentials") {
                 cfg.auth_forward_inbound_credentials = forward.as_bool().ok_or_else(|| {
                     ConfigError("auth.forwardInboundCredentials must be a boolean".to_owned())
@@ -5165,6 +5179,37 @@ mod tests {
             Err(ConfigError("auth must be an object".to_owned()))
         );
         assert!(parse(&json!({"idTokenSigning": "hs256"})).is_err());
+    }
+
+    #[test]
+    fn idp_signers_are_validated_when_the_configuration_is_read() {
+        // A public 2048-bit modulus; the key it belongs to was discarded.
+        let modulus = "0lwNtQWMVy0QqgEvrBmoFqwky_dcMx8CgS-o2rTesEV7QbG4cvNigTcDV7b_u0twRkJdonkMPjbUs0b8NKe_0_UOZ5vE_kILFG4TtPdeZWub8xnqhETc7WifXhEfqcB8xFbRyIxU9V0d_epsuNnQ-Nd7NlnFsH-aaq6f1HKp55_BVNxudwmHwT49P6JhNDDh7FWyoYBBBFtQ0St8dky4MFQTd2swZP4pEA8xGp-q-1mxbn0g9gfbq5voYWtOaDW9a2lsC_S_d6DecsrNWn4YYJ7Qc5xcx4pI70a23zftkVBj_I-Eip2hcvNUEsZJA4LlR4BgDLsNWu3ZWQxe08fOew";
+        let jwks = json!({"keys": [{"kty": "RSA", "alg": "RS256", "use": "sig", "kid": "k", "n": modulus, "e": "AQAB"}]});
+        let issuer = "https://idp.example/oidc/run";
+        let parsed = parse(&json!({"idpSigners": {issuer: jwks.clone()}})).unwrap();
+        assert_eq!(
+            parsed.auth_idp_signers,
+            Some(json!({issuer: jwks}).as_object().unwrap().clone())
+        );
+        assert_eq!(parse(&json!({})).unwrap().auth_idp_signers, None);
+        assert_eq!(
+            parse(&json!({"idpSigners": []})),
+            Err(ConfigError("auth.idpSigners must be an object".to_owned()))
+        );
+        assert!(
+            parse(&json!({"idpSigners": {"http://idp.example": jwks.clone()}}))
+                .unwrap_err()
+                .0
+                .starts_with("auth.idpSigners: ")
+        );
+        // A key the strict verifier could never use is refused at startup.
+        let mut unusable = jwks;
+        unusable["keys"][0].as_object_mut().unwrap().remove("use");
+        assert!(parse(&json!({"idpSigners": {issuer: unusable}}))
+            .unwrap_err()
+            .0
+            .contains("use sig"));
     }
 
     #[test]

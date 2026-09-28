@@ -111,6 +111,7 @@ fn state(strict: bool, handles_send_email: bool) -> (AuthState, Arc<Mutex<Vec<Ma
         client_api_key: ClientApiKeyPolicy::Optional,
         fake_custom_token_expiry: FakeCustomTokenExpiry::Ignore,
         custom_token_trust: None,
+        idp_assertions: fireemu_adapter_http::identity_toolkit::IdpAssertionPolicy::Fixture,
         app_check: None,
         app_check_policy: None,
         tenancy: None,

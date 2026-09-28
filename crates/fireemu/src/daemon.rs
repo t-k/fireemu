@@ -325,6 +325,28 @@ fn blocking_auth_selection(
     }
 }
 
+/// How `signInWithIdp` assertions are verified (AUTH-FEDERATION owner decision O4). Strict
+/// verifies signed OIDC ID tokens with the `auth.idpSigners` keys, and refuses every `IdP`
+/// sign-in without them; the emulator profile keeps the fixture `IdP` and ignores the keys.
+fn idp_assertion_policy(
+    profile: crate::config::CompatibilityProfile,
+    signers: Option<&serde_json::Map<String, serde_json::Value>>,
+) -> Result<fireemu_adapter_http::identity_toolkit::IdpAssertionPolicy, String> {
+    use fireemu_adapter_http::identity_toolkit::{IdpAssertionPolicy, IdpSignerTrust};
+    Ok(match profile {
+        crate::config::CompatibilityProfile::Emulator => IdpAssertionPolicy::Fixture,
+        crate::config::CompatibilityProfile::Strict => {
+            // Validated when the configuration was parsed; a failure here is a configuration bug.
+            let trust = signers
+                .map(IdpSignerTrust::from_jwks)
+                .transpose()
+                .map_err(|e| format!("auth.idpSigners: {e}"))?
+                .unwrap_or_default();
+            IdpAssertionPolicy::SignedOidc(Arc::new(trust))
+        }
+    })
+}
+
 /// The bridge's selections, global forwarding switch and forwarding restrictions, as the local
 /// configuration gives them.
 type BlockingAuthBridgeSettings = (
@@ -440,6 +462,22 @@ pub(crate) fn custom_token_signer_note(cfg: &RuntimeConfig) -> Option<&'static s
         && cfg.auth_custom_token_signers.is_none())
     .then_some(
         "  custom tokens:    refused (strict accepts only signed tokens: set auth.customTokenSigners to the service accounts' public JWK sets, or use profile \"emulator\" for the Admin SDK's unsigned emulator tokens)",
+    )
+}
+
+/// The startup notice for a strict profile without `IdP` signers: strict verifies OIDC ID
+/// tokens only with `auth.idpSigners` keys, so without them it refuses every OIDC sign-in (SAML
+/// responses are verified with each provider's configured certificates).
+pub(crate) fn idp_signer_note(cfg: &RuntimeConfig) -> Option<&'static str> {
+    idp_signer_note_for(cfg.profile, cfg.auth_idp_signers.is_some())
+}
+
+fn idp_signer_note_for(
+    profile: crate::config::CompatibilityProfile,
+    configured: bool,
+) -> Option<&'static str> {
+    (profile == crate::config::CompatibilityProfile::Strict && !configured).then_some(
+        "  identity providers: OIDC refused (strict accepts only signed OIDC ID tokens: set auth.idpSigners to the issuers' public JWK sets); SAML responses are verified with each provider's certificates; use profile \"emulator\" for the fixture IdP",
     )
 }
 
@@ -562,6 +600,7 @@ fn assemble_adapters(bound: BoundStartup) -> Result<ServiceAssembly, String> {
         })
         .transpose()
         .map_err(|e| format!("auth.customTokenSigners: {e}"))?;
+    let idp_assertions = idp_assertion_policy(cfg.profile, cfg.auth_idp_signers.as_ref())?;
     let auth = Arc::new(AuthState {
         store: auth_store.clone(),
         clock: clock.clone(),
@@ -632,6 +671,7 @@ fn assemble_adapters(bound: BoundStartup) -> Result<ServiceAssembly, String> {
             }
         },
         custom_token_trust,
+        idp_assertions,
         tenancy: Some(tenancy.clone()),
         app_check: app_check.clone(),
         app_check_policy: auth_policy,
@@ -1760,8 +1800,8 @@ mod tests {
         apply_auth_config_overrides, apply_auth_password_policy_overrides, auth_project_config,
         auth_sign_in_config, auth_signup_quota_config, blocking_auth_bridge_settings,
         blocking_auth_selection, close_functions_source_admission, function_log_input,
-        reapply_explicit_auth_config, reapply_explicit_auth_password_policies,
-        reapply_explicit_auth_quota,
+        idp_assertion_policy, reapply_explicit_auth_config,
+        reapply_explicit_auth_password_policies, reapply_explicit_auth_quota,
     };
 
     /// Only the strict profile's unpinned daemon follows wall time on Firestore; a pinned clock
@@ -2517,5 +2557,46 @@ mod tests {
         assert!(registry
             .tenant_store("demo-app", "unrelated-tenant")
             .is_none());
+    }
+
+    #[test]
+    fn only_strict_without_idp_signers_says_identity_providers_are_refused() {
+        use super::idp_signer_note_for;
+        use crate::config::CompatibilityProfile;
+        assert!(idp_signer_note_for(CompatibilityProfile::Strict, false)
+            .is_some_and(|note| note.contains("auth.idpSigners")));
+        assert_eq!(
+            idp_signer_note_for(CompatibilityProfile::Strict, true),
+            None
+        );
+        assert_eq!(
+            idp_signer_note_for(CompatibilityProfile::Emulator, false),
+            None
+        );
+    }
+
+    #[test]
+    fn strict_verifies_idp_assertions_even_without_signers_and_the_emulator_keeps_the_fixture() {
+        use crate::config::CompatibilityProfile;
+        use fireemu_adapter_http::identity_toolkit::IdpAssertionPolicy;
+        // A public 2048-bit modulus; the key it belongs to was discarded.
+        let modulus = "0lwNtQWMVy0QqgEvrBmoFqwky_dcMx8CgS-o2rTesEV7QbG4cvNigTcDV7b_u0twRkJdonkMPjbUs0b8NKe_0_UOZ5vE_kILFG4TtPdeZWub8xnqhETc7WifXhEfqcB8xFbRyIxU9V0d_epsuNnQ-Nd7NlnFsH-aaq6f1HKp55_BVNxudwmHwT49P6JhNDDh7FWyoYBBBFtQ0St8dky4MFQTd2swZP4pEA8xGp-q-1mxbn0g9gfbq5voYWtOaDW9a2lsC_S_d6DecsrNWn4YYJ7Qc5xcx4pI70a23zftkVBj_I-Eip2hcvNUEsZJA4LlR4BgDLsNWu3ZWQxe08fOew";
+        let issuer = "https://idp.example/oidc/run";
+        let signers = json!({issuer: {"keys": [{"kty": "RSA", "alg": "RS256", "use": "sig", "kid": "k", "n": modulus, "e": "AQAB"}]}});
+        let signers = signers.as_object().unwrap();
+        match idp_assertion_policy(CompatibilityProfile::Strict, Some(signers)).unwrap() {
+            IdpAssertionPolicy::SignedOidc(trust) => assert!(trust.key(issuer, "k").is_some()),
+            IdpAssertionPolicy::Fixture => panic!("strict must verify signed assertions"),
+        }
+        match idp_assertion_policy(CompatibilityProfile::Strict, None).unwrap() {
+            IdpAssertionPolicy::SignedOidc(trust) => assert!(!trust.knows(issuer)),
+            IdpAssertionPolicy::Fixture => panic!("strict without signers must still refuse"),
+        }
+        for configured in [None, Some(signers)] {
+            assert!(matches!(
+                idp_assertion_policy(CompatibilityProfile::Emulator, configured).unwrap(),
+                IdpAssertionPolicy::Fixture
+            ));
+        }
     }
 }

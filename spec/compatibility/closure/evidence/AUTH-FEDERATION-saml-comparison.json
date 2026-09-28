@@ -1,0 +1,258 @@
+{
+  "kind": "auth-federation-saml-comparison-v1",
+  "artifactSha256": "ff883a9bcd577ba7f7f12619c26c8e80596777ca551a69f47e18034269336de0",
+  "fixtureSha256": "349120878c55c74ef8d04253221cd6c2f8ac5688b85a8cfa75de8359e64951b9",
+  "summary": {
+    "MATCH": 62
+  },
+  "rows": [
+    {
+      "row": "auth-federation/saml/sign-in#create-provider",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-federation/saml/sign-in#auth-uri",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-federation/saml/sign-in#first",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-federation/saml/sign-in#auth-uri-again",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-federation/saml/sign-in#returning",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-federation/saml/sign-in#lookup",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-federation/saml/sign-in#refresh",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-federation/saml/conditions#create-provider",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-federation/saml/conditions#valid-auth-uri",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-federation/saml/conditions#valid",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-federation/saml/conditions#audience-other-auth-uri",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-federation/saml/conditions#audience-other",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-federation/saml/conditions#destination-other-auth-uri",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-federation/saml/conditions#destination-other",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-federation/saml/conditions#recipient-other-auth-uri",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-federation/saml/conditions#recipient-other",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-federation/saml/conditions#not-yet-valid-auth-uri",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-federation/saml/conditions#not-yet-valid",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-federation/saml/conditions#expired-conditions-auth-uri",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-federation/saml/conditions#expired-conditions",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-federation/saml/conditions#expired-confirmation-auth-uri",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-federation/saml/conditions#expired-confirmation",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-federation/saml/conditions#in-response-to-other-auth-uri",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-federation/saml/conditions#in-response-to-other",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-federation/saml/conditions#in-response-to-absent-auth-uri",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-federation/saml/conditions#in-response-to-absent",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-federation/saml/conditions#issuer-other-auth-uri",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-federation/saml/conditions#issuer-other",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-federation/saml/conditions#status-failure-auth-uri",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-federation/saml/conditions#status-failure",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-federation/saml/attributes#create-provider",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-federation/saml/attributes#persistent-auth-uri",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-federation/saml/attributes#persistent-name-id",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-federation/saml/attributes#lookup-persistent",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-federation/saml/attributes#multi-auth-uri",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-federation/saml/attributes#multi-valued",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-federation/saml/acs#create-provider",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-federation/saml/acs#other-continue",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-federation/saml/certificate#create-provider",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-federation/saml/certificate#auth-uri",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-federation/saml/certificate#expired-certificate",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-federation/duplicate-email-lookup#create-provider",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-federation/duplicate-email-lookup#allow-duplicates",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-federation/duplicate-email-lookup#create-owner",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-federation/duplicate-email-lookup#sign-in",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-federation/duplicate-email-lookup#lookup-new",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-federation/duplicate-email-lookup#lookup-owner",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-federation/duplicate-email-lookup#identifier",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-federation/oidc/nonce-mismatch#create-provider",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-federation/oidc/nonce-mismatch#mismatch",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-federation/oidc/stale#create-provider",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-federation/oidc/stale#iat-minus-300",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-federation/oidc/stale#iat-minus-1800",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-federation/oidc/stale#iat-minus-3500",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-federation/oidc/stale#iat-minus-3700",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-federation/oidc/stale#iat-minus-7200",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-federation/oidc/azp#create-provider",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-federation/oidc/azp#azp-other",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-federation/oidc/azp#azp-own",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-federation/third-party-configured#create-google",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-federation/third-party-configured#google-garbage-id-token",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-federation/third-party-configured#delete-google",
+      "status": "MATCH"
+    }
+  ]
+}

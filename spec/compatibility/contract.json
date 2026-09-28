@@ -993,7 +993,7 @@
               "precision": "exact-for-local-semantics"
             },
             {
-              "behaviour": "a strict-profile Listen stream ends with INTERNAL once its ID token expires, without waiting for a later commit, as production ended every held native stream around its token's expiry (AUTH-FS-CROSS stage 2, 2026-09-28, two recordings); when production closes it relative to expiry is not settled yet (one stream ended before exp-60 s, all by exp+35 s), so fireemu closes at exp and the rule is refined after the next recording; a commit met after a pinned clock was moved past exp ends it the same way; the emulator profile keeps the stream, as the official emulator does",
+              "behaviour": "a strict-profile Listen stream ends with INTERNAL once its ID token expires, without waiting for a later commit, as production ended every held native stream around its token's expiry (AUTH-FS-CROSS stage 2, 2026-09-28, two recordings); when production closes it relative to expiry is not settled yet (one stream ended before exp-60 s, all by exp+35 s), so closing at exp is provisional: the close-time rule is decided from the streamEnds of the next stage-2 recording (packet v7); a commit met after a pinned clock was moved past exp ends it the same way; the emulator profile keeps the stream, as the official emulator does",
               "precision": "exact-for-local-semantics"
             }
           ],

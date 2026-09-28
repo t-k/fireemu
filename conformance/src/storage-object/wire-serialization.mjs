@@ -77,11 +77,13 @@ export function serializeLocalHttpRequest(value, init, origins) {
         !/^[!#$%&'*+.^_`|~A-Za-z0-9-]+$/.test(name) ||
         typeof descriptor.value !== "string" ||
         !/^[\x20-\x7e]*$/.test(descriptor.value) ||
-        FRAMING_HEADERS.has(key) ||
+        (FRAMING_HEADERS.has(key) &&
+          !(key === "content-length" && descriptor.value === String(body.length))) ||
         seen.has(key)
       )
         throw new Error();
       seen.add(key);
+      if (key === "content-length") continue;
       headers.push(name, descriptor.value);
     }
     let head = `${method} ${url.pathname}${url.search} HTTP/1.1\r\n`;

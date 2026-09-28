@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { serializeLocalHttpRequest } from "./storage-object/wire-serialization.mjs";
+import { buildCorpus } from "./storage-object/corpus.mjs";
 const origin = "http://127.0.0.1:9999";
 const serialize = (path, init = {}) => serializeLocalHttpRequest(origin + path, init, [origin]);
 
@@ -33,6 +34,58 @@ test("UTF8 JSON Content-Length counts bytes and empty GET explicitly has zero bo
   const get = serialize("/read");
   assert.equal(get.headers[5], "0");
   assert.equal(get.body.length, 0);
+});
+
+test("canonical GCS resumable chunks, query and cancellation retain exact declared lengths with one framing header", () => {
+  const recipe = buildCorpus({
+    bucket: "example.appspot.com",
+    prefix: "storage-object/run/",
+  }).recipes.find((row) => row.id === "storage-object/gcs/resumable-upload");
+  const continuations = [...recipe.steps, ...recipe.cleanup].filter(
+    (step) => step.sessionUriReference,
+  );
+  assert.equal(continuations.length, 5);
+  for (const step of continuations) {
+    const body = step.body ? Buffer.from(step.body.base64, "base64") : undefined;
+    const serialized = serialize(
+      "/upload/storage/v1/b/example.appspot.com/o?upload_id=synthetic-session",
+      {
+        method: step.method,
+        headers: step.headers,
+        body,
+      },
+    );
+    const names = serialized.headers.filter((_, index) => index % 2 === 0);
+    assert.equal(names.filter((name) => name.toLowerCase() === "content-length").length, 1);
+    assert.equal(serialized.headers[5], step.headers["content-length"]);
+    assert.equal(serialized.body.length, Number(step.headers["content-length"]));
+    assert.ok(
+      serialized.wire
+        .subarray(-serialized.body.length || serialized.wire.length)
+        .equals(serialized.body),
+    );
+  }
+});
+
+test("declared Content-Length must match actual UTF8 bytes and reject mismatches, duplicate casing and noncanonical forms", () => {
+  const body = "日本語";
+  assert.equal(
+    serialize("/x", { method: "POST", body, headers: { "Content-Length": "9" } }).headers[5],
+    "9",
+  );
+  for (const value of ["3", "8", "10", "09", " 9", "+9", "9 ", "9.0"])
+    assert.throws(
+      () => serialize("/x", { body, headers: { "content-length": value } }),
+      /invalid wire request/,
+    );
+  assert.throws(
+    () => serialize("/x", { body, headers: { "Content-Length": "9", "content-length": "9" } }),
+    /invalid wire request/,
+  );
+  assert.throws(
+    () => serialize("/x", { headers: { "content-length": "1" } }),
+    /invalid wire request/,
+  );
 });
 
 for (const header of [

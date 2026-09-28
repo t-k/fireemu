@@ -3340,6 +3340,14 @@ impl BlockingAuthBridge {
         self
     }
 
+    /// Serves the events and waits the deadline of `profile`: what the daemon builds (closure
+    /// re-review, 2026-09-28).
+    #[must_use]
+    pub const fn for_profile(self, profile: CompatibilityProfile) -> Self {
+        self.with_send_events(serves_send_blocking_events(profile))
+            .with_deadline_for(profile)
+    }
+
     /// Waits for a function as `profile` does ([`blocking_auth_deadline`]).
     #[must_use]
     pub const fn with_deadline_for(mut self, profile: CompatibilityProfile) -> Self {
@@ -5234,6 +5242,7 @@ mod tests {
     /// function answered (the fake runner echoes the request): the user events carry the
     /// user, the mail event the address, and a bridge without the email event runs nothing.
     #[tokio::test(flavor = "current_thread")]
+    #[allow(clippy::too_many_lines)] // One scenario per invocation path, checked together.
     async fn every_invocation_path_delivers_its_token_and_answers_the_function() {
         use fireemu_adapter_http::identity_toolkit::{AuthBlockingContext, AuthBlockingHook};
         use fireemu_core_auth::mfa::TotpPolicy;
@@ -5416,6 +5425,28 @@ mod tests {
         for absent in ["sub", "user_record", "tenant_id", "sign_in_method"] {
             assert!(!claims.contains_key(absent), "{absent}");
         }
+    }
+
+    /// The daemon's bridge takes its served events and its deadline from the profile
+    /// (closure re-review, 2026-09-28).
+    #[tokio::test(flavor = "current_thread")]
+    async fn the_daemon_bridge_follows_the_profile() {
+        let runtime = runtime_with_blocking_auth_targets(&[]).await;
+        let bridge = |profile| {
+            BlockingAuthBridge::new_with_selections(
+                runtime.clone(),
+                fireemu_core_functions::manifest::BlockingAuthSelections::default(),
+                false,
+            )
+            .for_profile(profile)
+        };
+        let strict = bridge(super::CompatibilityProfile::Strict);
+        assert!(strict.send_events);
+        assert_eq!(strict.deadline, Duration::from_secs(7));
+        let emulator = bridge(super::CompatibilityProfile::Emulator);
+        assert!(!emulator.send_events);
+        assert_eq!(emulator.deadline, Duration::from_secs(60));
+        runtime.shutdown().await;
     }
 
     /// Only the strict profile serves the email and SMS events, and a local selection is

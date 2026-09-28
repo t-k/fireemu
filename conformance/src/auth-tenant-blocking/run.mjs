@@ -1385,9 +1385,9 @@ export function classify({ stale, production, alternative, fireemu }) {
 }
 
 async function check() {
-  const fixture = existsSync(FIXTURE)
-    ? JSON.parse(await readFile(FIXTURE, "utf8"))
-    : { programs: {} };
+  // One read: the digest recorded is that of the bytes the rows were compared against.
+  const fixtureText = existsSync(FIXTURE) ? await readFile(FIXTURE, "utf8") : undefined;
+  const fixture = fixtureText === undefined ? { programs: {} } : JSON.parse(fixtureText);
   const selected = selectedPrograms();
   validateTenantCorpus(selected);
   const harnesses = {
@@ -1420,7 +1420,7 @@ async function check() {
   const summary = {};
   for (const { status } of rows) summary[status] = (summary[status] ?? 0) + 1;
   const artifactSha256 = sha256(await readFile(local.binary));
-  const fixtureSha256 = existsSync(FIXTURE) ? sha256(await readFile(FIXTURE, "utf8")) : undefined;
+  const fixtureSha256 = fixtureText === undefined ? undefined : sha256(fixtureText);
   await writeFile(
     join(RUN_DIR, "comparison.json"),
     `${JSON.stringify({ suite: SUITE, artifact: local.binary, artifactSha256, fixtureSha256, runnerSha256: await runnerSha256(), ...(await sourceTree()), summary, orphans, failures: local.failures, rows }, null, 2)}\n`,

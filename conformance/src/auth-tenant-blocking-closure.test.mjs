@@ -253,6 +253,13 @@ test("each recorded condition is backed by committed comparisons of one artifact
       assert.ok(typeof reason === "string" && reason.length > 0, `${label}: ${row} says why`);
     }
     if (condition.status === "VERIFIED") {
+      // TB12 holds on the branch before integration only: a verified condition, which is
+      // bound to the integrated artifact, carries no divergence under it (owner ledger 418).
+      assert.deepEqual(
+        divergences.filter(({ scopeDecision }) => scopeDecision === "TB12").map(({ row }) => row),
+        [],
+        `${label}: TB12 is removed once verified`,
+      );
       assert.deepEqual(off, [], `${label}: every row matches production`);
       assert.deepEqual(pending, [], `${label}: nothing is left for after the integration`);
     } else {

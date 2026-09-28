@@ -8947,3 +8947,28 @@ fn routed_project_config_installs_its_store_for_each_kind_of_update() {
         assert!(registry.routed_store_for(project).is_some(), "{mask}");
     }
 }
+
+/// A sign-in that ran a blocking function answers an unnamed account's `displayName` as `""`,
+/// as the sign-in without one does (AUTH-TENANT-BLOCKING recording 2026-09-28,
+/// events#sign-in-password).
+#[test]
+fn a_blocked_sign_in_answers_an_unnamed_account_as_production() {
+    let mut s = state();
+    sign_up(&s, "unnamed@example.com");
+    let sign_in = |s: &AuthState| {
+        post(
+            s,
+            &format!("{V1}/accounts:signInWithPassword"),
+            &json!({"email": "unnamed@example.com", "password": "hunter22", "returnSecureToken": true}),
+        )
+    };
+    let (status, plain) = sign_in(&s);
+    assert_eq!(status, 200, "{plain}");
+    s.blocking = Some(Arc::new(FixedBeforeSignInHook {
+        response: json!({"userRecord": {"updateMask": "sessionClaims", "sessionClaims": {"s": 1}}}),
+    }));
+    let (status, blocked) = sign_in(&s);
+    assert_eq!(status, 200, "{blocked}");
+    assert_eq!(blocked["displayName"], plain["displayName"], "{blocked}");
+    assert_eq!(blocked["displayName"], "");
+}

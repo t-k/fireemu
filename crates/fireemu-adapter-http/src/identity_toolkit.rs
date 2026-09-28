@@ -2757,8 +2757,12 @@ fn dispatch_with_blocking_hook(
                     }
                 }
                 if let Some(user) = committed.user(&uid) {
+                    // An account without a name answers "" as the sign-in without a blocking
+                    // function does (AUTH-TENANT-BLOCKING recording 2026-09-28, e.g.
+                    // events#sign-in-password).
                     if committed_response.body.get("displayName").is_some() {
-                        committed_response.body["displayName"] = json!(user.display_name);
+                        committed_response.body["displayName"] =
+                            json!(user.display_name.as_deref().unwrap_or_default());
                     }
                     if committed_response.body.get("photoUrl").is_some() {
                         committed_response.body["photoUrl"] = json!(user.photo_url);

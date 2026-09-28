@@ -3240,15 +3240,16 @@ fn request_project(
 
 /// The tenant an account request's ID token names, answered as the official Auth emulator
 /// answers it (emulator profile; firebase-tools 15.28.2). The emulator takes the target tenant
-/// from the body, else from the ID token (`toExegesisController`): a body tenant other than the
-/// token's is `TENANT_ID_MISMATCH`, and a target tenant that no longer exists (or never did)
-/// finds no user there (`parseIdToken`: `USER_NOT_FOUND`), whatever the API key or a query
-/// tenant say. Unlike the emulator, which creates
-/// the missing tenant on the way, fireemu creates nothing. A token of another project, a signed
-/// token that does not decode, and a request without a tenant token keep their current answer.
+/// from the path, else from the body, else from the ID token (`toExegesisOperation`): a path or
+/// body tenant other than the token's is `TENANT_ID_MISMATCH`, and a target tenant that no
+/// longer exists (or never did) finds no user there (`parseIdToken`: `USER_NOT_FOUND`), whatever
+/// the API key or a query tenant say. Unlike the emulator, which creates the missing tenant on
+/// the way, fireemu creates nothing. A token of another project, a signed token that does not
+/// decode, a `tenantId` that is not a string, and a request without an ID token keep their
+/// current answer.
 ///
 /// `Ok(Some(body))` is the body the request continues with: an empty `tenantId` is dropped, as
-/// the emulator reads `""` as no tenant.
+/// the emulator reads `""` as no tenant (a project user's token too).
 fn emulator_named_tenant(
     state: &AuthState,
     path: &str,
@@ -3267,7 +3268,7 @@ fn emulator_named_tenant(
     if !account_api {
         return Ok(None);
     }
-    let Some((audience, Some(token_tenant))) = str_field(body, "idToken").and_then(|token| {
+    let Some((audience, token_tenant)) = str_field(body, "idToken").and_then(|token| {
         let signer = state.store.lock().ok().and_then(|s| s.signer_arc());
         let decoded = fireemu_core_auth::jwt::decode_token(token, signer.as_deref()).ok()?;
         let audience = decoded
@@ -3289,26 +3290,35 @@ fn emulator_named_tenant(
     if audience != project {
         return Ok(None);
     }
-    // The target is the body's tenant, else the token's; `""` is no tenant to the emulator
-    // (JavaScript falsiness), so it is dropped and the token names the tenant.
+    // `""` is no tenant to the emulator (JavaScript falsiness), so it is dropped.
     let mut rewritten = None;
-    let target = match body.get("tenantId") {
-        Some(Value::String(named)) if !named.is_empty() => {
-            if named.as_str() != token_tenant.as_str() {
-                return Err(error(400, "TENANT_ID_MISMATCH"));
-            }
-            named.as_str()
-        }
-        None | Some(Value::Null) => token_tenant.as_str(),
+    let body_tenant = match body.get("tenantId") {
+        Some(Value::String(named)) if !named.is_empty() => Some(named.as_str()),
+        None | Some(Value::Null) => None,
         Some(Value::String(_)) => {
             let mut without = body.clone();
             if let Some(object) = without.as_object_mut() {
                 object.remove("tenantId");
             }
             rewritten = Some(without);
-            token_tenant.as_str()
+            None
         }
         _ => return Ok(None),
+    };
+    let Some(token_tenant) = token_tenant else {
+        return Ok(rewritten);
+    };
+    // The target is the path's tenant, else the body's, else the token's. A path and a body
+    // tenant that differ are also `TENANT_ID_MISMATCH` (one of them is not the token's).
+    let path_tenant = routes::scoped_target(path).and_then(|(_, tenant)| tenant);
+    let target = match (path_tenant, body_tenant) {
+        (Some(named), _) | (None, Some(named)) => {
+            if named != token_tenant.as_str() || body_tenant.is_some_and(|b| b != named) {
+                return Err(error(400, "TENANT_ID_MISMATCH"));
+            }
+            named
+        }
+        (None, None) => token_tenant.as_str(),
     };
     if registry.tenant_store(&project, target).is_none() {
         return Err(error(400, "USER_NOT_FOUND"));

@@ -470,3 +470,256 @@ fn an_empty_body_tenant_is_the_tokens_tenant() {
         );
     }
 }
+
+/// A project user's token with an empty `tenantId` stays in the project in both profiles
+/// (strict: production's `""` names the project; emulator: the official emulator reads `""` as
+/// absent). fireemu's emulator profile answered `TENANT_NOT_FOUND`.
+#[test]
+fn an_empty_body_tenant_with_a_project_token_is_the_project() {
+    for (case, state, _registry) in cases() {
+        let (status, user) = post(
+            &state,
+            &format!("{V1}/accounts:signUp?key={KEY}"),
+            &json!({"email": "p@example.com", "password": "hunter22", "returnSecureToken": true}),
+        );
+        assert_eq!(status, 200, "{case}: {user}");
+        let (status, found) = sdk_call(
+            &state,
+            "accounts:lookup",
+            &json!({"idToken": user["idToken"], "tenantId": ""}),
+        );
+        assert_eq!(status, 200, "{case}: {found}");
+        assert_eq!(found["users"][0]["localId"], user["localId"], "{case}");
+    }
+}
+
+/// An Admin call on a tenant path with another tenant's ID token is `TENANT_ID_MISMATCH` in both
+/// profiles (emulator: firebase-tools 15.28.2 `toExegesisOperation` takes the path tenant first
+/// and checks the token against it), also once the token's tenant is deleted, and also when the
+/// path names the token's (deleted) tenant but the body names another. Nothing changes.
+#[test]
+fn a_path_tenant_other_than_the_tokens_is_a_mismatch() {
+    for (case, state, registry) in cases() {
+        let a = sign_up(&state, KEY, TENANT_A, "a@example.com");
+        let b = sign_up(&state, KEY, TENANT_B, "b@example.com");
+        let before_b = tenant_accounts(&state, "demo-app", TENANT_B);
+        let refuse = |path_tenant: &str, body: Value, when: &str| {
+            for route in ["accounts:lookup", "accounts:update", "accounts:delete"] {
+                let (status, refused) = admin(
+                    &state,
+                    "POST",
+                    &format!("{V1}/projects/demo-app/tenants/{path_tenant}/{route}"),
+                    &body,
+                );
+                assert_eq!(status, 400, "{case} {when} {route}: {refused}");
+                assert_eq!(
+                    class(&refused),
+                    "TENANT_ID_MISMATCH",
+                    "{case} {when} {route}: {refused}"
+                );
+            }
+        };
+        refuse(
+            TENANT_B,
+            json!({"idToken": a["idToken"], "displayName": "x"}),
+            "live",
+        );
+        // The path's tenant itself is served.
+        let (status, found) = admin(
+            &state,
+            "POST",
+            &format!("{V1}/projects/demo-app/tenants/{TENANT_B}/accounts:lookup"),
+            &json!({"localId": [b["localId"]]}),
+        );
+        assert_eq!(status, 200, "{case}: {found}");
+        assert_eq!(found["users"][0]["localId"], b["localId"], "{case}");
+
+        assert!(registry.delete_tenant("demo-app", TENANT_A), "{case}");
+        refuse(
+            TENANT_B,
+            json!({"idToken": a["idToken"], "displayName": "x"}),
+            "deleted",
+        );
+        refuse(
+            TENANT_A,
+            json!({"idToken": a["idToken"], "tenantId": TENANT_B, "displayName": "x"}),
+            "deleted path, other body",
+        );
+        assert_eq!(
+            tenant_accounts(&state, "demo-app", TENANT_B),
+            before_b,
+            "{case}"
+        );
+        assert!(
+            registry.tenant_store("demo-app", TENANT_A).is_none(),
+            "{case}: the deleted tenant is not created again"
+        );
+    }
+}
+
+/// A `tenantId` of blanks is a tenant name, not an empty one: it is not the token's tenant.
+#[test]
+fn a_blank_body_tenant_is_a_mismatch() {
+    for (case, state, _registry) in cases() {
+        let a = sign_up(&state, KEY, TENANT_A, "a@example.com");
+        let (status, refused) = sdk_call(
+            &state,
+            "accounts:lookup",
+            &json!({"idToken": a["idToken"], "tenantId": "   "}),
+        );
+        assert_eq!(status, 400, "{case}: {refused}");
+        assert_eq!(class(&refused), "TENANT_ID_MISMATCH", "{case}: {refused}");
+    }
+}
+
+/// The refusal of a missing tenant creates nothing, where the official emulator creates the
+/// tenant on the way (a divergence fireemu keeps).
+#[test]
+fn a_missing_tenant_is_not_created_by_its_refusal() {
+    for (case, state, registry) in cases() {
+        let a = sign_up(&state, KEY, TENANT_A, "a@example.com");
+        assert!(registry.delete_tenant("demo-app", TENANT_A), "{case}");
+        let (status, refused) =
+            sdk_call(&state, "accounts:lookup", &json!({"idToken": a["idToken"]}));
+        assert_eq!(status, 400, "{case}: {refused}");
+        assert!(
+            registry.tenant_store("demo-app", TENANT_A).is_none(),
+            "{case}"
+        );
+        let (status, tenants) = admin(
+            &state,
+            "GET",
+            "/identitytoolkit.googleapis.com/v2/projects/demo-app/tenants",
+            &json!({}),
+        );
+        assert_eq!(status, 200, "{case}: {tenants}");
+        let names: Vec<&str> = tenants["tenants"]
+            .as_array()
+            .map(|all| all.iter().filter_map(|t| t["name"].as_str()).collect())
+            .unwrap_or_default();
+        assert_eq!(names.len(), 1, "{case}: {tenants}");
+        assert!(names[0].ends_with(TENANT_B), "{case}: {tenants}");
+    }
+}
+
+/// A `tenantId` that is not a string keeps each profile's answer (strict: production's
+/// `INVALID_TENANT_ID`; emulator: fireemu's earlier path, not checked against the official
+/// emulator), and never reaches another tenant or the project.
+#[test]
+fn a_tenant_id_that_is_not_a_string_reaches_no_other_scope() {
+    for (case, state, _registry) in cases() {
+        let a = sign_up(&state, KEY, TENANT_A, "a@example.com");
+        sign_up(&state, KEY, TENANT_B, "b@example.com");
+        let before_b = tenant_accounts(&state, "demo-app", TENANT_B);
+        for tenant in [json!(0), json!({}), json!(false)] {
+            let (status, answer) = sdk_call(
+                &state,
+                "accounts:update",
+                &json!({"idToken": a["idToken"], "tenantId": tenant, "displayName": "x"}),
+            );
+            if case.starts_with("strict") {
+                assert_eq!(status, 400, "{case} {tenant}: {answer}");
+                assert_eq!(
+                    class(&answer),
+                    "INVALID_TENANT_ID",
+                    "{case} {tenant}: {answer}"
+                );
+            }
+            assert_eq!(
+                tenant_accounts(&state, "demo-app", TENANT_B),
+                before_b,
+                "{case} {tenant}"
+            );
+        }
+        let (status, project) = admin(
+            &state,
+            "GET",
+            &format!("{V1}/projects/demo-app/accounts:batchGet?maxResults=1000"),
+            &json!({}),
+        );
+        assert_eq!(status, 200, "{case}: {project}");
+        assert!(
+            project["users"].as_array().is_none_or(Vec::is_empty),
+            "{case}: {project}"
+        );
+    }
+}
+
+/// A forged tenant claim naming an existing sibling tenant is refused there in both profiles, and
+/// neither tenant changes.
+#[test]
+fn a_tenant_claim_forged_to_a_sibling_is_refused() {
+    for (case, state, _registry) in cases() {
+        let a = sign_up(&state, KEY, TENANT_A, "a@example.com");
+        sign_up(&state, KEY, TENANT_B, "b@example.com");
+        let before = (
+            tenant_accounts(&state, "demo-app", TENANT_A),
+            tenant_accounts(&state, "demo-app", TENANT_B),
+        );
+        let token = a["idToken"].as_str().unwrap();
+        let mut payload = claims(token);
+        payload["firebase"]["tenant"] = json!(TENANT_B);
+        let mut parts = token.split('.');
+        let header = parts.next().unwrap();
+        let signature = parts.nth(1).unwrap();
+        let forged = format!(
+            "{header}.{}.{signature}",
+            base64url_encode(payload.to_string().as_bytes())
+        );
+        for route in ["accounts:lookup", "accounts:update", "accounts:delete"] {
+            let (status, refused) = sdk_call(
+                &state,
+                route,
+                &json!({"idToken": forged, "displayName": "x"}),
+            );
+            assert_eq!(status, 400, "{case} {route}: {refused}");
+        }
+        let after = (
+            tenant_accounts(&state, "demo-app", TENANT_A),
+            tenant_accounts(&state, "demo-app", TENANT_B),
+        );
+        assert_eq!(after, before, "{case}");
+    }
+}
+
+/// With registered API keys, an unknown key and a token of a deleted tenant: the order of the
+/// two refusals is pinned (the tenant check runs before the key is refused, in both profiles;
+/// security review N1 of 2026-09-29), so that a change to it is seen.
+#[test]
+fn an_unknown_key_with_a_deleted_tenants_token_keeps_its_refusal_order() {
+    for (case, mut state, registry) in cases() {
+        let a = sign_up(&state, KEY, TENANT_A, "a@example.com");
+        let mut tenancy = Tenancy::new("demo-app");
+        assert!(registry.register(
+            "worker-alpha",
+            AuthStore::new("worker-alpha", SplitMix64::new(11), TotpPolicy::default()),
+        ));
+        tenancy
+            .register("worker-alpha", &[], &["alpha-key".to_owned()])
+            .unwrap();
+        state.tenancy = Some(Arc::new(RwLock::new(tenancy)));
+        assert!(registry.delete_tenant("demo-app", TENANT_A), "{case}");
+        let (status, refused) = post(
+            &state,
+            &format!("{V1}/accounts:lookup?key=unknown-key"),
+            &json!({"idToken": a["idToken"]}),
+        );
+        assert_eq!(status, 400, "{case}: {refused}");
+        assert_eq!(
+            class(&refused),
+            expected(&case, "TENANT_DELETED", "USER_NOT_FOUND"),
+            "{case}: {refused}"
+        );
+        // The key alone is refused: without an ID token no tenant check runs.
+        let (status, refused) = post(
+            &state,
+            &format!("{V1}/accounts:lookup?key=unknown-key"),
+            &json!({"localId": [a["localId"]]}),
+        );
+        assert_eq!(status, 400, "{case}: {refused}");
+        assert_eq!(
+            refused["error"]["details"][0]["reason"], "API_KEY_INVALID",
+            "{case}: {refused}"
+        );
+    }
+}

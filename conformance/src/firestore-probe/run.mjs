@@ -26,7 +26,7 @@ import {
 } from "../evidence.mjs";
 import { PROGRAMS } from "./programs.mjs";
 import { DIVERGENCES } from "./divergences.mjs";
-import { checkHistoricalProduction } from "./historical-production-check.mjs";
+import * as historical from "./historical-production-check.mjs";
 
 const PROJECT = "demo-firestore-probe";
 const TESTD_FIRESTORE_PORT = 32291;
@@ -125,8 +125,8 @@ async function probeOracle(inPath, outPath) {
 }
 
 /** Runs the programs against fireemu. */
-async function probeFireemu(inPath, outPath) {
-  const binary = resolveFireemuBinary();
+async function probeFireemu(inPath, outPath, chosen) {
+  const binary = chosen ?? resolveFireemuBinary();
   await runSupervisor({
     name: "fireemu",
     command: binary,
@@ -577,13 +577,28 @@ async function checkProduction() {
     throw new Error("historical production matrix has no verified live production observation");
   }
   const inPath = await writePrograms();
-  const fireemu = await probeFireemu(inPath, join(RUN_DIR, "fireemu-historical-production.json"));
-  const result = checkHistoricalProduction({
-    saved,
-    live: fireemu,
-    definitions: PROGRAMS,
-    excludedKeys: HISTORICAL_CHANGED_STEPS,
-  });
+  const binary = resolveFireemuBinary();
+  const before = await historical.measureArtifact(binary);
+  const fireemu = await probeFireemu(
+    inPath,
+    join(RUN_DIR, "fireemu-historical-production.json"),
+    binary,
+  );
+  const after = await historical.measureArtifact(binary);
+  const result = {
+    artifact: historical.historicalArtifactIdentity({
+      binary,
+      before: before.sha256,
+      after: after.sha256,
+      version: before.version,
+    }),
+    ...historical.checkHistoricalProduction({
+      saved,
+      live: fireemu,
+      definitions: PROGRAMS,
+      excludedKeys: HISTORICAL_CHANGED_STEPS,
+    }),
+  };
   await writeFile(
     join(RUN_DIR, "historical-production-comparison.json"),
     `${JSON.stringify(result, null, 2)}\n`,

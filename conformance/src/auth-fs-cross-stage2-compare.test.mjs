@@ -386,3 +386,51 @@ test("the deleted tenant's SDK row may vary only inside its allowed set", () => 
     "CAPPED",
   );
 });
+
+test("stage-2 comparison evidence binds the recording harness and the fireemu artifact apart", async () => {
+  const { stage2Evidence } = await import("./auth-fs-cross/stage2-compare.mjs");
+  const fixtureText = JSON.stringify({ harnessDigest: "h", programDigest: "p", rows: {} });
+  const comparison = {
+    summary: { MATCH: 1, MATCH_NONDETERMINISTIC: 1 },
+    rows: [
+      { row: "a", status: "MATCH", production: { x: 1 }, fireemu: { x: 1 } },
+      { row: "b", status: "MATCH_NONDETERMINISTIC", production: {}, fireemu: {} },
+    ],
+  };
+  const bindings = {
+    artifactSha256: "f".repeat(64),
+    harnessCommit: "a".repeat(40),
+    fireemuCommit: "b".repeat(40),
+  };
+  const evidence = stage2Evidence({ comparison, fixtureText, ...bindings });
+  assert.equal(evidence.kind, "auth-fs-cross-stage2-comparison-v1");
+  assert.deepEqual(evidence.harness, { commit: "a".repeat(40), digest: "h", programDigest: "p" });
+  assert.deepEqual(evidence.fireemu, { commit: "b".repeat(40), artifactSha256: "f".repeat(64) });
+  assert.match(evidence.fixtureSha256, /^[0-9a-f]{64}$/);
+  assert.deepEqual(evidence.summary, comparison.summary);
+  assert.deepEqual(evidence.rows, [
+    { row: "a", status: "MATCH" },
+    { row: "b", status: "MATCH_NONDETERMINISTIC" },
+  ]);
+  // A summary that the rows do not add up to, or a non-passing row, is refused.
+  assert.throws(
+    () => stage2Evidence({ comparison: { ...comparison, summary: { MATCH: 2 } }, fixtureText, ...bindings }),
+    /summary does not match the rows/,
+  );
+  assert.throws(
+    () =>
+      stage2Evidence({
+        comparison: {
+          summary: { MISMATCH: 1 },
+          rows: [{ row: "a", status: "MISMATCH" }],
+        },
+        fixtureText,
+        ...bindings,
+      }),
+    /not passing: a/,
+  );
+  assert.throws(
+    () => stage2Evidence({ comparison, fixtureText, ...bindings, harnessCommit: "abc" }),
+    /full commit/,
+  );
+});

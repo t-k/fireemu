@@ -1,0 +1,247 @@
+{
+  "kind": "auth-fs-cross-stage2-comparison-v1",
+  "harness": {
+    "commit": "4be4e58d47a377060f6edcf485e6cc0c9db01637",
+    "digest": "ba7ba895011de42dc2826ba51008da0cb566e721534f2216beb47c986295b1ac",
+    "programDigest": "9b9a699a96f25a21cee7954f184c64ceaee55441ec05dea1106140bcf9b0fb4a"
+  },
+  "fireemu": {
+    "commit": "782d847dfe1fe618b1dd98da1cd35e40f3fcc9b4",
+    "artifactSha256": "023db733b2f17016383d2f5241ea7ef6bf59ff33465334f61fd188ac41bf58d4"
+  },
+  "fixtureSha256": "c55f8b94e7e7235e0418c3c895823c157616b0c9408d7788b8b4fc11a3c06ca8",
+  "summary": {
+    "MATCH": 56,
+    "MATCH_NONDETERMINISTIC": 1
+  },
+  "rows": [
+    {
+      "row": "b-ab/after-switch",
+      "status": "MATCH"
+    },
+    {
+      "row": "b-ab/as-alice",
+      "status": "MATCH"
+    },
+    {
+      "row": "b-ab/bob-listens",
+      "status": "MATCH"
+    },
+    {
+      "row": "b-ab/switched",
+      "status": "MATCH"
+    },
+    {
+      "row": "b-out/after-sign-out",
+      "status": "MATCH"
+    },
+    {
+      "row": "b-out/listen-signed-out",
+      "status": "MATCH"
+    },
+    {
+      "row": "b-out/signed-in",
+      "status": "MATCH"
+    },
+    {
+      "row": "b-out/signed-in-again",
+      "status": "MATCH"
+    },
+    {
+      "row": "b-out/signed-out",
+      "status": "MATCH"
+    },
+    {
+      "row": "b-pend-ab/after-back",
+      "status": "MATCH"
+    },
+    {
+      "row": "b-pend-ab/after-online",
+      "status": "MATCH"
+    },
+    {
+      "row": "b-pend-ab/back",
+      "status": "MATCH"
+    },
+    {
+      "row": "b-pend-ab/offline",
+      "status": "MATCH"
+    },
+    {
+      "row": "b-pend-ab/online",
+      "status": "MATCH"
+    },
+    {
+      "row": "b-pend-out/after-back",
+      "status": "MATCH"
+    },
+    {
+      "row": "b-pend-out/after-online",
+      "status": "MATCH"
+    },
+    {
+      "row": "b-pend-out/back",
+      "status": "MATCH"
+    },
+    {
+      "row": "b-pend-out/offline",
+      "status": "MATCH"
+    },
+    {
+      "row": "b-pend-out/online",
+      "status": "MATCH"
+    },
+    {
+      "row": "claim/added",
+      "status": "MATCH"
+    },
+    {
+      "row": "claim/after-remove",
+      "status": "MATCH"
+    },
+    {
+      "row": "claim/removed",
+      "status": "MATCH"
+    },
+    {
+      "row": "claim/with-c",
+      "status": "MATCH"
+    },
+    {
+      "row": "claim/without-c",
+      "status": "MATCH"
+    },
+    {
+      "row": "held/after-change",
+      "status": "MATCH"
+    },
+    {
+      "row": "held/after-change-65s",
+      "status": "MATCH"
+    },
+    {
+      "row": "held/exp-minus-60",
+      "status": "MATCH"
+    },
+    {
+      "row": "held/exp-plus-35-grpc",
+      "status": "MATCH"
+    },
+    {
+      "row": "held/exp-plus-35-sdk",
+      "status": "MATCH_NONDETERMINISTIC"
+    },
+    {
+      "row": "held/life",
+      "status": "MATCH"
+    },
+    {
+      "row": "held/opened",
+      "status": "MATCH"
+    },
+    {
+      "row": "n-ab/after-switch",
+      "status": "MATCH"
+    },
+    {
+      "row": "n-ab/as-alice",
+      "status": "MATCH"
+    },
+    {
+      "row": "n-ab/bob-listens",
+      "status": "MATCH"
+    },
+    {
+      "row": "n-ab/switched",
+      "status": "MATCH"
+    },
+    {
+      "row": "n-out/after-sign-out",
+      "status": "MATCH"
+    },
+    {
+      "row": "n-out/listen-signed-out",
+      "status": "MATCH"
+    },
+    {
+      "row": "n-out/signed-in",
+      "status": "MATCH"
+    },
+    {
+      "row": "n-out/signed-in-again",
+      "status": "MATCH"
+    },
+    {
+      "row": "n-out/signed-out",
+      "status": "MATCH"
+    },
+    {
+      "row": "n-pend-ab/after-back",
+      "status": "MATCH"
+    },
+    {
+      "row": "n-pend-ab/after-online",
+      "status": "MATCH"
+    },
+    {
+      "row": "n-pend-ab/back",
+      "status": "MATCH"
+    },
+    {
+      "row": "n-pend-ab/offline",
+      "status": "MATCH"
+    },
+    {
+      "row": "n-pend-ab/online",
+      "status": "MATCH"
+    },
+    {
+      "row": "n-pend-out/after-back",
+      "status": "MATCH"
+    },
+    {
+      "row": "n-pend-out/after-online",
+      "status": "MATCH"
+    },
+    {
+      "row": "n-pend-out/back",
+      "status": "MATCH"
+    },
+    {
+      "row": "n-pend-out/offline",
+      "status": "MATCH"
+    },
+    {
+      "row": "n-pend-out/online",
+      "status": "MATCH"
+    },
+    {
+      "row": "resume/open",
+      "status": "MATCH"
+    },
+    {
+      "row": "tx-control/result",
+      "status": "MATCH"
+    },
+    {
+      "row": "tx-control/server",
+      "status": "MATCH"
+    },
+    {
+      "row": "tx-signout/result",
+      "status": "MATCH"
+    },
+    {
+      "row": "tx-signout/server",
+      "status": "MATCH"
+    },
+    {
+      "row": "tx-switch/result",
+      "status": "MATCH"
+    },
+    {
+      "row": "tx-switch/server",
+      "status": "MATCH"
+    }
+  ]
+}

@@ -3,6 +3,7 @@
 // recordings. Times, counts of repeated requests, heartbeats and snapshots that change only
 // metadata are not compared; the order of what a listener delivered and how it ended is.
 
+import { createHash } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
 
 const collapse = (list) => list.filter((value, i) => i === 0 || value !== list[i - 1]);
@@ -220,5 +221,41 @@ export function buildFixture({ recordings, metas, programDigest, harnessDigest }
       ),
     })),
     rows,
+  };
+}
+
+/**
+ * The committed evidence of one stage-2 comparison: the harness that recorded production (its
+ * commit and digests, from the fixture) and the fireemu artifact compared (its commit and
+ * sha256) are bound apart, since a later harness commit may change only how a run stops. Only
+ * passing rows are accepted, and the summary must be what the rows add up to.
+ */
+export function stage2Evidence({ comparison, fixtureText, artifactSha256, harnessCommit, fireemuCommit }) {
+  for (const [name, commit] of [
+    ["harness", harnessCommit],
+    ["fireemu", fireemuCommit],
+  ])
+    if (!/^[0-9a-f]{40}$/.test(commit ?? "")) throw new Error(`${name} needs a full commit`);
+  if (!/^[0-9a-f]{64}$/.test(artifactSha256 ?? "")) throw new Error("artifactSha256 is required");
+  const counted = {};
+  for (const { status } of comparison.rows) counted[status] = (counted[status] ?? 0) + 1;
+  if (!isDeepStrictEqual(counted, comparison.summary))
+    throw new Error("the summary does not match the rows");
+  const failing = comparison.rows
+    .filter(({ status }) => status !== "MATCH" && status !== "MATCH_NONDETERMINISTIC")
+    .map(({ row }) => row);
+  if (failing.length) throw new Error(`not passing: ${failing.join(", ")}`);
+  const fixture = JSON.parse(fixtureText);
+  return {
+    kind: "auth-fs-cross-stage2-comparison-v1",
+    harness: {
+      commit: harnessCommit,
+      digest: fixture.harnessDigest,
+      programDigest: fixture.programDigest,
+    },
+    fireemu: { commit: fireemuCommit, artifactSha256 },
+    fixtureSha256: createHash("sha256").update(fixtureText).digest("hex"),
+    summary: comparison.summary,
+    rows: comparison.rows.map(({ row, status }) => ({ row, status })),
   };
 }

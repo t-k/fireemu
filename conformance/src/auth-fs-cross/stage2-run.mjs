@@ -8,6 +8,10 @@
 //   node src/auth-fs-cross/stage2-run.mjs build-fixture <dir1> <dir2>
 //                                                         the fixture from the private run
 //                                                         directories of recordings 1 and 2
+//   node src/auth-fs-cross/stage2-run.mjs export-comparison <comparison.json> <out.json>
+//                                                         --artifact <binary> --harness-commit <sha>
+//                                                         --fireemu-commit <sha>
+//                                                         the committed evidence of a comparison
 //   node src/auth-fs-cross/stage2-run.mjs check [--rows <fireemu.json>]
 //                                                         run the window against fireemu (or
 //                                                         read a saved local run) and compare
@@ -29,7 +33,7 @@ import { createContext, SANDBOX_PROJECT } from "../fs-rules/harness.mjs";
 import { STAGE2_PRINCIPALS, STAGE2_PROGRAM } from "./programs-stage2.mjs";
 import { closureTransports, validateStage2 } from "./stage2-corpus.mjs";
 import { scanFixture } from "../auth-account/fixture-scan.mjs";
-import { buildFixture, classifyStage2, comparable } from "./stage2-compare.mjs";
+import { buildFixture, classifyStage2, comparable, stage2Evidence } from "./stage2-compare.mjs";
 import { runStage2Window } from "./stage2-orchestrator.mjs";
 import { browserKeyProbe, guardHarnessConnections } from "./stage2-record.mjs";
 
@@ -269,6 +273,34 @@ async function writeStage2Fixture(dirs) {
   console.log(JSON.stringify({ rows: Object.keys(fixture.rows).length, differing }, null, 2));
 }
 
+/**
+ * Writes the committed evidence of a saved comparison: `<comparison.json> <out.json>
+ * --artifact <fireemu binary> --harness-commit <sha> --fireemu-commit <sha>`. The fixture is
+ * the one in this checkout; the artifact is hashed here.
+ */
+async function exportStage2Comparison(args) {
+  const [comparisonPath, out] = args;
+  const flag = (name) => {
+    const at = args.indexOf(name);
+    return at >= 0 ? args[at + 1] : undefined;
+  };
+  const artifact = flag("--artifact");
+  if (!comparisonPath || !out || !artifact)
+    throw new Error(
+      "usage: export-comparison <comparison.json> <out.json> --artifact <binary> --harness-commit <sha> --fireemu-commit <sha>",
+    );
+  const { createHash } = await import("node:crypto");
+  const evidence = stage2Evidence({
+    comparison: JSON.parse(await readFile(comparisonPath, "utf8")),
+    fixtureText: await readFile(FIXTURE, "utf8"),
+    artifactSha256: createHash("sha256").update(await readFile(artifact)).digest("hex"),
+    harnessCommit: flag("--harness-commit"),
+    fireemuCommit: flag("--fireemu-commit"),
+  });
+  await writeFile(out, `${JSON.stringify(evidence, null, 2)}\n`);
+  console.log(JSON.stringify({ out, summary: evidence.summary, fireemu: evidence.fireemu }, null, 2));
+}
+
 /** Compares fireemu's rows (a fresh window, or a saved local run) with the fixture. */
 async function check(args) {
   const { stage2HarnessDigest, stage2ProgramDigest } = await import("./stage2-record.mjs");
@@ -327,6 +359,8 @@ async function main([command, ...args]) {
       return sessionLocal();
     case "build-fixture":
       return writeStage2Fixture(args);
+    case "export-comparison":
+      return exportStage2Comparison(args);
     case "check":
       return check(args);
     case "admission": {

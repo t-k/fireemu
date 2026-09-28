@@ -112,7 +112,7 @@
   "productionPlan": {
     "status": "PROPOSAL_ONLY",
     "authorizesProduction": false,
-    "productionExecuted": false,
+    "productionExecuted": true,
     "recordingsRequired": 2,
     "stages": {
       "1": [
@@ -142,7 +142,7 @@
       "configProjections": [
         "default"
       ],
-      "status": "PRODUCTION_RECORDED",
+      "status": "VERIFIED",
       "note": "The same UID in two tenants of the project is told apart by Rules, and an unexpired ID token of a deleted tenant is presented to Firestore, with a surviving sibling tenant as control.",
       "stage": 1,
       "observation": {
@@ -173,7 +173,13 @@
           }
         ],
         "fixturePath": "conformance/auth-fs-cross-production.json",
-        "note": "Both recordings agree on every row; the comparison on the final artifact is still to come."
+        "note": "Both recordings agree on every row; the final artifact matches all 89 rows of the stage-1 programs. Commit SHAs of the recordings are as the sandbox ledger wrote them; commits before 2026-09-28 09:40Z were rewritten that day (tree unchanged), and spec/compatibility/history-rewrite-2026-09-28.json on main maps the old SHAs to the new ones.",
+        "finalArtifactSha256": "023db733b2f17016383d2f5241ea7ef6bf59ff33465334f61fd188ac41bf58d4",
+        "sourceCommit": "782d847dfe1fe618b1dd98da1cd35e40f3fcc9b4",
+        "comparisonPath": "spec/compatibility/closure/evidence/AUTH-FS-CROSS-stage1-comparison.json",
+        "rows": {
+          "MATCH": 89
+        }
       }
     },
     {
@@ -185,7 +191,7 @@
       "configProjections": [
         "default"
       ],
-      "status": "PRODUCTION_RECORDED",
+      "status": "VERIFIED",
       "note": "A read-only transaction opened with one principal's token is used with another principal's, another tenant's and no credential. End users cannot open read-write transactions (FS-RULES/document-access), so this is the only server-side transaction an end user holds.",
       "stage": 1,
       "observation": {
@@ -213,7 +219,13 @@
           }
         ],
         "fixturePath": "conformance/auth-fs-cross-production.json",
-        "note": "Both recordings agree on every row; the comparison on the final artifact is still to come."
+        "note": "Both recordings agree on every row; the final artifact matches all 89 rows of the stage-1 programs. Commit SHAs of the recordings are as the sandbox ledger wrote them; commits before 2026-09-28 09:40Z were rewritten that day (tree unchanged), and spec/compatibility/history-rewrite-2026-09-28.json on main maps the old SHAs to the new ones.",
+        "finalArtifactSha256": "023db733b2f17016383d2f5241ea7ef6bf59ff33465334f61fd188ac41bf58d4",
+        "sourceCommit": "782d847dfe1fe618b1dd98da1cd35e40f3fcc9b4",
+        "comparisonPath": "spec/compatibility/closure/evidence/AUTH-FS-CROSS-stage1-comparison.json",
+        "rows": {
+          "MATCH": 89
+        }
       }
     },
     {
@@ -225,7 +237,7 @@
       "configProjections": [
         "default"
       ],
-      "status": "PRODUCTION_RECORDED",
+      "status": "VERIFIED",
       "note": "A validly signed ID token issued by another Firebase project's Auth is presented to Firestore on the sandbox, with a same-project control.",
       "stage": 1,
       "observation": {
@@ -253,7 +265,13 @@
           }
         ],
         "fixturePath": "conformance/auth-fs-cross-production.json",
-        "note": "Both recordings agree on every row; the comparison on the final artifact is still to come."
+        "note": "Both recordings agree on every row; the final artifact matches all 89 rows of the stage-1 programs. Commit SHAs of the recordings are as the sandbox ledger wrote them; commits before 2026-09-28 09:40Z were rewritten that day (tree unchanged), and spec/compatibility/history-rewrite-2026-09-28.json on main maps the old SHAs to the new ones.",
+        "finalArtifactSha256": "023db733b2f17016383d2f5241ea7ef6bf59ff33465334f61fd188ac41bf58d4",
+        "sourceCommit": "782d847dfe1fe618b1dd98da1cd35e40f3fcc9b4",
+        "comparisonPath": "spec/compatibility/closure/evidence/AUTH-FS-CROSS-stage1-comparison.json",
+        "rows": {
+          "MATCH": 89
+        }
       }
     },
     {
@@ -265,7 +283,7 @@
       "configProjections": [
         "default"
       ],
-      "status": "PENDING_CORPUS",
+      "status": "VERIFIED",
       "note": "A Web SDK runTransaction (batchGet reads, then one Commit with preconditions and verify writes) across a sign-out or a principal switch between its reads and its commit.",
       "stage": 2,
       "observation": {
@@ -277,10 +295,34 @@
       },
       "localEvidence": {
         "references": [],
-        "productionExecuted": false
+        "productionExecuted": true
       },
       "verification": {
         "recordingsRequired": 2
+      },
+      "evidence": {
+        "productionRecordings": [
+          {
+            "recordedAt": "2026-09-28T10:46:46.463Z",
+            "gitSha": "ec06eede96b1bf908b47ac792ba0ff6067874f2e",
+            "recordings": 2,
+            "project": "fireemu-oracle-idp",
+            "packetSha256": "5a4d6cca7ae329a461379a1ef38e8722e149b5f10e14e20a7a6744f6c0142d4e"
+          }
+        ],
+        "fixturePath": "conformance/auth-fs-cross-stage2-production.json",
+        "finalArtifactSha256": "023db733b2f17016383d2f5241ea7ef6bf59ff33465334f61fd188ac41bf58d4",
+        "sourceCommit": "782d847dfe1fe618b1dd98da1cd35e40f3fcc9b4",
+        "harness": {
+          "commit": "4be4e58d47a377060f6edcf485e6cc0c9db01637",
+          "digest": "ba7ba895011de42dc2826ba51008da0cb566e721534f2216beb47c986295b1ac",
+          "programDigest": "9b9a699a96f25a21cee7954f184c64ceaee55441ec05dea1106140bcf9b0fb4a"
+        },
+        "comparisonPath": "spec/compatibility/closure/evidence/AUTH-FS-CROSS-stage2-comparison.json",
+        "rows": {
+          "MATCH": 7
+        },
+        "note": "Packet v7's two recordings agree on every row. The comparison ran the harness that recorded them (the fixture's commit) against the final artifact; the later harness commit 3a7777242 changes only how a run stops (resume streams closed on a stop or fatal), how approvals and revocations are read, the deleted tenant's allowed set and run-directory tests, not the window's requests or rows. Packet v6's two recordings (2026-09-28 04:21Z and 05:59Z) found the differences fixed since and are not evidence. Commit SHAs of the recordings are as the sandbox ledger wrote them; commits before 2026-09-28 09:40Z were rewritten that day (tree unchanged), and spec/compatibility/history-rewrite-2026-09-28.json on main maps the old SHAs to the new ones."
       }
     },
     {
@@ -292,7 +334,7 @@
       "configProjections": [
         "default"
       ],
-      "status": "PENDING_CORPUS",
+      "status": "VERIFIED",
       "note": "Active document and query listeners under Rules through sign-out (catalog case 106, moved here from FS-LISTEN-SDK by R2) and through a switch from principal A to B.",
       "stage": 2,
       "observation": {
@@ -309,11 +351,35 @@
         "references": [
           "tools/sdk-smoke/sdk-listen-coverage.json"
         ],
-        "productionExecuted": false,
+        "productionExecuted": true,
         "limits": "The local scenario AUTH-FS-CROSS.auth-switch-rules-listen is unobserved in production."
       },
       "verification": {
         "recordingsRequired": 2
+      },
+      "evidence": {
+        "productionRecordings": [
+          {
+            "recordedAt": "2026-09-28T10:46:46.463Z",
+            "gitSha": "ec06eede96b1bf908b47ac792ba0ff6067874f2e",
+            "recordings": 2,
+            "project": "fireemu-oracle-idp",
+            "packetSha256": "5a4d6cca7ae329a461379a1ef38e8722e149b5f10e14e20a7a6744f6c0142d4e"
+          }
+        ],
+        "fixturePath": "conformance/auth-fs-cross-stage2-production.json",
+        "finalArtifactSha256": "023db733b2f17016383d2f5241ea7ef6bf59ff33465334f61fd188ac41bf58d4",
+        "sourceCommit": "782d847dfe1fe618b1dd98da1cd35e40f3fcc9b4",
+        "harness": {
+          "commit": "4be4e58d47a377060f6edcf485e6cc0c9db01637",
+          "digest": "ba7ba895011de42dc2826ba51008da0cb566e721534f2216beb47c986295b1ac",
+          "programDigest": "9b9a699a96f25a21cee7954f184c64ceaee55441ec05dea1106140bcf9b0fb4a"
+        },
+        "comparisonPath": "spec/compatibility/closure/evidence/AUTH-FS-CROSS-stage2-comparison.json",
+        "rows": {
+          "MATCH": 20
+        },
+        "note": "Packet v7's two recordings agree on every row. The comparison ran the harness that recorded them (the fixture's commit) against the final artifact; the later harness commit 3a7777242 changes only how a run stops (resume streams closed on a stop or fatal), how approvals and revocations are read, the deleted tenant's allowed set and run-directory tests, not the window's requests or rows. Packet v6's two recordings (2026-09-28 04:21Z and 05:59Z) found the differences fixed since and are not evidence. Commit SHAs of the recordings are as the sandbox ledger wrote them; commits before 2026-09-28 09:40Z were rewritten that day (tree unchanged), and spec/compatibility/history-rewrite-2026-09-28.json on main maps the old SHAs to the new ones."
       }
     },
     {
@@ -325,7 +391,7 @@
       "configProjections": [
         "default"
       ],
-      "status": "PENDING_CORPUS",
+      "status": "VERIFIED",
       "note": "Active document and query listeners across a claim change with a forced token refresh, and a native listen stream held past its token's expiry allowance.",
       "stage": 2,
       "observation": {
@@ -338,11 +404,36 @@
       },
       "localEvidence": {
         "references": [],
-        "productionExecuted": false,
+        "productionExecuted": true,
         "limits": "Production closed every held native stream 3,600.17-3,600.19 s after it opened (packet v7, 2026-09-28, twelve streams, INTERNAL from an HTTP/2 RST_STREAM), and the strict profile closes an end user's stream an hour after it opened. Unobserved: a stream opened with an older token (whether production closes it at the token's exp or at its hour); the strict profile adds no close at exp. One earlier close (packet v6, recording 2, stream grpc-ten-t2, before its exp-60 s probe, time not recorded) is an unexplained single observation, not reproduced in the twelve v7 streams."
       },
       "verification": {
         "recordingsRequired": 2
+      },
+      "evidence": {
+        "productionRecordings": [
+          {
+            "recordedAt": "2026-09-28T10:46:46.463Z",
+            "gitSha": "ec06eede96b1bf908b47ac792ba0ff6067874f2e",
+            "recordings": 2,
+            "project": "fireemu-oracle-idp",
+            "packetSha256": "5a4d6cca7ae329a461379a1ef38e8722e149b5f10e14e20a7a6744f6c0142d4e"
+          }
+        ],
+        "fixturePath": "conformance/auth-fs-cross-stage2-production.json",
+        "finalArtifactSha256": "023db733b2f17016383d2f5241ea7ef6bf59ff33465334f61fd188ac41bf58d4",
+        "sourceCommit": "782d847dfe1fe618b1dd98da1cd35e40f3fcc9b4",
+        "harness": {
+          "commit": "4be4e58d47a377060f6edcf485e6cc0c9db01637",
+          "digest": "ba7ba895011de42dc2826ba51008da0cb566e721534f2216beb47c986295b1ac",
+          "programDigest": "9b9a699a96f25a21cee7954f184c64ceaee55441ec05dea1106140bcf9b0fb4a"
+        },
+        "comparisonPath": "spec/compatibility/closure/evidence/AUTH-FS-CROSS-stage2-comparison.json",
+        "rows": {
+          "MATCH": 9,
+          "MATCH_NONDETERMINISTIC": 1
+        },
+        "note": "Packet v7's two recordings agree on every row. The comparison ran the harness that recorded them (the fixture's commit) against the final artifact; the later harness commit 3a7777242 changes only how a run stops (resume streams closed on a stop or fatal), how approvals and revocations are read, the deleted tenant's allowed set and run-directory tests, not the window's requests or rows. Packet v6's two recordings (2026-09-28 04:21Z and 05:59Z) found the differences fixed since and are not evidence. Commit SHAs of the recordings are as the sandbox ledger wrote them; commits before 2026-09-28 09:40Z were rewritten that day (tree unchanged), and spec/compatibility/history-rewrite-2026-09-28.json on main maps the old SHAs to the new ones."
       }
     },
     {
@@ -354,7 +445,7 @@
       "configProjections": [
         "default"
       ],
-      "status": "PENDING_CORPUS",
+      "status": "VERIFIED",
       "note": "Active document and query listeners after the principal's refresh tokens are revoked (catalog cases 109 and 109C, moved here from FS-LISTEN-SDK by R2), the account is disabled, or the account is deleted.",
       "stage": 2,
       "observation": {
@@ -370,10 +461,35 @@
       },
       "localEvidence": {
         "references": [],
-        "productionExecuted": false
+        "productionExecuted": true
       },
       "verification": {
         "recordingsRequired": 2
+      },
+      "evidence": {
+        "productionRecordings": [
+          {
+            "recordedAt": "2026-09-28T10:46:46.463Z",
+            "gitSha": "ec06eede96b1bf908b47ac792ba0ff6067874f2e",
+            "recordings": 2,
+            "project": "fireemu-oracle-idp",
+            "packetSha256": "5a4d6cca7ae329a461379a1ef38e8722e149b5f10e14e20a7a6744f6c0142d4e"
+          }
+        ],
+        "fixturePath": "conformance/auth-fs-cross-stage2-production.json",
+        "finalArtifactSha256": "023db733b2f17016383d2f5241ea7ef6bf59ff33465334f61fd188ac41bf58d4",
+        "sourceCommit": "782d847dfe1fe618b1dd98da1cd35e40f3fcc9b4",
+        "harness": {
+          "commit": "4be4e58d47a377060f6edcf485e6cc0c9db01637",
+          "digest": "ba7ba895011de42dc2826ba51008da0cb566e721534f2216beb47c986295b1ac",
+          "programDigest": "9b9a699a96f25a21cee7954f184c64ceaee55441ec05dea1106140bcf9b0fb4a"
+        },
+        "comparisonPath": "spec/compatibility/closure/evidence/AUTH-FS-CROSS-stage2-comparison.json",
+        "rows": {
+          "MATCH": 6,
+          "MATCH_NONDETERMINISTIC": 1
+        },
+        "note": "Packet v7's two recordings agree on every row. The comparison ran the harness that recorded them (the fixture's commit) against the final artifact; the later harness commit 3a7777242 changes only how a run stops (resume streams closed on a stop or fatal), how approvals and revocations are read, the deleted tenant's allowed set and run-directory tests, not the window's requests or rows. Packet v6's two recordings (2026-09-28 04:21Z and 05:59Z) found the differences fixed since and are not evidence. Commit SHAs of the recordings are as the sandbox ledger wrote them; commits before 2026-09-28 09:40Z were rewritten that day (tree unchanged), and spec/compatibility/history-rewrite-2026-09-28.json on main maps the old SHAs to the new ones."
       }
     },
     {
@@ -385,7 +501,7 @@
       "configProjections": [
         "default"
       ],
-      "status": "PENDING_CORPUS",
+      "status": "VERIFIED",
       "note": "Active document and query listeners of a tenant principal when the tenant is deleted, with a same-UID principal of a surviving tenant as control.",
       "stage": 2,
       "observation": {
@@ -400,11 +516,36 @@
         "references": [
           "docs/compatibility/auth-fs-tenant-read-local.md"
         ],
-        "productionExecuted": false,
+        "productionExecuted": true,
         "limits": "Since 9a030f985 a listener on the daemon's Firestore enforcer keeps a deleted tenant's unexpired token, as unary requests do in production (stage 1); the older local test that ends the target remains for Identity Toolkit's token checks only. Production's listener is unobserved."
       },
       "verification": {
         "recordingsRequired": 2
+      },
+      "evidence": {
+        "productionRecordings": [
+          {
+            "recordedAt": "2026-09-28T10:46:46.463Z",
+            "gitSha": "ec06eede96b1bf908b47ac792ba0ff6067874f2e",
+            "recordings": 2,
+            "project": "fireemu-oracle-idp",
+            "packetSha256": "5a4d6cca7ae329a461379a1ef38e8722e149b5f10e14e20a7a6744f6c0142d4e"
+          }
+        ],
+        "fixturePath": "conformance/auth-fs-cross-stage2-production.json",
+        "finalArtifactSha256": "023db733b2f17016383d2f5241ea7ef6bf59ff33465334f61fd188ac41bf58d4",
+        "sourceCommit": "782d847dfe1fe618b1dd98da1cd35e40f3fcc9b4",
+        "harness": {
+          "commit": "4be4e58d47a377060f6edcf485e6cc0c9db01637",
+          "digest": "ba7ba895011de42dc2826ba51008da0cb566e721534f2216beb47c986295b1ac",
+          "programDigest": "9b9a699a96f25a21cee7954f184c64ceaee55441ec05dea1106140bcf9b0fb4a"
+        },
+        "comparisonPath": "spec/compatibility/closure/evidence/AUTH-FS-CROSS-stage2-comparison.json",
+        "rows": {
+          "MATCH": 6,
+          "MATCH_NONDETERMINISTIC": 1
+        },
+        "note": "Packet v7's two recordings agree on every row. The comparison ran the harness that recorded them (the fixture's commit) against the final artifact; the later harness commit 3a7777242 changes only how a run stops (resume streams closed on a stop or fatal), how approvals and revocations are read, the deleted tenant's allowed set and run-directory tests, not the window's requests or rows. Packet v6's two recordings (2026-09-28 04:21Z and 05:59Z) found the differences fixed since and are not evidence. Commit SHAs of the recordings are as the sandbox ledger wrote them; commits before 2026-09-28 09:40Z were rewritten that day (tree unchanged), and spec/compatibility/history-rewrite-2026-09-28.json on main maps the old SHAs to the new ones."
       }
     },
     {
@@ -416,7 +557,7 @@
       "configProjections": [
         "default"
       ],
-      "status": "PENDING_CORPUS",
+      "status": "VERIFIED",
       "note": "A Web SDK write left pending by one principal when the user switches to another or signs out: what the backend receives and does.",
       "stage": 2,
       "observation": {
@@ -429,10 +570,34 @@
       },
       "localEvidence": {
         "references": [],
-        "productionExecuted": false
+        "productionExecuted": true
       },
       "verification": {
         "recordingsRequired": 2
+      },
+      "evidence": {
+        "productionRecordings": [
+          {
+            "recordedAt": "2026-09-28T10:46:46.463Z",
+            "gitSha": "ec06eede96b1bf908b47ac792ba0ff6067874f2e",
+            "recordings": 2,
+            "project": "fireemu-oracle-idp",
+            "packetSha256": "5a4d6cca7ae329a461379a1ef38e8722e149b5f10e14e20a7a6744f6c0142d4e"
+          }
+        ],
+        "fixturePath": "conformance/auth-fs-cross-stage2-production.json",
+        "finalArtifactSha256": "023db733b2f17016383d2f5241ea7ef6bf59ff33465334f61fd188ac41bf58d4",
+        "sourceCommit": "782d847dfe1fe618b1dd98da1cd35e40f3fcc9b4",
+        "harness": {
+          "commit": "4be4e58d47a377060f6edcf485e6cc0c9db01637",
+          "digest": "ba7ba895011de42dc2826ba51008da0cb566e721534f2216beb47c986295b1ac",
+          "programDigest": "9b9a699a96f25a21cee7954f184c64ceaee55441ec05dea1106140bcf9b0fb4a"
+        },
+        "comparisonPath": "spec/compatibility/closure/evidence/AUTH-FS-CROSS-stage2-comparison.json",
+        "rows": {
+          "MATCH": 21
+        },
+        "note": "Packet v7's two recordings agree on every row. The comparison ran the harness that recorded them (the fixture's commit) against the final artifact; the later harness commit 3a7777242 changes only how a run stops (resume streams closed on a stop or fatal), how approvals and revocations are read, the deleted tenant's allowed set and run-directory tests, not the window's requests or rows. Packet v6's two recordings (2026-09-28 04:21Z and 05:59Z) found the differences fixed since and are not evidence. Commit SHAs of the recordings are as the sandbox ledger wrote them; commits before 2026-09-28 09:40Z were rewritten that day (tree unchanged), and spec/compatibility/history-rewrite-2026-09-28.json on main maps the old SHAs to the new ones."
       }
     },
     {
@@ -444,7 +609,7 @@
       "configProjections": [
         "default"
       ],
-      "status": "PENDING_REVIEW",
+      "status": "VERIFIED",
       "note": "The final artifact's AUTH-FS-CROSS comparison, with the FS-RULES comparison re-run on the same artifact because the unary conditions moved there.",
       "stage": null,
       "observation": {
@@ -458,6 +623,44 @@
       },
       "verification": {
         "recordingsRequired": 0
+      },
+      "evidence": {
+        "finalArtifactSha256": "023db733b2f17016383d2f5241ea7ef6bf59ff33465334f61fd188ac41bf58d4",
+        "sourceCommit": "782d847dfe1fe618b1dd98da1cd35e40f3fcc9b4",
+        "comparisons": {
+          "stage1": {
+            "comparisonPath": "spec/compatibility/closure/evidence/AUTH-FS-CROSS-stage1-comparison.json",
+            "summary": {
+              "MATCH": 89
+            }
+          },
+          "stage2": {
+            "comparisonPath": "spec/compatibility/closure/evidence/AUTH-FS-CROSS-stage2-comparison.json",
+            "summary": {
+              "MATCH": 56,
+              "MATCH_NONDETERMINISTIC": 1
+            },
+            "harness": {
+              "commit": "4be4e58d47a377060f6edcf485e6cc0c9db01637",
+              "digest": "ba7ba895011de42dc2826ba51008da0cb566e721534f2216beb47c986295b1ac"
+            }
+          }
+        },
+        "regressions": {
+          "fs-rules": {
+            "artifactSha256": "023db733b2f17016383d2f5241ea7ef6bf59ff33465334f61fd188ac41bf58d4",
+            "summary": {
+              "MATCH": 1144,
+              "DEPENDENCY_REFUSED": 5
+            },
+            "comparisonPath": "spec/compatibility/closure/evidence/AUTH-FS-CROSS-fs-rules-regression.json"
+          }
+        },
+        "emulatorProfile": {
+          "kind": "differential",
+          "note": "The release corpus under the emulator profile (the gate commit 97a2f94cd applied without committing) gave the same 12 findings with and without the fixes of this lane (at 782d847df and at a9e6b719b, the commit before them); none is in a Listen scenario, and firestore/listen-sequence-with-resume and firestore/listener-replacement-handoff pass. The 12 come from this branch predating main's Auth fixes."
+        },
+        "pendingIntegration": "0 findings of the emulator-profile release corpus on main after the round-2 merge of this lane."
       }
     },
     {

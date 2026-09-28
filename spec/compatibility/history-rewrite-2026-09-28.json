@@ -17,7 +17,8 @@
     "For every pair: same tree, byte-identical message, same author and committer dates, the same number of parents, and parents mapped through this table.",
     "For every rewritten ref: the new tip has the same tree as the old tip.",
     "Every new commit carries a good signature from the owner's key and no commit in the new ranges names the previous identity.",
-    "Rebind: in each file listed under rebind.files, applying rebind.digestRounds in reverse and then new->old commit SHAs restores bytes whose sha256 is preRebindSha256."
+    "Rebind: in each file listed under rebind.files, applying rebind.digestRounds in reverse and then new->old commit SHAs restores bytes whose sha256 is preRebindSha256.",
+    "Appended rebinds (rebind.appends, one per merged branch): in each file listed under an append's files, putting each recorded original token back at its byte offset restores bytes whose sha256 is preRebindSha256; every commit pair agrees with this table (by prefix) and every digest pair follows that append's digestRounds."
   ],
   "mapping": {
     "002cbb27370af0eb956c6a7ae34e32181c31173d": "d6219d51576532706b739ac65a71865ceb6fa66b",
@@ -2387,6 +2388,399 @@
         "preRebindSha256": "c5b3386d89d758f07e6183280b794f0f1c270a9a5fe42e4eb72a2c866b618802",
         "postRebindSha256": "50b6b1f0d81deffccc2f4dfe6a1ffec86827d00e9db27785dcce9afa654ed81b"
       }
-    }
+    },
+    "appends": [
+      {
+        "date": "2026-09-29",
+        "branch": "work/auth-tenant-blocking-wip",
+        "baseCommit": "7324c1a845b78317639b8fda8f17ee37caa30487",
+        "branchDiffBase": "da89d7b31cd4a893cb4132ee171a518332274d74",
+        "commitReplacements": 52,
+        "digestReplacements": 2,
+        "digestRounds": [
+          [
+            {
+              "path": "conformance/auth-tenant-blocking-production.json",
+              "from": "259136913f5232749b6cf9aae1111a7f2fd2894447c30f9c45cfe81c74674d07",
+              "to": "99679371f97e17fb12912bb54513424a80c502b19ba40b0f5c2aa4d7ed9a639b"
+            }
+          ],
+          [
+            {
+              "path": null,
+              "from": "253e48959ca7ccdefd42c64bb8371107d7aeca698a969e78bb7974898e84b8b0",
+              "to": "58ce3d60402cc096c5d80a68fc198c993c93b6dfe2b0f07e466ac9dc65903a88",
+              "derivation": "prior-rebind rebind.files conformance/auth-account-production.json"
+            },
+            {
+              "path": null,
+              "from": "4a83aa942859b2abb69fb2e457fe4dbd2dcd1560edf52f7125fd7ef510915c5f",
+              "to": "60f873dfaf770c9ba72cd58d4e886d7a1f3f6f32fef4f0c8c98c3c25757475b1",
+              "derivation": "prior-rebind rebind.files conformance/auth-action-production.json"
+            },
+            {
+              "path": null,
+              "from": "fbfe5dcb4f3af72c849a48dc28d3829d6205e74833439589f98b03cbf1163155",
+              "to": "8fe6cc8ebcaf0f9056fc09ce4804ba1fe229fd6993e3efea7639d62c56b97026",
+              "derivation": "prior-rebind rebind.files conformance/auth-mfa-production.json"
+            },
+            {
+              "path": null,
+              "from": "fcffa45131e136404cbf3ff7f9fa40e6f78329ee665e0d27698c81f51772c0dc",
+              "to": "72bee92e3f5c7890fd71f18471335c09955ff880e9d114e13643cdc0fc91a884",
+              "derivation": "prior-rebind rebind.files conformance/auth-credential-production.json"
+            }
+          ]
+        ],
+        "labels": [],
+        "referencedOutsideHistory": [],
+        "files": {
+          "conformance/auth-tenant-blocking-production.json": {
+            "preRebindSha256": "259136913f5232749b6cf9aae1111a7f2fd2894447c30f9c45cfe81c74674d07",
+            "postRebindSha256": "99679371f97e17fb12912bb54513424a80c502b19ba40b0f5c2aa4d7ed9a639b",
+            "replacements": [
+              [
+                2146,
+                "b993d1cbf8dc42c764cb534b49233bdec4fe0808",
+                "b497911d29515e89df5c277541b424bac40144ca"
+              ],
+              [
+                22722,
+                "b993d1cbf8dc42c764cb534b49233bdec4fe0808",
+                "b497911d29515e89df5c277541b424bac40144ca"
+              ],
+              [
+                25382,
+                "b993d1cbf8dc42c764cb534b49233bdec4fe0808",
+                "b497911d29515e89df5c277541b424bac40144ca"
+              ],
+              [
+                28436,
+                "b993d1cbf8dc42c764cb534b49233bdec4fe0808",
+                "b497911d29515e89df5c277541b424bac40144ca"
+              ],
+              [
+                37986,
+                "b993d1cbf8dc42c764cb534b49233bdec4fe0808",
+                "b497911d29515e89df5c277541b424bac40144ca"
+              ],
+              [
+                68794,
+                "b993d1cbf8dc42c764cb534b49233bdec4fe0808",
+                "b497911d29515e89df5c277541b424bac40144ca"
+              ],
+              [
+                77527,
+                "b993d1cbf8dc42c764cb534b49233bdec4fe0808",
+                "b497911d29515e89df5c277541b424bac40144ca"
+              ],
+              [
+                88111,
+                "b993d1cbf8dc42c764cb534b49233bdec4fe0808",
+                "b497911d29515e89df5c277541b424bac40144ca"
+              ],
+              [
+                96422,
+                "b993d1cbf8dc42c764cb534b49233bdec4fe0808",
+                "b497911d29515e89df5c277541b424bac40144ca"
+              ],
+              [
+                104479,
+                "b993d1cbf8dc42c764cb534b49233bdec4fe0808",
+                "b497911d29515e89df5c277541b424bac40144ca"
+              ],
+              [
+                111125,
+                "b993d1cbf8dc42c764cb534b49233bdec4fe0808",
+                "b497911d29515e89df5c277541b424bac40144ca"
+              ],
+              [
+                121024,
+                "b993d1cbf8dc42c764cb534b49233bdec4fe0808",
+                "b497911d29515e89df5c277541b424bac40144ca"
+              ],
+              [
+                131676,
+                "b993d1cbf8dc42c764cb534b49233bdec4fe0808",
+                "b497911d29515e89df5c277541b424bac40144ca"
+              ],
+              [
+                134465,
+                "08d0cb2ee76e8bb847458fa3fa7027adfb2c34e2",
+                "7b088713b3a210b779c615f4093aada6783227b8"
+              ],
+              [
+                141607,
+                "08d0cb2ee76e8bb847458fa3fa7027adfb2c34e2",
+                "7b088713b3a210b779c615f4093aada6783227b8"
+              ],
+              [
+                151838,
+                "08d0cb2ee76e8bb847458fa3fa7027adfb2c34e2",
+                "7b088713b3a210b779c615f4093aada6783227b8"
+              ],
+              [
+                162550,
+                "08d0cb2ee76e8bb847458fa3fa7027adfb2c34e2",
+                "7b088713b3a210b779c615f4093aada6783227b8"
+              ],
+              [
+                168913,
+                "08d0cb2ee76e8bb847458fa3fa7027adfb2c34e2",
+                "7b088713b3a210b779c615f4093aada6783227b8"
+              ],
+              [
+                174913,
+                "08d0cb2ee76e8bb847458fa3fa7027adfb2c34e2",
+                "7b088713b3a210b779c615f4093aada6783227b8"
+              ],
+              [
+                185305,
+                "08d0cb2ee76e8bb847458fa3fa7027adfb2c34e2",
+                "7b088713b3a210b779c615f4093aada6783227b8"
+              ],
+              [
+                213605,
+                "08d0cb2ee76e8bb847458fa3fa7027adfb2c34e2",
+                "7b088713b3a210b779c615f4093aada6783227b8"
+              ],
+              [
+                231363,
+                "08d0cb2ee76e8bb847458fa3fa7027adfb2c34e2",
+                "7b088713b3a210b779c615f4093aada6783227b8"
+              ],
+              [
+                240282,
+                "08d0cb2ee76e8bb847458fa3fa7027adfb2c34e2",
+                "7b088713b3a210b779c615f4093aada6783227b8"
+              ],
+              [
+                244248,
+                "08d0cb2ee76e8bb847458fa3fa7027adfb2c34e2",
+                "7b088713b3a210b779c615f4093aada6783227b8"
+              ],
+              [
+                264171,
+                "08d0cb2ee76e8bb847458fa3fa7027adfb2c34e2",
+                "7b088713b3a210b779c615f4093aada6783227b8"
+              ],
+              [
+                282261,
+                "08d0cb2ee76e8bb847458fa3fa7027adfb2c34e2",
+                "7b088713b3a210b779c615f4093aada6783227b8"
+              ]
+            ]
+          },
+          "conformance/fixtures/auth/blocking-function-error-status.json": {
+            "preRebindSha256": "fc3166cc111e927228e3df211e407796d7179387428ddd9b569bd49d10dcd759",
+            "postRebindSha256": "25e51464bd5fd0a283d96d99d0b39e30d2449c27cad217186a581614f69ff971",
+            "replacements": [
+              [
+                1092,
+                "86bc3ecbd",
+                "ed615e82c"
+              ]
+            ]
+          },
+          "spec/compatibility/closure/AUTH-TENANT-BLOCKING.json": {
+            "preRebindSha256": "03694bcc45cb978c7aa6ccd6b2e5e4bbce5cef88bf1a8fa31a3f3df2315db13a",
+            "postRebindSha256": "e1b85ff83180b15e93977a449bbee70b04a979b486f259d2ed08a97ad818c2ee",
+            "replacements": [
+              [
+                7790,
+                "08d0cb2ee76e8bb847458fa3fa7027adfb2c34e2",
+                "7b088713b3a210b779c615f4093aada6783227b8"
+              ],
+              [
+                8903,
+                "08d0cb2ee76e8bb847458fa3fa7027adfb2c34e2",
+                "7b088713b3a210b779c615f4093aada6783227b8"
+              ],
+              [
+                10095,
+                "08d0cb2ee76e8bb847458fa3fa7027adfb2c34e2",
+                "7b088713b3a210b779c615f4093aada6783227b8"
+              ],
+              [
+                11234,
+                "08d0cb2ee76e8bb847458fa3fa7027adfb2c34e2",
+                "7b088713b3a210b779c615f4093aada6783227b8"
+              ],
+              [
+                12363,
+                "08d0cb2ee76e8bb847458fa3fa7027adfb2c34e2",
+                "7b088713b3a210b779c615f4093aada6783227b8"
+              ],
+              [
+                13518,
+                "08d0cb2ee76e8bb847458fa3fa7027adfb2c34e2",
+                "7b088713b3a210b779c615f4093aada6783227b8"
+              ],
+              [
+                14665,
+                "08d0cb2ee76e8bb847458fa3fa7027adfb2c34e2",
+                "7b088713b3a210b779c615f4093aada6783227b8"
+              ],
+              [
+                15786,
+                "08d0cb2ee76e8bb847458fa3fa7027adfb2c34e2",
+                "7b088713b3a210b779c615f4093aada6783227b8"
+              ],
+              [
+                16940,
+                "08d0cb2ee76e8bb847458fa3fa7027adfb2c34e2",
+                "7b088713b3a210b779c615f4093aada6783227b8"
+              ],
+              [
+                18022,
+                "08d0cb2ee76e8bb847458fa3fa7027adfb2c34e2",
+                "7b088713b3a210b779c615f4093aada6783227b8"
+              ],
+              [
+                19166,
+                "08d0cb2ee76e8bb847458fa3fa7027adfb2c34e2",
+                "7b088713b3a210b779c615f4093aada6783227b8"
+              ],
+              [
+                20321,
+                "08d0cb2ee76e8bb847458fa3fa7027adfb2c34e2",
+                "7b088713b3a210b779c615f4093aada6783227b8"
+              ],
+              [
+                22093,
+                "b993d1cbf8dc42c764cb534b49233bdec4fe0808",
+                "b497911d29515e89df5c277541b424bac40144ca"
+              ],
+              [
+                23165,
+                "b993d1cbf8dc42c764cb534b49233bdec4fe0808",
+                "b497911d29515e89df5c277541b424bac40144ca"
+              ],
+              [
+                24238,
+                "b993d1cbf8dc42c764cb534b49233bdec4fe0808",
+                "b497911d29515e89df5c277541b424bac40144ca"
+              ],
+              [
+                25364,
+                "b993d1cbf8dc42c764cb534b49233bdec4fe0808",
+                "b497911d29515e89df5c277541b424bac40144ca"
+              ],
+              [
+                26429,
+                "b993d1cbf8dc42c764cb534b49233bdec4fe0808",
+                "b497911d29515e89df5c277541b424bac40144ca"
+              ],
+              [
+                28017,
+                "b993d1cbf8dc42c764cb534b49233bdec4fe0808",
+                "b497911d29515e89df5c277541b424bac40144ca"
+              ],
+              [
+                29110,
+                "b993d1cbf8dc42c764cb534b49233bdec4fe0808",
+                "b497911d29515e89df5c277541b424bac40144ca"
+              ],
+              [
+                30281,
+                "b993d1cbf8dc42c764cb534b49233bdec4fe0808",
+                "b497911d29515e89df5c277541b424bac40144ca"
+              ],
+              [
+                31490,
+                "b993d1cbf8dc42c764cb534b49233bdec4fe0808",
+                "b497911d29515e89df5c277541b424bac40144ca"
+              ],
+              [
+                32534,
+                "b993d1cbf8dc42c764cb534b49233bdec4fe0808",
+                "b497911d29515e89df5c277541b424bac40144ca"
+              ],
+              [
+                33650,
+                "b993d1cbf8dc42c764cb534b49233bdec4fe0808",
+                "b497911d29515e89df5c277541b424bac40144ca"
+              ],
+              [
+                41227,
+                "08d0cb2ee76e8bb847458fa3fa7027adfb2c34e2",
+                "7b088713b3a210b779c615f4093aada6783227b8"
+              ],
+              [
+                41445,
+                "b993d1cbf8dc42c764cb534b49233bdec4fe0808",
+                "b497911d29515e89df5c277541b424bac40144ca"
+              ]
+            ]
+          },
+          "spec/compatibility/closure/evidence/AUTH-TENANT-BLOCKING-account-regression.json": {
+            "preRebindSha256": "7ec2536d3f26b43d85bb0ff339b55df7812816ed2c5e8170d737de31e747d918",
+            "postRebindSha256": "2d4b45e0ff01233a096d07803ac9c05e6104231c7f5d5907b78c362f259712cf",
+            "replacements": [
+              [
+                150,
+                "253e48959ca7ccdefd42c64bb8371107d7aeca698a969e78bb7974898e84b8b0",
+                "58ce3d60402cc096c5d80a68fc198c993c93b6dfe2b0f07e466ac9dc65903a88"
+              ]
+            ]
+          },
+          "spec/compatibility/closure/evidence/AUTH-TENANT-BLOCKING-action-regression.json": {
+            "preRebindSha256": "7f2cc03e8424dddda24558c9e18c99fadc678a3d0acac482b2fbafbd1bbc93a4",
+            "postRebindSha256": "615f6696de0f0ade823e1cc29cdc73cf83fb19d19b63a541f36ac81bb3eec9a1",
+            "replacements": [
+              [
+                149,
+                "4a83aa942859b2abb69fb2e457fe4dbd2dcd1560edf52f7125fd7ef510915c5f",
+                "60f873dfaf770c9ba72cd58d4e886d7a1f3f6f32fef4f0c8c98c3c25757475b1"
+              ]
+            ]
+          },
+          "spec/compatibility/closure/evidence/AUTH-TENANT-BLOCKING-blocking-comparison.json": {
+            "preRebindSha256": "1a86f7ed0e4b925fba939b477daf304c4e7b49094ffaf2895161ab465f55fe31",
+            "postRebindSha256": "26c38c8e858cf6c000dc5decb06022390eb51c2e054b2021c3cccf7852784f46",
+            "replacements": [
+              [
+                158,
+                "259136913f5232749b6cf9aae1111a7f2fd2894447c30f9c45cfe81c74674d07",
+                "99679371f97e17fb12912bb54513424a80c502b19ba40b0f5c2aa4d7ed9a639b"
+              ]
+            ]
+          },
+          "spec/compatibility/closure/evidence/AUTH-TENANT-BLOCKING-credential-regression.json": {
+            "preRebindSha256": "6a2e52d24f315eb8b1f63a349ea6d03ac0457c65e32b2a6e988672556aed7ac8",
+            "postRebindSha256": "f181f10ddc0f1ad1890827c8ad4f8db21360d20b3833ee84b86ea06593934a0a",
+            "replacements": [
+              [
+                153,
+                "fcffa45131e136404cbf3ff7f9fa40e6f78329ee665e0d27698c81f51772c0dc",
+                "72bee92e3f5c7890fd71f18471335c09955ff880e9d114e13643cdc0fc91a884"
+              ]
+            ]
+          },
+          "spec/compatibility/closure/evidence/AUTH-TENANT-BLOCKING-mfa-regression.json": {
+            "preRebindSha256": "186d317161c8ee7c48bfc8fc5770b530df476d3dd952d76d1e47ff64b5c63bea",
+            "postRebindSha256": "03f6fa8b67d5043da65a942c66afc6f21a1968b70ad8860ac50ac5984299ff3c",
+            "replacements": [
+              [
+                146,
+                "fbfe5dcb4f3af72c849a48dc28d3829d6205e74833439589f98b03cbf1163155",
+                "8fe6cc8ebcaf0f9056fc09ce4804ba1fe229fd6993e3efea7639d62c56b97026"
+              ]
+            ]
+          },
+          "spec/compatibility/closure/evidence/AUTH-TENANT-BLOCKING-tenant-comparison.json": {
+            "preRebindSha256": "6d9a7e5f58715d32d8629e60d20cfe9e4f58491fd52cfe84e9c79421b786d40b",
+            "postRebindSha256": "50c6ecc491ff0c51c15dc7bc844198112bafc852239c44ae49b73d9cce508ecf",
+            "replacements": [
+              [
+                158,
+                "259136913f5232749b6cf9aae1111a7f2fd2894447c30f9c45cfe81c74674d07",
+                "99679371f97e17fb12912bb54513424a80c502b19ba40b0f5c2aa4d7ed9a639b"
+              ]
+            ]
+          }
+        }
+      }
+    ]
   }
 }

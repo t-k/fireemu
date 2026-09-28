@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { test } from "node:test";
 
@@ -11,6 +11,19 @@ import {
   selectSupplementComparisons,
 } from "./fs-data-write-sandbox-run.mjs";
 
+// Broad-run file names keep the commit abbreviation they were recorded under. After the 2026-09-28
+// author correction the history-rewrite record maps each such label to the rewritten commit.
+const historyRewritePath = fileURLToPath(
+  new URL("../../spec/compatibility/history-rewrite-2026-09-28.json", import.meta.url),
+);
+const rewrittenCommitLabels = existsSync(historyRewritePath)
+  ? new Map(
+      JSON.parse(readFileSync(historyRewritePath, "utf8")).labels.map(({ token, new: commit }) => [
+        commit,
+        token,
+      ]),
+    )
+  : new Map();
 const closurePath = fileURLToPath(
   new URL("../../spec/compatibility/closure/FS-DATA-WRITE.json", import.meta.url),
 );
@@ -897,7 +910,10 @@ test("verified conditions are bound to their saved comparisons", async () => {
     if (streamComparison) {
       assert.match(comparison.artifactSourceCommit, /^[0-9a-f]{40}$/);
       assert.ok(
-        condition.evidence.comparisonPath.includes(comparison.artifactSourceCommit.slice(0, 9)),
+        condition.evidence.comparisonPath.includes(
+          rewrittenCommitLabels.get(comparison.artifactSourceCommit) ??
+            comparison.artifactSourceCommit.slice(0, 9),
+        ),
       );
       assert.equal(
         comparison.localConfigSha256,

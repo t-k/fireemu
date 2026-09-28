@@ -132,11 +132,19 @@ export async function withProjectLocks(options, run, hooks = {}) {
     throw error;
   }
   let sent = false;
+  let started = false;
   let failed = false;
   let closed = false;
   let inFlight = false;
   let active = true;
   const lease = {
+    // Call before attempting the started row: its durability can fail before any HTTP.
+    markStarted() {
+      if (!active) throw new Error("project lock lease is inactive");
+      if (started || sent || closed || inFlight)
+        throw new Error("project lock run already started");
+      started = true;
+    },
     async dispatch(transport) {
       if (!active) throw new Error("project lock lease is inactive");
       if (typeof transport !== "function") throw new Error("outbound transport required");
@@ -155,7 +163,7 @@ export async function withProjectLocks(options, run, hooks = {}) {
     },
     confirmClosed() {
       if (!active) throw new Error("project lock lease is inactive");
-      if (!sent || failed) throw new Error("cannot confirm project lock closure");
+      if ((!sent && !started) || failed) throw new Error("cannot confirm project lock closure");
       if (inFlight) throw new Error("outbound dispatch still pending");
       closed = true;
     },
@@ -169,9 +177,10 @@ export async function withProjectLocks(options, run, hooks = {}) {
     }
     if (inFlight) throw new Error("outbound dispatch still pending; project locks retained");
     if (failed) throw new Error("outbound attempt failed; project locks retained");
-    if (sent && !closed) throw new Error("closure not confirmed; project locks retained");
+    if ((sent || started) && !closed)
+      throw new Error("closure not confirmed; project locks retained");
   } catch (error) {
-    if (!sent) await releaseOwned(records);
+    if (!sent && !started) await releaseOwned(records);
     throw error;
   }
   await releaseOwned(records);

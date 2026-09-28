@@ -429,3 +429,50 @@ test("an acquisition fsync failure rolls back its owned lock before any dispatch
     }
   });
 });
+
+test("a started persistence attempt retains the lease even before its first outbound dispatch", async () => {
+  for (const persistenceFailed of [false, true])
+    await fixture(async ({ lockDir, options }) => {
+      const { withProjectLocks } = await import("./storage-object/project-locks.mjs");
+      await assert.rejects(
+        withProjectLocks(options, async (lease) => {
+          assert.equal(typeof lease.markStarted, "function");
+          lease.markStarted();
+          assert.throws(() => lease.markStarted(), /started/);
+          if (persistenceFailed) throw new Error("started fsync uncertain");
+          return "terminal not durable";
+        }),
+        persistenceFailed ? /started fsync uncertain/ : /closure not confirmed/,
+      );
+      assert.equal(
+        JSON.parse(await readFile(join(lockDir, "example-query.lock"), "utf8")).taskId,
+        "STORAGE-OBJECT",
+      );
+    });
+});
+
+test("a started lease with no HTTP needs explicit durable terminal closure and expires after release", async () => {
+  await fixture(async ({ lockDir, options }) => {
+    const { withProjectLocks } = await import("./storage-object/project-locks.mjs");
+    let retained;
+    await withProjectLocks(options, async (lease) => {
+      retained = lease;
+      lease.markStarted();
+      lease.confirmClosed();
+    });
+    await assert.rejects(lstat(join(lockDir, "example-query.lock")), { code: "ENOENT" });
+    assert.throws(() => retained.markStarted(), /inactive/);
+  });
+});
+
+test("started cannot be marked after outbound dispatch or terminal confirmation", async () => {
+  await fixture(async ({ options }) => {
+    const { withProjectLocks } = await import("./storage-object/project-locks.mjs");
+    await withProjectLocks(options, async (lease) => {
+      await lease.dispatch(async () => ({ status: 200 }));
+      assert.throws(() => lease.markStarted(), /already started/);
+      lease.confirmClosed();
+      assert.throws(() => lease.markStarted(), /already started/);
+    });
+  });
+});

@@ -55,6 +55,8 @@ test("shared core requires all factory policies and bounded timeouts before any 
     { onByteReserve: null },
     { timeoutMs: 0 },
     { timeoutMs: 30001 },
+    { auxiliaryResponsePolicy: true },
+    { auxiliaryResponsePolicy: "UNKNOWN" },
   ])
     assert.throws(() => make(changes), /^Error: invalid wire transport core configuration$/);
 });

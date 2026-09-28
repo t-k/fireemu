@@ -25,6 +25,7 @@ const FAILURE_CODES = new Set([
   "WIRE_UNEXPECTED_UPGRADE",
   "WIRE_REQUEST_FAILED",
   "WIRE_REQUEST_CREATION_FAILED",
+  "WIRE_UNSUPPORTED_AUXILIARY_RESPONSE",
 ]);
 
 function safeFailure(error) {
@@ -56,6 +57,7 @@ export function createWireTransportCore({
   createCapture,
   tlsConnectionOptions,
   timeoutMs = 30_000,
+  auxiliaryResponsePolicy = "ALLOW",
 }) {
   if (
     process.version !== PINNED_NODE_VERSION ||
@@ -65,7 +67,8 @@ export function createWireTransportCore({
     typeof tlsConnectionOptions !== "function" ||
     !Number.isSafeInteger(timeoutMs) ||
     timeoutMs < 1 ||
-    timeoutMs > 30_000
+    timeoutMs > 30_000 ||
+    !["ALLOW", "REJECT"].includes(auxiliaryResponsePolicy)
   )
     throw new Error("invalid wire transport core configuration");
   let context = null;
@@ -312,6 +315,8 @@ export function createWireTransportCore({
             });
             incoming.once("end", () => {
               responseEnded = true;
+              if (auxiliaryResponsePolicy === "REJECT" && incoming.rawTrailers.length !== 0)
+                fail("WIRE_UNSUPPORTED_AUXILIARY_RESPONSE");
             });
             incoming.once("aborted", () => fail("WIRE_TRUNCATED"));
             incoming.once("error", () => fail("WIRE_RESPONSE_FAILED"));
@@ -319,6 +324,9 @@ export function createWireTransportCore({
         );
         request.once("finish", () => {
           finishConfirmed = true;
+        });
+        request.on("information", () => {
+          if (auxiliaryResponsePolicy === "REJECT") fail("WIRE_UNSUPPORTED_AUXILIARY_RESPONSE");
         });
         request.once("upgrade", () => fail("WIRE_UNEXPECTED_UPGRADE"));
         request.once("error", () => fail("WIRE_REQUEST_FAILED"));

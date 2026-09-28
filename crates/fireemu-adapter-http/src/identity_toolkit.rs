@@ -2296,6 +2296,30 @@ impl Drop for GeneratedLocalIdReservation {
     }
 }
 
+/// Keeps a new account whose sign-up a blocking function refused (disabled it, or refused
+/// beforeSignIn): the account keeps its sign-in time and, as production records, its token
+/// issuance time (AUTH-TENANT-BLOCKING recording 2026-09-28, rollback#lookup-*), but no session,
+/// and it counts as a sign-up.
+fn keep_refused_new_account(
+    state: &AuthState,
+    live: &mut AuthStore,
+    mut committed: AuthStore,
+    uid: &LocalId,
+    quota_reservation: &mut Option<SignupReservation>,
+    at: LogicalInstant,
+) -> Result<(), JsonResponse> {
+    committed.record_refused_sign_up_issuance(uid, at);
+    committed.revoke_refresh_tokens(uid);
+    if let Some(reservation) = quota_reservation.clone() {
+        committed
+            .commit_signup(reservation, now(state))
+            .map_err(|error| auth_error(&error))?;
+        quota_reservation.take();
+    }
+    *live = committed;
+    Ok(())
+}
+
 // The request parts stay separate here so the ordinary dispatcher remains the one source of
 // route behavior; grouping them in a second request type would duplicate that boundary.
 #[allow(clippy::too_many_arguments, clippy::too_many_lines)]
@@ -2411,6 +2435,8 @@ fn dispatch_with_blocking_hook(
     // custom-token#custom-*; the official Auth emulator runs none either).
     let runs_hooks = !matches!(sign_in_method.as_deref(), Some("anonymous" | "custom"));
     let mut blocking_responses = Vec::new();
+    // beforeSignIn's refusal of a sign-up that created its account; the account is kept.
+    let mut new_account_refusal = None;
     if response.status == 200 {
         if let Some(uid) = uid {
             if runs_hooks
@@ -2485,6 +2511,14 @@ fn dispatch_with_blocking_hook(
                         &context,
                     ) {
                         Ok(value) => value,
+                        // Identity Platform creates the account before it runs beforeSignIn, so
+                        // a refused sign-up keeps it (AUTH-TENANT-BLOCKING recording
+                        // 2026-09-28, rollback#lookup-refused-at-sign-in; the official Auth
+                        // emulator does the same). A new account has no pending sign-in.
+                        Err(failure) if is_new => {
+                            new_account_refusal = Some(failure.response());
+                            None
+                        }
                         Err(failure) => {
                             if let Err(response) =
                                 discard_pending_inbound_credentials_if_revision_current(
@@ -2678,6 +2712,21 @@ fn dispatch_with_blocking_hook(
                     Err(reason) => return error(400, &reason),
                 }
             }
+            // A sign-up refused at beforeSignIn keeps the account it created, as a disabled
+            // one does below (the refusal is only ever recorded for a new account).
+            if let Some(refusal) = new_account_refusal.as_ref() {
+                if let Err(response) = keep_refused_new_account(
+                    state,
+                    &mut live,
+                    committed,
+                    &uid,
+                    quota_reservation,
+                    at,
+                ) {
+                    return response;
+                }
+                return refusal.clone();
+            }
             // A hook response that disables the account refuses the very request that
             // ran it with USER_DISABLED and no tokens (production, recorded 2026-09-11
             // and 2026-09-12). What persists depends on the request, as recorded: a
@@ -2692,8 +2741,16 @@ fn dispatch_with_blocking_hook(
             // rule.
             if issued_session.is_some() && committed.user(&uid).is_some_and(|u| u.disabled) {
                 if live.user(&uid).is_none() {
-                    committed.revoke_refresh_tokens(&uid);
-                    *live = committed;
+                    if let Err(response) = keep_refused_new_account(
+                        state,
+                        &mut live,
+                        committed,
+                        &uid,
+                        quota_reservation,
+                        at,
+                    ) {
+                        return response;
+                    }
                 } else if handler == routes::Handler::MfaSignInFinalize {
                     // Applied to a working copy so that a response that passed on the
                     // committed copy but fails against the live record (claims size)
@@ -2757,12 +2814,16 @@ fn dispatch_with_blocking_hook(
                     }
                 }
                 if let Some(user) = committed.user(&uid) {
-                    // An account without a name answers "" as the sign-in without a blocking
-                    // function does (AUTH-TENANT-BLOCKING recording 2026-09-28, e.g.
-                    // events#sign-in-password).
-                    if committed_response.body.get("displayName").is_some() {
-                        committed_response.body["displayName"] =
-                            json!(user.display_name.as_deref().unwrap_or_default());
+                    // An account without a name keeps the answer the request gives without a
+                    // blocking function: "" from a sign-in, no member from a sign-up
+                    // (AUTH-TENANT-BLOCKING recording 2026-09-28, events#sign-in-password and
+                    // events#sign-up-password).
+                    if let Some(answered) = committed_response.body.get("displayName") {
+                        committed_response.body["displayName"] = match &user.display_name {
+                            Some(name) => json!(name),
+                            None if answered.is_string() => json!(""),
+                            None => Value::Null,
+                        };
                     }
                     if committed_response.body.get("photoUrl").is_some() {
                         committed_response.body["photoUrl"] = json!(user.photo_url);

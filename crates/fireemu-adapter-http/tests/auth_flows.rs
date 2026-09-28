@@ -4,8 +4,8 @@
 use std::sync::{Arc, Mutex, RwLock};
 
 use fireemu_adapter_http::identity_toolkit::{
-    handle, handle_with, AuthBlockingContext, AuthBlockingHook, AuthState, BlockingFunctionFailure,
-    RequestHeaders,
+    handle, handle_with, AuthBlockingContext, AuthBlockingHook, AuthState, BlockingFunctionCode,
+    BlockingFunctionFailure, RequestHeaders,
 };
 use fireemu_core_auth::jwt::{base64url_encode, decode_unsigned};
 use fireemu_core_auth::mfa::TotpPolicy;
@@ -8971,4 +8971,149 @@ fn a_blocked_sign_in_answers_an_unnamed_account_as_production() {
     assert_eq!(status, 200, "{blocked}");
     assert_eq!(blocked["displayName"], plain["displayName"], "{blocked}");
     assert_eq!(blocked["displayName"], "");
+}
+
+/// A sign-up that ran a blocking function leaves an unnamed account's `displayName` out, as the
+/// sign-up without one does (AUTH-TENANT-BLOCKING recording 2026-09-28,
+/// events#sign-up-password and tenant#tenant-sign-up).
+#[test]
+fn a_blocked_sign_up_leaves_an_unnamed_account_out_as_production() {
+    let mut s = state();
+    let sign_up = |s: &AuthState, email: &str| {
+        post(
+            s,
+            &format!("{V1}/accounts:signUp"),
+            &json!({"email": email, "password": "hunter22", "returnSecureToken": true}),
+        )
+    };
+    let (status, plain) = sign_up(&s, "plain@example.com");
+    assert_eq!(status, 200, "{plain}");
+    assert!(plain.get("displayName").is_none(), "{plain}");
+    s.blocking = Some(Arc::new(FixedBeforeSignInHook {
+        response: json!({"userRecord": {"updateMask": "sessionClaims", "sessionClaims": {"s": 1}}}),
+    }));
+    let (status, blocked) = sign_up(&s, "blocked@example.com");
+    assert_eq!(status, 200, "{blocked}");
+    assert!(blocked.get("displayName").is_none(), "{blocked}");
+}
+
+/// Sets a claim at beforeCreate, then refuses or disables the sign-in at beforeSignIn.
+struct CreateThenRefuseSignInHook {
+    disable: bool,
+}
+
+impl AuthBlockingHook for CreateThenRefuseSignInHook {
+    fn invoke(
+        &self,
+        event: BlockingAuthEvent,
+        _user: &fireemu_core_auth::store::UserRecord,
+    ) -> Result<Value, BlockingFunctionFailure> {
+        match event {
+            BlockingAuthEvent::BeforeCreate => Ok(json!({"userRecord": {
+                "updateMask": "customClaims", "customClaims": {"created": true}}})),
+            BlockingAuthEvent::BeforeSignIn if self.disable => {
+                Ok(json!({"userRecord": {"updateMask": "disabled", "disabled": true}}))
+            }
+            BlockingAuthEvent::BeforeSignIn => Err(BlockingFunctionFailure::from_function(
+                BlockingFunctionCode::PermissionDenied,
+                "refused",
+            )
+            .unwrap()),
+        }
+    }
+}
+
+/// A sign-up refused at beforeSignIn keeps the account it created, with what beforeCreate set,
+/// its sign-in time and its token issuance time; so does one whose account beforeSignIn
+/// disables; a second sign-up is `EMAIL_EXISTS` (AUTH-TENANT-BLOCKING recording 2026-09-28,
+/// rollback#lookup-refused-at-sign-in, #sign-up-again and #lookup-sign-in-disabled; the
+/// official Auth emulator also creates the account before it runs beforeSignIn).
+#[test]
+fn a_sign_up_refused_at_before_sign_in_keeps_its_account_as_production() {
+    for (disable, message) in [
+        (false, "BLOCKING_FUNCTION_ERROR_RESPONSE"),
+        (true, "USER_DISABLED"),
+    ] {
+        let mut s = state();
+        s.blocking = Some(Arc::new(CreateThenRefuseSignInHook { disable }));
+        let email = "refused-at-sign-in@example.com";
+        let sign_up = |s: &AuthState| {
+            post(
+                s,
+                &format!("{V1}/accounts:signUp"),
+                &json!({"email": email, "password": "hunter22", "returnSecureToken": true}),
+            )
+        };
+        let (status, refused) = sign_up(&s);
+        assert_eq!(status, 400, "{refused}");
+        assert!(
+            refused["error"]["message"]
+                .as_str()
+                .unwrap()
+                .starts_with(message),
+            "{refused}"
+        );
+        assert!(refused.get("idToken").is_none() && refused.get("refreshToken").is_none());
+        let (status, lookup) = admin(
+            &s,
+            &format!("{V1}/projects/demo-app/accounts:lookup"),
+            &json!({"email": [email]}),
+        );
+        assert_eq!(status, 200, "{lookup}");
+        let user = &lookup["users"][0];
+        assert_eq!(user["customAttributes"], r#"{"created":true}"#, "{lookup}");
+        assert!(user["lastLoginAt"].is_string(), "{lookup}");
+        assert!(user["lastRefreshAt"].is_string(), "{lookup}");
+        assert_eq!(
+            user["disabled"].as_bool().unwrap_or(false),
+            disable,
+            "{lookup}"
+        );
+        let (status, again) = sign_up(&s);
+        assert_eq!(status, 400, "{again}");
+        assert_eq!(again["error"]["message"], "EMAIL_EXISTS");
+    }
+}
+
+/// Answers `response` at beforeCreate and nothing at beforeSignIn.
+struct FixedBeforeCreateHook {
+    response: Value,
+}
+
+impl AuthBlockingHook for FixedBeforeCreateHook {
+    fn invoke(
+        &self,
+        event: BlockingAuthEvent,
+        _user: &fireemu_core_auth::store::UserRecord,
+    ) -> Result<Value, BlockingFunctionFailure> {
+        Ok(if event == BlockingAuthEvent::BeforeCreate {
+            self.response.clone()
+        } else {
+            json!({})
+        })
+    }
+}
+
+/// An account that beforeCreate disables is kept with its token issuance time
+/// (AUTH-TENANT-BLOCKING recording 2026-09-28, rollback#lookup-create-disabled).
+#[test]
+fn a_sign_up_disabled_at_before_create_keeps_its_issuance_time_as_production() {
+    let mut s = state();
+    s.blocking = Some(Arc::new(FixedBeforeCreateHook {
+        response: json!({"userRecord": {"updateMask": "disabled", "disabled": true}}),
+    }));
+    let (status, refused) = post(
+        &s,
+        &format!("{V1}/accounts:signUp"),
+        &json!({"email": "disabled-at-create@example.com", "password": "hunter22", "returnSecureToken": true}),
+    );
+    assert_eq!(status, 400, "{refused}");
+    assert_eq!(refused["error"]["message"], "USER_DISABLED");
+    let (_, lookup) = admin(
+        &s,
+        &format!("{V1}/projects/demo-app/accounts:lookup"),
+        &json!({"email": ["disabled-at-create@example.com"]}),
+    );
+    assert_eq!(lookup["users"][0]["disabled"], true, "{lookup}");
+    assert!(lookup["users"][0]["lastRefreshAt"].is_string(), "{lookup}");
 }

@@ -1,0 +1,6492 @@
+{
+  "version": 1,
+  "recordedAgainst": {
+    "target": "production Firestore (native gRPC Listen, Node Web SDK 12.18.0, browser Web SDK 12.18.0 over WebChannel) and the Identity Platform sandbox, end-user ID tokens",
+    "note": "Two recordings, one run each. Principal uids, tenants, the run id, the project and its number are placeholders. `second` holds recording 2's form of a row where it differed; `null` where recording 2 has no such row."
+  },
+  "programDigest": "453a95f4bf701a378c47c7a723a65deedd35d9880619f9b9650009295f8054f6",
+  "harnessDigest": "517a02e70a5fb68c8bed0f2c1777bdbf8ee5299da9a73b66dd973de8b875129b",
+  "recordings": [
+    {
+      "recording": 1,
+      "startedAt": "2026-09-28T04:21:56.507Z",
+      "sha": "8ab9191e08148f88b14ec204244bf1d33fdd9e3a"
+    },
+    {
+      "recording": 2,
+      "startedAt": "2026-09-28T05:59:09.107Z",
+      "sha": "8ab9191e08148f88b14ec204244bf1d33fdd9e3a"
+    }
+  ],
+  "rows": {
+    "b-ab/after-switch": {
+      "conditions": [
+        "AUTH-FS-CROSS/listen-sign-out-and-switch"
+      ],
+      "production": {
+        "listeners": {
+          "b-ab/own": [
+            "error:permission-denied"
+          ],
+          "b-ab/query": [
+            "error:permission-denied"
+          ],
+          "b-ab/open": [
+            "docs:1"
+          ],
+          "sdk-steady/w-b-ab": []
+        },
+        "clients": {
+          "b-ab": {
+            "wire": [
+              "firestore /google.firestore.v1.Firestore/Listen/channel <uid:bob>",
+              "firestore /google.firestore.v1.Firestore/Listen/channel null",
+              "identitytoolkit /v1/accounts:lookup null",
+              "identitytoolkit /v1/accounts:signInWithPassword null"
+            ],
+            "results": [
+              "signIn:ok"
+            ],
+            "settled": [],
+            "auth": [
+              "<uid:bob>"
+            ]
+          }
+        }
+      },
+      "raw": {
+        "id": "b-ab/after-switch",
+        "conditions": [
+          "AUTH-FS-CROSS/listen-sign-out-and-switch"
+        ],
+        "listeners": {
+          "b-ab/own": {
+            "events": [
+              {
+                "kind": "snapshot",
+                "fromCache": true,
+                "pending": false,
+                "docs": [
+                  {
+                    "path": "afc2-owned/alice-b-ab",
+                    "exists": true,
+                    "n": 1
+                  }
+                ]
+              },
+              {
+                "kind": "error",
+                "code": "permission-denied"
+              }
+            ]
+          },
+          "b-ab/query": {
+            "events": [
+              {
+                "kind": "snapshot",
+                "fromCache": true,
+                "pending": false,
+                "docs": [
+                  {
+                    "path": "afc2-owned/alice-b-ab",
+                    "exists": true,
+                    "n": 1
+                  }
+                ]
+              },
+              {
+                "kind": "error",
+                "code": "permission-denied"
+              }
+            ]
+          },
+          "b-ab/open": {
+            "events": [
+              {
+                "kind": "snapshot",
+                "fromCache": true,
+                "pending": false,
+                "docs": [
+                  {
+                    "path": "afc2-open/b-ab",
+                    "exists": true,
+                    "n": 1
+                  }
+                ]
+              },
+              {
+                "kind": "snapshot",
+                "fromCache": false,
+                "pending": false,
+                "docs": [
+                  {
+                    "path": "afc2-open/b-ab",
+                    "exists": true,
+                    "n": 1
+                  }
+                ]
+              }
+            ]
+          },
+          "sdk-steady/w-b-ab": {
+            "events": []
+          }
+        },
+        "clients": {
+          "b-ab": [
+            {
+              "kind": "wire",
+              "service": "identitytoolkit",
+              "method": "/v1/accounts:signInWithPassword",
+              "principal": null
+            },
+            {
+              "kind": "wire",
+              "service": "identitytoolkit",
+              "method": "/v1/accounts:lookup",
+              "principal": null
+            },
+            {
+              "kind": "wire",
+              "service": "firestore",
+              "method": "/google.firestore.v1.Firestore/Listen/channel",
+              "principal": null
+            },
+            {
+              "kind": "result",
+              "op": "signIn",
+              "ok": true,
+              "code": null
+            },
+            {
+              "kind": "wire",
+              "service": "firestore",
+              "method": "/google.firestore.v1.Firestore/Listen/channel",
+              "principal": "<uid:bob>"
+            },
+            {
+              "kind": "auth",
+              "uid": "<uid:bob>"
+            },
+            {
+              "kind": "wire",
+              "service": "firestore",
+              "method": "/google.firestore.v1.Firestore/Listen/channel",
+              "principal": null
+            },
+            {
+              "kind": "wire",
+              "service": "firestore",
+              "method": "/google.firestore.v1.Firestore/Listen/channel",
+              "principal": null
+            },
+            {
+              "kind": "wire",
+              "service": "firestore",
+              "method": "/google.firestore.v1.Firestore/Listen/channel",
+              "principal": null
+            }
+          ]
+        }
+      }
+    },
+    "b-ab/as-alice": {
+      "conditions": [
+        "AUTH-FS-CROSS/listen-sign-out-and-switch"
+      ],
+      "production": {
+        "listeners": {
+          "b-ab/own": [
+            "docs:0",
+            "docs:1"
+          ],
+          "b-ab/query": [
+            "docs:0",
+            "docs:1"
+          ],
+          "b-ab/open": [
+            "docs:0",
+            "docs:1"
+          ],
+          "sdk-steady/w-b-ab": [
+            "docs:1"
+          ]
+        },
+        "clients": {}
+      },
+      "raw": {
+        "id": "b-ab/as-alice",
+        "conditions": [
+          "AUTH-FS-CROSS/listen-sign-out-and-switch"
+        ],
+        "listeners": {
+          "b-ab/own": {
+            "events": [
+              {
+                "kind": "snapshot",
+                "fromCache": false,
+                "pending": false,
+                "docs": [
+                  {
+                    "path": "afc2-owned/alice-b-ab",
+                    "exists": true,
+                    "n": 0
+                  }
+                ]
+              },
+              {
+                "kind": "snapshot",
+                "fromCache": false,
+                "pending": false,
+                "docs": [
+                  {
+                    "path": "afc2-owned/alice-b-ab",
+                    "exists": true,
+                    "n": 1
+                  }
+                ]
+              }
+            ]
+          },
+          "b-ab/query": {
+            "events": [
+              {
+                "kind": "snapshot",
+                "fromCache": false,
+                "pending": false,
+                "docs": [
+                  {
+                    "path": "afc2-owned/alice-b-ab",
+                    "exists": true,
+                    "n": 0
+                  }
+                ]
+              },
+              {
+                "kind": "snapshot",
+                "fromCache": false,
+                "pending": false,
+                "docs": [
+                  {
+                    "path": "afc2-owned/alice-b-ab",
+                    "exists": true,
+                    "n": 1
+                  }
+                ]
+              }
+            ]
+          },
+          "b-ab/open": {
+            "events": [
+              {
+                "kind": "snapshot",
+                "fromCache": false,
+                "pending": false,
+                "docs": [
+                  {
+                    "path": "afc2-open/b-ab",
+                    "exists": true,
+                    "n": 0
+                  }
+                ]
+              },
+              {
+                "kind": "snapshot",
+                "fromCache": false,
+                "pending": false,
+                "docs": [
+                  {
+                    "path": "afc2-open/b-ab",
+                    "exists": true,
+                    "n": 1
+                  }
+                ]
+              }
+            ]
+          },
+          "sdk-steady/w-b-ab": {
+            "events": [
+              {
+                "kind": "snapshot",
+                "fromCache": false,
+                "pending": false,
+                "docs": [
+                  {
+                    "path": "afc2-open/b-ab",
+                    "exists": true,
+                    "n": 1
+                  }
+                ]
+              }
+            ]
+          }
+        },
+        "clients": {}
+      }
+    },
+    "b-ab/bob-listens": {
+      "conditions": [
+        "AUTH-FS-CROSS/listen-sign-out-and-switch"
+      ],
+      "production": {
+        "listeners": {
+          "b-ab/own": [],
+          "b-ab/query": [],
+          "b-ab/open": [
+            "docs:3"
+          ],
+          "sdk-steady/w-b-ab": [
+            "docs:3"
+          ],
+          "b-ab/bob-own": [
+            "docs:1",
+            "docs:2"
+          ]
+        },
+        "clients": {}
+      },
+      "raw": {
+        "id": "b-ab/bob-listens",
+        "conditions": [
+          "AUTH-FS-CROSS/listen-sign-out-and-switch"
+        ],
+        "listeners": {
+          "b-ab/own": {
+            "events": []
+          },
+          "b-ab/query": {
+            "events": []
+          },
+          "b-ab/open": {
+            "events": [
+              {
+                "kind": "snapshot",
+                "fromCache": false,
+                "pending": false,
+                "docs": [
+                  {
+                    "path": "afc2-open/b-ab",
+                    "exists": true,
+                    "n": 3
+                  }
+                ]
+              }
+            ]
+          },
+          "sdk-steady/w-b-ab": {
+            "events": [
+              {
+                "kind": "snapshot",
+                "fromCache": false,
+                "pending": false,
+                "docs": [
+                  {
+                    "path": "afc2-open/b-ab",
+                    "exists": true,
+                    "n": 3
+                  }
+                ]
+              }
+            ]
+          },
+          "b-ab/bob-own": {
+            "events": [
+              {
+                "kind": "snapshot",
+                "fromCache": false,
+                "pending": false,
+                "docs": [
+                  {
+                    "path": "afc2-owned/bob-b-ab",
+                    "exists": true,
+                    "n": 1
+                  }
+                ]
+              },
+              {
+                "kind": "snapshot",
+                "fromCache": false,
+                "pending": false,
+                "docs": [
+                  {
+                    "path": "afc2-owned/bob-b-ab",
+                    "exists": true,
+                    "n": 2
+                  }
+                ]
+              }
+            ]
+          }
+        },
+        "clients": {}
+      }
+    },
+    "b-ab/switched": {
+      "conditions": [
+        "AUTH-FS-CROSS/listen-sign-out-and-switch"
+      ],
+      "production": {
+        "listeners": {
+          "b-ab/own": [],
+          "b-ab/query": [],
+          "b-ab/open": [
+            "docs:2"
+          ],
+          "sdk-steady/w-b-ab": [
+            "docs:2"
+          ]
+        },
+        "clients": {}
+      },
+      "raw": {
+        "id": "b-ab/switched",
+        "conditions": [
+          "AUTH-FS-CROSS/listen-sign-out-and-switch"
+        ],
+        "listeners": {
+          "b-ab/own": {
+            "events": []
+          },
+          "b-ab/query": {
+            "events": []
+          },
+          "b-ab/open": {
+            "events": [
+              {
+                "kind": "snapshot",
+                "fromCache": false,
+                "pending": false,
+                "docs": [
+                  {
+                    "path": "afc2-open/b-ab",
+                    "exists": true,
+                    "n": 2
+                  }
+                ]
+              }
+            ]
+          },
+          "sdk-steady/w-b-ab": {
+            "events": [
+              {
+                "kind": "snapshot",
+                "fromCache": false,
+                "pending": false,
+                "docs": [
+                  {
+                    "path": "afc2-open/b-ab",
+                    "exists": true,
+                    "n": 2
+                  }
+                ]
+              }
+            ]
+          }
+        },
+        "clients": {}
+      }
+    },
+    "b-out/after-sign-out": {
+      "conditions": [
+        "AUTH-FS-CROSS/listen-sign-out-and-switch"
+      ],
+      "production": {
+        "listeners": {
+          "b-out/own": [
+            "error:permission-denied"
+          ],
+          "b-out/query": [
+            "error:permission-denied"
+          ],
+          "b-out/open": [
+            "error:permission-denied"
+          ],
+          "sdk-steady/w-b-out": []
+        },
+        "clients": {
+          "b-out": {
+            "wire": [
+              "firestore /google.firestore.v1.Firestore/Listen/channel null"
+            ],
+            "results": [
+              "signOut:ok"
+            ],
+            "settled": [],
+            "auth": [
+              "null"
+            ]
+          }
+        }
+      },
+      "raw": {
+        "id": "b-out/after-sign-out",
+        "conditions": [
+          "AUTH-FS-CROSS/listen-sign-out-and-switch"
+        ],
+        "listeners": {
+          "b-out/own": {
+            "events": [
+              {
+                "kind": "snapshot",
+                "fromCache": true,
+                "pending": false,
+                "docs": [
+                  {
+                    "path": "afc2-owned/alice-b-out",
+                    "exists": true,
+                    "n": 1
+                  }
+                ]
+              },
+              {
+                "kind": "error",
+                "code": "permission-denied"
+              }
+            ]
+          },
+          "b-out/query": {
+            "events": [
+              {
+                "kind": "snapshot",
+                "fromCache": true,
+                "pending": false,
+                "docs": [
+                  {
+                    "path": "afc2-owned/alice-b-out",
+                    "exists": true,
+                    "n": 1
+                  }
+                ]
+              },
+              {
+                "kind": "error",
+                "code": "permission-denied"
+              }
+            ]
+          },
+          "b-out/open": {
+            "events": [
+              {
+                "kind": "snapshot",
+                "fromCache": true,
+                "pending": false,
+                "docs": [
+                  {
+                    "path": "afc2-open/b-out",
+                    "exists": true,
+                    "n": 1
+                  }
+                ]
+              },
+              {
+                "kind": "error",
+                "code": "permission-denied"
+              }
+            ]
+          },
+          "sdk-steady/w-b-out": {
+            "events": []
+          }
+        },
+        "clients": {
+          "b-out": [
+            {
+              "kind": "auth",
+              "uid": null
+            },
+            {
+              "kind": "result",
+              "op": "signOut",
+              "ok": true,
+              "code": null
+            },
+            {
+              "kind": "wire",
+              "service": "firestore",
+              "method": "/google.firestore.v1.Firestore/Listen/channel",
+              "principal": null
+            },
+            {
+              "kind": "wire",
+              "service": "firestore",
+              "method": "/google.firestore.v1.Firestore/Listen/channel",
+              "principal": null
+            },
+            {
+              "kind": "wire",
+              "service": "firestore",
+              "method": "/google.firestore.v1.Firestore/Listen/channel",
+              "principal": null
+            },
+            {
+              "kind": "wire",
+              "service": "firestore",
+              "method": "/google.firestore.v1.Firestore/Listen/channel",
+              "principal": null
+            },
+            {
+              "kind": "wire",
+              "service": "firestore",
+              "method": "/google.firestore.v1.Firestore/Listen/channel",
+              "principal": null
+            }
+          ]
+        }
+      }
+    },
+    "b-out/listen-signed-out": {
+      "conditions": [
+        "AUTH-FS-CROSS/listen-sign-out-and-switch"
+      ],
+      "production": {
+        "listeners": {
+          "b-out/own-signed-out": [
+            "error:permission-denied"
+          ]
+        },
+        "clients": {}
+      },
+      "raw": {
+        "id": "b-out/listen-signed-out",
+        "conditions": [
+          "AUTH-FS-CROSS/listen-sign-out-and-switch"
+        ],
+        "listeners": {
+          "b-out/own-signed-out": {
+            "events": [
+              {
+                "kind": "snapshot",
+                "fromCache": true,
+                "pending": false,
+                "docs": [
+                  {
+                    "path": "afc2-owned/alice-b-out",
+                    "exists": true,
+                    "n": 1
+                  }
+                ]
+              },
+              {
+                "kind": "error",
+                "code": "permission-denied"
+              }
+            ]
+          }
+        },
+        "clients": {}
+      }
+    },
+    "b-out/signed-in": {
+      "conditions": [
+        "AUTH-FS-CROSS/listen-sign-out-and-switch"
+      ],
+      "production": {
+        "listeners": {
+          "b-out/own": [
+            "docs:1"
+          ],
+          "b-out/query": [
+            "docs:1"
+          ],
+          "b-out/open": [
+            "docs:1"
+          ],
+          "sdk-steady/w-b-out": [
+            "docs:1"
+          ]
+        },
+        "clients": {}
+      },
+      "raw": {
+        "id": "b-out/signed-in",
+        "conditions": [
+          "AUTH-FS-CROSS/listen-sign-out-and-switch"
+        ],
+        "listeners": {
+          "b-out/own": {
+            "events": [
+              {
+                "kind": "snapshot",
+                "fromCache": false,
+                "pending": false,
+                "docs": [
+                  {
+                    "path": "afc2-owned/alice-b-out",
+                    "exists": true,
+                    "n": 1
+                  }
+                ]
+              }
+            ]
+          },
+          "b-out/query": {
+            "events": [
+              {
+                "kind": "snapshot",
+                "fromCache": false,
+                "pending": false,
+                "docs": [
+                  {
+                    "path": "afc2-owned/alice-b-out",
+                    "exists": true,
+                    "n": 1
+                  }
+                ]
+              }
+            ]
+          },
+          "b-out/open": {
+            "events": [
+              {
+                "kind": "snapshot",
+                "fromCache": true,
+                "pending": false,
+                "docs": [
+                  {
+                    "path": "afc2-open/b-out",
+                    "exists": true,
+                    "n": 1
+                  }
+                ]
+              },
+              {
+                "kind": "snapshot",
+                "fromCache": false,
+                "pending": false,
+                "docs": [
+                  {
+                    "path": "afc2-open/b-out",
+                    "exists": true,
+                    "n": 1
+                  }
+                ]
+              }
+            ]
+          },
+          "sdk-steady/w-b-out": {
+            "events": [
+              {
+                "kind": "snapshot",
+                "fromCache": false,
+                "pending": false,
+                "docs": [
+                  {
+                    "path": "afc2-open/b-out",
+                    "exists": true,
+                    "n": 1
+                  }
+                ]
+              }
+            ]
+          }
+        },
+        "clients": {}
+      }
+    },
+    "b-out/signed-in-again": {
+      "conditions": [
+        "AUTH-FS-CROSS/listen-sign-out-and-switch"
+      ],
+      "production": {
+        "listeners": {
+          "b-out/own": [],
+          "b-out/query": [],
+          "b-out/open": [],
+          "sdk-steady/w-b-out": [
+            "docs:3"
+          ],
+          "b-out/own-again": [
+            "docs:2",
+            "docs:3"
+          ]
+        },
+        "clients": {}
+      },
+      "raw": {
+        "id": "b-out/signed-in-again",
+        "conditions": [
+          "AUTH-FS-CROSS/listen-sign-out-and-switch"
+        ],
+        "listeners": {
+          "b-out/own": {
+            "events": []
+          },
+          "b-out/query": {
+            "events": []
+          },
+          "b-out/open": {
+            "events": []
+          },
+          "sdk-steady/w-b-out": {
+            "events": [
+              {
+                "kind": "snapshot",
+                "fromCache": false,
+                "pending": false,
+                "docs": [
+                  {
+                    "path": "afc2-open/b-out",
+                    "exists": true,
+                    "n": 3
+                  }
+                ]
+              }
+            ]
+          },
+          "b-out/own-again": {
+            "events": [
+              {
+                "kind": "snapshot",
+                "fromCache": true,
+                "pending": false,
+                "docs": [
+                  {
+                    "path": "afc2-owned/alice-b-out",
+                    "exists": true,
+                    "n": 1
+                  }
+                ]
+              },
+              {
+                "kind": "snapshot",
+                "fromCache": false,
+                "pending": false,
+                "docs": [
+                  {
+                    "path": "afc2-owned/alice-b-out",
+                    "exists": true,
+                    "n": 2
+                  }
+                ]
+              },
+              {
+                "kind": "snapshot",
+                "fromCache": false,
+                "pending": false,
+                "docs": [
+                  {
+                    "path": "afc2-owned/alice-b-out",
+                    "exists": true,
+                    "n": 3
+                  }
+                ]
+              }
+            ]
+          }
+        },
+        "clients": {}
+      }
+    },
+    "b-out/signed-out": {
+      "conditions": [
+        "AUTH-FS-CROSS/listen-sign-out-and-switch"
+      ],
+      "production": {
+        "listeners": {
+          "b-out/own": [],
+          "b-out/query": [],
+          "b-out/open": [],
+          "sdk-steady/w-b-out": [
+            "docs:2"
+          ]
+        },
+        "clients": {}
+      },
+      "raw": {
+        "id": "b-out/signed-out",
+        "conditions": [
+          "AUTH-FS-CROSS/listen-sign-out-and-switch"
+        ],
+        "listeners": {
+          "b-out/own": {
+            "events": []
+          },
+          "b-out/query": {
+            "events": []
+          },
+          "b-out/open": {
+            "events": []
+          },
+          "sdk-steady/w-b-out": {
+            "events": [
+              {
+                "kind": "snapshot",
+                "fromCache": false,
+                "pending": false,
+                "docs": [
+                  {
+                    "path": "afc2-open/b-out",
+                    "exists": true,
+                    "n": 2
+                  }
+                ]
+              }
+            ]
+          }
+        },
+        "clients": {}
+      }
+    },
+    "b-pend-ab/after-back": {
+      "conditions": [
+        "AUTH-FS-CROSS/pending-write-across-switch"
+      ],
+      "production": {
+        "docs": {
+          "afc2-pending/b-ab": {
+            "exists": true,
+            "fields": {
+              "owner": {
+                "stringValue": "<uid:alice>"
+              },
+              "n": {
+                "integerValue": "1"
+              }
+            }
+          }
+        }
+      },
+      "raw": {
+        "id": "b-pend-ab/after-back",
+        "conditions": [
+          "AUTH-FS-CROSS/pending-write-across-switch"
+        ],
+        "docs": {
+          "afc2-pending/b-ab": {
+            "exists": true,
+            "fields": {
+              "owner": {
+                "stringValue": "<uid:alice>"
+              },
+              "n": {
+                "integerValue": "1"
+              }
+            }
+          }
+        }
+      }
+    },
+    "b-pend-ab/after-online": {
+      "conditions": [
+        "AUTH-FS-CROSS/pending-write-across-switch"
+      ],
+      "production": {
+        "docs": {
+          "afc2-pending/b-ab": {
+            "exists": false,
+            "fields": null
+          }
+        }
+      },
+      "raw": {
+        "id": "b-pend-ab/after-online",
+        "conditions": [
+          "AUTH-FS-CROSS/pending-write-across-switch"
+        ],
+        "docs": {
+          "afc2-pending/b-ab": {
+            "exists": false,
+            "fields": null
+          }
+        }
+      }
+    },
+    "b-pend-ab/back": {
+      "conditions": [
+        "AUTH-FS-CROSS/pending-write-across-switch"
+      ],
+      "production": {
+        "listeners": {},
+        "clients": {
+          "b-pend-ab": {
+            "wire": [
+              "firestore /google.firestore.v1.Firestore/Write/channel <uid:alice>",
+              "firestore /google.firestore.v1.Firestore/Write/channel null",
+              "identitytoolkit /v1/accounts:lookup null",
+              "identitytoolkit /v1/accounts:signInWithPassword null"
+            ],
+            "results": [
+              "signIn:ok"
+            ],
+            "settled": [
+              "w:ok"
+            ],
+            "auth": [
+              "<uid:alice>"
+            ]
+          }
+        }
+      },
+      "raw": {
+        "id": "b-pend-ab/back",
+        "conditions": [
+          "AUTH-FS-CROSS/pending-write-across-switch"
+        ],
+        "listeners": {},
+        "clients": {
+          "b-pend-ab": [
+            {
+              "kind": "wire",
+              "service": "identitytoolkit",
+              "method": "/v1/accounts:signInWithPassword",
+              "principal": null
+            },
+            {
+              "kind": "wire",
+              "service": "identitytoolkit",
+              "method": "/v1/accounts:lookup",
+              "principal": null
+            },
+            {
+              "kind": "result",
+              "op": "signIn",
+              "ok": true,
+              "code": null
+            },
+            {
+              "kind": "auth",
+              "uid": "<uid:alice>"
+            },
+            {
+              "kind": "wire",
+              "service": "firestore",
+              "method": "/google.firestore.v1.Firestore/Write/channel",
+              "principal": "<uid:alice>"
+            },
+            {
+              "kind": "wire",
+              "service": "firestore",
+              "method": "/google.firestore.v1.Firestore/Write/channel",
+              "principal": null
+            },
+            {
+              "kind": "wire",
+              "service": "firestore",
+              "method": "/google.firestore.v1.Firestore/Write/channel",
+              "principal": null
+            },
+            {
+              "kind": "wire",
+              "service": "firestore",
+              "method": "/google.firestore.v1.Firestore/Write/channel",
+              "principal": null
+            },
+            {
+              "kind": "wire",
+              "service": "firestore",
+              "method": "/google.firestore.v1.Firestore/Write/channel",
+              "principal": null
+            },
+            {
+              "kind": "write-settled",
+              "writeId": "w",
+              "ok": true,
+              "code": null
+            },
+            {
+              "kind": "wire",
+              "service": "firestore",
+              "method": "/google.firestore.v1.Firestore/Write/channel",
+              "principal": null
+            }
+          ]
+        }
+      }
+    },
+    "b-pend-ab/offline": {
+      "conditions": [
+        "AUTH-FS-CROSS/pending-write-across-switch"
+      ],
+      "production": {
+        "docs": {
+          "afc2-pending/b-ab": {
+            "exists": false,
+            "fields": null
+          }
+        }
+      },
+      "raw": {
+        "id": "b-pend-ab/offline",
+        "conditions": [
+          "AUTH-FS-CROSS/pending-write-across-switch"
+        ],
+        "docs": {
+          "afc2-pending/b-ab": {
+            "exists": false,
+            "fields": null
+          }
+        }
+      }
+    },
+    "b-pend-ab/online": {
+      "conditions": [
+        "AUTH-FS-CROSS/pending-write-across-switch"
+      ],
+      "production": {
+        "listeners": {},
+        "clients": {
+          "b-pend-ab": {
+            "wire": [],
+            "results": [
+              "online:ok"
+            ],
+            "settled": [],
+            "auth": []
+          }
+        }
+      },
+      "raw": {
+        "id": "b-pend-ab/online",
+        "conditions": [
+          "AUTH-FS-CROSS/pending-write-across-switch"
+        ],
+        "listeners": {},
+        "clients": {
+          "b-pend-ab": [
+            {
+              "kind": "result",
+              "op": "online",
+              "ok": true,
+              "code": null
+            }
+          ]
+        }
+      }
+    },
+    "b-pend-out/after-back": {
+      "conditions": [
+        "AUTH-FS-CROSS/pending-write-across-switch"
+      ],
+      "production": {
+        "docs": {
+          "afc2-pending/b-out": {
+            "exists": true,
+            "fields": {
+              "n": {
+                "integerValue": "1"
+              },
+              "owner": {
+                "stringValue": "<uid:alice>"
+              }
+            }
+          }
+        }
+      },
+      "raw": {
+        "id": "b-pend-out/after-back",
+        "conditions": [
+          "AUTH-FS-CROSS/pending-write-across-switch"
+        ],
+        "docs": {
+          "afc2-pending/b-out": {
+            "exists": true,
+            "fields": {
+              "n": {
+                "integerValue": "1"
+              },
+              "owner": {
+                "stringValue": "<uid:alice>"
+              }
+            }
+          }
+        }
+      }
+    },
+    "b-pend-out/after-online": {
+      "conditions": [
+        "AUTH-FS-CROSS/pending-write-across-switch"
+      ],
+      "production": {
+        "docs": {
+          "afc2-pending/b-out": {
+            "exists": false,
+            "fields": null
+          }
+        }
+      },
+      "raw": {
+        "id": "b-pend-out/after-online",
+        "conditions": [
+          "AUTH-FS-CROSS/pending-write-across-switch"
+        ],
+        "docs": {
+          "afc2-pending/b-out": {
+            "exists": false,
+            "fields": null
+          }
+        }
+      }
+    },
+    "b-pend-out/back": {
+      "conditions": [
+        "AUTH-FS-CROSS/pending-write-across-switch"
+      ],
+      "production": {
+        "listeners": {},
+        "clients": {
+          "b-pend-out": {
+            "wire": [
+              "firestore /google.firestore.v1.Firestore/Write/channel <uid:alice>",
+              "firestore /google.firestore.v1.Firestore/Write/channel null",
+              "identitytoolkit /v1/accounts:lookup null",
+              "identitytoolkit /v1/accounts:signInWithPassword null"
+            ],
+            "results": [
+              "signIn:ok"
+            ],
+            "settled": [
+              "w:ok"
+            ],
+            "auth": [
+              "<uid:alice>"
+            ]
+          }
+        }
+      },
+      "raw": {
+        "id": "b-pend-out/back",
+        "conditions": [
+          "AUTH-FS-CROSS/pending-write-across-switch"
+        ],
+        "listeners": {},
+        "clients": {
+          "b-pend-out": [
+            {
+              "kind": "wire",
+              "service": "identitytoolkit",
+              "method": "/v1/accounts:signInWithPassword",
+              "principal": null
+            },
+            {
+              "kind": "wire",
+              "service": "identitytoolkit",
+              "method": "/v1/accounts:lookup",
+              "principal": null
+            },
+            {
+              "kind": "result",
+              "op": "signIn",
+              "ok": true,
+              "code": null
+            },
+            {
+              "kind": "auth",
+              "uid": "<uid:alice>"
+            },
+            {
+              "kind": "wire",
+              "service": "firestore",
+              "method": "/google.firestore.v1.Firestore/Write/channel",
+              "principal": "<uid:alice>"
+            },
+            {
+              "kind": "wire",
+              "service": "firestore",
+              "method": "/google.firestore.v1.Firestore/Write/channel",
+              "principal": null
+            },
+            {
+              "kind": "wire",
+              "service": "firestore",
+              "method": "/google.firestore.v1.Firestore/Write/channel",
+              "principal": null
+            },
+            {
+              "kind": "wire",
+              "service": "firestore",
+              "method": "/google.firestore.v1.Firestore/Write/channel",
+              "principal": null
+            },
+            {
+              "kind": "wire",
+              "service": "firestore",
+              "method": "/google.firestore.v1.Firestore/Write/channel",
+              "principal": null
+            },
+            {
+              "kind": "write-settled",
+              "writeId": "w",
+              "ok": true,
+              "code": null
+            },
+            {
+              "kind": "wire",
+              "service": "firestore",
+              "method": "/google.firestore.v1.Firestore/Write/channel",
+              "principal": null
+            }
+          ]
+        }
+      }
+    },
+    "b-pend-out/offline": {
+      "conditions": [
+        "AUTH-FS-CROSS/pending-write-across-switch"
+      ],
+      "production": {
+        "docs": {
+          "afc2-pending/b-out": {
+            "exists": false,
+            "fields": null
+          }
+        }
+      },
+      "raw": {
+        "id": "b-pend-out/offline",
+        "conditions": [
+          "AUTH-FS-CROSS/pending-write-across-switch"
+        ],
+        "docs": {
+          "afc2-pending/b-out": {
+            "exists": false,
+            "fields": null
+          }
+        }
+      }
+    },
+    "b-pend-out/online": {
+      "conditions": [
+        "AUTH-FS-CROSS/pending-write-across-switch"
+      ],
+      "production": {
+        "listeners": {},
+        "clients": {
+          "b-pend-out": {
+            "wire": [],
+            "results": [
+              "online:ok"
+            ],
+            "settled": [],
+            "auth": []
+          }
+        }
+      },
+      "raw": {
+        "id": "b-pend-out/online",
+        "conditions": [
+          "AUTH-FS-CROSS/pending-write-across-switch"
+        ],
+        "listeners": {},
+        "clients": {
+          "b-pend-out": [
+            {
+              "kind": "result",
+              "op": "online",
+              "ok": true,
+              "code": null
+            }
+          ]
+        }
+      }
+    },
+    "claim/added": {
+      "conditions": [
+        "AUTH-FS-CROSS/listen-token-refresh"
+      ],
+      "production": {
+        "listeners": {
+          "n-claim/doc1": [],
+          "n-claim/query1": []
+        },
+        "clients": {}
+      },
+      "raw": {
+        "id": "claim/added",
+        "conditions": [
+          "AUTH-FS-CROSS/listen-token-refresh"
+        ],
+        "listeners": {
+          "n-claim/doc1": {
+            "events": []
+          },
+          "n-claim/query1": {
+            "events": []
+          }
+        },
+        "clients": {}
+      }
+    },
+    "claim/after-remove": {
+      "conditions": [
+        "AUTH-FS-CROSS/listen-token-refresh"
+      ],
+      "production": {
+        "listeners": {
+          "n-claim/doc2": [
+            "error:permission-denied"
+          ],
+          "n-claim/query2": [
+            "error:permission-denied"
+          ]
+        },
+        "clients": {
+          "n-claim": {
+            "wire": [
+              "firestore /google.firestore.v1.Firestore/Listen <uid:claim>",
+              "securetoken /v1/token null"
+            ],
+            "results": [
+              "refreshToken:ok"
+            ],
+            "settled": [],
+            "auth": [
+              "<uid:claim>"
+            ]
+          }
+        }
+      },
+      "raw": {
+        "id": "claim/after-remove",
+        "conditions": [
+          "AUTH-FS-CROSS/listen-token-refresh"
+        ],
+        "listeners": {
+          "n-claim/doc2": {
+            "events": [
+              {
+                "kind": "snapshot",
+                "fromCache": true,
+                "pending": false,
+                "docs": [
+                  {
+                    "path": "afc2-claim/n",
+                    "exists": true,
+                    "n": 2
+                  }
+                ]
+              },
+              {
+                "kind": "error",
+                "code": "permission-denied"
+              }
+            ]
+          },
+          "n-claim/query2": {
+            "events": [
+              {
+                "kind": "snapshot",
+                "fromCache": true,
+                "pending": false,
+                "docs": [
+                  {
+                    "path": "afc2-claim/n",
+                    "exists": true,
+                    "n": 2
+                  }
+                ]
+              },
+              {
+                "kind": "error",
+                "code": "permission-denied"
+              }
+            ]
+          }
+        },
+        "clients": {
+          "n-claim": [
+            {
+              "kind": "wire",
+              "service": "securetoken",
+              "method": "/v1/token",
+              "principal": null
+            },
+            {
+              "kind": "result",
+              "op": "refreshToken",
+              "ok": true,
+              "code": null
+            },
+            {
+              "kind": "auth",
+              "uid": "<uid:claim>"
+            },
+            {
+              "kind": "wire",
+              "service": "firestore",
+              "method": "/google.firestore.v1.Firestore/Listen",
+              "principal": "<uid:claim>"
+            }
+          ]
+        }
+      }
+    },
+    "claim/removed": {
+      "conditions": [
+        "AUTH-FS-CROSS/listen-token-refresh"
+      ],
+      "production": {
+        "listeners": {
+          "n-claim/doc2": [],
+          "n-claim/query2": []
+        },
+        "clients": {}
+      },
+      "raw": {
+        "id": "claim/removed",
+        "conditions": [
+          "AUTH-FS-CROSS/listen-token-refresh"
+        ],
+        "listeners": {
+          "n-claim/doc2": {
+            "events": []
+          },
+          "n-claim/query2": {
+            "events": []
+          }
+        },
+        "clients": {}
+      }
+    },
+    "claim/with-c": {
+      "conditions": [
+        "AUTH-FS-CROSS/listen-token-refresh"
+      ],
+      "production": {
+        "listeners": {
+          "n-claim/doc1": [],
+          "n-claim/query1": [],
+          "n-claim/doc2": [
+            "docs:1",
+            "docs:2"
+          ],
+          "n-claim/query2": [
+            "docs:1",
+            "docs:2"
+          ]
+        },
+        "clients": {}
+      },
+      "raw": {
+        "id": "claim/with-c",
+        "conditions": [
+          "AUTH-FS-CROSS/listen-token-refresh"
+        ],
+        "listeners": {
+          "n-claim/doc1": {
+            "events": []
+          },
+          "n-claim/query1": {
+            "events": []
+          },
+          "n-claim/doc2": {
+            "events": [
+              {
+                "kind": "snapshot",
+                "fromCache": false,
+                "pending": false,
+                "docs": [
+                  {
+                    "path": "afc2-claim/n",
+                    "exists": true,
+                    "n": 1
+                  }
+                ]
+              },
+              {
+                "kind": "snapshot",
+                "fromCache": false,
+                "pending": false,
+                "docs": [
+                  {
+                    "path": "afc2-claim/n",
+                    "exists": true,
+                    "n": 2
+                  }
+                ]
+              }
+            ]
+          },
+          "n-claim/query2": {
+            "events": [
+              {
+                "kind": "snapshot",
+                "fromCache": false,
+                "pending": false,
+                "docs": [
+                  {
+                    "path": "afc2-claim/n",
+                    "exists": true,
+                    "n": 1
+                  }
+                ]
+              },
+              {
+                "kind": "snapshot",
+                "fromCache": false,
+                "pending": false,
+                "docs": [
+                  {
+                    "path": "afc2-claim/n",
+                    "exists": true,
+                    "n": 2
+                  }
+                ]
+              }
+            ]
+          }
+        },
+        "clients": {}
+      }
+    },
+    "claim/without-c": {
+      "conditions": [
+        "AUTH-FS-CROSS/listen-token-refresh"
+      ],
+      "production": {
+        "listeners": {
+          "n-claim/doc1": [
+            "error:permission-denied"
+          ],
+          "n-claim/query1": [
+            "error:permission-denied"
+          ]
+        },
+        "clients": {}
+      },
+      "raw": {
+        "id": "claim/without-c",
+        "conditions": [
+          "AUTH-FS-CROSS/listen-token-refresh"
+        ],
+        "listeners": {
+          "n-claim/doc1": {
+            "events": [
+              {
+                "kind": "error",
+                "code": "permission-denied"
+              }
+            ]
+          },
+          "n-claim/query1": {
+            "events": [
+              {
+                "kind": "error",
+                "code": "permission-denied"
+              }
+            ]
+          }
+        },
+        "clients": {}
+      }
+    },
+    "held/after-change": {
+      "conditions": [
+        "AUTH-FS-CROSS/listen-revocation-disable-delete",
+        "AUTH-FS-CROSS/listen-tenant-deletion"
+      ],
+      "production": {
+        "listeners": {
+          "grpc-steady": {
+            "targets": {
+              "1": [
+                "n:2"
+              ],
+              "2": [
+                "n:2"
+              ]
+            },
+            "removed": {},
+            "end": null,
+            "endedBefore": false
+          },
+          "sdk-steady/doc": [
+            "docs:2"
+          ],
+          "sdk-steady/query": [
+            "docs:2"
+          ],
+          "grpc-rev": {
+            "targets": {
+              "1": [
+                "n:2"
+              ],
+              "2": [
+                "n:2"
+              ]
+            },
+            "removed": {},
+            "end": null,
+            "endedBefore": false
+          },
+          "sdk-rev/doc": [
+            "docs:2"
+          ],
+          "sdk-rev/query": [
+            "docs:2"
+          ],
+          "grpc-dis": {
+            "targets": {
+              "1": [
+                "n:2"
+              ],
+              "2": [
+                "n:2"
+              ]
+            },
+            "removed": {},
+            "end": null,
+            "endedBefore": false
+          },
+          "sdk-dis/doc": [
+            "docs:2"
+          ],
+          "sdk-dis/query": [
+            "docs:2"
+          ],
+          "grpc-del": {
+            "targets": {
+              "1": [
+                "n:2"
+              ],
+              "2": [
+                "n:2"
+              ]
+            },
+            "removed": {},
+            "end": null,
+            "endedBefore": false
+          },
+          "sdk-del/doc": [
+            "docs:2"
+          ],
+          "sdk-del/query": [
+            "docs:2"
+          ],
+          "grpc-ten-t1": {
+            "targets": {
+              "1": [
+                "n:2"
+              ],
+              "2": [
+                "n:2"
+              ]
+            },
+            "removed": {},
+            "end": null,
+            "endedBefore": false
+          },
+          "sdk-ten-t1/doc": [
+            "docs:2"
+          ],
+          "sdk-ten-t1/query": [
+            "docs:2"
+          ],
+          "grpc-ten-t2": {
+            "targets": {
+              "1": [
+                "n:2"
+              ],
+              "2": [
+                "n:2"
+              ]
+            },
+            "removed": {},
+            "end": null,
+            "endedBefore": false
+          },
+          "sdk-ten-t2/doc": [
+            "docs:2"
+          ],
+          "sdk-ten-t2/query": [
+            "docs:2"
+          ]
+        },
+        "clients": {}
+      },
+      "raw": {
+        "id": "held/after-change",
+        "conditions": [
+          "AUTH-FS-CROSS/listen-revocation-disable-delete",
+          "AUTH-FS-CROSS/listen-tenant-deletion"
+        ],
+        "listeners": {
+          "grpc-steady": {
+            "events": [
+              {
+                "kind": "documentChange",
+                "doc": "afc2-owned/steady-grpc",
+                "n": "2",
+                "targetIds": [
+                  2
+                ],
+                "removedTargetIds": []
+              },
+              {
+                "kind": "targetChange",
+                "type": "NO_CHANGE",
+                "targetIds": [
+                  2
+                ],
+                "cause": null
+              },
+              {
+                "kind": "documentChange",
+                "doc": "afc2-owned/steady-grpc",
+                "n": "2",
+                "targetIds": [
+                  1
+                ],
+                "removedTargetIds": []
+              },
+              {
+                "kind": "targetChange",
+                "type": "NO_CHANGE",
+                "targetIds": [
+                  1
+                ],
+                "cause": null
+              }
+            ],
+            "endedBefore": false,
+            "end": null
+          },
+          "sdk-steady/doc": {
+            "events": [
+              {
+                "kind": "snapshot",
+                "fromCache": false,
+                "pending": false,
+                "docs": [
+                  {
+                    "path": "afc2-owned/steady-sdk",
+                    "exists": true,
+                    "n": 2
+                  }
+                ]
+              }
+            ]
+          },
+          "sdk-steady/query": {
+            "events": [
+              {
+                "kind": "snapshot",
+                "fromCache": false,
+                "pending": false,
+                "docs": [
+                  {
+                    "path": "afc2-owned/steady-sdk",
+                    "exists": true,
+                    "n": 2
+                  }
+                ]
+              }
+            ]
+          },
+          "grpc-rev": {
+            "events": [
+              {
+                "kind": "documentChange",
+                "doc": "afc2-owned/rev-grpc",
+                "n": "2",
+                "targetIds": [
+                  2
+                ],
+                "removedTargetIds": []
+              },
+              {
+                "kind": "targetChange",
+                "type": "NO_CHANGE",
+                "targetIds": [
+                  2
+                ],
+                "cause": null
+              },
+              {
+                "kind": "documentChange",
+                "doc": "afc2-owned/rev-grpc",
+                "n": "2",
+                "targetIds": [
+                  1
+                ],
+                "removedTargetIds": []
+              },
+              {
+                "kind": "targetChange",
+                "type": "NO_CHANGE",
+                "targetIds": [
+                  1
+                ],
+                "cause": null
+              }
+            ],
+            "endedBefore": false,
+            "end": null
+          },
+          "sdk-rev/doc": {
+            "events": [
+              {
+                "kind": "snapshot",
+                "fromCache": false,
+                "pending": false,
+                "docs": [
+                  {
+                    "path": "afc2-owned/rev-sdk",
+                    "exists": true,
+                    "n": 2
+                  }
+                ]
+              }
+            ]
+          },
+          "sdk-rev/query": {
+            "events": [
+              {
+                "kind": "snapshot",
+                "fromCache": false,
+                "pending": false,
+                "docs": [
+                  {
+                    "path": "afc2-owned/rev-sdk",
+                    "exists": true,
+                    "n": 2
+                  }
+                ]
+              }
+            ]
+          },
+          "grpc-dis": {
+            "events": [
+              {
+                "kind": "documentChange",
+                "doc": "afc2-owned/dis-grpc",
+                "n": "2",
+                "targetIds": [
+                  2
+                ],
+                "removedTargetIds": []
+              },
+              {
+                "kind": "targetChange",
+                "type": "NO_CHANGE",
+                "targetIds": [
+                  2
+                ],
+                "cause": null
+              },
+              {
+                "kind": "documentChange",
+                "doc": "afc2-owned/dis-grpc",
+                "n": "2",
+                "targetIds": [
+                  1
+                ],
+                "removedTargetIds": []
+              },
+              {
+                "kind": "targetChange",
+                "type": "NO_CHANGE",
+                "targetIds": [
+                  1
+                ],
+                "cause": null
+              }
+            ],
+            "endedBefore": false,
+            "end": null
+          },
+          "sdk-dis/doc": {
+            "events": [
+              {
+                "kind": "snapshot",
+                "fromCache": false,
+                "pending": false,
+                "docs": [
+                  {
+                    "path": "afc2-owned/dis-sdk",
+                    "exists": true,
+                    "n": 2
+                  }
+                ]
+              }
+            ]
+          },
+          "sdk-dis/query": {
+            "events": [
+              {
+                "kind": "snapshot",
+                "fromCache": false,
+                "pending": false,
+                "docs": [
+                  {
+                    "path": "afc2-owned/dis-sdk",
+                    "exists": true,
+                    "n": 2
+                  }
+                ]
+              }
+            ]
+          },
+          "grpc-del": {
+            "events": [
+              {
+                "kind": "documentChange",
+                "doc": "afc2-owned/del-grpc",
+                "n": "2",
+                "targetIds": [
+                  2
+                ],
+                "removedTargetIds": []
+              },
+              {
+                "kind": "targetChange",
+                "type": "NO_CHANGE",
+                "targetIds": [
+                  2
+                ],
+                "cause": null
+              },
+              {
+                "kind": "documentChange",
+                "doc": "afc2-owned/del-grpc",
+                "n": "2",
+                "targetIds": [
+                  1
+                ],
+                "removedTargetIds": []
+              },
+              {
+                "kind": "targetChange",
+                "type": "NO_CHANGE",
+                "targetIds": [
+                  1
+                ],
+                "cause": null
+              }
+            ],
+            "endedBefore": false,
+            "end": null
+          },
+          "sdk-del/doc": {
+            "events": [
+              {
+                "kind": "snapshot",
+                "fromCache": false,
+                "pending": false,
+                "docs": [
+                  {
+                    "path": "afc2-owned/del-sdk",
+                    "exists": true,
+                    "n": 2
+                  }
+                ]
+              }
+            ]
+          },
+          "sdk-del/query": {
+            "events": [
+              {
+                "kind": "snapshot",
+                "fromCache": false,
+                "pending": false,
+                "docs": [
+                  {
+                    "path": "afc2-owned/del-sdk",
+                    "exists": true,
+                    "n": 2
+                  }
+                ]
+              }
+            ]
+          },
+          "grpc-ten-t1": {
+            "events": [
+              {
+                "kind": "documentChange",
+                "doc": "afc2-tenant/t1-grpc",
+                "n": "2",
+                "targetIds": [
+                  2
+                ],
+                "removedTargetIds": []
+              },
+              {
+                "kind": "targetChange",
+                "type": "NO_CHANGE",
+                "targetIds": [
+                  2
+                ],
+                "cause": null
+              },
+              {
+                "kind": "documentChange",
+                "doc": "afc2-tenant/t1-grpc",
+                "n": "2",
+                "targetIds": [
+                  1
+                ],
+                "removedTargetIds": []
+              },
+              {
+                "kind": "targetChange",
+                "type": "NO_CHANGE",
+                "targetIds": [
+                  1
+                ],
+                "cause": null
+              }
+            ],
+            "endedBefore": false,
+            "end": null
+          },
+          "sdk-ten-t1/doc": {
+            "events": [
+              {
+                "kind": "snapshot",
+                "fromCache": false,
+                "pending": false,
+                "docs": [
+                  {
+                    "path": "afc2-tenant/t1-sdk",
+                    "exists": true,
+                    "n": 2
+                  }
+                ]
+              }
+            ]
+          },
+          "sdk-ten-t1/query": {
+            "events": [
+              {
+                "kind": "snapshot",
+                "fromCache": false,
+                "pending": false,
+                "docs": [
+                  {
+                    "path": "afc2-tenant/t1-sdk",
+                    "exists": true,
+                    "n": 2
+                  }
+                ]
+              }
+            ]
+          },
+          "grpc-ten-t2": {
+            "events": [
+              {
+                "kind": "documentChange",
+                "doc": "afc2-tenant/t2-grpc",
+                "n": "2",
+                "targetIds": [
+                  2
+                ],
+                "removedTargetIds": []
+              },
+              {
+                "kind": "targetChange",
+                "type": "NO_CHANGE",
+                "targetIds": [
+                  2
+                ],
+                "cause": null
+              },
+              {
+                "kind": "documentChange",
+                "doc": "afc2-tenant/t2-grpc",
+                "n": "2",
+                "targetIds": [
+                  1
+                ],
+                "removedTargetIds": []
+              },
+              {
+                "kind": "targetChange",
+                "type": "NO_CHANGE",
+                "targetIds": [
+                  1
+                ],
+                "cause": null
+              }
+            ],
+            "endedBefore": false,
+            "end": null
+          },
+          "sdk-ten-t2/doc": {
+            "events": [
+              {
+                "kind": "snapshot",
+                "fromCache": false,
+                "pending": false,
+                "docs": [
+                  {
+                    "path": "afc2-tenant/t2-sdk",
+                    "exists": true,
+                    "n": 2
+                  }
+                ]
+              }
+            ]
+          },
+          "sdk-ten-t2/query": {
+            "events": [
+              {
+                "kind": "snapshot",
+                "fromCache": false,
+                "pending": false,
+                "docs": [
+                  {
+                    "path": "afc2-tenant/t2-sdk",
+                    "exists": true,
+                    "n": 2
+                  }
+                ]
+              }
+            ]
+          }
+        },
+        "clients": {}
+      }
+    },
+    "held/after-change-65s": {
+      "conditions": [
+        "AUTH-FS-CROSS/listen-revocation-disable-delete",
+        "AUTH-FS-CROSS/listen-tenant-deletion"
+      ],
+      "production": {
+        "listeners": {
+          "grpc-steady": {
+            "targets": {
+              "1": [
+                "n:3"
+              ],
+              "2": [
+                "n:3"
+              ]
+            },
+            "removed": {},
+            "end": null,
+            "endedBefore": false
+          },
+          "sdk-steady/doc": [
+            "docs:3"
+          ],
+          "sdk-steady/query": [
+            "docs:3"
+          ],
+          "grpc-rev": {
+            "targets": {
+              "1": [
+                "n:3"
+              ],
+              "2": [
+                "n:3"
+              ]
+            },
+            "removed": {},
+            "end": null,
+            "endedBefore": false
+          },
+          "sdk-rev/doc": [
+            "docs:3"
+          ],
+          "sdk-rev/query": [
+            "docs:3"
+          ],
+          "grpc-dis": {
+            "targets": {
+              "1": [
+                "n:3"
+              ],
+              "2": [
+                "n:3"
+              ]
+            },
+            "removed": {},
+            "end": null,
+            "endedBefore": false
+          },
+          "sdk-dis/doc": [
+            "docs:3"
+          ],
+          "sdk-dis/query": [
+            "docs:3"
+          ],
+          "grpc-del": {
+            "targets": {
+              "1": [
+                "n:3"
+              ],
+              "2": [
+                "n:3"
+              ]
+            },
+            "removed": {},
+            "end": null,
+            "endedBefore": false
+          },
+          "sdk-del/doc": [
+            "docs:3"
+          ],
+          "sdk-del/query": [
+            "docs:3"
+          ],
+          "grpc-ten-t1": {
+            "targets": {
+              "1": [
+                "n:3"
+              ],
+              "2": [
+                "n:3"
+              ]
+            },
+            "removed": {},
+            "end": null,
+            "endedBefore": false
+          },
+          "sdk-ten-t1/doc": [
+            "docs:3"
+          ],
+          "sdk-ten-t1/query": [
+            "docs:3"
+          ],
+          "grpc-ten-t2": {
+            "targets": {
+              "1": [
+                "n:3"
+              ],
+              "2": [
+                "n:3"
+              ]
+            },
+            "removed": {},
+            "end": null,
+            "endedBefore": false
+          },
+          "sdk-ten-t2/doc": [
+            "docs:3"
+          ],
+          "sdk-ten-t2/query": [
+            "docs:3"
+          ]
+        },
+        "clients": {}
+      },
+      "raw": {
+        "id": "held/after-change-65s",
+        "conditions": [
+          "AUTH-FS-CROSS/listen-revocation-disable-delete",
+          "AUTH-FS-CROSS/listen-tenant-deletion"
+        ],
+        "listeners": {
+          "grpc-steady": {
+            "events": [
+              {
+                "kind": "documentChange",
+                "doc": "afc2-owned/steady-grpc",
+                "n": "3",
+                "targetIds": [
+                  2
+                ],
+                "removedTargetIds": []
+              },
+              {
+                "kind": "targetChange",
+                "type": "NO_CHANGE",
+                "targetIds": [
+                  2
+                ],
+                "cause": null
+              },
+              {
+                "kind": "documentChange",
+                "doc": "afc2-owned/steady-grpc",
+                "n": "3",
+                "targetIds": [
+                  1
+                ],
+                "removedTargetIds": []
+              },
+              {
+                "kind": "targetChange",
+                "type": "NO_CHANGE",
+                "targetIds": [
+                  1
+                ],
+                "cause": null
+              }
+            ],
+            "endedBefore": false,
+            "end": null
+          },
+          "sdk-steady/doc": {
+            "events": [
+              {
+                "kind": "snapshot",
+                "fromCache": false,
+                "pending": false,
+                "docs": [
+                  {
+                    "path": "afc2-owned/steady-sdk",
+                    "exists": true,
+                    "n": 3
+                  }
+                ]
+              }
+            ]
+          },
+          "sdk-steady/query": {
+            "events": [
+              {
+                "kind": "snapshot",
+                "fromCache": false,
+                "pending": false,
+                "docs": [
+                  {
+                    "path": "afc2-owned/steady-sdk",
+                    "exists": true,
+                    "n": 3
+                  }
+                ]
+              }
+            ]
+          },
+          "grpc-rev": {
+            "events": [
+              {
+                "kind": "documentChange",
+                "doc": "afc2-owned/rev-grpc",
+                "n": "3",
+                "targetIds": [
+                  2
+                ],
+                "removedTargetIds": []
+              },
+              {
+                "kind": "targetChange",
+                "type": "NO_CHANGE",
+                "targetIds": [
+                  2
+                ],
+                "cause": null
+              },
+              {
+                "kind": "documentChange",
+                "doc": "afc2-owned/rev-grpc",
+                "n": "3",
+                "targetIds": [
+                  1
+                ],
+                "removedTargetIds": []
+              },
+              {
+                "kind": "targetChange",
+                "type": "NO_CHANGE",
+                "targetIds": [
+                  1
+                ],
+                "cause": null
+              }
+            ],
+            "endedBefore": false,
+            "end": null
+          },
+          "sdk-rev/doc": {
+            "events": [
+              {
+                "kind": "snapshot",
+                "fromCache": false,
+                "pending": false,
+                "docs": [
+                  {
+                    "path": "afc2-owned/rev-sdk",
+                    "exists": true,
+                    "n": 3
+                  }
+                ]
+              }
+            ]
+          },
+          "sdk-rev/query": {
+            "events": [
+              {
+                "kind": "snapshot",
+                "fromCache": false,
+                "pending": false,
+                "docs": [
+                  {
+                    "path": "afc2-owned/rev-sdk",
+                    "exists": true,
+                    "n": 3
+                  }
+                ]
+              }
+            ]
+          },
+          "grpc-dis": {
+            "events": [
+              {
+                "kind": "documentChange",
+                "doc": "afc2-owned/dis-grpc",
+                "n": "3",
+                "targetIds": [
+                  2
+                ],
+                "removedTargetIds": []
+              },
+              {
+                "kind": "targetChange",
+                "type": "NO_CHANGE",
+                "targetIds": [
+                  2
+                ],
+                "cause": null
+              },
+              {
+                "kind": "documentChange",
+                "doc": "afc2-owned/dis-grpc",
+                "n": "3",
+                "targetIds": [
+                  1
+                ],
+                "removedTargetIds": []
+              },
+              {
+                "kind": "targetChange",
+                "type": "NO_CHANGE",
+                "targetIds": [
+                  1
+                ],
+                "cause": null
+              }
+            ],
+            "endedBefore": false,
+            "end": null
+          },
+          "sdk-dis/doc": {
+            "events": [
+              {
+                "kind": "snapshot",
+                "fromCache": false,
+                "pending": false,
+                "docs": [
+                  {
+                    "path": "afc2-owned/dis-sdk",
+                    "exists": true,
+                    "n": 3
+                  }
+                ]
+              }
+            ]
+          },
+          "sdk-dis/query": {
+            "events": [
+              {
+                "kind": "snapshot",
+                "fromCache": false,
+                "pending": false,
+                "docs": [
+                  {
+                    "path": "afc2-owned/dis-sdk",
+                    "exists": true,
+                    "n": 3
+                  }
+                ]
+              }
+            ]
+          },
+          "grpc-del": {
+            "events": [
+              {
+                "kind": "documentChange",
+                "doc": "afc2-owned/del-grpc",
+                "n": "3",
+                "targetIds": [
+                  2
+                ],
+                "removedTargetIds": []
+              },
+              {
+                "kind": "targetChange",
+                "type": "NO_CHANGE",
+                "targetIds": [
+                  2
+                ],
+                "cause": null
+              },
+              {
+                "kind": "documentChange",
+                "doc": "afc2-owned/del-grpc",
+                "n": "3",
+                "targetIds": [
+                  1
+                ],
+                "removedTargetIds": []
+              },
+              {
+                "kind": "targetChange",
+                "type": "NO_CHANGE",
+                "targetIds": [
+                  1
+                ],
+                "cause": null
+              }
+            ],
+            "endedBefore": false,
+            "end": null
+          },
+          "sdk-del/doc": {
+            "events": [
+              {
+                "kind": "snapshot",
+                "fromCache": false,
+                "pending": false,
+                "docs": [
+                  {
+                    "path": "afc2-owned/del-sdk",
+                    "exists": true,
+                    "n": 3
+                  }
+                ]
+              }
+            ]
+          },
+          "sdk-del/query": {
+            "events": [
+              {
+                "kind": "snapshot",
+                "fromCache": false,
+                "pending": false,
+                "docs": [
+                  {
+                    "path": "afc2-owned/del-sdk",
+                    "exists": true,
+                    "n": 3
+                  }
+                ]
+              }
+            ]
+          },
+          "grpc-ten-t1": {
+            "events": [
+              {
+                "kind": "documentChange",
+                "doc": "afc2-tenant/t1-grpc",
+                "n": "3",
+                "targetIds": [
+                  2
+                ],
+                "removedTargetIds": []
+              },
+              {
+                "kind": "targetChange",
+                "type": "NO_CHANGE",
+                "targetIds": [
+                  2
+                ],
+                "cause": null
+              },
+              {
+                "kind": "documentChange",
+                "doc": "afc2-tenant/t1-grpc",
+                "n": "3",
+                "targetIds": [
+                  1
+                ],
+                "removedTargetIds": []
+              },
+              {
+                "kind": "targetChange",
+                "type": "NO_CHANGE",
+                "targetIds": [
+                  1
+                ],
+                "cause": null
+              }
+            ],
+            "endedBefore": false,
+            "end": null
+          },
+          "sdk-ten-t1/doc": {
+            "events": [
+              {
+                "kind": "snapshot",
+                "fromCache": false,
+                "pending": false,
+                "docs": [
+                  {
+                    "path": "afc2-tenant/t1-sdk",
+                    "exists": true,
+                    "n": 3
+                  }
+                ]
+              }
+            ]
+          },
+          "sdk-ten-t1/query": {
+            "events": [
+              {
+                "kind": "snapshot",
+                "fromCache": false,
+                "pending": false,
+                "docs": [
+                  {
+                    "path": "afc2-tenant/t1-sdk",
+                    "exists": true,
+                    "n": 3
+                  }
+                ]
+              }
+            ]
+          },
+          "grpc-ten-t2": {
+            "events": [
+              {
+                "kind": "documentChange",
+                "doc": "afc2-tenant/t2-grpc",
+                "n": "3",
+                "targetIds": [
+                  2
+                ],
+                "removedTargetIds": []
+              },
+              {
+                "kind": "targetChange",
+                "type": "NO_CHANGE",
+                "targetIds": [
+                  2
+                ],
+                "cause": null
+              },
+              {
+                "kind": "documentChange",
+                "doc": "afc2-tenant/t2-grpc",
+                "n": "3",
+                "targetIds": [
+                  1
+                ],
+                "removedTargetIds": []
+              },
+              {
+                "kind": "targetChange",
+                "type": "NO_CHANGE",
+                "targetIds": [
+                  1
+                ],
+                "cause": null
+              }
+            ],
+            "endedBefore": false,
+            "end": null
+          },
+          "sdk-ten-t2/doc": {
+            "events": [
+              {
+                "kind": "snapshot",
+                "fromCache": false,
+                "pending": false,
+                "docs": [
+                  {
+                    "path": "afc2-tenant/t2-sdk",
+                    "exists": true,
+                    "n": 3
+                  }
+                ]
+              }
+            ]
+          },
+          "sdk-ten-t2/query": {
+            "events": [
+              {
+                "kind": "snapshot",
+                "fromCache": false,
+                "pending": false,
+                "docs": [
+                  {
+                    "path": "afc2-tenant/t2-sdk",
+                    "exists": true,
+                    "n": 3
+                  }
+                ]
+              }
+            ]
+          }
+        },
+        "clients": {}
+      }
+    },
+    "held/exp-minus-60": {
+      "conditions": [
+        "AUTH-FS-CROSS/listen-revocation-disable-delete",
+        "AUTH-FS-CROSS/listen-tenant-deletion",
+        "AUTH-FS-CROSS/listen-token-refresh"
+      ],
+      "production": {
+        "probes": {
+          "afc2-owned/steady-grpc": {
+            "listeners": {
+              "grpc-steady": {
+                "targets": {
+                  "1": [
+                    "n:4"
+                  ],
+                  "2": [
+                    "n:4"
+                  ]
+                },
+                "removed": {},
+                "end": null,
+                "endedBefore": false
+              }
+            }
+          },
+          "afc2-owned/steady-sdk": {
+            "listeners": {
+              "sdk-steady/doc": [
+                "docs:4"
+              ],
+              "sdk-steady/query": [
+                "docs:4"
+              ]
+            }
+          },
+          "afc2-owned/rev-grpc": {
+            "listeners": {
+              "grpc-rev": {
+                "targets": {
+                  "1": [
+                    "n:4"
+                  ],
+                  "2": [
+                    "n:4"
+                  ]
+                },
+                "removed": {},
+                "end": null,
+                "endedBefore": false
+              }
+            }
+          },
+          "afc2-owned/rev-sdk": {
+            "listeners": {
+              "sdk-rev/doc": [],
+              "sdk-rev/query": []
+            }
+          },
+          "afc2-owned/dis-grpc": {
+            "listeners": {
+              "grpc-dis": {
+                "targets": {
+                  "1": [
+                    "n:4"
+                  ],
+                  "2": [
+                    "n:4"
+                  ]
+                },
+                "removed": {},
+                "end": null,
+                "endedBefore": false
+              }
+            }
+          },
+          "afc2-owned/dis-sdk": {
+            "listeners": {
+              "sdk-dis/doc": [],
+              "sdk-dis/query": []
+            }
+          },
+          "afc2-owned/del-grpc": {
+            "listeners": {
+              "grpc-del": {
+                "targets": {
+                  "1": [
+                    "n:4"
+                  ],
+                  "2": [
+                    "n:4"
+                  ]
+                },
+                "removed": {},
+                "end": null,
+                "endedBefore": false
+              }
+            }
+          },
+          "afc2-owned/del-sdk": {
+            "listeners": {
+              "sdk-del/doc": [],
+              "sdk-del/query": []
+            }
+          },
+          "afc2-tenant/t1-grpc": {
+            "listeners": {
+              "grpc-ten-t1": {
+                "targets": {
+                  "1": [
+                    "n:4"
+                  ],
+                  "2": [
+                    "n:4"
+                  ]
+                },
+                "removed": {},
+                "end": null,
+                "endedBefore": false
+              }
+            }
+          },
+          "afc2-tenant/t1-sdk": {
+            "listeners": {
+              "sdk-ten-t1/doc": [
+                "docs:4"
+              ],
+              "sdk-ten-t1/query": [
+                "docs:4"
+              ]
+            }
+          },
+          "afc2-tenant/t2-grpc": {
+            "listeners": {
+              "grpc-ten-t2": {
+                "targets": {
+                  "1": [
+                    "n:4"
+                  ],
+                  "2": [
+                    "n:4"
+                  ]
+                },
+                "removed": {},
+                "end": null,
+                "endedBefore": false
+              }
+            }
+          },
+          "afc2-tenant/t2-sdk": {
+            "listeners": {
+              "sdk-ten-t2/doc": [
+                "docs:4"
+              ],
+              "sdk-ten-t2/query": [
+                "docs:4"
+              ]
+            }
+          }
+        },
+        "late": []
+      },
+      "second": {
+        "probes": {
+          "afc2-owned/steady-grpc": {
+            "listeners": {
+              "grpc-steady": {
+                "targets": {
+                  "1": [
+                    "n:4"
+                  ],
+                  "2": [
+                    "n:4"
+                  ]
+                },
+                "removed": {},
+                "end": null,
+                "endedBefore": false
+              }
+            }
+          },
+          "afc2-owned/steady-sdk": {
+            "listeners": {
+              "sdk-steady/doc": [
+                "docs:4"
+              ],
+              "sdk-steady/query": [
+                "docs:4"
+              ]
+            }
+          },
+          "afc2-owned/rev-grpc": {
+            "listeners": {
+              "grpc-rev": {
+                "targets": {
+                  "1": [
+                    "n:4"
+                  ],
+                  "2": [
+                    "n:4"
+                  ]
+                },
+                "removed": {},
+                "end": null,
+                "endedBefore": false
+              }
+            }
+          },
+          "afc2-owned/rev-sdk": {
+            "listeners": {
+              "sdk-rev/doc": [],
+              "sdk-rev/query": []
+            }
+          },
+          "afc2-owned/dis-grpc": {
+            "listeners": {
+              "grpc-dis": {
+                "targets": {
+                  "1": [
+                    "n:4"
+                  ],
+                  "2": [
+                    "n:4"
+                  ]
+                },
+                "removed": {},
+                "end": null,
+                "endedBefore": false
+              }
+            }
+          },
+          "afc2-owned/dis-sdk": {
+            "listeners": {
+              "sdk-dis/doc": [],
+              "sdk-dis/query": []
+            }
+          },
+          "afc2-owned/del-grpc": {
+            "listeners": {
+              "grpc-del": {
+                "targets": {
+                  "1": [
+                    "n:4"
+                  ],
+                  "2": [
+                    "n:4"
+                  ]
+                },
+                "removed": {},
+                "end": null,
+                "endedBefore": false
+              }
+            }
+          },
+          "afc2-owned/del-sdk": {
+            "listeners": {
+              "sdk-del/doc": [],
+              "sdk-del/query": []
+            }
+          },
+          "afc2-tenant/t1-grpc": {
+            "listeners": {
+              "grpc-ten-t1": {
+                "targets": {
+                  "1": [
+                    "n:4"
+                  ],
+                  "2": [
+                    "n:4"
+                  ]
+                },
+                "removed": {},
+                "end": null,
+                "endedBefore": false
+              }
+            }
+          },
+          "afc2-tenant/t1-sdk": {
+            "listeners": {
+              "sdk-ten-t1/doc": [
+                "docs:4"
+              ],
+              "sdk-ten-t1/query": [
+                "docs:4"
+              ]
+            }
+          },
+          "afc2-tenant/t2-grpc": {
+            "listeners": {
+              "grpc-ten-t2": {
+                "targets": {},
+                "removed": {},
+                "end": null,
+                "endedBefore": true
+              }
+            }
+          },
+          "afc2-tenant/t2-sdk": {
+            "listeners": {
+              "sdk-ten-t2/doc": [
+                "docs:4"
+              ],
+              "sdk-ten-t2/query": [
+                "docs:4"
+              ]
+            }
+          }
+        },
+        "late": []
+      },
+      "raw": {
+        "id": "held/exp-minus-60",
+        "conditions": [
+          "AUTH-FS-CROSS/listen-revocation-disable-delete",
+          "AUTH-FS-CROSS/listen-tenant-deletion",
+          "AUTH-FS-CROSS/listen-token-refresh"
+        ],
+        "probes": [
+          {
+            "doc": "afc2-owned/steady-grpc",
+            "onTime": true,
+            "listeners": {
+              "grpc-steady": {
+                "events": [
+                  {
+                    "kind": "documentChange",
+                    "doc": "afc2-owned/steady-grpc",
+                    "n": "4",
+                    "targetIds": [
+                      2
+                    ],
+                    "removedTargetIds": []
+                  },
+                  {
+                    "kind": "targetChange",
+                    "type": "NO_CHANGE",
+                    "targetIds": [
+                      2
+                    ],
+                    "cause": null
+                  },
+                  {
+                    "kind": "documentChange",
+                    "doc": "afc2-owned/steady-grpc",
+                    "n": "4",
+                    "targetIds": [
+                      1
+                    ],
+                    "removedTargetIds": []
+                  },
+                  {
+                    "kind": "targetChange",
+                    "type": "NO_CHANGE",
+                    "targetIds": [
+                      1
+                    ],
+                    "cause": null
+                  }
+                ],
+                "endedBefore": false,
+                "end": null
+              }
+            },
+            "clients": {}
+          },
+          {
+            "doc": "afc2-owned/steady-sdk",
+            "onTime": true,
+            "listeners": {
+              "sdk-steady/doc": {
+                "events": [
+                  {
+                    "kind": "snapshot",
+                    "fromCache": false,
+                    "pending": false,
+                    "docs": [
+                      {
+                        "path": "afc2-owned/steady-sdk",
+                        "exists": true,
+                        "n": 4
+                      }
+                    ]
+                  }
+                ]
+              },
+              "sdk-steady/query": {
+                "events": [
+                  {
+                    "kind": "snapshot",
+                    "fromCache": false,
+                    "pending": false,
+                    "docs": [
+                      {
+                        "path": "afc2-owned/steady-sdk",
+                        "exists": true,
+                        "n": 4
+                      }
+                    ]
+                  }
+                ]
+              }
+            },
+            "clients": {}
+          },
+          {
+            "doc": "afc2-owned/rev-grpc",
+            "onTime": true,
+            "listeners": {
+              "grpc-rev": {
+                "events": [
+                  {
+                    "kind": "documentChange",
+                    "doc": "afc2-owned/rev-grpc",
+                    "n": "4",
+                    "targetIds": [
+                      2
+                    ],
+                    "removedTargetIds": []
+                  },
+                  {
+                    "kind": "targetChange",
+                    "type": "NO_CHANGE",
+                    "targetIds": [
+                      2
+                    ],
+                    "cause": null
+                  },
+                  {
+                    "kind": "documentChange",
+                    "doc": "afc2-owned/rev-grpc",
+                    "n": "4",
+                    "targetIds": [
+                      1
+                    ],
+                    "removedTargetIds": []
+                  },
+                  {
+                    "kind": "targetChange",
+                    "type": "NO_CHANGE",
+                    "targetIds": [
+                      1
+                    ],
+                    "cause": null
+                  }
+                ],
+                "endedBefore": false,
+                "end": null
+              }
+            },
+            "clients": {}
+          },
+          {
+            "doc": "afc2-owned/rev-sdk",
+            "onTime": true,
+            "listeners": {
+              "sdk-rev/doc": {
+                "events": []
+              },
+              "sdk-rev/query": {
+                "events": []
+              }
+            },
+            "clients": {}
+          },
+          {
+            "doc": "afc2-owned/dis-grpc",
+            "onTime": true,
+            "listeners": {
+              "grpc-dis": {
+                "events": [
+                  {
+                    "kind": "documentChange",
+                    "doc": "afc2-owned/dis-grpc",
+                    "n": "4",
+                    "targetIds": [
+                      2
+                    ],
+                    "removedTargetIds": []
+                  },
+                  {
+                    "kind": "targetChange",
+                    "type": "NO_CHANGE",
+                    "targetIds": [
+                      2
+                    ],
+                    "cause": null
+                  },
+                  {
+                    "kind": "documentChange",
+                    "doc": "afc2-owned/dis-grpc",
+                    "n": "4",
+                    "targetIds": [
+                      1
+                    ],
+                    "removedTargetIds": []
+                  },
+                  {
+                    "kind": "targetChange",
+                    "type": "NO_CHANGE",
+                    "targetIds": [
+                      1
+                    ],
+                    "cause": null
+                  }
+                ],
+                "endedBefore": false,
+                "end": null
+              }
+            },
+            "clients": {}
+          },
+          {
+            "doc": "afc2-owned/dis-sdk",
+            "onTime": true,
+            "listeners": {
+              "sdk-dis/doc": {
+                "events": []
+              },
+              "sdk-dis/query": {
+                "events": []
+              }
+            },
+            "clients": {}
+          },
+          {
+            "doc": "afc2-owned/del-grpc",
+            "onTime": true,
+            "listeners": {
+              "grpc-del": {
+                "events": [
+                  {
+                    "kind": "documentChange",
+                    "doc": "afc2-owned/del-grpc",
+                    "n": "4",
+                    "targetIds": [
+                      2
+                    ],
+                    "removedTargetIds": []
+                  },
+                  {
+                    "kind": "targetChange",
+                    "type": "NO_CHANGE",
+                    "targetIds": [
+                      2
+                    ],
+                    "cause": null
+                  },
+                  {
+                    "kind": "documentChange",
+                    "doc": "afc2-owned/del-grpc",
+                    "n": "4",
+                    "targetIds": [
+                      1
+                    ],
+                    "removedTargetIds": []
+                  },
+                  {
+                    "kind": "targetChange",
+                    "type": "NO_CHANGE",
+                    "targetIds": [
+                      1
+                    ],
+                    "cause": null
+                  }
+                ],
+                "endedBefore": false,
+                "end": null
+              }
+            },
+            "clients": {}
+          },
+          {
+            "doc": "afc2-owned/del-sdk",
+            "onTime": true,
+            "listeners": {
+              "sdk-del/doc": {
+                "events": []
+              },
+              "sdk-del/query": {
+                "events": []
+              }
+            },
+            "clients": {}
+          },
+          {
+            "doc": "afc2-tenant/t1-grpc",
+            "onTime": true,
+            "listeners": {
+              "grpc-ten-t1": {
+                "events": [
+                  {
+                    "kind": "documentChange",
+                    "doc": "afc2-tenant/t1-grpc",
+                    "n": "4",
+                    "targetIds": [
+                      2
+                    ],
+                    "removedTargetIds": []
+                  },
+                  {
+                    "kind": "targetChange",
+                    "type": "NO_CHANGE",
+                    "targetIds": [
+                      2
+                    ],
+                    "cause": null
+                  },
+                  {
+                    "kind": "documentChange",
+                    "doc": "afc2-tenant/t1-grpc",
+                    "n": "4",
+                    "targetIds": [
+                      1
+                    ],
+                    "removedTargetIds": []
+                  },
+                  {
+                    "kind": "targetChange",
+                    "type": "NO_CHANGE",
+                    "targetIds": [
+                      1
+                    ],
+                    "cause": null
+                  }
+                ],
+                "endedBefore": false,
+                "end": null
+              }
+            },
+            "clients": {}
+          },
+          {
+            "doc": "afc2-tenant/t1-sdk",
+            "onTime": true,
+            "listeners": {
+              "sdk-ten-t1/doc": {
+                "events": [
+                  {
+                    "kind": "snapshot",
+                    "fromCache": false,
+                    "pending": false,
+                    "docs": [
+                      {
+                        "path": "afc2-tenant/t1-sdk",
+                        "exists": true,
+                        "n": 4
+                      }
+                    ]
+                  }
+                ]
+              },
+              "sdk-ten-t1/query": {
+                "events": [
+                  {
+                    "kind": "snapshot",
+                    "fromCache": false,
+                    "pending": false,
+                    "docs": [
+                      {
+                        "path": "afc2-tenant/t1-sdk",
+                        "exists": true,
+                        "n": 4
+                      }
+                    ]
+                  }
+                ]
+              }
+            },
+            "clients": {}
+          },
+          {
+            "doc": "afc2-tenant/t2-grpc",
+            "onTime": true,
+            "listeners": {
+              "grpc-ten-t2": {
+                "events": [
+                  {
+                    "kind": "documentChange",
+                    "doc": "afc2-tenant/t2-grpc",
+                    "n": "4",
+                    "targetIds": [
+                      2
+                    ],
+                    "removedTargetIds": []
+                  },
+                  {
+                    "kind": "targetChange",
+                    "type": "NO_CHANGE",
+                    "targetIds": [
+                      2
+                    ],
+                    "cause": null
+                  },
+                  {
+                    "kind": "documentChange",
+                    "doc": "afc2-tenant/t2-grpc",
+                    "n": "4",
+                    "targetIds": [
+                      1
+                    ],
+                    "removedTargetIds": []
+                  },
+                  {
+                    "kind": "targetChange",
+                    "type": "NO_CHANGE",
+                    "targetIds": [
+                      1
+                    ],
+                    "cause": null
+                  }
+                ],
+                "endedBefore": false,
+                "end": null
+              }
+            },
+            "clients": {}
+          },
+          {
+            "doc": "afc2-tenant/t2-sdk",
+            "onTime": true,
+            "listeners": {
+              "sdk-ten-t2/doc": {
+                "events": [
+                  {
+                    "kind": "snapshot",
+                    "fromCache": false,
+                    "pending": false,
+                    "docs": [
+                      {
+                        "path": "afc2-tenant/t2-sdk",
+                        "exists": true,
+                        "n": 4
+                      }
+                    ]
+                  }
+                ]
+              },
+              "sdk-ten-t2/query": {
+                "events": [
+                  {
+                    "kind": "snapshot",
+                    "fromCache": false,
+                    "pending": false,
+                    "docs": [
+                      {
+                        "path": "afc2-tenant/t2-sdk",
+                        "exists": true,
+                        "n": 4
+                      }
+                    ]
+                  }
+                ]
+              }
+            },
+            "clients": {}
+          }
+        ]
+      }
+    },
+    "held/exp-plus-35-grpc": {
+      "conditions": [
+        "AUTH-FS-CROSS/listen-revocation-disable-delete",
+        "AUTH-FS-CROSS/listen-tenant-deletion",
+        "AUTH-FS-CROSS/listen-token-refresh"
+      ],
+      "production": {
+        "probes": {
+          "afc2-owned/steady-grpc": {
+            "listeners": {
+              "grpc-steady": {
+                "targets": {},
+                "removed": {},
+                "end": null,
+                "endedBefore": true
+              }
+            }
+          },
+          "afc2-owned/rev-grpc": {
+            "listeners": {
+              "grpc-rev": {
+                "targets": {},
+                "removed": {},
+                "end": null,
+                "endedBefore": true
+              }
+            }
+          },
+          "afc2-owned/dis-grpc": {
+            "listeners": {
+              "grpc-dis": {
+                "targets": {},
+                "removed": {},
+                "end": null,
+                "endedBefore": true
+              }
+            }
+          },
+          "afc2-owned/del-grpc": {
+            "listeners": {
+              "grpc-del": {
+                "targets": {},
+                "removed": {},
+                "end": null,
+                "endedBefore": true
+              }
+            }
+          },
+          "afc2-tenant/t1-grpc": {
+            "listeners": {
+              "grpc-ten-t1": {
+                "targets": {},
+                "removed": {},
+                "end": null,
+                "endedBefore": true
+              }
+            }
+          },
+          "afc2-tenant/t2-grpc": {
+            "listeners": {
+              "grpc-ten-t2": {
+                "targets": {},
+                "removed": {},
+                "end": null,
+                "endedBefore": true
+              }
+            }
+          }
+        },
+        "late": []
+      },
+      "raw": {
+        "id": "held/exp-plus-35-grpc",
+        "conditions": [
+          "AUTH-FS-CROSS/listen-revocation-disable-delete",
+          "AUTH-FS-CROSS/listen-tenant-deletion",
+          "AUTH-FS-CROSS/listen-token-refresh"
+        ],
+        "probes": [
+          {
+            "doc": "afc2-owned/steady-grpc",
+            "onTime": true,
+            "listeners": {
+              "grpc-steady": {
+                "events": [],
+                "endedBefore": true,
+                "end": null
+              }
+            },
+            "clients": {}
+          },
+          {
+            "doc": "afc2-owned/rev-grpc",
+            "onTime": true,
+            "listeners": {
+              "grpc-rev": {
+                "events": [],
+                "endedBefore": true,
+                "end": null
+              }
+            },
+            "clients": {}
+          },
+          {
+            "doc": "afc2-owned/dis-grpc",
+            "onTime": true,
+            "listeners": {
+              "grpc-dis": {
+                "events": [],
+                "endedBefore": true,
+                "end": null
+              }
+            },
+            "clients": {}
+          },
+          {
+            "doc": "afc2-owned/del-grpc",
+            "onTime": true,
+            "listeners": {
+              "grpc-del": {
+                "events": [],
+                "endedBefore": true,
+                "end": null
+              }
+            },
+            "clients": {}
+          },
+          {
+            "doc": "afc2-tenant/t1-grpc",
+            "onTime": true,
+            "listeners": {
+              "grpc-ten-t1": {
+                "events": [],
+                "endedBefore": true,
+                "end": null
+              }
+            },
+            "clients": {}
+          },
+          {
+            "doc": "afc2-tenant/t2-grpc",
+            "onTime": true,
+            "listeners": {
+              "grpc-ten-t2": {
+                "events": [],
+                "endedBefore": true,
+                "end": null
+              }
+            },
+            "clients": {}
+          }
+        ]
+      }
+    },
+    "held/exp-plus-35-sdk": {
+      "conditions": [
+        "AUTH-FS-CROSS/listen-revocation-disable-delete",
+        "AUTH-FS-CROSS/listen-tenant-deletion",
+        "AUTH-FS-CROSS/listen-token-refresh"
+      ],
+      "production": {
+        "probes": {
+          "afc2-owned/steady-sdk": {
+            "listeners": {
+              "sdk-steady/doc": [
+                "docs:5"
+              ],
+              "sdk-steady/query": [
+                "docs:5"
+              ]
+            }
+          },
+          "afc2-owned/rev-sdk": {
+            "listeners": {
+              "sdk-rev/doc": [],
+              "sdk-rev/query": []
+            }
+          },
+          "afc2-owned/dis-sdk": {
+            "listeners": {
+              "sdk-dis/doc": [],
+              "sdk-dis/query": []
+            }
+          },
+          "afc2-owned/del-sdk": {
+            "listeners": {
+              "sdk-del/doc": [],
+              "sdk-del/query": []
+            }
+          },
+          "afc2-tenant/t1-sdk": {
+            "listeners": {
+              "sdk-ten-t1/doc": [],
+              "sdk-ten-t1/query": []
+            }
+          },
+          "afc2-tenant/t2-sdk": {
+            "listeners": {
+              "sdk-ten-t2/doc": [
+                "docs:5"
+              ],
+              "sdk-ten-t2/query": [
+                "docs:5"
+              ]
+            }
+          }
+        },
+        "late": []
+      },
+      "raw": {
+        "id": "held/exp-plus-35-sdk",
+        "conditions": [
+          "AUTH-FS-CROSS/listen-revocation-disable-delete",
+          "AUTH-FS-CROSS/listen-tenant-deletion",
+          "AUTH-FS-CROSS/listen-token-refresh"
+        ],
+        "probes": [
+          {
+            "doc": "afc2-owned/steady-sdk",
+            "onTime": true,
+            "listeners": {
+              "sdk-steady/doc": {
+                "events": [
+                  {
+                    "kind": "snapshot",
+                    "fromCache": false,
+                    "pending": false,
+                    "docs": [
+                      {
+                        "path": "afc2-owned/steady-sdk",
+                        "exists": true,
+                        "n": 5
+                      }
+                    ]
+                  }
+                ]
+              },
+              "sdk-steady/query": {
+                "events": [
+                  {
+                    "kind": "snapshot",
+                    "fromCache": false,
+                    "pending": false,
+                    "docs": [
+                      {
+                        "path": "afc2-owned/steady-sdk",
+                        "exists": true,
+                        "n": 5
+                      }
+                    ]
+                  }
+                ]
+              }
+            },
+            "clients": {}
+          },
+          {
+            "doc": "afc2-owned/rev-sdk",
+            "onTime": true,
+            "listeners": {
+              "sdk-rev/doc": {
+                "events": []
+              },
+              "sdk-rev/query": {
+                "events": []
+              }
+            },
+            "clients": {}
+          },
+          {
+            "doc": "afc2-owned/dis-sdk",
+            "onTime": true,
+            "listeners": {
+              "sdk-dis/doc": {
+                "events": []
+              },
+              "sdk-dis/query": {
+                "events": []
+              }
+            },
+            "clients": {}
+          },
+          {
+            "doc": "afc2-owned/del-sdk",
+            "onTime": true,
+            "listeners": {
+              "sdk-del/doc": {
+                "events": []
+              },
+              "sdk-del/query": {
+                "events": []
+              }
+            },
+            "clients": {}
+          },
+          {
+            "doc": "afc2-tenant/t1-sdk",
+            "onTime": true,
+            "listeners": {
+              "sdk-ten-t1/doc": {
+                "events": []
+              },
+              "sdk-ten-t1/query": {
+                "events": []
+              }
+            },
+            "clients": {}
+          },
+          {
+            "doc": "afc2-tenant/t2-sdk",
+            "onTime": true,
+            "listeners": {
+              "sdk-ten-t2/doc": {
+                "events": [
+                  {
+                    "kind": "snapshot",
+                    "fromCache": false,
+                    "pending": false,
+                    "docs": [
+                      {
+                        "path": "afc2-tenant/t2-sdk",
+                        "exists": true,
+                        "n": 5
+                      }
+                    ]
+                  }
+                ]
+              },
+              "sdk-ten-t2/query": {
+                "events": [
+                  {
+                    "kind": "snapshot",
+                    "fromCache": false,
+                    "pending": false,
+                    "docs": [
+                      {
+                        "path": "afc2-tenant/t2-sdk",
+                        "exists": true,
+                        "n": 5
+                      }
+                    ]
+                  }
+                ]
+              }
+            },
+            "clients": {}
+          }
+        ]
+      }
+    },
+    "held/life": {
+      "conditions": [
+        "AUTH-FS-CROSS/sdk-optimistic-transaction",
+        "AUTH-FS-CROSS/listen-sign-out-and-switch",
+        "AUTH-FS-CROSS/listen-token-refresh",
+        "AUTH-FS-CROSS/listen-revocation-disable-delete",
+        "AUTH-FS-CROSS/listen-tenant-deletion",
+        "AUTH-FS-CROSS/pending-write-across-switch"
+      ],
+      "production": {
+        "streams": {
+          "grpc-steady": {
+            "reason": "error",
+            "code": 13
+          },
+          "grpc-rev": {
+            "reason": "error",
+            "code": 13
+          },
+          "grpc-dis": {
+            "reason": "error",
+            "code": 13
+          },
+          "grpc-del": {
+            "reason": "error",
+            "code": 13
+          },
+          "grpc-ten-t1": {
+            "reason": "error",
+            "code": 13
+          },
+          "grpc-ten-t2": {
+            "reason": "error",
+            "code": 13
+          }
+        },
+        "listeners": {
+          "sdk-rev/query": {
+            "reason": "error",
+            "code": "permission-denied"
+          },
+          "sdk-rev/doc": {
+            "reason": "error",
+            "code": "permission-denied"
+          },
+          "sdk-dis/query": {
+            "reason": "error",
+            "code": "permission-denied"
+          },
+          "sdk-dis/doc": {
+            "reason": "error",
+            "code": "permission-denied"
+          },
+          "sdk-del/query": {
+            "reason": "error",
+            "code": "permission-denied"
+          },
+          "sdk-del/doc": {
+            "reason": "error",
+            "code": "permission-denied"
+          },
+          "n-claim/doc1": {
+            "reason": "error",
+            "code": "permission-denied"
+          },
+          "n-claim/query1": {
+            "reason": "error",
+            "code": "permission-denied"
+          },
+          "n-claim/doc2": {
+            "reason": "error",
+            "code": "permission-denied"
+          },
+          "n-claim/query2": {
+            "reason": "error",
+            "code": "permission-denied"
+          },
+          "n-out/open": {
+            "reason": "error",
+            "code": "permission-denied"
+          },
+          "n-out/own": {
+            "reason": "error",
+            "code": "permission-denied"
+          },
+          "n-out/query": {
+            "reason": "error",
+            "code": "permission-denied"
+          },
+          "n-out/own-signed-out": {
+            "reason": "error",
+            "code": "permission-denied"
+          },
+          "n-ab/query": {
+            "reason": "error",
+            "code": "permission-denied"
+          },
+          "n-ab/own": {
+            "reason": "error",
+            "code": "permission-denied"
+          },
+          "b-out/open": {
+            "reason": "error",
+            "code": "permission-denied"
+          },
+          "b-out/own": {
+            "reason": "error",
+            "code": "permission-denied"
+          },
+          "b-out/query": {
+            "reason": "error",
+            "code": "permission-denied"
+          },
+          "b-out/own-signed-out": {
+            "reason": "error",
+            "code": "permission-denied"
+          },
+          "b-ab/own": {
+            "reason": "error",
+            "code": "permission-denied"
+          },
+          "b-ab/query": {
+            "reason": "error",
+            "code": "permission-denied"
+          }
+        }
+      },
+      "raw": {
+        "id": "held/life",
+        "conditions": [
+          "AUTH-FS-CROSS/sdk-optimistic-transaction",
+          "AUTH-FS-CROSS/listen-sign-out-and-switch",
+          "AUTH-FS-CROSS/listen-token-refresh",
+          "AUTH-FS-CROSS/listen-revocation-disable-delete",
+          "AUTH-FS-CROSS/listen-tenant-deletion",
+          "AUTH-FS-CROSS/pending-write-across-switch"
+        ],
+        "streams": {
+          "grpc-steady": {
+            "reason": "error",
+            "code": 13
+          },
+          "grpc-rev": {
+            "reason": "error",
+            "code": 13
+          },
+          "grpc-dis": {
+            "reason": "error",
+            "code": 13
+          },
+          "grpc-del": {
+            "reason": "error",
+            "code": 13
+          },
+          "grpc-ten-t1": {
+            "reason": "error",
+            "code": 13
+          },
+          "grpc-ten-t2": {
+            "reason": "error",
+            "code": 13
+          }
+        },
+        "listeners": {
+          "sdk-rev/query": {
+            "reason": "error",
+            "code": "permission-denied"
+          },
+          "sdk-rev/doc": {
+            "reason": "error",
+            "code": "permission-denied"
+          },
+          "sdk-dis/query": {
+            "reason": "error",
+            "code": "permission-denied"
+          },
+          "sdk-dis/doc": {
+            "reason": "error",
+            "code": "permission-denied"
+          },
+          "sdk-del/query": {
+            "reason": "error",
+            "code": "permission-denied"
+          },
+          "sdk-del/doc": {
+            "reason": "error",
+            "code": "permission-denied"
+          },
+          "n-claim/doc1": {
+            "reason": "error",
+            "code": "permission-denied"
+          },
+          "n-claim/query1": {
+            "reason": "error",
+            "code": "permission-denied"
+          },
+          "n-claim/doc2": {
+            "reason": "error",
+            "code": "permission-denied"
+          },
+          "n-claim/query2": {
+            "reason": "error",
+            "code": "permission-denied"
+          },
+          "n-out/open": {
+            "reason": "error",
+            "code": "permission-denied"
+          },
+          "n-out/own": {
+            "reason": "error",
+            "code": "permission-denied"
+          },
+          "n-out/query": {
+            "reason": "error",
+            "code": "permission-denied"
+          },
+          "n-out/own-signed-out": {
+            "reason": "error",
+            "code": "permission-denied"
+          },
+          "n-ab/query": {
+            "reason": "error",
+            "code": "permission-denied"
+          },
+          "n-ab/own": {
+            "reason": "error",
+            "code": "permission-denied"
+          },
+          "b-out/open": {
+            "reason": "error",
+            "code": "permission-denied"
+          },
+          "b-out/own": {
+            "reason": "error",
+            "code": "permission-denied"
+          },
+          "b-out/query": {
+            "reason": "error",
+            "code": "permission-denied"
+          },
+          "b-out/own-signed-out": {
+            "reason": "error",
+            "code": "permission-denied"
+          },
+          "b-ab/own": {
+            "reason": "error",
+            "code": "permission-denied"
+          },
+          "b-ab/query": {
+            "reason": "error",
+            "code": "permission-denied"
+          }
+        }
+      }
+    },
+    "held/opened": {
+      "conditions": [
+        "AUTH-FS-CROSS/listen-revocation-disable-delete",
+        "AUTH-FS-CROSS/listen-tenant-deletion",
+        "AUTH-FS-CROSS/listen-token-refresh"
+      ],
+      "production": {
+        "listeners": {
+          "grpc-steady": {
+            "targets": {
+              "1": [
+                "n:1"
+              ],
+              "2": [
+                "n:1"
+              ]
+            },
+            "removed": {},
+            "end": null,
+            "endedBefore": false
+          },
+          "sdk-steady/doc": [
+            "docs:1"
+          ],
+          "sdk-steady/query": [
+            "docs:1"
+          ],
+          "grpc-rev": {
+            "targets": {
+              "1": [
+                "n:1"
+              ],
+              "2": [
+                "n:1"
+              ]
+            },
+            "removed": {},
+            "end": null,
+            "endedBefore": false
+          },
+          "sdk-rev/doc": [
+            "docs:1"
+          ],
+          "sdk-rev/query": [
+            "docs:1"
+          ],
+          "grpc-dis": {
+            "targets": {
+              "1": [
+                "n:1"
+              ],
+              "2": [
+                "n:1"
+              ]
+            },
+            "removed": {},
+            "end": null,
+            "endedBefore": false
+          },
+          "sdk-dis/doc": [
+            "docs:1"
+          ],
+          "sdk-dis/query": [
+            "docs:1"
+          ],
+          "grpc-del": {
+            "targets": {
+              "1": [
+                "n:1"
+              ],
+              "2": [
+                "n:1"
+              ]
+            },
+            "removed": {},
+            "end": null,
+            "endedBefore": false
+          },
+          "sdk-del/doc": [
+            "docs:1"
+          ],
+          "sdk-del/query": [
+            "docs:1"
+          ],
+          "grpc-ten-t1": {
+            "targets": {
+              "1": [
+                "n:1"
+              ],
+              "2": [
+                "n:1"
+              ]
+            },
+            "removed": {},
+            "end": null,
+            "endedBefore": false
+          },
+          "sdk-ten-t1/doc": [
+            "docs:1"
+          ],
+          "sdk-ten-t1/query": [
+            "docs:1"
+          ],
+          "grpc-ten-t2": {
+            "targets": {
+              "1": [
+                "n:1"
+              ],
+              "2": [
+                "n:1"
+              ]
+            },
+            "removed": {},
+            "end": null,
+            "endedBefore": false
+          },
+          "sdk-ten-t2/doc": [
+            "docs:0",
+            "docs:1"
+          ],
+          "sdk-ten-t2/query": [
+            "docs:0",
+            "docs:1"
+          ],
+          "sdk-steady/w-n-out": [
+            "docs:0"
+          ],
+          "sdk-steady/w-n-ab": [
+            "docs:0"
+          ],
+          "sdk-steady/w-b-out": [
+            "docs:0"
+          ],
+          "sdk-steady/w-b-ab": [
+            "docs:0"
+          ]
+        },
+        "clients": {}
+      },
+      "raw": {
+        "id": "held/opened",
+        "conditions": [
+          "AUTH-FS-CROSS/listen-revocation-disable-delete",
+          "AUTH-FS-CROSS/listen-tenant-deletion",
+          "AUTH-FS-CROSS/listen-token-refresh"
+        ],
+        "listeners": {
+          "grpc-steady": {
+            "events": [
+              {
+                "kind": "documentChange",
+                "doc": "afc2-owned/steady-grpc",
+                "n": "1",
+                "targetIds": [
+                  2
+                ],
+                "removedTargetIds": []
+              },
+              {
+                "kind": "targetChange",
+                "type": "NO_CHANGE",
+                "targetIds": [
+                  2
+                ],
+                "cause": null
+              },
+              {
+                "kind": "documentChange",
+                "doc": "afc2-owned/steady-grpc",
+                "n": "1",
+                "targetIds": [
+                  1
+                ],
+                "removedTargetIds": []
+              },
+              {
+                "kind": "targetChange",
+                "type": "NO_CHANGE",
+                "targetIds": [
+                  1
+                ],
+                "cause": null
+              }
+            ],
+            "endedBefore": false,
+            "end": null
+          },
+          "sdk-steady/doc": {
+            "events": [
+              {
+                "kind": "snapshot",
+                "fromCache": false,
+                "pending": false,
+                "docs": [
+                  {
+                    "path": "afc2-owned/steady-sdk",
+                    "exists": true,
+                    "n": 1
+                  }
+                ]
+              }
+            ]
+          },
+          "sdk-steady/query": {
+            "events": [
+              {
+                "kind": "snapshot",
+                "fromCache": false,
+                "pending": false,
+                "docs": [
+                  {
+                    "path": "afc2-owned/steady-sdk",
+                    "exists": true,
+                    "n": 1
+                  }
+                ]
+              }
+            ]
+          },
+          "grpc-rev": {
+            "events": [
+              {
+                "kind": "documentChange",
+                "doc": "afc2-owned/rev-grpc",
+                "n": "1",
+                "targetIds": [
+                  2
+                ],
+                "removedTargetIds": []
+              },
+              {
+                "kind": "targetChange",
+                "type": "NO_CHANGE",
+                "targetIds": [
+                  2
+                ],
+                "cause": null
+              },
+              {
+                "kind": "documentChange",
+                "doc": "afc2-owned/rev-grpc",
+                "n": "1",
+                "targetIds": [
+                  1
+                ],
+                "removedTargetIds": []
+              },
+              {
+                "kind": "targetChange",
+                "type": "NO_CHANGE",
+                "targetIds": [
+                  1
+                ],
+                "cause": null
+              }
+            ],
+            "endedBefore": false,
+            "end": null
+          },
+          "sdk-rev/doc": {
+            "events": [
+              {
+                "kind": "snapshot",
+                "fromCache": false,
+                "pending": false,
+                "docs": [
+                  {
+                    "path": "afc2-owned/rev-sdk",
+                    "exists": true,
+                    "n": 1
+                  }
+                ]
+              }
+            ]
+          },
+          "sdk-rev/query": {
+            "events": [
+              {
+                "kind": "snapshot",
+                "fromCache": false,
+                "pending": false,
+                "docs": [
+                  {
+                    "path": "afc2-owned/rev-sdk",
+                    "exists": true,
+                    "n": 1
+                  }
+                ]
+              }
+            ]
+          },
+          "grpc-dis": {
+            "events": [
+              {
+                "kind": "documentChange",
+                "doc": "afc2-owned/dis-grpc",
+                "n": "1",
+                "targetIds": [
+                  2
+                ],
+                "removedTargetIds": []
+              },
+              {
+                "kind": "targetChange",
+                "type": "NO_CHANGE",
+                "targetIds": [
+                  2
+                ],
+                "cause": null
+              },
+              {
+                "kind": "documentChange",
+                "doc": "afc2-owned/dis-grpc",
+                "n": "1",
+                "targetIds": [
+                  1
+                ],
+                "removedTargetIds": []
+              },
+              {
+                "kind": "targetChange",
+                "type": "NO_CHANGE",
+                "targetIds": [
+                  1
+                ],
+                "cause": null
+              }
+            ],
+            "endedBefore": false,
+            "end": null
+          },
+          "sdk-dis/doc": {
+            "events": [
+              {
+                "kind": "snapshot",
+                "fromCache": false,
+                "pending": false,
+                "docs": [
+                  {
+                    "path": "afc2-owned/dis-sdk",
+                    "exists": true,
+                    "n": 1
+                  }
+                ]
+              }
+            ]
+          },
+          "sdk-dis/query": {
+            "events": [
+              {
+                "kind": "snapshot",
+                "fromCache": false,
+                "pending": false,
+                "docs": [
+                  {
+                    "path": "afc2-owned/dis-sdk",
+                    "exists": true,
+                    "n": 1
+                  }
+                ]
+              }
+            ]
+          },
+          "grpc-del": {
+            "events": [
+              {
+                "kind": "documentChange",
+                "doc": "afc2-owned/del-grpc",
+                "n": "1",
+                "targetIds": [
+                  2
+                ],
+                "removedTargetIds": []
+              },
+              {
+                "kind": "targetChange",
+                "type": "NO_CHANGE",
+                "targetIds": [
+                  2
+                ],
+                "cause": null
+              },
+              {
+                "kind": "documentChange",
+                "doc": "afc2-owned/del-grpc",
+                "n": "1",
+                "targetIds": [
+                  1
+                ],
+                "removedTargetIds": []
+              },
+              {
+                "kind": "targetChange",
+                "type": "NO_CHANGE",
+                "targetIds": [
+                  1
+                ],
+                "cause": null
+              }
+            ],
+            "endedBefore": false,
+            "end": null
+          },
+          "sdk-del/doc": {
+            "events": [
+              {
+                "kind": "snapshot",
+                "fromCache": false,
+                "pending": false,
+                "docs": [
+                  {
+                    "path": "afc2-owned/del-sdk",
+                    "exists": true,
+                    "n": 1
+                  }
+                ]
+              }
+            ]
+          },
+          "sdk-del/query": {
+            "events": [
+              {
+                "kind": "snapshot",
+                "fromCache": false,
+                "pending": false,
+                "docs": [
+                  {
+                    "path": "afc2-owned/del-sdk",
+                    "exists": true,
+                    "n": 1
+                  }
+                ]
+              }
+            ]
+          },
+          "grpc-ten-t1": {
+            "events": [
+              {
+                "kind": "documentChange",
+                "doc": "afc2-tenant/t1-grpc",
+                "n": "1",
+                "targetIds": [
+                  2
+                ],
+                "removedTargetIds": []
+              },
+              {
+                "kind": "targetChange",
+                "type": "NO_CHANGE",
+                "targetIds": [
+                  2
+                ],
+                "cause": null
+              },
+              {
+                "kind": "documentChange",
+                "doc": "afc2-tenant/t1-grpc",
+                "n": "1",
+                "targetIds": [
+                  1
+                ],
+                "removedTargetIds": []
+              },
+              {
+                "kind": "targetChange",
+                "type": "NO_CHANGE",
+                "targetIds": [
+                  1
+                ],
+                "cause": null
+              }
+            ],
+            "endedBefore": false,
+            "end": null
+          },
+          "sdk-ten-t1/doc": {
+            "events": [
+              {
+                "kind": "snapshot",
+                "fromCache": false,
+                "pending": false,
+                "docs": [
+                  {
+                    "path": "afc2-tenant/t1-sdk",
+                    "exists": true,
+                    "n": 1
+                  }
+                ]
+              }
+            ]
+          },
+          "sdk-ten-t1/query": {
+            "events": [
+              {
+                "kind": "snapshot",
+                "fromCache": false,
+                "pending": false,
+                "docs": [
+                  {
+                    "path": "afc2-tenant/t1-sdk",
+                    "exists": true,
+                    "n": 1
+                  }
+                ]
+              }
+            ]
+          },
+          "grpc-ten-t2": {
+            "events": [
+              {
+                "kind": "documentChange",
+                "doc": "afc2-tenant/t2-grpc",
+                "n": "1",
+                "targetIds": [
+                  2
+                ],
+                "removedTargetIds": []
+              },
+              {
+                "kind": "targetChange",
+                "type": "NO_CHANGE",
+                "targetIds": [
+                  2
+                ],
+                "cause": null
+              },
+              {
+                "kind": "documentChange",
+                "doc": "afc2-tenant/t2-grpc",
+                "n": "1",
+                "targetIds": [
+                  1
+                ],
+                "removedTargetIds": []
+              },
+              {
+                "kind": "targetChange",
+                "type": "NO_CHANGE",
+                "targetIds": [
+                  1
+                ],
+                "cause": null
+              }
+            ],
+            "endedBefore": false,
+            "end": null
+          },
+          "sdk-ten-t2/doc": {
+            "events": [
+              {
+                "kind": "snapshot",
+                "fromCache": false,
+                "pending": false,
+                "docs": [
+                  {
+                    "path": "afc2-tenant/t2-sdk",
+                    "exists": true,
+                    "n": 0
+                  }
+                ]
+              },
+              {
+                "kind": "snapshot",
+                "fromCache": false,
+                "pending": false,
+                "docs": [
+                  {
+                    "path": "afc2-tenant/t2-sdk",
+                    "exists": true,
+                    "n": 1
+                  }
+                ]
+              }
+            ]
+          },
+          "sdk-ten-t2/query": {
+            "events": [
+              {
+                "kind": "snapshot",
+                "fromCache": false,
+                "pending": false,
+                "docs": [
+                  {
+                    "path": "afc2-tenant/t2-sdk",
+                    "exists": true,
+                    "n": 0
+                  }
+                ]
+              },
+              {
+                "kind": "snapshot",
+                "fromCache": false,
+                "pending": false,
+                "docs": [
+                  {
+                    "path": "afc2-tenant/t2-sdk",
+                    "exists": true,
+                    "n": 1
+                  }
+                ]
+              }
+            ]
+          },
+          "sdk-steady/w-n-out": {
+            "events": [
+              {
+                "kind": "snapshot",
+                "fromCache": false,
+                "pending": false,
+                "docs": [
+                  {
+                    "path": "afc2-open/n-out",
+                    "exists": true,
+                    "n": 0
+                  }
+                ]
+              }
+            ]
+          },
+          "sdk-steady/w-n-ab": {
+            "events": [
+              {
+                "kind": "snapshot",
+                "fromCache": false,
+                "pending": false,
+                "docs": [
+                  {
+                    "path": "afc2-open/n-ab",
+                    "exists": true,
+                    "n": 0
+                  }
+                ]
+              }
+            ]
+          },
+          "sdk-steady/w-b-out": {
+            "events": [
+              {
+                "kind": "snapshot",
+                "fromCache": false,
+                "pending": false,
+                "docs": [
+                  {
+                    "path": "afc2-open/b-out",
+                    "exists": true,
+                    "n": 0
+                  }
+                ]
+              }
+            ]
+          },
+          "sdk-steady/w-b-ab": {
+            "events": [
+              {
+                "kind": "snapshot",
+                "fromCache": false,
+                "pending": false,
+                "docs": [
+                  {
+                    "path": "afc2-open/b-ab",
+                    "exists": true,
+                    "n": 0
+                  }
+                ]
+              }
+            ]
+          }
+        },
+        "clients": {}
+      }
+    },
+    "n-ab/after-switch": {
+      "conditions": [
+        "AUTH-FS-CROSS/listen-sign-out-and-switch"
+      ],
+      "production": {
+        "listeners": {
+          "n-ab/own": [
+            "error:permission-denied"
+          ],
+          "n-ab/query": [
+            "error:permission-denied"
+          ],
+          "n-ab/open": [
+            "docs:1"
+          ],
+          "sdk-steady/w-n-ab": []
+        },
+        "clients": {
+          "n-ab": {
+            "wire": [
+              "firestore /google.firestore.v1.Firestore/Listen <uid:bob>",
+              "identitytoolkit /v1/accounts:lookup null",
+              "identitytoolkit /v1/accounts:signInWithPassword null"
+            ],
+            "results": [
+              "signIn:ok"
+            ],
+            "settled": [],
+            "auth": [
+              "<uid:bob>"
+            ]
+          }
+        }
+      },
+      "raw": {
+        "id": "n-ab/after-switch",
+        "conditions": [
+          "AUTH-FS-CROSS/listen-sign-out-and-switch"
+        ],
+        "listeners": {
+          "n-ab/own": {
+            "events": [
+              {
+                "kind": "snapshot",
+                "fromCache": true,
+                "pending": false,
+                "docs": [
+                  {
+                    "path": "afc2-owned/alice-n-ab",
+                    "exists": true,
+                    "n": 1
+                  }
+                ]
+              },
+              {
+                "kind": "error",
+                "code": "permission-denied"
+              }
+            ]
+          },
+          "n-ab/query": {
+            "events": [
+              {
+                "kind": "snapshot",
+                "fromCache": true,
+                "pending": false,
+                "docs": [
+                  {
+                    "path": "afc2-owned/alice-n-ab",
+                    "exists": true,
+                    "n": 1
+                  }
+                ]
+              },
+              {
+                "kind": "error",
+                "code": "permission-denied"
+              }
+            ]
+          },
+          "n-ab/open": {
+            "events": [
+              {
+                "kind": "snapshot",
+                "fromCache": true,
+                "pending": false,
+                "docs": [
+                  {
+                    "path": "afc2-open/n-ab",
+                    "exists": true,
+                    "n": 1
+                  }
+                ]
+              },
+              {
+                "kind": "snapshot",
+                "fromCache": false,
+                "pending": false,
+                "docs": [
+                  {
+                    "path": "afc2-open/n-ab",
+                    "exists": true,
+                    "n": 1
+                  }
+                ]
+              }
+            ]
+          },
+          "sdk-steady/w-n-ab": {
+            "events": []
+          }
+        },
+        "clients": {
+          "n-ab": [
+            {
+              "kind": "wire",
+              "service": "identitytoolkit",
+              "method": "/v1/accounts:signInWithPassword",
+              "principal": null
+            },
+            {
+              "kind": "wire",
+              "service": "identitytoolkit",
+              "method": "/v1/accounts:lookup",
+              "principal": null
+            },
+            {
+              "kind": "auth",
+              "uid": "<uid:bob>"
+            },
+            {
+              "kind": "result",
+              "op": "signIn",
+              "ok": true,
+              "code": null
+            },
+            {
+              "kind": "wire",
+              "service": "firestore",
+              "method": "/google.firestore.v1.Firestore/Listen",
+              "principal": "<uid:bob>"
+            }
+          ]
+        }
+      }
+    },
+    "n-ab/as-alice": {
+      "conditions": [
+        "AUTH-FS-CROSS/listen-sign-out-and-switch"
+      ],
+      "production": {
+        "listeners": {
+          "n-ab/own": [
+            "docs:0",
+            "docs:1"
+          ],
+          "n-ab/query": [
+            "docs:0",
+            "docs:1"
+          ],
+          "n-ab/open": [
+            "docs:0",
+            "docs:1"
+          ],
+          "sdk-steady/w-n-ab": [
+            "docs:1"
+          ]
+        },
+        "clients": {}
+      },
+      "raw": {
+        "id": "n-ab/as-alice",
+        "conditions": [
+          "AUTH-FS-CROSS/listen-sign-out-and-switch"
+        ],
+        "listeners": {
+          "n-ab/own": {
+            "events": [
+              {
+                "kind": "snapshot",
+                "fromCache": false,
+                "pending": false,
+                "docs": [
+                  {
+                    "path": "afc2-owned/alice-n-ab",
+                    "exists": true,
+                    "n": 0
+                  }
+                ]
+              },
+              {
+                "kind": "snapshot",
+                "fromCache": false,
+                "pending": false,
+                "docs": [
+                  {
+                    "path": "afc2-owned/alice-n-ab",
+                    "exists": true,
+                    "n": 1
+                  }
+                ]
+              }
+            ]
+          },
+          "n-ab/query": {
+            "events": [
+              {
+                "kind": "snapshot",
+                "fromCache": false,
+                "pending": false,
+                "docs": [
+                  {
+                    "path": "afc2-owned/alice-n-ab",
+                    "exists": true,
+                    "n": 0
+                  }
+                ]
+              },
+              {
+                "kind": "snapshot",
+                "fromCache": false,
+                "pending": false,
+                "docs": [
+                  {
+                    "path": "afc2-owned/alice-n-ab",
+                    "exists": true,
+                    "n": 1
+                  }
+                ]
+              }
+            ]
+          },
+          "n-ab/open": {
+            "events": [
+              {
+                "kind": "snapshot",
+                "fromCache": false,
+                "pending": false,
+                "docs": [
+                  {
+                    "path": "afc2-open/n-ab",
+                    "exists": true,
+                    "n": 0
+                  }
+                ]
+              },
+              {
+                "kind": "snapshot",
+                "fromCache": false,
+                "pending": false,
+                "docs": [
+                  {
+                    "path": "afc2-open/n-ab",
+                    "exists": true,
+                    "n": 1
+                  }
+                ]
+              }
+            ]
+          },
+          "sdk-steady/w-n-ab": {
+            "events": [
+              {
+                "kind": "snapshot",
+                "fromCache": false,
+                "pending": false,
+                "docs": [
+                  {
+                    "path": "afc2-open/n-ab",
+                    "exists": true,
+                    "n": 1
+                  }
+                ]
+              }
+            ]
+          }
+        },
+        "clients": {}
+      }
+    },
+    "n-ab/bob-listens": {
+      "conditions": [
+        "AUTH-FS-CROSS/listen-sign-out-and-switch"
+      ],
+      "production": {
+        "listeners": {
+          "n-ab/own": [],
+          "n-ab/query": [],
+          "n-ab/open": [
+            "docs:3"
+          ],
+          "sdk-steady/w-n-ab": [
+            "docs:3"
+          ],
+          "n-ab/bob-own": [
+            "docs:1",
+            "docs:2"
+          ]
+        },
+        "clients": {}
+      },
+      "raw": {
+        "id": "n-ab/bob-listens",
+        "conditions": [
+          "AUTH-FS-CROSS/listen-sign-out-and-switch"
+        ],
+        "listeners": {
+          "n-ab/own": {
+            "events": []
+          },
+          "n-ab/query": {
+            "events": []
+          },
+          "n-ab/open": {
+            "events": [
+              {
+                "kind": "snapshot",
+                "fromCache": false,
+                "pending": false,
+                "docs": [
+                  {
+                    "path": "afc2-open/n-ab",
+                    "exists": true,
+                    "n": 3
+                  }
+                ]
+              }
+            ]
+          },
+          "sdk-steady/w-n-ab": {
+            "events": [
+              {
+                "kind": "snapshot",
+                "fromCache": false,
+                "pending": false,
+                "docs": [
+                  {
+                    "path": "afc2-open/n-ab",
+                    "exists": true,
+                    "n": 3
+                  }
+                ]
+              }
+            ]
+          },
+          "n-ab/bob-own": {
+            "events": [
+              {
+                "kind": "snapshot",
+                "fromCache": false,
+                "pending": false,
+                "docs": [
+                  {
+                    "path": "afc2-owned/bob-n-ab",
+                    "exists": true,
+                    "n": 1
+                  }
+                ]
+              },
+              {
+                "kind": "snapshot",
+                "fromCache": false,
+                "pending": false,
+                "docs": [
+                  {
+                    "path": "afc2-owned/bob-n-ab",
+                    "exists": true,
+                    "n": 2
+                  }
+                ]
+              }
+            ]
+          }
+        },
+        "clients": {}
+      }
+    },
+    "n-ab/switched": {
+      "conditions": [
+        "AUTH-FS-CROSS/listen-sign-out-and-switch"
+      ],
+      "production": {
+        "listeners": {
+          "n-ab/own": [],
+          "n-ab/query": [],
+          "n-ab/open": [
+            "docs:2"
+          ],
+          "sdk-steady/w-n-ab": [
+            "docs:2"
+          ]
+        },
+        "clients": {}
+      },
+      "raw": {
+        "id": "n-ab/switched",
+        "conditions": [
+          "AUTH-FS-CROSS/listen-sign-out-and-switch"
+        ],
+        "listeners": {
+          "n-ab/own": {
+            "events": []
+          },
+          "n-ab/query": {
+            "events": []
+          },
+          "n-ab/open": {
+            "events": [
+              {
+                "kind": "snapshot",
+                "fromCache": false,
+                "pending": false,
+                "docs": [
+                  {
+                    "path": "afc2-open/n-ab",
+                    "exists": true,
+                    "n": 2
+                  }
+                ]
+              }
+            ]
+          },
+          "sdk-steady/w-n-ab": {
+            "events": [
+              {
+                "kind": "snapshot",
+                "fromCache": false,
+                "pending": false,
+                "docs": [
+                  {
+                    "path": "afc2-open/n-ab",
+                    "exists": true,
+                    "n": 2
+                  }
+                ]
+              }
+            ]
+          }
+        },
+        "clients": {}
+      }
+    },
+    "n-out/after-sign-out": {
+      "conditions": [
+        "AUTH-FS-CROSS/listen-sign-out-and-switch"
+      ],
+      "production": {
+        "listeners": {
+          "n-out/own": [
+            "error:permission-denied"
+          ],
+          "n-out/query": [
+            "error:permission-denied"
+          ],
+          "n-out/open": [
+            "error:permission-denied"
+          ],
+          "sdk-steady/w-n-out": []
+        },
+        "clients": {
+          "n-out": {
+            "wire": [
+              "firestore /google.firestore.v1.Firestore/Listen null"
+            ],
+            "results": [
+              "signOut:ok"
+            ],
+            "settled": [],
+            "auth": [
+              "null"
+            ]
+          }
+        }
+      },
+      "raw": {
+        "id": "n-out/after-sign-out",
+        "conditions": [
+          "AUTH-FS-CROSS/listen-sign-out-and-switch"
+        ],
+        "listeners": {
+          "n-out/own": {
+            "events": [
+              {
+                "kind": "snapshot",
+                "fromCache": true,
+                "pending": false,
+                "docs": [
+                  {
+                    "path": "afc2-owned/alice-n-out",
+                    "exists": true,
+                    "n": 1
+                  }
+                ]
+              },
+              {
+                "kind": "error",
+                "code": "permission-denied"
+              }
+            ]
+          },
+          "n-out/query": {
+            "events": [
+              {
+                "kind": "snapshot",
+                "fromCache": true,
+                "pending": false,
+                "docs": [
+                  {
+                    "path": "afc2-owned/alice-n-out",
+                    "exists": true,
+                    "n": 1
+                  }
+                ]
+              },
+              {
+                "kind": "error",
+                "code": "permission-denied"
+              }
+            ]
+          },
+          "n-out/open": {
+            "events": [
+              {
+                "kind": "snapshot",
+                "fromCache": true,
+                "pending": false,
+                "docs": [
+                  {
+                    "path": "afc2-open/n-out",
+                    "exists": true,
+                    "n": 1
+                  }
+                ]
+              },
+              {
+                "kind": "error",
+                "code": "permission-denied"
+              }
+            ]
+          },
+          "sdk-steady/w-n-out": {
+            "events": []
+          }
+        },
+        "clients": {
+          "n-out": [
+            {
+              "kind": "auth",
+              "uid": null
+            },
+            {
+              "kind": "result",
+              "op": "signOut",
+              "ok": true,
+              "code": null
+            },
+            {
+              "kind": "wire",
+              "service": "firestore",
+              "method": "/google.firestore.v1.Firestore/Listen",
+              "principal": null
+            }
+          ]
+        }
+      }
+    },
+    "n-out/listen-signed-out": {
+      "conditions": [
+        "AUTH-FS-CROSS/listen-sign-out-and-switch"
+      ],
+      "production": {
+        "listeners": {
+          "n-out/own-signed-out": [
+            "error:permission-denied"
+          ]
+        },
+        "clients": {}
+      },
+      "raw": {
+        "id": "n-out/listen-signed-out",
+        "conditions": [
+          "AUTH-FS-CROSS/listen-sign-out-and-switch"
+        ],
+        "listeners": {
+          "n-out/own-signed-out": {
+            "events": [
+              {
+                "kind": "snapshot",
+                "fromCache": true,
+                "pending": false,
+                "docs": [
+                  {
+                    "path": "afc2-owned/alice-n-out",
+                    "exists": true,
+                    "n": 1
+                  }
+                ]
+              },
+              {
+                "kind": "error",
+                "code": "permission-denied"
+              }
+            ]
+          }
+        },
+        "clients": {}
+      }
+    },
+    "n-out/signed-in": {
+      "conditions": [
+        "AUTH-FS-CROSS/listen-sign-out-and-switch"
+      ],
+      "production": {
+        "listeners": {
+          "n-out/own": [
+            "docs:0",
+            "docs:1"
+          ],
+          "n-out/query": [
+            "docs:0",
+            "docs:1"
+          ],
+          "n-out/open": [
+            "docs:0",
+            "docs:1"
+          ],
+          "sdk-steady/w-n-out": [
+            "docs:1"
+          ]
+        },
+        "clients": {}
+      },
+      "second": {
+        "listeners": {
+          "n-out/own": [
+            "docs:1"
+          ],
+          "n-out/query": [
+            "docs:1"
+          ],
+          "n-out/open": [
+            "docs:1"
+          ],
+          "sdk-steady/w-n-out": [
+            "docs:1"
+          ]
+        },
+        "clients": {}
+      },
+      "raw": {
+        "id": "n-out/signed-in",
+        "conditions": [
+          "AUTH-FS-CROSS/listen-sign-out-and-switch"
+        ],
+        "listeners": {
+          "n-out/own": {
+            "events": [
+              {
+                "kind": "snapshot",
+                "fromCache": false,
+                "pending": false,
+                "docs": [
+                  {
+                    "path": "afc2-owned/alice-n-out",
+                    "exists": true,
+                    "n": 0
+                  }
+                ]
+              },
+              {
+                "kind": "snapshot",
+                "fromCache": false,
+                "pending": false,
+                "docs": [
+                  {
+                    "path": "afc2-owned/alice-n-out",
+                    "exists": true,
+                    "n": 1
+                  }
+                ]
+              }
+            ]
+          },
+          "n-out/query": {
+            "events": [
+              {
+                "kind": "snapshot",
+                "fromCache": false,
+                "pending": false,
+                "docs": [
+                  {
+                    "path": "afc2-owned/alice-n-out",
+                    "exists": true,
+                    "n": 0
+                  }
+                ]
+              },
+              {
+                "kind": "snapshot",
+                "fromCache": false,
+                "pending": false,
+                "docs": [
+                  {
+                    "path": "afc2-owned/alice-n-out",
+                    "exists": true,
+                    "n": 1
+                  }
+                ]
+              }
+            ]
+          },
+          "n-out/open": {
+            "events": [
+              {
+                "kind": "snapshot",
+                "fromCache": false,
+                "pending": false,
+                "docs": [
+                  {
+                    "path": "afc2-open/n-out",
+                    "exists": true,
+                    "n": 0
+                  }
+                ]
+              },
+              {
+                "kind": "snapshot",
+                "fromCache": false,
+                "pending": false,
+                "docs": [
+                  {
+                    "path": "afc2-open/n-out",
+                    "exists": true,
+                    "n": 1
+                  }
+                ]
+              }
+            ]
+          },
+          "sdk-steady/w-n-out": {
+            "events": [
+              {
+                "kind": "snapshot",
+                "fromCache": false,
+                "pending": false,
+                "docs": [
+                  {
+                    "path": "afc2-open/n-out",
+                    "exists": true,
+                    "n": 1
+                  }
+                ]
+              }
+            ]
+          }
+        },
+        "clients": {}
+      }
+    },
+    "n-out/signed-in-again": {
+      "conditions": [
+        "AUTH-FS-CROSS/listen-sign-out-and-switch"
+      ],
+      "production": {
+        "listeners": {
+          "n-out/own": [],
+          "n-out/query": [],
+          "n-out/open": [],
+          "sdk-steady/w-n-out": [
+            "docs:3"
+          ],
+          "n-out/own-again": [
+            "docs:2",
+            "docs:3"
+          ]
+        },
+        "clients": {}
+      },
+      "raw": {
+        "id": "n-out/signed-in-again",
+        "conditions": [
+          "AUTH-FS-CROSS/listen-sign-out-and-switch"
+        ],
+        "listeners": {
+          "n-out/own": {
+            "events": []
+          },
+          "n-out/query": {
+            "events": []
+          },
+          "n-out/open": {
+            "events": []
+          },
+          "sdk-steady/w-n-out": {
+            "events": [
+              {
+                "kind": "snapshot",
+                "fromCache": false,
+                "pending": false,
+                "docs": [
+                  {
+                    "path": "afc2-open/n-out",
+                    "exists": true,
+                    "n": 3
+                  }
+                ]
+              }
+            ]
+          },
+          "n-out/own-again": {
+            "events": [
+              {
+                "kind": "snapshot",
+                "fromCache": true,
+                "pending": false,
+                "docs": [
+                  {
+                    "path": "afc2-owned/alice-n-out",
+                    "exists": true,
+                    "n": 1
+                  }
+                ]
+              },
+              {
+                "kind": "snapshot",
+                "fromCache": false,
+                "pending": false,
+                "docs": [
+                  {
+                    "path": "afc2-owned/alice-n-out",
+                    "exists": true,
+                    "n": 2
+                  }
+                ]
+              },
+              {
+                "kind": "snapshot",
+                "fromCache": false,
+                "pending": false,
+                "docs": [
+                  {
+                    "path": "afc2-owned/alice-n-out",
+                    "exists": true,
+                    "n": 3
+                  }
+                ]
+              }
+            ]
+          }
+        },
+        "clients": {}
+      }
+    },
+    "n-out/signed-out": {
+      "conditions": [
+        "AUTH-FS-CROSS/listen-sign-out-and-switch"
+      ],
+      "production": {
+        "listeners": {
+          "n-out/own": [],
+          "n-out/query": [],
+          "n-out/open": [],
+          "sdk-steady/w-n-out": [
+            "docs:2"
+          ]
+        },
+        "clients": {}
+      },
+      "raw": {
+        "id": "n-out/signed-out",
+        "conditions": [
+          "AUTH-FS-CROSS/listen-sign-out-and-switch"
+        ],
+        "listeners": {
+          "n-out/own": {
+            "events": []
+          },
+          "n-out/query": {
+            "events": []
+          },
+          "n-out/open": {
+            "events": []
+          },
+          "sdk-steady/w-n-out": {
+            "events": [
+              {
+                "kind": "snapshot",
+                "fromCache": false,
+                "pending": false,
+                "docs": [
+                  {
+                    "path": "afc2-open/n-out",
+                    "exists": true,
+                    "n": 2
+                  }
+                ]
+              }
+            ]
+          }
+        },
+        "clients": {}
+      }
+    },
+    "n-pend-ab/after-back": {
+      "conditions": [
+        "AUTH-FS-CROSS/pending-write-across-switch"
+      ],
+      "production": {
+        "docs": {
+          "afc2-pending/n-ab": {
+            "exists": true,
+            "fields": {
+              "owner": {
+                "stringValue": "<uid:alice>"
+              },
+              "n": {
+                "integerValue": "1"
+              }
+            }
+          }
+        }
+      },
+      "raw": {
+        "id": "n-pend-ab/after-back",
+        "conditions": [
+          "AUTH-FS-CROSS/pending-write-across-switch"
+        ],
+        "docs": {
+          "afc2-pending/n-ab": {
+            "exists": true,
+            "fields": {
+              "owner": {
+                "stringValue": "<uid:alice>"
+              },
+              "n": {
+                "integerValue": "1"
+              }
+            }
+          }
+        }
+      }
+    },
+    "n-pend-ab/after-online": {
+      "conditions": [
+        "AUTH-FS-CROSS/pending-write-across-switch"
+      ],
+      "production": {
+        "docs": {
+          "afc2-pending/n-ab": {
+            "exists": false,
+            "fields": null
+          }
+        }
+      },
+      "raw": {
+        "id": "n-pend-ab/after-online",
+        "conditions": [
+          "AUTH-FS-CROSS/pending-write-across-switch"
+        ],
+        "docs": {
+          "afc2-pending/n-ab": {
+            "exists": false,
+            "fields": null
+          }
+        }
+      }
+    },
+    "n-pend-ab/back": {
+      "conditions": [
+        "AUTH-FS-CROSS/pending-write-across-switch"
+      ],
+      "production": {
+        "listeners": {},
+        "clients": {
+          "n-pend-ab": {
+            "wire": [
+              "firestore /google.firestore.v1.Firestore/Write <uid:alice>",
+              "identitytoolkit /v1/accounts:lookup null",
+              "identitytoolkit /v1/accounts:signInWithPassword null"
+            ],
+            "results": [
+              "signIn:ok"
+            ],
+            "settled": [
+              "w:ok"
+            ],
+            "auth": [
+              "<uid:alice>"
+            ]
+          }
+        }
+      },
+      "raw": {
+        "id": "n-pend-ab/back",
+        "conditions": [
+          "AUTH-FS-CROSS/pending-write-across-switch"
+        ],
+        "listeners": {},
+        "clients": {
+          "n-pend-ab": [
+            {
+              "kind": "wire",
+              "service": "identitytoolkit",
+              "method": "/v1/accounts:signInWithPassword",
+              "principal": null
+            },
+            {
+              "kind": "wire",
+              "service": "identitytoolkit",
+              "method": "/v1/accounts:lookup",
+              "principal": null
+            },
+            {
+              "kind": "auth",
+              "uid": "<uid:alice>"
+            },
+            {
+              "kind": "result",
+              "op": "signIn",
+              "ok": true,
+              "code": null
+            },
+            {
+              "kind": "wire",
+              "service": "firestore",
+              "method": "/google.firestore.v1.Firestore/Write",
+              "principal": "<uid:alice>"
+            },
+            {
+              "kind": "write-settled",
+              "writeId": "w",
+              "ok": true,
+              "code": null
+            }
+          ]
+        }
+      }
+    },
+    "n-pend-ab/offline": {
+      "conditions": [
+        "AUTH-FS-CROSS/pending-write-across-switch"
+      ],
+      "production": {
+        "docs": {
+          "afc2-pending/n-ab": {
+            "exists": false,
+            "fields": null
+          }
+        }
+      },
+      "raw": {
+        "id": "n-pend-ab/offline",
+        "conditions": [
+          "AUTH-FS-CROSS/pending-write-across-switch"
+        ],
+        "docs": {
+          "afc2-pending/n-ab": {
+            "exists": false,
+            "fields": null
+          }
+        }
+      }
+    },
+    "n-pend-ab/online": {
+      "conditions": [
+        "AUTH-FS-CROSS/pending-write-across-switch"
+      ],
+      "production": {
+        "listeners": {},
+        "clients": {
+          "n-pend-ab": {
+            "wire": [],
+            "results": [
+              "online:ok"
+            ],
+            "settled": [],
+            "auth": []
+          }
+        }
+      },
+      "raw": {
+        "id": "n-pend-ab/online",
+        "conditions": [
+          "AUTH-FS-CROSS/pending-write-across-switch"
+        ],
+        "listeners": {},
+        "clients": {
+          "n-pend-ab": [
+            {
+              "kind": "result",
+              "op": "online",
+              "ok": true,
+              "code": null
+            }
+          ]
+        }
+      }
+    },
+    "n-pend-out/after-back": {
+      "conditions": [
+        "AUTH-FS-CROSS/pending-write-across-switch"
+      ],
+      "production": {
+        "docs": {
+          "afc2-pending/n-out": {
+            "exists": true,
+            "fields": {
+              "owner": {
+                "stringValue": "<uid:alice>"
+              },
+              "n": {
+                "integerValue": "1"
+              }
+            }
+          }
+        }
+      },
+      "raw": {
+        "id": "n-pend-out/after-back",
+        "conditions": [
+          "AUTH-FS-CROSS/pending-write-across-switch"
+        ],
+        "docs": {
+          "afc2-pending/n-out": {
+            "exists": true,
+            "fields": {
+              "owner": {
+                "stringValue": "<uid:alice>"
+              },
+              "n": {
+                "integerValue": "1"
+              }
+            }
+          }
+        }
+      }
+    },
+    "n-pend-out/after-online": {
+      "conditions": [
+        "AUTH-FS-CROSS/pending-write-across-switch"
+      ],
+      "production": {
+        "docs": {
+          "afc2-pending/n-out": {
+            "exists": false,
+            "fields": null
+          }
+        }
+      },
+      "raw": {
+        "id": "n-pend-out/after-online",
+        "conditions": [
+          "AUTH-FS-CROSS/pending-write-across-switch"
+        ],
+        "docs": {
+          "afc2-pending/n-out": {
+            "exists": false,
+            "fields": null
+          }
+        }
+      }
+    },
+    "n-pend-out/back": {
+      "conditions": [
+        "AUTH-FS-CROSS/pending-write-across-switch"
+      ],
+      "production": {
+        "listeners": {},
+        "clients": {
+          "n-pend-out": {
+            "wire": [
+              "firestore /google.firestore.v1.Firestore/Write <uid:alice>",
+              "identitytoolkit /v1/accounts:lookup null",
+              "identitytoolkit /v1/accounts:signInWithPassword null"
+            ],
+            "results": [
+              "signIn:ok"
+            ],
+            "settled": [
+              "w:ok"
+            ],
+            "auth": [
+              "<uid:alice>"
+            ]
+          }
+        }
+      },
+      "raw": {
+        "id": "n-pend-out/back",
+        "conditions": [
+          "AUTH-FS-CROSS/pending-write-across-switch"
+        ],
+        "listeners": {},
+        "clients": {
+          "n-pend-out": [
+            {
+              "kind": "wire",
+              "service": "identitytoolkit",
+              "method": "/v1/accounts:signInWithPassword",
+              "principal": null
+            },
+            {
+              "kind": "wire",
+              "service": "identitytoolkit",
+              "method": "/v1/accounts:lookup",
+              "principal": null
+            },
+            {
+              "kind": "auth",
+              "uid": "<uid:alice>"
+            },
+            {
+              "kind": "result",
+              "op": "signIn",
+              "ok": true,
+              "code": null
+            },
+            {
+              "kind": "wire",
+              "service": "firestore",
+              "method": "/google.firestore.v1.Firestore/Write",
+              "principal": "<uid:alice>"
+            },
+            {
+              "kind": "write-settled",
+              "writeId": "w",
+              "ok": true,
+              "code": null
+            }
+          ]
+        }
+      }
+    },
+    "n-pend-out/offline": {
+      "conditions": [
+        "AUTH-FS-CROSS/pending-write-across-switch"
+      ],
+      "production": {
+        "docs": {
+          "afc2-pending/n-out": {
+            "exists": false,
+            "fields": null
+          }
+        }
+      },
+      "raw": {
+        "id": "n-pend-out/offline",
+        "conditions": [
+          "AUTH-FS-CROSS/pending-write-across-switch"
+        ],
+        "docs": {
+          "afc2-pending/n-out": {
+            "exists": false,
+            "fields": null
+          }
+        }
+      }
+    },
+    "n-pend-out/online": {
+      "conditions": [
+        "AUTH-FS-CROSS/pending-write-across-switch"
+      ],
+      "production": {
+        "listeners": {},
+        "clients": {
+          "n-pend-out": {
+            "wire": [],
+            "results": [
+              "online:ok"
+            ],
+            "settled": [],
+            "auth": []
+          }
+        }
+      },
+      "raw": {
+        "id": "n-pend-out/online",
+        "conditions": [
+          "AUTH-FS-CROSS/pending-write-across-switch"
+        ],
+        "listeners": {},
+        "clients": {
+          "n-pend-out": [
+            {
+              "kind": "result",
+              "op": "online",
+              "ok": true,
+              "code": null
+            }
+          ]
+        }
+      }
+    },
+    "tx-control/result": {
+      "conditions": [
+        "AUTH-FS-CROSS/sdk-optimistic-transaction"
+      ],
+      "production": {
+        "result": [
+          "transaction:ok:1"
+        ],
+        "listeners": {},
+        "clients": {
+          "n-tx": {
+            "wire": [
+              "firestore /google.firestore.v1.Firestore/BatchGetDocuments <uid:alice>",
+              "firestore /google.firestore.v1.Firestore/Commit <uid:alice>"
+            ],
+            "results": [
+              "continueTransaction:ok",
+              "transaction:ok:1"
+            ],
+            "settled": [],
+            "auth": []
+          }
+        }
+      },
+      "raw": {
+        "id": "tx-control/result",
+        "conditions": [
+          "AUTH-FS-CROSS/sdk-optimistic-transaction"
+        ],
+        "result": {
+          "kind": "result",
+          "op": "transaction",
+          "ok": true,
+          "code": null,
+          "attempts": 1
+        },
+        "clients": {
+          "n-tx": [
+            {
+              "kind": "wire",
+              "service": "firestore",
+              "method": "/google.firestore.v1.Firestore/BatchGetDocuments",
+              "principal": "<uid:alice>"
+            },
+            {
+              "kind": "result",
+              "op": "continueTransaction",
+              "ok": true,
+              "code": null
+            },
+            {
+              "kind": "wire",
+              "service": "firestore",
+              "method": "/google.firestore.v1.Firestore/Commit",
+              "principal": "<uid:alice>"
+            },
+            {
+              "kind": "result",
+              "op": "transaction",
+              "ok": true,
+              "code": null,
+              "attempts": 1
+            }
+          ]
+        }
+      }
+    },
+    "tx-control/server": {
+      "conditions": [
+        "AUTH-FS-CROSS/sdk-optimistic-transaction"
+      ],
+      "production": {
+        "docs": {
+          "afc2-tx/control": {
+            "exists": true,
+            "fields": {
+              "by": {
+                "stringValue": "<uid:alice>"
+              },
+              "n": {
+                "integerValue": "1"
+              }
+            }
+          }
+        }
+      },
+      "raw": {
+        "id": "tx-control/server",
+        "conditions": [
+          "AUTH-FS-CROSS/sdk-optimistic-transaction"
+        ],
+        "docs": {
+          "afc2-tx/control": {
+            "exists": true,
+            "fields": {
+              "by": {
+                "stringValue": "<uid:alice>"
+              },
+              "n": {
+                "integerValue": "1"
+              }
+            }
+          }
+        }
+      }
+    },
+    "tx-signout/result": {
+      "conditions": [
+        "AUTH-FS-CROSS/sdk-optimistic-transaction"
+      ],
+      "production": {
+        "result": [
+          "transaction:permission-denied:1"
+        ],
+        "listeners": {},
+        "clients": {
+          "n-tx": {
+            "wire": [
+              "firestore /google.firestore.v1.Firestore/BatchGetDocuments <uid:alice>",
+              "firestore /google.firestore.v1.Firestore/Commit null"
+            ],
+            "results": [
+              "signOut:ok",
+              "continueTransaction:ok",
+              "transaction:permission-denied:1"
+            ],
+            "settled": [],
+            "auth": [
+              "null"
+            ]
+          }
+        }
+      },
+      "raw": {
+        "id": "tx-signout/result",
+        "conditions": [
+          "AUTH-FS-CROSS/sdk-optimistic-transaction"
+        ],
+        "result": {
+          "kind": "result",
+          "op": "transaction",
+          "ok": false,
+          "code": "permission-denied",
+          "attempts": 1
+        },
+        "clients": {
+          "n-tx": [
+            {
+              "kind": "wire",
+              "service": "firestore",
+              "method": "/google.firestore.v1.Firestore/BatchGetDocuments",
+              "principal": "<uid:alice>"
+            },
+            {
+              "kind": "auth",
+              "uid": null
+            },
+            {
+              "kind": "result",
+              "op": "signOut",
+              "ok": true,
+              "code": null
+            },
+            {
+              "kind": "result",
+              "op": "continueTransaction",
+              "ok": true,
+              "code": null
+            },
+            {
+              "kind": "wire",
+              "service": "firestore",
+              "method": "/google.firestore.v1.Firestore/Commit",
+              "principal": null
+            },
+            {
+              "kind": "result",
+              "op": "transaction",
+              "ok": false,
+              "code": "permission-denied",
+              "attempts": 1
+            }
+          ]
+        }
+      }
+    },
+    "tx-signout/server": {
+      "conditions": [
+        "AUTH-FS-CROSS/sdk-optimistic-transaction"
+      ],
+      "production": {
+        "docs": {
+          "afc2-tx/signout": {
+            "exists": true,
+            "fields": {
+              "by": {
+                "stringValue": "seed"
+              },
+              "n": {
+                "integerValue": "0"
+              }
+            }
+          }
+        }
+      },
+      "raw": {
+        "id": "tx-signout/server",
+        "conditions": [
+          "AUTH-FS-CROSS/sdk-optimistic-transaction"
+        ],
+        "docs": {
+          "afc2-tx/signout": {
+            "exists": true,
+            "fields": {
+              "by": {
+                "stringValue": "seed"
+              },
+              "n": {
+                "integerValue": "0"
+              }
+            }
+          }
+        }
+      }
+    },
+    "tx-switch/result": {
+      "conditions": [
+        "AUTH-FS-CROSS/sdk-optimistic-transaction"
+      ],
+      "production": {
+        "result": [
+          "transaction:permission-denied:1"
+        ],
+        "listeners": {},
+        "clients": {
+          "n-tx": {
+            "wire": [
+              "firestore /google.firestore.v1.Firestore/BatchGetDocuments <uid:alice>",
+              "firestore /google.firestore.v1.Firestore/Commit <uid:bob>",
+              "identitytoolkit /v1/accounts:lookup null",
+              "identitytoolkit /v1/accounts:signInWithPassword null"
+            ],
+            "results": [
+              "signIn:ok",
+              "continueTransaction:ok",
+              "transaction:permission-denied:1"
+            ],
+            "settled": [],
+            "auth": [
+              "<uid:bob>"
+            ]
+          }
+        }
+      },
+      "raw": {
+        "id": "tx-switch/result",
+        "conditions": [
+          "AUTH-FS-CROSS/sdk-optimistic-transaction"
+        ],
+        "result": {
+          "kind": "result",
+          "op": "transaction",
+          "ok": false,
+          "code": "permission-denied",
+          "attempts": 1
+        },
+        "clients": {
+          "n-tx": [
+            {
+              "kind": "wire",
+              "service": "firestore",
+              "method": "/google.firestore.v1.Firestore/BatchGetDocuments",
+              "principal": "<uid:alice>"
+            },
+            {
+              "kind": "wire",
+              "service": "identitytoolkit",
+              "method": "/v1/accounts:signInWithPassword",
+              "principal": null
+            },
+            {
+              "kind": "wire",
+              "service": "identitytoolkit",
+              "method": "/v1/accounts:lookup",
+              "principal": null
+            },
+            {
+              "kind": "auth",
+              "uid": "<uid:bob>"
+            },
+            {
+              "kind": "result",
+              "op": "signIn",
+              "ok": true,
+              "code": null
+            },
+            {
+              "kind": "result",
+              "op": "continueTransaction",
+              "ok": true,
+              "code": null
+            },
+            {
+              "kind": "wire",
+              "service": "firestore",
+              "method": "/google.firestore.v1.Firestore/Commit",
+              "principal": "<uid:bob>"
+            },
+            {
+              "kind": "result",
+              "op": "transaction",
+              "ok": false,
+              "code": "permission-denied",
+              "attempts": 1
+            }
+          ]
+        }
+      }
+    },
+    "tx-switch/server": {
+      "conditions": [
+        "AUTH-FS-CROSS/sdk-optimistic-transaction"
+      ],
+      "production": {
+        "docs": {
+          "afc2-tx/switch": {
+            "exists": true,
+            "fields": {
+              "n": {
+                "integerValue": "0"
+              },
+              "by": {
+                "stringValue": "seed"
+              }
+            }
+          }
+        }
+      },
+      "raw": {
+        "id": "tx-switch/server",
+        "conditions": [
+          "AUTH-FS-CROSS/sdk-optimistic-transaction"
+        ],
+        "docs": {
+          "afc2-tx/switch": {
+            "exists": true,
+            "fields": {
+              "n": {
+                "integerValue": "0"
+              },
+              "by": {
+                "stringValue": "seed"
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

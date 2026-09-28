@@ -345,18 +345,13 @@ fn connect_report(control_url: &str) -> Result<Vec<String>, String> {
 /// forwards it anywhere else.
 fn control_get(control_url: &str, path: &str) -> Result<String, String> {
     use std::io::{Read, Write};
-    let rest = control_url
-        .strip_prefix("http://")
-        .ok_or_else(|| format!("{control_url}: the control URL must start with http://"))?;
-    let authority = rest.split('/').next().unwrap_or("");
+    // The same check the Hub locator reader applies, so a URL this command dials and an origin
+    // a locator names are held to one rule.
+    let authority = crate::hub::loopback_authority(control_url)
+        .map_err(|refusal| format!("{refusal} (only a loopback control API can be inspected)"))?;
     let (host, port) = authority
         .rsplit_once(':')
         .ok_or_else(|| format!("{control_url}: the control URL must name a port"))?;
-    if !matches!(host, "127.0.0.1" | "localhost" | "[::1]") {
-        return Err(format!(
-            "{control_url}: only a loopback control API can be inspected"
-        ));
-    }
     let port: u16 = port
         .parse()
         .map_err(|_| format!("{control_url}: the port is not a number"))?;

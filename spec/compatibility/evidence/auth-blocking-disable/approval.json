@@ -1,0 +1,23 @@
+{
+  "schemaVersion": 1,
+  "subjectSha256": "81e74c75576f91b3cf889cae905e4eb21437a8f6a86846082b160dc1e4e6db0d",
+  "sourceCommit": "9cab49c7533bde3f6d420e104f59ec52a551ac54",
+  "scope": "Twelve-case frame (eight executed rows, four conditionally skipped rows) projected without secrets from the saved 2026-09-11 run of auth-blocking-disable revision 1, production only. One recorded response shape of a first-generation beforeSignIn function (disabled: true for accounts carrying a dedicated custom claim), phone MFA with test phone numbers, no tenant, a single run and the recorded operation order. Approved as recorded: USER_DISABLED on C's password sign-in and on A's phone MFA finalize, the immediate Admin readback of the disabled flag (C false, A true), refusal of the second sign-ins under the same registered function, the control B's successful completions before and after, and the recorded function removal, configuration restore with a matching digest and account absence confirmation. The four token lookup and refresh rows were skipped because the first requests were refused; they are not approved as executed or successful. The approval does not extend to an independent check of token absence in a refused response, to non-issuance inside the server, to immediate persistence of the disable on every path, to the cause or timing of the readback difference, to a production/local comparison of this corpus, to created-then-disabled accounts, beforeCreate, other MFA methods, tenants, SDK or Rules.",
+  "cases": [
+    "baseline-b-fresh-finalize",
+    "hook-c-first-signin",
+    "hook-c-token-lookup",
+    "hook-c-token-refresh",
+    "hook-c-disabled-readback",
+    "hook-c-second-signin",
+    "hook-a-first-finalize",
+    "hook-a-token-lookup",
+    "hook-a-token-refresh",
+    "hook-a-disabled-readback",
+    "hook-a-second-signin",
+    "final-b-fresh-finalize"
+  ],
+  "reviewer": "github:t-k (id:426779)",
+  "reviewedAt": "2026-09-11",
+  "decision": "approve"
+}

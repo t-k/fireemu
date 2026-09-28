@@ -1,0 +1,147 @@
+{
+  "schemaVersion": 1,
+  "kind": "account-disable-route-case-mapping",
+  "reviewer": "Codex (agent-authored interpretation, not human approval)",
+  "reviewedAt": "2026-09-11",
+  "executionApproval": "not-granted",
+  "sources": [
+    {
+      "id": "auth-rest",
+      "url": "https://firebase.google.com/docs/reference/rest/auth",
+      "locators": [
+        "section-sign-in-email-password",
+        "section-get-account-info",
+        "section-refresh-token"
+      ]
+    },
+    {
+      "id": "admin-update",
+      "url": "https://docs.cloud.google.com/identity-platform/docs/reference/rest/v1/projects.accounts/update",
+      "locators": [
+        "request-body"
+      ]
+    },
+    {
+      "id": "sessions",
+      "url": "https://firebase.google.com/docs/auth/admin/manage-sessions",
+      "locators": [
+        "manage_user_sessions"
+      ]
+    }
+  ],
+  "obligations": [
+    {
+      "case": "baseline-a-signin",
+      "source": "auth-rest",
+      "basis": "harness-control",
+      "condition": "Observe the specified phase/account/route with fixed original credentials; validate successful baseline/control and fresh re-enabled signin. Other target-token outcomes are diagnostic, not assumed restored. Retain elapsed request-start timing and exact allowlisted errors."
+    },
+    {
+      "case": "baseline-a-id",
+      "source": "auth-rest",
+      "basis": "harness-control",
+      "condition": "Observe the specified phase/account/route with fixed original credentials; validate successful baseline/control and fresh re-enabled signin. Other target-token outcomes are diagnostic, not assumed restored. Retain elapsed request-start timing and exact allowlisted errors."
+    },
+    {
+      "case": "baseline-a-refresh",
+      "source": "auth-rest",
+      "basis": "harness-control",
+      "condition": "Observe the specified phase/account/route with fixed original credentials; validate successful baseline/control and fresh re-enabled signin. Other target-token outcomes are diagnostic, not assumed restored. Retain elapsed request-start timing and exact allowlisted errors."
+    },
+    {
+      "case": "baseline-b-signin",
+      "source": "auth-rest",
+      "basis": "harness-control",
+      "condition": "Observe the specified phase/account/route with fixed original credentials; validate successful baseline/control and fresh re-enabled signin. Other target-token outcomes are diagnostic, not assumed restored. Retain elapsed request-start timing and exact allowlisted errors."
+    },
+    {
+      "case": "baseline-b-id",
+      "source": "auth-rest",
+      "basis": "harness-control",
+      "condition": "Observe the specified phase/account/route with fixed original credentials; validate successful baseline/control and fresh re-enabled signin. Other target-token outcomes are diagnostic, not assumed restored. Retain elapsed request-start timing and exact allowlisted errors."
+    },
+    {
+      "case": "baseline-b-refresh",
+      "source": "auth-rest",
+      "basis": "harness-control",
+      "condition": "Observe the specified phase/account/route with fixed original credentials; validate successful baseline/control and fresh re-enabled signin. Other target-token outcomes are diagnostic, not assumed restored. Retain elapsed request-start timing and exact allowlisted errors."
+    },
+    {
+      "case": "disabled-a-signin",
+      "source": "auth-rest",
+      "basis": "harness-control",
+      "condition": "Observe the specified phase/account/route with fixed original credentials; validate successful baseline/control and fresh re-enabled signin. Other target-token outcomes are diagnostic, not assumed restored. Retain elapsed request-start timing and exact allowlisted errors."
+    },
+    {
+      "case": "disabled-a-id",
+      "source": "auth-rest",
+      "basis": "harness-control",
+      "condition": "Observe the specified phase/account/route with fixed original credentials; validate successful baseline/control and fresh re-enabled signin. Other target-token outcomes are diagnostic, not assumed restored. Retain elapsed request-start timing and exact allowlisted errors."
+    },
+    {
+      "case": "disabled-a-refresh",
+      "source": "auth-rest",
+      "basis": "harness-control",
+      "condition": "Observe the specified phase/account/route with fixed original credentials; validate successful baseline/control and fresh re-enabled signin. Other target-token outcomes are diagnostic, not assumed restored. Retain elapsed request-start timing and exact allowlisted errors."
+    },
+    {
+      "case": "disabled-b-signin",
+      "source": "auth-rest",
+      "basis": "harness-control",
+      "condition": "Observe the specified phase/account/route with fixed original credentials; validate successful baseline/control and fresh re-enabled signin. Other target-token outcomes are diagnostic, not assumed restored. Retain elapsed request-start timing and exact allowlisted errors."
+    },
+    {
+      "case": "disabled-b-id",
+      "source": "auth-rest",
+      "basis": "harness-control",
+      "condition": "Observe the specified phase/account/route with fixed original credentials; validate successful baseline/control and fresh re-enabled signin. Other target-token outcomes are diagnostic, not assumed restored. Retain elapsed request-start timing and exact allowlisted errors."
+    },
+    {
+      "case": "disabled-b-refresh",
+      "source": "auth-rest",
+      "basis": "harness-control",
+      "condition": "Observe the specified phase/account/route with fixed original credentials; validate successful baseline/control and fresh re-enabled signin. Other target-token outcomes are diagnostic, not assumed restored. Retain elapsed request-start timing and exact allowlisted errors."
+    },
+    {
+      "case": "reenabled-a-signin",
+      "source": "auth-rest",
+      "basis": "harness-control",
+      "condition": "Observe the specified phase/account/route with fixed original credentials; validate successful baseline/control and fresh re-enabled signin. Other target-token outcomes are diagnostic, not assumed restored. Retain elapsed request-start timing and exact allowlisted errors."
+    },
+    {
+      "case": "reenabled-a-id",
+      "source": "auth-rest",
+      "basis": "harness-control",
+      "condition": "Observe the specified phase/account/route with fixed original credentials; validate successful baseline/control and fresh re-enabled signin. Other target-token outcomes are diagnostic, not assumed restored. Retain elapsed request-start timing and exact allowlisted errors."
+    },
+    {
+      "case": "reenabled-a-refresh",
+      "source": "auth-rest",
+      "basis": "harness-control",
+      "condition": "Observe the specified phase/account/route with fixed original credentials; validate successful baseline/control and fresh re-enabled signin. Other target-token outcomes are diagnostic, not assumed restored. Retain elapsed request-start timing and exact allowlisted errors."
+    },
+    {
+      "case": "reenabled-b-signin",
+      "source": "auth-rest",
+      "basis": "harness-control",
+      "condition": "Observe the specified phase/account/route with fixed original credentials; validate successful baseline/control and fresh re-enabled signin. Other target-token outcomes are diagnostic, not assumed restored. Retain elapsed request-start timing and exact allowlisted errors."
+    },
+    {
+      "case": "reenabled-b-id",
+      "source": "auth-rest",
+      "basis": "harness-control",
+      "condition": "Observe the specified phase/account/route with fixed original credentials; validate successful baseline/control and fresh re-enabled signin. Other target-token outcomes are diagnostic, not assumed restored. Retain elapsed request-start timing and exact allowlisted errors."
+    },
+    {
+      "case": "reenabled-b-refresh",
+      "source": "auth-rest",
+      "basis": "harness-control",
+      "condition": "Observe the specified phase/account/route with fixed original credentials; validate successful baseline/control and fresh re-enabled signin. Other target-token outcomes are diagnostic, not assumed restored. Retain elapsed request-start timing and exact allowlisted errors."
+    }
+  ],
+  "limitations": [
+    "URLs were read during design; no new frozen full-body source snapshot or completed page-review claim is made by this mapping.",
+    "Admin update and session sources support operations, not universal instant revocation or re-enabled credential outcomes.",
+    "No execution approval, independent signatures, SDK checkRevoked, Rules, tenant, actual expiry or fault recovery claim."
+  ]
+}

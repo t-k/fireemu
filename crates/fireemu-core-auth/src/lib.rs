@@ -6,8 +6,13 @@
 
 pub mod base32;
 pub mod claims;
+pub mod config_members;
+pub mod federation;
 pub mod jwt;
 pub mod mfa;
+pub mod mfa_config;
+pub mod password_policy;
 pub mod sha1;
+pub mod signup_quota;
 pub mod store;
 pub mod totp;

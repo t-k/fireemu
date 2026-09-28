@@ -26,7 +26,6 @@
 #![allow(clippy::result_large_err)]
 
 use std::collections::{BTreeMap, HashMap, VecDeque};
-use std::hash::{BuildHasher, Hasher};
 use std::io::Write as _;
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::mpsc::{sync_channel, SyncSender, TrySendError};
@@ -58,8 +57,22 @@ const LONG_POLL_WAIT: Duration = Duration::from_secs(30);
 const LONG_POLL_MAX: Duration = Duration::from_secs(60);
 /// Streaming back channels send a keep-alive after this much silence.
 const KEEPALIVE: Duration = Duration::from_secs(30);
-/// Maximum accepted form body.
-pub const MAX_FORM_BYTES: usize = 10 * 1024 * 1024;
+/// The largest `WebChannel` form body a profile accepts. Production accepted 12,582,912 bytes on
+/// a valid session and refused 16,777,216 (FS-DATA-WRITE follow-up recording, 2026-09-27), so
+/// strict accepts everything below the refusal; the pinned official emulator accepts
+/// 16,777,216 and refuses one more byte, and the emulator profile adds no refusal to it.
+#[must_use]
+pub const fn max_form_bytes(enforce_limits: bool) -> usize {
+    if enforce_limits {
+        16_777_215
+    } else {
+        16 * 1024 * 1024
+    }
+}
+
+/// How much of an over-bound form body is read and discarded before answering, so that the
+/// refusal reaches the client (production answered even a 33,554,433-byte body).
+pub const MAX_FORM_DRAIN_BYTES: usize = 64 * 1024 * 1024;
 /// Maximum concurrent sessions.
 pub const MAX_SESSIONS: usize = 256;
 /// Maximum unacknowledged arrays per session before it is closed.
@@ -595,32 +608,23 @@ impl ListenObserver for WebchannelListenObserver {
     }
 }
 
-/// 128 bits from the operating system CSPRNG.
+/// 128 bits from the operating system CSPRNG, or no session at all.
 ///
 /// A channel id was always unguessable-by-construction, but since App Check admits a channel
 /// once and later envelopes ride on that admission (specification section 13.1), knowing one
-/// *is* the capability to use an admitted channel. It is drawn from the same source as the
-/// control token, the runner secret and the project epochs rather than from keyed hashing of a
-/// counter. A failed draw falls back to that keyed hashing rather than to anything predictable:
-/// refusing to open channels because the operating system produced no entropy would be worse,
-/// and the fallback is exactly the previous behaviour.
-fn random_sid() -> String {
-    fireemu_adapter_support::entropy::hex_128().unwrap_or_else(|_| keyed_sid())
+/// *is* the capability to use an admitted channel. So it is drawn from the same source as the
+/// control token, the runner secret and the project epochs, and a failed draw refuses the
+/// handshake. Falling back to keyed hashing of a counter would mint the capability from a
+/// weaker source exactly when the strong one is unavailable, which is the moment it matters.
+fn random_sid() -> Result<String, String> {
+    sid_from_entropy(fireemu_adapter_support::entropy::hex_128)
 }
 
-/// The fallback of [`random_sid`]: system-keyed hashing of a counter, not derived from the
-/// deterministic runtime seed.
-fn keyed_sid() -> String {
-    static COUNTER: AtomicU64 = AtomicU64::new(1);
-    let n = COUNTER.fetch_add(1, Ordering::Relaxed);
-    let state = std::collections::hash_map::RandomState::new();
-    let mut a = state.build_hasher();
-    a.write_u64(n);
-    a.write_u64(0xA5A5);
-    let mut b = state.build_hasher();
-    b.write_u64(n ^ 0x5A5A_5A5A);
-    b.write_u64(u64::from(std::process::id()));
-    format!("{:016x}{:016x}", a.finish(), b.finish())
+/// [`random_sid`] over an explicit entropy source, so a failing one can be observed.
+fn sid_from_entropy<E: std::fmt::Display>(
+    draw: impl FnOnce() -> Result<String, E>,
+) -> Result<String, String> {
+    draw().map_err(|e| format!("a WebChannel session id cannot be drawn: {e}"))
 }
 
 fn next_trace_session_id() -> u64 {
@@ -1497,16 +1501,17 @@ impl Hub {
     }
 
     fn session(&self, req: &ChannelRequest, sid: &str) -> Result<Arc<Session>, ChannelResponse> {
+        let strict = self.state.gateway.enforce_limits;
         let s = self
             .sessions
             .lock()
             .ok()
             .and_then(|m| m.get(sid).cloned())
             .filter(|s| !s.is_terminated())
-            .ok_or_else(unknown_session)?;
+            .ok_or_else(|| unknown_session(strict))?;
         // A session answers only the origin and stream kind that opened it.
         if s.kind != req.kind || s.origin != req.origin {
-            return Err(unknown_session());
+            return Err(unknown_session(strict));
         }
         s.touch();
         Ok(s)
@@ -1516,6 +1521,29 @@ impl Hub {
         let removed = self.sessions.lock().ok().and_then(|mut m| m.remove(sid));
         if let Some(s) = removed {
             s.terminate();
+        }
+    }
+
+    /// Whether this hub serves the strict profile.
+    #[must_use]
+    pub fn enforce_limits(&self) -> bool {
+        self.state.gateway.enforce_limits
+    }
+
+    /// The answer to a form body over [`max_form_bytes`]. Production answers its HTML 400 page
+    /// and the session is gone afterwards (its terminate answered the same page), so strict ends
+    /// the named session. The official emulator answers an empty 413 and keeps the session.
+    pub fn oversized_form(&self, sid: Option<&str>) -> ChannelResponse {
+        if self.enforce_limits() {
+            if let Some(sid) = sid {
+                self.remove(sid);
+            }
+            return unknown_session(true);
+        }
+        ChannelResponse::Full {
+            status: 413,
+            headers: Vec::new(),
+            body: String::new(),
         }
     }
 
@@ -1535,8 +1563,12 @@ impl Hub {
         if req.params.get("TYPE").map(String::as_str) == Some("terminate") {
             // Sent as POST, or as a GET image request when the page unloads.
             if let Some(sid) = sid {
-                if self.session(req, &sid).is_ok() {
-                    self.remove(&sid);
+                match self.session(req, &sid) {
+                    Ok(_) => self.remove(&sid),
+                    // Production answers the terminate of a session it no longer has with its
+                    // unknown-session page (FS-DATA-WRITE follow-up recording, 2026-09-27).
+                    Err(unknown) if self.enforce_limits() => return unknown,
+                    Err(_) => {}
                 }
             }
             return text_response(200, String::new());
@@ -1671,7 +1703,10 @@ impl Hub {
             },
             None => crate::rules::Principal::Owner,
         };
-        let sid = random_sid();
+        let sid = match random_sid() {
+            Ok(sid) => sid,
+            Err(e) => return text_response(500, e),
+        };
         let (inbound_tx, inbound_rx) = mpsc::channel::<Result<Value, Status>>(64);
         let session = Arc::new(Session {
             sid: sid.clone(),
@@ -2222,9 +2257,26 @@ fn bad_json(e: &JsonError) -> Status {
     Status::invalid_argument(e.to_string())
 }
 
-fn unknown_session() -> ChannelResponse {
-    // The client classifies this body as an unknown session and re-handshakes.
-    text_response(400, "Error: Unknown SID".to_owned())
+/// What production answers a `WebChannel` request for an unknown session: HTTP 400 with Google's
+/// HTML error page (owner decision D6, 2026-09-25; `writes/limits/webchannel-request-bytes`,
+/// recorded twice). Only the first 400 characters of that page were recorded, so this is
+/// exactly that prefix and nothing is invented past it; the rest of the page and its
+/// content type are unobserved.
+pub const STRICT_UNKNOWN_SESSION_BODY: &str = "<!DOCTYPE html>\n<html lang=en>\n  <meta charset=utf-8>\n  <meta name=viewport content=\"initial-scale=1, minimum-scale=1, width=device-width\">\n  <title>Error 400 (Bad Request)!!1</title>\n  <style>\n    *{margin:0;padding:0}html,code{font:15px/22px arial,sans-serif}html{background:#fff;color:#222;padding:15px}body{margin:7% auto 0;max-width:390px;min-height:180px;padding:30px 0 15px}* > body{background";
+
+/// The emulator profile keeps the official emulator's answer, which the web SDK classifies as
+/// an unknown session and re-handshakes on.
+pub const EMULATOR_UNKNOWN_SESSION_BODY: &str = "Error: Unknown SID";
+
+fn unknown_session(strict: bool) -> ChannelResponse {
+    if strict {
+        return ChannelResponse::Full {
+            status: 400,
+            headers: vec![("content-type", "text/html; charset=UTF-8".to_owned())],
+            body: STRICT_UNKNOWN_SESSION_BODY.to_owned(),
+        };
+    }
+    text_response(400, EMULATOR_UNKNOWN_SESSION_BODY.to_owned())
 }
 
 fn error_chunk(e: &Status) -> ChannelResponse {
@@ -3508,5 +3560,42 @@ mod tests {
         assert!(rx.try_recv().is_err());
         assert!(session.finish_backchannel(replacement_generation));
         assert!(!session.backchannel_attached());
+    }
+}
+
+#[cfg(test)]
+mod sid_entropy_tests {
+    use super::{random_sid, sid_from_entropy};
+
+    /// SIDENT-1: the session id is the capability to use an admitted channel, so it is drawn
+    /// from the operating system CSPRNG and nowhere else. A failed draw refuses the handshake
+    /// rather than minting the capability from a weaker source at the moment the strong one
+    /// is unavailable.
+    #[test]
+    fn a_failed_entropy_draw_refuses_the_session_instead_of_weakening_it() {
+        struct Unavailable;
+        impl std::fmt::Display for Unavailable {
+            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                f.write_str("the operating system random number generator is unavailable")
+            }
+        }
+
+        let refused = sid_from_entropy(|| Err::<String, _>(Unavailable))
+            .expect_err("a failed draw must not produce a session id");
+        assert!(refused.contains("cannot be drawn"), "{refused}");
+        assert!(refused.contains("unavailable"), "{refused}");
+
+        // The working source is passed through unchanged, and the real one is 32 hex digits.
+        assert_eq!(
+            sid_from_entropy(|| Ok::<_, Unavailable>("0123456789abcdef".to_owned())).as_deref(),
+            Ok("0123456789abcdef")
+        );
+        let drawn = random_sid().expect("the operating system CSPRNG is available under test");
+        assert_eq!(drawn.len(), 32);
+        assert!(drawn.bytes().all(|b| b.is_ascii_hexdigit()));
+        assert_ne!(
+            drawn,
+            random_sid().expect("the operating system CSPRNG is available under test")
+        );
     }
 }

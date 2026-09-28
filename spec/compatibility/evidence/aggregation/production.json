@@ -1,0 +1,908 @@
+{
+  "schemaVersion": 2,
+  "acceptance": "candidate",
+  "target": "production",
+  "connection": "production",
+  "scope": {
+    "feature": "FS-AGGREGATIONS",
+    "edition": "STANDARD",
+    "apiMode": "FIRESTORE_NATIVE",
+    "transport": "REST",
+    "profile": "strict",
+    "rules": "admin-bypass"
+  },
+  "recordedAt": "2026-09-10T01:44:33.571101+00:00",
+  "probeSource": {
+    "commit": "b76a253d886e73c2d72523846744c9c0972a9db4",
+    "files": {
+      "aggregation_corpus.py": "d33b7e358aac69d69548ca4b8d166454ee108b7042ffa257c8acc2e82e39dce0",
+      "aggregation_evidence.py": "e196c75e2f9678fe5ee3b5e684def42d93a1ab6143c3e5b39e89805ce5a215ba",
+      "aggregation_index.py": "0a24bfc2de926b98018c64a3689d3cc0aecf3113a0192414ca6cd7141080b818",
+      "aggregation_package.py": "9ae81c9af268c80cf3a3c08fdf0b24903c56bcbb246c93c8bfdf01133859eb8b",
+      "aggregation_probe.py": "917d9600008d7ef509c6c40084cad4755e9016f0e8cefafd784b85114d4a641e",
+      "aggregation_response.py": "976f60525c988020bfd8d51fad5b2bb618a510b4ef00d09a887b831ad6048cfa",
+      "auth_probe.py": "097ead80880d23fe74902601578ee8250efcc06218b7cd0588e54004ad027122",
+      "capture.py": "955b8af8f4efa0a884479c9db495cde37be7f535541c639a49487c8893c24848",
+      "evidence_common.py": "054f8dcba3652ae905d489f100eda3bc4528dc6c497ec94c3938b03102dc8750",
+      "owned_runner.py": "ceb7dab2ab9bd4878e21e28da475d1156e6948aae07de13384cbbe56aff1deed",
+      "probe.py": "38383f9705f553edce413ac1a544e0ed39c200b10a0a5c2170d33fb889f19a94",
+      "protobuf_inventory.py": "d1218f5a411770f98b3d87c7c308af887b65cc2385db931e2f77389a0f5ce76b",
+      "publish.py": "57d932b37fca87ee840925abf2680e347d89c3d6a7e0f2b5eb36739f9a46275b"
+    }
+  },
+  "corpusSha256": "5185a066b8a6438f82e7ba5a3ca512262da9aa577398a5b1c609758c61d5c94a",
+  "project": "fireemu-35fe6",
+  "cases": [
+    {
+      "id": "count-alone",
+      "request": {
+        "structuredAggregationQuery": {
+          "structuredQuery": {
+            "from": [
+              {
+                "collectionId": "compat_5cb71337c6ae4974a80f37fd0fc46f3a"
+              }
+            ]
+          },
+          "aggregations": [
+            {
+              "alias": "count",
+              "count": {}
+            }
+          ]
+        }
+      },
+      "httpStatus": 200,
+      "rawResponse": [
+        {
+          "result": {
+            "aggregateFields": {
+              "count": {
+                "integerValue": "4"
+              }
+            }
+          },
+          "readTime": "2026-09-10T01:50:42.388736Z"
+        }
+      ],
+      "passed": true
+    },
+    {
+      "id": "count-sum",
+      "request": {
+        "structuredAggregationQuery": {
+          "structuredQuery": {
+            "from": [
+              {
+                "collectionId": "compat_5cb71337c6ae4974a80f37fd0fc46f3a"
+              }
+            ]
+          },
+          "aggregations": [
+            {
+              "alias": "count",
+              "count": {}
+            },
+            {
+              "alias": "sum",
+              "sum": {
+                "field": {
+                  "fieldPath": "x"
+                }
+              }
+            }
+          ]
+        }
+      },
+      "httpStatus": 200,
+      "rawResponse": [
+        {
+          "result": {
+            "aggregateFields": {
+              "count": {
+                "integerValue": "3"
+              },
+              "sum": {
+                "doubleValue": 30.5
+              }
+            }
+          },
+          "readTime": "2026-09-10T01:50:42.652069Z"
+        }
+      ],
+      "passed": true
+    },
+    {
+      "id": "count-average",
+      "request": {
+        "structuredAggregationQuery": {
+          "structuredQuery": {
+            "from": [
+              {
+                "collectionId": "compat_5cb71337c6ae4974a80f37fd0fc46f3a"
+              }
+            ]
+          },
+          "aggregations": [
+            {
+              "alias": "count",
+              "count": {}
+            },
+            {
+              "alias": "avg",
+              "avg": {
+                "field": {
+                  "fieldPath": "x"
+                }
+              }
+            }
+          ]
+        }
+      },
+      "httpStatus": 200,
+      "rawResponse": [
+        {
+          "result": {
+            "aggregateFields": {
+              "count": {
+                "integerValue": "3"
+              },
+              "avg": {
+                "doubleValue": 15.25
+              }
+            }
+          },
+          "readTime": "2026-09-10T01:50:43.633441Z"
+        }
+      ],
+      "passed": true
+    },
+    {
+      "id": "sum-average",
+      "request": {
+        "structuredAggregationQuery": {
+          "structuredQuery": {
+            "from": [
+              {
+                "collectionId": "compat_5cb71337c6ae4974a80f37fd0fc46f3a"
+              }
+            ]
+          },
+          "aggregations": [
+            {
+              "alias": "sum",
+              "sum": {
+                "field": {
+                  "fieldPath": "x"
+                }
+              }
+            },
+            {
+              "alias": "avg",
+              "avg": {
+                "field": {
+                  "fieldPath": "x"
+                }
+              }
+            }
+          ]
+        }
+      },
+      "httpStatus": 200,
+      "rawResponse": [
+        {
+          "result": {
+            "aggregateFields": {
+              "sum": {
+                "doubleValue": 30.5
+              },
+              "avg": {
+                "doubleValue": 15.25
+              }
+            }
+          },
+          "readTime": "2026-09-10T01:50:44.602212Z"
+        }
+      ],
+      "passed": true
+    },
+    {
+      "id": "multiple-fields",
+      "request": {
+        "structuredAggregationQuery": {
+          "structuredQuery": {
+            "from": [
+              {
+                "collectionId": "compat_5cb71337c6ae4974a80f37fd0fc46f3a"
+              }
+            ]
+          },
+          "aggregations": [
+            {
+              "alias": "count",
+              "count": {}
+            },
+            {
+              "alias": "sum",
+              "sum": {
+                "field": {
+                  "fieldPath": "x"
+                }
+              }
+            },
+            {
+              "alias": "avg",
+              "avg": {
+                "field": {
+                  "fieldPath": "y"
+                }
+              }
+            }
+          ]
+        }
+      },
+      "httpStatus": 200,
+      "rawResponse": [
+        {
+          "result": {
+            "aggregateFields": {
+              "count": {
+                "integerValue": "2"
+              },
+              "sum": {
+                "integerValue": "10"
+              },
+              "avg": {
+                "doubleValue": 60
+              }
+            }
+          },
+          "readTime": "2026-09-10T01:50:45.560058Z"
+        }
+      ],
+      "passed": true
+    },
+    {
+      "id": "empty-result",
+      "request": {
+        "structuredAggregationQuery": {
+          "structuredQuery": {
+            "from": [
+              {
+                "collectionId": "compat_5cb71337c6ae4974a80f37fd0fc46f3a"
+              }
+            ],
+            "where": {
+              "fieldFilter": {
+                "field": {
+                  "fieldPath": "x"
+                },
+                "op": "GREATER_THAN",
+                "value": {
+                  "integerValue": "1000"
+                }
+              }
+            }
+          },
+          "aggregations": [
+            {
+              "alias": "count",
+              "count": {}
+            },
+            {
+              "alias": "sum",
+              "sum": {
+                "field": {
+                  "fieldPath": "x"
+                }
+              }
+            },
+            {
+              "alias": "avg",
+              "avg": {
+                "field": {
+                  "fieldPath": "x"
+                }
+              }
+            }
+          ]
+        }
+      },
+      "httpStatus": 200,
+      "rawResponse": [
+        {
+          "result": {
+            "aggregateFields": {
+              "count": {
+                "integerValue": "0"
+              },
+              "sum": {
+                "integerValue": "0"
+              },
+              "avg": {
+                "nullValue": null
+              }
+            }
+          },
+          "readTime": "2026-09-10T01:50:46.506570Z"
+        }
+      ],
+      "passed": true
+    },
+    {
+      "id": "missing-before-limit",
+      "request": {
+        "structuredAggregationQuery": {
+          "structuredQuery": {
+            "from": [
+              {
+                "collectionId": "compat_5cb71337c6ae4974a80f37fd0fc46f3a"
+              }
+            ],
+            "limit": 2
+          },
+          "aggregations": [
+            {
+              "alias": "count",
+              "count": {}
+            },
+            {
+              "alias": "sum",
+              "sum": {
+                "field": {
+                  "fieldPath": "x"
+                }
+              }
+            }
+          ]
+        }
+      },
+      "httpStatus": 200,
+      "rawResponse": [
+        {
+          "result": {
+            "aggregateFields": {
+              "count": {
+                "integerValue": "2"
+              },
+              "sum": {
+                "doubleValue": 30.5
+              }
+            }
+          },
+          "readTime": "2026-09-10T01:50:47.405757Z"
+        }
+      ],
+      "passed": true
+    },
+    {
+      "id": "bounded-count",
+      "request": {
+        "structuredAggregationQuery": {
+          "structuredQuery": {
+            "from": [
+              {
+                "collectionId": "compat_5cb71337c6ae4974a80f37fd0fc46f3a"
+              }
+            ]
+          },
+          "aggregations": [
+            {
+              "alias": "count",
+              "count": {
+                "upTo": "2"
+              }
+            }
+          ]
+        }
+      },
+      "httpStatus": 200,
+      "rawResponse": [
+        {
+          "result": {
+            "aggregateFields": {
+              "count": {
+                "integerValue": "2"
+              }
+            }
+          },
+          "readTime": "2026-09-10T01:50:48.402331Z"
+        }
+      ],
+      "passed": true
+    },
+    {
+      "id": "explicit-x-asc",
+      "request": {
+        "structuredAggregationQuery": {
+          "structuredQuery": {
+            "from": [
+              {
+                "collectionId": "compat_5cb71337c6ae4974a80f37fd0fc46f3a"
+              }
+            ],
+            "orderBy": [
+              {
+                "field": {
+                  "fieldPath": "x"
+                },
+                "direction": "ASCENDING"
+              }
+            ],
+            "limit": 2
+          },
+          "aggregations": [
+            {
+              "alias": "count",
+              "count": {}
+            },
+            {
+              "alias": "sum",
+              "sum": {
+                "field": {
+                  "fieldPath": "x"
+                }
+              }
+            }
+          ]
+        }
+      },
+      "httpStatus": 200,
+      "rawResponse": [
+        {
+          "result": {
+            "aggregateFields": {
+              "count": {
+                "integerValue": "2"
+              },
+              "sum": {
+                "doubleValue": 30.5
+              }
+            }
+          },
+          "readTime": "2026-09-10T01:50:49.352219Z"
+        }
+      ],
+      "passed": true
+    },
+    {
+      "id": "explicit-x-desc",
+      "request": {
+        "structuredAggregationQuery": {
+          "structuredQuery": {
+            "from": [
+              {
+                "collectionId": "compat_5cb71337c6ae4974a80f37fd0fc46f3a"
+              }
+            ],
+            "orderBy": [
+              {
+                "field": {
+                  "fieldPath": "x"
+                },
+                "direction": "DESCENDING"
+              }
+            ],
+            "limit": 2
+          },
+          "aggregations": [
+            {
+              "alias": "count",
+              "count": {}
+            },
+            {
+              "alias": "sum",
+              "sum": {
+                "field": {
+                  "fieldPath": "x"
+                }
+              }
+            }
+          ]
+        }
+      },
+      "httpStatus": 200,
+      "rawResponse": [
+        {
+          "result": {
+            "aggregateFields": {
+              "count": {
+                "integerValue": "2"
+              },
+              "sum": {
+                "doubleValue": 20.5
+              }
+            }
+          },
+          "readTime": "2026-09-10T01:50:50.274474Z"
+        }
+      ],
+      "passed": true
+    },
+    {
+      "id": "explicit-x-offset",
+      "request": {
+        "structuredAggregationQuery": {
+          "structuredQuery": {
+            "from": [
+              {
+                "collectionId": "compat_5cb71337c6ae4974a80f37fd0fc46f3a"
+              }
+            ],
+            "orderBy": [
+              {
+                "field": {
+                  "fieldPath": "x"
+                },
+                "direction": "ASCENDING"
+              }
+            ],
+            "limit": 1,
+            "offset": 2
+          },
+          "aggregations": [
+            {
+              "alias": "count",
+              "count": {}
+            },
+            {
+              "alias": "sum",
+              "sum": {
+                "field": {
+                  "fieldPath": "x"
+                }
+              }
+            }
+          ]
+        }
+      },
+      "httpStatus": 200,
+      "rawResponse": [
+        {
+          "result": {
+            "aggregateFields": {
+              "count": {
+                "integerValue": "1"
+              },
+              "sum": {
+                "integerValue": "0"
+              }
+            }
+          },
+          "readTime": "2026-09-10T01:50:51.233975Z"
+        }
+      ],
+      "passed": true
+    },
+    {
+      "id": "explicit-name-rejected",
+      "request": {
+        "structuredAggregationQuery": {
+          "structuredQuery": {
+            "from": [
+              {
+                "collectionId": "compat_5cb71337c6ae4974a80f37fd0fc46f3a"
+              }
+            ],
+            "orderBy": [
+              {
+                "field": {
+                  "fieldPath": "__name__"
+                },
+                "direction": "ASCENDING"
+              }
+            ],
+            "limit": 2
+          },
+          "aggregations": [
+            {
+              "alias": "count",
+              "count": {}
+            },
+            {
+              "alias": "sum",
+              "sum": {
+                "field": {
+                  "fieldPath": "x"
+                }
+              }
+            }
+          ]
+        }
+      },
+      "httpStatus": 400,
+      "rawResponse": [
+        {
+          "error": {
+            "code": 400,
+            "message": "This query requires an index with fields [x] after __name__ and Firestore does not currently support such an index. Please try the query again with additional ordering on those fields.",
+            "status": "INVALID_ARGUMENT"
+          }
+        }
+      ],
+      "passed": true
+    },
+    {
+      "id": "refused-commit",
+      "request": {
+        "writes": [
+          {
+            "update": {
+              "name": "projects/fireemu-35fe6/databases/(default)/documents/compat_5cb71337c6ae4974a80f37fd0fc46f3a/A",
+              "fields": {
+                "x": {
+                  "integerValue": "99"
+                }
+              }
+            }
+          },
+          {
+            "update": {
+              "name": "projects/fireemu-35fe6/databases/(default)/documents/compat_5cb71337c6ae4974a80f37fd0fc46f3a/D",
+              "fields": {}
+            },
+            "currentDocument": {
+              "exists": false
+            }
+          }
+        ]
+      },
+      "httpStatus": 409,
+      "rawResponse": {
+        "error": {
+          "code": 409,
+          "message": "Document already exists: projects/fireemu-35fe6/databases/(default)/documents/compat_5cb71337c6ae4974a80f37fd0fc46f3a/D",
+          "status": "ALREADY_EXISTS"
+        }
+      },
+      "passed": true
+    },
+    {
+      "id": "unchanged-state",
+      "passed": true
+    }
+  ],
+  "cleanup": [
+    {
+      "name": "projects/fireemu-35fe6/databases/(default)/documents/compat_5cb71337c6ae4974a80f37fd0fc46f3a/A",
+      "deleted": true,
+      "confirmedMissing": true,
+      "recoveredOwnership": false
+    },
+    {
+      "name": "projects/fireemu-35fe6/databases/(default)/documents/compat_5cb71337c6ae4974a80f37fd0fc46f3a/B",
+      "deleted": true,
+      "confirmedMissing": true,
+      "recoveredOwnership": false
+    },
+    {
+      "name": "projects/fireemu-35fe6/databases/(default)/documents/compat_5cb71337c6ae4974a80f37fd0fc46f3a/C",
+      "deleted": true,
+      "confirmedMissing": true,
+      "recoveredOwnership": false
+    },
+    {
+      "name": "projects/fireemu-35fe6/databases/(default)/documents/compat_5cb71337c6ae4974a80f37fd0fc46f3a/D",
+      "deleted": true,
+      "confirmedMissing": true,
+      "recoveredOwnership": false
+    }
+  ],
+  "status": "passed",
+  "collection": "compat_5cb71337c6ae4974a80f37fd0fc46f3a",
+  "index": {
+    "collection": "compat_5cb71337c6ae4974a80f37fd0fc46f3a",
+    "baselineEmpty": true,
+    "createAttempted": true,
+    "definition": {
+      "queryScope": "COLLECTION",
+      "fields": [
+        {
+          "fieldPath": "x",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "y",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "__name__",
+          "order": "ASCENDING"
+        }
+      ]
+    },
+    "operation": "projects/fireemu-35fe6/databases/(default)/operations/S2twamFqTmdBQ0lDDCoDIDQ1ZGE5YzlhZGVkNy04MDU5LWU0YzQtYWM4OS1lYjg2ZTk3MiQac2VuaWxlcGlwCQpBEg",
+    "operationReadback": {
+      "name": "projects/fireemu-35fe6/databases/(default)/operations/S2twamFqTmdBQ0lDDCoDIDQ1ZGE5YzlhZGVkNy04MDU5LWU0YzQtYWM4OS1lYjg2ZTk3MiQac2VuaWxlcGlwCQpBEg",
+      "metadata": {
+        "@type": "type.googleapis.com/google.firestore.admin.v1.IndexOperationMetadata",
+        "startTime": "2026-09-10T01:44:39.452937Z",
+        "endTime": "2026-09-10T01:50:29.970110Z",
+        "index": "projects/fireemu-35fe6/databases/(default)/collectionGroups/compat_5cb71337c6ae4974a80f37fd0fc46f3a/indexes/CICAgNjajpkK",
+        "state": "SUCCESSFUL",
+        "progressDocuments": {}
+      },
+      "done": true,
+      "response": {
+        "@type": "type.googleapis.com/google.firestore.admin.v1.Index",
+        "name": "projects/fireemu-35fe6/databases/(default)/collectionGroups/compat_5cb71337c6ae4974a80f37fd0fc46f3a/indexes/CICAgNjajpkK",
+        "queryScope": "COLLECTION",
+        "fields": [
+          {
+            "fieldPath": "x",
+            "order": "ASCENDING"
+          },
+          {
+            "fieldPath": "y",
+            "order": "ASCENDING"
+          },
+          {
+            "fieldPath": "__name__",
+            "order": "ASCENDING"
+          }
+        ],
+        "state": "READY",
+        "density": "SPARSE_ALL"
+      }
+    },
+    "ready": {
+      "name": "projects/fireemu-35fe6/databases/(default)/collectionGroups/compat_5cb71337c6ae4974a80f37fd0fc46f3a/indexes/CICAgNjajpkK",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {
+          "fieldPath": "x",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "y",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "__name__",
+          "order": "ASCENDING"
+        }
+      ],
+      "state": "READY",
+      "density": "SPARSE_ALL"
+    },
+    "deletedNames": [
+      "projects/fireemu-35fe6/databases/(default)/collectionGroups/compat_5cb71337c6ae4974a80f37fd0fc46f3a/indexes/CICAgNjajpkK"
+    ],
+    "confirmedMissing": true
+  },
+  "verifiedProjectNumber": "592603257417",
+  "database": {
+    "name": "projects/fireemu-35fe6/databases/(default)",
+    "type": "FIRESTORE_NATIVE",
+    "databaseEdition": "STANDARD",
+    "concurrencyMode": "PESSIMISTIC",
+    "locationId": "us-central1"
+  },
+  "ownershipMarker": "6b8f9ae97227422f9c3c614f0c4ed130",
+  "attemptedResources": [
+    "projects/fireemu-35fe6/databases/(default)/documents/compat_5cb71337c6ae4974a80f37fd0fc46f3a/A",
+    "projects/fireemu-35fe6/databases/(default)/documents/compat_5cb71337c6ae4974a80f37fd0fc46f3a/B",
+    "projects/fireemu-35fe6/databases/(default)/documents/compat_5cb71337c6ae4974a80f37fd0fc46f3a/C",
+    "projects/fireemu-35fe6/databases/(default)/documents/compat_5cb71337c6ae4974a80f37fd0fc46f3a/D"
+  ],
+  "ownedResources": [
+    "projects/fireemu-35fe6/databases/(default)/documents/compat_5cb71337c6ae4974a80f37fd0fc46f3a/A",
+    "projects/fireemu-35fe6/databases/(default)/documents/compat_5cb71337c6ae4974a80f37fd0fc46f3a/B",
+    "projects/fireemu-35fe6/databases/(default)/documents/compat_5cb71337c6ae4974a80f37fd0fc46f3a/C",
+    "projects/fireemu-35fe6/databases/(default)/documents/compat_5cb71337c6ae4974a80f37fd0fc46f3a/D"
+  ],
+  "stateBefore": {
+    "projects/fireemu-35fe6/databases/(default)/documents/compat_5cb71337c6ae4974a80f37fd0fc46f3a/A": {
+      "name": "projects/fireemu-35fe6/databases/(default)/documents/compat_5cb71337c6ae4974a80f37fd0fc46f3a/A",
+      "fields": {
+        "__fireemuOracleOwner": {
+          "stringValue": "6b8f9ae97227422f9c3c614f0c4ed130"
+        },
+        "x": {
+          "integerValue": "10"
+        },
+        "y": {
+          "integerValue": "100"
+        }
+      },
+      "createTime": "2026-09-10T01:50:34.412060Z",
+      "updateTime": "2026-09-10T01:50:34.412060Z"
+    },
+    "projects/fireemu-35fe6/databases/(default)/documents/compat_5cb71337c6ae4974a80f37fd0fc46f3a/B": {
+      "name": "projects/fireemu-35fe6/databases/(default)/documents/compat_5cb71337c6ae4974a80f37fd0fc46f3a/B",
+      "fields": {
+        "__fireemuOracleOwner": {
+          "stringValue": "6b8f9ae97227422f9c3c614f0c4ed130"
+        }
+      },
+      "createTime": "2026-09-10T01:50:35.452217Z",
+      "updateTime": "2026-09-10T01:50:35.452217Z"
+    },
+    "projects/fireemu-35fe6/databases/(default)/documents/compat_5cb71337c6ae4974a80f37fd0fc46f3a/C": {
+      "name": "projects/fireemu-35fe6/databases/(default)/documents/compat_5cb71337c6ae4974a80f37fd0fc46f3a/C",
+      "fields": {
+        "y": {
+          "integerValue": "20"
+        },
+        "__fireemuOracleOwner": {
+          "stringValue": "6b8f9ae97227422f9c3c614f0c4ed130"
+        },
+        "x": {
+          "stringValue": "not-a-number"
+        }
+      },
+      "createTime": "2026-09-10T01:50:36.466515Z",
+      "updateTime": "2026-09-10T01:50:36.466515Z"
+    },
+    "projects/fireemu-35fe6/databases/(default)/documents/compat_5cb71337c6ae4974a80f37fd0fc46f3a/D": {
+      "name": "projects/fireemu-35fe6/databases/(default)/documents/compat_5cb71337c6ae4974a80f37fd0fc46f3a/D",
+      "fields": {
+        "x": {
+          "doubleValue": 20.5
+        },
+        "__fireemuOracleOwner": {
+          "stringValue": "6b8f9ae97227422f9c3c614f0c4ed130"
+        }
+      },
+      "createTime": "2026-09-10T01:50:37.478920Z",
+      "updateTime": "2026-09-10T01:50:37.478920Z"
+    }
+  },
+  "stateAfter": {
+    "projects/fireemu-35fe6/databases/(default)/documents/compat_5cb71337c6ae4974a80f37fd0fc46f3a/A": {
+      "name": "projects/fireemu-35fe6/databases/(default)/documents/compat_5cb71337c6ae4974a80f37fd0fc46f3a/A",
+      "fields": {
+        "y": {
+          "integerValue": "100"
+        },
+        "__fireemuOracleOwner": {
+          "stringValue": "6b8f9ae97227422f9c3c614f0c4ed130"
+        },
+        "x": {
+          "integerValue": "10"
+        }
+      },
+      "createTime": "2026-09-10T01:50:34.412060Z",
+      "updateTime": "2026-09-10T01:50:34.412060Z"
+    },
+    "projects/fireemu-35fe6/databases/(default)/documents/compat_5cb71337c6ae4974a80f37fd0fc46f3a/B": {
+      "name": "projects/fireemu-35fe6/databases/(default)/documents/compat_5cb71337c6ae4974a80f37fd0fc46f3a/B",
+      "fields": {
+        "__fireemuOracleOwner": {
+          "stringValue": "6b8f9ae97227422f9c3c614f0c4ed130"
+        }
+      },
+      "createTime": "2026-09-10T01:50:35.452217Z",
+      "updateTime": "2026-09-10T01:50:35.452217Z"
+    },
+    "projects/fireemu-35fe6/databases/(default)/documents/compat_5cb71337c6ae4974a80f37fd0fc46f3a/C": {
+      "name": "projects/fireemu-35fe6/databases/(default)/documents/compat_5cb71337c6ae4974a80f37fd0fc46f3a/C",
+      "fields": {
+        "y": {
+          "integerValue": "20"
+        },
+        "x": {
+          "stringValue": "not-a-number"
+        },
+        "__fireemuOracleOwner": {
+          "stringValue": "6b8f9ae97227422f9c3c614f0c4ed130"
+        }
+      },
+      "createTime": "2026-09-10T01:50:36.466515Z",
+      "updateTime": "2026-09-10T01:50:36.466515Z"
+    },
+    "projects/fireemu-35fe6/databases/(default)/documents/compat_5cb71337c6ae4974a80f37fd0fc46f3a/D": {
+      "name": "projects/fireemu-35fe6/databases/(default)/documents/compat_5cb71337c6ae4974a80f37fd0fc46f3a/D",
+      "fields": {
+        "x": {
+          "doubleValue": 20.5
+        },
+        "__fireemuOracleOwner": {
+          "stringValue": "6b8f9ae97227422f9c3c614f0c4ed130"
+        }
+      },
+      "createTime": "2026-09-10T01:50:37.478920Z",
+      "updateTime": "2026-09-10T01:50:37.478920Z"
+    }
+  }
+}

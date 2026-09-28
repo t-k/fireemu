@@ -115,9 +115,12 @@ fn auth_state(store: Arc<Mutex<AuthStore>>) -> AuthState {
         registry: None,
         allow_routed_projects: false,
         stateless_refresh_tokens: true,
+        idp_continuations: fireemu_adapter_http::identity_toolkit::IdpContinuationPolicy::Disabled,
         query_limits: fireemu_adapter_http::identity_toolkit::AuthQueryLimits::EmulatorUnbounded,
+        client_api_key: fireemu_adapter_http::identity_toolkit::ClientApiKeyPolicy::Optional,
         fake_custom_token_expiry:
             fireemu_adapter_http::identity_toolkit::FakeCustomTokenExpiry::Ignore,
+        custom_token_trust: None,
         app_check: None,
         app_check_policy: None,
         tenancy: None,
@@ -274,7 +277,7 @@ fn blocking_auth_with_fifty_thousand_sessions_copies_only_changed_registries() {
             .lock()
             .unwrap()
             .transient_registries_shared_with(&before),
-        3,
+        5,
         "the blocking request may detach only refresh sessions and their owner index"
     );
 }
@@ -378,6 +381,178 @@ fn session_rsa_generation_is_deterministic_and_seed_separated() {
     let other = RsaSigner::from_seed(8).unwrap();
     assert_eq!(first.kid(), repeated.kid());
     assert_ne!(first.kid(), other.kid());
+}
+
+#[test]
+fn session_cookie_duration_boundaries_preserve_claims_in_both_signing_modes() {
+    for signed in [false, true] {
+        let mut store = AuthStore::new("demo-app", SplitMix64::new(57), TotpPolicy::default());
+        if signed {
+            store.set_signer(fixture_signer(INSECURE_TEST_ONLY_RSA_A_HEX));
+        }
+        let state = auth_state(Arc::new(Mutex::new(store)));
+        let created = handle(
+            &state,
+            "POST",
+            "/identitytoolkit.googleapis.com/v1/accounts:signUp",
+            &json!({"email": "cookie@example.com", "password": "password1"}),
+        );
+        assert_eq!(created.status, 200);
+        let token = created.body["idToken"].as_str().unwrap();
+        let before = state
+            .store
+            .lock()
+            .unwrap()
+            .user_by_email("cookie@example.com")
+            .unwrap()
+            .clone();
+        for duration in [299_i64, 300, 1_209_600, 1_209_601] {
+            let response = handle_with(
+                &state,
+                "POST",
+                "/identitytoolkit.googleapis.com/v1/projects/demo-app:createSessionCookie",
+                &RequestHeaders {
+                    authorization: Some(OWNER_CREDENTIAL.to_owned()),
+                    ..RequestHeaders::default()
+                },
+                &json!({"idToken": token, "validDuration": duration.to_string()}),
+            );
+            if [299, 1_209_601].contains(&duration) {
+                assert_eq!(response.status, 400);
+                assert_eq!(response.body["error"]["message"], "INVALID_DURATION");
+                assert!(response.body.get("sessionCookie").is_none());
+            } else {
+                assert_eq!(response.status, 200);
+                let store = state.store.lock().unwrap();
+                let encoded = response.body["sessionCookie"].as_str().unwrap();
+                // Production session cookies carry {alg, kid} and no typ (sandbox recording
+                // 2026-09-24, auth-credential/session-cookie).
+                let header =
+                    fireemu_core_auth::jwt::base64url_decode(encoded.split('.').next().unwrap())
+                        .unwrap();
+                let header: serde_json::Value = serde_json::from_slice(&header).unwrap();
+                assert!(header.get("typ").is_none(), "{header}");
+                assert_eq!(header.get("kid").is_some(), signed, "{header}");
+                let cookie = decode_token(encoded, store.signer()).unwrap();
+                let original = decode_token(token, store.signer()).unwrap();
+                let mut expected: serde_json::Value =
+                    serde_json::from_str(&original.payload_json).unwrap();
+                expected["iss"] = json!("https://session.firebase.google.com/demo-app");
+                expected["exp"] = json!(1_788_004_860 + duration);
+                let actual: serde_json::Value = serde_json::from_str(&cookie.payload_json).unwrap();
+                assert_eq!(actual, expected);
+                assert!(matches!(
+                    verify_id_token(encoded, &store, START),
+                    Err(JwtError::WrongIssuer { .. })
+                ));
+                assert!(fireemu_core_auth::jwt::verify_rules_token(
+                    encoded,
+                    &store,
+                    START,
+                    fireemu_core_auth::jwt::TokenAcceptance::Verified
+                )
+                .is_err());
+                // Emulator mock Rules deliberately accept unsigned payloads, including a
+                // cookie-shaped one; that is not Admin SDK session-cookie verification.
+                assert_eq!(
+                    fireemu_core_auth::jwt::verify_rules_token(
+                        encoded,
+                        &store,
+                        START,
+                        fireemu_core_auth::jwt::TokenAcceptance::EmulatorMock
+                    )
+                    .is_ok(),
+                    !signed
+                );
+            }
+            assert_eq!(
+                state
+                    .store
+                    .lock()
+                    .unwrap()
+                    .user_by_email("cookie@example.com")
+                    .unwrap(),
+                &before
+            );
+        }
+    }
+}
+
+#[test]
+fn session_cookie_signed_mode_rejects_unsigned_foreign_and_tampered_id_tokens() {
+    let signer = fixture_signer(INSECURE_TEST_ONLY_RSA_A_HEX);
+    let foreign = fixture_signer(INSECURE_TEST_ONLY_RSA_B_HEX);
+    let mut store = AuthStore::new("demo-app", SplitMix64::new(58), TotpPolicy::default());
+    let uid = store
+        .create_user(NewUser::email("cookie-signature@example.com"), START)
+        .unwrap();
+    let claims = store.id_token_claims(&uid, None, START).unwrap();
+    store.set_signer(signer.clone());
+    let valid = encode_with(&claims, Some(signer.as_ref()));
+    let parts: Vec<_> = valid.split('.').collect();
+    let tampered = format!(
+        "{}.{}.{}",
+        parts[0],
+        fireemu_core_auth::jwt::base64url_encode(
+            claims
+                .canonical_json()
+                .replace("cookie-signature", "tampered")
+                .as_bytes()
+        ),
+        parts[2]
+    );
+    let state = auth_state(Arc::new(Mutex::new(store)));
+    for token in [
+        encode_unsigned(&claims),
+        encode_with(&claims, Some(foreign.as_ref())),
+        tampered,
+    ] {
+        let response = handle_with(
+            &state,
+            "POST",
+            "/identitytoolkit.googleapis.com/v1/projects/demo-app:createSessionCookie",
+            &RequestHeaders {
+                authorization: Some(OWNER_CREDENTIAL.to_owned()),
+                ..RequestHeaders::default()
+            },
+            &json!({"idToken": token, "validDuration": "300"}),
+        );
+        assert_eq!(response.status, 400);
+        assert!(response.body.get("sessionCookie").is_none());
+    }
+    let original: serde_json::Value = serde_json::from_str(&claims.canonical_json()).unwrap();
+    for field in ["iss", "aud", "tenant"] {
+        let mut payload = original.clone();
+        if field == "tenant" {
+            payload["firebase"]["tenant"] = json!("other-tenant");
+        } else {
+            payload[field] = json!("other-project");
+        }
+        let token = fireemu_core_auth::jwt::encode_payload_with(
+            &payload.to_string(),
+            Some(signer.as_ref()),
+        );
+        let response = handle_with(
+            &state,
+            "POST",
+            "/identitytoolkit.googleapis.com/v1/projects/demo-app:createSessionCookie",
+            &RequestHeaders {
+                authorization: Some(OWNER_CREDENTIAL.to_owned()),
+                ..RequestHeaders::default()
+            },
+            &json!({"idToken": token, "validDuration": "300"}),
+        );
+        assert_eq!(response.status, 400, "case {field}");
+        assert!(response.body.get("sessionCookie").is_none());
+    }
+    let unprivileged = handle(
+        &state,
+        "POST",
+        "/identitytoolkit.googleapis.com/v1/projects/demo-app:createSessionCookie",
+        &json!({"idToken": valid, "validDuration": "300"}),
+    );
+    assert_eq!(unprivileged.status, 403);
+    assert!(verify_id_token(&valid, &state.store.lock().unwrap(), START).is_ok());
 }
 
 #[test]

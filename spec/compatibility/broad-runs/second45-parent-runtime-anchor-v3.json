@@ -1,0 +1,9 @@
+{
+  "parentManifestSha256": "68f1a6dfe1eed59c2ca4d90da77a7bb8d19f657421010c47eb9e87e47d9ca6ca",
+  "mappedReceiptFileSha256": "a81eaaa3a06371d6f6631522df4e4a1b3191dcd2b75d57d01361a752cf0b025d",
+  "runtimeIdentity": {
+    "artifactSha256": "63203a2a54cd678ffa50fe308f1089dd15cd13048f7edfdb7ce4f21520b354a5",
+    "executionCommit": "f915e9d7b37e3a3076a6eeaf67454980f2a2ebe3",
+    "configurationDigest": "90654f8e79d9135fb7de5f1d46f7ca1e18a78c892aa0b0b302a68614f1fa5223"
+  }
+}

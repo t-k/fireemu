@@ -96,11 +96,24 @@ pub fn parse_indexes(path: &str, text: &str) -> Result<IndexSet, String> {
             let mode = match (
                 f.get("order").and_then(Value::as_str),
                 f.get("arrayConfig").and_then(Value::as_str),
+                f.get("vectorConfig"),
             ) {
-                (Some("ASCENDING"), _) => IndexFieldMode::Ascending,
-                (Some("DESCENDING"), _) => IndexFieldMode::Descending,
-                (_, Some("CONTAINS")) => IndexFieldMode::Contains,
-                _ => return Err(format!("index field {path}: order or arrayConfig required")),
+                (Some("ASCENDING"), None, None) => IndexFieldMode::Ascending,
+                (Some("DESCENDING"), None, None) => IndexFieldMode::Descending,
+                (None, Some("CONTAINS"), None) => IndexFieldMode::Contains,
+                (None, None, Some(config)) => {
+                    let dimension = config
+                        .get("dimension")
+                        .and_then(|value| value.as_u64().or_else(|| value.as_str()?.parse().ok()))
+                        .and_then(|value| u32::try_from(value).ok())
+                        .filter(|dimension| (1..=2048).contains(dimension))
+                        .ok_or_else(|| format!("index field {path}: vectorConfig.dimension must be an integer from 1 through 2048"))?;
+                    if !config.get("flat").is_some_and(Value::is_object) {
+                        return Err(format!("index field {path}: vectorConfig.flat is required"));
+                    }
+                    IndexFieldMode::Vector { dimension }
+                }
+                _ => return Err(format!("index field {path}: exactly one order, arrayConfig, or vectorConfig is required")),
             };
             fields.push(IndexField {
                 path: FieldPath::parse(path).map_err(|e| e.to_string())?,
@@ -162,13 +175,34 @@ fn parse_field_overrides(json: &Value, set: &mut IndexSet) -> Result<(), String>
                 let mode = match (
                     index.get("order").and_then(Value::as_str),
                     index.get("arrayConfig").and_then(Value::as_str),
+                    index.get("vectorConfig"),
                 ) {
-                    (Some("ASCENDING"), None) => IndexFieldMode::Ascending,
-                    (Some("DESCENDING"), None) => IndexFieldMode::Descending,
-                    (None, Some("CONTAINS")) => IndexFieldMode::Contains,
+                    (Some("ASCENDING"), None, None) => IndexFieldMode::Ascending,
+                    (Some("DESCENDING"), None, None) => IndexFieldMode::Descending,
+                    (None, Some("CONTAINS"), None) => IndexFieldMode::Contains,
+                    (None, None, Some(config)) => {
+                        let dimension = config
+                            .get("dimension")
+                            .and_then(|value| {
+                                value.as_u64().or_else(|| value.as_str()?.parse().ok())
+                            })
+                            .and_then(|value| u32::try_from(value).ok())
+                            .filter(|dimension| (1..=2048).contains(dimension))
+                            .ok_or_else(|| {
+                                format!(
+                                    "field override {path}: vectorConfig.dimension must be an integer from 1 through 2048"
+                                )
+                            })?;
+                        if !config.get("flat").is_some_and(Value::is_object) {
+                            return Err(format!(
+                                "field override {path}: vectorConfig.flat is required"
+                            ));
+                        }
+                        IndexFieldMode::Vector { dimension }
+                    }
                     _ => {
                         return Err(format!(
-                            "field override {path}: one order or arrayConfig required"
+                            "field override {path}: exactly one order, arrayConfig, or vectorConfig is required"
                         ))
                     }
                 };
@@ -266,6 +300,40 @@ mod tests {
     }
 
     #[test]
+    fn parses_vector_index_configuration() {
+        let config = json!({
+            "indexes": [{
+                "collectionGroup": "items",
+                "fields": [{"fieldPath": "category", "order": "ASCENDING"},
+                           {"fieldPath": "embedding", "vectorConfig": {"dimension": 2, "flat": {}}}]
+            }]
+        });
+        let indexes = parse_indexes("test", &config.to_string()).unwrap();
+        assert_eq!(
+            indexes.composites()[0].fields[1].mode,
+            IndexFieldMode::Vector { dimension: 2 }
+        );
+    }
+
+    #[test]
+    fn rejects_malformed_vector_index_configuration() {
+        for vector_config in [
+            json!({"dimension": 0, "flat": {}}),
+            json!({"dimension": 2049, "flat": {}}),
+            json!({"dimension": 2}),
+            json!({"dimension": "not-a-number", "flat": {}}),
+        ] {
+            let config = json!({
+                "indexes": [{
+                    "collectionGroup": "items",
+                    "fields": [{"fieldPath": "embedding", "vectorConfig": vector_config}]
+                }]
+            });
+            assert!(parse_indexes("test", &config.to_string()).is_err());
+        }
+    }
+
+    #[test]
     fn field_override_preserves_enabled_modes_and_rejects_conflicting_modes() {
         let config = json!({"fieldOverrides":[{"collectionGroup":"tasks", "fieldPath":"*", "indexes":[]}, {"collectionGroup":"tasks", "fieldPath":"map.x", "indexes":[{"order":"DESCENDING", "queryScope":"COLLECTION_GROUP"}]}]});
         let indexes = parse_indexes("test", &config.to_string()).unwrap();
@@ -279,5 +347,84 @@ mod tests {
         );
         let config = json!({"fieldOverrides":[{"collectionGroup":"tasks", "fieldPath":"a", "indexes":[{"order":"ASCENDING", "arrayConfig":"CONTAINS"}]}]});
         assert!(parse_indexes("test", &config.to_string()).is_err());
+    }
+
+    #[test]
+    fn parses_vector_field_override_configuration() {
+        let config = json!({
+            "fieldOverrides": [{
+                "collectionGroup": "items",
+                "fieldPath": "embedding",
+                "indexes": [{
+                    "queryScope": "COLLECTION",
+                    "vectorConfig": {"dimension": 3, "flat": {}}
+                }]
+            }]
+        });
+
+        let indexes = parse_indexes("test", &config.to_string()).unwrap();
+        let collection = CollectionId::try_new("items").unwrap();
+        assert_eq!(
+            indexes.single_field_modes(&collection, &FieldPath::parse("embedding").unwrap()),
+            vec![(
+                IndexQueryScope::Collection,
+                IndexFieldMode::Vector { dimension: 3 }
+            )]
+        );
+    }
+
+    #[test]
+    fn parsed_vector_indexes_drive_nearest_planning_and_filtered_queries_need_composites() {
+        use fireemu_core_firestore::index::{
+            decide, IndexDecision, IndexValidationPolicy, PlanningContext,
+        };
+        use fireemu_core_firestore::query::{
+            DistanceMeasure, FieldOp, FilterExpr, Query, QueryScope,
+        };
+        use fireemu_core_firestore::value::Value;
+        use fireemu_core_types::edition::{FirestoreApiMode, FirestoreEdition};
+
+        let config = json!({
+            "fieldOverrides": [{
+                "collectionGroup": "items",
+                "fieldPath": "embedding",
+                "indexes": [{"vectorConfig": {"dimension": 2, "flat": {}}}]
+            }]
+        });
+        let indexes = parse_indexes("test", &config.to_string()).unwrap();
+        let context = PlanningContext {
+            edition: FirestoreEdition::Standard,
+            api_mode: FirestoreApiMode::Native,
+            policy: IndexValidationPolicy::Production,
+        };
+        let nearest = || {
+            Query::new(QueryScope::collection(
+                None,
+                CollectionId::try_new("items").unwrap(),
+            ))
+            .with_find_nearest(fireemu_core_firestore::query::FindNearest {
+                vector_field: FieldPath::parse("embedding").unwrap(),
+                query_vector: vec![0.0, 1.0],
+                distance_measure: DistanceMeasure::Cosine,
+                limit: 5,
+                distance_result_field: None,
+                distance_threshold: None,
+            })
+        };
+
+        assert!(matches!(
+            decide(&nearest().canonicalize().unwrap(), &indexes, &context),
+            IndexDecision::UseIndex { .. }
+        ));
+
+        let filtered = nearest().with_filter(FilterExpr::Field {
+            field: FieldPath::parse("category").unwrap(),
+            op: FieldOp::Equal,
+            value: Value::String("book".to_owned()),
+        });
+        assert!(matches!(
+            decide(&filtered.canonicalize().unwrap(), &indexes, &context),
+            IndexDecision::MissingRequired { .. }
+        ));
     }
 }

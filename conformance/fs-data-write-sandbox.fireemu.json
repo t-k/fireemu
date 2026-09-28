@@ -1,0 +1,11 @@
+{
+  "schemaVersion": 1,
+  "profile": "strict",
+  "firestore": {
+    "edition": "standard",
+    "apiMode": "native",
+    "rules": "conformance/firestore-probe.rules",
+    "indexFile": "conformance/firestore.indexes.json"
+  },
+  "daemon": { "clockStart": "2026-01-02T03:04:05Z" }
+}

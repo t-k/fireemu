@@ -100,7 +100,29 @@ fn seed_large_collection(firestore: u16) {
     );
 }
 
-fn start_large_queries(firestore: u16) -> Vec<std::thread::JoinHandle<u16>> {
+struct LargeQueries {
+    readers: Vec<std::thread::JoinHandle<u16>>,
+    completed: std::sync::Arc<Vec<std::sync::atomic::AtomicBool>>,
+}
+
+impl LargeQueries {
+    fn assert_workload_active(&self, probe: &str) {
+        assert!(
+            self.completed
+                .iter()
+                .any(|done| !done.load(std::sync::atomic::Ordering::Acquire)),
+            "{probe} completed only after every large query had finished"
+        );
+    }
+
+    fn finish(self) {
+        for reader in self.readers {
+            assert_eq!(reader.join().unwrap(), 200);
+        }
+    }
+}
+
+fn start_large_queries(firestore: u16) -> LargeQueries {
     let query = serde_json::json!({"structuredQuery": {
         "from": [{"collectionId": "items"}],
         "orderBy": [{"field": {"fieldPath": "__name__"}, "direction": "ASCENDING"}]
@@ -144,7 +166,7 @@ fn start_large_queries(firestore: u16) -> Vec<std::thread::JoinHandle<u16>> {
             .all(|done| !done.load(std::sync::atomic::Ordering::Acquire)),
         "all large queries must still be active before the responsiveness probes"
     );
-    readers
+    LargeQueries { readers, completed }
 }
 
 struct Daemon(Child);
@@ -248,17 +270,17 @@ fn large_firestore_queries_do_not_stall_auth_or_another_database() {
     let firestore = u16::try_from(emulators["firestore"]["port"].as_u64().unwrap()).unwrap();
 
     seed_large_collection(firestore);
-    let readers = start_large_queries(firestore);
+    let queries = start_large_queries(firestore);
 
-    let auth_started = Instant::now();
     assert_eq!(request(auth, "GET", "/", None).unwrap().0, 200);
-    assert!(auth_started.elapsed() < Duration::from_secs(2));
+    queries.assert_workload_active("Auth readiness probe");
     let other = "/v1/projects/demo-saturation/databases/other/documents/items/missing";
-    let firestore_started = Instant::now();
-    assert_eq!(json_request(firestore, "GET", other, "").unwrap().0, 404);
-    assert!(firestore_started.elapsed() < Duration::from_secs(2));
+    let other_stream = write_json_request(firestore, "GET", other, "").unwrap();
+    other_stream
+        .set_read_timeout(Some(Duration::from_secs(5)))
+        .unwrap();
+    assert_eq!(read_response(other_stream).unwrap().0, 404);
+    queries.assert_workload_active("other-database probe");
 
-    for reader in readers {
-        assert_eq!(reader.join().unwrap(), 200);
-    }
+    queries.finish();
 }

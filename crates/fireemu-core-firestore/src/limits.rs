@@ -40,7 +40,31 @@ pub const SUBCOLLECTION_DEPTH: &str = "FS-LIMIT-SUBCOLLECTION-DEPTH";
 pub const DOCUMENT_NAME_BYTES: &str = "FS-LIMIT-DOCUMENT-NAME-BYTES";
 /// Stored field names are validated recursively, including maps inside arrays.
 pub const FIELD_NAME: &str = "FS-LIMIT-FIELD-NAME";
-/// Maximum string or bytes field payload, excluding storage accounting overhead.
+/// `FS-LIMIT-FIELD-VALUE-BYTES`: the largest field value, checked on every stored write.
+///
+/// A string or bytes value is measured on its raw payload, the metric production was observed
+/// using on 2026-09-07, and is refused under either profile. A map or array value is measured
+/// with the official storage-size formula (the catalog's `logical-bytes` unit) and is refused
+/// only under [`crate::store::LimitScope::Production`], because production has not been
+/// observed on an aggregate value.
+pub const FIELD_VALUE_BYTES: &str = "FS-LIMIT-FIELD-VALUE-BYTES";
+
+/// `FS-LIMIT-FIELD-PATH-BYTES`: the canonical path of every field, whether a client named it
+/// or a document implied it by nesting maps.
+pub const FIELD_PATH_BYTES: &str = "FS-LIMIT-FIELD-PATH-BYTES";
+
+/// `FS-LIMIT-INDEXED-FIELD-VALUE-BYTES`: the published truncating maximum for indexed
+/// values. [`crate::size::indexed_value_size`] retains the full charge for references,
+/// matching the saved production long-reference index-entry refusals. This limit alone
+/// refuses nothing; the resulting index-entry size may refuse the write.
+pub const INDEXED_FIELD_VALUE_BYTES: &str = "FS-LIMIT-INDEXED-FIELD-VALUE-BYTES";
+
+/// `FS-LIMIT-API-REQUEST-BYTES`: the largest API request, applied at each transport's decode
+/// boundary by `fireemu_adapter_grpc::serve::API_REQUEST_BYTES`.
+pub const API_REQUEST_BYTES: &str = "FS-LIMIT-API-REQUEST-BYTES";
+
+/// Maximum string or bytes field payload, excluding storage accounting overhead
+/// ([`FIELD_VALUE_BYTES`]).
 pub const MAX_FIELD_PAYLOAD_BYTES: usize = 1_048_487;
 /// Most dimensions a stored vector embedding may have (production: `Vectors must be at most
 /// 2048 dimensions.`).
@@ -53,7 +77,11 @@ pub const INDEX_ENTRY_BYTES: &str = "FS-LIMIT-INDEX-ENTRY-BYTES";
 /// Sum of automatic and composite entry sizes.
 pub const INDEX_ENTRY_SUM_PER_DOCUMENT: &str = "FS-LIMIT-INDEX-ENTRY-SUM-PER-DOCUMENT";
 
-/// Every catalog limit the local Firestore runtime enforces.
+/// Every catalog limit the local Firestore runtime enforces or applies.
+///
+/// Most entries refuse a request. [`INDEXED_FIELD_VALUE_BYTES`] is a truncating maximum and
+/// refuses nothing: it is listed because the runtime applies it, which is what the catalog
+/// means by `implemented`.
 pub const ENFORCED_LIMIT_IDS: &[&str] = &[
     DOCUMENT_BYTES,
     NESTED_MAP_ARRAY_DEPTH,
@@ -65,6 +93,10 @@ pub const ENFORCED_LIMIT_IDS: &[&str] = &[
     SUBCOLLECTION_DEPTH,
     DOCUMENT_NAME_BYTES,
     FIELD_NAME,
+    FIELD_PATH_BYTES,
+    FIELD_VALUE_BYTES,
+    INDEXED_FIELD_VALUE_BYTES,
+    API_REQUEST_BYTES,
     INDEX_ENTRIES_PER_DOCUMENT,
     INDEX_ENTRY_BYTES,
     INDEX_ENTRY_SUM_PER_DOCUMENT,

@@ -65,6 +65,90 @@ const auth = getAuth(app);
 connectAuthEmulator(auth, `http://${authHost}`, { disableWarnings: true });
 const adminAuth = getAdminAuth(initializeAdmin({ projectId: project }));
 
+// Local unsigned-emulator verification only. Production Google signatures and the
+// runtime's session RSA key have different trust roots and are not tested here.
+await check("session cookie duration bounds and Admin verification lifecycle", async () => {
+  const expectCode = async (operation, expected) => {
+    let code;
+    try {
+      await operation();
+    } catch (error) {
+      code = error?.code;
+    }
+    assert(code === expected, `expected ${expected}, received ${code ?? "success"}`);
+  };
+  for (const transition of ["revoked", "disabled", "deleted"]) {
+    const credential = await createUserWithEmailAndPassword(
+      auth,
+      `cookie-${transition}@example.com`,
+      "password1",
+    );
+    const uid = credential.user.uid;
+    try {
+      const idToken = await credential.user.getIdToken();
+      for (const seconds of [299, 1209601]) {
+        await expectCode(
+          () => adminAuth.createSessionCookie(idToken, { expiresIn: seconds * 1000 }),
+          "auth/invalid-session-cookie-duration",
+        );
+      }
+      for (const seconds of [300, 1209600]) {
+        const cookie = await adminAuth.createSessionCookie(idToken, { expiresIn: seconds * 1000 });
+        const claims = await adminAuth.verifySessionCookie(cookie, true);
+        assert(
+          claims.uid === uid && claims.exp - claims.iat === seconds,
+          "cookie identity or duration differs",
+        );
+      }
+      const cookie = await adminAuth.createSessionCookie(idToken, { expiresIn: 300000 });
+      const claims = await adminAuth.verifySessionCookie(cookie, true);
+      if (transition === "revoked") {
+        const deadline = Date.now() + 3000;
+        while (Math.floor(Date.now() / 1000) <= claims.auth_time && Date.now() < deadline) {
+          await new Promise((resolve) => setTimeout(resolve, 20));
+        }
+        assert(
+          Math.floor(Date.now() / 1000) > claims.auth_time,
+          "revocation timing precondition failed",
+        );
+        await adminAuth.revokeRefreshTokens(uid);
+        const user = await adminAuth.getUser(uid);
+        assert(
+          Date.parse(user.tokensValidAfterTime) / 1000 > claims.auth_time,
+          "validSince did not advance",
+        );
+      } else if (transition === "disabled") {
+        await adminAuth.updateUser(uid, { disabled: true });
+        assert((await adminAuth.getUser(uid)).disabled, "disabled state was not persisted");
+      } else {
+        await adminAuth.deleteUser(uid);
+        await expectCode(() => adminAuth.getUser(uid), "auth/user-not-found");
+      }
+      await expectCode(
+        () => adminAuth.verifySessionCookie(cookie, true),
+        {
+          revoked: "auth/session-cookie-revoked",
+          disabled: "auth/user-disabled",
+          deleted: "auth/user-not-found",
+        }[transition],
+      );
+      // Emulator mode forces the lookup/revocation path even with false.
+      await expectCode(
+        () => adminAuth.verifySessionCookie(cookie, false),
+        {
+          revoked: "auth/session-cookie-revoked",
+          disabled: "auth/user-disabled",
+          deleted: "auth/user-not-found",
+        }[transition],
+      );
+    } finally {
+      await signOut(auth);
+      if (transition !== "deleted") await adminAuth.deleteUser(uid);
+    }
+  }
+  return { transitions: 3, durationBoundaries: 4, mode: "unsigned-emulator" };
+});
+
 await check("password change invalidates an existing session cookie", async () => {
   const credential = await createUserWithEmailAndPassword(
     auth,

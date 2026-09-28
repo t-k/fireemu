@@ -501,7 +501,7 @@
     },
     {
       "id": "INV-RULES-001",
-      "statement": "A request that exceeds the expression, document access or call depth budget never reaches allow.",
+      "statement": "A request that exceeds the expression budget never reaches allow, whatever else holds. A document access or call depth budget overrun never reaches allow by itself; another allow statement that holds still allows, as production answers (FS-RULES 2026-09-24).",
       "criticality": "critical",
       "owner": "core-rules",
       "status": "planned",
@@ -552,7 +552,7 @@
     },
     {
       "id": "INV-RULES-004",
-      "statement": "Regular expression step-budget exhaustion is distinct from an ordinary non-match and never reaches allow, including when matches() is negated.",
+      "statement": "Regular expression step-budget exhaustion is distinct from an ordinary non-match and never reaches allow by itself, including when matches() is negated; another allow statement that holds still allows, as production and the official emulator answer (FS-RULES 2026-09-24), until a request has exhausted it in four matches, after which the request stops.",
       "criticality": "critical",
       "owner": "core-rules",
       "status": "implemented",
@@ -561,7 +561,9 @@
         "property": "prop_rules_regex_exhaustion_never_allows",
         "mutation": [
           "M-RULES-015",
-          "M-FORMAL-RULES-REGEX-001"
+          "M-FORMAL-RULES-REGEX-001",
+          "M-FORMAL-RULES-REGEX-002",
+          "M-FORMAL-RULES-REGEX-003"
         ],
         "integration": [
           "crates/fireemu-core-rules/tests/eval.rs",
@@ -927,6 +929,20 @@
           "crates/fireemu-adapter-http/tests/identity_toolkit.rs"
         ]
       }
+    },
+    {
+      "id": "AUTH-REFRESH-001",
+      "statement": "A well-formed Secure Token refresh request for a project- or tenant-owned refresh session issues a new ID token without changing the session authentication time, preserves the session claims and provider, advances issuance and expiry timestamps under the virtual clock, reports the configured project identifier, and rejects malformed, unknown, revoked, disabled or deleted credentials without mutating the account or session.",
+      "criticality": "important",
+      "owner": "adapter-http",
+      "status": "implemented",
+      "artifacts": {
+        "integration": [
+          "crates/fireemu-adapter-http/tests/identity_toolkit.rs",
+          "crates/fireemu-adapter-http/tests/auth_flows.rs"
+        ]
+      },
+      "note": "The strict and official-emulator profiles are exercised separately. Local tests cover malformed and unknown tokens, revocation, disabled/deleted users, project/tenant routing, claim preservation and virtual-clock timestamp progression. Production Secure Token response and exact verifier-path parity remain unobserved."
     },
     {
       "id": "AC-CFG-001",
@@ -1534,6 +1550,7 @@
       "artifacts": {
         "integration": [
           "crates/fireemu-adapter-grpc/tests/rules.rs",
+          "crates/fireemu-core-rules/tests/eval.rs",
           "crates/fireemu-adapter-http/tests/storage.rs"
         ],
         "conformance": "conformance/rules-programs.json"
@@ -1625,13 +1642,15 @@
     },
     {
       "id": "FN-HTTP-001",
-      "statement": "The functions port answers the official emulator's two 404s, its timeout answer and the CORS a loopback origin gets, and refuses a non-loopback Origin.",
+      "statement": "The Functions port answers the official emulator's two 404s and its timeout answer. Both profiles admit loopback, external and LAN Origins and delegate callable OPTIONS to the SDK CORS wrapper before Auth or App Check admission, respecting explicit cors:false and the selected profile's Origin-list behavior.",
       "criticality": "important",
       "owner": "adapter-functions",
       "status": "implemented",
       "artifacts": {
         "integration": [
-          "crates/fireemu-adapter-functions/tests/runtime.rs"
+          "crates/fireemu-adapter-functions/tests/runtime.rs",
+          "crates/fireemu-adapter-functions/tests/app_check_callable.rs",
+          "crates/fireemu/tests/functions_environment.rs"
         ],
         "conformance": "conformance/fixtures/functions/http-routing-cors-and-timeouts.json"
       }
@@ -1867,6 +1886,46 @@
         "integration": [
           "crates/fireemu-core-firestore/tests/enforced_limits.rs",
           "crates/fireemu/tests/capabilities.rs"
+        ]
+      }
+    },
+    {
+      "id": "AUTH-CONFIG-MASK-001",
+      "statement": "The Identity Toolkit projects.updateConfig PATCH applies only the project configuration fields named by updateMask, validates every selected value before mutation, applies multiple selected fields atomically, preserves unselected fields and follows the endpoint-specific empty or omitted-mask behavior.",
+      "criticality": "important",
+      "owner": "adapter-http",
+      "status": "implemented",
+      "artifacts": {
+        "integration": [
+          "crates/fireemu-adapter-http/tests/auth_flows.rs"
+        ]
+      },
+      "note": "The real Admin v2 handler covers mask-scoped updates, type rejection with unchanged state, multiple fields, reset-to-default values, empty/omitted masks and disjoint concurrent updates. Production projects.updateConfig response and configuration parity remain unobserved."
+    },
+    {
+      "id": "AUTH-SAML-MASK-001",
+      "statement": "An inbound SAML PATCH treats idpConfig.signRequest as a selected boolean leaf: an omitted JSON presence under that mask resets it to false, an explicit boolean is applied, unselected provider fields remain unchanged and invalid selected values leave the whole configuration unchanged.",
+      "criticality": "important",
+      "owner": "adapter-http",
+      "status": "implemented",
+      "artifacts": {
+        "integration": [
+          "crates/fireemu-adapter-http/tests/identity_toolkit.rs"
+        ]
+      },
+      "note": "The project and tenant Admin v2 handlers exercise parent-mask versus leaf-mask semantics, omitted/default and explicit values, validation-before-mutation and provider-field isolation. Production SAML configuration PATCH parity remains unobserved."
+    },
+    {
+      "id": "INV-FS-TTL-001",
+      "statement": "A document whose configured time-to-live field holds a timestamp earlier than the current virtual clock is deleted by the expiry sweep, stays readable until that sweep runs, and is never deleted when the field holds a value that is not a timestamp.",
+      "criticality": "important",
+      "owner": "core-firestore",
+      "status": "implemented",
+      "note": "The sweep runs when the shared virtual clock moves past one sweep interval since the policy took effect, and on the control route that runs one immediately. Its deletes go through the ordinary write path, so they publish to listeners and deliver triggers and evaluate no Security Rules, which is what production's own expiry does. The configuration is bounded to 64 policies per database.",
+      "artifacts": {
+        "integration": [
+          "crates/fireemu-adapter-grpc/tests/ttl.rs",
+          "crates/fireemu-adapter-grpc/src/rest/admin_fields_tests.rs"
         ]
       }
     }

@@ -3,6 +3,17 @@
 version = 4
 
 [[package]]
+name = "aes"
+version = "0.8.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b169f7a6d4742236a0a00c541b845991d0ac43e546831af1249753ab4c3aa3a0"
+dependencies = [
+ "cfg-if",
+ "cipher",
+ "cpufeatures",
+]
+
+[[package]]
 name = "ahash"
 version = "0.8.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -39,6 +50,18 @@ name = "anyhow"
 version = "1.0.104"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "330a5ed07fa54e4702c9d6c4174f74427fc0ef6e214bbd677ae50a5099946470"
+
+[[package]]
+name = "argon2"
+version = "0.5.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3c3610892ee6e0cbce8ae2700349fcf8f98adb0dbfbee85aec3c9179d29cc072"
+dependencies = [
+ "base64ct",
+ "blake2",
+ "cpufeatures",
+ "password-hash",
+]
 
 [[package]]
 name = "async-trait"
@@ -128,6 +151,19 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2af50177e190e07a26ab74f8b1efbfe2ef87da2116221318cb1c2e82baf7de06"
 
 [[package]]
+name = "bcrypt"
+version = "0.16.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2b1866ecef4f2d06a0bb77880015fdf2b89e25a1c2e5addacb87e459c86dc67e"
+dependencies = [
+ "base64",
+ "blowfish",
+ "getrandom 0.2.17",
+ "subtle",
+ "zeroize",
+]
+
+[[package]]
 name = "bit-set"
 version = "0.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -155,12 +191,31 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b588b76d00fde79687d7646a9b5bdf3cc0f655e0bbd080335a95d7e96f3587da"
 
 [[package]]
+name = "blake2"
+version = "0.10.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "46502ad458c9a52b69d4d4d32775c788b7a1b85e8bc9d482d92250fc0e3f8efe"
+dependencies = [
+ "digest",
+]
+
+[[package]]
 name = "block-buffer"
 version = "0.10.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3078c7629b62d3f0439517fa394996acacc5cbc91c5a20d8c658e77abd503a71"
 dependencies = [
  "generic-array",
+]
+
+[[package]]
+name = "blowfish"
+version = "0.9.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e412e2cd0f2b2d93e02543ceae7917b3c70331573df19ee046bcbc35e45e87d7"
+dependencies = [
+ "byteorder",
+ "cipher",
 ]
 
 [[package]]
@@ -189,6 +244,12 @@ name = "bytecount"
 version = "0.6.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "175812e0be2bccb6abe50bb8d566126198344f707e304f45c648fd8f2cc0365e"
+
+[[package]]
+name = "byteorder"
+version = "1.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1fd0f2584146f6f2ef48085050886acf353beff7305ebd1ae69500e27c67f64b"
 
 [[package]]
 name = "bytes"
@@ -243,6 +304,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "cipher"
+version = "0.4.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "773f3b9af64447d2ce9850330c473515014aa235e6a783b02db81ff39e4a3dad"
+dependencies = [
+ "crypto-common",
+ "inout",
+]
+
+[[package]]
 name = "colored"
 version = "3.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -253,14 +324,14 @@ dependencies = [
 
 [[package]]
 name = "compat-check"
-version = "0.7.1"
+version = "0.8.0"
 dependencies = [
  "serde_json",
 ]
 
 [[package]]
 name = "config-schema-check"
-version = "0.7.1"
+version = "0.8.0"
 dependencies = [
  "jsonschema",
  "serde_json",
@@ -295,6 +366,15 @@ checksum = "78c8292055d1c1df0cce5d180393dc8cce0abec0a7102adb6c7b1eef6016d60a"
 dependencies = [
  "generic-array",
  "typenum",
+]
+
+[[package]]
+name = "ctr"
+version = "0.9.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0369ee1ad671834580515889b80f2ea915f23b8be8d0daa4bbaf2ac5c7590835"
+dependencies = [
+ "cipher",
 ]
 
 [[package]]
@@ -412,6 +492,7 @@ dependencies = [
  "block-buffer",
  "const-oid",
  "crypto-common",
+ "subtle",
 ]
 
 [[package]]
@@ -499,7 +580,7 @@ checksum = "d45db016d36b838f563236e9193d0ee6ce38f3f68b6c94e914b4929c96bbb890"
 
 [[package]]
 name = "fireemu"
-version = "0.7.1"
+version = "0.8.0"
 dependencies = [
  "bytes",
  "exacl",
@@ -536,7 +617,7 @@ dependencies = [
 
 [[package]]
 name = "fireemu-adapter-functions"
-version = "0.7.1"
+version = "0.8.0"
 dependencies = [
  "bytes",
  "chrono",
@@ -564,7 +645,7 @@ dependencies = [
 
 [[package]]
 name = "fireemu-adapter-grpc"
-version = "0.7.1"
+version = "0.8.0"
 dependencies = [
  "bytes",
  "fireemu-adapter-support",
@@ -580,6 +661,7 @@ dependencies = [
  "hyper",
  "hyper-util",
  "proptest",
+ "prost",
  "prost-types",
  "serde_json",
  "tokio",
@@ -589,9 +671,13 @@ dependencies = [
 
 [[package]]
 name = "fireemu-adapter-http"
-version = "0.7.1"
+version = "0.8.0"
 dependencies = [
+ "aes",
+ "argon2",
+ "bcrypt",
  "bytes",
+ "ctr",
  "fireemu-adapter-support",
  "fireemu-core-app-check",
  "fireemu-core-auth",
@@ -602,13 +688,18 @@ dependencies = [
  "fireemu-core-session",
  "fireemu-core-storage",
  "fireemu-core-types",
+ "hmac",
  "http-body-util",
  "hyper",
  "hyper-util",
+ "md-5",
+ "pbkdf2",
  "rand_chacha 0.3.1",
  "rand_core 0.6.4",
  "rsa",
+ "scrypt",
  "serde_json",
+ "sha1",
  "sha2",
  "subtle",
  "tokio",
@@ -616,7 +707,7 @@ dependencies = [
 
 [[package]]
 name = "fireemu-adapter-logging"
-version = "0.7.1"
+version = "0.8.0"
 dependencies = [
  "base64",
  "fireemu-core-session",
@@ -627,7 +718,7 @@ dependencies = [
 
 [[package]]
 name = "fireemu-adapter-pubsub"
-version = "0.7.1"
+version = "0.8.0"
 dependencies = [
  "axum",
  "base64",
@@ -645,7 +736,7 @@ dependencies = [
 
 [[package]]
 name = "fireemu-adapter-support"
-version = "0.7.1"
+version = "0.8.0"
 dependencies = [
  "bytes",
  "getrandom 0.3.4",
@@ -660,7 +751,7 @@ dependencies = [
 
 [[package]]
 name = "fireemu-adapter-ui"
-version = "0.7.1"
+version = "0.8.0"
 dependencies = [
  "bytes",
  "fireemu-adapter-functions",
@@ -686,7 +777,7 @@ dependencies = [
 
 [[package]]
 name = "fireemu-core-app-check"
-version = "0.7.1"
+version = "0.8.0"
 dependencies = [
  "fireemu-core-auth",
  "fireemu-core-types",
@@ -694,7 +785,7 @@ dependencies = [
 
 [[package]]
 name = "fireemu-core-auth"
-version = "0.7.1"
+version = "0.8.0"
 dependencies = [
  "fireemu-core-limits",
  "fireemu-core-types",
@@ -703,7 +794,7 @@ dependencies = [
 
 [[package]]
 name = "fireemu-core-events"
-version = "0.7.1"
+version = "0.8.0"
 dependencies = [
  "fireemu-core-types",
  "proptest",
@@ -711,7 +802,7 @@ dependencies = [
 
 [[package]]
 name = "fireemu-core-export"
-version = "0.7.1"
+version = "0.8.0"
 dependencies = [
  "fireemu-core-firestore",
  "fireemu-core-types",
@@ -720,7 +811,7 @@ dependencies = [
 
 [[package]]
 name = "fireemu-core-firestore"
-version = "0.7.1"
+version = "0.8.0"
 dependencies = [
  "fireemu-core-limits",
  "fireemu-core-types",
@@ -729,14 +820,14 @@ dependencies = [
 
 [[package]]
 name = "fireemu-core-functions"
-version = "0.7.1"
+version = "0.8.0"
 dependencies = [
  "fireemu-core-types",
 ]
 
 [[package]]
 name = "fireemu-core-limits"
-version = "0.7.1"
+version = "0.8.0"
 dependencies = [
  "fireemu-core-types",
  "proptest",
@@ -744,7 +835,7 @@ dependencies = [
 
 [[package]]
 name = "fireemu-core-pubsub"
-version = "0.7.1"
+version = "0.8.0"
 dependencies = [
  "fireemu-core-types",
  "proptest",
@@ -752,7 +843,7 @@ dependencies = [
 
 [[package]]
 name = "fireemu-core-rules"
-version = "0.7.1"
+version = "0.8.0"
 dependencies = [
  "fireemu-core-auth",
  "fireemu-core-limits",
@@ -762,7 +853,7 @@ dependencies = [
 
 [[package]]
 name = "fireemu-core-session"
-version = "0.7.1"
+version = "0.8.0"
 dependencies = [
  "fireemu-core-types",
  "proptest",
@@ -770,7 +861,7 @@ dependencies = [
 
 [[package]]
 name = "fireemu-core-storage"
-version = "0.7.1"
+version = "0.8.0"
 dependencies = [
  "fireemu-core-types",
  "proptest",
@@ -778,14 +869,14 @@ dependencies = [
 
 [[package]]
 name = "fireemu-core-types"
-version = "0.7.1"
+version = "0.8.0"
 dependencies = [
  "proptest",
 ]
 
 [[package]]
 name = "fireemu-export-publication"
-version = "0.7.1"
+version = "0.8.0"
 dependencies = [
  "exacl",
  "rustix",
@@ -793,7 +884,7 @@ dependencies = [
 
 [[package]]
 name = "fireemu-proto-firestore"
-version = "0.7.1"
+version = "0.8.0"
 dependencies = [
  "prost",
  "prost-types",
@@ -802,7 +893,7 @@ dependencies = [
 
 [[package]]
 name = "fireemu-proto-pubsub"
-version = "0.7.1"
+version = "0.8.0"
 dependencies = [
  "prost",
  "prost-types",
@@ -811,7 +902,7 @@ dependencies = [
 
 [[package]]
 name = "fireemu-verification-kani"
-version = "0.7.1"
+version = "0.8.0"
 dependencies = [
  "fireemu-core-events",
  "fireemu-core-limits",
@@ -821,7 +912,7 @@ dependencies = [
 
 [[package]]
 name = "fireemu-verification-loom"
-version = "0.7.1"
+version = "0.8.0"
 dependencies = [
  "fireemu-core-auth",
  "fireemu-core-events",
@@ -832,7 +923,7 @@ dependencies = [
 
 [[package]]
 name = "fireemu-verification-property"
-version = "0.7.1"
+version = "0.8.0"
 dependencies = [
  "fireemu-core-app-check",
  "fireemu-core-auth",
@@ -846,7 +937,7 @@ dependencies = [
 
 [[package]]
 name = "fireemu-verification-quint"
-version = "0.7.1"
+version = "0.8.0"
 dependencies = [
  "anyhow",
  "fireemu-adapter-functions",
@@ -1102,6 +1193,15 @@ name = "hex"
 version = "0.4.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7f24254aa9a54b5c858eaee2f5bccdb46aaf0e486a595ed5fd8f86ba55232a70"
+
+[[package]]
+name = "hmac"
+version = "0.12.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6c49c37c09c17a53d937dfbb742eb3a961d65a994e6bcdcf37e7399d0cc8ab5e"
+dependencies = [
+ "digest",
+]
 
 [[package]]
 name = "http"
@@ -1380,6 +1480,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "inout"
+version = "0.1.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "879f10e63c20629ecabbb64a8010319738c66a5cd0c29b02d63d272b03751d01"
+dependencies = [
+ "generic-array",
+]
+
+[[package]]
 name = "itertools"
 version = "0.14.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1517,7 +1626,7 @@ checksum = "b6d2cec3eae94f9f509c767b45932f1ada8350c4bdb85af2fcab4a3c14807981"
 
 [[package]]
 name = "limit-catalog-gen"
-version = "0.7.1"
+version = "0.8.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -1568,6 +1677,16 @@ name = "matchit"
 version = "0.8.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "47e1ffaa40ddd1f3ed91f717a33c8c0ee23fff369e3aa8772b9605cc1d22f4c3"
+
+[[package]]
+name = "md-5"
+version = "0.10.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d89e7ee0cfbedfc4da3340218492196241d89eefb6dab27de5df917a6d2e78cf"
+dependencies = [
+ "cfg-if",
+ "digest",
+]
 
 [[package]]
 name = "memchr"
@@ -1746,6 +1865,27 @@ name = "outref"
 version = "0.5.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1a80800c0488c3a21695ea981a54918fbb37abf04f4d0720c453632255e2ff0e"
+
+[[package]]
+name = "password-hash"
+version = "0.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "346f04948ba92c43e8469c1ee6736c7563d71012b17d40745260fe106aac2166"
+dependencies = [
+ "base64ct",
+ "rand_core 0.6.4",
+ "subtle",
+]
+
+[[package]]
+name = "pbkdf2"
+version = "0.12.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f8ed6a7761f76e3b9f92dfb0a60a6a6477c61024b775147ff0973a02653abaf2"
+dependencies = [
+ "digest",
+ "hmac",
+]
 
 [[package]]
 name = "pem-rfc7468"
@@ -1981,7 +2121,7 @@ dependencies = [
 
 [[package]]
 name = "proto-gen"
-version = "0.7.1"
+version = "0.8.0"
 dependencies = [
  "prost-build",
  "tonic-build",
@@ -2230,6 +2370,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9774ba4a74de5f7b1c1451ed6cd5285a32eddb5cccb8cc655a4e50009e06477f"
 
 [[package]]
+name = "salsa20"
+version = "0.10.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "97a22f5af31f73a954c10289c93e8a50cc23d971e80ee446f1f6f7137a088213"
+dependencies = [
+ "cipher",
+]
+
+[[package]]
 name = "schemars"
 version = "0.9.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2264,6 +2413,17 @@ name = "scopeguard"
 version = "1.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "94143f37725109f92c262ed2cf5e59bce7498c01bcc1502d7b9afe439a4e9f49"
+
+[[package]]
+name = "scrypt"
+version = "0.11.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0516a385866c09368f0b5bcd1caff3366aace790fcd46e2bb032697bb172fd1f"
+dependencies = [
+ "pbkdf2",
+ "salsa20",
+ "sha2",
+]
 
 [[package]]
 name = "serde"
@@ -2770,7 +2930,7 @@ checksum = "8df9b6e13f2d32c91b9bd719c00d1958837bc7dec474d94952798cc8e69eeec3"
 
 [[package]]
 name = "traceability-check"
-version = "0.7.1"
+version = "0.8.0"
 dependencies = [
  "fireemu-verification-quint",
  "serde",

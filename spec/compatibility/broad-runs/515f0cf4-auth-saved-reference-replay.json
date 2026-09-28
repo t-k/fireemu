@@ -1,0 +1,1446 @@
+{
+  "allCasesMatch": true,
+  "comparisonDigest": "b7c3e6498472fc3531c5ea83898737902ddd45e17b4a2251cc88c7a4a0545529",
+  "corpora": {
+    "auth-basic-v2": {
+      "caseCount": 12,
+      "classification": "MATCH",
+      "configurationComparison": {
+        "classification": "SEPARATE_EVIDENCE",
+        "localStrictProfileSha256": "dc4466f0080ac58a25e2df92b765d1d666052fef735e94f4fe697a2a2507ada4",
+        "productionProjectionSha256": "901acc9e8fad556673061056698b04d9fa544e539fab4bbb6b4f8b3bd4fdcbdf",
+        "reason": "The local strict runner configuration and the production configuration projection are different contracts; they are retained separately rather than coerced into equality."
+      },
+      "corpus": "auth-basic-v2",
+      "currentLocal": {
+        "localArtifactSha256": "5a337e6ad0a74ec0e769f91bcff9195fde91f55a3f9602c3635406e76204f4ae",
+        "localBuildInputs": "20ad09376753cad3c5b9e0340542c3e3a00cc08315ffc98e2dd9da0058282fa8",
+        "localCases": [
+          {
+            "checks": {
+              "emailMatches": true,
+              "expiryIsPositiveInteger": true,
+              "expiryMatchesOneHour": true,
+              "httpOk": true,
+              "idTokenPresent": true,
+              "noError": true,
+              "refreshTokenPresent": true,
+              "uidMatches": true
+            },
+            "expirySeconds": "3600",
+            "httpStatus": 200,
+            "id": "signup",
+            "passed": true
+          },
+          {
+            "checks": {
+              "ownedIdentity": true
+            },
+            "httpStatus": 200,
+            "id": "signup-token-lookup",
+            "passed": true
+          },
+          {
+            "checks": {
+              "bearerType": true,
+              "expiryIsPositiveInteger": true,
+              "expiryMatchesOneHour": true,
+              "httpOk": true,
+              "idTokenPresent": true,
+              "noError": true,
+              "refreshTokenPresent": true,
+              "uidMatches": true
+            },
+            "expirySeconds": "3600",
+            "httpStatus": 200,
+            "id": "signup-token-refresh",
+            "passed": true
+          },
+          {
+            "checks": {
+              "ownedIdentity": true
+            },
+            "httpStatus": 200,
+            "id": "signup-refreshed-lookup",
+            "passed": true
+          },
+          {
+            "checks": {
+              "emailMatches": true,
+              "expiryIsPositiveInteger": true,
+              "expiryMatchesOneHour": true,
+              "httpOk": true,
+              "idTokenPresent": true,
+              "noError": true,
+              "refreshTokenPresent": true,
+              "uidMatches": true
+            },
+            "expirySeconds": "3600",
+            "httpStatus": 200,
+            "id": "signin",
+            "passed": true
+          },
+          {
+            "checks": {
+              "ownedIdentity": true
+            },
+            "httpStatus": 200,
+            "id": "lookup",
+            "passed": true
+          },
+          {
+            "checks": {
+              "expectedError": true,
+              "rejected": true
+            },
+            "httpStatus": 400,
+            "id": "wrong-password",
+            "passed": true
+          },
+          {
+            "checks": {
+              "selectedStableFieldsUnchanged": true
+            },
+            "httpStatus": 200,
+            "id": "unchanged-state",
+            "passed": true
+          },
+          {
+            "checks": {
+              "bearerType": true,
+              "expiryIsPositiveInteger": true,
+              "expiryMatchesOneHour": true,
+              "httpOk": true,
+              "idTokenPresent": true,
+              "noError": true,
+              "refreshTokenPresent": true,
+              "uidMatches": true
+            },
+            "expirySeconds": "3600",
+            "httpStatus": 200,
+            "id": "refresh",
+            "passed": true
+          },
+          {
+            "checks": {
+              "ownedIdentity": true
+            },
+            "httpStatus": 200,
+            "id": "refreshed-lookup",
+            "passed": true
+          },
+          {
+            "checks": {
+              "httpOk": true,
+              "noError": true
+            },
+            "httpStatus": 200,
+            "id": "delete",
+            "passed": true
+          },
+          {
+            "checks": {
+              "bothSelectorsAbsent": true
+            },
+            "httpStatus": 200,
+            "id": "deleted-account-absent",
+            "passed": true
+          }
+        ],
+        "localCleanup": {
+          "emailAbsent": true,
+          "uidAbsent": true
+        },
+        "localConfigurationFileSha256": "57214114009a6bc113c3acfd10e2fe27613bde8aaa72a1807c38a275883fb230",
+        "localConfigurationSha256": "dc4466f0080ac58a25e2df92b765d1d666052fef735e94f4fe697a2a2507ada4",
+        "localProbeInputs": "3a3f6d864d8399a6cf7a84ce99631e6919858795bccad643fbc2d79f9d42760c",
+        "localRecordedAt": "2026-09-16T18:27:10.121648+00:00",
+        "ownedProcess": {
+          "exitCode": 0,
+          "listenersClosed": true,
+          "stopped": true
+        },
+        "runtimeSourceCommit": "515f0cf4afa1b12e887b84552aa20851ab3142ae"
+      },
+      "matchCount": 12,
+      "mismatchCases": [],
+      "rows": [
+        {
+          "classification": "MATCH",
+          "id": "signup"
+        },
+        {
+          "classification": "MATCH",
+          "id": "signup-token-lookup"
+        },
+        {
+          "classification": "MATCH",
+          "id": "signup-token-refresh"
+        },
+        {
+          "classification": "MATCH",
+          "id": "signup-refreshed-lookup"
+        },
+        {
+          "classification": "MATCH",
+          "id": "signin"
+        },
+        {
+          "classification": "MATCH",
+          "id": "lookup"
+        },
+        {
+          "classification": "MATCH",
+          "id": "wrong-password"
+        },
+        {
+          "classification": "MATCH",
+          "id": "unchanged-state"
+        },
+        {
+          "classification": "MATCH",
+          "id": "refresh"
+        },
+        {
+          "classification": "MATCH",
+          "id": "refreshed-lookup"
+        },
+        {
+          "classification": "MATCH",
+          "id": "delete"
+        },
+        {
+          "classification": "MATCH",
+          "id": "deleted-account-absent"
+        }
+      ],
+      "savedProduction": {
+        "productionCases": [
+          {
+            "checks": {
+              "emailMatches": true,
+              "expiryIsPositiveInteger": true,
+              "expiryMatchesOneHour": true,
+              "httpOk": true,
+              "idTokenPresent": true,
+              "noError": true,
+              "refreshTokenPresent": true,
+              "uidMatches": true
+            },
+            "expirySeconds": "3600",
+            "httpStatus": 200,
+            "id": "signup",
+            "passed": true
+          },
+          {
+            "checks": {
+              "ownedIdentity": true
+            },
+            "httpStatus": 200,
+            "id": "signup-token-lookup",
+            "passed": true
+          },
+          {
+            "checks": {
+              "bearerType": true,
+              "expiryIsPositiveInteger": true,
+              "expiryMatchesOneHour": true,
+              "httpOk": true,
+              "idTokenPresent": true,
+              "noError": true,
+              "refreshTokenPresent": true,
+              "uidMatches": true
+            },
+            "expirySeconds": "3600",
+            "httpStatus": 200,
+            "id": "signup-token-refresh",
+            "passed": true
+          },
+          {
+            "checks": {
+              "ownedIdentity": true
+            },
+            "httpStatus": 200,
+            "id": "signup-refreshed-lookup",
+            "passed": true
+          },
+          {
+            "checks": {
+              "emailMatches": true,
+              "expiryIsPositiveInteger": true,
+              "expiryMatchesOneHour": true,
+              "httpOk": true,
+              "idTokenPresent": true,
+              "noError": true,
+              "refreshTokenPresent": true,
+              "uidMatches": true
+            },
+            "expirySeconds": "3600",
+            "httpStatus": 200,
+            "id": "signin",
+            "passed": true
+          },
+          {
+            "checks": {
+              "ownedIdentity": true
+            },
+            "httpStatus": 200,
+            "id": "lookup",
+            "passed": true
+          },
+          {
+            "checks": {
+              "expectedError": true,
+              "rejected": true
+            },
+            "httpStatus": 400,
+            "id": "wrong-password",
+            "passed": true
+          },
+          {
+            "checks": {
+              "selectedStableFieldsUnchanged": true
+            },
+            "httpStatus": 200,
+            "id": "unchanged-state",
+            "passed": true
+          },
+          {
+            "checks": {
+              "bearerType": true,
+              "expiryIsPositiveInteger": true,
+              "expiryMatchesOneHour": true,
+              "httpOk": true,
+              "idTokenPresent": true,
+              "noError": true,
+              "refreshTokenPresent": true,
+              "uidMatches": true
+            },
+            "expirySeconds": "3600",
+            "httpStatus": 200,
+            "id": "refresh",
+            "passed": true
+          },
+          {
+            "checks": {
+              "ownedIdentity": true
+            },
+            "httpStatus": 200,
+            "id": "refreshed-lookup",
+            "passed": true
+          },
+          {
+            "checks": {
+              "httpOk": true,
+              "noError": true
+            },
+            "httpStatus": 200,
+            "id": "delete",
+            "passed": true
+          },
+          {
+            "checks": {
+              "bothSelectorsAbsent": true
+            },
+            "httpStatus": 200,
+            "id": "deleted-account-absent",
+            "passed": true
+          }
+        ],
+        "productionCleanup": {
+          "emailAbsent": true,
+          "uidAbsent": true
+        },
+        "productionConfigurationSha256": "901acc9e8fad556673061056698b04d9fa544e539fab4bbb6b4f8b3bd4fdcbdf",
+        "productionProbeSourceCommit": "829f3aa1006777e5b3c2b1ca36f9ddb76ae990a6",
+        "productionRecordedAt": "2026-09-10T03:08:04.933082+00:00",
+        "receiptSha256": "0fb1648416ad615a7f18bcb79b2abad7c26b7ced6e202276cdb3a2eeb409304a"
+      }
+    },
+    "auth-display-name": {
+      "caseCount": 12,
+      "classification": "MATCH",
+      "configurationComparison": {
+        "classification": "SEPARATE_EVIDENCE",
+        "localStrictProfileSha256": "dc4466f0080ac58a25e2df92b765d1d666052fef735e94f4fe697a2a2507ada4",
+        "productionProjectionSha256": "901acc9e8fad556673061056698b04d9fa544e539fab4bbb6b4f8b3bd4fdcbdf",
+        "reason": "The local strict runner configuration and the production configuration projection are different contracts; they are retained separately rather than coerced into equality."
+      },
+      "corpus": "auth-display-name",
+      "currentLocal": {
+        "localArtifactSha256": "5a337e6ad0a74ec0e769f91bcff9195fde91f55a3f9602c3635406e76204f4ae",
+        "localBuildInputs": "20ad09376753cad3c5b9e0340542c3e3a00cc08315ffc98e2dd9da0058282fa8",
+        "localCases": [
+          {
+            "checks": {
+              "emailMatches": true,
+              "expiryIsPositiveInteger": true,
+              "expiryMatchesOneHour": true,
+              "httpOk": true,
+              "idTokenPresent": true,
+              "noError": true,
+              "refreshTokenPresent": true,
+              "uidMatches": true
+            },
+            "expirySeconds": "3600",
+            "httpStatus": 200,
+            "id": "signup",
+            "passed": true
+          },
+          {
+            "checks": {
+              "httpOk": true,
+              "nameMatches": true,
+              "selectedIdentityUnchanged": true
+            },
+            "httpStatus": 200,
+            "id": "initial-lookup",
+            "nameState": "initial",
+            "passed": true
+          },
+          {
+            "checks": {
+              "httpOk": true,
+              "nameMatches": true,
+              "selectedIdentityUnchanged": true
+            },
+            "httpStatus": 200,
+            "id": "set-name",
+            "nameState": "first",
+            "passed": true
+          },
+          {
+            "checks": {
+              "httpOk": true,
+              "nameMatches": true,
+              "selectedIdentityUnchanged": true
+            },
+            "httpStatus": 200,
+            "id": "set-name-lookup",
+            "nameState": "first",
+            "passed": true
+          },
+          {
+            "checks": {
+              "httpOk": true,
+              "nameMatches": true,
+              "selectedIdentityUnchanged": true
+            },
+            "httpStatus": 200,
+            "id": "replace-name",
+            "nameState": "second",
+            "passed": true
+          },
+          {
+            "checks": {
+              "httpOk": true,
+              "nameMatches": true,
+              "selectedIdentityUnchanged": true
+            },
+            "httpStatus": 200,
+            "id": "replace-name-lookup",
+            "nameState": "second",
+            "passed": true
+          },
+          {
+            "checks": {
+              "expectedError": true,
+              "rejected": true
+            },
+            "httpStatus": 400,
+            "id": "invalid-token-update",
+            "passed": true
+          },
+          {
+            "checks": {
+              "httpOk": true,
+              "selectedStableFieldsUnchanged": true
+            },
+            "httpStatus": 200,
+            "id": "unchanged-state",
+            "passed": true
+          },
+          {
+            "checks": {
+              "httpOk": true,
+              "nameMatches": true,
+              "selectedIdentityUnchanged": true
+            },
+            "httpStatus": 200,
+            "id": "delete-name",
+            "nameState": "absent",
+            "passed": true
+          },
+          {
+            "checks": {
+              "httpOk": true,
+              "nameMatches": true,
+              "selectedIdentityUnchanged": true
+            },
+            "httpStatus": 200,
+            "id": "deleted-name-lookup",
+            "nameState": "absent",
+            "passed": true
+          },
+          {
+            "checks": {
+              "httpOk": true,
+              "noError": true
+            },
+            "httpStatus": 200,
+            "id": "delete",
+            "passed": true
+          },
+          {
+            "checks": {
+              "bothSelectorsAbsent": true
+            },
+            "httpStatus": 200,
+            "id": "deleted-account-absent",
+            "passed": true
+          }
+        ],
+        "localCleanup": {
+          "emailAbsent": true,
+          "uidAbsent": true
+        },
+        "localConfigurationFileSha256": "57214114009a6bc113c3acfd10e2fe27613bde8aaa72a1807c38a275883fb230",
+        "localConfigurationSha256": "dc4466f0080ac58a25e2df92b765d1d666052fef735e94f4fe697a2a2507ada4",
+        "localProbeInputs": "5683b04cb015151d727db87c3c0631bc0009ae7ee7b15994a53f798a44d51456",
+        "localRecordedAt": "2026-09-16T18:27:10.670024+00:00",
+        "ownedProcess": {
+          "exitCode": 0,
+          "listenersClosed": true,
+          "stopped": true
+        },
+        "runtimeSourceCommit": "515f0cf4afa1b12e887b84552aa20851ab3142ae"
+      },
+      "matchCount": 12,
+      "mismatchCases": [],
+      "rows": [
+        {
+          "classification": "MATCH",
+          "id": "signup"
+        },
+        {
+          "classification": "MATCH",
+          "id": "initial-lookup"
+        },
+        {
+          "classification": "MATCH",
+          "id": "set-name"
+        },
+        {
+          "classification": "MATCH",
+          "id": "set-name-lookup"
+        },
+        {
+          "classification": "MATCH",
+          "id": "replace-name"
+        },
+        {
+          "classification": "MATCH",
+          "id": "replace-name-lookup"
+        },
+        {
+          "classification": "MATCH",
+          "id": "invalid-token-update"
+        },
+        {
+          "classification": "MATCH",
+          "id": "unchanged-state"
+        },
+        {
+          "classification": "MATCH",
+          "id": "delete-name"
+        },
+        {
+          "classification": "MATCH",
+          "id": "deleted-name-lookup"
+        },
+        {
+          "classification": "MATCH",
+          "id": "delete"
+        },
+        {
+          "classification": "MATCH",
+          "id": "deleted-account-absent"
+        }
+      ],
+      "savedProduction": {
+        "productionCases": [
+          {
+            "checks": {
+              "emailMatches": true,
+              "expiryIsPositiveInteger": true,
+              "expiryMatchesOneHour": true,
+              "httpOk": true,
+              "idTokenPresent": true,
+              "noError": true,
+              "refreshTokenPresent": true,
+              "uidMatches": true
+            },
+            "expirySeconds": "3600",
+            "httpStatus": 200,
+            "id": "signup",
+            "passed": true
+          },
+          {
+            "checks": {
+              "httpOk": true,
+              "nameMatches": true,
+              "selectedIdentityUnchanged": true
+            },
+            "httpStatus": 200,
+            "id": "initial-lookup",
+            "nameState": "initial",
+            "passed": true
+          },
+          {
+            "checks": {
+              "httpOk": true,
+              "nameMatches": true,
+              "selectedIdentityUnchanged": true
+            },
+            "httpStatus": 200,
+            "id": "set-name",
+            "nameState": "first",
+            "passed": true
+          },
+          {
+            "checks": {
+              "httpOk": true,
+              "nameMatches": true,
+              "selectedIdentityUnchanged": true
+            },
+            "httpStatus": 200,
+            "id": "set-name-lookup",
+            "nameState": "first",
+            "passed": true
+          },
+          {
+            "checks": {
+              "httpOk": true,
+              "nameMatches": true,
+              "selectedIdentityUnchanged": true
+            },
+            "httpStatus": 200,
+            "id": "replace-name",
+            "nameState": "second",
+            "passed": true
+          },
+          {
+            "checks": {
+              "httpOk": true,
+              "nameMatches": true,
+              "selectedIdentityUnchanged": true
+            },
+            "httpStatus": 200,
+            "id": "replace-name-lookup",
+            "nameState": "second",
+            "passed": true
+          },
+          {
+            "checks": {
+              "expectedError": true,
+              "rejected": true
+            },
+            "httpStatus": 400,
+            "id": "invalid-token-update",
+            "passed": true
+          },
+          {
+            "checks": {
+              "httpOk": true,
+              "selectedStableFieldsUnchanged": true
+            },
+            "httpStatus": 200,
+            "id": "unchanged-state",
+            "passed": true
+          },
+          {
+            "checks": {
+              "httpOk": true,
+              "nameMatches": true,
+              "selectedIdentityUnchanged": true
+            },
+            "httpStatus": 200,
+            "id": "delete-name",
+            "nameState": "absent",
+            "passed": true
+          },
+          {
+            "checks": {
+              "httpOk": true,
+              "nameMatches": true,
+              "selectedIdentityUnchanged": true
+            },
+            "httpStatus": 200,
+            "id": "deleted-name-lookup",
+            "nameState": "absent",
+            "passed": true
+          },
+          {
+            "checks": {
+              "httpOk": true,
+              "noError": true
+            },
+            "httpStatus": 200,
+            "id": "delete",
+            "passed": true
+          },
+          {
+            "checks": {
+              "bothSelectorsAbsent": true
+            },
+            "httpStatus": 200,
+            "id": "deleted-account-absent",
+            "passed": true
+          }
+        ],
+        "productionCleanup": {
+          "emailAbsent": true,
+          "uidAbsent": true
+        },
+        "productionConfigurationSha256": "901acc9e8fad556673061056698b04d9fa544e539fab4bbb6b4f8b3bd4fdcbdf",
+        "productionProbeSourceCommit": "bd599e279bb2d96d6cd035149b22942ed02539bb",
+        "productionRecordedAt": "2026-09-10T04:54:15.059126+00:00",
+        "receiptSha256": "1c1a1aba0bd2cadc0cba6f80e5fbd1266163f73242c9d90ce652b6e0cce02f47"
+      }
+    },
+    "auth-password": {
+      "caseCount": 12,
+      "classification": "MATCH",
+      "configurationComparison": {
+        "classification": "SEPARATE_EVIDENCE",
+        "localStrictProfileSha256": "dc4466f0080ac58a25e2df92b765d1d666052fef735e94f4fe697a2a2507ada4",
+        "productionProjectionSha256": "901acc9e8fad556673061056698b04d9fa544e539fab4bbb6b4f8b3bd4fdcbdf",
+        "reason": "The local strict runner configuration and the production configuration projection are different contracts; they are retained separately rather than coerced into equality."
+      },
+      "corpus": "auth-password",
+      "currentLocal": {
+        "localArtifactSha256": "5a337e6ad0a74ec0e769f91bcff9195fde91f55a3f9602c3635406e76204f4ae",
+        "localBuildInputs": "20ad09376753cad3c5b9e0340542c3e3a00cc08315ffc98e2dd9da0058282fa8",
+        "localCases": [
+          {
+            "checks": {
+              "emailMatches": true,
+              "expiryIsPositiveInteger": true,
+              "expiryMatchesOneHour": true,
+              "httpOk": true,
+              "idTokenPresent": true,
+              "noError": true,
+              "refreshTokenPresent": true,
+              "uidMatches": true
+            },
+            "expirySeconds": "3600",
+            "httpStatus": 200,
+            "id": "signup",
+            "passed": true
+          },
+          {
+            "checks": {
+              "emailMatches": true,
+              "expiryIsPositiveInteger": true,
+              "expiryMatchesOneHour": true,
+              "httpOk": true,
+              "idTokenPresent": true,
+              "noError": true,
+              "refreshTokenPresent": true,
+              "uidMatches": true
+            },
+            "expirySeconds": "3600",
+            "httpStatus": 200,
+            "id": "baseline-signin",
+            "passed": true
+          },
+          {
+            "checks": {
+              "emailMatches": true,
+              "expiryIsPositiveInteger": true,
+              "expiryMatchesOneHour": true,
+              "httpOk": true,
+              "idTokenPresent": true,
+              "noError": true,
+              "refreshTokenPresent": true,
+              "uidMatches": true
+            },
+            "expirySeconds": "3600",
+            "httpStatus": 200,
+            "id": "change-password",
+            "passed": true
+          },
+          {
+            "checks": {
+              "httpOk": true,
+              "selectedStableFieldsUnchanged": true
+            },
+            "httpStatus": 200,
+            "id": "changed-token-lookup",
+            "passed": true
+          },
+          {
+            "checks": {
+              "expectedError": true,
+              "rejected": true
+            },
+            "httpStatus": 400,
+            "id": "old-password-rejected",
+            "passed": true
+          },
+          {
+            "checks": {
+              "httpOk": true,
+              "selectedStableFieldsUnchanged": true
+            },
+            "httpStatus": 200,
+            "id": "unchanged-state",
+            "passed": true
+          },
+          {
+            "checks": {
+              "emailMatches": true,
+              "expiryIsPositiveInteger": true,
+              "expiryMatchesOneHour": true,
+              "httpOk": true,
+              "idTokenPresent": true,
+              "noError": true,
+              "refreshTokenPresent": true,
+              "uidMatches": true
+            },
+            "expirySeconds": "3600",
+            "httpStatus": 200,
+            "id": "new-password-signin",
+            "passed": true
+          },
+          {
+            "checks": {
+              "httpOk": true,
+              "selectedStableFieldsUnchanged": true
+            },
+            "httpStatus": 200,
+            "id": "new-password-lookup",
+            "passed": true
+          },
+          {
+            "checks": {
+              "bearerType": true,
+              "expiryIsPositiveInteger": true,
+              "expiryMatchesOneHour": true,
+              "httpOk": true,
+              "idTokenPresent": true,
+              "noError": true,
+              "refreshTokenPresent": true,
+              "uidMatches": true
+            },
+            "expirySeconds": "3600",
+            "httpStatus": 200,
+            "id": "changed-token-refresh",
+            "passed": true
+          },
+          {
+            "checks": {
+              "httpOk": true,
+              "selectedStableFieldsUnchanged": true
+            },
+            "httpStatus": 200,
+            "id": "refreshed-lookup",
+            "passed": true
+          },
+          {
+            "checks": {
+              "httpOk": true,
+              "noError": true
+            },
+            "httpStatus": 200,
+            "id": "delete",
+            "passed": true
+          },
+          {
+            "checks": {
+              "bothSelectorsAbsent": true
+            },
+            "httpStatus": 200,
+            "id": "deleted-account-absent",
+            "passed": true
+          }
+        ],
+        "localCleanup": {
+          "emailAbsent": true,
+          "uidAbsent": true
+        },
+        "localConfigurationFileSha256": "57214114009a6bc113c3acfd10e2fe27613bde8aaa72a1807c38a275883fb230",
+        "localConfigurationSha256": "dc4466f0080ac58a25e2df92b765d1d666052fef735e94f4fe697a2a2507ada4",
+        "localProbeInputs": "1ab148985e9558da58929643f9d1889a2685cbaecedecab6ac3b4d0bc5d4667d",
+        "localRecordedAt": "2026-09-16T18:27:10.947751+00:00",
+        "ownedProcess": {
+          "exitCode": 0,
+          "listenersClosed": true,
+          "stopped": true
+        },
+        "runtimeSourceCommit": "515f0cf4afa1b12e887b84552aa20851ab3142ae"
+      },
+      "matchCount": 12,
+      "mismatchCases": [],
+      "rows": [
+        {
+          "classification": "MATCH",
+          "id": "signup"
+        },
+        {
+          "classification": "MATCH",
+          "id": "baseline-signin"
+        },
+        {
+          "classification": "MATCH",
+          "id": "change-password"
+        },
+        {
+          "classification": "MATCH",
+          "id": "changed-token-lookup"
+        },
+        {
+          "classification": "MATCH",
+          "id": "old-password-rejected"
+        },
+        {
+          "classification": "MATCH",
+          "id": "unchanged-state"
+        },
+        {
+          "classification": "MATCH",
+          "id": "new-password-signin"
+        },
+        {
+          "classification": "MATCH",
+          "id": "new-password-lookup"
+        },
+        {
+          "classification": "MATCH",
+          "id": "changed-token-refresh"
+        },
+        {
+          "classification": "MATCH",
+          "id": "refreshed-lookup"
+        },
+        {
+          "classification": "MATCH",
+          "id": "delete"
+        },
+        {
+          "classification": "MATCH",
+          "id": "deleted-account-absent"
+        }
+      ],
+      "savedProduction": {
+        "productionCases": [
+          {
+            "checks": {
+              "emailMatches": true,
+              "expiryIsPositiveInteger": true,
+              "expiryMatchesOneHour": true,
+              "httpOk": true,
+              "idTokenPresent": true,
+              "noError": true,
+              "refreshTokenPresent": true,
+              "uidMatches": true
+            },
+            "expirySeconds": "3600",
+            "httpStatus": 200,
+            "id": "signup",
+            "passed": true
+          },
+          {
+            "checks": {
+              "emailMatches": true,
+              "expiryIsPositiveInteger": true,
+              "expiryMatchesOneHour": true,
+              "httpOk": true,
+              "idTokenPresent": true,
+              "noError": true,
+              "refreshTokenPresent": true,
+              "uidMatches": true
+            },
+            "expirySeconds": "3600",
+            "httpStatus": 200,
+            "id": "baseline-signin",
+            "passed": true
+          },
+          {
+            "checks": {
+              "emailMatches": true,
+              "expiryIsPositiveInteger": true,
+              "expiryMatchesOneHour": true,
+              "httpOk": true,
+              "idTokenPresent": true,
+              "noError": true,
+              "refreshTokenPresent": true,
+              "uidMatches": true
+            },
+            "expirySeconds": "3600",
+            "httpStatus": 200,
+            "id": "change-password",
+            "passed": true
+          },
+          {
+            "checks": {
+              "httpOk": true,
+              "selectedStableFieldsUnchanged": true
+            },
+            "httpStatus": 200,
+            "id": "changed-token-lookup",
+            "passed": true
+          },
+          {
+            "checks": {
+              "expectedError": true,
+              "rejected": true
+            },
+            "httpStatus": 400,
+            "id": "old-password-rejected",
+            "passed": true
+          },
+          {
+            "checks": {
+              "httpOk": true,
+              "selectedStableFieldsUnchanged": true
+            },
+            "httpStatus": 200,
+            "id": "unchanged-state",
+            "passed": true
+          },
+          {
+            "checks": {
+              "emailMatches": true,
+              "expiryIsPositiveInteger": true,
+              "expiryMatchesOneHour": true,
+              "httpOk": true,
+              "idTokenPresent": true,
+              "noError": true,
+              "refreshTokenPresent": true,
+              "uidMatches": true
+            },
+            "expirySeconds": "3600",
+            "httpStatus": 200,
+            "id": "new-password-signin",
+            "passed": true
+          },
+          {
+            "checks": {
+              "httpOk": true,
+              "selectedStableFieldsUnchanged": true
+            },
+            "httpStatus": 200,
+            "id": "new-password-lookup",
+            "passed": true
+          },
+          {
+            "checks": {
+              "bearerType": true,
+              "expiryIsPositiveInteger": true,
+              "expiryMatchesOneHour": true,
+              "httpOk": true,
+              "idTokenPresent": true,
+              "noError": true,
+              "refreshTokenPresent": true,
+              "uidMatches": true
+            },
+            "expirySeconds": "3600",
+            "httpStatus": 200,
+            "id": "changed-token-refresh",
+            "passed": true
+          },
+          {
+            "checks": {
+              "httpOk": true,
+              "selectedStableFieldsUnchanged": true
+            },
+            "httpStatus": 200,
+            "id": "refreshed-lookup",
+            "passed": true
+          },
+          {
+            "checks": {
+              "httpOk": true,
+              "noError": true
+            },
+            "httpStatus": 200,
+            "id": "delete",
+            "passed": true
+          },
+          {
+            "checks": {
+              "bothSelectorsAbsent": true
+            },
+            "httpStatus": 200,
+            "id": "deleted-account-absent",
+            "passed": true
+          }
+        ],
+        "productionCleanup": {
+          "emailAbsent": true,
+          "uidAbsent": true
+        },
+        "productionConfigurationSha256": "901acc9e8fad556673061056698b04d9fa544e539fab4bbb6b4f8b3bd4fdcbdf",
+        "productionProbeSourceCommit": "f915ed8dde6fb0fafa94fe3312080b705ccbc34d",
+        "productionRecordedAt": "2026-09-10T05:46:03.907588+00:00",
+        "receiptSha256": "2054ac0ede30d54e91e59f3e6c5454714e97118dc6845fd22a34f86e70255d2f"
+      }
+    },
+    "auth-profile": {
+      "caseCount": 12,
+      "classification": "MATCH",
+      "configurationComparison": {
+        "classification": "SEPARATE_EVIDENCE",
+        "localStrictProfileSha256": "dc4466f0080ac58a25e2df92b765d1d666052fef735e94f4fe697a2a2507ada4",
+        "productionProjectionSha256": "901acc9e8fad556673061056698b04d9fa544e539fab4bbb6b4f8b3bd4fdcbdf",
+        "reason": "The local strict runner configuration and the production configuration projection are different contracts; they are retained separately rather than coerced into equality."
+      },
+      "corpus": "auth-profile",
+      "currentLocal": {
+        "localArtifactSha256": "5a337e6ad0a74ec0e769f91bcff9195fde91f55a3f9602c3635406e76204f4ae",
+        "localBuildInputs": "20ad09376753cad3c5b9e0340542c3e3a00cc08315ffc98e2dd9da0058282fa8",
+        "localCases": [
+          {
+            "checks": {
+              "emailMatches": true,
+              "expiryIsPositiveInteger": true,
+              "expiryMatchesOneHour": true,
+              "httpOk": true,
+              "idTokenPresent": true,
+              "noError": true,
+              "refreshTokenPresent": true,
+              "uidMatches": true
+            },
+            "expirySeconds": "3600",
+            "httpStatus": 200,
+            "id": "signup",
+            "passed": true
+          },
+          {
+            "checks": {
+              "httpOk": true,
+              "photoMatches": true,
+              "selectedIdentityUnchanged": true
+            },
+            "httpStatus": 200,
+            "id": "initial-lookup",
+            "passed": true,
+            "photoState": "absent"
+          },
+          {
+            "checks": {
+              "httpOk": true,
+              "photoMatches": true,
+              "selectedIdentityUnchanged": true
+            },
+            "httpStatus": 200,
+            "id": "set-photo",
+            "passed": true,
+            "photoState": "first"
+          },
+          {
+            "checks": {
+              "httpOk": true,
+              "photoMatches": true,
+              "selectedIdentityUnchanged": true
+            },
+            "httpStatus": 200,
+            "id": "set-photo-lookup",
+            "passed": true,
+            "photoState": "first"
+          },
+          {
+            "checks": {
+              "httpOk": true,
+              "photoMatches": true,
+              "selectedIdentityUnchanged": true
+            },
+            "httpStatus": 200,
+            "id": "replace-photo",
+            "passed": true,
+            "photoState": "second"
+          },
+          {
+            "checks": {
+              "httpOk": true,
+              "photoMatches": true,
+              "selectedIdentityUnchanged": true
+            },
+            "httpStatus": 200,
+            "id": "replace-photo-lookup",
+            "passed": true,
+            "photoState": "second"
+          },
+          {
+            "checks": {
+              "expectedError": true,
+              "rejected": true
+            },
+            "httpStatus": 400,
+            "id": "invalid-token-update",
+            "passed": true
+          },
+          {
+            "checks": {
+              "httpOk": true,
+              "selectedStableFieldsUnchanged": true
+            },
+            "httpStatus": 200,
+            "id": "unchanged-state",
+            "passed": true
+          },
+          {
+            "checks": {
+              "httpOk": true,
+              "photoMatches": true,
+              "selectedIdentityUnchanged": true
+            },
+            "httpStatus": 200,
+            "id": "delete-photo",
+            "passed": true,
+            "photoState": "absent"
+          },
+          {
+            "checks": {
+              "httpOk": true,
+              "photoMatches": true,
+              "selectedIdentityUnchanged": true
+            },
+            "httpStatus": 200,
+            "id": "deleted-photo-lookup",
+            "passed": true,
+            "photoState": "absent"
+          },
+          {
+            "checks": {
+              "httpOk": true,
+              "noError": true
+            },
+            "httpStatus": 200,
+            "id": "delete",
+            "passed": true
+          },
+          {
+            "checks": {
+              "bothSelectorsAbsent": true
+            },
+            "httpStatus": 200,
+            "id": "deleted-account-absent",
+            "passed": true
+          }
+        ],
+        "localCleanup": {
+          "emailAbsent": true,
+          "uidAbsent": true
+        },
+        "localConfigurationFileSha256": "57214114009a6bc113c3acfd10e2fe27613bde8aaa72a1807c38a275883fb230",
+        "localConfigurationSha256": "dc4466f0080ac58a25e2df92b765d1d666052fef735e94f4fe697a2a2507ada4",
+        "localProbeInputs": "22a26b6e4b6921adb2d71e4ca4eabc05f9df1a1b19d9f35acd5da0df837e552a",
+        "localRecordedAt": "2026-09-16T18:27:10.390776+00:00",
+        "ownedProcess": {
+          "exitCode": 0,
+          "listenersClosed": true,
+          "stopped": true
+        },
+        "runtimeSourceCommit": "515f0cf4afa1b12e887b84552aa20851ab3142ae"
+      },
+      "matchCount": 12,
+      "mismatchCases": [],
+      "rows": [
+        {
+          "classification": "MATCH",
+          "id": "signup"
+        },
+        {
+          "classification": "MATCH",
+          "id": "initial-lookup"
+        },
+        {
+          "classification": "MATCH",
+          "id": "set-photo"
+        },
+        {
+          "classification": "MATCH",
+          "id": "set-photo-lookup"
+        },
+        {
+          "classification": "MATCH",
+          "id": "replace-photo"
+        },
+        {
+          "classification": "MATCH",
+          "id": "replace-photo-lookup"
+        },
+        {
+          "classification": "MATCH",
+          "id": "invalid-token-update"
+        },
+        {
+          "classification": "MATCH",
+          "id": "unchanged-state"
+        },
+        {
+          "classification": "MATCH",
+          "id": "delete-photo"
+        },
+        {
+          "classification": "MATCH",
+          "id": "deleted-photo-lookup"
+        },
+        {
+          "classification": "MATCH",
+          "id": "delete"
+        },
+        {
+          "classification": "MATCH",
+          "id": "deleted-account-absent"
+        }
+      ],
+      "savedProduction": {
+        "productionCases": [
+          {
+            "checks": {
+              "emailMatches": true,
+              "expiryIsPositiveInteger": true,
+              "expiryMatchesOneHour": true,
+              "httpOk": true,
+              "idTokenPresent": true,
+              "noError": true,
+              "refreshTokenPresent": true,
+              "uidMatches": true
+            },
+            "expirySeconds": "3600",
+            "httpStatus": 200,
+            "id": "signup",
+            "passed": true
+          },
+          {
+            "checks": {
+              "httpOk": true,
+              "photoMatches": true,
+              "selectedIdentityUnchanged": true
+            },
+            "httpStatus": 200,
+            "id": "initial-lookup",
+            "passed": true,
+            "photoState": "absent"
+          },
+          {
+            "checks": {
+              "httpOk": true,
+              "photoMatches": true,
+              "selectedIdentityUnchanged": true
+            },
+            "httpStatus": 200,
+            "id": "set-photo",
+            "passed": true,
+            "photoState": "first"
+          },
+          {
+            "checks": {
+              "httpOk": true,
+              "photoMatches": true,
+              "selectedIdentityUnchanged": true
+            },
+            "httpStatus": 200,
+            "id": "set-photo-lookup",
+            "passed": true,
+            "photoState": "first"
+          },
+          {
+            "checks": {
+              "httpOk": true,
+              "photoMatches": true,
+              "selectedIdentityUnchanged": true
+            },
+            "httpStatus": 200,
+            "id": "replace-photo",
+            "passed": true,
+            "photoState": "second"
+          },
+          {
+            "checks": {
+              "httpOk": true,
+              "photoMatches": true,
+              "selectedIdentityUnchanged": true
+            },
+            "httpStatus": 200,
+            "id": "replace-photo-lookup",
+            "passed": true,
+            "photoState": "second"
+          },
+          {
+            "checks": {
+              "expectedError": true,
+              "rejected": true
+            },
+            "httpStatus": 400,
+            "id": "invalid-token-update",
+            "passed": true
+          },
+          {
+            "checks": {
+              "httpOk": true,
+              "selectedStableFieldsUnchanged": true
+            },
+            "httpStatus": 200,
+            "id": "unchanged-state",
+            "passed": true
+          },
+          {
+            "checks": {
+              "httpOk": true,
+              "photoMatches": true,
+              "selectedIdentityUnchanged": true
+            },
+            "httpStatus": 200,
+            "id": "delete-photo",
+            "passed": true,
+            "photoState": "absent"
+          },
+          {
+            "checks": {
+              "httpOk": true,
+              "photoMatches": true,
+              "selectedIdentityUnchanged": true
+            },
+            "httpStatus": 200,
+            "id": "deleted-photo-lookup",
+            "passed": true,
+            "photoState": "absent"
+          },
+          {
+            "checks": {
+              "httpOk": true,
+              "noError": true
+            },
+            "httpStatus": 200,
+            "id": "delete",
+            "passed": true
+          },
+          {
+            "checks": {
+              "bothSelectorsAbsent": true
+            },
+            "httpStatus": 200,
+            "id": "deleted-account-absent",
+            "passed": true
+          }
+        ],
+        "productionCleanup": {
+          "emailAbsent": true,
+          "uidAbsent": true
+        },
+        "productionConfigurationSha256": "901acc9e8fad556673061056698b04d9fa544e539fab4bbb6b4f8b3bd4fdcbdf",
+        "productionProbeSourceCommit": "cce3087d421b1821a264eb0df694bebe031373ee",
+        "productionRecordedAt": "2026-09-10T04:10:52.215005+00:00",
+        "receiptSha256": "75a58259e1dc8e26665e955bcea1b32bc008acc2bdb50e42430f9563500c7f87"
+      }
+    }
+  },
+  "kind": "auth-saved-reference-replay-v2",
+  "runManifestSha256": "d44371687a080043235a5dc868bec929de37bd2c640b7a3ec0c61e9128c94eba",
+  "schemaVersion": 2,
+  "sourceCommit": "515f0cf4afa1b12e887b84552aa20851ab3142ae"
+}

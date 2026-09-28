@@ -1,0 +1,3 @@
+{
+  "functions": [{ "source": ".", "codebase": "fireemu-blocking-disable-probe" }]
+}

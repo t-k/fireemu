@@ -1,0 +1,397 @@
+{
+  "observedOn": "2026-09-24",
+  "source": "locations.list of a production project, in the order production listed them",
+  "locations": [
+    {
+      "locationId": "eur3",
+      "displayName": "Europe",
+      "labels": {
+        "appengine.googleapis.com/geo": "europe-west",
+        "cloud.googleapis.com/location": "eur3",
+        "cloud.googleapis.com/geo": "eur3"
+      }
+    },
+    {
+      "locationId": "nam5",
+      "displayName": "United States",
+      "labels": {
+        "appengine.googleapis.com/geo": "us-central",
+        "cloud.googleapis.com/location": "nam5",
+        "cloud.googleapis.com/geo": "nam5"
+      }
+    },
+    {
+      "locationId": "nam7",
+      "displayName": "United States",
+      "labels": {
+        "cloud.googleapis.com/location": "nam7",
+        "cloud.googleapis.com/geo": "nam7"
+      }
+    },
+    {
+      "locationId": "africa-south1",
+      "displayName": "Johannesburg",
+      "labels": {
+        "cloud.googleapis.com/location": "africa-south1",
+        "cloud.googleapis.com/region": "africa-south1"
+      }
+    },
+    {
+      "locationId": "asia-east1",
+      "displayName": "Taiwan",
+      "labels": {
+        "appengine.googleapis.com/region": "asia-east1",
+        "cloud.googleapis.com/location": "asia-east1",
+        "cloud.googleapis.com/region": "asia-east1"
+      }
+    },
+    {
+      "locationId": "asia-east2",
+      "displayName": "Hong Kong",
+      "labels": {
+        "appengine.googleapis.com/region": "asia-east2",
+        "cloud.googleapis.com/location": "asia-east2",
+        "cloud.googleapis.com/region": "asia-east2"
+      }
+    },
+    {
+      "locationId": "asia-northeast1",
+      "displayName": "Tokyo",
+      "labels": {
+        "appengine.googleapis.com/region": "asia-northeast1",
+        "cloud.googleapis.com/location": "asia-northeast1",
+        "cloud.googleapis.com/region": "asia-northeast1"
+      }
+    },
+    {
+      "locationId": "asia-northeast2",
+      "displayName": "Osaka",
+      "labels": {
+        "appengine.googleapis.com/region": "asia-northeast2",
+        "cloud.googleapis.com/location": "asia-northeast2",
+        "cloud.googleapis.com/region": "asia-northeast2"
+      }
+    },
+    {
+      "locationId": "asia-northeast3",
+      "displayName": "Seoul",
+      "labels": {
+        "appengine.googleapis.com/region": "asia-northeast3",
+        "cloud.googleapis.com/location": "asia-northeast3",
+        "cloud.googleapis.com/region": "asia-northeast3"
+      }
+    },
+    {
+      "locationId": "asia-south1",
+      "displayName": "Mumbai",
+      "labels": {
+        "appengine.googleapis.com/region": "asia-south1",
+        "cloud.googleapis.com/location": "asia-south1",
+        "cloud.googleapis.com/region": "asia-south1"
+      }
+    },
+    {
+      "locationId": "asia-south2",
+      "displayName": "Delhi",
+      "labels": {
+        "cloud.googleapis.com/location": "asia-south2",
+        "cloud.googleapis.com/region": "asia-south2"
+      }
+    },
+    {
+      "locationId": "asia-southeast1",
+      "displayName": "Singapore",
+      "labels": {
+        "appengine.googleapis.com/region": "asia-southeast1",
+        "cloud.googleapis.com/location": "asia-southeast1",
+        "cloud.googleapis.com/region": "asia-southeast1"
+      }
+    },
+    {
+      "locationId": "asia-southeast2",
+      "displayName": "Jakarta",
+      "labels": {
+        "appengine.googleapis.com/region": "asia-southeast2",
+        "cloud.googleapis.com/location": "asia-southeast2",
+        "cloud.googleapis.com/region": "asia-southeast2"
+      }
+    },
+    {
+      "locationId": "asia-southeast3",
+      "displayName": "Bangkok",
+      "labels": {
+        "cloud.googleapis.com/location": "asia-southeast3",
+        "cloud.googleapis.com/region": "asia-southeast3"
+      }
+    },
+    {
+      "locationId": "australia-southeast1",
+      "displayName": "Sydney",
+      "labels": {
+        "appengine.googleapis.com/region": "australia-southeast1",
+        "cloud.googleapis.com/location": "australia-southeast1",
+        "cloud.googleapis.com/region": "australia-southeast1"
+      }
+    },
+    {
+      "locationId": "australia-southeast2",
+      "displayName": "Melbourne",
+      "labels": {
+        "cloud.googleapis.com/location": "australia-southeast2",
+        "cloud.googleapis.com/region": "australia-southeast2"
+      }
+    },
+    {
+      "locationId": "europe-central2",
+      "displayName": "Warsaw",
+      "labels": {
+        "appengine.googleapis.com/region": "europe-central2",
+        "cloud.googleapis.com/location": "europe-central2",
+        "cloud.googleapis.com/region": "europe-central2"
+      }
+    },
+    {
+      "locationId": "europe-north1",
+      "displayName": "Finland",
+      "labels": {
+        "cloud.googleapis.com/location": "europe-north1",
+        "cloud.googleapis.com/region": "europe-north1"
+      }
+    },
+    {
+      "locationId": "europe-north2",
+      "displayName": "Stockholm",
+      "labels": {
+        "cloud.googleapis.com/location": "europe-north2",
+        "cloud.googleapis.com/region": "europe-north2"
+      }
+    },
+    {
+      "locationId": "europe-southwest1",
+      "displayName": "Madrid",
+      "labels": {
+        "cloud.googleapis.com/location": "europe-southwest1",
+        "cloud.googleapis.com/region": "europe-southwest1"
+      }
+    },
+    {
+      "locationId": "europe-west1",
+      "displayName": "Belgium",
+      "labels": {
+        "cloud.googleapis.com/location": "europe-west1",
+        "cloud.googleapis.com/region": "europe-west1"
+      }
+    },
+    {
+      "locationId": "europe-west10",
+      "displayName": "Berlin",
+      "labels": {
+        "cloud.googleapis.com/location": "europe-west10",
+        "cloud.googleapis.com/region": "europe-west10"
+      }
+    },
+    {
+      "locationId": "europe-west12",
+      "displayName": "Turin",
+      "labels": {
+        "cloud.googleapis.com/location": "europe-west12",
+        "cloud.googleapis.com/region": "europe-west12"
+      }
+    },
+    {
+      "locationId": "europe-west2",
+      "displayName": "London",
+      "labels": {
+        "appengine.googleapis.com/region": "europe-west2",
+        "cloud.googleapis.com/location": "europe-west2",
+        "cloud.googleapis.com/region": "europe-west2"
+      }
+    },
+    {
+      "locationId": "europe-west3",
+      "displayName": "Frankfurt",
+      "labels": {
+        "appengine.googleapis.com/region": "europe-west3",
+        "cloud.googleapis.com/location": "europe-west3",
+        "cloud.googleapis.com/region": "europe-west3"
+      }
+    },
+    {
+      "locationId": "europe-west4",
+      "displayName": "Netherlands",
+      "labels": {
+        "cloud.googleapis.com/location": "europe-west4",
+        "cloud.googleapis.com/region": "europe-west4"
+      }
+    },
+    {
+      "locationId": "europe-west6",
+      "displayName": "Zurich",
+      "labels": {
+        "appengine.googleapis.com/region": "europe-west6",
+        "cloud.googleapis.com/location": "europe-west6",
+        "cloud.googleapis.com/region": "europe-west6"
+      }
+    },
+    {
+      "locationId": "europe-west8",
+      "displayName": "Milan",
+      "labels": {
+        "cloud.googleapis.com/location": "europe-west8",
+        "cloud.googleapis.com/region": "europe-west8"
+      }
+    },
+    {
+      "locationId": "europe-west9",
+      "displayName": "Paris",
+      "labels": {
+        "cloud.googleapis.com/location": "europe-west9",
+        "cloud.googleapis.com/region": "europe-west9"
+      }
+    },
+    {
+      "locationId": "me-central1",
+      "displayName": "Doha",
+      "labels": {
+        "cloud.googleapis.com/location": "me-central1",
+        "cloud.googleapis.com/region": "me-central1"
+      }
+    },
+    {
+      "locationId": "me-central2",
+      "displayName": "Dammam",
+      "labels": {
+        "cloud.googleapis.com/location": "me-central2",
+        "cloud.googleapis.com/region": "me-central2"
+      }
+    },
+    {
+      "locationId": "me-west1",
+      "displayName": "Tel Aviv",
+      "labels": {
+        "cloud.googleapis.com/location": "me-west1",
+        "cloud.googleapis.com/region": "me-west1"
+      }
+    },
+    {
+      "locationId": "northamerica-northeast1",
+      "displayName": "Montr\u00e9al",
+      "labels": {
+        "appengine.googleapis.com/region": "northamerica-northeast1",
+        "cloud.googleapis.com/location": "northamerica-northeast1",
+        "cloud.googleapis.com/region": "northamerica-northeast1"
+      }
+    },
+    {
+      "locationId": "northamerica-northeast2",
+      "displayName": "Toronto",
+      "labels": {
+        "cloud.googleapis.com/location": "northamerica-northeast2",
+        "cloud.googleapis.com/region": "northamerica-northeast2"
+      }
+    },
+    {
+      "locationId": "northamerica-south1",
+      "displayName": "Mexico",
+      "labels": {
+        "cloud.googleapis.com/location": "northamerica-south1",
+        "cloud.googleapis.com/region": "northamerica-south1"
+      }
+    },
+    {
+      "locationId": "southamerica-east1",
+      "displayName": "S\u00e3o Paulo",
+      "labels": {
+        "appengine.googleapis.com/region": "southamerica-east1",
+        "cloud.googleapis.com/location": "southamerica-east1",
+        "cloud.googleapis.com/region": "southamerica-east1"
+      }
+    },
+    {
+      "locationId": "southamerica-west1",
+      "displayName": "Santiago",
+      "labels": {
+        "cloud.googleapis.com/location": "southamerica-west1",
+        "cloud.googleapis.com/region": "southamerica-west1"
+      }
+    },
+    {
+      "locationId": "us-central1",
+      "displayName": "Iowa",
+      "labels": {
+        "cloud.googleapis.com/location": "us-central1",
+        "cloud.googleapis.com/region": "us-central1"
+      }
+    },
+    {
+      "locationId": "us-east1",
+      "displayName": "South Carolina",
+      "labels": {
+        "appengine.googleapis.com/region": "us-east1",
+        "cloud.googleapis.com/location": "us-east1",
+        "cloud.googleapis.com/region": "us-east1"
+      }
+    },
+    {
+      "locationId": "us-east4",
+      "displayName": "Northern Virginia",
+      "labels": {
+        "appengine.googleapis.com/region": "us-east4",
+        "cloud.googleapis.com/location": "us-east4",
+        "cloud.googleapis.com/region": "us-east4"
+      }
+    },
+    {
+      "locationId": "us-east5",
+      "displayName": "Columbus",
+      "labels": {
+        "cloud.googleapis.com/location": "us-east5",
+        "cloud.googleapis.com/region": "us-east5"
+      }
+    },
+    {
+      "locationId": "us-south1",
+      "displayName": "Dallas",
+      "labels": {
+        "cloud.googleapis.com/location": "us-south1",
+        "cloud.googleapis.com/region": "us-south1"
+      }
+    },
+    {
+      "locationId": "us-west1",
+      "displayName": "Oregon",
+      "labels": {
+        "appengine.googleapis.com/region": "us-west1",
+        "cloud.googleapis.com/location": "us-west1",
+        "cloud.googleapis.com/region": "us-west1"
+      }
+    },
+    {
+      "locationId": "us-west2",
+      "displayName": "Los Angeles",
+      "labels": {
+        "appengine.googleapis.com/region": "us-west2",
+        "cloud.googleapis.com/location": "us-west2",
+        "cloud.googleapis.com/region": "us-west2"
+      }
+    },
+    {
+      "locationId": "us-west3",
+      "displayName": "Salt Lake City",
+      "labels": {
+        "appengine.googleapis.com/region": "us-west3",
+        "cloud.googleapis.com/location": "us-west3",
+        "cloud.googleapis.com/region": "us-west3"
+      }
+    },
+    {
+      "locationId": "us-west4",
+      "displayName": "Las Vegas",
+      "labels": {
+        "appengine.googleapis.com/region": "us-west4",
+        "cloud.googleapis.com/location": "us-west4",
+        "cloud.googleapis.com/region": "us-west4"
+      }
+    }
+  ]
+}

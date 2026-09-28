@@ -18,6 +18,7 @@ fireemu-core-rules = { path = "../fireemu-core-rules" }
 fireemu-core-auth = { path = "../fireemu-core-auth" }
 fireemu-core-app-check = { path = "../fireemu-core-app-check" }
 fireemu-proto-firestore = { path = "../fireemu-proto-firestore" }
+prost = "0.13"
 prost-types = "0.13"
 tonic = { version = "0.13", features = ["transport", "codegen", "prost"] }
 tokio = { version = "1", features = ["rt-multi-thread", "net", "macros", "sync"] }

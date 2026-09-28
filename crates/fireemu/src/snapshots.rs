@@ -61,6 +61,94 @@ impl SnapshotHook for Firestore {
     }
 }
 
+/// The session's Firestore field configuration (the time-to-live policies).
+///
+/// It is a separate part from the databases: a restore that brought documents back without
+/// their policies would report an expiry configuration the session no longer has.
+pub struct FieldConfig(pub Arc<LocalBackend>);
+
+/// One session's time-to-live catalogs, keyed by project and database.
+type TtlCatalogs =
+    std::collections::BTreeMap<(String, String), fireemu_core_firestore::ttl::TtlCatalog>;
+
+/// One session's field configuration: the time-to-live catalogs and the operations that
+/// produced them.
+///
+/// Both are captured together. A restore that brought the catalogs back but left the
+/// operation records in place would keep answering an operation name minted against state
+/// the restore has just replaced.
+#[derive(Debug, Clone, Default)]
+struct FieldConfigSnapshot {
+    catalogs: TtlCatalogs,
+    operations:
+        std::collections::BTreeMap<String, Vec<fireemu_adapter_grpc::local::FieldOperation>>,
+}
+
+impl SnapshotHook for FieldConfig {
+    fn name(&self) -> &'static str {
+        "firestore field config"
+    }
+    fn capture(&self, scope: &Scope) -> Result<SnapshotPart, TransitionFailure> {
+        Ok(Arc::new(FieldConfigSnapshot {
+            catalogs: self
+                .0
+                .ttl_catalogs()
+                .into_iter()
+                .filter(|((project, _), _)| scope.owns_project(project))
+                .collect(),
+            operations: self
+                .0
+                .field_operations_by_project()
+                .into_iter()
+                .filter(|(project, _)| scope.owns_project(project))
+                .collect(),
+        }))
+    }
+    fn validate(&self, _: &Scope, part: &SnapshotPart) -> Result<(), TransitionFailure> {
+        part.downcast_ref::<FieldConfigSnapshot>()
+            .map(|_| ())
+            .ok_or_else(|| wrong_shape(self.name()))
+    }
+    fn restore(&self, scope: &Scope, part: &SnapshotPart) -> Result<(), TransitionFailure> {
+        let captured = part
+            .downcast_ref::<FieldConfigSnapshot>()
+            .ok_or_else(|| wrong_shape(self.name()))?;
+        self.0
+            .restore_ttl_catalogs(|project| scope.owns_project(project), &captured.catalogs);
+        self.0
+            .restore_field_operations(|project| scope.owns_project(project), &captured.operations);
+        Ok(())
+    }
+    fn retained_bytes(&self, part: &SnapshotPart) -> u64 {
+        part.downcast_ref::<FieldConfigSnapshot>()
+            .map_or(0, |captured| {
+                let policies: usize = captured
+                    .catalogs
+                    .iter()
+                    .map(|((project, database), catalog)| {
+                        project.len()
+                            + database.len()
+                            + catalog
+                                .iter()
+                                .map(|(group, policy)| {
+                                    group.as_str().len() + policy.field.canonical().len()
+                                })
+                                .sum::<usize>()
+                    })
+                    .sum();
+                let operations: usize = captured
+                    .operations
+                    .values()
+                    .flat_map(|records| records.iter())
+                    .map(|record| {
+                        record.name.len() + record.field.len() + record.response.to_string().len()
+                    })
+                    .sum();
+                u64::try_from(policies + operations).unwrap_or(u64::MAX)
+            })
+    }
+}
+
 /// The session's buckets and objects.
 pub struct Storage(pub Arc<fireemu_adapter_http::storage::StorageState>);
 
@@ -70,12 +158,17 @@ impl Storage {
     }
 }
 
-/// The complete global or target-based Storage Rules registry.
+/// The complete global or target-based Storage Rules registry (shared: one table serves
+/// every session, like the Firestore ruleset).
 pub struct StorageRules(pub Arc<fireemu_adapter_http::storage::StorageRulesRegistry>);
 
 impl SnapshotHook for StorageRules {
     fn name(&self) -> &'static str {
         "storage rules"
+    }
+
+    fn shared(&self) -> bool {
+        true
     }
 
     fn capture(&self, _: &Scope) -> Result<SnapshotPart, TransitionFailure> {
@@ -159,6 +252,9 @@ impl SnapshotHook for Storage {
 /// faithful.
 pub struct Auth(pub Arc<AuthRegistry>);
 
+#[derive(Clone)]
+struct AuthRollback(AuthStore);
+
 impl Auth {
     fn store(&self, scope: &Scope) -> Result<Arc<Mutex<AuthStore>>, TransitionFailure> {
         match scope {
@@ -182,6 +278,13 @@ impl SnapshotHook for Auth {
         let snapshot = AuthSnapshot::capture(&guard);
         debug_assert!(snapshot.holds_no_totp_secret());
         Ok(Arc::new(snapshot))
+    }
+    fn capture_rollback(&self, scope: &Scope) -> Result<SnapshotPart, TransitionFailure> {
+        let store = self.store(scope)?;
+        let guard = store
+            .lock()
+            .map_err(|_| poisoned(self.name(), "the Auth store"))?;
+        Ok(Arc::new(AuthRollback(guard.clone())))
     }
     fn validate(&self, scope: &Scope, part: &SnapshotPart) -> Result<(), TransitionFailure> {
         part.downcast_ref::<AuthSnapshot>()
@@ -208,6 +311,17 @@ impl SnapshotHook for Auth {
                 report.totp_factors_dropped
             );
         }
+        Ok(())
+    }
+    fn rollback(&self, scope: &Scope, part: &SnapshotPart) -> Result<(), TransitionFailure> {
+        let rollback = part
+            .downcast_ref::<AuthRollback>()
+            .ok_or_else(|| wrong_shape(self.name()))?;
+        let store = self.store(scope)?;
+        let mut store = store
+            .lock()
+            .map_err(|_| poisoned(self.name(), "the Auth store"))?;
+        *store = rollback.0.clone();
         Ok(())
     }
     fn retained_bytes(&self, part: &SnapshotPart) -> u64 {
@@ -481,7 +595,7 @@ mod tests {
     //! registrations of the scope and then rotates its epoch, so no token issued against the
     //! replaced state survives it (specification section 14).
 
-    use super::{AppCheck, Rules, Scope, SnapshotHook};
+    use super::{AppCheck, FieldConfig, LocalBackend, Rules, Scope, SnapshotHook, StorageRules};
     use crate::sessions::tests::{admits_for, gate, token_for, APP_ID};
 
     use fireemu_core_rules::runtime::{LoadedRules, RulesetSlot};
@@ -490,6 +604,122 @@ mod tests {
     use std::sync::Arc;
 
     const AT: LogicalInstant = LogicalInstant::from_unix_seconds(1_788_004_860);
+
+    fn backend() -> Arc<LocalBackend> {
+        use fireemu_core_firestore::index::{IndexSet, IndexValidationPolicy, PlanningContext};
+        use fireemu_core_session::clock::VirtualClock;
+        use fireemu_core_types::edition::{FirestoreApiMode, FirestoreEdition};
+
+        let gateway = fireemu_adapter_grpc::gateway::Gateway {
+            enforce_limits: true,
+            ctx: PlanningContext {
+                edition: FirestoreEdition::Standard,
+                api_mode: FirestoreApiMode::Native,
+                policy: IndexValidationPolicy::Production,
+            },
+            indexes: IndexSet::default(),
+        };
+        Arc::new(LocalBackend::new(
+            gateway,
+            Arc::new(std::sync::Mutex::new(VirtualClock::new(AT))),
+            7,
+        ))
+    }
+
+    fn group(name: &str) -> fireemu_core_types::ids::CollectionId {
+        fireemu_core_types::ids::CollectionId::try_new(name).expect("collection")
+    }
+
+    fn field(name: &str) -> fireemu_core_firestore::field_path::FieldPath {
+        fireemu_core_firestore::field_path::FieldPath::parse(name).expect("field")
+    }
+
+    #[test]
+    fn a_restore_brings_back_the_time_to_live_policies_the_capture_held() {
+        let backend = backend();
+        backend
+            .enable_ttl(
+                "demo-app",
+                "(default)",
+                group("sessions"),
+                field("expiresAt"),
+            )
+            .expect("enable ttl");
+        let hook = FieldConfig(backend.clone());
+        let scope = Scope::AllExcept(BTreeSet::new());
+        let part = hook.capture(&scope).expect("capture");
+        assert!(hook.retained_bytes(&part) > 0);
+
+        assert!(backend.disable_ttl(
+            "demo-app",
+            "(default)",
+            &group("sessions"),
+            &field("expiresAt")
+        ));
+        assert!(backend.ttl_catalog("demo-app", "(default)").is_empty());
+
+        hook.restore(&scope, &part).expect("restore");
+        assert_eq!(
+            backend
+                .ttl_catalog("demo-app", "(default)")
+                .state(&group("sessions"), &field("expiresAt")),
+            Some(fireemu_core_firestore::ttl::TtlState::Active)
+        );
+    }
+
+    #[test]
+    fn a_restore_replaces_the_operation_records_of_its_scope() {
+        let backend = backend();
+        let hook = FieldConfig(backend.clone());
+        let scope = Scope::AllExcept(BTreeSet::new());
+        let before = backend.record_field_operation(
+            "demo-app",
+            "(default)",
+            "a field",
+            AT,
+            serde_json::Value::Null,
+        );
+        let part = hook.capture(&scope).expect("capture");
+
+        let after = backend.record_field_operation(
+            "demo-app",
+            "(default)",
+            "another field",
+            AT,
+            serde_json::Value::Null,
+        );
+        hook.restore(&scope, &part).expect("restore");
+
+        // The operation minted after the capture no longer resolves; the captured one does.
+        assert!(backend.field_operation("demo-app", &before).is_some());
+        assert_eq!(backend.field_operation("demo-app", &after), None);
+    }
+
+    #[test]
+    fn a_restore_of_an_empty_capture_clears_the_policies_of_its_scope() {
+        let backend = backend();
+        let hook = FieldConfig(backend.clone());
+        let scope = Scope::AllExcept(BTreeSet::new());
+        let empty = hook.capture(&scope).expect("capture");
+        backend
+            .enable_ttl(
+                "demo-app",
+                "(default)",
+                group("sessions"),
+                field("expiresAt"),
+            )
+            .expect("enable ttl");
+        let operation = backend.record_field_operation(
+            "demo-app",
+            "(default)",
+            "a field",
+            AT,
+            serde_json::Value::Null,
+        );
+        hook.restore(&scope, &empty).expect("restore");
+        assert!(backend.ttl_catalog("demo-app", "(default)").is_empty());
+        assert_eq!(backend.field_operation("demo-app", &operation), None);
+    }
 
     #[test]
     fn named_database_rules_restore_their_own_fresh_generations() {
@@ -526,6 +756,60 @@ mod tests {
         assert_eq!(
             (analytics.source.as_deref(), analytics.generation()),
             (Some(ALLOW), 2)
+        );
+    }
+
+    /// SNAPSR-1 / SNAPSR-2: the Storage Rules registry is one process-wide table, so the hook
+    /// captures and restores all of it whatever the scope. Only the default session may carry
+    /// it, or a project session's restore would roll back the rules every other session is
+    /// authorizing against.
+    #[test]
+    fn the_storage_rules_registry_is_a_shared_part_of_the_default_session_only() {
+        const DENY: &str = "service firebase.storage { match /b/{bucket}/o { match /{p=**} { allow read: if false; } } }";
+        const ALLOW: &str = "service firebase.storage { match /b/{bucket}/o { match /{p=**} { allow read: if true; } } }";
+
+        let slot = Arc::new(RulesetSlot::new(LoadedRules::from_source(DENY).unwrap()));
+        let registry = Arc::new(fireemu_adapter_http::storage::StorageRulesRegistry::global(
+            slot.clone(),
+        ));
+        let hook = StorageRules(registry.clone());
+        let source = || {
+            registry
+                .global_snapshot()
+                .expect("read the registry")
+                .expect("global rules")
+                .source
+                .clone()
+        };
+
+        assert!(
+            hook.shared(),
+            "the registry is daemon-global, so only the default session's snapshot carries it"
+        );
+
+        // SNAPSR-2: the default session's snapshot carries the registry and restores it.
+        let default = Scope::AllExcept(BTreeSet::new());
+        let part = hook.capture(&default).expect("capture the registry");
+        slot.replace_source(ALLOW).expect("change the rules");
+        assert_eq!(source().as_deref(), Some(ALLOW));
+        hook.restore(&default, &part).expect("restore the registry");
+        assert_eq!(source().as_deref(), Some(DENY));
+
+        // SNAPSR-1: the hook is scope-blind. A project session's part would be the same
+        // daemon-wide table, and restoring it would change what every other session reads.
+        let project = Scope::Project("demo-b".to_owned());
+        slot.replace_source(ALLOW).expect("change the rules again");
+        let project_part = hook
+            .capture(&project)
+            .expect("capture under a project scope");
+        slot.replace_source(DENY)
+            .expect("change the rules once more");
+        hook.restore(&project, &project_part)
+            .expect("restore under a project scope");
+        assert_eq!(
+            source().as_deref(),
+            Some(ALLOW),
+            "the hook restores the whole registry whatever the scope"
         );
     }
 
@@ -712,6 +996,71 @@ mod tests {
             s.user(&uid).unwrap().mfa.is_empty(),
             "AUTH-SNAPSHOT-SECRET-05: no secret, no factor"
         );
+    }
+
+    #[test]
+    fn auth_hook_rollback_preserves_credentials_valid_before_a_failed_restore() {
+        use fireemu_core_auth::jwt::{encode_unsigned, verify_id_token, JwtError};
+        use fireemu_core_auth::mfa::TotpPolicy;
+        use fireemu_core_auth::store::{AuthRegistry, AuthStore, NewUser};
+        use fireemu_core_types::determinism::SplitMix64;
+        use std::collections::BTreeMap;
+        use std::sync::{Arc, Mutex};
+
+        let default = Arc::new(Mutex::new(AuthStore::new(
+            "demo-app",
+            SplitMix64::new(1),
+            TotpPolicy::default(),
+        )));
+        let registry = Arc::new(
+            AuthRegistry::with_project_numbers_and_lifecycle_incarnation(
+                "demo-app",
+                default,
+                BTreeMap::new(),
+                73,
+            ),
+        );
+        assert!(registry.register(
+            "worker-alpha",
+            AuthStore::new("worker-alpha", SplitMix64::new(2), TotpPolicy::default(),),
+        ));
+        let store = registry.store_for("worker-alpha").unwrap();
+        let uid = store
+            .lock()
+            .unwrap()
+            .create_user_with_id(
+                NewUser::email("rollback@example.test"),
+                Some("same-user"),
+                AT,
+            )
+            .unwrap();
+        let hook = super::Auth(registry);
+        let scope = Scope::Project("worker-alpha".to_owned());
+        let target = hook.capture(&scope).unwrap();
+        store
+            .lock()
+            .unwrap()
+            .create_user(NewUser::email("later@example.test"), AT)
+            .unwrap();
+        let valid_before_route = {
+            let store = store.lock().unwrap();
+            encode_unsigned(&store.id_token_claims(&uid, None, AT).unwrap())
+        };
+        let pre_image = hook.capture_rollback(&scope).unwrap();
+
+        hook.restore(&scope, &target).unwrap();
+        assert!(matches!(
+            verify_id_token(&valid_before_route, &store.lock().unwrap(), AT),
+            Err(JwtError::WrongSessionEpoch { .. })
+        ));
+        hook.rollback(&scope, &pre_image).unwrap();
+
+        assert!(store
+            .lock()
+            .unwrap()
+            .user_by_email("later@example.test")
+            .is_some());
+        assert!(verify_id_token(&valid_before_route, &store.lock().unwrap(), AT).is_ok());
     }
 
     /// `SNAP-MEM-01`: the production Auth hook reports a positive retained-byte estimate for a

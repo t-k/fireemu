@@ -31,10 +31,20 @@ use crate::runtime::FunctionsRuntime;
 pub const MAX_FUNCTION_BODY_BYTES: usize = 32 * 1024 * 1024;
 /// Express' default JSON limit used by the pinned Cloud Tasks emulator.
 pub const MAX_TASK_BODY_BYTES: usize = 100 * 1024;
-/// Maximum response body accepted from a function (responses are buffered).
+/// Maximum raw HTTP response accepted from a function, including framing and headers.
 pub const MAX_FUNCTION_RESPONSE_BYTES: u64 = 64 * 1024 * 1024;
 /// Production's maximum streamed response size for a second-generation function.
 pub const MAX_STREAMING_FUNCTION_RESPONSE_BYTES: u64 = 10 * 1024 * 1024;
+
+/// Selects the public HTTP behavior of the pinned emulator or production ingress.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FunctionsHttpProfile {
+    /// Reproduce the pinned Firebase Local Emulator Suite.
+    Emulator,
+    /// Reproduce the recorded production Functions and Cloud Run ingress.
+    Strict,
+}
+
 const MAX_FUNCTION_CONNECTIONS: usize = 128;
 const MAX_CONCURRENT_BODY_READS: usize = 64;
 const MAX_RESERVED_BODY_BYTES: usize = 64 * 1024 * 1024;
@@ -237,16 +247,23 @@ fn accepts_callable_stream(headers: &hyper::HeaderMap) -> bool {
         == Some("text/event-stream")
 }
 
-fn local_request_origin(headers: &hyper::HeaderMap) -> Result<Option<String>, Refusal> {
+fn request_origin(headers: &hyper::HeaderMap) -> Result<Option<String>, Refusal> {
     let origins = field_values(headers, "origin");
-    if origins.len() > 1
-        || origins
-            .first()
-            .is_some_and(|origin| !origin_is_local(origin))
-    {
+    if origins.len() > 1 {
         return Err(Box::new(simple(StatusCode::FORBIDDEN, "forbidden origin")));
     }
     Ok(origins.into_iter().next())
+}
+
+fn function_origin(
+    headers: &hyper::HeaderMap,
+    callable_preflight: bool,
+) -> Result<Option<String>, Refusal> {
+    if callable_preflight {
+        Ok(None)
+    } else {
+        request_origin(headers)
+    }
 }
 
 /// A forwarded response.
@@ -987,6 +1004,34 @@ fn sanitize_credentials(
     }
 }
 
+fn strict_callable_bearer_refusal(
+    runtime: &FunctionsRuntime,
+    raw: &hyper::HeaderMap,
+) -> Option<Response<OutBody>> {
+    let presented = field_values(raw, "authorization");
+    let [authorization] = presented.as_slice() else {
+        return None;
+    };
+    let (scheme, token) = authorization.split_once(' ')?;
+    if !scheme.eq_ignore_ascii_case("bearer") || token.is_empty() {
+        return None;
+    }
+    let verified_user = runtime.callable_auth_verifier().is_some_and(|verifier| {
+        matches!(
+            verifier
+                .principal_from_authorization_for_project(Some(authorization), runtime.project(),),
+            Ok(fireemu_adapter_grpc::rules::Principal::User(_))
+        )
+    });
+    (!verified_user).then(|| {
+        typed(
+            StatusCode::UNAUTHORIZED,
+            "text/html; charset=UTF-8",
+            "\n<html><head>\n<meta http-equiv=\"content-type\" content=\"text/html;charset=utf-8\">\n<title>401 Unauthorized</title>\n</head>\n<body text=#000000 bgcolor=#ffffff>\n<h1>Error: Unauthorized</h1>\n<h2>Your client does not have permission to the requested URL <code>/</code>.</h2>\n<h2></h2>\n</body></html>\n",
+        )
+    })
+}
+
 /// Answers the Cloud Tasks routes, including the emulator diagnostics endpoint.
 ///
 /// There is no queue to create: the official emulator creates one per `onTaskDispatched`
@@ -1229,25 +1274,10 @@ async fn respond_support_surface(
     }
 }
 
-fn buffered_response(
-    response: ProxiedResponse,
-    plain_http: bool,
-    origin: Option<&str>,
-) -> Response<OutBody> {
+fn buffered_response(response: ProxiedResponse) -> Response<OutBody> {
     let mut builder = Response::builder().status(response.status);
-    let answered_cors = response
-        .headers
-        .iter()
-        .any(|(name, _)| name.eq_ignore_ascii_case("access-control-allow-origin"));
     for (name, value) in response.headers {
         builder = builder.header(name, value);
-    }
-    if plain_http && !answered_cors {
-        if let Some(origin) = origin {
-            builder = builder
-                .header("access-control-allow-origin", origin)
-                .header("vary", "Origin");
-        }
     }
     builder
         .body(full(Bytes::from(response.body)))
@@ -1273,25 +1303,97 @@ fn streaming_response(response: ProxiedStreamResponse) -> Response<OutBody> {
         .unwrap_or_else(|_| Response::new(full(Bytes::new())))
 }
 
+fn strict_default_content_type(
+    mut response: Response<OutBody>,
+    profile: FunctionsHttpProfile,
+    streaming: bool,
+) -> Response<OutBody> {
+    if profile == FunctionsHttpProfile::Strict
+        && (response.status() == StatusCode::NO_CONTENT || streaming)
+        && !response.headers().contains_key(hyper::header::CONTENT_TYPE)
+    {
+        response.headers_mut().insert(
+            hyper::header::CONTENT_TYPE,
+            hyper::header::HeaderValue::from_static("text/html"),
+        );
+    }
+    response
+}
+
+struct HttpIngressMode {
+    profile: FunctionsHttpProfile,
+    streaming: bool,
+}
+
+async fn invoke_runner(
+    runtime: &Arc<FunctionsRuntime>,
+    target: &crate::runtime::HttpTarget,
+    method: &str,
+    path_and_query: &str,
+    headers: &[(String, String)],
+    body: &[u8],
+    mode: HttpIngressMode,
+) -> Result<Response<OutBody>, std::io::Error> {
+    if mode.streaming {
+        return match runtime
+            .invoke_http_stream_with_profile(
+                target,
+                method,
+                path_and_query,
+                headers,
+                body,
+                mode.profile,
+            )
+            .await
+        {
+            Ok(crate::runtime::HttpStreamStart::Buffered(response)) => Ok(
+                strict_default_content_type(buffered_response(response), mode.profile, false),
+            ),
+            Ok(crate::runtime::HttpStreamStart::Streaming(response)) => Ok(
+                strict_default_content_type(streaming_response(response), mode.profile, true),
+            ),
+            Err(error) if error == crate::runtime::DROP_CONNECTION => {
+                Err(std::io::Error::other(error))
+            }
+            Err(error) => Ok(simple(StatusCode::BAD_GATEWAY, &error)),
+        };
+    }
+    match runtime
+        .invoke_http_with_profile(target, method, path_and_query, headers, body, mode.profile)
+        .await
+    {
+        Ok(response) => Ok(strict_default_content_type(
+            buffered_response(response),
+            mode.profile,
+            false,
+        )),
+        // A `dropConnection` fault: the connection closes without a response.
+        Err(error) if error == crate::runtime::DROP_CONNECTION => Err(std::io::Error::other(error)),
+        Err(error) => Ok(simple(StatusCode::BAD_GATEWAY, &error)),
+    }
+}
+
 async fn respond(
     runtime: Arc<FunctionsRuntime>,
     req: Request<Incoming>,
     body_limit: usize,
     surface: HttpSurface,
+    profile: FunctionsHttpProfile,
+    peer_ip: std::net::IpAddr,
 ) -> Result<Response<OutBody>, std::io::Error> {
     let path = req.uri().path().to_owned();
     let query = req.uri().query().map(str::to_owned);
-    // Like the other ports: a page on another site must not drive this loopback runtime. The
-    // official emulator does let it -- its runtime runs with `enableCors: true`, which wraps
-    // every handler in `cors({origin: true})` and reflects any origin, so a page anywhere on
-    // the internet can POST to a developer's callable and read the result. That is the one
-    // documented divergence of this port, recorded in
-    // `conformance/fixtures/functions/http-routing-cors-and-timeouts.json`.
-    let origin = match local_request_origin(req.headers()) {
-        Ok(origin) => origin,
-        Err(refusal) => return Ok(*refusal),
-    };
     if surface != HttpSurface::Functions {
+        let origin = match request_origin(req.headers()) {
+            Ok(origin) => origin,
+            Err(refusal) => return Ok(*refusal),
+        };
+        if origin
+            .as_deref()
+            .is_some_and(|value| !origin_is_local(value))
+        {
+            return Ok(simple(StatusCode::FORBIDDEN, "forbidden origin"));
+        }
         return Ok(
             respond_support_surface(runtime, req, body_limit, surface, origin.as_deref()).await,
         );
@@ -1308,20 +1410,22 @@ async fn respond(
         return Ok(simple(StatusCode::BAD_REQUEST, &error));
     }
     let method = req.method().as_str().to_owned();
-    // The CORS the official emulator's `enableCors` gives an `onRequest` function, for the
-    // loopback origins this port serves. A callable answers its own preflight (v2 `onCall`
-    // enables CORS itself, and the recorded oracle shows `POST` where an `onRequest` shows the
-    // whole method list), so a callable's request is forwarded untouched.
-    let (callable, plain_http, streaming_callable) = http_trigger_kinds(&runtime, function);
-    let streaming = streaming_callable && accepts_callable_stream(req.headers());
-    if let Some(answer) = function_preflight(
-        callable,
-        plain_http,
-        &method,
-        req.headers(),
-        origin.as_deref(),
-    ) {
-        return Ok(answer);
+    let (callable, _plain_http, streaming_callable) = http_trigger_kinds(&runtime, function);
+    let callable_preflight = callable && method == "OPTIONS";
+    // The SDK's CORS middleware owns every callable OPTIONS response, including
+    // explicit cors:false and origin lists. Preflights do not authenticate or invoke
+    // the callable handler, so strip credentials without admitting them.
+    let origin = match function_origin(req.headers(), callable_preflight) {
+        Ok(origin) => origin,
+        Err(refusal) => return Ok(*refusal),
+    };
+    let streaming =
+        !callable_preflight && streaming_callable && accepts_callable_stream(req.headers());
+    if callable && !callable_preflight && profile == FunctionsHttpProfile::Strict {
+        if let Some(denial) = strict_callable_bearer_refusal(&runtime, req.headers()) {
+            drain_refused_body(req.into_body()).await;
+            return Ok(denial);
+        }
     }
     let headers: Vec<(String, String)> = req
         .headers()
@@ -1332,17 +1436,32 @@ async fn respond(
                 .map(|v| (k.as_str().to_owned(), v.to_owned()))
         })
         .collect();
-    let headers = match sanitize_credentials(&runtime, function, req.headers(), headers) {
-        Ok(headers) => headers,
-        Err(denial) => {
-            drain_refused_body(req.into_body()).await;
-            return Ok(callable_credential_refusal(
-                *denial,
-                streaming,
-                origin.as_deref(),
-            ));
+    let mut headers = if callable_preflight {
+        headers
+            .into_iter()
+            .filter(|(name, _)| !crate::callable::is_owned(name))
+            .collect()
+    } else {
+        match sanitize_credentials(&runtime, function, req.headers(), headers) {
+            Ok(headers) => headers,
+            Err(denial) => {
+                drain_refused_body(req.into_body()).await;
+                return Ok(callable_credential_refusal(
+                    *denial,
+                    streaming,
+                    origin.as_deref(),
+                ));
+            }
         }
     };
+    if profile == FunctionsHttpProfile::Strict {
+        headers.retain(|(name, _)| {
+            !name.eq_ignore_ascii_case("x-forwarded-for")
+                && !name.eq_ignore_ascii_case("x-forwarded-proto")
+        });
+        headers.push(("x-forwarded-for".to_owned(), peer_ip.to_string()));
+        headers.push(("x-forwarded-proto".to_owned(), "https".to_owned()));
+    }
     let body = match collect_body(req.into_body(), body_limit).await {
         Ok(body) => body,
         Err(answer) => return Ok(*answer),
@@ -1351,32 +1470,16 @@ async fn respond(
         Some(q) => format!("{path}?{q}"),
         None => path,
     };
-    if streaming {
-        return match runtime
-            .invoke_http_stream(&target, &method, &path_and_query, &headers, &body)
-            .await
-        {
-            Ok(crate::runtime::HttpStreamStart::Buffered(response)) => {
-                Ok(buffered_response(response, plain_http, origin.as_deref()))
-            }
-            Ok(crate::runtime::HttpStreamStart::Streaming(response)) => {
-                Ok(streaming_response(response))
-            }
-            Err(error) if error == crate::runtime::DROP_CONNECTION => {
-                Err(std::io::Error::other(error))
-            }
-            Err(error) => Ok(simple(StatusCode::BAD_GATEWAY, &error)),
-        };
-    }
-    match runtime
-        .invoke_http(&target, &method, &path_and_query, &headers, &body)
-        .await
-    {
-        Ok(response) => Ok(buffered_response(response, plain_http, origin.as_deref())),
-        // A `dropConnection` fault: the connection closes without a response.
-        Err(error) if error == crate::runtime::DROP_CONNECTION => Err(std::io::Error::other(error)),
-        Err(error) => Ok(simple(StatusCode::BAD_GATEWAY, &error)),
-    }
+    invoke_runner(
+        &runtime,
+        &target,
+        &method,
+        &path_and_query,
+        &headers,
+        &body,
+        HttpIngressMode { profile, streaming },
+    )
+    .await
 }
 
 /// Every instance of one field, in wire order, with an unrenderable value as an empty string.
@@ -1392,128 +1495,6 @@ fn field_values(headers: &hyper::HeaderMap, name: &str) -> Vec<String> {
         .collect()
 }
 
-/// The preflight answer `cors({origin: true})` produces, which is what the official
-/// emulator's `enableCors` debug feature puts in front of every handler.
-///
-/// Recorded from the oracle: `204`, the origin reflected, the full default method list, the
-/// requested headers echoed, and `Vary: Origin, Access-Control-Request-Headers`. The handler
-/// is not invoked.
-fn preflight_answer(origin: &str, headers: &hyper::HeaderMap) -> Response<OutBody> {
-    let mut builder = Response::builder()
-        .status(StatusCode::NO_CONTENT)
-        .header("access-control-allow-origin", origin)
-        .header(
-            "access-control-allow-methods",
-            "GET,HEAD,PUT,PATCH,POST,DELETE",
-        )
-        .header("vary", "Origin, Access-Control-Request-Headers")
-        .header("content-length", "0");
-    if let Some(requested) = headers
-        .get("access-control-request-headers")
-        .and_then(|v| v.to_str().ok())
-    {
-        builder = builder.header("access-control-allow-headers", requested);
-    }
-    builder
-        .body(full(Bytes::new()))
-        .unwrap_or_else(|_| Response::new(full(Bytes::new())))
-}
-
-fn function_preflight(
-    callable: bool,
-    plain_http: bool,
-    method: &str,
-    headers: &hyper::HeaderMap,
-    origin: Option<&str>,
-) -> Option<Response<OutBody>> {
-    if callable && method == "OPTIONS" {
-        return Some(
-            callable_preflight(headers)
-                .unwrap_or_else(|| simple(StatusCode::FORBIDDEN, "forbidden callable preflight")),
-        );
-    }
-    if plain_http && method == "OPTIONS" && headers.contains_key("access-control-request-method") {
-        return origin.map(|origin| preflight_answer(origin, headers));
-    }
-    None
-}
-
-/// A proxy-owned callable preflight response.
-///
-/// Callable preflights never reach Auth/App Check admission or the runner. Unlike the
-/// compatibility response for `onRequest`, this accepts only the callable protocol's method
-/// and request headers instead of reflecting browser input as authority.
-fn callable_preflight(headers: &hyper::HeaderMap) -> Option<Response<OutBody>> {
-    let origins = field_values(headers, "origin");
-    let [origin] = origins.as_slice() else {
-        return None;
-    };
-    if !origin_is_local(origin) {
-        return None;
-    }
-    let requested_method = field_values(headers, "access-control-request-method");
-    if requested_method.len() != 1 || !requested_method[0].eq_ignore_ascii_case("POST") {
-        return None;
-    }
-    let fetch_site = field_values(headers, "sec-fetch-site");
-    if fetch_site.len() > 1
-        || fetch_site.first().is_some_and(|site| {
-            !matches!(
-                site.to_ascii_lowercase().as_str(),
-                "same-origin" | "same-site" | "none"
-            )
-        })
-    {
-        return None;
-    }
-    let fetch_mode = field_values(headers, "sec-fetch-mode");
-    if fetch_mode.len() > 1
-        || fetch_mode
-            .first()
-            .is_some_and(|mode| !mode.eq_ignore_ascii_case("cors"))
-    {
-        return None;
-    }
-
-    let requested_fields = field_values(headers, "access-control-request-headers");
-    if requested_fields.len() > 1 {
-        return None;
-    }
-    let mut admitted = Vec::new();
-    if let Some(fields) = requested_fields.first() {
-        for field in fields.split(',') {
-            let field = field.trim().to_ascii_lowercase();
-            if field.is_empty()
-                || !matches!(
-                    field.as_str(),
-                    "authorization"
-                        | "content-type"
-                        | "firebase-instance-id-token"
-                        | "x-firebase-appcheck"
-                )
-                || admitted.contains(&field)
-            {
-                return None;
-            }
-            admitted.push(field);
-        }
-    }
-
-    let mut builder = Response::builder()
-        .status(StatusCode::NO_CONTENT)
-        .header("access-control-allow-origin", origin)
-        .header("access-control-allow-methods", "POST")
-        .header(
-            "vary",
-            "Origin, Access-Control-Request-Method, Access-Control-Request-Headers, Sec-Fetch-Site, Sec-Fetch-Mode",
-        )
-        .header("content-length", "0");
-    if !admitted.is_empty() {
-        builder = builder.header("access-control-allow-headers", admitted.join(","));
-    }
-    builder.body(full(Bytes::new())).ok()
-}
-
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum HttpSurface {
     Functions,
@@ -1526,9 +1507,10 @@ async fn serve_surface(
     runtime: Arc<FunctionsRuntime>,
     surface: HttpSurface,
     admission: HttpAdmission,
+    profile: FunctionsHttpProfile,
 ) -> std::io::Result<()> {
     loop {
-        let (stream, _) = listener.accept().await?;
+        let (stream, peer) = listener.accept().await?;
         let connection = admission
             .connections
             .clone()
@@ -1547,7 +1529,7 @@ async fn serve_surface(
                     let body_limit = request_body_limit(surface, req.uri().path());
                     let reservation = request_body_reservation(&req, body_limit);
                     let _request = request_admission.acquire(reservation).await;
-                    respond(runtime, req, body_limit, surface).await
+                    respond(runtime, req, body_limit, surface, profile, peer.ip()).await
                 }
             });
             let mut builder = http1::Builder::new();
@@ -1566,7 +1548,24 @@ pub async fn serve_functions(
     runtime: Arc<FunctionsRuntime>,
     admission: HttpAdmission,
 ) -> std::io::Result<()> {
-    serve_surface(listener, runtime, HttpSurface::Functions, admission).await
+    serve_functions_with_profile(listener, runtime, admission, FunctionsHttpProfile::Emulator).await
+}
+
+/// Serves HTTP and callable Functions with an explicit compatibility profile.
+pub async fn serve_functions_with_profile(
+    listener: TcpListener,
+    runtime: Arc<FunctionsRuntime>,
+    admission: HttpAdmission,
+    profile: FunctionsHttpProfile,
+) -> std::io::Result<()> {
+    serve_surface(
+        listener,
+        runtime,
+        HttpSurface::Functions,
+        admission,
+        profile,
+    )
+    .await
 }
 
 /// Serves only the Eventarc channel publication routes on the official Eventarc listener.
@@ -1575,7 +1574,14 @@ pub async fn serve_eventarc(
     runtime: Arc<FunctionsRuntime>,
     admission: HttpAdmission,
 ) -> std::io::Result<()> {
-    serve_surface(listener, runtime, HttpSurface::Eventarc, admission).await
+    serve_surface(
+        listener,
+        runtime,
+        HttpSurface::Eventarc,
+        admission,
+        FunctionsHttpProfile::Emulator,
+    )
+    .await
 }
 
 /// Serves only the Cloud Tasks queue routes on the official Tasks listener.
@@ -1584,7 +1590,51 @@ pub async fn serve_tasks(
     runtime: Arc<FunctionsRuntime>,
     admission: HttpAdmission,
 ) -> std::io::Result<()> {
-    serve_surface(listener, runtime, HttpSurface::Tasks, admission).await
+    serve_surface(
+        listener,
+        runtime,
+        HttpSurface::Tasks,
+        admission,
+        FunctionsHttpProfile::Emulator,
+    )
+    .await
+}
+
+#[cfg(test)]
+mod buffered_response_tests {
+    use super::parse_response;
+
+    const LARGE_BODY: usize = 10 * 1024 * 1024 + 1;
+
+    fn response(headers: &str, body: &[u8]) -> Vec<u8> {
+        let mut raw = format!("HTTP/1.1 200 OK\r\n{headers}\r\n").into_bytes();
+        raw.extend_from_slice(body);
+        raw
+    }
+
+    #[test]
+    fn ordinary_on_request_content_length_body_above_ten_mib_is_forwarded() {
+        let body = vec![b'x'; LARGE_BODY];
+        let raw = response(&format!("Content-Length: {}\r\n", body.len()), &body);
+        assert_eq!(parse_response(&raw, "GET").unwrap().body, body);
+    }
+
+    #[test]
+    fn ordinary_on_request_close_delimited_body_above_ten_mib_is_forwarded() {
+        let body = vec![b'x'; LARGE_BODY];
+        let raw = response("", &body);
+        assert_eq!(parse_response(&raw, "GET").unwrap().body, body);
+    }
+
+    #[test]
+    fn ordinary_on_request_chunked_body_above_ten_mib_is_forwarded() {
+        let body = vec![b'x'; LARGE_BODY];
+        let mut wire = format!("{:x}\r\n", LARGE_BODY - 1).into_bytes();
+        wire.extend_from_slice(&body[..LARGE_BODY - 1]);
+        wire.extend_from_slice(b"\r\n1\r\nx\r\n0\r\n\r\n");
+        let raw = response("Transfer-Encoding: chunked\r\n", &wire);
+        assert_eq!(parse_response(&raw, "GET").unwrap().body, body);
+    }
 }
 
 #[cfg(test)]

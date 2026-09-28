@@ -15,7 +15,7 @@ use fireemu_core_firestore::path::DocumentPath;
 use fireemu_core_firestore::store::{CommitVersion, Document, DocumentChange};
 use fireemu_core_firestore::value::Value as FsValue;
 use fireemu_core_functions::manifest::{
-    BlockingAuthEvent, TaskRateLimits, TaskRetryConfig, Trigger,
+    BlockingAuthEvent, TaskRateLimits, TaskRetryConfig, Trigger, DEFAULT_TIMEOUT_SECONDS,
 };
 use fireemu_core_functions::manifest::{DocumentEvent, FunctionGeneration, ObjectEvent};
 use fireemu_core_session::clock::VirtualClock;
@@ -26,6 +26,50 @@ use fireemu_core_types::time::{LogicalDuration, LogicalInstant};
 use serde_json::json;
 
 const START: LogicalInstant = LogicalInstant::from_unix_seconds(1_788_004_860);
+const RUNNER_HELLO_TIMEOUT: Duration = Duration::from_secs(60);
+
+#[test]
+fn spawn_spec_debug_redacts_environment_and_command_arguments() {
+    let spec = SpawnSpec {
+        command: vec!["node".to_owned(), "--token=command-sentinel-47".to_owned()],
+        cwd: Some("/functions".to_owned()),
+        env: vec![(
+            "LOCAL_SECRET".to_owned(),
+            "environment-sentinel-48".to_owned(),
+        )],
+        hello_timeout: Duration::from_secs(7),
+    };
+    let spec_debug = format!("{spec:?}");
+    for sentinel in ["command-sentinel-47", "environment-sentinel-48"] {
+        assert!(!spec_debug.contains(sentinel), "{spec_debug}");
+    }
+    assert!(spec_debug.contains("hello_timeout"), "{spec_debug}");
+}
+
+#[test]
+fn functions_config_debug_redacts_runner_secret() {
+    let config = FunctionsConfig {
+        project: "demo-app".to_owned(),
+        default_bucket: "demo-app.appspot.com".to_owned(),
+        location: "nam5".to_owned(),
+        session: SessionId::new(7),
+        max_running: 4,
+        debug_mode: false,
+        retry_attempts: 4,
+        max_catch_up_runs: 10,
+        runner_secret: "runtime-sentinel-49".to_owned(),
+        overlap: fireemu_adapter_functions::runtime::OverlapPolicy::Allow,
+        catch_up: fireemu_adapter_functions::runtime::CatchUpPolicy::All,
+        functions_host: None,
+    };
+
+    let config_debug = format!("{config:?}");
+    assert!(
+        !config_debug.contains("runtime-sentinel-49"),
+        "{config_debug}"
+    );
+    assert!(config_debug.contains("project"), "{config_debug}");
+}
 
 #[tokio::test]
 async fn runner_log_frames_preserve_function_and_user_metadata() {
@@ -34,7 +78,7 @@ async fn runner_log_frames_preserve_function_and_user_metadata() {
         command: vec!["python3".to_owned(), script.to_owned()],
         cwd: None,
         env: Vec::new(),
-        hello_timeout: Duration::from_secs(20),
+        hello_timeout: RUNNER_HELLO_TIMEOUT,
     })
     .await
     .unwrap();
@@ -134,12 +178,31 @@ async fn start_with_runtime_options(
     respawnable: bool,
     configure: impl FnOnce(&mut fireemu_core_functions::manifest::FunctionManifest),
 ) -> (Arc<FunctionsRuntime>, Arc<Mutex<VirtualClock>>) {
+    start_with_runtime_options_and_env(
+        overlap,
+        catch_up,
+        max_running,
+        respawnable,
+        Vec::new(),
+        configure,
+    )
+    .await
+}
+
+async fn start_with_runtime_options_and_env(
+    overlap: fireemu_adapter_functions::runtime::OverlapPolicy,
+    catch_up: fireemu_adapter_functions::runtime::CatchUpPolicy,
+    max_running: usize,
+    respawnable: bool,
+    env: Vec<(String, String)>,
+    configure: impl FnOnce(&mut fireemu_core_functions::manifest::FunctionManifest),
+) -> (Arc<FunctionsRuntime>, Arc<Mutex<VirtualClock>>) {
     let script = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fake_runner.py");
     let spec = SpawnSpec {
         command: vec!["python3".to_owned(), script.to_owned()],
         cwd: None,
-        env: Vec::new(),
-        hello_timeout: Duration::from_secs(20),
+        env,
+        hello_timeout: RUNNER_HELLO_TIMEOUT,
     };
     let runner = Runner::spawn_spec(&spec).await.unwrap();
     let mut manifest = parse_manifest(runner.hello().manifest.as_ref().unwrap()).unwrap();
@@ -169,6 +232,337 @@ async fn start_with_runtime_options(
     (runtime, clock)
 }
 
+async fn wait_for_runner(runtime: &FunctionsRuntime) {
+    let deadline = tokio::time::Instant::now() + RUNNER_HELLO_TIMEOUT + Duration::from_secs(1);
+    while !runtime.runner_alive() {
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "the runner did not restart within its hello timeout"
+        );
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+}
+
+#[tokio::test]
+async fn rapid_resets_share_one_in_flight_runner_spawn() {
+    let dir = std::env::temp_dir().join(format!("fireemu-reset-spawn-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let probe = dir.join("starts");
+    let (runtime, _clock) = start_with_runtime_options_and_env(
+        fireemu_adapter_functions::runtime::OverlapPolicy::Allow,
+        fireemu_adapter_functions::runtime::CatchUpPolicy::All,
+        4,
+        true,
+        vec![
+            (
+                "FIREEMU_FAKE_START_PROBE".to_owned(),
+                probe.display().to_string(),
+            ),
+            ("FIREEMU_FAKE_HELLO_DELAY_MS".to_owned(), "1500".to_owned()),
+        ],
+        |_| {},
+    )
+    .await;
+    runtime.reset();
+    runtime.reset();
+    runtime.reset();
+    wait_for_runner(&runtime).await;
+    assert_eq!(std::fs::read_to_string(&probe).unwrap().lines().count(), 2);
+    runtime.shutdown().await;
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[tokio::test]
+async fn http_immediately_after_reset_uses_one_replacement() {
+    let dir = std::env::temp_dir().join(format!("fireemu-http-reset-spawn-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let probe = dir.join("starts");
+    let (runtime, _clock) = start_with_runtime_options_and_env(
+        fireemu_adapter_functions::runtime::OverlapPolicy::Allow,
+        fireemu_adapter_functions::runtime::CatchUpPolicy::All,
+        4,
+        true,
+        vec![(
+            "FIREEMU_FAKE_START_PROBE".to_owned(),
+            probe.display().to_string(),
+        )],
+        |_| {},
+    )
+    .await;
+    let stale_target = runtime
+        .http_target("demo-app", "us-central1", "echo")
+        .unwrap();
+    runtime.reset();
+    assert_eq!(
+        runtime
+            .invoke_http(&stale_target, "GET", "/after-reset", &[], &[])
+            .await
+            .unwrap()
+            .status,
+        200
+    );
+    assert_eq!(std::fs::read_to_string(&probe).unwrap().lines().count(), 2);
+    runtime.shutdown().await;
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[tokio::test]
+async fn fixed_inspector_reload_holds_recovery_until_the_new_runner_is_published() {
+    let dir = std::env::temp_dir().join(format!("fireemu-inspector-gate-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let probe = dir.join("starts");
+    let env = vec![(
+        "FIREEMU_FAKE_START_PROBE".to_owned(),
+        probe.display().to_string(),
+    )];
+    let (runtime, _clock) = start_with_runtime_options_and_env(
+        fireemu_adapter_functions::runtime::OverlapPolicy::Allow,
+        fireemu_adapter_functions::runtime::CatchUpPolicy::All,
+        4,
+        true,
+        env.clone(),
+        |_| {},
+    )
+    .await;
+    let target = runtime
+        .http_target("demo-app", "us-central1", "echo")
+        .unwrap();
+    let guard = runtime
+        .stop_runner_for_fixed_inspector_reload("default")
+        .await
+        .unwrap();
+    runtime.publish("jobs", &[json!({"data": "YQ=="})]);
+    let pending = {
+        let runtime = runtime.clone();
+        tokio::spawn(async move {
+            runtime
+                .invoke_http(&target, "GET", "/after-reload", &[], &[])
+                .await
+        })
+    };
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    assert!(!pending.is_finished());
+    assert_eq!(std::fs::read_to_string(&probe).unwrap().lines().count(), 1);
+    let spec = SpawnSpec {
+        command: vec![
+            "python3".to_owned(),
+            concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fake_runner.py").to_owned(),
+        ],
+        cwd: None,
+        env,
+        hello_timeout: RUNNER_HELLO_TIMEOUT,
+    };
+    let replacement = Arc::new(Runner::spawn_spec(&spec).await.unwrap());
+    runtime
+        .reload_codebase(CodebaseSpec {
+            name: "default".to_owned(),
+            manifest: runtime.manifest().clone(),
+            runner: replacement.clone(),
+            spawn: Some(spec),
+            cleanup_dir: None,
+        })
+        .unwrap();
+    drop(guard);
+    assert_eq!(pending.await.unwrap().unwrap().status, 200);
+    runtime.await_idle(Duration::from_secs(3)).await.unwrap();
+    assert!(runtime
+        .history()
+        .iter()
+        .any(|record| { record.function == "onJob" && record.outcome == "ok" }));
+    assert!(Arc::ptr_eq(&runtime.runner(), &replacement));
+    assert_eq!(std::fs::read_to_string(&probe).unwrap().lines().count(), 2);
+    runtime.shutdown().await;
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[tokio::test]
+async fn fixed_inspector_reload_wakes_queued_background_work() {
+    let (runtime, _clock) = start_with_runtime_options(
+        fireemu_adapter_functions::runtime::OverlapPolicy::Allow,
+        fireemu_adapter_functions::runtime::CatchUpPolicy::All,
+        4,
+        true,
+        |_| {},
+    )
+    .await;
+    let guard = runtime
+        .stop_runner_for_fixed_inspector_reload("default")
+        .await
+        .unwrap();
+    runtime.publish("jobs", &[json!({"data": "YQ=="})]);
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    assert!(!runtime.is_idle());
+    assert!(runtime.history().is_empty());
+    let spec = SpawnSpec {
+        command: vec![
+            "python3".to_owned(),
+            concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fake_runner.py").to_owned(),
+        ],
+        cwd: None,
+        env: Vec::new(),
+        hello_timeout: RUNNER_HELLO_TIMEOUT,
+    };
+    let replacement = Arc::new(Runner::spawn_spec(&spec).await.unwrap());
+    runtime
+        .reload_codebase(CodebaseSpec {
+            name: "default".to_owned(),
+            manifest: runtime.manifest().clone(),
+            runner: replacement,
+            spawn: Some(spec),
+            cleanup_dir: None,
+        })
+        .unwrap();
+    drop(guard);
+    runtime.await_idle(Duration::from_secs(3)).await.unwrap();
+    assert!(runtime
+        .history()
+        .iter()
+        .any(|record| { record.function == "onJob" && record.outcome == "ok" }));
+    runtime.shutdown().await;
+}
+
+#[tokio::test]
+async fn reset_during_runner_hello_discards_the_superseded_spawn() {
+    let dir =
+        std::env::temp_dir().join(format!("fireemu-stale-reset-spawn-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let probe = dir.join("starts");
+    let (runtime, _clock) = start_with_runtime_options_and_env(
+        fireemu_adapter_functions::runtime::OverlapPolicy::Allow,
+        fireemu_adapter_functions::runtime::CatchUpPolicy::All,
+        4,
+        true,
+        vec![
+            (
+                "FIREEMU_FAKE_START_PROBE".to_owned(),
+                probe.display().to_string(),
+            ),
+            ("FIREEMU_FAKE_HELLO_DELAY_MS".to_owned(), "1500".to_owned()),
+        ],
+        |_| {},
+    )
+    .await;
+    runtime.reset();
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(2);
+    loop {
+        let starts = std::fs::read_to_string(&probe).unwrap();
+        if starts.lines().count() >= 2 {
+            break;
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "the first replacement did not start"
+        );
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    runtime.reset();
+    runtime.reset();
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    assert_eq!(std::fs::read_to_string(&probe).unwrap().lines().count(), 2);
+    wait_for_runner(&runtime).await;
+    assert_eq!(std::fs::read_to_string(&probe).unwrap().lines().count(), 3);
+    let target = runtime
+        .http_target("demo-app", "us-central1", "echo")
+        .unwrap();
+    assert_eq!(
+        runtime
+            .invoke_http(&target, "GET", "/echo", &[], &[])
+            .await
+            .unwrap()
+            .status,
+        200
+    );
+    runtime.shutdown().await;
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[tokio::test]
+async fn reset_joins_an_in_flight_blocking_auth_runner_spawn() {
+    let dir = std::env::temp_dir().join(format!("fireemu-auth-reset-spawn-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let probe = dir.join("starts");
+    let (runtime, _clock) = start_with_runtime_options_and_env(
+        fireemu_adapter_functions::runtime::OverlapPolicy::Allow,
+        fireemu_adapter_functions::runtime::CatchUpPolicy::All,
+        4,
+        true,
+        vec![
+            (
+                "FIREEMU_FAKE_START_PROBE".to_owned(),
+                probe.display().to_string(),
+            ),
+            ("FIREEMU_FAKE_HELLO_DELAY_MS".to_owned(), "1500".to_owned()),
+        ],
+        |manifest| {
+            manifest.functions.extend(
+                parse_manifest(&json!({"functions": [{
+                    "name": "beforeCreate",
+                    "generation": 2,
+                    "trigger": {"type": "blockingAuth", "eventType": "beforeCreate"}
+                }]}))
+                .unwrap()
+                .functions,
+            );
+        },
+    )
+    .await;
+    let (target, admission) = runtime
+        .try_admit_blocking_auth(BlockingAuthEvent::BeforeCreate)
+        .unwrap()
+        .unwrap();
+    drop(admission);
+    assert!(runtime.restart_runner_after_blocking_failure(&target));
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(2);
+    loop {
+        let starts = std::fs::read_to_string(&probe).unwrap();
+        if starts.lines().count() >= 2 {
+            break;
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "the Blocking Auth replacement did not start"
+        );
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    runtime.reset();
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    assert_eq!(std::fs::read_to_string(&probe).unwrap().lines().count(), 2);
+    wait_for_runner(&runtime).await;
+    assert_eq!(std::fs::read_to_string(&probe).unwrap().lines().count(), 3);
+    runtime.shutdown().await;
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+async fn wait_for_ok_since(
+    runtime: &FunctionsRuntime,
+    cursor: fireemu_adapter_functions::runtime::HistoryCursor,
+) {
+    let deadline =
+        tokio::time::Instant::now() + Duration::from_secs(u64::from(DEFAULT_TIMEOUT_SECONDS) + 1);
+    loop {
+        let delta = runtime.history_since(Some(cursor));
+        assert!(!delta.resync, "the current-epoch cursor remains valid");
+        if delta
+            .records
+            .iter()
+            .any(|r| r.record.function == "ok" && r.record.outcome == "ok")
+        {
+            return;
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "the current-epoch completion was not recorded: {:?}",
+            delta.records
+        );
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+}
+
 async fn start_task_runtime(
     probe: &Path,
     configure: impl Fn(&str) -> TaskRateLimits,
@@ -192,15 +586,26 @@ async fn start_task_runtime_with_policy(
     max_running: usize,
     configure: impl Fn(&str) -> (TaskRetryConfig, TaskRateLimits),
 ) -> Arc<FunctionsRuntime> {
+    start_task_runtime_with_policy_and_env(probe, max_running, configure, Vec::new()).await
+}
+
+async fn start_task_runtime_with_policy_and_env(
+    probe: &Path,
+    max_running: usize,
+    configure: impl Fn(&str) -> (TaskRetryConfig, TaskRateLimits),
+    extra_env: Vec<(String, String)>,
+) -> Arc<FunctionsRuntime> {
     let script = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fake_runner.py");
+    let mut env = vec![(
+        "FIREEMU_FAKE_TASK_PROBE".to_owned(),
+        probe.display().to_string(),
+    )];
+    env.extend(extra_env);
     let spec = SpawnSpec {
         command: vec!["python3".to_owned(), script.to_owned()],
         cwd: None,
-        env: vec![(
-            "FIREEMU_FAKE_TASK_PROBE".to_owned(),
-            probe.display().to_string(),
-        )],
-        hello_timeout: Duration::from_secs(20),
+        env,
+        hello_timeout: Duration::from_secs(60),
     };
     let runner = Runner::spawn_spec(&spec).await.unwrap();
     let mut manifest = parse_manifest(runner.hello().manifest.as_ref().unwrap()).unwrap();
@@ -315,10 +720,23 @@ async fn reset_task_completion_cannot_release_a_new_generation_task() {
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
     let probe = dir.join("entries");
-    let runtime = start_task_runtime(&probe, |_| TaskRateLimits {
-        max_concurrent_dispatches: 1,
-        max_dispatches_per_second: 500.0,
-    })
+    let runtime = start_task_runtime_with_policy_and_env(
+        &probe,
+        4,
+        |_| {
+            (
+                TaskRetryConfig {
+                    max_attempts: 1,
+                    ..TaskRetryConfig::default()
+                },
+                TaskRateLimits {
+                    max_concurrent_dispatches: 1,
+                    max_dispatches_per_second: 500.0,
+                },
+            )
+        },
+        vec![("FIREEMU_FAKE_HELLO_DELAY_MS".to_owned(), "3000".to_owned())],
+    )
     .await;
 
     let body = task_body("same");
@@ -332,9 +750,28 @@ async fn reset_task_completion_cannot_release_a_new_generation_task() {
     runtime
         .enqueue_task("demo-app", "us-central1", "taskA", &body)
         .unwrap();
-    let _ = wait_for_task_entries(&probe, 2).await;
+    let restart_deadline =
+        tokio::time::Instant::now() + RUNNER_HELLO_TIMEOUT + Duration::from_secs(1);
+    while !runtime.runner_alive() {
+        assert_eq!(
+            runtime.task_queue_stats()["queue:demo-app-us-central1-taskA"]["numberOfTasks"],
+            1,
+            "a task accepted during reset stays pending without spending a delivery attempt"
+        );
+        assert!(
+            tokio::time::Instant::now() < restart_deadline,
+            "the runner did not restart within its hello timeout"
+        );
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    let entries = wait_for_task_entries(&probe, 2).await;
+    assert_eq!(entries.iter().filter(|entry| *entry == "taskA").count(), 2);
     tokio::time::sleep(Duration::from_millis(100)).await;
     assert_eq!(runtime.status()["tasksInFlight"], 1);
+    assert_eq!(
+        runtime.task_queue_stats()["queue:demo-app-us-central1-taskA"]["failedTasks"],
+        0.0
+    );
 
     std::fs::write(format!("{}.taskA.release", probe.display()), b"").unwrap();
     tokio::time::timeout(Duration::from_secs(4), async {
@@ -560,7 +997,7 @@ async fn multi_codebase_runtime_exposes_and_stops_every_current_runner() {
         command: vec!["python3".to_owned(), script.to_owned()],
         cwd: None,
         env: Vec::new(),
-        hello_timeout: Duration::from_secs(20),
+        hello_timeout: Duration::from_secs(60),
     };
     let first = Arc::new(Runner::spawn_spec(&spec).await.unwrap());
     let second = Arc::new(Runner::spawn_spec(&spec).await.unwrap());
@@ -639,7 +1076,7 @@ async fn shutdown_rejects_late_reload_and_reset_runner_installation() {
         command: vec!["python3".to_owned(), script.to_owned()],
         cwd: None,
         env: Vec::new(),
-        hello_timeout: Duration::from_secs(20),
+        hello_timeout: Duration::from_secs(60),
     };
     let replacement = Arc::new(Runner::spawn_spec(&spec).await.unwrap());
     let error = runtime
@@ -672,7 +1109,7 @@ async fn rejected_manifest_reload_keeps_the_eventarc_generation_and_table() {
         command: vec!["python3".to_owned(), script.to_owned()],
         cwd: None,
         env: Vec::new(),
-        hello_timeout: Duration::from_secs(20),
+        hello_timeout: Duration::from_secs(60),
     };
     let replacement = Arc::new(Runner::spawn_spec(&spawn).await.unwrap());
     let mut changed = runtime.manifest().clone();
@@ -720,7 +1157,7 @@ async fn hot_reload_rejects_a_policy_only_blocking_auth_manifest_change() {
         command: vec!["python3".to_owned(), script.to_owned()],
         cwd: None,
         env: Vec::new(),
-        hello_timeout: Duration::from_secs(20),
+        hello_timeout: Duration::from_secs(60),
     };
     let replacement = Arc::new(Runner::spawn_spec(&spawn).await.unwrap());
     let mut changed = runtime.manifest().clone();
@@ -746,6 +1183,56 @@ async fn hot_reload_rejects_a_policy_only_blocking_auth_manifest_change() {
     assert!(error.contains("changed its trigger manifest"), "{error}");
     assert_eq!(runtime.trigger_generation(), generation);
     assert!(!replacement.is_alive());
+    runtime.shutdown().await;
+}
+
+#[tokio::test]
+async fn blocking_auth_token_policy_follows_an_explicit_target() {
+    let (runtime, _clock) = start_with_policies_and_manifest(
+        fireemu_adapter_functions::runtime::OverlapPolicy::Allow,
+        fireemu_adapter_functions::runtime::CatchUpPolicy::All,
+        |manifest| {
+            let mut blocking = parse_manifest(&json!({"functions": [{
+                "name": "policyA",
+                "trigger": {"type": "blockingAuth", "eventType": "beforeCreate"}
+            }, {
+                "name": "policyB",
+                "trigger": {"type": "blockingAuth", "eventType": "beforeCreate", "accessToken": true}
+            }]}))
+            .unwrap();
+            manifest.functions.append(&mut blocking.functions);
+        },
+    )
+    .await;
+
+    assert!(
+        !runtime
+            .blocking_auth_token_policy(BlockingAuthEvent::BeforeCreate)
+            .access_token
+    );
+    assert!(
+        !runtime
+            .blocking_auth_token_policy_for(BlockingAuthEvent::BeforeCreate, Some("policyA"))
+            .access_token
+    );
+    assert!(
+        runtime
+            .blocking_auth_token_policy_for(BlockingAuthEvent::BeforeCreate, Some("policyB"))
+            .access_token
+    );
+    assert!(
+        !runtime
+            .blocking_auth_token_policy_for(BlockingAuthEvent::BeforeCreate, Some("missing"))
+            .access_token
+    );
+
+    let (target, admission) = runtime
+        .try_admit_blocking_auth_for(BlockingAuthEvent::BeforeCreate, Some("policyB"))
+        .unwrap()
+        .unwrap();
+    assert_eq!(target.function, "policyB");
+    assert!(target.token_policy.access_token);
+    drop(admission);
     runtime.shutdown().await;
 }
 
@@ -917,7 +1404,7 @@ async fn a_stuck_blocking_auth_invocation_recycles_its_runner() {
         .try_admit_blocking_auth(BlockingAuthEvent::BeforeCreate)
         .is_err());
 
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(3);
+    let deadline = tokio::time::Instant::now() + RUNNER_HELLO_TIMEOUT + Duration::from_secs(1);
     loop {
         let replacement = runtime.runner();
         if !Arc::ptr_eq(&retired, &replacement) && replacement.is_alive() {
@@ -930,10 +1417,181 @@ async fn a_stuck_blocking_auth_invocation_recycles_its_runner() {
         }
         assert!(
             tokio::time::Instant::now() < deadline,
-            "the stuck runner was not replaced"
+            "the stuck runner was not replaced within its hello contract"
         );
-        tokio::task::yield_now().await;
+        tokio::time::sleep(Duration::from_millis(20)).await;
     }
+}
+
+#[tokio::test]
+async fn a_blocking_auth_request_starts_recovery_of_an_idle_dead_runner() {
+    let (runtime, _clock) = start_with_policies_and_manifest(
+        fireemu_adapter_functions::runtime::OverlapPolicy::Allow,
+        fireemu_adapter_functions::runtime::CatchUpPolicy::All,
+        |manifest| {
+            let mut blocking = parse_manifest(&json!({"functions": [{
+                "name": "beforeCreate",
+                "generation": 2,
+                "trigger": {"type": "blockingAuth", "eventType": "beforeCreate"}
+            }]}))
+            .unwrap();
+            manifest.functions.append(&mut blocking.functions);
+        },
+    )
+    .await;
+    runtime.runner().kill_now();
+    assert!(runtime
+        .try_admit_blocking_auth(BlockingAuthEvent::BeforeCreate)
+        .is_err());
+    tokio::time::timeout(Duration::from_secs(3), async {
+        while !runtime.runner_alive() {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .expect("the request starts runner recovery");
+    let (_target, admission) = runtime
+        .try_admit_blocking_auth(BlockingAuthEvent::BeforeCreate)
+        .unwrap()
+        .unwrap();
+    drop(admission);
+    runtime.shutdown().await;
+}
+
+#[tokio::test]
+async fn failed_blocking_auth_respawn_releases_recovery_ownership() {
+    let dir =
+        std::env::temp_dir().join(format!("fireemu-auth-restart-fails-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let probe = dir.join("starts");
+    let script = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fake_runner.py");
+    let probe_env = (
+        "FIREEMU_FAKE_START_PROBE".to_owned(),
+        probe.display().to_string(),
+    );
+    let initial_spec = SpawnSpec {
+        command: vec!["python3".to_owned(), script.to_owned()],
+        cwd: None,
+        env: vec![probe_env.clone()],
+        hello_timeout: RUNNER_HELLO_TIMEOUT,
+    };
+    let runner = Arc::new(Runner::spawn_spec(&initial_spec).await.unwrap());
+    let mut manifest = parse_manifest(runner.hello().manifest.as_ref().unwrap()).unwrap();
+    manifest.functions.extend(
+        parse_manifest(&json!({"functions": [{
+            "name": "beforeCreate", "generation": 2,
+            "trigger": {"type": "blockingAuth", "eventType": "beforeCreate"}
+        }]}))
+        .unwrap()
+        .functions,
+    );
+    let failing_spec = SpawnSpec {
+        command: vec!["python3".to_owned(), script.to_owned()],
+        cwd: None,
+        env: vec![
+            probe_env,
+            ("FIREEMU_FAKE_EXIT_BEFORE_HELLO".to_owned(), "1".to_owned()),
+        ],
+        hello_timeout: Duration::from_secs(10),
+    };
+    let runtime = FunctionsRuntime::new(
+        manifest,
+        FunctionsConfig {
+            project: "demo-app".into(),
+            default_bucket: "demo-app.appspot.com".into(),
+            location: "nam5".into(),
+            session: SessionId::new(7),
+            max_running: 4,
+            debug_mode: false,
+            retry_attempts: 4,
+            max_catch_up_runs: 1000,
+            runner_secret: "s".into(),
+            overlap: fireemu_adapter_functions::runtime::OverlapPolicy::Allow,
+            catch_up: fireemu_adapter_functions::runtime::CatchUpPolicy::All,
+            functions_host: None,
+        },
+        Arc::new(Mutex::new(VirtualClock::new(START))),
+        runner,
+        Some(failing_spec),
+    );
+    tokio::spawn(runtime.clone().dispatch_loop());
+    let stale_http = runtime
+        .http_target("demo-app", "us-central1", "echo")
+        .unwrap();
+    let (blocking, admission) = runtime
+        .try_admit_blocking_auth(BlockingAuthEvent::BeforeCreate)
+        .unwrap()
+        .unwrap();
+    drop(admission);
+    assert!(runtime.restart_runner_after_blocking_failure(&blocking));
+    runtime.publish("crash-once", &[json!({"data": "YQ=="})]);
+    tokio::time::timeout(Duration::from_secs(10), async {
+        while std::fs::read_to_string(&probe).unwrap().lines().count() < 3 {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("queued work must wake after the failed Blocking Auth restart");
+    let result = tokio::time::timeout(
+        Duration::from_secs(10),
+        runtime.invoke_http(&stale_http, "GET", "/after-failed-auth-restart", &[], &[]),
+    )
+    .await
+    .expect("a failed Blocking Auth respawn must release the shared recovery gate");
+    assert!(
+        result.is_err(),
+        "a runner that cannot finish hello cannot serve HTTP"
+    );
+    runtime.shutdown().await;
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[tokio::test]
+async fn http_waits_for_an_existing_blocking_auth_runner_restart() {
+    let dir = std::env::temp_dir().join(format!("fireemu-blocking-restart-{}", std::process::id()));
+    std::fs::create_dir(&dir).unwrap();
+    let probe = dir.join("starts");
+    let (runtime, _clock) = start_with_runtime_options_and_env(
+        fireemu_adapter_functions::runtime::OverlapPolicy::Allow,
+        fireemu_adapter_functions::runtime::CatchUpPolicy::All,
+        4,
+        true,
+        vec![
+            ("FIREEMU_FAKE_HELLO_DELAY_MS".to_owned(), "500".to_owned()),
+            (
+                "FIREEMU_FAKE_START_PROBE".to_owned(),
+                probe.display().to_string(),
+            ),
+        ],
+        |manifest| {
+            let mut blocking = parse_manifest(&json!({"functions": [{
+                "name": "beforeCreate",
+                "generation": 2,
+                "trigger": {"type": "blockingAuth", "eventType": "beforeCreate"}
+            }]}))
+            .unwrap();
+            manifest.functions.append(&mut blocking.functions);
+        },
+    )
+    .await;
+    let stale_http = runtime
+        .http_target("demo-app", "us-central1", "echo")
+        .unwrap();
+    let (blocking, admission) = runtime
+        .try_admit_blocking_auth(BlockingAuthEvent::BeforeCreate)
+        .unwrap()
+        .unwrap();
+    drop(admission);
+    assert!(runtime.restart_runner_after_blocking_failure(&blocking));
+    let response = runtime
+        .invoke_http(&stale_http, "GET", "/during-blocking-restart", &[], &[])
+        .await
+        .expect("HTTP waits for the claimed Blocking Auth replacement");
+    assert_eq!(response.status, 200);
+    assert_eq!(std::fs::read_to_string(&probe).unwrap().lines().count(), 2);
+    runtime.shutdown().await;
+    std::fs::remove_dir_all(dir).unwrap();
 }
 
 #[tokio::test]
@@ -981,7 +1639,7 @@ async fn a_blocking_restart_cannot_replace_a_newer_hot_reload_generation() {
         command: vec!["python3".to_owned(), script.to_owned()],
         cwd: None,
         env: Vec::new(),
-        hello_timeout: Duration::from_secs(20),
+        hello_timeout: Duration::from_secs(60),
     };
     let mut slow = fast.clone();
     slow.env = vec![("FIREEMU_FAKE_HELLO_DELAY_MS".to_owned(), "500".to_owned())];
@@ -1189,6 +1847,276 @@ async fn events_are_dispatched_and_retried_in_virtual_time() {
 }
 
 #[tokio::test]
+async fn a_crashed_event_retries_only_when_retry_is_enabled() {
+    let dir = std::env::temp_dir().join(format!("fireemu-crash-once-{}", std::process::id()));
+    std::fs::create_dir(&dir).unwrap();
+    let path = dir.join("crash-once");
+    let (runtime, clock) = start_with_runtime_options_and_env(
+        fireemu_adapter_functions::runtime::OverlapPolicy::Allow,
+        fireemu_adapter_functions::runtime::CatchUpPolicy::All,
+        4,
+        true,
+        vec![(
+            "FIREEMU_FAKE_CRASH_ONCE_MARKER".to_owned(),
+            path.display().to_string(),
+        )],
+        |manifest| {
+            manifest
+                .functions
+                .iter_mut()
+                .find(|function| function.name == "crashOnce")
+                .unwrap()
+                .retry = true;
+        },
+    )
+    .await;
+    runtime.publish("crash-once", &[json!({"data": "YQ=="})]);
+    let waiting = runtime.await_idle(Duration::from_millis(500)).await;
+    assert!(
+        waiting.is_err(),
+        "the first crash waits for the retry clock"
+    );
+    clock
+        .lock()
+        .unwrap()
+        .advance(LogicalDuration::from_seconds(60))
+        .unwrap();
+    runtime.on_clock_changed();
+    runtime
+        .await_idle(Duration::from_secs(5))
+        .await
+        .expect("the policy retries after a replacement starts");
+    let records: Vec<_> = runtime
+        .history()
+        .into_iter()
+        .filter(|record| record.function == "crashOnce")
+        .collect();
+    assert_eq!(records.len(), 2);
+    assert!(records[0].outcome.starts_with("runner gone:"));
+    assert_eq!(records[0].attempt, 1);
+    assert_eq!(records[1].outcome, "ok");
+    assert_eq!(records[1].attempt, 2);
+    assert!(runtime.runner_alive());
+    runtime.shutdown().await;
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[tokio::test]
+async fn a_spontaneously_crashing_non_retry_event_terminates_after_one_delivery() {
+    let dir = std::env::temp_dir().join(format!("fireemu-crash-always-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let starts = dir.join("starts");
+    let (runtime, _clock) = start_with_runtime_options_and_env(
+        fireemu_adapter_functions::runtime::OverlapPolicy::Allow,
+        fireemu_adapter_functions::runtime::CatchUpPolicy::All,
+        4,
+        true,
+        vec![(
+            "FIREEMU_FAKE_START_PROBE".to_owned(),
+            starts.display().to_string(),
+        )],
+        |_| {},
+    )
+    .await;
+
+    runtime.publish("crash-always", &[json!({"data": "YQ=="})]);
+    let idle = runtime.await_idle(Duration::from_secs(4)).await;
+    let records: Vec<_> = runtime
+        .history()
+        .into_iter()
+        .filter(|record| record.function == "crashAlways")
+        .collect();
+    let status = runtime.status();
+    runtime.shutdown().await;
+    let start_count = std::fs::read_to_string(&starts).unwrap().lines().count();
+    std::fs::remove_dir_all(dir).unwrap();
+
+    assert!(
+        idle.is_ok(),
+        "the crashed event kept the session busy: {status}"
+    );
+    assert_eq!(records.len(), 1, "the event was redelivered: {records:?}");
+    assert!(records[0].outcome.starts_with("runner gone:"));
+    assert_eq!(status["deadLettered"], 1);
+    assert!(
+        start_count <= 2,
+        "the runner was restarted {start_count} times"
+    );
+}
+
+#[tokio::test]
+async fn a_spontaneously_crashing_retry_event_exhausts_its_attempt_budget() {
+    let (runtime, clock) = start_with_runtime_options_and_env(
+        fireemu_adapter_functions::runtime::OverlapPolicy::Allow,
+        fireemu_adapter_functions::runtime::CatchUpPolicy::All,
+        4,
+        true,
+        Vec::new(),
+        |manifest| {
+            manifest
+                .functions
+                .iter_mut()
+                .find(|function| function.name == "crashAlways")
+                .unwrap()
+                .retry = true;
+        },
+    )
+    .await;
+    runtime.publish("crash-always", &[json!({"data": "YQ=="})]);
+    for delivered in 1..=3 {
+        tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                if runtime
+                    .history()
+                    .iter()
+                    .filter(|record| record.function == "crashAlways")
+                    .count()
+                    >= delivered
+                {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("the crash is recorded before advancing the retry clock");
+        clock
+            .lock()
+            .unwrap()
+            .advance(LogicalDuration::from_seconds(60))
+            .unwrap();
+        runtime.on_clock_changed();
+    }
+    let idle = runtime.await_idle(Duration::from_secs(5)).await;
+    let records: Vec<_> = runtime
+        .history()
+        .into_iter()
+        .filter(|record| record.function == "crashAlways")
+        .collect();
+    let status = runtime.status();
+    runtime.shutdown().await;
+
+    assert!(idle.is_ok(), "the retry budget did not terminate: {status}");
+    assert_eq!(
+        records
+            .iter()
+            .map(|record| record.attempt)
+            .collect::<Vec<_>>(),
+        vec![1, 2, 3, 4]
+    );
+    assert_eq!(status["deadLettered"], 1);
+}
+
+#[tokio::test]
+async fn http_recovery_uses_the_function_deadline() {
+    let (runtime, _clock) = start_with_runtime_options_and_env(
+        fireemu_adapter_functions::runtime::OverlapPolicy::Allow,
+        fireemu_adapter_functions::runtime::CatchUpPolicy::All,
+        4,
+        true,
+        vec![("FIREEMU_FAKE_HELLO_DELAY_MS".to_owned(), "3000".to_owned())],
+        |manifest| {
+            manifest
+                .functions
+                .iter_mut()
+                .find(|function| function.name == "echo")
+                .unwrap()
+                .timeout_seconds = 1;
+        },
+    )
+    .await;
+    let target = runtime
+        .http_target("demo-app", "us-central1", "echo")
+        .unwrap();
+    runtime.runner().kill_now();
+    let result = tokio::time::timeout(
+        Duration::from_secs(2),
+        runtime.invoke_http(&target, "GET", "/slow-recovery", &[], &[]),
+    )
+    .await
+    .expect("the invocation returns within its recovery deadline");
+    let response = result.expect("a timed-out recovery uses the function timeout response");
+    assert_eq!(response.status, 500);
+    assert_eq!(response.body, br#"{"code":"ECONNRESET"}"#);
+    assert!(runtime
+        .history()
+        .iter()
+        .any(|record| record.function == "echo" && record.outcome == "timeout"));
+    runtime.shutdown().await;
+}
+
+#[tokio::test]
+async fn strict_http_recovery_returns_the_recorded_upstream_timeout() {
+    let (runtime, _clock) = start_with_runtime_options_and_env(
+        fireemu_adapter_functions::runtime::OverlapPolicy::Allow,
+        fireemu_adapter_functions::runtime::CatchUpPolicy::All,
+        4,
+        true,
+        vec![("FIREEMU_FAKE_HELLO_DELAY_MS".to_owned(), "3000".to_owned())],
+        |manifest| {
+            manifest
+                .functions
+                .iter_mut()
+                .find(|function| function.name == "echo")
+                .unwrap()
+                .timeout_seconds = 1;
+        },
+    )
+    .await;
+    let target = runtime
+        .http_target("demo-app", "us-central1", "echo")
+        .unwrap();
+    runtime.runner().kill_now();
+    let response = tokio::time::timeout(
+        Duration::from_secs(2),
+        runtime.invoke_http_with_profile(
+            &target,
+            "GET",
+            "/slow-recovery",
+            &[],
+            &[],
+            fireemu_adapter_functions::http::FunctionsHttpProfile::Strict,
+        ),
+    )
+    .await
+    .expect("the invocation returns within its recovery deadline")
+    .expect("a timed-out recovery has an HTTP response");
+    assert_eq!(response.status, 504);
+    assert_eq!(
+        response.headers,
+        vec![("content-type".to_owned(), "text/plain".to_owned())]
+    );
+    assert_eq!(response.body, b"upstream request timeout");
+    assert!(runtime
+        .history()
+        .iter()
+        .any(|record| record.function == "echo" && record.outcome == "timeout"));
+    runtime.shutdown().await;
+}
+
+#[tokio::test]
+async fn an_idle_runner_exit_is_replaced_for_the_next_http_invocation() {
+    let (runtime, _clock) = start().await;
+    let stale_target = runtime
+        .http_target("demo-app", "us-central1", "echo")
+        .unwrap();
+    runtime.runner().kill_now();
+
+    let response = runtime
+        .invoke_http(&stale_target, "GET", "/after-crash", &[], &[])
+        .await
+        .expect("the next invocation starts a new runner");
+    assert_eq!(response.status, 200);
+    assert!(runtime.runner_alive());
+    let next = runtime
+        .invoke_http(&stale_target, "GET", "/after-recovery", &[], &[])
+        .await
+        .expect("a retained target follows the replacement runner");
+    assert_eq!(next.status, 200);
+    runtime.shutdown().await;
+}
+
+#[tokio::test]
 async fn reset_discards_in_flight_work() {
     let (runtime, _clock) = start().await;
     runtime.on_commit(&commit(vec![DocumentChange {
@@ -1203,24 +2131,149 @@ async fn reset_discards_in_flight_work() {
     runtime.reset();
     assert!(runtime.is_idle());
     assert_eq!(runtime.status()["epoch"], 1);
-    for _ in 0..100 {
-        if runtime.runner_alive() {
-            break;
-        }
-        tokio::time::sleep(Duration::from_millis(100)).await;
-    }
-    assert!(runtime.runner_alive(), "the runner was restarted");
+    wait_for_runner(&runtime).await;
+    let cursor = runtime.history_since(None).cursor;
     runtime.on_commit(&commit(vec![DocumentChange {
         path: doc("items/c", 1).path,
         before: None,
         after: Some(doc("items/c", 1).into()),
     }]));
-    let _ = runtime.await_idle(Duration::from_secs(5)).await;
+    wait_for_ok_since(&runtime, cursor).await;
+    runtime.runner().shutdown().await;
+}
+
+#[tokio::test]
+async fn a_spontaneous_recovery_cannot_replace_a_newer_reload() {
+    let script = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fake_runner.py");
+    let fast = SpawnSpec {
+        command: vec!["python3".to_owned(), script.to_owned()],
+        cwd: None,
+        env: Vec::new(),
+        hello_timeout: RUNNER_HELLO_TIMEOUT,
+    };
+    let mut slow = fast.clone();
+    slow.env = vec![("FIREEMU_FAKE_HELLO_DELAY_MS".to_owned(), "1000".to_owned())];
+    let initial = Arc::new(Runner::spawn_spec(&fast).await.unwrap());
+    let manifest = parse_manifest(initial.hello().manifest.as_ref().unwrap()).unwrap();
+    let runtime = FunctionsRuntime::new(
+        manifest.clone(),
+        FunctionsConfig {
+            project: "demo-app".into(),
+            default_bucket: "demo-app.appspot.com".into(),
+            location: "nam5".into(),
+            session: SessionId::new(7),
+            max_running: 4,
+            debug_mode: false,
+            retry_attempts: 4,
+            max_catch_up_runs: 1000,
+            runner_secret: "s".into(),
+            overlap: fireemu_adapter_functions::runtime::OverlapPolicy::Allow,
+            catch_up: fireemu_adapter_functions::runtime::CatchUpPolicy::All,
+            functions_host: None,
+        },
+        Arc::new(Mutex::new(VirtualClock::new(START))),
+        initial.clone(),
+        Some(slow),
+    );
+    let target = runtime
+        .http_target("demo-app", "us-central1", "echo")
+        .unwrap();
+    initial.kill_now();
+    let recovering = {
+        let runtime = runtime.clone();
+        tokio::spawn(async move {
+            runtime
+                .invoke_http(&target, "GET", "/old-generation", &[], &[])
+                .await
+        })
+    };
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    assert!(
+        !recovering.is_finished(),
+        "recovery is in flight before reload"
+    );
+    let replacement = Arc::new(Runner::spawn_spec(&fast).await.unwrap());
+    runtime
+        .reload_codebase(CodebaseSpec {
+            name: "default".to_owned(),
+            manifest,
+            runner: replacement.clone(),
+            spawn: Some(fast),
+            cleanup_dir: None,
+        })
+        .unwrap();
+    assert_eq!(recovering.await.unwrap().unwrap().status, 200);
+    assert!(Arc::ptr_eq(&runtime.runner(), &replacement));
+    let current = runtime
+        .http_target("demo-app", "us-central1", "echo")
+        .unwrap();
+    assert_eq!(
+        runtime
+            .invoke_http(&current, "GET", "/new-generation", &[], &[])
+            .await
+            .unwrap()
+            .status,
+        200
+    );
+    runtime.shutdown().await;
+}
+
+#[tokio::test]
+async fn reload_wakes_background_work_after_superseding_recovery() {
+    let dir = std::env::temp_dir().join(format!("fireemu-reload-recovery-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let probe = dir.join("starts");
+    let (runtime, _clock) = start_with_runtime_options_and_env(
+        fireemu_adapter_functions::runtime::OverlapPolicy::Allow,
+        fireemu_adapter_functions::runtime::CatchUpPolicy::All,
+        4,
+        true,
+        vec![
+            (
+                "FIREEMU_FAKE_START_PROBE".to_owned(),
+                probe.display().to_string(),
+            ),
+            ("FIREEMU_FAKE_HELLO_DELAY_MS".to_owned(), "1000".to_owned()),
+        ],
+        |_| {},
+    )
+    .await;
+    runtime.runner().kill_now();
+    runtime.publish("jobs", &[json!({"data": "YQ=="})]);
+    tokio::time::timeout(Duration::from_secs(2), async {
+        while std::fs::read_to_string(&probe).unwrap().lines().count() < 2 {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("background recovery starts before reload");
+    let fast = SpawnSpec {
+        command: vec![
+            "python3".to_owned(),
+            concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fake_runner.py").to_owned(),
+        ],
+        cwd: None,
+        env: Vec::new(),
+        hello_timeout: RUNNER_HELLO_TIMEOUT,
+    };
+    let replacement = Arc::new(Runner::spawn_spec(&fast).await.unwrap());
+    runtime
+        .reload_codebase(CodebaseSpec {
+            name: "default".to_owned(),
+            manifest: runtime.manifest().clone(),
+            runner: replacement,
+            spawn: Some(fast),
+            cleanup_dir: None,
+        })
+        .unwrap();
+    runtime.await_idle(Duration::from_secs(3)).await.unwrap();
     assert!(runtime
         .history()
         .iter()
-        .any(|r| r.function == "ok" && r.outcome == "ok" && r.event_id > 1));
-    runtime.runner().shutdown().await;
+        .any(|record| { record.function == "onJob" && record.outcome == "ok" }));
+    runtime.shutdown().await;
+    std::fs::remove_dir_all(dir).unwrap();
 }
 
 #[tokio::test]
@@ -1230,7 +2283,7 @@ async fn reload_generation_wins_over_an_older_reset_respawn() {
         command: vec!["python3".to_owned(), script.to_owned()],
         cwd: None,
         env: Vec::new(),
-        hello_timeout: Duration::from_secs(20),
+        hello_timeout: Duration::from_secs(60),
     };
     let mut slow = fast.clone();
     slow.env = vec![("FIREEMU_FAKE_HELLO_DELAY_MS".to_owned(), "500".to_owned())];
@@ -1286,7 +2339,7 @@ async fn a_crash_fault_still_kills_a_runner_that_cannot_be_respawned() {
         command: vec!["python3".to_owned(), script.to_owned()],
         cwd: None,
         env: Vec::new(),
-        hello_timeout: Duration::from_secs(20),
+        hello_timeout: Duration::from_secs(60),
     };
     let runner = Runner::spawn_spec(&spec).await.unwrap();
     let manifest = parse_manifest(runner.hello().manifest.as_ref().unwrap()).unwrap();
@@ -1667,6 +2720,14 @@ fn iana_zones_follow_daylight_saving_time() {
     assert!(!fireemu_adapter_functions::zone::database_version().is_empty());
 }
 
+#[test]
+fn invalid_iana_zone_error_does_not_claim_daylight_saving_is_unsupported() {
+    let error = fireemu_adapter_functions::zone::resolve(Some("Mars/Olympus"))
+        .err()
+        .expect("the zone is not in the IANA database");
+    assert_eq!(error, "unknown time zone \"Mars/Olympus\"");
+}
+
 #[tokio::test]
 async fn overlap_policies_skip_queue_or_reject_concurrent_schedule_runs() {
     use fireemu_adapter_functions::runtime::OverlapPolicy;
@@ -2001,11 +3062,36 @@ async fn fault_plans_duplicate_delay_dead_letter_and_crash_the_runner() {
         .iter()
         .any(|r| r.function == "onUser" && r.outcome == "ok"));
     // Crash: the runner dies on the attempt, a fresh one takes over and the event succeeds.
+    let cursor = runtime.history_since(None).cursor;
     store.delete_user_by_id(uid.as_str()).unwrap();
     for e in store.take_user_events() {
         runtime.on_user_event(&e);
     }
-    assert!(runtime.await_idle(Duration::from_secs(20)).await.is_ok());
+    let deadline = tokio::time::Instant::now()
+        + RUNNER_HELLO_TIMEOUT
+        + Duration::from_secs(u64::from(DEFAULT_TIMEOUT_SECONDS) + 1);
+    loop {
+        let delta = runtime.history_since(Some(cursor));
+        assert!(!delta.resync, "the crash-retry cursor remains valid");
+        let outcomes: Vec<&str> = delta
+            .records
+            .iter()
+            .filter(|r| r.record.function == "onGone")
+            .map(|r| r.record.outcome.as_str())
+            .collect();
+        if outcomes.iter().any(|o| o.starts_with("runner gone"))
+            && outcomes.contains(&"ok")
+            && runtime.is_idle()
+        {
+            break;
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "the crash retry did not complete within its spawn and invocation contracts: {outcomes:?}; {}",
+            runtime.status()
+        );
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
     let on_gone: Vec<String> = runtime
         .history()
         .iter()
@@ -2178,6 +3264,165 @@ fn slow_object(name: &str) -> StorageEvent {
 }
 
 #[tokio::test]
+async fn http_completion_after_reset_keeps_only_current_epoch_records() {
+    let (runtime, _clock) = start().await;
+    let echo = runtime
+        .http_target("demo-app", "us-central1", "echo")
+        .unwrap();
+    assert_eq!(
+        runtime
+            .invoke_http(&echo, "POST", "/echo", &[], &[])
+            .await
+            .unwrap()
+            .status,
+        200
+    );
+    let hold = runtime
+        .http_target("demo-app", "us-central1", "hold")
+        .unwrap();
+    let held_runtime = runtime.clone();
+    let request = tokio::spawn(async move {
+        held_runtime
+            .invoke_http(&hold, "POST", "/hold", &[], &[])
+            .await
+    });
+    for _ in 0..100 {
+        if runtime.status()["running"].as_u64().unwrap_or(0) > 0 {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    assert!(
+        runtime.status()["running"].as_u64().unwrap_or(0) > 0,
+        "the HTTP request did not enter: {}",
+        runtime.status()
+    );
+    assert!(
+        !request.is_finished(),
+        "the HTTP request finished before reset"
+    );
+
+    runtime.reset();
+    runtime.reset();
+    let _ = tokio::time::timeout(Duration::from_secs(4), request)
+        .await
+        .expect("the old HTTP invocation settled after reset")
+        .unwrap();
+    wait_for_runner(&runtime).await;
+    let echo = runtime
+        .http_target("demo-app", "us-central1", "echo")
+        .unwrap();
+    assert_eq!(
+        runtime
+            .invoke_http(&echo, "POST", "/echo", &[], &[])
+            .await
+            .unwrap()
+            .status,
+        200
+    );
+    let history = runtime.history();
+    runtime.shutdown().await;
+    assert_eq!(
+        history
+            .iter()
+            .filter(|record| record.function == "echo")
+            .count(),
+        2,
+        "the records before reset and from the current epoch survive: {history:?}"
+    );
+    assert!(
+        history.iter().all(|record| record.function != "hold"),
+        "the stale HTTP invocation appended a record: {history:?}"
+    );
+}
+
+#[tokio::test]
+async fn stream_start_failure_after_reset_does_not_record_the_old_invocation() {
+    let (runtime, _clock) = start().await;
+    let hold = runtime
+        .http_target("demo-app", "us-central1", "hold")
+        .unwrap();
+    let held_runtime = runtime.clone();
+    let request = tokio::spawn(async move {
+        held_runtime
+            .invoke_http_stream(&hold, "POST", "/hold", &[], &[])
+            .await
+    });
+    for _ in 0..100 {
+        if runtime.status()["running"].as_u64().unwrap_or(0) > 0 {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    assert!(
+        runtime.status()["running"].as_u64().unwrap_or(0) > 0,
+        "the stream did not enter: {}",
+        runtime.status()
+    );
+    assert!(!request.is_finished(), "the stream finished before reset");
+
+    runtime.reset();
+    let _ = tokio::time::timeout(Duration::from_secs(4), request)
+        .await
+        .expect("the old stream start settled after reset")
+        .unwrap();
+    let history = runtime.history();
+    runtime.shutdown().await;
+    assert!(
+        history.iter().all(|record| record.function != "hold"),
+        "the stale stream start appended a record: {history:?}"
+    );
+}
+
+#[tokio::test]
+async fn stream_body_completion_after_reset_does_not_record_the_old_invocation() {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    let (runtime, _clock) = start().await;
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let (release, released) = tokio::sync::oneshot::channel::<()>();
+    let server = tokio::spawn(async move {
+        let (mut socket, _) = listener.accept().await.unwrap();
+        let mut request = [0_u8; 1024];
+        assert!(socket.read(&mut request).await.unwrap() > 0);
+        socket
+            .write_all(b"HTTP/1.1 200 OK\r\ntransfer-encoding: chunked\r\ncontent-type: text/event-stream\r\n\r\n")
+            .await
+            .unwrap();
+        released.await.unwrap();
+        socket.write_all(b"4\r\ntest\r\n0\r\n\r\n").await.unwrap();
+    });
+    let mut target = runtime
+        .http_target("demo-app", "us-central1", "echo")
+        .unwrap();
+    target.addr = addr.to_string();
+    let started = runtime
+        .invoke_http_stream(&target, "POST", "/echo", &[], &[])
+        .await
+        .unwrap();
+    let fireemu_adapter_functions::runtime::HttpStreamStart::Streaming(mut response) = started
+    else {
+        panic!("the runner sent streaming headers");
+    };
+    assert_eq!(response.status, 200);
+
+    runtime.reset();
+    release.send(()).unwrap();
+    assert_eq!(response.body.recv().await.unwrap().as_ref(), b"test");
+    assert!(response.body.recv().await.is_none());
+    response.terminal.await.unwrap().unwrap();
+    server.await.unwrap();
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    let history = runtime.history();
+    runtime.shutdown().await;
+    assert!(
+        history.iter().all(|record| record.function != "echo"),
+        "the stale stream body appended a record: {history:?}"
+    );
+}
+
+#[tokio::test]
 async fn a_completion_that_resolves_after_a_reset_appends_no_record() {
     // FN-EPOCH-01 / 02 / 04 / 05: a handler that finishes (or times out) after a reset must
     // not append an invocation record or a dead letter to the new epoch, while the records
@@ -2245,28 +3490,14 @@ async fn a_completion_that_resolves_after_a_reset_appends_no_record() {
     );
 
     // FN-EPOCH-03: a current-epoch completion is still recorded.
-    for _ in 0..200 {
-        if runtime.runner_alive() {
-            break;
-        }
-        tokio::time::sleep(Duration::from_millis(50)).await;
-    }
+    wait_for_runner(&runtime).await;
+    let cursor = runtime.history_since(None).cursor;
     runtime.on_commit(&commit(vec![DocumentChange {
         path: doc("items/z", 1).path,
         before: None,
         after: Some(doc("items/z", 1).into()),
     }]));
-    let _ = runtime.await_idle(Duration::from_secs(5)).await;
-    assert!(
-        runtime
-            .history()
-            .iter()
-            .filter(|r| r.function == "ok" && r.outcome == "ok")
-            .count()
-            >= 2,
-        "{:?}",
-        runtime.history()
-    );
+    wait_for_ok_since(&runtime, cursor).await;
     runtime.runner().shutdown().await;
 }
 

@@ -1,0 +1,102 @@
+        PASS [   0.038s] (  56/3062) fireemu::cli storage_target_rules_are_resolved_before_the_emulator_starts
+        PASS [   0.017s] (  57/3062) fireemu::exec a_startup_failure_never_runs_the_command
+        PASS [   0.062s] (  58/3062) fireemu::cli init_option_conflicts_duplicates_and_missing_values_are_usage_errors
+        PASS [   0.041s] (  59/3062) fireemu::doctor a_missing_runner_fails_the_report_with_actionable_remediation
+        PASS [   0.036s] (  60/3062) fireemu::doctor the_report_carries_no_secrets_from_the_environment
+        FAIL [   0.039s] (  61/3062) fireemu::doctor doctor_names_the_binary_the_ui_bundle_the_runner_and_the_runtimes
+  stdout ───
+
+    running 1 test
+    test doctor_names_the_binary_the_ui_bundle_the_runner_and_the_runtimes ... FAILED
+
+    failures:
+
+    failures:
+        doctor_names_the_binary_the_ui_bundle_the_runner_and_the_runtimes
+
+    test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 3 filtered out; finished in 0.03s
+
+  stderr ───
+
+    thread 'doctor_names_the_binary_the_ui_bundle_the_runner_and_the_runtimes' (213489687) panicked at crates/fireemu/tests/doctor.rs:98:5:
+    the runner's firebase-functions range is reported:
+    ok fireemu                     0.7.1
+    ok target                      darwin-arm64
+    ok vendored googleapis commit  1f38da6aa7661cf22e17247ad33d2d566a2c356e
+    ok limit catalogs              firebase-auth-2026-08-30, firebase-rules-2026-08-25, firestore-enterprise-native-2026-08-27, firestore-standard-2026-08-25, firestore-standard-query-2026-08-25
+    -- ui bundle                   not bundled (placeholder page)
+    !! functions runner            not found
+    -- firebase-functions support  unknown (no runner)
+    ok node                        v24.14.0
+    ok java                        not required (fireemu runs no JVM emulator)
+
+    ui bundle: this binary was compiled without the single-page app. A release build embeds it; from a source tree run `pnpm -C ui install && pnpm -C ui build` and rebuild
+    functions runner: the bundled Node runner (runner-node/index.mjs) was not found; tried /repo/target/agent/g0-baseline/normal/debug/runner-node/index.mjs, /repo/target/agent/g0-baseline/normal/runner-node/index.mjs. Set FIREEMU_RUNNER_NODE to an index.mjs, or reinstall the platform package that ships it. Functions (`--functions <dir>`) cannot start without it; every other service works
+    firebase-functions support: looked in: /repo/target/agent/g0-baseline/normal/debug/runner-node/index.mjs, /repo/target/agent/g0-baseline/normal/runner-node/index.mjs
+
+    note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+        PASS [   0.042s] (  62/3062) fireemu::doctor an_installed_binary_finds_the_runner_beside_itself
+        PASS [   0.066s] (  63/3062) fireemu::cli log_verbosity_decides_whether_the_banner_is_printed
+        PASS [   0.058s] (  64/3062) fireemu::cli the_official_command_names_are_aliases_of_the_short_ones
+        PASS [   0.021s] (  65/3062) fireemu::exec an_unconfigured_support_service_is_not_a_standalone_target
+        PASS [   0.044s] (  66/3062) fireemu::exec an_occupied_port_of_a_selected_service_fails_before_the_command_runs
+        PASS [   0.015s] (  67/3062) fireemu::exec exec_needs_a_command
+        PASS [   0.095s] (  68/3062) fireemu::cli inspect_functions_passes_the_node_inspector_through_to_the_runner
+        PASS [   0.030s] (  69/3062) fireemu::exec only_selects_the_variables_the_command_receives
+        PASS [   0.031s] (  70/3062) fireemu::exec inherited_emulator_variables_do_not_reach_the_command_unless_selected
+        PASS [   0.058s] (  71/3062) fireemu::exec an_official_service_fireemu_does_not_serve_is_refused_with_its_status
+        PASS [   0.029s] (  72/3062) fireemu::exec the_command_gets_the_emulator_hosts_and_the_services_stop_with_it
+        PASS [   0.025s] (  73/3062) fireemu::exec the_exit_status_of_the_command_is_propagated
+        PASS [   0.029s] (  74/3062) fireemu::exec the_control_plane_leaves_the_auth_port_free_when_auth_is_not_selected
+        PASS [   0.049s] (  75/3062) fireemu::exec support_services_without_a_functions_codebase_are_accepted_no_ops
+        PASS [   0.024s] (  76/3062) fireemu::functions_codebases a_python_or_dart_codebase_is_refused_with_the_language_named
+        FAIL [   0.019s] (  77/3062) fireemu::functions_environment a_dotenv_file_the_official_parser_refuses_stops_the_run_with_its_message
+  stdout ───
+        FAIL [   0.065s] ( 104/3062) fireemu::hub the_hub_switches_background_triggers_and_says_so
+  stdout ───
+
+    running 1 test
+    test the_hub_switches_background_triggers_and_says_so ... FAILED
+
+    failures:
+
+    failures:
+        the_hub_switches_background_triggers_and_says_so
+
+    test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 12 filtered out; finished in 0.06s
+
+  stderr ───
+
+    thread 'the_hub_switches_background_triggers_and_says_so' (213490846) panicked at crates/fireemu/tests/hub.rs:204:33:
+    the daemon became ready: stdout reached EOF before readiness; pid=60866; status=Some(ExitStatus(unix_wait_status(256)))
+    stdout:
+
+    stderr:
+    error: the Functions codebase "default": the bundled Node runner (runner-node/index.mjs) was not found; tried /repo/target/agent/g0-baseline/normal/debug/runner-node/index.mjs, /repo/target/agent/g0-baseline/normal/runner-node/index.mjs. Set FIREEMU_RUNNER_NODE to an index.mjs, or reinstall the platform package that ships it
+
+    note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+        PASS [   0.035s] ( 105/3062) fireemu::import_export a_corrupt_later_firestore_partition_is_refused_before_starting_the_command
+        PASS [   0.033s] ( 106/3062) fireemu::import_export a_firestore_output_truncated_at_a_record_boundary_is_refused
+        PASS [   0.035s] ( 107/3062) fireemu::import_export a_malformed_auth_section_refuses_the_whole_import
+        PASS [   0.023s] ( 108/3062) fireemu::import_export a_realtime_database_section_is_refused_with_the_deferred_status
+        PASS [   0.022s] ( 109/3062) fireemu::import_export a_section_of_an_unselected_product_is_skipped_with_a_notice
+        PASS [   0.045s] ( 110/3062) fireemu::import_export a_failed_staged_export_leaves_the_existing_export_unchanged
+        PASS [   0.639s] (3058/3062) fireemu-verification-quint::cli_contract authority_term_signal_stops_and_waits_for_the_active_gate_group
+        PASS [   0.844s] (3059/3062) fireemu-verification-quint::event_delivery_evidence checked_in_evidence_rejects_each_bound_input_tamper
+        PASS [   0.695s] (3060/3062) traceability-check::artifact_references the_repository_ledger_matches_the_repository
+        PASS [   3.799s] (3061/3062) fireemu-verification-quint::cli_contract authority_pass_owns_a_dynamic_loopback_endpoint_when_legacy_8822_is_occupied
+        PASS [   6.324s] (3062/3062) fireemu-verification-quint::cli_contract process_group_supervisor_escalates_and_reaps_term_resistant_descendants
+────────────
+     Summary [  85.382s] 3062 tests run: 3054 passed (6 slow), 8 failed, 81 skipped
+        FAIL [   0.039s] (  61/3062) fireemu::doctor doctor_names_the_binary_the_ui_bundle_the_runner_and_the_runtimes
+        FAIL [   0.019s] (  77/3062) fireemu::functions_environment a_dotenv_file_the_official_parser_refuses_stops_the_run_with_its_message
+        FAIL [   0.019s] (  78/3062) fireemu::functions_environment a_same_size_rewrite_reloads_and_an_invalid_generation_keeps_the_last_good_one
+        FAIL [   0.020s] (  79/3062) fireemu::functions_environment the_dotenv_chain_secret_overrides_and_runtime_config_reach_the_runtime
+        FAIL [   0.019s] (  81/3062) fireemu::functions_environment the_emulator_profile_inherits_the_parent_environment_but_strict_stays_isolated
+        FAIL [   0.065s] ( 104/3062) fireemu::hub the_hub_switches_background_triggers_and_says_so
+        FAIL [   0.048s] ( 170/3062) fireemu::resources doctor_connect_reads_the_running_daemon_and_stays_loopback_only
+        FAIL [   0.026s] ( 313/3062) fireemu::bin/fireemu functions::tests::workspace_runner_is_found_from_the_executable_without_a_compiled_in_path
+error: test run failed
+local-regression-gate: failed (3062 run, 3054 passed, 8 failed, 81 skipped) at 2dd6d9d9ddfc; report /repo/docs.local/gates/REDACTED.json

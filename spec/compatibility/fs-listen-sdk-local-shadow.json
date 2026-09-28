@@ -1,0 +1,2758 @@
+{
+  "schema": "o6-listen-observation-v1",
+  "caseId": "FS-LISTEN-SDK",
+  "campaignDigest": "de3e2eb7733344e776caac54417f62708dfe2841d2edf79b0dd643542d9c4a3b",
+  "catalogDigest": "a91a671ae9e65518d11fa0ab1e442492eeebb06ca9baaced76289f377f07713f",
+  "productionExecuted": false,
+  "environment": {
+    "kind": "local-fireemu",
+    "node": "24.14.0",
+    "sourceCommit": "e0d53f912eb425d6c4f725be46e2452d08ed6634",
+    "firebaseSdk": null,
+    "fireemuBinary": "target/debug/fireemu",
+    "fireemuBinaryDigest": "d13c45c8b29b75336ea735a533f17c68e27cbdf4dfa4144b85e8b54f08a89fa4",
+    "fireemuSourceCommit": "e0d53f912eb425d6c4f725be46e2452d08ed6634",
+    "rulesPath": "tools/compat-broad/fs-listen-resume/fs-listen-sdk.rules",
+    "rulesDigest": "f60a988c929ea7e26feb4645e1d8134979b91adea56d3ccb9a747cbeb1e41f34",
+    "projectId": "demo-o6",
+    "nonceDigest": "a0e7b5b94d995a42ccf6a247caec1e69851da094baa61344185274e929073357"
+  },
+  "budget": {
+    "used": {
+      "reads": 41,
+      "writes": 32,
+      "deletes": 1,
+      "snapshots": 56,
+      "listeners": 21
+    },
+    "limits": {
+      "reads": 600,
+      "writes": 60,
+      "deletes": 80,
+      "snapshots": 120,
+      "listeners": 40
+    },
+    "deadlineMs": 300000,
+    "exceeded": [],
+    "exhausted": false
+  },
+  "cleanupBudget": {
+    "used": {
+      "reads": 160,
+      "writes": 0,
+      "deletes": 23,
+      "snapshots": 0,
+      "listeners": 0
+    },
+    "limits": {
+      "reads": 300,
+      "writes": 0,
+      "deletes": 150,
+      "snapshots": 0,
+      "listeners": 0
+    },
+    "deadlineMs": 180000,
+    "exceeded": [],
+    "exhausted": false
+  },
+  "cleanup": {
+    "complete": true,
+    "rows": [
+      {
+        "name": "alpha",
+        "pathDigest": "ca6b046571be27b38fd8438d0a5be94ffe7343c8761b28fea6d3311b0016ca3f",
+        "outcome": "already-deleted-earlier",
+        "detail": null
+      },
+      {
+        "name": "beta",
+        "pathDigest": "d092c377e56c48c6f2e246c8f8a2ae5f280be9ee155c18941d6aa41025adecb9",
+        "outcome": "already-deleted-earlier",
+        "detail": null
+      },
+      {
+        "name": "gamma",
+        "pathDigest": "90c3d6eff6ab46f50d9e2c7c5ef14a1f19de162e22e28e0c223efa5ffd9ae666",
+        "outcome": "already-deleted-earlier",
+        "detail": null
+      },
+      {
+        "name": "absent",
+        "pathDigest": "b16b5bfe5e493bb593ab4998a2ef3247a638537c30df1c55819d3a0ff6cd8bc7",
+        "outcome": "not-created",
+        "detail": null
+      },
+      {
+        "name": "private",
+        "pathDigest": "f44727d88307c4f19cfa8cb1e09531e02a58bef1db03dd7b3eac7850cfcc2d63",
+        "outcome": "already-deleted-earlier",
+        "detail": null
+      },
+      {
+        "name": "privateB",
+        "pathDigest": "ef5ffb2bbb8fbc598348307bc51ea7d74f79670a0f6d4aff6c445f7058bc0cd6",
+        "outcome": "already-deleted-earlier",
+        "detail": null
+      }
+    ],
+    "unproven": [],
+    "deleted": 0
+  },
+  "cleanupPasses": [
+    {
+      "pass": "FS-LISTEN-SDK-101",
+      "complete": true,
+      "deleted": 1,
+      "rows": [
+        {
+          "name": "alpha",
+          "pathDigest": "ca6b046571be27b38fd8438d0a5be94ffe7343c8761b28fea6d3311b0016ca3f",
+          "outcome": "deleted-and-absent",
+          "detail": null
+        },
+        {
+          "name": "beta",
+          "pathDigest": "d092c377e56c48c6f2e246c8f8a2ae5f280be9ee155c18941d6aa41025adecb9",
+          "outcome": "not-created",
+          "detail": null
+        },
+        {
+          "name": "gamma",
+          "pathDigest": "90c3d6eff6ab46f50d9e2c7c5ef14a1f19de162e22e28e0c223efa5ffd9ae666",
+          "outcome": "not-created",
+          "detail": null
+        },
+        {
+          "name": "absent",
+          "pathDigest": "b16b5bfe5e493bb593ab4998a2ef3247a638537c30df1c55819d3a0ff6cd8bc7",
+          "outcome": "not-created",
+          "detail": null
+        },
+        {
+          "name": "private",
+          "pathDigest": "f44727d88307c4f19cfa8cb1e09531e02a58bef1db03dd7b3eac7850cfcc2d63",
+          "outcome": "not-created",
+          "detail": null
+        },
+        {
+          "name": "privateB",
+          "pathDigest": "ef5ffb2bbb8fbc598348307bc51ea7d74f79670a0f6d4aff6c445f7058bc0cd6",
+          "outcome": "not-created",
+          "detail": null
+        }
+      ]
+    },
+    {
+      "pass": "FS-LISTEN-SDK-101C",
+      "complete": true,
+      "deleted": 0,
+      "rows": [
+        {
+          "name": "alpha",
+          "pathDigest": "ca6b046571be27b38fd8438d0a5be94ffe7343c8761b28fea6d3311b0016ca3f",
+          "outcome": "already-deleted-earlier",
+          "detail": null
+        },
+        {
+          "name": "beta",
+          "pathDigest": "d092c377e56c48c6f2e246c8f8a2ae5f280be9ee155c18941d6aa41025adecb9",
+          "outcome": "not-created",
+          "detail": null
+        },
+        {
+          "name": "gamma",
+          "pathDigest": "90c3d6eff6ab46f50d9e2c7c5ef14a1f19de162e22e28e0c223efa5ffd9ae666",
+          "outcome": "not-created",
+          "detail": null
+        },
+        {
+          "name": "absent",
+          "pathDigest": "b16b5bfe5e493bb593ab4998a2ef3247a638537c30df1c55819d3a0ff6cd8bc7",
+          "outcome": "not-created",
+          "detail": null
+        },
+        {
+          "name": "private",
+          "pathDigest": "f44727d88307c4f19cfa8cb1e09531e02a58bef1db03dd7b3eac7850cfcc2d63",
+          "outcome": "not-created",
+          "detail": null
+        },
+        {
+          "name": "privateB",
+          "pathDigest": "ef5ffb2bbb8fbc598348307bc51ea7d74f79670a0f6d4aff6c445f7058bc0cd6",
+          "outcome": "not-created",
+          "detail": null
+        }
+      ]
+    },
+    {
+      "pass": "FS-LISTEN-SDK-102",
+      "complete": true,
+      "deleted": 1,
+      "rows": [
+        {
+          "name": "alpha",
+          "pathDigest": "ca6b046571be27b38fd8438d0a5be94ffe7343c8761b28fea6d3311b0016ca3f",
+          "outcome": "already-deleted-earlier",
+          "detail": null
+        },
+        {
+          "name": "beta",
+          "pathDigest": "d092c377e56c48c6f2e246c8f8a2ae5f280be9ee155c18941d6aa41025adecb9",
+          "outcome": "deleted-and-absent",
+          "detail": null
+        },
+        {
+          "name": "gamma",
+          "pathDigest": "90c3d6eff6ab46f50d9e2c7c5ef14a1f19de162e22e28e0c223efa5ffd9ae666",
+          "outcome": "not-created",
+          "detail": null
+        },
+        {
+          "name": "absent",
+          "pathDigest": "b16b5bfe5e493bb593ab4998a2ef3247a638537c30df1c55819d3a0ff6cd8bc7",
+          "outcome": "not-created",
+          "detail": null
+        },
+        {
+          "name": "private",
+          "pathDigest": "f44727d88307c4f19cfa8cb1e09531e02a58bef1db03dd7b3eac7850cfcc2d63",
+          "outcome": "not-created",
+          "detail": null
+        },
+        {
+          "name": "privateB",
+          "pathDigest": "ef5ffb2bbb8fbc598348307bc51ea7d74f79670a0f6d4aff6c445f7058bc0cd6",
+          "outcome": "not-created",
+          "detail": null
+        }
+      ]
+    },
+    {
+      "pass": "FS-LISTEN-SDK-102C",
+      "complete": true,
+      "deleted": 1,
+      "rows": [
+        {
+          "name": "alpha",
+          "pathDigest": "ca6b046571be27b38fd8438d0a5be94ffe7343c8761b28fea6d3311b0016ca3f",
+          "outcome": "already-deleted-earlier",
+          "detail": null
+        },
+        {
+          "name": "beta",
+          "pathDigest": "d092c377e56c48c6f2e246c8f8a2ae5f280be9ee155c18941d6aa41025adecb9",
+          "outcome": "deleted-and-absent",
+          "detail": null
+        },
+        {
+          "name": "gamma",
+          "pathDigest": "90c3d6eff6ab46f50d9e2c7c5ef14a1f19de162e22e28e0c223efa5ffd9ae666",
+          "outcome": "not-created",
+          "detail": null
+        },
+        {
+          "name": "absent",
+          "pathDigest": "b16b5bfe5e493bb593ab4998a2ef3247a638537c30df1c55819d3a0ff6cd8bc7",
+          "outcome": "not-created",
+          "detail": null
+        },
+        {
+          "name": "private",
+          "pathDigest": "f44727d88307c4f19cfa8cb1e09531e02a58bef1db03dd7b3eac7850cfcc2d63",
+          "outcome": "not-created",
+          "detail": null
+        },
+        {
+          "name": "privateB",
+          "pathDigest": "ef5ffb2bbb8fbc598348307bc51ea7d74f79670a0f6d4aff6c445f7058bc0cd6",
+          "outcome": "not-created",
+          "detail": null
+        }
+      ]
+    },
+    {
+      "pass": "FS-LISTEN-SDK-103",
+      "complete": true,
+      "deleted": 1,
+      "rows": [
+        {
+          "name": "alpha",
+          "pathDigest": "ca6b046571be27b38fd8438d0a5be94ffe7343c8761b28fea6d3311b0016ca3f",
+          "outcome": "already-deleted-earlier",
+          "detail": null
+        },
+        {
+          "name": "beta",
+          "pathDigest": "d092c377e56c48c6f2e246c8f8a2ae5f280be9ee155c18941d6aa41025adecb9",
+          "outcome": "deleted-and-absent",
+          "detail": null
+        },
+        {
+          "name": "gamma",
+          "pathDigest": "90c3d6eff6ab46f50d9e2c7c5ef14a1f19de162e22e28e0c223efa5ffd9ae666",
+          "outcome": "not-created",
+          "detail": null
+        },
+        {
+          "name": "absent",
+          "pathDigest": "b16b5bfe5e493bb593ab4998a2ef3247a638537c30df1c55819d3a0ff6cd8bc7",
+          "outcome": "not-created",
+          "detail": null
+        },
+        {
+          "name": "private",
+          "pathDigest": "f44727d88307c4f19cfa8cb1e09531e02a58bef1db03dd7b3eac7850cfcc2d63",
+          "outcome": "not-created",
+          "detail": null
+        },
+        {
+          "name": "privateB",
+          "pathDigest": "ef5ffb2bbb8fbc598348307bc51ea7d74f79670a0f6d4aff6c445f7058bc0cd6",
+          "outcome": "not-created",
+          "detail": null
+        }
+      ]
+    },
+    {
+      "pass": "FS-LISTEN-SDK-103C",
+      "complete": true,
+      "deleted": 2,
+      "rows": [
+        {
+          "name": "alpha",
+          "pathDigest": "ca6b046571be27b38fd8438d0a5be94ffe7343c8761b28fea6d3311b0016ca3f",
+          "outcome": "deleted-and-absent",
+          "detail": null
+        },
+        {
+          "name": "beta",
+          "pathDigest": "d092c377e56c48c6f2e246c8f8a2ae5f280be9ee155c18941d6aa41025adecb9",
+          "outcome": "already-deleted-earlier",
+          "detail": null
+        },
+        {
+          "name": "gamma",
+          "pathDigest": "90c3d6eff6ab46f50d9e2c7c5ef14a1f19de162e22e28e0c223efa5ffd9ae666",
+          "outcome": "deleted-and-absent",
+          "detail": null
+        },
+        {
+          "name": "absent",
+          "pathDigest": "b16b5bfe5e493bb593ab4998a2ef3247a638537c30df1c55819d3a0ff6cd8bc7",
+          "outcome": "not-created",
+          "detail": null
+        },
+        {
+          "name": "private",
+          "pathDigest": "f44727d88307c4f19cfa8cb1e09531e02a58bef1db03dd7b3eac7850cfcc2d63",
+          "outcome": "not-created",
+          "detail": null
+        },
+        {
+          "name": "privateB",
+          "pathDigest": "ef5ffb2bbb8fbc598348307bc51ea7d74f79670a0f6d4aff6c445f7058bc0cd6",
+          "outcome": "not-created",
+          "detail": null
+        }
+      ]
+    },
+    {
+      "pass": "FS-LISTEN-SDK-104",
+      "complete": true,
+      "deleted": 3,
+      "rows": [
+        {
+          "name": "alpha",
+          "pathDigest": "ca6b046571be27b38fd8438d0a5be94ffe7343c8761b28fea6d3311b0016ca3f",
+          "outcome": "deleted-and-absent",
+          "detail": null
+        },
+        {
+          "name": "beta",
+          "pathDigest": "d092c377e56c48c6f2e246c8f8a2ae5f280be9ee155c18941d6aa41025adecb9",
+          "outcome": "deleted-and-absent",
+          "detail": null
+        },
+        {
+          "name": "gamma",
+          "pathDigest": "90c3d6eff6ab46f50d9e2c7c5ef14a1f19de162e22e28e0c223efa5ffd9ae666",
+          "outcome": "deleted-and-absent",
+          "detail": null
+        },
+        {
+          "name": "absent",
+          "pathDigest": "b16b5bfe5e493bb593ab4998a2ef3247a638537c30df1c55819d3a0ff6cd8bc7",
+          "outcome": "not-created",
+          "detail": null
+        },
+        {
+          "name": "private",
+          "pathDigest": "f44727d88307c4f19cfa8cb1e09531e02a58bef1db03dd7b3eac7850cfcc2d63",
+          "outcome": "not-created",
+          "detail": null
+        },
+        {
+          "name": "privateB",
+          "pathDigest": "ef5ffb2bbb8fbc598348307bc51ea7d74f79670a0f6d4aff6c445f7058bc0cd6",
+          "outcome": "not-created",
+          "detail": null
+        }
+      ]
+    },
+    {
+      "pass": "FS-LISTEN-SDK-104C",
+      "complete": true,
+      "deleted": 3,
+      "rows": [
+        {
+          "name": "alpha",
+          "pathDigest": "ca6b046571be27b38fd8438d0a5be94ffe7343c8761b28fea6d3311b0016ca3f",
+          "outcome": "deleted-and-absent",
+          "detail": null
+        },
+        {
+          "name": "beta",
+          "pathDigest": "d092c377e56c48c6f2e246c8f8a2ae5f280be9ee155c18941d6aa41025adecb9",
+          "outcome": "deleted-and-absent",
+          "detail": null
+        },
+        {
+          "name": "gamma",
+          "pathDigest": "90c3d6eff6ab46f50d9e2c7c5ef14a1f19de162e22e28e0c223efa5ffd9ae666",
+          "outcome": "deleted-and-absent",
+          "detail": null
+        },
+        {
+          "name": "absent",
+          "pathDigest": "b16b5bfe5e493bb593ab4998a2ef3247a638537c30df1c55819d3a0ff6cd8bc7",
+          "outcome": "not-created",
+          "detail": null
+        },
+        {
+          "name": "private",
+          "pathDigest": "f44727d88307c4f19cfa8cb1e09531e02a58bef1db03dd7b3eac7850cfcc2d63",
+          "outcome": "not-created",
+          "detail": null
+        },
+        {
+          "name": "privateB",
+          "pathDigest": "ef5ffb2bbb8fbc598348307bc51ea7d74f79670a0f6d4aff6c445f7058bc0cd6",
+          "outcome": "not-created",
+          "detail": null
+        }
+      ]
+    },
+    {
+      "pass": "FS-LISTEN-SDK-105",
+      "complete": true,
+      "deleted": 1,
+      "rows": [
+        {
+          "name": "alpha",
+          "pathDigest": "ca6b046571be27b38fd8438d0a5be94ffe7343c8761b28fea6d3311b0016ca3f",
+          "outcome": "deleted-and-absent",
+          "detail": null
+        },
+        {
+          "name": "beta",
+          "pathDigest": "d092c377e56c48c6f2e246c8f8a2ae5f280be9ee155c18941d6aa41025adecb9",
+          "outcome": "already-deleted-earlier",
+          "detail": null
+        },
+        {
+          "name": "gamma",
+          "pathDigest": "90c3d6eff6ab46f50d9e2c7c5ef14a1f19de162e22e28e0c223efa5ffd9ae666",
+          "outcome": "already-deleted-earlier",
+          "detail": null
+        },
+        {
+          "name": "absent",
+          "pathDigest": "b16b5bfe5e493bb593ab4998a2ef3247a638537c30df1c55819d3a0ff6cd8bc7",
+          "outcome": "not-created",
+          "detail": null
+        },
+        {
+          "name": "private",
+          "pathDigest": "f44727d88307c4f19cfa8cb1e09531e02a58bef1db03dd7b3eac7850cfcc2d63",
+          "outcome": "not-created",
+          "detail": null
+        },
+        {
+          "name": "privateB",
+          "pathDigest": "ef5ffb2bbb8fbc598348307bc51ea7d74f79670a0f6d4aff6c445f7058bc0cd6",
+          "outcome": "not-created",
+          "detail": null
+        }
+      ]
+    },
+    {
+      "pass": "FS-LISTEN-SDK-105C",
+      "complete": true,
+      "deleted": 1,
+      "rows": [
+        {
+          "name": "alpha",
+          "pathDigest": "ca6b046571be27b38fd8438d0a5be94ffe7343c8761b28fea6d3311b0016ca3f",
+          "outcome": "deleted-and-absent",
+          "detail": null
+        },
+        {
+          "name": "beta",
+          "pathDigest": "d092c377e56c48c6f2e246c8f8a2ae5f280be9ee155c18941d6aa41025adecb9",
+          "outcome": "already-deleted-earlier",
+          "detail": null
+        },
+        {
+          "name": "gamma",
+          "pathDigest": "90c3d6eff6ab46f50d9e2c7c5ef14a1f19de162e22e28e0c223efa5ffd9ae666",
+          "outcome": "already-deleted-earlier",
+          "detail": null
+        },
+        {
+          "name": "absent",
+          "pathDigest": "b16b5bfe5e493bb593ab4998a2ef3247a638537c30df1c55819d3a0ff6cd8bc7",
+          "outcome": "not-created",
+          "detail": null
+        },
+        {
+          "name": "private",
+          "pathDigest": "f44727d88307c4f19cfa8cb1e09531e02a58bef1db03dd7b3eac7850cfcc2d63",
+          "outcome": "not-created",
+          "detail": null
+        },
+        {
+          "name": "privateB",
+          "pathDigest": "ef5ffb2bbb8fbc598348307bc51ea7d74f79670a0f6d4aff6c445f7058bc0cd6",
+          "outcome": "not-created",
+          "detail": null
+        }
+      ]
+    },
+    {
+      "pass": "FS-LISTEN-SDK-106",
+      "complete": true,
+      "deleted": 1,
+      "rows": [
+        {
+          "name": "alpha",
+          "pathDigest": "ca6b046571be27b38fd8438d0a5be94ffe7343c8761b28fea6d3311b0016ca3f",
+          "outcome": "already-deleted-earlier",
+          "detail": null
+        },
+        {
+          "name": "beta",
+          "pathDigest": "d092c377e56c48c6f2e246c8f8a2ae5f280be9ee155c18941d6aa41025adecb9",
+          "outcome": "already-deleted-earlier",
+          "detail": null
+        },
+        {
+          "name": "gamma",
+          "pathDigest": "90c3d6eff6ab46f50d9e2c7c5ef14a1f19de162e22e28e0c223efa5ffd9ae666",
+          "outcome": "already-deleted-earlier",
+          "detail": null
+        },
+        {
+          "name": "absent",
+          "pathDigest": "b16b5bfe5e493bb593ab4998a2ef3247a638537c30df1c55819d3a0ff6cd8bc7",
+          "outcome": "not-created",
+          "detail": null
+        },
+        {
+          "name": "private",
+          "pathDigest": "f44727d88307c4f19cfa8cb1e09531e02a58bef1db03dd7b3eac7850cfcc2d63",
+          "outcome": "deleted-and-absent",
+          "detail": null
+        },
+        {
+          "name": "privateB",
+          "pathDigest": "ef5ffb2bbb8fbc598348307bc51ea7d74f79670a0f6d4aff6c445f7058bc0cd6",
+          "outcome": "not-created",
+          "detail": null
+        }
+      ]
+    },
+    {
+      "pass": "FS-LISTEN-SDK-106N",
+      "complete": true,
+      "deleted": 0,
+      "rows": [
+        {
+          "name": "alpha",
+          "pathDigest": "ca6b046571be27b38fd8438d0a5be94ffe7343c8761b28fea6d3311b0016ca3f",
+          "outcome": "already-deleted-earlier",
+          "detail": null
+        },
+        {
+          "name": "beta",
+          "pathDigest": "d092c377e56c48c6f2e246c8f8a2ae5f280be9ee155c18941d6aa41025adecb9",
+          "outcome": "already-deleted-earlier",
+          "detail": null
+        },
+        {
+          "name": "gamma",
+          "pathDigest": "90c3d6eff6ab46f50d9e2c7c5ef14a1f19de162e22e28e0c223efa5ffd9ae666",
+          "outcome": "already-deleted-earlier",
+          "detail": null
+        },
+        {
+          "name": "absent",
+          "pathDigest": "b16b5bfe5e493bb593ab4998a2ef3247a638537c30df1c55819d3a0ff6cd8bc7",
+          "outcome": "not-created",
+          "detail": null
+        },
+        {
+          "name": "private",
+          "pathDigest": "f44727d88307c4f19cfa8cb1e09531e02a58bef1db03dd7b3eac7850cfcc2d63",
+          "outcome": "already-deleted-earlier",
+          "detail": null
+        },
+        {
+          "name": "privateB",
+          "pathDigest": "ef5ffb2bbb8fbc598348307bc51ea7d74f79670a0f6d4aff6c445f7058bc0cd6",
+          "outcome": "not-created",
+          "detail": null
+        }
+      ]
+    },
+    {
+      "pass": "FS-LISTEN-SDK-107",
+      "complete": true,
+      "deleted": 1,
+      "rows": [
+        {
+          "name": "alpha",
+          "pathDigest": "ca6b046571be27b38fd8438d0a5be94ffe7343c8761b28fea6d3311b0016ca3f",
+          "outcome": "deleted-and-absent",
+          "detail": null
+        },
+        {
+          "name": "beta",
+          "pathDigest": "d092c377e56c48c6f2e246c8f8a2ae5f280be9ee155c18941d6aa41025adecb9",
+          "outcome": "already-deleted-earlier",
+          "detail": null
+        },
+        {
+          "name": "gamma",
+          "pathDigest": "90c3d6eff6ab46f50d9e2c7c5ef14a1f19de162e22e28e0c223efa5ffd9ae666",
+          "outcome": "already-deleted-earlier",
+          "detail": null
+        },
+        {
+          "name": "absent",
+          "pathDigest": "b16b5bfe5e493bb593ab4998a2ef3247a638537c30df1c55819d3a0ff6cd8bc7",
+          "outcome": "not-created",
+          "detail": null
+        },
+        {
+          "name": "private",
+          "pathDigest": "f44727d88307c4f19cfa8cb1e09531e02a58bef1db03dd7b3eac7850cfcc2d63",
+          "outcome": "already-deleted-earlier",
+          "detail": null
+        },
+        {
+          "name": "privateB",
+          "pathDigest": "ef5ffb2bbb8fbc598348307bc51ea7d74f79670a0f6d4aff6c445f7058bc0cd6",
+          "outcome": "not-created",
+          "detail": null
+        }
+      ]
+    },
+    {
+      "pass": "FS-LISTEN-SDK-107C",
+      "complete": true,
+      "deleted": 1,
+      "rows": [
+        {
+          "name": "alpha",
+          "pathDigest": "ca6b046571be27b38fd8438d0a5be94ffe7343c8761b28fea6d3311b0016ca3f",
+          "outcome": "deleted-and-absent",
+          "detail": null
+        },
+        {
+          "name": "beta",
+          "pathDigest": "d092c377e56c48c6f2e246c8f8a2ae5f280be9ee155c18941d6aa41025adecb9",
+          "outcome": "already-deleted-earlier",
+          "detail": null
+        },
+        {
+          "name": "gamma",
+          "pathDigest": "90c3d6eff6ab46f50d9e2c7c5ef14a1f19de162e22e28e0c223efa5ffd9ae666",
+          "outcome": "already-deleted-earlier",
+          "detail": null
+        },
+        {
+          "name": "absent",
+          "pathDigest": "b16b5bfe5e493bb593ab4998a2ef3247a638537c30df1c55819d3a0ff6cd8bc7",
+          "outcome": "not-created",
+          "detail": null
+        },
+        {
+          "name": "private",
+          "pathDigest": "f44727d88307c4f19cfa8cb1e09531e02a58bef1db03dd7b3eac7850cfcc2d63",
+          "outcome": "already-deleted-earlier",
+          "detail": null
+        },
+        {
+          "name": "privateB",
+          "pathDigest": "ef5ffb2bbb8fbc598348307bc51ea7d74f79670a0f6d4aff6c445f7058bc0cd6",
+          "outcome": "not-created",
+          "detail": null
+        }
+      ]
+    },
+    {
+      "pass": "FS-LISTEN-SDK-108",
+      "complete": true,
+      "deleted": 1,
+      "rows": [
+        {
+          "name": "alpha",
+          "pathDigest": "ca6b046571be27b38fd8438d0a5be94ffe7343c8761b28fea6d3311b0016ca3f",
+          "outcome": "already-deleted-earlier",
+          "detail": null
+        },
+        {
+          "name": "beta",
+          "pathDigest": "d092c377e56c48c6f2e246c8f8a2ae5f280be9ee155c18941d6aa41025adecb9",
+          "outcome": "already-deleted-earlier",
+          "detail": null
+        },
+        {
+          "name": "gamma",
+          "pathDigest": "90c3d6eff6ab46f50d9e2c7c5ef14a1f19de162e22e28e0c223efa5ffd9ae666",
+          "outcome": "already-deleted-earlier",
+          "detail": null
+        },
+        {
+          "name": "absent",
+          "pathDigest": "b16b5bfe5e493bb593ab4998a2ef3247a638537c30df1c55819d3a0ff6cd8bc7",
+          "outcome": "not-created",
+          "detail": null
+        },
+        {
+          "name": "private",
+          "pathDigest": "f44727d88307c4f19cfa8cb1e09531e02a58bef1db03dd7b3eac7850cfcc2d63",
+          "outcome": "already-deleted-earlier",
+          "detail": null
+        },
+        {
+          "name": "privateB",
+          "pathDigest": "ef5ffb2bbb8fbc598348307bc51ea7d74f79670a0f6d4aff6c445f7058bc0cd6",
+          "outcome": "deleted-and-absent",
+          "detail": null
+        }
+      ]
+    },
+    {
+      "pass": "FS-LISTEN-SDK-108C",
+      "complete": true,
+      "deleted": 1,
+      "rows": [
+        {
+          "name": "alpha",
+          "pathDigest": "ca6b046571be27b38fd8438d0a5be94ffe7343c8761b28fea6d3311b0016ca3f",
+          "outcome": "already-deleted-earlier",
+          "detail": null
+        },
+        {
+          "name": "beta",
+          "pathDigest": "d092c377e56c48c6f2e246c8f8a2ae5f280be9ee155c18941d6aa41025adecb9",
+          "outcome": "already-deleted-earlier",
+          "detail": null
+        },
+        {
+          "name": "gamma",
+          "pathDigest": "90c3d6eff6ab46f50d9e2c7c5ef14a1f19de162e22e28e0c223efa5ffd9ae666",
+          "outcome": "already-deleted-earlier",
+          "detail": null
+        },
+        {
+          "name": "absent",
+          "pathDigest": "b16b5bfe5e493bb593ab4998a2ef3247a638537c30df1c55819d3a0ff6cd8bc7",
+          "outcome": "not-created",
+          "detail": null
+        },
+        {
+          "name": "private",
+          "pathDigest": "f44727d88307c4f19cfa8cb1e09531e02a58bef1db03dd7b3eac7850cfcc2d63",
+          "outcome": "already-deleted-earlier",
+          "detail": null
+        },
+        {
+          "name": "privateB",
+          "pathDigest": "ef5ffb2bbb8fbc598348307bc51ea7d74f79670a0f6d4aff6c445f7058bc0cd6",
+          "outcome": "deleted-and-absent",
+          "detail": null
+        }
+      ]
+    },
+    {
+      "pass": "FS-LISTEN-SDK-109",
+      "complete": true,
+      "deleted": 2,
+      "rows": [
+        {
+          "name": "alpha",
+          "pathDigest": "ca6b046571be27b38fd8438d0a5be94ffe7343c8761b28fea6d3311b0016ca3f",
+          "outcome": "already-deleted-earlier",
+          "detail": null
+        },
+        {
+          "name": "beta",
+          "pathDigest": "d092c377e56c48c6f2e246c8f8a2ae5f280be9ee155c18941d6aa41025adecb9",
+          "outcome": "already-deleted-earlier",
+          "detail": null
+        },
+        {
+          "name": "gamma",
+          "pathDigest": "90c3d6eff6ab46f50d9e2c7c5ef14a1f19de162e22e28e0c223efa5ffd9ae666",
+          "outcome": "already-deleted-earlier",
+          "detail": null
+        },
+        {
+          "name": "absent",
+          "pathDigest": "b16b5bfe5e493bb593ab4998a2ef3247a638537c30df1c55819d3a0ff6cd8bc7",
+          "outcome": "not-created",
+          "detail": null
+        },
+        {
+          "name": "private",
+          "pathDigest": "f44727d88307c4f19cfa8cb1e09531e02a58bef1db03dd7b3eac7850cfcc2d63",
+          "outcome": "deleted-and-absent",
+          "detail": null
+        },
+        {
+          "name": "privateB",
+          "pathDigest": "ef5ffb2bbb8fbc598348307bc51ea7d74f79670a0f6d4aff6c445f7058bc0cd6",
+          "outcome": "deleted-and-absent",
+          "detail": null
+        }
+      ]
+    },
+    {
+      "pass": "FS-LISTEN-SDK-109C",
+      "complete": true,
+      "deleted": 2,
+      "rows": [
+        {
+          "name": "alpha",
+          "pathDigest": "ca6b046571be27b38fd8438d0a5be94ffe7343c8761b28fea6d3311b0016ca3f",
+          "outcome": "already-deleted-earlier",
+          "detail": null
+        },
+        {
+          "name": "beta",
+          "pathDigest": "d092c377e56c48c6f2e246c8f8a2ae5f280be9ee155c18941d6aa41025adecb9",
+          "outcome": "already-deleted-earlier",
+          "detail": null
+        },
+        {
+          "name": "gamma",
+          "pathDigest": "90c3d6eff6ab46f50d9e2c7c5ef14a1f19de162e22e28e0c223efa5ffd9ae666",
+          "outcome": "already-deleted-earlier",
+          "detail": null
+        },
+        {
+          "name": "absent",
+          "pathDigest": "b16b5bfe5e493bb593ab4998a2ef3247a638537c30df1c55819d3a0ff6cd8bc7",
+          "outcome": "not-created",
+          "detail": null
+        },
+        {
+          "name": "private",
+          "pathDigest": "f44727d88307c4f19cfa8cb1e09531e02a58bef1db03dd7b3eac7850cfcc2d63",
+          "outcome": "deleted-and-absent",
+          "detail": null
+        },
+        {
+          "name": "privateB",
+          "pathDigest": "ef5ffb2bbb8fbc598348307bc51ea7d74f79670a0f6d4aff6c445f7058bc0cd6",
+          "outcome": "deleted-and-absent",
+          "detail": null
+        }
+      ]
+    },
+    {
+      "pass": "final",
+      "complete": true,
+      "deleted": 0,
+      "rows": [
+        {
+          "name": "alpha",
+          "pathDigest": "ca6b046571be27b38fd8438d0a5be94ffe7343c8761b28fea6d3311b0016ca3f",
+          "outcome": "already-deleted-earlier",
+          "detail": null
+        },
+        {
+          "name": "beta",
+          "pathDigest": "d092c377e56c48c6f2e246c8f8a2ae5f280be9ee155c18941d6aa41025adecb9",
+          "outcome": "already-deleted-earlier",
+          "detail": null
+        },
+        {
+          "name": "gamma",
+          "pathDigest": "90c3d6eff6ab46f50d9e2c7c5ef14a1f19de162e22e28e0c223efa5ffd9ae666",
+          "outcome": "already-deleted-earlier",
+          "detail": null
+        },
+        {
+          "name": "absent",
+          "pathDigest": "b16b5bfe5e493bb593ab4998a2ef3247a638537c30df1c55819d3a0ff6cd8bc7",
+          "outcome": "not-created",
+          "detail": null
+        },
+        {
+          "name": "private",
+          "pathDigest": "f44727d88307c4f19cfa8cb1e09531e02a58bef1db03dd7b3eac7850cfcc2d63",
+          "outcome": "already-deleted-earlier",
+          "detail": null
+        },
+        {
+          "name": "privateB",
+          "pathDigest": "ef5ffb2bbb8fbc598348307bc51ea7d74f79670a0f6d4aff6c445f7058bc0cd6",
+          "outcome": "already-deleted-earlier",
+          "detail": null
+        }
+      ]
+    }
+  ],
+  "totalDeleted": 23,
+  "thrown": null,
+  "cases": [
+    {
+      "caseId": "FS-LISTEN-SDK-101",
+      "role": "observation",
+      "comparison": "ordered-events",
+      "complete": true,
+      "failures": [],
+      "observed": [
+        {
+          "listener": "primary",
+          "snapshotKind": "initial",
+          "changes": [],
+          "docs": [
+            "alpha"
+          ],
+          "exists": true,
+          "fromCache": true,
+          "hasPendingWrites": false,
+          "error": null
+        }
+      ],
+      "rawEvents": [
+        {
+          "listener": "primary",
+          "snapshotKind": "initial",
+          "changes": [],
+          "docs": [
+            "alpha"
+          ],
+          "exists": true,
+          "fromCache": true,
+          "hasPendingWrites": false,
+          "error": null
+        },
+        {
+          "listener": "primary",
+          "snapshotKind": "initial",
+          "changes": [],
+          "docs": [
+            "alpha"
+          ],
+          "exists": true,
+          "fromCache": false,
+          "hasPendingWrites": false,
+          "error": null
+        }
+      ],
+      "rawEventCount": 2,
+      "baselineAt": 0,
+      "comparedFields": [
+        "listener",
+        "snapshotKind",
+        "changes",
+        "docs",
+        "exists",
+        "error"
+      ],
+      "transportTimeline": [
+        {
+          "kind": "connect",
+          "atMs": 147,
+          "derivedFrom": "first server-backed snapshot"
+        }
+      ],
+      "invariantViolations": [],
+      "listenersClosed": true
+    },
+    {
+      "caseId": "FS-LISTEN-SDK-101C",
+      "role": "control",
+      "comparison": "ordered-events",
+      "complete": true,
+      "failures": [],
+      "observed": [
+        {
+          "listener": "primary",
+          "snapshotKind": "initial",
+          "changes": [],
+          "docs": [],
+          "exists": false,
+          "fromCache": true,
+          "hasPendingWrites": false,
+          "error": null
+        }
+      ],
+      "rawEvents": [
+        {
+          "listener": "primary",
+          "snapshotKind": "initial",
+          "changes": [],
+          "docs": [],
+          "exists": false,
+          "fromCache": true,
+          "hasPendingWrites": false,
+          "error": null
+        },
+        {
+          "listener": "primary",
+          "snapshotKind": "initial",
+          "changes": [],
+          "docs": [],
+          "exists": false,
+          "fromCache": false,
+          "hasPendingWrites": false,
+          "error": null
+        }
+      ],
+      "rawEventCount": 2,
+      "baselineAt": 0,
+      "comparedFields": [
+        "listener",
+        "snapshotKind",
+        "changes",
+        "docs",
+        "exists",
+        "error"
+      ],
+      "transportTimeline": [
+        {
+          "kind": "connect",
+          "atMs": 205,
+          "derivedFrom": "first server-backed snapshot"
+        }
+      ],
+      "invariantViolations": [],
+      "listenersClosed": true
+    },
+    {
+      "caseId": "FS-LISTEN-SDK-102",
+      "role": "observation",
+      "comparison": "ordered-events",
+      "complete": true,
+      "failures": [],
+      "observed": [
+        {
+          "listener": "primary",
+          "snapshotKind": "delta",
+          "changes": [],
+          "docs": [
+            "beta"
+          ],
+          "exists": true,
+          "fromCache": false,
+          "hasPendingWrites": true,
+          "error": null
+        },
+        {
+          "listener": "primary",
+          "snapshotKind": "delta",
+          "changes": [],
+          "docs": [
+            "beta"
+          ],
+          "exists": true,
+          "fromCache": false,
+          "hasPendingWrites": false,
+          "error": null
+        }
+      ],
+      "rawEvents": [
+        {
+          "listener": "primary",
+          "snapshotKind": "initial",
+          "changes": [],
+          "docs": [],
+          "exists": false,
+          "fromCache": true,
+          "hasPendingWrites": false,
+          "error": null
+        },
+        {
+          "listener": "primary",
+          "snapshotKind": "initial",
+          "changes": [],
+          "docs": [],
+          "exists": false,
+          "fromCache": false,
+          "hasPendingWrites": false,
+          "error": null
+        },
+        {
+          "listener": "primary",
+          "snapshotKind": "delta",
+          "changes": [],
+          "docs": [
+            "beta"
+          ],
+          "exists": true,
+          "fromCache": false,
+          "hasPendingWrites": true,
+          "error": null
+        },
+        {
+          "listener": "primary",
+          "snapshotKind": "delta",
+          "changes": [],
+          "docs": [
+            "beta"
+          ],
+          "exists": true,
+          "fromCache": false,
+          "hasPendingWrites": false,
+          "error": null
+        }
+      ],
+      "rawEventCount": 4,
+      "baselineAt": 2,
+      "comparedFields": [
+        "listener",
+        "snapshotKind",
+        "changes",
+        "docs",
+        "exists",
+        "fromCache",
+        "hasPendingWrites",
+        "error"
+      ],
+      "transportTimeline": [
+        {
+          "kind": "connect",
+          "atMs": 247,
+          "derivedFrom": "first server-backed snapshot"
+        }
+      ],
+      "invariantViolations": [],
+      "listenersClosed": true
+    },
+    {
+      "caseId": "FS-LISTEN-SDK-102C",
+      "role": "control",
+      "comparison": "ordered-events",
+      "complete": true,
+      "failures": [],
+      "observed": [
+        {
+          "listener": "primary",
+          "snapshotKind": "delta",
+          "changes": [],
+          "docs": [
+            "beta"
+          ],
+          "exists": true,
+          "fromCache": false,
+          "hasPendingWrites": false,
+          "error": null
+        }
+      ],
+      "rawEvents": [
+        {
+          "listener": "primary",
+          "snapshotKind": "initial",
+          "changes": [],
+          "docs": [],
+          "exists": false,
+          "fromCache": true,
+          "hasPendingWrites": false,
+          "error": null
+        },
+        {
+          "listener": "primary",
+          "snapshotKind": "initial",
+          "changes": [],
+          "docs": [],
+          "exists": false,
+          "fromCache": false,
+          "hasPendingWrites": false,
+          "error": null
+        },
+        {
+          "listener": "primary",
+          "snapshotKind": "delta",
+          "changes": [],
+          "docs": [
+            "beta"
+          ],
+          "exists": true,
+          "fromCache": false,
+          "hasPendingWrites": false,
+          "error": null
+        }
+      ],
+      "rawEventCount": 3,
+      "baselineAt": 2,
+      "comparedFields": [
+        "listener",
+        "snapshotKind",
+        "changes",
+        "docs",
+        "exists",
+        "fromCache",
+        "hasPendingWrites",
+        "error"
+      ],
+      "transportTimeline": [
+        {
+          "kind": "connect",
+          "atMs": 322,
+          "derivedFrom": "first server-backed snapshot"
+        }
+      ],
+      "invariantViolations": [],
+      "listenersClosed": true
+    },
+    {
+      "caseId": "FS-LISTEN-SDK-103",
+      "role": "observation",
+      "comparison": "ordered-events",
+      "complete": true,
+      "failures": [],
+      "observed": [
+        {
+          "listener": "primary",
+          "snapshotKind": "delta",
+          "changes": [
+            {
+              "type": "added",
+              "doc": "beta",
+              "oldIndex": -1,
+              "newIndex": 0
+            }
+          ],
+          "docs": [
+            "beta",
+            "alpha"
+          ],
+          "exists": null,
+          "fromCache": false,
+          "hasPendingWrites": false,
+          "error": null
+        },
+        {
+          "listener": "primary",
+          "snapshotKind": "delta",
+          "changes": [
+            {
+              "type": "modified",
+              "doc": "beta",
+              "oldIndex": 0,
+              "newIndex": 1
+            }
+          ],
+          "docs": [
+            "alpha",
+            "beta"
+          ],
+          "exists": null,
+          "fromCache": false,
+          "hasPendingWrites": false,
+          "error": null
+        },
+        {
+          "listener": "primary",
+          "snapshotKind": "delta",
+          "changes": [
+            {
+              "type": "removed",
+              "doc": "alpha",
+              "oldIndex": 0,
+              "newIndex": -1
+            }
+          ],
+          "docs": [
+            "beta"
+          ],
+          "exists": null,
+          "fromCache": false,
+          "hasPendingWrites": false,
+          "error": null
+        }
+      ],
+      "rawEvents": [
+        {
+          "listener": "primary",
+          "snapshotKind": "initial",
+          "changes": [
+            {
+              "type": "added",
+              "doc": "alpha",
+              "oldIndex": -1,
+              "newIndex": 0
+            }
+          ],
+          "docs": [
+            "alpha"
+          ],
+          "exists": null,
+          "fromCache": true,
+          "hasPendingWrites": false,
+          "error": null
+        },
+        {
+          "listener": "primary",
+          "snapshotKind": "initial",
+          "changes": [],
+          "docs": [
+            "alpha"
+          ],
+          "exists": null,
+          "fromCache": false,
+          "hasPendingWrites": false,
+          "error": null
+        },
+        {
+          "listener": "primary",
+          "snapshotKind": "delta",
+          "changes": [
+            {
+              "type": "added",
+              "doc": "beta",
+              "oldIndex": -1,
+              "newIndex": 0
+            }
+          ],
+          "docs": [
+            "beta",
+            "alpha"
+          ],
+          "exists": null,
+          "fromCache": false,
+          "hasPendingWrites": false,
+          "error": null
+        },
+        {
+          "listener": "primary",
+          "snapshotKind": "delta",
+          "changes": [
+            {
+              "type": "modified",
+              "doc": "beta",
+              "oldIndex": 0,
+              "newIndex": 1
+            }
+          ],
+          "docs": [
+            "alpha",
+            "beta"
+          ],
+          "exists": null,
+          "fromCache": false,
+          "hasPendingWrites": false,
+          "error": null
+        },
+        {
+          "listener": "primary",
+          "snapshotKind": "delta",
+          "changes": [
+            {
+              "type": "removed",
+              "doc": "alpha",
+              "oldIndex": 0,
+              "newIndex": -1
+            }
+          ],
+          "docs": [
+            "beta"
+          ],
+          "exists": null,
+          "fromCache": false,
+          "hasPendingWrites": false,
+          "error": null
+        }
+      ],
+      "rawEventCount": 5,
+      "baselineAt": 2,
+      "comparedFields": [
+        "listener",
+        "snapshotKind",
+        "changes",
+        "docs",
+        "exists",
+        "fromCache",
+        "hasPendingWrites",
+        "error"
+      ],
+      "transportTimeline": [
+        {
+          "kind": "connect",
+          "atMs": 406,
+          "derivedFrom": "first server-backed snapshot"
+        }
+      ],
+      "invariantViolations": [],
+      "listenersClosed": true
+    },
+    {
+      "caseId": "FS-LISTEN-SDK-103C",
+      "role": "control",
+      "comparison": "ordered-events",
+      "complete": true,
+      "failures": [],
+      "observed": [],
+      "rawEvents": [
+        {
+          "listener": "primary",
+          "snapshotKind": "initial",
+          "changes": [
+            {
+              "type": "added",
+              "doc": "alpha",
+              "oldIndex": -1,
+              "newIndex": 0
+            }
+          ],
+          "docs": [
+            "alpha"
+          ],
+          "exists": null,
+          "fromCache": true,
+          "hasPendingWrites": false,
+          "error": null
+        },
+        {
+          "listener": "primary",
+          "snapshotKind": "initial",
+          "changes": [],
+          "docs": [
+            "alpha"
+          ],
+          "exists": null,
+          "fromCache": false,
+          "hasPendingWrites": false,
+          "error": null
+        }
+      ],
+      "rawEventCount": 2,
+      "baselineAt": 2,
+      "comparedFields": [
+        "listener",
+        "snapshotKind",
+        "changes",
+        "docs",
+        "exists",
+        "fromCache",
+        "hasPendingWrites",
+        "error"
+      ],
+      "transportTimeline": [
+        {
+          "kind": "connect",
+          "atMs": 540,
+          "derivedFrom": "first server-backed snapshot"
+        }
+      ],
+      "invariantViolations": [],
+      "listenersClosed": true
+    },
+    {
+      "caseId": "FS-LISTEN-SDK-104",
+      "role": "observation",
+      "comparison": "aggregate-changes",
+      "complete": true,
+      "failures": [],
+      "observed": [
+        {
+          "listener": "primary",
+          "snapshotKind": "aggregate",
+          "changes": [
+            {
+              "type": "modified",
+              "doc": "alpha",
+              "oldIndex": null,
+              "newIndex": null
+            },
+            {
+              "type": "added",
+              "doc": "gamma",
+              "oldIndex": null,
+              "newIndex": null
+            }
+          ],
+          "docs": [
+            "beta",
+            "alpha",
+            "gamma"
+          ],
+          "exists": null,
+          "fromCache": false,
+          "hasPendingWrites": false,
+          "error": null,
+          "fromCacheTransitions": [
+            true,
+            false
+          ]
+        }
+      ],
+      "rawEvents": [
+        {
+          "listener": "primary",
+          "snapshotKind": "initial",
+          "changes": [
+            {
+              "type": "added",
+              "doc": "alpha",
+              "oldIndex": -1,
+              "newIndex": 0
+            },
+            {
+              "type": "added",
+              "doc": "beta",
+              "oldIndex": -1,
+              "newIndex": 1
+            }
+          ],
+          "docs": [
+            "alpha",
+            "beta"
+          ],
+          "exists": null,
+          "fromCache": true,
+          "hasPendingWrites": false,
+          "error": null
+        },
+        {
+          "listener": "primary",
+          "snapshotKind": "initial",
+          "changes": [],
+          "docs": [
+            "alpha",
+            "beta"
+          ],
+          "exists": null,
+          "fromCache": false,
+          "hasPendingWrites": false,
+          "error": null
+        },
+        {
+          "listener": "primary",
+          "snapshotKind": "delta",
+          "changes": [],
+          "docs": [
+            "alpha",
+            "beta"
+          ],
+          "exists": null,
+          "fromCache": true,
+          "hasPendingWrites": false,
+          "error": null
+        },
+        {
+          "listener": "primary",
+          "snapshotKind": "delta",
+          "changes": [
+            {
+              "type": "added",
+              "doc": "gamma",
+              "oldIndex": -1,
+              "newIndex": 2
+            },
+            {
+              "type": "modified",
+              "doc": "alpha",
+              "oldIndex": 0,
+              "newIndex": 1
+            }
+          ],
+          "docs": [
+            "beta",
+            "alpha",
+            "gamma"
+          ],
+          "exists": null,
+          "fromCache": false,
+          "hasPendingWrites": false,
+          "error": null
+        }
+      ],
+      "rawEventCount": 4,
+      "baselineAt": 2,
+      "comparedFields": [
+        "listener",
+        "snapshotKind",
+        "changes",
+        "docs",
+        "exists",
+        "error"
+      ],
+      "transportTimeline": [
+        {
+          "kind": "connect",
+          "atMs": 3599,
+          "derivedFrom": "first server-backed snapshot"
+        },
+        {
+          "kind": "break-requested",
+          "atMs": 3624,
+          "derivedFrom": "collector called disableNetwork"
+        },
+        {
+          "kind": "disconnect",
+          "atMs": 3627,
+          "derivedFrom": "listener fell back to the local cache"
+        },
+        {
+          "kind": "resume-requested",
+          "atMs": 3628,
+          "derivedFrom": "collector called enableNetwork"
+        },
+        {
+          "kind": "reconnect",
+          "atMs": 3632,
+          "derivedFrom": "first server-backed snapshot"
+        }
+      ],
+      "invariantViolations": [],
+      "listenersClosed": true
+    },
+    {
+      "caseId": "FS-LISTEN-SDK-104C",
+      "role": "control",
+      "comparison": "aggregate-changes",
+      "complete": true,
+      "failures": [],
+      "observed": [
+        {
+          "listener": "primary",
+          "snapshotKind": "aggregate",
+          "changes": [
+            {
+              "type": "modified",
+              "doc": "alpha",
+              "oldIndex": null,
+              "newIndex": null
+            },
+            {
+              "type": "added",
+              "doc": "gamma",
+              "oldIndex": null,
+              "newIndex": null
+            }
+          ],
+          "docs": [
+            "beta",
+            "alpha",
+            "gamma"
+          ],
+          "exists": null,
+          "fromCache": false,
+          "hasPendingWrites": false,
+          "error": null,
+          "fromCacheTransitions": [
+            false
+          ]
+        }
+      ],
+      "rawEvents": [
+        {
+          "listener": "primary",
+          "snapshotKind": "initial",
+          "changes": [
+            {
+              "type": "added",
+              "doc": "alpha",
+              "oldIndex": -1,
+              "newIndex": 0
+            },
+            {
+              "type": "added",
+              "doc": "beta",
+              "oldIndex": -1,
+              "newIndex": 1
+            }
+          ],
+          "docs": [
+            "alpha",
+            "beta"
+          ],
+          "exists": null,
+          "fromCache": true,
+          "hasPendingWrites": false,
+          "error": null
+        },
+        {
+          "listener": "primary",
+          "snapshotKind": "initial",
+          "changes": [],
+          "docs": [
+            "alpha",
+            "beta"
+          ],
+          "exists": null,
+          "fromCache": false,
+          "hasPendingWrites": false,
+          "error": null
+        },
+        {
+          "listener": "primary",
+          "snapshotKind": "delta",
+          "changes": [
+            {
+              "type": "added",
+              "doc": "gamma",
+              "oldIndex": -1,
+              "newIndex": 2
+            }
+          ],
+          "docs": [
+            "alpha",
+            "beta",
+            "gamma"
+          ],
+          "exists": null,
+          "fromCache": false,
+          "hasPendingWrites": false,
+          "error": null
+        },
+        {
+          "listener": "primary",
+          "snapshotKind": "delta",
+          "changes": [
+            {
+              "type": "modified",
+              "doc": "alpha",
+              "oldIndex": 0,
+              "newIndex": 1
+            }
+          ],
+          "docs": [
+            "beta",
+            "alpha",
+            "gamma"
+          ],
+          "exists": null,
+          "fromCache": false,
+          "hasPendingWrites": false,
+          "error": null
+        }
+      ],
+      "rawEventCount": 4,
+      "baselineAt": 2,
+      "comparedFields": [
+        "listener",
+        "snapshotKind",
+        "changes",
+        "docs",
+        "exists",
+        "error"
+      ],
+      "transportTimeline": [
+        {
+          "kind": "connect",
+          "atMs": 8664,
+          "derivedFrom": "first server-backed snapshot"
+        }
+      ],
+      "invariantViolations": [],
+      "listenersClosed": true
+    },
+    {
+      "caseId": "FS-LISTEN-SDK-105",
+      "role": "observation",
+      "comparison": "ordered-events",
+      "complete": true,
+      "failures": [],
+      "observed": [
+        {
+          "listener": "witness",
+          "snapshotKind": "delta",
+          "changes": [],
+          "docs": [
+            "alpha"
+          ],
+          "exists": true,
+          "fromCache": false,
+          "hasPendingWrites": false,
+          "error": null
+        }
+      ],
+      "rawEvents": [
+        {
+          "listener": "primary",
+          "snapshotKind": "initial",
+          "changes": [],
+          "docs": [
+            "alpha"
+          ],
+          "exists": true,
+          "fromCache": true,
+          "hasPendingWrites": false,
+          "error": null
+        },
+        {
+          "listener": "witness",
+          "snapshotKind": "initial",
+          "changes": [],
+          "docs": [
+            "alpha"
+          ],
+          "exists": true,
+          "fromCache": true,
+          "hasPendingWrites": false,
+          "error": null
+        },
+        {
+          "listener": "primary",
+          "snapshotKind": "initial",
+          "changes": [],
+          "docs": [
+            "alpha"
+          ],
+          "exists": true,
+          "fromCache": false,
+          "hasPendingWrites": false,
+          "error": null
+        },
+        {
+          "listener": "witness",
+          "snapshotKind": "initial",
+          "changes": [],
+          "docs": [
+            "alpha"
+          ],
+          "exists": true,
+          "fromCache": false,
+          "hasPendingWrites": false,
+          "error": null
+        },
+        {
+          "listener": "witness",
+          "snapshotKind": "delta",
+          "changes": [],
+          "docs": [
+            "alpha"
+          ],
+          "exists": true,
+          "fromCache": false,
+          "hasPendingWrites": false,
+          "error": null
+        }
+      ],
+      "rawEventCount": 5,
+      "baselineAt": 4,
+      "comparedFields": [
+        "listener",
+        "snapshotKind",
+        "changes",
+        "docs",
+        "exists",
+        "error"
+      ],
+      "transportTimeline": [
+        {
+          "kind": "connect",
+          "atMs": 13728,
+          "derivedFrom": "first server-backed snapshot"
+        }
+      ],
+      "invariantViolations": [],
+      "listenersClosed": true
+    },
+    {
+      "caseId": "FS-LISTEN-SDK-105C",
+      "role": "control",
+      "comparison": "ordered-events",
+      "complete": true,
+      "failures": [],
+      "observed": [
+        {
+          "listener": "primary",
+          "snapshotKind": "delta",
+          "changes": [],
+          "docs": [
+            "alpha"
+          ],
+          "exists": true,
+          "fromCache": false,
+          "hasPendingWrites": false,
+          "error": null
+        },
+        {
+          "listener": "witness",
+          "snapshotKind": "delta",
+          "changes": [],
+          "docs": [
+            "alpha"
+          ],
+          "exists": true,
+          "fromCache": false,
+          "hasPendingWrites": false,
+          "error": null
+        }
+      ],
+      "rawEvents": [
+        {
+          "listener": "primary",
+          "snapshotKind": "initial",
+          "changes": [],
+          "docs": [
+            "alpha"
+          ],
+          "exists": true,
+          "fromCache": true,
+          "hasPendingWrites": false,
+          "error": null
+        },
+        {
+          "listener": "witness",
+          "snapshotKind": "initial",
+          "changes": [],
+          "docs": [
+            "alpha"
+          ],
+          "exists": true,
+          "fromCache": true,
+          "hasPendingWrites": false,
+          "error": null
+        },
+        {
+          "listener": "primary",
+          "snapshotKind": "initial",
+          "changes": [],
+          "docs": [
+            "alpha"
+          ],
+          "exists": true,
+          "fromCache": false,
+          "hasPendingWrites": false,
+          "error": null
+        },
+        {
+          "listener": "witness",
+          "snapshotKind": "initial",
+          "changes": [],
+          "docs": [
+            "alpha"
+          ],
+          "exists": true,
+          "fromCache": false,
+          "hasPendingWrites": false,
+          "error": null
+        },
+        {
+          "listener": "primary",
+          "snapshotKind": "delta",
+          "changes": [],
+          "docs": [
+            "alpha"
+          ],
+          "exists": true,
+          "fromCache": false,
+          "hasPendingWrites": false,
+          "error": null
+        },
+        {
+          "listener": "witness",
+          "snapshotKind": "delta",
+          "changes": [],
+          "docs": [
+            "alpha"
+          ],
+          "exists": true,
+          "fromCache": false,
+          "hasPendingWrites": false,
+          "error": null
+        }
+      ],
+      "rawEventCount": 6,
+      "baselineAt": 4,
+      "comparedFields": [
+        "listener",
+        "snapshotKind",
+        "changes",
+        "docs",
+        "exists",
+        "error"
+      ],
+      "transportTimeline": [
+        {
+          "kind": "connect",
+          "atMs": 16804,
+          "derivedFrom": "first server-backed snapshot"
+        }
+      ],
+      "invariantViolations": [],
+      "listenersClosed": true
+    },
+    {
+      "caseId": "FS-LISTEN-SDK-106",
+      "role": "observation",
+      "comparison": "ordered-events",
+      "complete": true,
+      "failures": [],
+      "observed": [
+        {
+          "listener": "primary",
+          "snapshotKind": "error",
+          "changes": [],
+          "docs": [],
+          "exists": null,
+          "fromCache": false,
+          "hasPendingWrites": false,
+          "error": "permission-denied"
+        },
+        {
+          "listener": "recovered",
+          "snapshotKind": "initial",
+          "changes": [],
+          "docs": [
+            "private"
+          ],
+          "exists": true,
+          "fromCache": true,
+          "hasPendingWrites": false,
+          "error": null
+        }
+      ],
+      "rawEvents": [
+        {
+          "listener": "primary",
+          "snapshotKind": "initial",
+          "changes": [],
+          "docs": [
+            "private"
+          ],
+          "exists": true,
+          "fromCache": true,
+          "hasPendingWrites": false,
+          "error": null
+        },
+        {
+          "listener": "primary",
+          "snapshotKind": "initial",
+          "changes": [],
+          "docs": [
+            "private"
+          ],
+          "exists": true,
+          "fromCache": false,
+          "hasPendingWrites": false,
+          "error": null
+        },
+        {
+          "listener": "primary",
+          "snapshotKind": "error",
+          "changes": [],
+          "docs": [],
+          "exists": null,
+          "fromCache": false,
+          "hasPendingWrites": false,
+          "error": "permission-denied"
+        },
+        {
+          "listener": "recovered",
+          "snapshotKind": "initial",
+          "changes": [],
+          "docs": [
+            "private"
+          ],
+          "exists": true,
+          "fromCache": true,
+          "hasPendingWrites": false,
+          "error": null
+        },
+        {
+          "listener": "recovered",
+          "snapshotKind": "initial",
+          "changes": [],
+          "docs": [
+            "private"
+          ],
+          "exists": true,
+          "fromCache": false,
+          "hasPendingWrites": false,
+          "error": null
+        }
+      ],
+      "rawEventCount": 5,
+      "baselineAt": 2,
+      "comparedFields": [
+        "listener",
+        "snapshotKind",
+        "changes",
+        "docs",
+        "exists",
+        "error"
+      ],
+      "transportTimeline": [
+        {
+          "kind": "connect",
+          "atMs": 16880,
+          "derivedFrom": "first server-backed snapshot"
+        },
+        {
+          "kind": "disconnect",
+          "atMs": 16932,
+          "derivedFrom": "listener fell back to the local cache"
+        },
+        {
+          "kind": "connect",
+          "atMs": 16934,
+          "derivedFrom": "first server-backed snapshot"
+        }
+      ],
+      "invariantViolations": [],
+      "listenersClosed": true
+    },
+    {
+      "caseId": "FS-LISTEN-SDK-106N",
+      "role": "negative",
+      "comparison": "ordered-events",
+      "complete": true,
+      "failures": [],
+      "observed": [
+        {
+          "listener": "primary",
+          "snapshotKind": "error",
+          "changes": [],
+          "docs": [],
+          "exists": null,
+          "fromCache": false,
+          "hasPendingWrites": false,
+          "error": "permission-denied"
+        }
+      ],
+      "rawEvents": [
+        {
+          "listener": "primary",
+          "snapshotKind": "initial",
+          "changes": [],
+          "docs": [],
+          "exists": false,
+          "fromCache": true,
+          "hasPendingWrites": false,
+          "error": null
+        },
+        {
+          "listener": "primary",
+          "snapshotKind": "error",
+          "changes": [],
+          "docs": [],
+          "exists": null,
+          "fromCache": false,
+          "hasPendingWrites": false,
+          "error": "permission-denied"
+        }
+      ],
+      "rawEventCount": 2,
+      "baselineAt": 0,
+      "comparedFields": [
+        "listener",
+        "snapshotKind",
+        "changes",
+        "docs",
+        "exists",
+        "error"
+      ],
+      "transportTimeline": [],
+      "invariantViolations": [],
+      "listenersClosed": true
+    },
+    {
+      "caseId": "FS-LISTEN-SDK-107",
+      "role": "observation",
+      "comparison": "ordered-events",
+      "complete": true,
+      "failures": [],
+      "observed": [
+        {
+          "listener": "primary",
+          "snapshotKind": "initial",
+          "changes": [],
+          "docs": [
+            "alpha"
+          ],
+          "exists": true,
+          "fromCache": true,
+          "hasPendingWrites": false,
+          "error": null
+        },
+        {
+          "listener": "primary",
+          "snapshotKind": "delta",
+          "changes": [],
+          "docs": [
+            "alpha"
+          ],
+          "exists": true,
+          "fromCache": false,
+          "hasPendingWrites": false,
+          "error": null
+        }
+      ],
+      "rawEvents": [
+        {
+          "listener": "primary",
+          "snapshotKind": "initial",
+          "changes": [],
+          "docs": [
+            "alpha"
+          ],
+          "exists": true,
+          "fromCache": true,
+          "hasPendingWrites": false,
+          "error": null
+        },
+        {
+          "listener": "primary",
+          "snapshotKind": "delta",
+          "changes": [],
+          "docs": [
+            "alpha"
+          ],
+          "exists": true,
+          "fromCache": false,
+          "hasPendingWrites": false,
+          "error": null
+        }
+      ],
+      "rawEventCount": 2,
+      "baselineAt": 0,
+      "comparedFields": [
+        "listener",
+        "snapshotKind",
+        "changes",
+        "docs",
+        "exists",
+        "error"
+      ],
+      "transportTimeline": [
+        {
+          "kind": "connect",
+          "atMs": 20027,
+          "derivedFrom": "first server-backed snapshot"
+        }
+      ],
+      "invariantViolations": [],
+      "listenersClosed": true
+    },
+    {
+      "caseId": "FS-LISTEN-SDK-107C",
+      "role": "control",
+      "comparison": "ordered-events",
+      "complete": true,
+      "failures": [],
+      "observed": [
+        {
+          "listener": "primary",
+          "snapshotKind": "initial",
+          "changes": [],
+          "docs": [
+            "alpha"
+          ],
+          "exists": true,
+          "fromCache": true,
+          "hasPendingWrites": false,
+          "error": null
+        }
+      ],
+      "rawEvents": [
+        {
+          "listener": "primary",
+          "snapshotKind": "initial",
+          "changes": [],
+          "docs": [
+            "alpha"
+          ],
+          "exists": true,
+          "fromCache": true,
+          "hasPendingWrites": false,
+          "error": null
+        }
+      ],
+      "rawEventCount": 1,
+      "baselineAt": 0,
+      "comparedFields": [
+        "listener",
+        "snapshotKind",
+        "changes",
+        "docs",
+        "exists",
+        "error"
+      ],
+      "transportTimeline": [],
+      "invariantViolations": [],
+      "listenersClosed": true
+    },
+    {
+      "caseId": "FS-LISTEN-SDK-108",
+      "role": "observation",
+      "comparison": "ordered-events",
+      "complete": true,
+      "failures": [],
+      "observed": [
+        {
+          "listener": "primary",
+          "snapshotKind": "error",
+          "changes": [],
+          "docs": [],
+          "exists": null,
+          "fromCache": false,
+          "hasPendingWrites": false,
+          "error": "permission-denied"
+        }
+      ],
+      "rawEvents": [
+        {
+          "listener": "primary",
+          "snapshotKind": "error",
+          "changes": [],
+          "docs": [],
+          "exists": null,
+          "fromCache": false,
+          "hasPendingWrites": false,
+          "error": "permission-denied"
+        }
+      ],
+      "rawEventCount": 1,
+      "baselineAt": 0,
+      "comparedFields": [
+        "listener",
+        "snapshotKind",
+        "changes",
+        "docs",
+        "exists",
+        "error"
+      ],
+      "transportTimeline": [],
+      "invariantViolations": [],
+      "listenersClosed": true
+    },
+    {
+      "caseId": "FS-LISTEN-SDK-108C",
+      "role": "control",
+      "comparison": "ordered-events",
+      "complete": true,
+      "failures": [],
+      "observed": [
+        {
+          "listener": "secondary",
+          "snapshotKind": "initial",
+          "changes": [],
+          "docs": [
+            "privateB"
+          ],
+          "exists": true,
+          "fromCache": true,
+          "hasPendingWrites": false,
+          "error": null
+        }
+      ],
+      "rawEvents": [
+        {
+          "listener": "secondary",
+          "snapshotKind": "initial",
+          "changes": [],
+          "docs": [
+            "privateB"
+          ],
+          "exists": true,
+          "fromCache": true,
+          "hasPendingWrites": false,
+          "error": null
+        },
+        {
+          "listener": "secondary",
+          "snapshotKind": "initial",
+          "changes": [],
+          "docs": [
+            "privateB"
+          ],
+          "exists": true,
+          "fromCache": false,
+          "hasPendingWrites": false,
+          "error": null
+        }
+      ],
+      "rawEventCount": 2,
+      "baselineAt": 0,
+      "comparedFields": [
+        "listener",
+        "snapshotKind",
+        "changes",
+        "docs",
+        "exists",
+        "error"
+      ],
+      "transportTimeline": [
+        {
+          "kind": "connect",
+          "atMs": 29128,
+          "derivedFrom": "first server-backed snapshot"
+        }
+      ],
+      "invariantViolations": [],
+      "listenersClosed": true
+    },
+    {
+      "caseId": "FS-LISTEN-SDK-109",
+      "role": "observation",
+      "comparison": "ordered-events",
+      "complete": true,
+      "failures": [],
+      "observed": [
+        {
+          "listener": "primary",
+          "snapshotKind": "error",
+          "changes": [],
+          "docs": [],
+          "exists": null,
+          "fromCache": false,
+          "hasPendingWrites": false,
+          "error": "unauthenticated"
+        }
+      ],
+      "rawEvents": [
+        {
+          "listener": "primary",
+          "snapshotKind": "initial",
+          "changes": [],
+          "docs": [
+            "private"
+          ],
+          "exists": true,
+          "fromCache": true,
+          "hasPendingWrites": false,
+          "error": null
+        },
+        {
+          "listener": "primary",
+          "snapshotKind": "initial",
+          "changes": [],
+          "docs": [
+            "private"
+          ],
+          "exists": true,
+          "fromCache": false,
+          "hasPendingWrites": false,
+          "error": null
+        },
+        {
+          "listener": "primary",
+          "snapshotKind": "error",
+          "changes": [],
+          "docs": [],
+          "exists": null,
+          "fromCache": false,
+          "hasPendingWrites": false,
+          "error": "unauthenticated"
+        }
+      ],
+      "rawEventCount": 3,
+      "baselineAt": 2,
+      "comparedFields": [
+        "listener",
+        "snapshotKind",
+        "changes",
+        "docs",
+        "exists",
+        "error"
+      ],
+      "transportTimeline": [
+        {
+          "kind": "connect",
+          "atMs": 30379,
+          "derivedFrom": "first server-backed snapshot"
+        },
+        {
+          "kind": "revoke-requested",
+          "atMs": 30403,
+          "derivedFrom": "collector asked the adapter to revoke the session"
+        }
+      ],
+      "invariantViolations": [],
+      "listenersClosed": true
+    },
+    {
+      "caseId": "FS-LISTEN-SDK-109C",
+      "role": "control",
+      "comparison": "ordered-events",
+      "complete": true,
+      "failures": [],
+      "observed": [
+        {
+          "listener": "primary",
+          "snapshotKind": "delta",
+          "changes": [],
+          "docs": [
+            "private"
+          ],
+          "exists": true,
+          "fromCache": false,
+          "hasPendingWrites": false,
+          "error": null
+        }
+      ],
+      "rawEvents": [
+        {
+          "listener": "primary",
+          "snapshotKind": "initial",
+          "changes": [],
+          "docs": [
+            "private"
+          ],
+          "exists": true,
+          "fromCache": true,
+          "hasPendingWrites": false,
+          "error": null
+        },
+        {
+          "listener": "primary",
+          "snapshotKind": "initial",
+          "changes": [],
+          "docs": [
+            "private"
+          ],
+          "exists": true,
+          "fromCache": false,
+          "hasPendingWrites": false,
+          "error": null
+        },
+        {
+          "listener": "primary",
+          "snapshotKind": "delta",
+          "changes": [],
+          "docs": [
+            "private"
+          ],
+          "exists": true,
+          "fromCache": false,
+          "hasPendingWrites": false,
+          "error": null
+        }
+      ],
+      "rawEventCount": 3,
+      "baselineAt": 2,
+      "comparedFields": [
+        "listener",
+        "snapshotKind",
+        "changes",
+        "docs",
+        "exists",
+        "error"
+      ],
+      "transportTimeline": [
+        {
+          "kind": "connect",
+          "atMs": 31664,
+          "derivedFrom": "first server-backed snapshot"
+        }
+      ],
+      "invariantViolations": [],
+      "listenersClosed": true
+    }
+  ],
+  "complete": true,
+  "permission": null,
+  "sdkResolved": {
+    "@firebase/auth": "1.13.5",
+    "@firebase/firestore": "4.17.1",
+    "@firebase/webchannel-wrapper": "1.0.7",
+    "firebase": "12.18.0"
+  },
+  "transportTimeline": [
+    {
+      "kind": "connect",
+      "atMs": 147,
+      "derivedFrom": "first server-backed snapshot",
+      "caseId": "FS-LISTEN-SDK-101"
+    },
+    {
+      "kind": "connect",
+      "atMs": 205,
+      "derivedFrom": "first server-backed snapshot",
+      "caseId": "FS-LISTEN-SDK-101C"
+    },
+    {
+      "kind": "connect",
+      "atMs": 247,
+      "derivedFrom": "first server-backed snapshot",
+      "caseId": "FS-LISTEN-SDK-102"
+    },
+    {
+      "kind": "connect",
+      "atMs": 322,
+      "derivedFrom": "first server-backed snapshot",
+      "caseId": "FS-LISTEN-SDK-102C"
+    },
+    {
+      "kind": "connect",
+      "atMs": 406,
+      "derivedFrom": "first server-backed snapshot",
+      "caseId": "FS-LISTEN-SDK-103"
+    },
+    {
+      "kind": "connect",
+      "atMs": 540,
+      "derivedFrom": "first server-backed snapshot",
+      "caseId": "FS-LISTEN-SDK-103C"
+    },
+    {
+      "kind": "connect",
+      "atMs": 3599,
+      "derivedFrom": "first server-backed snapshot",
+      "caseId": "FS-LISTEN-SDK-104"
+    },
+    {
+      "kind": "break-requested",
+      "atMs": 3624,
+      "derivedFrom": "collector called disableNetwork",
+      "caseId": "FS-LISTEN-SDK-104"
+    },
+    {
+      "kind": "disconnect",
+      "atMs": 3627,
+      "derivedFrom": "listener fell back to the local cache",
+      "caseId": "FS-LISTEN-SDK-104"
+    },
+    {
+      "kind": "resume-requested",
+      "atMs": 3628,
+      "derivedFrom": "collector called enableNetwork",
+      "caseId": "FS-LISTEN-SDK-104"
+    },
+    {
+      "kind": "reconnect",
+      "atMs": 3632,
+      "derivedFrom": "first server-backed snapshot",
+      "caseId": "FS-LISTEN-SDK-104"
+    },
+    {
+      "kind": "connect",
+      "atMs": 8664,
+      "derivedFrom": "first server-backed snapshot",
+      "caseId": "FS-LISTEN-SDK-104C"
+    },
+    {
+      "kind": "connect",
+      "atMs": 13728,
+      "derivedFrom": "first server-backed snapshot",
+      "caseId": "FS-LISTEN-SDK-105"
+    },
+    {
+      "kind": "connect",
+      "atMs": 16804,
+      "derivedFrom": "first server-backed snapshot",
+      "caseId": "FS-LISTEN-SDK-105C"
+    },
+    {
+      "kind": "connect",
+      "atMs": 16880,
+      "derivedFrom": "first server-backed snapshot",
+      "caseId": "FS-LISTEN-SDK-106"
+    },
+    {
+      "kind": "disconnect",
+      "atMs": 16932,
+      "derivedFrom": "listener fell back to the local cache",
+      "caseId": "FS-LISTEN-SDK-106"
+    },
+    {
+      "kind": "connect",
+      "atMs": 16934,
+      "derivedFrom": "first server-backed snapshot",
+      "caseId": "FS-LISTEN-SDK-106"
+    },
+    {
+      "kind": "connect",
+      "atMs": 20027,
+      "derivedFrom": "first server-backed snapshot",
+      "caseId": "FS-LISTEN-SDK-107"
+    },
+    {
+      "kind": "connect",
+      "atMs": 29128,
+      "derivedFrom": "first server-backed snapshot",
+      "caseId": "FS-LISTEN-SDK-108C"
+    },
+    {
+      "kind": "connect",
+      "atMs": 30379,
+      "derivedFrom": "first server-backed snapshot",
+      "caseId": "FS-LISTEN-SDK-109"
+    },
+    {
+      "kind": "revoke-requested",
+      "atMs": 30403,
+      "derivedFrom": "collector asked the adapter to revoke the session",
+      "caseId": "FS-LISTEN-SDK-109"
+    },
+    {
+      "kind": "connect",
+      "atMs": 31664,
+      "derivedFrom": "first server-backed snapshot",
+      "caseId": "FS-LISTEN-SDK-109C"
+    }
+  ],
+  "sourceDigests": {
+    "tools/compat-broad/fs-listen-resume/listen_collector.mjs": "1c641bfcc9ffa2720ff2fe6cdc94c23911c5b10d4fa149b5cd1fba15e8780893",
+    "tools/compat-broad/fs-listen-resume/listen_sdk_adapter.mjs": "1cd755958d1fe8293ecefc0c0d0d18ba455db803e6dbaad7eb4d2545af3c3e19",
+    "tools/compat-broad/fs-listen-resume/listen_journal.mjs": "c3c11ba199ace9cf6eecbb40cefc86134bbf1a92d8514148674a44ccb06847dc",
+    "tools/compat-broad/fs-listen-resume/cases.py": "272cb5f3f6ed2af93748184549f552ed08528f984097acccfadcc161ca5750d7",
+    "tools/compat-broad/fs-listen-resume/campaign.py": "553c3196acdd69e324ab5abef1c8acaec9d70c771eefcd0f38a8ad286d3a6f49",
+    "tools/compat-broad/fs-listen-resume/observation.py": "3675cfc653779cdb3c8f213bc56bc7b063901fb201f50d2101cd34ee7eb59a6d"
+  },
+  "lifecycle": {
+    "failure": null,
+    "accountCleanup": {
+      "complete": true,
+      "outcome": "deleted-and-absent",
+      "accounts": {
+        "primary": {
+          "complete": true,
+          "outcome": "deleted-and-absent"
+        },
+        "secondary": {
+          "complete": true,
+          "outcome": "deleted-and-absent"
+        }
+      }
+    },
+    "clients": {
+      "complete": true,
+      "rows": [
+        {
+          "client": "primary",
+          "databaseTerminated": true,
+          "appDeleted": true,
+          "failures": []
+        },
+        {
+          "client": "witness",
+          "databaseTerminated": true,
+          "appDeleted": true,
+          "failures": []
+        },
+        {
+          "client": "secondary",
+          "databaseTerminated": true,
+          "appDeleted": true,
+          "failures": []
+        }
+      ]
+    },
+    "localAdminRequests": 9,
+    "localAdminRequestLimit": 10,
+    "complete": true
+  }
+}

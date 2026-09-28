@@ -138,6 +138,222 @@ struct Harness {
     server: tokio::task::JoinHandle<std::io::Result<()>>,
 }
 
+#[test]
+fn response_reader_accepts_connection_reset_after_complete_response() {
+    let raw = b"HTTP/1.1 404 Not Found\r\ncontent-length: 3\r\n\r\nno!";
+    let response = response_after_read(
+        raw,
+        Err(std::io::Error::new(
+            std::io::ErrorKind::ConnectionReset,
+            "peer reset",
+        )),
+        "POST",
+    )
+    .expect("a complete response remains usable after a reset");
+    assert_eq!(response.status, 404);
+    assert_eq!(response.body, b"no!");
+}
+
+#[test]
+fn response_reader_rejects_connection_reset_without_complete_response() {
+    let raw = b"HTTP/1.1 404 Not Found\r\ncontent-length: 3\r\n\r\nno";
+    let error = response_after_read(
+        raw,
+        Err(std::io::Error::new(
+            std::io::ErrorKind::ConnectionReset,
+            "peer reset",
+        )),
+        "POST",
+    )
+    .expect_err("a reset must not hide a truncated response");
+    assert_eq!(error, "truncated response body");
+}
+
+#[test]
+fn response_reader_rejects_connection_reset_without_http_response() {
+    let error = response_after_read(
+        b"",
+        Err(std::io::Error::new(
+            std::io::ErrorKind::ConnectionReset,
+            "peer reset",
+        )),
+        "POST",
+    )
+    .expect_err("an empty response must not be treated as a refusal");
+    assert_eq!(error, "malformed response from the functions runner");
+}
+
+#[test]
+fn response_reader_rejects_reset_after_a_close_delimited_partial_response() {
+    let error = response_after_read(
+        b"HTTP/1.1 404 Not Found\r\n\r\npartial",
+        Err(std::io::Error::new(
+            std::io::ErrorKind::ConnectionReset,
+            "peer reset",
+        )),
+        "POST",
+    )
+    .expect_err("a reset cannot delimit a close-delimited response");
+    assert_eq!(error, "response is not self-delimiting");
+}
+
+#[test]
+fn response_reader_rejects_reset_after_an_incomplete_chunked_response() {
+    let error = response_after_read(
+        b"HTTP/1.1 404 Not Found\r\ntransfer-encoding: chunked\r\n\r\n3\r\nno!\r\n0\r\n",
+        Err(std::io::Error::new(
+            std::io::ErrorKind::ConnectionReset,
+            "peer reset",
+        )),
+        "POST",
+    )
+    .expect_err("a reset cannot complete chunked terminal framing");
+    assert_eq!(error, "response is not self-delimiting");
+}
+
+#[test]
+fn response_reader_rejects_reset_after_incomplete_chunked_framing_despite_content_length() {
+    let error = response_after_read(
+        b"HTTP/1.1 404 Not Found\r\ncontent-length: 3\r\ntransfer-encoding: chunked\r\n\r\n0\r\n",
+        Err(std::io::Error::new(
+            std::io::ErrorKind::ConnectionReset,
+            "peer reset",
+        )),
+        "POST",
+    )
+    .expect_err("chunked framing takes precedence over content length");
+    assert_eq!(error, "response is not self-delimiting");
+}
+
+#[test]
+fn response_reader_accepts_properly_terminated_chunked_response_after_reset() {
+    let response = response_after_read(
+        b"HTTP/1.1 404 Not Found\r\ntransfer-encoding: chunked\r\n\r\n3\r\nno!\r\n0\r\n\r\n",
+        Err(std::io::Error::new(
+            std::io::ErrorKind::ConnectionReset,
+            "peer reset",
+        )),
+        "POST",
+    )
+    .expect("properly terminated chunked framing is complete");
+    assert_eq!(response.body, b"no!");
+}
+
+#[test]
+fn response_reader_accepts_bodyless_response_after_reset() {
+    let response = response_after_read(
+        b"HTTP/1.1 204 No Content\r\n\r\n",
+        Err(std::io::Error::new(
+            std::io::ErrorKind::ConnectionReset,
+            "peer reset",
+        )),
+        "POST",
+    )
+    .expect("bodyless responses are self-delimiting");
+    assert_eq!(response.status, 204);
+    assert!(response.body.is_empty());
+}
+
+#[test]
+fn response_reader_rejects_other_read_errors() {
+    let error = response_after_read(
+        b"HTTP/1.1 404 Not Found\r\ncontent-length: 3\r\n\r\nno!",
+        Err(std::io::Error::new(
+            std::io::ErrorKind::UnexpectedEof,
+            "short read",
+        )),
+        "POST",
+    )
+    .expect_err("only connection reset may be tolerated");
+    assert_eq!(error, "reading response: short read");
+}
+
+fn response_after_read(
+    raw: &[u8],
+    read: std::io::Result<usize>,
+    method: &str,
+) -> Result<fireemu_adapter_functions::http::ProxiedResponse, String> {
+    match read {
+        Ok(_) => fireemu_adapter_functions::http::parse_response(raw, method),
+        Err(error) if error.kind() == std::io::ErrorKind::ConnectionReset => {
+            let response = fireemu_adapter_functions::http::parse_response(raw, method)?;
+            ensure_self_delimiting(raw, method, response.status)?;
+            Ok(response)
+        }
+        Err(error) => Err(format!("reading response: {error}")),
+    }
+}
+
+fn ensure_self_delimiting(raw: &[u8], method: &str, status: u16) -> Result<(), String> {
+    let header_end = raw
+        .windows(4)
+        .position(|window| window == b"\r\n\r\n")
+        .ok_or_else(|| "malformed response from the functions runner".to_owned())?;
+    if method.eq_ignore_ascii_case("HEAD")
+        || matches!(status, 204 | 304)
+        || (100..200).contains(&status)
+    {
+        return Ok(());
+    }
+
+    let head = std::str::from_utf8(&raw[..header_end])
+        .map_err(|_| "malformed response header text".to_owned())?;
+    let mut transfer_encoding_chunked = false;
+    let mut content_length = None;
+    for line in head.split("\r\n").skip(1) {
+        let Some((name, value)) = line.split_once(':') else {
+            continue;
+        };
+        match name.trim().to_ascii_lowercase().as_str() {
+            "transfer-encoding" => {
+                transfer_encoding_chunked = value.trim().eq_ignore_ascii_case("chunked");
+            }
+            "content-length" => {
+                content_length = value.trim().parse::<usize>().ok();
+            }
+            _ => {}
+        }
+    }
+
+    let body = &raw[header_end + 4..];
+    if transfer_encoding_chunked {
+        let mut rest = body;
+        loop {
+            let line_end = rest
+                .windows(2)
+                .position(|window| window == b"\r\n")
+                .ok_or_else(|| "response is not self-delimiting".to_owned())?;
+            let size = usize::from_str_radix(
+                rest[..line_end]
+                    .split(|byte| *byte == b';')
+                    .next()
+                    .and_then(|value| std::str::from_utf8(value).ok())
+                    .unwrap_or("")
+                    .trim(),
+                16,
+            )
+            .map_err(|_| "response is not self-delimiting".to_owned())?;
+            rest = &rest[line_end + 2..];
+            if size == 0 {
+                return (rest.starts_with(b"\r\n")
+                    || rest.windows(4).any(|window| window == b"\r\n\r\n"))
+                .then_some(())
+                .ok_or_else(|| "response is not self-delimiting".to_owned());
+            }
+            if rest.len() < size + 2 || &rest[size..size + 2] != b"\r\n" {
+                return Err("response is not self-delimiting".to_owned());
+            }
+            rest = &rest[size + 2..];
+        }
+    }
+    if let Some(length) = content_length {
+        return (body.len() >= length)
+            .then_some(())
+            .ok_or_else(|| "response is not self-delimiting".to_owned());
+    }
+    Err("response is not self-delimiting".to_owned())
+}
+
 impl Harness {
     fn token(&self) -> String {
         token_for(&self.gate, PROJECT, APP_ID)
@@ -336,12 +552,8 @@ impl Harness {
             .expect("the request body is written");
         stream.flush().await.expect("flush");
         let mut raw = Vec::new();
-        stream
-            .read_to_end(&mut raw)
-            .await
-            .expect("the response is read");
-        fireemu_adapter_functions::http::parse_response(&raw, "POST")
-            .expect("a well-formed response")
+        let read = stream.read_to_end(&mut raw).await;
+        response_after_read(&raw, read, "POST").expect("a well-formed response")
     }
 }
 
@@ -375,12 +587,34 @@ async fn start(trusted: bool) -> Harness {
 }
 
 async fn start_with_consume(trusted: bool, consume: &str) -> Harness {
+    start_with_consume_profile(
+        trusted,
+        consume,
+        fireemu_adapter_functions::http::FunctionsHttpProfile::Emulator,
+    )
+    .await
+}
+
+async fn start_with_consume_profile(
+    trusted: bool,
+    consume: &str,
+    profile: fireemu_adapter_functions::http::FunctionsHttpProfile,
+) -> Harness {
+    start_with_serve_entry(trusted, consume, profile, false).await
+}
+
+async fn start_with_serve_entry(
+    trusted: bool,
+    consume: &str,
+    profile: fireemu_adapter_functions::http::FunctionsHttpProfile,
+    default_entry: bool,
+) -> Harness {
     let script = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fake_runner.py");
     let spec = SpawnSpec {
         command: vec!["python3".to_owned(), script.to_owned()],
         cwd: None,
         env: vec![("FIREEMU_FAKE_CONSUME".to_owned(), consume.to_owned())],
-        hello_timeout: Duration::from_secs(20),
+        hello_timeout: Duration::from_secs(60),
     };
     let runner = Runner::spawn_spec(&spec)
         .await
@@ -414,26 +648,38 @@ async fn start_with_consume(trusted: bool, consume: &str) -> Harness {
         SplitMix64::new(3),
         TotpPolicy::default(),
     )));
+    let verifier = Arc::new(RulesEnforcer::new(
+        Arc::new(RulesetSlot::default()),
+        auth.clone(),
+        clock,
+    ));
+    runtime.set_callable_auth_verifier(verifier.clone());
     if trusted {
         let policy = ServiceAdmission::new(gate.clone(), "functions", BaselineMode::Unenforced)
             .map(Arc::new)
             .expect("unenforced is a policy");
-        let verifier = Arc::new(RulesEnforcer::new(
-            Arc::new(RulesetSlot::default()),
-            auth.clone(),
-            clock,
-        ));
         runtime.set_callable_trust(Arc::new(CallableTrust::new(policy, verifier, PROJECT)));
     }
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
         .await
         .expect("bind");
     let addr = listener.local_addr().expect("a local address");
-    let server = tokio::spawn(fireemu_adapter_functions::http::serve_functions(
-        listener,
-        runtime.clone(),
-        fireemu_adapter_functions::http::HttpAdmission::new(),
-    ));
+    let server_runtime = runtime.clone();
+    let server = tokio::spawn(async move {
+        let admission = fireemu_adapter_functions::http::HttpAdmission::new();
+        if default_entry {
+            fireemu_adapter_functions::http::serve_functions(listener, server_runtime, admission)
+                .await
+        } else {
+            fireemu_adapter_functions::http::serve_functions_with_profile(
+                listener,
+                server_runtime,
+                admission,
+                profile,
+            )
+            .await
+        }
+    });
     Harness {
         addr,
         gate,
@@ -917,126 +1163,83 @@ async fn eventarc_publish_rejects_amplified_fanout_without_partial_enqueue() {
 }
 
 #[tokio::test]
-async fn an_enforced_callable_answers_a_genuine_local_preflight_without_admission_or_invocation() {
-    let h = start(true).await;
-    let response = h
-        .request(
-            "OPTIONS",
-            "guarded",
-            &[
-                ("origin", "http://127.0.0.1:5173"),
-                ("access-control-request-method", "POST"),
-                (
-                    "access-control-request-headers",
-                    "authorization,content-type,x-firebase-appcheck",
-                ),
-                ("sec-fetch-site", "same-site"),
-                ("sec-fetch-mode", "cors"),
-            ],
-        )
-        .await;
-    assert_eq!(response.status, 204);
-    assert_eq!(
-        response_header(&response, "access-control-allow-origin"),
-        Some("http://127.0.0.1:5173")
-    );
-    assert_eq!(
-        response_header(&response, "access-control-allow-methods"),
-        Some("POST")
-    );
-    assert_eq!(
-        response_header(&response, "access-control-allow-headers"),
-        Some("authorization,content-type,x-firebase-appcheck")
-    );
-    assert_eq!(
-        response_header(&response, "vary"),
-        Some("Origin, Access-Control-Request-Method, Access-Control-Request-Headers, Sec-Fetch-Site, Sec-Fetch-Mode")
-    );
-    assert!(response.body.is_empty());
-    assert!(
-        h.gate
-            .registry()
-            .read()
-            .unwrap()
-            .observations(PROJECT)
-            .is_empty(),
-        "a preflight is not an App Check admission"
-    );
-
-    let token = h.token();
-    let (_, bearer) = h.user("preflight@example.com");
-    let (status, body) = h
-        .call(
-            "guarded",
-            &[
-                ("origin", "http://127.0.0.1:5173"),
-                ("authorization", &bearer),
-                ("x-firebase-appcheck", &token),
-            ],
-        )
-        .await;
-    assert_eq!(status, 200, "{body}");
-    assert_eq!(echoed(&body, "authorization"), vec![bearer]);
-    assert_eq!(echoed(&body, "x-firebase-appcheck"), vec![token]);
-    h.stop().await;
+async fn callable_preflights_delegate_response_to_the_runner_in_the_emulator_profile() {
+    assert_callable_preflights_reach_the_runner(
+        fireemu_adapter_functions::http::FunctionsHttpProfile::Emulator,
+    )
+    .await;
 }
 
 #[tokio::test]
-async fn callable_preflight_rejects_nonlocal_or_malformed_browser_requests() {
-    let h = start(true).await;
+async fn callable_preflights_delegate_response_to_the_runner_in_the_strict_profile() {
+    assert_callable_preflights_reach_the_runner(
+        fireemu_adapter_functions::http::FunctionsHttpProfile::Strict,
+    )
+    .await;
+}
+
+async fn assert_callable_preflights_reach_the_runner(
+    profile: fireemu_adapter_functions::http::FunctionsHttpProfile,
+) {
+    let h = start_with_consume_profile(true, "disabled", profile).await;
+    for origin in [
+        "http://localhost:5173",
+        "http://127.0.0.1:5173",
+        "https://evil.example",
+        "http://192.168.1.20:5173",
+        "null",
+    ] {
+        for fields in [
+            vec![],
+            vec![("access-control-request-method", "GET")],
+            vec![
+                ("access-control-request-method", "POST"),
+                ("access-control-request-method", "GET"),
+            ],
+            vec![("access-control-request-headers", "x-client-header")],
+            vec![
+                ("access-control-request-headers", "content-type"),
+                ("access-control-request-headers", "authorization"),
+            ],
+            vec![
+                ("sec-fetch-site", "cross-site"),
+                ("sec-fetch-mode", "navigate"),
+            ],
+        ] {
+            let mut headers = vec![("origin", origin)];
+            headers.extend(fields.iter().copied());
+            let response = h.request("OPTIONS", "guarded", &headers).await;
+            assert_eq!(response.status, 200, "{profile:?} {headers:?}");
+            let body: Value = serde_json::from_slice(&response.body).unwrap();
+            assert_eq!(body["method"], "OPTIONS");
+            assert_eq!(echoed(&body, "origin"), vec![origin]);
+            for (name, _) in &fields {
+                let expected: Vec<String> = fields
+                    .iter()
+                    .filter(|(field, _)| field == name)
+                    .map(|(_, value)| (*value).to_owned())
+                    .collect();
+                assert_eq!(echoed(&body, name), expected, "{headers:?}");
+            }
+        }
+    }
     for headers in [
         vec![("access-control-request-method", "POST")],
-        vec![("origin", "http://localhost:5173")],
-        vec![
-            ("origin", "https://attacker.example"),
-            ("access-control-request-method", "POST"),
-        ],
-        vec![
-            ("origin", "null"),
-            ("access-control-request-method", "POST"),
-        ],
         vec![
             ("origin", "http://localhost:5173"),
-            ("access-control-request-method", "PUT"),
-        ],
-        vec![
-            ("origin", "http://localhost:5173"),
-            ("access-control-request-method", "POST"),
-            ("access-control-request-headers", "x-fireemu-runner-secret"),
-        ],
-        vec![
-            ("origin", "http://localhost:5173"),
-            ("access-control-request-method", "POST"),
-            ("sec-fetch-site", "cross-site"),
-        ],
-        vec![
-            ("origin", "http://localhost:5173"),
-            ("access-control-request-method", "POST"),
-            ("sec-fetch-mode", "navigate"),
-        ],
-        vec![
-            ("origin", "http://localhost:5173"),
-            ("access-control-request-method", "POST"),
-            ("access-control-request-method", "POST"),
-        ],
-        vec![
-            ("origin", "http://localhost:5173"),
-            ("access-control-request-method", "POST"),
-            ("access-control-request-headers", "content-type"),
-            ("access-control-request-headers", "authorization"),
-        ],
-        vec![
-            ("origin", "http://localhost:5173"),
-            ("origin", "http://127.0.0.1:5173"),
-            ("access-control-request-method", "POST"),
+            ("origin", "https://evil.example"),
         ],
     ] {
         let response = h.request("OPTIONS", "guarded", &headers).await;
-        assert_ne!(response.status, 204, "{headers:?}");
-        assert!(
-            response_header(&response, "access-control-allow-origin").is_none(),
-            "a refused preflight has no CORS grant: {headers:?}"
-        );
+        assert_eq!(response.status, 200, "{headers:?}");
+        let body: Value = serde_json::from_slice(&response.body).unwrap();
+        assert_eq!(body["method"], "OPTIONS");
+        let expected: Vec<String> = headers
+            .iter()
+            .filter(|(name, _)| *name == "origin")
+            .map(|(_, value)| (*value).to_owned())
+            .collect();
+        assert_eq!(echoed(&body, "origin"), expected);
     }
     assert!(h
         .gate
@@ -1045,6 +1248,121 @@ async fn callable_preflight_rejects_nonlocal_or_malformed_browser_requests() {
         .unwrap()
         .observations(PROJECT)
         .is_empty());
+    h.stop().await;
+}
+
+#[tokio::test]
+async fn callable_preflights_strip_credentials_without_auth_or_app_check_admission() {
+    for profile in [
+        fireemu_adapter_functions::http::FunctionsHttpProfile::Emulator,
+        fireemu_adapter_functions::http::FunctionsHttpProfile::Strict,
+    ] {
+        let h = start_with_consume_profile(true, "disabled", profile).await;
+        for headers in [
+            vec![],
+            vec![
+                ("authorization", "Bearer malformed"),
+                ("x-firebase-appcheck", "malformed"),
+            ],
+            vec![
+                ("authorization", "Bearer malformed"),
+                ("Authorization", "Bearer owner"),
+                ("x-firebase-appcheck", "malformed"),
+                ("X-Firebase-AppCheck", "also-malformed"),
+                ("x-callable-context-auth", "forged"),
+                ("x-original-auth", "forged"),
+                ("x-fireemu-runner-secret", "forged"),
+                ("accept", "text/event-stream"),
+            ],
+        ] {
+            let response = h.request("OPTIONS", "guarded", &headers).await;
+            assert_eq!(response.status, 200, "{profile:?} {headers:?}");
+            let body: Value = serde_json::from_slice(&response.body).unwrap();
+            assert_eq!(body["method"], "OPTIONS");
+            for name in [
+                "authorization",
+                "x-firebase-appcheck",
+                "x-callable-context-auth",
+                "x-original-auth",
+            ] {
+                assert!(echoed(&body, name).is_empty(), "{name}: {body}");
+            }
+            assert_eq!(
+                echoed(&body, "x-fireemu-runner-secret"),
+                vec!["runner-secret"]
+            );
+        }
+        assert!(h
+            .gate
+            .registry()
+            .read()
+            .unwrap()
+            .observations(PROJECT)
+            .is_empty());
+        h.stop().await;
+    }
+}
+
+#[tokio::test]
+async fn callable_origin_post_reaches_the_handler_in_the_emulator_profile() {
+    assert_callable_origins_reach_the_handler(
+        fireemu_adapter_functions::http::FunctionsHttpProfile::Emulator,
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn ordinary_function_requests_keep_the_existing_ambiguous_origin_refusal() {
+    let h = start(true).await;
+    for function in ["add", "echo"] {
+        for method in ["POST", "GET"] {
+            let response = h
+                .request(
+                    method,
+                    function,
+                    &[
+                        ("origin", "http://localhost:5173"),
+                        ("origin", "https://evil.example"),
+                    ],
+                )
+                .await;
+            assert_eq!(response.status, 403);
+            assert_eq!(response.body, b"forbidden origin");
+        }
+    }
+    h.stop().await;
+}
+
+#[tokio::test]
+async fn callable_origin_post_reaches_the_handler_in_the_strict_profile() {
+    assert_callable_origins_reach_the_handler(
+        fireemu_adapter_functions::http::FunctionsHttpProfile::Strict,
+    )
+    .await;
+}
+
+async fn assert_callable_origins_reach_the_handler(
+    profile: fireemu_adapter_functions::http::FunctionsHttpProfile,
+) {
+    let h = start_with_consume_profile(true, "disabled", profile).await;
+    let token = h.token();
+    for origin in [
+        "https://evil.example",
+        "http://192.168.1.20:5173",
+        "http://127.0.0.1:5173",
+    ] {
+        for function in ["add", "guardedV2"] {
+            let (status, body) = h
+                .call(
+                    function,
+                    &[("origin", origin), ("x-firebase-appcheck", &token)],
+                )
+                .await;
+            assert_eq!(status, 200, "{function} receives {origin}: {body}");
+            assert_eq!(echoed(&body, "origin"), vec![origin]);
+            assert_eq!(body["method"], "POST");
+        }
+    }
     h.stop().await;
 }
 
@@ -1124,6 +1442,36 @@ async fn on_request_receives_the_original_app_check_field_without_classification
     h.stop().await;
 }
 
+#[tokio::test]
+async fn on_request_runs_for_cross_origin_options_and_post_without_proxy_cors_grant() {
+    let h = start(true).await;
+    let path = format!("/{PROJECT}/us-central1/echo/echo");
+    for method in ["OPTIONS", "POST"] {
+        let response = h
+            .raw_request_with_origin(
+                method,
+                h.addr,
+                &path,
+                if method == "POST" {
+                    br#"{"probe":"cors"}"#
+                } else {
+                    b""
+                },
+                Some("https://example.com"),
+            )
+            .await;
+        assert_eq!(response.status, 200, "{method}");
+        let body: Value = serde_json::from_slice(&response.body).expect("the handler replied");
+        assert_eq!(body["method"], method);
+        assert_eq!(echoed(&body, "origin"), vec!["https://example.com"]);
+        assert_eq!(
+            response_header(&response, "access-control-allow-origin"),
+            None
+        );
+    }
+    h.stop().await;
+}
+
 // ------------------------------------------------------------------------------------------
 // Scenarios 7 and 9: callable Auth integrity (`INV-APPCHECK-010`)
 // ------------------------------------------------------------------------------------------
@@ -1165,12 +1513,287 @@ async fn bearer_owner_never_reaches_a_callable() {
 }
 
 #[tokio::test]
+async fn strict_callable_ingress_refuses_invalid_bearer_before_invocation() {
+    let h = start_with_consume_profile(
+        true,
+        "disabled",
+        fireemu_adapter_functions::http::FunctionsHttpProfile::Strict,
+    )
+    .await;
+    let (_, valid) = h.user("strict@example.com");
+    let expected = "\n<html><head>\n<meta http-equiv=\"content-type\" content=\"text/html;charset=utf-8\">\n<title>401 Unauthorized</title>\n</head>\n<body text=#000000 bgcolor=#ffffff>\n<h1>Error: Unauthorized</h1>\n<h2>Your client does not have permission to the requested URL <code>/</code>.</h2>\n<h2></h2>\n</body></html>\n";
+    for bearer in ["Bearer malformed".to_owned(), format!("{valid}x")] {
+        let response = h
+            .request("POST", "add", &[("authorization", &bearer)])
+            .await;
+        assert_eq!(response.status, 401);
+        assert_eq!(
+            response_header(&response, "content-type"),
+            Some("text/html; charset=UTF-8")
+        );
+        assert_eq!(response.body, expected.as_bytes());
+    }
+    assert_eq!(h.request("POST", "add", &[]).await.status, 200);
+    assert_eq!(
+        h.request("POST", "add", &[("authorization", &valid)])
+            .await
+            .status,
+        200
+    );
+    h.stop().await;
+}
+
+#[tokio::test]
+async fn strict_callable_ingress_checks_bearer_when_app_check_is_not_selected() {
+    let h = start_with_consume_profile(
+        false,
+        "disabled",
+        fireemu_adapter_functions::http::FunctionsHttpProfile::Strict,
+    )
+    .await;
+    let (_, valid) = h.user("without-app-check@example.com");
+    let refused = h
+        .request("POST", "add", &[("authorization", "Bearer malformed")])
+        .await;
+    assert_eq!(refused.status, 401);
+    assert_eq!(
+        response_header(&refused, "content-type"),
+        Some("text/html; charset=UTF-8")
+    );
+    assert_eq!(h.request("POST", "add", &[]).await.status, 200);
+    assert_eq!(
+        h.request("POST", "add", &[("authorization", &valid)])
+            .await
+            .status,
+        200
+    );
+    h.stop().await;
+}
+
+#[tokio::test]
+async fn default_functions_http_entry_serves_requests_with_the_emulator_profile() {
+    let h = start_with_serve_entry(
+        true,
+        "disabled",
+        fireemu_adapter_functions::http::FunctionsHttpProfile::Emulator,
+        true,
+    )
+    .await;
+    assert_eq!(h.request("GET", "echo", &[]).await.status, 200);
+    let response = h
+        .request("POST", "add", &[("authorization", "Bearer malformed")])
+        .await;
+    assert_eq!(response.status, 200);
+    let body: Value =
+        serde_json::from_slice(&response.body).expect("the handler responds with JSON");
+    assert!(
+        body.get("headers").is_some(),
+        "the handler was reached: {body}"
+    );
+    h.stop().await;
+}
+
+#[tokio::test]
+async fn strict_callable_bearer_refusal_leaves_other_schemes_and_empty_tokens_to_the_handler() {
+    let h = start_with_consume_profile(
+        false,
+        "disabled",
+        fireemu_adapter_functions::http::FunctionsHttpProfile::Strict,
+    )
+    .await;
+    for authorization in ["Basic YQ==", "Bearer "] {
+        let response = h
+            .request("POST", "add", &[("authorization", authorization)])
+            .await;
+        assert_eq!(response.status, 200, "{authorization}");
+    }
+    h.stop().await;
+}
+
+#[tokio::test]
+async fn http_faults_close_only_drop_connection_requests_for_buffered_and_streaming_handlers() {
+    use fireemu_core_session::fault::{FaultAction, FaultMatch, FaultPlan, FaultRule, FaultState};
+    use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
+
+    for (function, accept) in [("echo", ""), ("guardedV2", "accept: text/event-stream\r\n")] {
+        for (action, closes_connection) in [
+            (FaultAction::DropConnection, true),
+            (FaultAction::DeadLetter, false),
+        ] {
+            let h = start_with_consume_profile(
+                false,
+                "disabled",
+                fireemu_adapter_functions::http::FunctionsHttpProfile::Strict,
+            )
+            .await;
+            let faults = Arc::new(Mutex::new(FaultState::default()));
+            faults.lock().unwrap().install(FaultPlan {
+                seed: 1,
+                rules: vec![FaultRule {
+                    matches: FaultMatch {
+                        operation: "functions.invoke".into(),
+                        nth: Some(1),
+                        function: Some(function.into()),
+                        event_type: None,
+                    },
+                    action,
+                }],
+            });
+            h.runtime.set_faults(faults);
+            let body = br#"{"data":{}}"#;
+            let request = format!(
+                "POST /{PROJECT}/us-central1/{function} HTTP/1.1\r\nhost: {}\r\n{accept}content-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n",
+                h.addr,
+                body.len()
+            );
+            let mut stream = tokio::net::TcpStream::connect(h.addr).await.unwrap();
+            stream.write_all(request.as_bytes()).await.unwrap();
+            stream.write_all(body).await.unwrap();
+            stream.flush().await.unwrap();
+            let mut raw = Vec::new();
+            let read = tokio::time::timeout(Duration::from_secs(3), stream.read_to_end(&mut raw))
+                .await
+                .expect("the fault response completes");
+            if let Err(error) = read {
+                assert_eq!(error.kind(), std::io::ErrorKind::ConnectionReset);
+            }
+            if closes_connection {
+                assert!(
+                    raw.is_empty(),
+                    "{function}: dropConnection returned HTTP bytes"
+                );
+            } else {
+                let response = fireemu_adapter_functions::http::parse_response(&raw, "POST")
+                    .expect("a non-drop fault has an HTTP response");
+                assert_eq!(response.status, 502, "{function}");
+                assert_eq!(response.body, b"fault plan: deadLetter");
+            }
+            h.stop().await;
+        }
+    }
+}
+
+#[tokio::test]
+async fn strict_ingress_adds_the_recorded_default_type_only_to_missing_response_types() {
+    for (profile, expected_default) in [
+        (
+            fireemu_adapter_functions::http::FunctionsHttpProfile::Emulator,
+            None,
+        ),
+        (
+            fireemu_adapter_functions::http::FunctionsHttpProfile::Strict,
+            Some("text/html"),
+        ),
+    ] {
+        let h = start_with_consume_profile(false, "disabled", profile).await;
+        let no_content = h.request("GET", "echo/status204", &[]).await;
+        assert_eq!(no_content.status, 204);
+        assert_eq!(
+            response_header(&no_content, "content-type"),
+            expected_default
+        );
+        let stream = h
+            .request(
+                "POST",
+                "guardedV2/stream",
+                &[("accept", "text/event-stream")],
+            )
+            .await;
+        assert_eq!(stream.status, 200);
+        assert_eq!(stream.body, b"data: {\"result\":{\"ok\":true}}\n\n");
+        assert_eq!(response_header(&stream, "content-type"), expected_default);
+        let explicit = h
+            .request(
+                "POST",
+                "guardedV2/stream-explicit",
+                &[("accept", "text/event-stream")],
+            )
+            .await;
+        assert_eq!(
+            response_header(&explicit, "content-type"),
+            Some("text/event-stream")
+        );
+        h.stop().await;
+    }
+}
+
+#[tokio::test]
+async fn strict_ingress_sets_one_forwarded_hop_and_https_for_http_and_callable() {
+    let h = start_with_consume_profile(
+        false,
+        "disabled",
+        fireemu_adapter_functions::http::FunctionsHttpProfile::Strict,
+    )
+    .await;
+    for function in ["echo", "add"] {
+        for headers in [
+            &[][..],
+            &[
+                ("x-forwarded-for", "203.0.113.10, 203.0.113.11"),
+                ("x-forwarded-proto", "http"),
+                ("x-forwarded-for", "203.0.113.12"),
+            ][..],
+        ] {
+            let (status, body) = h.call(function, headers).await;
+            assert_eq!(status, 200, "{function}");
+            assert_eq!(
+                echoed(&body, "x-forwarded-for"),
+                vec!["127.0.0.1"],
+                "{function}: {body}"
+            );
+            assert_eq!(
+                echoed(&body, "x-forwarded-proto"),
+                vec!["https"],
+                "{function}: {body}"
+            );
+        }
+    }
+    h.stop().await;
+}
+
+#[tokio::test]
 async fn a_verified_id_token_is_reinserted_exactly_once() {
     let h = start(true).await;
     let (_, bearer) = h.user("ada@example.com");
     let (status, body) = h.call("add", &[("authorization", &bearer)]).await;
     assert_eq!(status, 200);
     assert_eq!(echoed(&body, "authorization"), vec![bearer]);
+    h.stop().await;
+}
+
+/// Firestore honours a token 30 seconds past `exp` and the unexpired token of a revoked,
+/// disabled or deleted account (FS-RULES). Nothing observed a callable doing so: a callable
+/// keeps ID-token verification, which refuses all of them.
+#[tokio::test]
+async fn a_callable_does_not_take_firestores_token_allowances() {
+    let h = start(true).await;
+    let late = {
+        let mut store = h.auth.lock().expect("the store is not poisoned");
+        let uid = store
+            .create_user(NewUser::email("late@example.com"), START)
+            .expect("the user is created");
+        let issued = LogicalInstant::from_nanos(START.as_nanos() - 3_610 * 1_000_000_000);
+        let claims = store.id_token_claims(&uid, None, issued).expect("claims");
+        format!("Bearer {}", encode_unsigned(&claims))
+    };
+    let (disabled_uid, disabled) = h.user("disabled@example.com");
+    {
+        let mut store = h.auth.lock().expect("the store is not poisoned");
+        let uid = store
+            .user_by_id(&disabled_uid)
+            .expect("the user exists")
+            .local_id
+            .clone();
+        store.user_mut(&uid).expect("the user exists").disabled = true;
+    }
+    for (name, bearer) in [("10 s past exp", late), ("disabled account", disabled)] {
+        let (status, body) = h.call("add", &[("authorization", &bearer)]).await;
+        assert_eq!(status, 200);
+        assert!(
+            echoed(&body, "authorization").is_empty(),
+            "{name}: the token must not reach the callable: {body}"
+        );
+    }
     h.stop().await;
 }
 

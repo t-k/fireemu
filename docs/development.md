@@ -29,13 +29,31 @@ Use `cargo nextest run --workspace --profile pr` as the full local gate. Do not 
 
 ## Local regression gate
 
-The automatic pull-request job formats and compiles every target with `cargo check`; it runs no test, so a green pull-request status is not evidence that the runtime behaves. Runtime tests run locally and on the manual `workflow_dispatch` jobs. To record a local run as evidence, run nextest through the gate:
+Every job in `.github/workflows/ci.yml` runs on pull requests, on pushes to `main` and on demand (`workflow_dispatch`): the quick `pr` job formats and compiles every target, and the `lint`, `test`, `verify`, platform, `package` and `ui` jobs run the runtime suite. Runtime tests also run locally. To record a local run as evidence, run nextest through the gate:
 
 ```sh
 scripts/local-regression-gate --session compat --report docs.local/gates/compat.json -- -p fireemu-core-firestore -p fireemu-adapter-grpc
 ```
 
 The gate runs `cargo nextest run --profile pr` (choose another profile with `--profile`) through `scripts/cargo-session` and writes a JSON report naming the commit, whether the tree was dirty, the profile, the arguments, the nextest and rustc versions, and the counts of tests run, passed, failed and skipped. It exits non-zero when a test fails, when cargo-nextest is not installed (`missing-dependency`) and when no test ran (`no-tests`), so an empty filter or a missing tool is never recorded as a pass. Cite the report, not the exit status, in work logs and issue closures. `scripts/local-regression-gate.test.sh` is its self-test.
+
+The report path must be new: existing files and symlinks are rejected before tests
+start. A same-directory temporary report is published exclusively, so concurrent
+runs cannot overwrite each other's receipts. A log/write/publication failure is
+not a test pass. Parsed successful runs must account for every executed test as
+passed; malformed or inconsistent summaries are rejected. `exitStatus` is normalized
+before publication to match the process result. The raw summary is retained.
+
+The shell-only fault tests need Python/pytest but do not need Rust:
+
+```sh
+PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python -m pytest scripts/test_local_regression_gate.py
+```
+
+They inject a **fake nextest**, so they validate only the gate's reporting and file
+handling. The native self-test and the real workspace still have to run. Exclusive
+publication is not a power-loss durability guarantee, nor a complete source-tree
+attestation; the report's `commit` and `dirty` fields retain their existing scope.
 
 ## Post-pressure recovery harness
 

@@ -1,0 +1,250 @@
+{
+  "kind": "second45-runtime-recomparison-v2",
+  "status": "candidate",
+  "sourceCommit": "f915e9d7b37e3a3076a6eeaf67454980f2a2ebe3",
+  "evaluatorSourceCommit": "a3bbd46e489f83d533867b87b2642be1560b5659",
+  "evaluatorCommit": "a3bbd46e489f83d533867b87b2642be1560b5659",
+  "runtimeSourceCommit": "f915e9d7b37e3a3076a6eeaf67454980f2a2ebe3",
+  "evaluatorAnchorSha256": "a05e5e564c20c1be9f354b5862f61746ed1f1b257516edfea75477a23b250d9d",
+  "comparisonOutputSha256": "dd9815c49917c88a308ea11e3d51655be88585ae85c8275ca842de71c13fdf29",
+  "productionSource": "774e9d8b-second45-production-candidate.json",
+  "evidence": {
+    "parentManifestPath": "docs.local/logs/2026-09-14/second45-runtime-a2/parent-manifest.json",
+    "parentManifestSha256": "cf54e764b2499cdd7cf2a49ce3d84d15ba652d0ef91325ff04d45d6cf34db0f1",
+    "mappedReceiptPath": "docs.local/logs/2026-09-14/second45-runtime-a2/mapped-receipt.json",
+    "mappedReceiptFileSha256": "a81eaaa3a06371d6f6631522df4e4a1b3191dcd2b75d57d01361a752cf0b025d",
+    "visibility": "private; contains runtime credential/token material"
+  },
+  "comparison": {
+    "kind": "second45-production-local-comparison-v2",
+    "mode": "saved-production-versus-local",
+    "comparisonContractDigest": "0625bd76c028de64ff0ae9ae595b1c5f44bd48cc5475c63e806a8060cbf742cb",
+    "historicalObserverDigest": "2bbf234fd2b1543902b9d3c66720b5fb0d9b86d7a83f5675ae5e544b57f0b313",
+    "currentObserverDigest": "5102491405c433190ca7035996d2238c30ad81e36d145c3a7da8b792e272c42f",
+    "productionObserverDigest": "2bbf234fd2b1543902b9d3c66720b5fb0d9b86d7a83f5675ae5e544b57f0b313",
+    "localObserverDigest": "5102491405c433190ca7035996d2238c30ad81e36d145c3a7da8b792e272c42f",
+    "productionCandidateSourceSha256": "8938a0c31909a85753916dfeed095d102dfaa9cc4b1f6ebd6b93060b1c9d4d73",
+    "currentLocalSourceSha256": "7ef72ebd732260d843f4381040eb6f1c2f2d9c18187d3ea8dcd00e98f0eee42c",
+    "productionSourceSha256": "8938a0c31909a85753916dfeed095d102dfaa9cc4b1f6ebd6b93060b1c9d4d73",
+    "localSourceSha256": "7ef72ebd732260d843f4381040eb6f1c2f2d9c18187d3ea8dcd00e98f0eee42c",
+    "historicalProductionReceiptSha256": "6ff36c6dc6e482299772b75bb3e0ec183aebd9ac053bcb7e8607b617f26c9cd1",
+    "historicalLocalReceiptSha256": "22d54900eeb1f27ac2780958167e4c475bea997ab92b986a9c0b394c96c90b94",
+    "runtimeSourceCommit": "f915e9d7b37e3a3076a6eeaf67454980f2a2ebe3",
+    "evaluatorCommit": "a3bbd46e489f83d533867b87b2642be1560b5659",
+    "evaluatorAnchorSha256": "a05e5e564c20c1be9f354b5862f61746ed1f1b257516edfea75477a23b250d9d",
+    "parentManifestSha256": "68f1a6dfe1eed59c2ca4d90da77a7bb8d19f657421010c47eb9e87e47d9ca6ca",
+    "mappedReceiptFileSha256": "a81eaaa3a06371d6f6631522df4e4a1b3191dcd2b75d57d01361a752cf0b025d",
+    "recordingComplete": true,
+    "cleanupComplete": true,
+    "stateValidation": true,
+    "compatibility": "match",
+    "rows": [
+      {
+        "id": "second/auth/01",
+        "compatibility": "match"
+      },
+      {
+        "id": "second/auth/02",
+        "compatibility": "match"
+      },
+      {
+        "id": "second/auth/03",
+        "compatibility": "match"
+      },
+      {
+        "id": "second/auth/04",
+        "compatibility": "match"
+      },
+      {
+        "id": "second/auth/05",
+        "compatibility": "match"
+      },
+      {
+        "id": "second/auth/06",
+        "compatibility": "match"
+      },
+      {
+        "id": "second/auth/07",
+        "compatibility": "match"
+      },
+      {
+        "id": "second/auth/08",
+        "compatibility": "match"
+      },
+      {
+        "id": "second/auth/09",
+        "compatibility": "match"
+      },
+      {
+        "id": "second/auth/10",
+        "compatibility": "match"
+      },
+      {
+        "id": "second/auth/11",
+        "compatibility": "match"
+      },
+      {
+        "id": "second/auth/12",
+        "compatibility": "match"
+      },
+      {
+        "id": "second/auth/13",
+        "compatibility": "match"
+      },
+      {
+        "id": "second/auth/14",
+        "compatibility": "match"
+      },
+      {
+        "id": "second/auth/15",
+        "compatibility": "match"
+      },
+      {
+        "id": "second/auth/16",
+        "compatibility": "match"
+      },
+      {
+        "id": "second/auth/17",
+        "compatibility": "match"
+      },
+      {
+        "id": "second/auth/18",
+        "compatibility": "match"
+      },
+      {
+        "id": "second/auth/19",
+        "compatibility": "match"
+      },
+      {
+        "id": "second/auth/20",
+        "compatibility": "match"
+      },
+      {
+        "id": "second/auth/21",
+        "compatibility": "match"
+      },
+      {
+        "id": "second/auth/22",
+        "compatibility": "match"
+      },
+      {
+        "id": "second/auth/23",
+        "compatibility": "match"
+      },
+      {
+        "id": "second/auth/24",
+        "compatibility": "match"
+      },
+      {
+        "id": "second/auth/25",
+        "compatibility": "match"
+      },
+      {
+        "id": "second/auth/26",
+        "compatibility": "match"
+      },
+      {
+        "id": "second/auth/27",
+        "compatibility": "match"
+      },
+      {
+        "id": "second/auth/28",
+        "compatibility": "match"
+      },
+      {
+        "id": "second/auth/29",
+        "compatibility": "match"
+      },
+      {
+        "id": "second/auth/30",
+        "compatibility": "match"
+      },
+      {
+        "id": "second/auth/31",
+        "compatibility": "match"
+      },
+      {
+        "id": "second/auth/32",
+        "compatibility": "match"
+      },
+      {
+        "id": "second/masks/ancestor-overlap-state/normal",
+        "compatibility": "match"
+      },
+      {
+        "id": "second/masks/ancestor-overlap-state/before",
+        "compatibility": "match"
+      },
+      {
+        "id": "second/masks/ancestor-overlap-state/diagnostic",
+        "compatibility": "match"
+      },
+      {
+        "id": "second/masks/ancestor-overlap-state/after",
+        "compatibility": "match"
+      },
+      {
+        "id": "second/preconditions/stale-delete-state/original",
+        "compatibility": "match"
+      },
+      {
+        "id": "second/preconditions/stale-delete-state/normal",
+        "compatibility": "match"
+      },
+      {
+        "id": "second/preconditions/stale-delete-state/before",
+        "compatibility": "match"
+      },
+      {
+        "id": "second/preconditions/stale-delete-state/diagnostic",
+        "compatibility": "match"
+      },
+      {
+        "id": "second/preconditions/stale-delete-state/after",
+        "compatibility": "match"
+      },
+      {
+        "id": "second/transforms/invalid-path-state/normal",
+        "compatibility": "match"
+      },
+      {
+        "id": "second/transforms/invalid-path-state/before",
+        "compatibility": "match"
+      },
+      {
+        "id": "second/transforms/invalid-path-state/diagnostic",
+        "compatibility": "match"
+      },
+      {
+        "id": "second/transforms/invalid-path-state/after",
+        "compatibility": "match"
+      }
+    ],
+    "errors": [],
+    "limitations": [
+      "Raw historical production receipts are unavailable; comparison uses the pinned normalized candidate production rows."
+    ]
+  },
+  "rowSummary": {
+    "count": 45,
+    "matches": 45,
+    "mismatches": 0,
+    "indeterminate": 0
+  },
+  "runtime": {
+    "executionCommit": "f915e9d7b37e3a3076a6eeaf67454980f2a2ebe3",
+    "artifactSha256": "63203a2a54cd678ffa50fe308f1089dd15cd13048f7edfdb7ce4f21520b354a5",
+    "configurationDigest": "90654f8e79d9135fb7de5f1d46f7ca1e18a78c892aa0b0b302a68614f1fa5223",
+    "exitCode": 0,
+    "recordingComplete": true,
+    "cleanupComplete": true,
+    "ownedProcessStopped": true,
+    "listenersClosed": true,
+    "requestCounts": {
+      "auth": 302,
+      "firestore": 28,
+      "recovery": 17,
+      "total": 330
+    }
+  }
+}

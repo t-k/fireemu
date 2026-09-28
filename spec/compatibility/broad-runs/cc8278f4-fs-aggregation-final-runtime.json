@@ -1,0 +1,1023 @@
+{
+  "schemaVersion": 1,
+  "kind": "firestore-aggregation-final-runtime-local-result",
+  "status": "local-production-reference-complete",
+  "capturedOn": "2026-09-14",
+  "executionCommit": "7cc598a24df09699c6db3b894ac27a832788357e",
+  "baseCommit": "984ecfd3",
+  "target": "owned-local-artifact",
+  "project": "demo-firestore-probe",
+  "edition": "Standard Native",
+  "profile": "emulator",
+  "productionExecuted": false,
+  "artifact": {
+    "path": "/tmp/fireemu-aggregation-target/release/fireemu",
+    "sha256": "sha256-0edd478068f4a6bdfd1ed9699e5542a45d638383050d18cca99b73aa48ca6127",
+    "buildCommand": "CARGO_TARGET_DIR=/tmp/fireemu-aggregation-target cargo build -p fireemu --release"
+  },
+  "selection": {
+    "program": "queries/aggregations",
+    "persistedCorpus": "conformance/.runs/firestore-probe/programs.json",
+    "persistedCorpusSha256": "sha256-9dfa01b5fc487439f1df31cceacca9fbd544c6cb70a618b52c1d4145ea089311",
+    "selectedProgramsSha256": "sha256-0ffb49e9425062a53f07d3d198e2c747dc407018cf7077e46b2d8bef317c5c80",
+    "selectedProgramsDigestAlgorithm": "sha256(JSON.stringify(recursively-key-sorted([programs.json entry whose id is queries/aggregations])))",
+    "generator": "conformance/src/firestore-probe/programs.mjs",
+    "generatorSha256": "sha256-a5584c3a83305592d3ca7ec8fd3d976a5d933e843b19cf3bfd2cd3e7af9e88a2",
+    "caseCount": 23,
+    "caseIds": [
+      "count-all",
+      "count-up-to",
+      "count-with-filter",
+      "count-with-limit",
+      "count-with-offset",
+      "count-empty",
+      "sum-integers",
+      "sum-mixed-numbers",
+      "sum-doubles-only",
+      "sum-empty",
+      "sum-missing-field",
+      "sum-overflow-saturates-or-promotes",
+      "avg-integers",
+      "avg-with-nan",
+      "avg-empty",
+      "several-aggregations",
+      "count-collection-group",
+      "count-with-cursor",
+      "count-beside-a-sum-over-a-missing-field",
+      "count-beside-an-avg-over-a-missing-field",
+      "duplicate-alias",
+      "no-aggregations",
+      "sum-on-name"
+    ]
+  },
+  "productionMatrix": {
+    "path": "conformance/firestore-production-matrix.json",
+    "sha256": "sha256-4bcb04ac9427e73bfe89aab5bc9916f318b2ea60efbf156d79cdf47632d58f56",
+    "version": 1,
+    "recordedAgainst": {
+      "target": "production Firestore (Native mode) over the public REST surface",
+      "database": {
+        "type": "FIRESTORE_NATIVE",
+        "concurrencyMode": "PESSIMISTIC",
+        "databaseEdition": "STANDARD",
+        "locationId": "us-central1",
+        "versionRetentionPeriod": "3600s"
+      },
+      "officialEmulatorMatrix": {
+        "firebaseTools": "15.28.2",
+        "note": "the Firestore emulator jar that firebase-tools pins; see ORACLE.md",
+        "evidenceSchema": 1,
+        "evidence": {
+          "identity": {
+            "sourceSha": "sha256-73a2ceaa84e28d2d935777fa5473871622c5c074fc65814a037ea3a439f6c15b",
+            "packageVersion": "0.0.0-dev",
+            "packageManifestDigest": "sha256-a63232bffcb57cbea641bfb942767b4dccb73ecc108e5e9d05808ae1fa80d176",
+            "packageIntegrity": null,
+            "artifactSha256": null,
+            "artifactPlatform": null,
+            "profile": "official-emulator",
+            "configDigest": "sha256-728c1ff5b7060009b1f54e3dad7b6367a5161544ad3535c94d38f16ca6a24d77",
+            "rulesDigest": "sha256-95b6b2680f3d3d64231ca4f90b88f348e09439665a2ea77befe5d0e64277a428",
+            "sdkLockDigest": "sha256-a1287b8bf5d8ef937b0bd82d7cec0df65abe3fe8f6669a4d2e3d927874291432",
+            "corpusDigest": "sha256-d4ae37c1b35ec7dcd162015f170c9da36a926ca5eb646177471d966e3a12bf2b",
+            "indexDigest": "sha256-ad4a66f22bbfb41fd0a2e7585ed0cbd82f88e854a915049ee724e9f2afd4d01a",
+            "databaseDigest": "sha256-163cbb73917a2b1603a32eee8a0c4f906c56d8abd1ffa98ae8219305d6b82c4c"
+          }
+        }
+      },
+      "evidenceSchema": 1,
+      "note": "The production project id is normalized to the recording project id in every value; the project itself is not recorded. Rows compare status, canonical error code and normalized body; error message text is not compared."
+    },
+    "observation": {
+      "schemaVersion": 1,
+      "observation": {
+        "side": "production",
+        "mode": "live",
+        "startedAt": "2026-09-07T14:12:49.893Z",
+        "finishedAt": "2026-09-07T14:16:43.655Z",
+        "database": {
+          "type": "FIRESTORE_NATIVE",
+          "concurrencyMode": "PESSIMISTIC",
+          "databaseEdition": "STANDARD",
+          "locationId": "us-central1",
+          "versionRetentionPeriod": "3600s"
+        }
+      },
+      "source": {
+        "gitSha": "2526c61eda5fc53ac91250307786127ae3c601be",
+        "sourceTreeDigest": "sha256-73a2ceaa84e28d2d935777fa5473871622c5c074fc65814a037ea3a439f6c15b",
+        "trackedTreeClean": true
+      },
+      "package": {
+        "name": "fireemu",
+        "version": "0.0.0-dev",
+        "manifest": "fireemu/package.json",
+        "manifestDigest": "sha256-a63232bffcb57cbea641bfb942767b4dccb73ecc108e5e9d05808ae1fa80d176",
+        "integrity": "sha512-H9jEDrw2r1rsfXDhojPaZfYjIxDav2NS1bs6lFiO+kvjOpYNEywv37CH/XyR9/W+pCeGyocGSkxNR90XwnEG6Q=="
+      },
+      "artifact": null,
+      "runtime": {
+        "profile": "production",
+        "config": null,
+        "configDigest": null,
+        "rules": null,
+        "rulesDigest": null
+      },
+      "inputs": {
+        "sdkLock": "conformance/pnpm-lock.yaml",
+        "sdkLockDigest": "sha256-a1287b8bf5d8ef937b0bd82d7cec0df65abe3fe8f6669a4d2e3d927874291432",
+        "corpus": "conformance/.runs/firestore-probe/programs.json",
+        "corpusDigest": "sha256-d4ae37c1b35ec7dcd162015f170c9da36a926ca5eb646177471d966e3a12bf2b",
+        "indexFiles": [
+          {
+            "file": "conformance/firestore.indexes.json",
+            "bytes": 2484,
+            "sha256": "sha256-8a4d4bd7a72c3ce2bed4e0f8c4adc0cdb3a7c428477578295e44a11ae063d01c"
+          }
+        ],
+        "indexDigest": "sha256-ad4a66f22bbfb41fd0a2e7585ed0cbd82f88e854a915049ee724e9f2afd4d01a"
+      }
+    },
+    "limitations": [
+      "Historical live observation from 2026-09-07 against Firestore Native Standard over the public REST surface.",
+      "The production project id is normalized out of every recorded value and is not present in this result.",
+      "Rows compare normalized status, canonical error code and body; error message text is retained as diagnostics and is not compared.",
+      "The production observation does not establish gRPC, SDK, Rules, Enterprise, Cloud or whole-service parity."
+    ]
+  },
+  "comparator": {
+    "source": "conformance/src/firestore-probe/run.mjs",
+    "sourceSha256": "sha256-8350cbed7aa73433b2bd61f0313e74a7b581156727589089df00d618fc1aa181",
+    "normalizer": "conformance/src/firestore-probe/session.mjs",
+    "normalizerSha256": "sha256-af4e664ac4d1efe9cfa5de445c2ee8833ee91d1c0c515283133e8e0a8c5b4823",
+    "normalizationSupportSource": "conformance/src/normalize.mjs",
+    "normalizationSupportSha256": "sha256-9d6891b2c1ab79d4ef202f55730fd34ee341620d8feecf7cae05da047324d952",
+    "entryPoint": "compareProductionToFireemu({ production, fireemu, programDefinitions: [selected program] })",
+    "contract": {
+      "expected": "conformance/firestore-production-matrix.json#programs[queries/aggregations].steps[*].production",
+      "actual": "conformance/.runs/firestore-probe/fireemu.json#queries/aggregations",
+      "success": "compare status, code and normalized body with recursively sorted object keys",
+      "error": "compare status and canonical code; retain message for diagnostics only",
+      "missing": "missing actual rows never match a saved production row",
+      "implementation": "compareProductionToFireemu applies decision and recursively-key-sorted canonical equality to each saved production row and current local response; firestore-matrix divergence/oracle fields are never read"
+    }
+  },
+  "executionConfiguration": {
+    "effective": {
+      "authorization": "Bearer owner; admin bypass",
+      "rules": "none loaded; every request allowed",
+      "compositeIndexes": "not applied; emulator profile serves aggregation queries without configured composite indexes"
+    },
+    "referenceOnly": {
+      "rules": {
+        "path": "conformance/firestore-probe.rules",
+        "sha256": "sha256-95b6b2680f3d3d64231ca4f90b88f348e09439665a2ea77befe5d0e64277a428",
+        "role": "reference-only; not applied in this run"
+      },
+      "indexes": {
+        "path": "conformance/firestore.indexes.json",
+        "sha256": "sha256-62d5387f860555c8a966d115ea95c2619c907c498b75e4c2e7a465503b452ec7",
+        "role": "reference-only; not applied in this run"
+      },
+      "config": {
+        "path": "conformance/firestore-probe.fireemu.json",
+        "sha256": "sha256-69b6695dbd921ecd7a3c44314070e5c816675a8a0459f97c2469069294b18808",
+        "role": "runtime profile/config reference"
+      }
+    }
+  },
+  "directReplay": {
+    "command": "fireemu exec --config conformance/firestore-probe.fireemu.json --project demo-firestore-probe --only firestore --firestore-port 32291 --http-port 32292 --ui-port 0 --hub-port 0 -- node src/firestore-probe/session.mjs",
+    "responsePath": "conformance/.runs/firestore-probe/fireemu.json",
+    "responseSha256": "sha256-ef95c98bc798e8f00dba3815cf0b54508ab9b166ee45c0f90aca23f72e7af8c9",
+    "selectedResponseSha256": "sha256-8a92470e165bdf1a839c008999d14e1eb379f31539241b51388644b2c285bafc",
+    "result": "23/23 direct aggregation rows completed"
+  },
+  "comparison": {
+    "basis": "executable comparator contract applied to current normalized local responses and saved production values",
+    "rowCount": 23,
+    "matches": 23,
+    "mismatches": 0,
+    "rows": [
+      {
+        "id": "count-all",
+        "comparison": "match",
+        "production": {
+          "status": 200,
+          "code": "OK",
+          "body": [
+            {
+              "result": {
+                "aggregateFields": {
+                  "count": {
+                    "integerValue": "6"
+                  }
+                }
+              },
+              "readTime": "<now>"
+            }
+          ]
+        },
+        "local": {
+          "status": 200,
+          "code": "OK",
+          "body": [
+            {
+              "readTime": "<now>",
+              "result": {
+                "aggregateFields": {
+                  "count": {
+                    "integerValue": "6"
+                  }
+                }
+              }
+            }
+          ]
+        }
+      },
+      {
+        "id": "count-up-to",
+        "comparison": "match",
+        "production": {
+          "status": 200,
+          "code": "OK",
+          "body": [
+            {
+              "result": {
+                "aggregateFields": {
+                  "c": {
+                    "integerValue": "2"
+                  }
+                }
+              },
+              "readTime": "<now>"
+            }
+          ]
+        },
+        "local": {
+          "status": 200,
+          "code": "OK",
+          "body": [
+            {
+              "readTime": "<now>",
+              "result": {
+                "aggregateFields": {
+                  "c": {
+                    "integerValue": "2"
+                  }
+                }
+              }
+            }
+          ]
+        }
+      },
+      {
+        "id": "count-with-filter",
+        "comparison": "match",
+        "production": {
+          "status": 200,
+          "code": "OK",
+          "body": [
+            {
+              "result": {
+                "aggregateFields": {
+                  "count": {
+                    "integerValue": "2"
+                  }
+                }
+              },
+              "readTime": "<now>"
+            }
+          ]
+        },
+        "local": {
+          "status": 200,
+          "code": "OK",
+          "body": [
+            {
+              "readTime": "<now>",
+              "result": {
+                "aggregateFields": {
+                  "count": {
+                    "integerValue": "2"
+                  }
+                }
+              }
+            }
+          ]
+        }
+      },
+      {
+        "id": "count-with-limit",
+        "comparison": "match",
+        "production": {
+          "status": 200,
+          "code": "OK",
+          "body": [
+            {
+              "result": {
+                "aggregateFields": {
+                  "count": {
+                    "integerValue": "3"
+                  }
+                }
+              },
+              "readTime": "<now>"
+            }
+          ]
+        },
+        "local": {
+          "status": 200,
+          "code": "OK",
+          "body": [
+            {
+              "readTime": "<now>",
+              "result": {
+                "aggregateFields": {
+                  "count": {
+                    "integerValue": "3"
+                  }
+                }
+              }
+            }
+          ]
+        }
+      },
+      {
+        "id": "count-with-offset",
+        "comparison": "match",
+        "production": {
+          "status": 200,
+          "code": "OK",
+          "body": [
+            {
+              "result": {
+                "aggregateFields": {
+                  "count": {
+                    "integerValue": "2"
+                  }
+                }
+              },
+              "readTime": "<now>"
+            }
+          ]
+        },
+        "local": {
+          "status": 200,
+          "code": "OK",
+          "body": [
+            {
+              "readTime": "<now>",
+              "result": {
+                "aggregateFields": {
+                  "count": {
+                    "integerValue": "2"
+                  }
+                }
+              }
+            }
+          ]
+        }
+      },
+      {
+        "id": "count-empty",
+        "comparison": "match",
+        "production": {
+          "status": 200,
+          "code": "OK",
+          "body": [
+            {
+              "result": {
+                "aggregateFields": {
+                  "count": {
+                    "integerValue": "0"
+                  }
+                }
+              },
+              "readTime": "<now>"
+            }
+          ]
+        },
+        "local": {
+          "status": 200,
+          "code": "OK",
+          "body": [
+            {
+              "readTime": "<now>",
+              "result": {
+                "aggregateFields": {
+                  "count": {
+                    "integerValue": "0"
+                  }
+                }
+              }
+            }
+          ]
+        }
+      },
+      {
+        "id": "sum-integers",
+        "comparison": "match",
+        "production": {
+          "status": 200,
+          "code": "OK",
+          "body": [
+            {
+              "result": {
+                "aggregateFields": {
+                  "sum": {
+                    "doubleValue": 9223372036854776000
+                  }
+                }
+              },
+              "readTime": "<now>"
+            }
+          ]
+        },
+        "local": {
+          "status": 200,
+          "code": "OK",
+          "body": [
+            {
+              "readTime": "<now>",
+              "result": {
+                "aggregateFields": {
+                  "sum": {
+                    "doubleValue": 9223372036854776000
+                  }
+                }
+              }
+            }
+          ]
+        }
+      },
+      {
+        "id": "sum-mixed-numbers",
+        "comparison": "match",
+        "production": {
+          "status": 200,
+          "code": "OK",
+          "body": [
+            {
+              "result": {
+                "aggregateFields": {
+                  "sum": {
+                    "doubleValue": "NaN"
+                  }
+                }
+              },
+              "readTime": "<now>"
+            }
+          ]
+        },
+        "local": {
+          "status": 200,
+          "code": "OK",
+          "body": [
+            {
+              "readTime": "<now>",
+              "result": {
+                "aggregateFields": {
+                  "sum": {
+                    "doubleValue": "NaN"
+                  }
+                }
+              }
+            }
+          ]
+        }
+      },
+      {
+        "id": "sum-doubles-only",
+        "comparison": "match",
+        "production": {
+          "status": 200,
+          "code": "OK",
+          "body": [
+            {
+              "result": {
+                "aggregateFields": {
+                  "sum": {
+                    "doubleValue": 4
+                  }
+                }
+              },
+              "readTime": "<now>"
+            }
+          ]
+        },
+        "local": {
+          "status": 200,
+          "code": "OK",
+          "body": [
+            {
+              "readTime": "<now>",
+              "result": {
+                "aggregateFields": {
+                  "sum": {
+                    "doubleValue": 4
+                  }
+                }
+              }
+            }
+          ]
+        }
+      },
+      {
+        "id": "sum-empty",
+        "comparison": "match",
+        "production": {
+          "status": 200,
+          "code": "OK",
+          "body": [
+            {
+              "result": {
+                "aggregateFields": {
+                  "sum": {
+                    "integerValue": "0"
+                  }
+                }
+              },
+              "readTime": "<now>"
+            }
+          ]
+        },
+        "local": {
+          "status": 200,
+          "code": "OK",
+          "body": [
+            {
+              "readTime": "<now>",
+              "result": {
+                "aggregateFields": {
+                  "sum": {
+                    "integerValue": "0"
+                  }
+                }
+              }
+            }
+          ]
+        }
+      },
+      {
+        "id": "sum-missing-field",
+        "comparison": "match",
+        "production": {
+          "status": 200,
+          "code": "OK",
+          "body": [
+            {
+              "result": {
+                "aggregateFields": {
+                  "sum": {
+                    "integerValue": "0"
+                  }
+                }
+              },
+              "readTime": "<now>"
+            }
+          ]
+        },
+        "local": {
+          "status": 200,
+          "code": "OK",
+          "body": [
+            {
+              "readTime": "<now>",
+              "result": {
+                "aggregateFields": {
+                  "sum": {
+                    "integerValue": "0"
+                  }
+                }
+              }
+            }
+          ]
+        }
+      },
+      {
+        "id": "sum-overflow-saturates-or-promotes",
+        "comparison": "match",
+        "production": {
+          "status": 200,
+          "code": "OK",
+          "body": [
+            {
+              "result": {
+                "aggregateFields": {
+                  "sum": {
+                    "doubleValue": 9223372036854776000
+                  }
+                }
+              },
+              "readTime": "<now>"
+            }
+          ]
+        },
+        "local": {
+          "status": 200,
+          "code": "OK",
+          "body": [
+            {
+              "readTime": "<now>",
+              "result": {
+                "aggregateFields": {
+                  "sum": {
+                    "doubleValue": 9223372036854776000
+                  }
+                }
+              }
+            }
+          ]
+        }
+      },
+      {
+        "id": "avg-integers",
+        "comparison": "match",
+        "production": {
+          "status": 200,
+          "code": "OK",
+          "body": [
+            {
+              "result": {
+                "aggregateFields": {
+                  "avg": {
+                    "doubleValue": 1.5
+                  }
+                }
+              },
+              "readTime": "<now>"
+            }
+          ]
+        },
+        "local": {
+          "status": 200,
+          "code": "OK",
+          "body": [
+            {
+              "readTime": "<now>",
+              "result": {
+                "aggregateFields": {
+                  "avg": {
+                    "doubleValue": 1.5
+                  }
+                }
+              }
+            }
+          ]
+        }
+      },
+      {
+        "id": "avg-with-nan",
+        "comparison": "match",
+        "production": {
+          "status": 200,
+          "code": "OK",
+          "body": [
+            {
+              "result": {
+                "aggregateFields": {
+                  "avg": {
+                    "doubleValue": "NaN"
+                  }
+                }
+              },
+              "readTime": "<now>"
+            }
+          ]
+        },
+        "local": {
+          "status": 200,
+          "code": "OK",
+          "body": [
+            {
+              "readTime": "<now>",
+              "result": {
+                "aggregateFields": {
+                  "avg": {
+                    "doubleValue": "NaN"
+                  }
+                }
+              }
+            }
+          ]
+        }
+      },
+      {
+        "id": "avg-empty",
+        "comparison": "match",
+        "production": {
+          "status": 200,
+          "code": "OK",
+          "body": [
+            {
+              "result": {
+                "aggregateFields": {
+                  "avg": {
+                    "nullValue": null
+                  }
+                }
+              },
+              "readTime": "<now>"
+            }
+          ]
+        },
+        "local": {
+          "status": 200,
+          "code": "OK",
+          "body": [
+            {
+              "readTime": "<now>",
+              "result": {
+                "aggregateFields": {
+                  "avg": {
+                    "nullValue": null
+                  }
+                }
+              }
+            }
+          ]
+        }
+      },
+      {
+        "id": "several-aggregations",
+        "comparison": "match",
+        "production": {
+          "status": 200,
+          "code": "OK",
+          "body": [
+            {
+              "result": {
+                "aggregateFields": {
+                  "total": {
+                    "integerValue": "4"
+                  },
+                  "sum_n": {
+                    "integerValue": "6"
+                  },
+                  "avg_d": {
+                    "doubleValue": "NaN"
+                  },
+                  "capped": {
+                    "integerValue": "1"
+                  }
+                }
+              },
+              "readTime": "<now>"
+            }
+          ]
+        },
+        "local": {
+          "status": 200,
+          "code": "OK",
+          "body": [
+            {
+              "readTime": "<now>",
+              "result": {
+                "aggregateFields": {
+                  "avg_d": {
+                    "doubleValue": "NaN"
+                  },
+                  "capped": {
+                    "integerValue": "1"
+                  },
+                  "sum_n": {
+                    "integerValue": "6"
+                  },
+                  "total": {
+                    "integerValue": "4"
+                  }
+                }
+              }
+            }
+          ]
+        }
+      },
+      {
+        "id": "count-collection-group",
+        "comparison": "match",
+        "production": {
+          "status": 200,
+          "code": "OK",
+          "body": [
+            {
+              "result": {
+                "aggregateFields": {
+                  "count": {
+                    "integerValue": "6"
+                  }
+                }
+              },
+              "readTime": "<now>"
+            }
+          ]
+        },
+        "local": {
+          "status": 200,
+          "code": "OK",
+          "body": [
+            {
+              "readTime": "<now>",
+              "result": {
+                "aggregateFields": {
+                  "count": {
+                    "integerValue": "6"
+                  }
+                }
+              }
+            }
+          ]
+        }
+      },
+      {
+        "id": "count-with-cursor",
+        "comparison": "match",
+        "production": {
+          "status": 200,
+          "code": "OK",
+          "body": [
+            {
+              "result": {
+                "aggregateFields": {
+                  "count": {
+                    "integerValue": "4"
+                  }
+                }
+              },
+              "readTime": "<now>"
+            }
+          ]
+        },
+        "local": {
+          "status": 200,
+          "code": "OK",
+          "body": [
+            {
+              "readTime": "<now>",
+              "result": {
+                "aggregateFields": {
+                  "count": {
+                    "integerValue": "4"
+                  }
+                }
+              }
+            }
+          ]
+        }
+      },
+      {
+        "id": "count-beside-a-sum-over-a-missing-field",
+        "comparison": "match",
+        "production": {
+          "status": 200,
+          "code": "OK",
+          "body": [
+            {
+              "result": {
+                "aggregateFields": {
+                  "total": {
+                    "integerValue": "4"
+                  },
+                  "sum_d": {
+                    "doubleValue": "NaN"
+                  }
+                }
+              },
+              "readTime": "<now>"
+            }
+          ]
+        },
+        "local": {
+          "status": 200,
+          "code": "OK",
+          "body": [
+            {
+              "readTime": "<now>",
+              "result": {
+                "aggregateFields": {
+                  "sum_d": {
+                    "doubleValue": "NaN"
+                  },
+                  "total": {
+                    "integerValue": "4"
+                  }
+                }
+              }
+            }
+          ]
+        }
+      },
+      {
+        "id": "count-beside-an-avg-over-a-missing-field",
+        "comparison": "match",
+        "production": {
+          "status": 200,
+          "code": "OK",
+          "body": [
+            {
+              "result": {
+                "aggregateFields": {
+                  "total": {
+                    "integerValue": "4"
+                  },
+                  "avg_d": {
+                    "doubleValue": "NaN"
+                  }
+                }
+              },
+              "readTime": "<now>"
+            }
+          ]
+        },
+        "local": {
+          "status": 200,
+          "code": "OK",
+          "body": [
+            {
+              "readTime": "<now>",
+              "result": {
+                "aggregateFields": {
+                  "avg_d": {
+                    "doubleValue": "NaN"
+                  },
+                  "total": {
+                    "integerValue": "4"
+                  }
+                }
+              }
+            }
+          ]
+        }
+      },
+      {
+        "id": "duplicate-alias",
+        "comparison": "match",
+        "production": {
+          "status": 400,
+          "code": "INVALID_ARGUMENT"
+        },
+        "local": {
+          "status": 400,
+          "code": "INVALID_ARGUMENT"
+        }
+      },
+      {
+        "id": "no-aggregations",
+        "comparison": "match",
+        "production": {
+          "status": 400,
+          "code": "INVALID_ARGUMENT"
+        },
+        "local": {
+          "status": 400,
+          "code": "INVALID_ARGUMENT"
+        }
+      },
+      {
+        "id": "sum-on-name",
+        "comparison": "match",
+        "production": {
+          "status": 400,
+          "code": "INVALID_ARGUMENT"
+        },
+        "local": {
+          "status": 400,
+          "code": "INVALID_ARGUMENT"
+        }
+      }
+    ]
+  },
+  "savedReferences": {
+    "historicalProductionReceipt": {
+      "path": "spec/compatibility/observations/2026-09-09/aggregation-production-final.json",
+      "sha256": "sha256-0e9cd56a4a7a9359809d62db32ac866e00006b27e1cbebcdc72085ce3ee97e24",
+      "scope": "six historical REST cases; immutable extracted values; not replayed"
+    },
+    "historicalFireemuReceipt": {
+      "path": "spec/compatibility/observations/2026-09-09/aggregation-fireemu-final.json",
+      "sha256": "sha256-ffc2485e0800f577c3395c7d6575f05a04035e78987e8513bad6fce8a7222efc",
+      "scope": "six historical REST cases; immutable extracted values; not replayed"
+    },
+    "approvedProductionObservation": {
+      "path": "spec/compatibility/evidence/aggregation/production.json",
+      "sha256": "sha256-dcf97b9380d060e7a8dd085730d01fdbce76dac7e1cde101c7004bafbeaea85e",
+      "scope": "14 approved bounded REST expectations; immutable"
+    },
+    "approvedLocalObservation": {
+      "path": "spec/compatibility/evidence/aggregation/local.json",
+      "sha256": "sha256-44412d3bb9a5536f1e20dccdba48c6d66a1f923792b90cc6937feada8293bbc2",
+      "scope": "14 approved bounded REST expectations; immutable"
+    }
+  },
+  "verification": {
+    "productionReferenceRows": "23/23 recomputed matches",
+    "directReplay": "23/23 aggregation rows completed",
+    "focusedGrpcAndRestTests": "cargo nextest run -p fireemu-adapter-grpc --profile pr -E test(aggregation): 14 passed",
+    "fullFirestoreReplay": "324 rows reached runtime; 2 unrelated writes/transforms rows fail on existing transform-path behavior"
+  },
+  "limitations": [
+    "No production request was made and no historical receipt was edited or rebound.",
+    "Rules and index files are recorded as reference-only; this local run used the effective no-rules/admin path and did not apply composite-index enforcement.",
+    "The result covers the 23 saved production aggregation rows plus focused local gRPC/REST tests; it does not claim SDK, Rules, Cloud, Enterprise or whole Firestore parity."
+  ]
+}

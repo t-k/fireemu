@@ -1,0 +1,350 @@
+{
+  "schemaVersion": 1,
+  "kind": "workspace-evidence-repair-and-finite-enterprise-offset",
+  "status": "done-local",
+  "sourceCommit": "cb94a4878bc79784957529c69f0296993b7526f2",
+  "runtimeCommit": "6252e363b9faea59751b9f692c3c3220af71693e",
+  "productionExecuted": false,
+  "capturedAt": "2026-09-13T10:47:43Z",
+  "preservedEvidence": {
+    "g3G4Commit": "419eef0aba53848d8a37081aa5fa1d25142cee3d",
+    "g3G4Result": "spec/compatibility/broad-runs/419eef0a-next-feature-goals-local.json",
+    "g0FixedCommit": "a35f85b464743d62344a3a58763d382b5b3838ce",
+    "g0ExecutionInputs": "spec/compatibility/broad-runs/a35f85b4-shared-execution-inputs.json",
+    "changed": false,
+    "productionLimitations": "Owner, permission window, unused production nonce, current settings and pricing acceptance, and recovery owner remain unset. No Cloud authentication, read or data operation was performed."
+  },
+  "workspaceFailureGoal": {
+    "baseline": {
+      "commit": "74fe8427e33b23574c4a3051884db9ea10e88897",
+      "command": [
+        "cargo",
+        "nextest",
+        "run",
+        "--workspace",
+        "--profile",
+        "pr",
+        "--no-fail-fast",
+        "--status-level",
+        "fail",
+        "--final-status-level",
+        "fail"
+      ],
+      "passed": 2038,
+      "failed": 3,
+      "skipped": 81
+    },
+    "failures": [
+      {
+        "test": "fireemu-verification-quint::evidence_contract every_registered_model_has_current_checked_in_evidence",
+        "reason": "AtomicCommitOutbox evidence recorded crates/fireemu-adapter-grpc/src/local.rs as fae72b7f9d16db840a90a9dadca1c633729a05039dbacc892b3b72a2c2986399 but the source digest was aea4396d1848f91b48413acf091df0c311f538c39ecc19205b32971a75caf540."
+      },
+      {
+        "test": "fireemu-verification-quint::evidence_contract firestore_value_changes_invalidate_dependent_model_evidence",
+        "reason": "The untampered control failed on the same stale AtomicCommitOutbox source binding before the intended value.rs tamper."
+      },
+      {
+        "test": "traceability-check::artifact_references the_repository_ledger_matches_the_repository",
+        "reason": "Three invalid evidence families produced 21 direct and downstream ledger errors. AuthTotp store.rs and AtomicExportPublication import_export.rs were also stale; undefined formal mutants and two critical mutation gaps were consequences of refusing invalid evidence."
+      }
+    ],
+    "causes": [
+      {
+        "model": "AtomicCommitOutbox and FirestoreListenRefresh",
+        "evidenceBaseline": "326602ea",
+        "sourceCommits": [
+          "788ef25f"
+        ],
+        "path": "crates/fireemu-adapter-grpc/src/local.rs"
+      },
+      {
+        "model": "AuthTotp and CompatibilitySelection",
+        "evidenceBaseline": "392307e1",
+        "sourceCommits": [
+          "d9d66d82",
+          "49adc117"
+        ],
+        "path": "crates/fireemu-core-auth/src/store.rs"
+      },
+      {
+        "model": "AtomicExportPublication",
+        "evidenceBaseline": "326602ea",
+        "sourceCommits": [
+          "d9d66d82",
+          "49adc117"
+        ],
+        "path": "crates/fireemu/src/import_export.rs"
+      }
+    ],
+    "repair": {
+      "commit": "981a54fdf815023dc6b3fd673fc6abb6915b3cc7",
+      "command": "QUINT_REAL_BIN=\"$PWD/verification/quint/node_modules/.bin/quint\" PATH=\"$PWD/verification/quint/bin:$PATH\" VERIFICATION_PASSES=1 verification/quint/run-verification.sh --refresh",
+      "method": "Existing staged full-authority generator; no digest was edited by hand. All fourteen model, Connect, real mutation and evidence gates passed before traceability and atomic publication.",
+      "models": 14,
+      "mutantsKilled": 107,
+      "changedEvidenceFiles": 5,
+      "changedDigestFields": 7,
+      "traceabilityPendingArtifacts": [
+        "INV-LIMIT-001 Quint LimitRejectionAtomicity",
+        "INV-INDEX-001 Kani production_index_never_false_accepts",
+        "INV-AUTH-001 Kani totp_window_boundary"
+      ]
+    },
+    "independentReview": {
+      "approval": "approved",
+      "mustFix": 0,
+      "shouldFix": 0,
+      "fullNonRefreshAuthorityExitCode": 0,
+      "notes": "All refreshed digests matched commit blobs; affected generated evidence matched checked-in output and proof conditions were not weakened."
+    }
+  },
+  "enterpriseOffsetGoal": {
+    "state": "done-local",
+    "contract": "Enterprise owner-authorized local latest read: collection, optional where(equal(top-level field, scalar literal)), optional top-level select aliases, optional one offset(n), optional limit. offset is an IntegerValue in 0..=i32::MAX, skips matching rows exactly once before limit, and reuses the existing RunQuery snapshot and paging path.",
+    "conditions": [
+      "offset 0 matches the no-offset local control",
+      "offset boundaries 1, 31, 32, 33, 64, 65, 66, 67, 68 and i32::MAX preserve the control suffix and finite empty response",
+      "where filters before offset; select does not change row count, including a projected row with no fields",
+      "multi-page offsets and limits have no duplicate or missing row",
+      "all 67 source documents are compared as full GetDocument protobuf values before and after success and refusal cases"
+    ],
+    "refusals": {
+      "invalidArgument": "negative, double, unset, zero/two arguments and stage options return FS_PIPE_INVALID without canonical metadata at validation",
+      "unimplemented": "duplicate or misplaced offset and values above i32::MAX return FS_PIPE_UNSUPPORTED_STAGE with canonical pipeline metadata"
+    },
+    "excluded": [
+      "sort and production ordering guarantees",
+      "consistency selectors and auto-commit",
+      "other stages, expressions, nested fields and metadata fields",
+      "production execution and exact production error parity"
+    ],
+    "newRunnerOrDsl": false,
+    "productionCompatibility": "unobserved",
+    "independentReview": {
+      "approval": "approved",
+      "mustFix": 0,
+      "shouldFix": 0,
+      "reviewSha256": "be252530836e150fa624d870cc131a4ed3f06dd473d31ebf7b06e122e9868f75",
+      "reviewFix": "cb94a487"
+    }
+  },
+  "validation": {
+    "offsetTargeted": {
+      "command": [
+        "cargo",
+        "nextest",
+        "run",
+        "-p",
+        "fireemu-adapter-grpc",
+        "--test",
+        "local",
+        "execute_pipeline_offset_skips_filtered_rows_once_across_pages_and_preserves_state"
+      ],
+      "runId": "2930ffb6-bd19-4fe0-a2a2-1f85257d13ef",
+      "passed": 1,
+      "failed": 0
+    },
+    "adapterClippy": {
+      "command": [
+        "cargo",
+        "clippy",
+        "-p",
+        "fireemu-adapter-grpc",
+        "--all-targets",
+        "--",
+        "-D",
+        "warnings"
+      ],
+      "exitCode": 0
+    },
+    "compatibilityCatalog": {
+      "command": [
+        "cargo",
+        "run",
+        "--locked",
+        "-p",
+        "compat-check"
+      ],
+      "coveredEntries": 47,
+      "exitCode": 0
+    },
+    "affectedGate": {
+      "commit": "dc77d6a5932e040893a80392f214c6d604be087b",
+      "report": "docs.local/logs/2026-09-13/workspace-offset-integration/affected.json",
+      "passed": 389,
+      "failed": 0,
+      "skipped": 49
+    },
+    "workspace": {
+      "commit": "cb94a4878bc79784957529c69f0296993b7526f2",
+      "command": [
+        "cargo",
+        "nextest",
+        "run",
+        "--workspace",
+        "--profile",
+        "pr",
+        "--no-fail-fast",
+        "--status-level",
+        "fail",
+        "--final-status-level",
+        "fail"
+      ],
+      "runId": "1dba89c5-0cb7-4535-82c8-4da67b13a11c",
+      "passed": 2042,
+      "failed": 0,
+      "skipped": 81
+    },
+    "nonCanonicalDiagnostic": {
+      "report": "docs.local/logs/2026-09-13/workspace-offset-integration/workspace.json",
+      "passed": 2031,
+      "failed": 11,
+      "skipped": 81,
+      "classification": "The deep target/agent/<session>/normal path exceeded the runtime workspace-runner ancestor search. The same source passed under the canonical baseline command using the normal workspace target; this diagnostic result is retained and is not presented as green."
+    }
+  },
+  "usage": {
+    "windowStart": "2026-09-13T10:08:15.814Z",
+    "sampledAt": "2026-09-13T10:47:08.523504+00:00",
+    "source": "existing local rollout token_count events; no new instrumentation",
+    "method": "Per-session consecutive cumulative differences after this user turn. Repeated totals excluded. Differences checked against last_token_usage. Cached input and reasoning output remain subsets, not additions. The parent Goal-tool aggregate is not added.",
+    "phaseLimits": "Coordinator work is mixed across integration, implementation and evidence and is not assigned to one feature. Review-ready handbacks use recorded agent events only.",
+    "currencyCost": null,
+    "rows": [
+      {
+        "owner": "coordinator",
+        "models": [
+          "gpt-5.6-sol"
+        ],
+        "firstIncludedEvent": "2026-09-13T10:08:38.635Z",
+        "lastIncludedEvent": "2026-09-13T10:46:44.638Z",
+        "distinctUsageEvents": 124,
+        "repeatedCumulativeEventsExcluded": 8,
+        "incrementVsLastUsageMismatches": 0,
+        "usage": {
+          "input_tokens": 16362321,
+          "cached_input_tokens": 15991296,
+          "cache_write_input_tokens": 0,
+          "output_tokens": 30615,
+          "reasoning_output_tokens": 8722,
+          "total_tokens": 16392936
+        },
+        "inputExcludingCached": 371025,
+        "totalEqualsInputPlusOutput": true
+      },
+      {
+        "owner": "compat_workspace_failures",
+        "models": [
+          "gpt-5.6-sol"
+        ],
+        "firstIncludedEvent": "2026-09-13T10:11:18.722Z",
+        "lastIncludedEvent": "2026-09-13T10:20:01.350Z",
+        "distinctUsageEvents": 35,
+        "repeatedCumulativeEventsExcluded": 1,
+        "incrementVsLastUsageMismatches": 0,
+        "usage": {
+          "input_tokens": 2236447,
+          "cached_input_tokens": 2122752,
+          "cache_write_input_tokens": 0,
+          "output_tokens": 13473,
+          "reasoning_output_tokens": 3672,
+          "total_tokens": 2249920
+        },
+        "inputExcludingCached": 113695,
+        "totalEqualsInputPlusOutput": true
+      },
+      {
+        "owner": "enterprise_next_contract",
+        "models": [
+          "gpt-6-astra"
+        ],
+        "firstIncludedEvent": "2026-09-13T10:11:24.781Z",
+        "lastIncludedEvent": "2026-09-13T10:13:44.508Z",
+        "distinctUsageEvents": 11,
+        "repeatedCumulativeEventsExcluded": 1,
+        "incrementVsLastUsageMismatches": 0,
+        "usage": {
+          "input_tokens": 554261,
+          "cached_input_tokens": 482304,
+          "cache_write_input_tokens": 0,
+          "output_tokens": 3629,
+          "reasoning_output_tokens": 277,
+          "total_tokens": 557890
+        },
+        "inputExcludingCached": 71957,
+        "totalEqualsInputPlusOutput": true
+      },
+      {
+        "owner": "enterprise_offset_review",
+        "models": [
+          "gpt-5.6-sol"
+        ],
+        "firstIncludedEvent": "2026-09-13T10:29:42.940Z",
+        "lastIncludedEvent": "2026-09-13T10:36:35.649Z",
+        "distinctUsageEvents": 24,
+        "repeatedCumulativeEventsExcluded": 2,
+        "incrementVsLastUsageMismatches": 0,
+        "usage": {
+          "input_tokens": 1785353,
+          "cached_input_tokens": 1714048,
+          "cache_write_input_tokens": 0,
+          "output_tokens": 8400,
+          "reasoning_output_tokens": 3557,
+          "total_tokens": 1793753
+        },
+        "inputExcludingCached": 71305,
+        "totalEqualsInputPlusOutput": true
+      },
+      {
+        "owner": "compat_fixed_boundaries",
+        "models": [
+          "gpt-5.6-sol"
+        ],
+        "firstIncludedEvent": "2026-09-13T10:11:49.888Z",
+        "lastIncludedEvent": "2026-09-13T10:15:48.659Z",
+        "distinctUsageEvents": 18,
+        "repeatedCumulativeEventsExcluded": 0,
+        "incrementVsLastUsageMismatches": 0,
+        "usage": {
+          "input_tokens": 1765320,
+          "cached_input_tokens": 1633792,
+          "cache_write_input_tokens": 0,
+          "output_tokens": 10450,
+          "reasoning_output_tokens": 1915,
+          "total_tokens": 1775770
+        },
+        "inputExcludingCached": 131528,
+        "totalEqualsInputPlusOutput": true
+      },
+      {
+        "owner": "quint_refresh_review",
+        "models": [
+          "gpt-5.6-sol"
+        ],
+        "firstIncludedEvent": "2026-09-13T10:29:40.857Z",
+        "lastIncludedEvent": "2026-09-13T10:45:18.778Z",
+        "distinctUsageEvents": 33,
+        "repeatedCumulativeEventsExcluded": 1,
+        "incrementVsLastUsageMismatches": 0,
+        "usage": {
+          "input_tokens": 2008791,
+          "cached_input_tokens": 1938816,
+          "cache_write_input_tokens": 0,
+          "output_tokens": 7652,
+          "reasoning_output_tokens": 3282,
+          "total_tokens": 2016443
+        },
+        "inputExcludingCached": 69975,
+        "totalEqualsInputPlusOutput": true
+      }
+    ],
+    "crossSessionTotal": {
+      "input_tokens": 24712493,
+      "cached_input_tokens": 23883008,
+      "cache_write_input_tokens": 0,
+      "output_tokens": 74219,
+      "reasoning_output_tokens": 21425,
+      "total_tokens": 24786712
+    }
+  }
+}

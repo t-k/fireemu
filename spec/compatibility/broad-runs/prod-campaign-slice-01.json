@@ -1,0 +1,702 @@
+{
+  "kind": "production-campaign-slice-01-v2",
+  "status": "proposal-only-unapproved",
+  "sourceCommit": "1fc4dd044",
+  "collector": "existing-batch-adapter-shared-v1",
+  "admission": "existing-shared-gate-local-only",
+  "ownerInputs": {
+    "owner": null,
+    "permissionReference": null,
+    "startsAt": null,
+    "endsAt": null,
+    "nonce": null,
+    "currentEnvironment": null
+  },
+  "artifactSha256": null,
+  "configurationDigest": null,
+  "planTemplate": {
+    "contract": "shared-local-v1",
+    "nonce": "{freshNonce}",
+    "jobs": {
+      "query-explain": {
+        "resources": [
+          "projects/fireemu-35fe6/databases/(default)/documents/campaign/{freshNonce}/items/item-a",
+          "projects/fireemu-35fe6/databases/(default)/documents/campaign/{freshNonce}/items/item-b"
+        ],
+        "observation": [
+          {
+            "service": "firestore",
+            "path": "/v1/projects/fireemu-35fe6/databases/(default)/documents/campaign/{freshNonce}/items/item-a",
+            "method": "GET",
+            "body": null,
+            "privileged": true,
+            "form": false
+          },
+          {
+            "service": "firestore",
+            "path": "/v1/projects/fireemu-35fe6/databases/(default)/documents/campaign/{freshNonce}/items/item-b",
+            "method": "GET",
+            "body": null,
+            "privileged": true,
+            "form": false
+          },
+          {
+            "service": "firestore",
+            "path": "/v1/projects/fireemu-35fe6/databases/(default)/documents/campaign/{freshNonce}/items/item-a?currentDocument.exists=false",
+            "method": "PATCH",
+            "body": {
+              "fields": {
+                "a": {
+                  "integerValue": "7"
+                }
+              }
+            },
+            "privileged": true,
+            "form": false
+          },
+          {
+            "service": "firestore",
+            "path": "/v1/projects/fireemu-35fe6/databases/(default)/documents/campaign/{freshNonce}/items/item-b?currentDocument.exists=false",
+            "method": "PATCH",
+            "body": {
+              "fields": {
+                "a": {
+                  "integerValue": "8"
+                }
+              }
+            },
+            "privileged": true,
+            "form": false
+          },
+          {
+            "service": "firestore",
+            "path": "/v1/projects/fireemu-35fe6/databases/(default)/documents/campaign/{freshNonce}:runQuery",
+            "method": "POST",
+            "body": {
+              "structuredQuery": {
+                "from": [
+                  {
+                    "collectionId": "items"
+                  }
+                ],
+                "offset": 0
+              },
+              "explainOptions": {
+                "analyze": false
+              }
+            },
+            "privileged": true,
+            "form": false
+          },
+          {
+            "service": "firestore",
+            "path": "/v1/projects/fireemu-35fe6/databases/(default)/documents/campaign/{freshNonce}:runQuery",
+            "method": "POST",
+            "body": {
+              "structuredQuery": {
+                "from": [
+                  {
+                    "collectionId": "items"
+                  }
+                ],
+                "offset": 0
+              },
+              "explainOptions": {
+                "analyze": true
+              }
+            },
+            "privileged": true,
+            "form": false
+          },
+          {
+            "service": "firestore",
+            "path": "/v1/projects/fireemu-35fe6/databases/(default)/documents/campaign/{freshNonce}:runQuery",
+            "method": "POST",
+            "body": {
+              "structuredQuery": {
+                "from": [
+                  {
+                    "collectionId": "items"
+                  }
+                ],
+                "offset": 0,
+                "limit": 0
+              },
+              "explainOptions": {
+                "analyze": true
+              }
+            },
+            "privileged": true,
+            "form": false
+          },
+          {
+            "service": "firestore",
+            "path": "/v1/projects/fireemu-35fe6/databases/(default)/documents/campaign/{freshNonce}:runAggregationQuery",
+            "method": "POST",
+            "body": {
+              "structuredAggregationQuery": {
+                "structuredQuery": {
+                  "from": [
+                    {
+                      "collectionId": "items"
+                    }
+                  ],
+                  "offset": 0
+                },
+                "aggregations": [
+                  {
+                    "alias": "count",
+                    "count": {}
+                  }
+                ]
+              },
+              "explainOptions": {
+                "analyze": false
+              }
+            },
+            "privileged": true,
+            "form": false
+          },
+          {
+            "service": "firestore",
+            "path": "/v1/projects/fireemu-35fe6/databases/(default)/documents/campaign/{freshNonce}:runAggregationQuery",
+            "method": "POST",
+            "body": {
+              "structuredAggregationQuery": {
+                "structuredQuery": {
+                  "from": [
+                    {
+                      "collectionId": "items"
+                    }
+                  ],
+                  "offset": 0
+                },
+                "aggregations": [
+                  {
+                    "alias": "count",
+                    "count": {}
+                  }
+                ]
+              },
+              "explainOptions": {
+                "analyze": true
+              }
+            },
+            "privileged": true,
+            "form": false
+          },
+          {
+            "service": "firestore",
+            "path": "/v1/projects/fireemu-35fe6/databases/(default)/documents/campaign/{freshNonce}:runAggregationQuery",
+            "method": "POST",
+            "body": {
+              "structuredAggregationQuery": {
+                "structuredQuery": {
+                  "from": [
+                    {
+                      "collectionId": "items"
+                    }
+                  ],
+                  "offset": 0,
+                  "limit": 0
+                },
+                "aggregations": [
+                  {
+                    "alias": "count",
+                    "count": {}
+                  }
+                ]
+              },
+              "explainOptions": {
+                "analyze": true
+              }
+            },
+            "privileged": true,
+            "form": false
+          },
+          {
+            "service": "firestore",
+            "path": "/v1/projects/fireemu-35fe6/databases/(default)/documents/campaign/{freshNonce}/items/item-a",
+            "method": "GET",
+            "body": null,
+            "privileged": true,
+            "form": false
+          },
+          {
+            "service": "firestore",
+            "path": "/v1/projects/fireemu-35fe6/databases/(default)/documents/campaign/{freshNonce}/items/item-b",
+            "method": "GET",
+            "body": null,
+            "privileged": true,
+            "form": false
+          }
+        ],
+        "recovery": [
+          {
+            "service": "firestore",
+            "path": "/v1/projects/fireemu-35fe6/databases/(default)/documents/campaign/{freshNonce}/items/item-a",
+            "method": "GET",
+            "body": null,
+            "privileged": true,
+            "form": false
+          },
+          {
+            "service": "firestore",
+            "path": "/v1/projects/fireemu-35fe6/databases/(default)/documents/campaign/{freshNonce}/items/item-a",
+            "method": "DELETE",
+            "body": null,
+            "privileged": true,
+            "form": false,
+            "versionFrom": 0
+          },
+          {
+            "service": "firestore",
+            "path": "/v1/projects/fireemu-35fe6/databases/(default)/documents/campaign/{freshNonce}/items/item-a",
+            "method": "GET",
+            "body": null,
+            "privileged": true,
+            "form": false
+          },
+          {
+            "service": "firestore",
+            "path": "/v1/projects/fireemu-35fe6/databases/(default)/documents/campaign/{freshNonce}/items/item-b",
+            "method": "GET",
+            "body": null,
+            "privileged": true,
+            "form": false
+          },
+          {
+            "service": "firestore",
+            "path": "/v1/projects/fireemu-35fe6/databases/(default)/documents/campaign/{freshNonce}/items/item-b",
+            "method": "DELETE",
+            "body": null,
+            "privileged": true,
+            "form": false,
+            "versionFrom": 3
+          },
+          {
+            "service": "firestore",
+            "path": "/v1/projects/fireemu-35fe6/databases/(default)/documents/campaign/{freshNonce}/items/item-b",
+            "method": "GET",
+            "body": null,
+            "privileged": true,
+            "form": false
+          }
+        ],
+        "stepIds": [
+          "setup/absence/item-a",
+          "setup/absence/item-b",
+          "setup/create/item-a",
+          "setup/create/item-b",
+          "explain/query/plan-only",
+          "explain/query/analyze",
+          "explain/query/empty-analyze",
+          "explain/aggregation/plan-only",
+          "explain/aggregation/analyze",
+          "explain/aggregation/empty-analyze",
+          "readback/item-a",
+          "readback/item-b"
+        ]
+      }
+    },
+    "wallSeconds": 300,
+    "recoverySeconds": 180,
+    "observationRequests": 12,
+    "intervalSeconds": 0.25,
+    "requestCostMicrousd": 100,
+    "costMicrousd": 5000,
+    "fixedCostMicrousd": 3000,
+    "coordinatorRequests": 2,
+    "accounts": 0,
+    "configurationChanges": 0,
+    "metadataRequests": 0,
+    "observerSha256": "074ab9bf07e137418a03f39472f77c4ff1b1c85a539d7d80a4c94d2f0b7b028e",
+    "transport": "local-only",
+    "collector": "existing-batch-adapter-shared-v1"
+  },
+  "cases": [
+    {
+      "id": "firestore/explain/query/plan-only",
+      "service": "firestore",
+      "method": "POST",
+      "path": "/v1/projects/fireemu-35fe6/databases/(default)/documents/campaign/{freshNonce}:runQuery",
+      "body": {
+        "structuredQuery": {
+          "from": [
+            {
+              "collectionId": "items"
+            }
+          ],
+          "offset": 0
+        },
+        "explainOptions": {
+          "analyze": false
+        }
+      },
+      "principal": "owned-firestore-admin",
+      "principalProof": "privileged Adapter access is reserved by shared_gate before dispatch",
+      "namespace": "projects/{project}/databases/(default)/documents/campaign/{freshNonce}",
+      "admission": "accepted",
+      "setup": "owned document absence then conditional create",
+      "readback": "typed Explain response and final document identity/state",
+      "cleanup": "existing journaled conditional DELETE and final absence read",
+      "comparator": "shared-production-pair typed JSON response comparison",
+      "budget": {
+        "requestCount": 1,
+        "wallSeconds": 300,
+        "requestCostMicrousd": 100,
+        "costMicrousd": 100
+      },
+      "recoveryBudget": {
+        "requestCount": 6,
+        "seconds": 180,
+        "costMicrousd": 600
+      },
+      "source": "crates/fireemu-adapter-grpc/tests/rest.rs"
+    },
+    {
+      "id": "firestore/explain/query/analyze",
+      "service": "firestore",
+      "method": "POST",
+      "path": "/v1/projects/fireemu-35fe6/databases/(default)/documents/campaign/{freshNonce}:runQuery",
+      "body": {
+        "structuredQuery": {
+          "from": [
+            {
+              "collectionId": "items"
+            }
+          ],
+          "offset": 0
+        },
+        "explainOptions": {
+          "analyze": true
+        }
+      },
+      "principal": "owned-firestore-admin",
+      "principalProof": "privileged Adapter access is reserved by shared_gate before dispatch",
+      "namespace": "projects/{project}/databases/(default)/documents/campaign/{freshNonce}",
+      "admission": "accepted",
+      "setup": "owned document absence then conditional create",
+      "readback": "typed Explain response and final document identity/state",
+      "cleanup": "existing journaled conditional DELETE and final absence read",
+      "comparator": "shared-production-pair typed JSON response comparison",
+      "budget": {
+        "requestCount": 1,
+        "wallSeconds": 300,
+        "requestCostMicrousd": 100,
+        "costMicrousd": 100
+      },
+      "recoveryBudget": {
+        "requestCount": 6,
+        "seconds": 180,
+        "costMicrousd": 600
+      },
+      "source": "crates/fireemu-adapter-grpc/tests/rest.rs"
+    },
+    {
+      "id": "firestore/explain/query/empty-analyze",
+      "service": "firestore",
+      "method": "POST",
+      "path": "/v1/projects/fireemu-35fe6/databases/(default)/documents/campaign/{freshNonce}:runQuery",
+      "body": {
+        "structuredQuery": {
+          "from": [
+            {
+              "collectionId": "items"
+            }
+          ],
+          "offset": 0,
+          "limit": 0
+        },
+        "explainOptions": {
+          "analyze": true
+        }
+      },
+      "principal": "owned-firestore-admin",
+      "principalProof": "privileged Adapter access is reserved by shared_gate before dispatch",
+      "namespace": "projects/{project}/databases/(default)/documents/campaign/{freshNonce}",
+      "admission": "accepted",
+      "setup": "owned document absence then conditional create",
+      "readback": "typed Explain response and final document identity/state",
+      "cleanup": "existing journaled conditional DELETE and final absence read",
+      "comparator": "shared-production-pair typed JSON response comparison",
+      "budget": {
+        "requestCount": 1,
+        "wallSeconds": 300,
+        "requestCostMicrousd": 100,
+        "costMicrousd": 100
+      },
+      "recoveryBudget": {
+        "requestCount": 6,
+        "seconds": 180,
+        "costMicrousd": 600
+      },
+      "source": "crates/fireemu-adapter-grpc/tests/rest.rs"
+    },
+    {
+      "id": "firestore/explain/aggregation/plan-only",
+      "service": "firestore",
+      "method": "POST",
+      "path": "/v1/projects/fireemu-35fe6/databases/(default)/documents/campaign/{freshNonce}:runAggregationQuery",
+      "body": {
+        "structuredAggregationQuery": {
+          "structuredQuery": {
+            "from": [
+              {
+                "collectionId": "items"
+              }
+            ],
+            "offset": 0
+          },
+          "aggregations": [
+            {
+              "alias": "count",
+              "count": {}
+            }
+          ]
+        },
+        "explainOptions": {
+          "analyze": false
+        }
+      },
+      "principal": "owned-firestore-admin",
+      "principalProof": "privileged Adapter access is reserved by shared_gate before dispatch",
+      "namespace": "projects/{project}/databases/(default)/documents/campaign/{freshNonce}",
+      "admission": "accepted",
+      "setup": "owned document absence then conditional create",
+      "readback": "typed Explain response and final document identity/state",
+      "cleanup": "existing journaled conditional DELETE and final absence read",
+      "comparator": "shared-production-pair typed JSON response comparison",
+      "budget": {
+        "requestCount": 1,
+        "wallSeconds": 300,
+        "requestCostMicrousd": 100,
+        "costMicrousd": 100
+      },
+      "recoveryBudget": {
+        "requestCount": 6,
+        "seconds": 180,
+        "costMicrousd": 600
+      },
+      "source": "crates/fireemu-adapter-grpc/tests/rest.rs"
+    },
+    {
+      "id": "firestore/explain/aggregation/analyze",
+      "service": "firestore",
+      "method": "POST",
+      "path": "/v1/projects/fireemu-35fe6/databases/(default)/documents/campaign/{freshNonce}:runAggregationQuery",
+      "body": {
+        "structuredAggregationQuery": {
+          "structuredQuery": {
+            "from": [
+              {
+                "collectionId": "items"
+              }
+            ],
+            "offset": 0
+          },
+          "aggregations": [
+            {
+              "alias": "count",
+              "count": {}
+            }
+          ]
+        },
+        "explainOptions": {
+          "analyze": true
+        }
+      },
+      "principal": "owned-firestore-admin",
+      "principalProof": "privileged Adapter access is reserved by shared_gate before dispatch",
+      "namespace": "projects/{project}/databases/(default)/documents/campaign/{freshNonce}",
+      "admission": "accepted",
+      "setup": "owned document absence then conditional create",
+      "readback": "typed Explain response and final document identity/state",
+      "cleanup": "existing journaled conditional DELETE and final absence read",
+      "comparator": "shared-production-pair typed JSON response comparison",
+      "budget": {
+        "requestCount": 1,
+        "wallSeconds": 300,
+        "requestCostMicrousd": 100,
+        "costMicrousd": 100
+      },
+      "recoveryBudget": {
+        "requestCount": 6,
+        "seconds": 180,
+        "costMicrousd": 600
+      },
+      "source": "crates/fireemu-adapter-grpc/tests/rest.rs"
+    },
+    {
+      "id": "firestore/explain/aggregation/empty-analyze",
+      "service": "firestore",
+      "method": "POST",
+      "path": "/v1/projects/fireemu-35fe6/databases/(default)/documents/campaign/{freshNonce}:runAggregationQuery",
+      "body": {
+        "structuredAggregationQuery": {
+          "structuredQuery": {
+            "from": [
+              {
+                "collectionId": "items"
+              }
+            ],
+            "offset": 0,
+            "limit": 0
+          },
+          "aggregations": [
+            {
+              "alias": "count",
+              "count": {}
+            }
+          ]
+        },
+        "explainOptions": {
+          "analyze": true
+        }
+      },
+      "principal": "owned-firestore-admin",
+      "principalProof": "privileged Adapter access is reserved by shared_gate before dispatch",
+      "namespace": "projects/{project}/databases/(default)/documents/campaign/{freshNonce}",
+      "admission": "accepted",
+      "setup": "owned document absence then conditional create",
+      "readback": "typed Explain response and final document identity/state",
+      "cleanup": "existing journaled conditional DELETE and final absence read",
+      "comparator": "shared-production-pair typed JSON response comparison",
+      "budget": {
+        "requestCount": 1,
+        "wallSeconds": 300,
+        "requestCostMicrousd": 100,
+        "costMicrousd": 100
+      },
+      "recoveryBudget": {
+        "requestCount": 6,
+        "seconds": 180,
+        "costMicrousd": 600
+      },
+      "source": "crates/fireemu-adapter-grpc/tests/rest.rs"
+    },
+    {
+      "id": "firestore/explain/query/auth-refusal",
+      "service": "firestore",
+      "admission": "outside",
+      "reason": "Query Explain rules refusal needs Rules setup",
+      "source": "crates/fireemu-adapter-grpc/src/service/tests/explain_tests.rs",
+      "externalDependencies": []
+    },
+    {
+      "id": "firestore/explain/aggregation/auth-refusal",
+      "service": "firestore",
+      "admission": "outside",
+      "reason": "Query Explain rules refusal needs Rules setup",
+      "source": "crates/fireemu-adapter-grpc/src/service/tests/explain_tests.rs",
+      "externalDependencies": []
+    },
+    {
+      "id": "firestore/explain/query/transaction-ownership",
+      "service": "firestore",
+      "admission": "outside",
+      "reason": "transaction rollback route is outside shared cleanup",
+      "source": "crates/fireemu-adapter-grpc/src/service/tests/explain_tests.rs",
+      "externalDependencies": []
+    },
+    {
+      "id": "firestore/explain/aggregation/transaction-ownership",
+      "service": "firestore",
+      "admission": "outside",
+      "reason": "transaction rollback route is outside shared cleanup",
+      "source": "crates/fireemu-adapter-grpc/src/service/tests/explain_tests.rs",
+      "externalDependencies": []
+    },
+    {
+      "id": "auth/tenant/namespace-isolation",
+      "service": "auth",
+      "admission": "outside",
+      "reason": "existing Adapter has no tenant route admission",
+      "source": "crates/fireemu-adapter-http/tests/auth_flows.rs",
+      "externalDependencies": []
+    },
+    {
+      "id": "auth/tenant/path-separator-refusal",
+      "service": "auth",
+      "admission": "outside",
+      "reason": "existing Adapter has no tenant route admission",
+      "source": "crates/fireemu-adapter-http/tests/auth_flows.rs",
+      "externalDependencies": []
+    },
+    {
+      "id": "auth/tenant/implicit-defaults",
+      "service": "auth",
+      "admission": "outside",
+      "reason": "existing Adapter has no tenant route admission",
+      "source": "crates/fireemu-adapter-http/tests/auth_flows.rs",
+      "externalDependencies": []
+    },
+    {
+      "id": "auth/tenant/rejected-project-no-id-consume",
+      "service": "auth",
+      "admission": "outside",
+      "reason": "existing Adapter has no tenant route admission",
+      "source": "crates/fireemu-adapter-http/tests/auth_flows.rs",
+      "externalDependencies": []
+    },
+    {
+      "id": "auth/tenant/generated-id-skips-implicit",
+      "service": "auth",
+      "admission": "outside",
+      "reason": "existing Adapter has no tenant route admission",
+      "source": "crates/fireemu-adapter-http/tests/auth_flows.rs",
+      "externalDependencies": []
+    },
+    {
+      "id": "auth/tenant/concurrent-patches",
+      "service": "auth",
+      "admission": "outside",
+      "reason": "existing Adapter has no tenant route admission",
+      "source": "crates/fireemu-adapter-http/tests/auth_flows.rs",
+      "externalDependencies": []
+    },
+    {
+      "id": "auth/tenant/admin-routes-isolation",
+      "service": "auth",
+      "admission": "outside",
+      "reason": "existing Adapter has no tenant route admission",
+      "source": "crates/fireemu-adapter-http/tests/auth_flows.rs",
+      "externalDependencies": []
+    },
+    {
+      "id": "auth/tenant/client-id-mismatch",
+      "service": "auth",
+      "admission": "outside",
+      "reason": "existing Adapter has no tenant route admission",
+      "source": "crates/fireemu-adapter-http/tests/auth_flows.rs",
+      "externalDependencies": []
+    },
+    {
+      "id": "auth/tenant/cross-tenant-update",
+      "service": "auth",
+      "admission": "outside",
+      "reason": "existing Adapter has no tenant route admission",
+      "source": "crates/fireemu-adapter-http/tests/auth_flows.rs",
+      "externalDependencies": []
+    },
+    {
+      "id": "auth/tenant/cross-tenant-refresh",
+      "service": "auth",
+      "admission": "outside",
+      "reason": "existing Adapter has no tenant route admission",
+      "source": "crates/fireemu-adapter-http/tests/auth_flows.rs",
+      "externalDependencies": []
+    }
+  ],
+  "budget": {
+    "observationRequests": 12,
+    "recoveryRequests": 6,
+    "totalRequests": 20,
+    "wallSeconds": 300,
+    "recoverySeconds": 180,
+    "costMicrousd": 5000
+  },
+  "productionExecutable": false,
+  "networkCalls": 0,
+  "unsupported": "Cases marked outside remain recorded but cannot be admitted by weakening existing guards."
+}

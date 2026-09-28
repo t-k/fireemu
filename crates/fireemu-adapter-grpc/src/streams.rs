@@ -157,6 +157,7 @@ struct WriteStreamState {
     /// against the last token they saw).
     issued: u64,
     acknowledged: u64,
+    token_prefix: u64,
 }
 
 /// Runs the `Write` stream: the first message (no writes) is the handshake; every later
@@ -166,11 +167,13 @@ pub async fn write_stream(
     mut inbound: impl tokio_stream::Stream<Item = Result<pb::WriteRequest, Status>> + Unpin + Send,
     tx: mpsc::Sender<Result<pb::WriteResponse, Status>>,
 ) {
+    let stream_number = NEXT_STREAM_ID.fetch_add(1, Ordering::Relaxed);
     let mut state = WriteStreamState {
         parent: None,
-        stream_id: format!("fireemu-{}", NEXT_STREAM_ID.fetch_add(1, Ordering::Relaxed)),
+        stream_id: format!("fireemu-{stream_number}"),
         issued: 0,
         acknowledged: 0,
+        token_prefix: stream_number,
     };
     while let Some(next) = inbound.next().await {
         let req = match next {
@@ -180,6 +183,33 @@ pub async fn write_stream(
                 break;
             }
         };
+        // Production evaluates an empty write after anything the client already sent: a client
+        // that half-closed right behind it gets a stream that ends OK (trailing-metadata),
+        // one still waiting for the answer gets `empty write operation`
+        // (response-before-half-close). Look once, without waiting.
+        if state.parent.is_some()
+            && req.writes.iter().any(|write| write.operation.is_none())
+            && already_half_closed(&mut inbound)
+        {
+            break;
+        }
+        // Production refuses a first message carrying a token (ABORTED) while the client keeps
+        // sending, but ends the stream OK when the client half-closes right behind it
+        // (coordinator decision D5, 2026-09-27). A large message can finish arriving just
+        // before its half-close does, so only this refusal waits, briefly, for the half-close.
+        // The grace approximates production's processing time; it is not observed.
+        if state.parent.is_none()
+            && !req.stream_token.is_empty()
+            && req.stream_id.is_empty()
+            && req.writes.is_empty()
+            && half_closes_before(
+                &mut inbound,
+                tokio::time::sleep(FIRST_TOKEN_HALF_CLOSE_GRACE),
+            )
+            .await
+        {
+            break;
+        }
         let outcome = handle_write_request(&ctx, &mut state, &req);
         let stop = outcome.is_err();
         if tx.send(outcome).await.is_err() || stop {
@@ -188,8 +218,37 @@ pub async fn write_stream(
     }
 }
 
-fn token_bytes(n: u64) -> Vec<u8> {
-    n.to_be_bytes().to_vec()
+/// How long a refused first-message token waits for the client's half-close (decision D5).
+const FIRST_TOKEN_HALF_CLOSE_GRACE: std::time::Duration = std::time::Duration::from_millis(100);
+
+/// Whether the client ends its side before `deadline` does. The end wins a tie; a message or
+/// the deadline means the client is still sending.
+async fn half_closes_before<S, D>(inbound: &mut S, deadline: D) -> bool
+where
+    S: tokio_stream::Stream + Unpin,
+    D: std::future::Future<Output = ()>,
+{
+    tokio::select! {
+        biased;
+        next = inbound.next() => next.is_none(),
+        () = deadline => false,
+    }
+}
+
+/// Whether the client side of a stream has already ended, without waiting for it.
+fn already_half_closed<S: tokio_stream::Stream + Unpin>(inbound: &mut S) -> bool {
+    let mut cx = std::task::Context::from_waker(std::task::Waker::noop());
+    matches!(
+        std::pin::Pin::new(inbound).poll_next(&mut cx),
+        std::task::Poll::Ready(None)
+    )
+}
+
+fn token_bytes(prefix: u64, n: u64) -> Vec<u8> {
+    let mut token = Vec::with_capacity(16);
+    token.extend_from_slice(&prefix.to_be_bytes());
+    token.extend_from_slice(&n.to_be_bytes());
+    token
 }
 
 fn handle_write_request(
@@ -204,10 +263,13 @@ fn handle_write_request(
                 "the first Write request must name the database",
             ));
         }
-        if !req.stream_id.is_empty() || !req.stream_token.is_empty() {
+        if !req.stream_id.is_empty() {
             return Err(Status::failed_precondition(
                 "write stream resumption is not supported; start a new stream",
             ));
+        }
+        if !req.stream_token.is_empty() {
+            return Err(Status::aborted("resuming a stream not supported"));
         }
         if !req.writes.is_empty() {
             return Err(Status::invalid_argument(
@@ -215,9 +277,18 @@ fn handle_write_request(
             ));
         }
         let parent = database_parent(&req.database)?;
+        if parent.document.is_some() {
+            return Err(Status::invalid_argument(
+                "the first Write request must name the database root",
+            ));
+        }
         // The route and the target database are resolved; App Check decides before the
         // Firebase Auth credential, Security Rules and every mutation (section 7.4).
         ctx.admit_app_check(&parent, "Write")?;
+        // Only then is the stream opened against a database that exists. A request refused
+        // for two reasons answers with the same one here as on the unary paths, which
+        // classify App Check before they touch any database.
+        ctx.local.database_handle(&parent)?;
         state.parent = Some(parent);
     } else if !req.stream_id.is_empty() || !req.database.is_empty() {
         return Err(Status::invalid_argument(
@@ -228,8 +299,18 @@ fn handle_write_request(
         return Err(Status::internal("write stream without database"));
     };
     if !req.stream_token.is_empty() {
-        let acknowledged: Option<[u8; 8]> = req.stream_token.as_slice().try_into().ok();
-        let acknowledged = acknowledged.map_or(0, u64::from_be_bytes);
+        let acknowledged = req
+            .stream_token
+            .as_slice()
+            .try_into()
+            .ok()
+            .and_then(|bytes: [u8; 16]| {
+                let (prefix, sequence) = bytes.split_at(8);
+                let prefix = u64::from_be_bytes(prefix.try_into().ok()?);
+                let sequence = u64::from_be_bytes(sequence.try_into().ok()?);
+                (prefix == state.token_prefix).then_some(sequence)
+            })
+            .unwrap_or(0);
         if acknowledged == 0 || acknowledged > state.issued || acknowledged < state.acknowledged {
             return Err(Status::failed_precondition("unknown write stream token"));
         }
@@ -244,7 +325,7 @@ fn handle_write_request(
     if req.writes.is_empty() {
         return Ok(pb::WriteResponse {
             stream_id,
-            stream_token: token_bytes(state.issued),
+            stream_token: token_bytes(state.token_prefix, state.issued),
             write_results: Vec::new(),
             commit_time: None,
         });
@@ -278,7 +359,7 @@ fn handle_write_request(
     let result = ctx.local.commit_writes(parent, &writes, &guarded)?;
     Ok(pb::WriteResponse {
         stream_id,
-        stream_token: token_bytes(state.issued),
+        stream_token: token_bytes(state.token_prefix, state.issued),
         write_results: result.write_results,
         commit_time: result.commit_time,
     })
@@ -703,6 +784,11 @@ fn decode_target(
                     "query target requires a structured_query",
                 ));
             };
+            if sq.find_nearest.is_some() {
+                return Err(Status::unimplemented(
+                    "Listen does not support findNearest targets",
+                ));
+            }
             let accepted = ctx.local.accepted_query(&query_parent, sq)?;
             Ok(TargetKind::Query(Box::new(accepted.query)))
         }
@@ -1275,7 +1361,11 @@ impl WireCommit {
 mod refresh_tests {
     use super::*;
     use crate::local::{CommitChangeKind, CommitPathChange, FirestoreSnapshot};
-    use fireemu_core_firestore::index::{IndexSet, IndexValidationPolicy, PlanningContext};
+    use fireemu_core_firestore::field_path::FieldPath;
+    use fireemu_core_firestore::index::{
+        IndexDefinition, IndexField, IndexFieldMode, IndexQueryScope, IndexSet,
+        IndexValidationPolicy, PlanningContext,
+    };
     use fireemu_core_firestore::store::{FirestoreState, WriteOp};
     use fireemu_core_firestore::value::Value;
     use fireemu_core_session::clock::VirtualClock;
@@ -1353,6 +1443,70 @@ mod refresh_tests {
         }
     }
 
+    #[test]
+    fn listen_decoder_refuses_find_nearest_targets() {
+        let fixture = generation_fixture();
+        let parent = fixture.parent.as_ref().unwrap();
+        let mut request = query_request(1, "restored");
+        let Some(pb::listen_request::TargetChange::AddTarget(target)) = &mut request.target_change
+        else {
+            unreachable!();
+        };
+        let Some(pb::target::TargetType::Query(query)) = &mut target.target_type else {
+            unreachable!();
+        };
+        let Some(pb::target::query_target::QueryType::StructuredQuery(structured)) =
+            &mut query.query_type
+        else {
+            unreachable!();
+        };
+        structured.find_nearest = Some(pb::structured_query::FindNearest {
+            vector_field: Some(pb::structured_query::FieldReference {
+                field_path: "embedding".to_owned(),
+            }),
+            query_vector: Some(pb::Value {
+                value_type: Some(pb::value::ValueType::MapValue(pb::MapValue {
+                    fields: [
+                        (
+                            "__type__".to_owned(),
+                            pb::Value {
+                                value_type: Some(pb::value::ValueType::StringValue(
+                                    "__vector__".to_owned(),
+                                )),
+                            },
+                        ),
+                        (
+                            "value".to_owned(),
+                            pb::Value {
+                                value_type: Some(pb::value::ValueType::ArrayValue(
+                                    pb::ArrayValue {
+                                        values: vec![pb::Value {
+                                            value_type: Some(pb::value::ValueType::DoubleValue(
+                                                1.0,
+                                            )),
+                                        }],
+                                    },
+                                )),
+                            },
+                        ),
+                    ]
+                    .into_iter()
+                    .collect(),
+                })),
+            }),
+            distance_measure: pb::structured_query::find_nearest::DistanceMeasure::Euclidean as i32,
+            limit: Some(1),
+            ..Default::default()
+        });
+        let Some(pb::listen_request::TargetChange::AddTarget(target)) = request.target_change
+        else {
+            unreachable!();
+        };
+        let error = decode_target(&fixture.context, parent, &target).unwrap_err();
+        assert_eq!(error.code(), tonic::Code::Unimplemented);
+        assert!(error.message().contains("findNearest"));
+    }
+
     struct GenerationFixture {
         context: StreamContext,
         scope: Scope,
@@ -1370,7 +1524,18 @@ mod refresh_tests {
                 api_mode: FirestoreApiMode::Native,
                 policy: IndexValidationPolicy::Production,
             },
-            indexes: IndexSet::default(),
+            indexes: {
+                let mut indexes = IndexSet::default();
+                indexes.add_composite(IndexDefinition {
+                    collection_group: CollectionId::try_new("restored").unwrap(),
+                    query_scope: IndexQueryScope::Collection,
+                    fields: vec![IndexField {
+                        path: FieldPath::parse("embedding").unwrap(),
+                        mode: IndexFieldMode::Vector { dimension: 1 },
+                    }],
+                });
+                indexes
+            },
         };
         let clock = Arc::new(std::sync::Mutex::new(VirtualClock::new(
             LogicalInstant::UNIX_EPOCH,
@@ -1651,5 +1816,157 @@ mod refresh_tests {
                     .expect("unbounded query stays incremental");
         }
         assert_eq!(examined, 50);
+    }
+}
+
+#[cfg(test)]
+mod empty_write_tests {
+    use super::*;
+    use fireemu_core_firestore::index::{IndexSet, IndexValidationPolicy, PlanningContext};
+    use fireemu_core_session::clock::VirtualClock;
+    use fireemu_core_types::edition::{FirestoreApiMode, FirestoreEdition};
+    use fireemu_core_types::time::LogicalInstant;
+
+    fn context() -> StreamContext {
+        let gateway = Gateway {
+            enforce_limits: true,
+            ctx: PlanningContext {
+                edition: FirestoreEdition::Standard,
+                api_mode: FirestoreApiMode::Native,
+                policy: IndexValidationPolicy::Production,
+            },
+            indexes: IndexSet::default(),
+        };
+        let clock = Arc::new(std::sync::Mutex::new(VirtualClock::new(
+            LogicalInstant::UNIX_EPOCH,
+        )));
+        let local = Arc::new(LocalBackend::new(gateway.clone(), clock, 7));
+        StreamContext {
+            local: local.clone(),
+            gateway: Arc::new(gateway),
+            rules: None,
+            principal: Principal::Owner,
+            authorization: None,
+            epoch: local.epoch(),
+            app_check: None,
+        }
+    }
+
+    /// Runs a stream over `requests`; `half_closed` drops the client side before the server
+    /// reads, as when a client half-closes right after its last message.
+    async fn run(half_closed: bool) -> Vec<Result<pb::WriteResponse, Status>> {
+        let (client, inbound) = mpsc::channel(4);
+        client
+            .send(Ok(pb::WriteRequest {
+                database: "projects/demo-app/databases/(default)".to_owned(),
+                ..Default::default()
+            }))
+            .await
+            .unwrap();
+        client
+            .send(Ok(pb::WriteRequest {
+                writes: vec![pb::Write::default()],
+                ..Default::default()
+            }))
+            .await
+            .unwrap();
+        let open = (!half_closed).then_some(client);
+        let (tx, mut rx) = mpsc::channel(4);
+        write_stream(
+            context(),
+            tokio_stream::wrappers::ReceiverStream::new(inbound),
+            tx,
+        )
+        .await;
+        drop(open);
+        let mut out = Vec::new();
+        while let Some(item) = rx.recv().await {
+            out.push(item);
+        }
+        out
+    }
+
+    /// `writes/write-stream-terminal/response-before-half-close` (recorded twice on
+    /// 2026-09-25): a client still waiting for the answer gets `empty write operation`.
+    /// `writes/write-stream-terminal/trailing-metadata`: a client that half-closed right after
+    /// the empty write gets a stream that ends OK. Production evaluates the empty write after
+    /// it has seen the half-close; which one it sees first depends on arrival order.
+    #[tokio::test]
+    async fn an_empty_write_is_refused_only_while_the_client_is_still_sending() {
+        let open = run(false).await;
+        assert_eq!(open.len(), 2, "{open:?}");
+        assert!(open[0].is_ok());
+        let refused = open[1].as_ref().unwrap_err();
+        assert_eq!(refused.code(), tonic::Code::InvalidArgument);
+        assert_eq!(refused.message(), "empty write operation");
+
+        let closed = run(true).await;
+        assert_eq!(closed.len(), 1, "{closed:?}");
+        assert!(
+            closed[0].is_ok(),
+            "only the handshake answer, then an OK end"
+        );
+    }
+
+    /// The half-close race that decides a first-message token, without time: the client's end
+    /// wins over a deadline that is ready at the same moment.
+    #[tokio::test]
+    async fn the_first_token_grace_is_decided_by_what_arrives_first() {
+        use std::future::{pending, ready};
+        let closed = || tokio_stream::iter(Vec::<u8>::new());
+        let open = || tokio_stream::pending::<u8>();
+        assert!(half_closes_before(&mut closed(), pending::<()>()).await);
+        assert!(
+            half_closes_before(&mut closed(), ready(())).await,
+            "the end wins a tie"
+        );
+        assert!(
+            !half_closes_before(&mut open(), ready(())).await,
+            "the deadline passed"
+        );
+        assert!(
+            !half_closes_before(&mut tokio_stream::iter(vec![1_u8]), pending::<()>()).await,
+            "another message means the client is still sending"
+        );
+    }
+
+    /// Production's D5 probe refused an unknown first token while the sender stayed open,
+    /// whereas both 10 MiB request-byte recordings ended OK after an immediate half-close.
+    #[tokio::test]
+    async fn an_unknown_first_token_depends_on_client_half_close() {
+        async fn run(half_closed: bool) -> Vec<Result<pb::WriteResponse, Status>> {
+            let (client, inbound) = mpsc::channel(2);
+            client
+                .send(Ok(pb::WriteRequest {
+                    database: "projects/demo-app/databases/(default)".to_owned(),
+                    stream_token: vec![7; 16],
+                    ..Default::default()
+                }))
+                .await
+                .unwrap();
+            let open = (!half_closed).then_some(client);
+            let (tx, mut rx) = mpsc::channel(2);
+            write_stream(
+                context(),
+                tokio_stream::wrappers::ReceiverStream::new(inbound),
+                tx,
+            )
+            .await;
+            drop(open);
+            let mut out = Vec::new();
+            while let Some(item) = rx.recv().await {
+                out.push(item);
+            }
+            out
+        }
+
+        let open = run(false).await;
+        assert_eq!(open.len(), 1, "{open:?}");
+        let refused = open[0].as_ref().unwrap_err();
+        assert_eq!(refused.code(), tonic::Code::Aborted);
+        assert_eq!(refused.message(), "resuming a stream not supported");
+
+        let closed = run(true).await;
+        assert!(closed.is_empty(), "{closed:?}");
     }
 }

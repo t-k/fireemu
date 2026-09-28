@@ -90,6 +90,14 @@ impl ClaimValue {
     }
 }
 
+/// The canonical JSON of a claim map (sorted keys, no whitespace).
+#[must_use]
+pub fn canonical_map_json(entries: &BTreeMap<String, ClaimValue>) -> String {
+    let mut out = String::new();
+    write_map(&mut out, entries);
+    out
+}
+
 fn write_map(out: &mut String, entries: &BTreeMap<String, ClaimValue>) {
     out.push('{');
     for (i, (k, v)) in entries.iter().enumerate() {
@@ -103,7 +111,9 @@ fn write_map(out: &mut String, entries: &BTreeMap<String, ClaimValue>) {
     out.push('}');
 }
 
-/// Claim names reserved by OIDC / Firebase that custom claims may not use.
+/// Claim names reserved by OIDC / Firebase that custom claims may not use. `user_id` is not
+/// among them: production stores it (sandbox recording 2026-09-23) and the ID token's own
+/// `user_id` still takes precedence when the token is assembled.
 pub const RESERVED_CLAIM_NAMES: &[&str] = &[
     "acr",
     "amr",
@@ -126,7 +136,6 @@ pub const RESERVED_CLAIM_NAMES: &[&str] = &[
     "phone_number",
     "sign_in_provider",
     "sub",
-    "user_id",
 ];
 
 /// Claim names the Firebase Functions SDK rejects in Blocking Auth responses.
@@ -176,12 +185,28 @@ impl fmt::Display for CustomClaimsError {
 impl std::error::Error for CustomClaimsError {}
 
 /// Custom claims set through the Admin SDK.
-#[derive(Debug, Clone, PartialEq, Default)]
+#[derive(Debug, Clone, Default)]
 pub struct CustomClaims {
     entries: BTreeMap<String, ClaimValue>,
+    /// The `customAttributes` text the claims were set from, which production reads back as
+    /// given (key order and an empty `{}` included). Any later change drops it.
+    source: Option<String>,
+}
+
+/// Claims compare by their entries: the text they were set from is a presentation detail.
+impl PartialEq for CustomClaims {
+    fn eq(&self, other: &Self) -> bool {
+        self.entries == other.entries
+    }
 }
 
 impl CustomClaims {
+    /// The claims as a map, in canonical key order.
+    #[must_use]
+    pub const fn entries_map(&self) -> &BTreeMap<String, ClaimValue> {
+        &self.entries
+    }
+
     /// Inserts a claim, rejecting reserved names.
     pub fn insert(&mut self, name: &str, value: ClaimValue) -> Result<(), CustomClaimsError> {
         if name.is_empty() {
@@ -190,6 +215,7 @@ impl CustomClaims {
         if RESERVED_CLAIM_NAMES.contains(&name) {
             return Err(CustomClaimsError::ReservedName(name.to_owned()));
         }
+        self.source = None;
         self.entries.insert(name.to_owned(), value);
         Ok(())
     }
@@ -207,6 +233,7 @@ impl CustomClaims {
         if BLOCKING_RESPONSE_RESERVED_CLAIM_NAMES.contains(&name) {
             return Err(CustomClaimsError::ReservedName(name.to_owned()));
         }
+        self.source = None;
         self.entries.insert(name.to_owned(), value);
         Ok(())
     }
@@ -219,7 +246,11 @@ impl CustomClaims {
 
     /// Removes a claim, returning whether it was present.
     pub fn remove(&mut self, name: &str) -> bool {
-        self.entries.remove(name).is_some()
+        let removed = self.entries.remove(name).is_some();
+        if removed {
+            self.source = None;
+        }
+        removed
     }
 
     /// Entries in canonical order.
@@ -244,7 +275,27 @@ impl CustomClaims {
         for (name, value) in &members {
             claims.insert(name, ClaimValue::from_json(value))?;
         }
+        claims.source = Some(text.to_owned());
         Ok(claims)
+    }
+
+    /// The same claims, remembered as set from `text` (the `customAttributes` value the
+    /// caller parsed them from).
+    #[must_use]
+    pub fn with_source(mut self, text: &str) -> Self {
+        self.source = Some(text.to_owned());
+        self
+    }
+
+    /// The `customAttributes` value an account reports: the text the claims were set from,
+    /// else their canonical JSON; `None` for claims never set.
+    #[must_use]
+    pub fn attributes_text(&self) -> Option<String> {
+        match &self.source {
+            Some(text) => Some(text.clone()),
+            None if self.entries.is_empty() => None,
+            None => Some(self.canonical_json()),
+        }
     }
 
     /// Canonical JSON encoding.
@@ -255,12 +306,17 @@ impl CustomClaims {
         out
     }
 
-    /// Checks `AUTH-LIMIT-CUSTOM-CLAIMS-BYTES` on the canonical JSON size.
+    /// Checks `AUTH-LIMIT-CUSTOM-CLAIMS-BYTES` on the stored text: the text the claims were set
+    /// from when there is one, so padding cannot carry more than the limit (closure security
+    /// review 2026-09-24), else the canonical JSON.
     pub fn check_size(&self) -> Result<(), LimitViolation> {
         let def = FIREBASE_AUTH_2026_08_30
             .find("AUTH-LIMIT-CUSTOM-CLAIMS-BYTES")
             .unwrap_or_else(|| unreachable!("catalog entry is checked by catalog tests"));
-        let bytes = self.canonical_json().len() as u64;
+        let bytes = self
+            .source
+            .as_ref()
+            .map_or_else(|| self.canonical_json().len(), String::len) as u64;
         match evaluate(
             def,
             bytes,
@@ -288,6 +344,8 @@ pub struct FirebaseClaims {
     pub tenant: Option<String>,
     /// Additional attributes from the identity provider used for this sign-in.
     pub sign_in_attributes: Option<ClaimValue>,
+    /// Private fireemu control-session incarnation. Ordinary production-shaped stores omit it.
+    pub fireemu_session_epoch: Option<String>,
 }
 
 /// ID token claims (unsigned; signing is an adapter concern).
@@ -317,6 +375,9 @@ pub struct IdTokenClaims {
     pub display_name: Option<String>,
     /// Profile photo URL (`picture` in the JWT).
     pub photo_url: Option<String>,
+    /// `provider_id` at the top level: production sets it to `anonymous` for an anonymous
+    /// account and leaves it out otherwise.
+    pub provider_id: Option<String>,
     /// Firebase block.
     pub firebase: FirebaseClaims,
     /// Custom claims (merged at the top level when serialized).
@@ -335,6 +396,9 @@ impl IdTokenClaims {
         entries.insert("sub".into(), ClaimValue::String(self.sub.clone()));
         entries.insert("iat".into(), ClaimValue::Int(self.iat));
         entries.insert("exp".into(), ClaimValue::Int(self.exp));
+        if let Some(provider) = &self.provider_id {
+            entries.insert("provider_id".into(), ClaimValue::String(provider.clone()));
+        }
         if let Some(email) = &self.email {
             entries.insert("email".into(), ClaimValue::String(email.clone()));
             entries.insert(
@@ -385,6 +449,12 @@ impl IdTokenClaims {
         }
         if let Some(attributes) = &self.firebase.sign_in_attributes {
             firebase.insert("sign_in_attributes".to_owned(), attributes.clone());
+        }
+        if let Some(epoch) = &self.firebase.fireemu_session_epoch {
+            firebase.insert(
+                "fireemu_session_epoch".to_owned(),
+                ClaimValue::String(epoch.clone()),
+            );
         }
         entries.insert("firebase".into(), ClaimValue::Map(firebase));
         let mut out = String::new();

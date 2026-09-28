@@ -1,0 +1,37 @@
+{
+  "artifactSha256": "24234cd10240c2decb6425017ffe68f482bdacc01d1757d8f2ffa348604dae7b",
+  "cleanupComplete": true,
+  "completed": true,
+  "configurationDigest": "faecb4ac71ff8df1a872b56660a1e7dbccb05e66ffa5efc0ae071504033e2d6f",
+  "coordinatorRequests": 2,
+  "executionCommit": "7213600b346c3f79f3d436b3d637f726f840258e",
+  "failure": null,
+  "kind": "production-campaign-auth-list-next-local-artifact-v3",
+  "limitations": [
+    "Loopback-owned fireemu artifact only; no production parity evidence.",
+    "Public summary omits token-bearing response bodies; private receipt retains full rows."
+  ],
+  "listenersClosed": true,
+  "observationRequests": 18,
+  "observedFamilies": [
+    "auth-lookup",
+    "auth-refresh",
+    "auth-sign-in",
+    "auth-sign-up",
+    "firestore-document-create",
+    "firestore-document-read",
+    "firestore-list-collection-ids"
+  ],
+  "observerSha256": "c0a29be4f98e4d2993cb5c283219ce2b48e16bba1027698a2815a59d63ba6594",
+  "parentManifestSha256": "ff157b7bb72dd628e5a13e5a63ade4ef09d83ac161b871a1230401e59fdca91f",
+  "processCleanup": true,
+  "productionExecuted": false,
+  "recordingComplete": true,
+  "recoveryRequests": 19,
+  "schemaVersion": 1,
+  "stateValidation": true,
+  "stopReason": "child-completed",
+  "target": "owned-fireemu-artifact",
+  "totalRequests": 39,
+  "totalWireRequests": 39
+}

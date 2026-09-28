@@ -207,10 +207,20 @@
           "key": "firestore.indexValidation",
           "profileValue": "every composite index a query needs is assumed to exist and reported as FS_EMULATOR_INDEX_ASSUMED",
           "emulatorValue": "no composite index is checked",
-          "authorityRefs": [
-            "firestore/missing-composite-index#admin-equality-plus-inequality"
-          ],
-          "note": "The pinned official Firestore emulator does not check composite indexes at all, so the profile that reproduces it assumes every index a query needs and reports each assumption as FS_EMULATOR_INDEX_ASSUMED. The strict profile applies production's rules instead, verified against a real project: the same query is refused with FAILED_PRECONDITION and the firestore.indexes.json fragment, and the index merges production performs are accepted. The policy has no configuration key; it follows the profile."
+          "authority": {
+            "kind": "intentional-local-policy",
+            "sourceUrls": [
+              "https://firebase.google.com/docs/firestore/query-data/indexing",
+              "https://github.com/firebase/firebase-tools/tree/v15.28.2"
+            ],
+            "checkedOn": "2026-09-28",
+            "officialBaseline": {
+              "package": "firebase-tools",
+              "version": "15.28.2"
+            },
+            "approvalRecord": "README.md, \"Gap from the official Firebase Emulator Suite\""
+          },
+          "note": "The pinned official Firestore emulator does not check composite indexes at all, so the profile that reproduces it assumes every index a query needs, answers the query as the official emulator does (conformance/fixtures/firestore/missing-composite-index.json#admin-equality-plus-inequality is a parity row) and reports each assumption as the FS_EMULATOR_INDEX_ASSUMED diagnostic. The strict profile applies production's rules instead, verified against a real project: the same query is refused with FAILED_PRECONDITION and the console link production answers with, and the index merges production performs are accepted. The policy has no configuration key; it follows the profile."
         },
         {
           "key": "rules.idTokenVerification",
@@ -432,7 +442,7 @@
       }
     }
   },
-  "profileStatus": "The profile is a runtime switch, and its sets list exactly what the daemon derives from it: firestore.enforceLimits (a Standard query limit violation is reported as an FS_LIMIT_OBSERVED warning / refuses the query). Three further derived settings have no configuration key: how composite indexes are validated (every index a query needs is assumed, as the official emulator does / production's rules, verified against a real project, including the index merges production performs), how a caller's ID token is verified on the Firestore and Storage Security Rules surfaces (the official emulators' unsigned mock tokens are admitted / the full verification against the Auth store stands), and whether Auth refresh tokens remain stateless like the official emulator or are revoked after privileged account mutations. An explicit configuration key always wins over the profile's default for it. A unit test in crates/fireemu/src/config.rs reads this file and fails when a profile's sets and what set_profile derives disagree. Every other key a profile names is under declared, with a status: hand-written means the loader reads the key but does not derive it from the profile, not-implemented means the loader refuses the value or reads nothing of the section, so the value is a statement of intent and not a switch. fireemu capabilities and GET /v1/capabilities publish the active profile and the start banner prints it. tools/compat-check CC-08 checks every key and value under sets and declared against spec/config/fireemu.schema.json, requires a status and a note on each declared key, refuses a key that is both set and declared, and checks that the profile names declared here are exactly the values that schema's profile key accepts.",
+  "profileStatus": "The profile is a runtime switch, and its sets list exactly what the daemon derives from it: firestore.enforceLimits (a Standard query limit violation is reported as an FS_LIMIT_OBSERVED warning / refuses the query). Four further derived settings have no configuration key: how composite indexes are validated (every index a query needs is assumed, as the official emulator does / production's rules, verified against a real project, including the index merges production performs), how a caller's ID token is verified on the Firestore and Storage Security Rules surfaces (the official emulators' unsigned mock tokens are admitted / the full verification against the Auth store stands), whether Auth refresh tokens remain stateless like the official emulator or are revoked after privileged account mutations, and whether a Firestore data-plane request materializes a database nothing created (any syntactically valid database id is served, as the official emulator does / the default database and the databases a firebase.json firestore entry names are served and every other one answers the NOT_FOUND production answers until an import or a snapshot restore materializes it). An explicit configuration key always wins over the profile's default for it. A unit test in crates/fireemu/src/config.rs reads this file and fails when a profile's sets and what set_profile derives disagree. Every other key a profile names is under declared, with a status: hand-written means the loader reads the key but does not derive it from the profile, not-implemented means the loader refuses the value or reads nothing of the section, so the value is a statement of intent and not a switch. fireemu capabilities and GET /v1/capabilities publish the active profile and the start banner prints it. tools/compat-check CC-08 checks every key and value under sets and declared against spec/config/fireemu.schema.json, requires a status and a note on each declared key, refuses a key that is both set and declared, and checks that the profile names declared here are exactly the values that schema's profile key accepts.",
   "vocabulary": {
     "scopes": {
       "active": "In the supported-surface milestone. Either parity is claimed with evidence, the surface is a fireemu addition, or it is an open gap that blocks the complete-suite claim.",
@@ -460,11 +470,11 @@
     "sharedTerms": [
       {
         "term": "ExecutePipeline",
-        "status": "implemented",
+        "status": "partial",
         "owners": [
           "FS-PIPE-RPC-1"
         ],
-        "qualifier": "validation-only: a well-formed pipeline is answered UNIMPLEMENTED FS_PIPE_VALIDATION_ONLY"
+        "qualifier": "finite local latest-read collection / optional single where(equal(top-level field, scalar literal)) / optional top-level field-reference select / optional non-negative int32 offset / optional limit execution; other execution semantics and production parity remain unsupported or unobserved"
       },
       {
         "term": "Storage triggers",
@@ -481,6 +491,15 @@
           "APPCHECK-REPLAY-1"
         ],
         "qualifier": "limitedUse: true fails closed with 501 APP_CHECK_REPLAY_UNSUPPORTED"
+      },
+      {
+        "term": "expirationOffset",
+        "status": "implemented",
+        "owners": [
+          "FS-FIELD-CONFIG-1"
+        ],
+        "qualifier": "ttlConfig.expirationOffset is read, stored, reported back and applied to the sweep condition; the expiration time is the stored timestamp plus the offset",
+        "mustAppearInClaim": true
       }
     ]
   },
@@ -566,6 +585,26 @@
             {
               "behaviour": "seeded fault injection on firestore.commit / read / beginTransaction",
               "precision": "exact-for-local-semantics"
+            },
+            {
+              "behaviour": "Query semantics follow production as recorded on 2026-09-24 in both profiles: RunQuery marks no response done (where the pinned official emulator does), a kindless query without allDescendants reads the parent's direct children, IS_NOT_NAN excludes null, a range against NaN matches nothing, a count capped at zero answers after authorization without reading, Explain reports the index each disjunct scans and production's billing, and PartitionQuery (which the pinned official emulator leaves unimplemented) splits at sampled keys. The official emulator's answer to the others was not re-measured. Under the strict profile only, as production: unnamed aggregations are numbered field_1, field_2 over the unnamed ones only and aliases follow the property-name rules (the emulator profile numbers them by position and admits any alias, as fireemu did before), PartitionQuery refuses a projection, a __name__ filter on a reference that is not a document is refused, and a query method on a root collection over REST is routed to the create template",
+              "precision": "documented-not-observed"
+            },
+            {
+              "behaviour": "A refusal text echoes at most 1 KiB of the client input it names (a property path, a collection id, a document reference, a distance result field, the inequality-field list, a transcoder value, key or path), in both profiles, and a transcoder refusal lists at most 16 violations: a refusal is produced before authorization and can travel in a grpc-message header, so the answer must not grow with the request. Production's own truncation is unobserved; this is a local safety bound",
+              "precision": "strictly-safer"
+            },
+            {
+              "behaviour": "A PartitionQuery page token names the snapshot version it was issued at and carries a fingerprint of the request and that version, in both profiles, so a token edited to read another version is refused as foreign. fireemu before FS-QUERY-INDEX did not bind the version; this is the one refusal the emulator profile adds, a local integrity bound on a token only fireemu issues",
+              "precision": "strictly-safer"
+            },
+            {
+              "behaviour": "gRPC answers are shaped as production's front end sends them in the strict profile only: an error answered trailers-only is split into headers and trailers, and a Write stream that sent a response ends with the trailer content-disposition: attachment (FS-DATA-WRITE decision 1, 2026-09-25). The emulator profile keeps tonic's answer and adds the local diagnostic trailer fireemu-reason (for example FS_GW_DECODE), which the strict profile removes. No official-emulator recording of trailer metadata exists",
+              "precision": "documented-divergence"
+            },
+            {
+              "behaviour": "The Firestore Admin API (REST v1 and gRPC google.firestore.admin.v1 with google.longrunning.Operations) is served in both profiles with production's shapes, recorded on 2026-09-24 (FS-CONFIG-LIFECYCLE): named database create, get, list, patch and delete; composite indexes; single-field index and TTL configuration; managed exportDocuments, importDocuments and bulkDeleteDocuments over the emulated Cloud Storage; operations, locations. The official emulator serves none of it, so no existing request is newly refused, but after its use: deleting (default) or a declared database answers the data plane NOT_FOUND, a Datastore-mode or Enterprise database created through it is refused by the Native data plane, a deleted database id cannot be reused for 300 seconds (firestore.deletedDatabaseIdCooldownSeconds), and the managed-infrastructure methods (backups, backup schedules, restore, clone, point-in-time recovery) answer 501 instead of 404. A managed export's partition checksum is written as 0 and not verified on import (owner decision C13). Under the strict profile only, projects.unknownProjects = refuse answers any other project with production's 403 (C11). Local bounds and isolation the Admin API adds, in both profiles (their wording is fireemu's; production's is unobserved): a third concurrent managed import answers RESOURCE_EXHAUSTED; an import decodes at most 1,000,000 documents and 1 GiB of output and refuses an export naming a partition or an output twice or outside its directory, and a document id carrying a slash, with INVALID_ARGUMENT; a bucket belongs to the first project whose managed export or import of it succeeded, and another project's export into it or import from it (or from another project's default bucket) answers as a missing bucket or file (owner decision C15); a gRPC Admin request whose resource name is not of the kind the method takes answers INVALID_ARGUMENT",
+              "precision": "explicit-extension"
             }
           ],
           "productionOnly": [
@@ -581,12 +620,17 @@
             {
               "id": "FS-REST-1",
               "status": "implemented"
+            },
+            {
+              "id": "FS-ADMIN-INVENTORY-1",
+              "status": "implemented"
             }
           ],
           "evidence": {
             "tests": [],
             "integration": [
               "crates/fireemu-adapter-grpc/tests/rest.rs",
+              "crates/fireemu-adapter-grpc/src/rest/admin_inventory_tests.rs",
               "conformance/firestore-matrix.json"
             ],
             "conformance": [
@@ -632,9 +676,124 @@
             {
               "behaviour": "removal compares the semantic eventTrigger object rather than depending on JSON member insertion order, and a successful source reload rebuilds the manifest-owned table at the new generation instead of retaining manually duplicated stale-generation registrations",
               "precision": "exact-for-local-semantics"
+            },
+            {
+              "behaviour": "runQuery, runAggregationQuery and executePipeline answer an error inside a one-element JSON array, as production does, and request bodies are read with production's JSON grammar (bare keys, single quotes, trailing commas) with its refusal texts, in both profiles; production's transcoder check of query bodies (schema, enum and wrapper forms, field violations), and the Standard :executePipeline route are strict-profile refusals only, because the emulator profile may add no rejection; under the emulator profile a body that production's grammar refuses but standard JSON admits (nesting past its depth of 100) is read as standard JSON, and a read_time before database creation is refused in both profiles, as fireemu refused it before",
+              "precision": "exact-for-local-semantics"
+            },
+            {
+              "behaviour": "listDocuments and listCollectionIds follow production as recorded on 2026-09-24 (FS-DATA-WRITE-LIST) in both profiles: at most 300 documents a page, ordered page tokens that continue after the recorded order values, tokens bound to the listing but not the snapshot, production's refusal texts, repeated REST parameters taking the last value and loose booleans. Strict-profile refusals only, because the emulator profile may add no rejection: an unknown REST query parameter, proto-name parameters and the transcoder's timestamp check, the transcoder check of a listCollectionIds body, and show_missing without a collection id over gRPC",
+              "precision": "exact-for-local-semantics"
             }
           ],
           "productionOnly": [],
+          "preview": []
+        },
+        {
+          "id": "FS-CLAIM-FIELD-CONFIG",
+          "statement": "The Firestore Admin field-configuration surface is served for time-to-live policies, including the ttlConfig.expirationOffset that decides a document's expiration time, and a document whose expiration time has passed is deleted by a sweep on the virtual clock after a configurable delay rather than staying readable forever. A sweep deletion is decided under the policy and the document version current in the section that commits it, so a document whose configuration or time-to-live field moved after the sweep chose it is kept.",
+          "capabilities": [
+            {
+              "id": "FS-FIELD-CONFIG-1",
+              "status": "implemented"
+            }
+          ],
+          "evidence": {
+            "tests": [],
+            "integration": [
+              "crates/fireemu-adapter-grpc/src/rest/admin_fields_tests.rs",
+              "crates/fireemu-adapter-grpc/tests/ttl.rs",
+              "crates/fireemu-core-firestore/src/ttl.rs",
+              "crates/fireemu/src/snapshots.rs"
+            ],
+            "conformance": []
+          },
+          "officialLimitations": [
+            "the official emulator serves no collectionGroups.fields surface and performs no expiry sweep, so a document whose time-to-live has elapsed stays readable there for the life of the run"
+          ],
+          "fireemuOnly": [
+            {
+              "behaviour": "The expiry sweep interval is configurable (firestore.ttlSweepIntervalSeconds, default 86400, maximum 259200) and a control route POST /v1/sessions/{session}/firestore/ttl:sweep runs one sweep at once, so a test observes the post-expiry state without advancing the virtual clock by a day.",
+              "reason": "Production's deletion delay is documented as typically 24 hours and at most 72 hours, which is not a boundary a deterministic local run can wait out; the configurable interval and the immediate sweep make both ends of that window reachable without inventing a deletion production would not perform."
+            },
+            {
+              "behaviour": "A fields.patch returns a long-running operation that is already done, and the readback reports ACTIVE at once; patching indexConfig is refused with UNIMPLEMENTED.",
+              "reason": "The local runtime applies a configuration change synchronously, so the intermediate CREATING state has no local duration to observe. Single-field exemptions come from the project's index configuration and have no runtime transition, so accepting the patch would report an exemption that never took effect."
+            },
+            {
+              "behaviour": "One sweep deletes at most 1024 documents and does not record itself as having run, so the next clock move continues from where it stopped. A sweep is scoped to the session that asked for it.",
+              "reason": "The sweep runs inside the control request that moved the virtual clock, so a clock advance observes its own deletions and a test needs no quiescence wait. An unbounded sweep would hold that response open for as long as the store is large, and an unscoped one would take another session's grace period between expiry and deletion away."
+            },
+            {
+              "behaviour": "The export sidecar that carries the time-to-live configuration declares version 2 when at least one policy carries an expirationOffset and version 1 otherwise, and a reader refuses a version-1 artifact that carries one.",
+              "reason": "The official export format has no field-configuration section at all, so the sidecar is a fireemu addition and its versioning is fireemu's own. An older reader that silently dropped an offset would sweep every document of that collection group up to one offset early, so the version is what turns that data loss into a refusal."
+            },
+            {
+              "behaviour": "Each automatic single-field index reported under indexConfig.indexes carries a name whose id is a digest over the project, database, collection group, field, query scope and mode.",
+              "reason": "Production assigns an opaque server-side id to every index and a local run has no index resource to draw one from, so the name is derived rather than observed. It is stable across restarts of the same configuration and distinct for distinct indexes, which is what a caller that stores or compares the name needs; whether production's own names may be depended on is an observation this lane has not made."
+            }
+          ],
+          "productionOnly": [
+            "the real deletion latency, its backfill cost and the billing of the deletes",
+            "the server-assigned ids of the automatic single-field indexes",
+            "the observed refusal statuses and messages for an out-of-range or sub-second ttlConfig.expirationOffset; the range and precision rule is taken from the Firestore v1 discovery document and has not been compared against a production project"
+          ],
+          "preview": []
+        },
+        {
+          "id": "FS-CLAIM-VECTOR",
+          "statement": "Firestore Standard/Native findNearest vector queries are implemented locally on both the v1 gRPC RunQuery and Firestore REST :runQuery surfaces. The local implementation supports Euclidean, cosine and dot-product distance measures, optional distance-result projection, finite distance thresholds, a result limit from 1 through 1000, ordinary query projection and filters (under the strict profile a query-level limit, offset or cursor is refused as production refuses it; the emulator profile applies them before the ranking), and the declared vector-index policy: strict production planning requires a dimensioned vector index matching the query vector and a matching composite vector index when prefilters are present, while the emulator profile assumes the vector index. Under the strict profile a cosine search that meets a zero vector is refused (the emulator profile leaves that vector out); ties are broken by document name, and count, sum and avg aggregate the nearest results. The REST and gRPC behavior is compared with production in the FS-QUERY-INDEX sandbox corpus (the vector programs of spec/compatibility/closure/FS-QUERY-INDEX.json); SDK execution is unobserved, and findNearest is refused for Listen/WebChannel targets.",
+          "capabilities": [
+            {
+              "id": "FS-QRY-1",
+              "status": "implemented"
+            },
+            {
+              "id": "FS-REST-1",
+              "status": "implemented"
+            }
+          ],
+          "evidence": {
+            "tests": [
+              "rest_run_query_supports_standard_find_nearest",
+              "grpc_run_query_supports_standard_find_nearest",
+              "grpc_find_nearest_refuses_query_limits_offsets_and_cursors",
+              "nearest_vector_query_orders_euclidean_cosine_and_dot_product",
+              "nearest_projection_controls_synthesized_distance_field",
+              "nearest_vector_query_limit_and_threshold_are_applied",
+              "vector_queries_require_a_dimensioned_vector_index_in_production",
+              "vector_query_prefilters_require_the_same_composite_vector_index",
+              "emulator_vector_queries_assume_a_vector_index_without_using_name_index"
+            ],
+            "integration": [
+              "crates/fireemu-adapter-grpc/tests/rest.rs",
+              "crates/fireemu-adapter-grpc/tests/local.rs",
+              "crates/fireemu-adapter-grpc/tests/webchannel.rs",
+              "crates/fireemu-core-firestore/tests/execute.rs",
+              "crates/fireemu-core-firestore/tests/index.rs"
+            ],
+            "conformance": []
+          },
+          "officialLimitations": [
+            "the pinned official Firestore emulator refuses findNearest on its REST surface; this contract records fireemu's REST implementation as a local capability rather than official-emulator parity"
+          ],
+          "fireemuOnly": [
+            {
+              "behaviour": "REST and gRPC findNearest execution with projection, Euclidean/cosine/dot-product distance, finite thresholds and a result limit; equal distances rank by document name and count, sum and avg aggregate the nearest results (production, recorded 2026-09-24); under the strict profile a query-level limit, offset or cursor is refused as production refuses it, while the emulator profile, which may add no rejection, applies those ordinary stages before the nearest ranking as fireemu did before; Listen and WebChannel reject findNearest targets explicitly",
+              "precision": "finite-local-read-subset"
+            },
+            {
+              "behaviour": "Under the emulator profile, non-document-name explicit ordering before the nearest ranking materializes at most offset + limit <= 1000 ordinary rows; unbounded offsets require document-name ordering or a top-level limit",
+              "precision": "resource-safety-divergence"
+            },
+            {
+              "behaviour": "A cosine search that meets a zero vector, the query's or a candidate's, is refused with FAILED_PRECONDITION under the strict profile as production refuses it; the emulator profile leaves such a candidate out as a distance that is not finite, as fireemu did before",
+              "precision": "exact-for-local-semantics"
+            }
+          ],
+          "productionOnly": [
+            "production vector-search execution, index-build/backfill behaviour, and production error or ranking parity"
+          ],
           "preview": []
         },
         {
@@ -662,6 +821,10 @@
             {
               "behaviour": "local memory-safety limits of 2 MiB per outbound array, 16 MiB of unacknowledged arrays per session, 4 MiB per framed backchannel batch, 4 MiB of concurrently owned replay copies per session, 64 MiB of unacknowledged arrays per Hub and 16 MiB of replay copies per Hub; overflow closes only the affected channel without weakening Security Rules",
               "precision": "resource-safety-divergence"
+            },
+            {
+              "behaviour": "a request naming an unknown WebChannel session answers HTTP 400 in both profiles; the strict profile sends production's HTML error page (its first 400 characters, owner decision D6), the emulator profile the plain text 'Error: Unknown SID', which the web SDK classifies as an unknown session and re-handshakes on. A terminate naming an unknown session is the exception: strict answers production's page (follow-up recording, 2026-09-27) and the emulator profile answers 200 as before. No official-emulator recording backs the emulator wording",
+              "precision": "documented-divergence"
             }
           ],
           "productionOnly": [],
@@ -715,17 +878,37 @@
             "tests": [],
             "integration": [
               "crates/fireemu-core-limits/tests/evaluate.rs",
-              "crates/fireemu-core-limits/tests/catalog.rs"
+              "crates/fireemu-core-limits/tests/catalog.rs",
+              "crates/fireemu-core-firestore/tests/enforced_limits.rs",
+              "crates/fireemu-core-firestore/tests/write_path_limits.rs",
+              "crates/fireemu-adapter-grpc/tests/write_path_limits.rs",
+              "crates/fireemu-adapter-grpc/tests/request_bytes.rs"
             ],
             "conformance": []
           },
           "officialLimitations": [
-            "the official emulator enforces a subset of the production limits (document bytes via the per-value cap, nesting depth, identifier lengths, IN values, array-contains count) and not the rest (transforms per document, composite indexes, transaction budgets are unmeasured); the emulator profile refuses exactly the measured subset and observes the production-only limits as warnings"
+            "the official emulator enforces a subset of the production limits (document bytes via the per-value cap, nesting depth, identifier lengths, IN values, array-contains count) and not the rest: measured on 2026-09-27 (firebase-tools 15.28.2, Firestore emulator v1.22.0), it accepted writes over the create transaction budget, over 40,000 index entries, with a single-field index entry over 5,530 bytes, and past the document-name guard; transforms per document and composite indexes are not enforced either. The emulator profile refuses exactly the measured subset and observes the production-only limits without refusing"
           ],
           "fireemuOnly": [
             {
               "behaviour": "boundary-exact limit catalogs with a per-limit disposition and warning thresholds",
               "precision": "exact-for-local-semantics"
+            },
+            {
+              "behaviour": "one strict-profile-only write-path refusal, published here as the contract requires: a field path over FS-LIMIT-FIELD-PATH-BYTES (1,500 bytes) implied through an array element; the equivalent path implied through nested maps was already refused under both profiles by automatic index accounting, which does not walk into arrays. Documented, production observation pending. A map or array value is not refused for its aggregate size in either profile: production accepted a map of 1,048,488 logical bytes, one over the FS-LIMIT-FIELD-VALUE-BYTES figure (FS-DATA-WRITE bracket recording, 2026-09-27), so only FS-LIMIT-DOCUMENT-BYTES bounds an aggregate value; a single string or bytes payload over 1,048,487 bytes is refused under both profiles",
+              "precision": "documented-not-observed"
+            },
+            {
+              "behaviour": "two further strict-profile-only write-path refusals, both production-recorded (FS-DATA-WRITE sandbox, 2026-09-24/25). First, a direct field key over 1,494 UTF-8 bytes in a map held by an array is refused with production's 'Property <path> contains an invalid nested entity.' (bracketed 1,494 accepted, 1,495 refused), even when the implied path is under the 1,500-byte FS-LIMIT-FIELD-PATH-BYTES limit. Second, deleting a stored document whose delete transaction is over its route's budget is refused with 'Transaction too big. Decrease transaction size.' (REST DELETE and BatchWrite from 12,113 array elements under a 1,000-byte name, Commit from 12,112; production's answer inside its band is nondeterministic and the fitted charge is an estimate for other name lengths, owner decisions A and D2). The emulator profile accepts both, as no official-emulator measurement shows either refusal",
+              "precision": "documented-divergence"
+            },
+            {
+              "behaviour": "FS-LIMIT-API-REQUEST-BYTES is enforced at 11,534,336 bytes (inclusive) on REST and on gRPC unary and streamed requests, in both profiles, with production's REST Commit refusal (HTTP 400 INVALID_ARGUMENT, gRPC code 3, 'Request payload size exceeds the limit: 11534336 bytes.'). Production recorded that bound on REST Commit, the non-commit REST routes and gRPC unary (FS-DATA-WRITE bracket recording, 2026-09-27), so the catalog's 10 MiB figure is not enforced; the gRPC stream's own bound is unobservable and uses the same value (owner decision). The pinned official emulator's own REST and gRPC request bound was not measured; the emulator profile applies production's bound by decision D (2026-09-27), which only removed its former, smaller 10 MiB refusal. WebChannel form bodies have their own bound: production accepted 12,582,912 bytes on a valid session and refused 16,777,216 with its HTML 400 page, after which the session was gone (follow-up recording, 2026-09-27), so strict accepts up to 16,777,215 and answers that page and ends the session above it; the pinned official emulator accepts 16,777,216 and answers an empty 413 above it, keeping the session, and the emulator profile does the same. Only REST :commit and WebChannel drain an over-bound body before answering; on the other REST routes a body far over the bound may reset the connection instead of delivering the 400",
+              "precision": "documented-divergence"
+            },
+            {
+              "behaviour": "FS-LIMIT-INDEX-ENTRY-BYTES: strict refuses a single-field (collection scope) index entry over 5,530 bytes under the documented entry formula (own name, parent name, field name, indexed value up to 1,500 bytes, plus 32) with production's 'Index entry is too large.'. Production accepted 5,529 and refused 5,531, and every recorded FS-DATA-WRITE write agrees (2026-09-23 to 2026-09-27), well below the published 7,680. Composite and collection-group entries are unobserved in production: no refusal is recorded for them and the published figure does not match production's single-field accounting, so neither profile refuses them for their size until production is observed. The emulator profile counts entries without refusing, as the pinned official emulator does. Strict also refuses a document whose name size is over 4,644 bytes, even when empty: production accepted empty-document-name/4627 (4,644) and refused /4628 (4,645) with the same message; the documented formulas do not explain this refusal, so the bound is fitted to that pair (owner decision, 2026-09-28)",
+              "precision": "documented-divergence"
             }
           ],
           "productionOnly": [
@@ -816,7 +999,7 @@
           },
           "officialLimitations": [
             "the official compiler's static type checker rejects three of the 680 recorded language claims while it compiles the file, where fireemu raises on them at evaluation; the request decision is the same in both and each row is pinned in conformance/rules-matrix.json",
-            "the official emulator answers a denial with a per-allow trace of its own evaluation; that text is a diagnostic rather than an API contract, so fireemu answers with its own message and publishes the same information through :ruleCoverage and the request-trace control route"
+            "the official emulator answers a denial with a per-allow trace of its own evaluation; that text is a diagnostic rather than an API contract, so fireemu answers with production's message and publishes the same information through :ruleCoverage and the request-trace control route"
           ],
           "fireemuOnly": [
             {
@@ -826,6 +1009,14 @@
             {
               "behaviour": "static rules linting beyond what the official compiler reports, and runtime expression budgets",
               "precision": "exact-for-local-semantics"
+            },
+            {
+              "behaviour": "both profiles answer every Security Rules denial with production's PERMISSION_DENIED text \"Missing or insufficient permissions.\" (observed on the FS-RULES sandbox, 2026-09-24) instead of the official emulator's per-allow trace; the reason stays in the request-trace control route",
+              "precision": "documented-divergence"
+            },
+            {
+              "behaviour": "three strict-profile-only refusals, as production refuses (FS-RULES sandbox, 2026-09-24): every client request while its database has no ruleset, an unusable credential in production's shapes (an expired token UNAUTHENTICATED, a bearer value that is not a JWT the front end's OAuth refusal, any other PERMISSION_DENIED), and an end user's read-write transaction (BeginTransaction or a read's newTransaction; read-only ones open); the emulator profile allows all three as the official emulator does",
+              "precision": "documented-divergence"
             }
           ],
           "productionOnly": [],
@@ -833,27 +1024,33 @@
         },
         {
           "id": "FS-CLAIM-PIPELINE",
-          "statement": "ExecutePipeline is decoded, identified and validated against the documented stage registry; a well-formed pipeline is answered UNIMPLEMENTED FS_PIPE_VALIDATION_ONLY rather than executed, and an unknown stage is refused rather than skipped.",
+          "statement": "ExecutePipeline validates the documented stage registry and executes a finite Enterprise local latest-read subset: collection, optional single where(equal(top-level field reference, scalar literal)), optional top-level field-reference select aliases, optional non-negative int32 offset and optional limit, in that order. Offset skips matching rows once before limit while reusing the existing paged stream. Unsupported execution stages, expressions and consistency selectors are refused rather than ignored; production execution, ordering and exact production error parity are unobserved.",
           "capabilities": [
             {
               "id": "FS-PIPE-RPC-1",
-              "status": "implemented"
+              "status": "partial"
             }
           ],
           "evidence": {
             "tests": [
-              "pipelines_are_identified_and_misplaced_or_unknown_stages_refused"
+              "pipelines_are_identified_and_misplaced_or_unknown_stages_refused",
+              "execute_pipeline_reads_collection_projects_field_aliases_and_applies_limit",
+              "execute_pipeline_where_equal_executes_scalar_matrix_and_rejects_missing_fields",
+              "execute_pipeline_where_equal_pushes_filter_before_limit",
+              "execute_pipeline_where_equal_refusals_preserve_status_context_and_documents",
+              "execute_pipeline_offset_skips_filtered_rows_once_across_pages_and_preserves_state"
             ],
             "integration": [
-              "crates/fireemu-core-firestore/tests/validation_only.rs"
+              "crates/fireemu-core-firestore/tests/validation_only.rs",
+              "crates/fireemu-adapter-grpc/tests/local.rs"
             ],
             "conformance": []
           },
           "officialLimitations": [],
           "fireemuOnly": [
             {
-              "behaviour": "strict decode-and-validate with a canonical form in the refusal",
-              "precision": "strict-validation-only"
+              "behaviour": "finite latest-read collection / optional single where(equal(top-level field, scalar literal)) / optional top-level field-reference select / optional non-negative int32 offset / optional limit execution with explicit unsupported-operation refusal",
+              "precision": "finite-local-read-subset"
             }
           ],
           "productionOnly": [],
@@ -959,10 +1156,14 @@
       "claims": [
         {
           "id": "AUTH-CLAIM-IDENTITY-TOOLKIT",
-          "statement": "The Identity Toolkit REST subset the Auth emulator serves is reproduced with the official error envelopes, including the Admin account routes real projects use (create, lookup, update, batchGet, batchCreate, batchDelete, query, session cookies, link generators), the client account routes (sign-up, sign-in, update, delete) and the emulator-only routes that read out-of-band codes and verification codes and read or change the project configuration. An unpinned daemon advances Auth request time monotonically, so a self-service credential change in a later second invalidates an earlier session cookie through validSince just as the Admin SDK observes on the official emulator.",
+          "statement": "The Identity Toolkit REST subset the Auth emulator serves is reproduced with the official error envelopes, including the Admin account routes real projects use (create, lookup, update, batchGet, batchCreate, batchDelete, query, session cookies, link generators), the client account routes (sign-up, sign-in, update, delete) and the emulator-only routes that read out-of-band codes and verification codes and read or change the project configuration. The local implementation validates new password policy before mutation on sign-up, client and Admin update, password reset, and batch import, with a six-character minimum, a 4096 UTF-16-unit maximum and control-character rejection; trusted artifact restoration preserves recorded credentials without applying new-password policy. Saved production evidence for these rules is limited to the approved end-user client accounts:update corpus, including finite 4095/4096/4097 UTF-16-unit maximum cases and six/five-character ASCII controls. Other routes and local malformed/control/minimum cases remain production-unobserved, so this claim does not transfer client-update evidence across routes. An unpinned daemon advances Auth request time monotonically, so a self-service credential change in a later second invalidates an earlier session cookie through validSince just as the Admin SDK observes on the official emulator.",
           "capabilities": [
             {
               "id": "AUTH-CORE-1",
+              "status": "implemented"
+            },
+            {
+              "id": "AUTH-ACCOUNT-LIFECYCLE-1",
               "status": "implemented"
             },
             {
@@ -994,11 +1195,11 @@
           ],
           "fireemuOnly": [
             {
-              "behaviour": "codes are deterministic from the session seed rather than random",
+              "behaviour": "normal daemon starts re-key generated credential handles from a CSPRNG lifecycle incarnation so restart or namespace recreation cannot replay them; tests may inject a fixed incarnation for reproducibility",
               "precision": "exact-for-local-semantics"
             },
             {
-              "behaviour": "transient credentials are bounded: email action codes expire after an hour and phone codes after ten minutes of virtual time, pending second-factor sign-ins after an hour, and each kind refuses with QUOTA_EXCEEDED past 1000 outstanding codes per project or 32 pending sessions per user; the official emulator keeps every code until it is consumed and its pending credential is stateless (firebase-tools/lib/emulator/auth/state.js)",
+              "behaviour": "transient credentials are bounded: email action codes expire after an hour and phone codes after ten minutes of virtual time, pending second-factor sign-ins after an hour, and each kind refuses with QUOTA_EXCEEDED past 1000 outstanding codes per project or 32 pending sessions per user; the official emulator keeps every code until it is consumed and its pending credential is stateless (firebase-tools/lib/emulator/auth/state.js). The strict profile follows production where it was measured and bounds the rest itself: a phone enrollment session does not expire (production accepted every age it was shown, up to about 1803 seconds); an account holds at most 32 of them, and at that number or at the code cap its own oldest one older than that makes room, never another account's; a TOTP sign-in whose pending credential is 302 seconds old or older is TOTP_CHALLENGE_TIMEOUT (production accepted 293 and refused 303 seconds, so the boundary inside that bracket is fireemu's choice); a TOTP enrollment start needs a sign-in younger than 333 seconds (production accepted 244 and refused 333); the SMS step of a pending credential starts only before 602 seconds (production accepted about 453 and refused about 603, so the boundary inside that bracket is fireemu's choice); and at the per-user budget the finished flows production keeps (a pending credential that succeeded, an expired or completed enrollment session) make room first, answering as unknown afterwards",
               "precision": "exact-for-local-semantics"
             },
             {
@@ -1008,10 +1209,123 @@
             {
               "behaviour": "the console lines for issued email action links and SMS codes carry the official wording but a two-space `auth:` prefix instead of the CLI's `i  auth:` bullet, are printed once per issued code after the issuing request, and can be silenced with auth.logActionCodes = false (the official emulator has no such switch); a RECOVER_EMAIL line is not produced because the recover-email action is not served",
               "precision": "exact-for-local-semantics"
+            },
+            {
+              "behaviour": "Identity Toolkit honours an ID token and a custom token for five minutes past exp and then refuses them with INVALID_ID_TOKEN or INVALID_CUSTOM_TOKEN rather than TOKEN_EXPIRED, in both profiles, as production does (AUTH-CREDENTIAL sandbox recording 2026-09-24); the official emulator never reads an ID token's exp and ignores a fake custom token's exp, which the emulator profile keeps for custom tokens",
+              "precision": "documented-divergence"
+            },
+            {
+              "behaviour": "session cookies carry a header of alg and kid with no typ in both profiles, as production's do; the official emulator's carry typ JWT, which the Admin SDK's verifySessionCookie does not read",
+              "precision": "documented-divergence"
+            },
+            {
+              "behaviour": "an administrator's validSince is stored as given and may move back, and sessions are judged against it when they are used, in both profiles as in production; a client update's validSince is ignored as production ignores it; the official emulator sets validSince to the current time for any value, from either caller, and re-issues the client's tokens",
+              "precision": "documented-divergence"
+            },
+            {
+              "behaviour": "createSessionCookie decodes validDuration as an int64 in the strict profile (TYPE_INT64 refusal for a fraction or text, INVALID_DURATION for zero) as production does; the emulator profile keeps the official emulator's Number(validDuration) || two weeks",
+              "precision": "documented-divergence"
+            },
+            {
+              "behaviour": "createSessionCookie called with an API key and no credential answers production's 401 UNAUTHENTICATED CREDENTIALS_MISSING, and with a deleted account's ID token USER_NOT_FOUND, in both profiles",
+              "precision": "documented-divergence"
+            },
+            {
+              "behaviour": "an API key outside auth.apiKeys, or outside the keys a session registered, is refused with production's 400 API_KEY_INVALID envelope; the official emulator validates no key",
+              "precision": "documented-divergence"
+            },
+            {
+              "behaviour": "a custom-token sign-in marks the account customAuth and the account then reports validSince, in both profiles as production does; the official emulator reports customAuth without validSince",
+              "precision": "documented-divergence"
+            },
+            {
+              "behaviour": "the strict profile accepts only signed custom tokens verified against auth.customTokenSigners, answers password and custom-token sign-in without returnSecureToken with production's legacy Identity Toolkit token (honoured where production was observed to honour it: account lookup, update and delete, a verification mail and an email change, phone linking, email-link linking, a sign-up upgrade and MFA enrollment; refused by identity-provider linking and session-cookie creation), answers MFA enrollment with production's v2 error shape and TOTP-disabled refusal, and applies production's custom-token claim rules; the emulator profile keeps the official emulator's unsigned and JSON fake tokens and secure tokens",
+              "precision": "documented-divergence"
+            },
+            {
+              "behaviour": "the Admin project config carries authorizedDomains (localhost and the project's Hosting domains by default) in both profiles, and the strict profile refuses an action-code continueUrl outside them with UNAUTHORIZED_DOMAIN as production does (AUTH-ACTION sandbox recording 2026-09-24); the official emulator's config has no authorizedDomains and checks no domain",
+              "precision": "documented-divergence"
+            },
+            {
+              "behaviour": "an account an email link created reports validSince, and an Admin-created account with only a phone number is a phone account whose sessions carry no anonymous provider_id, in both profiles as production does (AUTH-ACTION sandbox recording 2026-09-24)",
+              "precision": "documented-divergence"
+            },
+            {
+              "behaviour": "the strict profile applies production's action-code rules (AUTH-ACTION sandbox recording 2026-09-24): a newer reset, change or sign-in code retires the older one, a deleted account's codes are void, a reset or verification finds its account by the code's address, a disabled account refuses a code (a refused reset spends it), an applied change voids the replaced address's verification codes and records it as initialEmail, an update with an ID token ignores oobCode, a reset code expires after an hour as EXPIRED_OOB_CODE while the other kinds outlive it, and production's refusal codes; the emulator profile keeps the official emulator's codes and answers and its one-hour local code lifetime",
+              "precision": "documented-divergence"
+            },
+            {
+              "behaviour": "a tenant created with a display name of the documented form (4-20 letters, digits and hyphens, beginning with a letter) is named after it as production names it, the display name, a hyphen and five characters of [a-z0-9] drawn reproducibly from the creation sequence, in both profiles; the official emulator draws a random 28-character ID, and a tenant without such a display name keeps fireemu's generated name",
+              "precision": "documented-divergence"
+            },
+            {
+              "behaviour": "the Admin project config answers per profile (AUTH-CONFIG-SDK sandbox recording 2026-09-25): the strict profile answers production's document for a project initialized with Identity Platform (initial templates, hashConfig, mobile links, SMS regions, written strength options and quota as production normalizes them), the emulator profile the official emulator's members plus the members written; in both profiles the email and SMS templates and action links follow notification.defaultLocale (English and Japanese), a written SMS region policy replaces the other member of its oneof, and the reCAPTCHA member reads back as production stores it; the PATCH body is read as production's proto3 JSON with production's refusal wording, unknown, read-only and repeated mask paths are ignored, a masked parent (signIn, emailPrivacyConfig, client.permissions) the body leaves out goes back to its default where the official emulator keeps the old value, and a test number's code is any text; GET v2/recaptchaConfig answers the configured states (the official emulator answers 501) and v2/passwordPolicy refuses an unknown tenant with 400 INVALID_TENANT_ID",
+              "precision": "documented-divergence"
+            },
+            {
+              "behaviour": "an Admin account update may set a password below six characters and a password sign-in of an address several imported accounts share reaches the earliest account holding a password, in both profiles as production does; the official emulator refuses the short password with WEAK_PASSWORD",
+              "precision": "documented-divergence"
+            },
+            {
+              "behaviour": "the strict profile adds production's configuration-dependent refusals the official emulator does not model (AUTH-CONFIG-SDK sandbox recording 2026-09-25): codes for new accounts while client sign-up is off, a written SMS region policy, mobile link settings (link domains, an app link without a continue URL, the Dynamic Links domain) and createAuthUri for a provider that is not configured, and the config values production refuses (a password policy without one version, non-CLDR region codes, template updates, off-step reCAPTCHA scores and actionless rules, misaligned SMS switches, reCAPTCHA keys, malformed authorized domains); it also wraps app links in /__/auth/links as production does",
+              "precision": "documented-divergence"
             }
           ],
           "productionOnly": [
             "real identity provider round trips and provider-side account state"
+          ],
+          "preview": []
+        },
+        {
+          "id": "AUTH-CLAIM-PROVIDER-CONFIG",
+          "statement": "Project and tenant OAuth IdP and inbound SAML provider configuration resources implement create, get, list, update and delete under the public v2 Identity Platform paths, with owner-only access, namespace and provider-kind isolation, creation-order pagination, validation before mutation and secret-safe snapshots. This is a local implementation contract; production response parity and external identity-provider exchanges are not attested.",
+          "capabilities": [
+            {
+              "id": "AUTH-PROVIDER-CONFIG-1",
+              "status": "implemented"
+            }
+          ],
+          "evidence": {
+            "tests": [],
+            "integration": [
+              "crates/fireemu-adapter-http/tests/identity_toolkit.rs"
+            ],
+            "conformance": []
+          },
+          "officialLimitations": [
+            "the pinned official Auth emulator does not serve project or tenant OAuth IdP and inbound SAML configuration resources"
+          ],
+          "fireemuOnly": [],
+          "productionOnly": [
+            "live provider discovery, redirects, assertion exchange and production configuration parity"
+          ],
+          "preview": []
+        },
+        {
+          "id": "AUTH-CLAIM-FEDERATION-ASSERTION-LOCAL",
+          "statement": "An opt-in local adapter path verifies one caller-pinned RS256 OIDC key and binds issuer, subject, audience, authorized party, tenant, provider, expiry, issued-at, not-before and nonce before account mutation. Mixed bearer access or refresh credentials are refused before mutation. This is finite local trust-boundary evidence and does not attest production federation parity, provider discovery, hosted redirects, authorization-code exchange, SAML or external identity-provider behavior.",
+          "capabilities": [
+            {
+              "id": "AUTH-FEDERATION-ASSERTION-LOCAL",
+              "status": "partial"
+            }
+          ],
+          "evidence": {
+            "tests": [],
+            "integration": [
+              "crates/fireemu-adapter-http/tests/auth_oidc_assertions.rs"
+            ],
+            "conformance": []
+          },
+          "officialLimitations": [],
+          "fireemuOnly": [
+            {
+              "behaviour": "the opt-in test boundary accepts one explicitly pinned local RS256 JWK and performs no discovery or external identity-provider traffic",
+              "precision": "exact-for-local-semantics"
+            }
+          ],
+          "productionOnly": [
+            "production provider configuration and discovery, hosted redirects, authorization-code exchange, SAML, key rotation and external identity-provider behavior"
           ],
           "preview": []
         },
@@ -1102,11 +1416,15 @@
           ],
           "fireemuOnly": [
             {
-              "behaviour": "declaring auth.totp enables local TOTP enrollment and sign-in; its acceptance window and enrolment session TTL are policies driven by the virtual clock, while an absent auth.totp preserves the official emulator's INVALID_ARGUMENT refusal",
+              "behaviour": "declaring auth.totp enables local TOTP enrollment and sign-in in the emulator profile; its acceptance window and enrolment session TTL are policies driven by the virtual clock, while an absent auth.totp preserves the official emulator's INVALID_ARGUMENT refusal. In the strict profile only the project mfa config enables TOTP, as in production, and an account with a TOTP factor is asked for it even while that config is off (fail closed; production was seen to skip only a phone factor then)",
               "precision": "boundary-conformance"
             },
             {
-              "behaviour": "TOTP enrollment does not require a verified email: the official emulator has no TOTP route to measure it against and production behaviour is not inferred from the SMS result",
+              "behaviour": "the Admin config API holds the project's mfa member (state, enabledProviders, providerConfigs) and reads it back in production's shape; a value whose TOTP provider is enabled also enables TOTP enrollment and sign-in without auth.totp, with its adjacentIntervals as the acceptance window. The official emulator has no project mfa config; without one the emulator profile keeps its answers",
+              "precision": "boundary-conformance"
+            },
+            {
+              "behaviour": "TOTP enrollment requires a verified email, as phone enrollment does: mfaEnrollment:start and mfaEnrollment:finalize both refuse an unverified email with UNVERIFIED_EMAIL. Production refuses the start the same way (sandbox recording 2026-09-24, auth-mfa/interactions#unverified-totp-start); the official emulator has no TOTP route, so in the emulator profile this is fireemu's own rule",
               "precision": "boundary-conformance"
             },
             {
@@ -1268,7 +1586,7 @@
       "claims": [
         {
           "id": "FN-CLAIM-HTTP",
-          "statement": "onRequest, onCall (v2) and v1 HTTPS functions run in the bundled Node runner behind /{project}/{region}/{function} and reproduce the official callable envelope, the two 404s of an unknown route, the timeout answer and the CORS a loopback origin gets. A v2 callable stream forwards sendChunk and onCallGenkit values progressively, keeps its final result pending until completion, and propagates a client disconnect to the runner while retaining admission for the stream lifetime.",
+          "statement": "onRequest, onCall (v2) and v1 HTTPS functions run in the bundled Node runner behind /{project}/{region}/{function}. The emulator profile reproduces the official callable envelope, route misses and timeout answer; the strict profile reproduces the recorded production timeout, malformed JSON and invalid Bearer responses, forwarded headers, and response content types. Both profiles admit callable and onRequest requests from non-loopback origins and pass the Origin to the handler or SDK wrapper. Callable preflights from every Origin reach the SDK CORS wrapper without Auth or App Check admission; the wrapper respects explicit cors:false and the selected profile's Origin-list behavior. A v2 callable stream forwards sendChunk and onCallGenkit values progressively, keeps its final result pending until completion, and propagates a client disconnect to the runner while retaining admission for the stream lifetime.",
           "capabilities": [
             {
               "id": "FN-HTTP-1",
@@ -1290,15 +1608,11 @@
           },
           "officialLimitations": [
             "the official Functions emulator runs the runtime with token verification skipped, so any App Check field becomes an app with a null id and Bearer owner becomes an authenticated context with a null uid",
-            "the official emulator kills the runtime process of a function that overruns its timeout; it runs one process per trigger, and one fireemu runner serves a whole codebase, so fireemu answers the same 500 without taking the codebase down"
+            "the official emulator kills the runtime process of a function that overruns its timeout; it runs one process per trigger, and one fireemu runner serves a whole codebase, so fireemu's emulator profile answers the same 500 without taking the codebase down"
           ],
           "fireemuOnly": [
             {
-              "behaviour": "the daemon proxy refuses Bearer owner, forged bearer values and duplicate or folded auth fields as callable user identities instead of admitting them",
-              "precision": "conservative"
-            },
-            {
-              "behaviour": "a non-loopback Origin is refused with 403 instead of reflected; the official emulator runs its runtime with enableCors, so any page on the internet can drive a developer's local callable and read the result",
+              "behaviour": "the emulator profile retains its pre-existing 401 JSON refusal for malformed Bearer, invalid-signature and expired ID tokens on a callable: production also refuses these with 401 but uses HTML, while the official Functions emulator returns 200. The owner approved retaining this production-first exception on 2026-09-28 (FUNCTIONS-HTTP decision B7). Bearer owner and duplicate or folded auth fields are also refused as callable user identities under the configured trust boundary",
               "precision": "conservative"
             }
           ],
@@ -1842,7 +2156,7 @@
         },
         {
           "id": "CLI-CLAIM-IMPORT-EXPORT",
-          "statement": "An export directory firebase emulators:export wrote with firebase-tools 15.28.2 imports into fireemu with its Firestore documents, Auth accounts and Storage objects intact, and an export fireemu writes imports back into the official suite the same way: the firebase-export-metadata.json manifest, the Firestore managed export, the Identity Toolkit accounts and config documents and the Storage bucket, blob and metadata files are the pinned formats. --import, --export-on-exit and emulators:export behave as the official commands do, an import across products is all or nothing, and a section of a deferred product is refused rather than silently dropped.",
+          "statement": "An export directory firebase emulators:export wrote with firebase-tools 15.28.2 imports into fireemu with its Firestore documents, Auth accounts and Storage objects intact, and an export fireemu writes imports back into the official suite the same way: the firebase-export-metadata.json manifest, every Firestore managed-export output partition referenced by overall_export_metadata, the Identity Toolkit accounts and config documents and the Storage bucket, blob and metadata files are the pinned formats. --import, --export-on-exit and emulators:export behave as the official commands do, an import across products is all or nothing, and corrupt metadata, duplicate or aliased partition outputs, a partition-count overflow, and a section of a deferred product are refused before any imported state is published rather than silently dropped.",
           "capabilities": [
             {
               "id": "DATA-1",
@@ -1982,7 +2296,7 @@
       "officialDefaultPort": 4500,
       "officialTraits": [],
       "state": "claimed",
-      "decision": "Active supported surface: an RFC 6455 WebSocket on the logging port serves the EmulatorLog wire format the official UI's Logs page reads, fed by the functions runner's output and the emulators' lifecycle lines; loopback-only and with a bounded history, both documented divergences.",
+      "decision": "Active supported surface: an RFC 6455 WebSocket on the logging port serves the EmulatorLog wire format the official UI's Logs page reads, fed by the functions runner's output and the emulators' lifecycle lines; loopback-only for both the Host header and any browser Origin, with a bounded history, and with a handshake bounded in time and size, all documented divergences.",
       "docs": [
         "https://firebase.google.com/docs/emulator-suite/install_and_configure",
         "https://firebase.google.com/docs/functions/writing-and-viewing-logs",
@@ -2025,6 +2339,14 @@
             {
               "behaviour": "the WebSocket handshake is refused unless the Host header names loopback (the same DNS-rebinding guard the other fireemu listeners apply); the official server has none",
               "precision": "exact-for-local-semantics"
+            },
+            {
+              "behaviour": "a WebSocket handshake carrying a browser Origin header that is not an HTTP(S) loopback origin is refused with 403 before any frame is written, the same browser-origin policy the Auth/control listener and the Hub apply; a handshake with no Origin (a non-browser client such as firebase-tools) still connects. A repeated Host or Origin header is refused rather than resolved to one of its values, as RFC 7230 requires, and a header name that is not an RFC 7230 token is refused instead of skipped. WebSocket handshakes are exempt from the same-origin policy, so without this guard any web page could read the stream, which carries the Auth out-of-band links and SMS codes the official emulator also streams. The official UI Logs page connects from a loopback origin, and the streamed content itself stays at parity",
+              "precision": "exact-for-local-semantics"
+            },
+            {
+              "behaviour": "the handshake request head must arrive whole inside a ten-second deadline and within 8 KiB, otherwise the connection is answered 408 or 431 and closed before any frame is written; the official server bounds the handshake in neither time nor size, so one stalled peer holds a connection open indefinitely. A well-formed handshake is a few hundred bytes sent in one write, so no real client approaches either bound",
+              "precision": "conservative"
             },
             {
               "behaviour": "the retained history is bounded to the most recent 1000 frames rather than unbounded, so an unbounded producer cannot exhaust memory",
@@ -2096,6 +2418,7 @@
             "tests": [
               "publish_pull_ack_round_trip",
               "redelivery_after_ack_deadline_on_virtual_clock",
+              "push_without_a_retry_policy_waits_exactly_the_minimum_redelivery_interval",
               "streaming_pull_delivers_and_acks",
               "rest_put_routes_preserve_every_supported_subscription_field",
               "rest_update_mask_is_atomic_scoped_and_rejects_unsupported_fields",

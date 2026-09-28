@@ -1,0 +1,225 @@
+{
+  "acceptance": "candidate",
+  "corpus": {
+    "cases": [
+      "baseline-a-signin",
+      "baseline-b-signin",
+      "disabled-a-password-update",
+      "disabled-a-update-token-lookup",
+      "disabled-a-update-token-refresh",
+      "disabled-a-photo-update",
+      "disabled-a-signin",
+      "disabled-b-signin",
+      "reenabled-a-signin",
+      "reenabled-b-signin"
+    ],
+    "revision": 1,
+    "slice": "auth-disabled-admin-update"
+  },
+  "production": {
+    "cases": [
+      {
+        "checks": {
+          "derivedLookup": true,
+          "emailMatches": true,
+          "expiryIsPositiveInteger": true,
+          "expiryMatchesOneHour": true,
+          "idTokenPresent": true,
+          "noError": true,
+          "refreshTokenPresent": true,
+          "uidMatches": true
+        },
+        "elapsedMs": 3979,
+        "httpStatus": 200,
+        "id": "baseline-a-signin",
+        "observedError": null,
+        "outcome": "accepted",
+        "skipped": false
+      },
+      {
+        "checks": {
+          "derivedLookup": true,
+          "emailMatches": true,
+          "expiryIsPositiveInteger": true,
+          "expiryMatchesOneHour": true,
+          "idTokenPresent": true,
+          "noError": true,
+          "refreshTokenPresent": true,
+          "uidMatches": true
+        },
+        "elapsedMs": 4583,
+        "httpStatus": 200,
+        "id": "baseline-b-signin",
+        "observedError": null,
+        "outcome": "accepted",
+        "skipped": false
+      },
+      {
+        "checks": {
+          "localIdMatches": true,
+          "noError": true,
+          "readbackApplied": true,
+          "tokensReturned": false
+        },
+        "elapsedMs": 6720,
+        "httpStatus": 200,
+        "id": "disabled-a-password-update",
+        "observedError": null,
+        "outcome": "accepted",
+        "skipped": false
+      },
+      {
+        "checks": {},
+        "elapsedMs": 6720,
+        "httpStatus": null,
+        "id": "disabled-a-update-token-lookup",
+        "observedError": null,
+        "outcome": "skipped",
+        "skipped": true
+      },
+      {
+        "checks": {},
+        "elapsedMs": 6720,
+        "httpStatus": null,
+        "id": "disabled-a-update-token-refresh",
+        "observedError": null,
+        "outcome": "skipped",
+        "skipped": true
+      },
+      {
+        "checks": {
+          "localIdMatches": true,
+          "noError": true,
+          "readbackApplied": true,
+          "tokensReturned": false
+        },
+        "elapsedMs": 7459,
+        "httpStatus": 200,
+        "id": "disabled-a-photo-update",
+        "observedError": null,
+        "outcome": "accepted",
+        "skipped": false
+      },
+      {
+        "checks": {},
+        "elapsedMs": 7756,
+        "httpStatus": 400,
+        "id": "disabled-a-signin",
+        "observedError": "USER_DISABLED",
+        "outcome": "refused",
+        "skipped": false
+      },
+      {
+        "checks": {
+          "derivedLookup": true,
+          "emailMatches": true,
+          "expiryIsPositiveInteger": true,
+          "expiryMatchesOneHour": true,
+          "idTokenPresent": true,
+          "noError": true,
+          "refreshTokenPresent": true,
+          "uidMatches": true
+        },
+        "elapsedMs": 8388,
+        "httpStatus": 200,
+        "id": "disabled-b-signin",
+        "observedError": null,
+        "outcome": "accepted",
+        "skipped": false
+      },
+      {
+        "checks": {
+          "derivedLookup": true,
+          "emailMatches": true,
+          "expiryIsPositiveInteger": true,
+          "expiryMatchesOneHour": true,
+          "idTokenPresent": true,
+          "noError": true,
+          "refreshTokenPresent": true,
+          "uidMatches": true
+        },
+        "elapsedMs": 10409,
+        "httpStatus": 200,
+        "id": "reenabled-a-signin",
+        "observedError": null,
+        "outcome": "accepted",
+        "skipped": false
+      },
+      {
+        "checks": {
+          "derivedLookup": true,
+          "emailMatches": true,
+          "expiryIsPositiveInteger": true,
+          "expiryMatchesOneHour": true,
+          "idTokenPresent": true,
+          "noError": true,
+          "refreshTokenPresent": true,
+          "uidMatches": true
+        },
+        "elapsedMs": 11006,
+        "httpStatus": 200,
+        "id": "reenabled-b-signin",
+        "observedError": null,
+        "outcome": "accepted",
+        "skipped": false
+      }
+    ],
+    "cleanup": {
+      "emailAbsent": true,
+      "uidAbsent": true
+    },
+    "configuration": {
+      "adminPasswordPolicyAbsent": true,
+      "blockingTriggersAbsent": true,
+      "emailEnabled": true,
+      "improvedEmailPrivacy": true,
+      "passwordPolicy": {
+        "customStrengthOptions": {
+          "maxPasswordLength": 4096,
+          "minPasswordLength": 6
+        },
+        "enforcementState": "ENFORCE",
+        "schemaVersion": 1
+      },
+      "passwordRequired": true,
+      "sha256": "7878eb2600c66f48c82ef55fb8c2443ab15689ea7542a77fbda206da06f817c2"
+    },
+    "configurationUnchanged": true,
+    "privateReceiptSha256": "6ed23dfb4e40b28a5f62f9b282f82eef4a14d6ecd3c648edd3a76f00cf4cdf5d",
+    "probeSourceCommit": "8dddb9736d64e9acc68fc2e73f2483ef98be43ec",
+    "recordedAt": "2026-09-11T15:11:55.221048+00:00",
+    "recordedWith": {
+      "probeSourceCommit": "8dddb9736d64e9acc68fc2e73f2483ef98be43ec",
+      "recorderCommit": "8dddb9736d64e9acc68fc2e73f2483ef98be43ec",
+      "recorderInputs": {
+        "tools/auth-disabled-admin-update/admin_update_contract.py": "b98e1dfcc797d5f1a88b895ffa6463da5762b6d57c5560855e98696f9caa9ae8",
+        "tools/auth-disabled-admin-update/admin_update_recorder.py": "850d854da1092dd403ee77713165fcea65f42805f343d59883df9f6b11cc97b2"
+      }
+    },
+    "reevaluatedWith": {
+      "commit": "0635fa18bcef41fcc687503fc40fbb19e8d61f81",
+      "contractSha256": "b98e1dfcc797d5f1a88b895ffa6463da5762b6d57c5560855e98696f9caa9ae8"
+    },
+    "setup": {
+      "a": true,
+      "b": true
+    },
+    "target": "production",
+    "transitions": [
+      {
+        "controlUnchanged": true,
+        "disabled": true,
+        "targetReadback": true
+      },
+      {
+        "controlUnchanged": true,
+        "disabled": false,
+        "targetReadback": true
+      }
+    ]
+  },
+  "publicationContractSha256": "fa25d9ad0f68d362cbed9c99466b0a7c9fdb26c6a5171a51abc67ccd97c3cc50",
+  "schemaVersion": 1,
+  "scope": "Ten sequential REST observations in production only: password sign-ins of target A and control B, then A is disabled through privileged accounts:update and read back; while disabled, an administrative password replacement and an administrative photo update are attempted on A (whether tokens are returned is the observation; any returned tokens are tried for lookup and refresh), A signs in with the new password, B signs in; A is re-enabled and read back, and both sign in again. No tenant, no configuration change (the configuration and the recorded password policy are read before and after and must be unchanged), a single run. Admin is used for owned account setup, the disable and re-enable transitions, the two updates, readback and cleanup. No human approval, no local artifact comparison, and no claim about other update fields, tenants, SDK or Rules.",
+  "sourceReviewSha256": "568509fd02a002cc6ee85e15d68c192b70e2443daeee5e88a5f21254e7a95f70"
+}

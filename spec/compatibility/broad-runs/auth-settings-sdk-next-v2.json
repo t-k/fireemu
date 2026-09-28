@@ -1,0 +1,374 @@
+{
+  "campaignEnvelope": {
+    "allowedProductionObservationsPerCase": 1,
+    "artifactDigest": null,
+    "collectorCommit": "ca9894d0275c33f478b999aeb2c4d1ea32c5d9b5",
+    "comparatorDigest": null,
+    "concurrency": 1,
+    "configurationChanges": "none in the local shadow; production privacy/blocking/quota changes require exclusive CONFIG_MUTATING or SHARED_SETTING approval",
+    "configurationDigest": null,
+    "database": null,
+    "executionWindow": null,
+    "freshNonce": null,
+    "freshNoncePolicy": "required; never reuse a historical nonce",
+    "manifestDigest": null,
+    "manifestDigestPolicy": "bind externally after owner inputs, collector and artifact are frozen; do not self-reference",
+    "maxAccounts": 8,
+    "maxDocuments": 0,
+    "maxElapsedSeconds": 180,
+    "maxEstimatedCostUsd": 10,
+    "maxHttpCredentialOperations": 40,
+    "maxResources": 8,
+    "owner": null,
+    "permissionReference": null,
+    "postFixConfirmation": "at most one per approved case; saved reference preferred",
+    "project": null,
+    "recoveryOwner": null,
+    "recoveryReservation": null,
+    "requestRate": 1,
+    "sdkVersion": "firebase 12.18.0; firebase-admin 14.3.0; node >=20",
+    "stopConditions": [
+      "missing owner/project/tenant or permission reference",
+      "configuration or artifact drift",
+      "credential ambiguity",
+      "unexpected permission expansion",
+      "external Function URI or delivery destination",
+      "cleanup uncertainty",
+      "budget overrun",
+      "transport or receipt incompleteness"
+    ],
+    "tenant": null
+  },
+  "cases": [
+    {
+      "budget": {
+        "concurrencyMax": 1,
+        "elapsedSecondsMax": 90,
+        "estimatedCostUsdMax": 0,
+        "httpRequestsMax": 12,
+        "resourceCountMax": 2
+      },
+      "cleanup": "Delete every owned UID through the authorized owner path and verify UID/email absence; preserve uncertain resources in the journal.",
+      "comparator": "auth-settings-v1 with operation, namespace, response shape, UID/provider state and cleanup binding.",
+      "configurationRestorationRule": "Save configuration before any mode change; restore the exact projection and verify it before releasing the exclusive lease.",
+      "id": "account-linking-duplicate-email",
+      "localPreRunControl": "Reject fixture transport, caller-supplied localId selection, missing artifact digest and unbound project/tenant.",
+      "meaning": "Same-provider reauthentication preserves one UID, cross-provider collisions follow documented linking rules, and duplicate-account mode does not merge or delete pre-existing accounts.",
+      "observation": "Run same-provider, cross-provider, duplicate-mode and explicit link/unlink controls; record status, UID and provider projection.",
+      "ownedResources": "At most two generated Auth accounts per namespace; no production pre-existing account may be used",
+      "parentFeatureGroups": [
+        "AUTH-ACCOUNT",
+        "AUTH-CREDENTIAL",
+        "AUTH-CONFIG-SDK"
+      ],
+      "postStateReadback": "Lookup every involved UID and email index; verify no implicit merge, deletion, UID change or token revocation outside the observed operation.",
+      "preflight": [
+        "project/tenant ownership and config digest",
+        "fresh generated email/provider identifiers",
+        "client/Admin SDK versions",
+        "mode and expected linking controls frozen",
+        "cleanup authority for both UIDs"
+      ],
+      "principalTenantDatabase": "End-user client credentials plus privileged owner/Admin readback; explicit project and optional tenant",
+      "productionOnlyReason": "Email ownership, cross-provider collision and mode-transition semantics require backend observation; local linking tests do not establish production parity.",
+      "productionOperationSequence": [
+        "Create two owned accounts with generated identities",
+        "Exercise same-provider sign-in and a cross-provider same-email collision control",
+        "Exercise explicit duplicate-email mode only if included in the frozen configuration",
+        "Read back UID, provider links and email ownership after each outcome"
+      ],
+      "requiredConfiguration": "One explicit project/tenant duplicate-email setting; no implicit mode transition during the case",
+      "requirementSurface": "allowDuplicateEmails and provider/email ownership transitions",
+      "setup": "Create only owned generated accounts using the pinned SDK/API path and record the bound UID/resource identifiers."
+    },
+    {
+      "budget": {
+        "concurrencyMax": 1,
+        "elapsedSecondsMax": 120,
+        "estimatedCostUsdMax": 0,
+        "httpRequestsMax": 16,
+        "resourceCountMax": 2
+      },
+      "cleanup": "Consume no real delivery; delete owned accounts, verify OOB state according to the approved operation, restore configuration and verify readback.",
+      "comparator": "auth-settings-v1; classify expected privacy differences separately from transport/ownership failure.",
+      "configurationRestorationRule": "Exclusive CONFIG_MUTATING lease for any toggle; snapshot, update, readback, restore and post-restore readback are mandatory.",
+      "id": "client-permission-and-email-privacy",
+      "localPreRunControl": "Reject a client attempt to use Admin config routes, fixture success without artifact binding and any delivery-enabled setup lacking approval.",
+      "meaning": "End-user create/delete permissions and email enumeration privacy affect only their documented client paths, while Admin/Owner paths retain their separate authorization.",
+      "observation": "Exercise privacy, client permission and Admin control paths; record response classification without treating all errors as equivalent.",
+      "ownedResources": "At most two generated accounts and bounded OOB attempts; no real delivery destination",
+      "parentFeatureGroups": [
+        "AUTH-CONFIG-SDK",
+        "AUTH-ACCOUNT",
+        "AUTH-ACTION"
+      ],
+      "postStateReadback": "Verify rejected signup/delete leaves UID, provider links, tokens, OOB codes, quota success count and timestamps unchanged; verify Admin control separately.",
+      "preflight": [
+        "configuration snapshot and digest",
+        "generated owned identities",
+        "email/SMS delivery disabled or separately authorized",
+        "expected privacy/error boundary recorded",
+        "owner cleanup authority"
+      ],
+      "principalTenantDatabase": "End-user ID token/API key and separate owner/Admin principal; explicit project and optional tenant",
+      "productionOnlyReason": "Email privacy error/provider disclosure and client permission semantics are configuration-dependent backend behavior not established by local tests.",
+      "productionOperationSequence": [
+        "Read project/tenant settings through the authorized management path",
+        "Run unknown-email and wrong-password sign-in controls",
+        "Run password reset and provider-disclosure controls where approved",
+        "Run end-user signup/delete rejection and Admin success controls",
+        "Read back user, token, OOB and configuration state after rejection"
+      ],
+      "requiredConfiguration": "Explicit permissions/privacy projection; no unapproved settings change in a read-only variant",
+      "requirementSurface": "client.permissions and emailPrivacyConfig application across sign-in, lookup, reset and self-service operations",
+      "setup": "Create only owned accounts and capture baseline lookup/token/OOB/configuration state."
+    },
+    {
+      "budget": {
+        "concurrencyMax": 1,
+        "elapsedSecondsMax": 120,
+        "estimatedCostUsdMax": 0,
+        "httpRequestsMax": 8,
+        "resourceCountMax": 2
+      },
+      "cleanup": "Delete generated accounts, stop the owned Functions process, close listeners and verify no external URI or secret remains configured.",
+      "comparator": "auth-settings-v1 with function binding, token-type presence, response/post-state and cleanup evidence.",
+      "configurationRestorationRule": "Exclusive SHARED_SETTING lease; snapshot the logical selection, restore it and verify the owned route is no longer selected.",
+      "id": "blocking-selection-and-token-forwarding",
+      "localPreRunControl": "Reject external or ambiguous URI, fixture transport, wrong project/tenant and any forwarding request that violates the global switch.",
+      "meaning": "Blocking selection is bound to the owned project/tenant and function, and each forwarded credential requires global, project, function and input-presence authorization.",
+      "observation": "Record trigger selection, invocation outcome, claim/credential presence metadata and Auth response without persisting token values.",
+      "ownedResources": "At most one generated account per namespace and one owned local/production Functions endpoint; no external URI",
+      "parentFeatureGroups": [
+        "AUTH-TENANT-BLOCKING",
+        "AUTH-ACTION",
+        "AUTH-CONFIG-SDK"
+      ],
+      "postStateReadback": "Verify rejected hook/selector leaves account, token issuance, provider links, pending credential and timestamps unchanged.",
+      "preflight": [
+        "function name/region/URI resolves to an owned daemon route",
+        "project/tenant binding",
+        "token presence and redaction policy",
+        "timeout/rollback and external side-effect boundary",
+        "recovery owner and function availability"
+      ],
+      "principalTenantDatabase": "End-user principal plus owner-bound Functions/Auth configuration; explicit project and optional tenant",
+      "productionOnlyReason": "Blocking trigger timing, tenant application and credential forwarding behavior require approved backend/function observation; local function tests are insufficient.",
+      "productionOperationSequence": [
+        "Read the configured blocking projection and function binding",
+        "Run an owned signup/sign-in control through the approved blocking function",
+        "Exercise one token-forwarding control per approved token type",
+        "Exercise wrong-tenant and unauthenticated selector negatives",
+        "Read back Auth state and function invocation evidence"
+      ],
+      "requiredConfiguration": "Owned Functions route and explicit trigger/token policy; any production setting change requires exclusive approval",
+      "requirementSurface": "beforeCreate/beforeSignIn selection and inbound ID/access/refresh credential forwarding",
+      "setup": "Start or bind only the owned Functions endpoint and create a generated account if the selected event requires one."
+    },
+    {
+      "budget": {
+        "concurrencyMax": 1,
+        "elapsedSecondsMax": 90,
+        "estimatedCostUsdMax": 0,
+        "httpRequestsMax": 8,
+        "resourceCountMax": 2
+      },
+      "cleanup": "Delete every owned UID and verify absence; do not reset or return quota usage through cleanup; restore any approved temporary setting.",
+      "comparator": "auth-settings-v1; classify private/undocumented abuse controls as INDETERMINATE rather than mismatch.",
+      "configurationRestorationRule": "Quota configuration changes require exclusive CONFIG_MUTATING lease; save absolute start/duration, restore and read back; usage state is separate and is not reset by account cleanup.",
+      "id": "signup-quota-boundary",
+      "localPreRunControl": "Reject volume beyond the bound, missing logical clock, arbitrary client IP injection, fixture transport and unbound artifact.",
+      "meaning": "The local fixed-window simulation is deterministic and bounded, while production observation distinguishes documented quota configuration from private abuse controls and does not use a load test.",
+      "observation": "Record success/rejection, quota diagnostics and post-state; distinguish configuration GET/PATCH from counting behavior.",
+      "ownedResources": "At most two generated accounts; no high-volume account creation",
+      "parentFeatureGroups": [
+        "AUTH-CONFIG-SDK",
+        "AUTH-ACCOUNT"
+      ],
+      "postStateReadback": "Verify failed signup does not create a user, issue a token, consume an OOB code or increment successful-use accounting; verify existing sign-in/link/Admin operations are separate.",
+      "preflight": [
+        "quota and simulation configuration digests",
+        "bounded request and cost envelope",
+        "fresh generated identities",
+        "transport peer IP binding; no body/X-Forwarded-For override",
+        "cleanup/recovery owner"
+      ],
+      "principalTenantDatabase": "End-user signup principal and owner/Admin cleanup principal; project scoped, tenant is not implicitly split",
+      "productionOnlyReason": "Official quota counting and abuse controls are not fully public; only a finite, approved observation can establish the selected production boundary.",
+      "productionOperationSequence": [
+        "Read the approved quota configuration and current project state",
+        "Run a small below-bound signup control if explicitly approved",
+        "Observe one boundary or documented response control without attempting high-volume quota exhaustion",
+        "Read back created accounts, tokens and configuration"
+      ],
+      "requiredConfiguration": "No production quota mutation in the default candidate; local quotaSimulation uses fixed-window-v1 and a logical clock",
+      "requirementSurface": "Temporary sign-up quota configuration and deterministic local simulation boundary",
+      "setup": "Use local logical clock for shadow; for production, use only an approved finite sequence and never assume private abuse-control parity."
+    }
+  ],
+  "comparator": {
+    "binds": [
+      "sdkVersion",
+      "artifactSha256",
+      "configurationDigest",
+      "projectId",
+      "tenantId",
+      "operation",
+      "responseShape",
+      "policyProjection",
+      "postState",
+      "cleanup"
+    ],
+    "classificationRule": "A complete response with a semantic difference is SEMANTIC_MISMATCH; transport, cleanup, ownership, configuration or binding failure is INDETERMINATE.",
+    "classifications": [
+      "MATCH",
+      "SEMANTIC_MISMATCH",
+      "INDETERMINATE",
+      "EXPECTED_NONDETERMINISM"
+    ],
+    "contractDigest": null,
+    "contractStatus": "PREPARED_NOT_EXECUTED",
+    "id": "auth-settings-v1",
+    "productionObserved": false,
+    "savedProductionReference": null,
+    "version": 1
+  },
+  "evidenceBoundary": {
+    "localArtifactShadow": "pending; preparation only",
+    "modelOrDocumentation": "not a substitute for runtime or production evidence",
+    "officialEmulator": "unobserved",
+    "production": "unobserved",
+    "promotion": "not eligible for COMPAT_VERIFIED",
+    "savedProductionReference": "none bound for this candidate"
+  },
+  "frozenAt": "2026-09-16T21:27:40Z",
+  "id": "auth-settings-sdk-next-v2",
+  "kind": "auth-settings-sdk-current-head-rebind-v2",
+  "localShadow": {
+    "artifact": null,
+    "artifactBinding": "FIREEMU_ARTIFACT plus FIREEMU_ARTIFACT_SHA256",
+    "configurationDigest": null,
+    "currentRunnerLimitation": "The current runner provides binding/validation/plan helpers and does not yet execute case-level SDK operations or produce case-level response evidence. It must not be reported as a completed SDK shadow.",
+    "limitations": [
+      "No local artifact has been bound to this current-head rebind.",
+      "The runner does not authorize or perform production operations.",
+      "Configuration mutation, policy inheritance, external Functions and official backend semantics remain unobserved."
+    ],
+    "productionExecuted": false,
+    "runner": "tools/sdk-smoke/auth-settings-sdk-oracle.mjs",
+    "status": "PENDING_LOCAL_SHADOW",
+    "test": "tools/sdk-smoke/auth-settings-sdk-oracle.test.mjs",
+    "transport": "real-fireemu-artifact only; fixture responses are rejected; loopback Auth host only"
+  },
+  "oracleState": "WAITING_ORACLE",
+  "ownerInputsRequired": [
+    "owner identity and explicit permission reference",
+    "target project and optional tenant/database scope",
+    "execution window and fresh nonce",
+    "accepted configuration and restoration/recovery owner",
+    "credential/API-key and SDK/API version binding",
+    "collector, comparator and artifact digests",
+    "accepted request/resource/time/cost/concurrency bounds"
+  ],
+  "parentFeatureGroups": [
+    "AUTH-CONFIG-SDK",
+    "AUTH-ACCOUNT",
+    "AUTH-CREDENTIAL",
+    "AUTH-ACTION",
+    "AUTH-TENANT-BLOCKING"
+  ],
+  "preservedHistoricalArtifacts": [
+    {
+      "path": "spec/compatibility/broad-runs/auth-settings-sdk-next.json",
+      "preservation": "immutable historical preparation artifact; never overwrite",
+      "productionExecuted": false,
+      "sha256": "a4f737118d9a6ca4cb332b6fd1b129d43e03a5f49ccae5c29592b9318d49bad9",
+      "version": 1
+    },
+    {
+      "path": "spec/compatibility/broad-runs/515f0cf4-auth-saved-reference-replay.json",
+      "role": "immutable saved-production replay; current source recompare still required",
+      "sha256": "5d7c9e8aad4bc749d05e7d211609793854966c7f05704d68aba50885848f19c9"
+    }
+  ],
+  "productionExecuted": false,
+  "safetyClass": "AUTH_ACCOUNT",
+  "sdk": {
+    "firebase": "12.18.0",
+    "firebaseAdmin": "14.3.0",
+    "node": ">=20",
+    "versionSource": "tools/sdk-smoke/package-lock.json"
+  },
+  "sourceBinding": {
+    "boundFiles": [
+      {
+        "path": "crates/fireemu-core-auth/src/store.rs",
+        "sha256": "7194b97679c2886470b26a81392a1d4fedb0a70520670a077853ee19adaaae86"
+      },
+      {
+        "path": "crates/fireemu-core-auth/src/signup_quota.rs",
+        "sha256": "62ecbd4d67a2c672293fd6638caea4bed8c1ba91382d1b01bb51ce0ad40f6eed"
+      },
+      {
+        "path": "crates/fireemu-adapter-http/src/identity_toolkit.rs",
+        "sha256": "498112fe1038d54d012f657e25158a76e7cf3a83bbe1d7a057019a301729e292"
+      },
+      {
+        "path": "crates/fireemu-adapter-http/src/identity_toolkit/routes.rs",
+        "sha256": "78c67e049f27fcb3d05a123771126c6224781318ed2d97697e7bc3ba7a5c36e1"
+      },
+      {
+        "path": "crates/fireemu/src/config.rs",
+        "sha256": "16f1644d6df2093f6d8bb3e19f0d421d111faa185603dfaa0841cfabd700781c"
+      },
+      {
+        "path": "crates/fireemu/src/daemon.rs",
+        "sha256": "9f31bcf9736893e9c9a2506b5fc5257bbf471326f6bfddf3abc067d5d825914e"
+      },
+      {
+        "path": "crates/fireemu/src/functions.rs",
+        "sha256": "56aefd43da9fbf1e9d8536c3c6a395863028f012a8b457bb17c6d2c1a5c1f375"
+      },
+      {
+        "path": "crates/fireemu/src/import_export.rs",
+        "sha256": "61382248569e7c25785d7496f22ab91333da2eb6bcbb4b82e3d2315c1f27ac1e"
+      },
+      {
+        "path": "crates/fireemu-adapter-functions/src/runtime.rs",
+        "sha256": "3724ec7af0efc5f2a534021821b0e229d67ca8001adc3ef85ab309ef5b4696ab"
+      },
+      {
+        "path": "spec/config/fireemu.schema.json",
+        "sha256": "edccfabbf64db4148d3ccc992a86ee60404773e86a307c71e61dd625dda598a5"
+      },
+      {
+        "path": "tools/sdk-smoke/package.json",
+        "sha256": "a2c204fca35f330f79129b9596da44aa16949e1aa3575613cef3759a25b51824"
+      },
+      {
+        "path": "tools/sdk-smoke/package-lock.json",
+        "sha256": "77320cd304149c5c3e99289b7548757e307c08373bf02a811a5ae8518775704c"
+      },
+      {
+        "path": "tools/sdk-smoke/auth-settings-sdk-oracle.mjs",
+        "sha256": "8b96501944f9f22eb8c39d4954419480f6b3e310c4d18ec935dfca6aefa2278d"
+      },
+      {
+        "path": "tools/sdk-smoke/auth-settings-sdk-oracle.test.mjs",
+        "sha256": "e4152f67d23433ca88547db3a6ff4ab01d2f060fb2b04c945bd148072caa7049"
+      }
+    ],
+    "collectorCommit": "ca9894d0275c33f478b999aeb2c4d1ea32c5d9b5",
+    "featureHead": "2db210750005601e9e774a76f0150c30ff5479ee",
+    "gitStatus": "clean at freeze",
+    "priorManifest": {
+      "path": "spec/compatibility/broad-runs/auth-settings-sdk-next.json",
+      "preservation": "immutable historical preparation artifact; never overwrite",
+      "productionExecuted": false,
+      "sha256": "a4f737118d9a6ca4cb332b6fd1b129d43e03a5f49ccae5c29592b9318d49bad9",
+      "version": 1
+    }
+  },
+  "status": "BLOCKED_OWNER",
+  "version": 2
+}

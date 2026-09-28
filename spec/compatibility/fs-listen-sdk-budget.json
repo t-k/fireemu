@@ -1,0 +1,31 @@
+{
+  "boundSources": [
+    "tools/compat-broad/fs-listen-resume/listen_collector.mjs",
+    "tools/compat-broad/fs-listen-resume/listen_sdk_adapter.mjs",
+    "tools/compat-broad/fs-listen-resume/listen_journal.mjs",
+    "tools/compat-broad/fs-listen-resume/cases.py",
+    "tools/compat-broad/fs-listen-resume/campaign.py",
+    "tools/compat-broad/fs-listen-resume/observation.py"
+  ],
+  "budget": {
+    "cleanupReserveDeletes": 150,
+    "cleanupReserveReads": 300,
+    "cleanupReserveSeconds": 180,
+    "estimatedCostUsd": 0.01,
+    "hardCostCeilingUsd": 0.5,
+    "maxAccounts": 2,
+    "maxClients": 3,
+    "maxConcurrency": 1,
+    "maxConcurrentListeners": 3,
+    "maxDeletes": 80,
+    "maxDocuments": 6,
+    "maxDurationSeconds": 600,
+    "maxListenerRegistrations": 40,
+    "maxReads": 600,
+    "maxRuns": 1,
+    "maxSnapshots": 120,
+    "maxWrites": 60
+  },
+  "note": "Local shadow runs use these same bounds; production adds a permission.",
+  "schema": "o6-listen-sdk-budget-v2"
+}

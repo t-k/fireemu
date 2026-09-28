@@ -8,20 +8,26 @@ use std::sync::{Arc, Mutex};
 use fireemu_adapter_grpc::decode::Parent;
 use fireemu_adapter_grpc::gateway::Gateway;
 use fireemu_adapter_grpc::local::LocalBackend;
-use fireemu_adapter_grpc::rules::{LatestReader, Principal, RulesEnforcer};
+use fireemu_adapter_grpc::rules::{LatestReader, Principal, RulesEnforcer, TokenSemantics};
 use fireemu_adapter_grpc::service::GatewayService;
 use fireemu_core_auth::jwt::{base64url_encode, encode_unsigned, TokenAcceptance};
 use fireemu_core_auth::mfa::TotpPolicy;
 use fireemu_core_auth::store::{AuthRegistry, AuthStore, NewUser};
-use fireemu_core_firestore::index::{IndexSet, IndexValidationPolicy, PlanningContext};
+use fireemu_core_firestore::field_path::FieldPath;
+use fireemu_core_firestore::index::{
+    IndexDefinition, IndexField, IndexFieldMode, IndexQueryScope, IndexSet, IndexValidationPolicy,
+    PlanningContext,
+};
 use fireemu_core_firestore::path::DocumentPath;
-use fireemu_core_rules::eval::DocumentAccess;
+use fireemu_core_firestore::query::{FieldOp, FilterExpr, Query, QueryScope};
+use fireemu_core_firestore::value::Value;
+use fireemu_core_rules::eval::{DocumentAccess, NoDocumentAccess};
 use fireemu_core_rules::runtime::{LoadedRules, RulesetSlot};
 use fireemu_core_rules::value::RulesValue;
 use fireemu_core_session::clock::VirtualClock;
 use fireemu_core_types::determinism::SplitMix64;
 use fireemu_core_types::edition::{FirestoreApiMode, FirestoreEdition};
-use fireemu_core_types::ids::{DatabaseId, ProjectId};
+use fireemu_core_types::ids::{CollectionId, DatabaseId, ProjectId};
 use fireemu_core_types::time::LogicalInstant;
 use fireemu_proto_firestore::google::firestore::v1 as pb;
 use fireemu_proto_firestore::google::firestore::v1::firestore_client::FirestoreClient;
@@ -32,6 +38,9 @@ use tokio_stream::wrappers::{ReceiverStream, TcpListenerStream};
 use tokio_stream::StreamExt;
 use tonic::metadata::MetadataValue;
 use tonic::Request;
+
+#[path = "rules/auth_atomicity.rs"]
+mod auth_atomicity;
 
 const DB: &str = "projects/demo-app/databases/(default)";
 const DOCS: &str = "projects/demo-app/databases/(default)/documents";
@@ -203,11 +212,69 @@ fn tenant_tokens_build_a_firestore_rules_principal() {
     ));
 }
 
+#[test]
+fn query_authorization_rejects_numeric_error_sensitive_rules() {
+    let clock = Arc::new(Mutex::new(VirtualClock::new(START)));
+    let auth = Arc::new(Mutex::new(AuthStore::new(
+        "demo-app",
+        SplitMix64::new(3),
+        TotpPolicy::default(),
+    )));
+    let rules = Arc::new(RulesetSlot::new(
+        LoadedRules::from_source(
+            "rules_version = '2'; service cloud.firestore { match /databases/{database}/documents { match /notes/{id} { allow list: if timestamp.value(resource.data.value) is timestamp; } } }",
+        )
+        .unwrap(),
+    ));
+    let enforcer = RulesEnforcer::new(rules, auth, clock);
+    let project = ProjectId::try_new("demo-app").unwrap();
+    let database = DatabaseId::default_database();
+    let parent = Parent {
+        project,
+        database,
+        document: None,
+    };
+    let mut query = Query::new(QueryScope::collection(
+        None,
+        CollectionId::try_new("notes").unwrap(),
+    ));
+    query.filter = Some(FilterExpr::Field {
+        field: FieldPath::parse("value").unwrap(),
+        op: FieldOp::Equal,
+        value: Value::Integer(1),
+    });
+
+    let error = enforcer
+        .authorize_query(&Principal::Anonymous, &parent, &query, &NoDocumentAccess)
+        .expect_err("an integer query representative must not prove an integer-only builtin");
+    assert_eq!(error.code(), tonic::Code::PermissionDenied);
+}
+
 struct Harness {
     client: FirestoreClient<tonic::transport::Channel>,
     auth: Arc<Mutex<AuthStore>>,
     rules: Arc<RulesetSlot>,
+    backend: Arc<LocalBackend>,
+    registry: Arc<AuthRegistry>,
     handle: tokio::task::JoinHandle<()>,
+}
+
+/// Turns on the request traces of the ruleset in force, where denials keep their reason.
+fn trace_denials(h: &Harness) {
+    let active = h.rules.snapshot().unwrap();
+    active.diagnostics.lock().unwrap().enable_request_traces();
+}
+
+/// The reason of the newest traced denial: production's text carries none.
+fn latest_denial(h: &Harness) -> String {
+    let active = h.rules.snapshot().unwrap();
+    let diagnostics = active.diagnostics.lock().unwrap();
+    diagnostics
+        .requests()
+        .into_iter()
+        .find(|trace| !trace.allowed)
+        .map(|trace| trace.reason.clone())
+        .unwrap_or_default()
 }
 
 async fn start() -> Harness {
@@ -215,6 +282,36 @@ async fn start() -> Harness {
 }
 
 async fn start_with(acceptance: TokenAcceptance) -> Harness {
+    start_with_config(acceptance, IndexSet::default()).await
+}
+
+async fn start_with_indexes(indexes: IndexSet) -> Harness {
+    start_with_config(TokenAcceptance::Verified, indexes).await
+}
+
+async fn start_with_config(acceptance: TokenAcceptance, indexes: IndexSet) -> Harness {
+    start_with_options(acceptance, indexes, false).await
+}
+
+/// `refuse_without_ruleset`: the strict profile's answer to a client request while no ruleset
+/// is loaded (production refuses every client request without a `cloud.firestore` release).
+async fn start_with_options(
+    acceptance: TokenAcceptance,
+    indexes: IndexSet,
+    refuse_without_ruleset: bool,
+) -> Harness {
+    start_with_enforcer(acceptance, indexes, |enforcer| {
+        enforcer.with_refusal_without_ruleset(refuse_without_ruleset)
+    })
+    .await
+}
+
+/// A harness whose enforcer `configure` finishes (profile switches).
+async fn start_with_enforcer(
+    acceptance: TokenAcceptance,
+    indexes: IndexSet,
+    configure: impl FnOnce(RulesEnforcer) -> RulesEnforcer,
+) -> Harness {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     let gateway = Gateway {
@@ -224,7 +321,7 @@ async fn start_with(acceptance: TokenAcceptance) -> Harness {
             api_mode: FirestoreApiMode::Native,
             policy: IndexValidationPolicy::Production,
         },
-        indexes: IndexSet::default(),
+        indexes,
     };
     let clock = Arc::new(Mutex::new(VirtualClock::new(START)));
     let backend = Arc::new(LocalBackend::new(gateway.clone(), clock.clone(), 7));
@@ -234,10 +331,15 @@ async fn start_with(acceptance: TokenAcceptance) -> Harness {
         TotpPolicy::default(),
     )));
     let rules = Arc::new(RulesetSlot::new(LoadedRules::from_source(RULES).unwrap()));
-    let enforcer = Arc::new(
-        RulesEnforcer::new(rules.clone(), auth.clone(), clock).with_token_acceptance(acceptance),
-    );
-    let svc = FirestoreServer::new(GatewayService::local(gateway, backend).with_rules(enforcer));
+    let registry = Arc::new(AuthRegistry::new("demo-app", auth.clone()));
+    let enforcer = Arc::new(configure(
+        RulesEnforcer::new(rules.clone(), auth.clone(), clock)
+            .with_token_semantics(TokenSemantics::Firestore)
+            .with_token_acceptance(acceptance)
+            .with_registry(registry.clone()),
+    ));
+    let svc =
+        FirestoreServer::new(GatewayService::local(gateway, backend.clone()).with_rules(enforcer));
     let handle = tokio::spawn(async move {
         tonic::transport::Server::builder()
             .add_service(svc)
@@ -254,6 +356,8 @@ async fn start_with(acceptance: TokenAcceptance) -> Harness {
         client: FirestoreClient::new(channel),
         auth,
         rules,
+        backend,
+        registry,
         handle,
     }
 }
@@ -271,6 +375,16 @@ impl Harness {
 fn s(v: &str) -> pb::Value {
     pb::Value {
         value_type: Some(pb::value::ValueType::StringValue(v.to_owned())),
+    }
+}
+fn double(v: f64) -> pb::Value {
+    pb::Value {
+        value_type: Some(pb::value::ValueType::DoubleValue(v)),
+    }
+}
+fn integer(v: i64) -> pb::Value {
+    pb::Value {
+        value_type: Some(pb::value::ValueType::IntegerValue(v)),
     }
 }
 fn map(fields: &[(&str, pb::Value)]) -> pb::Value {
@@ -386,6 +500,71 @@ service cloud.firestore {
         .unwrap_err();
     assert_eq!(error.code(), tonic::Code::PermissionDenied);
     assert!(!error.message().contains("FIREEMU-REGEX"), "{error}");
+    h.handle.abort();
+}
+
+#[tokio::test]
+async fn firestore_grpc_request_shape_has_anonymous_auth_and_omits_inapplicable_members() {
+    let mut h = start().await;
+    h.rules
+        .replace_source(
+            "rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    match /shape/{id} {
+      allow get: if request.auth == null
+                 && request.keys().hasOnly(['auth', 'method', 'path', 'time']);
+    }
+  }
+}",
+        )
+        .unwrap();
+
+    // The request passes Rules and reaches Firestore's not-found response, proving that
+    // anonymous auth is explicit null and that resource/query are absent from request.keys().
+    let error = h
+        .client
+        .get_document(get("shape/missing"))
+        .await
+        .unwrap_err();
+    assert_eq!(error.code(), tonic::Code::NotFound, "{error}");
+
+    // Missing members are evaluation errors, rather than values equal to null.
+    h.rules
+        .replace_source(
+            "rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    match /shape/{id} { allow get: if request.resource == null; }
+  }
+}",
+        )
+        .unwrap();
+    let error = h
+        .client
+        .get_document(get("shape/missing"))
+        .await
+        .unwrap_err();
+    assert_eq!(error.code(), tonic::Code::PermissionDenied, "{error}");
+
+    // A missing member must not be coerced to boolean false. If it were, this
+    // rule would allow the read and Firestore would return NotFound instead.
+    h.rules
+        .replace_source(
+            "rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    match /shape/{id} { allow get: if request.resource == false; }
+  }
+}",
+        )
+        .unwrap();
+    let error = h
+        .client
+        .get_document(get("shape/missing"))
+        .await
+        .unwrap_err();
+    assert_eq!(error.code(), tonic::Code::PermissionDenied, "{error}");
     h.handle.abort();
 }
 
@@ -752,7 +931,7 @@ async fn document_name_in_authorizes_each_real_candidate_as_a_list() {
         .await
         .unwrap_err();
     assert_eq!(missing.code(), tonic::Code::PermissionDenied);
-    assert_eq!(missing.message(), "query denied by Security Rules");
+    assert_eq!(missing.message(), "Missing or insufficient permissions.");
 
     let denied = h
         .client
@@ -842,6 +1021,567 @@ service cloud.firestore {
         .await
         .is_ok());
     let _ = alice;
+    h.handle.abort();
+}
+
+#[tokio::test]
+#[allow(clippy::too_many_lines)]
+async fn query_proof_does_not_treat_nested_numeric_representation_as_difference() {
+    let mut h = start().await;
+    let (_alice, alice_token) = h.user("alice@example.com");
+    h.rules
+        .replace_source(
+            "rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    match /records/{id} {
+      allow read: if resource.data.meta != { payload: [1.0] };
+    }
+  }
+}",
+        )
+        .unwrap();
+
+    let stored_meta = map(&[("payload", arr(vec![double(1.0)]))]);
+    h.client
+        .commit(with_bearer(
+            commit(vec![set_write("records/numeric", &[("meta", stored_meta)])]),
+            "owner",
+        ))
+        .await
+        .unwrap();
+
+    let query_payload = arr(vec![integer(1)]);
+    let mut owner_stream = h
+        .client
+        .run_query(with_bearer(
+            list_where("records", "meta.payload", query_payload.clone()),
+            "owner",
+        ))
+        .await
+        .unwrap()
+        .into_inner();
+    let mut owner_documents = Vec::new();
+    while let Some(response) = owner_stream.next().await {
+        if let Some(document) = response.unwrap().document {
+            owner_documents.push(document.name);
+        }
+    }
+    assert_eq!(
+        owner_documents,
+        vec![format!("{DOCS}/records/numeric")],
+        "the query's numeric equivalence should include the stored document"
+    );
+
+    let get_error = h
+        .client
+        .get_document(with_bearer(get("records/numeric"), &alice_token))
+        .await
+        .unwrap_err();
+    assert_eq!(get_error.code(), tonic::Code::PermissionDenied);
+
+    match h
+        .client
+        .run_query(with_bearer(
+            list_where("records", "meta.payload", query_payload.clone()),
+            &alice_token,
+        ))
+        .await
+    {
+        Err(error) => assert_eq!(error.code(), tonic::Code::PermissionDenied),
+        Ok(response) => {
+            let mut query_stream = response.into_inner();
+            let query_error = query_stream
+                .next()
+                .await
+                .expect("query must return a terminal authorization error")
+                .unwrap_err();
+            assert_eq!(query_error.code(), tonic::Code::PermissionDenied);
+        }
+    }
+
+    h.rules
+        .replace_source(
+            "rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    match /records/{id} {
+      allow read: if resource.data.meta.payload != [1.0];
+    }
+  }
+}",
+        )
+        .unwrap();
+    let mut owner_stream = h
+        .client
+        .run_query(with_bearer(
+            list_where("records", "meta.payload", query_payload.clone()),
+            "owner",
+        ))
+        .await
+        .unwrap()
+        .into_inner();
+    assert_eq!(
+        owner_stream
+            .next()
+            .await
+            .expect("owner query should return the stored document")
+            .unwrap()
+            .document
+            .expect("owner query document")
+            .name,
+        format!("{DOCS}/records/numeric")
+    );
+    assert!(
+        owner_stream.next().await.is_none(),
+        "owner query should end without a terminal stream error"
+    );
+    assert_eq!(
+        h.client
+            .get_document(with_bearer(get("records/numeric"), &alice_token))
+            .await
+            .unwrap_err()
+            .code(),
+        tonic::Code::PermissionDenied
+    );
+    match h
+        .client
+        .run_query(with_bearer(
+            list_where("records", "meta.payload", query_payload.clone()),
+            &alice_token,
+        ))
+        .await
+    {
+        Err(error) => assert_eq!(error.code(), tonic::Code::PermissionDenied),
+        Ok(response) => assert_eq!(
+            response
+                .into_inner()
+                .next()
+                .await
+                .expect("query must return a terminal authorization error")
+                .unwrap_err()
+                .code(),
+            tonic::Code::PermissionDenied
+        ),
+    }
+
+    h.rules
+        .replace_source(
+            "rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    match /records/{id} {
+      allow read: if resource.data.meta.payload[0] is int;
+    }
+  }
+}",
+        )
+        .unwrap();
+    assert_eq!(
+        h.client
+            .get_document(with_bearer(get("records/numeric"), &alice_token))
+            .await
+            .unwrap_err()
+            .code(),
+        tonic::Code::PermissionDenied
+    );
+    match h
+        .client
+        .run_query(with_bearer(
+            list_where("records", "meta.payload", query_payload),
+            &alice_token,
+        ))
+        .await
+    {
+        Err(error) => assert_eq!(error.code(), tonic::Code::PermissionDenied),
+        Ok(response) => assert_eq!(
+            response
+                .into_inner()
+                .next()
+                .await
+                .expect("query must return a terminal authorization error")
+                .unwrap_err()
+                .code(),
+            tonic::Code::PermissionDenied
+        ),
+    }
+
+    h.rules
+        .replace_source(
+            "rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function getter() {
+      return resource.data.meta.payload;
+    }
+    function gate(value) {
+      let alias = value;
+      return alias != [1.0];
+    }
+    match /records/{id} {
+      allow read: if gate(getter());
+    }
+  }
+}",
+        )
+        .unwrap();
+    let mut owner_stream = h
+        .client
+        .run_query(with_bearer(
+            list_where("records", "meta.payload", arr(vec![integer(1)])),
+            "owner",
+        ))
+        .await
+        .unwrap()
+        .into_inner();
+    assert_eq!(
+        owner_stream
+            .next()
+            .await
+            .expect("owner alias query should return the stored document")
+            .unwrap()
+            .document
+            .expect("owner alias query document")
+            .name,
+        format!("{DOCS}/records/numeric")
+    );
+    assert!(owner_stream.next().await.is_none());
+    assert_eq!(
+        h.client
+            .get_document(with_bearer(get("records/numeric"), &alice_token))
+            .await
+            .unwrap_err()
+            .code(),
+        tonic::Code::PermissionDenied
+    );
+    match h
+        .client
+        .run_query(with_bearer(
+            list_where("records", "meta.payload", arr(vec![integer(1)])),
+            &alice_token,
+        ))
+        .await
+    {
+        Err(error) => assert_eq!(error.code(), tonic::Code::PermissionDenied),
+        Ok(response) => assert_eq!(
+            response
+                .into_inner()
+                .next()
+                .await
+                .expect("query must return a terminal authorization error")
+                .unwrap_err()
+                .code(),
+            tonic::Code::PermissionDenied
+        ),
+    }
+
+    h.rules
+        .replace_source(
+            "rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    match /records/{id} {
+      allow read: if resource.data.tags.hasAny([{ score: 1 }]);
+    }
+  }
+}",
+        )
+        .unwrap();
+    h.client
+        .commit(with_bearer(
+            commit(vec![set_write(
+                "records/map-membership",
+                &[("tags", arr(vec![map(&[("score", double(1.0))])]))],
+            )]),
+            "owner",
+        ))
+        .await
+        .unwrap();
+    let mut map_query = list("records");
+    if let Some(pb::run_query_request::QueryType::StructuredQuery(sq)) = &mut map_query.query_type {
+        sq.r#where = Some(sq::Filter {
+            filter_type: Some(sq::filter::FilterType::FieldFilter(sq::FieldFilter {
+                field: Some(sq::FieldReference {
+                    field_path: "tags".to_owned(),
+                }),
+                op: sq::field_filter::Operator::ArrayContains as i32,
+                value: Some(map(&[("score", integer(1))])),
+            })),
+        });
+    }
+    let mut owner_stream = h
+        .client
+        .run_query(with_bearer(map_query.clone(), "owner"))
+        .await
+        .unwrap()
+        .into_inner();
+    assert_eq!(
+        owner_stream
+            .next()
+            .await
+            .expect("owner query should return the map document")
+            .unwrap()
+            .document
+            .expect("owner query document")
+            .name,
+        format!("{DOCS}/records/map-membership")
+    );
+    assert!(owner_stream.next().await.is_none());
+    assert_eq!(
+        h.client
+            .get_document(with_bearer(get("records/map-membership"), &alice_token))
+            .await
+            .unwrap_err()
+            .code(),
+        tonic::Code::PermissionDenied
+    );
+    match h
+        .client
+        .run_query(with_bearer(map_query.clone(), &alice_token))
+        .await
+    {
+        Err(error) => assert_eq!(error.code(), tonic::Code::PermissionDenied),
+        Ok(response) => assert_eq!(
+            response
+                .into_inner()
+                .next()
+                .await
+                .expect("query must return a terminal authorization error")
+                .unwrap_err()
+                .code(),
+            tonic::Code::PermissionDenied
+        ),
+    }
+    let mut map_any_query = map_query.clone();
+    if let Some(pb::run_query_request::QueryType::StructuredQuery(sq)) =
+        &mut map_any_query.query_type
+    {
+        let Some(sq::Filter {
+            filter_type: Some(sq::filter::FilterType::FieldFilter(filter)),
+        }) = &mut sq.r#where
+        else {
+            panic!("array-contains query filter should be present");
+        };
+        filter.op = sq::field_filter::Operator::ArrayContainsAny as i32;
+        filter.value = Some(arr(vec![map(&[("score", integer(1))])]));
+    }
+    match h
+        .client
+        .run_query(with_bearer(map_any_query, &alice_token))
+        .await
+    {
+        Err(error) => assert_eq!(error.code(), tonic::Code::PermissionDenied),
+        Ok(response) => assert_eq!(
+            response
+                .into_inner()
+                .next()
+                .await
+                .expect("array-contains-any query must be denied")
+                .unwrap_err()
+                .code(),
+            tonic::Code::PermissionDenied
+        ),
+    }
+
+    let map_equal_query = list_where("records", "tags", arr(vec![map(&[("score", integer(1))])]));
+
+    h.rules
+        .replace_source(
+            "rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    match /records/{id} {
+      allow read: if resource.data.tags.toSet().difference([{ score: 1 }].toSet()).size() == 0;
+    }
+  }
+}",
+        )
+        .unwrap();
+    let mut owner_stream = h
+        .client
+        .run_query(with_bearer(map_equal_query.clone(), "owner"))
+        .await
+        .unwrap()
+        .into_inner();
+    assert_eq!(
+        owner_stream
+            .next()
+            .await
+            .expect("owner transformation query should return the stored document")
+            .unwrap()
+            .document
+            .expect("owner transformation query document")
+            .name,
+        format!("{DOCS}/records/map-membership")
+    );
+    assert!(owner_stream.next().await.is_none());
+    assert_eq!(
+        h.client
+            .get_document(with_bearer(get("records/map-membership"), &alice_token))
+            .await
+            .unwrap_err()
+            .code(),
+        tonic::Code::PermissionDenied
+    );
+    match h
+        .client
+        .run_query(with_bearer(map_equal_query, &alice_token))
+        .await
+    {
+        Err(error) => assert_eq!(error.code(), tonic::Code::PermissionDenied),
+        Ok(response) => assert_eq!(
+            response
+                .into_inner()
+                .next()
+                .await
+                .expect("transformation query must be denied")
+                .unwrap_err()
+                .code(),
+            tonic::Code::PermissionDenied
+        ),
+    }
+    h.handle.abort();
+}
+
+#[tokio::test]
+async fn query_proof_does_not_prove_numeric_arithmetic_from_equivalent_encoding() {
+    let mut h = start().await;
+    let (_alice, alice_token) = h.user("arithmetic@example.com");
+    h.rules
+        .replace_source(
+            "rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    match /records/{id} {
+      allow read: if resource.data.score / 2 == 1;
+    }
+  }
+}",
+        )
+        .unwrap();
+    h.client
+        .commit(with_bearer(
+            commit(vec![set_write(
+                "records/arithmetic",
+                &[("score", double(3.0))],
+            )]),
+            "owner",
+        ))
+        .await
+        .unwrap();
+
+    let query = list_where("records", "score", integer(3));
+    let mut owner_stream = h
+        .client
+        .run_query(with_bearer(query.clone(), "owner"))
+        .await
+        .unwrap()
+        .into_inner();
+    assert_eq!(
+        owner_stream
+            .next()
+            .await
+            .expect("owner query should return the stored document")
+            .unwrap()
+            .document
+            .expect("owner query document")
+            .name,
+        format!("{DOCS}/records/arithmetic")
+    );
+    assert!(owner_stream.next().await.is_none());
+
+    assert_eq!(
+        h.client
+            .get_document(with_bearer(get("records/arithmetic"), &alice_token))
+            .await
+            .unwrap_err()
+            .code(),
+        tonic::Code::PermissionDenied
+    );
+    match h.client.run_query(with_bearer(query, &alice_token)).await {
+        Err(error) => assert_eq!(error.code(), tonic::Code::PermissionDenied),
+        Ok(response) => assert_eq!(
+            response
+                .into_inner()
+                .next()
+                .await
+                .expect("query must return a terminal authorization error")
+                .unwrap_err()
+                .code(),
+            tonic::Code::PermissionDenied
+        ),
+    }
+    h.handle.abort();
+}
+
+#[tokio::test]
+async fn query_proof_rejects_numeric_path_bindings() {
+    let mut h = start().await;
+    let (_alice, alice_token) = h.user("alice@example.com");
+    h.rules
+        .replace_source(
+            "rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    match /records/{id} {
+      allow read: if path('/other/{target}').bind({target: resource.data.target}) == path('/other/1');
+    }
+  }
+}",
+        )
+        .unwrap();
+    h.client
+        .commit(with_bearer(
+            commit(vec![set_write(
+                "records/numeric-path",
+                &[("target", double(1.0))],
+            )]),
+            "owner",
+        ))
+        .await
+        .unwrap();
+
+    let query = list_where("records", "target", integer(1));
+    let mut owner_stream = h
+        .client
+        .run_query(with_bearer(query.clone(), "owner"))
+        .await
+        .unwrap()
+        .into_inner();
+    assert_eq!(
+        owner_stream
+            .next()
+            .await
+            .expect("owner query should return the numeric path document")
+            .unwrap()
+            .document
+            .expect("owner query document")
+            .name,
+        format!("{DOCS}/records/numeric-path")
+    );
+    assert!(owner_stream.next().await.is_none());
+
+    assert_eq!(
+        h.client
+            .get_document(with_bearer(get("records/numeric-path"), &alice_token))
+            .await
+            .unwrap_err()
+            .code(),
+        tonic::Code::PermissionDenied
+    );
+    match h.client.run_query(with_bearer(query, &alice_token)).await {
+        Err(error) => assert_eq!(error.code(), tonic::Code::PermissionDenied),
+        Ok(response) => assert_eq!(
+            response
+                .into_inner()
+                .next()
+                .await
+                .expect("numeric path query must be denied")
+                .unwrap_err()
+                .code(),
+            tonic::Code::PermissionDenied
+        ),
+    }
     h.handle.abort();
 }
 
@@ -1091,6 +1831,7 @@ service cloud.firestore {
 }",
         )
         .unwrap();
+    trace_denials(&h);
     let writes = |n: usize| {
         (0..n)
             .map(|i| set_write(&format!("items/{i}"), &[("v", s("1"))]))
@@ -1108,10 +1849,11 @@ service cloud.firestore {
         .await
         .unwrap_err();
     assert_eq!(err.code(), tonic::Code::PermissionDenied);
+    assert_eq!(err.message(), "Missing or insufficient permissions.");
     assert!(
-        err.message().contains("RULES-DOC-ACCESS-MULTI-TOTAL"),
+        latest_denial(&h).contains("RULES-DOC-ACCESS-MULTI-TOTAL"),
         "{}",
-        err.message()
+        latest_denial(&h)
     );
     h.handle.abort();
 }
@@ -1191,6 +1933,7 @@ service cloud.firestore {
 }",
         )
         .unwrap();
+    trace_denials(&h);
     let batch = |n: usize| pb::BatchGetDocumentsRequest {
         database: DB.to_owned(),
         documents: (0..n).map(|i| format!("{DOCS}/items/{i}")).collect(),
@@ -1214,7 +1957,8 @@ service cloud.firestore {
         .await
         .unwrap_err();
     assert_eq!(err.code(), tonic::Code::PermissionDenied);
-    assert!(err.message().contains("RULES-DOC-ACCESS-MULTI-TOTAL"));
+    assert_eq!(err.message(), "Missing or insufficient permissions.");
+    assert!(latest_denial(&h).contains("RULES-DOC-ACCESS-MULTI-TOTAL"));
     h.handle.abort();
 }
 
@@ -1330,6 +2074,424 @@ service cloud.firestore {
             .unwrap_err();
         assert_eq!(err.code(), code, "page_size {page_size}");
     }
+    h.handle.abort();
+}
+
+#[tokio::test]
+async fn aggregation_implicit_order_does_not_change_security_rules_query_metadata() {
+    let mut h = start().await;
+    let (_, token) = h.user("aggregation@example.com");
+    h.rules.replace_source("rules_version = '2'; service cloud.firestore { match /databases/{database}/documents { match /ordered/{id} { allow list: if request.query.orderBy.size() == 0; } } }").unwrap();
+    for explicit in [false, true] {
+        let Some(pb::run_query_request::QueryType::StructuredQuery(mut query)) =
+            list("ordered").query_type
+        else {
+            panic!("structured query required")
+        };
+        if explicit {
+            query.order_by.push(sq::Order {
+                field: Some(sq::FieldReference {
+                    field_path: "x".into(),
+                }),
+                direction: sq::Direction::Ascending as i32,
+            });
+        }
+        let request = pb::RunAggregationQueryRequest {
+            parent: DOCS.into(),
+            query_type: Some(
+                pb::run_aggregation_query_request::QueryType::StructuredAggregationQuery(
+                    pb::StructuredAggregationQuery {
+                        query_type: Some(
+                            pb::structured_aggregation_query::QueryType::StructuredQuery(query),
+                        ),
+                        aggregations: vec![pb::structured_aggregation_query::Aggregation {
+                            alias: "sum".into(),
+                            operator: Some(
+                                pb::structured_aggregation_query::aggregation::Operator::Sum(
+                                    pb::structured_aggregation_query::aggregation::Sum {
+                                        field: Some(sq::FieldReference {
+                                            field_path: "x".into(),
+                                        }),
+                                    },
+                                ),
+                            ),
+                        }],
+                    },
+                ),
+            ),
+            ..Default::default()
+        };
+        let result = h
+            .client
+            .run_aggregation_query(with_bearer(request, &token))
+            .await
+            .map(|_| ())
+            .map_err(|error| error.code());
+        assert_eq!(
+            result,
+            if explicit {
+                Err(tonic::Code::PermissionDenied)
+            } else {
+                Ok(())
+            }
+        );
+    }
+    h.handle.abort();
+}
+
+#[tokio::test]
+#[allow(clippy::too_many_lines)]
+async fn query_proof_preserves_same_field_range_with_negation_filters() {
+    use sq::field_filter::Operator as Op;
+    let mut h = start().await;
+    let (_alice, alice_token) = h.user("alice@example.com");
+    h.rules
+        .replace_source(
+            "rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    match /scores/{id} { allow list: if resource.data.score > 0; }
+    match /excluded/{id} { allow list: if resource.data.score != 20; }
+    match /exact/{id} { allow list: if resource.data.score == 20; }
+    match /membership/{id} { allow list: if resource.data.score in [20, 30]; }
+    match /not-membership/{id} { allow list: if !(resource.data.score in [20, 30]); }
+    match /unknown-membership/{id} { allow list: if !(resource.data.score in [resource.data.other]); }
+  }
+}",
+        )
+        .unwrap();
+    let int = |value: i64| pb::Value {
+        value_type: Some(pb::value::ValueType::IntegerValue(value)),
+    };
+    let query = |collection: &str, range_value: i64, negation: sq::Filter| {
+        let mut request = list(collection);
+        if let Some(pb::run_query_request::QueryType::StructuredQuery(query)) =
+            &mut request.query_type
+        {
+            query.r#where = Some(sq::Filter {
+                filter_type: Some(sq::filter::FilterType::CompositeFilter(
+                    sq::CompositeFilter {
+                        op: sq::composite_filter::Operator::And as i32,
+                        filters: vec![
+                            sq::Filter {
+                                filter_type: Some(sq::filter::FilterType::FieldFilter(
+                                    sq::FieldFilter {
+                                        field: Some(sq::FieldReference {
+                                            field_path: "score".to_owned(),
+                                        }),
+                                        op: Op::GreaterThan as i32,
+                                        value: Some(int(range_value)),
+                                    },
+                                )),
+                            },
+                            negation,
+                        ],
+                    },
+                )),
+            });
+        }
+        request
+    };
+    let not_equal = |value| sq::Filter {
+        filter_type: Some(sq::filter::FilterType::FieldFilter(sq::FieldFilter {
+            field: Some(sq::FieldReference {
+                field_path: "score".to_owned(),
+            }),
+            op: Op::NotEqual as i32,
+            value: Some(int(value)),
+        })),
+    };
+    let not_in = sq::Filter {
+        filter_type: Some(sq::filter::FilterType::FieldFilter(sq::FieldFilter {
+            field: Some(sq::FieldReference {
+                field_path: "score".to_owned(),
+            }),
+            op: Op::NotIn as i32,
+            value: Some(arr(vec![int(20), int(30)])),
+        })),
+    };
+    let equal = |value| sq::Filter {
+        filter_type: Some(sq::filter::FilterType::FieldFilter(sq::FieldFilter {
+            field: Some(sq::FieldReference {
+                field_path: "score".to_owned(),
+            }),
+            op: Op::Equal as i32,
+            value: Some(int(value)),
+        })),
+    };
+    let in_values = sq::Filter {
+        filter_type: Some(sq::filter::FilterType::FieldFilter(sq::FieldFilter {
+            field: Some(sq::FieldReference {
+                field_path: "score".to_owned(),
+            }),
+            op: Op::In as i32,
+            value: Some(arr(vec![int(20), int(30)])),
+        })),
+    };
+
+    // The range proves score > 0; the negation only removes values from that range.
+    assert!(h
+        .client
+        .run_query(with_bearer(
+            query("scores", 10, not_equal(20)),
+            &alice_token
+        ))
+        .await
+        .is_ok());
+    assert!(h
+        .client
+        .run_query(with_bearer(
+            query("scores", 10, not_in.clone()),
+            &alice_token
+        ))
+        .await
+        .is_ok());
+    assert!(h
+        .client
+        .run_query(with_bearer(
+            query("excluded", 10, not_equal(20)),
+            &alice_token
+        ))
+        .await
+        .is_ok());
+    assert!(h
+        .client
+        .run_query(with_bearer(query("exact", 10, equal(20)), &alice_token))
+        .await
+        .is_ok());
+    assert!(h
+        .client
+        .run_query(with_bearer(
+            query("membership", 10, in_values),
+            &alice_token
+        ))
+        .await
+        .is_ok());
+    assert!(h
+        .client
+        .run_query(with_bearer(
+            query("not-membership", 10, not_in.clone()),
+            &alice_token
+        ))
+        .await
+        .is_ok());
+
+    // A range that still includes non-positive values cannot prove the rule.
+    assert_eq!(
+        h.client
+            .run_query(with_bearer(
+                query("scores", -10, not_equal(20)),
+                &alice_token
+            ))
+            .await
+            .unwrap_err()
+            .code(),
+        tonic::Code::PermissionDenied
+    );
+    let nonexcluded = sq::Filter {
+        filter_type: Some(sq::filter::FilterType::FieldFilter(sq::FieldFilter {
+            field: Some(sq::FieldReference {
+                field_path: "score".to_owned(),
+            }),
+            op: Op::NotIn as i32,
+            value: Some(arr(vec![int(20), int(40)])),
+        })),
+    };
+    assert_eq!(
+        h.client
+            .run_query(with_bearer(
+                query("not-membership", 10, nonexcluded),
+                &alice_token
+            ))
+            .await
+            .unwrap_err()
+            .code(),
+        tonic::Code::PermissionDenied
+    );
+    // An unknown member in the membership RHS stays undecidable and must not panic.
+    assert_eq!(
+        h.client
+            .run_query(with_bearer(
+                query("unknown-membership", 10, not_in.clone()),
+                &alice_token,
+            ))
+            .await
+            .unwrap_err()
+            .code(),
+        tonic::Code::PermissionDenied
+    );
+    h.handle.abort();
+}
+
+#[tokio::test]
+#[allow(clippy::too_many_lines)]
+async fn query_proof_preserves_parent_exclusion_with_nested_range() {
+    use sq::field_filter::Operator as Op;
+
+    let mut indexes = IndexSet::default();
+    indexes.add_composite(IndexDefinition {
+        collection_group: CollectionId::try_new("records").unwrap(),
+        query_scope: IndexQueryScope::Collection,
+        fields: vec![
+            IndexField {
+                path: FieldPath::parse("meta").unwrap(),
+                mode: IndexFieldMode::Ascending,
+            },
+            IndexField {
+                path: FieldPath::parse("meta.score").unwrap(),
+                mode: IndexFieldMode::Ascending,
+            },
+        ],
+    });
+    let mut h = start_with_indexes(indexes).await;
+    let (_alice, alice_token) = h.user("nested-range@example.com");
+    h.rules
+        .replace_source(
+            "rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    match /records/{id} { allow list: if resource.data.meta != {}; }
+  }
+}",
+        )
+        .unwrap();
+
+    let int = |value: i64| pb::Value {
+        value_type: Some(pb::value::ValueType::IntegerValue(value)),
+    };
+    let field_filter = |field: &str, op: Op, value: pb::Value| sq::Filter {
+        filter_type: Some(sq::filter::FilterType::FieldFilter(sq::FieldFilter {
+            field: Some(sq::FieldReference {
+                field_path: field.to_owned(),
+            }),
+            op: op as i32,
+            value: Some(value),
+        })),
+    };
+    let query = |filters: Vec<sq::Filter>| {
+        let mut request = list("records");
+        if let Some(pb::run_query_request::QueryType::StructuredQuery(query)) =
+            &mut request.query_type
+        {
+            query.r#where = Some(sq::Filter {
+                filter_type: Some(sq::filter::FilterType::CompositeFilter(
+                    sq::CompositeFilter {
+                        op: sq::composite_filter::Operator::And as i32,
+                        filters,
+                    },
+                )),
+            });
+        }
+        request
+    };
+    let parent_exclusion = field_filter("meta", Op::NotEqual, map(&[]));
+    let nested_range = field_filter("meta.score", Op::GreaterThan, int(10));
+
+    // The nested range and the parent exclusion must be retained together.
+    let first = h
+        .client
+        .run_query(with_bearer(
+            query(vec![parent_exclusion.clone(), nested_range.clone()]),
+            &alice_token,
+        ))
+        .await;
+    assert!(first.is_ok(), "{first:?}");
+    // Reordering equivalent filters must not change the proof.
+    assert!(h
+        .client
+        .run_query(with_bearer(
+            query(vec![nested_range.clone(), parent_exclusion.clone()]),
+            &alice_token,
+        ))
+        .await
+        .is_ok());
+
+    h.rules
+        .replace_source(
+            "rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    match /records/{id} { allow list: if resource.data.meta.score > 0; }
+  }
+}",
+        )
+        .unwrap();
+    assert!(h
+        .client
+        .run_query(with_bearer(
+            query(vec![nested_range.clone(), parent_exclusion.clone()]),
+            &alice_token,
+        ))
+        .await
+        .is_ok());
+
+    h.rules
+        .replace_source(
+            "rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    match /records/{id} { allow list: if resource.data.meta == {}; }
+  }
+}",
+        )
+        .unwrap();
+    assert_eq!(
+        h.client
+            .run_query(with_bearer(
+                query(vec![parent_exclusion.clone(), nested_range.clone()]),
+                &alice_token,
+            ))
+            .await
+            .unwrap_err()
+            .code(),
+        tonic::Code::PermissionDenied
+    );
+
+    h.rules
+        .replace_source(
+            "rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    match /records/{id} { allow list: if resource.data.meta.score > 100; }
+  }
+}",
+        )
+        .unwrap();
+    assert_eq!(
+        h.client
+            .run_query(with_bearer(
+                query(vec![parent_exclusion, nested_range]),
+                &alice_token,
+            ))
+            .await
+            .unwrap_err()
+            .code(),
+        tonic::Code::PermissionDenied
+    );
+
+    // A nested RangeExcluding value can prove inequality when the concrete
+    // candidate is one of the excluded values, even though it lies in range.
+    let nested_range_excluding = field_filter("meta.score", Op::GreaterThan, int(10));
+    let nested_not_equal = field_filter("meta.score", Op::NotEqual, int(20));
+    h.rules
+        .replace_source(
+            "rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    match /records/{id} { allow list: if resource.data.meta != { score: 20 }; }
+  }
+}",
+        )
+        .unwrap();
+    let range_excluding = h
+        .client
+        .run_query(with_bearer(
+            query(vec![nested_range_excluding, nested_not_equal]),
+            &alice_token,
+        ))
+        .await;
+    assert!(range_excluding.is_ok(), "{range_excluding:?}");
+
     h.handle.abort();
 }
 
@@ -1563,23 +2725,22 @@ service cloud.firestore {
         ))
         .await
         .is_ok());
-    // A read cannot use getAfter(): fails closed with the reason.
-    h.rules.replace_source(
-        "rules_version = '2';
+    // A read applies no write, so getAfter() reads the current state there, as production
+    // answers (FS-RULES, 2026-09-24): the counter is now 1.
+    h.rules
+        .replace_source(
+            "rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
     match /posts/{id} { allow read: if getAfter(/databases/$(database)/documents/stats/posts).data.count == 1; }
   }
 }",
-    )
-    .unwrap();
-    let err = h
-        .client
+        )
+        .unwrap();
+    h.client
         .get_document(with_bearer(get("posts/p1"), &alice_token))
         .await
-        .unwrap_err();
-    assert_eq!(err.code(), tonic::Code::PermissionDenied);
-    assert!(err.message().contains("getAfter()"), "{}", err.message());
+        .unwrap();
     h.handle.abort();
 }
 
@@ -1718,6 +2879,144 @@ async fn transactions_are_bound_to_the_token_audience_too() {
         ))
         .await
         .is_ok());
+    h.handle.abort();
+}
+
+/// A query of `open` that opens a transaction with `options`.
+fn open_query_in_new_transaction(options: pb::TransactionOptions) -> pb::RunQueryRequest {
+    pb::RunQueryRequest {
+        parent: format!("{DB}/documents"),
+        query_type: Some(pb::run_query_request::QueryType::StructuredQuery(
+            pb::StructuredQuery {
+                from: vec![pb::structured_query::CollectionSelector {
+                    collection_id: "open".to_owned(),
+                    all_descendants: false,
+                }],
+                ..Default::default()
+            },
+        )),
+        consistency_selector: Some(pb::run_query_request::ConsistencySelector::NewTransaction(
+            options,
+        )),
+        ..Default::default()
+    }
+}
+
+/// Production refuses an end user, signed in or not, a read-write transaction with the ordinary
+/// denial whatever the rules say, whether by `BeginTransaction` or by a read's
+/// `newTransaction`, and opens a read-only one (FS-RULES production recording, 2026-09-25); the
+/// official emulator opens both. The owner may, under both profiles.
+#[tokio::test]
+async fn end_users_may_not_open_a_read_write_transaction_in_production() {
+    use pb::transaction_options::{Mode, ReadOnly, ReadWrite};
+    let read_only = || pb::TransactionOptions {
+        mode: Some(Mode::ReadOnly(ReadOnly::default())),
+    };
+    let read_write = || pb::TransactionOptions {
+        mode: Some(Mode::ReadWrite(ReadWrite::default())),
+    };
+    let begin = |options: Option<pb::TransactionOptions>| pb::BeginTransactionRequest {
+        database: DB.to_owned(),
+        options,
+        ..Default::default()
+    };
+    let batch_get = |options: pb::TransactionOptions| pb::BatchGetDocumentsRequest {
+        database: DB.to_owned(),
+        documents: vec![format!("{DB}/documents/open/d")],
+        consistency_selector: Some(
+            pb::batch_get_documents_request::ConsistencySelector::NewTransaction(options),
+        ),
+        ..Default::default()
+    };
+    let mut h = start_with_enforcer(TokenAcceptance::Verified, IndexSet::default(), |e| {
+        e.with_end_user_transactions(false)
+    })
+    .await;
+    h.rules
+        .replace_source(
+            "rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    match /{document=**} { allow read, write: if true; }
+  }
+}",
+        )
+        .unwrap();
+    let (_, token) = h.user("t@example.com");
+    let denied = |err: tonic::Status| {
+        assert_eq!(err.code(), tonic::Code::PermissionDenied, "{err}");
+        assert_eq!(err.message(), "Missing or insufficient permissions.");
+    };
+    for options in [None, Some(read_write())] {
+        denied(
+            h.client
+                .begin_transaction(with_bearer(begin(options.clone()), &token))
+                .await
+                .unwrap_err(),
+        );
+        denied(
+            h.client
+                .begin_transaction(tonic::Request::new(begin(options)))
+                .await
+                .unwrap_err(),
+        );
+    }
+    denied(
+        h.client
+            .batch_get_documents(with_bearer(batch_get(read_write()), &token))
+            .await
+            .unwrap_err(),
+    );
+    denied(
+        h.client
+            .run_query(with_bearer(
+                open_query_in_new_transaction(read_write()),
+                &token,
+            ))
+            .await
+            .unwrap_err(),
+    );
+    // Read-only transactions open, for an end user as for anyone.
+    h.client
+        .begin_transaction(with_bearer(begin(Some(read_only())), &token))
+        .await
+        .unwrap();
+    h.client
+        .begin_transaction(tonic::Request::new(begin(Some(read_only()))))
+        .await
+        .unwrap();
+    h.client
+        .batch_get_documents(with_bearer(batch_get(read_only()), &token))
+        .await
+        .unwrap();
+    h.client
+        .run_query(with_bearer(
+            open_query_in_new_transaction(read_only()),
+            &token,
+        ))
+        .await
+        .unwrap();
+    // The owner opens a read-write one.
+    h.client
+        .begin_transaction(with_bearer(begin(None), "owner"))
+        .await
+        .unwrap();
+    h.handle.abort();
+}
+
+/// The official emulator opens an end user's read-write transaction.
+#[tokio::test]
+async fn end_users_open_read_write_transactions_without_production_refusals() {
+    let mut h = start().await;
+    let (_, token) = h.user("t@example.com");
+    let begin = pb::BeginTransactionRequest {
+        database: DB.to_owned(),
+        ..Default::default()
+    };
+    h.client
+        .begin_transaction(with_bearer(begin, &token))
+        .await
+        .unwrap();
     h.handle.abort();
 }
 
@@ -1911,6 +3210,7 @@ async fn the_emulator_profile_binds_unknown_mock_tokens_to_the_requested_project
     assert_eq!(err.code(), tonic::Code::Unauthenticated, "{err}");
     firebase.handle.abort();
 
+    // The strict profile refuses a token it cannot verify in production's words.
     let mut strict = start_with(TokenAcceptance::Verified).await;
     let err = strict
         .client
@@ -1924,7 +3224,7 @@ async fn the_emulator_profile_binds_unknown_mock_tokens_to_the_requested_project
         ))
         .await
         .unwrap_err();
-    assert_eq!(err.code(), tonic::Code::Unauthenticated, "{err}");
+    assert_eq!(err.code(), tonic::Code::PermissionDenied, "{err}");
 
     let (strict_tx, strict_rx) = mpsc::channel(4);
     let mut strict_responses = strict
@@ -1950,7 +3250,7 @@ async fn the_emulator_profile_binds_unknown_mock_tokens_to_the_requested_project
         .await
         .unwrap();
     let err = strict_responses.next().await.unwrap().unwrap_err();
-    assert_eq!(err.code(), tonic::Code::Unauthenticated, "{err}");
+    assert_eq!(err.code(), tonic::Code::PermissionDenied, "{err}");
     strict.handle.abort();
 }
 
@@ -1965,8 +3265,9 @@ async fn the_strict_profile_refuses_a_mock_token_the_auth_store_cannot_verify() 
         ))
         .await
         .unwrap_err();
+    // The mock token expired an hour after the epoch: production's expiry refusal.
     assert_eq!(err.code(), tonic::Code::Unauthenticated, "{err}");
-    assert!(err.message().contains("invalid ID token"), "{err}");
+    assert_eq!(err.message(), "Missing or invalid authentication.", "{err}");
     h.handle.abort();
 }
 
@@ -2011,5 +3312,922 @@ async fn the_emulator_profile_keeps_the_project_binding_and_the_signature_it_can
         .commit(with_bearer(profile_write(&uid), &token))
         .await
         .is_ok());
+    h.handle.abort();
+}
+
+/// What each client request answers while no ruleset is loaded, for one harness: `None` when
+/// it was allowed (a missing document is allowed too), else the code and message.
+async fn outcomes_without_ruleset(
+    h: &mut Harness,
+    token: &str,
+) -> Vec<Option<(tonic::Code, String)>> {
+    let refusal = |e: tonic::Status| {
+        (e.code() != tonic::Code::NotFound).then(|| (e.code(), e.message().to_owned()))
+    };
+    let mut out = Vec::new();
+    out.push(
+        h.client
+            .get_document(with_bearer(get("profiles/p1"), token))
+            .await
+            .err()
+            .and_then(refusal),
+    );
+    out.push(
+        h.client
+            .commit(with_bearer(
+                commit(vec![set_write("profiles/p2", &[("name", s("P"))])]),
+                token,
+            ))
+            .await
+            .err()
+            .and_then(refusal),
+    );
+    let query = pb::RunQueryRequest {
+        parent: DOCS.to_owned(),
+        query_type: Some(pb::run_query_request::QueryType::StructuredQuery(
+            pb::StructuredQuery {
+                from: vec![sq::CollectionSelector {
+                    collection_id: "profiles".into(),
+                    all_descendants: false,
+                }],
+                ..Default::default()
+            },
+        )),
+        ..Default::default()
+    };
+    let listed = match h.client.run_query(with_bearer(query, token)).await {
+        Ok(stream) => {
+            let mut stream = stream.into_inner();
+            let mut result = None;
+            while let Some(item) = stream.next().await {
+                if let Err(e) = item {
+                    result = refusal(e);
+                }
+            }
+            result
+        }
+        Err(e) => refusal(e),
+    };
+    out.push(listed);
+    out
+}
+
+#[tokio::test]
+async fn strict_refuses_every_client_request_while_no_ruleset_is_loaded() {
+    let mut h = start_with_options(TokenAcceptance::Verified, IndexSet::default(), true).await;
+    let (_alice, alice_token) = h.user("alice@example.com");
+    h.rules.clear().unwrap();
+    for outcome in outcomes_without_ruleset(&mut h, &alice_token).await {
+        assert_eq!(
+            outcome,
+            Some((
+                tonic::Code::PermissionDenied,
+                "Missing or insufficient permissions.".to_owned()
+            )),
+            "production refuses a client request without a release"
+        );
+    }
+    // Unauthenticated callers too, and the owner still passes.
+    let err = h.client.get_document(get("profiles/p1")).await.unwrap_err();
+    assert_eq!(err.code(), tonic::Code::PermissionDenied);
+    for outcome in outcomes_without_ruleset(&mut h, "owner").await {
+        assert_eq!(outcome, None);
+    }
+    h.handle.abort();
+}
+
+#[tokio::test]
+async fn the_emulator_profile_still_allows_everything_while_no_ruleset_is_loaded() {
+    let mut h = start_with_options(TokenAcceptance::Verified, IndexSet::default(), false).await;
+    let (_alice, alice_token) = h.user("alice@example.com");
+    h.rules.clear().unwrap();
+    for outcome in outcomes_without_ruleset(&mut h, &alice_token).await {
+        assert_eq!(outcome, None);
+    }
+    h.handle.abort();
+}
+
+/// Production answers an end user's `ListCollectionIds` and `PartitionQuery` with the same
+/// `PERMISSION_DENIED` as every Security Rules denial (FS-RULES, 2026-09-24).
+#[tokio::test]
+async fn end_users_may_not_list_collection_ids_or_partition_queries() {
+    let mut h = start().await;
+    let (_alice, alice_token) = h.user("alice@example.com");
+    let err = h
+        .client
+        .list_collection_ids(with_bearer(
+            pb::ListCollectionIdsRequest {
+                parent: DOCS.to_owned(),
+                ..Default::default()
+            },
+            &alice_token,
+        ))
+        .await
+        .unwrap_err();
+    assert_eq!(err.code(), tonic::Code::PermissionDenied);
+    assert_eq!(err.message(), "Missing or insufficient permissions.");
+    let err = h
+        .client
+        .partition_query(with_bearer(
+            pb::PartitionQueryRequest {
+                parent: DOCS.to_owned(),
+                partition_count: 2,
+                ..Default::default()
+            },
+            &alice_token,
+        ))
+        .await
+        .unwrap_err();
+    assert_eq!(err.code(), tonic::Code::PermissionDenied);
+    assert_eq!(err.message(), "Missing or insufficient permissions.");
+    // The owner is not refused.
+    h.client
+        .list_collection_ids(with_bearer(
+            pb::ListCollectionIdsRequest {
+                parent: DOCS.to_owned(),
+                ..Default::default()
+            },
+            "owner",
+        ))
+        .await
+        .unwrap();
+    h.handle.abort();
+}
+
+/// How Firestore refuses a credential it cannot use (FS-RULES production recording,
+/// 2026-09-24), before any rule is read: a token past its allowance is `UNAUTHENTICATED`
+/// "Missing or invalid authentication."; a bearer value that is not a JWT is
+/// `UNAUTHENTICATED` with the front end's OAuth text; every other unusable credential -- a
+/// JWT that does not verify, an empty bearer, another scheme -- is the ordinary
+/// `PERMISSION_DENIED`, even for a document every caller may read.
+#[tokio::test]
+async fn unusable_credentials_are_refused_in_productions_shapes() {
+    let mut h = start().await;
+    h.rules
+        .replace_source(
+            "rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    match /open/{id} { allow read: if true; }
+  }
+}",
+        )
+        .unwrap();
+    let (alice, token) = h.user("alice@example.com");
+    let expired = {
+        let store = h.auth.lock().unwrap();
+        let uid = store.user_by_id(&alice).unwrap().local_id.clone();
+        let claims = store
+            .id_token_claims(
+                &uid,
+                None,
+                LogicalInstant::from_nanos(START.as_nanos() - 7_200_000_000_000),
+            )
+            .unwrap();
+        encode_unsigned(&claims)
+    };
+    let payload = token.split('.').nth(1).unwrap();
+    let signed_garbage = format!("eyJhbGciOiJSUzI1NiJ9.{payload}.c2lnbmF0dXJl");
+    let oauth = "Request had invalid authentication credentials. Expected OAuth 2 access token, login cookie or other valid authentication credential. See https://developers.google.com/identity/sign-in/web/devconsole-project.";
+    let cases: [(&str, String, tonic::Code, &str); 6] = [
+        (
+            "expired",
+            format!("Bearer {expired}"),
+            tonic::Code::Unauthenticated,
+            "Missing or invalid authentication.",
+        ),
+        (
+            "not a JWT",
+            "Bearer fsr-not-a-token".to_owned(),
+            tonic::Code::Unauthenticated,
+            oauth,
+        ),
+        (
+            "bad signature",
+            format!("Bearer {signed_garbage}"),
+            tonic::Code::PermissionDenied,
+            "Missing or insufficient permissions.",
+        ),
+        (
+            "empty bearer",
+            "Bearer ".to_owned(),
+            tonic::Code::PermissionDenied,
+            "Missing or insufficient permissions.",
+        ),
+        (
+            "basic",
+            "Basic ZnNyOmZzcg==".to_owned(),
+            tonic::Code::PermissionDenied,
+            "Missing or insufficient permissions.",
+        ),
+        (
+            "lowercase scheme",
+            format!("bearer {token}"),
+            tonic::Code::PermissionDenied,
+            "Missing or insufficient permissions.",
+        ),
+    ];
+    for (name, header, code, message) in cases {
+        let mut request = tonic::Request::new(get("open/d"));
+        request
+            .metadata_mut()
+            .insert("authorization", header.parse().unwrap());
+        let err = h.client.get_document(request).await.unwrap_err();
+        assert_eq!((err.code(), err.message()), (code, message), "{name}");
+    }
+    // The same valid token is honoured.
+    let err = h
+        .client
+        .get_document(with_bearer(get("open/d"), &token))
+        .await
+        .unwrap_err();
+    assert_eq!(err.code(), tonic::Code::NotFound);
+    h.handle.abort();
+}
+
+/// Firestore honours an ID token for 30 seconds past its `exp` (FS-RULES production recordings,
+/// 2026-09-25: accepted at a nominal 29.8 s past it and refused at a nominal 30.3 s on REST,
+/// 29.3 s and 31.3 s on gRPC), and then refuses it as an expired credential.
+#[tokio::test]
+async fn an_id_token_is_honoured_for_thirty_seconds_past_its_expiry() {
+    let mut h = start().await;
+    h.rules
+        .replace_source(
+            "rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    match /open/{id} { allow read: if request.auth != null; }
+  }
+}",
+        )
+        .unwrap();
+    let (alice, _) = h.user("alice@example.com");
+    let expired_for = |seconds: i128| {
+        let store = h.auth.lock().unwrap();
+        let uid = store.user_by_id(&alice).unwrap().local_id.clone();
+        let claims = store
+            .id_token_claims(
+                &uid,
+                None,
+                LogicalInstant::from_nanos(START.as_nanos() - (3600 + seconds) * 1_000_000_000),
+            )
+            .unwrap();
+        encode_unsigned(&claims)
+    };
+    for seconds in [0, 1, 29] {
+        let err = h
+            .client
+            .get_document(with_bearer(get("open/d"), &expired_for(seconds)))
+            .await
+            .unwrap_err();
+        assert_eq!(err.code(), tonic::Code::NotFound, "{seconds}: {err}");
+    }
+    for seconds in [30, 31, 300] {
+        let err = h
+            .client
+            .get_document(with_bearer(get("open/d"), &expired_for(seconds)))
+            .await
+            .unwrap_err();
+        assert_eq!(
+            (err.code(), err.message()),
+            (
+                tonic::Code::Unauthenticated,
+                "Missing or invalid authentication."
+            ),
+            "{seconds}"
+        );
+    }
+    h.handle.abort();
+}
+
+/// An end user may not call `BatchWrite`: production refuses it with the ordinary denial and the
+/// official emulator with "Batch writes require admin authentication." (FS-RULES, 2026-09-24),
+/// whatever the rules would say of each write. The owner may.
+#[tokio::test]
+async fn end_users_may_not_batch_write() {
+    let mut h = start().await;
+    let (alice, alice_token) = h.user("alice@example.com");
+    let request = || pb::BatchWriteRequest {
+        database: DB.to_owned(),
+        writes: vec![set_write(
+            &format!("profiles/{alice}"),
+            &[("name", s("Alice"))],
+        )],
+        ..Default::default()
+    };
+    let err = h
+        .client
+        .batch_write(with_bearer(request(), &alice_token))
+        .await
+        .unwrap_err();
+    assert_eq!(err.code(), tonic::Code::PermissionDenied);
+    assert_eq!(err.message(), "Missing or insufficient permissions.");
+    h.client
+        .batch_write(with_bearer(request(), "owner"))
+        .await
+        .unwrap();
+    h.handle.abort();
+}
+
+/// A query may make 20 distinct document reads in its rule, as many as a multi-document
+/// request; the 21st is refused, as production and the official emulator answer (FS-RULES).
+#[tokio::test]
+async fn a_query_rule_may_read_twenty_documents() {
+    let mut h = start().await;
+    let (_alice, alice_token) = h.user("alice@example.com");
+    let gets = |n: usize| {
+        (0..n)
+            .map(|i| format!("exists(/databases/$(database)/documents/d/{i})"))
+            .collect::<Vec<_>>()
+            .join(" || ")
+    };
+    h.rules
+        .replace_source(&format!(
+            "rules_version = '2';
+service cloud.firestore {{
+  match /databases/{{database}}/documents {{
+    match /twenty/{{id}} {{ allow list: if !({}); }}
+    match /twentyone/{{id}} {{ allow list: if !({}); }}
+  }}
+}}",
+            gets(20),
+            gets(21)
+        ))
+        .unwrap();
+    let query = |collection: &str| pb::RunQueryRequest {
+        parent: DOCS.to_owned(),
+        query_type: Some(pb::run_query_request::QueryType::StructuredQuery(
+            pb::StructuredQuery {
+                from: vec![sq::CollectionSelector {
+                    collection_id: collection.into(),
+                    all_descendants: false,
+                }],
+                ..Default::default()
+            },
+        )),
+        ..Default::default()
+    };
+    let mut ok = h
+        .client
+        .run_query(with_bearer(query("twenty"), &alice_token))
+        .await
+        .unwrap()
+        .into_inner();
+    while let Some(item) = ok.next().await {
+        item.unwrap();
+    }
+    let refused = match h
+        .client
+        .run_query(with_bearer(query("twentyone"), &alice_token))
+        .await
+    {
+        Err(e) => e,
+        Ok(stream) => stream.into_inner().next().await.unwrap().unwrap_err(),
+    };
+    assert_eq!(refused.code(), tonic::Code::PermissionDenied);
+    h.handle.abort();
+}
+
+/// A query counts distinct document paths once when a read rule uses `getAfter()`, including
+/// a path also read by `exists()`. The 21st distinct path still exceeds the shared limit.
+#[tokio::test]
+async fn a_query_rule_counts_get_after_by_distinct_document_path() {
+    let mut h = start().await;
+    let (_alice, alice_token) = h.user("alice@example.com");
+    let afters = |n: usize| {
+        (0..n)
+            .map(|i| format!("existsAfter(/databases/$(database)/documents/d/{i})"))
+            .collect::<Vec<_>>()
+            .join(" || ")
+    };
+    h.rules
+        .replace_source(&format!(
+            "rules_version = '2';
+service cloud.firestore {{
+  match /databases/{{database}}/documents {{
+    match /aftereleven/{{id}} {{ allow list: if !({}); }}
+    match /aftertwenty/{{id}} {{ allow list: if !({}); }}
+    match /aftertwentyone/{{id}} {{ allow list: if !({}); }}
+    match /mixedtwenty/{{id}} {{ allow list: if !(({}) || exists(/databases/$(database)/documents/d/0)); }}
+  }}
+}}",
+            afters(11),
+            afters(20),
+            afters(21),
+            afters(20),
+        ))
+        .unwrap();
+    let query = |collection: &str| pb::RunQueryRequest {
+        parent: DOCS.to_owned(),
+        query_type: Some(pb::run_query_request::QueryType::StructuredQuery(
+            pb::StructuredQuery {
+                from: vec![sq::CollectionSelector {
+                    collection_id: collection.into(),
+                    all_descendants: false,
+                }],
+                ..Default::default()
+            },
+        )),
+        ..Default::default()
+    };
+    for collection in ["aftereleven", "aftertwenty", "mixedtwenty"] {
+        let mut accepted = h
+            .client
+            .run_query(with_bearer(query(collection), &alice_token))
+            .await
+            .unwrap()
+            .into_inner();
+        while let Some(item) = accepted.next().await {
+            item.unwrap();
+        }
+    }
+    let refused = match h
+        .client
+        .run_query(with_bearer(query("aftertwentyone"), &alice_token))
+        .await
+    {
+        Err(error) => error,
+        Ok(stream) => stream.into_inner().next().await.unwrap().unwrap_err(),
+    };
+    assert_eq!(refused.code(), tonic::Code::PermissionDenied);
+    h.handle.abort();
+}
+
+/// Production's `request.query` has nine keys, not the three documented (FS-RULES exploration
+/// 2026-09-25, not evidence; the recorded rows see `keys().hasOnly(['limit', 'offset',
+/// 'orderBy'])` denied): `kind` is the collection id, `parent` null at the root and the parent
+/// document's path below one, `allDescendants` and `distinct` false, `groupBy` an empty map and
+/// `selectOnlyKeys` false, even for a query that selects only `__name__`.
+#[tokio::test]
+async fn request_query_carries_productions_nine_keys() {
+    let mut h = start().await;
+    let (_alice, alice_token) = h.user("alice@example.com");
+    let ninth = fireemu_adapter_grpc::rules::REQUEST_QUERY_KEYS_ONLY_KEY;
+    h.rules
+        .replace_source(&format!(
+            "rules_version = '2';
+service cloud.firestore {{
+  match /databases/{{database}}/documents {{
+    match /nine/{{id}} {{ allow list: if request.query.size() == 9 && request.query.keys().hasAll(['limit', 'offset', 'orderBy', 'allDescendants', 'distinct', 'groupBy', 'kind', 'parent', '{ninth}']); }}
+    match /three/{{id}} {{ allow list: if request.query.keys().hasOnly(['limit', 'offset', 'orderBy']); }}
+    match /values/{{id}} {{ allow list: if request.query.kind == 'values' && request.query.parent == null && request.query.allDescendants == false && request.query.distinct == false && request.query.groupBy == {{}} && request.query['{ninth}'] == false; }}
+    match /p/x/nested/{{id}} {{ allow list: if request.query.kind == 'nested' && request.query.parent == /databases/$(database)/documents/p/x && request.query.size() == 9; }}
+    match /keys/{{id}} {{ allow list: if request.query['{ninth}'] == false && request.query.size() == 9; }}
+    match /{{path=**}}/group/{{id}} {{ allow list: if request.query.allDescendants == true && request.query.kind == 'group'; }}
+  }}
+}}"
+        ))
+        .unwrap();
+    let run = |collection: &'static str, all_descendants: bool| pb::RunQueryRequest {
+        parent: if collection == "nested" {
+            format!("{DOCS}/p/x")
+        } else {
+            DOCS.to_owned()
+        },
+        query_type: Some(pb::run_query_request::QueryType::StructuredQuery(
+            pb::StructuredQuery {
+                from: vec![sq::CollectionSelector {
+                    collection_id: collection.into(),
+                    all_descendants,
+                }],
+                select: (collection == "keys").then(|| sq::Projection {
+                    fields: vec![sq::FieldReference {
+                        field_path: "__name__".into(),
+                    }],
+                }),
+                ..Default::default()
+            },
+        )),
+        ..Default::default()
+    };
+    for (collection, group, allowed) in [
+        ("nine", false, true),
+        ("three", false, false),
+        ("values", false, true),
+        ("group", true, true),
+        ("nested", false, true),
+        ("keys", false, true),
+    ] {
+        let outcome = match h
+            .client
+            .run_query(with_bearer(run(collection, group), &alice_token))
+            .await
+        {
+            Err(e) => Err(e.code()),
+            Ok(stream) => {
+                let mut stream = stream.into_inner();
+                let mut result = Ok(());
+                while let Some(item) = stream.next().await {
+                    if let Err(e) = item {
+                        result = Err(e.code());
+                    }
+                }
+                result
+            }
+        };
+        let expected = if allowed {
+            Ok(())
+        } else {
+            Err(tonic::Code::PermissionDenied)
+        };
+        assert_eq!(outcome, expected, "{collection}");
+    }
+    h.handle.abort();
+}
+
+/// `request.query` for the query shapes the exploratory probes did not reach (not observed in
+/// production): a collection-group query under a parent document, a query without a collection
+/// id over every descendant (`kind` empty), and a query by `__name__`, which is authorized name
+/// by name.
+#[tokio::test]
+async fn request_query_values_for_group_kindless_and_named_queries() {
+    let mut h = start().await;
+    let (_alice, alice_token) = h.user("alice@example.com");
+    h.rules
+        .replace_source(
+            "rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    match /{path=**}/grp/{id} { allow list: if request.query.allDescendants == true && request.query.kind == 'grp' && request.query.parent == /databases/$(database)/documents/p/x; }
+    match /named/{id} { allow list: if request.query.size() == 9 && request.query.kind == 'named' && request.query.parent == null && request.query.allDescendants == false; }
+    match /{document=**} { allow list: if request.query.kind == '' && request.query.allDescendants == true && request.query.parent == null; }
+  }
+}",
+        )
+        .unwrap();
+    let query = |parent: String, collection: &str, all_descendants: bool, name: Option<&str>| {
+        pb::RunQueryRequest {
+            parent,
+            query_type: Some(pb::run_query_request::QueryType::StructuredQuery(
+                pb::StructuredQuery {
+                    from: vec![sq::CollectionSelector {
+                        collection_id: collection.into(),
+                        all_descendants,
+                    }],
+                    r#where: name.map(|name| sq::Filter {
+                        filter_type: Some(sq::filter::FilterType::FieldFilter(sq::FieldFilter {
+                            field: Some(sq::FieldReference {
+                                field_path: "__name__".into(),
+                            }),
+                            op: sq::field_filter::Operator::Equal as i32,
+                            value: Some(pb::Value {
+                                value_type: Some(pb::value::ValueType::ReferenceValue(format!(
+                                    "{DOCS}/{name}"
+                                ))),
+                            }),
+                        })),
+                    }),
+                    order_by: if collection.is_empty() {
+                        vec![sq::Order {
+                            field: Some(sq::FieldReference {
+                                field_path: "__name__".into(),
+                            }),
+                            direction: sq::Direction::Ascending as i32,
+                        }]
+                    } else {
+                        Vec::new()
+                    },
+                    ..Default::default()
+                },
+            )),
+            ..Default::default()
+        }
+    };
+    for (name, request) in [
+        (
+            "group under a document",
+            query(format!("{DOCS}/p/x"), "grp", true, None),
+        ),
+        ("kindless", query(DOCS.to_owned(), "", true, None)),
+        (
+            "by name",
+            query(DOCS.to_owned(), "named", false, Some("named/a")),
+        ),
+    ] {
+        let mut stream = h
+            .client
+            .run_query(with_bearer(request, &alice_token))
+            .await
+            .unwrap_or_else(|e| panic!("{name}: {e}"))
+            .into_inner();
+        while let Some(item) = stream.next().await {
+            item.unwrap_or_else(|e| panic!("{name}: {e}"));
+        }
+    }
+    h.handle.abort();
+}
+
+/// `request.query` always carries `limit`, `offset` and `orderBy`; `orderBy` is a map, empty
+/// when the query has no order (the official emulator; production refuses `orderBy == null`).
+#[tokio::test]
+async fn request_query_always_has_an_order_by_map() {
+    let mut h = start().await;
+    let (_alice, alice_token) = h.user("alice@example.com");
+    h.rules
+        .replace_source(
+            "rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    match /map/{id} { allow list: if request.query.orderBy is map && request.query.orderBy.size() == 0; }
+    match /keys/{id} { allow list: if request.query.keys().hasAll(['limit', 'offset', 'orderBy']); }
+    match /null/{id} { allow list: if request.query.orderBy == null; }
+  }
+}",
+        )
+        .unwrap();
+    let run = |collection: &'static str| pb::RunQueryRequest {
+        parent: DOCS.to_owned(),
+        query_type: Some(pb::run_query_request::QueryType::StructuredQuery(
+            pb::StructuredQuery {
+                from: vec![sq::CollectionSelector {
+                    collection_id: collection.into(),
+                    all_descendants: false,
+                }],
+                ..Default::default()
+            },
+        )),
+        ..Default::default()
+    };
+    for (collection, allowed) in [("map", true), ("keys", true), ("null", false)] {
+        let outcome = match h
+            .client
+            .run_query(with_bearer(run(collection), &alice_token))
+            .await
+        {
+            Err(e) => Err(e.code()),
+            Ok(stream) => {
+                let mut stream = stream.into_inner();
+                let mut result = Ok(());
+                while let Some(item) = stream.next().await {
+                    if let Err(e) = item {
+                        result = Err(e.code());
+                    }
+                }
+                result
+            }
+        };
+        assert_eq!(outcome.is_ok(), allowed, "{collection}: {outcome:?}");
+    }
+    h.handle.abort();
+}
+
+/// The rules judge a write by the method its precondition names: `exists: false` is a create
+/// and `exists: true` an update, whatever the document is now (FS-RULES production recording,
+/// 2026-09-24). A write the rules allow is then refused by its failed precondition; one they
+/// deny is refused by them.
+#[tokio::test]
+async fn the_rules_method_follows_the_precondition() {
+    let mut h = start().await;
+    let (_alice, alice_token) = h.user("alice@example.com");
+    h.rules
+        .replace_source(
+            "rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    match /created/{id} { allow create: if request.resource.data.ok == true; }
+    match /updated/{id} { allow update: if request.resource.data.ok == true; }
+  }
+}",
+        )
+        .unwrap();
+    for doc in ["created/present", "updated/present"] {
+        h.client
+            .commit(with_bearer(
+                commit(vec![set_write(doc, &[("n", s("1"))])]),
+                "owner",
+            ))
+            .await
+            .unwrap();
+    }
+    let ok = |value: bool| pb::Value {
+        value_type: Some(pb::value::ValueType::BooleanValue(value)),
+    };
+    let write = |doc: &str, allowed: bool, exists: bool| {
+        let mut w = set_write(doc, &[("ok", ok(allowed))]);
+        w.current_document = Some(pb::Precondition {
+            condition_type: Some(pb::precondition::ConditionType::Exists(exists)),
+        });
+        w
+    };
+    for (name, w, expected) in [
+        (
+            "create allowed, exists",
+            write("created/present", true, false),
+            tonic::Code::AlreadyExists,
+        ),
+        (
+            "create denied, exists",
+            write("created/present", false, false),
+            tonic::Code::PermissionDenied,
+        ),
+        (
+            "update allowed, missing",
+            write("updated/missing", true, true),
+            tonic::Code::NotFound,
+        ),
+        (
+            "update denied, missing",
+            write("updated/missing", false, true),
+            tonic::Code::PermissionDenied,
+        ),
+        // Without a create rule a create is denied even of a document that exists.
+        (
+            "create of an updatable document",
+            write("updated/present", true, false),
+            tonic::Code::PermissionDenied,
+        ),
+    ] {
+        let err = h
+            .client
+            .commit(with_bearer(commit(vec![w]), &alice_token))
+            .await
+            .unwrap_err();
+        assert_eq!(err.code(), expected, "{name}: {err}");
+    }
+    h.handle.abort();
+}
+
+/// `n` negated `exists()` calls on distinct documents named after the rule's `id`.
+fn distinct_reads(prefix: &str, n: usize) -> String {
+    (0..n)
+        .map(|k| format!("!exists(/databases/$(database)/documents/m/$({prefix} + '-{k}'))"))
+        .collect::<Vec<_>>()
+        .join(" && ")
+}
+
+async fn drained<T>(
+    stream: Result<tonic::Response<tonic::Streaming<T>>, tonic::Status>,
+) -> Result<(), tonic::Code> {
+    let mut stream = stream.map_err(|e| e.code())?.into_inner();
+    while let Some(item) = stream.next().await {
+        item.map_err(|e| e.code())?;
+    }
+    Ok(())
+}
+
+/// A multi-document request may make 20 distinct document reads in its rules, not 19: two
+/// documents whose rules read 10 each, by batchGet, by a commit and by a query that names its
+/// document (FS-RULES: `commit-10-and-10` allowed).
+#[tokio::test]
+async fn a_multi_document_request_may_read_exactly_twenty_documents() {
+    let mut h = start().await;
+    let (_, token) = h.user("t@example.com");
+    h.rules
+        .replace_source(&format!(
+            "rules_version = '2';
+service cloud.firestore {{
+  match /databases/{{database}}/documents {{
+    match /bg/{{id}} {{ allow get, create: if {}; }}
+    match /nm/{{id}} {{ allow list: if {}; }}
+  }}
+}}",
+            distinct_reads("id", 10),
+            distinct_reads("'n'", 20)
+        ))
+        .unwrap();
+    let batch = pb::BatchGetDocumentsRequest {
+        database: DB.to_owned(),
+        documents: vec![format!("{DOCS}/bg/a"), format!("{DOCS}/bg/b")],
+        ..Default::default()
+    };
+    assert_eq!(
+        drained(
+            h.client
+                .batch_get_documents(with_bearer(batch, &token))
+                .await
+        )
+        .await,
+        Ok(())
+    );
+    let create = |id: &str| {
+        let mut write = set_write(&format!("bg/{id}"), &[]);
+        write.current_document = Some(pb::Precondition {
+            condition_type: Some(pb::precondition::ConditionType::Exists(false)),
+        });
+        write
+    };
+    let commit = pb::CommitRequest {
+        database: DB.to_owned(),
+        writes: vec![create("c"), create("d")],
+        ..Default::default()
+    };
+    h.client
+        .commit(with_bearer(commit, &token))
+        .await
+        .expect("two creates reading 10 documents each");
+    let named = pb::RunQueryRequest {
+        parent: DOCS.to_owned(),
+        query_type: Some(pb::run_query_request::QueryType::StructuredQuery(
+            pb::StructuredQuery {
+                from: vec![sq::CollectionSelector {
+                    collection_id: "nm".into(),
+                    all_descendants: false,
+                }],
+                r#where: Some(sq::Filter {
+                    filter_type: Some(sq::filter::FilterType::FieldFilter(sq::FieldFilter {
+                        field: Some(sq::FieldReference {
+                            field_path: "__name__".into(),
+                        }),
+                        op: sq::field_filter::Operator::Equal as i32,
+                        value: Some(pb::Value {
+                            value_type: Some(pb::value::ValueType::ReferenceValue(format!(
+                                "{DOCS}/nm/a"
+                            ))),
+                        }),
+                    })),
+                }),
+                ..Default::default()
+            },
+        )),
+        ..Default::default()
+    };
+    assert_eq!(
+        drained(h.client.run_query(with_bearer(named, &token)).await).await,
+        Ok(())
+    );
+    h.handle.abort();
+}
+
+/// A denial's trace names the end user it refused.
+#[tokio::test]
+async fn a_denial_trace_names_the_user() {
+    let mut h = start().await;
+    let (alice, token) = h.user("alice@example.com");
+    trace_denials(&h);
+    let request = pb::ListCollectionIdsRequest {
+        parent: DOCS.to_owned(),
+        ..Default::default()
+    };
+    let err = h
+        .client
+        .list_collection_ids(with_bearer(request, &token))
+        .await
+        .unwrap_err();
+    assert_eq!(err.code(), tonic::Code::PermissionDenied);
+    let active = h.rules.snapshot().unwrap();
+    let diagnostics = active.diagnostics.lock().unwrap();
+    let trace = diagnostics
+        .requests()
+        .into_iter()
+        .find(|trace| !trace.allowed)
+        .expect("the denial is traced");
+    assert_eq!(trace.uid.as_deref(), Some(alice.as_str()));
+    drop(diagnostics);
+    h.handle.abort();
+}
+
+/// A signer that signs by reversing the input: enough to make the store verify signatures.
+struct ReversingSigner;
+
+impl fireemu_core_auth::jwt::IdTokenSigner for ReversingSigner {
+    fn alg(&self) -> &'static str {
+        "RS256"
+    }
+    fn kid(&self) -> &'static str {
+        "test"
+    }
+    fn sign(&self, signing_input: &[u8]) -> Vec<u8> {
+        signing_input.iter().rev().copied().collect()
+    }
+    fn verify(&self, signing_input: &[u8], signature: &[u8]) -> bool {
+        self.sign(signing_input) == signature
+    }
+    fn public_jwk_json(&self) -> String {
+        "{}".to_owned()
+    }
+}
+
+/// The emulator profile keeps its own text for an expired token of a signing session; the
+/// production text is the strict profile's.
+#[tokio::test]
+async fn the_emulator_profile_keeps_its_expired_token_text() {
+    let mut h = start_with(TokenAcceptance::EmulatorMock).await;
+    h.rules
+        .replace_source(
+            "rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    match /open/{id} { allow read: if true; }
+  }
+}",
+        )
+        .unwrap();
+    let expired = {
+        let mut store = h.auth.lock().unwrap();
+        store.set_signer(Arc::new(ReversingSigner));
+        let issued = LogicalInstant::from_nanos(START.as_nanos() - 3_700 * 1_000_000_000);
+        let uid = store
+            .create_user(NewUser::email("late@example.com"), issued)
+            .unwrap();
+        let claims = store.id_token_claims(&uid, None, issued).unwrap();
+        fireemu_core_auth::jwt::encode_with(&claims, store.signer())
+    };
+    let err = h
+        .client
+        .get_document(with_bearer(get("open/d"), &expired))
+        .await
+        .unwrap_err();
+    assert_eq!(err.code(), tonic::Code::Unauthenticated, "{err}");
+    assert!(err.message().starts_with("invalid ID token"), "{err}");
     h.handle.abort();
 }

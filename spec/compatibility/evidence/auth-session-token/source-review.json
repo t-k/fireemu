@@ -1,0 +1,371 @@
+{
+  "schemaVersion": 1,
+  "kind": "agent-authored-source-review",
+  "reviewer": "Codex (agent-authored interpretation, not human approval)",
+  "reviewedAt": "2026-09-10",
+  "executionApproval": "not-granted",
+  "sources": [
+    {
+      "id": "auth-rest",
+      "url": "https://firebase.google.com/docs/reference/rest/auth",
+      "rawSha256": "c3454bcf8f4e565422657ba8d55ea0d23bb3d82a2bfbc0a3c6aaabdcfc888af8",
+      "bodySha256": "a9b8129d0d42db1aa1b7eed2121ac7dc2be6d5b53c3976502ecf6b753b09c0c9",
+      "fetchedAt": "2026-09-10T04:04:29.598062+00:00",
+      "locators": [
+        "section-create-email-password",
+        "section-sign-in-email-password",
+        "section-change-password",
+        "section-get-account-info",
+        "section-refresh-token",
+        "section-delete-account"
+      ]
+    },
+    {
+      "id": "password-policy",
+      "url": "https://docs.cloud.google.com/identity-platform/docs/reference/rest/v2/TopLevel/getPasswordPolicy",
+      "rawSha256": "e0358d44836900cf88704efeb032ea23674afa1be5f60badd618631aae9319e6",
+      "bodySha256": "32ee1fa52b8d6dcdeb7c051dcd34d22378ed5e6fac51aed65092f26879ee26fe",
+      "fetchedAt": "2026-09-10T05:41:19.870929+00:00",
+      "locators": [
+        "response-body",
+        "customstrengthoptions",
+        "enforcementstate"
+      ]
+    },
+    {
+      "id": "email-privacy",
+      "url": "https://docs.cloud.google.com/identity-platform/docs/admin/email-enumeration-protection",
+      "rawSha256": "0ae2cb918d4d56d047a2b928a5eb66d96a80127fb60a7ed55e5389f5551a8834",
+      "bodySha256": "6457558a31c25b2f770f277c29839eecc1fa2f5e0c3878f2e3df3911e2a3061a",
+      "fetchedAt": "2026-09-10T05:41:20.751654+00:00",
+      "locators": [
+        "overview",
+        "example_of_an_error_response"
+      ]
+    },
+    {
+      "id": "session-management",
+      "url": "https://firebase.google.com/docs/auth/admin/manage-sessions",
+      "rawSha256": "c569fd71427ca95d1a0d2c5fa3e1be02ed2a99fb8d3d3dd369640564890768ba",
+      "bodySha256": "5302929198bef46eff0214c11609881bd610df20af898cc9a411a6c0b8185a9f",
+      "fetchedAt": "2026-09-10T06:28:09.936836+00:00",
+      "locators": [
+        "revoke_refresh_tokens",
+        "detect_id_token_revocation",
+        "detect_id_token_revocation_in_the_sdk"
+      ]
+    }
+  ],
+  "obligations": [
+    {
+      "id": "AUTH-SESSION-SIGNUP",
+      "case": "signup",
+      "basis": "harness-control",
+      "source": "auth-rest",
+      "locator": "section-create-email-password",
+      "condition": "signup: establish same-account baseline/control for the fixed REST experiment. Require successful same-account operation; no SDK or revocation inference.",
+      "existingRequirement": null
+    },
+    {
+      "id": "AUTH-SESSION-SIGNIN-A",
+      "case": "signin-a",
+      "basis": "harness-control",
+      "source": "auth-rest",
+      "locator": "section-sign-in-email-password",
+      "condition": "signin-a: establish same-account baseline/control for the fixed REST experiment. Require successful same-account operation; no SDK or revocation inference.",
+      "existingRequirement": null
+    },
+    {
+      "id": "AUTH-SESSION-SIGNIN-B",
+      "case": "signin-b",
+      "basis": "harness-control",
+      "source": "auth-rest",
+      "locator": "section-sign-in-email-password",
+      "condition": "signin-b: establish same-account baseline/control for the fixed REST experiment. Require successful same-account operation; no SDK or revocation inference.",
+      "existingRequirement": null
+    },
+    {
+      "id": "AUTH-SESSION-A-ID-BASELINE",
+      "case": "a-id-baseline",
+      "basis": "harness-control",
+      "source": "auth-rest",
+      "locator": "section-get-account-info",
+      "condition": "a-id-baseline: establish same-account baseline/control for the fixed REST experiment. Require successful same-account operation; no SDK or revocation inference.",
+      "existingRequirement": null
+    },
+    {
+      "id": "AUTH-SESSION-A-REFRESH-BASELINE-1",
+      "case": "a-refresh-baseline-1",
+      "basis": "harness-control",
+      "source": "auth-rest",
+      "locator": "section-refresh-token",
+      "condition": "a-refresh-baseline-1: establish same-account baseline/control for the fixed REST experiment. Reuse the original refresh token, require exchange and issued-ID lookup; do not replace its input after rotation.",
+      "existingRequirement": null
+    },
+    {
+      "id": "AUTH-SESSION-A-REFRESH-BASELINE-2",
+      "case": "a-refresh-baseline-2",
+      "basis": "harness-control",
+      "source": "auth-rest",
+      "locator": "section-refresh-token",
+      "condition": "a-refresh-baseline-2: establish same-account baseline/control for the fixed REST experiment. Reuse the original refresh token, require exchange and issued-ID lookup; do not replace its input after rotation.",
+      "existingRequirement": null
+    },
+    {
+      "id": "AUTH-SESSION-B-ID-BASELINE",
+      "case": "b-id-baseline",
+      "basis": "harness-control",
+      "source": "auth-rest",
+      "locator": "section-get-account-info",
+      "condition": "b-id-baseline: establish same-account baseline/control for the fixed REST experiment. Require successful same-account operation; no SDK or revocation inference.",
+      "existingRequirement": null
+    },
+    {
+      "id": "AUTH-SESSION-B-REFRESH-BASELINE-1",
+      "case": "b-refresh-baseline-1",
+      "basis": "harness-control",
+      "source": "auth-rest",
+      "locator": "section-refresh-token",
+      "condition": "b-refresh-baseline-1: establish same-account baseline/control for the fixed REST experiment. Reuse the original refresh token, require exchange and issued-ID lookup; do not replace its input after rotation.",
+      "existingRequirement": null
+    },
+    {
+      "id": "AUTH-SESSION-B-REFRESH-BASELINE-2",
+      "case": "b-refresh-baseline-2",
+      "basis": "harness-control",
+      "source": "auth-rest",
+      "locator": "section-refresh-token",
+      "condition": "b-refresh-baseline-2: establish same-account baseline/control for the fixed REST experiment. Reuse the original refresh token, require exchange and issued-ID lookup; do not replace its input after rotation.",
+      "existingRequirement": null
+    },
+    {
+      "id": "AUTH-SESSION-CHANGE-PASSWORD",
+      "case": "change-password",
+      "basis": "harness-control",
+      "source": "auth-rest",
+      "locator": "section-change-password",
+      "condition": "change-password: establish same-account baseline/control for the fixed REST experiment. Use A's original ID token and a distinct compliant password after separated-second baseline issuance.",
+      "existingRequirement": null
+    },
+    {
+      "id": "AUTH-SESSION-A-ID-0",
+      "case": "a-id@0",
+      "basis": "diagnostic-observation",
+      "source": "auth-rest",
+      "locator": "section-get-account-info",
+      "condition": "At fixed target offset 0ms, use immutable a-id credentials. Record actual HTTP/error/identity and time. No uniform rejection expectation: record accepted or auth-rejected, with other responses unresolved.",
+      "existingRequirement": null
+    },
+    {
+      "id": "AUTH-SESSION-A-REFRESH-0",
+      "case": "a-refresh@0",
+      "basis": "diagnostic-observation",
+      "source": "auth-rest",
+      "locator": "section-refresh-token",
+      "condition": "At fixed target offset 0ms, use immutable a-refresh credentials. Record actual HTTP/error/identity and time. If exchange is accepted, separately lookup using its returned ID token; preserve rotation as a boolean. No uniform rejection expectation: record accepted or auth-rejected, with other responses unresolved.",
+      "existingRequirement": null
+    },
+    {
+      "id": "AUTH-SESSION-B-ID-0",
+      "case": "b-id@0",
+      "basis": "diagnostic-observation",
+      "source": "auth-rest",
+      "locator": "section-get-account-info",
+      "condition": "At fixed target offset 0ms, use immutable b-id credentials. Record actual HTTP/error/identity and time. No uniform rejection expectation: record accepted or auth-rejected, with other responses unresolved.",
+      "existingRequirement": null
+    },
+    {
+      "id": "AUTH-SESSION-B-REFRESH-0",
+      "case": "b-refresh@0",
+      "basis": "diagnostic-observation",
+      "source": "auth-rest",
+      "locator": "section-refresh-token",
+      "condition": "At fixed target offset 0ms, use immutable b-refresh credentials. Record actual HTTP/error/identity and time. If exchange is accepted, separately lookup using its returned ID token; preserve rotation as a boolean. No uniform rejection expectation: record accepted or auth-rejected, with other responses unresolved.",
+      "existingRequirement": null
+    },
+    {
+      "id": "AUTH-SESSION-CHANGED-ID-0",
+      "case": "changed-id@0",
+      "basis": "diagnostic-observation",
+      "source": "auth-rest",
+      "locator": "section-get-account-info",
+      "condition": "At fixed target offset 0ms, use immutable changed-id credentials. Record actual HTTP/error/identity and time. Fresh control must remain usable; failure makes comparison inconclusive.",
+      "existingRequirement": null
+    },
+    {
+      "id": "AUTH-SESSION-CHANGED-REFRESH-0",
+      "case": "changed-refresh@0",
+      "basis": "diagnostic-observation",
+      "source": "auth-rest",
+      "locator": "section-refresh-token",
+      "condition": "At fixed target offset 0ms, use immutable changed-refresh credentials. Record actual HTTP/error/identity and time. If exchange is accepted, separately lookup using its returned ID token; preserve rotation as a boolean. Fresh control must remain usable; failure makes comparison inconclusive.",
+      "existingRequirement": null
+    },
+    {
+      "id": "AUTH-SESSION-A-ID-10000",
+      "case": "a-id@10000",
+      "basis": "diagnostic-observation",
+      "source": "auth-rest",
+      "locator": "section-get-account-info",
+      "condition": "At fixed target offset 10000ms, use immutable a-id credentials. Record actual HTTP/error/identity and time. No uniform rejection expectation: record accepted or auth-rejected, with other responses unresolved.",
+      "existingRequirement": null
+    },
+    {
+      "id": "AUTH-SESSION-A-REFRESH-10000",
+      "case": "a-refresh@10000",
+      "basis": "diagnostic-observation",
+      "source": "auth-rest",
+      "locator": "section-refresh-token",
+      "condition": "At fixed target offset 10000ms, use immutable a-refresh credentials. Record actual HTTP/error/identity and time. If exchange is accepted, separately lookup using its returned ID token; preserve rotation as a boolean. No uniform rejection expectation: record accepted or auth-rejected, with other responses unresolved.",
+      "existingRequirement": null
+    },
+    {
+      "id": "AUTH-SESSION-B-ID-10000",
+      "case": "b-id@10000",
+      "basis": "diagnostic-observation",
+      "source": "auth-rest",
+      "locator": "section-get-account-info",
+      "condition": "At fixed target offset 10000ms, use immutable b-id credentials. Record actual HTTP/error/identity and time. No uniform rejection expectation: record accepted or auth-rejected, with other responses unresolved.",
+      "existingRequirement": null
+    },
+    {
+      "id": "AUTH-SESSION-B-REFRESH-10000",
+      "case": "b-refresh@10000",
+      "basis": "diagnostic-observation",
+      "source": "auth-rest",
+      "locator": "section-refresh-token",
+      "condition": "At fixed target offset 10000ms, use immutable b-refresh credentials. Record actual HTTP/error/identity and time. If exchange is accepted, separately lookup using its returned ID token; preserve rotation as a boolean. No uniform rejection expectation: record accepted or auth-rejected, with other responses unresolved.",
+      "existingRequirement": null
+    },
+    {
+      "id": "AUTH-SESSION-CHANGED-ID-10000",
+      "case": "changed-id@10000",
+      "basis": "diagnostic-observation",
+      "source": "auth-rest",
+      "locator": "section-get-account-info",
+      "condition": "At fixed target offset 10000ms, use immutable changed-id credentials. Record actual HTTP/error/identity and time. Fresh control must remain usable; failure makes comparison inconclusive.",
+      "existingRequirement": null
+    },
+    {
+      "id": "AUTH-SESSION-CHANGED-REFRESH-10000",
+      "case": "changed-refresh@10000",
+      "basis": "diagnostic-observation",
+      "source": "auth-rest",
+      "locator": "section-refresh-token",
+      "condition": "At fixed target offset 10000ms, use immutable changed-refresh credentials. Record actual HTTP/error/identity and time. If exchange is accepted, separately lookup using its returned ID token; preserve rotation as a boolean. Fresh control must remain usable; failure makes comparison inconclusive.",
+      "existingRequirement": null
+    },
+    {
+      "id": "AUTH-SESSION-A-ID-30000",
+      "case": "a-id@30000",
+      "basis": "diagnostic-observation",
+      "source": "auth-rest",
+      "locator": "section-get-account-info",
+      "condition": "At fixed target offset 30000ms, use immutable a-id credentials. Record actual HTTP/error/identity and time. No uniform rejection expectation: record accepted or auth-rejected, with other responses unresolved.",
+      "existingRequirement": null
+    },
+    {
+      "id": "AUTH-SESSION-A-REFRESH-30000",
+      "case": "a-refresh@30000",
+      "basis": "diagnostic-observation",
+      "source": "auth-rest",
+      "locator": "section-refresh-token",
+      "condition": "At fixed target offset 30000ms, use immutable a-refresh credentials. Record actual HTTP/error/identity and time. If exchange is accepted, separately lookup using its returned ID token; preserve rotation as a boolean. No uniform rejection expectation: record accepted or auth-rejected, with other responses unresolved.",
+      "existingRequirement": null
+    },
+    {
+      "id": "AUTH-SESSION-B-ID-30000",
+      "case": "b-id@30000",
+      "basis": "diagnostic-observation",
+      "source": "auth-rest",
+      "locator": "section-get-account-info",
+      "condition": "At fixed target offset 30000ms, use immutable b-id credentials. Record actual HTTP/error/identity and time. No uniform rejection expectation: record accepted or auth-rejected, with other responses unresolved.",
+      "existingRequirement": null
+    },
+    {
+      "id": "AUTH-SESSION-B-REFRESH-30000",
+      "case": "b-refresh@30000",
+      "basis": "diagnostic-observation",
+      "source": "auth-rest",
+      "locator": "section-refresh-token",
+      "condition": "At fixed target offset 30000ms, use immutable b-refresh credentials. Record actual HTTP/error/identity and time. If exchange is accepted, separately lookup using its returned ID token; preserve rotation as a boolean. No uniform rejection expectation: record accepted or auth-rejected, with other responses unresolved.",
+      "existingRequirement": null
+    },
+    {
+      "id": "AUTH-SESSION-CHANGED-ID-30000",
+      "case": "changed-id@30000",
+      "basis": "diagnostic-observation",
+      "source": "auth-rest",
+      "locator": "section-get-account-info",
+      "condition": "At fixed target offset 30000ms, use immutable changed-id credentials. Record actual HTTP/error/identity and time. Fresh control must remain usable; failure makes comparison inconclusive.",
+      "existingRequirement": null
+    },
+    {
+      "id": "AUTH-SESSION-CHANGED-REFRESH-30000",
+      "case": "changed-refresh@30000",
+      "basis": "diagnostic-observation",
+      "source": "auth-rest",
+      "locator": "section-refresh-token",
+      "condition": "At fixed target offset 30000ms, use immutable changed-refresh credentials. Record actual HTTP/error/identity and time. If exchange is accepted, separately lookup using its returned ID token; preserve rotation as a boolean. Fresh control must remain usable; failure makes comparison inconclusive.",
+      "existingRequirement": null
+    },
+    {
+      "id": "AUTH-SESSION-NEW-PASSWORD-SIGNIN",
+      "case": "new-password-signin",
+      "basis": "harness-control",
+      "source": "auth-rest",
+      "locator": "section-sign-in-email-password",
+      "condition": "new-password-signin: establish same-account baseline/control for the fixed REST experiment. Require successful same-account operation; no SDK or revocation inference.",
+      "existingRequirement": null
+    },
+    {
+      "id": "AUTH-SESSION-NEW-PASSWORD-LOOKUP",
+      "case": "new-password-lookup",
+      "basis": "harness-control",
+      "source": "auth-rest",
+      "locator": "section-get-account-info",
+      "condition": "new-password-lookup: establish same-account baseline/control for the fixed REST experiment. Require successful same-account operation; no SDK or revocation inference.",
+      "existingRequirement": null
+    },
+    {
+      "id": "AUTH-SESSION-DELETE",
+      "case": "delete",
+      "basis": "harness-control",
+      "source": "auth-rest",
+      "locator": "section-delete-account",
+      "condition": "delete: establish same-account baseline/control for the fixed REST experiment. Require successful same-account operation; no SDK or revocation inference.",
+      "existingRequirement": null
+    },
+    {
+      "id": "AUTH-SESSION-DELETED-ACCOUNT-ABSENT",
+      "case": "deleted-account-absent",
+      "basis": "harness-control",
+      "source": "auth-rest",
+      "locator": "section-delete-account",
+      "condition": "deleted-account-absent: establish same-account baseline/control for the fixed REST experiment. Both exact UID and email Admin selectors must confirm absence.",
+      "existingRequirement": null
+    }
+  ],
+  "limitations": [
+    "Diagnostic candidate only; no predetermined old-token rejection or automatic approval.",
+    "Official REST/policy/privacy snapshots are reused with their original hashes/times; manage-sessions was fetched for this slice.",
+    "0/10/30-second targets and 45-second request-start deadline are finite harness bounds, not documented propagation guarantees. Socket/processing timeout is not hard real-time cancellation; in-flight workers drain before cleanup.",
+    "Decoded iat/auth_time and account validSince are unverified timing metadata. Token raw bytes/digests and private identity are not published.",
+    "Same-second boundaries, refresh lineage after rotation, no-change longitudinal controls, SDK checkRevoked, Rules, elapsed expiry, MFA, physical devices and fault-injected recovery remain unverified.",
+    "Earlier approved password/basic/profile/aggregation evidence remains unchanged. Broad Auth and public npm labels are not promoted."
+  ],
+  "preconditions": [
+    {
+      "source": "password-policy",
+      "locator": "response-body",
+      "condition": "Require exact client schemaVersion 1, enforcementState ENFORCE, minPasswordLength 6 and maxPasswordLength 4096; admin config must omit passwordPolicyConfig. This explicit readback is not inferred OFF. Distinct 47-character generated passwords have uppercase/lowercase/numeric/non-alphanumeric characters; no configuration is changed."
+    }
+  ],
+  "interpretation": [
+    {
+      "source": "session-management",
+      "locator": "detect_id_token_revocation_in_the_sdk",
+      "condition": "SDK checkRevoked is a separate verification route. General revocation descriptions do not establish uniform immediate REST rejection. Observe A/B/fresh lanes independently; retain differences and bounded non-rejection without promoting them to whole-session claims."
+    }
+  ]
+}

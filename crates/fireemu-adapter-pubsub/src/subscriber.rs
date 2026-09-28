@@ -50,42 +50,7 @@ fn project_of(resource: &str) -> Result<&str, Status> {
 }
 
 fn validate_update_paths(paths: &[String]) -> Result<(), Status> {
-    for path in paths {
-        match path.as_str() {
-            "ack_deadline_seconds" | "push_config" => {}
-            "dead_letter_policy"
-            | "retry_policy"
-            | "filter"
-            | "enable_message_ordering"
-            | "bigquery_config"
-            | "cloud_storage_config"
-            | "bigtable_config"
-            | "retain_acked_messages"
-            | "message_retention_duration"
-            | "expiration_policy"
-            | "detached"
-            | "enable_exactly_once_delivery"
-            | "topic_message_retention_duration"
-            | "analytics_hub_subscription_info"
-            | "message_transforms"
-            | "tags" => {
-                return Err(Status::unimplemented(format!(
-                    "updating {path} is not supported by the Pub/Sub emulator"
-                )))
-            }
-            path if path.starts_with("push_config.") => {
-                return Err(Status::unimplemented(format!(
-                    "updating {path} is not supported by the Pub/Sub emulator"
-                )))
-            }
-            _ => {
-                return Err(Status::invalid_argument(format!(
-                    "unknown update_mask path {path}"
-                )))
-            }
-        }
-    }
-    Ok(())
+    crate::convert::validate_subscription_update_paths(paths).map_err(|error| status(&error))
 }
 
 fn update_ack_deadline(paths: &[String], sub: &pb::Subscription) -> Result<Option<u32>, Status> {
@@ -481,20 +446,17 @@ impl Subscriber for SubscriberService {
     ) -> Result<Response<pb::SeekResponse>, Status> {
         let req = request.into_inner();
         let name = SubscriptionName::parse(&req.subscription).map_err(|e| status(&e))?;
-        let now = self.handle.now();
         match req.target {
             Some(pb::seek_request::Target::Time(ts)) => {
                 let time = from_timestamp(&ts);
                 self.handle
-                    .state()
-                    .seek_to_time(&name, time, now)
+                    .seek_to_time(&name, time)
                     .map_err(|e| status(&e))?;
                 Ok(Response::new(pb::SeekResponse::default()))
             }
             Some(pb::seek_request::Target::Snapshot(snapshot)) => {
                 self.handle
-                    .state()
-                    .seek_to_snapshot(&name, &snapshot, now)
+                    .seek_to_snapshot(&name, &snapshot)
                     .map_err(|e| status(&e))?;
                 Ok(Response::new(pb::SeekResponse::default()))
             }

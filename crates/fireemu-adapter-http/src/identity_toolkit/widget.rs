@@ -83,7 +83,7 @@ fn provider_list_html(store: &AuthStore, provider_id: &str) -> String {
             let graphic = match info.photo_url.as_deref().filter(|p| !p.is_empty()) {
                 Some(photo) => format!(
                     "\n            <span class=\"mdc-list-item__graphic profile-photo\" style=\"background-image: url('{}')\"></span>",
-                    escape_html(photo)
+                    escape_html(&escape_css_string(photo))
                 ),
                 None => "\n            <span class=\"mdc-list-item__graphic material-icons\" aria-hidden=true>person</span>".to_owned(),
             };
@@ -159,6 +159,52 @@ fn escape_html(s: &str) -> String {
     out
 }
 
+/// Escapes one value for a CSS string inside `url('...')`. HTML escaping alone does not
+/// contain it: the HTML parser decodes `&#39;` back to `'` before the CSS parser reads the
+/// `style` attribute, so the quote has to leave the value as a CSS escape. Everything
+/// outside the printable ASCII set a URL uses is escaped as `\{hex} `, which CSS reads back
+/// as the original character. The result is HTML-escaped afterwards, as every other injected
+/// value is.
+fn escape_css_string(s: &str) -> String {
+    use std::fmt::Write as _;
+    let mut out = String::with_capacity(s.len());
+    for c in s.chars() {
+        let safe = c.is_ascii_alphanumeric()
+            || matches!(
+                c,
+                '-' | '_'
+                    | '.'
+                    | '~'
+                    | ':'
+                    | '/'
+                    | '?'
+                    | '#'
+                    | '['
+                    | ']'
+                    | '@'
+                    | '!'
+                    | '$'
+                    | '&'
+                    | '*'
+                    | '+'
+                    | ','
+                    | ';'
+                    | '='
+                    | '%'
+                    | '<'
+                    | '>'
+            );
+        if safe {
+            out.push(c);
+        } else {
+            // The trailing space terminates the escape; CSS consumes exactly one, so a
+            // literal space that follows survives.
+            let _ = write!(out, "\\{:x} ", c as u32);
+        }
+    }
+    out
+}
+
 /// `encodeURIComponent`: percent-encodes every byte except the unreserved set
 /// `A-Za-z0-9 - _ . ! ~ * ' ( )`. The output is safe inside a double-quoted HTML attribute.
 fn encode_uri_component(s: &str) -> String {
@@ -183,7 +229,7 @@ fn encode_uri_component(s: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{encode_uri_component, escape_html, is_widget_path};
+    use super::{encode_uri_component, escape_css_string, escape_html, is_widget_path};
 
     #[test]
     fn widget_paths_are_recognised() {
@@ -205,6 +251,19 @@ mod tests {
             escaped,
             "&lt;img src=x onerror=alert(1)&gt;&quot;&#39;&amp;"
         );
+    }
+
+    #[test]
+    fn a_css_string_keeps_its_quotes_and_backslashes_out_of_the_value() {
+        assert_eq!(
+            escape_css_string("https://p.example/a.png?v=1"),
+            "https://p.example/a.png?v=1"
+        );
+        assert_eq!(escape_css_string("a'b"), "a\\27 b");
+        assert_eq!(escape_css_string("a\\b"), "a\\5c b");
+        assert_eq!(escape_css_string("a\"b"), "a\\22 b");
+        assert_eq!(escape_css_string("a\nb"), "a\\a b");
+        assert_eq!(escape_css_string("a(b)"), "a\\28 b\\29 ");
     }
 
     #[test]

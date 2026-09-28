@@ -1,0 +1,785 @@
+{
+  "id": "queries/aggregations",
+  "area": "queries",
+  "seed": [
+    {
+      "path": "/v1/projects/PROJECT/databases/(default)/documents/agg/a",
+      "fields": {
+        "n": {
+          "integerValue": "1"
+        },
+        "d": {
+          "doubleValue": 1.5
+        },
+        "k": {
+          "stringValue": "x"
+        }
+      }
+    },
+    {
+      "path": "/v1/projects/PROJECT/databases/(default)/documents/agg/b",
+      "fields": {
+        "n": {
+          "integerValue": "2"
+        },
+        "d": {
+          "doubleValue": 2.5
+        },
+        "k": {
+          "stringValue": "x"
+        }
+      }
+    },
+    {
+      "path": "/v1/projects/PROJECT/databases/(default)/documents/agg/c",
+      "fields": {
+        "n": {
+          "integerValue": "3"
+        },
+        "d": {
+          "doubleValue": "NaN"
+        },
+        "k": {
+          "stringValue": "y"
+        }
+      }
+    },
+    {
+      "path": "/v1/projects/PROJECT/databases/(default)/documents/agg/d",
+      "fields": {
+        "n": {
+          "stringValue": "4"
+        },
+        "d": {
+          "integerValue": "4"
+        },
+        "k": {
+          "stringValue": "y"
+        }
+      }
+    },
+    {
+      "path": "/v1/projects/PROJECT/databases/(default)/documents/agg/e",
+      "fields": {
+        "n": {
+          "integerValue": "9223372036854775807"
+        },
+        "k": {
+          "stringValue": "z"
+        }
+      }
+    },
+    {
+      "path": "/v1/projects/PROJECT/databases/(default)/documents/agg/f",
+      "fields": {
+        "n": {
+          "integerValue": "1"
+        },
+        "k": {
+          "stringValue": "z"
+        }
+      }
+    }
+  ],
+  "steps": [
+    {
+      "id": "count-all",
+      "method": "POST",
+      "path": "/v1/projects/PROJECT/databases/(default)/documents:runAggregationQuery",
+      "body": {
+        "structuredAggregationQuery": {
+          "structuredQuery": {
+            "from": [
+              {
+                "collectionId": "agg"
+              }
+            ]
+          },
+          "aggregations": [
+            {
+              "alias": "count",
+              "count": {}
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "count-up-to",
+      "method": "POST",
+      "path": "/v1/projects/PROJECT/databases/(default)/documents:runAggregationQuery",
+      "body": {
+        "structuredAggregationQuery": {
+          "structuredQuery": {
+            "from": [
+              {
+                "collectionId": "agg"
+              }
+            ]
+          },
+          "aggregations": [
+            {
+              "alias": "c",
+              "count": {
+                "upTo": "2"
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "count-with-filter",
+      "method": "POST",
+      "path": "/v1/projects/PROJECT/databases/(default)/documents:runAggregationQuery",
+      "body": {
+        "structuredAggregationQuery": {
+          "structuredQuery": {
+            "from": [
+              {
+                "collectionId": "agg"
+              }
+            ],
+            "where": {
+              "fieldFilter": {
+                "field": {
+                  "fieldPath": "k"
+                },
+                "op": "EQUAL",
+                "value": {
+                  "stringValue": "x"
+                }
+              }
+            }
+          },
+          "aggregations": [
+            {
+              "alias": "count",
+              "count": {}
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "count-with-limit",
+      "method": "POST",
+      "path": "/v1/projects/PROJECT/databases/(default)/documents:runAggregationQuery",
+      "body": {
+        "structuredAggregationQuery": {
+          "structuredQuery": {
+            "from": [
+              {
+                "collectionId": "agg"
+              }
+            ],
+            "limit": 3
+          },
+          "aggregations": [
+            {
+              "alias": "count",
+              "count": {}
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "count-with-offset",
+      "method": "POST",
+      "path": "/v1/projects/PROJECT/databases/(default)/documents:runAggregationQuery",
+      "body": {
+        "structuredAggregationQuery": {
+          "structuredQuery": {
+            "from": [
+              {
+                "collectionId": "agg"
+              }
+            ],
+            "offset": 4
+          },
+          "aggregations": [
+            {
+              "alias": "count",
+              "count": {}
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "count-empty",
+      "method": "POST",
+      "path": "/v1/projects/PROJECT/databases/(default)/documents:runAggregationQuery",
+      "body": {
+        "structuredAggregationQuery": {
+          "structuredQuery": {
+            "from": [
+              {
+                "collectionId": "agg"
+              }
+            ],
+            "where": {
+              "fieldFilter": {
+                "field": {
+                  "fieldPath": "k"
+                },
+                "op": "EQUAL",
+                "value": {
+                  "stringValue": "none"
+                }
+              }
+            }
+          },
+          "aggregations": [
+            {
+              "alias": "count",
+              "count": {}
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "sum-integers",
+      "method": "POST",
+      "path": "/v1/projects/PROJECT/databases/(default)/documents:runAggregationQuery",
+      "body": {
+        "structuredAggregationQuery": {
+          "structuredQuery": {
+            "from": [
+              {
+                "collectionId": "agg"
+              }
+            ],
+            "where": {
+              "fieldFilter": {
+                "field": {
+                  "fieldPath": "k"
+                },
+                "op": "IN",
+                "value": {
+                  "arrayValue": {
+                    "values": [
+                      {
+                        "stringValue": "x"
+                      },
+                      {
+                        "stringValue": "z"
+                      }
+                    ]
+                  }
+                }
+              }
+            }
+          },
+          "aggregations": [
+            {
+              "alias": "sum",
+              "sum": {
+                "field": {
+                  "fieldPath": "n"
+                }
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "sum-mixed-numbers",
+      "method": "POST",
+      "path": "/v1/projects/PROJECT/databases/(default)/documents:runAggregationQuery",
+      "body": {
+        "structuredAggregationQuery": {
+          "structuredQuery": {
+            "from": [
+              {
+                "collectionId": "agg"
+              }
+            ]
+          },
+          "aggregations": [
+            {
+              "alias": "sum",
+              "sum": {
+                "field": {
+                  "fieldPath": "d"
+                }
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "sum-doubles-only",
+      "method": "POST",
+      "path": "/v1/projects/PROJECT/databases/(default)/documents:runAggregationQuery",
+      "body": {
+        "structuredAggregationQuery": {
+          "structuredQuery": {
+            "from": [
+              {
+                "collectionId": "agg"
+              }
+            ],
+            "where": {
+              "fieldFilter": {
+                "field": {
+                  "fieldPath": "k"
+                },
+                "op": "EQUAL",
+                "value": {
+                  "stringValue": "x"
+                }
+              }
+            }
+          },
+          "aggregations": [
+            {
+              "alias": "sum",
+              "sum": {
+                "field": {
+                  "fieldPath": "d"
+                }
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "sum-empty",
+      "method": "POST",
+      "path": "/v1/projects/PROJECT/databases/(default)/documents:runAggregationQuery",
+      "body": {
+        "structuredAggregationQuery": {
+          "structuredQuery": {
+            "from": [
+              {
+                "collectionId": "agg"
+              }
+            ],
+            "where": {
+              "fieldFilter": {
+                "field": {
+                  "fieldPath": "k"
+                },
+                "op": "EQUAL",
+                "value": {
+                  "stringValue": "none"
+                }
+              }
+            }
+          },
+          "aggregations": [
+            {
+              "alias": "sum",
+              "sum": {
+                "field": {
+                  "fieldPath": "n"
+                }
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "sum-missing-field",
+      "method": "POST",
+      "path": "/v1/projects/PROJECT/databases/(default)/documents:runAggregationQuery",
+      "body": {
+        "structuredAggregationQuery": {
+          "structuredQuery": {
+            "from": [
+              {
+                "collectionId": "agg"
+              }
+            ]
+          },
+          "aggregations": [
+            {
+              "alias": "sum",
+              "sum": {
+                "field": {
+                  "fieldPath": "nothing"
+                }
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "sum-overflow-saturates-or-promotes",
+      "method": "POST",
+      "path": "/v1/projects/PROJECT/databases/(default)/documents:runAggregationQuery",
+      "body": {
+        "structuredAggregationQuery": {
+          "structuredQuery": {
+            "from": [
+              {
+                "collectionId": "agg"
+              }
+            ]
+          },
+          "aggregations": [
+            {
+              "alias": "sum",
+              "sum": {
+                "field": {
+                  "fieldPath": "n"
+                }
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "avg-integers",
+      "method": "POST",
+      "path": "/v1/projects/PROJECT/databases/(default)/documents:runAggregationQuery",
+      "body": {
+        "structuredAggregationQuery": {
+          "structuredQuery": {
+            "from": [
+              {
+                "collectionId": "agg"
+              }
+            ],
+            "where": {
+              "fieldFilter": {
+                "field": {
+                  "fieldPath": "k"
+                },
+                "op": "IN",
+                "value": {
+                  "arrayValue": {
+                    "values": [
+                      {
+                        "stringValue": "x"
+                      },
+                      {
+                        "stringValue": "f"
+                      }
+                    ]
+                  }
+                }
+              }
+            }
+          },
+          "aggregations": [
+            {
+              "alias": "avg",
+              "avg": {
+                "field": {
+                  "fieldPath": "n"
+                }
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "avg-with-nan",
+      "method": "POST",
+      "path": "/v1/projects/PROJECT/databases/(default)/documents:runAggregationQuery",
+      "body": {
+        "structuredAggregationQuery": {
+          "structuredQuery": {
+            "from": [
+              {
+                "collectionId": "agg"
+              }
+            ]
+          },
+          "aggregations": [
+            {
+              "alias": "avg",
+              "avg": {
+                "field": {
+                  "fieldPath": "d"
+                }
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "avg-empty",
+      "method": "POST",
+      "path": "/v1/projects/PROJECT/databases/(default)/documents:runAggregationQuery",
+      "body": {
+        "structuredAggregationQuery": {
+          "structuredQuery": {
+            "from": [
+              {
+                "collectionId": "agg"
+              }
+            ],
+            "where": {
+              "fieldFilter": {
+                "field": {
+                  "fieldPath": "k"
+                },
+                "op": "EQUAL",
+                "value": {
+                  "stringValue": "none"
+                }
+              }
+            }
+          },
+          "aggregations": [
+            {
+              "alias": "avg",
+              "avg": {
+                "field": {
+                  "fieldPath": "n"
+                }
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "several-aggregations",
+      "method": "POST",
+      "path": "/v1/projects/PROJECT/databases/(default)/documents:runAggregationQuery",
+      "body": {
+        "structuredAggregationQuery": {
+          "structuredQuery": {
+            "from": [
+              {
+                "collectionId": "agg"
+              }
+            ]
+          },
+          "aggregations": [
+            {
+              "alias": "total",
+              "count": {}
+            },
+            {
+              "alias": "sum_n",
+              "sum": {
+                "field": {
+                  "fieldPath": "n"
+                }
+              }
+            },
+            {
+              "alias": "avg_d",
+              "avg": {
+                "field": {
+                  "fieldPath": "d"
+                }
+              }
+            },
+            {
+              "alias": "capped",
+              "count": {
+                "upTo": "1"
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "count-collection-group",
+      "method": "POST",
+      "path": "/v1/projects/PROJECT/databases/(default)/documents:runAggregationQuery",
+      "body": {
+        "structuredAggregationQuery": {
+          "structuredQuery": {
+            "from": [
+              {
+                "collectionId": "agg",
+                "allDescendants": true
+              }
+            ]
+          },
+          "aggregations": [
+            {
+              "alias": "count",
+              "count": {}
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "count-with-cursor",
+      "method": "POST",
+      "path": "/v1/projects/PROJECT/databases/(default)/documents:runAggregationQuery",
+      "body": {
+        "structuredAggregationQuery": {
+          "structuredQuery": {
+            "from": [
+              {
+                "collectionId": "agg"
+              }
+            ],
+            "orderBy": [
+              {
+                "field": {
+                  "fieldPath": "__name__"
+                },
+                "direction": "ASCENDING"
+              }
+            ],
+            "startAt": {
+              "values": [
+                {
+                  "referenceValue": "projects/PROJECT/databases/(default)/documents/agg/c"
+                }
+              ],
+              "before": true
+            }
+          },
+          "aggregations": [
+            {
+              "alias": "count",
+              "count": {}
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "count-beside-a-sum-over-a-missing-field",
+      "method": "POST",
+      "path": "/v1/projects/PROJECT/databases/(default)/documents:runAggregationQuery",
+      "body": {
+        "structuredAggregationQuery": {
+          "structuredQuery": {
+            "from": [
+              {
+                "collectionId": "agg"
+              }
+            ]
+          },
+          "aggregations": [
+            {
+              "alias": "total",
+              "count": {}
+            },
+            {
+              "alias": "sum_d",
+              "sum": {
+                "field": {
+                  "fieldPath": "d"
+                }
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "count-beside-an-avg-over-a-missing-field",
+      "method": "POST",
+      "path": "/v1/projects/PROJECT/databases/(default)/documents:runAggregationQuery",
+      "body": {
+        "structuredAggregationQuery": {
+          "structuredQuery": {
+            "from": [
+              {
+                "collectionId": "agg"
+              }
+            ]
+          },
+          "aggregations": [
+            {
+              "alias": "total",
+              "count": {}
+            },
+            {
+              "alias": "avg_d",
+              "avg": {
+                "field": {
+                  "fieldPath": "d"
+                }
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "duplicate-alias",
+      "method": "POST",
+      "path": "/v1/projects/PROJECT/databases/(default)/documents:runAggregationQuery",
+      "body": {
+        "structuredAggregationQuery": {
+          "structuredQuery": {
+            "from": [
+              {
+                "collectionId": "agg"
+              }
+            ]
+          },
+          "aggregations": [
+            {
+              "alias": "x",
+              "count": {}
+            },
+            {
+              "alias": "x",
+              "count": {}
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "no-aggregations",
+      "method": "POST",
+      "path": "/v1/projects/PROJECT/databases/(default)/documents:runAggregationQuery",
+      "body": {
+        "structuredAggregationQuery": {
+          "structuredQuery": {
+            "from": [
+              {
+                "collectionId": "agg"
+              }
+            ]
+          },
+          "aggregations": []
+        }
+      }
+    },
+    {
+      "id": "sum-on-name",
+      "method": "POST",
+      "path": "/v1/projects/PROJECT/databases/(default)/documents:runAggregationQuery",
+      "body": {
+        "structuredAggregationQuery": {
+          "structuredQuery": {
+            "from": [
+              {
+                "collectionId": "agg"
+              }
+            ]
+          },
+          "aggregations": [
+            {
+              "alias": "sum",
+              "sum": {
+                "field": {
+                  "fieldPath": "__name__"
+                }
+              }
+            }
+          ]
+        }
+      }
+    }
+  ]
+}

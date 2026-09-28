@@ -13,6 +13,9 @@ pub struct Tenancy {
     buckets: BTreeMap<String, BTreeSet<String>>,
     /// API key → registered project.
     api_keys: BTreeMap<String, String>,
+    /// The default project's declared API keys (`auth.apiKeys`). Once any is declared, a key
+    /// that no project declared is refused.
+    default_api_keys: BTreeSet<String>,
 }
 
 /// What one session owns.
@@ -67,7 +70,28 @@ impl Tenancy {
             default_project: default_project.to_owned(),
             buckets: BTreeMap::new(),
             api_keys: BTreeMap::new(),
+            default_api_keys: BTreeSet::new(),
         }
+    }
+
+    /// Declares the default project's API keys.
+    pub fn declare_default_api_keys(&mut self, keys: &[String]) {
+        self.default_api_keys.extend(keys.iter().cloned());
+    }
+
+    /// Whether `key` is one of the default project's declared API keys.
+    #[must_use]
+    pub fn is_default_api_key(&self, key: &str) -> bool {
+        self.default_api_keys.contains(key)
+    }
+
+    /// Whether `key` is refused because the default project declared its keys and no project
+    /// declared this one.
+    #[must_use]
+    pub fn refuses_api_key(&self, key: &str) -> bool {
+        !self.default_api_keys.is_empty()
+            && !self.default_api_keys.contains(key)
+            && !self.api_keys.contains_key(key)
     }
 
     /// The default project.
@@ -110,6 +134,19 @@ impl Tenancy {
             self.api_keys.insert(k.clone(), project.to_owned());
         }
         Ok(())
+    }
+
+    /// The first API key (in key order) of `project`: a registered project's own keys, or the
+    /// default project's declared `auth.apiKeys`. `None` when it has none.
+    #[must_use]
+    pub fn api_key_for(&self, project: &str) -> Option<&str> {
+        if project == self.default_project {
+            return self.default_api_keys.iter().next().map(String::as_str);
+        }
+        self.api_keys
+            .iter()
+            .find(|(_, owner)| owner.as_str() == project)
+            .map(|(key, _)| key.as_str())
     }
 
     /// Forgets a registered project; `false` when it was not registered.
@@ -186,8 +223,42 @@ impl Tenancy {
 pub type SharedTenancy = std::sync::Arc<std::sync::RwLock<Tenancy>>;
 
 #[cfg(test)]
+mod api_key_tests {
+    use super::Tenancy;
+
+    #[test]
+    fn a_project_names_its_first_declared_key() {
+        let mut tenancy = Tenancy::new("demo-app");
+        assert_eq!(tenancy.api_key_for("demo-app"), None);
+        tenancy.declare_default_api_keys(&["k2".to_owned(), "k1".to_owned()]);
+        assert_eq!(tenancy.api_key_for("demo-app"), Some("k1"));
+        tenancy
+            .register("other", &[], &["o2".to_owned(), "o1".to_owned()])
+            .unwrap();
+        assert_eq!(tenancy.api_key_for("other"), Some("o1"));
+        assert_eq!(tenancy.api_key_for("nobody"), None);
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn declared_default_keys_refuse_every_undeclared_key() {
+        let mut t = Tenancy::new("demo-a");
+        t.register("demo-b", &[], &["key-b".to_owned()]).unwrap();
+        // Without declared default keys any key is accepted.
+        assert!(!t.refuses_api_key("anything"));
+        assert!(!t.is_default_api_key("key-a"));
+        t.declare_default_api_keys(&["key-a".to_owned()]);
+        assert!(t.is_default_api_key("key-a"));
+        assert!(!t.is_default_api_key("key-b"));
+        assert!(!t.refuses_api_key("key-a"), "the default project's own key");
+        assert!(!t.refuses_api_key("key-b"), "a registered session's key");
+        assert!(t.refuses_api_key("anything"));
+        assert!(t.refuses_api_key(""));
+    }
 
     #[test]
     fn buckets_and_keys_resolve_to_their_session() {

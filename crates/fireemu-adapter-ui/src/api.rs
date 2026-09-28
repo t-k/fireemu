@@ -160,8 +160,16 @@ fn firestore(state: &UiState, path: &str, req: &UiRequest) -> UiResponse {
         authorization: Some("Bearer owner".to_owned()),
         // The UI front is privileged local administration: it presents the owner credential
         // above and takes the bypass of specification section 12.2.
+        //
+        // The browser fields are deliberately not forwarded. This front has already applied
+        // the privileged-route policy itself (loopback origin plus the control token, see the
+        // crate docs), so the request reaching the REST surface is this daemon's, not the
+        // page's, and re-applying the browser guard behind it would refuse the UI's own calls.
+        origin: None,
+        browser_metadata: false,
         app_check: Vec::new(),
         body,
+        batch_field_order: Vec::new(),
     });
     let mut out = UiResponse::json(response.status, &response.body);
     if fireemu_adapter_grpc::rest::drops_connection(&response) {
@@ -202,6 +210,7 @@ fn auth(state: &UiState, path: &str, req: &UiRequest) -> UiResponse {
         // credential above and takes the Admin bypass of specification section 12.2, so it
         // never forwards an App Check field of its own.
         app_check: Vec::new(),
+        peer_ip: None,
     };
     let response = fireemu_adapter_http::identity_toolkit::handle_with(
         &state.auth,

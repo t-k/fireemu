@@ -6,11 +6,16 @@
 //! checks are forwarded to an optional upstream (official Emulator or real service); without an
 //! upstream they are answered with `UNIMPLEMENTED` (never a silent local success).
 
+pub mod admin;
 pub mod decode;
 pub mod encode;
 pub mod gateway;
+pub mod index_messages;
 pub mod local;
+pub mod partition;
 pub mod pipeline;
+pub mod production_status;
+pub mod query_messages;
 pub mod rest;
 pub mod rules;
 pub mod serve;

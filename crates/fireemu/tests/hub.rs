@@ -129,6 +129,7 @@ struct Daemon {
 struct DaemonNamespace {
     #[cfg(unix)]
     trusted: TrustedTempDir,
+    working_directory: Option<PathBuf>,
 }
 
 impl DaemonNamespace {
@@ -136,7 +137,16 @@ impl DaemonNamespace {
         Self {
             #[cfg(unix)]
             trusted: TrustedTempDir::new(label),
+            working_directory: None,
         }
+    }
+
+    /// Starts the daemon in `directory` instead of inheriting the test binary's own working
+    /// directory, so a scenario can observe how the daemon resolves a relative path.
+    #[cfg(unix)]
+    fn in_working_directory(mut self, directory: PathBuf) -> Self {
+        self.working_directory = Some(directory);
+        self
     }
 
     fn path(&self) -> PathBuf {
@@ -239,6 +249,9 @@ impl Daemon {
             .stderr(Stdio::piped());
         #[cfg(unix)]
         command.env("TMPDIR", namespace.path());
+        if let Some(directory) = &namespace.working_directory {
+            command.current_dir(directory);
+        }
         let mut child = command.spawn().unwrap();
         // The banner's control-API line is printed once every listener is bound and served.
         // The pipe keeps being drained on its own thread afterwards: a closed stdout would
@@ -357,6 +370,22 @@ impl Daemon {
         }
         self.stopped = true;
         graceful && owned_locator
+    }
+
+    /// Sends SIGTERM and waits for the daemon, reporting how it exited. A daemon that dies
+    /// from the signal's default disposition runs no destructor, which is the regression
+    /// `a_sigterm_the_instant_the_daemon_is_ready_still_removes_the_locator` watches for.
+    #[cfg(unix)]
+    fn terminate_and_wait(&mut self) -> ExitStatus {
+        // Signalled from this process rather than through `kill(1)`: the point of the
+        // scenario is how little time the daemon is given between reporting ready and being
+        // asked to stop, and a fork and exec would hand it milliseconds of head start.
+        let pid = rustix::process::Pid::from_raw(i32::try_from(self.child.id()).expect("a pid"))
+            .expect("a live pid");
+        rustix::process::kill_process(pid, rustix::process::Signal::TERM).expect("SIGTERM is sent");
+        let status = self.child.wait().expect("the daemon is waited for");
+        self.stopped = true;
+        status
     }
 
     fn stop(mut self) {
@@ -542,6 +571,34 @@ fn the_locator_file_is_written_at_start_and_removed_at_exit() {
     while path.exists() && gone.elapsed() < Duration::from_secs(5) {
         std::thread::sleep(Duration::from_millis(50));
     }
+    assert!(
+        !path.exists(),
+        "{} outlived the daemon that wrote it",
+        path.display()
+    );
+}
+
+/// LOCEXIT-1: the stop signals are installed before the daemon prints the banner a caller
+/// waits on, so a SIGTERM that arrives the instant the suite is ready runs the shutdown
+/// sequence instead of terminating the process outright. A daemon killed by the default
+/// disposition would leave its locator behind, and `FIREBASE_EMULATOR_HUB` discovery would
+/// keep pointing at a suite that no longer answers.
+///
+/// The scenario is deterministic: the window this closes was the whole distance between the
+/// banner and the serving `select!`, and the test signals as soon as the banner is read.
+#[cfg(unix)]
+#[test]
+fn a_sigterm_the_instant_the_daemon_is_ready_still_removes_the_locator() {
+    let mut daemon = Daemon::start("demo-hub-locator-sigterm", &[]);
+    let path = daemon.locator();
+    assert!(path.exists(), "{} was written", path.display());
+
+    let status = daemon.terminate_and_wait();
+    assert_eq!(
+        status.code(),
+        Some(0),
+        "the daemon handled SIGTERM rather than dying from it: {status:?}"
+    );
     assert!(
         !path.exists(),
         "{} outlived the daemon that wrote it",
@@ -1001,4 +1058,55 @@ fn the_export_route_requires_the_control_capability_and_refuses_browser_origins(
     drop(daemon);
     #[cfg(not(unix))]
     let _ = std::fs::remove_dir_all(dir);
+}
+
+/// HUBREL-1: the export route takes a path from a client that need not know the daemon's
+/// working directory, and a one-element relative name such as `out` has the empty path as its
+/// parent. Every operation on "" fails with ENOENT, so such a request used to run the whole
+/// export and then lose it while restricting the parent's permissions.
+#[cfg(unix)]
+#[test]
+fn the_export_route_writes_a_bare_relative_path_under_the_daemon_working_directory() {
+    use std::io::{Read as _, Write as _};
+    use std::net::TcpStream;
+    use std::time::Duration;
+
+    let namespace = DaemonNamespace::new("hub-export-relative");
+    let work = namespace.path().join("work");
+    std::fs::create_dir_all(&work).expect("the daemon working directory is created");
+    let daemon = Daemon::start_in_namespace(
+        "demo-hub-export-relative",
+        &[],
+        namespace.in_working_directory(work.clone()),
+    );
+    let port = daemon.hub_port();
+    let body = r#"{"path": "out", "initiatedBy": "test"}"#;
+    let mut stream = TcpStream::connect(("127.0.0.1", port)).expect("the Hub accepts");
+    stream
+        .set_read_timeout(Some(Duration::from_secs(30)))
+        .unwrap();
+    write!(
+        stream,
+        "POST /_admin/export HTTP/1.1\r\nHost: 127.0.0.1\r\nAuthorization: Bearer {}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+        daemon.control_token(),
+        body.len()
+    )
+    .unwrap();
+    let mut raw = String::new();
+    let _ = stream.read_to_string(&mut raw);
+    let status = raw
+        .lines()
+        .next()
+        .and_then(|l| l.split_whitespace().nth(1))
+        .and_then(|c| c.parse::<u16>().ok())
+        .unwrap_or(0);
+
+    assert_eq!(status, 200, "{raw}");
+    assert!(
+        work.join("out")
+            .join("firebase-export-metadata.json")
+            .is_file(),
+        "the export was not written under the daemon working directory: {raw}"
+    );
+    drop(daemon);
 }

@@ -1,0 +1,21 @@
+{
+  "schemaVersion": 1,
+  "acceptance": "candidate",
+  "target": "production",
+  "recordedAt": "2026-09-09T14:33:10.562850+00:00",
+  "project": "fireemu-35fe6",
+  "sourceCommit": "85e238c1106a7efb25cf7dc74812aba7fa313271",
+  "probeSha256": "097ead80880d23fe74902601578ee8250efcc06218b7cd0588e54004ad027122",
+  "cases": [],
+  "resourceMutations": 0,
+  "status": "inconclusive",
+  "limitations": [
+    "Rejection-only cases have no positive controls and do not attest MFA eligibility, enrollment or sign-in."
+  ],
+  "projectNumberVerified": true,
+  "configReadback": {
+    "httpStatus": 403,
+    "available": false
+  },
+  "failure": "ValueError"
+}

@@ -1,0 +1,23 @@
+{
+  "schemaVersion": 1,
+  "subjectSha256": "b7ad987bdd466784b379a8281a3137e1d1dc259513df426cc9774a68efad7bb4",
+  "sourceCommit": "db39f7133efbe009474308e9ce52df56a989a136",
+  "scope": "The 12 auth-password-minimum revision 1 cases, limited to the recorded artifact, configuration and corpus; fresh end-user ID token REST routes, no tenant, local strict profile and recorded production authentication settings and schema 1 ENFORCE password policy with minimum 6, maximum 4096 and no additional character requirements. Approved as redacted observations of a generated six-character URL-safe ASCII password change, old-password rejection, new-password same-account signin, actual use of update-issued ID and refresh tokens, selected account-field preservation and recorded deletion/process termination.",
+  "cases": [
+    "signup",
+    "baseline-signin",
+    "minimum-password-change",
+    "changed-token-lookup",
+    "old-password-rejected",
+    "unchanged-state",
+    "new-password-signin",
+    "new-password-lookup",
+    "changed-token-refresh",
+    "refreshed-lookup",
+    "delete",
+    "deleted-account-absent"
+  ],
+  "reviewer": "github:t-k (id:426779)",
+  "reviewedAt": "2026-09-10",
+  "decision": "approve"
+}

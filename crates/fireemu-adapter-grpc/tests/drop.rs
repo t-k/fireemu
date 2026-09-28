@@ -71,6 +71,7 @@ async fn drop_connection_faults_close_rest_and_reset_grpc_streams() {
         gateway: Arc::new(gateway.clone()),
         rules: None,
         app_check: None,
+        control_token: None,
     });
     let server = tokio::spawn(serve_multiplexed(
         listener,

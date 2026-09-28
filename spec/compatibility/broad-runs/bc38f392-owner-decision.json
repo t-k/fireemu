@@ -1,0 +1,127 @@
+{
+  "kind": "owner-decision-draft-not-permission",
+  "executionInputsPath": "spec/compatibility/broad-runs/bc38f392-execution-inputs.json",
+  "frozenCommit": "bc38f392077784509f7fbb8993d5be66c1a8be14",
+  "observerSha256": "1501aea61749d79d32238b9329f3d75370d9d500322ffab331ec0c8b3505342f",
+  "manifestSha256": "4b6d42bc5acd1a697622b25325ba67620af272d5c44f5d00982dbffe8bb8cc3f",
+  "comparisonContractDigest": "ec0ef13fc77b6edf0f4940f472267b91b117707b36aac15a00c0a6aea96e89dc",
+  "databaseProjectionContractDigest": "24b4847314fe67940a1e0e8eb53e34e2bd007ef2e1d942639b51564677d30f18",
+  "quotaProject": "fireemu-35fe6",
+  "databaseProjection": {
+    "name": "projects/fireemu-35fe6/databases/(default)",
+    "uid": "dc7a48b3-ee80-4d2e-964b-0d475c35a47a",
+    "createTime": "2026-09-02T12:56:28.522410Z",
+    "updateTime": "2026-09-02T12:56:28.522410Z",
+    "locationId": "us-central1",
+    "type": "FIRESTORE_NATIVE",
+    "concurrencyMode": "PESSIMISTIC",
+    "versionRetentionPeriod": "3600s",
+    "appEngineIntegrationMode": "DISABLED",
+    "pointInTimeRecoveryEnablement": "POINT_IN_TIME_RECOVERY_DISABLED",
+    "deleteProtectionState": "DELETE_PROTECTION_DISABLED",
+    "databaseEdition": "STANDARD",
+    "freeTier": true,
+    "realtimeUpdatesMode": "REALTIME_UPDATES_MODE_ENABLED",
+    "enhancedTextSearchQueryMode": "ENHANCED_QUERY_MODE_ENABLED"
+  },
+  "databaseProjectionDigest": "31957f98b7ec76e9c2e7a04803772f7270763a8ed62037fbdefa74c2c8f71d33",
+  "baselineSource": "saved successfully acquired Database response; offline v2 projection, no new oracle acquisition",
+  "authConfigDigest": "7878eb2600c66f48c82ef55fb8c2443ab15689ea7542a77fbda206da06f817c2",
+  "pricingResearch": {
+    "checkedDate": "2026-09-12",
+    "sources": [
+      "https://cloud.google.com/firestore/pricing",
+      "https://cloud.google.com/identity-platform/pricing"
+    ],
+    "identityPlatform": {
+      "method": "email/password Tier1",
+      "highestPublishedPaidUsdPerMau": 0.0055,
+      "manifestCeilingUsdPerMau": 0.01,
+      "threeMauAtHighestPublishedRateUsd": 0.0165,
+      "belowPlanningRate": true,
+      "freeQuotaDeducted": false
+    },
+    "firestore": {
+      "confirmedLocation": "us-central1",
+      "publishedUsdRatesUsed": {
+        "documentReads": 3e-07,
+        "documentWrites": 9e-07,
+        "documentDeletes": 1e-07,
+        "indexReadBatches": 3e-07,
+        "storageGiBMonths": 0.152876376,
+        "egressGiB": 0.23,
+        "authMau": 0.0055
+      },
+      "storageHoursBudgeted": 744,
+      "egressAssumption": "Maximum published destination rate0.23 USD/GiB; no free quota or discounts deducted",
+      "manifestUnits": {
+        "documentReads": 3200,
+        "documentWrites": 1600,
+        "documentDeletes": 200,
+        "indexReadBatches": 2,
+        "storageGiBMonths": 0.0626220703125,
+        "egressGiB": 0.146484375,
+        "authMau": 3
+      },
+      "perDimensionBelowPlanningCeiling": {
+        "documentReads": true,
+        "documentWrites": true,
+        "documentDeletes": true,
+        "indexReadBatches": true,
+        "storageGiBMonths": true,
+        "egressGiB": true,
+        "authMau": true
+      },
+      "conditionalEstimateUsd": 0.062185441416992185,
+      "tariffsConfirmedBelowPlanningCeilings": null,
+      "remainingConditions": [
+        "Owner acceptance of reused dated tariff evidence and applicable billing terms",
+        "Recovery retention stays within the stated budget horizon"
+      ]
+    }
+  },
+  "apiKeyOwnershipConfirmedAt": "2026-09-12T14:23:29.511418+00:00",
+  "independentKeyLookup": "retained in preflight; API Keys API remains enabled",
+  "proposal": {
+    "diagnosticRows": 46,
+    "authRows": 19,
+    "firestoreRows": 27,
+    "accounts": 3,
+    "documents": 8,
+    "requests": {
+      "total": 2400,
+      "auth": 400,
+      "firestore": 1600,
+      "metadata": 100,
+      "recovery": 300
+    },
+    "wallSeconds": 1200,
+    "observationSeconds": 900,
+    "recoverySeconds": 300,
+    "sequential": true,
+    "maxStartsPerSecond": 4,
+    "costCapUsd": 1,
+    "planningEstimateUsd": 0.3051264453125,
+    "queries": 2,
+    "maxOwnedDocumentsScannedPerQuery": 1,
+    "executions": 1,
+    "automaticRetries": 0
+  },
+  "nonce": "377db86cda534573b00d4422bd81db77",
+  "nonceState": "unused when prepared; checked again immediately before execution",
+  "ownerIdentity": null,
+  "permissionReference": null,
+  "issuedAt": null,
+  "expiresAt": null,
+  "permission": null,
+  "productionExecuted": false,
+  "oldInvocation": "7be6cf08 incomplete and nonce consumed; no reuse",
+  "nextExecution": "one preflight, one production batch, owned cleanup and fixed-observer local comparison; no automatic reruns or baseline adoption",
+  "localResultPath": "spec/compatibility/broad-runs/bc38f392-local.json",
+  "review": {
+    "mustFix": [],
+    "shouldFix": [],
+    "scope": "Database projection v2 and saved fixture provenance; no production approval"
+  },
+  "proposedValiditySeconds": 3600
+}

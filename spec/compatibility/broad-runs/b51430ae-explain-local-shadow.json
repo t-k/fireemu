@@ -1,0 +1,30 @@
+{
+  "kind": "query-explain-campaign-local-shadow-v2",
+  "status": "complete",
+  "productionExecuted": false,
+  "executionCommit": "b51430aec743b4fc78dbd32396e7ba66b1be616a",
+  "manifestDigest": "843f556bc9a0dc837c31524a2b4bf0ec98627437ffa2c86db45cd7457bd12b02",
+  "observerSha256": "8898909c2f72ae5fb90c83747270064573ab2f0002d6e1086e9de4dd1b2bfbad",
+  "comparisonContractDigest": "a37b09e37577574b5c278bef51caf8f944ecb7d0caef8815468c66dba7d2b4c0",
+  "configurationDigest": "cf2b716aa3ecc5bbb5dfc248980d05d05401f49897d39ffb3d0159ad8a63db80",
+  "artifactSha256": "19eb397af6f8fcf1899bdd499379561e32314b7388c5b60d2b56a08bdc11cd12",
+  "artifactManifestSha256": "68ca9af1f158ded463417d2fd4a196457d315e7266b7606edf9c0d7f90bdae18",
+  "inputSha256": "3eabd1318e214eb78fbe1c8c33cc18db6233e33dddb2e174e6fc55f9a2c5e3e9",
+  "processSha256": "4b440c45b780f3972e49f8e2c3a74ca72d4ec39b0d7272c5fe71960930323446",
+  "cleanupSha256": "083a39f8bde2ff66b4a7f3dfd2c42ae1014c02caddff921dd71a46f709f873cd",
+  "recordingComplete": true,
+  "stateVerified": true,
+  "cleanupComplete": true,
+  "configurationUnchanged": true,
+  "ownedProcessStopped": true,
+  "listenersClosed": true,
+  "observedRows": 12,
+  "recoveryRows": 6,
+  "compatibility": "not-observed",
+  "scope": [
+    "Six Explain cases: query and aggregation plan-only, analyze and empty-analyze.",
+    "Setup/readback and owned cleanup are included in the local shadow.",
+    "The current feature artifact completed the campaign at b51430ae; no production request was made.",
+    "The record is local evidence and is not production compatibility evidence."
+  ]
+}

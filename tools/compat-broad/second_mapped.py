@@ -1,0 +1,955 @@
+"""Execute the closed second45 admission twice on an owned local runtime."""
+
+# ruff: noqa: BLE001 -- Retain failures and unwind owned resources.
+from __future__ import annotations
+
+import argparse
+import copy
+import json
+import os
+import signal
+import subprocess
+import sys
+import uuid
+from pathlib import Path
+from urllib.parse import quote, urlencode
+
+from batch_adapter import Adapter, request_headers
+from batch_contract import NUMBER, PROJECT, candidate
+from broad import run, save
+from broad_contract import digest
+from owned_runner import control_get, local_addresses
+from second_admission import (
+    BASE,
+    FS_IDS,
+    SecondBudget,
+    auth_recipe,
+    equal,
+    fs_recipe,
+    manifest,
+    operation,
+    origins,
+    require_operation,
+)
+from second_cases import auth_cases, auth_invariants, firestore_cases
+from second_mapping import compare_second, validate_rows, validate_trace
+
+
+def validated_pair_state(direct, mapped):
+    """Require both complete observed receipts to pass the independent validators."""
+    try:
+        for result in (direct, mapped):
+            if not isinstance(result, dict) or result.get("safety") is not True:
+                return False
+            validate_rows(result, observed_outcomes=True)
+            if validate_trace(result, observed_outcomes=True) is not True:
+                return False
+    except Exception:
+        return False
+    return True
+
+
+ADMIN = f"identitytoolkit.googleapis.com/v1/projects/{PROJECT}/accounts:"
+CLIENT = "identitytoolkit.googleapis.com/v1/accounts:"
+
+
+def acknowledged_diagnostic_cleanup_proof(
+    program_id,
+    name,
+    diagnostic_operation,
+    diagnostic_status,
+    diagnostic_ack,
+    after_status,
+    after_document,
+):
+    """Return a cleanup proof only for the exactly admitted mask mutation."""
+    if program_id != FS_IDS[0] or diagnostic_status != 200 or after_status != 200:
+        return None
+    program = next(
+        (value for value in firestore_cases() if value["id"] == program_id), None
+    )
+    if program is None or len(program["seed"]) != 1:
+        return None
+    seed_fields = program["seed"][0]["fields"]
+    if seed_fields != {
+        "n": {"integerValue": "2"},
+        "g": {"stringValue": "q"},
+        "a": {"mapValue": {"fields": {"b": {"integerValue": "7"}}}},
+    }:
+        return None
+    try:
+        normal, _ = fs_recipe(program_id, "normal", name, {})
+        expected_operation, _ = fs_recipe(program_id, "diagnostic", name, {})
+    except (ValueError, KeyError, TypeError):
+        return None
+    if diagnostic_operation != expected_operation:
+        return None
+    normal_paths = [
+        value for key, value in normal["query"] if key == "updateMask.fieldPaths"
+    ]
+    diagnostic_paths = [
+        value
+        for key, value in diagnostic_operation["query"]
+        if key == "updateMask.fieldPaths"
+    ]
+    if normal_paths != ["a.b"] or diagnostic_paths != ["a", "a.b"]:
+        return None
+
+    expected_fields = copy.deepcopy(seed_fields)
+    normal_map = normal["body"]["fields"]["a"]["mapValue"]["fields"]
+    expected_fields["a"]["mapValue"]["fields"]["b"] = copy.deepcopy(normal_map["b"])
+    diagnostic_value = diagnostic_operation["body"]["fields"]["a"]
+    diagnostic_map = diagnostic_value["mapValue"]["fields"]
+    diagnostic_child = diagnostic_map.get("b")
+    if diagnostic_child is None:
+        return None
+    expected_fields["a"] = copy.deepcopy(diagnostic_value)
+    expected_fields["a"]["mapValue"]["fields"]["b"] = copy.deepcopy(diagnostic_child)
+
+    def complete_document(value):
+        return (
+            isinstance(value, dict)
+            and value.get("name") == name
+            and value.get("fields") == expected_fields
+            and isinstance(value.get("updateTime"), str)
+            and bool(value["updateTime"])
+        )
+
+    if (
+        not complete_document(diagnostic_ack)
+        or not complete_document(after_document)
+        or diagnostic_ack["updateTime"] != after_document["updateTime"]
+    ):
+        return None
+    return {
+        "name": name,
+        "updateTime": diagnostic_ack["updateTime"],
+        "fieldsDigest": digest(expected_fields),
+        "responseDigest": digest(after_document),
+    }
+
+
+class LocalAdapter(Adapter):
+    """First transport/ownership only; never invokes its production execution path."""
+
+    def __init__(self, local_origins, nonce, output, mode="mapped"):
+        super().__init__(
+            candidate(), nonce, output, local_origins=origins(local_origins)
+        )
+        self.initialize_second(nonce, mode)
+
+    def initialize_second(self, nonce, mode):
+        self.budget = SecondBudget()
+        self.phase = "setup"
+        self.expected = None
+        self.baseline = None
+        self.trace = []
+        self.cleanup_version = {}
+        self.owner_rejected = False
+        self.second_nonce = nonce
+        if mode not in {"direct", "mapped"}:
+            raise ValueError("unknown mode")
+        self.mode = mode
+        self.users = {}
+        self.case_index = None
+        self.program_index = None
+        self.versions = {}
+
+    def request(
+        self, service, path, body=None, *, method="POST", privileged=False, form=False
+    ):
+        if privileged and self.owner_rejected:
+            raise ValueError("local owner credential previously rejected")
+        actual = operation(service, path, body, method, privileged)
+        if form or service not in {"auth", "firestore"}:
+            raise ValueError("closed local transport only")
+        if self.expected is not None:
+            require_operation(actual, self.expected)
+            self.expected = None
+        elif service == "auth":
+            if path == ADMIN + "lookup" and privileged:
+                if (
+                    not isinstance(body, dict)
+                    or set(body) != {"email"}
+                    or not isinstance(body["email"], list)
+                    or len(body["email"]) != 1
+                    or body["email"][0]
+                    not in {
+                        f"broad-{self.second_nonce}-{r}@example.invalid"
+                        for r in ("a", "b")
+                    }
+                ):
+                    raise ValueError("unowned lookup")
+            elif (
+                self.phase == "setup"
+                and path == CLIENT + "signUp?key=fake"
+                and not privileged
+            ):
+                email = (body or {}).get("email")
+                if email not in {
+                    f"broad-{self.second_nonce}-{r}@example.invalid" for r in ("a", "b")
+                }:
+                    raise ValueError("unowned setup")
+                require_operation(
+                    actual,
+                    operation(
+                        "auth",
+                        path,
+                        {
+                            "email": email,
+                            "password": "abc123",
+                            "returnSecureToken": True,
+                        },
+                    ),
+                )
+            elif self.phase == "baseline" and self.baseline is not None:
+                role = next(
+                    (
+                        r
+                        for r, u in self.users.items()
+                        if u["uid"] == self.baseline.get("localId")
+                    ),
+                    None,
+                )
+                if role is None or self.case_index is None:
+                    raise ValueError("unowned baseline context")
+                expected_baseline = {
+                    "localId": self.users[role]["uid"],
+                    "displayName": role
+                    + f"-before-second/auth/{self.case_index + 1:02d}",
+                    "emailVerified": False,
+                }
+                require_operation(
+                    actual,
+                    operation(
+                        "auth", ADMIN + "update", expected_baseline, privileged=True
+                    ),
+                )
+            elif self.budget.recovery and path == ADMIN + "delete" and privileged:
+                if (
+                    not isinstance(body, dict)
+                    or set(body) != {"localId"}
+                    or body["localId"] not in self.accounts.values()
+                    or body["localId"] is None
+                ):
+                    raise ValueError("unowned deletion")
+            else:
+                raise ValueError("unexpected Auth phase operation")
+            if method != "POST":
+                raise ValueError("Auth method mismatch")
+        elif self.budget.recovery:
+            name = path.split("?", 1)[0].removeprefix("/v1/")
+            if name not in self.documents:
+                raise ValueError("unowned recovery document")
+            if method == "GET":
+                require_operation(
+                    actual,
+                    operation(
+                        "firestore", "/v1/" + name, method="GET", privileged=True
+                    ),
+                )
+            elif method == "DELETE" and name in self.cleanup_version:
+                require_operation(
+                    actual,
+                    operation(
+                        "firestore",
+                        "/v1/"
+                        + name
+                        + "?"
+                        + urlencode(
+                            {"currentDocument.updateTime": self.cleanup_version[name]}
+                        ),
+                        method="DELETE",
+                        privileged=True,
+                    ),
+                )
+            else:
+                raise ValueError("unexpected recovery operation")
+        else:
+            raise ValueError("Firestore requires closed operation ticket")
+        entry = {
+            "ordinal": len(self.trace),
+            "phase": self.phase,
+            "recovery": self.budget.recovery,
+            "sent": actual,
+        }
+        self.trace.append(entry)
+        self.last_observation = None
+        self.persist_trace()
+        try:
+            if len(json.dumps(body).encode()) > 16384:
+                raise ValueError("request byte bound")
+            token = self.access() if privileged else None
+            self.reserve(service)
+            received = self.collect(service, path, body, method, token, entry)
+            http = received["http"]
+            status, result = http["status"], received.get("body")
+            self.last_observation = {
+                "httpStatus": status,
+                "mediaType": http["contentType"].split(";", 1)[0].strip().lower(),
+                "body": result,
+                "http": http,
+            }
+            if privileged and status in (401, 403):
+                self.owner_rejected = True
+                self.credential.fail()
+                raise ValueError("local owner credential rejected")
+            if not http["complete"]:
+                raise ValueError("HTTP " + str(http["failure"]))
+            response_only = self.permits_absent_after() and (
+                self.phase == "diagnostic"
+                or (service == "firestore" and method == "GET" and status == 404)
+            )
+            if not response_only and (
+                http["bodyKind"] != "json" or not isinstance(result, dict)
+            ):
+                raise ValueError("received non-JSON or unexpected JSON shape")
+            if status >= 500 or status == 429 or (privileged and status in (401, 403)):
+                raise ValueError("unexpected response")
+            entry["observation"] = copy.deepcopy(self.last_observation)
+            if (
+                self.budget.recovery
+                and service == "firestore"
+                and method == "GET"
+                and status == 200
+            ):
+                self.cleanup_version[result["name"]] = result["updateTime"]
+            return status, result
+        except Exception as error:
+            entry["failure"] = type(error).__name__
+            entry["observation"] = copy.deepcopy(self.last_observation)
+            entry["collection"] = (
+                "received-rejected-response"
+                if self.last_observation is not None
+                else "transport-incomplete"
+            )
+            raise
+        finally:
+            self.persist_trace()
+
+    def collect(self, service, path, body, method, token, entry):
+        assert self.local is not None
+        origin = self.local[service]
+        payload = {
+            "url": origin + (path if service == "firestore" else "/" + path),
+            "origin": origin,
+            "method": method,
+            "body": body,
+            "headers": request_headers(token, local=True, form=False),
+            "privateDirectory": str(self.output / "wire" / str(entry["ordinal"])),
+        }
+        process = subprocess.run(
+            ["node", str(Path(__file__).with_name("second_wire.mjs"))],
+            input=json.dumps(payload),
+            text=True,
+            capture_output=True,
+            timeout=12,
+            check=True,
+            env={
+                k: os.environ[k]
+                for k in ("PATH", "LANG", "SYSTEMROOT")
+                if k in os.environ
+            },
+        )
+        received = json.loads(process.stdout)
+        return received
+
+    def result_fields(self):
+        return {}
+
+    def finish(self):
+        return
+
+    def permits_absent_after(self):
+        return False
+
+    def persist_trace(self):
+        save(
+            self.output / "transport-trace.json",
+            {
+                "contract": "bounded-http-v1",
+                "trace": self.trace,
+                "counts": self.budget.counts,
+            },
+        )
+
+    def send(self, actual):
+        if actual["service"] == "auth":
+            if self.phase != "diagnostic" or self.case_index is None:
+                raise ValueError("Auth diagnostic context required")
+            expected = auth_recipe(self.case_index, self.users)
+        else:
+            if self.program_index not in (0, 1, 2):
+                raise ValueError("Firestore program context required")
+            name = BASE + (
+                "/cur/c"
+                if self.mode == "direct"
+                else f"/_fireemuBroad/{self.second_nonce}-{self.program_index}/cur/c"
+            )
+            if self.phase == "absence":
+                expected = operation(
+                    "firestore", "/v1/" + name, method="GET", privileged=True
+                )
+            elif self.phase == "seed":
+                expected = operation(
+                    "firestore",
+                    "/v1/" + name + "?currentDocument.exists=false",
+                    {
+                        "fields": {
+                            "n": {"integerValue": "2"},
+                            "g": {"stringValue": "q"},
+                            "a": {"mapValue": {"fields": {"b": {"integerValue": "7"}}}},
+                        }
+                    },
+                    "PATCH",
+                    True,
+                )
+            else:
+                expected, _ = fs_recipe(
+                    FS_IDS[self.program_index], self.phase, name, self.versions
+                )
+        require_operation(actual, expected)
+        self.expected = expected
+        path = actual["path"]
+        if actual["query"]:
+            path += "?" + urlencode([tuple(pair) for pair in actual["query"]])
+        return self.request(
+            actual["service"],
+            path,
+            actual["body"],
+            method=actual["method"],
+            privileged=actual["privileged"],
+        )
+
+    def recover(self):
+        self.phase = "recovery"
+        super().cleanup()
+        failed_docs = {r["name"] for r in self.unrecovered if r["kind"] == "document"}
+        failed_accounts = {
+            r["email"] for r in self.unrecovered if r["kind"] == "account"
+        }
+        self.documents.intersection_update(failed_docs)
+        self.accounts = {k: v for k, v in self.accounts.items() if k in failed_accounts}
+        if self.unrecovered:
+            raise ValueError("incomplete recovery")
+        self.budget.recovery = False
+
+
+def render_auth(case, users):
+    actor = case["actor"]
+    role = actor if actor in users else "b"
+    body = {
+        k: "updated-" + case["id"] if v == "$sentinel" else copy.deepcopy(v)
+        for k, v in case["fields"].items()
+        if v != "$missing"
+    }
+    selector = case["selector"]
+    if selector != "missing":
+        body["localId"] = {
+            "self": users[role]["uid"],
+            "other": users["a" if role == "b" else "b"]["uid"],
+            "null": None,
+            "number": 0,
+            "object": {},
+            "array": [],
+        }[selector]
+    if actor in users:
+        body["idToken"] = users[actor]["token"]
+    elif actor in ("null", "number", "invalid"):
+        body["idToken"] = {
+            "null": None,
+            "number": 0,
+            "invalid": "controlled-invalid-token",
+        }[actor]
+    return operation(
+        "auth",
+        ADMIN + "update" if actor == "admin" else CLIENT + "update?key=fake",
+        body,
+        privileged=actor == "admin",
+    )
+
+
+def render_fs(step, name, versions):
+    abstract = "projects/PROJECT/databases/(default)/documents/cur/c"
+
+    def map_value(value):
+        if isinstance(value, dict):
+            return {k: map_value(v) for k, v in value.items()}
+        if isinstance(value, list):
+            return [map_value(v) for v in value]
+        if isinstance(value, str):
+            return (
+                value.replace(abstract, name)
+                .replace("projects/PROJECT", f"projects/{PROJECT}")
+                .replace(
+                    "{{original.updateTime}}",
+                    quote(versions.get("original", ""), safe=""),
+                )
+            )
+        return value
+
+    value = map_value(step)
+    return operation(
+        "firestore", value["path"], value.get("body"), value["method"], True
+    )
+
+
+def execute_side(local_origins, output, mode, nonce, runtime_identity):
+    if mode not in {"direct", "mapped"}:
+        raise ValueError("unknown mode")
+    a = LocalAdapter(local_origins, nonce, output, mode)
+    return execute_45(a, output, runtime_identity)
+
+
+def execute_45(a, output, runtime_identity):
+    mode, nonce = a.mode, a.second_nonce
+    users, rows, documents = {}, [], {}
+    a.users = users
+    from second_production_contract import binding as comparison_binding
+    from second_production_contract import manifest as comparison_manifest
+    from second_production_contract import observer_digest as comparison_observer_digest
+
+    result = {
+        "kind": "second45-local-run-v1",
+        "target": "local",
+        "mode": mode,
+        "productionExecuted": False,
+        "runtimeIdentity": runtime_identity,
+        "nonce": nonce,
+        "manifestDigest": digest(manifest()),
+        "admissionDigest": digest(manifest()),
+        "comparisonManifestDigest": digest(comparison_manifest()),
+        "comparisonContractDigest": digest(comparison_binding()),
+        "observerDigest": comparison_observer_digest(),
+        "bindings": users,
+        "documents": documents,
+        "rows": rows,
+        "recordingComplete": False,
+        "cleanupComplete": False,
+        "safety": True,
+        "productionCompatibility": "unobserved",
+        "failure": None,
+    }
+
+    def persist():
+        result["counts"] = dict(a.budget.counts)
+        result["trace"] = copy.deepcopy(a.trace)
+        result["unrecovered"] = copy.deepcopy(a.unrecovered)
+        result.update(a.result_fields())
+        save(output / "result.json", result)
+
+    def snapshot():
+        found = {}
+        for role, user in users.items():
+            values = a.lookup(user["email"])
+            if (
+                len(values) != 1
+                or values[0].get("localId") != user["uid"]
+                or values[0].get("email") != user["email"]
+            ):
+                raise ValueError("unusable account readback")
+            found[role] = values[0]
+        return found
+
+    persist()
+    try:
+        a.preflight()
+        for role in ("a", "b"):
+            email = f"broad-{nonce}-{role}@example.invalid"
+            status, body = a.auth_call(
+                CLIENT + "signUp?key=fake",
+                {"email": email, "password": "abc123", "returnSecureToken": True},
+            )
+            if status != 200 or not body.get("idToken"):
+                raise ValueError("setup failed")
+            users[role] = {
+                "uid": body["localId"],
+                "token": body["idToken"],
+                "email": email,
+            }
+        initial = None
+        for index, case in enumerate(auth_cases()):
+            a.case_index = index
+            a.phase = "baseline"
+            for role in ("a", "b"):
+                a.baseline = {
+                    "localId": users[role]["uid"],
+                    "displayName": role + "-before-" + case["id"],
+                    "emailVerified": False,
+                }
+                status, _ = a.auth_call(ADMIN + "update", a.baseline, admin=True)
+                if status != 200:
+                    raise ValueError("baseline failed")
+            a.phase = "before"
+            before = snapshot()
+            if any(
+                before[r].get("displayName") != r + "-before-" + case["id"]
+                or before[r].get("emailVerified") is not False
+                for r in users
+            ):
+                raise ValueError("baseline readback mismatch")
+            protected = {
+                r: {
+                    k: v
+                    for k, v in before[r].items()
+                    if k in ("disabled", "customAttributes", "mfaInfo")
+                }
+                for r in users
+            }
+            if initial is None:
+                initial = copy.deepcopy(protected)
+            elif not equal(initial, protected):
+                result["safety"] = False
+                raise ValueError("protected baseline drift; stop without repair")
+            actual = render_auth(case, users)
+            if case["actor"] == "admin":
+                a.owner(users["b"]["uid"])
+            a.phase = "diagnostic"
+            status, _ = a.send(actual)
+            observation = copy.deepcopy(a.last_observation)
+            a.phase = "after"
+            after = snapshot()
+            checks = auth_invariants(case, status, before, after)
+            rows.append(
+                {
+                    "id": case["id"],
+                    "sent": actual,
+                    "observation": observation,
+                    "before": before,
+                    "after": after,
+                    "checks": checks,
+                    "relation": None,
+                }
+            )
+            result["safety"] = all(checks.values())
+            persist()
+            if not result["safety"]:
+                raise ValueError("protected state changed; Auth stopped")
+        a.recover()
+        for index, program in enumerate(manifest()["firestorePrograms"]):
+            name = BASE + (
+                "/cur/c"
+                if mode == "direct"
+                else f"/_fireemuBroad/{nonce}-{index}/cur/c"
+            )
+            documents[program["id"]] = name
+            a.program_index = index
+            a.phase = "absence"
+            op = operation("firestore", "/v1/" + name, method="GET", privileged=True)
+            status, _ = a.send(op)
+            if status != 404:
+                raise ValueError("seed target not absent")
+            a.record({"kind": "document-attempt", "name": name})
+            a.documents.add(name)
+            a.phase = "seed"
+            seed_body = {"fields": program["seed"][0]["fields"]}
+            expected_seed = {
+                "fields": {
+                    "n": {"integerValue": "2"},
+                    "g": {"stringValue": "q"},
+                    "a": {"mapValue": {"fields": {"b": {"integerValue": "7"}}}},
+                }
+            }
+            if not equal(seed_body, expected_seed) or len(program["seed"]) != 1:
+                raise ValueError("closed seed changed")
+            op = operation(
+                "firestore",
+                "/v1/" + name + "?currentDocument.exists=false",
+                seed_body,
+                "PATCH",
+                True,
+            )
+            status, _ = a.send(op)
+            if status != 200:
+                raise ValueError("seed failed")
+            versions, reads = {}, {}
+            diagnostic_ack = None
+            a.versions = versions
+            for step in program["steps"]:
+                a.phase = step["id"]
+                actual = render_fs(step, name, versions)
+                _expected, relation = fs_recipe(
+                    program["id"], step["id"], name, versions
+                )
+                status, body = a.send(actual)
+                if step["id"] == "diagnostic":
+                    diagnostic_ack = {
+                        "operation": copy.deepcopy(actual),
+                        "status": status,
+                        "body": copy.deepcopy(body),
+                    }
+                observation = copy.deepcopy(a.last_observation)
+                if step["id"] in ("original", "before", "after"):
+                    absent = (
+                        a.permits_absent_after()
+                        and step["id"] == "after"
+                        and status == 404
+                    )
+                    if not absent and (
+                        status != 200
+                        or not isinstance(body, dict)
+                        or body.get("name") != name
+                        or not isinstance(body.get("fields"), dict)
+                        or not isinstance(body.get("updateTime"), str)
+                    ):
+                        raise ValueError(
+                            "unusable document readback; state indeterminate"
+                        )
+                    if not absent:
+                        versions[step["id"]] = body["updateTime"]
+                        if step["id"] in ("original", "before"):
+                            # The seed response may omit the document body on
+                            # transports that acknowledge the write with an
+                            # empty JSON object. Bind cleanup to the first
+                            # complete readback instead. This also covers
+                            # plans whose first step is a write or transform.
+                            a.creation_proofs[name] = {
+                                "name": name,
+                                "updateTime": body["updateTime"],
+                                "fieldsDigest": digest(body["fields"]),
+                                "responseDigest": digest(body),
+                            }
+                            a.record(
+                                {
+                                    "kind": "document-created",
+                                    "name": name,
+                                    "updateTime": body["updateTime"],
+                                    "fieldsDigest": digest(body["fields"]),
+                                    "responseDigest": digest(body),
+                                }
+                            )
+                    elif step["id"] == "after" and status == 404:
+                        a.creation_proofs.pop(name, None)
+                    reads[step["id"]] = None if absent else body
+                    if step["id"] == "after" and diagnostic_ack is not None:
+                        proof = acknowledged_diagnostic_cleanup_proof(
+                            program["id"],
+                            name,
+                            diagnostic_ack["operation"],
+                            diagnostic_ack["status"],
+                            diagnostic_ack["body"],
+                            status,
+                            body,
+                        )
+                        if proof is not None:
+                            a.creation_proofs[name] = proof
+                            a.record(
+                                {
+                                    "kind": "diagnostic-cleanup-proof",
+                                    "name": name,
+                                    "updateTime": proof["updateTime"],
+                                    "fieldsDigest": proof["fieldsDigest"],
+                                    "responseDigest": proof["responseDigest"],
+                                }
+                            )
+                rows.append(
+                    {
+                        "id": program["id"] + "/" + step["id"],
+                        "sent": actual,
+                        "observation": observation,
+                        "document": name,
+                        "versions": copy.deepcopy(versions),
+                        "relation": relation,
+                    }
+                )
+                persist()
+                if (
+                    a.permits_absent_after()
+                    and step["id"] == "normal"
+                    and status != 200
+                ):
+                    raise ValueError("normal operation did not establish prerequisite")
+            diagnostic = next(
+                r for r in rows if r["id"] == program["id"] + "/diagnostic"
+            )
+            if diagnostic["observation"]["httpStatus"] >= 400 and not equal(
+                reads["before"], reads["after"]
+            ):
+                result["safety"] = False
+                raise ValueError("refused operation changed document")
+            a.recover()
+        result["recordingComplete"] = len(rows) == 45
+    except Exception as error:
+        result["failure"] = {
+            "kind": type(error).__name__,
+            "reason": str(error),
+            "phase": a.phase,
+        }
+    finally:
+        try:
+            if a.accounts or a.documents:
+                a.recover()
+        except Exception as error:
+            result["cleanupFailure"] = type(error).__name__
+        try:
+            a.finish()
+        except Exception as error:
+            result["postflightFailure"] = type(error).__name__
+            result["recordingComplete"] = False
+        if not result["recordingComplete"] and result["safety"] is not False:
+            result["safety"] = None
+        result["cleanupComplete"] = (
+            not a.accounts and not a.documents and not a.unrecovered
+        )
+        persist()
+    return result
+
+
+def run_pair(local_origins, output, runtime_identity):
+    origins(local_origins)
+    output.mkdir(parents=True, exist_ok=True, mode=0o700)
+    direct = execute_side(
+        local_origins, output / "direct", "direct", uuid.uuid4().hex, runtime_identity
+    )
+    if (
+        direct["safety"] is False
+        or not direct["cleanupComplete"]
+        or not direct["recordingComplete"]
+    ):
+        mapped = {
+            "mode": "mapped",
+            "nonce": None,
+            "rows": [],
+            "recordingComplete": False,
+            "cleanupComplete": True,
+            "safety": None,
+            "skipReason": "direct incomplete, safety violation, or unconfirmed cleanup",
+        }
+        comparison = compare_second(direct, mapped)
+        save(output / "comparison.json", comparison)
+        return comparison
+    mapped = execute_side(
+        local_origins, output / "mapped", "mapped", uuid.uuid4().hex, runtime_identity
+    )
+    comparison = compare_second(direct, mapped)
+    save(output / "comparison.json", comparison)
+    return comparison
+
+
+def child(output, nonce):
+    auth = "http://" + os.environ["FIREBASE_AUTH_EMULATOR_HOST"]
+    fs, control = local_addresses(
+        os.environ["FIRESTORE_EMULATOR_HOST"], os.environ["FIREEMU_CONTROL_URL"]
+    )
+    local = origins({"auth": auth, "firestore": fs})
+    token = os.environ["FIREEMU_CONTROL_TOKEN"]
+    status, body = control_get(control, "/v1/sessions/default/resources", token)
+    wrong, _ = control_get(control, "/v1/sessions/default/resources", token + "-wrong")
+    if (
+        status != 200
+        or wrong != 403
+        or body.get("project") != PROJECT
+        or os.environ["GOOGLE_CLOUD_PROJECT"] != PROJECT
+    ):
+        raise ValueError("owned runtime identity mismatch")
+    save(
+        output / "instance.json",
+        {
+            "pid": os.getpid(),
+            "parentPid": os.getppid(),
+            "argv": sys.argv,
+            "nonce": nonce,
+            "authOrigin": auth,
+            "firestoreOrigin": fs,
+            "controlOrigin": control,
+            "wrongTokenStatus": wrong,
+        },
+    )
+    initial = json.loads((output / "manifest.json").read_bytes())
+    runtime_identity = {
+        k: initial[k]
+        for k in ("artifactSha256", "executionCommit", "configurationDigest")
+    }
+    comparison = run_pair(local, output / "pair", runtime_identity)
+    direct_receipt = json.loads((output / "pair/direct/result.json").read_bytes())
+    mapped_path = output / "pair/mapped/result.json"
+    mapped_receipt = (
+        json.loads(mapped_path.read_bytes()) if mapped_path.is_file() else None
+    )
+    state_validation = validated_pair_state(direct_receipt, mapped_receipt)
+    cases = [
+        {
+            "id": r["id"],
+            "family": "second45-mapping",
+            "basis": "independently-admitted-local-pair",
+            "status": "pass" if r["mapping"] == "match" else "mismatch",
+            "productionCompatibility": "unobserved",
+        }
+        for r in comparison["rows"]
+    ]
+    if not cases:
+        cases = [
+            {
+                "id": "second45/incomplete",
+                "family": "second45-mapping",
+                "basis": "incomplete-local-recording",
+                "status": "indeterminate",
+            }
+        ]
+    save(
+        output / "cases.json",
+        {
+            "schemaVersion": 1,
+            "kind": "second45-local-pair-v1",
+            "cases": cases,
+            "manifest": manifest(),
+            "manifestDigest": digest(manifest()),
+            "recordingComplete": comparison["recordingComplete"],
+            "stateValidation": state_validation,
+            "localObservations": {"comparison": comparison},
+            "productionExecuted": False,
+        },
+    )
+    if (
+        not comparison["recordingComplete"]
+        or not comparison["safety"]
+        or not state_validation
+        or comparison["mapping"] != "match"
+    ):
+        raise ValueError(
+            "second45 incomplete, unsafe, or mapping mismatch; retained private results"
+        )
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--child", type=Path)
+    parser.add_argument("--nonce")
+    parser.add_argument("--output", type=Path)
+    parser.add_argument("--write-manifest", type=Path)
+    args = parser.parse_args()
+    if args.write_manifest:
+        save(args.write_manifest, manifest())
+        return 0
+    if args.child:
+        child(args.child, args.nonce)
+        return 0
+    if args.output is None:
+        parser.error("--output required")
+    report = run(
+        args.output.resolve(),
+        child_script=Path(__file__).resolve(),
+        project=PROJECT,
+        configuration={"daemon": {"authProjectNumbers": {PROJECT: NUMBER}}},
+        execution_timeout=2430,
+        recovery_grace=300,
+    )
+    print(
+        json.dumps(
+            {
+                "status": report["status"],
+                "recordingComplete": report["recordingComplete"],
+            }
+        )
+    )
+    return 0 if report["status"] == "completed" else 2
+
+
+if __name__ == "__main__":
+
+    def interrupted(_signal, _frame):
+        raise InterruptedError("stop requested; unwind cleanup")
+
+    signal.signal(signal.SIGTERM, interrupted)
+    signal.signal(signal.SIGHUP, interrupted)
+    sys.exit(main())

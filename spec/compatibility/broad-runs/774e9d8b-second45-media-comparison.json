@@ -1,0 +1,98 @@
+{
+  "kind": "second45-json-media-comparison-revision-v2",
+  "executionCommit": "774e9d8bf4ec56db47c8f1f4bdabd71ed8bc3ceb",
+  "productionExecuted": false,
+  "productionCompatibility": "unobserved",
+  "manifestDigest": "6f275645a8a0c7fb957bd37242a28eacf81af3734444912770edc3f28a494d98",
+  "observerDigest": "2bbf234fd2b1543902b9d3c66720b5fb0d9b86d7a83f5675ae5e544b57f0b313",
+  "comparisonContractDigest": "0625bd76c028de64ff0ae9ae595b1c5f44bd48cc5475c63e806a8060cbf742cb",
+  "local": {
+    "runtimeIdentity": {
+      "artifactSha256": "e6a5a347cf7eea5afa879f60c5f3b47dc4c02b1fc8797060fccf683de5e93843",
+      "executionCommit": "774e9d8bf4ec56db47c8f1f4bdabd71ed8bc3ceb",
+      "configurationDigest": "b64234d36ac9a515cef0b2ff2b0ed340a27158562456c01f7093d03f9407db7c"
+    },
+    "artifactSha256": "e6a5a347cf7eea5afa879f60c5f3b47dc4c02b1fc8797060fccf683de5e93843",
+    "rows": 45,
+    "counts": {
+      "auth": 302,
+      "firestore": 28,
+      "metadata": 0,
+      "recovery": 17,
+      "total": 330
+    },
+    "recordingComplete": true,
+    "cleanupComplete": true,
+    "safety": true,
+    "ownedProcess": {
+      "stopped": true,
+      "listenersClosed": true
+    },
+    "resultSha256": "22d54900eeb1f27ac2780958167e4c475bea997ab92b986a9c0b394c96c90b94",
+    "elapsedIncludingBuildSeconds": 89.11
+  },
+  "first46Regression": {
+    "artifactSha256": "6b482ac96ea94e207327a6359a68ce43690050926851d2e6d282b068a00cc77c",
+    "matches": 46,
+    "compatibility": "match",
+    "source": {
+      "publicationCommit": "ab7bd698",
+      "executionCommit": "bc38f392077784509f7fbb8993d5be66c1a8be14",
+      "observerDigest": "1501aea61749d79d32238b9329f3d75370d9d500322ffab331ec0c8b3505342f",
+      "manifestDigest": "4b6d42bc5acd1a697622b25325ba67620af272d5c44f5d00982dbffe8bb8cc3f",
+      "comparisonContractDigest": "ec0ef13fc77b6edf0f4940f472267b91b117707b36aac15a00c0a6aea96e89dc",
+      "fileSha256": {
+        "bc38f392-paired-observations.json": "a7809362c9c3a69d6a03a4f68e69aea0de34e29771f5bd36b2053359c609114c",
+        "bc38f392-execution-result.json": "5997e5ecc9f3da0addeed6b88c290cfc97c496e317c7625a9175232105953b88"
+      },
+      "originalComparisonCounts": {
+        "match": 35,
+        "mismatch": 11
+      },
+      "limitation": "Uses pinned published normalized observations; previously removed token bytes and absolute times are not recovered. No new production execution."
+    },
+    "comparisonSha256": "2140ff167541cfa918d52cc18bfb872ce8fd2c8851f26999b8e1d4bedf860f61",
+    "ownedProcess": {
+      "stopped": true,
+      "listenersClosed": true
+    },
+    "elapsedIncludingBuildSeconds": 25.16
+  },
+  "tests": {
+    "focusedPassed": 69,
+    "fullBroadPassed": 210,
+    "failed": 0,
+    "skipped": 0,
+    "fullBroadSeconds": 62.26,
+    "independentComparatorTestsPassed": 20,
+    "ruff": "pass",
+    "ty": "pass",
+    "independentReview": "approved; no Must Fix or Should Fix",
+    "mutation": "Process-local removal of normalization killed by actual compare() equivalence test"
+  },
+  "contrastCoverage": {
+    "equivalent": [
+      "single UTF-8 charset optional",
+      "ASCII media-type/charset casing",
+      "SP/HTAB OWS",
+      "quoted UTF-8 charset"
+    ],
+    "different": [
+      "body value",
+      "body type",
+      "missing/added field",
+      "text/plain versus JSON",
+      "missing/invalid header",
+      "unknown charset",
+      "other meaningful parameters",
+      "duplicate charset",
+      "CR/LF"
+    ],
+    "preservation": [
+      "raw header and inputs unchanged",
+      "legacy comparable remains exact",
+      "b0c1f3ef local/production comparisonv1 histories unchanged"
+    ]
+  },
+  "runtimeChanges": false
+}

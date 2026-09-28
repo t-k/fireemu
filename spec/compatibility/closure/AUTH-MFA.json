@@ -1,0 +1,784 @@
+{
+  "schemaVersion": 1,
+  "parent": "AUTH-MFA",
+  "parentStatus": "COMPAT_VERIFIED",
+  "oracleTrack": "disposable-sandbox",
+  "scopeDecisions": [
+    {
+      "id": "M1",
+      "decision": "The project multi-factor configuration of the Identity Platform sandbox (mfa.state, mfa.enabledProviders with PHONE_SMS, mfa.providerConfigs with the TOTP provider) is switched on per program and restored to its pre-run value (state DISABLED) at the end of every program and on every stop path, with a read-back. Every change is recorded in the sandbox change log. Only the Auth side of fireemu-oracle-idp is used; its Firestore and Rules belong to FS-RULES.",
+      "decidedBy": "owner (t-k)",
+      "decidedOn": "2026-09-25"
+    },
+    {
+      "id": "M2",
+      "decision": "Multi-factor configuration per tenant and every tenant/MFA interaction move to AUTH-TENANT-BLOCKING, so this parent does not touch the tenant FS-RULES creates. AUTH-MFA observes the project-level configuration only.",
+      "decidedBy": "owner (t-k)",
+      "decidedOn": "2026-09-25",
+      "movedTo": "AUTH-TENANT-BLOCKING"
+    },
+    {
+      "id": "M3",
+      "decision": "SMS second factors are observed only with the sandbox's configured test phone numbers (+16505550101 to +16505550106, fixed code 123456), to which production sends nothing. Real SMS delivery and the behavior of real numbers (sending quotas, region policy, reCAPTCHA or SMS defense on real traffic) are out of scope for every parent, as mail delivery is under AUTH-ACTION scope decision E1.",
+      "decidedBy": "owner (t-k)",
+      "decidedOn": "2026-09-25"
+    },
+    {
+      "id": "M4",
+      "decision": "A pending MFA credential is sampled at 300, 450 and 600 seconds, with 1800 seconds as the refusal-side control; no longer lifetime is observed. Each aged sample is paired with a control on the same account using a credential acquired at that moment, so a refusal paired with an accepted control leaves age as the explanation.",
+      "decidedBy": "owner (t-k)",
+      "decidedOn": "2026-09-25"
+    },
+    {
+      "id": "M5",
+      "decision": "Second-factor sign-in after an email-link or a custom-token first factor is in scope: the email-link program switches signIn.email.passwordRequired off for its own duration (as AUTH-ACTION does) and takes its code from the Admin sendOobCode with the link returned; the custom-token program mints its token through a time-limited signJwt-only binding created for the recording and removed afterwards (as AUTH-CREDENTIAL does). Second factors after a federated identity-provider first factor move to AUTH-FEDERATION, following AUTH-ACCOUNT scope decision A4.",
+      "decidedBy": "owner (t-k)",
+      "decidedOn": "2026-09-25",
+      "movedTo": "AUTH-FEDERATION"
+    },
+    {
+      "id": "M6",
+      "decision": "Closure is defined by these behavioral conditions observed through the REST surface (Identity Toolkit v1 and v2, Secure Token, the Admin config API). Client and Admin SDK paths (multiFactor, TotpMultiFactorGenerator, PhoneMultiFactorGenerator, the Admin SDK's multiFactor settings) belong to AUTH-CONFIG-SDK, following AUTH-ACCOUNT scope decision A5; blocking functions that see a second factor belong to AUTH-TENANT-BLOCKING, following AUTH-ACTION scope decision E4.",
+      "decidedBy": "agent, applying owner decisions A5 and E4",
+      "decidedOn": "2026-09-25",
+      "movedTo": "AUTH-CONFIG-SDK"
+    },
+    {
+      "id": "M7",
+      "decision": "How rows are compared: TOTP codes are computed by the harness from the secret the enrollment start returned (RFC 6238) at the target's own clock, and a code-sensitive block first moves to the middle of a 30-second step; the TOTP window is exercised with adjacentIntervals 5 at both edges (the config program records which other values production accepts). Secrets, session infos, pending credentials, codes and refresh tokens are never recorded. Second factors are named per program by first appearance and shape; factor instants by their fraction precision; an enrollment deadline by its distance from the send time, rounded to ten seconds. Production may notify an account's @example.com address of a new or withdrawn second factor; nothing is delivered (null MX) and delivery is out of scope, as under AUTH-ACTION E1 and M3. Aged rows wait three seconds past their age and the achieved ages, like the clock skew estimated from each enrollment deadline, are kept with the private recordings; the window rows are not sent while the skew exceeds two seconds.",
+      "decidedBy": "agent (recorded, not an owner decision)",
+      "decidedOn": "2026-09-25"
+    },
+    {
+      "id": "M8",
+      "decision": "The first recording (2026-09-24) found a TOTP pending credential already refused at 300 seconds (TOTP_CHALLENGE_TIMEOUT, its same-account control accepted) and an enrollment start refused with a token 1800 seconds old (CREDENTIAL_TOO_OLD_LOGIN_AGAIN). One more small program brackets them: a TOTP pending credential at 60, 120, 180, 240 and 290 seconds, an SMS pending credential at 150 and 300 seconds, and an enrollment start with a token 240 and 330 seconds old, each with a same-account control, recorded twice in the same task.",
+      "decidedBy": "owner (t-k)",
+      "decidedOn": "2026-09-25"
+    },
+    {
+      "id": "M9",
+      "decision": "Where production's lifetimes were bracketed but not pinned, strict refuses a TOTP pending credential from 302 seconds (accepted at 293, refused at 303, both measured send to send; one second below the refusal reproduces it despite the two requests' differing latencies) and a TOTP enrollment start from a sign-in 333 seconds old (accepted at 244). The owner approved both boundaries as a sub-second exception to AUTH-ACTION's rule of no inferred refusal (owner ledger, 2026-09-25, AUTH-MFA). The phone enrollment session is M12.",
+      "decidedBy": "owner (t-k)",
+      "decidedOn": "2026-09-25"
+    },
+    {
+      "id": "M10",
+      "decision": "The two rows of auth-mfa/totp/sign-in that production answered with its per-account TOTP attempt quota (QUOTA_EXCEEDED after the program's earlier wrong codes) are observed again by auth-mfa/totp/quota-free, where each check is the only wrong code of a new account.",
+      "decidedBy": "owner (t-k)",
+      "decidedOn": "2026-09-25"
+    },
+    {
+      "id": "M10a",
+      "decision": "How M10's re-observation is used: the comparison passes an original row only when its re-observation matches and fireemu's own answer on the row is the re-observed production answer (REOBSERVED_MATCH); a repeated QUOTA_EXCEEDED in the re-observation would have been recorded as it is, without retries. The per-account attempt quota itself (its count and window) is unobserved and not claimed by this parent.",
+      "decidedBy": "agent (recorded in the owner ledger, not an owner decision)",
+      "decidedOn": "2026-09-25"
+    },
+    {
+      "id": "M10b",
+      "decision": "How the comparison passes rows production answered two ways: MATCH_NONDETERMINISTIC when fireemu gives the answer of either recording of the same row; MATCH_TIMING_DEPENDENT only for the phone control starts of auth-mfa/lifetime (control-start-s<age>), whose answer depends on whether the sign-in and the phone enrollment fell in the same second (production answered TOKEN_EXPIRED and SECOND_FACTOR_EXISTS for the same s600 and s1800 rows across its two recordings), and only when fireemu gives an answer production recorded for such a row.",
+      "decidedBy": "Claude under the owner's delegation to the coordinator (owner ledger, 2026-09-25, AUTH-MFA), as M10a",
+      "decidedOn": "2026-09-25"
+    },
+    {
+      "id": "M11",
+      "decision": "The final-artifact regression re-runs the AUTH-ACTION, AUTH-CREDENTIAL and AUTH-ACCOUNT corpora and inherits their one documented divergence, as AUTH-ACTION scope decision E9 does: AUTH-ACCOUNT scope decision A12, the gson parser message text for malformed customAttributes JSON. The INVALID_CLAIMS refusal itself must match.",
+      "decidedBy": "owner (t-k)",
+      "decidedOn": "2026-09-25",
+      "resolvedOn": "2026-09-28",
+      "resolution": "Resolved with AUTH-ACCOUNT A12: on the integrated v0.8.0 release binary the row matches production. The divergence is kept under resolvedDivergences of the final-artifact regression, for the lane artifact it was recorded on."
+    },
+    {
+      "id": "M12",
+      "decision": "Under production's rules a phone MFA enrollment session does not expire: production accepted sessions of every age it was shown (300, 450, 600 and about 1803 seconds, both recordings) and refused none, as AUTH-ACTION's long codes. At the cap of 1000 outstanding phone codes the oldest enrollment session older than the observed ages makes room. Changed by the follow-up directive's Should 2 (2026-09-25): an account holds at most 32 phone enrollment sessions; at that number, or at the project's cap, only its own oldest session older than the observed ages makes room, never another account's.",
+      "decidedBy": "owner (t-k)",
+      "decidedOn": "2026-09-25"
+    },
+    {
+      "id": "M13",
+      "decision": "The SMS pending credential's lifetime is observed too: auth-mfa/lifetime-sms samples it at 450 and 600 seconds with 1800 seconds as the refusal-side control, each followed at once by a same-account control, recorded twice in the same task (within M1 and M4). Strict follows the result and places no inferred refusal outside the measured bracket.",
+      "decidedBy": "Claude under the owner's delegation to the coordinator (owner ledger, 2026-09-25, AUTH-MFA)",
+      "decidedOn": "2026-09-25"
+    },
+    {
+      "id": "M14",
+      "decision": "auth-mfa/lifetime-sms (recorded twice, 2026-09-25) found the SMS step of a pending credential started at about 453 seconds and refused as INVALID_MFA_PENDING_CREDENTIAL (expired) at about 603 and 1803 seconds. Strict refuses the SMS start from 602 seconds, one second below the refusal to absorb the requests' latency, as the owner's M9 exception; a finalize after an accepted start is not refused, as that was not observed.",
+      "decidedBy": "Claude under the owner's delegation to the coordinator, within the owner's M9 exception (owner ledger, 2026-09-25, AUTH-MFA)",
+      "decidedOn": "2026-09-25"
+    }
+  ],
+  "conditions": [
+    {
+      "conditionId": "AUTH-MFA/disabled-project",
+      "source": "docs/compatibility/ip-fs-production-compatibility.md#feature-group-status",
+      "recipeIds": [
+        "auth-mfa/disabled"
+      ],
+      "configProjections": [
+        "default"
+      ],
+      "status": "VERIFIED",
+      "note": "With the project's MFA switched off: TOTP and SMS enrollment starts, a phone factor written by the Admin API, and the password sign-in of that account, which returns tokens without asking for the factor (so the SMS second-factor rows after it have nothing to act on).",
+      "evidence": {
+        "productionRecordings": [
+          {
+            "recordedAt": "2026-09-24T17:59:03.835Z",
+            "gitSha": "b7d8482ce2fd4b72624aa08d1cee4996acc5b50a",
+            "recordings": 2,
+            "project": "fireemu-oracle-idp"
+          }
+        ],
+        "finalArtifactSha256": "86172226d07d1f6e850a58934c24c650b05eda345361ab4058aaea174f921356",
+        "sourceCommit": "91b477156ec2d626775be1cfcea96e74c967bbf7",
+        "comparisonPaths": [
+          "spec/compatibility/closure/evidence/AUTH-MFA-comparison.json"
+        ],
+        "rows": {
+          "MATCH": 9
+        }
+      }
+    },
+    {
+      "conditionId": "AUTH-MFA/project-config",
+      "source": "docs/compatibility/ip-fs-production-compatibility.md#feature-group-status",
+      "recipeIds": [
+        "auth-mfa/config"
+      ],
+      "configProjections": [
+        "default"
+      ],
+      "status": "VERIFIED",
+      "note": "The Admin config API's mfa member: the read-back of the applied value, and which values production accepts or refuses (adjacentIntervals 0, 10, 11 and -1, a TOTP provider without its config or disabled, ENABLED without providers, DISABLED with providers, MANDATORY, an unknown provider and an unknown state).",
+      "evidence": {
+        "productionRecordings": [
+          {
+            "recordedAt": "2026-09-24T17:59:03.835Z",
+            "gitSha": "b7d8482ce2fd4b72624aa08d1cee4996acc5b50a",
+            "recordings": 2,
+            "project": "fireemu-oracle-idp"
+          }
+        ],
+        "finalArtifactSha256": "86172226d07d1f6e850a58934c24c650b05eda345361ab4058aaea174f921356",
+        "sourceCommit": "91b477156ec2d626775be1cfcea96e74c967bbf7",
+        "comparisonPaths": [
+          "spec/compatibility/closure/evidence/AUTH-MFA-comparison.json"
+        ],
+        "rows": {
+          "MATCH": 13
+        }
+      }
+    },
+    {
+      "conditionId": "AUTH-MFA/totp-enrollment",
+      "source": "docs/compatibility/ip-fs-production-compatibility.md#feature-group-status",
+      "recipeIds": [
+        "auth-mfa/totp/enroll"
+      ],
+      "configProjections": [
+        "default"
+      ],
+      "status": "VERIFIED",
+      "note": "mfaEnrollment:start and :finalize for TOTP: the start answer and its deadline, missing and unknown session info, missing, wrong and repeated wrong codes, the accepted code and its tokens, a finalized session offered again after three attempts (TOO_MANY_ENROLLMENT_ATTEMPTS), the factor read back by the client and the Admin API, the first-factor session's token and refresh after enrollment, the start of a second TOTP enrollment, and the code window at enrollment: 5 steps back accepted, 6 steps either side refused, and 5 steps ahead sent without a display name, which production refuses for the name first (the 5-steps-ahead acceptance is observed at sign-in, auth-mfa/totp/sign-in#pending-1-again).",
+      "evidence": {
+        "productionRecordings": [
+          {
+            "recordedAt": "2026-09-24T17:59:03.835Z",
+            "gitSha": "b7d8482ce2fd4b72624aa08d1cee4996acc5b50a",
+            "recordings": 2,
+            "project": "fireemu-oracle-idp"
+          }
+        ],
+        "finalArtifactSha256": "86172226d07d1f6e850a58934c24c650b05eda345361ab4058aaea174f921356",
+        "sourceCommit": "91b477156ec2d626775be1cfcea96e74c967bbf7",
+        "comparisonPaths": [
+          "spec/compatibility/closure/evidence/AUTH-MFA-comparison.json"
+        ],
+        "rows": {
+          "MATCH": 27,
+          "MATCH_NONDETERMINISTIC": 1
+        }
+      }
+    },
+    {
+      "conditionId": "AUTH-MFA/totp-sign-in",
+      "source": "docs/compatibility/ip-fs-production-compatibility.md#feature-group-status",
+      "recipeIds": [
+        "auth-mfa/totp/sign-in",
+        "auth-mfa/totp/quota-free"
+      ],
+      "configProjections": [
+        "default"
+      ],
+      "status": "VERIFIED",
+      "note": "The first-factor answer that asks for a second factor, mfaSignIn:start for a TOTP factor, mfaSignIn:finalize with missing and unknown pending credentials, codes and factors, wrong codes, the code window at sign-in, the accepted code, the pending credential offered again after success, a code already used at sign-in or at enrollment, an unused code older than the last accepted one, the factor id left out, and phone verification offered for a TOTP factor. Production's per-account attempt quota answered QUOTA_EXCEEDED to the two used-code checks after the program's earlier wrong codes, so auth-mfa/totp/quota-free repeats them as the only wrong code of a new account (owner decision M10; how the rows pass is M10a). The quota itself is not claimed.",
+      "evidence": {
+        "productionRecordings": [
+          {
+            "recordedAt": "2026-09-24T17:59:03.835Z",
+            "gitSha": "b7d8482ce2fd4b72624aa08d1cee4996acc5b50a",
+            "recordings": 2,
+            "project": "fireemu-oracle-idp"
+          },
+          {
+            "recordedAt": "2026-09-25T01:19:15.102Z",
+            "gitSha": "1703c7f044a751f54ed4ae2eba42e333327f7aa2",
+            "recordings": 2,
+            "project": "fireemu-oracle-idp"
+          }
+        ],
+        "finalArtifactSha256": "86172226d07d1f6e850a58934c24c650b05eda345361ab4058aaea174f921356",
+        "sourceCommit": "91b477156ec2d626775be1cfcea96e74c967bbf7",
+        "comparisonPaths": [
+          "spec/compatibility/closure/evidence/AUTH-MFA-comparison.json"
+        ],
+        "rows": {
+          "MATCH": 46,
+          "REOBSERVED_MATCH": 2
+        }
+      }
+    },
+    {
+      "conditionId": "AUTH-MFA/withdrawal-and-revocation",
+      "source": "docs/compatibility/ip-fs-production-compatibility.md#feature-group-status",
+      "recipeIds": [
+        "auth-mfa/totp/withdraw"
+      ],
+      "configProjections": [
+        "default"
+      ],
+      "status": "VERIFIED",
+      "note": "mfaEnrollment:withdraw with a missing, unknown and repeated factor and without a token, the answer to a withdrawal, what it does to the tokens and refresh tokens issued before it and to validSince, the read-back and the sign-in afterwards, and a withdrawal with a first-factor token that predates the factor. SMS withdrawal is in AUTH-MFA/sms.",
+      "evidence": {
+        "productionRecordings": [
+          {
+            "recordedAt": "2026-09-24T17:59:03.835Z",
+            "gitSha": "b7d8482ce2fd4b72624aa08d1cee4996acc5b50a",
+            "recordings": 2,
+            "project": "fireemu-oracle-idp"
+          }
+        ],
+        "finalArtifactSha256": "86172226d07d1f6e850a58934c24c650b05eda345361ab4058aaea174f921356",
+        "sourceCommit": "91b477156ec2d626775be1cfcea96e74c967bbf7",
+        "comparisonPaths": [
+          "spec/compatibility/closure/evidence/AUTH-MFA-comparison.json"
+        ],
+        "rows": {
+          "MATCH": 21
+        }
+      }
+    },
+    {
+      "conditionId": "AUTH-MFA/sms",
+      "source": "docs/compatibility/ip-fs-production-compatibility.md#feature-group-status",
+      "recipeIds": [
+        "auth-mfa/sms"
+      ],
+      "configProjections": [
+        "default"
+      ],
+      "status": "VERIFIED",
+      "note": "SMS enrollment, sign-in and withdrawal with configured test numbers (owner decision M3): missing and invalid numbers, missing and wrong codes, a finalized session offered again, the factor read back, mfaSignIn:start without phone info and with an unknown factor, sign-in finalize, a session offered again, a second phone factor, the same number twice, and a withdrawal with its effect on validSince.",
+      "evidence": {
+        "productionRecordings": [
+          {
+            "recordedAt": "2026-09-24T17:59:03.835Z",
+            "gitSha": "b7d8482ce2fd4b72624aa08d1cee4996acc5b50a",
+            "recordings": 2,
+            "project": "fireemu-oracle-idp"
+          }
+        ],
+        "finalArtifactSha256": "86172226d07d1f6e850a58934c24c650b05eda345361ab4058aaea174f921356",
+        "sourceCommit": "91b477156ec2d626775be1cfcea96e74c967bbf7",
+        "comparisonPaths": [
+          "spec/compatibility/closure/evidence/AUTH-MFA-comparison.json"
+        ],
+        "rows": {
+          "MATCH": 28
+        }
+      }
+    },
+    {
+      "conditionId": "AUTH-MFA/interactions",
+      "source": "docs/compatibility/ip-fs-production-compatibility.md#feature-group-status",
+      "recipeIds": [
+        "auth-mfa/interactions"
+      ],
+      "configProjections": [
+        "default"
+      ],
+      "status": "VERIFIED",
+      "note": "Who may enroll (an unverified address, an anonymous and a phone first factor, a missing and a garbage ID token, both kinds at once), TOTP beside a phone factor, the factor limit (five and six factors written by the Admin API, and client enrollment at the limit), and a pending credential across account changes (disabled and enabled again, a password change, factors cleared, the account deleted, another account's factor).",
+      "evidence": {
+        "productionRecordings": [
+          {
+            "recordedAt": "2026-09-24T17:59:03.835Z",
+            "gitSha": "b7d8482ce2fd4b72624aa08d1cee4996acc5b50a",
+            "recordings": 2,
+            "project": "fireemu-oracle-idp"
+          }
+        ],
+        "finalArtifactSha256": "86172226d07d1f6e850a58934c24c650b05eda345361ab4058aaea174f921356",
+        "sourceCommit": "91b477156ec2d626775be1cfcea96e74c967bbf7",
+        "comparisonPaths": [
+          "spec/compatibility/closure/evidence/AUTH-MFA-comparison.json"
+        ],
+        "rows": {
+          "MATCH": 53
+        }
+      }
+    },
+    {
+      "conditionId": "AUTH-MFA/admin-factors",
+      "source": "spec/compatibility/closure/AUTH-ACCOUNT.json#A10",
+      "recipeIds": [
+        "auth-mfa/admin-factors"
+      ],
+      "configProjections": [
+        "default"
+      ],
+      "status": "VERIFIED",
+      "note": "Factors in imported accounts (AUTH-ACCOUNT scope decision A10): accounts:batchCreate with phone factors (with and without an id and an enrollment time), a TOTP factor and an invalid phone; factors replaced, set to TOTP, set to an invalid phone and cleared by the Admin accounts:update; sign-in with an imported factor; and a client TOTP enrollment beside an Admin-written phone factor.",
+      "evidence": {
+        "productionRecordings": [
+          {
+            "recordedAt": "2026-09-24T17:59:03.835Z",
+            "gitSha": "b7d8482ce2fd4b72624aa08d1cee4996acc5b50a",
+            "recordings": 2,
+            "project": "fireemu-oracle-idp"
+          }
+        ],
+        "finalArtifactSha256": "86172226d07d1f6e850a58934c24c650b05eda345361ab4058aaea174f921356",
+        "sourceCommit": "91b477156ec2d626775be1cfcea96e74c967bbf7",
+        "comparisonPaths": [
+          "spec/compatibility/closure/evidence/AUTH-MFA-comparison.json"
+        ],
+        "rows": {
+          "MATCH": 21
+        }
+      }
+    },
+    {
+      "conditionId": "AUTH-MFA/other-first-factors",
+      "source": "spec/compatibility/closure/AUTH-MFA.json#M5",
+      "recipeIds": [
+        "auth-mfa/first-factor"
+      ],
+      "configProjections": [
+        "default"
+      ],
+      "status": "VERIFIED",
+      "note": "A second factor after an email-link sign-in (a password account, and an account that only ever signed in by link), both of which ask for the enrolled factor and complete with it; and a custom-token sign-in of an account with a TOTP factor, which production answers with tokens at once, without asking for the factor (owner decision M5), so the second-factor rows after it have nothing to act on.",
+      "evidence": {
+        "productionRecordings": [
+          {
+            "recordedAt": "2026-09-24T17:59:03.835Z",
+            "gitSha": "b7d8482ce2fd4b72624aa08d1cee4996acc5b50a",
+            "recordings": 2,
+            "project": "fireemu-oracle-idp"
+          }
+        ],
+        "finalArtifactSha256": "86172226d07d1f6e850a58934c24c650b05eda345361ab4058aaea174f921356",
+        "sourceCommit": "91b477156ec2d626775be1cfcea96e74c967bbf7",
+        "comparisonPaths": [
+          "spec/compatibility/closure/evidence/AUTH-MFA-comparison.json"
+        ],
+        "rows": {
+          "MATCH": 21
+        }
+      }
+    },
+    {
+      "conditionId": "AUTH-MFA/second-factor-claims",
+      "source": "spec/compatibility/closure/AUTH-CREDENTIAL.json#C7",
+      "recipeIds": [
+        "auth-mfa/totp/sign-in",
+        "auth-mfa/totp/quota-free",
+        "auth-mfa/sms",
+        "auth-mfa/first-factor"
+      ],
+      "configProjections": [
+        "default"
+      ],
+      "status": "VERIFIED",
+      "note": "firebase.sign_in_second_factor and firebase.second_factor_identifier in the ID token after TOTP and SMS enrollment and sign-in, kept by a refresh, carried by a session cookie, and after an email-link first factor completed with a second factor; a custom-token sign-in's token carries neither (it did not ask for the factor; AUTH-CREDENTIAL scope decision C7).",
+      "evidence": {
+        "productionRecordings": [
+          {
+            "recordedAt": "2026-09-24T17:59:03.835Z",
+            "gitSha": "b7d8482ce2fd4b72624aa08d1cee4996acc5b50a",
+            "recordings": 2,
+            "project": "fireemu-oracle-idp"
+          },
+          {
+            "recordedAt": "2026-09-25T01:19:15.102Z",
+            "gitSha": "1703c7f044a751f54ed4ae2eba42e333327f7aa2",
+            "recordings": 2,
+            "project": "fireemu-oracle-idp"
+          }
+        ],
+        "finalArtifactSha256": "86172226d07d1f6e850a58934c24c650b05eda345361ab4058aaea174f921356",
+        "sourceCommit": "91b477156ec2d626775be1cfcea96e74c967bbf7",
+        "comparisonPaths": [
+          "spec/compatibility/closure/evidence/AUTH-MFA-comparison.json"
+        ],
+        "rows": {
+          "MATCH": 95,
+          "REOBSERVED_MATCH": 2
+        }
+      }
+    },
+    {
+      "conditionId": "AUTH-MFA/pending-credential-lifetime",
+      "source": "docs/compatibility/auth-mfa-next-campaign-preparation.md",
+      "recipeIds": [
+        "auth-mfa/lifetime",
+        "auth-mfa/lifetime-short",
+        "auth-mfa/lifetime-sms"
+      ],
+      "configProjections": [
+        "default"
+      ],
+      "status": "VERIFIED",
+      "note": "A TOTP pending credential offered at 300, 450, 600 and 1800 seconds (owner decision M4) and, since production refused it already at 300, at 60, 120, 180, 240 and 290 seconds (M8); an SMS pending credential whose code is sent at 150 and 300 seconds (M8), and at 450, 600 and 1800 seconds (M13; production refused the SMS start from about 603 seconds, M14). Each is followed at once by a same-account control with a credential acquired then. The ages the SMS start rows reached are not in the harness's own timings (it reads the clock only for rows that use a code, a deadline or an enrollment start); they come from the timestamped recording log, response to response (about 453, 603 and 1803 seconds). Reading the clock for every aged row waits for the next harness change, since the harness is part of the fixture's digest.",
+      "evidence": {
+        "productionRecordings": [
+          {
+            "recordedAt": "2026-09-24T17:59:03.835Z",
+            "gitSha": "b7d8482ce2fd4b72624aa08d1cee4996acc5b50a",
+            "recordings": 2,
+            "project": "fireemu-oracle-idp"
+          },
+          {
+            "recordedAt": "2026-09-24T23:56:47.745Z",
+            "gitSha": "19bc337818a214467dc622e10c7841021fe664ba",
+            "recordings": 2,
+            "project": "fireemu-oracle-idp"
+          },
+          {
+            "recordedAt": "2026-09-25T06:16:27.221Z",
+            "gitSha": "d47c499f1fd75b8126521dc5dda6b7fb7d56c20d",
+            "recordings": 2,
+            "project": "fireemu-oracle-idp"
+          }
+        ],
+        "finalArtifactSha256": "86172226d07d1f6e850a58934c24c650b05eda345361ab4058aaea174f921356",
+        "sourceCommit": "91b477156ec2d626775be1cfcea96e74c967bbf7",
+        "comparisonPaths": [
+          "spec/compatibility/closure/evidence/AUTH-MFA-comparison.json"
+        ],
+        "rows": {
+          "MATCH": 202,
+          "MATCH_NONDETERMINISTIC": 4,
+          "MATCH_TIMING_DEPENDENT": 1
+        }
+      }
+    },
+    {
+      "conditionId": "AUTH-MFA/enrollment-session-lifetime",
+      "source": "docs/compatibility/auth-mfa-next-campaign-preparation.md",
+      "recipeIds": [
+        "auth-mfa/lifetime",
+        "auth-mfa/lifetime-short"
+      ],
+      "configProjections": [
+        "default"
+      ],
+      "status": "VERIFIED",
+      "note": "A TOTP enrollment session finalized at 300, 450, 600, 870, 930 and 1800 seconds (either side of the 900 seconds its deadline announces) and an SMS enrollment session at 300, 450, 600 and 1800 seconds, each with the token of a sign-in made just before (so only the session is old). Each is followed by a same-account control start: after a refused session (TOTP at 930 and 1800 seconds) it starts and finalizes a new session; after an accepted one it is refused because the factor is now enrolled (SECOND_FACTOR_LIMIT_EXCEEDED, SECOND_FACTOR_EXISTS, or TOKEN_EXPIRED when the phone enrollment moved validSince past the sign-in's second), so its session row records nothing. Whether an enrollment start needs a recent sign-in: a token 1800 seconds old, then a new one, and the bracket of tokens 240 and 330 seconds old (M8).",
+      "evidence": {
+        "productionRecordings": [
+          {
+            "recordedAt": "2026-09-24T17:59:03.835Z",
+            "gitSha": "b7d8482ce2fd4b72624aa08d1cee4996acc5b50a",
+            "recordings": 2,
+            "project": "fireemu-oracle-idp"
+          },
+          {
+            "recordedAt": "2026-09-24T23:56:47.745Z",
+            "gitSha": "19bc337818a214467dc622e10c7841021fe664ba",
+            "recordings": 2,
+            "project": "fireemu-oracle-idp"
+          }
+        ],
+        "finalArtifactSha256": "86172226d07d1f6e850a58934c24c650b05eda345361ab4058aaea174f921356",
+        "sourceCommit": "91b477156ec2d626775be1cfcea96e74c967bbf7",
+        "comparisonPaths": [
+          "spec/compatibility/closure/evidence/AUTH-MFA-comparison.json"
+        ],
+        "rows": {
+          "MATCH": 172,
+          "MATCH_NONDETERMINISTIC": 4,
+          "MATCH_TIMING_DEPENDENT": 1
+        }
+      }
+    },
+    {
+      "conditionId": "AUTH-MFA/final-artifact-regression",
+      "source": "docs.local/instructions/2026-09-23-fs-data-write-sandbox-directive.md#4",
+      "recipeIds": [
+        "auth-mfa",
+        "auth-action",
+        "auth-credential",
+        "auth-account"
+      ],
+      "configProjections": [
+        "default"
+      ],
+      "status": "VERIFIED",
+      "note": "The final artifact compared with every AUTH-MFA row and, as regressions, every AUTH-ACTION, AUTH-CREDENTIAL and AUTH-ACCOUNT row.",
+      "evidence": {
+        "productionRecordings": [
+          {
+            "recordedAt": "2026-09-23T11:52:22.579Z",
+            "gitSha": "cfb090f17d568b03b9cc9c572b8234ce464e7300",
+            "recordings": 2,
+            "project": "fireemu-oracle-idp"
+          },
+          {
+            "recordedAt": "2026-09-23T12:44:15.390Z",
+            "gitSha": "0a056552b7a5eb5cd53bc66448d3a5c49f495be8",
+            "recordings": 2,
+            "project": "fireemu-oracle-idp"
+          },
+          {
+            "recordedAt": "2026-09-23T15:29:14.879Z",
+            "gitSha": "3a36882be11991ec6f2cc8bb086f895cfd7c24f6",
+            "recordings": 2,
+            "project": "fireemu-oracle-idp"
+          },
+          {
+            "recordedAt": "2026-09-24T05:51:03.248Z",
+            "gitSha": "384c19ccea69cc7fce06f9bb37af77d7c982f788",
+            "recordings": 2,
+            "project": "fireemu-oracle-idp"
+          },
+          {
+            "recordedAt": "2026-09-24T05:53:09.841Z",
+            "gitSha": "6555f0f02fb4b70b6fbfbc1298f4fd5c35fc66ee",
+            "recordings": 2,
+            "project": "fireemu-oracle-idp"
+          },
+          {
+            "recordedAt": "2026-09-24T08:04:46.724Z",
+            "gitSha": "d4c96ba6f3b8eaf35217e64ea835b557e1819e97",
+            "recordings": 2,
+            "project": "fireemu-oracle-idp"
+          },
+          {
+            "recordedAt": "2026-09-24T12:13:38.654Z",
+            "gitSha": "f1e3bda061ae42f5b63b62d3d7c6d755836b385c",
+            "recordings": 2,
+            "project": "fireemu-oracle-idp"
+          },
+          {
+            "recordedAt": "2026-09-24T14:23:20.843Z",
+            "gitSha": "214e3dbc3ece1bb5f03190d64e4c9beac323e88a",
+            "recordings": 2,
+            "project": "fireemu-oracle-idp"
+          },
+          {
+            "recordedAt": "2026-09-24T17:27:34.229Z",
+            "gitSha": "04b5dc7107dc839dcd073f24b11e8e79cf43b5b0",
+            "recordings": 2,
+            "project": "fireemu-oracle-idp"
+          },
+          {
+            "recordedAt": "2026-09-24T17:59:03.835Z",
+            "gitSha": "b7d8482ce2fd4b72624aa08d1cee4996acc5b50a",
+            "recordings": 2,
+            "project": "fireemu-oracle-idp"
+          },
+          {
+            "recordedAt": "2026-09-24T23:56:47.745Z",
+            "gitSha": "19bc337818a214467dc622e10c7841021fe664ba",
+            "recordings": 2,
+            "project": "fireemu-oracle-idp"
+          },
+          {
+            "recordedAt": "2026-09-25T01:19:15.102Z",
+            "gitSha": "1703c7f044a751f54ed4ae2eba42e333327f7aa2",
+            "recordings": 2,
+            "project": "fireemu-oracle-idp"
+          },
+          {
+            "recordedAt": "2026-09-25T06:16:27.221Z",
+            "gitSha": "d47c499f1fd75b8126521dc5dda6b7fb7d56c20d",
+            "recordings": 2,
+            "project": "fireemu-oracle-idp"
+          }
+        ],
+        "finalArtifactSha256": "86172226d07d1f6e850a58934c24c650b05eda345361ab4058aaea174f921356",
+        "sourceCommit": "91b477156ec2d626775be1cfcea96e74c967bbf7",
+        "comparisonPaths": [
+          "spec/compatibility/closure/evidence/AUTH-MFA-comparison.json",
+          "spec/compatibility/closure/evidence/AUTH-MFA-action-regression.json",
+          "spec/compatibility/closure/evidence/AUTH-MFA-credential-regression.json",
+          "spec/compatibility/closure/evidence/AUTH-MFA-account-regression.json"
+        ],
+        "rows": {
+          "MATCH": 1639,
+          "MATCH_NONDETERMINISTIC": 5,
+          "REOBSERVED_MATCH": 2,
+          "MATCH_TIMING_DEPENDENT": 1,
+          "MISMATCH": 1
+        },
+        "workspaceTests": {
+          "command": "cargo nextest run --workspace --profile pr",
+          "passed": 3439,
+          "failed": 0,
+          "note": "Measured after c95701182 and the pinned local clock, which add tests only; the artifact's source 91b477156 passed 3437."
+        },
+        "buildTree": "clean (git status --porcelain empty at build); artifact copy, sha256, source commit and check logs in docs.local/runs/auth-mfa-final-20260925c/ (private)",
+        "mutation": "docs.local/mutation/auth-mfa/ (private): cargo-mutants over ccda084aa..ccd10a2d5 (264 mutants: 197 caught, 39 unviable, 1 timeout, 27 survivors), 20260925-followup/ over ccd10a2d5..34fc32a05 (50: 38 caught, 9 unviable, 3 survivors) and 20260925-directive/ over the follow-up directive's source changes 34fc32a05..91b477156 (26: 21 caught, 4 unviable, 1 survivor), in fireemu-core-auth and fireemu-adapter-http. All 31 survivors are triaged (20260925/triage.md, 20260925-directive/triage.md): 5 equivalent, 26 killed by tests in HEAD.",
+        "resolvedDivergences": [
+          {
+            "row": "auth-account/admin/custom-attributes#invalid-json",
+            "kind": "message-text",
+            "decidedBy": "owner",
+            "decidedOn": "2026-09-25",
+            "scopeDecision": "M11",
+            "reason": "AUTH-ACCOUNT scope decision A12, inherited as AUTH-ACTION E9: production returns gson's parser message for malformed customAttributes JSON; the INVALID_CLAIMS refusal itself matches.",
+            "resolvedOn": "2026-09-28",
+            "resolvedArtifactSha256": "c258b022c5f452a60a9bc60de68e6de26b3f5aeaf846623cf1bf7e33f28d31df",
+            "resolvedEvidence": {
+              "path": "spec/compatibility/closure/evidence/integration-v0.8.0/AUTH-ACCOUNT-comparison.json",
+              "sha256": "00455bf3da54088e3cc9498fb9717d5f5221e20ec03af4e62ef19cf8ee963603",
+              "status": "MATCH"
+            },
+            "resolution": "AUTH-ACCOUNT scope decision A12 is resolved: the integrated v0.8.0 release binary answers production's message, so the row matches. The divergence stays recorded for the lane artifact this condition is bound to."
+          }
+        ]
+      }
+    },
+    {
+      "conditionId": "AUTH-MFA/closure-review",
+      "source": "docs.local/instructions/2026-09-23-fs-data-write-sandbox-directive.md#4",
+      "recipeIds": [
+        "auth-mfa"
+      ],
+      "configProjections": [
+        "default"
+      ],
+      "status": "VERIFIED",
+      "note": "An independent closure review and a separate safety review of the final artifact.",
+      "evidence": {
+        "productionRecordings": [
+          {
+            "recordedAt": "2026-09-24T17:59:03.835Z",
+            "gitSha": "b7d8482ce2fd4b72624aa08d1cee4996acc5b50a",
+            "recordings": 2,
+            "project": "fireemu-oracle-idp"
+          },
+          {
+            "recordedAt": "2026-09-24T23:56:47.745Z",
+            "gitSha": "19bc337818a214467dc622e10c7841021fe664ba",
+            "recordings": 2,
+            "project": "fireemu-oracle-idp"
+          },
+          {
+            "recordedAt": "2026-09-25T01:19:15.102Z",
+            "gitSha": "1703c7f044a751f54ed4ae2eba42e333327f7aa2",
+            "recordings": 2,
+            "project": "fireemu-oracle-idp"
+          },
+          {
+            "recordedAt": "2026-09-25T06:16:27.221Z",
+            "gitSha": "d47c499f1fd75b8126521dc5dda6b7fb7d56c20d",
+            "recordings": 2,
+            "project": "fireemu-oracle-idp"
+          }
+        ],
+        "finalArtifactSha256": "86172226d07d1f6e850a58934c24c650b05eda345361ab4058aaea174f921356",
+        "sourceCommit": "91b477156ec2d626775be1cfcea96e74c967bbf7",
+        "comparisonPaths": [
+          "spec/compatibility/closure/evidence/AUTH-MFA-comparison.json"
+        ],
+        "rows": {
+          "MATCH": 441,
+          "MATCH_NONDETERMINISTIC": 5,
+          "REOBSERVED_MATCH": 2,
+          "MATCH_TIMING_DEPENDENT": 1
+        }
+      }
+    }
+  ],
+  "closureReview": {
+    "decision": "APPROVED",
+    "decidedOn": "2026-09-25",
+    "reviewer": "clean-context confirmation review of the coordinator's follow-up directive on artifact 86172226 (APPROVE WITH CHANGES, no Must Fix; its four Should Fix items fixed without source changes in c95701182), after the coordinator's independent promotion review (promotion kept, conditionally), the independent closure review and its confirmation, the pre-send reviews of every recorded program, and the safety review and its confirmation",
+    "reviewedCommit": "e06c059a9",
+    "finalArtifactSha256": "86172226d07d1f6e850a58934c24c650b05eda345361ab4058aaea174f921356",
+    "report": "docs.local/reviews/2026-09-25-auth-mfa-follow-up-confirmation.md (private; earlier: docs.local/instructions/2026-09-25-auth-mfa-promotion-review.md, 2026-09-25-auth-mfa-follow-up-directive.md, docs.local/reviews/2026-09-25-auth-mfa-closure-review.md, -closure-confirmation.md, -safety-review.md, -safety-confirmation.md and the pre-send reviews)",
+    "followUps": "Non-blocking and tracked privately (docs.local/issues/open/auth-mfa-unobserved-edges.md, mfa-pending-credential-survives-token-revocation.md): the per-account TOTP attempt quota, the unobserved gaps inside the measured brackets (TOTP pending, recent sign-in, SMS start), the SMS finalize after an accepted start, the phone enrollment session's lifetime past about 1803 seconds, a finalized TOTP session offered again before three attempts, fireemu's own per-user and per-account bounds, Admin entries with both phoneInfo and totpInfo, pending credentials after a refresh-token revocation (a password change was observed and production still completes), and tenant second factors (AUTH-TENANT-BLOCKING). The local check runs each program with a pinned clock so it is reproducible; the harness does not record the ages its SMS start rows reach (see the pending-credential-lifetime note)."
+  },
+  "integratedRegression": {
+    "release": "v0.8.0",
+    "integrationCommit": "f8f0611ac35185a0719ae7660601ed4ac584dcad",
+    "releaseBinarySha256": "c258b022c5f452a60a9bc60de68e6de26b3f5aeaf846623cf1bf7e33f28d31df",
+    "buildReceiptPath": "spec/compatibility/closure/evidence/integration-v0.8.0/release-artifact.json",
+    "buildReceiptSha256": "439d1f55b447d2621661077fc8c130df1fba8f38d996b0a952adef0d4d8bcd1c",
+    "comparisons": [
+      {
+        "path": "spec/compatibility/closure/evidence/integration-v0.8.0/AUTH-MFA-comparison.json",
+        "sha256": "b329e716461b6f8813e0f35570a625c9192571e0416289da434f0836a2a0b821",
+        "rows": 449,
+        "summary": {
+          "MATCH": 441,
+          "MATCH_NONDETERMINISTIC": 5,
+          "REOBSERVED_MATCH": 2,
+          "MATCH_TIMING_DEPENDENT": 1
+        },
+        "laneComparisonPath": "spec/compatibility/closure/evidence/AUTH-MFA-comparison.json",
+        "laneComparisonSha256": "9193fc482f88ecb3f27d3a309caa8651c82103916e575c48c6beff970aaf4951",
+        "identicalRows": 449,
+        "changedRows": []
+      },
+      {
+        "path": "spec/compatibility/closure/evidence/integration-v0.8.0/AUTH-ACCOUNT-comparison.json",
+        "sha256": "00455bf3da54088e3cc9498fb9717d5f5221e20ec03af4e62ef19cf8ee963603",
+        "rows": 631,
+        "summary": {
+          "MATCH": 631
+        },
+        "laneComparisonPath": "spec/compatibility/closure/evidence/AUTH-MFA-account-regression.json",
+        "laneComparisonSha256": "f51d7290e509ced3d64cc1db171d216b9d0117c15c5fe6d70a5b1a7e583781ec",
+        "identicalRows": 630,
+        "changedRows": [
+          {
+            "row": "auth-account/admin/custom-attributes#invalid-json",
+            "lane": "MISMATCH",
+            "integrated": "MATCH"
+          }
+        ],
+        "inherited": "AUTH-ACCOUNT"
+      },
+      {
+        "path": "spec/compatibility/closure/evidence/integration-v0.8.0/AUTH-ACTION-comparison.json",
+        "sha256": "28a7dd84c79bb85df5e0aacafa2a1f2203df8297067fa27ea269782332ab8e74",
+        "rows": 346,
+        "summary": {
+          "MATCH": 346
+        },
+        "laneComparisonPath": "spec/compatibility/closure/evidence/AUTH-MFA-action-regression.json",
+        "laneComparisonSha256": "008870ad918862b31086dd1b235d1f9b28b8a9b7cff97425e0392819b0f86d55",
+        "identicalRows": 346,
+        "changedRows": [],
+        "inherited": "AUTH-ACTION"
+      },
+      {
+        "path": "spec/compatibility/closure/evidence/integration-v0.8.0/AUTH-CREDENTIAL-comparison.json",
+        "sha256": "422bb6e490555819eeced8d0c1853077c38cefb378e8f90123bef78de665ed58",
+        "rows": 222,
+        "summary": {
+          "MATCH": 222
+        },
+        "laneComparisonPath": "spec/compatibility/closure/evidence/AUTH-MFA-credential-regression.json",
+        "laneComparisonSha256": "42eb0bccb178125a64a09d80230400dfeb5e5c9554d9f55518af3f1114a9c40f",
+        "identicalRows": 222,
+        "changedRows": [],
+        "inherited": "AUTH-CREDENTIAL"
+      }
+    ],
+    "result": "IDENTICAL_EXCEPT_RESOLVED_DIVERGENCES",
+    "productionRequests": 0
+  }
+}

@@ -1,0 +1,104 @@
+{
+  "binding": {
+    "acquisitionValidated": true,
+    "artifactSha256": "76f855367910ad237de6ffd491091f20bcdccdb2e5eb8ee417e80b94bf6ac397",
+    "classification": "EXPECTED_NONDETERMINISM",
+    "comparisonOrigin": "new-local-v1-comparison",
+    "derivedAnalysis": true,
+    "frozenInputsSha256": "27f62136d95e85ae514ffd4ec7ae885d806d09540bfbf8a4281f837c06323499",
+    "kind": "fs-write-limits-recompare-binding-v2",
+    "localBundleDigest": "db048de4e30c4b0c51091ff8766326e7b55ec53f302d2d02bd0aa8a0edd50e95",
+    "originalContract": "fs-write-limits-production-comparison-v1",
+    "originalFrozenComparisonSha256": "c6f6906c491ce186fd26bf43496767f47a278c12df17138afbc422c9a8d06e41",
+    "productionReceiptSha256": "ca418bcf1eed6d906baebc7d22090161752071c7d845ab19a10bd3b6ddc429a7",
+    "promotionReady": false,
+    "v1ResultSha256": "af6244ec7be77119fdac676b3dbba13a395fa5c801119c47096f8d9c6de6e81f",
+    "v2EntrySourceSha256": "110fe6cf9edf1666ef2fab08edc0ba9f1ddbc7b1502135854ab87ae447ee7278",
+    "v2KernelSourceSha256": "d3d427bfec20e2380793f7d42bf4d3ff7d08acdb47c8db49629ac9da61d4362a",
+    "v2ResultSha256": "f61cb5db0f65de720e86674b292f8d552dd24bdec8013610715880df298f49d8",
+    "v2SourceSha256": "14dbd2ce702cd0afe055dc9098b01444a070b6d50336e421c8a7075eb483c2d0",
+    "version": "fs-write-limits-recompare-v2"
+  },
+  "campaignId": "FS-DATA-WRITE-LIMITS-02",
+  "evidenceCategory": "saved-production-reference-comparison",
+  "kind": "fs-write-limits-saved-reference-result-v2",
+  "limitations": [
+    "Kernel output is semantic-only; acquisition validation is supplied by the separately bound v1 result and binding.",
+    "Two finite byte/depth groups do not complete FS-DATA-WRITE.",
+    "Original production receipt and pre-fix comparison remain immutable.",
+    "Final-artifact verification must be repeated if relevant runtime inputs change."
+  ],
+  "newProductionRequests": 0,
+  "parentsPromoted": 0,
+  "rowClassificationCounts": {
+    "EXPECTED_NONDETERMINISM": 15,
+    "MATCH": 1
+  },
+  "rows": [
+    {
+      "classification": "EXPECTED_NONDETERMINISM",
+      "index": 0
+    },
+    {
+      "classification": "EXPECTED_NONDETERMINISM",
+      "index": 1
+    },
+    {
+      "classification": "EXPECTED_NONDETERMINISM",
+      "index": 2
+    },
+    {
+      "classification": "EXPECTED_NONDETERMINISM",
+      "index": 3
+    },
+    {
+      "classification": "EXPECTED_NONDETERMINISM",
+      "index": 4
+    },
+    {
+      "classification": "EXPECTED_NONDETERMINISM",
+      "index": 5
+    },
+    {
+      "classification": "EXPECTED_NONDETERMINISM",
+      "index": 6
+    },
+    {
+      "classification": "EXPECTED_NONDETERMINISM",
+      "index": 7
+    },
+    {
+      "classification": "EXPECTED_NONDETERMINISM",
+      "index": 8
+    },
+    {
+      "classification": "EXPECTED_NONDETERMINISM",
+      "index": 9
+    },
+    {
+      "classification": "EXPECTED_NONDETERMINISM",
+      "index": 10
+    },
+    {
+      "classification": "EXPECTED_NONDETERMINISM",
+      "index": 11
+    },
+    {
+      "classification": "MATCH",
+      "index": 12
+    },
+    {
+      "classification": "EXPECTED_NONDETERMINISM",
+      "index": 13
+    },
+    {
+      "classification": "EXPECTED_NONDETERMINISM",
+      "index": 14
+    },
+    {
+      "classification": "EXPECTED_NONDETERMINISM",
+      "index": 15
+    }
+  ],
+  "sourceCommit": "8b33aac4ddd09e6b945cc8701a7e757a948223ac"
+}

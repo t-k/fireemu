@@ -471,6 +471,53 @@ fn cases() -> Vec<Case> {
             },
             expect: Some("is declared \"implemented\" while its owner AC-REPLAY-1 is \"unsupported\""),
         },
+        // CC-07: a term the manifest describes that no claim promises.
+        Case {
+            name: "shared-term-missing-from-the-claim",
+            mutate: |contract, _, _| {
+                set(
+                    contract,
+                    "vocabulary/sharedTerms/0/mustAppearInClaim",
+                    json!(true),
+                );
+            },
+            expect: Some("must appear in a claim, but no claim that binds [\"FS-PIPE-RPC-1\"] mentions it"),
+        },
+        // CC-07: the same term, promised by the claim that binds its owner.
+        Case {
+            name: "shared-term-present-in-the-claim",
+            mutate: |contract, _, _| {
+                set(
+                    contract,
+                    "vocabulary/sharedTerms/0/mustAppearInClaim",
+                    json!(true),
+                );
+                set(
+                    contract,
+                    "surfaces/0/claims/1/statement",
+                    json!("pipelines are validated, ExecutePipeline included"),
+                );
+            },
+            expect: None,
+        },
+        // CC-07: a term that must be promised whose owner no claim binds at all.
+        Case {
+            name: "shared-term-with-no-claim-of-its-own",
+            mutate: |contract, _, _| {
+                set(
+                    contract,
+                    "vocabulary/sharedTerms/0/mustAppearInClaim",
+                    json!(true),
+                );
+                set(contract, "vocabulary/sharedTerms/0/owners", json!(["FS-RPC-1"]));
+                set(
+                    contract,
+                    "surfaces/0/claims/0/capabilities",
+                    json!([{"id": "FS-PIPE-RPC-1", "status": "implemented"}]),
+                );
+            },
+            expect: Some("no claim of spec/compatibility/contract.json names any of its owners"),
+        },
         // CC-06: release wording is scoped the same way as the README.
         Case {
             name: "scoped-document-leaks-a-deferred-product",

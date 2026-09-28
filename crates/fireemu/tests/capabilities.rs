@@ -515,6 +515,14 @@ fn firestore_rest_capability_matches_the_served_production_wire() {
         "FS-REST-1 must not claim that readTime is refused: {text}"
     );
     assert!(
+        text.contains("local Standard/Native findNearest is served through REST :runQuery"),
+        "FS-REST-1 must describe local findNearest support: {text}"
+    );
+    assert!(
+        text.contains("pinned official Firestore emulator refuses findNearest on REST"),
+        "FS-REST-1 must keep the official-emulator limitation explicit: {text}"
+    );
+    assert!(
         !text.contains("the last RunQuery response says done"),
         "FS-REST-1 must not claim a done marker: {text}"
     );
@@ -683,4 +691,28 @@ fn the_local_divergences_and_the_observation_surface_are_published() {
         observe_text.contains("never in a list, a log, window.__FIREEMU__ or an observation"),
         "the entry states where a raw debug secret may appear: {observe_text}"
     );
+}
+
+#[test]
+fn account_lifecycle_capability_is_published_with_its_compatibility_boundary() {
+    let entry = &manifest()["capabilities"]["AUTH-ACCOUNT-LIFECYCLE-1"];
+    assert_eq!(entry["status"], "implemented");
+    assert_eq!(entry["precision"], "boundary-conformance");
+    let text = text_of(entry);
+    for term in [
+        "Admin",
+        "client",
+        "duplicate email",
+        "disable and re-enable",
+        "UID reuse",
+        "anonymous upgrade",
+        "provider linking",
+        "production",
+    ] {
+        assert!(
+            text.to_ascii_lowercase()
+                .contains(&term.to_ascii_lowercase()),
+            "missing {term}: {text}"
+        );
+    }
 }

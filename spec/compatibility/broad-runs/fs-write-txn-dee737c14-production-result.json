@@ -1,0 +1,83 @@
+{
+  "artifactSha256": "be2771b9f2093cced55e8158d8d5a72ed35e6ac5e32edddb068daa45511e12ae",
+  "artifactSourceCommit": "cce4a4f9b7369938c89bd32a5106e8d3cab59f83",
+  "authorization": {
+    "budget": {
+      "accounts": 0,
+      "concurrency": 1,
+      "costMicrousd": 1303500,
+      "requests": 35,
+      "resources": 3,
+      "seconds": 1200
+    },
+    "configurationMutationAllowed": false,
+    "iterationsAuthorized": 1,
+    "iterationsExecuted": 1,
+    "ownerAccepted": true,
+    "permissionReference": "conversation:2026-09-17:FS-WRITE-TXN-PRECEDENCE-01-V9:explicit-bounded-24h-acceptance"
+  },
+  "campaignId": "FS-WRITE-TXN-PRECEDENCE-01",
+  "closure": {
+    "compatVerifiedParents": 0,
+    "newlyCompatibilityVerifiedConditions": 0,
+    "newlyObservedFiniteCaseGroups": 1,
+    "parents": [
+      "FS-DATA-WRITE",
+      "FS-TRANSACTION"
+    ],
+    "parentsPromoted": 0,
+    "remaining": [
+      "Repair the GetDocument diagnostic and compare a verified new local artifact against this saved production receipt.",
+      "Preserve comparator v1 and its original mismatch; version narrow owned-resource identity normalization separately.",
+      "Complete other declared Commit/BatchWrite, transaction, catalog-limit and final-artifact evidence conditions."
+    ],
+    "targetParents": 14
+  },
+  "collectorSourceDigest": "b052ce31b57e491e0d480f0dd34d3bcf797de99b57f2129970c2878bd258b383",
+  "comparison": {
+    "classification": "SEMANTIC_MISMATCH",
+    "differenceCluster": "GetDocument NOT_FOUND diagnostic wording and request-bound resource identity",
+    "independentlyValidated": true,
+    "localDiagnosticTemplate": "Document not found: <owned-resource>",
+    "originalComparisonPreserved": true,
+    "productionDiagnosticTemplate": "Document \"<owned-resource>\" not found.",
+    "promotionReady": false,
+    "statusCodeOrderAndDocumentStateDifferences": false
+  },
+  "comparisonContractDigest": "3f030474686afa844ca7a91c9ffad447ab21a88ad03388e93c0fdc9b4cdc4fb2",
+  "database": "(default)",
+  "evidenceCategory": "production-observed-and-fixed-artifact-comparison",
+  "kind": "fs-write-transaction-production-result-v1",
+  "limitations": [
+    "The 23 data calls cover one finite stream/transaction case group, not 23 independent requirements.",
+    "Two local descriptor setup refusals occurred before any reservation or network request; diagnostics were preserved and the approved production iteration executed once.",
+    "Cost is conservative accounting, not a measured invoice.",
+    "The retained runtime artifact predates the collector source; their source identities are distinct.",
+    "Raw resource nonce, tokens, credentials and transaction identifiers remain private.",
+    "No production reobservation is required for the current diagnostic repair."
+  ],
+  "manifestDigest": "cf4f04f45aae73bfb22f9eaa644cd92a4790319bdb2e13dbf12b901629a1d3c7",
+  "privateEvidenceSha256": {
+    "frozenInputs": "b43dbf0bffb4ea575467d12fa49727c78d15a34900401bbb9b3d0ebbc29d65d5",
+    "independentComparison": "1e109b1c84ea127649ae4cfbbc879ffa2301c13407a9dbfda8eb874d76b9a85f",
+    "ownerPermission": "7288b4a9b85c4e505a302c89ee2339196f58d71b4a59de737d1603da931a150b",
+    "productionReceipt": "12956fbe82acefc106093eb2cd913ede9092f74aa98bd29f39e795492754b3f3"
+  },
+  "production": {
+    "accountingCostMicrousd": 1303300,
+    "acquisitionValidated": true,
+    "billingMeasured": false,
+    "cleanupComplete": true,
+    "configurationUnchanged": true,
+    "credentialPreparationRequests": 2,
+    "dataRequests": 23,
+    "elapsedSeconds": 63.48,
+    "infrastructureFailures": 0,
+    "metadataRequests": 8,
+    "productionExecuted": true,
+    "requestsUsed": 33,
+    "reservationReleased": true
+  },
+  "project": "fireemu-35fe6",
+  "sourceCommit": "dee737c14e68eb4f546b7ca4c827871fc48a2503"
+}

@@ -678,10 +678,13 @@ fn limit_violations_reject_the_whole_commit_atomically() {
     let mut s = FirestoreState::new();
     s.commit(&[set("a/1", &[("k", Value::Integer(1))])], None, t(0))
         .unwrap();
-    let too_big = Value::String("x".repeat(1_048_576));
+    // Keep each field below the per-value limit so this control exercises the
+    // aggregate document-size refusal rather than the property-size diagnostic.
+    let too_big = Value::String("x".repeat(600_000));
+    let also_too_big = Value::String("y".repeat(500_000));
     let writes = vec![
         set("a/1", &[("k", Value::Integer(2))]),
-        set("a/2", &[("blob", too_big)]),
+        set("a/2", &[("blob", too_big), ("other", also_too_big)]),
     ];
     match s.commit(&writes, None, t(1)) {
         Err(FirestoreError::ResourceExhausted(v)) => {
@@ -1130,6 +1133,333 @@ fn a_query_in_a_transaction_locks_its_range() {
     let txn2 = s.begin_transaction(false, t(4)).unwrap();
     assert_eq!(s.run_query_in_transaction(&txn2, &q).unwrap().len(), 2);
     assert!(s.commit(&[set("other/y", &[])], Some(&txn2), t(5)).is_ok());
+}
+
+#[test]
+fn a_transaction_nearest_query_replays_with_vector_semantics_after_conflict() {
+    use fireemu_core_firestore::query::{DistanceMeasure, FindNearest, Query, QueryScope};
+    use fireemu_core_types::ids::CollectionId;
+
+    let mut state = FirestoreState::new();
+    state
+        .commit(
+            &[set(
+                "items/a",
+                &[("embedding", Value::Vector(vec![1.0, 0.0]))],
+            )],
+            None,
+            t(0),
+        )
+        .unwrap();
+    let query = Query::new(QueryScope::collection(
+        None,
+        CollectionId::try_new("items").unwrap(),
+    ))
+    .with_find_nearest(FindNearest {
+        vector_field: FieldPath::parse("embedding").unwrap(),
+        query_vector: vec![1.0, 0.0],
+        distance_measure: DistanceMeasure::Euclidean,
+        limit: 1,
+        distance_result_field: None,
+        distance_threshold: None,
+    })
+    .canonicalize()
+    .unwrap();
+    let first = state.begin_transaction(false, t(1)).unwrap();
+    let second = state.begin_transaction(false, t(1)).unwrap();
+    assert_eq!(
+        state.run_query_in_transaction(&first, &query).unwrap()[0]
+            .path
+            .document_id()
+            .as_str(),
+        "a"
+    );
+    assert_eq!(
+        state.run_query_in_transaction(&second, &query).unwrap()[0]
+            .path
+            .document_id()
+            .as_str(),
+        "a"
+    );
+    let replacement = set("items/a", &[("embedding", Value::Vector(vec![0.0, 1.0]))]);
+    assert!(matches!(
+        state.commit(std::slice::from_ref(&replacement), Some(&first), t(2)),
+        Err(FirestoreError::Aborted(message)) if message == TOO_MUCH_CONTENTION
+    ));
+    assert!(matches!(
+        state.commit(std::slice::from_ref(&replacement), Some(&second), t(3)),
+        Err(FirestoreError::Aborted(message)) if message == TOO_MUCH_CONTENTION
+    ));
+    state
+        .commit(std::slice::from_ref(&replacement), Some(&first), t(4))
+        .unwrap();
+    let retry = state.retry_transaction(&second, t(5)).unwrap();
+    let nearest = state.run_query_in_transaction(&retry, &query).unwrap();
+    assert_eq!(nearest.len(), 1);
+    assert_eq!(
+        nearest[0].fields["embedding"],
+        Value::Vector(vec![0.0, 1.0])
+    );
+}
+
+#[test]
+fn an_unrelated_commit_does_not_conflict_with_a_bounded_nearest_observation() {
+    use fireemu_core_firestore::query::{DistanceMeasure, FindNearest, Query, QueryScope};
+    use fireemu_core_types::ids::CollectionId;
+
+    let mut state = FirestoreState::new();
+    state
+        .commit(
+            &[
+                set(
+                    "items/near",
+                    &[("embedding", Value::Vector(vec![1.0, 0.0]))],
+                ),
+                set("items/far", &[("embedding", Value::Vector(vec![5.0, 0.0]))]),
+            ],
+            None,
+            t(0),
+        )
+        .unwrap();
+    let query = Query::new(QueryScope::collection(
+        None,
+        CollectionId::try_new("items").unwrap(),
+    ))
+    .with_find_nearest(FindNearest {
+        vector_field: FieldPath::parse("embedding").unwrap(),
+        query_vector: vec![1.0, 0.0],
+        distance_measure: DistanceMeasure::Euclidean,
+        limit: 1,
+        distance_result_field: None,
+        distance_threshold: None,
+    })
+    .canonicalize()
+    .unwrap();
+    let transaction = state.begin_transaction(false, t(1)).unwrap();
+    let nearest = state
+        .run_query_in_transaction(&transaction, &query)
+        .unwrap();
+    assert_eq!(nearest.len(), 1);
+    assert_eq!(nearest[0].path.document_id().as_str(), "near");
+
+    state
+        .commit(&[set("other/unrelated", &[])], None, t(2))
+        .unwrap();
+    state
+        .commit(
+            &[set("other/transaction-write", &[])],
+            Some(&transaction),
+            t(3),
+        )
+        .unwrap();
+}
+
+#[test]
+fn a_maximum_vector_query_is_charged_before_transaction_admission() {
+    use fireemu_core_firestore::query::{
+        DistanceMeasure, FieldOp, FilterExpr, FindNearest, Query, QueryScope,
+    };
+    use fireemu_core_types::ids::CollectionId;
+
+    let mut state = FirestoreState::new();
+    let baseline = state.begin_transaction(false, t(0)).unwrap();
+    let empty = Query::new(QueryScope::collection(
+        None,
+        CollectionId::try_new("empty").unwrap(),
+    ));
+    state.run_query_in_transaction(&baseline, &empty).unwrap();
+    let baseline_bytes = state.transaction_bookkeeping_stats().conflict_ledger_bytes;
+    state.rollback(&baseline).unwrap();
+
+    let query = empty
+        .with_find_nearest(FindNearest {
+            vector_field: FieldPath::parse("embedding").unwrap(),
+            query_vector: vec![1.0; 2048],
+            distance_measure: DistanceMeasure::Euclidean,
+            limit: 1,
+            distance_result_field: Some(FieldPath::parse("distance.result").unwrap()),
+            distance_threshold: None,
+        })
+        .canonicalize()
+        .unwrap();
+    let transaction = state.begin_transaction(false, t(0)).unwrap();
+    state
+        .run_query_in_transaction(&transaction, &query)
+        .unwrap();
+    let charged = state.transaction_bookkeeping_stats().conflict_ledger_bytes;
+    assert!(charged > baseline_bytes + 2048 * 8);
+
+    let mut oversized = query;
+    oversized.filter = Some(FilterExpr::Field {
+        field: FieldPath::parse("unused").unwrap(),
+        op: FieldOp::Equal,
+        value: Value::String(
+            "x".repeat(usize::try_from(MAX_TRANSACTION_CONFLICT_LEDGER_BYTES).unwrap() - 8_000),
+        ),
+    });
+    let refused = state.begin_transaction(false, t(0)).unwrap();
+    assert!(matches!(
+        state.run_query_in_transaction(&refused, &oversized),
+        Err(FirestoreError::Aborted(message))
+            if message == "transaction observed data exceeds the retained conflict-detection budget"
+    ));
+}
+
+#[test]
+fn maximum_vector_query_descriptors_share_the_active_transaction_budget() {
+    use fireemu_core_firestore::query::{
+        DistanceMeasure, FieldOp, FilterExpr, FindNearest, Query, QueryScope,
+    };
+    use fireemu_core_types::ids::CollectionId;
+
+    let mut state = FirestoreState::new();
+    let mut query = Query::new(QueryScope::collection(
+        None,
+        CollectionId::try_new("empty").unwrap(),
+    ));
+    query.filter = Some(FilterExpr::Field {
+        field: FieldPath::parse("unused").unwrap(),
+        op: FieldOp::Equal,
+        value: Value::String("q".repeat(1024 * 1024)),
+    });
+    query.find_nearest = Some(FindNearest {
+        vector_field: FieldPath::parse("embedding").unwrap(),
+        query_vector: vec![0.0; 2048],
+        distance_measure: DistanceMeasure::Euclidean,
+        limit: 1,
+        distance_result_field: Some(FieldPath::parse("distance").unwrap()),
+        distance_threshold: None,
+    });
+    let mut active = Vec::new();
+    let mut refused = false;
+    for attempt in 0..128 {
+        let transaction = state.begin_transaction(false, t(0)).unwrap();
+        match state.run_query_in_transaction(&transaction, &query) {
+            Ok(_) => active.push(transaction),
+            Err(FirestoreError::Aborted(_)) => {
+                state.abandon_transaction(&transaction);
+                refused = true;
+                break;
+            }
+            Err(error) => panic!("unexpected vector query failure: {error}"),
+        }
+        assert!(attempt < 127);
+    }
+    assert!(
+        refused,
+        "active vector query descriptors must hit the global cap"
+    );
+    for transaction in active {
+        state.rollback(&transaction).unwrap();
+    }
+    assert_eq!(
+        state.transaction_bookkeeping_stats().conflict_ledger_bytes,
+        0
+    );
+}
+
+#[test]
+fn failed_multiwrite_commit_does_not_publish_any_document() {
+    let mut state = FirestoreState::new();
+    let invalid = Value::String("x".repeat(1_048_488));
+
+    let result = state.commit(
+        &[
+            set("atomic/valid", &[("value", Value::Integer(1))]),
+            set("atomic/invalid", &[("value", invalid)]),
+        ],
+        None,
+        t(0),
+    );
+
+    assert!(matches!(result, Err(FirestoreError::InvalidArgument(_))));
+    assert!(state.get(&path("atomic/valid")).is_none());
+    assert!(state.get(&path("atomic/invalid")).is_none());
+    assert_eq!(state.current_version(), CommitVersion::default());
+}
+
+#[test]
+fn failed_transaction_commit_keeps_lock_until_explicit_rollback() {
+    let mut state = FirestoreState::new();
+    state
+        .commit(
+            &[set("locked/doc", &[("value", Value::Integer(1))])],
+            None,
+            t(0),
+        )
+        .unwrap();
+    let transaction = state.begin_transaction(false, t(1)).unwrap();
+    state
+        .get_in_transaction(&transaction, &path("locked/doc"))
+        .unwrap();
+
+    let invalid = Value::String("x".repeat(1_048_488));
+    let result = state.commit(
+        &[
+            set("atomic/valid", &[("value", Value::Integer(1))]),
+            set("atomic/invalid", &[("value", invalid)]),
+        ],
+        Some(&transaction),
+        t(2),
+    );
+    assert!(matches!(result, Err(FirestoreError::InvalidArgument(_))));
+    assert!(state.transaction_is_active(&transaction));
+    assert_eq!(state.transaction_bookkeeping_stats().active, 1);
+    assert!(matches!(
+        state.commit(&[set("locked/doc", &[("value", Value::Integer(2))])], None, t(3)),
+        Err(FirestoreError::Aborted(message)) if message == TOO_MUCH_CONTENTION
+    ));
+
+    state.rollback(&transaction).unwrap();
+    assert_eq!(state.transaction_bookkeeping_stats().active, 0);
+    state
+        .commit(
+            &[set("locked/doc", &[("value", Value::Integer(2))])],
+            None,
+            t(4),
+        )
+        .unwrap();
+    assert_eq!(
+        state.get(&path("locked/doc")).unwrap().fields.get("value"),
+        Some(&Value::Integer(2))
+    );
+}
+
+#[test]
+fn valid_multiwrite_and_transaction_commit_are_near_success_controls() {
+    let mut state = FirestoreState::new();
+    state
+        .commit(
+            &[
+                set("control/one", &[("value", Value::Integer(1))]),
+                set("control/two", &[("value", Value::Integer(2))]),
+            ],
+            None,
+            t(0),
+        )
+        .unwrap();
+    assert!(state.get(&path("control/one")).is_some());
+    assert!(state.get(&path("control/two")).is_some());
+
+    let transaction = state.begin_transaction(false, t(1)).unwrap();
+    state
+        .get_in_transaction(&transaction, &path("control/one"))
+        .unwrap();
+    state
+        .commit(
+            &[set("control/one", &[("value", Value::Integer(3))])],
+            Some(&transaction),
+            t(2),
+        )
+        .unwrap();
+    assert!(!state.transaction_is_active(&transaction));
+    state
+        .commit(
+            &[set("control/one", &[("value", Value::Integer(4))])],
+            None,
+            t(3),
+        )
+        .unwrap();
 }
 
 #[test]
@@ -2096,4 +2426,149 @@ fn verify_observes_staged_writes_and_preserves_atomic_validation() {
     assert!(state
         .commit(&[verify(Some(Precondition::Exists(true)))], None, t(6))
         .is_err());
+}
+
+/// FS-TXN-002 (a). `FS-LIMIT-TRANSACTION-TOTAL-TIME` is 270 s from the transaction's start on
+/// the virtual clock, whatever the activity in between: a read-write transaction whose idle
+/// window is kept open commits its write at 269 s total and is refused at 271 s total with
+/// `ABORTED` and the expiry wording, its write unpublished and its lock released.
+#[test]
+fn a_transaction_commits_at_269_s_total_and_is_refused_at_271_s_total() {
+    for (elapsed, commits) in [(269, true), (271, false)] {
+        let mut s = FirestoreState::new();
+        s.commit(&[set("total/doc", &[("v", Value::Integer(0))])], None, t(0))
+            .unwrap();
+        let txn = s.begin_transaction(false, t(0)).unwrap();
+        assert!(s
+            .get_in_transaction(&txn, &path("total/doc"))
+            .unwrap()
+            .is_some());
+        // Activity every 59 s keeps the 60 s idle window open up to t(236); both commit
+        // instants are then inside the idle window, so only the total budget decides.
+        for step in 1..=4 {
+            s.touch_transaction(&txn, t(step * 59)).unwrap();
+        }
+        let outcome = s.commit(
+            &[set("total/doc", &[("v", Value::Integer(1))])],
+            Some(&txn),
+            t(elapsed),
+        );
+        if commits {
+            outcome.unwrap_or_else(|error| panic!("commit at {elapsed} s: {error}"));
+            assert_eq!(
+                s.get(&path("total/doc")).unwrap().fields.get("v"),
+                Some(&Value::Integer(1))
+            );
+        } else {
+            assert!(
+                matches!(
+                    &outcome,
+                    Err(FirestoreError::Aborted(message))
+                        if message == "The referenced transaction has expired or is no longer valid."
+                ),
+                "commit at {elapsed} s: {outcome:?}"
+            );
+            assert_eq!(
+                s.get(&path("total/doc")).unwrap().fields.get("v"),
+                Some(&Value::Integer(0)),
+                "nothing of the expired transaction is published"
+            );
+            assert!(!s.transaction_is_active(&txn));
+            // The expired transaction holds no lock: an out-of-band write goes through.
+            s.commit(
+                &[set("total/doc", &[("v", Value::Integer(2))])],
+                None,
+                t(elapsed),
+            )
+            .unwrap();
+        }
+    }
+}
+
+/// FS-TXN-002 (b). A transactional query locks its whole scope, not only the documents its
+/// filter selected: an out-of-band write to a document inside the queried collection but
+/// outside the query's filter is refused `ABORTED` with the contention wording while the
+/// transaction is active, exactly like a write to a document the query returned.
+///
+/// Local-stricter hypothesis, production unobserved (compat-v2 Firestore scout report of
+/// 2026-09-21, section 4, hypothesis 1; `FS-TRANSACTION` in
+/// `docs/compatibility/ip-fs-production-compatibility.md`). Production documents that a
+/// transaction locks the documents it read and, for queries, the index range; whether a
+/// document the filter excluded is part of that range has not been measured. Local is at
+/// worst stricter (more `ABORTED`), never lossy. This test pins the current answer so a
+/// change to `check_contention` is deliberate; it is not a production claim.
+#[test]
+fn a_transactional_query_currently_locks_documents_its_filter_excluded() {
+    use fireemu_core_firestore::query::{FieldOp, FilterExpr, Query, QueryScope};
+    use fireemu_core_types::ids::CollectionId;
+    let mut s = FirestoreState::new();
+    s.commit(
+        &[
+            set("qf/selected", &[("v", Value::Integer(1))]),
+            set("qf/excluded", &[("v", Value::Integer(2))]),
+        ],
+        None,
+        t(0),
+    )
+    .unwrap();
+    let query = Query::new(QueryScope::collection(
+        None,
+        CollectionId::try_new("qf").unwrap(),
+    ))
+    .with_filter(FilterExpr::Field {
+        field: FieldPath::parse("v").unwrap(),
+        op: FieldOp::Equal,
+        value: Value::Integer(1),
+    })
+    .canonicalize()
+    .unwrap();
+    let txn = s.begin_transaction(false, t(1)).unwrap();
+    let selected = s.run_query_in_transaction(&txn, &query).unwrap();
+    assert_eq!(selected.len(), 1);
+    assert_eq!(selected[0].path, path("qf/selected"));
+
+    // A document the query returned is locked (production-documented).
+    let refused = s
+        .commit(
+            &[set("qf/selected", &[("v", Value::Integer(3))])],
+            None,
+            t(2),
+        )
+        .unwrap_err();
+    assert!(
+        matches!(&refused, FirestoreError::Aborted(m) if m == TOO_MUCH_CONTENTION),
+        "{refused}"
+    );
+    // A document the filter excluded, inside the same collection, is locked too: the local
+    // reading of the query's range. Production unobserved.
+    let refused = s
+        .commit(
+            &[set("qf/excluded", &[("v", Value::Integer(3))])],
+            None,
+            t(2),
+        )
+        .unwrap_err();
+    assert!(
+        matches!(&refused, FirestoreError::Aborted(m) if m == TOO_MUCH_CONTENTION),
+        "{refused}"
+    );
+    assert_eq!(
+        s.get(&path("qf/excluded")).unwrap().fields.get("v"),
+        Some(&Value::Integer(2))
+    );
+    // Outside the queried collection nothing is locked.
+    s.commit(&[set("elsewhere/doc", &[])], None, t(2)).unwrap();
+
+    // Rollback releases the range and the excluded document accepts the write.
+    s.rollback(&txn).unwrap();
+    s.commit(
+        &[set("qf/excluded", &[("v", Value::Integer(3))])],
+        None,
+        t(3),
+    )
+    .unwrap();
+    assert_eq!(
+        s.get(&path("qf/excluded")).unwrap().fields.get("v"),
+        Some(&Value::Integer(3))
+    );
 }

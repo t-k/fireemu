@@ -1,0 +1,246 @@
+{
+  "schemaVersion": 1,
+  "kind": "live-fireemu",
+  "acceptance": "candidate",
+  "recordedAt": "2026-09-09T14:33:10.384640+00:00",
+  "project": "fireemu-35fe6",
+  "expectedProjectNumber": "592603257417",
+  "sourceCommit": "85e238c1106a7efb25cf7dc74812aba7fa313271",
+  "binarySha256": "3b86ac12c6a1d97c520169cc06a141e65feef001abf2c23a86e856a495306c2a",
+  "probeSha256": "ed363f8319d26a75461298b9de9bfb5e13c9a286b13ed0b64fd97d0fde8fb28d",
+  "profile": "strict",
+  "sdk": "none (REST via Python stdlib)",
+  "cases": [
+    {
+      "id": "count-alone-includes-missing",
+      "httpStatus": 200,
+      "actual": {
+        "count": {
+          "integerValue": "4"
+        }
+      },
+      "expected": {
+        "count": {
+          "integerValue": "4"
+        }
+      },
+      "passed": true
+    },
+    {
+      "id": "count-with-sum-excludes-missing",
+      "httpStatus": 200,
+      "actual": {
+        "count": {
+          "integerValue": "3"
+        },
+        "sum": {
+          "integerValue": "30"
+        }
+      },
+      "expected": {
+        "count": {
+          "integerValue": "3"
+        },
+        "sum": {
+          "integerValue": "30"
+        }
+      },
+      "passed": true
+    },
+    {
+      "id": "count-with-avg-excludes-missing",
+      "httpStatus": 200,
+      "actual": {
+        "avg": {
+          "doubleValue": 15.0
+        },
+        "count": {
+          "integerValue": "3"
+        }
+      },
+      "expected": {
+        "count": {
+          "integerValue": "3"
+        },
+        "avg": {
+          "doubleValue": 15
+        }
+      },
+      "passed": true
+    },
+    {
+      "id": "sum-and-avg-ignore-nonnumeric",
+      "httpStatus": 200,
+      "actual": {
+        "avg": {
+          "doubleValue": 15.0
+        },
+        "sum": {
+          "integerValue": "30"
+        }
+      },
+      "expected": {
+        "sum": {
+          "integerValue": "30"
+        },
+        "avg": {
+          "doubleValue": 15
+        }
+      },
+      "passed": true
+    },
+    {
+      "id": "commit-refuses-existing-document",
+      "httpStatus": 409,
+      "code": "ALREADY_EXISTS",
+      "passed": true
+    },
+    {
+      "id": "queries-and-refused-commit-preserve-fields-and-times",
+      "passed": true
+    }
+  ],
+  "cleanup": [
+    {
+      "name": "projects/fireemu-35fe6/databases/(default)/documents/compat_98d30b3ff9ca4cac8e6ec9e4f7e797ab/A",
+      "deleted": true,
+      "confirmedMissing": true,
+      "recoveredOwnership": false
+    },
+    {
+      "name": "projects/fireemu-35fe6/databases/(default)/documents/compat_98d30b3ff9ca4cac8e6ec9e4f7e797ab/B",
+      "deleted": true,
+      "confirmedMissing": true,
+      "recoveredOwnership": false
+    },
+    {
+      "name": "projects/fireemu-35fe6/databases/(default)/documents/compat_98d30b3ff9ca4cac8e6ec9e4f7e797ab/C",
+      "deleted": true,
+      "confirmedMissing": true,
+      "recoveredOwnership": false
+    },
+    {
+      "name": "projects/fireemu-35fe6/databases/(default)/documents/compat_98d30b3ff9ca4cac8e6ec9e4f7e797ab/D",
+      "deleted": true,
+      "confirmedMissing": true,
+      "recoveredOwnership": false
+    }
+  ],
+  "status": "passed",
+  "attemptedResources": [
+    "projects/fireemu-35fe6/databases/(default)/documents/compat_98d30b3ff9ca4cac8e6ec9e4f7e797ab/A",
+    "projects/fireemu-35fe6/databases/(default)/documents/compat_98d30b3ff9ca4cac8e6ec9e4f7e797ab/B",
+    "projects/fireemu-35fe6/databases/(default)/documents/compat_98d30b3ff9ca4cac8e6ec9e4f7e797ab/C",
+    "projects/fireemu-35fe6/databases/(default)/documents/compat_98d30b3ff9ca4cac8e6ec9e4f7e797ab/D"
+  ],
+  "ownershipMarker": "0fe730fa6832438b8a93497ccb00b305",
+  "ownedResources": [
+    "projects/fireemu-35fe6/databases/(default)/documents/compat_98d30b3ff9ca4cac8e6ec9e4f7e797ab/A",
+    "projects/fireemu-35fe6/databases/(default)/documents/compat_98d30b3ff9ca4cac8e6ec9e4f7e797ab/B",
+    "projects/fireemu-35fe6/databases/(default)/documents/compat_98d30b3ff9ca4cac8e6ec9e4f7e797ab/C",
+    "projects/fireemu-35fe6/databases/(default)/documents/compat_98d30b3ff9ca4cac8e6ec9e4f7e797ab/D"
+  ],
+  "stateBefore": {
+    "projects/fireemu-35fe6/databases/(default)/documents/compat_98d30b3ff9ca4cac8e6ec9e4f7e797ab/A": {
+      "createTime": "2026-09-09T14:33:10.423342Z",
+      "fields": {
+        "__fireemuOracleOwner": {
+          "stringValue": "0fe730fa6832438b8a93497ccb00b305"
+        },
+        "x": {
+          "integerValue": "10"
+        }
+      },
+      "name": "projects/fireemu-35fe6/databases/(default)/documents/compat_98d30b3ff9ca4cac8e6ec9e4f7e797ab/A",
+      "updateTime": "2026-09-09T14:33:10.423342Z"
+    },
+    "projects/fireemu-35fe6/databases/(default)/documents/compat_98d30b3ff9ca4cac8e6ec9e4f7e797ab/B": {
+      "createTime": "2026-09-09T14:33:10.427607Z",
+      "fields": {
+        "__fireemuOracleOwner": {
+          "stringValue": "0fe730fa6832438b8a93497ccb00b305"
+        }
+      },
+      "name": "projects/fireemu-35fe6/databases/(default)/documents/compat_98d30b3ff9ca4cac8e6ec9e4f7e797ab/B",
+      "updateTime": "2026-09-09T14:33:10.427607Z"
+    },
+    "projects/fireemu-35fe6/databases/(default)/documents/compat_98d30b3ff9ca4cac8e6ec9e4f7e797ab/C": {
+      "createTime": "2026-09-09T14:33:10.430961Z",
+      "fields": {
+        "__fireemuOracleOwner": {
+          "stringValue": "0fe730fa6832438b8a93497ccb00b305"
+        },
+        "x": {
+          "stringValue": "not-a-number"
+        }
+      },
+      "name": "projects/fireemu-35fe6/databases/(default)/documents/compat_98d30b3ff9ca4cac8e6ec9e4f7e797ab/C",
+      "updateTime": "2026-09-09T14:33:10.430961Z"
+    },
+    "projects/fireemu-35fe6/databases/(default)/documents/compat_98d30b3ff9ca4cac8e6ec9e4f7e797ab/D": {
+      "createTime": "2026-09-09T14:33:10.434049Z",
+      "fields": {
+        "__fireemuOracleOwner": {
+          "stringValue": "0fe730fa6832438b8a93497ccb00b305"
+        },
+        "x": {
+          "integerValue": "20"
+        }
+      },
+      "name": "projects/fireemu-35fe6/databases/(default)/documents/compat_98d30b3ff9ca4cac8e6ec9e4f7e797ab/D",
+      "updateTime": "2026-09-09T14:33:10.434049Z"
+    }
+  },
+  "stateAfter": {
+    "projects/fireemu-35fe6/databases/(default)/documents/compat_98d30b3ff9ca4cac8e6ec9e4f7e797ab/A": {
+      "createTime": "2026-09-09T14:33:10.423342Z",
+      "fields": {
+        "__fireemuOracleOwner": {
+          "stringValue": "0fe730fa6832438b8a93497ccb00b305"
+        },
+        "x": {
+          "integerValue": "10"
+        }
+      },
+      "name": "projects/fireemu-35fe6/databases/(default)/documents/compat_98d30b3ff9ca4cac8e6ec9e4f7e797ab/A",
+      "updateTime": "2026-09-09T14:33:10.423342Z"
+    },
+    "projects/fireemu-35fe6/databases/(default)/documents/compat_98d30b3ff9ca4cac8e6ec9e4f7e797ab/B": {
+      "createTime": "2026-09-09T14:33:10.427607Z",
+      "fields": {
+        "__fireemuOracleOwner": {
+          "stringValue": "0fe730fa6832438b8a93497ccb00b305"
+        }
+      },
+      "name": "projects/fireemu-35fe6/databases/(default)/documents/compat_98d30b3ff9ca4cac8e6ec9e4f7e797ab/B",
+      "updateTime": "2026-09-09T14:33:10.427607Z"
+    },
+    "projects/fireemu-35fe6/databases/(default)/documents/compat_98d30b3ff9ca4cac8e6ec9e4f7e797ab/C": {
+      "createTime": "2026-09-09T14:33:10.430961Z",
+      "fields": {
+        "__fireemuOracleOwner": {
+          "stringValue": "0fe730fa6832438b8a93497ccb00b305"
+        },
+        "x": {
+          "stringValue": "not-a-number"
+        }
+      },
+      "name": "projects/fireemu-35fe6/databases/(default)/documents/compat_98d30b3ff9ca4cac8e6ec9e4f7e797ab/C",
+      "updateTime": "2026-09-09T14:33:10.430961Z"
+    },
+    "projects/fireemu-35fe6/databases/(default)/documents/compat_98d30b3ff9ca4cac8e6ec9e4f7e797ab/D": {
+      "createTime": "2026-09-09T14:33:10.434049Z",
+      "fields": {
+        "__fireemuOracleOwner": {
+          "stringValue": "0fe730fa6832438b8a93497ccb00b305"
+        },
+        "x": {
+          "integerValue": "20"
+        }
+      },
+      "name": "projects/fireemu-35fe6/databases/(default)/documents/compat_98d30b3ff9ca4cac8e6ec9e4f7e797ab/D",
+      "updateTime": "2026-09-09T14:33:10.434049Z"
+    }
+  },
+  "executedCases": 6
+}

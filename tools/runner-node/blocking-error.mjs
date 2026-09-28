@@ -29,18 +29,33 @@ const safeMessage = (value) =>
   !/\p{Cc}|[\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]/u.test(value);
 
 export function blockingFailure(error, HttpsErrors) {
-  const code = typeof error?.code === "string" ? functionErrorCodes.get(error.code) : undefined;
-  if (
-    !Array.isArray(HttpsErrors) ||
-    !HttpsErrors.some((HttpsError) =>
-      typeof HttpsError === "function" && error instanceof HttpsError
-    ) ||
-    !code ||
-    error?.httpErrorCode?.canonicalName !== code.canonicalName ||
-    error?.httpErrorCode?.status !== code.status ||
-    !safeMessage(error?.message)
-  ) {
+  try {
+    if (
+      !Array.isArray(HttpsErrors) ||
+      !HttpsErrors.some((HttpsError) =>
+        typeof HttpsError === "function" && error instanceof HttpsError
+      )
+    ) {
+      return unavailable;
+    }
+    // Read each potentially user-defined accessor once. In particular, validating
+    // one message and returning a second getter result can leak an unsafe message.
+    const rawCode = error.code;
+    const metadata = error.httpErrorCode;
+    const message = error.message;
+    const code = typeof rawCode === "string" ? functionErrorCodes.get(rawCode) : undefined;
+    if (
+      !code ||
+      metadata?.canonicalName !== code.canonicalName ||
+      metadata?.status !== code.status ||
+      !safeMessage(message)
+    ) {
+      return unavailable;
+    }
+    return { ...code, message };
+  } catch {
+    // Error objects, proxies and even instanceof hooks can throw. Their details
+    // must not replace the fixed public fallback or break the HTTP error path.
     return unavailable;
   }
-  return { ...code, message: error.message };
 }

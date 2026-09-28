@@ -18,7 +18,7 @@ use std::sync::{Arc, Mutex, RwLock};
 use fireemu_adapter_grpc::gateway::Gateway;
 use fireemu_adapter_grpc::local::LocalBackend;
 use fireemu_adapter_grpc::rest::{RestRequest, RestState};
-use fireemu_adapter_grpc::rules::RulesEnforcer;
+use fireemu_adapter_grpc::rules::{RulesEnforcer, TokenSemantics};
 use fireemu_adapter_grpc::service::GatewayService;
 use fireemu_adapter_grpc::webchannel::{ChannelRequest, ChannelResponse, Hub, StreamKind};
 use fireemu_core_app_check::admission::{AppCheckGate, ServiceAdmission};
@@ -207,6 +207,10 @@ fn credential_states(gate: &AppCheckGate) -> Vec<(&'static str, Option<String>)>
 }
 
 // ------------------------------------------------------------------------------------------
+/// A Security Rules denial answers with production's text (FS-RULES scope decision R6); an App
+/// Check denial has its own.
+const RULES_DENIAL: &str = fireemu_adapter_grpc::rules::PERMISSION_DENIED_MESSAGE;
+
 // Harness: a real gRPC server with Security Rules and an App Check policy, plus REST.
 // ------------------------------------------------------------------------------------------
 
@@ -246,7 +250,10 @@ async fn start(mode: BaselineMode) -> Harness {
     let rules = Arc::new(RulesetSlot::new(
         LoadedRules::from_source(RULES).expect("the fixture ruleset compiles"),
     ));
-    let enforcer = Arc::new(RulesEnforcer::new(rules, auth.clone(), enforcer_clock));
+    let enforcer = Arc::new(
+        RulesEnforcer::new(rules, auth.clone(), enforcer_clock)
+            .with_token_semantics(TokenSemantics::Firestore),
+    );
     let gate = gate();
     let policy = ServiceAdmission::new(gate.clone(), "firestore", mode).map(Arc::new);
 
@@ -273,6 +280,7 @@ async fn start(mode: BaselineMode) -> Harness {
         gateway: Arc::new(gateway),
         rules: Some(enforcer),
         app_check: policy,
+        control_token: None,
     });
     Harness {
         client: FirestoreClient::new(channel),
@@ -359,6 +367,9 @@ impl Harness {
             authorization: authorization.map(str::to_owned),
             app_check: app_check.iter().map(|v| (*v).to_owned()).collect(),
             body,
+            batch_field_order: Vec::new(),
+            origin: None,
+            browser_metadata: false,
         });
         (r.status, r.body)
     }
@@ -426,7 +437,7 @@ async fn enforced_unary_firestore_rejects_a_valid_auth_user_without_app_check_be
         Some("APP_CHECK_REQUIRED")
     );
     assert!(
-        !denied.message().contains("Security Rules"),
+        !denied.message().contains(RULES_DENIAL),
         "the denial is App Check's, not the ruleset's: {}",
         denied.message()
     );
@@ -591,7 +602,7 @@ async fn the_firestore_grpc_matrix_holds_for_every_mode_and_credential_state() {
                 // write. That is exactly the point: App Check admitted it.
                 let status = outcome.expect_err("the ruleset still judges the request");
                 assert!(
-                    status.message().contains("Security Rules"),
+                    status.message().contains(RULES_DENIAL),
                     "{mode}/{name} must be judged by the rules, not by App Check: {}",
                     status.message()
                 );
@@ -622,13 +633,13 @@ async fn the_firestore_rest_matrix_holds_for_every_mode_and_credential_state() {
                 assert_eq!(status, 403, "{mode}/{name}: {body}");
                 assert_eq!(body["error"]["status"], "PERMISSION_DENIED");
                 assert!(
-                    !body.to_string().contains("Security Rules"),
+                    !body.to_string().contains(RULES_DENIAL),
                     "{mode}/{name} is an App Check denial: {body}"
                 );
             } else {
                 assert_eq!(status, 403, "{mode}/{name}: {body}");
                 assert!(
-                    body.to_string().contains("Security Rules"),
+                    body.to_string().contains(RULES_DENIAL),
                     "{mode}/{name} must be judged by the rules: {body}"
                 );
             }
@@ -703,7 +714,7 @@ async fn firestore_metadata_refuses_duplicate_folded_empty_and_oversized_app_che
         .await
         .expect_err("the ruleset refuses an unauthenticated write");
     assert!(
-        admitted.message().contains("Security Rules"),
+        admitted.message().contains(RULES_DENIAL),
         "{}",
         admitted.message()
     );
@@ -732,7 +743,7 @@ async fn firestore_rest_refuses_duplicate_folded_empty_and_oversized_app_check_f
         );
         assert_eq!(status, 403, "{name}: {body}");
         assert!(
-            !body.to_string().contains("Security Rules"),
+            !body.to_string().contains(RULES_DENIAL),
             "{name} is an App Check denial: {body}"
         );
     }
@@ -823,6 +834,15 @@ async fn write_stream_first(
     authorization: Option<&str>,
     app_check: &[&str],
 ) -> Result<pb::WriteResponse, tonic::Status> {
+    write_stream_first_on(h, DATABASE, authorization, app_check).await
+}
+
+async fn write_stream_first_on(
+    h: &mut Harness,
+    database: &str,
+    authorization: Option<&str>,
+    app_check: &[&str],
+) -> Result<pb::WriteResponse, tonic::Status> {
     let (tx, rx) = tokio::sync::mpsc::channel(8);
     let mut responses = h
         .client
@@ -835,7 +855,7 @@ async fn write_stream_first(
         .expect("the stream opens")
         .into_inner();
     tx.send(pb::WriteRequest {
-        database: DATABASE.to_owned(),
+        database: database.to_owned(),
         ..pb::WriteRequest::default()
     })
     .await
@@ -852,6 +872,16 @@ async fn listen_stream_first(
     authorization: Option<&str>,
     app_check: &[&str],
 ) -> Result<pb::ListenResponse, tonic::Status> {
+    listen_stream_first_on(h, DATABASE, DOCS, authorization, app_check).await
+}
+
+async fn listen_stream_first_on(
+    h: &mut Harness,
+    database: &str,
+    documents: &str,
+    authorization: Option<&str>,
+    app_check: &[&str],
+) -> Result<pb::ListenResponse, tonic::Status> {
     let (tx, rx) = tokio::sync::mpsc::channel(8);
     let mut responses = h
         .client
@@ -864,11 +894,11 @@ async fn listen_stream_first(
         .expect("the stream opens")
         .into_inner();
     tx.send(pb::ListenRequest {
-        database: DATABASE.to_owned(),
+        database: database.to_owned(),
         target_change: Some(pb::listen_request::TargetChange::AddTarget(pb::Target {
             target_id: 2,
             target_type: Some(pb::target::TargetType::Query(pb::target::QueryTarget {
-                parent: DOCS.to_owned(),
+                parent: documents.to_owned(),
                 query_type: Some(pb::target::query_target::QueryType::StructuredQuery(
                     pb::StructuredQuery {
                         from: vec![pb::structured_query::CollectionSelector {
@@ -1158,7 +1188,7 @@ async fn an_enforced_webchannel_handshake_without_app_check_never_opens_a_channe
         !parsed["error"]["message"]
             .as_str()
             .unwrap_or_default()
-            .contains("Security Rules"),
+            .contains(RULES_DENIAL),
         "an App Check denial is not a rules denial: {body}"
     );
 
@@ -1318,5 +1348,58 @@ async fn webchannel_observations_name_the_transport() {
             .any(|o| o.transport == "webchannel" && o.operation == "channel.open"),
         "{observations:?}"
     );
+    h.handle.abort();
+}
+
+#[tokio::test]
+async fn app_check_decides_before_a_database_that_does_not_exist_on_both_streams() {
+    // A request that is refused for two reasons answers with the same one on every surface.
+    // The unary paths classify App Check as soon as the route and the target project are
+    // resolved, before any database is touched, so a stream must not answer NOT_FOUND where
+    // a unary call of the same shape answers PERMISSION_DENIED.
+    const MISSING: &str = "projects/demo-app/databases/never-created";
+    const MISSING_DOCS: &str = "projects/demo-app/databases/never-created/documents";
+    let mut h = start(BaselineMode::Enforced).await;
+
+    let err = write_stream_first_on(&mut h, MISSING, None, &[])
+        .await
+        .expect_err("an enforced Write stream needs a token");
+    assert_eq!(err.code(), Code::PermissionDenied, "{err:?}");
+    assert_eq!(
+        err.metadata()
+            .get("fireemu-code")
+            .map(|v| v.to_str().unwrap()),
+        Some("APP_CHECK_REQUIRED")
+    );
+
+    let err = listen_stream_first_on(&mut h, MISSING, MISSING_DOCS, None, &["not-a-jwt"])
+        .await
+        .expect_err("an invalid token is refused");
+    assert_eq!(err.code(), Code::PermissionDenied, "{err:?}");
+    assert_eq!(
+        err.metadata()
+            .get("fireemu-code")
+            .map(|v| v.to_str().unwrap()),
+        Some("APP_CHECK_INVALID")
+    );
+
+    // With App Check satisfied, the database that does not exist is the remaining refusal.
+    let token = h.token();
+    let err = write_stream_first_on(&mut h, MISSING, None, &[&token])
+        .await
+        .expect_err("the database still does not exist");
+    assert_eq!(err.code(), Code::NotFound, "{err:?}");
+    let refused = listen_stream_first_on(&mut h, MISSING, MISSING_DOCS, None, &[&token]).await;
+    // The Listen target is acknowledged before it is served, so the refusal may be the
+    // message after it.
+    let err = match refused {
+        Err(error) => error,
+        Ok(_) => tonic::Status::ok("the target was acknowledged"),
+    };
+    assert!(
+        err.code() == Code::NotFound || err.code() == Code::Ok,
+        "{err:?}"
+    );
+
     h.handle.abort();
 }

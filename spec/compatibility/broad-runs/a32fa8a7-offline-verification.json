@@ -1,0 +1,68 @@
+{
+  "executionCommit": "a32fa8a7fa9b2b3f4e286a3d8167723c8c26fcf0",
+  "productionExecuted": false,
+  "pytest": {
+    "passed": 165,
+    "failed": 0,
+    "skipped": 0
+  },
+  "mutations": [
+    {
+      "name": "baseline",
+      "expectedResult": true,
+      "exitCode": 0,
+      "summary": "16 passed in 5.50s"
+    },
+    {
+      "name": "earliest-time-treated-as-setting",
+      "expectedResult": true,
+      "exitCode": 1,
+      "summary": "1 failed, 15 passed in 5.56s"
+    },
+    {
+      "name": "uid-removed-from-settings",
+      "expectedResult": true,
+      "exitCode": 1,
+      "summary": "3 failed, 13 passed in 4.66s"
+    },
+    {
+      "name": "incomplete-recording-accepted",
+      "expectedResult": true,
+      "exitCode": 1,
+      "summary": "5 failed, 11 passed in 5.59s"
+    },
+    {
+      "name": "unrecovered-recording-accepted",
+      "expectedResult": true,
+      "exitCode": 1,
+      "summary": "4 failed, 12 passed in 5.64s"
+    },
+    {
+      "name": "check-mismatch-accepted",
+      "expectedResult": true,
+      "exitCode": 1,
+      "summary": "2 failed, 14 passed in 5.15s"
+    },
+    {
+      "name": "semantic-query-erased",
+      "expectedResult": true,
+      "exitCode": 1,
+      "summary": "1 failed, 15 passed in 5.62s"
+    },
+    {
+      "name": "expected-request-check-erased",
+      "expectedResult": true,
+      "exitCode": 1,
+      "summary": "2 failed, 14 passed in 4.88s"
+    }
+  ],
+  "finiteStates": {
+    "recordingAndCheck": 32,
+    "phaseAndBudget": 48
+  },
+  "technicalReview": {
+    "mustFix": [],
+    "shouldFix": [],
+    "ownerExecutionPermission": null
+  }
+}

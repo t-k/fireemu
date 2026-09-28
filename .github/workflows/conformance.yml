@@ -17,6 +17,10 @@ on:
         default: check
         required: true
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 env:
   CARGO_TERM_COLOR: always
 
@@ -33,6 +37,10 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 24
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - uses: astral-sh/setup-uv@v6
       # Only the oracle needs a JVM, but installing it unconditionally keeps the two modes
       # otherwise identical, so a `record` run cannot differ from a `check` run by setup.
       - uses: actions/setup-java@v4
@@ -45,6 +53,9 @@ jobs:
 
       - name: the gate's own tests
         run: pnpm -C conformance run selftest
+
+      - name: validate Python corpus exporters
+        run: uv run --with pytest pytest -q conformance/src/firestore-probe/test_*export.py conformance/src/firestore-probe/test_sandbox_expansion.py
 
       - name: lint and format
         run: |

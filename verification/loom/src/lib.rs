@@ -433,7 +433,7 @@ mod scenarios {
         use fireemu_core_types::time::LogicalDuration;
 
         loom::model(|| {
-            let (store, uid, _secret, t0) = auth_fixture();
+            let (store, uid, _secret, _enrollment_id, t0) = auth_fixture();
             let revoke_at = t0.checked_add(LogicalDuration::from_seconds(10)).unwrap();
             let issue_at = t0.checked_add(LogicalDuration::from_seconds(5)).unwrap();
             let revoker = {

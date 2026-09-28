@@ -1,0 +1,29 @@
+{
+  "schemaVersion": 1,
+  "subjectSha256": "b9592f50c07bcac36b387dfa3baa4bbfe0bf328a6499c4e1855e541400b63e81",
+  "sourceCommit": "fe7d57f0c1c7f9ac14639c472368dc8f98dda70b",
+  "scope": "Eighteen observations rechecked on the recorded corrected local artifact against unchanged saved production observations. No tenant, local strict profile and recorded production authentication/password-policy settings. Admin disables and re-enables owned target A; independent B is the unaffected control. Each phase follows the recorded order: password signin, fixed original ID-token lookup, then fixed original refresh-token exchange; successful issued tokens are used for lookup. Approval includes selected state checks, Admin account cleanup and UID/email absence, and owned process termination. Only elapsedMs is excluded from semantic comparison: the three disabled-A routes return USER_DISABLED and the remaining fifteen succeed. This is not a new production run. Approval does not cover all operation orders after re-enable, long-term validity, SDK/checkRevoked, Rules, actual expiry, propagation time or fault recovery.",
+  "cases": [
+    "baseline-a-signin",
+    "baseline-a-id",
+    "baseline-a-refresh",
+    "baseline-b-signin",
+    "baseline-b-id",
+    "baseline-b-refresh",
+    "disabled-a-signin",
+    "disabled-a-id",
+    "disabled-a-refresh",
+    "disabled-b-signin",
+    "disabled-b-id",
+    "disabled-b-refresh",
+    "reenabled-a-signin",
+    "reenabled-a-id",
+    "reenabled-a-refresh",
+    "reenabled-b-signin",
+    "reenabled-b-id",
+    "reenabled-b-refresh"
+  ],
+  "reviewer": "github:t-k (id:426779)",
+  "reviewedAt": "2026-09-11",
+  "decision": "approve"
+}

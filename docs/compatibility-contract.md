@@ -9,6 +9,8 @@ The rule the gate enforces is the same one the requirement ledger enforces
 (`docs/verification-ledger.md`): **a statement that claims to hold names artifacts that exist**.
 A claim nothing executes is not a claim, it is marketing.
 
+The [generated compatibility inventory](compatibility/README.md) adds a separate source-to-requirement view for Auth and Firestore. Existing artifact references establish traceability; they do not establish that a particular release, configuration or SDK run succeeded. The normal `compat-check` CLI also validates the inventory and its generated pages. Regenerate them with `cargo run -p compat-check -- --write-inventory`; schema 1 accepts discovery pointers and mappings, but cannot accept completed source reviews or feature execution receipts. Unknown and deferred scope remains visible.
+
 ## Why a contract at all
 
 The Local Emulator Suite is a moving target. `firebase-tools` ships fifteen emulators today and
@@ -134,6 +136,8 @@ configuration key or the profile-derived behaviour. Two are recorded today:
 `spec/config/fireemu.schema.json`, and checks that the profile names the contract declares are
 exactly the values that schema's `profile` key accepts, so neither the sets nor the names can
 drift from the configuration surface.
+
+The release workflow checks both profiles on the linux-x64 package it publishes, installed the way a user installs it, before anything is published. `verify-artifact` replays the conformance corpus under the `emulator` profile against the recordings of the pinned official Local Emulator Suite (`conformance/fixtures`). `strict-production` reruns, under the `strict` profile and in a network namespace with loopback only, every local comparison a `COMPAT_VERIFIED` parent's closure names in its `integratedRegression`, and requires each to equal the committed file row by row (status and row summary) with `conformance/src/release-strict-regression.mjs`. Two comparisons cannot run there because their production inputs are not published: the saved 23-row stream transaction replay of FS-DATA-WRITE (`FS-DATA-WRITE/stream-transaction-precedence` stays on the lane evidence), and the row-by-row comparison of FUNCTIONS-HTTP, whose production recordings are private; for FUNCTIONS-HTTP the job requires the local strict recording to be the same bytes the lane compared with them, which fixes every row's result. Platform packages other than linux-x64 are compared after publication.
 
 ## The capability manifest is a data file
 

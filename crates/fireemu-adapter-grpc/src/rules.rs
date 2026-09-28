@@ -36,15 +36,20 @@ use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::{Arc, Mutex};
 
-use fireemu_core_auth::jwt::{verify_rules_token, verify_rules_token_for_project, TokenAcceptance};
+use fireemu_core_auth::jwt::{
+    verify_firestore_rules_token, verify_rules_token, verify_rules_token_for_project, JwtError,
+    TokenAcceptance,
+};
 use fireemu_core_auth::store::AuthStore;
 use fireemu_core_firestore::field_path::FieldPath;
 use fireemu_core_firestore::path::DocumentPath;
-use fireemu_core_firestore::query::{Direction, FieldOp, FilterExpr, Query, UnaryOp};
-use fireemu_core_firestore::store::{CommitVersion, Document, FirestoreState, Write, WriteOp};
+use fireemu_core_firestore::query::{Direction, FieldOp, FilterExpr, Query, QueryScope, UnaryOp};
+use fireemu_core_firestore::store::{
+    CommitVersion, Document, FirestoreState, Precondition, Write, WriteOp,
+};
 use fireemu_core_firestore::value::Value;
 use fireemu_core_rules::ast::Ruleset;
-use fireemu_core_rules::coverage::{CoverageEntry, RequestTrace, RulesDiagnostics};
+use fireemu_core_rules::coverage::{Coverage, CoverageEntry, RequestTrace, RulesDiagnostics};
 use fireemu_core_rules::eval::{
     evaluate_request_traced_owned, try_compare, Decision, DenyReason, DocumentAccess, Method,
     RequestContext, RulesService, ABSTRACT_PREFIX, ABSTRACT_SEGMENT,
@@ -117,17 +122,12 @@ impl DocumentAccess for AggregateReader<'_> {
 
     fn get_after(&self, segments: &[String]) -> Option<Option<RulesValue>> {
         if let Ok(mut seen) = self.seen.try_borrow_mut() {
-            // A distinct access from `get()` of the same path.
-            let mut key = vec![AFTER_MARKER.to_owned()];
-            key.extend_from_slice(segments);
-            seen.insert(key);
+            // The budget counts distinct document paths across get() and getAfter().
+            seen.insert(segments.to_vec());
         }
         self.inner.get_after(segments)
     }
 }
-
-/// Segment prefix distinguishing `getAfter()` accesses in the aggregate budget.
-const AFTER_MARKER: &str = "\u{0}after";
 
 /// `get()` over the current state and `getAfter()` over the state the commit being
 /// authorized will leave behind (every write of the batch applied).
@@ -171,11 +171,6 @@ impl DocumentAccess for LatestReader {
             .read_unadmitted(&self.parent, |db| db.get(&path).map(resource_value))
             .flatten()
     }
-}
-
-/// Maximum distinct `get()` / `exists()` documents of one single-document or query request.
-fn single_max() -> u64 {
-    limit_value("RULES-DOC-ACCESS-SINGLE", 10)
 }
 
 /// Maximum distinct `get()` / `exists()` documents across one multi-document request.
@@ -358,6 +353,19 @@ pub enum RulesLoadError {
     Publish(String),
 }
 
+/// Which ID-token checks a caller's credential goes through.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum TokenSemantics {
+    /// ID-token verification as Identity Toolkit and the Admin SDK do it: a revoked, disabled
+    /// or deleted account's token is refused, and so is one past `exp`. The default, for every
+    /// surface nothing observed to be more lenient (callable Functions).
+    #[default]
+    IdToken,
+    /// What Firestore was observed to check (FS-RULES, 2026-09-24/25): the token alone, with a
+    /// 30-second allowance past `exp`, not the account.
+    Firestore,
+}
+
 /// Rules enforcement state shared by every surface.
 pub struct RulesEnforcer {
     rules: Arc<RulesetSlot>,
@@ -370,6 +378,15 @@ pub struct RulesEnforcer {
     /// How a caller's ID token is verified: the compatibility profile decides
     /// (`firebase` admits the official emulators' mock tokens, `strict` does not).
     acceptance: TokenAcceptance,
+    /// Whether a client request is refused while its database has no ruleset: production
+    /// refuses every client request without a `cloud.firestore` release (the `strict`
+    /// profile); the official emulator allows everything (the `emulator` profile).
+    refuse_without_ruleset: bool,
+    /// Whether an end user may open a read-write transaction: production refuses it with the
+    /// ordinary denial (the `strict` profile); the official emulator opens it.
+    end_user_transactions: bool,
+    /// Which ID-token checks apply (see [`TokenSemantics`]).
+    token_semantics: TokenSemantics,
 }
 
 impl RulesEnforcer {
@@ -387,6 +404,76 @@ impl RulesEnforcer {
             clock,
             registry: None,
             acceptance: TokenAcceptance::default(),
+            refuse_without_ruleset: false,
+            end_user_transactions: true,
+            token_semantics: TokenSemantics::default(),
+        }
+    }
+
+    /// Sets which ID-token checks apply: the Firestore surfaces use
+    /// [`TokenSemantics::Firestore`].
+    #[must_use]
+    pub const fn with_token_semantics(mut self, semantics: TokenSemantics) -> Self {
+        self.token_semantics = semantics;
+        self
+    }
+
+    /// Sets whether a client request is refused while its database has no ruleset.
+    #[must_use]
+    pub const fn with_refusal_without_ruleset(mut self, refuse: bool) -> Self {
+        self.refuse_without_ruleset = refuse;
+        self
+    }
+
+    /// Sets whether an end user may open a read-write transaction.
+    #[must_use]
+    pub const fn with_end_user_transactions(mut self, allowed: bool) -> Self {
+        self.end_user_transactions = allowed;
+        self
+    }
+
+    /// Whether `principal` may open a transaction with `options` (`None` is the default, a
+    /// read-write transaction), by `BeginTransaction` or a read's `newTransaction`.
+    /// Production refuses an end user, signed in or not, a read-write transaction with its
+    /// usual denial whatever the rules say, and opens a read-only one (FS-RULES, 2026-09-25).
+    pub fn check_new_transaction(
+        &self,
+        principal: &Principal,
+        options: Option<&fireemu_proto_firestore::google::firestore::v1::TransactionOptions>,
+    ) -> Result<(), Status> {
+        use fireemu_proto_firestore::google::firestore::v1::transaction_options::Mode;
+        let read_only = options.is_some_and(|o| matches!(o.mode, Some(Mode::ReadOnly(_))));
+        if read_only || self.end_user_transactions || matches!(principal, Principal::Owner) {
+            return Ok(());
+        }
+        let rules = self.rules.snapshot().map_err(Status::internal)?;
+        Err(denied(
+            &rules.diagnostics,
+            principal,
+            Method::Get,
+            "BeginTransaction".to_owned(),
+            "an end user may not open a read-write transaction in production".to_owned(),
+        ))
+    }
+
+    /// The answer to a client request against a database without a ruleset.
+    fn without_ruleset(
+        &self,
+        diagnostics: &Mutex<RulesDiagnostics>,
+        principal: &Principal,
+        method: Method,
+        path: String,
+    ) -> Result<(), Status> {
+        if self.refuse_without_ruleset {
+            Err(denied(
+                diagnostics,
+                principal,
+                method,
+                path,
+                "no ruleset is loaded for this database".to_owned(),
+            ))
+        } else {
+            Ok(())
         }
     }
 
@@ -499,11 +586,25 @@ impl RulesEnforcer {
         let Some(value) = value else {
             return Ok(Principal::Anonymous);
         };
+        // The strict profile refuses a credential in production's shapes (see
+        // `refusal`); the emulator profile keeps the texts it has always answered with.
+        let production = self.acceptance == TokenAcceptance::Verified;
         let token = value
             .strip_prefix("Bearer ")
-            .ok_or_else(|| Status::unauthenticated("authorization must be a Bearer token"))?;
+            .filter(|token| !production || !token.is_empty())
+            .ok_or_else(|| {
+                if production {
+                    Status::permission_denied(PERMISSION_DENIED_MESSAGE)
+                } else {
+                    Status::unauthenticated("authorization must be a Bearer token")
+                }
+            })?;
         if token == OWNER_TOKEN {
             return Ok(Principal::Owner);
+        }
+        // A bearer value that is not a JWT is taken for an OAuth access token by the front end.
+        if production && token.split('.').count() != 3 {
+            return Err(Status::unauthenticated(INVALID_CREDENTIALS_MESSAGE));
         }
         let now = self.now()?;
         // The token's audience names its project: verify against that project's store.
@@ -542,27 +643,55 @@ impl RulesEnforcer {
         let store = store_arc
             .lock()
             .map_err(|_| Status::internal("auth store lock poisoned"))?;
-        let decoded = match expected_project {
-            Some(project) => {
+        let verified = match (self.token_semantics, expected_project) {
+            (TokenSemantics::Firestore, _) => {
+                verify_firestore_rules_token(token, &store, now, self.acceptance, expected_project)
+            }
+            (TokenSemantics::IdToken, Some(project)) => {
                 verify_rules_token_for_project(token, &store, now, self.acceptance, project)
             }
-            None => verify_rules_token(token, &store, now, self.acceptance),
-        }
-        .map_err(|e| Status::unauthenticated(format!("invalid ID token: {e}")))?;
+            (TokenSemantics::IdToken, None) => {
+                verify_rules_token(token, &store, now, self.acceptance)
+            }
+        };
+        let decoded = verified.map_err(|error| match error {
+            JwtError::Expired if production => Status::unauthenticated(EXPIRED_CREDENTIALS_MESSAGE),
+            _ if production => Status::permission_denied(PERMISSION_DENIED_MESSAGE),
+            error => Status::unauthenticated(format!("invalid ID token: {error}")),
+        })?;
         drop(store);
-        let ctx = AuthContext::from_id_token_json(&decoded.payload_json)
-            .map_err(|e| Status::unauthenticated(format!("invalid ID token claims: {e}")))?;
+        let ctx = AuthContext::from_id_token_json(&decoded.payload_json).map_err(|e| {
+            if production {
+                Status::permission_denied(PERMISSION_DENIED_MESSAGE)
+            } else {
+                Status::unauthenticated(format!("invalid ID token claims: {e}"))
+            }
+        })?;
         Ok(Principal::User(ctx))
     }
 
     /// Owner-only surfaces (collection enumeration) while rules are loaded.
     pub fn require_owner(&self, principal: &Principal, what: &str) -> Result<(), Status> {
-        if matches!(principal, Principal::Owner) || !self.loaded()? {
+        if matches!(principal, Principal::Owner) {
             return Ok(());
         }
-        Err(Status::permission_denied(format!(
-            "{what} requires admin credentials while Security Rules are enforced"
-        )))
+        let rules = self.rules.snapshot().map_err(Status::internal)?;
+        if !rules.is_loaded() {
+            return self.without_ruleset(
+                &rules.diagnostics,
+                principal,
+                Method::List,
+                what.to_owned(),
+            );
+        }
+        // Production refuses an end user here with its usual Security Rules denial.
+        Err(denied(
+            &rules.diagnostics,
+            principal,
+            Method::List,
+            what.to_owned(),
+            format!("{what} is for administrators only while Security Rules are enforced"),
+        ))
     }
 
     /// Runs the loaded ruleset for one request; `Ok(())` = allowed.
@@ -583,7 +712,7 @@ impl RulesEnforcer {
             .snapshot()
             .map_err(Status::internal)?;
         let Some(ruleset) = &rules.ruleset else {
-            return Ok(());
+            return self.without_ruleset(&rules.diagnostics, principal, method, path.relative());
         };
         let now = self.now()?;
         evaluate_with(
@@ -638,7 +767,11 @@ impl RulesEnforcer {
             .snapshot()
             .map_err(Status::internal)?;
         let Some(ruleset) = &rules.ruleset else {
-            return Ok(());
+            let path = items
+                .first()
+                .map(|(path, _)| path.relative())
+                .unwrap_or_default();
+            return self.without_ruleset(&rules.diagnostics, principal, Method::Get, path);
         };
         let now = self.now()?;
         let reader = AggregateReader {
@@ -658,12 +791,17 @@ impl RulesEnforcer {
                 &reader,
                 Some(&rules.diagnostics),
             )?;
+            // One document's rules read at most the single-request budget (10), so the total
+            // only binds a multi-document request.
             let accessed = reader.seen.borrow().len() as u64;
-            if items.len() > 1 && accessed > multi_total {
-                return Err(Status::permission_denied(format!(
-                    "get on {} denied by Security Rules: RULES-DOC-ACCESS-MULTI-TOTAL: {accessed} exceeds {multi_total}",
-                    path.relative()
-                )));
+            if accessed > multi_total {
+                return Err(denied(
+                    &rules.diagnostics,
+                    principal,
+                    Method::Get,
+                    path.relative(),
+                    format!("RULES-DOC-ACCESS-MULTI-TOTAL: {accessed} exceeds {multi_total}"),
+                ));
             }
         }
         Ok(())
@@ -690,48 +828,29 @@ impl RulesEnforcer {
             .snapshot()
             .map_err(Status::internal)?;
         let Some(ruleset) = &rules.ruleset else {
-            return Ok(());
+            return self.without_ruleset(
+                &rules.diagnostics,
+                principal,
+                Method::List,
+                "a query".to_owned(),
+            );
         };
         let now = self.now()?;
         let reader = AggregateReader {
             inner: access,
             seen: RefCell::new(BTreeSet::new()),
         };
-        let single_max = single_max();
+        let list_max = multi_total_max();
         if let Some(candidates) = exact_name_candidates(parent, query) {
-            for candidate in candidates {
-                let segments = rules_document_segments(&candidate);
-                let resource = access.get(&segments);
-                let ctx = RequestContext {
-                    service: RulesService::Firestore,
-                    method: Method::List,
-                    path: rules_path(&candidate),
-                    auth: match principal {
-                        Principal::User(auth) => Some(auth.clone()),
-                        _ => None,
-                    },
-                    resource,
-                    request_resource: None,
-                    time_unix_nanos: now.as_nanos(),
-                    abstract_path: false,
-                    request_query: Some(query_value(query)),
-                };
-                let resource_absent = ctx.resource.is_none();
-                let (report, _) = evaluate_request_traced_owned(ruleset, ctx, Some(&reader));
-                if !matches!(report.decision, Decision::Allow)
-                    || (resource_absent && report.absent_resource_used)
-                {
-                    return Err(Status::permission_denied("query denied by Security Rules"));
-                }
-                let accessed = reader.seen.borrow().len() as u64;
-                if accessed > single_max {
-                    return Err(Status::permission_denied(format!(
-                        "list on {} denied by Security Rules: RULES-DOC-ACCESS-SINGLE: {accessed} exceeds {single_max}",
-                        candidate.relative()
-                    )));
-                }
-            }
-            return Ok(());
+            return authorize_exact_names(
+                ruleset,
+                &rules.diagnostics,
+                principal,
+                query,
+                &candidates,
+                &reader,
+                now,
+            );
         }
         for placeholder in placeholder_paths(parent, query)? {
             for disjunction in query.dnf() {
@@ -758,11 +877,14 @@ impl RulesEnforcer {
                     Some(&rules.diagnostics),
                 )?;
                 let accessed = reader.seen.borrow().len() as u64;
-                if accessed > single_max {
-                    return Err(Status::permission_denied(format!(
-                        "list on {} denied by Security Rules: RULES-DOC-ACCESS-SINGLE: {accessed} exceeds {single_max}",
-                        placeholder.relative()
-                    )));
+                if accessed > list_max {
+                    return Err(denied(
+                        &rules.diagnostics,
+                        principal,
+                        Method::List,
+                        placeholder.relative(),
+                        format!("RULES-DOC-ACCESS-MULTI-TOTAL: {accessed} exceeds {list_max}"),
+                    ));
                 }
             }
         }
@@ -789,7 +911,11 @@ impl RulesEnforcer {
             .snapshot()
             .map_err(Status::internal)?;
         let Some(ruleset) = &rules.ruleset else {
-            return Ok(());
+            let path = writes
+                .first()
+                .map(|write| write.op.path().relative())
+                .unwrap_or_default();
+            return self.without_ruleset(&rules.diagnostics, principal, Method::Update, path);
         };
         let at = db.next_commit_time(now);
         // The state after the whole commit, for `getAfter()`.
@@ -831,11 +957,17 @@ impl RulesEnforcer {
                 WriteOp::Delete { .. } => (Method::Delete, None),
                 // A verify is a transactional read of the document.
                 WriteOp::Verify { .. } => (Method::Get, None),
+                // The precondition names the method when there is one: production judges an
+                // `exists: false` write as a create and an `exists: true` or `updateTime` one as
+                // an update whatever the document is now, and the precondition then refuses it
+                // if it does not hold (FS-RULES, 2026-09-24).
                 WriteOp::Set { .. } => (
-                    if current.is_some() {
-                        Method::Update
-                    } else {
-                        Method::Create
+                    match write.precondition {
+                        Some(Precondition::Exists(true) | Precondition::UpdateTime(_)) => {
+                            Method::Update
+                        }
+                        None if current.is_some() => Method::Update,
+                        Some(Precondition::Exists(false)) | None => Method::Create,
                     },
                     FirestoreState::preview_from(current.as_ref(), write, at)
                         .map_err(|e| crate::encode::status_from_error(&e))?,
@@ -852,13 +984,17 @@ impl RulesEnforcer {
                 &reader,
                 Some(&rules.diagnostics),
             )?;
+            // One write's rules read at most the single-request budget (10), so the total only
+            // binds a multi-write request.
             let accessed = reader.seen.borrow().len() as u64;
-            if writes.len() > 1 && accessed > multi_total {
-                return Err(Status::permission_denied(format!(
-                    "{} on {} denied by Security Rules: RULES-DOC-ACCESS-MULTI-TOTAL: {accessed} exceeds {multi_total}",
-                    method_name(method),
-                    path.relative()
-                )));
+            if accessed > multi_total {
+                return Err(denied(
+                    &rules.diagnostics,
+                    principal,
+                    method,
+                    path.relative(),
+                    format!("RULES-DOC-ACCESS-MULTI-TOTAL: {accessed} exceeds {multi_total}"),
+                ));
             }
             if !matches!(write.op, WriteOp::Verify { .. }) {
                 staged.insert(path.clone(), preview);
@@ -866,6 +1002,67 @@ impl RulesEnforcer {
         }
         Ok(())
     }
+}
+
+/// A query whose every disjunct is `__name__ ==` a document: each named document is decided
+/// as a `list` against what is stored, with one `get()` / `exists()` budget.
+#[allow(clippy::too_many_arguments)]
+fn authorize_exact_names(
+    ruleset: &Ruleset,
+    diagnostics: &Mutex<RulesDiagnostics>,
+    principal: &Principal,
+    query: &Query,
+    candidates: &[DocumentPath],
+    reader: &AggregateReader<'_>,
+    now: LogicalInstant,
+) -> Result<(), Status> {
+    let list_max = multi_total_max();
+    for candidate in candidates {
+        let segments = rules_document_segments(candidate);
+        let resource = reader.inner.get(&segments);
+        let ctx = RequestContext {
+            service: RulesService::Firestore,
+            method: Method::List,
+            path: rules_path(candidate),
+            auth: match principal {
+                Principal::User(auth) => Some(auth.clone()),
+                _ => None,
+            },
+            resource,
+            request_resource: None,
+            time_unix_nanos: now.as_nanos(),
+            abstract_path: false,
+            request_query: Some(query_value(query)),
+        };
+        let resource_absent = ctx.resource.is_none();
+        let (report, _) = evaluate_request_traced_owned(ruleset, ctx, Some(reader));
+        if !matches!(report.decision, Decision::Allow)
+            || (resource_absent && report.absent_resource_used)
+        {
+            let reason = match &report.decision {
+                Decision::Deny(reason) => deny_text(reason),
+                Decision::Allow => "the rule read the resource of a missing document".into(),
+            };
+            return Err(denied(
+                diagnostics,
+                principal,
+                Method::List,
+                candidate.relative(),
+                reason,
+            ));
+        }
+        let accessed = reader.seen.borrow().len() as u64;
+        if accessed > list_max {
+            return Err(denied(
+                diagnostics,
+                principal,
+                Method::List,
+                candidate.relative(),
+                format!("RULES-DOC-ACCESS-MULTI-TOTAL: {accessed} exceeds {list_max}"),
+            ));
+        }
+    }
+    Ok(())
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -947,8 +1144,49 @@ fn decide(
     }
     match denial {
         None => Ok(()),
-        Some(message) => Err(Status::permission_denied(message)),
+        Some(_) => Err(Status::permission_denied(PERMISSION_DENIED_MESSAGE)),
     }
+}
+
+/// What production answers for every Security Rules denial, in both profiles (FS-RULES scope
+/// decision R6). The reason fireemu found stays in the ruleset's request traces. Production
+/// answers the same for a credential it cannot verify, another scheme and an empty bearer.
+pub const PERMISSION_DENIED_MESSAGE: &str = "Missing or insufficient permissions.";
+
+/// Production's answer to an ID token past its allowance (FS-RULES, 2026-09-24).
+pub const EXPIRED_CREDENTIALS_MESSAGE: &str = "Missing or invalid authentication.";
+
+/// The front end's answer to a bearer value that is not a JWT, which it takes for an OAuth
+/// access token (FS-RULES, 2026-09-24).
+pub const INVALID_CREDENTIALS_MESSAGE: &str = "Request had invalid authentication credentials. Expected OAuth 2 access token, login cookie or other valid authentication credential. See https://developers.google.com/identity/sign-in/web/devconsole-project.";
+
+/// A denial decided outside the evaluator (a budget across items, an exact-name query): traced
+/// with its reason like an evaluated one, answered with production's text.
+fn denied(
+    diagnostics: &Mutex<RulesDiagnostics>,
+    principal: &Principal,
+    method: Method,
+    path: String,
+    reason: String,
+) -> Status {
+    if let Ok(mut sink) = diagnostics.lock() {
+        if sink.request_traces_enabled() {
+            let uid = match principal {
+                Principal::User(auth) => Some(auth.uid.clone()),
+                _ => None,
+            };
+            sink.push(&Coverage::default(), move |sequence| RequestTrace {
+                sequence,
+                method: method_name(method),
+                path,
+                allowed: false,
+                reason,
+                uid,
+                expressions: Vec::new(),
+            });
+        }
+    }
+    Status::permission_denied(PERMISSION_DENIED_MESSAGE)
 }
 
 /// A write guard over an optional enforcer.
@@ -981,6 +1219,7 @@ fn abstract_resource(disjunction: &[FilterExpr]) -> RulesValue {
     // Inequality filters on one field combine into one range (Firestore requires every
     // range filter of a field to share the value's class); an equality wins over them.
     let mut ranges: BTreeMap<&FieldPath, Option<ValueRange>> = BTreeMap::new();
+    let mut exclusions: BTreeMap<&FieldPath, Vec<RulesValue>> = BTreeMap::new();
     for atom in disjunction {
         if let FilterExpr::Field { field, op, value } = atom {
             if !field.is_document_name() {
@@ -993,15 +1232,34 @@ fn abstract_resource(disjunction: &[FilterExpr]) -> RulesValue {
                     });
                     *entry = entry.take().and_then(|r| tighten(r, bound));
                 }
+                match op {
+                    FieldOp::NotEqual => exclusions
+                        .entry(field)
+                        .or_default()
+                        .push(rules_value(value)),
+                    FieldOp::NotIn => {
+                        if let Value::Array(items) = value {
+                            exclusions
+                                .entry(field)
+                                .or_default()
+                                .extend(items.iter().map(rules_value));
+                        }
+                    }
+                    _ => {}
+                }
             }
         }
     }
-    for (field, range) in ranges {
-        set_nested(
-            &mut data,
-            field,
-            range.map_or(RulesValue::Unknown, RulesValue::Range),
-        );
+    for (field, range) in &ranges {
+        let value = match (range.clone(), exclusions.get(field)) {
+            (Some(range), Some(excluded)) => RulesValue::RangeExcluding {
+                range,
+                excluded: excluded.clone(),
+            },
+            (Some(range), None) => RulesValue::Range(range),
+            (None, _) => RulesValue::Unknown,
+        };
+        set_nested(&mut data, field, value);
     }
     for atom in disjunction {
         match atom {
@@ -1038,23 +1296,6 @@ fn abstract_resource(disjunction: &[FilterExpr]) -> RulesValue {
                         }
                     }
                 }
-                // Exists, is not null and differs from the listed values.
-                FieldOp::NotEqual => {
-                    set_nested(
-                        &mut data,
-                        field,
-                        RulesValue::NotOneOf(vec![rules_value(value)]),
-                    );
-                }
-                FieldOp::NotIn => {
-                    if let Value::Array(items) = value {
-                        set_nested(
-                            &mut data,
-                            field,
-                            RulesValue::NotOneOf(items.iter().map(rules_value).collect()),
-                        );
-                    }
-                }
                 _ => {}
             },
             FilterExpr::Unary {
@@ -1062,6 +1303,11 @@ fn abstract_resource(disjunction: &[FilterExpr]) -> RulesValue {
                 op: UnaryOp::IsNull,
             } => set_nested(&mut data, field, RulesValue::Null),
             _ => {}
+        }
+    }
+    for (field, excluded) in exclusions {
+        if !ranges.contains_key(field) {
+            set_nested_exclusion(&mut data, field, excluded);
         }
     }
     let mut m = BTreeMap::new();
@@ -1142,8 +1388,46 @@ fn tighten(mut range: ValueRange, (bound, is_lower): (RangeBound, bool)) -> Opti
 /// while `orderBy is list` does not (`conformance/rules-programs.json`,
 /// `query-order-by-shape`). Without an explicit ordering it is `null`, as `limit` is
 /// without a limit.
+/// The name of the ninth `request.query` key (FS-RULES exploration 2026-09-25, not evidence).
+pub const REQUEST_QUERY_KEYS_ONLY_KEY: &str = "selectOnlyKeys";
+
+/// `request.query` as production builds it: the three documented keys and six more (FS-RULES
+/// exploration 2026-09-25, not evidence). Observed: `kind` is the collection id; `parent` is
+/// null for a root query and the parent document's path below one; `allDescendants` and
+/// `distinct` are false for a collection query; `groupBy` is an empty map; `selectOnlyKeys` is
+/// false, also for a query that selects only `__name__`. Unobserved: `kind` of a query without a
+/// collection id (empty here) and `allDescendants` of a collection-group query (true here).
 fn query_value(query: &Query) -> RulesValue {
+    let (parent, kind, all_descendants) = match &query.scope {
+        QueryScope::Collection {
+            parent,
+            collection_id,
+        } => (parent, collection_id.as_str(), false),
+        QueryScope::CollectionGroup {
+            parent,
+            collection_id,
+        } => (parent, collection_id.as_str(), true),
+        QueryScope::KindlessAllDescendants { parent } => (parent, "", true),
+        QueryScope::KindlessChildren { parent } => (parent, "", false),
+    };
     let mut m = BTreeMap::new();
+    m.insert(
+        "allDescendants".to_owned(),
+        RulesValue::Bool(all_descendants),
+    );
+    m.insert("distinct".to_owned(), RulesValue::Bool(false));
+    m.insert("groupBy".to_owned(), RulesValue::Map(BTreeMap::new()));
+    m.insert("kind".to_owned(), RulesValue::String(kind.to_owned()));
+    m.insert(
+        "parent".to_owned(),
+        parent.as_ref().map_or(RulesValue::Null, |document| {
+            RulesValue::Path(rules_document_segments(document))
+        }),
+    );
+    m.insert(
+        REQUEST_QUERY_KEYS_ONLY_KEY.to_owned(),
+        RulesValue::Bool(false),
+    );
     m.insert(
         "limit".to_owned(),
         query
@@ -1154,31 +1438,27 @@ fn query_value(query: &Query) -> RulesValue {
         "offset".to_owned(),
         RulesValue::Int(i64::from(query.offset)),
     );
-    m.insert(
-        "orderBy".to_owned(),
-        if query.order_by.is_empty() {
-            RulesValue::Null
-        } else {
-            RulesValue::Map(
-                query
-                    .order_by
-                    .iter()
-                    .map(|o| {
-                        (
-                            o.field.canonical(),
-                            RulesValue::String(
-                                match o.direction {
-                                    Direction::Ascending => "ASC",
-                                    Direction::Descending => "DESC",
-                                }
-                                .to_owned(),
-                            ),
-                        )
-                    })
-                    .collect(),
-            )
-        },
-    );
+    m.insert("orderBy".to_owned(), {
+        // A map in every query, empty when it has no order (FS-RULES, 2026-09-24).
+        RulesValue::Map(
+            query
+                .order_by
+                .iter()
+                .map(|o| {
+                    (
+                        o.field.canonical(),
+                        RulesValue::String(
+                            match o.direction {
+                                Direction::Ascending => "ASC",
+                                Direction::Descending => "DESC",
+                            }
+                            .to_owned(),
+                        ),
+                    )
+                })
+                .collect(),
+        )
+    });
     RulesValue::Map(m)
 }
 
@@ -1191,17 +1471,81 @@ fn set_nested(fields: &mut BTreeMap<String, RulesValue>, path: &FieldPath, value
         let entry = map
             .entry(s.clone())
             .or_insert_with(|| RulesValue::PartialMap(BTreeMap::new()));
-        if !matches!(entry, RulesValue::PartialMap(_) | RulesValue::Map(_)) {
+        if !matches!(
+            entry,
+            RulesValue::PartialMap(_) | RulesValue::PartialMapExcluding { .. } | RulesValue::Map(_)
+        ) {
             *entry = RulesValue::PartialMap(BTreeMap::new());
         }
         map = match entry {
             RulesValue::PartialMap(m) | RulesValue::Map(m) => m,
+            RulesValue::PartialMapExcluding { fields, .. } => fields,
             _ => return,
         };
     }
     if let Some(last) = segments.last() {
         map.insert(last.clone(), value);
     }
+}
+
+/// Merges a parent-level exclusion with any partial child constraints already present at that
+/// path. Query proofs need both facts: a child range remains available to the evaluator while
+/// the complete map is known not to equal each excluded value.
+fn set_nested_exclusion(
+    fields: &mut BTreeMap<String, RulesValue>,
+    path: &FieldPath,
+    excluded_values: Vec<RulesValue>,
+) {
+    let segments = path.segments();
+    let Some(last) = segments.last() else {
+        return;
+    };
+    let mut map = fields;
+    for segment in &segments[..segments.len() - 1] {
+        let entry = map
+            .entry(segment.clone())
+            .or_insert_with(|| RulesValue::PartialMap(BTreeMap::new()));
+        if let RulesValue::NotOneOf(excluded) = entry {
+            // A parent exclusion may be encountered before a nested exclusion (the
+            // BTreeMap ordering is parent-first). Preserve it while introducing the
+            // partial child map instead of replacing the parent's constraint.
+            let parent_excluded = std::mem::take(excluded);
+            *entry = RulesValue::PartialMapExcluding {
+                fields: BTreeMap::new(),
+                excluded: parent_excluded,
+            };
+        } else if !matches!(
+            entry,
+            RulesValue::PartialMap(_) | RulesValue::PartialMapExcluding { .. } | RulesValue::Map(_)
+        ) {
+            *entry = RulesValue::PartialMap(BTreeMap::new());
+        }
+        map = match entry {
+            RulesValue::PartialMap(m) | RulesValue::Map(m) => m,
+            RulesValue::PartialMapExcluding { fields, .. } => fields,
+            _ => return,
+        };
+    }
+    let merged = match map.remove(last) {
+        Some(RulesValue::PartialMap(fields)) => RulesValue::PartialMapExcluding {
+            fields,
+            excluded: excluded_values,
+        },
+        Some(RulesValue::PartialMapExcluding {
+            fields,
+            mut excluded,
+        }) => {
+            excluded.extend(excluded_values);
+            RulesValue::PartialMapExcluding { fields, excluded }
+        }
+        Some(RulesValue::NotOneOf(mut previous)) => {
+            previous.extend(excluded_values);
+            RulesValue::NotOneOf(previous)
+        }
+        Some(existing) => existing,
+        None => RulesValue::NotOneOf(excluded_values),
+    };
+    map.insert(last.clone(), merged);
 }
 
 const fn method_name(m: Method) -> &'static str {
@@ -1266,6 +1610,16 @@ pub fn placeholder_paths(parent: &Parent, query: &Query) -> Result<Vec<DocumentP
         ),
         QueryScope::KindlessAllDescendants { parent: None } => {
             format!("{ABSTRACT_PREFIX}/{ABSTRACT_SEGMENT}/{ABSTRACT_PREFIX}/{ABSTRACT_SEGMENT}")
+        }
+        // Any collection directly under the parent: the collection id is undetermined too.
+        QueryScope::KindlessChildren {
+            parent: Some(parent),
+        } => format!(
+            "{}/{ABSTRACT_SEGMENT}/{ABSTRACT_SEGMENT}",
+            parent.relative()
+        ),
+        QueryScope::KindlessChildren { parent: None } => {
+            format!("{ABSTRACT_SEGMENT}/{ABSTRACT_SEGMENT}")
         }
     };
     let path = DocumentPath::parse(&parent.project, &parent.database, &relative)
@@ -1336,6 +1690,9 @@ fn query_scope_contains(
         QueryScope::KindlessAllDescendants { parent } => parent
             .as_ref()
             .is_none_or(|ancestor| path_is_below(path, ancestor)),
+        QueryScope::KindlessChildren { parent } => {
+            path.parent_document().as_ref() == parent.as_ref()
+        }
     }
 }
 
@@ -1430,5 +1787,90 @@ pub fn same_epoch(
         Err(Status::unavailable(
             "the session was reset while the request was in flight; retry against the new session",
         ))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::abstract_resource;
+    use fireemu_core_firestore::field_path::FieldPath;
+    use fireemu_core_firestore::query::{FieldOp, FilterExpr};
+    use fireemu_core_firestore::value::Value;
+    use fireemu_core_rules::value::RulesValue;
+    use std::collections::BTreeMap;
+
+    #[test]
+    fn abstract_resource_retains_parent_exclusion_when_nested_exclusion_is_added() {
+        let parent = FieldPath::parse("meta").unwrap();
+        let nested = FieldPath::parse("meta.score").unwrap();
+        let mut excluded_map = BTreeMap::new();
+        excluded_map.insert("score".to_owned(), Value::Integer(6));
+        let resource = abstract_resource(&[
+            FilterExpr::Field {
+                field: parent,
+                op: FieldOp::NotEqual,
+                value: Value::Map(excluded_map),
+            },
+            FilterExpr::Field {
+                field: nested,
+                op: FieldOp::NotEqual,
+                value: Value::Integer(5),
+            },
+        ]);
+
+        let RulesValue::Map(resource) = resource else {
+            panic!("resource should be a map");
+        };
+        let RulesValue::PartialMap(data) = resource.get("data").expect("resource data") else {
+            panic!("resource data should be a partial map");
+        };
+        let RulesValue::PartialMapExcluding { fields, excluded } =
+            data.get("meta").expect("meta constraint")
+        else {
+            panic!("parent exclusion must be retained alongside nested constraints");
+        };
+        assert_eq!(
+            fields.get("score"),
+            Some(&RulesValue::NotOneOf(vec![RulesValue::Int(5)]))
+        );
+        assert_eq!(excluded.len(), 1);
+        assert!(matches!(
+            &excluded[0],
+            RulesValue::Map(values)
+                if values.get("score") == Some(&RulesValue::Int(6))
+        ));
+    }
+
+    #[test]
+    fn a_kindless_children_query_stands_for_any_direct_child_of_its_parent() {
+        use super::{placeholder_paths, query_scope_contains};
+        use crate::decode::Parent;
+        use fireemu_core_firestore::path::DocumentPath;
+        use fireemu_core_firestore::query::{Query, QueryScope};
+        use fireemu_core_rules::eval::ABSTRACT_SEGMENT;
+        use fireemu_core_types::ids::{DatabaseId, ProjectId};
+        let project = ProjectId::try_new("p").unwrap();
+        let database = DatabaseId::try_new("(default)").unwrap();
+        let doc = |relative: &str| DocumentPath::parse(&project, &database, relative).unwrap();
+        let parent = Parent {
+            project: project.clone(),
+            database: database.clone(),
+            document: None,
+        };
+        let root = Query::new(QueryScope::kindless_children(None));
+        assert_eq!(
+            placeholder_paths(&parent, &root).unwrap(),
+            vec![doc(&format!("{ABSTRACT_SEGMENT}/{ABSTRACT_SEGMENT}"))]
+        );
+        let nested = Query::new(QueryScope::kindless_children(Some(doc("a/b"))));
+        assert_eq!(
+            placeholder_paths(&parent, &nested).unwrap(),
+            vec![doc(&format!("a/b/{ABSTRACT_SEGMENT}/{ABSTRACT_SEGMENT}"))]
+        );
+        assert!(query_scope_contains(&root.scope, &doc("x/1")));
+        assert!(!query_scope_contains(&root.scope, &doc("x/1/y/2")));
+        assert!(query_scope_contains(&nested.scope, &doc("a/b/c/d")));
+        assert!(!query_scope_contains(&nested.scope, &doc("a/b/c/d/e/f")));
+        assert!(!query_scope_contains(&nested.scope, &doc("a/c/c/d")));
     }
 }

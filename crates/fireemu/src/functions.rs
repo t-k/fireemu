@@ -1,13 +1,17 @@
 //! Functions runtime wiring: runner process, event subscriptions, control hooks.
 
+#[cfg(not(windows))]
+use std::collections::HashMap;
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::{Read, Write};
 use std::net::TcpStream;
 use std::path::{Path, PathBuf};
 #[cfg(not(windows))]
 use std::process::{Command, Stdio};
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+#[cfg(not(windows))]
+use std::sync::OnceLock;
+use std::sync::{Arc, Mutex, RwLock};
 use std::time::{Duration, Instant};
 
 use fireemu_adapter_functions::manifest_json::parse_manifest;
@@ -212,6 +216,10 @@ const MAX_FUNCTIONS_SOURCE_WATCH_BYTES_PER_SECOND: u64 = 64 * 1024 * 1024;
 const MAX_FUNCTIONS_SOURCE_WATCH_FILES_PER_SECOND: u64 = 20_000;
 /// Maximum number of directory entries one source tree may enumerate per operation.
 const MAX_FUNCTIONS_SOURCE_ENTRIES: u64 = 100_000;
+/// Maximum bytes one Functions source tree may read or copy per operation.
+const MAX_FUNCTIONS_SOURCE_BYTES: u64 = 256 * 1024 * 1024;
+const SOURCE_BYTE_BUDGET_ERROR_PREFIX: &str =
+    "Functions source tree exceeds the 256 MiB byte budget";
 /// Maximum supported source-tree nesting, excluding the source root.
 const MAX_FUNCTIONS_SOURCE_DEPTH: usize = 128;
 
@@ -266,6 +274,35 @@ fn stream_source_chunks(
 #[derive(Default)]
 struct FunctionsSourceEntryBudget {
     entries: u64,
+}
+
+#[derive(Default)]
+struct FunctionsSourceByteBudget {
+    bytes: u64,
+    largest: Option<(PathBuf, u64)>,
+}
+
+impl FunctionsSourceByteBudget {
+    fn claim(&mut self, path: &Path, bytes: u64) -> Result<(), String> {
+        if self
+            .largest
+            .as_ref()
+            .is_none_or(|(_, largest)| bytes > *largest)
+        {
+            self.largest = Some((path.to_path_buf(), bytes));
+        }
+        self.bytes = self.bytes.saturating_add(bytes);
+        if self.bytes > MAX_FUNCTIONS_SOURCE_BYTES {
+            let (largest_path, largest_bytes) = self.largest.as_ref().unwrap();
+            return Err(format!(
+                "{SOURCE_BYTE_BUDGET_ERROR_PREFIX} at {} ({} bytes counted); largest file is {} ({largest_bytes} bytes). Narrow functions.source or move generated files outside it; functions.ignore affects watcher scans but not runtime snapshots",
+                path.display(),
+                self.bytes,
+                largest_path.display()
+            ));
+        }
+        Ok(())
+    }
 }
 
 impl FunctionsSourceEntryBudget {
@@ -414,6 +451,7 @@ fn hash_source_file(
     }
     let mut file = std::fs::File::open(child)
         .map_err(|error| format!("watch {}: {error}", child.display()))?;
+    let mut read_bytes = 0_u64;
     stream_source_chunks(
         &mut file,
         |bytes| {
@@ -423,7 +461,13 @@ fn hash_source_file(
             }
             Ok(())
         },
-        |bytes| charge(0, bytes).map_err(std::io::Error::other),
+        |bytes| {
+            read_bytes = read_bytes.saturating_add(bytes);
+            if read_bytes > version.len {
+                return Err(std::io::Error::other("source file grew during the scan"));
+            }
+            charge(0, bytes).map_err(std::io::Error::other)
+        },
         cancelled,
     )
     .map_err(|error| format!("watch {}: {error}", child.display()))?;
@@ -456,6 +500,7 @@ struct FunctionsSourceTraversal<'a> {
     root: &'a Path,
     ignores: &'a [String],
     entry_budget: FunctionsSourceEntryBudget,
+    byte_budget: FunctionsSourceByteBudget,
     charge: &'a mut dyn FnMut(u64, u64) -> Result<(), String>,
     cancelled: &'a AtomicBool,
 }
@@ -524,6 +569,7 @@ impl FunctionsSourceTraversal<'_> {
         let metadata = entry
             .metadata()
             .map_err(|error| format!("watch {}: {error}", child.display()))?;
+        self.byte_budget.claim(child, metadata.len())?;
         hash_source_file(
             child,
             relative,
@@ -575,12 +621,26 @@ impl FunctionsSourceTraversal<'_> {
         }
         let mut source_file = std::fs::File::open(source)
             .map_err(|error| format!("snapshot {}: {error}", source.display()))?;
+        let expected_len = source_file
+            .metadata()
+            .map_err(|error| format!("snapshot {}: {error}", source.display()))?
+            .len();
+        self.byte_budget.claim(source, expected_len)?;
         let mut target_file = std::fs::File::create(target)
             .map_err(|error| format!("snapshot {}: {error}", target.display()))?;
+        let mut read_bytes = 0_u64;
         stream_source_chunks(
             &mut source_file,
             |bytes| target_file.write_all(bytes),
-            |bytes| (self.charge)(0, bytes).map_err(std::io::Error::other),
+            |bytes| {
+                read_bytes = read_bytes.saturating_add(bytes);
+                if read_bytes > expected_len {
+                    return Err(std::io::Error::other(
+                        "source file grew during the snapshot",
+                    ));
+                }
+                (self.charge)(0, bytes).map_err(std::io::Error::other)
+            },
             self.cancelled,
         )
         .map_err(|error| format!("snapshot {}: {error}", source.display()))?;
@@ -621,6 +681,7 @@ fn functions_source_stamp_with_charge_and_file_version(
         root,
         ignores,
         entry_budget: FunctionsSourceEntryBudget::default(),
+        byte_budget: FunctionsSourceByteBudget::default(),
         charge,
         cancelled,
     }
@@ -729,20 +790,164 @@ impl FunctionsSourceScanBudget {
     }
 }
 
+#[cfg(unix)]
+fn snapshot_directory_name(pid: u32, sequence: u64) -> String {
+    let base = format!("fireemu-functions-{pid}-{sequence}");
+    #[cfg(target_os = "linux")]
+    if let Some(namespace) = pid_namespace_inode() {
+        return format!("{base}-n{namespace}");
+    }
+    base
+}
+
+#[cfg(target_os = "linux")]
+fn pid_namespace_inode() -> Option<u64> {
+    use std::os::unix::fs::MetadataExt as _;
+
+    std::fs::metadata("/proc/self/ns/pid")
+        .ok()
+        .map(|metadata| metadata.ino())
+}
+
+#[cfg(unix)]
+fn snapshot_owner_pid(name: &str) -> Option<rustix::process::Pid> {
+    let suffix = name.strip_prefix("fireemu-functions-")?;
+    let (pid, sequence) = suffix.split_once('-')?;
+    #[cfg(target_os = "linux")]
+    let (sequence, namespace) = sequence.split_once("-n")?;
+    if pid.is_empty()
+        || sequence.is_empty()
+        || (pid.len() > 1 && pid.starts_with('0'))
+        || (sequence.len() > 1 && sequence.starts_with('0'))
+        || !pid.bytes().all(|byte| byte.is_ascii_digit())
+        || !sequence.bytes().all(|byte| byte.is_ascii_digit())
+    {
+        return None;
+    }
+    let sequence = sequence.parse::<u64>().ok()?;
+    let pid = pid.parse::<i32>().ok().filter(|pid| *pid > 0)?;
+    #[cfg(target_os = "linux")]
+    if namespace != pid_namespace_inode()?.to_string() {
+        return None;
+    }
+    if name != snapshot_directory_name(u32::try_from(pid).ok()?, sequence) {
+        return None;
+    }
+    rustix::process::Pid::from_raw(pid)
+}
+
+#[cfg(unix)]
+fn snapshot_owned_directory(metadata: &std::fs::Metadata, uid: u32) -> bool {
+    use std::os::unix::fs::MetadataExt as _;
+
+    metadata.is_dir() && metadata.uid() == uid && metadata.mode() & 0o7777 == 0o700
+}
+
+#[cfg(unix)]
+fn snapshot_owner_is_dead(pid: rustix::process::Pid) -> bool {
+    matches!(
+        rustix::process::test_kill_process(pid),
+        Err(rustix::io::Errno::SRCH)
+    )
+}
+
+#[cfg(unix)]
+fn sweep_orphan_function_snapshots(root: &Path) -> Result<usize, String> {
+    use std::os::unix::fs::MetadataExt as _;
+
+    // Shared temp directories can contain many unrelated entries; the scan stays bounded.
+    const MAX_ENTRIES: usize = 1_000_000;
+    const MAX_REMOVAL_ATTEMPTS: usize = 64;
+    let uid = rustix::process::geteuid().as_raw();
+    let entries = std::fs::read_dir(root)
+        .map_err(|error| format!("orphan snapshot scan {}: {error}", root.display()))?;
+    let mut removed = 0;
+    let mut removal_attempts = 0;
+    let mut failed = 0;
+    for entry in entries.take(MAX_ENTRIES) {
+        if removal_attempts == MAX_REMOVAL_ATTEMPTS {
+            break;
+        }
+        let Ok(entry) = entry else {
+            failed += 1;
+            continue;
+        };
+        let name = entry.file_name();
+        let Some(pid) = name.to_str().and_then(snapshot_owner_pid) else {
+            continue;
+        };
+        if i32::try_from(std::process::id()).ok() == Some(pid.as_raw_pid()) {
+            continue;
+        }
+        let path = entry.path();
+        let Ok(before) = std::fs::symlink_metadata(&path) else {
+            continue;
+        };
+        if !snapshot_owned_directory(&before, uid) || !snapshot_owner_is_dead(pid) {
+            continue;
+        }
+        let Ok(now) = std::fs::symlink_metadata(&path) else {
+            continue;
+        };
+        if !snapshot_owned_directory(&now, uid)
+            || before.dev() != now.dev()
+            || before.ino() != now.ino()
+            || !snapshot_owner_is_dead(pid)
+        {
+            continue;
+        }
+        removal_attempts += 1;
+        if std::fs::remove_dir_all(&path).is_ok() {
+            removed += 1;
+        } else {
+            failed += 1;
+        }
+    }
+    if failed > 0 {
+        return Err(format!(
+            "orphan snapshot sweep could not inspect or remove {failed} entries"
+        ));
+    }
+    Ok(removed)
+}
+
+#[cfg(unix)]
+fn schedule_orphan_function_snapshot_sweep(root: PathBuf) -> tokio::task::JoinHandle<()> {
+    tokio::task::spawn_blocking(move || {
+        if let Err(reason) = sweep_orphan_function_snapshots(&root) {
+            eprintln!("warning: {reason}");
+        }
+    })
+}
+
 #[derive(Debug)]
 struct FunctionsSourceSnapshot {
-    path: Option<PathBuf>,
+    cleanup_root: Option<PathBuf>,
+    source_path: PathBuf,
 }
 
 impl FunctionsSourceSnapshot {
-    fn new(path: PathBuf) -> Self {
-        Self { path: Some(path) }
+    fn new(cleanup_root: PathBuf, source_path: PathBuf) -> Self {
+        Self {
+            cleanup_root: Some(cleanup_root),
+            source_path,
+        }
     }
 
     fn into_path(mut self) -> PathBuf {
-        self.path
+        self.cleanup_root
             .take()
             .expect("a snapshot path is transferred once")
+    }
+
+    async fn remove(self) -> Result<(), String> {
+        let path = self.into_path();
+        tokio::task::spawn_blocking(move || {
+            std::fs::remove_dir_all(&path)
+                .map_err(|error| format!("snapshot {} cleanup failed: {error}", path.display()))
+        })
+        .await
+        .map_err(|error| format!("snapshot cleanup worker failed: {error}"))?
     }
 }
 
@@ -750,7 +955,7 @@ impl std::ops::Deref for FunctionsSourceSnapshot {
     type Target = Path;
 
     fn deref(&self) -> &Self::Target {
-        self.path.as_deref().expect("a live snapshot owns its path")
+        &self.source_path
     }
 }
 
@@ -762,7 +967,7 @@ impl AsRef<Path> for FunctionsSourceSnapshot {
 
 impl Drop for FunctionsSourceSnapshot {
     fn drop(&mut self) {
-        if let Some(path) = self.path.take() {
+        if let Some(path) = self.cleanup_root.take() {
             let _ = std::fs::remove_dir_all(path);
         }
     }
@@ -788,41 +993,62 @@ fn snapshot_functions_source_with_charge(
     cancelled: &AtomicBool,
 ) -> Result<FunctionsSourceSnapshot, String> {
     static NEXT_SNAPSHOT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let source_root = std::fs::canonicalize(root)
+        .map_err(|error| format!("snapshot {}: {error}", root.display()))?;
     // Deployment/watch ignores do not define the runtime generation. Validate every
     // copied input, including local dotenv and secret files, under the same I/O budget.
     let before =
-        functions_source_stamp_with_charge(root, &[], charge, cancelled)?.content_signature;
+        functions_source_stamp_with_charge(&source_root, &[], charge, cancelled)?.content_signature;
     let sequence = NEXT_SNAPSHOT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-    let destination = std::env::temp_dir().join(format!(
-        "fireemu-functions-{}-{sequence}",
-        std::process::id()
-    ));
+    #[cfg(unix)]
+    let name = snapshot_directory_name(std::process::id(), sequence);
+    #[cfg(windows)]
+    let name = format!("fireemu-functions-{}-{sequence}", std::process::id());
+    let destination = std::env::temp_dir().join(name);
     std::fs::create_dir(&destination)
         .map_err(|e| format!("snapshot {}: {e}", destination.display()))?;
-    let snapshot = FunctionsSourceSnapshot::new(destination.clone());
+    let dependencies: Vec<_> = source_root
+        .ancestors()
+        .enumerate()
+        .filter_map(|(level, ancestor)| {
+            let path = ancestor.join("node_modules");
+            path.is_dir().then_some((level, path))
+        })
+        .collect();
+    let mut source_path = destination.clone();
+    if let Some((outermost_level, _)) = dependencies.last() {
+        for _ in 0..*outermost_level {
+            source_path.push("source");
+        }
+    }
+    let snapshot = FunctionsSourceSnapshot::new(destination.clone(), source_path.clone());
     secure_snapshot_directory(&destination)?;
     charge(1, 0)?;
+    std::fs::create_dir_all(&source_path)
+        .map_err(|error| format!("snapshot {}: {error}", source_path.display()))?;
     FunctionsSourceTraversal {
-        root,
+        root: &source_root,
         ignores,
         entry_budget: FunctionsSourceEntryBudget::default(),
+        byte_budget: FunctionsSourceByteBudget::default(),
         charge,
         cancelled,
     }
-    .copy_directory(root, &destination, 0)
+    .copy_directory(&source_root, &source_path, 0)
     .and_then(|()| {
-        let dependencies = root
-            .ancestors()
-            .map(|ancestor| ancestor.join("node_modules"))
-            .find(|candidate| candidate.is_dir());
-        if let Some(dependencies) = dependencies {
-            link_dependency_directory(&dependencies, &destination.join("node_modules"))?;
+        for (level, dependencies) in dependencies {
+            let ancestor = source_path
+                .ancestors()
+                .nth(level)
+                .expect("the snapshot mirrors each dependency ancestor");
+            link_dependency_directory(&dependencies, &ancestor.join("node_modules"))?;
         }
         Ok(())
     })?;
     let copied =
-        functions_source_stamp_with_charge(&destination, &[], charge, cancelled)?.content_signature;
-    let after = functions_source_stamp_with_charge(root, &[], charge, cancelled)?.content_signature;
+        functions_source_stamp_with_charge(&source_path, &[], charge, cancelled)?.content_signature;
+    let after =
+        functions_source_stamp_with_charge(&source_root, &[], charge, cancelled)?.content_signature;
     if before != copied || before != after {
         return Err(
             "Functions runtime inputs changed while capturing a reload snapshot".to_owned(),
@@ -856,14 +1082,24 @@ fn link_dependency_directory(source: &Path, destination: &Path) -> Result<(), St
         .map_err(|e| format!("snapshot {}: {e}", destination.display()))
 }
 
+#[derive(Clone)]
+struct ReloadResources {
+    scan_budget: Arc<FunctionsSourceScanBudget>,
+    node_probe_cache: Arc<NodeProbeCache>,
+}
+
 fn start_reload_supervisors(
     runtime: &Arc<FunctionsRuntime>,
     cfg: &RuntimeConfig,
     hosts: &EmulatorHosts,
     runner_secret: &str,
     callable_trusted_protocol: bool,
+    node_probe_cache: &Arc<NodeProbeCache>,
 ) {
-    let scan_budget = Arc::new(FunctionsSourceScanBudget::new());
+    let resources = ReloadResources {
+        scan_budget: Arc::new(FunctionsSourceScanBudget::new()),
+        node_probe_cache: node_probe_cache.clone(),
+    };
     for codebase in cfg.functions_to_load() {
         tokio::spawn(supervise_codebase_reloads(
             Arc::downgrade(runtime),
@@ -872,7 +1108,7 @@ fn start_reload_supervisors(
             hosts.clone(),
             runner_secret.to_owned(),
             callable_trusted_protocol,
-            scan_budget.clone(),
+            resources.clone(),
         ));
     }
 }
@@ -892,6 +1128,166 @@ async fn join_codebase_starts<T: Send + 'static>(
     outcomes
 }
 
+async fn discard_reload_snapshot(snapshot: FunctionsSourceSnapshot, codebase: &str) {
+    if let Err(reason) = snapshot.remove().await {
+        eprintln!("warning: functions[{codebase}]: {reason}");
+    }
+}
+
+fn warn_reload_once(last: &mut bool, codebase: &str, operation: &str, reason: &str) -> bool {
+    let first = !*last;
+    if first {
+        eprintln!("warning: functions[{codebase}] reload {operation} failed: {reason}");
+    }
+    *last = true;
+    first
+}
+
+fn source_scan_retry_delay(previous: Duration, reason: Option<&str>) -> Duration {
+    match reason {
+        None => Duration::from_millis(750),
+        Some(reason) if reason.starts_with(SOURCE_BYTE_BUDGET_ERROR_PREFIX) => {
+            Duration::from_secs(30)
+        }
+        Some(_) => previous
+            .max(Duration::from_millis(750))
+            .saturating_mul(2)
+            .min(Duration::from_secs(8)),
+    }
+}
+
+async fn changed_source_stamp(
+    root: &Path,
+    codebase: &FunctionsCodebase,
+    scan_budget: &FunctionsSourceScanBudget,
+    observed_stamp: &mut Option<FunctionsSourceStamp>,
+    last_scan_error: &mut bool,
+    retry_delay: &mut Duration,
+) -> Option<FunctionsSourceStamp> {
+    let next_stamp = match scan_budget.scan(root, &codebase.ignore).await {
+        Ok(stamp) => {
+            *last_scan_error = false;
+            *retry_delay = source_scan_retry_delay(*retry_delay, None);
+            stamp
+        }
+        Err(reason) => {
+            *retry_delay = source_scan_retry_delay(*retry_delay, Some(&reason));
+            warn_reload_once(last_scan_error, &codebase.codebase, "scan", &reason);
+            return None;
+        }
+    };
+    if *observed_stamp == Some(next_stamp) {
+        return None;
+    }
+    tokio::time::sleep(Duration::from_millis(250)).await;
+    let stable_stamp = scan_budget
+        .scan(root, &codebase.ignore)
+        .await
+        .unwrap_or(next_stamp);
+    if stable_stamp != next_stamp {
+        return None;
+    }
+    if observed_stamp.is_none() {
+        *observed_stamp = Some(stable_stamp);
+        return None;
+    }
+    if observed_stamp.map(|stamp| stamp.content_signature) == Some(stable_stamp.content_signature) {
+        *observed_stamp = Some(stable_stamp);
+        return None;
+    }
+    Some(stable_stamp)
+}
+
+async fn wait_for_fixed_inspector_port_release(port: u16, timeout: Duration) -> Result<(), String> {
+    let deadline = tokio::time::Instant::now() + timeout;
+    loop {
+        match std::net::TcpListener::bind(("127.0.0.1", port)) {
+            Ok(listener) => {
+                drop(listener);
+                return Ok(());
+            }
+            Err(cause) if tokio::time::Instant::now() >= deadline => {
+                return Err(format!(
+                    "fixed inspector port {port} did not become available after stopping the previous runner: {cause}"
+                ));
+            }
+            Err(_) => tokio::time::sleep(Duration::from_millis(25)).await,
+        }
+    }
+}
+
+async fn prepare_fixed_inspector_reload(
+    runtime: &Arc<FunctionsRuntime>,
+    codebase: &str,
+    port: u16,
+) -> Result<fireemu_adapter_functions::runtime::RunnerRestartGuard, String> {
+    // A fixed inspector port cannot be bound by both generations at once.
+    let restart_guard = runtime
+        .stop_runner_for_fixed_inspector_reload(codebase)
+        .await?;
+    wait_for_fixed_inspector_port_release(port, Duration::from_secs(3)).await?;
+    Ok(restart_guard)
+}
+
+fn report_reload_install(
+    result: Result<u64, String>,
+    fixed_inspector: bool,
+    codebase: &str,
+    stable_stamp: FunctionsSourceStamp,
+    observed_stamp: &mut Option<FunctionsSourceStamp>,
+    last_start_error: &mut bool,
+) {
+    match result {
+        Ok(generation) => {
+            *observed_stamp = Some(stable_stamp);
+            *last_start_error = false;
+            eprintln!("note: functions[{codebase}]: reloaded generation {generation}");
+        }
+        Err(reason) if fixed_inspector => {
+            *observed_stamp = Some(stable_stamp);
+            warn_reload_once(
+                last_start_error,
+                codebase,
+                "install after stopping the previous runner",
+                &reason,
+            );
+        }
+        Err(reason) => eprintln!("warning: functions[{codebase}]: reload rejected: {reason}"),
+    }
+}
+
+async fn snapshot_consistent_reload_source(
+    root: &Path,
+    codebase: &FunctionsCodebase,
+    scan_budget: &FunctionsSourceScanBudget,
+    stable: u64,
+    retry_delay: &mut Duration,
+    last_snapshot_error: &mut bool,
+) -> Option<FunctionsSourceSnapshot> {
+    let snapshot = match scan_budget.snapshot(root, &codebase.ignore).await {
+        Ok(snapshot) => {
+            *last_snapshot_error = false;
+            snapshot
+        }
+        Err(reason) => {
+            *retry_delay = source_scan_retry_delay(*retry_delay, Some(&reason));
+            warn_reload_once(last_snapshot_error, &codebase.codebase, "snapshot", &reason);
+            return None;
+        }
+    };
+    let (snapshot_stamp, current_stamp) = tokio::join!(
+        scan_budget.scan(&snapshot, &codebase.ignore),
+        scan_budget.scan(root, &codebase.ignore),
+    );
+    if snapshot_stamp.as_ref().map(|stamp| stamp.content_signature) != Ok(stable)
+        || current_stamp.as_ref().map(|stamp| stamp.content_signature) != Ok(stable)
+    {
+        discard_reload_snapshot(snapshot, &codebase.codebase).await;
+        return None;
+    }
+    Some(snapshot)
+}
+
 async fn supervise_codebase_reloads(
     weak_runtime: std::sync::Weak<FunctionsRuntime>,
     cfg: RuntimeConfig,
@@ -899,96 +1295,129 @@ async fn supervise_codebase_reloads(
     hosts: EmulatorHosts,
     secret: String,
     callable_trusted_protocol: bool,
-    scan_budget: Arc<FunctionsSourceScanBudget>,
+    resources: ReloadResources,
 ) {
     let root = PathBuf::from(&codebase.source);
-    let mut observed_stamp = scan_budget.scan(&root, &codebase.ignore).await.ok();
+    let initial_stamp = resources.scan_budget.scan(&root, &codebase.ignore).await;
+    let mut observed_stamp = initial_stamp.as_ref().ok().copied();
+    let mut last_scan_error = false;
+    let mut last_snapshot_error = false;
+    let mut last_start_error = false;
+    let mut retry_delay = source_scan_retry_delay(
+        Duration::from_millis(750),
+        initial_stamp.as_ref().err().map(String::as_str),
+    );
+    if let Err(reason) = initial_stamp {
+        warn_reload_once(&mut last_scan_error, &codebase.codebase, "scan", &reason);
+    }
     loop {
-        tokio::time::sleep(Duration::from_millis(750)).await;
+        tokio::time::sleep(retry_delay).await;
         let Some(runtime) = weak_runtime.upgrade() else {
             return;
         };
-        let next_stamp = match scan_budget.scan(&root, &codebase.ignore).await {
-            Ok(stamp) => stamp,
-            Err(reason) => {
-                eprintln!(
-                    "warning: functions[{}] reload scan failed: {reason}",
-                    codebase.codebase
-                );
-                continue;
-            }
+        let Some(stable_stamp) = changed_source_stamp(
+            &root,
+            &codebase,
+            &resources.scan_budget,
+            &mut observed_stamp,
+            &mut last_scan_error,
+            &mut retry_delay,
+        )
+        .await
+        else {
+            continue;
         };
-        if observed_stamp == Some(next_stamp) {
-            continue;
-        }
-        tokio::time::sleep(Duration::from_millis(250)).await;
-        let stable_stamp = scan_budget
-            .scan(&root, &codebase.ignore)
-            .await
-            .unwrap_or(next_stamp);
-        if stable_stamp != next_stamp {
-            continue;
-        }
         let stable = stable_stamp.content_signature;
-        if observed_stamp.map(|stamp| stamp.content_signature) == Some(stable) {
-            observed_stamp = Some(stable_stamp);
+        let Some(snapshot) = snapshot_consistent_reload_source(
+            &root,
+            &codebase,
+            &resources.scan_budget,
+            stable,
+            &mut retry_delay,
+            &mut last_snapshot_error,
+        )
+        .await
+        else {
             continue;
-        }
-        let snapshot = match scan_budget.snapshot(&root, &codebase.ignore).await {
-            Ok(snapshot) => snapshot,
-            Err(reason) => {
-                eprintln!(
-                    "warning: functions[{}] reload snapshot failed: {reason}",
-                    codebase.codebase
-                );
-                continue;
-            }
         };
-        let (snapshot_stamp, current_stamp) = tokio::join!(
-            scan_budget.scan(&snapshot, &codebase.ignore),
-            scan_budget.scan(&root, &codebase.ignore),
-        );
-        if snapshot_stamp.as_ref().map(|stamp| stamp.content_signature) != Ok(stable)
-            || current_stamp.as_ref().map(|stamp| stamp.content_signature) != Ok(stable)
-        {
-            continue;
-        }
-        observed_stamp = Some(stable_stamp);
-        let mut staged = codebase.clone();
-        staged.source = snapshot.to_string_lossy().into_owned();
-        match start_codebase(&cfg, &staged, &hosts, &secret, callable_trusted_protocol).await {
-            Ok(mut spec) => {
-                spec.cleanup_dir = Some(snapshot.into_path());
-                match runtime.reload_codebase(spec) {
-                    Ok(generation) => eprintln!(
-                        "note: functions[{}]: reloaded generation {generation}",
-                        codebase.codebase
-                    ),
-                    Err(reason) => eprintln!(
-                        "warning: functions[{}]: reload rejected: {reason}",
-                        codebase.codebase
-                    ),
+        let _restart_guard = if let Some(port) = cfg.functions_inspect_port {
+            match prepare_fixed_inspector_reload(&runtime, &codebase.codebase, port).await {
+                Ok(guard) => Some(guard),
+                Err(reason) => {
+                    warn_reload_once(&mut last_start_error, &codebase.codebase, "start", &reason);
+                    discard_reload_snapshot(snapshot, &codebase.codebase).await;
+                    continue;
                 }
             }
+        } else {
+            None
+        };
+        let mut staged = codebase.clone();
+        staged.source = snapshot.to_string_lossy().into_owned();
+        match start_codebase(
+            &cfg,
+            &staged,
+            &hosts,
+            &secret,
+            callable_trusted_protocol,
+            &resources.node_probe_cache,
+        )
+        .await
+        {
+            Ok(mut spec) => {
+                spec.cleanup_dir = Some(snapshot.into_path());
+                report_reload_install(
+                    runtime.reload_codebase(spec),
+                    cfg.functions_inspect_port.is_some(),
+                    &codebase.codebase,
+                    stable_stamp,
+                    &mut observed_stamp,
+                    &mut last_start_error,
+                );
+            }
             Err(reason) => {
-                eprintln!(
-                            "warning: functions[{}]: reload failed; keeping the last-known-good generation: {reason}",
-                            codebase.codebase
-                        );
+                if cfg.functions_inspect_port.is_some() {
+                    warn_reload_once(
+                        &mut last_start_error,
+                        &codebase.codebase,
+                        "start after stopping the previous runner",
+                        &reason,
+                    );
+                } else {
+                    eprintln!(
+                        "warning: functions[{}]: reload failed; keeping the last-known-good generation: {reason}",
+                        codebase.codebase
+                    );
+                }
+                discard_reload_snapshot(snapshot, &codebase.codebase).await;
             }
         }
     }
 }
 
-/// The debug feature the callable trusted protocol turns on, and nothing else.
+/// Debug features selected per profile and callable trust policy.
 ///
 /// `firebase-functions` reads `FIREBASE_DEBUG_MODE` once when it is first required and
 /// re-reads `FIREBASE_DEBUG_FEATURES` per lookup. `skipTokenVerification` makes the callable
 /// wrapper decode the App Check and Auth credentials locally instead of calling out to Google,
 /// which is only safe because the daemon has already verified and re-inserted both
-/// (specification section 13.4). No other feature is enabled: `enableCors`, in particular,
-/// would change what the functions themselves answer.
-const DEBUG_FEATURES: &str = r#"{"skipTokenVerification":true}"#;
+/// (specification section 13.4). The official emulator also enables `enableCors`, which
+/// wraps default `onRequest` handlers while preserving an explicit `cors: false`.
+const DEBUG_FEATURES_TRUSTED_STRICT: &str = r#"{"skipTokenVerification":true}"#;
+const DEBUG_FEATURES_UNTRUSTED_EMULATOR: &str = r#"{"enableCors":true}"#;
+const DEBUG_FEATURES_TRUSTED_EMULATOR: &str = r#"{"skipTokenVerification":true,"enableCors":true}"#;
+
+fn runner_debug_features(
+    profile: CompatibilityProfile,
+    callable_trusted_protocol: bool,
+) -> Option<&'static str> {
+    match (profile, callable_trusted_protocol) {
+        (CompatibilityProfile::Emulator, true) => Some(DEBUG_FEATURES_TRUSTED_EMULATOR),
+        (CompatibilityProfile::Emulator, false) => Some(DEBUG_FEATURES_UNTRUSTED_EMULATOR),
+        (CompatibilityProfile::Strict, true) => Some(DEBUG_FEATURES_TRUSTED_STRICT),
+        (CompatibilityProfile::Strict, false) => None,
+    }
+}
 
 /// `FIREBASE_CONFIG`, with the three members the official emulator puts in it
 /// (`functionsEmulator.js:1010-1026` with `constructDefaultAdminSdkConfig`,
@@ -1013,7 +1442,7 @@ pub fn firebase_config(project: &str) -> String {
 
 /// The user environment of one codebase: the dotenv chain, invocation-scoped local secrets
 /// and the legacy runtime configuration, with the files each came from.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Clone, Default, PartialEq, Eq)]
 pub struct UserEnvironment {
     /// `.env` chain values, later files having overridden earlier ones.
     pub values: Vec<(String, String)>,
@@ -1026,13 +1455,33 @@ pub struct UserEnvironment {
     pub files: Vec<String>,
 }
 
+impl std::fmt::Debug for UserEnvironment {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("UserEnvironment")
+            .field("values", &"[redacted]")
+            .field("secrets", &"[redacted]")
+            .field("runtime_config", &"[redacted]")
+            .field("files", &self.files)
+            .finish()
+    }
+}
+
+fn redacted_environment_parse_error(error: &str) -> &str {
+    if error.starts_with("Invalid dotenv file") {
+        "Invalid dotenv file, error on lines: [redacted]"
+    } else {
+        error
+    }
+}
+
 /// Parent variables the official CLI would leave on the Functions child, excluding names
 /// owned by the emulator and ambient Google credentials. Function code is trusted local code,
 /// but these exclusions keep the callable trust boundary and the no-ADC guarantee intact.
 fn inheritable_parent_environment() -> Vec<(String, String)> {
     use fireemu_core_functions::env;
 
-    std::env::vars()
+    std::env::vars_os()
+        .filter_map(|(name, value)| Some((name.into_string().ok()?, value.into_string().ok()?)))
         .filter(|(name, _)| {
             env::validate_key(name).is_ok()
                 && name != "GOOGLE_APPLICATION_CREDENTIALS"
@@ -1090,8 +1539,12 @@ pub fn load_user_environment(
         }
         let text = std::fs::read_to_string(&path)
             .map_err(|e| format!("Failed to load environment variables from {name}. ({e})"))?;
-        let values = env::parse_strict(&text)
-            .map_err(|e| format!("Failed to load environment variables from {name}. {e}"))?;
+        let values = env::parse_strict(&text).map_err(|e| {
+            format!(
+                "Failed to load environment variables from {name}. {}",
+                redacted_environment_parse_error(&e)
+            )
+        })?;
         for (k, v) in values {
             out.values.retain(|(existing, _)| existing != &k);
             out.values.push((k, v));
@@ -1109,8 +1562,9 @@ pub fn load_user_environment(
         out.secrets = env::parse_strict(&text)
             .map_err(|e| {
                 format!(
-                    "Failed to read local secrets file {}: {e}",
-                    secrets.display()
+                    "Failed to read local secrets file {}: {}",
+                    secrets.display(),
+                    redacted_environment_parse_error(&e)
                 )
             })?
             .into_iter()
@@ -1255,7 +1709,7 @@ impl RunnerSource {
 /// The bundled Node runner as located on this host.
 #[derive(Debug, Clone)]
 pub struct RunnerScript {
-    /// Absolute (or as-given, for the environment override) path of `index.mjs`.
+    /// Absolute path of `index.mjs`.
     pub path: PathBuf,
     /// Where it was found.
     pub source: RunnerSource,
@@ -1297,21 +1751,41 @@ pub fn runner_candidates() -> Vec<(RunnerSource, PathBuf)> {
     out
 }
 
+/// How many directories above the executable the workspace walk inspects.
+///
+/// The deepest supported layout, `target/agent/<session>/<mode>/<profile>/fireemu` (the
+/// `scripts/cargo-session` wrapper), puts the workspace root six directories up; a couple of
+/// extra levels keep the walk from being one directory short again if a wrapper nests
+/// deeper, while still stopping well before the filesystem root.
+const WORKSPACE_RUNNER_SEARCH_DEPTH: usize = 8;
+
 /// The runner in the source tree, for a binary that runs out of a cargo `target/` directory.
 ///
 /// The workspace is recognised at run time by walking up from the executable to a directory
 /// holding both `Cargo.toml` and `tools/runner-node/index.mjs`; nothing about the build
 /// machine is compiled in. (An `env!("CARGO_MANIFEST_DIR")` string here would survive
 /// `--remap-path-prefix`, which only rewrites debug info and panic locations, and would make
-/// the same commit build to different bytes from different checkouts.) `target/<profile>/`
-/// and `target/<triple>/<profile>/` are both covered by the ancestor walk.
+/// the same commit build to different bytes from different checkouts.) The ancestor walk
+/// covers `target/<profile>/`, `target/<triple>/<profile>/` and the session wrapper's
+/// `target/agent/<session>/<mode>/<profile>/`, and gives up after
+/// [`WORKSPACE_RUNNER_SEARCH_DEPTH`] directories or at the filesystem root, whichever comes
+/// first.
 fn workspace_runner() -> Option<PathBuf> {
     let exe = std::env::current_exe().ok()?;
     let exe = std::fs::canonicalize(&exe).unwrap_or(exe);
-    exe.ancestors().skip(1).take(5).find_map(|root| {
-        let script = root.join("tools").join("runner-node").join("index.mjs");
-        (root.join("Cargo.toml").is_file() && script.is_file()).then_some(script)
-    })
+    workspace_runner_from(&exe)
+}
+
+/// [`workspace_runner`] for a given executable path, so the search depth can be exercised
+/// against a synthetic tree without building a binary at that depth.
+fn workspace_runner_from(exe: &Path) -> Option<PathBuf> {
+    exe.ancestors()
+        .skip(1)
+        .take(WORKSPACE_RUNNER_SEARCH_DEPTH)
+        .find_map(|root| {
+            let script = root.join("tools").join("runner-node").join("index.mjs");
+            (root.join("Cargo.toml").is_file() && script.is_file()).then_some(script)
+        })
 }
 
 /// Locates the bundled Node runner, or explains every place that was tried.
@@ -1332,7 +1806,8 @@ pub fn locate_runner() -> Result<RunnerScript, String> {
     for (source, path) in &candidates {
         if path.is_file() {
             return Ok(RunnerScript {
-                path: path.clone(),
+                path: std::path::absolute(path)
+                    .map_err(|error| format!("runner {}: {error}", path.display()))?,
                 source: *source,
             });
         }
@@ -1607,8 +2082,25 @@ fn path_node_candidates(path: &std::ffi::OsStr) -> Vec<PathBuf> {
     candidates
 }
 
-fn node_candidates() -> Result<(Vec<PathBuf>, bool), String> {
-    if let Some(program) = std::env::var_os("FIREEMU_NODE") {
+#[derive(Clone, PartialEq, Eq, Hash)]
+struct NodeProbeKey {
+    path: Option<std::ffi::OsString>,
+    volta_home: Option<std::ffi::OsString>,
+    fireemu_node: Option<std::ffi::OsString>,
+}
+
+impl NodeProbeKey {
+    fn current() -> Self {
+        Self {
+            path: std::env::var_os("PATH"),
+            volta_home: std::env::var_os("VOLTA_HOME"),
+            fireemu_node: std::env::var_os("FIREEMU_NODE"),
+        }
+    }
+}
+
+fn node_candidates(key: &NodeProbeKey) -> Result<(Vec<PathBuf>, bool), String> {
+    if let Some(program) = &key.fireemu_node {
         let program = PathBuf::from(program);
         if !program.is_absolute() || !node_candidate_is_executable(&program) {
             return Err(format!(
@@ -1621,10 +2113,12 @@ fn node_candidates() -> Result<(Vec<PathBuf>, bool), String> {
         return Ok((candidates, true));
     }
 
-    let mut candidates = std::env::var_os("PATH")
-        .map(|path| path_node_candidates(&path))
+    let mut candidates = key
+        .path
+        .as_ref()
+        .map(|path| path_node_candidates(path))
         .unwrap_or_default();
-    if let Some(home) = std::env::var_os("VOLTA_HOME") {
+    if let Some(home) = &key.volta_home {
         let root = PathBuf::from(home).join("tools/image/node");
         if root.is_absolute() {
             if let Ok(entries) = std::fs::read_dir(root) {
@@ -1641,6 +2135,86 @@ fn node_candidates() -> Result<(Vec<PathBuf>, bool), String> {
     }
     candidates.truncate(16);
     Ok((candidates, false))
+}
+
+#[cfg(not(windows))]
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ProbedNodeCandidates {
+    installations: Vec<NodeInstallation>,
+    errors: Vec<String>,
+    explicit_node: bool,
+}
+
+#[derive(Default)]
+struct NodeProbeCache {
+    #[cfg(not(windows))]
+    entries: Mutex<HashMap<NodeProbeKey, NodeProbeEntry>>,
+}
+
+#[cfg(not(windows))]
+type NodeProbeEntry = Arc<OnceLock<Result<ProbedNodeCandidates, String>>>;
+
+#[cfg(not(windows))]
+impl NodeProbeCache {
+    fn probed(&self, key: &NodeProbeKey) -> Result<ProbedNodeCandidates, String> {
+        let entry = self
+            .entries
+            .lock()
+            .map_err(|_| "Node probe cache lock is poisoned".to_owned())?
+            .entry(key.clone())
+            .or_default()
+            .clone();
+        let result = entry.get_or_init(|| probe_node_candidates(key)).clone();
+        let successful = result
+            .as_ref()
+            .is_ok_and(|probed| !probed.installations.is_empty() && probed.errors.is_empty());
+        if !successful {
+            let mut entries = self
+                .entries
+                .lock()
+                .map_err(|_| "Node probe cache lock is poisoned".to_owned())?;
+            if entries
+                .get(key)
+                .is_some_and(|current| Arc::ptr_eq(current, &entry))
+            {
+                entries.remove(key);
+            }
+        }
+        result
+    }
+}
+
+#[cfg(not(windows))]
+fn probe_node_candidates(key: &NodeProbeKey) -> Result<ProbedNodeCandidates, String> {
+    let (candidates, explicit_node) = node_candidates(key)?;
+    let mut installations = Vec::new();
+    let mut errors = Vec::new();
+    for candidate in candidates {
+        match probe_node(&candidate) {
+            Ok(installation) => {
+                installations.push(installation);
+                if explicit_node {
+                    break;
+                }
+            }
+            Err(error) => errors.push(error),
+        }
+    }
+    Ok(ProbedNodeCandidates {
+        installations,
+        errors,
+        explicit_node,
+    })
+}
+
+async fn run_node_selection_blocking<F, T>(work: F) -> Result<T, String>
+where
+    F: FnOnce() -> T + Send + 'static,
+    T: Send + 'static,
+{
+    tokio::task::spawn_blocking(work)
+        .await
+        .map_err(|error| format!("Node selection task failed: {error}"))
 }
 
 #[cfg(not(windows))]
@@ -1811,9 +2385,10 @@ fn select_node_installation(
 #[cfg(windows)]
 fn default_runner_for_codebase(
     _codebase: &crate::config::FunctionsCodebase,
+    _node_probe_cache: &NodeProbeCache,
 ) -> Result<Vec<String>, String> {
     let script = locate_runner()?;
-    let (candidates, _) = node_candidates()?;
+    let (candidates, _) = node_candidates(&NodeProbeKey::current())?;
     let program = candidates.first().ok_or_else(|| {
         "no Node executable was found in an absolute PATH directory; set FIREEMU_NODE to an absolute executable or configure functions.runner explicitly".to_owned()
     })?;
@@ -1826,31 +2401,24 @@ fn default_runner_for_codebase(
 #[cfg(not(windows))]
 fn default_runner_for_codebase(
     codebase: &crate::config::FunctionsCodebase,
+    node_probe_cache: &NodeProbeCache,
 ) -> Result<Vec<String>, String> {
     let script = locate_runner()?;
     let engines = package_node_engine(Path::new(&codebase.source))?;
     if let Some(expression) = engines.as_deref() {
         let _ = node_engine_matches(expression, (0, 0, 0))?;
     }
-    let (candidates, explicit_node) = node_candidates()?;
+    let probed = node_probe_cache.probed(&NodeProbeKey::current())?;
+    let ProbedNodeCandidates {
+        installations,
+        errors: probe_errors,
+        explicit_node,
+    } = probed;
     let runtime_major = codebase.runtime.as_deref().and_then(|runtime| {
         runtime
             .strip_prefix("nodejs")
             .and_then(|major| major.parse::<u32>().ok())
     });
-    let mut installations = Vec::new();
-    let mut probe_errors = Vec::new();
-    for candidate in candidates {
-        match probe_node(&candidate) {
-            Ok(installation) => {
-                installations.push(installation);
-                if explicit_node {
-                    break;
-                }
-            }
-            Err(error) => probe_errors.push(error),
-        }
-    }
     if installations.is_empty() {
         let detail = if probe_errors.is_empty() {
             "no Node executable was found".to_owned()
@@ -1953,6 +2521,9 @@ pub async fn start(
                 .join(", ")
         ));
     }
+    let node_probe_cache = Arc::new(NodeProbeCache::default());
+    #[cfg(unix)]
+    drop(schedule_orphan_function_snapshot_sweep(std::env::temp_dir()));
     let starts = codebases
         .iter()
         .map(|codebase| {
@@ -1961,6 +2532,7 @@ pub async fn start(
             let codebase = codebase.clone();
             let hosts = hosts.clone();
             let runner_secret = runner_secret.to_owned();
+            let node_probe_cache = node_probe_cache.clone();
             let start = tokio::spawn(async move {
                 start_codebase(
                     &cfg,
@@ -1968,6 +2540,7 @@ pub async fn start(
                     &hosts,
                     &runner_secret,
                     callable_trusted_protocol,
+                    &node_probe_cache,
                 )
                 .await
             });
@@ -2021,6 +2594,7 @@ pub async fn start(
         hosts,
         runner_secret,
         callable_trusted_protocol,
+        &node_probe_cache,
     );
     Ok(runtime)
 }
@@ -2097,6 +2671,7 @@ async fn start_codebase(
     hosts: &EmulatorHosts,
     runner_secret: &str,
     callable_trusted_protocol: bool,
+    node_probe_cache: &Arc<NodeProbeCache>,
 ) -> Result<fireemu_adapter_functions::runtime::CodebaseSpec, String> {
     let source = codebase.source.clone();
     let label = &codebase.codebase;
@@ -2105,10 +2680,23 @@ async fn start_codebase(
             "the Functions codebase {label:?}: source {source:?} is not a directory"
         ));
     }
-    let mut command = match cfg.functions_runner.clone() {
-        Some(command) => command,
-        None => default_runner_for_codebase(codebase)
-            .map_err(|error| format!("the Functions codebase {label:?}: {error}"))?,
+    let source = std::fs::canonicalize(&source)
+        .map_err(|e| {
+            format!("the Functions codebase {label:?}: cannot resolve source {source:?}: {e}")
+        })?
+        .to_string_lossy()
+        .into_owned();
+    let mut command = if let Some(command) = cfg.functions_runner.clone() {
+        command
+    } else {
+        let codebase = codebase.clone();
+        let node_probe_cache = node_probe_cache.clone();
+        run_node_selection_blocking(move || {
+            default_runner_for_codebase(&codebase, &node_probe_cache)
+        })
+        .await
+        .map_err(|error| format!("the Functions codebase {label:?}: {error}"))?
+        .map_err(|error| format!("the Functions codebase {label:?}: {error}"))?
     };
     if cfg.functions_inspect_dynamic {
         command.insert(1, "--inspect-publish-uid=http".to_owned());
@@ -2184,6 +2772,10 @@ async fn start_codebase(
         ("TZ".to_owned(), "UTC".to_owned()),
         ("FIREEMU_RUNNER".to_owned(), "1".to_owned()),
         ("FIREEMU_RUNNER_SECRET".to_owned(), runner_secret.to_owned()),
+        (
+            "FIREEMU_HTTP_PROFILE".to_owned(),
+            cfg.profile.as_str().to_owned(),
+        ),
     ]);
     if let Some(host) = &hosts.firestore {
         env.push(("FIRESTORE_EMULATOR_HOST".to_owned(), host.clone()));
@@ -2220,19 +2812,20 @@ async fn start_codebase(
     if let Some(host) = &hosts.logging {
         env.push(("FIREBASE_LOGGING_EMULATOR_HOST".to_owned(), host.clone()));
     }
-    // Debug mode is granted only when the daemon is the sole source of both callable
-    // credentials. The runner inherits an allowlist that does not contain these names, and
-    // `SpawnSpec::env` is applied last, so neither can be shadowed from the host environment.
-    if callable_trusted_protocol {
+    // The emulator profile follows the official runtime's CORS feature. The trusted callable
+    // protocol separately enables token skipping only after daemon-side credential checks.
+    // The runner allowlist excludes these names and `SpawnSpec::env` is applied last.
+    let debug_features = runner_debug_features(cfg.profile, callable_trusted_protocol);
+    if let Some(debug_features) = debug_features {
         env.push(("FIREBASE_DEBUG_MODE".to_owned(), "true".to_owned()));
         env.push((
             "FIREBASE_DEBUG_FEATURES".to_owned(),
-            DEBUG_FEATURES.to_owned(),
+            debug_features.to_owned(),
         ));
     }
     let spec = SpawnSpec {
         command,
-        cwd: None,
+        cwd: Some(source),
         env,
         hello_timeout: Duration::from_secs(60),
     };
@@ -2672,6 +3265,17 @@ pub struct BlockingAuthBridge {
     runtime: Arc<FunctionsRuntime>,
     deadline: Duration,
     forward_inbound_credentials: bool,
+    settings: Arc<RwLock<BlockingAuthSettings>>,
+    settings_revision: AtomicU64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct BlockingAuthSettings {
+    selections: fireemu_core_functions::manifest::BlockingAuthSelections,
+    /// Optional project-level upper bound for raw token forwarding. `None` preserves the legacy
+    /// discovery-only policy; `Some` means every token kind is additionally required to be true
+    /// here before it can reach a handler.
+    forwarding_restrictions: Option<fireemu_core_functions::manifest::BlockingAuthTokenPolicy>,
 }
 
 const BLOCKING_AUTH_DEADLINE: Duration = Duration::from_secs(7);
@@ -2722,9 +3326,21 @@ fn blocking_auth_resource_name(project: &str, tenant: Option<&str>) -> String {
 
 fn narrow_blocking_auth_credentials(
     context: &fireemu_adapter_http::identity_toolkit::AuthBlockingContext,
+    globally_enabled: bool,
     policy: fireemu_core_functions::manifest::BlockingAuthTokenPolicy,
+    restrictions: Option<fireemu_core_functions::manifest::BlockingAuthTokenPolicy>,
 ) -> fireemu_adapter_http::identity_toolkit::AuthBlockingContext {
     let mut narrowed = context.clone();
+    let available = context.credential.as_ref().map_or_else(
+        fireemu_core_functions::manifest::BlockingAuthCredentialPresence::default,
+        |credential| fireemu_core_functions::manifest::BlockingAuthCredentialPresence {
+            access_token: credential.access_token.is_some(),
+            id_token: credential.id_token.is_some(),
+            refresh_token: credential.refresh_token.is_some(),
+        },
+    );
+    let policy =
+        effective_blocking_auth_token_policy(policy, globally_enabled, restrictions, available);
     if let Some(credential) = &mut narrowed.credential {
         if !policy.access_token {
             credential.access_token = None;
@@ -2737,6 +3353,83 @@ fn narrow_blocking_auth_credentials(
         }
     }
     narrowed
+}
+
+fn restrict_blocking_auth_token_policy(
+    policy: fireemu_core_functions::manifest::BlockingAuthTokenPolicy,
+    restrictions: Option<fireemu_core_functions::manifest::BlockingAuthTokenPolicy>,
+) -> fireemu_core_functions::manifest::BlockingAuthTokenPolicy {
+    let Some(restrictions) = restrictions else {
+        return policy;
+    };
+    fireemu_core_functions::manifest::BlockingAuthTokenPolicy {
+        access_token: policy.access_token && restrictions.access_token,
+        id_token: policy.id_token && restrictions.id_token,
+        refresh_token: policy.refresh_token && restrictions.refresh_token,
+    }
+}
+
+fn effective_blocking_auth_token_policy(
+    policy: fireemu_core_functions::manifest::BlockingAuthTokenPolicy,
+    globally_enabled: bool,
+    restrictions: Option<fireemu_core_functions::manifest::BlockingAuthTokenPolicy>,
+    available: fireemu_core_functions::manifest::BlockingAuthCredentialPresence,
+) -> fireemu_core_functions::manifest::BlockingAuthTokenPolicy {
+    restrict_blocking_auth_token_policy(policy.effective(globally_enabled, available), restrictions)
+}
+
+fn validate_blocking_auth_forwarding_policy(
+    globally_enabled: bool,
+    restrictions: Option<fireemu_core_functions::manifest::BlockingAuthTokenPolicy>,
+) -> Result<(), String> {
+    if !globally_enabled
+        && restrictions.is_some_and(fireemu_core_functions::manifest::BlockingAuthTokenPolicy::any)
+    {
+        return Err(
+            "blockingFunctions.forwardInboundCredentials requests token forwarding while the global auth.forwardInboundCredentials switch is disabled".to_owned(),
+        );
+    }
+    Ok(())
+}
+
+const BLOCKING_FUNCTIONS_URI_PREFIX: &str = "fireemu://functions/";
+const BLOCKING_DISCOVERY_EVENTS_MEMBER: &str = "__fireemuDiscoveryEvents";
+
+fn blocking_auth_selection_uri(
+    project: &str,
+    selection: &fireemu_core_functions::manifest::BlockingAuthSelection,
+    region: &str,
+) -> Option<serde_json::Value> {
+    match selection {
+        fireemu_core_functions::manifest::BlockingAuthSelection::Explicit { function, .. } => {
+            Some(serde_json::json!({
+                "functionUri": format!("{BLOCKING_FUNCTIONS_URI_PREFIX}{project}/{region}/{function}"),
+            }))
+        }
+        fireemu_core_functions::manifest::BlockingAuthSelection::Disabled => {
+            Some(serde_json::Value::Null)
+        }
+        fireemu_core_functions::manifest::BlockingAuthSelection::Discovery => None,
+    }
+}
+
+fn blocking_auth_selection_accepts_target(
+    selection: &fireemu_core_functions::manifest::BlockingAuthSelection,
+    target: Option<(&str, &str)>,
+) -> bool {
+    match selection {
+        fireemu_core_functions::manifest::BlockingAuthSelection::Discovery => target.is_some(),
+        fireemu_core_functions::manifest::BlockingAuthSelection::Disabled => false,
+        fireemu_core_functions::manifest::BlockingAuthSelection::Explicit { function, region } => {
+            let Some((actual_function, actual_region)) = target else {
+                return false;
+            };
+            actual_function == function
+                && region
+                    .as_deref()
+                    .is_none_or(|expected| expected == actual_region)
+        }
+    }
 }
 
 fn blocking_auth_context_json(
@@ -2901,16 +3594,18 @@ fn blocking_auth_response_failure(
 impl BlockingAuthBridge {
     /// Builds the production bridge with Identity Platform's seven-second deadline.
     #[must_use]
+    #[allow(dead_code)]
     pub fn new(runtime: Arc<FunctionsRuntime>) -> Self {
-        Self {
+        Self::new_with_selection(
             runtime,
-            deadline: BLOCKING_AUTH_DEADLINE,
-            forward_inbound_credentials: false,
-        }
+            fireemu_core_functions::manifest::BlockingAuthSelection::Discovery,
+            false,
+        )
     }
 
     /// Builds a bridge with the explicit raw credential forwarding policy.
     #[must_use]
+    #[allow(dead_code)]
     pub fn new_with_forward_inbound_credentials(
         runtime: Arc<FunctionsRuntime>,
         forward_inbound_credentials: bool,
@@ -2918,11 +3613,93 @@ impl BlockingAuthBridge {
         if !forward_inbound_credentials {
             return Self::new(runtime);
         }
-        Self {
+        Self::try_new_with_forwarding_policy(runtime, forward_inbound_credentials, None)
+            .expect("the legacy Blocking Auth bridge forwarding configuration is valid")
+    }
+
+    /// Builds a bridge with a project-level per-token forwarding restriction.
+    ///
+    /// A configured restriction is an upper bound on the discovered function policy. Supplying a
+    /// `true` bit while the global switch is disabled is rejected instead of being silently
+    /// ignored, because that configuration would claim to enable a capability the daemon has
+    /// globally disabled.
+    #[allow(dead_code)]
+    pub fn try_new_with_forwarding_policy(
+        runtime: Arc<FunctionsRuntime>,
+        forward_inbound_credentials: bool,
+        forwarding_restrictions: Option<fireemu_core_functions::manifest::BlockingAuthTokenPolicy>,
+    ) -> Result<Self, String> {
+        Self::try_new_with_selections_and_forwarding_policy(
+            runtime,
+            fireemu_core_functions::manifest::BlockingAuthSelections::default(),
+            forward_inbound_credentials,
+            forwarding_restrictions,
+        )
+    }
+
+    /// Builds a bridge with an explicit local selection for the synchronous Auth hooks.
+    ///
+    /// The selection must be resolved against the discovered manifest before the bridge is
+    /// installed. The bridge repeats the selected target check for every invocation so a source
+    /// reload cannot silently switch Auth to another function. The underlying Functions runtime
+    /// remains responsible for runner generations and admission.
+    #[must_use]
+    #[allow(dead_code)]
+    pub fn new_with_selections(
+        runtime: Arc<FunctionsRuntime>,
+        selections: fireemu_core_functions::manifest::BlockingAuthSelections,
+        forward_inbound_credentials: bool,
+    ) -> Self {
+        Self::try_new_with_selections_and_forwarding_policy(
+            runtime,
+            selections,
+            forward_inbound_credentials,
+            None,
+        )
+        .expect("the legacy Blocking Auth bridge forwarding configuration is valid")
+    }
+
+    /// Builds a bridge with both per-event target selection and per-token forwarding limits.
+    pub fn try_new_with_selections_and_forwarding_policy(
+        runtime: Arc<FunctionsRuntime>,
+        selections: fireemu_core_functions::manifest::BlockingAuthSelections,
+        forward_inbound_credentials: bool,
+        forwarding_restrictions: Option<fireemu_core_functions::manifest::BlockingAuthTokenPolicy>,
+    ) -> Result<Self, String> {
+        validate_blocking_auth_forwarding_policy(
+            forward_inbound_credentials,
+            forwarding_restrictions,
+        )?;
+        Ok(Self {
             runtime,
             deadline: BLOCKING_AUTH_DEADLINE,
             forward_inbound_credentials,
-        }
+            settings: Arc::new(RwLock::new(BlockingAuthSettings {
+                selections,
+                forwarding_restrictions,
+            })),
+            settings_revision: AtomicU64::new(0),
+        })
+    }
+
+    /// Builds a bridge applying the same selection to both supported Auth events.
+    ///
+    /// Prefer [`Self::new_with_selections`] when `beforeCreate` and `beforeSignIn` differ.
+    #[must_use]
+    #[allow(dead_code)]
+    pub fn new_with_selection(
+        runtime: Arc<FunctionsRuntime>,
+        selection: fireemu_core_functions::manifest::BlockingAuthSelection,
+        forward_inbound_credentials: bool,
+    ) -> Self {
+        Self::new_with_selections(
+            runtime,
+            fireemu_core_functions::manifest::BlockingAuthSelections {
+                before_create: selection.clone(),
+                before_sign_in: selection,
+            },
+            forward_inbound_credentials,
+        )
     }
 
     #[cfg(test)]
@@ -2931,7 +3708,512 @@ impl BlockingAuthBridge {
             runtime,
             deadline,
             forward_inbound_credentials: false,
+            settings: Arc::new(RwLock::new(BlockingAuthSettings {
+                selections: fireemu_core_functions::manifest::BlockingAuthSelections::default(),
+                forwarding_restrictions: None,
+            })),
+            settings_revision: AtomicU64::new(0),
         }
+    }
+
+    fn selection_for(
+        &self,
+        event: fireemu_core_functions::manifest::BlockingAuthEvent,
+    ) -> fireemu_core_functions::manifest::BlockingAuthSelection {
+        // The first version of the local config exposes one trigger map for both supported
+        // events through the bridge. Keeping this accessor event-shaped leaves the call site
+        // ready for per-event selections without changing the admission boundary.
+        self.settings.read().ok().map_or(
+            fireemu_core_functions::manifest::BlockingAuthSelection::Disabled,
+            |settings| settings.selections.for_event(event).clone(),
+        )
+    }
+
+    fn selected_function(
+        selection: &fireemu_core_functions::manifest::BlockingAuthSelection,
+    ) -> Option<&str> {
+        match selection {
+            fireemu_core_functions::manifest::BlockingAuthSelection::Explicit {
+                function, ..
+            } => Some(function),
+            fireemu_core_functions::manifest::BlockingAuthSelection::Discovery
+            | fireemu_core_functions::manifest::BlockingAuthSelection::Disabled => None,
+        }
+    }
+
+    fn settings_snapshot(&self) -> Result<BlockingAuthSettings, ()> {
+        self.settings
+            .read()
+            .map(|settings| settings.clone())
+            .map_err(|_| ())
+    }
+
+    fn settings_revision(&self) -> u64 {
+        // Keep the settings publication lock while reading the revision. This makes the
+        // revision a lock-ordered observation: a reader cannot pass through this method while a
+        // settings replacement has published its new value but has not yet published its
+        // revision.
+        let _settings = self.settings.read().ok();
+        self.settings_revision.load(Ordering::SeqCst)
+    }
+
+    fn install_settings(&self, settings: BlockingAuthSettings) -> Result<(), String> {
+        let mut current = self
+            .settings
+            .write()
+            .map_err(|_| "blocking Auth settings are poisoned".to_owned())?;
+        if *current != settings {
+            *current = settings;
+            self.settings_revision.fetch_add(1, Ordering::SeqCst);
+        }
+        Ok(())
+    }
+
+    #[allow(clippy::too_many_lines)]
+    fn parse_blocking_auth_settings(
+        &self,
+        value: &serde_json::Value,
+    ) -> Result<BlockingAuthSettings, String> {
+        let object = value
+            .as_object()
+            .ok_or_else(|| "blockingFunctions must be an object".to_owned())?;
+        if object.keys().any(|key| {
+            key != "triggers"
+                && key != "forwardInboundCredentials"
+                && key != BLOCKING_DISCOVERY_EVENTS_MEMBER
+        }) {
+            return Err("blockingFunctions contains an unsupported field".to_owned());
+        }
+        let discovery = match object.get(BLOCKING_DISCOVERY_EVENTS_MEMBER) {
+            None => BTreeSet::new(),
+            Some(value) => {
+                let events = value.as_array().ok_or_else(|| {
+                    format!("blockingFunctions.{BLOCKING_DISCOVERY_EVENTS_MEMBER} must be an array")
+                })?;
+                let mut discovery = BTreeSet::new();
+                for event in events {
+                    let event = event.as_str().ok_or_else(|| {
+                        format!(
+                            "blockingFunctions.{BLOCKING_DISCOVERY_EVENTS_MEMBER} must contain event names"
+                        )
+                    })?;
+                    if !matches!(event, "beforeCreate" | "beforeSignIn") {
+                        return Err(format!(
+                            "blockingFunctions.{BLOCKING_DISCOVERY_EVENTS_MEMBER} contains unsupported event {event:?}"
+                        ));
+                    }
+                    if !discovery.insert(event.to_owned()) {
+                        return Err(format!(
+                            "blockingFunctions.{BLOCKING_DISCOVERY_EVENTS_MEMBER} contains duplicate event {event:?}"
+                        ));
+                    }
+                }
+                discovery
+            }
+        };
+        if !discovery.is_empty() && object.get("triggers").is_none() {
+            return Err(format!(
+                "blockingFunctions.{BLOCKING_DISCOVERY_EVENTS_MEMBER} requires a triggers object"
+            ));
+        }
+        let selections = match object.get("triggers") {
+            None => fireemu_core_functions::manifest::BlockingAuthSelections::default(),
+            Some(value) => {
+                let triggers = value
+                    .as_object()
+                    .ok_or_else(|| "blockingFunctions.triggers must be an object".to_owned())?;
+                if triggers
+                    .keys()
+                    .any(|key| key != "beforeCreate" && key != "beforeSignIn")
+                {
+                    return Err(
+                        "blockingFunctions.triggers contains an unsupported event".to_owned()
+                    );
+                }
+                let parse = |event: &str| -> Result<
+                    fireemu_core_functions::manifest::BlockingAuthSelection,
+                    String,
+                > {
+                    if discovery.contains(event) {
+                        if triggers.contains_key(event) {
+                            return Err(format!(
+                                "blockingFunctions.{BLOCKING_DISCOVERY_EVENTS_MEMBER} conflicts with blockingFunctions.triggers.{event}"
+                            ));
+                        }
+                        return Ok(
+                            fireemu_core_functions::manifest::BlockingAuthSelection::Discovery,
+                        );
+                    }
+                    let Some(value) = triggers.get(event) else {
+                        return Ok(
+                            fireemu_core_functions::manifest::BlockingAuthSelection::Disabled,
+                        );
+                    };
+                    if value.is_null() {
+                        return Ok(
+                            fireemu_core_functions::manifest::BlockingAuthSelection::Disabled,
+                        );
+                    }
+                    let object = value.as_object().ok_or_else(|| {
+                        format!("blockingFunctions.triggers.{event} must be an object or null")
+                    })?;
+                    if object.keys().any(|key| key != "functionUri") {
+                        return Err(format!(
+                            "blockingFunctions.triggers.{event} contains an unsupported field"
+                        ));
+                    }
+                    let uri = object
+                        .get("functionUri")
+                        .and_then(serde_json::Value::as_str)
+                        .filter(|uri| !uri.is_empty())
+                        .ok_or_else(|| {
+                            format!(
+                                "blockingFunctions.triggers.{event}.functionUri must be a non-empty string"
+                            )
+                        })?;
+                    let rest = uri.strip_prefix(BLOCKING_FUNCTIONS_URI_PREFIX).ok_or_else(|| {
+                        format!(
+                            "blockingFunctions.triggers.{event}.functionUri must reference an owned fireemu function"
+                        )
+                    })?;
+                    let mut parts = rest.split('/');
+                    let project = parts.next().filter(|part| !part.is_empty());
+                    let region = parts.next().filter(|part| !part.is_empty());
+                    let function = parts.next().filter(|part| !part.is_empty());
+                    if project != Some(self.runtime.project())
+                        || region.is_none()
+                        || function.is_none()
+                        || parts.next().is_some()
+                    {
+                        return Err(format!(
+                            "blockingFunctions.triggers.{event}.functionUri does not reference this project's owned manifest"
+                        ));
+                    }
+                    Ok(
+                        fireemu_core_functions::manifest::BlockingAuthSelection::Explicit {
+                            function: function.unwrap_or_default().to_owned(),
+                            region: Some(region.unwrap_or_default().to_owned()),
+                        },
+                    )
+                };
+                fireemu_core_functions::manifest::BlockingAuthSelections {
+                    before_create: parse("beforeCreate")?,
+                    before_sign_in: parse("beforeSignIn")?,
+                }
+            }
+        };
+        let forwarding_restrictions = match object.get("forwardInboundCredentials") {
+            None => None,
+            Some(value) => {
+                let forwarding = value.as_object().ok_or_else(|| {
+                    "blockingFunctions.forwardInboundCredentials must be an object".to_owned()
+                })?;
+                if forwarding
+                    .keys()
+                    .any(|key| key != "idToken" && key != "accessToken" && key != "refreshToken")
+                {
+                    return Err(
+                        "blockingFunctions.forwardInboundCredentials contains an unsupported field"
+                            .to_owned(),
+                    );
+                }
+                let boolean = |key: &str| -> Result<bool, String> {
+                    forwarding
+                        .get(key)
+                        .map_or(Ok(false), |value| {
+                            value.as_bool().ok_or_else(|| {
+                                format!(
+                                    "blockingFunctions.forwardInboundCredentials.{key} must be a boolean"
+                                )
+                            })
+                        })
+                };
+                Some(fireemu_core_functions::manifest::BlockingAuthTokenPolicy {
+                    id_token: boolean("idToken")?,
+                    access_token: boolean("accessToken")?,
+                    refresh_token: boolean("refreshToken")?,
+                })
+            }
+        };
+        validate_blocking_auth_forwarding_policy(
+            self.forward_inbound_credentials,
+            forwarding_restrictions,
+        )?;
+        for (event, selection) in [
+            (
+                fireemu_core_functions::manifest::BlockingAuthEvent::BeforeCreate,
+                &selections.before_create,
+            ),
+            (
+                fireemu_core_functions::manifest::BlockingAuthEvent::BeforeSignIn,
+                &selections.before_sign_in,
+            ),
+        ] {
+            self.runtime
+                .manifest()
+                .blocking_auth_target(event, selection)
+                .map_err(|error| format!("blockingFunctions: {error}"))?;
+        }
+        Ok(BlockingAuthSettings {
+            selections,
+            forwarding_restrictions,
+        })
+    }
+
+    fn blocking_auth_settings_value_with_discovery_markers(
+        &self,
+        preserve_discovery: bool,
+    ) -> Result<Option<serde_json::Value>, String> {
+        let settings = self
+            .settings
+            .read()
+            .map_err(|_| "blocking Auth settings are poisoned".to_owned())?
+            .clone();
+        let mut object = serde_json::Map::new();
+        let mut triggers = serde_json::Map::new();
+        let mut discovery = Vec::new();
+        for (event_name, event, selection) in [
+            (
+                "beforeCreate",
+                fireemu_core_functions::manifest::BlockingAuthEvent::BeforeCreate,
+                &settings.selections.before_create,
+            ),
+            (
+                "beforeSignIn",
+                fireemu_core_functions::manifest::BlockingAuthEvent::BeforeSignIn,
+                &settings.selections.before_sign_in,
+            ),
+        ] {
+            match selection {
+                fireemu_core_functions::manifest::BlockingAuthSelection::Discovery => {
+                    if preserve_discovery {
+                        discovery.push(serde_json::Value::String(event_name.to_owned()));
+                    }
+                }
+                fireemu_core_functions::manifest::BlockingAuthSelection::Disabled => {
+                    triggers.insert(event_name.to_owned(), serde_json::Value::Null);
+                }
+                fireemu_core_functions::manifest::BlockingAuthSelection::Explicit { .. } => {
+                    let spec = self
+                        .runtime
+                        .manifest()
+                        .blocking_auth_target(event, selection)
+                        .map_err(|error| format!("blockingFunctions.{event_name}: {error}"))?
+                        .ok_or_else(|| {
+                            format!(
+                                "blockingFunctions.{event_name}: explicit target is no longer available"
+                            )
+                        })?;
+                    let value = blocking_auth_selection_uri(
+                        self.runtime.project(),
+                        selection,
+                        &spec.region,
+                    )
+                    .ok_or_else(|| {
+                        format!(
+                            "blockingFunctions.{event_name}: explicit target has no exportable URI"
+                        )
+                    })?;
+                    triggers.insert(event_name.to_owned(), value);
+                }
+            }
+        }
+        if !triggers.is_empty() {
+            object.insert("triggers".to_owned(), serde_json::Value::Object(triggers));
+            if preserve_discovery && !discovery.is_empty() {
+                object.insert(
+                    BLOCKING_DISCOVERY_EVENTS_MEMBER.to_owned(),
+                    serde_json::Value::Array(discovery),
+                );
+            }
+        }
+        if let Some(policy) = settings.forwarding_restrictions {
+            object.insert(
+                "forwardInboundCredentials".to_owned(),
+                serde_json::json!({
+                    "idToken": policy.id_token,
+                    "accessToken": policy.access_token,
+                    "refreshToken": policy.refresh_token,
+                }),
+            );
+        }
+        Ok(Some(serde_json::Value::Object(object)))
+    }
+
+    fn blocking_auth_settings_value_for_export(&self) -> Result<Option<serde_json::Value>, String> {
+        self.blocking_auth_settings_value_with_discovery_markers(true)
+    }
+
+    fn blocking_auth_settings_value(&self) -> Option<serde_json::Value> {
+        self.blocking_auth_settings_value_with_discovery_markers(false)
+            .ok()
+            .flatten()
+    }
+
+    fn blocking_auth_settings_snapshot_value(&self) -> Result<Option<serde_json::Value>, String> {
+        self.blocking_auth_settings_value_for_export()
+    }
+
+    fn restore_blocking_auth_settings_snapshot_value(
+        &self,
+        value: &serde_json::Value,
+    ) -> Result<(), String> {
+        // The parser validates and applies the private per-event marker as part of the same
+        // logical document. Keeping it in the input also rejects marker/trigger conflicts rather
+        // than allowing a malformed snapshot to overwrite a concrete selection.
+        let settings = self.parse_blocking_auth_settings(value)?;
+        for (event, selection) in [
+            (
+                fireemu_core_functions::manifest::BlockingAuthEvent::BeforeCreate,
+                &settings.selections.before_create,
+            ),
+            (
+                fireemu_core_functions::manifest::BlockingAuthEvent::BeforeSignIn,
+                &settings.selections.before_sign_in,
+            ),
+        ] {
+            self.runtime
+                .manifest()
+                .blocking_auth_target(event, selection)
+                .map_err(|error| format!("blockingFunctions: {error}"))?;
+        }
+        self.install_settings(settings)
+    }
+
+    /// Validates and atomically replaces the logical project-level blocking settings.
+    pub fn replace_blocking_auth_settings(&self, value: &serde_json::Value) -> Result<(), String> {
+        let settings = self.parse_blocking_auth_settings(value)?;
+        self.install_settings(settings)
+    }
+
+    /// Applies only the fields named by an Auth project update mask. A nested update must merge
+    /// against the internal selection state so an omitted Discovery event is not rewritten as
+    /// Disabled merely because the public projection does not serialize Discovery.
+    #[allow(clippy::too_many_lines)]
+    pub fn replace_blocking_auth_settings_masked(
+        &self,
+        value: &serde_json::Value,
+        fields: &[String],
+    ) -> Result<(), String> {
+        let mut next = self
+            .settings_snapshot()
+            .map_err(|()| "blocking Auth settings are poisoned".to_owned())?;
+
+        let has_complete_replacement = fields.iter().any(|field| field == "blockingFunctions");
+        if has_complete_replacement {
+            next = self.parse_blocking_auth_settings(value)?;
+        } else {
+            for field in fields {
+                match field.as_str() {
+                    "blockingFunctions.triggers" => {
+                        let triggers = value
+                            .get("triggers")
+                            .ok_or_else(|| "blockingFunctions.triggers is missing".to_owned())?;
+                        let parsed = self.parse_blocking_auth_settings(
+                            &serde_json::json!({ "triggers": triggers }),
+                        )?;
+                        next.selections = parsed.selections;
+                    }
+                    "blockingFunctions.triggers.beforeCreate"
+                    | "blockingFunctions.triggers.beforeSignIn" => {
+                        let event = field
+                            .strip_prefix("blockingFunctions.triggers.")
+                            .ok_or_else(|| "invalid blocking trigger field".to_owned())?;
+                        let trigger = value
+                            .get("triggers")
+                            .and_then(|triggers| triggers.get(event))
+                            .ok_or_else(|| {
+                                format!("blockingFunctions.triggers.{event} is missing")
+                            })?;
+                        let mut trigger_object = serde_json::Map::new();
+                        trigger_object.insert(event.to_owned(), trigger.clone());
+                        let parsed = self.parse_blocking_auth_settings(&serde_json::json!({
+                            "triggers": trigger_object
+                        }))?;
+                        if event == "beforeCreate" {
+                            next.selections.before_create = parsed.selections.before_create;
+                        } else {
+                            next.selections.before_sign_in = parsed.selections.before_sign_in;
+                        }
+                    }
+                    "blockingFunctions.forwardInboundCredentials" => {
+                        let forwarding =
+                            value.get("forwardInboundCredentials").ok_or_else(|| {
+                                "blockingFunctions.forwardInboundCredentials is missing".to_owned()
+                            })?;
+                        let parsed = self.parse_blocking_auth_settings(
+                            &serde_json::json!({ "forwardInboundCredentials": forwarding }),
+                        )?;
+                        next.forwarding_restrictions = parsed.forwarding_restrictions;
+                    }
+                    "blockingFunctions.forwardInboundCredentials.idToken"
+                    | "blockingFunctions.forwardInboundCredentials.accessToken"
+                    | "blockingFunctions.forwardInboundCredentials.refreshToken" => {
+                        let key = field
+                            .strip_prefix("blockingFunctions.forwardInboundCredentials.")
+                            .ok_or_else(|| "invalid blocking forwarding field".to_owned())?;
+                        let forwarding = value
+                            .get("forwardInboundCredentials")
+                            .and_then(|forwarding| forwarding.get(key))
+                            .ok_or_else(|| {
+                                format!(
+                                    "blockingFunctions.forwardInboundCredentials.{key} is missing"
+                                )
+                            })?;
+                        let enabled = forwarding.as_bool().ok_or_else(|| {
+                            format!("blocking forwarding {key} must be a boolean")
+                        })?;
+                        let mut policy = next.forwarding_restrictions.unwrap_or_default();
+                        match key {
+                            "idToken" => policy.id_token = enabled,
+                            "accessToken" => policy.access_token = enabled,
+                            "refreshToken" => policy.refresh_token = enabled,
+                            _ => unreachable!("validated blocking forwarding field"),
+                        }
+                        next.forwarding_restrictions = Some(policy);
+                    }
+                    _ => {}
+                }
+            }
+        }
+
+        validate_blocking_auth_forwarding_policy(
+            self.forward_inbound_credentials,
+            next.forwarding_restrictions,
+        )?;
+        for (event, selection) in [
+            (
+                fireemu_core_functions::manifest::BlockingAuthEvent::BeforeCreate,
+                &next.selections.before_create,
+            ),
+            (
+                fireemu_core_functions::manifest::BlockingAuthEvent::BeforeSignIn,
+                &next.selections.before_sign_in,
+            ),
+        ] {
+            self.runtime
+                .manifest()
+                .blocking_auth_target(event, selection)
+                .map_err(|error| format!("blockingFunctions: {error}"))?;
+        }
+        self.install_settings(next)
+    }
+
+    #[allow(clippy::unused_self)]
+    fn require_selected_target(
+        &self,
+        selection: &fireemu_core_functions::manifest::BlockingAuthSelection,
+        target: &fireemu_adapter_functions::runtime::BlockingAuthTarget,
+    ) -> Result<(), fireemu_adapter_http::identity_toolkit::BlockingFunctionFailure> {
+        if !blocking_auth_selection_accepts_target(
+            selection,
+            Some((&target.function, &target.region)),
+        ) {
+            return Err(
+                fireemu_adapter_http::identity_toolkit::BlockingFunctionFailure::unhandled(),
+            );
+        }
+        Ok(())
     }
 
     fn invoke_for_namespace(
@@ -2950,6 +4232,7 @@ impl BlockingAuthBridge {
         })
     }
 
+    #[allow(clippy::too_many_lines, clippy::ignored_unit_patterns)]
     fn invoke_matching_namespace(
         &self,
         project: &str,
@@ -2963,14 +4246,62 @@ impl BlockingAuthBridge {
     > {
         use fireemu_adapter_http::identity_toolkit::BlockingFunctionFailure;
 
-        let admitted = self
-            .runtime
-            .try_admit_blocking_auth(event)
+        let settings = self
+            .settings_snapshot()
             .map_err(|_| BlockingFunctionFailure::unhandled())?;
-        let Some((target, _admission)) = admitted else {
+        if matches!(
+            settings.selections.for_event(event),
+            fireemu_core_functions::manifest::BlockingAuthSelection::Disabled
+        ) {
             return Ok(None);
+        }
+
+        let selection = settings.selections.for_event(event);
+        let selected_function = Self::selected_function(selection);
+        let deadline = Instant::now() + self.deadline;
+        let first_admission = self
+            .runtime
+            .try_admit_blocking_auth_for(event, selected_function);
+        let admitted = if let Ok(admitted) = first_admission {
+            admitted
+        } else {
+            let handle = tokio::runtime::Handle::try_current()
+                .map_err(|_| BlockingFunctionFailure::unhandled())?;
+            handle
+                .block_on(async {
+                    tokio::time::timeout_at(
+                        tokio::time::Instant::from_std(deadline),
+                        self.runtime
+                            .recover_blocking_auth_runner_for(event, selected_function),
+                    )
+                    .await
+                })
+                .map_err(|_| BlockingFunctionFailure::timeout())?
+                .map_err(|_| BlockingFunctionFailure::unhandled())?;
+            // A recovered runner is healthy even when the caller's admission deadline has
+            // expired. Return the local timeout before reserving a slot or recycling it.
+            blocking_auth_remaining(deadline)?;
+            self.runtime
+                .try_admit_blocking_auth_for(event, selected_function)
+                .map_err(|_| BlockingFunctionFailure::unhandled())?
         };
-        let context = narrow_blocking_auth_credentials(context, target.token_policy);
+        let Some((target, _admission)) = admitted else {
+            return if matches!(
+                selection,
+                fireemu_core_functions::manifest::BlockingAuthSelection::Explicit { .. }
+            ) {
+                Err(BlockingFunctionFailure::unhandled())
+            } else {
+                Ok(None)
+            };
+        };
+        self.require_selected_target(selection, &target)?;
+        let context = narrow_blocking_auth_credentials(
+            context,
+            self.forward_inbound_credentials,
+            target.token_policy,
+            settings.forwarding_restrictions,
+        );
         let user_json = blocking_auth_user_json(user, tenant);
         let event_context = blocking_auth_context_json(
             project,
@@ -2994,7 +4325,6 @@ impl BlockingAuthBridge {
             target.region,
             target.function
         );
-        let deadline = Instant::now() + self.deadline;
         let exchange = (|| {
             let address = target
                 .addr
@@ -3037,16 +4367,34 @@ impl BlockingAuthBridge {
 }
 
 impl fireemu_adapter_http::identity_toolkit::AuthBlockingHook for BlockingAuthBridge {
+    fn blocking_auth_revision(&self) -> u64 {
+        self.settings_revision()
+    }
+
     fn request_concurrency_limit(&self) -> usize {
         self.runtime.max_global_concurrency()
     }
 
     fn handles(&self, event: fireemu_core_functions::manifest::BlockingAuthEvent) -> bool {
-        self.runtime.handles_blocking_auth(event)
+        match self.selection_for(event) {
+            fireemu_core_functions::manifest::BlockingAuthSelection::Disabled => false,
+            fireemu_core_functions::manifest::BlockingAuthSelection::Discovery => {
+                self.runtime.handles_blocking_auth(event)
+            }
+            // Explicit configuration is a fail-closed contract. Invocation turns a missing
+            // live target into an error instead of allowing Auth to proceed.
+            fireemu_core_functions::manifest::BlockingAuthSelection::Explicit { .. } => true,
+        }
     }
 
     fn forward_inbound_credentials(&self) -> bool {
+        let Ok(settings) = self.settings_snapshot() else {
+            return false;
+        };
         self.forward_inbound_credentials
+            && settings
+                .forwarding_restrictions
+                .is_none_or(fireemu_core_functions::manifest::BlockingAuthTokenPolicy::any)
     }
 
     fn inbound_credential_policy(
@@ -3054,10 +4402,64 @@ impl fireemu_adapter_http::identity_toolkit::AuthBlockingHook for BlockingAuthBr
         event: fireemu_core_functions::manifest::BlockingAuthEvent,
     ) -> fireemu_core_functions::manifest::BlockingAuthTokenPolicy {
         if self.forward_inbound_credentials {
-            self.runtime.blocking_auth_token_policy(event)
+            let Ok(settings) = self.settings_snapshot() else {
+                return fireemu_core_functions::manifest::BlockingAuthTokenPolicy::default();
+            };
+            let selection = settings.selections.for_event(event);
+            if matches!(
+                selection,
+                fireemu_core_functions::manifest::BlockingAuthSelection::Disabled
+            ) {
+                return fireemu_core_functions::manifest::BlockingAuthTokenPolicy::default();
+            }
+            let restrictions = settings.forwarding_restrictions;
+            restrict_blocking_auth_token_policy(
+                self.runtime
+                    .blocking_auth_token_policy_for(event, Self::selected_function(selection)),
+                restrictions,
+            )
         } else {
             fireemu_core_functions::manifest::BlockingAuthTokenPolicy::default()
         }
+    }
+
+    fn blocking_auth_settings(&self) -> Option<serde_json::Value> {
+        self.blocking_auth_settings_value()
+    }
+
+    fn blocking_auth_settings_for_export(&self) -> Result<Option<serde_json::Value>, String> {
+        self.blocking_auth_settings_value_for_export()
+    }
+
+    fn blocking_auth_settings_snapshot(&self) -> Result<Option<serde_json::Value>, String> {
+        self.blocking_auth_settings_snapshot_value()
+    }
+
+    fn restore_blocking_auth_settings_snapshot(
+        &self,
+        snapshot: &serde_json::Value,
+    ) -> Result<(), String> {
+        self.restore_blocking_auth_settings_snapshot_value(snapshot)
+    }
+
+    fn blocking_auth_project(&self) -> Option<&str> {
+        Some(self.runtime.project())
+    }
+
+    fn validate_blocking_auth_settings(&self, settings: &serde_json::Value) -> Result<(), String> {
+        self.parse_blocking_auth_settings(settings).map(|_| ())
+    }
+
+    fn update_blocking_auth_settings(&self, settings: &serde_json::Value) -> Result<(), String> {
+        self.replace_blocking_auth_settings(settings)
+    }
+
+    fn update_blocking_auth_settings_masked(
+        &self,
+        settings: &serde_json::Value,
+        fields: &[String],
+    ) -> Result<(), String> {
+        self.replace_blocking_auth_settings_masked(settings, fields)
     }
 
     fn invoke(
@@ -3266,35 +4668,183 @@ fn base64_encode(data: &[u8]) -> String {
 mod tests {
     use std::collections::{BTreeMap, BTreeSet};
     #[cfg(unix)]
+    use std::ffi::OsString;
+    #[cfg(unix)]
+    use std::os::unix::ffi::OsStringExt;
+    #[cfg(unix)]
     use std::process::Command;
     use std::sync::atomic::AtomicBool;
     use std::sync::{Arc, Mutex};
     use std::time::{Duration, Instant};
 
+    #[cfg(unix)]
+    use super::inheritable_parent_environment;
     use super::path_node_candidates;
     #[cfg(unix)]
     use super::probe_node;
     use super::{
         blocking_auth_io_failure, blocking_auth_read_response, blocking_auth_response_failure,
-        blocking_auth_write_request, check_callable_app_check, function_pubsub_resources,
-        functions_source_stamp, functions_source_stamp_with_file_version, hash_source_file,
-        hash_source_stamp_entry, node_engine_matches, owned_pubsub_topic, package_node_engine,
+        blocking_auth_write_request, changed_source_stamp, check_callable_app_check,
+        function_pubsub_resources, functions_source_stamp, functions_source_stamp_with_charge,
+        functions_source_stamp_with_file_version, hash_source_file, hash_source_stamp_entry,
+        load_user_environment, node_engine_matches, owned_pubsub_topic, package_node_engine,
         parse_node_version, provision_function_pubsub_resources, select_node_installation,
-        snapshot_functions_source, source_scan_pacing_delay, stream_source_chunks,
-        update_watch_hash, validate_functions_codebase_budget, FunctionsSourceEntryBudget,
-        FunctionsSourceFileVersion, FunctionsSourceScanBudget, FunctionsSourceStamp,
-        NodeInstallation, PubSubBridge, BLOCKING_AUTH_DEADLINE, MAX_BLOCKING_AUTH_RESPONSE_BYTES,
+        snapshot_functions_source, source_scan_pacing_delay, source_scan_retry_delay,
+        stream_source_chunks, update_watch_hash, validate_functions_codebase_budget,
+        wait_for_fixed_inspector_port_release, warn_reload_once, BlockingAuthBridge,
+        FunctionsSourceByteBudget, FunctionsSourceEntryBudget, FunctionsSourceFileVersion,
+        FunctionsSourceScanBudget, FunctionsSourceSnapshot, FunctionsSourceStamp,
+        FunctionsSourceTraversal, NodeInstallation, PubSubBridge, UserEnvironment,
+        BLOCKING_AUTH_DEADLINE, MAX_BLOCKING_AUTH_RESPONSE_BYTES, MAX_FUNCTIONS_SOURCE_BYTES,
         MAX_FUNCTIONS_SOURCE_ENTRIES, MAX_FUNCTIONS_SOURCE_WATCH_BYTES_PER_SECOND,
         MAX_FUNCTIONS_SOURCE_WATCH_FILES_PER_SECOND, SOURCE_IO_BUFFER_BYTES,
     };
     #[cfg(not(windows))]
-    use super::{push_node_candidate, run_node_probe};
+    use super::{
+        push_node_candidate, run_node_probe, run_node_selection_blocking, NodeProbeCache,
+        NodeProbeKey,
+    };
+    #[cfg(unix)]
+    use super::{
+        schedule_orphan_function_snapshot_sweep, snapshot_directory_name, snapshot_owned_directory,
+        snapshot_owner_pid, sweep_orphan_function_snapshots,
+    };
     use fireemu_adapter_functions::manifest_json::parse_manifest;
     use fireemu_core_pubsub::{
         Filter, PubSubState, PushConfig, SubscriptionConfig, SubscriptionName, TopicName,
     };
     use fireemu_core_session::clock::VirtualClock;
     use serde_json::json;
+
+    #[test]
+    fn runner_debug_features_emulator_trusted_enables_cors_and_verified_token_decoding() {
+        let features =
+            super::runner_debug_features(crate::config::CompatibilityProfile::Emulator, true)
+                .expect("the emulator runtime has debug features");
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(features).unwrap(),
+            json!({"enableCors": true, "skipTokenVerification": true})
+        );
+    }
+
+    #[test]
+    fn runner_debug_features_emulator_untrusted_enables_cors_without_token_skipping() {
+        let features =
+            super::runner_debug_features(crate::config::CompatibilityProfile::Emulator, false)
+                .expect("the emulator CORS feature does not require callable trust");
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(features).unwrap(),
+            json!({"enableCors": true})
+        );
+    }
+
+    #[test]
+    fn runner_debug_features_strict_trusted_only_enables_verified_token_decoding() {
+        let features =
+            super::runner_debug_features(crate::config::CompatibilityProfile::Strict, true)
+                .expect("trusted callables use daemon-verified credentials");
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(features).unwrap(),
+            json!({"skipTokenVerification": true})
+        );
+    }
+
+    #[test]
+    fn runner_debug_features_strict_untrusted_does_not_enable_debug_mode() {
+        assert_eq!(
+            super::runner_debug_features(crate::config::CompatibilityProfile::Strict, false),
+            None
+        );
+    }
+
+    #[tokio::test]
+    async fn fixed_inspector_port_wait_reports_a_port_still_in_use() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let error = wait_for_fixed_inspector_port_release(port, Duration::from_millis(50))
+            .await
+            .unwrap_err();
+        assert!(error.contains(&format!("fixed inspector port {port}")));
+        assert!(error.contains("did not become available"));
+
+        drop(listener);
+        wait_for_fixed_inspector_port_release(port, Duration::from_millis(50))
+            .await
+            .unwrap();
+    }
+
+    #[test]
+    fn user_environment_debug_redacts_all_loaded_values() {
+        let environment = UserEnvironment {
+            values: vec![("TOKEN".to_owned(), "dotenv-sentinel".to_owned())],
+            secrets: vec![("SECRET".to_owned(), "secret-sentinel".to_owned())],
+            runtime_config: Some("runtime-config-sentinel".to_owned()),
+            files: vec![".env".to_owned()],
+        };
+        let debug = format!("{environment:?}");
+        for value in [
+            "dotenv-sentinel",
+            "secret-sentinel",
+            "runtime-config-sentinel",
+        ] {
+            assert!(!debug.contains(value), "{debug}");
+        }
+        assert!(debug.contains("[redacted]"));
+    }
+
+    #[test]
+    fn invalid_environment_file_diagnostics_do_not_expose_values() {
+        let root = std::env::temp_dir().join(format!(
+            "fireemu-redacted-environment-{}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        for file in [".env", ".secret.local"] {
+            std::fs::write(root.join(file), "invalid-line-sentinel\n").unwrap();
+            let error = load_user_environment(&root, "demo", None).unwrap_err();
+            assert!(error.contains(file), "{error}");
+            assert!(!error.contains("invalid-line-sentinel"), "{error}");
+            std::fs::remove_file(root.join(file)).unwrap();
+        }
+        std::fs::remove_dir(&root).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn inheritable_parent_environment_skips_non_utf8_values() {
+        if std::env::var_os("FIREEMU_TEST_NON_UTF8_CHILD").is_some() {
+            let inherited = inheritable_parent_environment();
+            assert!(inherited
+                .iter()
+                .any(|(name, value)| { name == "VOLTA_FN_UTF8_PROBE" && value == "kept" }));
+            assert!(!inherited
+                .iter()
+                .any(|(name, _)| name == "VOLTA_FN_NON_UTF8_PROBE"));
+            println!("non-UTF-8 Functions environment probe ran");
+            return;
+        }
+
+        let output = Command::new(std::env::current_exe().unwrap())
+            .arg("--exact")
+            .arg("functions::tests::inheritable_parent_environment_skips_non_utf8_values")
+            .arg("--nocapture")
+            .env("FIREEMU_TEST_NON_UTF8_CHILD", "1")
+            .env("VOLTA_FN_UTF8_PROBE", "kept")
+            .env("VOLTA_FN_NON_UTF8_PROBE", OsString::from_vec(vec![0xff]))
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(
+            String::from_utf8_lossy(&output.stdout)
+                .contains("non-UTF-8 Functions environment probe ran"),
+            "child test did not run: {}",
+            String::from_utf8_lossy(&output.stdout)
+        );
+    }
 
     #[test]
     fn source_streaming_bounds_each_read_and_charges_bytes_before_a_late_error() {
@@ -3342,6 +4892,404 @@ mod tests {
         assert!(error.contains("100000 entries"), "{error}");
     }
 
+    #[test]
+    fn oversized_sparse_source_is_rejected_before_reading_its_contents() {
+        let root = std::env::temp_dir().join(format!(
+            "fireemu-functions-byte-budget-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir(&root).unwrap();
+        std::fs::File::create(root.join("oversized.bin"))
+            .unwrap()
+            .set_len(300 * 1024 * 1024)
+            .unwrap();
+        let mut charged = 0_u64;
+        let error = functions_source_stamp_with_charge(
+            &root,
+            &[],
+            &mut |_, bytes| {
+                charged = charged.saturating_add(bytes);
+                if charged >= u64::try_from(SOURCE_IO_BUFFER_BYTES).unwrap() {
+                    return Err("test stopped an unbounded read".to_owned());
+                }
+                Ok(())
+            },
+            &AtomicBool::new(false),
+        )
+        .unwrap_err();
+
+        assert!(error.contains("256 MiB byte budget"), "{error}");
+        assert!(error.contains("oversized.bin"), "{error}");
+        assert_eq!(charged, 0, "the oversized file was read before rejection");
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn source_byte_budget_counts_the_whole_tree_and_names_the_largest_file() {
+        let mut budget = FunctionsSourceByteBudget::default();
+        budget
+            .claim(std::path::Path::new("large.bin"), 200 * 1024 * 1024)
+            .unwrap();
+        budget
+            .claim(std::path::Path::new("small.bin"), 56 * 1024 * 1024)
+            .unwrap();
+
+        let error = budget
+            .claim(std::path::Path::new("overflow.bin"), 1)
+            .unwrap_err();
+
+        assert!(error.contains("256 MiB byte budget"), "{error}");
+        assert!(error.contains("large.bin"), "{error}");
+        assert!(error.contains("overflow.bin"), "{error}");
+    }
+
+    #[test]
+    fn reload_warning_is_emitted_once_until_a_successful_scan() {
+        let mut warned = false;
+        assert!(warn_reload_once(
+            &mut warned,
+            "alpha",
+            "scan",
+            "256 MiB exceeded at 300 MiB"
+        ));
+        assert!(!warn_reload_once(
+            &mut warned,
+            "alpha",
+            "scan",
+            "256 MiB exceeded at 301 MiB"
+        ));
+        warned = false;
+        assert!(warn_reload_once(
+            &mut warned,
+            "alpha",
+            "scan",
+            "256 MiB exceeded again"
+        ));
+    }
+
+    #[test]
+    fn source_scan_waits_before_retrying_a_budget_exceeded_tree() {
+        let mut budget = FunctionsSourceByteBudget::default();
+        let reason = budget
+            .claim(
+                std::path::Path::new("too-large.bin"),
+                MAX_FUNCTIONS_SOURCE_BYTES + 1,
+            )
+            .unwrap_err();
+        assert_eq!(
+            source_scan_retry_delay(Duration::from_millis(750), Some(&reason)),
+            Duration::from_secs(30)
+        );
+        assert_eq!(
+            source_scan_retry_delay(Duration::from_millis(750), Some("permission denied")),
+            Duration::from_millis(1500)
+        );
+        assert_eq!(
+            source_scan_retry_delay(Duration::from_secs(8), None),
+            Duration::from_millis(750)
+        );
+    }
+
+    #[tokio::test]
+    async fn first_successful_scan_after_startup_failure_sets_a_baseline() {
+        let root =
+            std::env::temp_dir().join(format!("fireemu-scan-baseline-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(root.join("index.js"), "exports.ok = 1;").unwrap();
+        let codebase = crate::config::FunctionsCodebase {
+            codebase: "default".to_owned(),
+            source: root.display().to_string(),
+            runtime: None,
+            ignore: Vec::new(),
+        };
+        let budget = FunctionsSourceScanBudget::new();
+        let mut observed = None;
+        let mut last_error = true;
+        let mut retry_delay = Duration::from_secs(3);
+
+        assert!(changed_source_stamp(
+            &root,
+            &codebase,
+            &budget,
+            &mut observed,
+            &mut last_error,
+            &mut retry_delay
+        )
+        .await
+        .is_none());
+        assert!(
+            observed.is_some(),
+            "the first successful scan is the baseline"
+        );
+        assert!(!last_error);
+        assert_eq!(retry_delay, Duration::from_millis(750));
+
+        std::fs::write(root.join("index.js"), "exports.ok = 2;").unwrap();
+        assert!(changed_source_stamp(
+            &root,
+            &codebase,
+            &budget,
+            &mut observed,
+            &mut last_error,
+            &mut retry_delay
+        )
+        .await
+        .is_some());
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[tokio::test]
+    async fn repeated_source_scan_errors_back_off_and_release_the_scan_permit() {
+        let root = std::env::temp_dir().join(format!("fireemu-scan-retry-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let codebase = crate::config::FunctionsCodebase {
+            codebase: "default".to_owned(),
+            source: root.display().to_string(),
+            runtime: None,
+            ignore: Vec::new(),
+        };
+        let budget = FunctionsSourceScanBudget::new();
+        let mut observed = None;
+        let mut last_error = false;
+        let mut retry_delay = Duration::from_millis(750);
+
+        assert!(changed_source_stamp(
+            &root,
+            &codebase,
+            &budget,
+            &mut observed,
+            &mut last_error,
+            &mut retry_delay
+        )
+        .await
+        .is_none());
+        assert!(retry_delay > Duration::from_millis(750));
+        assert_eq!(budget.gate.available_permits(), 1);
+        let first_delay = retry_delay;
+        assert!(changed_source_stamp(
+            &root,
+            &codebase,
+            &budget,
+            &mut observed,
+            &mut last_error,
+            &mut retry_delay
+        )
+        .await
+        .is_none());
+        assert!(retry_delay > first_delay);
+        assert_eq!(budget.gate.available_permits(), 1);
+        for _ in 0..8 {
+            assert!(changed_source_stamp(
+                &root,
+                &codebase,
+                &budget,
+                &mut observed,
+                &mut last_error,
+                &mut retry_delay
+            )
+            .await
+            .is_none());
+        }
+        assert_eq!(retry_delay, Duration::from_secs(8));
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(root.join("index.js"), "exports.ok = 1;").unwrap();
+        assert!(changed_source_stamp(
+            &root,
+            &codebase,
+            &budget,
+            &mut observed,
+            &mut last_error,
+            &mut retry_delay
+        )
+        .await
+        .is_none());
+        assert!(observed.is_some());
+        assert!(!last_error);
+        assert_eq!(retry_delay, Duration::from_millis(750));
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn oversized_snapshot_input_is_rejected_before_creating_its_copy() {
+        let root = std::env::temp_dir().join(format!(
+            "fireemu-functions-snapshot-byte-budget-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir(&root).unwrap();
+        let source = root.join("large.bin");
+        let target = root.join("copy.bin");
+        std::fs::File::create(&source)
+            .unwrap()
+            .set_len(300 * 1024 * 1024)
+            .unwrap();
+        let mut charged = 0_u64;
+        let mut charge = |_: u64, bytes: u64| {
+            charged = charged.saturating_add(bytes);
+            Ok(())
+        };
+        let cancelled = AtomicBool::new(false);
+        let mut traversal = FunctionsSourceTraversal {
+            root: &root,
+            ignores: &[],
+            entry_budget: FunctionsSourceEntryBudget::default(),
+            byte_budget: FunctionsSourceByteBudget::default(),
+            charge: &mut charge,
+            cancelled: &cancelled,
+        };
+
+        let error = traversal.copy_file(&source, &target).unwrap_err();
+
+        assert!(error.contains("256 MiB byte budget"), "{error}");
+        assert!(!target.exists());
+        assert_eq!(charged, 0);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn orphan_sweep_removes_only_owned_dead_pid_snapshot_directories() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let root = std::env::temp_dir().join(format!(
+            "fireemu-orphan-sweep-fixture-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir(&root).unwrap();
+        let dead = root.join(snapshot_directory_name(u32::try_from(i32::MAX).unwrap(), 0));
+        let live = root.join(snapshot_directory_name(std::process::id(), 1));
+        let parent_pid = rustix::process::getppid().unwrap();
+        let other_live = root.join(snapshot_directory_name(
+            u32::try_from(parent_pid.as_raw_pid()).unwrap(),
+            5,
+        ));
+        let malformed = root.join(format!("fireemu-functions-{}-bad", i32::MAX));
+        let permissive = root.join(snapshot_directory_name(u32::try_from(i32::MAX).unwrap(), 3));
+        let outside = root.join("outside");
+        for path in [&dead, &live, &other_live, &malformed, &permissive, &outside] {
+            std::fs::create_dir(path).unwrap();
+        }
+        for path in [&dead, &live, &other_live, &malformed] {
+            std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o700)).unwrap();
+        }
+        std::fs::set_permissions(&permissive, std::fs::Permissions::from_mode(0o755)).unwrap();
+        std::fs::write(outside.join("sentinel"), "keep").unwrap();
+        std::os::unix::fs::symlink(&outside, dead.join("node_modules")).unwrap();
+        let direct_link = root.join(snapshot_directory_name(u32::try_from(i32::MAX).unwrap(), 2));
+        std::os::unix::fs::symlink(&outside, &direct_link).unwrap();
+        let regular = root.join(snapshot_directory_name(u32::try_from(i32::MAX).unwrap(), 4));
+        std::fs::write(&regular, "keep").unwrap();
+
+        let removed = sweep_orphan_function_snapshots(&root).unwrap();
+
+        assert_eq!(removed, 1);
+        assert!(!dead.exists());
+        for path in [
+            &live,
+            &other_live,
+            &malformed,
+            &permissive,
+            &direct_link,
+            &regular,
+        ] {
+            assert!(
+                path.symlink_metadata().is_ok(),
+                "{} was removed",
+                path.display()
+            );
+        }
+        let owner = rustix::process::geteuid().as_raw();
+        let metadata = std::fs::symlink_metadata(&live).unwrap();
+        assert!(snapshot_owned_directory(&metadata, owner));
+        assert!(!snapshot_owned_directory(&metadata, owner.wrapping_add(1)));
+        assert_eq!(
+            std::fs::read_to_string(outside.join("sentinel")).unwrap(),
+            "keep"
+        );
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn orphan_snapshot_names_require_exact_decimal_pid_and_sequence() {
+        assert!(snapshot_owner_pid(&snapshot_directory_name(1, 0)).is_some());
+        for invalid in [
+            "fireemu-functions-0-0",
+            "fireemu-functions-01-0",
+            "fireemu-functions-1-00",
+            "fireemu-functions-1--1",
+            "fireemu-functions-1-0-extra",
+            "fireemu-functions-2147483648-0",
+            "fireemu-functions-1-18446744073709551616",
+            "fireemu-functions-cancelled-snapshot-source-1-0",
+        ] {
+            assert!(snapshot_owner_pid(invalid).is_none(), "{invalid}");
+        }
+        #[cfg(target_os = "linux")]
+        {
+            let other_namespace = format!(
+                "fireemu-functions-1-0-n{}",
+                super::pid_namespace_inode().unwrap().wrapping_add(1)
+            );
+            assert!(snapshot_owner_pid(&other_namespace).is_none());
+            assert!(snapshot_owner_pid("fireemu-functions-1-0").is_none());
+        }
+    }
+
+    #[cfg(unix)]
+    #[tokio::test(flavor = "current_thread")]
+    async fn startup_schedules_orphan_snapshot_cleanup_off_the_runtime_worker() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let root = std::env::temp_dir().join(format!(
+            "fireemu-startup-sweep-fixture-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir(&root).unwrap();
+        let orphan = root.join(snapshot_directory_name(u32::try_from(i32::MAX).unwrap(), 0));
+        std::fs::create_dir(&orphan).unwrap();
+        std::fs::set_permissions(&orphan, std::fs::Permissions::from_mode(0o700)).unwrap();
+
+        schedule_orphan_function_snapshot_sweep(root.clone())
+            .await
+            .unwrap();
+
+        assert!(!orphan.exists());
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn oversized_codebase_does_not_hold_the_shared_scan_gate() {
+        let root = std::env::temp_dir().join(format!(
+            "fireemu-functions-scan-gate-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        let oversized = root.join("oversized");
+        let small = root.join("small");
+        std::fs::create_dir_all(&oversized).unwrap();
+        std::fs::create_dir(&small).unwrap();
+        std::fs::File::create(oversized.join("large.bin"))
+            .unwrap()
+            .set_len(300 * 1024 * 1024)
+            .unwrap();
+        std::fs::write(small.join("index.js"), "module.exports = 1;").unwrap();
+
+        let budget = FunctionsSourceScanBudget::new();
+        let (large_result, small_result) = tokio::time::timeout(Duration::from_secs(2), async {
+            tokio::join!(budget.scan(&oversized, &[]), budget.scan(&small, &[]))
+        })
+        .await
+        .expect("an oversized codebase held the shared scan gate");
+        assert!(large_result.unwrap_err().contains("256 MiB byte budget"));
+        assert_eq!(small_result.unwrap().tracked_files, 1);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
     #[tokio::test]
     async fn cancelling_a_budgeted_snapshot_removes_the_partial_copy() {
         static NEXT_FIXTURE: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
@@ -3355,7 +5303,7 @@ mod tests {
         let marker = format!("cancel-{fixture}.js");
         std::fs::File::create(root.join(&marker))
             .unwrap()
-            .set_len(512 * 1024 * 1024)
+            .set_len(128 * 1024 * 1024)
             .unwrap();
         let prefix = format!("fireemu-functions-{}-", std::process::id());
         let snapshots = || {
@@ -3399,7 +5347,7 @@ mod tests {
         .await;
         assert!(
             cleaned.is_ok(),
-            "cancelling a paced 512 MiB snapshot did not stop and clean up within one second"
+            "cancelling a paced 128 MiB snapshot did not stop and clean up within one second"
         );
         assert!(
             matches!(ready, Ok(true)),
@@ -3627,11 +5575,13 @@ mod tests {
         for bits in 0_u8..8 {
             let narrowed = super::narrow_blocking_auth_credentials(
                 &context,
+                true,
                 BlockingAuthTokenPolicy {
                     access_token: bits & 1 != 0,
                     id_token: bits & 2 != 0,
                     refresh_token: bits & 4 != 0,
                 },
+                None,
             );
             let credential = narrowed.credential.unwrap();
             assert_eq!(credential.access_token.is_some(), bits & 1 != 0);
@@ -3639,6 +5589,573 @@ mod tests {
             assert_eq!(credential.refresh_token.is_some(), bits & 4 != 0);
             assert_eq!(credential.claims, Some(json!({"sub": "provider-user"})));
         }
+
+        let mut absent = context.clone();
+        absent.credential.as_mut().unwrap().id_token = None;
+        let narrowed = super::narrow_blocking_auth_credentials(
+            &absent,
+            true,
+            BlockingAuthTokenPolicy::ALL,
+            None,
+        );
+        let credential = narrowed.credential.unwrap();
+        assert!(credential.access_token.is_some());
+        assert!(credential.id_token.is_none());
+        assert!(credential.refresh_token.is_some());
+
+        let narrowed = super::narrow_blocking_auth_credentials(
+            &context,
+            false,
+            BlockingAuthTokenPolicy::ALL,
+            None,
+        );
+        let credential = narrowed.credential.unwrap();
+        assert!(credential.access_token.is_none());
+        assert!(credential.id_token.is_none());
+        assert!(credential.refresh_token.is_none());
+    }
+
+    #[test]
+    fn blocking_auth_forwarding_restrictions_intersect_manifest_and_global_policy() {
+        use fireemu_core_functions::manifest::{
+            BlockingAuthCredentialPresence, BlockingAuthTokenPolicy,
+        };
+
+        let manifest_policy = BlockingAuthTokenPolicy::ALL;
+        let configured = BlockingAuthTokenPolicy {
+            access_token: false,
+            id_token: true,
+            refresh_token: true,
+        };
+        let available = BlockingAuthCredentialPresence {
+            access_token: true,
+            id_token: false,
+            refresh_token: true,
+        };
+        assert_eq!(
+            super::effective_blocking_auth_token_policy(
+                manifest_policy,
+                true,
+                Some(configured),
+                available,
+            ),
+            BlockingAuthTokenPolicy {
+                access_token: false,
+                id_token: false,
+                refresh_token: true,
+            }
+        );
+
+        let global_disabled = super::validate_blocking_auth_forwarding_policy(
+            false,
+            Some(BlockingAuthTokenPolicy {
+                access_token: true,
+                id_token: false,
+                refresh_token: false,
+            }),
+        )
+        .unwrap_err();
+        assert!(global_disabled.contains("global auth.forwardInboundCredentials"));
+
+        super::validate_blocking_auth_forwarding_policy(
+            false,
+            Some(BlockingAuthTokenPolicy::default()),
+        )
+        .expect("an all-false project restriction cannot widen a disabled global switch");
+    }
+
+    #[test]
+    fn blocking_auth_selection_rejects_missing_or_changed_live_target() {
+        use fireemu_core_functions::manifest::BlockingAuthSelection;
+
+        let selection = BlockingAuthSelection::Explicit {
+            function: "guardSignIn".to_owned(),
+            region: Some("europe-west1".to_owned()),
+        };
+        assert!(super::blocking_auth_selection_accepts_target(
+            &selection,
+            Some(("guardSignIn", "europe-west1"))
+        ));
+        assert!(!super::blocking_auth_selection_accepts_target(
+            &selection, None
+        ));
+        assert!(!super::blocking_auth_selection_accepts_target(
+            &selection,
+            Some(("otherGuard", "europe-west1"))
+        ));
+        assert!(!super::blocking_auth_selection_accepts_target(
+            &selection,
+            Some(("guardSignIn", "us-central1"))
+        ));
+        assert!(!super::blocking_auth_selection_accepts_target(
+            &BlockingAuthSelection::Disabled,
+            Some(("guardSignIn", "europe-west1"))
+        ));
+    }
+
+    async fn runtime_with_blocking_auth_policy_order(
+        order: &[(&str, bool, bool)],
+    ) -> Arc<fireemu_adapter_functions::runtime::FunctionsRuntime> {
+        runtime_with_blocking_auth_policy_order_and_env(order, Vec::new()).await
+    }
+
+    async fn runtime_with_blocking_auth_policy_order_and_env(
+        order: &[(&str, bool, bool)],
+        env: Vec<(String, String)>,
+    ) -> Arc<fireemu_adapter_functions::runtime::FunctionsRuntime> {
+        use fireemu_adapter_functions::runner::{Runner, SpawnSpec};
+        use fireemu_adapter_functions::runtime::{FunctionsConfig, FunctionsRuntime};
+        use fireemu_core_functions::manifest::{BlockingAuthEvent, Trigger};
+        use fireemu_core_types::ids::SessionId;
+        use fireemu_core_types::time::LogicalInstant;
+
+        let script = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../fireemu-adapter-functions/tests/fake_runner.py");
+        let spec = SpawnSpec {
+            command: vec!["python3".to_owned(), script.display().to_string()],
+            cwd: None,
+            env,
+            hello_timeout: Duration::from_secs(60),
+        };
+        let runner = Runner::spawn_spec(&spec).await.unwrap();
+        let mut manifest = parse_manifest(runner.hello().manifest.as_ref().unwrap()).unwrap();
+        let template = manifest.get("echo").unwrap().clone();
+        for (name, access_token, refresh_token) in order {
+            let mut function = template.clone();
+            function.name = (*name).to_owned();
+            function.entry_point = (*name).to_owned();
+            function.trigger = Trigger::BlockingAuth {
+                event: BlockingAuthEvent::BeforeCreate,
+                token_policy: fireemu_core_functions::manifest::BlockingAuthTokenPolicy {
+                    access_token: *access_token,
+                    refresh_token: *refresh_token,
+                    ..Default::default()
+                },
+            };
+            manifest.functions.push(function);
+        }
+        FunctionsRuntime::new(
+            manifest,
+            FunctionsConfig {
+                project: "demo-app".to_owned(),
+                default_bucket: "demo-app.appspot.com".to_owned(),
+                location: "nam5".to_owned(),
+                session: SessionId::new(7),
+                max_running: 4,
+                debug_mode: false,
+                retry_attempts: 1,
+                max_catch_up_runs: 1,
+                runner_secret: "test-secret".to_owned(),
+                overlap: fireemu_adapter_functions::runtime::OverlapPolicy::Allow,
+                catch_up: fireemu_adapter_functions::runtime::CatchUpPolicy::All,
+                functions_host: None,
+            },
+            Arc::new(Mutex::new(VirtualClock::new(
+                LogicalInstant::from_unix_seconds(1_788_004_860),
+            ))),
+            Arc::new(runner),
+            Some(spec),
+        )
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn explicit_blocking_auth_prefilter_uses_the_selected_function_policy() {
+        use fireemu_adapter_http::identity_toolkit::AuthBlockingHook;
+        use fireemu_core_functions::manifest::{
+            BlockingAuthEvent, BlockingAuthSelection, BlockingAuthSelections,
+        };
+
+        let runtime = runtime_with_blocking_auth_policy_order(&[
+            ("guardA", false, false),
+            ("guardB", true, true),
+        ])
+        .await;
+        let bridge = BlockingAuthBridge::new_with_selections(
+            runtime.clone(),
+            BlockingAuthSelections {
+                before_create: BlockingAuthSelection::Explicit {
+                    function: "guardB".to_owned(),
+                    region: Some("us-central1".to_owned()),
+                },
+                before_sign_in: BlockingAuthSelection::Disabled,
+            },
+            true,
+        );
+        assert!(bridge.forward_inbound_credentials());
+        assert!(
+            bridge
+                .inbound_credential_policy(BlockingAuthEvent::BeforeCreate)
+                .access_token
+        );
+        assert!(
+            bridge
+                .inbound_credential_policy(BlockingAuthEvent::BeforeCreate)
+                .refresh_token
+        );
+        let (target, admission) = runtime
+            .try_admit_blocking_auth_for(BlockingAuthEvent::BeforeCreate, Some("guardB"))
+            .unwrap()
+            .unwrap();
+        assert_eq!(target.function, "guardB");
+        assert!(target.token_policy.access_token);
+        assert!(target.token_policy.refresh_token);
+        drop(admission);
+
+        let global_disabled = BlockingAuthBridge::new_with_selections(
+            runtime.clone(),
+            bridge.settings_snapshot().unwrap().selections,
+            false,
+        );
+        let global_disabled_policy =
+            global_disabled.inbound_credential_policy(BlockingAuthEvent::BeforeCreate);
+        assert!(!global_disabled_policy.access_token);
+        assert!(!global_disabled_policy.refresh_token);
+
+        let restricted = BlockingAuthBridge::try_new_with_selections_and_forwarding_policy(
+            runtime.clone(),
+            bridge.settings_snapshot().unwrap().selections,
+            true,
+            Some(fireemu_core_functions::manifest::BlockingAuthTokenPolicy {
+                access_token: false,
+                id_token: false,
+                refresh_token: true,
+            }),
+        )
+        .unwrap();
+        let restricted_policy =
+            restricted.inbound_credential_policy(BlockingAuthEvent::BeforeCreate);
+        assert!(!restricted_policy.access_token);
+        assert!(restricted_policy.refresh_token);
+        runtime.shutdown().await;
+
+        let runtime = runtime_with_blocking_auth_policy_order(&[
+            ("guardB", true, true),
+            ("guardA", false, false),
+        ])
+        .await;
+        let bridge = BlockingAuthBridge::new_with_selections(
+            runtime.clone(),
+            BlockingAuthSelections {
+                before_create: BlockingAuthSelection::Explicit {
+                    function: "guardB".to_owned(),
+                    region: Some("us-central1".to_owned()),
+                },
+                before_sign_in: BlockingAuthSelection::Disabled,
+            },
+            true,
+        );
+        assert!(
+            bridge
+                .inbound_credential_policy(BlockingAuthEvent::BeforeCreate)
+                .access_token
+        );
+        assert!(
+            bridge
+                .inbound_credential_policy(BlockingAuthEvent::BeforeCreate)
+                .refresh_token
+        );
+        runtime.shutdown().await;
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn blocking_auth_prefilter_keeps_discovery_and_disabled_policies() {
+        use fireemu_adapter_http::identity_toolkit::AuthBlockingHook;
+        use fireemu_core_functions::manifest::{
+            BlockingAuthEvent, BlockingAuthSelection, BlockingAuthSelections,
+        };
+
+        let runtime = runtime_with_blocking_auth_policy_order(&[
+            ("guardA", false, false),
+            ("guardB", true, true),
+        ])
+        .await;
+        let bridge = BlockingAuthBridge::new_with_selections(
+            runtime.clone(),
+            BlockingAuthSelections {
+                before_create: BlockingAuthSelection::Explicit {
+                    function: "guardA".to_owned(),
+                    region: Some("us-central1".to_owned()),
+                },
+                before_sign_in: BlockingAuthSelection::Disabled,
+            },
+            true,
+        );
+        assert!(
+            !bridge
+                .inbound_credential_policy(BlockingAuthEvent::BeforeCreate)
+                .access_token
+        );
+        assert!(
+            !bridge
+                .inbound_credential_policy(BlockingAuthEvent::BeforeCreate)
+                .refresh_token
+        );
+        runtime.shutdown().await;
+
+        let runtime = runtime_with_blocking_auth_policy_order(&[
+            ("guardA", false, false),
+            ("guardB", true, true),
+        ])
+        .await;
+        let bridge = BlockingAuthBridge::new_with_selections(
+            runtime.clone(),
+            BlockingAuthSelections {
+                before_create: BlockingAuthSelection::Discovery,
+                before_sign_in: BlockingAuthSelection::Disabled,
+            },
+            true,
+        );
+        assert!(
+            !bridge
+                .inbound_credential_policy(BlockingAuthEvent::BeforeCreate)
+                .access_token
+        );
+        assert!(
+            !bridge
+                .inbound_credential_policy(BlockingAuthEvent::BeforeCreate)
+                .refresh_token
+        );
+        runtime.shutdown().await;
+
+        let runtime = runtime_with_blocking_auth_policy_order(&[
+            ("guardA", false, false),
+            ("guardB", true, true),
+        ])
+        .await;
+        let bridge = BlockingAuthBridge::new_with_selections(
+            runtime.clone(),
+            BlockingAuthSelections {
+                before_create: BlockingAuthSelection::Disabled,
+                before_sign_in: BlockingAuthSelection::Disabled,
+            },
+            true,
+        );
+        assert!(
+            !bridge
+                .inbound_credential_policy(BlockingAuthEvent::BeforeCreate)
+                .access_token
+        );
+        assert!(
+            !bridge
+                .inbound_credential_policy(BlockingAuthEvent::BeforeCreate)
+                .refresh_token
+        );
+        runtime.shutdown().await;
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn blocking_auth_settings_revision_changes_only_after_successful_updates() {
+        let runtime = runtime_with_blocking_auth_policy_order(&[("guardA", true, false)]).await;
+        let bridge = BlockingAuthBridge::new_with_selections(
+            runtime.clone(),
+            fireemu_core_functions::manifest::BlockingAuthSelections::default(),
+            true,
+        );
+        let explicit = json!({
+            "triggers": {
+                "beforeCreate": {
+                    "functionUri": "fireemu://functions/demo-app/us-central1/guardA"
+                }
+            }
+        });
+
+        assert_eq!(bridge.settings_revision(), 0);
+        bridge
+            .replace_blocking_auth_settings(&explicit)
+            .expect("valid replacement");
+        assert_eq!(bridge.settings_revision(), 1);
+        bridge
+            .replace_blocking_auth_settings(&explicit)
+            .expect("replacing with the same settings is a no-op");
+        assert_eq!(bridge.settings_revision(), 1);
+
+        let error = bridge
+            .replace_blocking_auth_settings(&json!({"triggers": []}))
+            .expect_err("invalid replacement");
+        assert!(error.contains("triggers must be an object"), "{error}");
+        assert_eq!(bridge.settings_revision(), 1);
+
+        bridge
+            .replace_blocking_auth_settings_masked(
+                &json!({"triggers": {"beforeCreate": null}}),
+                &["blockingFunctions.triggers.beforeCreate".to_owned()],
+            )
+            .expect("valid masked replacement");
+        assert_eq!(bridge.settings_revision(), 2);
+
+        bridge
+            .restore_blocking_auth_settings_snapshot_value(&explicit)
+            .expect("valid snapshot restore");
+        assert_eq!(bridge.settings_revision(), 3);
+        runtime.shutdown().await;
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn blocking_auth_revision_waits_for_settings_publication_lock() {
+        let runtime = runtime_with_blocking_auth_policy_order(&[("guardA", true, false)]).await;
+        let bridge = Arc::new(BlockingAuthBridge::new_with_selections(
+            runtime.clone(),
+            fireemu_core_functions::manifest::BlockingAuthSelections::default(),
+            true,
+        ));
+        let settings_guard = bridge.settings.write().expect("settings lock");
+        let (sender, receiver) = std::sync::mpsc::channel();
+        let reader = bridge.clone();
+        let thread = std::thread::spawn(move || {
+            sender
+                .send(reader.settings_revision())
+                .expect("revision result");
+        });
+        assert!(receiver.recv_timeout(Duration::from_millis(50)).is_err());
+        drop(settings_guard);
+        assert_eq!(receiver.recv().expect("revision result"), 0);
+        thread.join().expect("revision reader");
+        runtime.shutdown().await;
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn explicit_blocking_export_fails_when_its_manifest_target_disappears() {
+        use fireemu_adapter_functions::runner::{Runner, SpawnSpec};
+        use fireemu_adapter_functions::runtime::{FunctionsConfig, FunctionsRuntime};
+        use fireemu_core_functions::manifest::{BlockingAuthSelection, BlockingAuthSelections};
+        use fireemu_core_types::ids::SessionId;
+        use fireemu_core_types::time::LogicalInstant;
+
+        let script = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../fireemu-adapter-functions/tests/fake_runner.py");
+        let spec = SpawnSpec {
+            command: vec!["python3".to_owned(), script.display().to_string()],
+            cwd: None,
+            env: Vec::new(),
+            hello_timeout: Duration::from_secs(60),
+        };
+        let runner = Runner::spawn_spec(&spec).await.unwrap();
+        let manifest = parse_manifest(runner.hello().manifest.as_ref().unwrap()).unwrap();
+        let runtime = FunctionsRuntime::new(
+            manifest,
+            FunctionsConfig {
+                project: "demo-app".to_owned(),
+                default_bucket: "demo-app.appspot.com".to_owned(),
+                location: "nam5".to_owned(),
+                session: SessionId::new(7),
+                max_running: 1,
+                debug_mode: false,
+                retry_attempts: 1,
+                max_catch_up_runs: 1,
+                runner_secret: "test-secret".to_owned(),
+                overlap: fireemu_adapter_functions::runtime::OverlapPolicy::Allow,
+                catch_up: fireemu_adapter_functions::runtime::CatchUpPolicy::All,
+                functions_host: None,
+            },
+            Arc::new(Mutex::new(VirtualClock::new(
+                LogicalInstant::from_unix_seconds(1_788_004_860),
+            ))),
+            Arc::new(runner),
+            Some(spec),
+        );
+        let bridge = BlockingAuthBridge::new_with_selections(
+            runtime.clone(),
+            BlockingAuthSelections {
+                before_create: BlockingAuthSelection::Explicit {
+                    function: "removedBeforeCreate".to_owned(),
+                    region: Some("us-central1".to_owned()),
+                },
+                before_sign_in: BlockingAuthSelection::Disabled,
+            },
+            false,
+        );
+
+        let error = fireemu_adapter_http::identity_toolkit::AuthBlockingHook::blocking_auth_settings_for_export(&bridge)
+            .unwrap_err();
+        assert!(error.contains("beforeCreate"), "{error}");
+        assert!(error.contains("not discovered"), "{error}");
+        runtime.runner().shutdown().await;
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn blocking_export_round_trips_mixed_discovery_without_runner_details() {
+        use fireemu_adapter_functions::runner::{Runner, SpawnSpec};
+        use fireemu_adapter_functions::runtime::{FunctionsConfig, FunctionsRuntime};
+        use fireemu_core_functions::manifest::{BlockingAuthSelection, BlockingAuthSelections};
+        use fireemu_core_types::ids::SessionId;
+        use fireemu_core_types::time::LogicalInstant;
+
+        let script = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../fireemu-adapter-functions/tests/fake_runner.py");
+        let spec = SpawnSpec {
+            command: vec!["python3".to_owned(), script.display().to_string()],
+            cwd: None,
+            env: Vec::new(),
+            hello_timeout: Duration::from_secs(60),
+        };
+        let runner = Runner::spawn_spec(&spec).await.unwrap();
+        let manifest = parse_manifest(runner.hello().manifest.as_ref().unwrap()).unwrap();
+        let runtime = FunctionsRuntime::new(
+            manifest,
+            FunctionsConfig {
+                project: "demo-app".to_owned(),
+                default_bucket: "demo-app.appspot.com".to_owned(),
+                location: "nam5".to_owned(),
+                session: SessionId::new(8),
+                max_running: 1,
+                debug_mode: false,
+                retry_attempts: 1,
+                max_catch_up_runs: 1,
+                runner_secret: "test-secret".to_owned(),
+                overlap: fireemu_adapter_functions::runtime::OverlapPolicy::Allow,
+                catch_up: fireemu_adapter_functions::runtime::CatchUpPolicy::All,
+                functions_host: None,
+            },
+            Arc::new(Mutex::new(VirtualClock::new(
+                LogicalInstant::from_unix_seconds(1_788_004_860),
+            ))),
+            Arc::new(runner),
+            Some(spec),
+        );
+        let bridge = BlockingAuthBridge::new_with_selections(
+            runtime.clone(),
+            BlockingAuthSelections {
+                before_create: BlockingAuthSelection::Discovery,
+                before_sign_in: BlockingAuthSelection::Disabled,
+            },
+            false,
+        );
+
+        let exported = fireemu_adapter_http::identity_toolkit::AuthBlockingHook::
+            blocking_auth_settings_for_export(&bridge)
+            .unwrap()
+            .expect("blocking settings export");
+        assert_eq!(
+            exported["triggers"]["beforeSignIn"],
+            serde_json::Value::Null
+        );
+        assert_eq!(
+            exported[super::BLOCKING_DISCOVERY_EVENTS_MEMBER],
+            serde_json::json!(["beforeCreate"])
+        );
+        let serialized = exported.to_string();
+        assert!(!serialized.contains("127.0.0.1"));
+        assert!(!serialized.contains("test-secret"));
+        assert!(!serialized.contains("httpPort"));
+
+        bridge
+            .replace_blocking_auth_settings(&exported)
+            .expect("mixed blocking settings restore");
+        let round_tripped = fireemu_adapter_http::identity_toolkit::AuthBlockingHook::
+            blocking_auth_settings_for_export(&bridge)
+            .unwrap()
+            .expect("blocking settings re-export");
+        assert_eq!(round_tripped, exported);
+
+        let public =
+            fireemu_adapter_http::identity_toolkit::AuthBlockingHook::blocking_auth_settings(
+                &bridge,
+            )
+            .expect("public blocking settings");
+        assert!(public
+            .get(super::BLOCKING_DISCOVERY_EVENTS_MEMBER)
+            .is_none());
+        runtime.runner().shutdown().await;
     }
 
     #[test]
@@ -3728,8 +6245,12 @@ mod tests {
                 "FIREEMU_FAKE_BLOCKING_HANG_MS".to_owned(),
                 "5000".to_owned(),
             )],
-            hello_timeout: Duration::from_secs(5),
+            // Runner startup is setup for this blocking-timeout scenario, rather than the
+            // behavior under test. Match the production handshake allowance so a cold macOS
+            // Python launch cannot consume the test's unrelated timeout budget.
+            hello_timeout: Duration::from_secs(60),
         };
+        let replacement_timeout = spec.hello_timeout;
         let runner = Runner::spawn_spec(&spec).await.unwrap();
         let mut manifest = parse_manifest(runner.hello().manifest.as_ref().unwrap()).unwrap();
         let mut blocking = parse_manifest(&json!({"functions": [{
@@ -3784,7 +6305,11 @@ mod tests {
             .try_admit_blocking_auth(BlockingAuthEvent::BeforeCreate)
             .is_err());
 
-        let deadline = tokio::time::Instant::now() + Duration::from_secs(3);
+        // A replacement is a fresh process and owns the same bounded hello handshake as the
+        // initial runner. Cold macOS hosts can spend most of that allowance starting Python,
+        // so the assertion must cover the declared spawn contract rather than an unrelated
+        // three-second scheduler assumption.
+        let deadline = tokio::time::Instant::now() + replacement_timeout + Duration::from_secs(1);
         loop {
             let replacement = runtime.runner();
             if !Arc::ptr_eq(&retired, &replacement) && replacement.is_alive() {
@@ -3802,6 +6327,74 @@ mod tests {
             );
             tokio::task::yield_now().await;
         }
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn first_blocking_auth_request_after_idle_runner_exit_recovers() {
+        use fireemu_adapter_http::identity_toolkit::AuthBlockingHook;
+        use fireemu_core_auth::mfa::TotpPolicy;
+        use fireemu_core_auth::store::{AuthStore, NewUser};
+        use fireemu_core_functions::manifest::BlockingAuthEvent;
+        use fireemu_core_types::determinism::SplitMix64;
+        use fireemu_core_types::time::LogicalInstant;
+
+        let runtime = runtime_with_blocking_auth_policy_order(&[("guardA", false, false)]).await;
+        let bridge = BlockingAuthBridge::new(runtime.clone());
+        let now = LogicalInstant::from_unix_seconds(1_788_004_860);
+        let mut store = AuthStore::new("demo-app", SplitMix64::new(7), TotpPolicy::default());
+        let uid = store
+            .create_user(NewUser::email("person@example.test"), now)
+            .unwrap();
+        let user = store.user_by_id(uid.as_str()).unwrap().clone();
+        runtime.runner().kill_now();
+
+        let result = tokio::task::spawn_blocking(move || {
+            bridge.invoke(BlockingAuthEvent::BeforeCreate, &user)
+        })
+        .await
+        .unwrap();
+        runtime.shutdown().await;
+
+        let value = result.expect("the first request waits for runner recovery");
+        assert!(value.is_object());
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn blocking_auth_runner_recovery_uses_the_existing_timeout_envelope() {
+        use fireemu_adapter_http::identity_toolkit::AuthBlockingHook;
+        use fireemu_core_auth::mfa::TotpPolicy;
+        use fireemu_core_auth::store::{AuthStore, NewUser};
+        use fireemu_core_functions::manifest::BlockingAuthEvent;
+        use fireemu_core_types::determinism::SplitMix64;
+        use fireemu_core_types::time::LogicalInstant;
+
+        let runtime = runtime_with_blocking_auth_policy_order_and_env(
+            &[("guardA", false, false)],
+            vec![("FIREEMU_FAKE_HELLO_DELAY_MS".to_owned(), "300".to_owned())],
+        )
+        .await;
+        let bridge = BlockingAuthBridge::with_deadline(runtime.clone(), Duration::from_millis(50));
+        let now = LogicalInstant::from_unix_seconds(1_788_004_860);
+        let mut store = AuthStore::new("demo-app", SplitMix64::new(7), TotpPolicy::default());
+        let uid = store
+            .create_user(NewUser::email("person@example.test"), now)
+            .unwrap();
+        let user = store.user_by_id(uid.as_str()).unwrap().clone();
+        runtime.runner().kill_now();
+
+        let result = tokio::task::spawn_blocking(move || {
+            bridge.invoke(BlockingAuthEvent::BeforeCreate, &user)
+        })
+        .await
+        .unwrap();
+        runtime.shutdown().await;
+
+        let failure = result.expect_err("the slow runner cannot meet the request deadline");
+        assert_eq!(failure.identity_status(), 503);
+        assert_eq!(
+            failure,
+            fireemu_adapter_http::identity_toolkit::BlockingFunctionFailure::timeout()
+        );
     }
 
     #[test]
@@ -3876,6 +6469,176 @@ mod tests {
             patch,
             require_module,
         }
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn discarded_reload_snapshot_is_removed() {
+        let root = std::env::temp_dir().join(format!(
+            "fireemu-discarded-reload-snapshot-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join("nested")).unwrap();
+        std::fs::write(root.join("nested/module.js"), "module.exports = 1;").unwrap();
+
+        FunctionsSourceSnapshot::new(root.clone(), root.clone())
+            .remove()
+            .await
+            .unwrap();
+
+        assert!(!root.exists());
+    }
+
+    #[cfg(unix)]
+    #[tokio::test(flavor = "current_thread")]
+    async fn node_probe_does_not_block_a_single_runtime_worker() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let root =
+            std::env::temp_dir().join(format!("fireemu-node-probe-worker-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        let program = root.join("node");
+        std::fs::write(
+            &program,
+            "#!/bin/sh\n/bin/sleep 0.4\ncase \"$1\" in --version) echo v22.12.0;; -p) echo true;; esac\n",
+        )
+        .unwrap();
+        std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o700)).unwrap();
+
+        let started = Instant::now();
+        let heartbeat = tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+            started.elapsed()
+        });
+        let installation = run_node_selection_blocking(move || probe_node(&program))
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(installation.version, "22.12.0");
+        let heartbeat_elapsed = heartbeat.await.unwrap();
+        assert!(
+            heartbeat_elapsed < Duration::from_millis(250),
+            "heartbeat waited {heartbeat_elapsed:?}"
+        );
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn node_probe_cache_reuses_results_until_environment_changes() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let root =
+            std::env::temp_dir().join(format!("fireemu-node-probe-cache-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        let program = root.join("node");
+        let calls = root.join("calls");
+        let script = format!(
+            "#!/bin/sh\necho probe >> '{}'\ncase \"$1\" in --version) echo v22.12.0;; -p) echo true;; esac\n",
+            calls.display()
+        );
+        std::fs::write(&program, script).unwrap();
+        std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let key = NodeProbeKey {
+            path: None,
+            volta_home: None,
+            fireemu_node: Some(program.into_os_string()),
+        };
+        let cache = NodeProbeCache::default();
+        let first = cache.probed(&key).unwrap();
+        assert_eq!(cache.probed(&key).unwrap(), first);
+        assert_eq!(std::fs::read_to_string(&calls).unwrap().lines().count(), 2);
+
+        let changed = NodeProbeKey {
+            path: Some("/another/bin".into()),
+            ..key
+        };
+        assert_eq!(cache.probed(&changed).unwrap(), first);
+        assert_eq!(std::fs::read_to_string(&calls).unwrap().lines().count(), 4);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn node_probe_cache_retries_failed_probe_with_same_environment() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let root = std::env::temp_dir().join(format!(
+            "fireemu-node-probe-retry-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        let program = root.join("node");
+        let calls = root.join("calls");
+        std::fs::write(
+            &program,
+            format!("#!/bin/sh\necho failed >> '{}'\nexit 1\n", calls.display()),
+        )
+        .unwrap();
+        std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let key = NodeProbeKey {
+            path: None,
+            volta_home: None,
+            fireemu_node: Some(program.clone().into_os_string()),
+        };
+        let cache = NodeProbeCache::default();
+        let first = cache.probed(&key).unwrap();
+        assert!(first.installations.is_empty());
+        assert_eq!(first.errors.len(), 1);
+
+        std::fs::write(
+            &program,
+            format!(
+                "#!/bin/sh\necho recovered >> '{}'\ncase \"$1\" in --version) echo v22.12.0;; -p) echo true;; esac\n",
+                calls.display()
+            ),
+        )
+        .unwrap();
+        let second = cache.probed(&key).unwrap();
+        assert_eq!(second.installations.len(), 1);
+        assert!(second.errors.is_empty());
+        assert_eq!(std::fs::read_to_string(&calls).unwrap().lines().count(), 3);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn node_probe_cache_retries_timed_out_probe() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let root = std::env::temp_dir().join(format!(
+            "fireemu-node-probe-timeout-retry-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        let program = root.join("node");
+        std::fs::write(&program, "#!/bin/sh\nexec /bin/sleep 30\n").unwrap();
+        std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let key = NodeProbeKey {
+            path: None,
+            volta_home: None,
+            fireemu_node: Some(program.clone().into_os_string()),
+        };
+        let cache = NodeProbeCache::default();
+        let first = cache.probed(&key).unwrap();
+        assert!(first.installations.is_empty());
+        assert!(first.errors.iter().any(|error| error.contains("timed out")));
+
+        std::fs::write(
+            &program,
+            "#!/bin/sh\ncase \"$1\" in --version) echo v22.12.0;; -p) echo true;; esac\n",
+        )
+        .unwrap();
+        let second = cache.probed(&key).unwrap();
+        assert_eq!(second.installations.len(), 1);
+        assert!(second.errors.is_empty());
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
@@ -4471,6 +7234,55 @@ mod tests {
         std::fs::remove_dir_all(root).unwrap();
     }
 
+    #[test]
+    fn reload_snapshot_resolves_local_and_hoisted_dependencies() {
+        let workspace = std::env::temp_dir().join(format!(
+            "fireemu-functions-hoisted-test-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&workspace);
+        let source = workspace.join("functions");
+        std::fs::create_dir_all(source.join("node_modules/local-pkg")).unwrap();
+        std::fs::create_dir_all(workspace.join("node_modules/hoisted-pkg")).unwrap();
+        std::fs::write(source.join("index.js"), "module.exports = 1;").unwrap();
+        std::fs::write(
+            source.join("node_modules/local-pkg/index.js"),
+            "module.exports = 'local';",
+        )
+        .unwrap();
+        std::fs::write(
+            workspace.join("node_modules/hoisted-pkg/index.js"),
+            "module.exports = 'hoisted';",
+        )
+        .unwrap();
+
+        let snapshot = snapshot_functions_source(&source, &[]).unwrap();
+        let script = "const {createRequire} = require('node:module'); const path = require('node:path'); const fromSource = createRequire(path.join(process.argv[1], 'index.js')); console.log(fromSource('local-pkg') + ':' + fromSource('hoisted-pkg'));";
+        let output = std::process::Command::new("node")
+            .args(["-e", script])
+            .arg(snapshot.as_ref())
+            .output()
+            .expect("Node is required to verify Functions module resolution");
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert_eq!(
+            String::from_utf8_lossy(&output.stdout).trim(),
+            "local:hoisted"
+        );
+
+        let snapshot_path = snapshot.to_path_buf();
+        drop(snapshot);
+        assert!(!snapshot_path.exists());
+        assert!(source.join("node_modules/local-pkg/index.js").is_file());
+        assert!(workspace
+            .join("node_modules/hoisted-pkg/index.js")
+            .is_file());
+        std::fs::remove_dir_all(workspace).unwrap();
+    }
+
     #[cfg(unix)]
     #[test]
     fn reload_snapshot_rejects_source_symlinks_instead_of_silently_omitting_them() {
@@ -4582,7 +7394,7 @@ mod tests {
             command: vec!["python3".to_owned(), script.display().to_string()],
             cwd: None,
             env: Vec::new(),
-            hello_timeout: Duration::from_secs(20),
+            hello_timeout: Duration::from_secs(60),
         };
         let runner = Runner::spawn_spec(&spawn).await.unwrap();
         let manifest = parse_manifest(runner.hello().manifest.as_ref().unwrap()).unwrap();
@@ -4683,7 +7495,7 @@ mod tests {
             command: vec!["python3".to_owned(), script.display().to_string()],
             cwd: None,
             env: Vec::new(),
-            hello_timeout: Duration::from_secs(20),
+            hello_timeout: Duration::from_secs(60),
         };
         let runner = Runner::spawn_spec(&spawn).await.unwrap();
         let manifest = parse_manifest(runner.hello().manifest.as_ref().unwrap()).unwrap();
@@ -5252,5 +8064,72 @@ mod tests {
         )
         .unwrap();
         assert_eq!(*path, expected);
+    }
+
+    /// Builds `<root>/Cargo.toml` and `<root>/tools/runner-node/index.mjs` under a fresh
+    /// temporary directory and returns the root; the caller removes it.
+    fn synthetic_workspace(name: &str) -> std::path::PathBuf {
+        let root = std::env::temp_dir().join(format!(
+            "fireemu-workspace-runner-{name}-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join("tools/runner-node")).unwrap();
+        std::fs::write(root.join("Cargo.toml"), "[workspace]\n").unwrap();
+        std::fs::write(root.join("tools/runner-node/index.mjs"), "").unwrap();
+        root
+    }
+
+    #[test]
+    fn workspace_runner_is_found_from_every_supported_target_layout() {
+        let root = synthetic_workspace("layouts");
+        let script = root.join("tools/runner-node/index.mjs");
+        for layout in [
+            "target/debug/fireemu",
+            "target/release/fireemu",
+            "target/x86_64-unknown-linux-gnu/debug/fireemu",
+            // `scripts/cargo-session` puts the binary five directories below the root.
+            "target/agent/runner-discovery/normal/debug/fireemu",
+            "target/agent/runner-discovery/loom/release/fireemu",
+        ] {
+            assert_eq!(
+                super::workspace_runner_from(&root.join(layout)).as_deref(),
+                Some(script.as_path()),
+                "layout {layout}"
+            );
+        }
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn workspace_runner_walk_is_bounded_and_needs_both_markers() {
+        let root = synthetic_workspace("bounded");
+        let too_deep = (0..super::WORKSPACE_RUNNER_SEARCH_DEPTH)
+            .fold(root.clone(), |dir, level| {
+                dir.join(format!("level-{level}"))
+            })
+            .join("fireemu");
+        assert_eq!(
+            super::workspace_runner_from(&too_deep),
+            None,
+            "a root {} directories above the executable is out of reach",
+            super::WORKSPACE_RUNNER_SEARCH_DEPTH + 1
+        );
+        let at_bound = too_deep.parent().unwrap().with_file_name("fireemu");
+        assert_eq!(
+            super::workspace_runner_from(&at_bound).as_deref(),
+            Some(root.join("tools/runner-node/index.mjs").as_path()),
+            "a root exactly {} directories above the executable is still found",
+            super::WORKSPACE_RUNNER_SEARCH_DEPTH
+        );
+        // A crate directory with its own `Cargo.toml` but no runner is walked past.
+        let crate_dir = root.join("crates/fireemu");
+        std::fs::create_dir_all(&crate_dir).unwrap();
+        std::fs::write(crate_dir.join("Cargo.toml"), "[package]\n").unwrap();
+        assert_eq!(
+            super::workspace_runner_from(&crate_dir.join("target/debug/fireemu")).as_deref(),
+            Some(root.join("tools/runner-node/index.mjs").as_path()),
+        );
+        std::fs::remove_dir_all(&root).unwrap();
     }
 }

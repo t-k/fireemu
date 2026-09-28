@@ -508,12 +508,20 @@ fn classified_mfa_error(error: &MfaError) -> anyhow::Error {
         MfaError::InvalidCode => "InvalidCode",
         MfaError::CodeAlreadyUsed => "CodeAlreadyUsed",
         MfaError::EnrollmentSessionExpired => "EnrollmentSessionExpired",
+        // Production's rules only; this driver runs the official emulator's.
+        MfaError::TooManyEnrollmentAttempts => "TooManyEnrollmentAttempts",
+        MfaError::EnrollmentAlreadyComplete => "EnrollmentAlreadyComplete",
+        MfaError::TotpChallengeTimeout => "TotpChallengeTimeout",
         MfaError::EnrollmentSessionUnknown => "EnrollmentSessionUnknown",
         MfaError::PendingSignInUnknown => "PendingSignInUnknown",
         MfaError::NoEnrolledFactor => "NoEnrolledFactor",
         MfaError::TooManyFactors => "TooManyFactors",
         MfaError::TooManyPending => "TooManyPending",
         MfaError::LimitExceeded(_) => "LimitExceeded",
+        // This driver enrolls TOTP factors only, and a TOTP enrollment stores no display
+        // name, so the refusal is unreachable here. It is named rather than swept into a
+        // wildcard so that a new refusal class cannot reach the model unclassified.
+        MfaError::ControlCharacterInText(_) => "ControlCharacterInText",
     };
     invalid_data(class)
 }

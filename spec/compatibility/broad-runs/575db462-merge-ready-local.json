@@ -1,0 +1,406 @@
+{
+  "schemaVersion": 1,
+  "kind": "merge-readiness-candidate",
+  "status": "ready-for-final-review",
+  "technicalSourceCommit": "575db462d134508ea79b8299b1fd86d2bddb07fd",
+  "baseCommit": "d987d5ddcc1374cee425f08d6d81915795fc2ab5",
+  "capturedAt": "2026-09-14T00:21:38Z",
+  "productionExecuted": true,
+  "productionScope": "Only the separately authorized, fixed a35f85b4 G0 BatchWrite observation ran during final merge preparation.",
+  "evidenceClasses": {
+    "productionObservation": "The fixed G0 run is candidate evidence from one authorized production execution.",
+    "savedProductionComparison": "Immutable previously captured production responses are compared without re-observation.",
+    "localInvariant": "Owned loopback artifacts and SDKs establish only their named local behavior and safety invariants.",
+    "formalModel": "Quint evidence covers only each model's declared projection and bound inputs."
+  },
+  "validation": {
+    "workspace": {
+      "sourceCommit": "4cf2d6036beeedb9446df6b3e1875ac128012dc7",
+      "command": "cargo nextest run --workspace --profile pr",
+      "runId": "852724a3-671a-49f3-8442-e703d616f665",
+      "passed": 2083,
+      "failed": 0,
+      "skipped": 81,
+      "elapsedSeconds": 37.053
+    },
+    "rust": {
+      "sourceCommit": "cb0978207c7531f6df844694acf4ea5ef7bcbd0b",
+      "commands": [
+        "cargo fmt --all -- --check",
+        "cargo clippy --workspace --all-targets --all-features -- -D warnings",
+        "RUSTDOCFLAGS=\"-D warnings\" cargo doc --workspace --all-features --no-deps",
+        "cargo deny check"
+      ],
+      "result": "passed",
+      "exactHead": {
+        "sourceCommit": "575db462d134508ea79b8299b1fd86d2bddb07fd",
+        "commands": [
+          "cargo fmt --all -- --check",
+          "cargo clippy --workspace --all-targets --all-features -- -D warnings"
+        ],
+        "result": "passed"
+      }
+    },
+    "compatibility": {
+      "validatedSourceCommit": "58392089a3fb8e66145491232192d10e221021cb",
+      "pytest": {
+        "passed": 570,
+        "failed": 0,
+        "skipped": 10
+      },
+      "historicalArchive": {
+        "passed": 304,
+        "failed": 0,
+        "skipped": 8
+      },
+      "publishers": "passed-at-f15755ca; hosted-compatibility-gate-passed-at-feac4c51",
+      "catalogAndAggregationChecks": "passed",
+      "finalDeltaSourceCommit": "cb0978207c7531f6df844694acf4ea5ef7bcbd0b",
+      "finalBroadPytest": {
+        "passed": 275,
+        "failed": 0,
+        "skipped": 10
+      },
+      "exactHead": {
+        "sourceCommit": "575db462d134508ea79b8299b1fd86d2bddb07fd",
+        "command": "cargo run --locked -p compat-check",
+        "capabilityEntriesCovered": 47,
+        "namedDebtStepsExcluded": 7,
+        "result": "passed"
+      }
+    },
+    "quint": {
+      "evidenceSourceCommit": "cb0978207c7531f6df844694acf4ea5ef7bcbd0b",
+      "models": 14,
+      "mutations": 107,
+      "generator": "verification/quint/run-verification.sh --refresh",
+      "result": "passed",
+      "fullGeneratorSourceCommit": "cb0978207c7531f6df844694acf4ea5ef7bcbd0b",
+      "finalModelDelta": {
+        "sourceCommit": "8e24b48c76351dc78873adbb265377c16c56e659",
+        "model": "AtomicCommitOutbox",
+        "command": "cargo run --locked -p fireemu-verification-quint -- mutate-model --model AtomicCommitOutbox --evidence verification/quint/evidence/AtomicCommitOutbox.json",
+        "result": "passed-and-evidence-refreshed"
+      },
+      "exactHeadAuthorityRun": {
+        "sourceCommit": "575db462d134508ea79b8299b1fd86d2bddb07fd",
+        "command": "QUINT_REAL_BIN=$PWD/verification/quint/node_modules/.bin/quint verification/quint/run-verification.sh --refresh",
+        "models": 14,
+        "mutations": 107,
+        "traceabilityPendingArtifacts": 3,
+        "result": "passed",
+        "generatedEvidenceChanged": false
+      }
+    },
+    "loom": {
+      "sourceCommit": "cb0978207c7531f6df844694acf4ea5ef7bcbd0b",
+      "command": "RUSTFLAGS=\"--cfg loom\" cargo test -p fireemu-verification-loom --release --target-dir target/merge-ready-loom-cb097820",
+      "passed": 9,
+      "failed": 0
+    },
+    "ui": {
+      "sourceCommit": "58392089a3fb8e66145491232192d10e221021cb",
+      "unit": 326,
+      "sizeReportTests": 7,
+      "playwright": 67,
+      "processSupervisorTests": 11,
+      "lint": "passed-with-one-existing-nonblocking-no-map-spread-warning",
+      "format": "passed",
+      "build": "passed",
+      "ownedProcessesStopped": true,
+      "listenersClosed": true,
+      "portReservationsReleased": true,
+      "finalAdapterIntegration": {
+        "passed": 27,
+        "failed": 0,
+        "sourceCommit": "feac4c5141482fe30ff5ed9b57c3033e1f505913"
+      },
+      "finalUiValidation": {
+        "sourceCommit": "4cf2d6036beeedb9446df6b3e1875ac128012dc7",
+        "buildCommands": [
+          "pnpm -C ui build",
+          "cargo build --release --locked -p fireemu"
+        ],
+        "command": "FIREEMU_BIN=\"$PWD/target/release/fireemu\" pnpm -C ui e2e",
+        "artifactSha256": "706344f6e1043b461993837b97fe27bdb7dcef8f38fe77ac8b628c37212ebadb",
+        "passed": 73,
+        "failed": 0,
+        "skipped": 0,
+        "artifactBindingNote": "An earlier integration attempt used the pre-change release binary selected by the Playwright setup and failed. Rebuilding the embedded UI and binding FIREEMU_BIN to the recorded artifact produced this passing result.",
+        "unitPassed": 342,
+        "sizeReportTestsPassed": 7
+      }
+    },
+    "distribution": {
+      "sourceCommit": "cb0978207c7531f6df844694acf4ea5ef7bcbd0b",
+      "buildCommand": "cargo build --release --locked -p fireemu",
+      "packageCommand": "node npm/scripts/pack-local.mjs",
+      "verificationCommand": "node npm/scripts/verify-install.mjs --dist npm/dist",
+      "installSmoke": "passed",
+      "processCleanup": "passed",
+      "binarySha256": "d1c0aa6a433a5c9023a20cf7e36b9ffa17a96c6bc408d9ae92c0f24d1f0a3529",
+      "launcherTarballSha256": "96fa62f3682e0a5a8610e74f7077b218846f7027df0f475c22d98baf96df85fd",
+      "platformTarballSha256": "4fa3902ee71cc0712fbfead900ee9505aaef6b5769088215b4018a9a554f5b3d"
+    },
+    "hostedCi": {
+      "status": "success",
+      "priorFailures": [
+        {
+          "workflow": "full-ci",
+          "headSha": "cb0978207c7531f6df844694acf4ea5ef7bcbd0b",
+          "url": "https://github.com/t-k/fireemu/actions/runs/34779517350",
+          "cause": "Three AtomicCommitOutbox Connect tests competed for a Python runner hello under saturated macOS workspace scheduling; no product runtime path was reached."
+        },
+        {
+          "workflow": "full-ci",
+          "headSha": "9bfee78ffd80e8b3688b182b612ae88e693d3f82",
+          "url": "https://github.com/t-k/fireemu/actions/runs/34782217711",
+          "cause": "macOS isolated the runner-backed test but its test driver still used a 20-second hello limit, shorter than the product contract; the UI job independently reproduced a Solid resource publication race during Firestore draft reload."
+        },
+        {
+          "workflow": "full-ci",
+          "headSha": "4cf2d6036beeedb9446df6b3e1875ac128012dc7",
+          "url": "https://github.com/t-k/fireemu/actions/runs/34785801518",
+          "cause": "The macOS host build did not populate Linux-only registry sources before hermetic Cargo authority tests resolved their fixed Linux projection with cargo metadata --offline."
+        },
+        {
+          "workflow": "full-ci",
+          "headSha": "0248ded677d51e72dfc98a0c20bd5a73eea2b3fb",
+          "url": "https://github.com/t-k/fireemu/actions/runs/34787766498",
+          "cause": "The macOS authority fixture injected a nonexistent DYLD library before its script could clear the child environment, and a panic-cleanup fixture allowed only three seconds for PID readiness under the saturated workspace."
+        }
+      ],
+      "runs": [
+        {
+          "workflow": "pull-request-ci",
+          "status": "success",
+          "headSha": "575db462d134508ea79b8299b1fd86d2bddb07fd",
+          "url": "https://github.com/t-k/fireemu/actions/runs/34790739723"
+        },
+        {
+          "workflow": "compatibility-inventory",
+          "status": "success",
+          "headSha": "575db462d134508ea79b8299b1fd86d2bddb07fd",
+          "url": "https://github.com/t-k/fireemu/actions/runs/34790739719"
+        },
+        {
+          "workflow": "full-ci",
+          "status": "success",
+          "headSha": "575db462d134508ea79b8299b1fd86d2bddb07fd",
+          "url": "https://github.com/t-k/fireemu/actions/runs/34790749217"
+        },
+        {
+          "workflow": "quint-verification",
+          "status": "success",
+          "headSha": "cb0978207c7531f6df844694acf4ea5ef7bcbd0b",
+          "url": "https://github.com/t-k/fireemu/actions/runs/34779518975"
+        },
+        {
+          "workflow": "functions-sdk-discovery",
+          "status": "success",
+          "headSha": "cb0978207c7531f6df844694acf4ea5ef7bcbd0b",
+          "url": "https://github.com/t-k/fireemu/actions/runs/34779520384"
+        },
+        {
+          "workflow": "conformance",
+          "status": "success",
+          "headSha": "cb0978207c7531f6df844694acf4ea5ef7bcbd0b",
+          "url": "https://github.com/t-k/fireemu/actions/runs/34779521864"
+        }
+      ]
+    },
+    "conformance": {
+      "sourceCommit": "58392089a3fb8e66145491232192d10e221021cb",
+      "selfTestsPassed": 58,
+      "scenarios": 24,
+      "gatedSteps": 199,
+      "result": "passed",
+      "lint": "passed-with-existing-nonblocking-warnings",
+      "format": "passed",
+      "hostedSourceCommit": "cb0978207c7531f6df844694acf4ea5ef7bcbd0b",
+      "hostedStatus": "success"
+    },
+    "workflowDelta": {
+      "sourceCommit": "575db462d134508ea79b8299b1fd86d2bddb07fd",
+      "parentTechnicalSource": "0248ded677d51e72dfc98a0c20bd5a73eea2b3fb",
+      "changes": [
+        "macOS prefetches the complete locked Cargo graph before offline authority tests",
+        "macOS authority fixtures avoid loader-fatal pre-script injection and use the established bounded readiness window"
+      ],
+      "commands": [
+        "ruby scripts/ci-workflow-contract.rb",
+        "cargo metadata --locked --offline --filter-platform x86_64-unknown-linux-gnu --format-version 1",
+        "cargo nextest run -p fireemu-verification-quint --test cargo_authority --profile pr",
+        "cargo nextest run -p fireemu-verification-quint --test cli_contract --profile pr"
+      ],
+      "result": "passed",
+      "review": "approved-with-no-blocker-high-or-medium",
+      "quintEvidenceImpact": "full official authority rerun passed at the exact head; generated evidence was unchanged"
+    }
+  },
+  "productionObservation": {
+    "goal": "G0",
+    "status": "candidate",
+    "executionCommit": "a35f85b464743d62344a3a58763d382b5b3838ce",
+    "startedAtUtc": "2026-09-13T14:52:31.781810+00:00",
+    "endedAtUtc": "2026-09-13T14:53:12.979168+00:00",
+    "elapsedSeconds": 41.19735813140869,
+    "exitCode": 0,
+    "operations": {
+      "total": 34,
+      "http": 33,
+      "credentialCommands": 1,
+      "observation": 18,
+      "recovery": 16,
+      "automaticRetries": 0
+    },
+    "recordingComplete": true,
+    "stateVerified": true,
+    "cleanupComplete": true,
+    "configurationUnchanged": true,
+    "ownedDocuments": 4,
+    "ownedDocumentsConfirmedAbsent": 4,
+    "originalComparison": {
+      "rows": 12,
+      "match": 10,
+      "mismatch": 2
+    },
+    "savedReferenceRuntimeRecomparison": {
+      "runtimeCommit": "68012694f81df504600f8e67301410c63ec9e2e7",
+      "artifactSha256": "7fa832d504a4e3faa7a69c90f7b912074f5a212d6eafec2987110425bbb93fdd",
+      "rows": 12,
+      "match": 12,
+      "mismatch": 0,
+      "productionReexecuted": false
+    },
+    "publicResult": "68012694-g0-runtime-recomparison.json"
+  },
+  "savedComparisons": {
+    "first46": {
+      "referencePublicationCommit": "ab7bd698",
+      "referenceExecutionCommit": "bc38f392077784509f7fbb8993d5be66c1a8be14",
+      "lastVerificationSourceCommit": "cb0978207c7531f6df844694acf4ea5ef7bcbd0b",
+      "localArtifactSha256": "e25c241d7ddcfb3142ef6c78dcb0a5bc6b620a23ac1c78d1bdd3e593aaeed217",
+      "recordingComplete": true,
+      "cleanupComplete": true,
+      "compatibility": "match",
+      "rows": 46,
+      "originalComparison": {
+        "match": 35,
+        "mismatch": 11
+      }
+    },
+    "second45": {
+      "lastBoundSavedReference": "37e4c396-second45-runtime-recomparison.json",
+      "lastBoundRuntimeCommit": "31dee8d06e56075ba7c488c89f740611ebb380d6",
+      "lastBoundCompatibility": "match",
+      "lastBoundRows": 45,
+      "originalComparison": {
+        "match": 32,
+        "mismatch": 13
+      },
+      "laterObserverPairing": "indeterminate",
+      "reason": "The later local observer digest is not bound to the immutable saved production record. The comparator rejected the pair and its binding was not weakened."
+    }
+  },
+  "skips": {
+    "quintExternalChecker": 48,
+    "functionsSdkAndDiscovery": 24,
+    "releaseLeakFixtureHelpers": 2,
+    "largeOrPerformanceQualification": 7,
+    "note": "The official Quint generator passed separately. The two release leak acceptance tests passed when selected explicitly. Functions SDK discovery is assigned to its dedicated workflow; large performance and capacity qualifications are outside this merge acceptance run."
+  },
+  "reviews": {
+    "fullDiff": {
+      "reviewedBase": "d987d5ddcc1374cee425f08d6d81915795fc2ab5",
+      "reviewedHead": "f15755ca1c24c54d85b161a80ec5b94e99c65d95",
+      "status": "approved",
+      "scope": "Base-to-head review through f15755ca; later commits use the scoped delta reviews recorded below."
+    },
+    "historyIsolationSecurity": "approved",
+    "distributionFixtureProvenance": "approved after all bypass findings were corrected",
+    "functionsConnectionResetHarness": "approved after self-delimiting framing follow-up",
+    "processSupervisorCorrectness": "approved at 7416a8eb; e206d566 adds only the POSIX test scope",
+    "processSupervisorSecurity": {
+      "sourceCommit": "e206d566049570340369d59176166e89872592f0",
+      "mustFix": 0,
+      "shouldFix": 0
+    },
+    "finalCiFixCorrectness": {
+      "sourceCommit": "58392089a3fb8e66145491232192d10e221021cb",
+      "approval": "approved",
+      "blockerOrHigh": 0
+    },
+    "finalCiFixSecurity": {
+      "sourceCommit": "58392089a3fb8e66145491232192d10e221021cb",
+      "mustFix": 0,
+      "shouldFix": 0
+    },
+    "compatHttpFixtureCorrectness": {
+      "sourceCommit": "feac4c5141482fe30ff5ed9b57c3033e1f505913",
+      "approval": "approved",
+      "blockerOrHigh": 0
+    },
+    "runnerTimeoutContractCorrectness": {
+      "sourceCommit": "feac4c5141482fe30ff5ed9b57c3033e1f505913",
+      "approval": "approved-after-ui-fixture-follow-up",
+      "blockerOrHigh": 0
+    },
+    "quintWorkflowTimeoutCorrectness": {
+      "sourceCommit": "fdd36e543e50d9ffce5dca4dd0530d195c7dcd96",
+      "approval": "approved",
+      "blockerOrHigh": 0
+    },
+    "taskResetDispatchCorrectness": {
+      "sourceCommit": "cb0978207c7531f6df844694acf4ea5ef7bcbd0b",
+      "approval": "approved-after-official-evidence-refresh",
+      "blockerOrHigh": 0
+    },
+    "taskResetDispatchSecurity": {
+      "sourceCommit": "cb0978207c7531f6df844694acf4ea5ef7bcbd0b",
+      "mustFix": 0,
+      "shouldFix": 0
+    },
+    "macosQuintRunnerScheduling": {
+      "sourceCommit": "8e24b48c76351dc78873adbb265377c16c56e659",
+      "approval": "approved-after-binary-scoping-and-bounded-driver-follow-ups",
+      "blockerOrHigh": 0,
+      "observedFailureRuns": [
+        "https://github.com/t-k/fireemu/actions/runs/34779517350",
+        "https://github.com/t-k/fireemu/actions/runs/34782217711"
+      ]
+    },
+    "uiConflictReloadRace": {
+      "status": "approved-after-H1-through-H5-follow-ups",
+      "correctnessBlockerOrHigh": 0,
+      "securityMustFix": 0,
+      "securityShouldFix": 1,
+      "securityNote": "The local control-token UI retains an already displayed same-scope document during a non-404 refresh error while editing; no new data is disclosed and update preconditions remain server-enforced.",
+      "observedFailureRun": "https://github.com/t-k/fireemu/actions/runs/34782217711",
+      "reviewedCommit": "49e336cdf490890f77e5d8f3f7df24306b072f57",
+      "integratedCommit": "4cf2d6036beeedb9446df6b3e1875ac128012dc7",
+      "treeEquivalence": {
+        "command": "git diff --quiet 49e336cdf490890f77e5d8f3f7df24306b072f57..4cf2d6036beeedb9446df6b3e1875ac128012dc7 -- ui",
+        "result": "no-difference"
+      }
+    }
+  },
+  "limitations": [
+    "This candidate does not claim complete Firebase, Identity Platform, Firestore or Enterprise compatibility.",
+    "The G0 result is candidate evidence from one fixed two-scenario run, not result acceptance or broader BatchWrite coverage.",
+    "The current second45 local record cannot be rebound to the older saved production observer.",
+    "Revision 3, GAP-AUTH-007, AUTH-U03 and the explicitly deferred Auth, Firestore, SDK and Enterprise ranges remain follow-up work.",
+    "The process supervisor controls the trusted owned harness process group; it is not a generic containment boundary against descendants that deliberately create a new session.",
+    "Retaining an already displayed same-scope document during a non-404 edit refresh failure is deliberate stale-data behavior in the local control-token UI; authorization changes require leaving or retrying the view."
+  ],
+  "cleanup": {
+    "ownedDaemons": "stopped",
+    "ownedListeners": "closed",
+    "ownedPortReservations": "released",
+    "g0DetachedCheckout": "retained intentionally as the fixed observation source"
+  },
+  "humanRemaining": [
+    "Review and accept the final base/head, evidence boundaries and known limitations.",
+    "Decide whether to merge the Draft pull request."
+  ]
+}

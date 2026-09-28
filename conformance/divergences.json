@@ -17,24 +17,6 @@
         "approvalRecord": "conformance/PRODUCTION-GAP-FOLLOWUP-2026-09-07.md"
       }
     },
-    "firestore/missing-composite-index#admin-equality-plus-inequality": {
-      "documents": "README.md, \"Gap from the official Firebase Emulator Suite\"",
-      "reason": "Same policy difference for an equality plus an inequality on another field.",
-      "authority": {
-        "kind": "production-spec",
-        "sourceUrls": [
-          "https://firebase.google.com/docs/firestore/query-data/indexing",
-          "https://github.com/firebase/firebase-tools/tree/v15.28.2"
-        ],
-        "checkedOn": "2026-09-05",
-        "officialBaseline": {
-          "package": "firebase-tools",
-          "version": "15.28.2"
-        },
-        "fixture": "conformance/fixtures/firestore/missing-composite-index.json#admin-equality-plus-inequality",
-        "approvalRecord": "README.md, \"Gap from the official Firebase Emulator Suite\""
-      }
-    },
     "appcheck/exchange-and-jwks#exchange-a-registered-debug-secret": {
       "documents": "capability manifest APPCHECK-DEBUG-EXCHANGE-1 (crates/fireemu/src/control.rs); docs/specifications/firebase-app-check.md section 10.1",
       "reason": "The official Local Emulator Suite serves no App Check exchange route at all, so the oracle answers 404. fireemu issues a locally signed token for a registered debug secret.",
@@ -591,60 +573,6 @@
         },
         "fixture": "conformance/fixtures/functions/callable-auth-context.json#bearer-owner-is-not-a-callable-identity",
         "approvalRecord": "capability manifest APPCHECK-FUNCTIONS-1, \"callable Authorization integrity\" (crates/fireemu/src/control.rs); docs/specifications/firebase-app-check.md section 25 decision 3"
-      }
-    },
-    "functions/http-routing-cors-and-timeouts#preflight-on-a-callable-from-a-loopback-origin": {
-      "documents": "capability manifest FN-HTTP-1 (crates/fireemu/src/capabilities.json)",
-      "reason": "The official emulator varies its callable preflight response only on Origin and Access-Control-Request-Headers. fireemu also names Access-Control-Request-Method, Sec-Fetch-Site and Sec-Fetch-Mode because those request fields participate in its loopback callable admission decision; this prevents a shared cache from replaying an admitted response for a request that the proxy would refuse.",
-      "authority": {
-        "kind": "official-emulator",
-        "sourceUrls": [
-          "https://firebase.google.com/docs/functions/http-events",
-          "https://github.com/firebase/firebase-tools/tree/v15.28.2"
-        ],
-        "checkedOn": "2026-09-05",
-        "officialBaseline": {
-          "package": "firebase-tools",
-          "version": "15.28.2"
-        },
-        "fixture": "conformance/fixtures/functions/http-routing-cors-and-timeouts.json#preflight-on-a-callable-from-a-loopback-origin",
-        "approvalRecord": "capability manifest FN-HTTP-1 (crates/fireemu/src/capabilities.json)"
-      }
-    },
-    "functions/http-routing-cors-and-timeouts#preflight-on-a-callable-from-a-remote-origin": {
-      "documents": "README.md, \"Functions\"",
-      "reason": "The official emulator starts its runtime with FIREBASE_DEBUG_FEATURES={\"skipTokenVerification\":true,\"enableCors\":true}, so firebase-functions wraps every handler in cors({origin: true}) and answers a preflight from any origin on the internet. fireemu serves the functions port to loopback origins only and answers 403 \"forbidden origin\" to the rest, the way its other ports do: a page a developer happens to have open must not be able to drive their local backend.",
-      "authority": {
-        "kind": "intentional-local-policy",
-        "sourceUrls": [
-          "https://firebase.google.com/docs/functions/http-events",
-          "https://github.com/firebase/firebase-tools/tree/v15.28.2"
-        ],
-        "checkedOn": "2026-09-05",
-        "officialBaseline": {
-          "package": "firebase-tools",
-          "version": "15.28.2"
-        },
-        "fixture": "conformance/fixtures/functions/http-routing-cors-and-timeouts.json#preflight-on-a-callable-from-a-remote-origin",
-        "approvalRecord": "README.md, \"Functions\""
-      }
-    },
-    "functions/http-routing-cors-and-timeouts#a-cross-origin-post-to-a-callable": {
-      "documents": "README.md, \"Functions\"",
-      "reason": "The same divergence on the request itself rather than the preflight: the official emulator reflects https://evil.example and hands the callable's result to it. fireemu refuses a non-loopback Origin with 403 before the request reaches the runner. An onRequest function on a loopback origin does get the CORS headers enableCors would have given it, so local browser development is unaffected.",
-      "authority": {
-        "kind": "intentional-local-policy",
-        "sourceUrls": [
-          "https://firebase.google.com/docs/functions/http-events",
-          "https://github.com/firebase/firebase-tools/tree/v15.28.2"
-        ],
-        "checkedOn": "2026-09-05",
-        "officialBaseline": {
-          "package": "firebase-tools",
-          "version": "15.28.2"
-        },
-        "fixture": "conformance/fixtures/functions/http-routing-cors-and-timeouts.json#a-cross-origin-post-to-a-callable",
-        "approvalRecord": "README.md, \"Functions\""
       }
     },
     "pubsub-probe/seek-to-time#replayed": {

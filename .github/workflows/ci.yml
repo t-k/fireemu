@@ -6,13 +6,17 @@ on:
     branches: [main]
   workflow_dispatch:
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 env:
   CARGO_TERM_COLOR: always
 
 jobs:
   lint:
-    if: ${{ github.event_name == 'workflow_dispatch' }}
     runs-on: ubuntu-latest
+    timeout-minutes: 120
     env:
       CARGO_TARGET_DIR: target/normal
     steps:
@@ -49,8 +53,8 @@ jobs:
         run: env -u CARGO_TARGET_DIR scripts/cargo-session.test.sh
 
   test:
-    if: ${{ github.event_name == 'workflow_dispatch' }}
     runs-on: ubuntu-latest
+    timeout-minutes: 120
     env:
       CARGO_TARGET_DIR: target/normal
     steps:
@@ -79,8 +83,8 @@ jobs:
         run: cargo run -p config-schema-check
 
   verify:
-    if: ${{ github.event_name == 'workflow_dispatch' }}
     runs-on: ubuntu-latest
+    timeout-minutes: 120
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -107,6 +111,7 @@ jobs:
 
   pr:
     runs-on: ubuntu-latest
+    timeout-minutes: 60
     env:
       CARGO_TARGET_DIR: target/minimal
     steps:
@@ -127,17 +132,17 @@ jobs:
         run: cargo check --workspace --all-targets
 
   # The platforms fireemu publishes binaries for, so a change that only breaks one of them is
-  # caught before a tag is cut rather than during a release. The automatic Ubuntu `pr` status
-  # above only formats and compiles (`cargo check`); it runs no test. Runtime tests run here and
-  # in the manual `lint`, `test` and `verify` jobs, and locally through
-  # scripts/local-regression-gate (docs/development.md).
+  # caught before a tag is cut rather than during a release. Every job in this workflow runs on
+  # pull requests, on pushes to main and on demand; the `pr` job is the quick format-and-compile
+  # status, and runtime tests run here and in the `lint`, `test` and `verify` jobs, and locally
+  # through scripts/local-regression-gate (docs/development.md).
   #
   # Linux arm64 is not here: it shares this source with linux x64 and is exercised in the
   # release workflow, which builds and tests it on a native arm64 runner.
   platforms:
-    if: ${{ github.event_name == 'workflow_dispatch' }}
     name: tests (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 180
     strategy:
       fail-fast: false
       matrix:
@@ -151,14 +156,21 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           key: ${{ matrix.os }}
+      # Cargo authority resolves the locked Linux projection with `--offline`. A host build does
+      # not populate another target's registry sources, so fetch the whole locked graph first.
+      - name: fetch locked dependency graph for offline authority checks
+        if: runner.os == 'macOS'
+        run: cargo fetch --locked
       # The process-census integration suites shell out to `ps` and `kill` to prove that a
       # daemon leaves nothing running; they are POSIX-only by construction, so Windows runs the
-      # portable library tests plus the explicit Windows CLI targets.
+      # in-crate unit tests. Making them portable is tracked in the distribution issue.
       - name: tests
         shell: bash
         run: |
           if [ "${{ runner.os }}" = "Windows" ]; then
-            cargo nextest run --workspace --lib --profile pr --exclude fireemu-verification-quint --exclude traceability-check
+            # The private Quint authority and its traceability CLI supervise Unix process groups;
+            # production libraries remain in this native Windows test run.
+            cargo nextest run --workspace --exclude fireemu-verification-quint --exclude traceability-check --lib --profile pr
             cargo nextest run -p fireemu --bin fireemu --test exec_windows --profile pr
           else
             cargo nextest run --workspace --profile pr
@@ -169,8 +181,8 @@ jobs:
   # characters, through a symlink and from a read-only directory. `pack-local.mjs` is what a
   # developer runs before a tag; running it here keeps the packaging from rotting between tags.
   package:
-    if: ${{ github.event_name == 'workflow_dispatch' }}
     runs-on: ubuntu-latest
+    timeout-minutes: 120
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -196,8 +208,8 @@ jobs:
   # tests, and the Playwright E2E (parity flows plus the security suite -- CSP, DNS-rebinding
   # via Host/Origin, download disposition, and bounded reads) against a real daemon.
   ui:
-    if: ${{ github.event_name == 'workflow_dispatch' }}
     runs-on: ubuntu-latest
+    timeout-minutes: 120
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
@@ -210,6 +222,8 @@ jobs:
           cache-dependency-path: ui/pnpm-lock.yaml
       - name: install UI dependencies
         run: pnpm -C ui install --frozen-lockfile
+      - name: install Functions fixture dependencies
+        run: npm ci --prefix tools/sdk-smoke --ignore-scripts
       - name: lint
         run: pnpm -C ui lint
       - name: format

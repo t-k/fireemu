@@ -1,0 +1,231 @@
+{
+  "schemaVersion": 1,
+  "goal": "G3-reconnect-next",
+  "status": "done-local",
+  "runtimeChanged": false,
+  "run": {
+    "sourceCommit": "7b359f00820d1a163a6fd9a190e43312bd00628b",
+    "runtimeSourceCommit": "de8a14b8",
+    "artifactSha256": "6a1292eccd6f35773f74244f558e9a1791482949cb0fb228af20c29a6d449733",
+    "command": [
+      "docs.local/logs/2026-09-13/goals/retained-artifacts/fireemu-de8a14b8-second45",
+      "exec",
+      "--only",
+      "auth,firestore",
+      "--firestore-port",
+      "0",
+      "--http-port",
+      "0",
+      "--hub-port",
+      "0",
+      "--logging-port",
+      "0",
+      "--ui-port",
+      "0",
+      "--project",
+      "demo-app",
+      "--",
+      "npm",
+      "--prefix",
+      "tools/sdk-smoke",
+      "run",
+      "smoke:g3"
+    ],
+    "start": "2026-09-13T07:50:31.010128+00:00",
+    "pid": 52707,
+    "exitCode": 0,
+    "processStopped": true,
+    "end": "2026-09-13T07:50:31.655008+00:00"
+  },
+  "transport": "actual Firebase client Node gRPC, SDK 12.18.0",
+  "result": {
+    "passed": true,
+    "transport": "firebase-client-node-grpc",
+    "deniedWritePostState": {
+      "error": "permission-denied",
+      "exists": true,
+      "data": {
+        "owner": "YPX32g6ng2ZDQFQZDCqhOsRRwz9q",
+        "revision": 0
+      }
+    },
+    "unsubscribe": {
+      "revisions": [
+        0
+      ],
+      "replacementRevisions": [
+        0,
+        1
+      ],
+      "callbacksAfterUnsubscribe": 0
+    },
+    "authSwitch": {
+      "events": [
+        {
+          "state": "signed-out"
+        },
+        {
+          "state": "signed-in",
+          "uid": "YPX32g6ng2ZDQFQZDCqhOsRRwz9q"
+        },
+        {
+          "state": "signed-out"
+        },
+        {
+          "state": "signed-in",
+          "uid": "Fra6HPZIsox8my7Vfij52zu9DfuC"
+        },
+        {
+          "state": "signed-out"
+        },
+        {
+          "state": "signed-in",
+          "uid": "YPX32g6ng2ZDQFQZDCqhOsRRwz9q"
+        },
+        {
+          "state": "signed-out"
+        },
+        {
+          "state": "signed-in",
+          "uid": "Fra6HPZIsox8my7Vfij52zu9DfuC"
+        },
+        {
+          "state": "signed-out"
+        }
+      ],
+      "finalState": "signed-out"
+    },
+    "reconnectAfterRejectedWrite": {
+      "originalClient": {
+        "listenerSnapshots": [
+          {
+            "revision": 1,
+            "fromCache": false,
+            "hasPendingWrites": false
+          },
+          {
+            "revision": 1,
+            "fromCache": true,
+            "hasPendingWrites": false
+          },
+          {
+            "revision": 2,
+            "fromCache": true,
+            "hasPendingWrites": true
+          },
+          {
+            "revision": 2,
+            "fromCache": false,
+            "hasPendingWrites": true
+          },
+          {
+            "revision": 2,
+            "fromCache": false,
+            "hasPendingWrites": false
+          }
+        ],
+        "serverBefore": {
+          "createTime": "2026-09-13T07:50:31.234927Z",
+          "fields": {
+            "owner": {
+              "stringValue": "YPX32g6ng2ZDQFQZDCqhOsRRwz9q"
+            },
+            "revision": {
+              "integerValue": "0"
+            }
+          },
+          "name": "projects/demo-app/databases/(default)/documents/g3-denied/reconnect",
+          "updateTime": "2026-09-13T07:50:31.234927Z"
+        },
+        "rejected": {
+          "code": "permission-denied",
+          "message": "7 PERMISSION_DENIED: update on g3-denied/reconnect denied by Security Rules: no allow statement evaluated to true"
+        },
+        "serverAfterRejected": {
+          "createTime": "2026-09-13T07:50:31.234927Z",
+          "fields": {
+            "owner": {
+              "stringValue": "YPX32g6ng2ZDQFQZDCqhOsRRwz9q"
+            },
+            "revision": {
+              "integerValue": "0"
+            }
+          },
+          "name": "projects/demo-app/databases/(default)/documents/g3-denied/reconnect",
+          "updateTime": "2026-09-13T07:50:31.234927Z"
+        },
+        "accepted": true,
+        "pending": true,
+        "profileAfterAccepted": {
+          "createTime": "2026-09-13T07:50:31.238598Z",
+          "fields": {
+            "owner": {
+              "stringValue": "Fra6HPZIsox8my7Vfij52zu9DfuC"
+            },
+            "revision": {
+              "integerValue": "2"
+            }
+          },
+          "name": "projects/demo-app/databases/(default)/documents/g3-profiles/Fra6HPZIsox8my7Vfij52zu9DfuC",
+          "updateTime": "2026-09-13T07:50:31.582033Z"
+        },
+        "serverAfterAccepted": {
+          "createTime": "2026-09-13T07:50:31.234927Z",
+          "fields": {
+            "owner": {
+              "stringValue": "YPX32g6ng2ZDQFQZDCqhOsRRwz9q"
+            },
+            "revision": {
+              "integerValue": "0"
+            }
+          },
+          "name": "projects/demo-app/databases/(default)/documents/g3-denied/reconnect",
+          "updateTime": "2026-09-13T07:50:31.234927Z"
+        },
+        "listenerAcknowledged": true
+      },
+      "cleanupComplete": true,
+      "freshClientPositiveControl": {
+        "initialRevision": 2,
+        "acceptedRevision": 3,
+        "pendingWritesResolved": true
+      }
+    }
+  },
+  "cleanup": {
+    "processStopped": true,
+    "listeners": [
+      {
+        "port": 56303,
+        "listenerClosed": true
+      },
+      {
+        "port": 56304,
+        "listenerClosed": true
+      }
+    ],
+    "ephemeralSessionDestroyed": true,
+    "logicalCleanupLimitation": "The inherited smoke explicitly deletes the final signed-in profile only; remaining in-memory users/documents are reclaimed by owned exec process termination, not claimed as individual production cleanup."
+  },
+  "review": {
+    "independentReviewer": "reused goal_g1 agent, separate from G3 implementers",
+    "mustFix": [],
+    "resolved": [
+      "The initial diagnosis targeted a document deleted by earlier setup; replaced with dedicated A-owned protected document and actual permission-denied assertion.",
+      "Transient pending listener state was not a failure: wait for explicit server revision acknowledgement.",
+      "Assert full typed protected state and exact accepted-profile REST state."
+    ],
+    "coordinatorCompletion": "Final typed state and partial/cleanup handling completed by coordinator after owner corrections.",
+    "reviewReturns": 3,
+    "remainingShouldFix": [
+      "Logical cleanup can be improved if this smoke is ever used with a persistent local session; current owned runner is ephemeral."
+    ]
+  },
+  "evidenceLimits": [
+    "No Cloud operations or new production comparison.",
+    "No browser or WebChannel claim.",
+    "Earlier incomplete probes and poisoned-client hypothesis are not confirmed runtime gaps."
+  ],
+  "newConfirmedRuntimeGaps": [],
+  "rawLogSha256": "b93e19ea8af14597628082bd74ec5a52c4956dad8f93f2db2f504c97a448d371"
+}

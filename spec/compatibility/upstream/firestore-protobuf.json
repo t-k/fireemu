@@ -1,0 +1,3671 @@
+{
+  "schemaVersion": 1,
+  "upstreamCommit": "1f38da6aa7661cf22e17247ad33d2d566a2c356e",
+  "descriptorSha256": "3fa4e3045827c76244e478059dc9f75b1c73ba60612f1921527eec98da1f0fe0",
+  "sources": [
+    {
+      "path": "crates/fireemu-proto-firestore/proto/google/api/annotations.proto",
+      "sha256": "e79ea741cb605a65e78ca322174764a4af9fde1962c1631e12b84c4934ba9a6c"
+    },
+    {
+      "path": "crates/fireemu-proto-firestore/proto/google/api/client.proto",
+      "sha256": "5e9fc117290fe7d3472791543c979bec7cf4497f3fe6ffaf9de9ae99cc4f1804"
+    },
+    {
+      "path": "crates/fireemu-proto-firestore/proto/google/api/field_behavior.proto",
+      "sha256": "bb7ed77725c95f751ec2c47cd92359d0137c39383b8a62aef41bab7aa7478da5"
+    },
+    {
+      "path": "crates/fireemu-proto-firestore/proto/google/api/http.proto",
+      "sha256": "ead99129aa15dd5f6233942030c72eec33bc0d7b1c7c260dc143293ef66c5b78"
+    },
+    {
+      "path": "crates/fireemu-proto-firestore/proto/google/api/launch_stage.proto",
+      "sha256": "68e22c9821227b4e84c7029569fce1055c21e6ccab991e0986bc75f12ef4dd82"
+    },
+    {
+      "path": "crates/fireemu-proto-firestore/proto/google/api/resource.proto",
+      "sha256": "815d51eada4341bf01672b474b5ec0abbea190e8df9f4aa26a0c96dbdad2993b"
+    },
+    {
+      "path": "crates/fireemu-proto-firestore/proto/google/api/routing.proto",
+      "sha256": "f31cb43c3efe07a80cd814eede587f1a38b4dac88053069dcfeaac86700511be"
+    },
+    {
+      "path": "crates/fireemu-proto-firestore/proto/google/firestore/v1/aggregation_result.proto",
+      "sha256": "0e75f0283c9813f0db3fc584fa1d20534944263697c3c94f79c9cc5bc2557a3c"
+    },
+    {
+      "path": "crates/fireemu-proto-firestore/proto/google/firestore/v1/bloom_filter.proto",
+      "sha256": "f7d44387d5ace96b6f76d03e092ac0e0e9f916f0342698ce4d064a0dac60401a"
+    },
+    {
+      "path": "crates/fireemu-proto-firestore/proto/google/firestore/v1/common.proto",
+      "sha256": "76b22a52fe379ab2b9c1a2b8d7a44b3d042cb05f6d3789b774c3d6f1b64d5bf7"
+    },
+    {
+      "path": "crates/fireemu-proto-firestore/proto/google/firestore/v1/document.proto",
+      "sha256": "7e7088b41f610fbe2405cfc26b5a837551a56510b769512f0e54b6baccb37aaa"
+    },
+    {
+      "path": "crates/fireemu-proto-firestore/proto/google/firestore/v1/explain_stats.proto",
+      "sha256": "64b72a1a6d6c56fb974c0b6b01010c483515cca97fc543ba51646e0237ad73cd"
+    },
+    {
+      "path": "crates/fireemu-proto-firestore/proto/google/firestore/v1/firestore.proto",
+      "sha256": "456dc27183788bdce2c3d7348e25d9dfd1ac50b2fc59fef00c32fdb96c299639"
+    },
+    {
+      "path": "crates/fireemu-proto-firestore/proto/google/firestore/v1/pipeline.proto",
+      "sha256": "52361c0d0beb74682b064f914f38e16d1b7d57a3240eb855ab9553dde208392f"
+    },
+    {
+      "path": "crates/fireemu-proto-firestore/proto/google/firestore/v1/query.proto",
+      "sha256": "3c41f325a151fbc6e26f3a161fdc8de177e5508c300b4e0ee0bb7a9ee2df0015"
+    },
+    {
+      "path": "crates/fireemu-proto-firestore/proto/google/firestore/v1/query_profile.proto",
+      "sha256": "0bafd463bc608c5c5396665f9b1cd45227eeb79419f63ed6f054307680cb834d"
+    },
+    {
+      "path": "crates/fireemu-proto-firestore/proto/google/firestore/v1/write.proto",
+      "sha256": "50b7b08bbe778f370e00a54dd520318e3add2d9daf4b4e519382aa6dc319129d"
+    },
+    {
+      "path": "crates/fireemu-proto-firestore/proto/google/longrunning/operations.proto",
+      "sha256": "5d2e7f9eeb55b8417b50e0a536a092babd32d26e4fbeb7099c6cdcda6e16db9c"
+    },
+    {
+      "path": "crates/fireemu-proto-firestore/proto/google/rpc/status.proto",
+      "sha256": "f5bfd262e6705c7ae73f32e0ad8ee20ce8c0a2578df8c4f76ebf76b572f295ed"
+    },
+    {
+      "path": "crates/fireemu-proto-firestore/proto/google/type/latlng.proto",
+      "sha256": "39666561b6c2cb45d488a56ad909b8ec9b5a086ccf62e28c662059170f3d1cbd"
+    }
+  ],
+  "surfaces": [
+    {
+      "locator": "google.firestore.v1.AggregationResult",
+      "kind": "message",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.AggregationResult.AggregateFieldsEntry",
+      "kind": "message",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.AggregationResult.AggregateFieldsEntry.key",
+      "kind": "field",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.AggregationResult.AggregateFieldsEntry.value",
+      "kind": "field",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.AggregationResult.aggregate_fields",
+      "kind": "field",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.ArrayValue",
+      "kind": "message",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.ArrayValue.values",
+      "kind": "field",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.BatchGetDocumentsRequest",
+      "kind": "message",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.BatchGetDocumentsRequest.consistency_selector",
+      "kind": "oneof",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.BatchGetDocumentsRequest.database",
+      "kind": "field",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.BatchGetDocumentsRequest.documents",
+      "kind": "field",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.BatchGetDocumentsRequest.mask",
+      "kind": "field",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.BatchGetDocumentsRequest.new_transaction",
+      "kind": "field",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.BatchGetDocumentsRequest.read_time",
+      "kind": "field",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.BatchGetDocumentsRequest.request_options",
+      "kind": "field",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.BatchGetDocumentsRequest.transaction",
+      "kind": "field",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.BatchGetDocumentsResponse",
+      "kind": "message",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.BatchGetDocumentsResponse.found",
+      "kind": "field",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.BatchGetDocumentsResponse.missing",
+      "kind": "field",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.BatchGetDocumentsResponse.read_time",
+      "kind": "field",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.BatchGetDocumentsResponse.result",
+      "kind": "oneof",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.BatchGetDocumentsResponse.transaction",
+      "kind": "field",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.BatchWriteRequest",
+      "kind": "message",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.BatchWriteRequest.LabelsEntry",
+      "kind": "message",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.BatchWriteRequest.LabelsEntry.key",
+      "kind": "field",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.BatchWriteRequest.LabelsEntry.value",
+      "kind": "field",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.BatchWriteRequest.database",
+      "kind": "field",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.BatchWriteRequest.labels",
+      "kind": "field",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.BatchWriteRequest.request_options",
+      "kind": "field",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.BatchWriteRequest.writes",
+      "kind": "field",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.BatchWriteResponse",
+      "kind": "message",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.BatchWriteResponse.status",
+      "kind": "field",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.BatchWriteResponse.write_results",
+      "kind": "field",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.BeginTransactionRequest",
+      "kind": "message",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.BeginTransactionRequest.database",
+      "kind": "field",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.BeginTransactionRequest.options",
+      "kind": "field",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.BeginTransactionRequest.request_options",
+      "kind": "field",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.BeginTransactionResponse",
+      "kind": "message",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.BeginTransactionResponse.transaction",
+      "kind": "field",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.BitSequence",
+      "kind": "message",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.BitSequence.bitmap",
+      "kind": "field",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.BitSequence.padding",
+      "kind": "field",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.BloomFilter",
+      "kind": "message",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.BloomFilter.bits",
+      "kind": "field",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.BloomFilter.hash_count",
+      "kind": "field",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.CommitRequest",
+      "kind": "message",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.CommitRequest.database",
+      "kind": "field",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.CommitRequest.request_options",
+      "kind": "field",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.CommitRequest.transaction",
+      "kind": "field",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.CommitRequest.writes",
+      "kind": "field",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.CommitResponse",
+      "kind": "message",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.CommitResponse.commit_time",
+      "kind": "field",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.CommitResponse.write_results",
+      "kind": "field",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.CreateDocumentRequest",
+      "kind": "message",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.CreateDocumentRequest.collection_id",
+      "kind": "field",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.CreateDocumentRequest.document",
+      "kind": "field",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.CreateDocumentRequest.document_id",
+      "kind": "field",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.CreateDocumentRequest.mask",
+      "kind": "field",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.CreateDocumentRequest.parent",
+      "kind": "field",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.CreateDocumentRequest.request_options",
+      "kind": "field",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.Cursor",
+      "kind": "message",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.Cursor.before",
+      "kind": "field",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.Cursor.values",
+      "kind": "field",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.DeleteDocumentRequest",
+      "kind": "message",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.DeleteDocumentRequest.current_document",
+      "kind": "field",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.DeleteDocumentRequest.name",
+      "kind": "field",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.DeleteDocumentRequest.request_options",
+      "kind": "field",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.Document",
+      "kind": "message",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.Document.FieldsEntry",
+      "kind": "message",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.Document.FieldsEntry.key",
+      "kind": "field",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.Document.FieldsEntry.value",
+      "kind": "field",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.Document.create_time",
+      "kind": "field",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.Document.fields",
+      "kind": "field",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.Document.name",
+      "kind": "field",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.Document.update_time",
+      "kind": "field",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.DocumentChange",
+      "kind": "message",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.DocumentChange.document",
+      "kind": "field",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.DocumentChange.removed_target_ids",
+      "kind": "field",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.DocumentChange.target_ids",
+      "kind": "field",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.DocumentDelete",
+      "kind": "message",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.DocumentDelete.document",
+      "kind": "field",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.DocumentDelete.read_time",
+      "kind": "field",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.DocumentDelete.removed_target_ids",
+      "kind": "field",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.DocumentMask",
+      "kind": "message",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.DocumentMask.field_paths",
+      "kind": "field",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.DocumentRemove",
+      "kind": "message",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.DocumentRemove.document",
+      "kind": "field",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.DocumentRemove.read_time",
+      "kind": "field",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.DocumentRemove.removed_target_ids",
+      "kind": "field",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.DocumentTransform",
+      "kind": "message",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.DocumentTransform.FieldTransform",
+      "kind": "message",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.DocumentTransform.FieldTransform.ServerValue",
+      "kind": "enum",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.DocumentTransform.FieldTransform.ServerValue.REQUEST_TIME",
+      "kind": "enum-value",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.DocumentTransform.FieldTransform.ServerValue.SERVER_VALUE_UNSPECIFIED",
+      "kind": "enum-value",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.DocumentTransform.FieldTransform.append_missing_elements",
+      "kind": "field",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.DocumentTransform.FieldTransform.field_path",
+      "kind": "field",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.DocumentTransform.FieldTransform.increment",
+      "kind": "field",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.DocumentTransform.FieldTransform.maximum",
+      "kind": "field",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.DocumentTransform.FieldTransform.minimum",
+      "kind": "field",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.DocumentTransform.FieldTransform.remove_all_from_array",
+      "kind": "field",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.DocumentTransform.FieldTransform.set_to_server_value",
+      "kind": "field",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.DocumentTransform.FieldTransform.transform_type",
+      "kind": "oneof",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.DocumentTransform.document",
+      "kind": "field",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.DocumentTransform.field_transforms",
+      "kind": "field",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.ExecutePipelineRequest",
+      "kind": "message",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.ExecutePipelineRequest.auto_commit_transaction",
+      "kind": "field",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.ExecutePipelineRequest.consistency_selector",
+      "kind": "oneof",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.ExecutePipelineRequest.database",
+      "kind": "field",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.ExecutePipelineRequest.new_transaction",
+      "kind": "field",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.ExecutePipelineRequest.pipeline_type",
+      "kind": "oneof",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.ExecutePipelineRequest.read_time",
+      "kind": "field",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.ExecutePipelineRequest.request_options",
+      "kind": "field",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.ExecutePipelineRequest.structured_pipeline",
+      "kind": "field",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.ExecutePipelineRequest.transaction",
+      "kind": "field",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.ExecutePipelineResponse",
+      "kind": "message",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.ExecutePipelineResponse.execution_time",
+      "kind": "field",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.ExecutePipelineResponse.explain_stats",
+      "kind": "field",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.ExecutePipelineResponse.results",
+      "kind": "field",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.ExecutePipelineResponse.transaction",
+      "kind": "field",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.ExecutionStats",
+      "kind": "message",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.ExecutionStats.debug_stats",
+      "kind": "field",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.ExecutionStats.execution_duration",
+      "kind": "field",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.ExecutionStats.read_operations",
+      "kind": "field",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.ExecutionStats.results_returned",
+      "kind": "field",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.ExistenceFilter",
+      "kind": "message",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.ExistenceFilter.count",
+      "kind": "field",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.ExistenceFilter.target_id",
+      "kind": "field",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.ExistenceFilter.unchanged_names",
+      "kind": "field",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.ExplainMetrics",
+      "kind": "message",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.ExplainMetrics.execution_stats",
+      "kind": "field",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.ExplainMetrics.plan_summary",
+      "kind": "field",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.ExplainOptions",
+      "kind": "message",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.ExplainOptions.analyze",
+      "kind": "field",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.ExplainStats",
+      "kind": "message",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.ExplainStats.data",
+      "kind": "field",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.Firestore.BatchGetDocuments",
+      "kind": "method",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.Firestore.BatchGetDocuments/input",
+      "kind": "request",
+      "type": ".google.firestore.v1.BatchGetDocumentsRequest",
+      "streaming": false,
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.Firestore.BatchGetDocuments/output",
+      "kind": "response",
+      "type": ".google.firestore.v1.BatchGetDocumentsResponse",
+      "streaming": true,
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.Firestore.BatchWrite",
+      "kind": "method",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.Firestore.BatchWrite/input",
+      "kind": "request",
+      "type": ".google.firestore.v1.BatchWriteRequest",
+      "streaming": false,
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.Firestore.BatchWrite/output",
+      "kind": "response",
+      "type": ".google.firestore.v1.BatchWriteResponse",
+      "streaming": false,
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.Firestore.BeginTransaction",
+      "kind": "method",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.Firestore.BeginTransaction/input",
+      "kind": "request",
+      "type": ".google.firestore.v1.BeginTransactionRequest",
+      "streaming": false,
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.Firestore.BeginTransaction/output",
+      "kind": "response",
+      "type": ".google.firestore.v1.BeginTransactionResponse",
+      "streaming": false,
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.Firestore.Commit",
+      "kind": "method",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.Firestore.Commit/input",
+      "kind": "request",
+      "type": ".google.firestore.v1.CommitRequest",
+      "streaming": false,
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.Firestore.Commit/output",
+      "kind": "response",
+      "type": ".google.firestore.v1.CommitResponse",
+      "streaming": false,
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.Firestore.CreateDocument",
+      "kind": "method",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.Firestore.CreateDocument/input",
+      "kind": "request",
+      "type": ".google.firestore.v1.CreateDocumentRequest",
+      "streaming": false,
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.Firestore.CreateDocument/output",
+      "kind": "response",
+      "type": ".google.firestore.v1.Document",
+      "streaming": false,
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.Firestore.DeleteDocument",
+      "kind": "method",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.Firestore.DeleteDocument/input",
+      "kind": "request",
+      "type": ".google.firestore.v1.DeleteDocumentRequest",
+      "streaming": false,
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.Firestore.DeleteDocument/output",
+      "kind": "response",
+      "type": ".google.protobuf.Empty",
+      "streaming": false,
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.Firestore.ExecutePipeline",
+      "kind": "method",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.Firestore.ExecutePipeline/input",
+      "kind": "request",
+      "type": ".google.firestore.v1.ExecutePipelineRequest",
+      "streaming": false,
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.Firestore.ExecutePipeline/output",
+      "kind": "response",
+      "type": ".google.firestore.v1.ExecutePipelineResponse",
+      "streaming": true,
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.Firestore.GetDocument",
+      "kind": "method",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.Firestore.GetDocument/input",
+      "kind": "request",
+      "type": ".google.firestore.v1.GetDocumentRequest",
+      "streaming": false,
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.Firestore.GetDocument/output",
+      "kind": "response",
+      "type": ".google.firestore.v1.Document",
+      "streaming": false,
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.Firestore.ListCollectionIds",
+      "kind": "method",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.Firestore.ListCollectionIds/input",
+      "kind": "request",
+      "type": ".google.firestore.v1.ListCollectionIdsRequest",
+      "streaming": false,
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.Firestore.ListCollectionIds/output",
+      "kind": "response",
+      "type": ".google.firestore.v1.ListCollectionIdsResponse",
+      "streaming": false,
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.Firestore.ListDocuments",
+      "kind": "method",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.Firestore.ListDocuments/input",
+      "kind": "request",
+      "type": ".google.firestore.v1.ListDocumentsRequest",
+      "streaming": false,
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.Firestore.ListDocuments/output",
+      "kind": "response",
+      "type": ".google.firestore.v1.ListDocumentsResponse",
+      "streaming": false,
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.Firestore.Listen",
+      "kind": "method",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.Firestore.Listen/input",
+      "kind": "request",
+      "type": ".google.firestore.v1.ListenRequest",
+      "streaming": true,
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.Firestore.Listen/output",
+      "kind": "response",
+      "type": ".google.firestore.v1.ListenResponse",
+      "streaming": true,
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.Firestore.PartitionQuery",
+      "kind": "method",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.Firestore.PartitionQuery/input",
+      "kind": "request",
+      "type": ".google.firestore.v1.PartitionQueryRequest",
+      "streaming": false,
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.Firestore.PartitionQuery/output",
+      "kind": "response",
+      "type": ".google.firestore.v1.PartitionQueryResponse",
+      "streaming": false,
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.Firestore.Rollback",
+      "kind": "method",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.Firestore.Rollback/input",
+      "kind": "request",
+      "type": ".google.firestore.v1.RollbackRequest",
+      "streaming": false,
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.Firestore.Rollback/output",
+      "kind": "response",
+      "type": ".google.protobuf.Empty",
+      "streaming": false,
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.Firestore.RunAggregationQuery",
+      "kind": "method",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.Firestore.RunAggregationQuery/input",
+      "kind": "request",
+      "type": ".google.firestore.v1.RunAggregationQueryRequest",
+      "streaming": false,
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.Firestore.RunAggregationQuery/output",
+      "kind": "response",
+      "type": ".google.firestore.v1.RunAggregationQueryResponse",
+      "streaming": true,
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.Firestore.RunQuery",
+      "kind": "method",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.Firestore.RunQuery/input",
+      "kind": "request",
+      "type": ".google.firestore.v1.RunQueryRequest",
+      "streaming": false,
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.Firestore.RunQuery/output",
+      "kind": "response",
+      "type": ".google.firestore.v1.RunQueryResponse",
+      "streaming": true,
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.Firestore.UpdateDocument",
+      "kind": "method",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.Firestore.UpdateDocument/input",
+      "kind": "request",
+      "type": ".google.firestore.v1.UpdateDocumentRequest",
+      "streaming": false,
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.Firestore.UpdateDocument/output",
+      "kind": "response",
+      "type": ".google.firestore.v1.Document",
+      "streaming": false,
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.Firestore.Write",
+      "kind": "method",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.Firestore.Write/input",
+      "kind": "request",
+      "type": ".google.firestore.v1.WriteRequest",
+      "streaming": true,
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.Firestore.Write/output",
+      "kind": "response",
+      "type": ".google.firestore.v1.WriteResponse",
+      "streaming": true,
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.Function",
+      "kind": "message",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.Function.OptionsEntry",
+      "kind": "message",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.Function.OptionsEntry.key",
+      "kind": "field",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.Function.OptionsEntry.value",
+      "kind": "field",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.Function.args",
+      "kind": "field",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.Function.name",
+      "kind": "field",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.Function.options",
+      "kind": "field",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.GetDocumentRequest",
+      "kind": "message",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.GetDocumentRequest.consistency_selector",
+      "kind": "oneof",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.GetDocumentRequest.mask",
+      "kind": "field",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.GetDocumentRequest.name",
+      "kind": "field",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.GetDocumentRequest.read_time",
+      "kind": "field",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.GetDocumentRequest.request_options",
+      "kind": "field",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.GetDocumentRequest.transaction",
+      "kind": "field",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.ListCollectionIdsRequest",
+      "kind": "message",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.ListCollectionIdsRequest.consistency_selector",
+      "kind": "oneof",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.ListCollectionIdsRequest.page_size",
+      "kind": "field",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.ListCollectionIdsRequest.page_token",
+      "kind": "field",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.ListCollectionIdsRequest.parent",
+      "kind": "field",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.ListCollectionIdsRequest.read_time",
+      "kind": "field",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.ListCollectionIdsRequest.request_options",
+      "kind": "field",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.ListCollectionIdsResponse",
+      "kind": "message",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.ListCollectionIdsResponse.collection_ids",
+      "kind": "field",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.ListCollectionIdsResponse.next_page_token",
+      "kind": "field",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.ListDocumentsRequest",
+      "kind": "message",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.ListDocumentsRequest.collection_id",
+      "kind": "field",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.ListDocumentsRequest.consistency_selector",
+      "kind": "oneof",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.ListDocumentsRequest.mask",
+      "kind": "field",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.ListDocumentsRequest.order_by",
+      "kind": "field",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.ListDocumentsRequest.page_size",
+      "kind": "field",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.ListDocumentsRequest.page_token",
+      "kind": "field",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.ListDocumentsRequest.parent",
+      "kind": "field",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.ListDocumentsRequest.read_time",
+      "kind": "field",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.ListDocumentsRequest.request_options",
+      "kind": "field",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.ListDocumentsRequest.show_missing",
+      "kind": "field",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.ListDocumentsRequest.transaction",
+      "kind": "field",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.ListDocumentsResponse",
+      "kind": "message",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.ListDocumentsResponse.documents",
+      "kind": "field",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.ListDocumentsResponse.next_page_token",
+      "kind": "field",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.ListenRequest",
+      "kind": "message",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.ListenRequest.LabelsEntry",
+      "kind": "message",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.ListenRequest.LabelsEntry.key",
+      "kind": "field",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.ListenRequest.LabelsEntry.value",
+      "kind": "field",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.ListenRequest.add_target",
+      "kind": "field",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.ListenRequest.database",
+      "kind": "field",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.ListenRequest.labels",
+      "kind": "field",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.ListenRequest.remove_target",
+      "kind": "field",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.ListenRequest.request_options",
+      "kind": "field",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.ListenRequest.target_change",
+      "kind": "oneof",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.ListenResponse",
+      "kind": "message",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.ListenResponse.document_change",
+      "kind": "field",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.ListenResponse.document_delete",
+      "kind": "field",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.ListenResponse.document_remove",
+      "kind": "field",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.ListenResponse.filter",
+      "kind": "field",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.ListenResponse.response_type",
+      "kind": "oneof",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.ListenResponse.target_change",
+      "kind": "field",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.MapValue",
+      "kind": "message",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.MapValue.FieldsEntry",
+      "kind": "message",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.MapValue.FieldsEntry.key",
+      "kind": "field",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.MapValue.FieldsEntry.value",
+      "kind": "field",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.MapValue.fields",
+      "kind": "field",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.PartitionQueryRequest",
+      "kind": "message",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.PartitionQueryRequest.consistency_selector",
+      "kind": "oneof",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.PartitionQueryRequest.page_size",
+      "kind": "field",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.PartitionQueryRequest.page_token",
+      "kind": "field",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.PartitionQueryRequest.parent",
+      "kind": "field",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.PartitionQueryRequest.partition_count",
+      "kind": "field",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.PartitionQueryRequest.query_type",
+      "kind": "oneof",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.PartitionQueryRequest.read_time",
+      "kind": "field",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.PartitionQueryRequest.request_options",
+      "kind": "field",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.PartitionQueryRequest.structured_query",
+      "kind": "field",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.PartitionQueryResponse",
+      "kind": "message",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.PartitionQueryResponse.next_page_token",
+      "kind": "field",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.PartitionQueryResponse.partitions",
+      "kind": "field",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.Pipeline",
+      "kind": "message",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.Pipeline.Stage",
+      "kind": "message",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.Pipeline.Stage.OptionsEntry",
+      "kind": "message",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.Pipeline.Stage.OptionsEntry.key",
+      "kind": "field",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.Pipeline.Stage.OptionsEntry.value",
+      "kind": "field",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.Pipeline.Stage.args",
+      "kind": "field",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.Pipeline.Stage.name",
+      "kind": "field",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.Pipeline.Stage.options",
+      "kind": "field",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.Pipeline.stages",
+      "kind": "field",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.PlanSummary",
+      "kind": "message",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.PlanSummary.indexes_used",
+      "kind": "field",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.Precondition",
+      "kind": "message",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.Precondition.condition_type",
+      "kind": "oneof",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.Precondition.exists",
+      "kind": "field",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.Precondition.update_time",
+      "kind": "field",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.RequestOptions",
+      "kind": "message",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.RequestOptions.request_tags",
+      "kind": "field",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.RollbackRequest",
+      "kind": "message",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.RollbackRequest.database",
+      "kind": "field",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.RollbackRequest.request_options",
+      "kind": "field",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.RollbackRequest.transaction",
+      "kind": "field",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.RunAggregationQueryRequest",
+      "kind": "message",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.RunAggregationQueryRequest.consistency_selector",
+      "kind": "oneof",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.RunAggregationQueryRequest.explain_options",
+      "kind": "field",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.RunAggregationQueryRequest.new_transaction",
+      "kind": "field",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.RunAggregationQueryRequest.parent",
+      "kind": "field",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.RunAggregationQueryRequest.query_type",
+      "kind": "oneof",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.RunAggregationQueryRequest.read_time",
+      "kind": "field",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.RunAggregationQueryRequest.request_options",
+      "kind": "field",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.RunAggregationQueryRequest.structured_aggregation_query",
+      "kind": "field",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.RunAggregationQueryRequest.transaction",
+      "kind": "field",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.RunAggregationQueryResponse",
+      "kind": "message",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.RunAggregationQueryResponse.explain_metrics",
+      "kind": "field",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.RunAggregationQueryResponse.read_time",
+      "kind": "field",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.RunAggregationQueryResponse.result",
+      "kind": "field",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.RunAggregationQueryResponse.transaction",
+      "kind": "field",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.RunQueryRequest",
+      "kind": "message",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.RunQueryRequest.consistency_selector",
+      "kind": "oneof",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.RunQueryRequest.explain_options",
+      "kind": "field",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.RunQueryRequest.new_transaction",
+      "kind": "field",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.RunQueryRequest.parent",
+      "kind": "field",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.RunQueryRequest.query_type",
+      "kind": "oneof",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.RunQueryRequest.read_time",
+      "kind": "field",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.RunQueryRequest.request_options",
+      "kind": "field",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.RunQueryRequest.structured_query",
+      "kind": "field",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.RunQueryRequest.transaction",
+      "kind": "field",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.RunQueryResponse",
+      "kind": "message",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.RunQueryResponse.continuation_selector",
+      "kind": "oneof",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.RunQueryResponse.document",
+      "kind": "field",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.RunQueryResponse.done",
+      "kind": "field",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.RunQueryResponse.explain_metrics",
+      "kind": "field",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.RunQueryResponse.read_time",
+      "kind": "field",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.RunQueryResponse.skipped_results",
+      "kind": "field",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.RunQueryResponse.transaction",
+      "kind": "field",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.StructuredAggregationQuery",
+      "kind": "message",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.StructuredAggregationQuery.Aggregation",
+      "kind": "message",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.StructuredAggregationQuery.Aggregation.Avg",
+      "kind": "message",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.StructuredAggregationQuery.Aggregation.Avg.field",
+      "kind": "field",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.StructuredAggregationQuery.Aggregation.Count",
+      "kind": "message",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.StructuredAggregationQuery.Aggregation.Count.up_to",
+      "kind": "field",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.StructuredAggregationQuery.Aggregation.Sum",
+      "kind": "message",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.StructuredAggregationQuery.Aggregation.Sum.field",
+      "kind": "field",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.StructuredAggregationQuery.Aggregation.alias",
+      "kind": "field",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.StructuredAggregationQuery.Aggregation.avg",
+      "kind": "field",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.StructuredAggregationQuery.Aggregation.count",
+      "kind": "field",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.StructuredAggregationQuery.Aggregation.operator",
+      "kind": "oneof",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.StructuredAggregationQuery.Aggregation.sum",
+      "kind": "field",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.StructuredAggregationQuery.aggregations",
+      "kind": "field",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.StructuredAggregationQuery.query_type",
+      "kind": "oneof",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.StructuredAggregationQuery.structured_query",
+      "kind": "field",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.StructuredPipeline",
+      "kind": "message",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.StructuredPipeline.OptionsEntry",
+      "kind": "message",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.StructuredPipeline.OptionsEntry.key",
+      "kind": "field",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.StructuredPipeline.OptionsEntry.value",
+      "kind": "field",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.StructuredPipeline.options",
+      "kind": "field",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.StructuredPipeline.pipeline",
+      "kind": "field",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.StructuredQuery",
+      "kind": "message",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.StructuredQuery.CollectionSelector",
+      "kind": "message",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.StructuredQuery.CollectionSelector.all_descendants",
+      "kind": "field",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.StructuredQuery.CollectionSelector.collection_id",
+      "kind": "field",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.StructuredQuery.CompositeFilter",
+      "kind": "message",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.StructuredQuery.CompositeFilter.Operator",
+      "kind": "enum",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.StructuredQuery.CompositeFilter.Operator.AND",
+      "kind": "enum-value",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.StructuredQuery.CompositeFilter.Operator.OPERATOR_UNSPECIFIED",
+      "kind": "enum-value",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.StructuredQuery.CompositeFilter.Operator.OR",
+      "kind": "enum-value",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.StructuredQuery.CompositeFilter.filters",
+      "kind": "field",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.StructuredQuery.CompositeFilter.op",
+      "kind": "field",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.StructuredQuery.Direction",
+      "kind": "enum",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.StructuredQuery.Direction.ASCENDING",
+      "kind": "enum-value",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.StructuredQuery.Direction.DESCENDING",
+      "kind": "enum-value",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.StructuredQuery.Direction.DIRECTION_UNSPECIFIED",
+      "kind": "enum-value",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.StructuredQuery.FieldFilter",
+      "kind": "message",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.StructuredQuery.FieldFilter.Operator",
+      "kind": "enum",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.StructuredQuery.FieldFilter.Operator.ARRAY_CONTAINS",
+      "kind": "enum-value",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.StructuredQuery.FieldFilter.Operator.ARRAY_CONTAINS_ANY",
+      "kind": "enum-value",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.StructuredQuery.FieldFilter.Operator.EQUAL",
+      "kind": "enum-value",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.StructuredQuery.FieldFilter.Operator.GREATER_THAN",
+      "kind": "enum-value",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.StructuredQuery.FieldFilter.Operator.GREATER_THAN_OR_EQUAL",
+      "kind": "enum-value",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.StructuredQuery.FieldFilter.Operator.IN",
+      "kind": "enum-value",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.StructuredQuery.FieldFilter.Operator.LESS_THAN",
+      "kind": "enum-value",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.StructuredQuery.FieldFilter.Operator.LESS_THAN_OR_EQUAL",
+      "kind": "enum-value",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.StructuredQuery.FieldFilter.Operator.NOT_EQUAL",
+      "kind": "enum-value",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.StructuredQuery.FieldFilter.Operator.NOT_IN",
+      "kind": "enum-value",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.StructuredQuery.FieldFilter.Operator.OPERATOR_UNSPECIFIED",
+      "kind": "enum-value",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.StructuredQuery.FieldFilter.field",
+      "kind": "field",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.StructuredQuery.FieldFilter.op",
+      "kind": "field",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.StructuredQuery.FieldFilter.value",
+      "kind": "field",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.StructuredQuery.FieldReference",
+      "kind": "message",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.StructuredQuery.FieldReference.field_path",
+      "kind": "field",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.StructuredQuery.Filter",
+      "kind": "message",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.StructuredQuery.Filter.composite_filter",
+      "kind": "field",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.StructuredQuery.Filter.field_filter",
+      "kind": "field",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.StructuredQuery.Filter.filter_type",
+      "kind": "oneof",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.StructuredQuery.Filter.unary_filter",
+      "kind": "field",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.StructuredQuery.FindNearest",
+      "kind": "message",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.StructuredQuery.FindNearest.DistanceMeasure",
+      "kind": "enum",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.StructuredQuery.FindNearest.DistanceMeasure.COSINE",
+      "kind": "enum-value",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.StructuredQuery.FindNearest.DistanceMeasure.DISTANCE_MEASURE_UNSPECIFIED",
+      "kind": "enum-value",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.StructuredQuery.FindNearest.DistanceMeasure.DOT_PRODUCT",
+      "kind": "enum-value",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.StructuredQuery.FindNearest.DistanceMeasure.EUCLIDEAN",
+      "kind": "enum-value",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.StructuredQuery.FindNearest.distance_measure",
+      "kind": "field",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.StructuredQuery.FindNearest.distance_result_field",
+      "kind": "field",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.StructuredQuery.FindNearest.distance_threshold",
+      "kind": "field",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.StructuredQuery.FindNearest.limit",
+      "kind": "field",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.StructuredQuery.FindNearest.query_vector",
+      "kind": "field",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.StructuredQuery.FindNearest.vector_field",
+      "kind": "field",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.StructuredQuery.Order",
+      "kind": "message",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.StructuredQuery.Order.direction",
+      "kind": "field",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.StructuredQuery.Order.field",
+      "kind": "field",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.StructuredQuery.Projection",
+      "kind": "message",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.StructuredQuery.Projection.fields",
+      "kind": "field",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.StructuredQuery.UnaryFilter",
+      "kind": "message",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.StructuredQuery.UnaryFilter.Operator",
+      "kind": "enum",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.StructuredQuery.UnaryFilter.Operator.IS_NAN",
+      "kind": "enum-value",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.StructuredQuery.UnaryFilter.Operator.IS_NOT_NAN",
+      "kind": "enum-value",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.StructuredQuery.UnaryFilter.Operator.IS_NOT_NULL",
+      "kind": "enum-value",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.StructuredQuery.UnaryFilter.Operator.IS_NULL",
+      "kind": "enum-value",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.StructuredQuery.UnaryFilter.Operator.OPERATOR_UNSPECIFIED",
+      "kind": "enum-value",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.StructuredQuery.UnaryFilter.field",
+      "kind": "field",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.StructuredQuery.UnaryFilter.op",
+      "kind": "field",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.StructuredQuery.UnaryFilter.operand_type",
+      "kind": "oneof",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.StructuredQuery.end_at",
+      "kind": "field",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.StructuredQuery.find_nearest",
+      "kind": "field",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.StructuredQuery.from",
+      "kind": "field",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.StructuredQuery.limit",
+      "kind": "field",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.StructuredQuery.offset",
+      "kind": "field",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.StructuredQuery.order_by",
+      "kind": "field",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.StructuredQuery.select",
+      "kind": "field",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.StructuredQuery.start_at",
+      "kind": "field",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.StructuredQuery.where",
+      "kind": "field",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.Target",
+      "kind": "message",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.Target.DocumentsTarget",
+      "kind": "message",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.Target.DocumentsTarget.documents",
+      "kind": "field",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.Target.QueryTarget",
+      "kind": "message",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.Target.QueryTarget.parent",
+      "kind": "field",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.Target.QueryTarget.query_type",
+      "kind": "oneof",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.Target.QueryTarget.structured_query",
+      "kind": "field",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.Target.documents",
+      "kind": "field",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.Target.expected_count",
+      "kind": "field",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.Target.once",
+      "kind": "field",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.Target.query",
+      "kind": "field",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.Target.read_time",
+      "kind": "field",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.Target.resume_token",
+      "kind": "field",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.Target.resume_type",
+      "kind": "oneof",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.Target.target_id",
+      "kind": "field",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.Target.target_type",
+      "kind": "oneof",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.TargetChange",
+      "kind": "message",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.TargetChange.TargetChangeType",
+      "kind": "enum",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.TargetChange.TargetChangeType.ADD",
+      "kind": "enum-value",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.TargetChange.TargetChangeType.CURRENT",
+      "kind": "enum-value",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.TargetChange.TargetChangeType.NO_CHANGE",
+      "kind": "enum-value",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.TargetChange.TargetChangeType.REMOVE",
+      "kind": "enum-value",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.TargetChange.TargetChangeType.RESET",
+      "kind": "enum-value",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.TargetChange.cause",
+      "kind": "field",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.TargetChange.read_time",
+      "kind": "field",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.TargetChange.resume_token",
+      "kind": "field",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.TargetChange.target_change_type",
+      "kind": "field",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.TargetChange.target_ids",
+      "kind": "field",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.TransactionOptions",
+      "kind": "message",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.TransactionOptions.ConcurrencyMode",
+      "kind": "enum",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.TransactionOptions.ConcurrencyMode.CONCURRENCY_MODE_UNSPECIFIED",
+      "kind": "enum-value",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.TransactionOptions.ConcurrencyMode.OPTIMISTIC",
+      "kind": "enum-value",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.TransactionOptions.ConcurrencyMode.PESSIMISTIC",
+      "kind": "enum-value",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.TransactionOptions.ReadOnly",
+      "kind": "message",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.TransactionOptions.ReadOnly.consistency_selector",
+      "kind": "oneof",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.TransactionOptions.ReadOnly.read_time",
+      "kind": "field",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.TransactionOptions.ReadWrite",
+      "kind": "message",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.TransactionOptions.ReadWrite.concurrency_mode",
+      "kind": "field",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.TransactionOptions.ReadWrite.retry_transaction",
+      "kind": "field",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.TransactionOptions.mode",
+      "kind": "oneof",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.TransactionOptions.read_only",
+      "kind": "field",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.TransactionOptions.read_write",
+      "kind": "field",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.UpdateDocumentRequest",
+      "kind": "message",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.UpdateDocumentRequest.current_document",
+      "kind": "field",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.UpdateDocumentRequest.document",
+      "kind": "field",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.UpdateDocumentRequest.mask",
+      "kind": "field",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.UpdateDocumentRequest.request_options",
+      "kind": "field",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.UpdateDocumentRequest.update_mask",
+      "kind": "field",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.Value",
+      "kind": "message",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.Value.array_value",
+      "kind": "field",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.Value.boolean_value",
+      "kind": "field",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.Value.bytes_value",
+      "kind": "field",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.Value.double_value",
+      "kind": "field",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.Value.field_reference_value",
+      "kind": "field",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.Value.function_value",
+      "kind": "field",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.Value.geo_point_value",
+      "kind": "field",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.Value.integer_value",
+      "kind": "field",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.Value.map_value",
+      "kind": "field",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.Value.null_value",
+      "kind": "field",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.Value.pipeline_value",
+      "kind": "field",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.Value.reference_value",
+      "kind": "field",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.Value.string_value",
+      "kind": "field",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.Value.timestamp_value",
+      "kind": "field",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.Value.value_type",
+      "kind": "oneof",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.Value.variable_reference_value",
+      "kind": "field",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.Write",
+      "kind": "message",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.Write.current_document",
+      "kind": "field",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.Write.delete",
+      "kind": "field",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.Write.operation",
+      "kind": "oneof",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.Write.transform",
+      "kind": "field",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.Write.update",
+      "kind": "field",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.Write.update_mask",
+      "kind": "field",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.Write.update_transforms",
+      "kind": "field",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.Write.verify",
+      "kind": "field",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.WriteRequest",
+      "kind": "message",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.WriteRequest.LabelsEntry",
+      "kind": "message",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.WriteRequest.LabelsEntry.key",
+      "kind": "field",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.WriteRequest.LabelsEntry.value",
+      "kind": "field",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.WriteRequest.database",
+      "kind": "field",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.WriteRequest.labels",
+      "kind": "field",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.WriteRequest.request_options",
+      "kind": "field",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.WriteRequest.stream_id",
+      "kind": "field",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.WriteRequest.stream_token",
+      "kind": "field",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.WriteRequest.writes",
+      "kind": "field",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.WriteResponse",
+      "kind": "message",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.WriteResponse.commit_time",
+      "kind": "field",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.WriteResponse.stream_id",
+      "kind": "field",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.WriteResponse.stream_token",
+      "kind": "field",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.WriteResponse.write_results",
+      "kind": "field",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.WriteResult",
+      "kind": "message",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.WriteResult.transform_results",
+      "kind": "field",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    },
+    {
+      "locator": "google.firestore.v1.WriteResult.update_time",
+      "kind": "field",
+      "transport": "gRPC",
+      "classification": "unknown",
+      "requirements": []
+    }
+  ]
+}

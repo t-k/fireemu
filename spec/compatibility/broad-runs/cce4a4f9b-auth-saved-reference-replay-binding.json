@@ -1,0 +1,56 @@
+{
+  "artifactSha256": "be2771b9f2093cced55e8158d8d5a72ed35e6ac5e32edddb068daa45511e12ae",
+  "cleanup": {
+    "allListenersClosed": true,
+    "allLocalAccountsAbsent": true,
+    "allOwnedProcessesExitCode": 0,
+    "allProcessesStopped": true
+  },
+  "collector": {
+    "path": "tools/auth-saved-reference-replay/run_replay.py",
+    "sha256": "ba889598a32f17fca0141e0823bcbe4cefffe2900067d0f8cf2873187a461867"
+  },
+  "comparator": {
+    "path": "tools/auth-saved-reference-replay/replay.py",
+    "sha256": "8a22e39add01376d486e5391e18c964e72f3688cc6a72d79511d48aceb92df4b"
+  },
+  "comparison": {
+    "digest": "20d0c8b727ff824d38cabbae401b3a6c15f3f0c20d45649d107a8a9cd0ff4ad8",
+    "path": "spec/compatibility/broad-runs/cce4a4f9b-auth-saved-reference-replay.json",
+    "sha256": "815cdae0db502c453ce4a7158445498e4b44ba4b138152385c26b1a007a82b2e"
+  },
+  "corpusSpec": {
+    "path": "spec/compatibility/broad-runs/auth-saved-reference-replay-v2.json",
+    "sha256": "107a848e6b611099bd7d8c920896a433812f6a601b0469aac01a6e15a82eb6ec"
+  },
+  "evidenceCategory": "saved-production-reference-comparison",
+  "kind": "auth-saved-reference-derived-binding-v1",
+  "localConfiguration": {
+    "fileSha256": "57214114009a6bc113c3acfd10e2fe27613bde8aaa72a1807c38a275883fb230",
+    "sha256": "dc4466f0080ac58a25e2df92b765d1d666052fef735e94f4fe697a2a2507ada4"
+  },
+  "manifestSha256": "082514d49e1a12154a1f1992fe64aea90ffd89ff22ef92c7998b1b693158ba99",
+  "parentPromoted": false,
+  "privateReplayReceiptSha256": "fd59b75f4b11df658ba52f390bad835bea44c5650f283c12551c1f7b118a6a8a",
+  "productionExecuted": false,
+  "savedReferences": [
+    {
+      "path": "spec/compatibility/evidence/auth-basic-v2/receipt.json",
+      "sha256": "0fb1648416ad615a7f18bcb79b2abad7c26b7ced6e202276cdb3a2eeb409304a"
+    },
+    {
+      "path": "spec/compatibility/evidence/auth-display-name/receipt.json",
+      "sha256": "1c1a1aba0bd2cadc0cba6f80e5fbd1266163f73242c9d90ce652b6e0cce02f47"
+    },
+    {
+      "path": "spec/compatibility/evidence/auth-password/receipt.json",
+      "sha256": "2054ac0ede30d54e91e59f3e6c5454714e97118dc6845fd22a34f86e70255d2f"
+    },
+    {
+      "path": "spec/compatibility/evidence/auth-profile/receipt.json",
+      "sha256": "75a58259e1dc8e26665e955bcea1b32bc008acc2bdb50e42430f9563500c7f87"
+    }
+  ],
+  "scope": "48 finite saved cases; configuration projections remain separate evidence. Historical v9/source-9830 preparation is unchanged.",
+  "sourceCommit": "cce4a4f9b7369938c89bd32a5106e8d3cab59f83"
+}

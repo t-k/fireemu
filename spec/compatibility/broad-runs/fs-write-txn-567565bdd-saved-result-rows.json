@@ -1,0 +1,316 @@
+{
+  "kind": "fs-write-transaction-saved-comparison-rows-v1",
+  "campaignId": "FS-WRITE-TXN-PRECEDENCE-01",
+  "evidenceCategory": "saved-production-reference-row-counts",
+  "describes": "spec/compatibility/broad-runs/fs-write-txn-567565bdd-saved-result.json",
+  "acquisitionValidated": false,
+  "promotionReady": false,
+  "newProductionRequests": 0,
+  "newBuilds": 0,
+  "anchor": {
+    "campaignId": "FS-WRITE-TXN-PRECEDENCE-01",
+    "productionSourceCommit": "dee737c14e68eb4f546b7ca4c827871fc48a2503",
+    "repairedArtifactSourceCommit": "567565bdd654cab00dbb84101edcc7bdc628e230",
+    "comparatorSourceCommit": "6dff3192a6b8b23ea462730bfc105747849a7788",
+    "comparatorSha256": "d0d2c818c086c4770d4a724a6f83059cbc522a898d992a252e48c45d3ef946af",
+    "productionReceiptSha256": "12956fbe82acefc106093eb2cd913ede9092f74aa98bd29f39e795492754b3f3",
+    "preparedInputsSha256": "b43dbf0bffb4ea575467d12fa49727c78d15a34900401bbb9b3d0ebbc29d65d5",
+    "repairedLocalReceiptSha256": "34724f3881f0920c6a3afc14cd735066d5f07e0b25411684e4552c284da142ab",
+    "repairedArtifactSha256": "e792e0bc1947bbd227b3ee9778eca093cda94fbde767911dd6139a6cbfd90be4",
+    "productionReceiptPath": "docs.local/logs/2026-09-17/stream-production-preflight/execution-dee737c14/receipt.json",
+    "preparedInputsPath": "docs.local/logs/2026-09-17/stream-production-preflight/approved-prepared-inputs-dee.json",
+    "repairedLocalReceiptPath": "docs.local/logs/2026-09-17/stream-repair-shadow-567565bdd/owned-run/receipt.json",
+    "repairedArtifactPath": "docs.local/logs/2026-09-17/stream-repair-shadow-567565bdd/fireemu-567565bdd",
+    "repairedArtifactRetained": true,
+    "repairedArtifactReExecuted": false,
+    "comparatorRebuilt": false,
+    "boundToCurrentHead": false
+  },
+  "rowDefinition": "One row is one data RPC, enumerated in the order the comparator ticks its finite RPC budget. The row count equals the data-request count both receipts record.",
+  "positiveAgreementDefinition": "Rows whose normalized semantic content is equal: MATCH plus EXPECTED_NONDETERMINISM.",
+  "recordedDataRequests": 23,
+  "originalComparison": {
+    "classification": "SEMANTIC_MISMATCH",
+    "rowCount": 23,
+    "counts": {
+      "MATCH": 0,
+      "EXPECTED_NONDETERMINISM": 15,
+      "SEMANTIC_MISMATCH": 8,
+      "INDETERMINATE": 0
+    },
+    "positiveAgreement": 15,
+    "unattributedDeviations": 0,
+    "rows": [
+      {
+        "index": 0,
+        "phase": "preflight-create-absence",
+        "classification": "SEMANTIC_MISMATCH"
+      },
+      {
+        "index": 1,
+        "phase": "preflight-create-absence",
+        "classification": "SEMANTIC_MISMATCH"
+      },
+      {
+        "index": 2,
+        "phase": "setup-control",
+        "classification": "EXPECTED_NONDETERMINISM"
+      },
+      {
+        "index": 3,
+        "phase": "setup-locked",
+        "classification": "EXPECTED_NONDETERMINISM"
+      },
+      {
+        "index": 4,
+        "phase": "positive-uncontended-stream",
+        "classification": "EXPECTED_NONDETERMINISM"
+      },
+      {
+        "index": 5,
+        "phase": "readback-control",
+        "classification": "EXPECTED_NONDETERMINISM"
+      },
+      {
+        "index": 6,
+        "phase": "begin-rw-transaction",
+        "classification": "EXPECTED_NONDETERMINISM"
+      },
+      {
+        "index": 7,
+        "phase": "get-locked-with-transaction",
+        "classification": "EXPECTED_NONDETERMINISM"
+      },
+      {
+        "index": 8,
+        "phase": "preflight-suffix-absence",
+        "classification": "SEMANTIC_MISMATCH"
+      },
+      {
+        "index": 9,
+        "phase": "contended-multiwrite-stream",
+        "classification": "EXPECTED_NONDETERMINISM"
+      },
+      {
+        "index": 10,
+        "phase": "readback-contention",
+        "role": "locked",
+        "classification": "EXPECTED_NONDETERMINISM"
+      },
+      {
+        "index": 11,
+        "phase": "readback-contention",
+        "role": "suffix",
+        "classification": "SEMANTIC_MISMATCH"
+      },
+      {
+        "index": 12,
+        "phase": "rollback",
+        "classification": "EXPECTED_NONDETERMINISM"
+      },
+      {
+        "index": 13,
+        "phase": "post-rollback-positive-stream",
+        "classification": "EXPECTED_NONDETERMINISM"
+      },
+      {
+        "index": 14,
+        "phase": "readback-post-rollback",
+        "classification": "EXPECTED_NONDETERMINISM"
+      },
+      {
+        "index": 15,
+        "phase": "cleanup",
+        "role": "control",
+        "classification": "EXPECTED_NONDETERMINISM"
+      },
+      {
+        "index": 16,
+        "phase": "cleanup",
+        "role": "control",
+        "classification": "EXPECTED_NONDETERMINISM"
+      },
+      {
+        "index": 17,
+        "phase": "cleanup",
+        "role": "control",
+        "classification": "SEMANTIC_MISMATCH"
+      },
+      {
+        "index": 18,
+        "phase": "cleanup",
+        "role": "locked",
+        "classification": "EXPECTED_NONDETERMINISM"
+      },
+      {
+        "index": 19,
+        "phase": "cleanup",
+        "role": "locked",
+        "classification": "EXPECTED_NONDETERMINISM"
+      },
+      {
+        "index": 20,
+        "phase": "cleanup",
+        "role": "locked",
+        "classification": "SEMANTIC_MISMATCH"
+      },
+      {
+        "index": 21,
+        "phase": "cleanup",
+        "role": "suffix",
+        "classification": "SEMANTIC_MISMATCH"
+      },
+      {
+        "index": 22,
+        "phase": "cleanup",
+        "role": "suffix",
+        "classification": "SEMANTIC_MISMATCH"
+      }
+    ]
+  },
+  "repairedComparison": {
+    "classification": "EXPECTED_NONDETERMINISM",
+    "rowCount": 23,
+    "counts": {
+      "MATCH": 0,
+      "EXPECTED_NONDETERMINISM": 23,
+      "SEMANTIC_MISMATCH": 0,
+      "INDETERMINATE": 0
+    },
+    "positiveAgreement": 23,
+    "unattributedDeviations": 0,
+    "rows": [
+      {
+        "index": 0,
+        "phase": "preflight-create-absence",
+        "classification": "EXPECTED_NONDETERMINISM"
+      },
+      {
+        "index": 1,
+        "phase": "preflight-create-absence",
+        "classification": "EXPECTED_NONDETERMINISM"
+      },
+      {
+        "index": 2,
+        "phase": "setup-control",
+        "classification": "EXPECTED_NONDETERMINISM"
+      },
+      {
+        "index": 3,
+        "phase": "setup-locked",
+        "classification": "EXPECTED_NONDETERMINISM"
+      },
+      {
+        "index": 4,
+        "phase": "positive-uncontended-stream",
+        "classification": "EXPECTED_NONDETERMINISM"
+      },
+      {
+        "index": 5,
+        "phase": "readback-control",
+        "classification": "EXPECTED_NONDETERMINISM"
+      },
+      {
+        "index": 6,
+        "phase": "begin-rw-transaction",
+        "classification": "EXPECTED_NONDETERMINISM"
+      },
+      {
+        "index": 7,
+        "phase": "get-locked-with-transaction",
+        "classification": "EXPECTED_NONDETERMINISM"
+      },
+      {
+        "index": 8,
+        "phase": "preflight-suffix-absence",
+        "classification": "EXPECTED_NONDETERMINISM"
+      },
+      {
+        "index": 9,
+        "phase": "contended-multiwrite-stream",
+        "classification": "EXPECTED_NONDETERMINISM"
+      },
+      {
+        "index": 10,
+        "phase": "readback-contention",
+        "role": "locked",
+        "classification": "EXPECTED_NONDETERMINISM"
+      },
+      {
+        "index": 11,
+        "phase": "readback-contention",
+        "role": "suffix",
+        "classification": "EXPECTED_NONDETERMINISM"
+      },
+      {
+        "index": 12,
+        "phase": "rollback",
+        "classification": "EXPECTED_NONDETERMINISM"
+      },
+      {
+        "index": 13,
+        "phase": "post-rollback-positive-stream",
+        "classification": "EXPECTED_NONDETERMINISM"
+      },
+      {
+        "index": 14,
+        "phase": "readback-post-rollback",
+        "classification": "EXPECTED_NONDETERMINISM"
+      },
+      {
+        "index": 15,
+        "phase": "cleanup",
+        "role": "control",
+        "classification": "EXPECTED_NONDETERMINISM"
+      },
+      {
+        "index": 16,
+        "phase": "cleanup",
+        "role": "control",
+        "classification": "EXPECTED_NONDETERMINISM"
+      },
+      {
+        "index": 17,
+        "phase": "cleanup",
+        "role": "control",
+        "classification": "EXPECTED_NONDETERMINISM"
+      },
+      {
+        "index": 18,
+        "phase": "cleanup",
+        "role": "locked",
+        "classification": "EXPECTED_NONDETERMINISM"
+      },
+      {
+        "index": 19,
+        "phase": "cleanup",
+        "role": "locked",
+        "classification": "EXPECTED_NONDETERMINISM"
+      },
+      {
+        "index": 20,
+        "phase": "cleanup",
+        "role": "locked",
+        "classification": "EXPECTED_NONDETERMINISM"
+      },
+      {
+        "index": 21,
+        "phase": "cleanup",
+        "role": "suffix",
+        "classification": "EXPECTED_NONDETERMINISM"
+      },
+      {
+        "index": 22,
+        "phase": "cleanup",
+        "role": "suffix",
+        "classification": "EXPECTED_NONDETERMINISM"
+      }
+    ]
+  },
+  "limitations": [
+    "Row counts are derived from the unmodified comparator; no classification rule was changed to produce them.",
+    "Raw-slot equality is a stricter test than the comparator identity relation, so the MATCH share is a lower bound and the positive-agreement total is unaffected.",
+    "This entry is not acquisition authority: only the recompare-v2 file entry can validate acquisition, and it needs the two frozen source worktrees.",
+    "The comparison still covers one finite stream and transaction case group, not all Write or transaction behavior."
+  ]
+}

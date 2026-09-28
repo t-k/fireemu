@@ -6,7 +6,7 @@ use fireemu_core_types::ids::{CollectionId, DatabaseId, DocumentId, IdSyntaxErro
 
 /// Maximum subcollection depth (`FS-LIMIT-SUBCOLLECTION-DEPTH`).
 pub const MAX_SUBCOLLECTION_DEPTH: usize = 100;
-/// Maximum UTF-8 bytes of a full resource name (`FS-LIMIT-DOCUMENT-NAME-BYTES`, 6 KiB).
+/// Maximum charged UTF-8 bytes of a document name (`FS-LIMIT-DOCUMENT-NAME-BYTES`, 6 KiB).
 pub const MAX_DOCUMENT_NAME_BYTES: usize = 6 * 1024;
 
 /// Path errors.
@@ -33,7 +33,7 @@ pub enum PathError {
         /// Inclusive maximum.
         maximum: usize,
     },
-    /// The full resource name is too long.
+    /// The charged document name is too long.
     NameTooLong {
         /// UTF-8 bytes.
         bytes: usize,
@@ -115,7 +115,10 @@ impl DocumentPath {
             database: database.clone(),
             pairs,
         };
-        let bytes = path.resource_name().len();
+        // Each segment is charged its UTF-8 bytes plus one terminator, and the name has a
+        // fixed 16-byte charge. The relative path has one fewer slash than segments, so
+        // this is exactly relative bytes + 17, independent of the project/database prefix.
+        let bytes = relative.len().saturating_add(17);
         if bytes > MAX_DOCUMENT_NAME_BYTES {
             return Err(PathError::NameTooLong {
                 bytes,

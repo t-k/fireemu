@@ -1,0 +1,307 @@
+{
+  "schemaVersion": 1,
+  "surfaces": [
+    {
+      "id": "AUTH-ENROLL-START",
+      "source": "AUTH-DISCOVERY-V2",
+      "locator": "accounts.mfaEnrollment.start",
+      "kind": "method",
+      "transport": "REST",
+      "classification": "requirement",
+      "reason": "Related existing invariant or local verification; not a complete specification mapping or an execution receipt.",
+      "requirements": [
+        "LIVE-AUTH-001"
+      ]
+    },
+    {
+      "id": "AUTH-ENROLL-FINALIZE",
+      "source": "AUTH-DISCOVERY-V2",
+      "locator": "accounts.mfaEnrollment.finalize",
+      "kind": "method",
+      "transport": "REST",
+      "classification": "requirement",
+      "reason": "Related existing invariant or local verification; not a complete specification mapping or an execution receipt.",
+      "requirements": [
+        "INV-AUTH-001",
+        "INV-AUTH-006",
+        "INV-AUTH-007"
+      ]
+    },
+    {
+      "id": "AUTH-SIGNIN-FINALIZE",
+      "source": "AUTH-DISCOVERY-V2",
+      "locator": "accounts.mfaSignIn.finalize",
+      "kind": "method",
+      "transport": "REST",
+      "classification": "requirement",
+      "reason": "Related existing invariant or local verification; not a complete specification mapping or an execution receipt.",
+      "requirements": [
+        "INV-AUTH-002"
+      ]
+    },
+    {
+      "id": "AUTH-SIGNUP",
+      "source": "AUTH-DISCOVERY-V1",
+      "locator": "accounts.signUp",
+      "kind": "method",
+      "transport": "REST",
+      "classification": "requirement",
+      "reason": "Related existing invariant or local verification; not a complete specification mapping or an execution receipt.",
+      "requirements": [
+        "INV-AUTH-005"
+      ]
+    },
+    {
+      "id": "AUTH-PASSWORD",
+      "source": "AUTH-DISCOVERY-V1",
+      "locator": "accounts.signInWithPassword",
+      "kind": "method",
+      "transport": "REST",
+      "classification": "requirement",
+      "reason": "Related existing invariant or local verification; not a complete specification mapping or an execution receipt.",
+      "requirements": [
+        "AUTH-PRIVACY-001"
+      ]
+    },
+    {
+      "id": "AUTH-REFRESH",
+      "source": "AUTH-REST",
+      "locator": "POST https://securetoken.googleapis.com/v1/token",
+      "kind": "method",
+      "transport": "REST",
+      "classification": "requirement",
+      "reason": "Finite local Secure Token refresh invariants are mapped; production response, verifier-path and release-specific behavior remain separately unobserved.",
+      "requirements": [
+        "AUTH-REFRESH-001"
+      ]
+    },
+    {
+      "id": "FS-COMMIT",
+      "source": "FS-RPC",
+      "locator": "google.firestore.v1.Firestore.Commit",
+      "kind": "method",
+      "transport": "gRPC",
+      "classification": "requirement",
+      "reason": "Related existing invariant or local verification; not a complete specification mapping or an execution receipt.",
+      "requirements": [
+        "REQ-FS-PARITY-01"
+      ]
+    },
+    {
+      "id": "FS-BATCHWRITE",
+      "source": "FS-RPC",
+      "locator": "google.firestore.v1.Firestore.BatchWrite",
+      "kind": "method",
+      "transport": "gRPC",
+      "classification": "requirement",
+      "reason": "Local REST/gRPC partial-failure cases cover response slots and post-state; production response and broader BatchWrite parity remain open.",
+      "requirements": [
+        "REQ-FS-PARITY-01"
+      ]
+    },
+    {
+      "id": "FS-AGGREGATE",
+      "source": "FS-RPC",
+      "locator": "google.firestore.v1.Firestore.RunAggregationQuery",
+      "kind": "method",
+      "transport": "gRPC",
+      "classification": "requirement",
+      "reason": "Related existing invariant or local verification; not a complete specification mapping or an execution receipt.",
+      "requirements": [
+        "REQ-FS-AGG-STREAM-01"
+      ]
+    },
+    {
+      "id": "FS-AGGREGATE-REST",
+      "source": "FS-DISCOVERY-V1",
+      "locator": "projects.databases.documents.runAggregationQuery",
+      "kind": "method",
+      "transport": "REST",
+      "classification": "requirement",
+      "reason": "Related existing invariant or local verification; not a complete specification mapping or an execution receipt.",
+      "requirements": [
+        "REQ-FS-PARITY-01"
+      ]
+    },
+    {
+      "id": "FS-AGGREGATION-REQUEST",
+      "source": "FS-RPC",
+      "locator": "google.firestore.v1.RunAggregationQueryRequest",
+      "kind": "request",
+      "transport": "gRPC",
+      "classification": "requirement",
+      "reason": "Finite local requirement mapping; production protocol or field-level compatibility remains separately unobserved.",
+      "requirements": [
+        "REQ-FS-AGG-STREAM-01"
+      ]
+    },
+    {
+      "id": "FS-AGGREGATION-RESPONSE",
+      "source": "FS-RPC",
+      "locator": "google.firestore.v1.RunAggregationQueryResponse",
+      "kind": "response",
+      "transport": "gRPC",
+      "classification": "requirement",
+      "reason": "Finite local requirement mapping; production protocol or field-level compatibility remains separately unobserved.",
+      "requirements": [
+        "REQ-FS-AGG-STREAM-01"
+      ]
+    },
+    {
+      "id": "FS-AGGREGATION-FIELD",
+      "source": "FS-RPC",
+      "locator": "google.firestore.v1.StructuredAggregationQuery.aggregations",
+      "kind": "field",
+      "transport": "gRPC",
+      "classification": "requirement",
+      "reason": "Finite local requirement mapping; production protocol or field-level compatibility remains separately unobserved.",
+      "requirements": [
+        "REQ-FS-AGG-STREAM-01"
+      ]
+    },
+    {
+      "id": "FS-AGGREGATION-ONEOF",
+      "source": "FS-RPC",
+      "locator": "google.firestore.v1.StructuredAggregationQuery.Aggregation.operator",
+      "kind": "oneof",
+      "transport": "gRPC",
+      "classification": "requirement",
+      "reason": "Finite local requirement mapping; production protocol or field-level compatibility remains separately unobserved.",
+      "requirements": [
+        "REQ-FS-AGG-STREAM-01"
+      ]
+    },
+    {
+      "id": "FS-FILTER-ENUM",
+      "source": "FS-RPC",
+      "locator": "google.firestore.v1.StructuredQuery.FieldFilter.Operator",
+      "kind": "enum",
+      "transport": "gRPC",
+      "classification": "requirement",
+      "reason": "Finite local requirement mapping; production protocol or field-level compatibility remains separately unobserved.",
+      "requirements": [
+        "REQ-FS-PARITY-01"
+      ]
+    },
+    {
+      "id": "FS-LISTEN",
+      "source": "FS-RPC",
+      "locator": "google.firestore.v1.Firestore.Listen",
+      "kind": "method",
+      "transport": "gRPC",
+      "classification": "requirement",
+      "reason": "Finite local requirement mapping; production protocol or field-level compatibility remains separately unobserved.",
+      "requirements": [
+        "FS-WEB-BOUND-001"
+      ]
+    },
+    {
+      "id": "FS-WRITE",
+      "source": "FS-RPC",
+      "locator": "google.firestore.v1.Firestore.Write",
+      "kind": "method",
+      "transport": "gRPC",
+      "classification": "requirement",
+      "reason": "FS-WRITE-STREAM-LOCAL records finite local gRPC handshake, acknowledgement and post-state evidence; production, REST and SDK parity remain open.",
+      "requirements": [
+        "REQ-FS-PARITY-01"
+      ]
+    },
+    {
+      "id": "FS-WEBCHANNEL",
+      "source": "FS-SDK",
+      "locator": "SDK WebChannel Listen/Write transport; SDK source revision pending",
+      "kind": "transport",
+      "transport": "WebChannel",
+      "classification": "requirement",
+      "reason": "Related existing invariant or local verification; not a complete specification mapping or an execution receipt.",
+      "requirements": [
+        "FS-WEB-BOUND-001"
+      ]
+    },
+    {
+      "id": "FS-PIPELINE",
+      "source": "FS-PROTO",
+      "locator": "google.firestore.v1.Firestore.ExecutePipeline",
+      "kind": "method",
+      "transport": "gRPC",
+      "classification": "requirement",
+      "reason": "Explicit unsupported-stage refusal invariant; FS-PIPE-RPC-1 implements a finite local collection / optional where(equal(top-level field, scalar literal)) / optional select / optional non-negative int32 offset / optional limit subset. This mapping does not establish full execution or production parity.",
+      "requirements": [
+        "INV-PIPE-001"
+      ]
+    },
+    {
+      "id": "FS-DATABASES",
+      "source": "FS-ADMIN",
+      "locator": "projects.databases.list and projects.databases.get",
+      "kind": "method",
+      "transport": "REST",
+      "classification": "requirement",
+      "reason": "Finite local-only Standard/Native read inventory; Enterprise and MongoDB-compatible modes are explicitly refused.",
+      "requirements": [
+        "REQ-FS-PARITY-01"
+      ]
+    },
+    {
+      "id": "AUTH-PROJECT-CONFIG",
+      "source": "AUTH-DISCOVERY-V2",
+      "locator": "identitytoolkit.projects.updateConfig",
+      "kind": "method",
+      "transport": "REST",
+      "classification": "requirement",
+      "reason": "The real Admin v2 handler and regression matrix cover the bounded updateMask contract; production configuration parity remains separately unobserved.",
+      "requirements": [
+        "AUTH-CONFIG-MASK-001"
+      ]
+    },
+    {
+      "id": "AUTH-PROJECT-CONFIG-MASK",
+      "source": "AUTH-DISCOVERY-V2",
+      "locator": "identitytoolkit.projects.updateConfig/parameters/updateMask",
+      "kind": "field",
+      "transport": "REST",
+      "classification": "requirement",
+      "reason": "The bounded leaf-mask selection and atomic validation behavior are locally verified; production field-level parity remains separately unobserved.",
+      "requirements": [
+        "AUTH-CONFIG-MASK-001"
+      ]
+    },
+    {
+      "id": "AUTH-SAML-SIGN-REQUEST",
+      "source": "AUTH-DISCOVERY-V2",
+      "locator": "schemas/GoogleCloudIdentitytoolkitAdminV2IdpConfig/properties/signRequest",
+      "kind": "field",
+      "transport": "REST",
+      "classification": "requirement",
+      "reason": "Project and tenant inbound SAML leaf-mask defaults and atomic validation are locally verified; production provider-configuration parity remains separately unobserved.",
+      "requirements": [
+        "AUTH-SAML-MASK-001"
+      ]
+    },
+    {
+      "id": "AUTH-SAML-PATCH",
+      "source": "AUTH-DISCOVERY-V2",
+      "locator": "identitytoolkit.projects.inboundSamlConfigs.patch",
+      "kind": "method",
+      "transport": "REST",
+      "classification": "requirement",
+      "reason": "The project inbound SAML PATCH path is covered by the bounded signRequest leaf-mask/default and atomicity matrix; production provider-configuration parity remains separately unobserved.",
+      "requirements": [
+        "AUTH-SAML-MASK-001"
+      ]
+    },
+    {
+      "id": "AUTH-SAML-TENANT-PATCH",
+      "source": "AUTH-DISCOVERY-V2",
+      "locator": "identitytoolkit.projects.tenants.inboundSamlConfigs.patch",
+      "kind": "method",
+      "transport": "REST",
+      "classification": "requirement",
+      "reason": "The tenant inbound SAML PATCH path is covered by the same bounded leaf-mask/default and atomicity matrix; production provider-configuration parity remains separately unobserved.",
+      "requirements": [
+        "AUTH-SAML-MASK-001"
+      ]
+    }
+  ]
+}

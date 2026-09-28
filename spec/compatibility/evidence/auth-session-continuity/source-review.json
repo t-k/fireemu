@@ -1,0 +1,389 @@
+{
+  "schemaVersion": 1,
+  "kind": "agent-authored-source-review",
+  "reviewer": "Codex (agent-authored interpretation, not human approval)",
+  "reviewedAt": "2026-09-10",
+  "executionApproval": "not-granted",
+  "sources": [
+    {
+      "id": "auth-rest",
+      "url": "https://firebase.google.com/docs/reference/rest/auth",
+      "rawSha256": "c3454bcf8f4e565422657ba8d55ea0d23bb3d82a2bfbc0a3c6aaabdcfc888af8",
+      "bodySha256": "a9b8129d0d42db1aa1b7eed2121ac7dc2be6d5b53c3976502ecf6b753b09c0c9",
+      "fetchedAt": "2026-09-10T04:04:29.598062+00:00",
+      "locators": [
+        "section-create-email-password",
+        "section-sign-in-email-password",
+        "section-change-password",
+        "section-get-account-info",
+        "section-refresh-token",
+        "section-delete-account"
+      ]
+    },
+    {
+      "id": "password-policy",
+      "url": "https://docs.cloud.google.com/identity-platform/docs/reference/rest/v2/TopLevel/getPasswordPolicy",
+      "rawSha256": "e0358d44836900cf88704efeb032ea23674afa1be5f60badd618631aae9319e6",
+      "bodySha256": "32ee1fa52b8d6dcdeb7c051dcd34d22378ed5e6fac51aed65092f26879ee26fe",
+      "fetchedAt": "2026-09-10T05:41:19.870929+00:00",
+      "locators": [
+        "response-body",
+        "customstrengthoptions",
+        "enforcementstate"
+      ]
+    },
+    {
+      "id": "email-privacy",
+      "url": "https://docs.cloud.google.com/identity-platform/docs/admin/email-enumeration-protection",
+      "rawSha256": "0ae2cb918d4d56d047a2b928a5eb66d96a80127fb60a7ed55e5389f5551a8834",
+      "bodySha256": "6457558a31c25b2f770f277c29839eecc1fa2f5e0c3878f2e3df3911e2a3061a",
+      "fetchedAt": "2026-09-10T05:41:20.751654+00:00",
+      "locators": [
+        "overview",
+        "example_of_an_error_response"
+      ]
+    },
+    {
+      "id": "session-management",
+      "url": "https://firebase.google.com/docs/auth/admin/manage-sessions",
+      "rawSha256": "c569fd71427ca95d1a0d2c5fa3e1be02ed2a99fb8d3d3dd369640564890768ba",
+      "bodySha256": "5302929198bef46eff0214c11609881bd610df20af898cc9a411a6c0b8185a9f",
+      "fetchedAt": "2026-09-10T06:28:09.936836+00:00",
+      "locators": [
+        "revoke_refresh_tokens",
+        "detect_id_token_revocation",
+        "detect_id_token_revocation_in_the_sdk"
+      ]
+    }
+  ],
+  "obligations": [
+    {
+      "id": "AUTH-CONTINUITY-SIGNUP",
+      "case": "signup",
+      "basis": "harness-control",
+      "source": "auth-rest",
+      "locator": "section-create-email-password",
+      "condition": "Successful same-account lifecycle or baseline control in the no-password-change experiment.",
+      "existingRequirement": null
+    },
+    {
+      "id": "AUTH-CONTINUITY-SIGNIN-A",
+      "case": "signin-a",
+      "basis": "harness-control",
+      "source": "auth-rest",
+      "locator": "section-sign-in-email-password",
+      "condition": "Successful same-account lifecycle or baseline control in the no-password-change experiment.",
+      "existingRequirement": null
+    },
+    {
+      "id": "AUTH-CONTINUITY-SIGNIN-B",
+      "case": "signin-b",
+      "basis": "harness-control",
+      "source": "auth-rest",
+      "locator": "section-sign-in-email-password",
+      "condition": "Successful same-account lifecycle or baseline control in the no-password-change experiment.",
+      "existingRequirement": null
+    },
+    {
+      "id": "AUTH-CONTINUITY-A-ID-BASELINE",
+      "case": "a-id-baseline",
+      "basis": "harness-control",
+      "source": "auth-rest",
+      "locator": "section-get-account-info",
+      "condition": "Successful same-account lifecycle or baseline control in the no-password-change experiment.",
+      "existingRequirement": null
+    },
+    {
+      "id": "AUTH-CONTINUITY-A-REFRESH-BASELINE-1",
+      "case": "a-refresh-baseline-1",
+      "basis": "harness-control",
+      "source": "auth-rest",
+      "locator": "section-refresh-token",
+      "condition": "Successful same-account lifecycle or baseline control in the no-password-change experiment.",
+      "existingRequirement": null
+    },
+    {
+      "id": "AUTH-CONTINUITY-A-REFRESH-BASELINE-2",
+      "case": "a-refresh-baseline-2",
+      "basis": "harness-control",
+      "source": "auth-rest",
+      "locator": "section-refresh-token",
+      "condition": "Successful same-account lifecycle or baseline control in the no-password-change experiment.",
+      "existingRequirement": null
+    },
+    {
+      "id": "AUTH-CONTINUITY-B-ID-BASELINE",
+      "case": "b-id-baseline",
+      "basis": "harness-control",
+      "source": "auth-rest",
+      "locator": "section-get-account-info",
+      "condition": "Successful same-account lifecycle or baseline control in the no-password-change experiment.",
+      "existingRequirement": null
+    },
+    {
+      "id": "AUTH-CONTINUITY-B-REFRESH-BASELINE-1",
+      "case": "b-refresh-baseline-1",
+      "basis": "harness-control",
+      "source": "auth-rest",
+      "locator": "section-refresh-token",
+      "condition": "Successful same-account lifecycle or baseline control in the no-password-change experiment.",
+      "existingRequirement": null
+    },
+    {
+      "id": "AUTH-CONTINUITY-B-REFRESH-BASELINE-2",
+      "case": "b-refresh-baseline-2",
+      "basis": "harness-control",
+      "source": "auth-rest",
+      "locator": "section-refresh-token",
+      "condition": "Successful same-account lifecycle or baseline control in the no-password-change experiment.",
+      "existingRequirement": null
+    },
+    {
+      "id": "AUTH-CONTINUITY-REFERENCE-REFRESH",
+      "case": "reference-refresh",
+      "basis": "harness-control",
+      "source": "auth-rest",
+      "locator": "section-refresh-token",
+      "condition": "Exchange frozen A.refresh after a three-second gap and use its returned ID token for lookup. No password mutation; reference refresh may equal A's original bytes.",
+      "existingRequirement": null
+    },
+    {
+      "id": "AUTH-CONTINUITY-A-ID@0",
+      "case": "a-id@0",
+      "basis": "harness-control",
+      "source": "auth-rest",
+      "locator": "section-get-account-info",
+      "condition": "Fixed no-password-change continuity sample. Require accepted primary response and, for refresh, successful lookup using the returned ID token; no matching-rejection success.",
+      "existingRequirement": null
+    },
+    {
+      "id": "AUTH-CONTINUITY-A-REFRESH@0",
+      "case": "a-refresh@0",
+      "basis": "harness-control",
+      "source": "auth-rest",
+      "locator": "section-refresh-token",
+      "condition": "Fixed no-password-change continuity sample. Require accepted primary response and, for refresh, successful lookup using the returned ID token; no matching-rejection success.",
+      "existingRequirement": null
+    },
+    {
+      "id": "AUTH-CONTINUITY-B-ID@0",
+      "case": "b-id@0",
+      "basis": "harness-control",
+      "source": "auth-rest",
+      "locator": "section-get-account-info",
+      "condition": "Fixed no-password-change continuity sample. Require accepted primary response and, for refresh, successful lookup using the returned ID token; no matching-rejection success.",
+      "existingRequirement": null
+    },
+    {
+      "id": "AUTH-CONTINUITY-B-REFRESH@0",
+      "case": "b-refresh@0",
+      "basis": "harness-control",
+      "source": "auth-rest",
+      "locator": "section-refresh-token",
+      "condition": "Fixed no-password-change continuity sample. Require accepted primary response and, for refresh, successful lookup using the returned ID token; no matching-rejection success.",
+      "existingRequirement": null
+    },
+    {
+      "id": "AUTH-CONTINUITY-REFERENCE-ID@0",
+      "case": "reference-id@0",
+      "basis": "harness-control",
+      "source": "auth-rest",
+      "locator": "section-get-account-info",
+      "condition": "Fixed no-password-change continuity sample. Require accepted primary response and, for refresh, successful lookup using the returned ID token; no matching-rejection success.",
+      "existingRequirement": null
+    },
+    {
+      "id": "AUTH-CONTINUITY-REFERENCE-REFRESH@0",
+      "case": "reference-refresh@0",
+      "basis": "harness-control",
+      "source": "auth-rest",
+      "locator": "section-refresh-token",
+      "condition": "Fixed no-password-change continuity sample. Require accepted primary response and, for refresh, successful lookup using the returned ID token; no matching-rejection success.",
+      "existingRequirement": null
+    },
+    {
+      "id": "AUTH-CONTINUITY-A-ID@10000",
+      "case": "a-id@10000",
+      "basis": "harness-control",
+      "source": "auth-rest",
+      "locator": "section-get-account-info",
+      "condition": "Fixed no-password-change continuity sample. Require accepted primary response and, for refresh, successful lookup using the returned ID token; no matching-rejection success.",
+      "existingRequirement": null
+    },
+    {
+      "id": "AUTH-CONTINUITY-A-REFRESH@10000",
+      "case": "a-refresh@10000",
+      "basis": "harness-control",
+      "source": "auth-rest",
+      "locator": "section-refresh-token",
+      "condition": "Fixed no-password-change continuity sample. Require accepted primary response and, for refresh, successful lookup using the returned ID token; no matching-rejection success.",
+      "existingRequirement": null
+    },
+    {
+      "id": "AUTH-CONTINUITY-B-ID@10000",
+      "case": "b-id@10000",
+      "basis": "harness-control",
+      "source": "auth-rest",
+      "locator": "section-get-account-info",
+      "condition": "Fixed no-password-change continuity sample. Require accepted primary response and, for refresh, successful lookup using the returned ID token; no matching-rejection success.",
+      "existingRequirement": null
+    },
+    {
+      "id": "AUTH-CONTINUITY-B-REFRESH@10000",
+      "case": "b-refresh@10000",
+      "basis": "harness-control",
+      "source": "auth-rest",
+      "locator": "section-refresh-token",
+      "condition": "Fixed no-password-change continuity sample. Require accepted primary response and, for refresh, successful lookup using the returned ID token; no matching-rejection success.",
+      "existingRequirement": null
+    },
+    {
+      "id": "AUTH-CONTINUITY-REFERENCE-ID@10000",
+      "case": "reference-id@10000",
+      "basis": "harness-control",
+      "source": "auth-rest",
+      "locator": "section-get-account-info",
+      "condition": "Fixed no-password-change continuity sample. Require accepted primary response and, for refresh, successful lookup using the returned ID token; no matching-rejection success.",
+      "existingRequirement": null
+    },
+    {
+      "id": "AUTH-CONTINUITY-REFERENCE-REFRESH@10000",
+      "case": "reference-refresh@10000",
+      "basis": "harness-control",
+      "source": "auth-rest",
+      "locator": "section-refresh-token",
+      "condition": "Fixed no-password-change continuity sample. Require accepted primary response and, for refresh, successful lookup using the returned ID token; no matching-rejection success.",
+      "existingRequirement": null
+    },
+    {
+      "id": "AUTH-CONTINUITY-A-ID@30000",
+      "case": "a-id@30000",
+      "basis": "harness-control",
+      "source": "auth-rest",
+      "locator": "section-get-account-info",
+      "condition": "Fixed no-password-change continuity sample. Require accepted primary response and, for refresh, successful lookup using the returned ID token; no matching-rejection success.",
+      "existingRequirement": null
+    },
+    {
+      "id": "AUTH-CONTINUITY-A-REFRESH@30000",
+      "case": "a-refresh@30000",
+      "basis": "harness-control",
+      "source": "auth-rest",
+      "locator": "section-refresh-token",
+      "condition": "Fixed no-password-change continuity sample. Require accepted primary response and, for refresh, successful lookup using the returned ID token; no matching-rejection success.",
+      "existingRequirement": null
+    },
+    {
+      "id": "AUTH-CONTINUITY-B-ID@30000",
+      "case": "b-id@30000",
+      "basis": "harness-control",
+      "source": "auth-rest",
+      "locator": "section-get-account-info",
+      "condition": "Fixed no-password-change continuity sample. Require accepted primary response and, for refresh, successful lookup using the returned ID token; no matching-rejection success.",
+      "existingRequirement": null
+    },
+    {
+      "id": "AUTH-CONTINUITY-B-REFRESH@30000",
+      "case": "b-refresh@30000",
+      "basis": "harness-control",
+      "source": "auth-rest",
+      "locator": "section-refresh-token",
+      "condition": "Fixed no-password-change continuity sample. Require accepted primary response and, for refresh, successful lookup using the returned ID token; no matching-rejection success.",
+      "existingRequirement": null
+    },
+    {
+      "id": "AUTH-CONTINUITY-REFERENCE-ID@30000",
+      "case": "reference-id@30000",
+      "basis": "harness-control",
+      "source": "auth-rest",
+      "locator": "section-get-account-info",
+      "condition": "Fixed no-password-change continuity sample. Require accepted primary response and, for refresh, successful lookup using the returned ID token; no matching-rejection success.",
+      "existingRequirement": null
+    },
+    {
+      "id": "AUTH-CONTINUITY-REFERENCE-REFRESH@30000",
+      "case": "reference-refresh@30000",
+      "basis": "harness-control",
+      "source": "auth-rest",
+      "locator": "section-refresh-token",
+      "condition": "Fixed no-password-change continuity sample. Require accepted primary response and, for refresh, successful lookup using the returned ID token; no matching-rejection success.",
+      "existingRequirement": null
+    },
+    {
+      "id": "AUTH-CONTINUITY-FINAL-SIGNIN",
+      "case": "final-signin",
+      "basis": "harness-control",
+      "source": "auth-rest",
+      "locator": "section-sign-in-email-password",
+      "condition": "Signin with the original unchanged password after the finite window.",
+      "existingRequirement": null
+    },
+    {
+      "id": "AUTH-CONTINUITY-FINAL-LOOKUP",
+      "case": "final-lookup",
+      "basis": "harness-control",
+      "source": "auth-rest",
+      "locator": "section-get-account-info",
+      "condition": "Successful same-account lifecycle or baseline control in the no-password-change experiment.",
+      "existingRequirement": null
+    },
+    {
+      "id": "AUTH-CONTINUITY-MALFORMED-REFRESH",
+      "case": "malformed-refresh",
+      "basis": "harness-control",
+      "source": "auth-rest",
+      "locator": "section-refresh-token",
+      "condition": "Fixed invalid refresh input must return HTTP 400 INVALID_REFRESH_TOKEN, not all possible malformed inputs.",
+      "existingRequirement": null
+    },
+    {
+      "id": "AUTH-CONTINUITY-UNKNOWN-REFRESH",
+      "case": "unknown-refresh",
+      "basis": "harness-control",
+      "source": "auth-rest",
+      "locator": "section-refresh-token",
+      "condition": "Fixed invalid refresh input must return HTTP 400 INVALID_REFRESH_TOKEN, not all possible malformed inputs.",
+      "existingRequirement": null
+    },
+    {
+      "id": "AUTH-CONTINUITY-DELETE",
+      "case": "delete",
+      "basis": "harness-control",
+      "source": "auth-rest",
+      "locator": "section-delete-account",
+      "condition": "Successful same-account lifecycle or baseline control in the no-password-change experiment.",
+      "existingRequirement": null
+    },
+    {
+      "id": "AUTH-CONTINUITY-DELETED-ACCOUNT-ABSENT",
+      "case": "deleted-account-absent",
+      "basis": "harness-control",
+      "source": "auth-rest",
+      "locator": "section-delete-account",
+      "condition": "Confirm dedicated-account absence through both exact UID and email selectors.",
+      "existingRequirement": null
+    }
+  ],
+  "limitations": [
+    "No human approval; this is an independent bounded no-password-change control, not an extension of the approved mutation experiment.",
+    "Original source snapshots are reused without changing their acquisition hashes or dates.",
+    "Reference exchange uses A's original refresh token and may return the same refresh bytes; no independent third session or lineage is claimed.",
+    "All scheduled primary/derived operations must succeed for continuity; matching rejection or missing/timed-out observations are inconclusive.",
+    "The separate change/no-change runs were not simultaneous randomized trials; no exact causal latency, permanent validity, one-hour expiry, SDK, Rules or whole-lineage guarantee is made.",
+    "Raw token/identity secrets remain private; timing claims are decoded without signature verification. Normal cleanup is not fault-injected recovery."
+  ],
+  "preconditions": [
+    {
+      "source": "password-policy",
+      "locator": "response-body",
+      "condition": "Require exact client schemaVersion 1, enforcementState ENFORCE, minPasswordLength 6 and maxPasswordLength 4096; admin config must omit passwordPolicyConfig. This explicit readback is not inferred OFF. A 47-character generated password has uppercase/lowercase/numeric/non-alphanumeric characters; no configuration is changed."
+    }
+  ],
+  "interpretation": [
+    {
+      "source": "session-management",
+      "locator": "detect_id_token_revocation_in_the_sdk",
+      "condition": "Short REST continuity is distinct from SDK signature/revocation checks and real elapsed token expiry. No password-change or explicit revocation is performed during this observation."
+    }
+  ]
+}

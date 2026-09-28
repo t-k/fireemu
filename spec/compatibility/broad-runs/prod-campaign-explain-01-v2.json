@@ -1,0 +1,518 @@
+{
+  "kind": "production-campaign-explain-01-v2",
+  "status": "prepared-offline",
+  "sourceCommit": "permission-bound-execution-HEAD",
+  "collector": "existing-batch-adapter-shared-v1",
+  "admission": "existing-shared-gate-v2",
+  "ownerAuthorization": {
+    "owner": "t-k",
+    "permissionReference": "conversation-2026-09-14-autonomous-production-under-usd10",
+    "windowPolicy": "current-session-bounded-window",
+    "noncePolicy": "fresh-generated-32-hex-only"
+  },
+  "environment": {
+    "project": "fireemu-35fe6",
+    "projectNumber": "592603257417",
+    "database": "(default)",
+    "edition": "STANDARD",
+    "databaseProjectionContractDigest": "24b4847314fe67940a1e0e8eb53e34e2bd007ef2e1d942639b51564677d30f18",
+    "observerSha256": "f79dadd3871afe4d08b53bbf68231d490d99ef130bdb84134a700c77fef97d61",
+    "configurationDigest": "cf2b716aa3ecc5bbb5dfc248980d05d05401f49897d39ffb3d0159ad8a63db80"
+  },
+  "template": {
+    "contract": "shared-local-v1",
+    "nonce": "{freshNonce}",
+    "jobs": {
+      "query-explain": {
+        "resources": [
+          "projects/fireemu-35fe6/databases/(default)/documents/campaign/{freshNonce}/items/item-a",
+          "projects/fireemu-35fe6/databases/(default)/documents/campaign/{freshNonce}/items/item-b"
+        ],
+        "observation": [
+          {
+            "service": "firestore",
+            "path": "/v1/projects/fireemu-35fe6/databases/(default)/documents/campaign/{freshNonce}/items/item-a",
+            "method": "GET",
+            "body": null,
+            "privileged": true,
+            "form": false
+          },
+          {
+            "service": "firestore",
+            "path": "/v1/projects/fireemu-35fe6/databases/(default)/documents/campaign/{freshNonce}/items/item-b",
+            "method": "GET",
+            "body": null,
+            "privileged": true,
+            "form": false
+          },
+          {
+            "service": "firestore",
+            "path": "/v1/projects/fireemu-35fe6/databases/(default)/documents/campaign/{freshNonce}/items/item-a?currentDocument.exists=false",
+            "method": "PATCH",
+            "body": {
+              "fields": {
+                "a": {
+                  "integerValue": "7"
+                }
+              }
+            },
+            "privileged": true,
+            "form": false
+          },
+          {
+            "service": "firestore",
+            "path": "/v1/projects/fireemu-35fe6/databases/(default)/documents/campaign/{freshNonce}/items/item-b?currentDocument.exists=false",
+            "method": "PATCH",
+            "body": {
+              "fields": {
+                "a": {
+                  "integerValue": "8"
+                }
+              }
+            },
+            "privileged": true,
+            "form": false
+          },
+          {
+            "service": "firestore",
+            "path": "/v1/projects/fireemu-35fe6/databases/(default)/documents/campaign/{freshNonce}:runQuery",
+            "method": "POST",
+            "body": {
+              "structuredQuery": {
+                "from": [
+                  {
+                    "collectionId": "items"
+                  }
+                ],
+                "offset": 0
+              },
+              "explainOptions": {
+                "analyze": false
+              }
+            },
+            "privileged": true,
+            "form": false
+          },
+          {
+            "service": "firestore",
+            "path": "/v1/projects/fireemu-35fe6/databases/(default)/documents/campaign/{freshNonce}:runQuery",
+            "method": "POST",
+            "body": {
+              "structuredQuery": {
+                "from": [
+                  {
+                    "collectionId": "items"
+                  }
+                ],
+                "offset": 0
+              },
+              "explainOptions": {
+                "analyze": true
+              }
+            },
+            "privileged": true,
+            "form": false
+          },
+          {
+            "service": "firestore",
+            "path": "/v1/projects/fireemu-35fe6/databases/(default)/documents/campaign/{freshNonce}:runQuery",
+            "method": "POST",
+            "body": {
+              "structuredQuery": {
+                "from": [
+                  {
+                    "collectionId": "items"
+                  }
+                ],
+                "offset": 0,
+                "limit": 0
+              },
+              "explainOptions": {
+                "analyze": true
+              }
+            },
+            "privileged": true,
+            "form": false
+          },
+          {
+            "service": "firestore",
+            "path": "/v1/projects/fireemu-35fe6/databases/(default)/documents/campaign/{freshNonce}:runAggregationQuery",
+            "method": "POST",
+            "body": {
+              "structuredAggregationQuery": {
+                "structuredQuery": {
+                  "from": [
+                    {
+                      "collectionId": "items"
+                    }
+                  ],
+                  "offset": 0
+                },
+                "aggregations": [
+                  {
+                    "alias": "count",
+                    "count": {}
+                  }
+                ]
+              },
+              "explainOptions": {
+                "analyze": false
+              }
+            },
+            "privileged": true,
+            "form": false
+          },
+          {
+            "service": "firestore",
+            "path": "/v1/projects/fireemu-35fe6/databases/(default)/documents/campaign/{freshNonce}:runAggregationQuery",
+            "method": "POST",
+            "body": {
+              "structuredAggregationQuery": {
+                "structuredQuery": {
+                  "from": [
+                    {
+                      "collectionId": "items"
+                    }
+                  ],
+                  "offset": 0
+                },
+                "aggregations": [
+                  {
+                    "alias": "count",
+                    "count": {}
+                  }
+                ]
+              },
+              "explainOptions": {
+                "analyze": true
+              }
+            },
+            "privileged": true,
+            "form": false
+          },
+          {
+            "service": "firestore",
+            "path": "/v1/projects/fireemu-35fe6/databases/(default)/documents/campaign/{freshNonce}:runAggregationQuery",
+            "method": "POST",
+            "body": {
+              "structuredAggregationQuery": {
+                "structuredQuery": {
+                  "from": [
+                    {
+                      "collectionId": "items"
+                    }
+                  ],
+                  "offset": 0,
+                  "limit": 0
+                },
+                "aggregations": [
+                  {
+                    "alias": "count",
+                    "count": {}
+                  }
+                ]
+              },
+              "explainOptions": {
+                "analyze": true
+              }
+            },
+            "privileged": true,
+            "form": false
+          },
+          {
+            "service": "firestore",
+            "path": "/v1/projects/fireemu-35fe6/databases/(default)/documents/campaign/{freshNonce}/items/item-a",
+            "method": "GET",
+            "body": null,
+            "privileged": true,
+            "form": false
+          },
+          {
+            "service": "firestore",
+            "path": "/v1/projects/fireemu-35fe6/databases/(default)/documents/campaign/{freshNonce}/items/item-b",
+            "method": "GET",
+            "body": null,
+            "privileged": true,
+            "form": false
+          }
+        ],
+        "recovery": [
+          {
+            "service": "firestore",
+            "path": "/v1/projects/fireemu-35fe6/databases/(default)/documents/campaign/{freshNonce}/items/item-a",
+            "method": "GET",
+            "body": null,
+            "privileged": true,
+            "form": false
+          },
+          {
+            "service": "firestore",
+            "path": "/v1/projects/fireemu-35fe6/databases/(default)/documents/campaign/{freshNonce}/items/item-a",
+            "method": "DELETE",
+            "body": null,
+            "privileged": true,
+            "form": false,
+            "versionFrom": 0
+          },
+          {
+            "service": "firestore",
+            "path": "/v1/projects/fireemu-35fe6/databases/(default)/documents/campaign/{freshNonce}/items/item-a",
+            "method": "GET",
+            "body": null,
+            "privileged": true,
+            "form": false
+          },
+          {
+            "service": "firestore",
+            "path": "/v1/projects/fireemu-35fe6/databases/(default)/documents/campaign/{freshNonce}/items/item-b",
+            "method": "GET",
+            "body": null,
+            "privileged": true,
+            "form": false
+          },
+          {
+            "service": "firestore",
+            "path": "/v1/projects/fireemu-35fe6/databases/(default)/documents/campaign/{freshNonce}/items/item-b",
+            "method": "DELETE",
+            "body": null,
+            "privileged": true,
+            "form": false,
+            "versionFrom": 3
+          },
+          {
+            "service": "firestore",
+            "path": "/v1/projects/fireemu-35fe6/databases/(default)/documents/campaign/{freshNonce}/items/item-b",
+            "method": "GET",
+            "body": null,
+            "privileged": true,
+            "form": false
+          }
+        ],
+        "stepIds": [
+          "setup/absence/item-a",
+          "setup/absence/item-b",
+          "setup/create/item-a",
+          "setup/create/item-b",
+          "explain/query/plan-only",
+          "explain/query/analyze",
+          "explain/query/empty-analyze",
+          "explain/aggregation/plan-only",
+          "explain/aggregation/analyze",
+          "explain/aggregation/empty-analyze",
+          "readback/item-a",
+          "readback/item-b"
+        ]
+      }
+    },
+    "wallSeconds": 1200,
+    "recoverySeconds": 300,
+    "observationRequests": 18,
+    "intervalSeconds": 0.25,
+    "requestCostMicrousd": 100,
+    "costMicrousd": 10000,
+    "fixedCostMicrousd": 1000,
+    "coordinatorRequests": 0,
+    "accounts": 0,
+    "configurationChanges": 0,
+    "metadataRequests": 0,
+    "observerSha256": "f79dadd3871afe4d08b53bbf68231d490d99ef130bdb84134a700c77fef97d61",
+    "transport": "shared-explicit-production-v1",
+    "collector": "existing-batch-adapter-shared-v1",
+    "configurationDigest": "cf2b716aa3ecc5bbb5dfc248980d05d05401f49897d39ffb3d0159ad8a63db80",
+    "recoveryRequests": 12,
+    "totalRequests": 30,
+    "management": {
+      "observation": [
+        {
+          "id": "access-command",
+          "duration": 86,
+          "timeout": 60
+        },
+        {
+          "id": "tokeninfo",
+          "duration": 12,
+          "timeout": 13
+        },
+        {
+          "id": "project",
+          "duration": 12,
+          "timeout": 13
+        },
+        {
+          "id": "database",
+          "duration": 12,
+          "timeout": 13
+        },
+        {
+          "id": "auth",
+          "duration": 12,
+          "timeout": 13
+        },
+        {
+          "id": "key",
+          "duration": 12,
+          "timeout": 13
+        }
+      ],
+      "recovery": [
+        {
+          "id": "access-command",
+          "duration": 86,
+          "timeout": 60
+        },
+        {
+          "id": "tokeninfo",
+          "duration": 12,
+          "timeout": 13
+        },
+        {
+          "id": "project",
+          "duration": 12,
+          "timeout": 13
+        },
+        {
+          "id": "database",
+          "duration": 12,
+          "timeout": 13
+        },
+        {
+          "id": "auth",
+          "duration": 12,
+          "timeout": 13
+        },
+        {
+          "id": "key",
+          "duration": 12,
+          "timeout": 13
+        }
+      ]
+    },
+    "recoveryRequestIds": [
+      "recovery:access-command",
+      "recovery:tokeninfo",
+      "recovery:project",
+      "recovery:database",
+      "recovery:auth",
+      "recovery:key"
+    ]
+  },
+  "cases": [
+    {
+      "id": "firestore/explain/query/plan-only",
+      "method": "runQuery",
+      "mode": "plan-only",
+      "path": "/v1/projects/fireemu-35fe6/databases/(default)/documents/campaign/{freshNonce}:runQuery",
+      "requestBudget": {
+        "requestCount": 1,
+        "wallSeconds": 300,
+        "requestCostMicrousd": 100,
+        "costMicrousd": 100
+      },
+      "recoveryBudget": {
+        "requestCount": 6,
+        "seconds": 180,
+        "costMicrousd": 600
+      }
+    },
+    {
+      "id": "firestore/explain/query/analyze",
+      "method": "runQuery",
+      "mode": "analyze",
+      "path": "/v1/projects/fireemu-35fe6/databases/(default)/documents/campaign/{freshNonce}:runQuery",
+      "requestBudget": {
+        "requestCount": 1,
+        "wallSeconds": 300,
+        "requestCostMicrousd": 100,
+        "costMicrousd": 100
+      },
+      "recoveryBudget": {
+        "requestCount": 6,
+        "seconds": 180,
+        "costMicrousd": 600
+      }
+    },
+    {
+      "id": "firestore/explain/query/empty-analyze",
+      "method": "runQuery",
+      "mode": "empty-analyze",
+      "path": "/v1/projects/fireemu-35fe6/databases/(default)/documents/campaign/{freshNonce}:runQuery",
+      "requestBudget": {
+        "requestCount": 1,
+        "wallSeconds": 300,
+        "requestCostMicrousd": 100,
+        "costMicrousd": 100
+      },
+      "recoveryBudget": {
+        "requestCount": 6,
+        "seconds": 180,
+        "costMicrousd": 600
+      }
+    },
+    {
+      "id": "firestore/explain/aggregation/plan-only",
+      "method": "runAggregationQuery",
+      "mode": "plan-only",
+      "path": "/v1/projects/fireemu-35fe6/databases/(default)/documents/campaign/{freshNonce}:runAggregationQuery",
+      "requestBudget": {
+        "requestCount": 1,
+        "wallSeconds": 300,
+        "requestCostMicrousd": 100,
+        "costMicrousd": 100
+      },
+      "recoveryBudget": {
+        "requestCount": 6,
+        "seconds": 180,
+        "costMicrousd": 600
+      }
+    },
+    {
+      "id": "firestore/explain/aggregation/analyze",
+      "method": "runAggregationQuery",
+      "mode": "analyze",
+      "path": "/v1/projects/fireemu-35fe6/databases/(default)/documents/campaign/{freshNonce}:runAggregationQuery",
+      "requestBudget": {
+        "requestCount": 1,
+        "wallSeconds": 300,
+        "requestCostMicrousd": 100,
+        "costMicrousd": 100
+      },
+      "recoveryBudget": {
+        "requestCount": 6,
+        "seconds": 180,
+        "costMicrousd": 600
+      }
+    },
+    {
+      "id": "firestore/explain/aggregation/empty-analyze",
+      "method": "runAggregationQuery",
+      "mode": "empty-analyze",
+      "path": "/v1/projects/fireemu-35fe6/databases/(default)/documents/campaign/{freshNonce}:runAggregationQuery",
+      "requestBudget": {
+        "requestCount": 1,
+        "wallSeconds": 300,
+        "requestCostMicrousd": 100,
+        "costMicrousd": 100
+      },
+      "recoveryBudget": {
+        "requestCount": 6,
+        "seconds": 180,
+        "costMicrousd": 600
+      }
+    }
+  ],
+  "budget": {
+    "observationRequests": 18,
+    "recoveryRequests": 12,
+    "totalRequests": 30,
+    "rateConcurrency": 1,
+    "maxElapsedSeconds": 1200,
+    "costCeilingMicrousd": 10000,
+    "costCeilingUsd": 0.01,
+    "formula": "(30 requests * 100 micro-USD) + 1000 micro-USD fixed reserve = 4000 micro-USD; ceiling 10000 micro-USD",
+    "pricingSnapshot": "https://firebase.google.com/docs/firestore/pricing",
+    "pricingQueryExplain": "https://firebase.google.com/docs/firestore/query-data/query-explain"
+  },
+  "networkCalls": 0,
+  "productionExecutable": true,
+  "scope": "six Query Explain REST recipes over exactly two owned documents; no settings, indexes, rules or auth changes"
+}

@@ -1,0 +1,11 @@
+# Auth session token revision 2 production recheck
+
+On 2026-09-14, the existing `auth-session-v2` recorder ran once against the owned `fireemu-35fe6` project with a fresh disposable account. The recorder completed its bounded 34-case corpus, confirmed the recorded project and password-policy configuration, and removed the account by both UID and email. No raw token, password or account identifier is published.
+
+The production receipt and the local strict artifact are kept in private execution output. The redacted result is [e4d34ccc-auth-session-v2-production-recheck.json](../../spec/compatibility/broad-runs/e4d34ccc-auth-session-v2-production-recheck.json). The production and local projections compare as 34 matches, with zero semantic differences and zero indeterminate rows under the revision-2 comparison contract. This is candidate evidence and does not add a human approval or promote the whole `AUTH-CREDENTIAL` feature group.
+
+The local side used source `e4d34ccca39652ad91e39b603cbd6806ee93e743`, the strict profile and artifact `d88adb0f86b8b6e9687d586bf10f5bf69d90dcbfbc64e6acf3143fd2df8a078c`. The production collector and local runtime source are recorded separately in the redacted result. The original revision-2 receipt, approval and all earlier observations remain immutable.
+
+The current test path uses `tools/auth-session-v2-frozen.py` to validate an immutable receipt against its recorded probe and runtime snapshots without changing the historical publisher or approval source. The adapter also binds the publication contract and source review to the recorded probe commit, binds build inputs to the recorded runtime commit, and renders the approval through the source-anchored validator. Newly generated records continue to use the original strict publisher, while the frozen adapter retains the artifact, contract and mutation checks for the old receipt. This prevents later unrelated source changes from invalidating historical evidence.
+
+This recheck covers one account, REST ID/refresh credentials, a password change, finite 0/10/30-second samples and two invalid refresh controls. It does not establish universal revocation, exact expiry, same-second issuance behavior, SDK/Rules parity, tenant/provider behavior or a complete Auth compatibility claim.

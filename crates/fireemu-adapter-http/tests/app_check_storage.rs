@@ -56,6 +56,7 @@ fn harness(mode: BaselineMode) -> Harness {
         app_check_policy: fixture::policy(&app_check, "storage", mode),
         admin_capability: Some("storage-capability".to_owned()),
         token_acceptance: fireemu_core_auth::jwt::TokenAcceptance::default(),
+        control_token: None,
     };
     Harness {
         storage,
@@ -888,6 +889,27 @@ fn the_admin_storage_capability_bypasses_only_the_server_side_gcs_dialect() {
                 ("sec-fetch-site", "same-origin"),
             ],
         ),
+        (
+            "sec-fetch-dest alone",
+            vec![
+                ("authorization", authorization.as_str()),
+                ("sec-fetch-dest", "empty"),
+            ],
+        ),
+        (
+            "referer alone",
+            vec![
+                ("authorization", authorization.as_str()),
+                ("referer", "http://127.0.0.1:5173/"),
+            ],
+        ),
+        (
+            "cookie alone",
+            vec![
+                ("authorization", authorization.as_str()),
+                ("cookie", "session=1"),
+            ],
+        ),
     ] {
         let denied = h.call("GET", &path, &headers, &[], b"");
         assert_eq!(
@@ -912,6 +934,73 @@ fn the_admin_storage_capability_bypasses_only_the_server_side_gcs_dialect() {
     );
     assert_eq!(firebase.status, 403);
     assert_eq!(body_of(&firebase)["error"]["reason"], "APP_CHECK_REQUIRED");
+}
+
+/// The exact header set Node's built-in `fetch` (undici) attaches to a request a script issues
+/// with no headers of its own: `sec-fetch-mode: cors` and nothing else from
+/// [`fireemu_core_session::loopback::BROWSER_METADATA_HEADERS`]. This is what
+/// `@firebase/rules-unit-testing` 5.x sends from an admin-capability request, and it is a
+/// process, not a page, so it must not be refused for it (same rule BROWSER-GUARD-001 gave the
+/// `/internal/setRules` route).
+#[test]
+fn the_admin_storage_capability_admits_the_exact_undici_header_set() {
+    let h = harness(BaselineMode::Enforced);
+    h.seed_object("undici/listed.txt");
+    let authorization = admin_storage_authorization();
+    let path = format!("/storage/v1/b/{BUCKET}/o?prefix=undici/");
+
+    let admitted = h.call(
+        "GET",
+        &path,
+        &[
+            ("authorization", authorization.as_str()),
+            ("accept", "*/*"),
+            ("accept-language", "*"),
+            ("accept-encoding", "gzip, deflate"),
+            ("user-agent", "node"),
+            ("sec-fetch-mode", "cors"),
+        ],
+        &[],
+        b"",
+    );
+    assert_eq!(
+        admitted.status,
+        200,
+        "{}",
+        String::from_utf8_lossy(&admitted.body)
+    );
+}
+
+/// A real browser attaches `Sec-Fetch-Site` and `Sec-Fetch-Dest` (and usually `Origin` and
+/// `Referer`) alongside `Sec-Fetch-Mode`; that full set is browser evidence and keeps the
+/// capability refused even though `Sec-Fetch-Mode` alone is not.
+#[test]
+fn the_admin_storage_capability_refuses_a_full_browser_header_set() {
+    let h = harness(BaselineMode::Enforced);
+    let authorization = admin_storage_authorization();
+    let path = format!("/storage/v1/b/{BUCKET}/o");
+
+    let denied = h.call(
+        "GET",
+        &path,
+        &[
+            ("authorization", authorization.as_str()),
+            ("origin", "http://127.0.0.1:5173"),
+            ("sec-fetch-site", "same-origin"),
+            ("sec-fetch-dest", "empty"),
+            ("sec-fetch-mode", "cors"),
+            ("referer", "http://127.0.0.1:5173/"),
+        ],
+        &[],
+        b"",
+    );
+    assert_eq!(
+        denied.status,
+        403,
+        "{}",
+        String::from_utf8_lossy(&denied.body)
+    );
+    assert_eq!(body_of(&denied)["error"]["reason"], "APP_CHECK_REQUIRED");
 }
 
 // ------------------------------------------------------------------------------------------

@@ -42,6 +42,12 @@ unless `retainAckedMessages` is set), and `check` replays fireemu alone against 
 `check` needs `cargo build -p fireemu` first (or `FIREEMU_BIN=/path/to/fireemu`).
 `CONFORMANCE_VERBOSE=1` streams both supervisors' output.
 
+The Firestore probe also contains three bounded Admin database-inventory requests. They are
+marked `localOnly` in the operation manifest because the official emulator has no corresponding
+route. `firestore:check` still requires a complete local HTTP observation for those rows, but
+does not present them as official-emulator compatibility matches; production status for the
+Admin surface is tracked separately in `FIRESTORE-PRODUCTION-MATRIX.md`.
+
 ## What it compares
 
 For each step: the HTTP status or gRPC code, the error code and message, the payload shape, the
@@ -168,6 +174,17 @@ multi-aggregation counting defect of the official emulator, and capabilities fir
 that the official emulator refuses (`orderBy(__name__, desc)`, `PartitionQuery`). Every row
 is also published in `spec/compatibility/contract.json` under
 `officialEmulatorDivergences`.
+
+## Release comparison against production recordings
+
+`src/release-strict-regression.mjs` is what the release job `strict-production` runs: the strict profile of one binary against the production recordings the closed parents saved. It reads `spec/compatibility/closure/*.json`, collects every comparison file a `COMPAT_VERIFIED` closure names in `integratedRegression`, reruns the local side of each (the lanes' `check` and `export-comparison`, FS-DATA-WRITE's `local-child` and `compare-local`, the historical `check-production` replay, and FUNCTIONS-HTTP's `check-local`) and fails on any row whose status or summary differs from the committed file. It never records: the recording, preflight and recovery modes are not in its command table, production and sandbox credentials in the environment refuse the run, and it refuses to start while a production endpoint answers.
+
+```sh
+FIREEMU_BIN=target/release/fireemu FIREEMU_NODE=<Node 22.22.1> \
+  node conformance/src/release-strict-regression.mjs --out <dir>
+```
+
+Run it where only loopback is reachable (the release job uses `unshare --net`; on macOS, `sandbox-exec` with a profile that denies outbound connections other than to localhost). The harnesses run one after another because several listen on fixed ports (32291 to 32298 and 32320 to 32322; AUTH-CREDENTIAL and AUTH-MFA share 32297), so do not run it next to another harness or a production recording. It needs `pnpm -C conformance install`, `npm ci` in `functions-http/fixtures`, and `uv` for the FS-DATA-WRITE corpus exporter.
 
 ## Layout
 

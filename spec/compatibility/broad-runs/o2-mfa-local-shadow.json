@@ -1,0 +1,1489 @@
+{
+  "campaign": {
+    "agingSchedule": {
+      "acquireAtOriginSeconds": 0,
+      "agedPendingSamplesSeconds": [
+        300,
+        450,
+        600,
+        1800
+      ],
+      "agedSessionSamplesSeconds": [
+        300,
+        450,
+        600
+      ],
+      "contract": "Every aged pending credential and every aged enrollment session is acquired at one common origin before any wait begins, and each aged row is scheduled at that origin plus its own age. The ages therefore elapse concurrently and the run's critical path is the largest age rather than their sum. Acquiring a resource immediately before its own wait, which is the obvious reading, costs the serial total instead and does not fit the wall budget.",
+      "dueOffsetsSeconds": [
+        {
+          "case": "age-300s-start",
+          "dueOffsetSeconds": 300
+        },
+        {
+          "case": "age-300s-finalize",
+          "dueOffsetSeconds": 300
+        },
+        {
+          "case": "age-300s-same-account-fresh-control",
+          "dueOffsetSeconds": 300
+        },
+        {
+          "case": "totp-enroll-session-age-300s",
+          "dueOffsetSeconds": 300
+        },
+        {
+          "case": "age-450s-start",
+          "dueOffsetSeconds": 450
+        },
+        {
+          "case": "age-450s-finalize",
+          "dueOffsetSeconds": 450
+        },
+        {
+          "case": "age-450s-same-account-fresh-control",
+          "dueOffsetSeconds": 450
+        },
+        {
+          "case": "totp-enroll-session-age-450s",
+          "dueOffsetSeconds": 450
+        },
+        {
+          "case": "age-600s-start",
+          "dueOffsetSeconds": 600
+        },
+        {
+          "case": "age-600s-finalize",
+          "dueOffsetSeconds": 600
+        },
+        {
+          "case": "age-600s-same-account-fresh-control",
+          "dueOffsetSeconds": 600
+        },
+        {
+          "case": "totp-enroll-session-age-600s",
+          "dueOffsetSeconds": 600
+        },
+        {
+          "case": "age-1800s-start",
+          "dueOffsetSeconds": 1800
+        },
+        {
+          "case": "age-1800s-finalize",
+          "dueOffsetSeconds": 1800
+        },
+        {
+          "case": "age-1800s-same-account-fresh-control",
+          "dueOffsetSeconds": 1800
+        }
+      ],
+      "mode": "concurrent-acquisition",
+      "totpStepRolloverSeconds": 30
+    },
+    "campaignId": "AUTH-MFA-AGE-TOTP-01",
+    "caseCount": 33,
+    "cases": [
+      {
+        "account": "pending-control",
+        "ageSeconds": 0,
+        "basis": "control",
+        "dueOffsetSeconds": null,
+        "endpoint": "accounts/mfaSignIn:finalize",
+        "expectedLocal": {
+          "basis": "source-read",
+          "errorCode": null,
+          "status": 200
+        },
+        "family": "pending-age-causality",
+        "id": "baseline-fresh-finalize",
+        "obligation": "A pending credential used immediately completes MFA and returns a verified identity.",
+        "productionExpectation": "unobserved",
+        "source": "mfa-signin-finalize"
+      },
+      {
+        "account": "pending-age-300",
+        "ageSeconds": 300,
+        "basis": "diagnostic",
+        "dueOffsetSeconds": 300,
+        "endpoint": "accounts/mfaSignIn:start",
+        "expectedLocal": {
+          "basis": "source-read",
+          "errorCode": null,
+          "status": 200
+        },
+        "family": "pending-age-causality",
+        "id": "age-300s-start",
+        "obligation": "A pending credential untouched for at least 300 seconds is offered to start; acceptance and classified refusal are both observations and neither proves expiry.",
+        "productionExpectation": "unobserved",
+        "source": "mfa-signin-start"
+      },
+      {
+        "account": "pending-age-300",
+        "ageSeconds": 300,
+        "basis": "diagnostic",
+        "dueOffsetSeconds": 300,
+        "endpoint": "accounts/mfaSignIn:finalize",
+        "expectedLocal": {
+          "basis": "source-read",
+          "errorCode": null,
+          "status": 200
+        },
+        "family": "pending-age-causality",
+        "id": "age-300s-finalize",
+        "obligation": "A session opened from the 300-second pending is finalized with a fresh code; it is skipped when its start was refused.",
+        "productionExpectation": "unobserved",
+        "source": "mfa-signin-finalize"
+      },
+      {
+        "account": "pending-age-300",
+        "ageSeconds": 0,
+        "basis": "control",
+        "dueOffsetSeconds": 300,
+        "endpoint": "accounts/mfaSignIn:finalize",
+        "expectedLocal": {
+          "basis": "source-read",
+          "errorCode": null,
+          "status": 200
+        },
+        "family": "pending-age-causality",
+        "id": "age-300s-same-account-fresh-control",
+        "obligation": "Immediately after the 300-second attempt, the same account signs in again and completes MFA with a newly acquired pending credential. A refusal above paired with success here isolates pending age from account, enrollment and project configuration state; it still assumes the aged pending was untouched.",
+        "productionExpectation": "unobserved",
+        "source": "mfa-signin-finalize"
+      },
+      {
+        "account": "enrollment-age-300",
+        "ageSeconds": 300,
+        "basis": "diagnostic",
+        "dueOffsetSeconds": 300,
+        "endpoint": "accounts/mfaEnrollment:finalize",
+        "expectedLocal": {
+          "basis": "source-read",
+          "errorCode": "SESSION_EXPIRED",
+          "status": 400
+        },
+        "family": "enrollment-session-age",
+        "id": "totp-enroll-session-age-300s",
+        "obligation": "A TOTP enrollment session untouched for at least 300 seconds is finalized with a code that is correct for the moment of submission, so only the session age can explain a refusal.",
+        "productionExpectation": "unobserved",
+        "source": "mfa-enrollment-finalize"
+      },
+      {
+        "account": "pending-age-450",
+        "ageSeconds": 450,
+        "basis": "diagnostic",
+        "dueOffsetSeconds": 450,
+        "endpoint": "accounts/mfaSignIn:start",
+        "expectedLocal": {
+          "basis": "source-read",
+          "errorCode": null,
+          "status": 200
+        },
+        "family": "pending-age-causality",
+        "id": "age-450s-start",
+        "obligation": "A pending credential untouched for at least 450 seconds is offered to start; acceptance and classified refusal are both observations and neither proves expiry.",
+        "productionExpectation": "unobserved",
+        "source": "mfa-signin-start"
+      },
+      {
+        "account": "pending-age-450",
+        "ageSeconds": 450,
+        "basis": "diagnostic",
+        "dueOffsetSeconds": 450,
+        "endpoint": "accounts/mfaSignIn:finalize",
+        "expectedLocal": {
+          "basis": "source-read",
+          "errorCode": null,
+          "status": 200
+        },
+        "family": "pending-age-causality",
+        "id": "age-450s-finalize",
+        "obligation": "A session opened from the 450-second pending is finalized with a fresh code; it is skipped when its start was refused.",
+        "productionExpectation": "unobserved",
+        "source": "mfa-signin-finalize"
+      },
+      {
+        "account": "pending-age-450",
+        "ageSeconds": 0,
+        "basis": "control",
+        "dueOffsetSeconds": 450,
+        "endpoint": "accounts/mfaSignIn:finalize",
+        "expectedLocal": {
+          "basis": "source-read",
+          "errorCode": null,
+          "status": 200
+        },
+        "family": "pending-age-causality",
+        "id": "age-450s-same-account-fresh-control",
+        "obligation": "Immediately after the 450-second attempt, the same account signs in again and completes MFA with a newly acquired pending credential. A refusal above paired with success here isolates pending age from account, enrollment and project configuration state; it still assumes the aged pending was untouched.",
+        "productionExpectation": "unobserved",
+        "source": "mfa-signin-finalize"
+      },
+      {
+        "account": "enrollment-age-450",
+        "ageSeconds": 450,
+        "basis": "diagnostic",
+        "dueOffsetSeconds": 450,
+        "endpoint": "accounts/mfaEnrollment:finalize",
+        "expectedLocal": {
+          "basis": "source-read",
+          "errorCode": "SESSION_EXPIRED",
+          "status": 400
+        },
+        "family": "enrollment-session-age",
+        "id": "totp-enroll-session-age-450s",
+        "obligation": "A TOTP enrollment session untouched for at least 450 seconds is finalized with a code that is correct for the moment of submission, so only the session age can explain a refusal.",
+        "productionExpectation": "unobserved",
+        "source": "mfa-enrollment-finalize"
+      },
+      {
+        "account": "pending-age-600",
+        "ageSeconds": 600,
+        "basis": "diagnostic",
+        "dueOffsetSeconds": 600,
+        "endpoint": "accounts/mfaSignIn:start",
+        "expectedLocal": {
+          "basis": "source-read",
+          "errorCode": null,
+          "status": 200
+        },
+        "family": "pending-age-causality",
+        "id": "age-600s-start",
+        "obligation": "A pending credential untouched for at least 600 seconds is offered to start; acceptance and classified refusal are both observations and neither proves expiry.",
+        "productionExpectation": "unobserved",
+        "source": "mfa-signin-start"
+      },
+      {
+        "account": "pending-age-600",
+        "ageSeconds": 600,
+        "basis": "diagnostic",
+        "dueOffsetSeconds": 600,
+        "endpoint": "accounts/mfaSignIn:finalize",
+        "expectedLocal": {
+          "basis": "source-read",
+          "errorCode": null,
+          "status": 200
+        },
+        "family": "pending-age-causality",
+        "id": "age-600s-finalize",
+        "obligation": "A session opened from the 600-second pending is finalized with a fresh code; it is skipped when its start was refused.",
+        "productionExpectation": "unobserved",
+        "source": "mfa-signin-finalize"
+      },
+      {
+        "account": "pending-age-600",
+        "ageSeconds": 0,
+        "basis": "control",
+        "dueOffsetSeconds": 600,
+        "endpoint": "accounts/mfaSignIn:finalize",
+        "expectedLocal": {
+          "basis": "source-read",
+          "errorCode": null,
+          "status": 200
+        },
+        "family": "pending-age-causality",
+        "id": "age-600s-same-account-fresh-control",
+        "obligation": "Immediately after the 600-second attempt, the same account signs in again and completes MFA with a newly acquired pending credential. A refusal above paired with success here isolates pending age from account, enrollment and project configuration state; it still assumes the aged pending was untouched.",
+        "productionExpectation": "unobserved",
+        "source": "mfa-signin-finalize"
+      },
+      {
+        "account": "enrollment-age-600",
+        "ageSeconds": 600,
+        "basis": "diagnostic",
+        "dueOffsetSeconds": 600,
+        "endpoint": "accounts/mfaEnrollment:finalize",
+        "expectedLocal": {
+          "basis": "source-read",
+          "errorCode": "INVALID_SESSION_INFO",
+          "status": 400
+        },
+        "family": "enrollment-session-age",
+        "id": "totp-enroll-session-age-600s",
+        "obligation": "A TOTP enrollment session untouched for at least 600 seconds is finalized with a code that is correct for the moment of submission, so only the session age can explain a refusal.",
+        "productionExpectation": "unobserved",
+        "source": "mfa-enrollment-finalize"
+      },
+      {
+        "account": "pending-age-1800",
+        "ageSeconds": 1800,
+        "basis": "control",
+        "dueOffsetSeconds": 1800,
+        "endpoint": "accounts/mfaSignIn:start",
+        "expectedLocal": {
+          "basis": "source-read",
+          "errorCode": null,
+          "status": 200
+        },
+        "family": "pending-age-causality",
+        "id": "age-1800s-start",
+        "obligation": "This age has already been refused in production, so it is the run's positive control for the refusal direction: if it is accepted too, the run aged nothing and no boundary may be read from the other samples. A pending credential untouched for at least 1800 seconds is offered to start; acceptance and classified refusal are both observations and neither proves expiry.",
+        "productionExpectation": "unobserved",
+        "source": "mfa-signin-start"
+      },
+      {
+        "account": "pending-age-1800",
+        "ageSeconds": 1800,
+        "basis": "control",
+        "dueOffsetSeconds": 1800,
+        "endpoint": "accounts/mfaSignIn:finalize",
+        "expectedLocal": {
+          "basis": "source-read",
+          "errorCode": null,
+          "status": 200
+        },
+        "family": "pending-age-causality",
+        "id": "age-1800s-finalize",
+        "obligation": "A session opened from the 1800-second pending is finalized with a fresh code; it is skipped when its start was refused.",
+        "productionExpectation": "unobserved",
+        "source": "mfa-signin-finalize"
+      },
+      {
+        "account": "pending-age-1800",
+        "ageSeconds": 0,
+        "basis": "control",
+        "dueOffsetSeconds": 1800,
+        "endpoint": "accounts/mfaSignIn:finalize",
+        "expectedLocal": {
+          "basis": "source-read",
+          "errorCode": null,
+          "status": 200
+        },
+        "family": "pending-age-causality",
+        "id": "age-1800s-same-account-fresh-control",
+        "obligation": "Immediately after the 1800-second attempt, the same account signs in again and completes MFA with a newly acquired pending credential. A refusal above paired with success here isolates pending age from account, enrollment and project configuration state; it still assumes the aged pending was untouched.",
+        "productionExpectation": "unobserved",
+        "source": "mfa-signin-finalize"
+      },
+      {
+        "account": "pending-control",
+        "ageSeconds": 0,
+        "basis": "control",
+        "dueOffsetSeconds": null,
+        "endpoint": "accounts/mfaSignIn:finalize",
+        "expectedLocal": {
+          "basis": "source-read",
+          "errorCode": null,
+          "status": 200
+        },
+        "family": "pending-age-causality",
+        "id": "final-fresh-finalize",
+        "obligation": "A closing fresh completion shows the configuration still worked at the end of the run.",
+        "productionExpectation": "unobserved",
+        "source": "mfa-signin-finalize"
+      },
+      {
+        "account": "totp-lifecycle",
+        "ageSeconds": null,
+        "basis": "diagnostic",
+        "dueOffsetSeconds": null,
+        "endpoint": "accounts/mfaEnrollment:start",
+        "expectedLocal": {
+          "basis": "source-read",
+          "errorCode": null,
+          "status": 200
+        },
+        "family": "totp-lifecycle",
+        "id": "totp-enroll-start",
+        "obligation": "A TOTP enrollment start returns a shared secret, code length, hashing algorithm, period and session identifier. The secret is used in memory and never recorded.",
+        "productionExpectation": "unobserved",
+        "source": "mfa-enrollment-start"
+      },
+      {
+        "account": "totp-lifecycle",
+        "ageSeconds": null,
+        "basis": "negative",
+        "dueOffsetSeconds": null,
+        "endpoint": "accounts/mfaEnrollment:finalize",
+        "expectedLocal": {
+          "basis": "source-read",
+          "errorCode": "INVALID_CODE",
+          "status": 400
+        },
+        "family": "totp-lifecycle",
+        "id": "totp-enroll-wrong-code",
+        "obligation": "A deterministically wrong code, chosen so that no step inside the acceptance window can match it, is refused.",
+        "productionExpectation": "unobserved",
+        "source": "mfa-enrollment-finalize"
+      },
+      {
+        "account": "totp-lifecycle",
+        "ageSeconds": null,
+        "basis": "diagnostic",
+        "dueOffsetSeconds": null,
+        "endpoint": "accounts/mfaEnrollment:finalize",
+        "expectedLocal": {
+          "basis": "source-read",
+          "errorCode": null,
+          "status": 200
+        },
+        "family": "totp-lifecycle",
+        "id": "totp-enroll-retry-same-session",
+        "obligation": "The same enrollment session accepts one correct code after the wrong one. This is the distinct obligation inherited from AUTH-MFA-TOTP-ENROLL-RETRY-01.",
+        "productionExpectation": "unobserved",
+        "source": "mfa-enrollment-finalize"
+      },
+      {
+        "account": "totp-lifecycle",
+        "ageSeconds": null,
+        "basis": "negative",
+        "dueOffsetSeconds": null,
+        "endpoint": "accounts/mfaEnrollment:finalize",
+        "expectedLocal": {
+          "basis": "source-read",
+          "errorCode": "INVALID_SESSION_INFO",
+          "status": 400
+        },
+        "family": "totp-lifecycle",
+        "id": "totp-enroll-replay-finalized-session",
+        "obligation": "Replaying the session identifier after a successful finalize is refused.",
+        "productionExpectation": "unobserved",
+        "source": "mfa-enrollment-finalize"
+      },
+      {
+        "account": "totp-lifecycle",
+        "ageSeconds": null,
+        "basis": "diagnostic",
+        "dueOffsetSeconds": null,
+        "endpoint": "accounts:lookup",
+        "expectedLocal": {
+          "basis": "source-read",
+          "errorCode": null,
+          "status": 200
+        },
+        "family": "totp-lifecycle",
+        "id": "totp-enroll-factor-readback",
+        "obligation": "The account reports exactly one enrolled TOTP factor with an enrollment identifier and an enrolled-at time.",
+        "productionExpectation": "unobserved",
+        "source": "accounts-lookup"
+      },
+      {
+        "account": "totp-lifecycle",
+        "ageSeconds": null,
+        "basis": "negative",
+        "dueOffsetSeconds": null,
+        "endpoint": "accounts/mfaEnrollment:start",
+        "expectedLocal": {
+          "basis": "source-read",
+          "errorCode": "SECOND_FACTOR_EXISTS",
+          "status": 400
+        },
+        "family": "interaction",
+        "id": "second-factor-limit",
+        "obligation": "Starting a second TOTP enrollment on an account that already has one is refused; fireemu refuses at start, so the step production refuses at is worth recording.",
+        "productionExpectation": "unobserved",
+        "source": "mfa-enrollment-start"
+      },
+      {
+        "account": "totp-lifecycle",
+        "ageSeconds": null,
+        "basis": "negative",
+        "dueOffsetSeconds": null,
+        "endpoint": "accounts/mfaSignIn:start",
+        "expectedLocal": {
+          "basis": "source-read",
+          "errorCode": "INVALID_ARGUMENT",
+          "status": 400
+        },
+        "family": "totp-lifecycle",
+        "id": "totp-signin-start",
+        "obligation": "Offering a TOTP enrollment identifier to the sign-in start step records what the service answers; fireemu refuses because TOTP has no start step.",
+        "productionExpectation": "unobserved",
+        "source": "mfa-signin-start"
+      },
+      {
+        "account": "totp-lifecycle",
+        "ageSeconds": null,
+        "basis": "diagnostic",
+        "dueOffsetSeconds": null,
+        "endpoint": "accounts/mfaSignIn:finalize",
+        "expectedLocal": {
+          "basis": "source-read",
+          "errorCode": null,
+          "status": 200
+        },
+        "family": "totp-lifecycle",
+        "id": "totp-signin-finalize",
+        "obligation": "A TOTP second factor completes sign-in directly at finalize and the returned token carries the second-factor claim.",
+        "productionExpectation": "unobserved",
+        "source": "mfa-signin-finalize"
+      },
+      {
+        "account": "totp-lifecycle",
+        "ageSeconds": null,
+        "basis": "negative",
+        "dueOffsetSeconds": null,
+        "endpoint": "accounts/mfaSignIn:finalize",
+        "expectedLocal": {
+          "basis": "source-read",
+          "errorCode": "INVALID_CODE",
+          "status": 400
+        },
+        "family": "totp-lifecycle",
+        "id": "totp-signin-replay-same-code",
+        "obligation": "Submitting the code that was just consumed is refused rather than accepted twice.",
+        "productionExpectation": "unobserved",
+        "source": "mfa-signin-finalize"
+      },
+      {
+        "account": "totp-lifecycle",
+        "ageSeconds": null,
+        "basis": "diagnostic",
+        "dueOffsetSeconds": null,
+        "endpoint": "accounts/mfaEnrollment:withdraw",
+        "expectedLocal": {
+          "basis": "source-read",
+          "errorCode": null,
+          "status": 200
+        },
+        "family": "totp-lifecycle",
+        "id": "totp-withdraw",
+        "obligation": "Withdrawing the enrolled TOTP factor succeeds and returns refreshed tokens.",
+        "productionExpectation": "unobserved",
+        "source": "mfa-enrollment-withdraw"
+      },
+      {
+        "account": "totp-lifecycle",
+        "ageSeconds": null,
+        "basis": "diagnostic",
+        "dueOffsetSeconds": null,
+        "endpoint": "accounts:lookup",
+        "expectedLocal": {
+          "basis": "source-read",
+          "errorCode": null,
+          "status": 200
+        },
+        "family": "totp-lifecycle",
+        "id": "totp-withdraw-readback",
+        "obligation": "After withdrawal the account reports no enrolled second factor.",
+        "productionExpectation": "unobserved",
+        "source": "accounts-lookup"
+      },
+      {
+        "account": "totp-lifecycle",
+        "ageSeconds": null,
+        "basis": "negative",
+        "dueOffsetSeconds": null,
+        "endpoint": "accounts/mfaEnrollment:withdraw",
+        "expectedLocal": {
+          "basis": "source-read",
+          "errorCode": "MFA_ENROLLMENT_NOT_FOUND",
+          "status": 400
+        },
+        "family": "totp-lifecycle",
+        "id": "totp-withdraw-unknown",
+        "obligation": "Withdrawing an enrollment identifier that no longer exists is refused.",
+        "productionExpectation": "unobserved",
+        "source": "mfa-enrollment-withdraw"
+      },
+      {
+        "account": "interaction-unverified",
+        "ageSeconds": null,
+        "basis": "negative",
+        "dueOffsetSeconds": null,
+        "endpoint": "accounts/mfaEnrollment:start",
+        "expectedLocal": {
+          "basis": "source-read",
+          "errorCode": "UNVERIFIED_EMAIL",
+          "status": 400
+        },
+        "family": "interaction",
+        "id": "unverified-email-enroll-refusal",
+        "obligation": "TOTP enrollment on an account whose email is not verified is refused.",
+        "productionExpectation": "unobserved",
+        "source": "mfa-enrollment-start"
+      },
+      {
+        "account": "interaction-anonymous",
+        "ageSeconds": null,
+        "basis": "negative",
+        "dueOffsetSeconds": null,
+        "endpoint": "accounts/mfaEnrollment:start",
+        "expectedLocal": {
+          "basis": "source-read",
+          "errorCode": "UNSUPPORTED_FIRST_FACTOR",
+          "status": 400
+        },
+        "family": "interaction",
+        "id": "ineligible-first-factor-refusal",
+        "obligation": "TOTP enrollment from an anonymous first factor is refused.",
+        "productionExpectation": "unobserved",
+        "source": "mfa-enrollment-start"
+      },
+      {
+        "account": "interaction-unverified",
+        "ageSeconds": null,
+        "basis": "negative",
+        "dueOffsetSeconds": null,
+        "endpoint": "accounts/mfaEnrollment:start",
+        "expectedLocal": {
+          "basis": "source-read",
+          "errorCode": "INVALID_ID_TOKEN",
+          "status": 400
+        },
+        "family": "interaction",
+        "id": "missing-id-token-refusal",
+        "obligation": "TOTP enrollment without an ID token is refused; fireemu deliberately differs from the official emulator here, so the production code is worth recording.",
+        "productionExpectation": "unobserved",
+        "source": "mfa-enrollment-start"
+      },
+      {
+        "account": "project",
+        "ageSeconds": null,
+        "basis": "control",
+        "dueOffsetSeconds": null,
+        "endpoint": "projects:getConfig",
+        "expectedLocal": {
+          "basis": "source-read",
+          "errorCode": null,
+          "status": 200
+        },
+        "family": "interaction",
+        "id": "project-mfa-config-readback",
+        "obligation": "The project configuration is read before and after the run so the multi-factor state and enabled providers the campaign relied on are part of the receipt. fireemu models no project multi-factor configuration, so this row is expected to differ.",
+        "productionExpectation": "unobserved",
+        "source": "project-config"
+      }
+    ],
+    "cleanupContract": {
+      "onAbort": "cleanup still runs; an incomplete cleanup makes the run incomplete",
+      "order": [
+        "withdraw-enrolled-factors",
+        "delete-owned-accounts",
+        "verify-account-absence-by-uid-and-email",
+        "restore-project-configuration",
+        "verify-configuration-digest-equals-baseline"
+      ],
+      "residueAllowed": 0
+    },
+    "limits": {
+      "criticalPathSeconds": 1830,
+      "enforced": true,
+      "estimatedCostUsd": 0.1,
+      "hardCostCeilingUsd": 0.5,
+      "maxConcurrency": 1,
+      "maxOwnedAccounts": 14,
+      "maxRequests": 400,
+      "maxWallSeconds": 2700,
+      "provisioningSeconds": 420,
+      "recoveryReserveSeconds": 300,
+      "serialAgingSeconds": 4530
+    },
+    "owner": {
+      "accounts": [
+        {
+          "email": "o2-mfa-enrollment-age-300-37920e163862440a8917ee9edecf309c@example.com",
+          "ownership": "created-by-this-run",
+          "role": "enrollment-age-300"
+        },
+        {
+          "email": "o2-mfa-enrollment-age-450-37920e163862440a8917ee9edecf309c@example.com",
+          "ownership": "created-by-this-run",
+          "role": "enrollment-age-450"
+        },
+        {
+          "email": "o2-mfa-enrollment-age-600-37920e163862440a8917ee9edecf309c@example.com",
+          "ownership": "created-by-this-run",
+          "role": "enrollment-age-600"
+        },
+        {
+          "email": "o2-mfa-interaction-anonymous-37920e163862440a8917ee9edecf309c@example.com",
+          "ownership": "created-by-this-run",
+          "role": "interaction-anonymous"
+        },
+        {
+          "email": "o2-mfa-interaction-unverified-37920e163862440a8917ee9edecf309c@example.com",
+          "ownership": "created-by-this-run",
+          "role": "interaction-unverified"
+        },
+        {
+          "email": "o2-mfa-pending-age-1800-37920e163862440a8917ee9edecf309c@example.com",
+          "ownership": "created-by-this-run",
+          "role": "pending-age-1800"
+        },
+        {
+          "email": "o2-mfa-pending-age-300-37920e163862440a8917ee9edecf309c@example.com",
+          "ownership": "created-by-this-run",
+          "role": "pending-age-300"
+        },
+        {
+          "email": "o2-mfa-pending-age-450-37920e163862440a8917ee9edecf309c@example.com",
+          "ownership": "created-by-this-run",
+          "role": "pending-age-450"
+        },
+        {
+          "email": "o2-mfa-pending-age-600-37920e163862440a8917ee9edecf309c@example.com",
+          "ownership": "created-by-this-run",
+          "role": "pending-age-600"
+        },
+        {
+          "email": "o2-mfa-pending-control-37920e163862440a8917ee9edecf309c@example.com",
+          "ownership": "created-by-this-run",
+          "role": "pending-control"
+        },
+        {
+          "email": "o2-mfa-totp-lifecycle-37920e163862440a8917ee9edecf309c@example.com",
+          "ownership": "created-by-this-run",
+          "role": "totp-lifecycle"
+        }
+      ],
+      "namespace": "o2/AUTH-MFA-AGE-TOTP-01/37920e163862440a8917ee9edecf309c",
+      "nonceDigest": "fc6d51e13fe542cd157025480ebe16524ee69a5395d8a59a924aa459ae77a262"
+    },
+    "ownerPreconditions": [
+      "Identity Platform (not legacy Firebase Authentication) is enabled on the project, because multi-factor configuration lives there.",
+      "Multi-factor authentication is set to ENABLED with TOTP among the enabled providers; the pre-run configuration is captured and its digest recorded first.",
+      "Phone multi-factor is enabled with one test phone number and a fixed code, so the pending-age rows send no SMS and incur no per-message charge.",
+      "The SMS region policy allows the test number's region for the duration of the run.",
+      "No tenant, blocking function or identity-provider change happens during the run.",
+      "The executing principal may create, read, update and delete accounts it created, and may read and restore the project configuration.",
+      "A named owner approves one run, bound to this manifest digest and a fresh nonce, and acknowledges that the run creates up to fourteen accounts it will delete."
+    ],
+    "permissionEnvelope": {
+      "allowedEndpoints": [
+        "accounts:signUp",
+        "accounts:signInWithPassword",
+        "accounts:signInWithCustomToken",
+        "accounts:lookup",
+        "accounts:update",
+        "accounts:delete",
+        "accounts/mfaEnrollment:start",
+        "accounts/mfaEnrollment:finalize",
+        "accounts/mfaEnrollment:withdraw",
+        "accounts/mfaSignIn:start",
+        "accounts/mfaSignIn:finalize",
+        "projects:getConfig",
+        "projects:updateConfig"
+      ],
+      "configurationMutation": {
+        "allowed": [
+          "multi-factor state and enabled providers",
+          "test phone numbers"
+        ],
+        "restoreProof": "readback plus whole-configuration digest equality with the pre-run baseline",
+        "restoreRequired": true
+      },
+      "database": null,
+      "forbidden": [
+        "any Firestore, Storage, Functions or Pub/Sub operation",
+        "any account the run did not create",
+        "any tenant operation",
+        "any blocking function deployment",
+        "recording a shared secret, a one-time code, an ID or refresh token, a pending credential or a session identifier in any published artifact"
+      ],
+      "project": "fireemu-35fe6"
+    },
+    "productionAllowed": false,
+    "productionExecuted": false,
+    "project": "fireemu-35fe6",
+    "refusalDirectionControlAgeSeconds": 1800,
+    "sampledAgesSeconds": [
+      300,
+      450,
+      600
+    ],
+    "schema": "o2-mfa-campaign-v1",
+    "sources": {
+      "accounts-lookup": "https://firebase.google.com/docs/reference/rest/auth",
+      "mfa-enrollment-finalize": "https://docs.cloud.google.com/identity-platform/docs/reference/rest/v2/accounts.mfaEnrollment/finalize",
+      "mfa-enrollment-start": "https://docs.cloud.google.com/identity-platform/docs/reference/rest/v2/accounts.mfaEnrollment/start",
+      "mfa-enrollment-withdraw": "https://docs.cloud.google.com/identity-platform/docs/reference/rest/v2/accounts.mfaEnrollment/withdraw",
+      "mfa-signin-finalize": "https://docs.cloud.google.com/identity-platform/docs/reference/rest/v2/accounts.mfaSignIn/finalize",
+      "mfa-signin-start": "https://docs.cloud.google.com/identity-platform/docs/reference/rest/v2/accounts.mfaSignIn/start",
+      "project-config": "https://docs.cloud.google.com/identity-platform/docs/reference/rest/v2/projects/getConfig",
+      "rfc-6238": "https://www.rfc-editor.org/rfc/rfc6238"
+    },
+    "status": "PREPARED_UNOBSERVED",
+    "unsupportedObligations": [
+      "expired-pending-with-independently-valid-code",
+      "tenant-scoped multi-factor behaviour",
+      "blocking-function interaction",
+      "SDK and Rules paths",
+      "exact production TTL values"
+    ]
+  },
+  "campaignId": "AUTH-MFA-AGE-TOTP-01",
+  "disagreements": [],
+  "expectations": [
+    {
+      "agrees": true,
+      "expected": {
+        "basis": "source-read",
+        "errorCode": null,
+        "status": 200
+      },
+      "id": "baseline-fresh-finalize",
+      "observed": {
+        "errorCode": null,
+        "status": 200
+      }
+    },
+    {
+      "agrees": true,
+      "expected": {
+        "basis": "source-read",
+        "errorCode": null,
+        "status": 200
+      },
+      "id": "age-300s-start",
+      "observed": {
+        "errorCode": null,
+        "status": 200
+      }
+    },
+    {
+      "agrees": true,
+      "expected": {
+        "basis": "source-read",
+        "errorCode": null,
+        "status": 200
+      },
+      "id": "age-300s-finalize",
+      "observed": {
+        "errorCode": null,
+        "status": 200
+      }
+    },
+    {
+      "agrees": true,
+      "expected": {
+        "basis": "source-read",
+        "errorCode": null,
+        "status": 200
+      },
+      "id": "age-300s-same-account-fresh-control",
+      "observed": {
+        "errorCode": null,
+        "status": 200
+      }
+    },
+    {
+      "agrees": true,
+      "expected": {
+        "basis": "source-read",
+        "errorCode": "SESSION_EXPIRED",
+        "status": 400
+      },
+      "id": "totp-enroll-session-age-300s",
+      "observed": {
+        "errorCode": "SESSION_EXPIRED",
+        "status": 400
+      }
+    },
+    {
+      "agrees": true,
+      "expected": {
+        "basis": "source-read",
+        "errorCode": null,
+        "status": 200
+      },
+      "id": "age-450s-start",
+      "observed": {
+        "errorCode": null,
+        "status": 200
+      }
+    },
+    {
+      "agrees": true,
+      "expected": {
+        "basis": "source-read",
+        "errorCode": null,
+        "status": 200
+      },
+      "id": "age-450s-finalize",
+      "observed": {
+        "errorCode": null,
+        "status": 200
+      }
+    },
+    {
+      "agrees": true,
+      "expected": {
+        "basis": "source-read",
+        "errorCode": null,
+        "status": 200
+      },
+      "id": "age-450s-same-account-fresh-control",
+      "observed": {
+        "errorCode": null,
+        "status": 200
+      }
+    },
+    {
+      "agrees": true,
+      "expected": {
+        "basis": "source-read",
+        "errorCode": "SESSION_EXPIRED",
+        "status": 400
+      },
+      "id": "totp-enroll-session-age-450s",
+      "observed": {
+        "errorCode": "SESSION_EXPIRED",
+        "status": 400
+      }
+    },
+    {
+      "agrees": true,
+      "expected": {
+        "basis": "source-read",
+        "errorCode": null,
+        "status": 200
+      },
+      "id": "age-600s-start",
+      "observed": {
+        "errorCode": null,
+        "status": 200
+      }
+    },
+    {
+      "agrees": true,
+      "expected": {
+        "basis": "source-read",
+        "errorCode": null,
+        "status": 200
+      },
+      "id": "age-600s-finalize",
+      "observed": {
+        "errorCode": null,
+        "status": 200
+      }
+    },
+    {
+      "agrees": true,
+      "expected": {
+        "basis": "source-read",
+        "errorCode": null,
+        "status": 200
+      },
+      "id": "age-600s-same-account-fresh-control",
+      "observed": {
+        "errorCode": null,
+        "status": 200
+      }
+    },
+    {
+      "agrees": true,
+      "expected": {
+        "basis": "source-read",
+        "errorCode": "INVALID_SESSION_INFO",
+        "status": 400
+      },
+      "id": "totp-enroll-session-age-600s",
+      "observed": {
+        "errorCode": "INVALID_SESSION_INFO",
+        "status": 400
+      }
+    },
+    {
+      "agrees": true,
+      "expected": {
+        "basis": "source-read",
+        "errorCode": null,
+        "status": 200
+      },
+      "id": "age-1800s-start",
+      "observed": {
+        "errorCode": null,
+        "status": 200
+      }
+    },
+    {
+      "agrees": true,
+      "expected": {
+        "basis": "source-read",
+        "errorCode": null,
+        "status": 200
+      },
+      "id": "age-1800s-finalize",
+      "observed": {
+        "errorCode": null,
+        "status": 200
+      }
+    },
+    {
+      "agrees": true,
+      "expected": {
+        "basis": "source-read",
+        "errorCode": null,
+        "status": 200
+      },
+      "id": "age-1800s-same-account-fresh-control",
+      "observed": {
+        "errorCode": null,
+        "status": 200
+      }
+    },
+    {
+      "agrees": true,
+      "expected": {
+        "basis": "source-read",
+        "errorCode": null,
+        "status": 200
+      },
+      "id": "final-fresh-finalize",
+      "observed": {
+        "errorCode": null,
+        "status": 200
+      }
+    },
+    {
+      "agrees": true,
+      "expected": {
+        "basis": "source-read",
+        "errorCode": null,
+        "status": 200
+      },
+      "id": "totp-enroll-start",
+      "observed": {
+        "errorCode": null,
+        "status": 200
+      }
+    },
+    {
+      "agrees": true,
+      "expected": {
+        "basis": "source-read",
+        "errorCode": "INVALID_CODE",
+        "status": 400
+      },
+      "id": "totp-enroll-wrong-code",
+      "observed": {
+        "errorCode": "INVALID_CODE",
+        "status": 400
+      }
+    },
+    {
+      "agrees": true,
+      "expected": {
+        "basis": "source-read",
+        "errorCode": null,
+        "status": 200
+      },
+      "id": "totp-enroll-retry-same-session",
+      "observed": {
+        "errorCode": null,
+        "status": 200
+      }
+    },
+    {
+      "agrees": true,
+      "expected": {
+        "basis": "source-read",
+        "errorCode": "INVALID_SESSION_INFO",
+        "status": 400
+      },
+      "id": "totp-enroll-replay-finalized-session",
+      "observed": {
+        "errorCode": "INVALID_SESSION_INFO",
+        "status": 400
+      }
+    },
+    {
+      "agrees": true,
+      "expected": {
+        "basis": "source-read",
+        "errorCode": null,
+        "status": 200
+      },
+      "id": "totp-enroll-factor-readback",
+      "observed": {
+        "errorCode": null,
+        "status": 200
+      }
+    },
+    {
+      "agrees": true,
+      "expected": {
+        "basis": "source-read",
+        "errorCode": "SECOND_FACTOR_EXISTS",
+        "status": 400
+      },
+      "id": "second-factor-limit",
+      "observed": {
+        "errorCode": "SECOND_FACTOR_EXISTS",
+        "status": 400
+      }
+    },
+    {
+      "agrees": true,
+      "expected": {
+        "basis": "source-read",
+        "errorCode": "INVALID_ARGUMENT",
+        "status": 400
+      },
+      "id": "totp-signin-start",
+      "observed": {
+        "errorCode": "INVALID_ARGUMENT",
+        "status": 400
+      }
+    },
+    {
+      "agrees": true,
+      "expected": {
+        "basis": "source-read",
+        "errorCode": null,
+        "status": 200
+      },
+      "id": "totp-signin-finalize",
+      "observed": {
+        "errorCode": null,
+        "status": 200
+      }
+    },
+    {
+      "agrees": true,
+      "expected": {
+        "basis": "source-read",
+        "errorCode": "INVALID_CODE",
+        "status": 400
+      },
+      "id": "totp-signin-replay-same-code",
+      "observed": {
+        "errorCode": "INVALID_CODE",
+        "status": 400
+      }
+    },
+    {
+      "agrees": true,
+      "expected": {
+        "basis": "source-read",
+        "errorCode": null,
+        "status": 200
+      },
+      "id": "totp-withdraw",
+      "observed": {
+        "errorCode": null,
+        "status": 200
+      }
+    },
+    {
+      "agrees": true,
+      "expected": {
+        "basis": "source-read",
+        "errorCode": null,
+        "status": 200
+      },
+      "id": "totp-withdraw-readback",
+      "observed": {
+        "errorCode": null,
+        "status": 200
+      }
+    },
+    {
+      "agrees": true,
+      "expected": {
+        "basis": "source-read",
+        "errorCode": "MFA_ENROLLMENT_NOT_FOUND",
+        "status": 400
+      },
+      "id": "totp-withdraw-unknown",
+      "observed": {
+        "errorCode": "MFA_ENROLLMENT_NOT_FOUND",
+        "status": 400
+      }
+    },
+    {
+      "agrees": true,
+      "expected": {
+        "basis": "source-read",
+        "errorCode": "UNVERIFIED_EMAIL",
+        "status": 400
+      },
+      "id": "unverified-email-enroll-refusal",
+      "observed": {
+        "errorCode": "UNVERIFIED_EMAIL",
+        "status": 400
+      }
+    },
+    {
+      "agrees": true,
+      "expected": {
+        "basis": "source-read",
+        "errorCode": "UNSUPPORTED_FIRST_FACTOR",
+        "status": 400
+      },
+      "id": "ineligible-first-factor-refusal",
+      "observed": {
+        "errorCode": "UNSUPPORTED_FIRST_FACTOR",
+        "status": 400
+      }
+    },
+    {
+      "agrees": true,
+      "expected": {
+        "basis": "source-read",
+        "errorCode": "INVALID_ID_TOKEN",
+        "status": 400
+      },
+      "id": "missing-id-token-refusal",
+      "observed": {
+        "errorCode": "INVALID_ID_TOKEN",
+        "status": 400
+      }
+    },
+    {
+      "agrees": true,
+      "expected": {
+        "basis": "source-read",
+        "errorCode": null,
+        "status": 200
+      },
+      "id": "project-mfa-config-readback",
+      "observed": {
+        "errorCode": null,
+        "status": 200
+      }
+    }
+  ],
+  "maxRequests": 400,
+  "productionExecuted": false,
+  "provenance": {
+    "digest": "da90698e94d5f56412ae73ee52563e3af689ebe8cbfc4bc29584128e2430a044",
+    "evidence": "recomputed-from-worktree",
+    "paths": {
+      "tools/compat-broad/auth-totp-enroll/mfa_cases.py": "55d5a3a7c140c98eee514bf960db2f0b90701100593c683d4aafcd2a8a58cd9f",
+      "tools/compat-broad/auth-totp-enroll/mfa_collector.py": "5221eadfc8409bd46e4327582074e20f579975541a1bf22b5d4968a41d1aef91",
+      "tools/compat-broad/auth-totp-enroll/mfa_comparator.py": "04d3cfe6b56a3054b36f71aa60480915112dcdf64af1217172fbdda7fd0590ba",
+      "tools/compat-broad/auth-totp-enroll/mfa_local_shadow.py": "21e12973df1edba22a6fd9156065750cd8130926749b9b19451f949e05a86783",
+      "tools/compat-broad/auth-totp-enroll/mfa_manifest.py": "e98060ef42b434fb20e5b750cb9737c8d28edcd7c76456b9ed4310888b2625df",
+      "tools/compat-broad/auth-totp-enroll/mfa_provenance.py": "18fa9f0d2ac5290f50a8c1892be3d9ba25601c84e5078dbc2c26422e0ce0d2be",
+      "tools/compat-broad/auth-totp-enroll/mfa_totp.py": "8ad51d3366656acf7ac79bb5fa671028e7bbc023a1c777e8f88ad82b8adabf0f",
+      "tools/compat-inventory/pyproject.toml": "2cd843edbfa0d2603121113cadd8c02a825c48dd11c95e54edb243507128d6a7",
+      "tools/compat-inventory/uv.lock": "0a2374a0081466d557ee5d4fdc14f99f00b1b8aacf983705d80ade5246f8ed55"
+    },
+    "schema": "o2-mfa-provenance-v1"
+  },
+  "recordingComplete": true,
+  "recovery": {
+    "cleanupVerified": true,
+    "configurationMutated": false,
+    "configurationRestored": true,
+    "ownedAccounts": 11,
+    "remainingOwnedResources": 0
+  },
+  "requestsCharged": 132,
+  "rows": [
+    {
+      "errorCode": null,
+      "id": "baseline-fresh-finalize",
+      "outcome": "observed",
+      "status": 200
+    },
+    {
+      "errorCode": null,
+      "id": "age-300s-start",
+      "outcome": "observed",
+      "pendingAgeSeconds": 300.0,
+      "status": 200
+    },
+    {
+      "errorCode": null,
+      "id": "age-300s-finalize",
+      "outcome": "observed",
+      "pendingAgeSeconds": 300.0,
+      "status": 200
+    },
+    {
+      "errorCode": null,
+      "id": "age-300s-same-account-fresh-control",
+      "outcome": "observed",
+      "pendingAgeSeconds": 0.0,
+      "status": 200
+    },
+    {
+      "errorCode": "SESSION_EXPIRED",
+      "id": "totp-enroll-session-age-300s",
+      "outcome": "observed",
+      "sessionAgeSeconds": 300.0,
+      "status": 400
+    },
+    {
+      "errorCode": null,
+      "id": "age-450s-start",
+      "outcome": "observed",
+      "pendingAgeSeconds": 450.0,
+      "status": 200
+    },
+    {
+      "errorCode": null,
+      "id": "age-450s-finalize",
+      "outcome": "observed",
+      "pendingAgeSeconds": 450.0,
+      "status": 200
+    },
+    {
+      "errorCode": null,
+      "id": "age-450s-same-account-fresh-control",
+      "outcome": "observed",
+      "pendingAgeSeconds": 0.0,
+      "status": 200
+    },
+    {
+      "errorCode": "SESSION_EXPIRED",
+      "id": "totp-enroll-session-age-450s",
+      "outcome": "observed",
+      "sessionAgeSeconds": 450.0,
+      "status": 400
+    },
+    {
+      "errorCode": null,
+      "id": "age-600s-start",
+      "outcome": "observed",
+      "pendingAgeSeconds": 600.0,
+      "status": 200
+    },
+    {
+      "errorCode": null,
+      "id": "age-600s-finalize",
+      "outcome": "observed",
+      "pendingAgeSeconds": 600.0,
+      "status": 200
+    },
+    {
+      "errorCode": null,
+      "id": "age-600s-same-account-fresh-control",
+      "outcome": "observed",
+      "pendingAgeSeconds": 0.0,
+      "status": 200
+    },
+    {
+      "errorCode": "INVALID_SESSION_INFO",
+      "id": "totp-enroll-session-age-600s",
+      "outcome": "observed",
+      "sessionAgeSeconds": 600.0,
+      "status": 400
+    },
+    {
+      "errorCode": null,
+      "id": "age-1800s-start",
+      "outcome": "observed",
+      "pendingAgeSeconds": 1800.0,
+      "status": 200
+    },
+    {
+      "errorCode": null,
+      "id": "age-1800s-finalize",
+      "outcome": "observed",
+      "pendingAgeSeconds": 1800.0,
+      "status": 200
+    },
+    {
+      "errorCode": null,
+      "id": "age-1800s-same-account-fresh-control",
+      "outcome": "observed",
+      "pendingAgeSeconds": 0.0,
+      "status": 200
+    },
+    {
+      "errorCode": null,
+      "id": "final-fresh-finalize",
+      "outcome": "observed",
+      "status": 200
+    },
+    {
+      "errorCode": null,
+      "id": "totp-enroll-start",
+      "outcome": "observed",
+      "status": 200
+    },
+    {
+      "errorCode": "INVALID_CODE",
+      "id": "totp-enroll-wrong-code",
+      "outcome": "observed",
+      "status": 400
+    },
+    {
+      "errorCode": null,
+      "id": "totp-enroll-retry-same-session",
+      "outcome": "observed",
+      "status": 200
+    },
+    {
+      "errorCode": "INVALID_SESSION_INFO",
+      "id": "totp-enroll-replay-finalized-session",
+      "outcome": "observed",
+      "status": 400
+    },
+    {
+      "errorCode": null,
+      "factorCount": 1,
+      "id": "totp-enroll-factor-readback",
+      "outcome": "observed",
+      "status": 200
+    },
+    {
+      "errorCode": "SECOND_FACTOR_EXISTS",
+      "id": "second-factor-limit",
+      "outcome": "observed",
+      "status": 400
+    },
+    {
+      "errorCode": "INVALID_ARGUMENT",
+      "id": "totp-signin-start",
+      "outcome": "observed",
+      "status": 400
+    },
+    {
+      "errorCode": null,
+      "id": "totp-signin-finalize",
+      "outcome": "observed",
+      "status": 200
+    },
+    {
+      "errorCode": "INVALID_CODE",
+      "id": "totp-signin-replay-same-code",
+      "outcome": "observed",
+      "status": 400
+    },
+    {
+      "errorCode": null,
+      "id": "totp-withdraw",
+      "outcome": "observed",
+      "status": 200
+    },
+    {
+      "errorCode": null,
+      "factorCount": 0,
+      "id": "totp-withdraw-readback",
+      "outcome": "observed",
+      "status": 200
+    },
+    {
+      "errorCode": "MFA_ENROLLMENT_NOT_FOUND",
+      "id": "totp-withdraw-unknown",
+      "outcome": "observed",
+      "status": 400
+    },
+    {
+      "errorCode": "UNVERIFIED_EMAIL",
+      "id": "unverified-email-enroll-refusal",
+      "outcome": "observed",
+      "status": 400
+    },
+    {
+      "errorCode": "UNSUPPORTED_FIRST_FACTOR",
+      "id": "ineligible-first-factor-refusal",
+      "outcome": "observed",
+      "status": 400
+    },
+    {
+      "errorCode": "INVALID_ID_TOKEN",
+      "id": "missing-id-token-refusal",
+      "outcome": "observed",
+      "status": 400
+    },
+    {
+      "errorCode": null,
+      "id": "project-mfa-config-readback",
+      "mfaConfigPresent": false,
+      "outcome": "observed",
+      "status": 200
+    }
+  ],
+  "schema": "o2-mfa-local-shadow-v1",
+  "side": "local",
+  "worktree": {
+    "clean": true,
+    "commit": "3ad5dd0483719b4a9d7791f6415c73726c068721",
+    "resolved": true
+  }
+}

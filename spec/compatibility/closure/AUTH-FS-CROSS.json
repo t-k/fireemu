@@ -101,6 +101,12 @@
       "decision": "A token of another project is obtained by creating one @example.com test user on fireemu-oracle-query, taking its ID token and deleting the user at once (as approved in the owner ledger on 2026-09-25 for that project).",
       "decidedBy": "owner (t-k)",
       "decidedOn": "2026-09-27"
+    },
+    {
+      "id": "OX-4",
+      "decision": "The emulator profile keeps refusing an ID token of another project by its audience, as an exception to following the official emulator (spec/compatibility/contract.json profiles.emulator.officialEmulatorDivergences[1]); the strict profile answers it as production does (foreign-project-token, stage 1).",
+      "decidedBy": "owner (t-k)",
+      "decidedOn": "2026-09-28"
     }
   ],
   "productionPlan": {

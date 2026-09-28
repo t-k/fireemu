@@ -8,10 +8,17 @@
 //     `- YYYY-MM-DD | <parent> <packet> | decision=APPROVE; envelopeId=…; packetSha256=<digest>;
 //      sourceCommit=<commit>; … | Claude（委任… | …`
 // The envelope must cover the runner: the same project and limits no lower than the runner's.
+// Under the owner's delegation (addendum of 2026-09-28, 「委任も (イ)で」), the envelope line may
+// also be the coordinator's: its decider exactly `Claude（委任。オーナーの裁量の委任 2026-09-28）`,
+// its body naming `根拠=2026-09-28 調整役への委任（本番の送信）`, that basis line present in the
+// ledger by the owner, and a reserve of at most US$10.
 // A later line of the parent and packet saying REVOKED with the digest or the envelope ID
 // withdraws what it names.
 
 const DATE_LINE = /^- \d{4}-\d{2}-\d{2} \| /;
+const DELEGATE = "Claude（委任。オーナーの裁量の委任 2026-09-28）";
+const BASIS = { date: "2026-09-28", subject: "調整役への委任（本番の送信）" };
+const MAX_DELEGATED_USD = 10;
 
 const escapeRegExp = (text) => text.replaceAll(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
@@ -46,7 +53,15 @@ export function packetApproval(ownerDecisions, { parent, packet, digest, commit,
     new RegExp(`(?:^|[^\\w-])${escapeRegExp(packet)} ${verb} ${digest}(?![0-9A-Za-z])`);
   const envelopes = new Map();
   let approval;
-  for (const line of ownerDecisions.split("\n")) {
+  const lines = ownerDecisions.split("\n");
+  // The owner's delegation the coordinator's envelope lines rest on.
+  const delegated = lines.some((line) => {
+    const [date = "", subject = "", , decider = ""] = columns(line);
+    return (
+      date === BASIS.date && subject === BASIS.subject && decider.trim().startsWith("オーナー")
+    );
+  });
+  for (const line of lines) {
     const [, subject = "", body = "", decider = ""] = columns(line);
     const owner = decider.trim().startsWith("オーナー");
     const ours = subject === `${parent} ${packet}` || subject === `${parent} ${packet} envelope`;
@@ -65,6 +80,22 @@ export function packetApproval(ownerDecisions, { parent, packet, digest, commit,
     } else if (subject === `${parent} ${packet} envelope` && owner) {
       const envelope = fields(body);
       if (envelope.envelopeId) envelopes.set(envelope.envelopeId, envelope);
+    } else if (
+      subject === `${parent} ${packet} envelope` &&
+      delegated &&
+      decider.trim() === DELEGATE
+    ) {
+      const envelope = fields(body);
+      const reserve = /^\d+(\.\d+)?$/.test(envelope.reserveUsd ?? "")
+        ? Number(envelope.reserveUsd)
+        : Number.NaN;
+      if (
+        envelope.envelopeId &&
+        envelope["根拠"] === `${BASIS.date} ${BASIS.subject}` &&
+        reserve <= MAX_DELEGATED_USD
+      ) {
+        envelopes.set(envelope.envelopeId, envelope);
+      }
     } else if (subject === `${parent} ${packet}` && decider.trim().startsWith("Claude（委任")) {
       const version = fields(body);
       const envelope = envelopes.get(version.envelopeId);

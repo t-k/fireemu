@@ -89,3 +89,38 @@ test("an envelope must cover the runner's project and limits", () => {
   assert.equal(packetApproval(`${narrow}\n${delegated()}`, ASK), undefined);
   assert.throws(() => packetApproval("", { ...ASK, commit: "abc" }), /40 hex/);
 });
+
+const DELEGATE = "Claude（委任。オーナーの裁量の委任 2026-09-28）";
+const BASIS_TOKEN = "根拠=2026-09-28 調整役への委任（本番の送信）";
+const BASIS =
+  "- 2026-09-28 | 調整役への委任（本番の送信） | decision=APPROVE; 費用がUS$10以内なら任せる | オーナー（このセッションへの直接の返答） | x";
+const coordinatorEnvelope = ({ reserve = "2", decider = DELEGATE, token = BASIS_TOKEN } = {}) =>
+  `- 2026-09-28 | AUTH-FEDERATION record-oidc envelope | envelopeId=AUTH-FEDERATION-record-oidc-1; project=fireemu-oracle-idp; maxRequests=500; reserveUsd=${reserve}; writes=run providers and accounts; ${token} | ${decider} | packet.md`;
+
+test("the coordinator's envelope line counts under the owner's delegation (addendum of 2026-09-28)", () => {
+  const ledger = (...lines) => lines.join("\n");
+  const approved = packetApproval(ledger(BASIS, coordinatorEnvelope(), delegated()), ASK);
+  assert.equal(approved?.kind, "envelope");
+  assert.equal(approved?.envelopeId, "AUTH-FEDERATION-record-oidc-1");
+  // Every condition is needed: the basis line (by the owner), the exact decider, the token and
+  // a reserve of at most US$10.
+  for (const [what, text] of [
+    ["no basis line", ledger(coordinatorEnvelope(), delegated())],
+    [
+      "a basis line not by the owner",
+      ledger(BASIS.replace("オーナー（このセッションへの直接の返答）", "調整役"), coordinatorEnvelope(), delegated()),
+    ],
+    ["another decider", ledger(BASIS, coordinatorEnvelope({ decider: "Claude（委任）" }), delegated())],
+    ["no basis token", ledger(BASIS, coordinatorEnvelope({ token: "note=none" }), delegated())],
+    ["a reserve over US$10", ledger(BASIS, coordinatorEnvelope({ reserve: "10.5" }), delegated())],
+  ]) {
+    assert.equal(packetApproval(text, ASK), undefined, what);
+  }
+  assert.equal(
+    packetApproval(ledger(BASIS, coordinatorEnvelope({ reserve: "10" }), delegated()), ASK)?.kind,
+    "envelope",
+    "exactly US$10",
+  );
+  // The owner's envelope line still approves as before.
+  assert.equal(packetApproval(ledger(envelope(), delegated()), ASK)?.kind, "envelope");
+});

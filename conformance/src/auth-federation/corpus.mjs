@@ -10,17 +10,17 @@
 
 import { issuerChannelHost } from "./guard.mjs";
 
-const admin = (id, method, path, extra = {}) => ({
+export const admin = (id, method, path, extra = {}) => ({
   id,
   auth: "admin",
   method,
   path: `admin/v2/projects/{project}/${path}`,
   ...extra,
 });
-const client = (id, method, body) => ({ id, auth: "key", path: `v1/accounts:${method}`, body });
+export const client = (id, method, body) => ({ id, auth: "key", path: `v1/accounts:${method}`, body });
 
 /** The run's issuer: a Hosting preview channel of the sandbox (O1), resolved per run. */
-const ISSUER = "https://ISSUERHOST/oidc/RUN";
+export const ISSUER = "https://ISSUERHOST/oidc/RUN";
 
 const oidcConfig = {
   id: "auth-federation/provider-config/oidc",
@@ -139,15 +139,15 @@ const defaultSupported = {
 };
 
 /** A manual-credential signInWithIdp body; `form` becomes the URL-encoded `postBody`. */
-const idp = (form, extra = {}) => ({
+export const idp = (form, extra = {}) => ({
   requestUri: "http://localhost",
   postBody: { $form: form },
   returnSecureToken: true,
   returnIdpCredential: true,
   ...extra,
 });
-const from = (reference) => ({ $from: reference });
-const token = (name) => ({ $token: name });
+export const from = (reference) => ({ $from: reference });
+export const token = (name) => ({ $token: name });
 
 const thirdPartyRefusals = {
   id: "auth-federation/third-party-refusals",
@@ -193,8 +193,8 @@ const thirdPartyRefusals = {
 // relative to the run, `$sha256: raw` for a hashed nonce, `drop` for claims left out, a
 // `header` override and `signWith: "other"` for a key the issuer does not publish.
 
-const oidcProvider = (letter) => `oidc.fireemu-RUN-${letter}`;
-const createOidc = (letter, extra = {}) =>
+export const oidcProvider = (letter) => `oidc.fireemu-RUN-${letter}`;
+export const createOidc = (letter, extra = {}) =>
   admin(`create-provider`, "POST", "oauthIdpConfigs", {
     query: { oauthIdpConfigId: oidcProvider(letter) },
     body: {
@@ -205,13 +205,13 @@ const createOidc = (letter, extra = {}) =>
       ...extra,
     },
   });
-const signIn = (id, letter, tokenName, extra = {}, form = {}) =>
+export const signIn = (id, letter, tokenName, extra = {}, form = {}) =>
   client(
     id,
     "signInWithIdp",
     idp({ providerId: oidcProvider(letter), id_token: token(tokenName), ...form }, extra),
   );
-const lookup = (id, reference) => ({
+export const lookup = (id, reference) => ({
   id,
   auth: "admin",
   path: "v1/projects/{project}/accounts:lookup",
@@ -349,7 +349,7 @@ const accountsReturning = {
   ],
 };
 
-const adminCreate = (id, body) => ({
+export const adminCreate = (id, body) => ({
   id,
   auth: "admin",
   path: "v1/projects/{project}/accounts",
@@ -459,7 +459,7 @@ const pendingToken = {
   ],
 };
 
-const refresh = (id, reference) => ({
+export const refresh = (id, reference) => ({
   id,
   auth: "key",
   path: "v1/token",

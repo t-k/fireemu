@@ -7,6 +7,8 @@
 // - ID tokens and session cookies are recorded as their header (the key ID masked) and claims
 //   (times relative to `iat`), never as the token.
 
+import { readAuthnRequest } from "./saml.mjs";
+
 // Secure Token answers a refresh with the new ID token as `access_token` (and `id_token`).
 const TOKEN_KEYS = new Set([
   "idToken",
@@ -76,6 +78,26 @@ function decodeToken(token) {
   }
 }
 
+/**
+ * A SAML `authUri` as recorded: the SSO endpoint and the AuthnRequest it carries, with the
+ * request ID and issue time (per request) masked in their form, and the relay state masked.
+ */
+function samlAuthUri(value, ctx) {
+  const { xml } = readAuthnRequest(value);
+  const request = xml
+    .replace(/(\sID=")_[0-9a-f]{32}"/, '$1<id:_hex32>"')
+    .replace(/(\sID=")(?!<id)[^"]*"/, '$1<id>"')
+    .replace(/(\sIssueInstant=")\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}Z"/, '$1<time:millis>"')
+    .replace(/(\sIssueInstant=")(?!<time)[^"]*"/, '$1<time>"');
+  return {
+    "<saml-authn-request>": {
+      endpoint: placeholders(value.split("?")[0], ctx),
+      request: placeholders(request, ctx),
+      relayState: "<relay-state>",
+    },
+  };
+}
+
 /** Unix times in seconds from 2020 to 2040: a number in a message that is one is a time. */
 const UNIX_SECONDS = /\b(1[6-9]|20|21)\d{8}\b/g;
 
@@ -124,6 +146,7 @@ export function normalize(value, ctx, key = "") {
     if (KEPT_ONLY[key]) return KEPT_ONLY[key](value);
     // The service's authorization state, and the nonce it makes when none is given, differ
     // on every createAuthUri (the nonce's form is kept).
+    if (key === "authUri" && value.includes("SAMLRequest=")) return samlAuthUri(value, ctx);
     if (key === "authUri") {
       const uri = value
         .replace(/([?&]state=)[^&#]*/, "$1<state>")

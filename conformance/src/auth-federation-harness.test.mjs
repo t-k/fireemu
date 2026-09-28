@@ -669,3 +669,50 @@ test("a run stops before a step that could create an account past its limit", as
   );
   assert.equal(sent.filter((line) => line.includes(":signInWithIdp")).length, 1, sent.join("\n"));
 });
+
+test("the run's SAML signers are a current and an expired certificate with their keys in memory", async () => {
+  const { prepareSamlSigners } = await import("./auth-federation/run.mjs");
+  const { mkdtemp, readdir, rm } = await import("node:fs/promises");
+  const { tmpdir } = await import("node:os");
+  const { join } = await import("node:path");
+  const { X509Certificate, KeyObject } = await import("node:crypto");
+  const dir = await mkdtemp(join(tmpdir(), "fireemu-saml-signers-"));
+  try {
+    const signers = await prepareSamlSigners(dir);
+    const now = Date.now();
+    const current = new X509Certificate(signers.certificates["saml-a"]);
+    const expired = new X509Certificate(signers.certificates["saml-expired"]);
+    assert.ok(Date.parse(current.validTo) > now && Date.parse(current.validFrom) <= now);
+    assert.ok(Date.parse(expired.validTo) < now, expired.validTo);
+    assert.ok(signers.keys.run.privateKey instanceof KeyObject);
+    assert.equal(signers.keys.run.certificatePem, signers.certificates["saml-a"]);
+    assert.equal(signers.keys.expired.certificatePem, signers.certificates["saml-expired"]);
+    assert.ok(current.checkPrivateKey(signers.keys.run.privateKey));
+    assert.ok(expired.checkPrivateKey(signers.keys.expired.privateKey));
+    // The run's certificates as a SAMLResponse carries them (base64 of the DER).
+    assert.deepEqual(signers.runCertificates, [current.raw.toString("base64"), expired.raw.toString("base64")]);
+    // Nothing is left on disk: the keys live in memory for the run only.
+    assert.deepEqual(await readdir(dir), []);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("a SAML authUri is recorded as its AuthnRequest, the request ID, time and relay state masked", async () => {
+  const { normalize } = await import("./auth-federation/harness.mjs");
+  const { deflateRawSync } = await import("node:zlib");
+  const ctx = { run: RUN, project: SANDBOX_PROJECT };
+  const request = `<?xml version="1.0" encoding="UTF-8"?><saml2p:AuthnRequest xmlns:saml2p="urn:oasis:names:tc:SAML:2.0:protocol" AssertionConsumerServiceURL="https://${SANDBOX_PROJECT}.firebaseapp.com/__/auth/handler" Destination="https://${SANDBOX_PROJECT}.web.app/saml/${RUN}/sso" ID="_ed0d4770c630176df01d0df9cf1e494f" IssueInstant="2026-09-27T16:57:13.876Z" ProtocolBinding="urn:oasis:names:tc:SAML:2.0:bindings:HTTP-POST" Version="2.0"><saml2:Issuer xmlns:saml2="urn:oasis:names:tc:SAML:2.0:assertion">fireemu-${RUN}-sp</saml2:Issuer></saml2p:AuthnRequest>`;
+  const encoded = encodeURIComponent(deflateRawSync(Buffer.from(request)).toString("base64"));
+  const authUri = `https://${SANDBOX_PROJECT}.web.app/saml/${RUN}/sso?SAMLRequest=${encoded}&RelayState=AMbdmDkLCfxgT-2G`;
+  assert.deepEqual(normalize({ authUri }, ctx), {
+    authUri: {
+      "<saml-authn-request>": {
+        endpoint: "https://<project>.web.app/saml/<run>/sso",
+        request:
+          '<?xml version="1.0" encoding="UTF-8"?><saml2p:AuthnRequest xmlns:saml2p="urn:oasis:names:tc:SAML:2.0:protocol" AssertionConsumerServiceURL="https://<project>.firebaseapp.com/__/auth/handler" Destination="https://<project>.web.app/saml/<run>/sso" ID="<id:_hex32>" IssueInstant="<time:millis>" ProtocolBinding="urn:oasis:names:tc:SAML:2.0:bindings:HTTP-POST" Version="2.0"><saml2:Issuer xmlns:saml2="urn:oasis:names:tc:SAML:2.0:assertion">fireemu-<run>-sp</saml2:Issuer></saml2p:AuthnRequest>',
+        relayState: "<relay-state>",
+      },
+    },
+  });
+});

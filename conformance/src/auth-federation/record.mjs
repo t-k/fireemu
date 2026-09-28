@@ -28,6 +28,7 @@ import { promisify } from "node:util";
 import { SANDBOX_PROJECT } from "../auth-account/harness.mjs";
 import { packetApproval } from "./approval.mjs";
 import { PROGRAMS } from "./corpus.mjs";
+import { SAML_PROGRAMS } from "./corpus-saml.mjs";
 import {
   checkWebConfig,
   clients,
@@ -41,7 +42,13 @@ import {
   versionsOfRun,
 } from "./hosting.mjs";
 import { withProjectLocks } from "./project-locks.mjs";
-import { makeCertificate, prepareKeys, resolveRun, runPrograms } from "./run.mjs";
+import {
+  makeCertificate,
+  prepareKeys,
+  prepareSamlSigners,
+  resolveRun,
+  runPrograms,
+} from "./run.mjs";
 import { changedKeys, configKeyDigests, precheckRefusal } from "./saml-smoke.mjs";
 
 export const TASK_ID = "AUTH-FEDERATION-SANDBOX";
@@ -68,11 +75,52 @@ export const FIXTURE = fileURLToPath(
   new URL("../../auth-federation-production.json", import.meta.url),
 );
 
+/**
+ * What differs between the recordings this runner makes: the packet an approval names, the
+ * ledger action, the envelope's constants, the request limits (API and issuer host), each
+ * pass's share, the accounts a pass may create (every one is an MAU), the corpus and the
+ * fixture. record-oidc's values are the module's exports above.
+ */
+export const PROFILES = {
+  "record-oidc": {
+    packet: PACKET,
+    action: ACTION,
+    runner: RUNNER,
+    limits: LIMITS,
+    passLimit: PASS_LIMIT,
+    accountLimit: undefined,
+    programs: PROGRAMS,
+    fixture: FIXTURE,
+    target:
+      "production Identity Toolkit, Secure Token and Admin v2 REST, Identity Platform sandbox; the OIDC issuer is the run's preview channel of the sandbox's Hosting, its ID tokens signed locally (owner decision O1)",
+  },
+  "record-saml": {
+    packet: "record-saml",
+    action: "record-saml",
+    runner: { project: SANDBOX_PROJECT, maxRequests: 450, reserveUsd: 2 },
+    limits: { api: 438, issuer: 12 },
+    passLimit: 150,
+    accountLimit: 25,
+    programs: SAML_PROGRAMS,
+    fixture: fileURLToPath(new URL("../../auth-federation-saml-production.json", import.meta.url)),
+    target:
+      "production Identity Toolkit, Secure Token and Admin v2 REST, Identity Platform sandbox; the SAML responses signed locally with the run's certificates at each step, the OIDC issuer the run's preview channel of the sandbox's Hosting (owner decisions O1, O5)",
+  },
+};
+
+/** The profile a mode names (record-oidc when none). */
+export function profileOf(name = "record-oidc") {
+  const profile = PROFILES[name];
+  if (!profile) throw new Error(`no recording ${name}`);
+  return profile;
+}
+
 /** The recording's modules by absolute path: the approval names the digest of their sources. */
 export const SOURCES = [
   "record.mjs",
   "run.mjs",
   "corpus.mjs",
+  "corpus-saml.mjs",
   "guard.mjs",
   "harness.mjs",
   "idp.mjs",
@@ -97,20 +145,23 @@ export async function scriptDigest(read = (path) => readFile(path)) {
 
 const sha256Hex = (text) => createHash("sha256").update(text).digest("hex");
 
-/** The config paths programs may touch, and their values before the recording. */
-const TOUCHED = [...new Set(PROGRAMS.flatMap((program) => program.touches ?? []))];
+/** The config paths a corpus's programs may touch. */
+const touchedOf = (programs) => [...new Set(programs.flatMap((program) => program.touches ?? []))];
 const PROVIDER_COLLECTIONS = [
   "oauthIdpConfigs",
   "inboundSamlConfigs",
   "defaultSupportedIdpConfigs",
 ];
-const DEFAULT_IDPS = [...new Set(PROGRAMS.flatMap((program) => program.defaultIdpWrites ?? []))];
+/** The default IdPs a corpus's programs write. */
+const defaultIdpsOf = (programs) => [
+  ...new Set(programs.flatMap((program) => program.defaultIdpWrites ?? [])),
+];
 const valueAt = (config, path) => path.split(".").reduce((value, key) => value?.[key], config);
 
 /** A digest of each program as written in the corpus (before a run fills it in). */
-export function programDigests() {
+export function programDigests(programs = PROGRAMS) {
   return Object.fromEntries(
-    PROGRAMS.map((program) => [program.id, sha256Hex(JSON.stringify(program))]),
+    programs.map((program) => [program.id, sha256Hex(JSON.stringify(program))]),
   );
 }
 
@@ -121,9 +172,9 @@ const sameRow = (a, b) => JSON.stringify(a) === JSON.stringify(b);
  * The fixture of a recording: the first pass's rows per program, and in `second` the rows the
  * second pass recorded differently. Programs a pass did not complete are left out.
  */
-export function buildFixture(passes, meta) {
+export function buildFixture(passes, meta, profile = PROFILES["record-oidc"]) {
   const [first, second] = passes;
-  const digests = programDigests();
+  const digests = programDigests(profile.programs);
   const programs = {};
   for (const id of Object.keys(first.results).toSorted()) {
     const one = first.results[id];
@@ -144,8 +195,7 @@ export function buildFixture(passes, meta) {
   return {
     version: 1,
     recordedAgainst: {
-      target:
-        "production Identity Toolkit, Secure Token and Admin v2 REST, Identity Platform sandbox; the OIDC issuer is the run's preview channel of the sandbox's Hosting, its ID tokens signed locally (owner decision O1)",
+      target: profile.target,
       project: "<project>",
       note: "Two recordings per program. The run's issuer host, run tag, project and project number are placeholders; tokens are recorded as their header and claims with times relative to iat; refresh, access and pending tokens, session IDs, local IDs and certificates are masked. `second` holds the other recording of rows that differed.",
     },
@@ -216,13 +266,20 @@ export async function recordCampaign({
   run,
   keys,
   certificatePem,
+  signers,
   meta,
   appendLedger,
   writeFixture,
   stop,
   now,
   sleep,
+  profile = PROFILES["record-oidc"],
 }) {
+  const { action } = profile;
+  const touched = touchedOf(profile.programs);
+  const defaultIdps = defaultIdpsOf(profile.programs);
+  // record-saml signs responses with the run's SAML keys; record-oidc only configures one.
+  const certificates = signers?.certificates ?? { "saml-a": certificatePem };
   const { auth, get, send } = clients(api, meta.adminToken);
   const base = `${ITK}/admin/v2/projects/${SANDBOX_PROJECT}`;
   const accountsUrl = (max) =>
@@ -267,21 +324,24 @@ export async function recordCampaign({
   const keysBefore = configKeyDigests(before.text);
   await appendLedger({
     event: "started",
-    action: ACTION,
+    action,
     run,
     envelopeId: meta.envelopeId,
-    requestLimits: LIMITS,
-    reserveUsd: RUNNER.reserveUsd,
+    requestLimits: profile.limits,
+    reserveUsd: profile.runner.reserveUsd,
+    ...(profile.accountLimit === undefined
+      ? {}
+      : { accountLimit: profile.accountLimit * PASSES }),
     gitSha: meta.gitSha,
     scriptDigest: meta.digest,
     configDigestBefore: sha256Hex(before.text),
     configKeyDigestsBefore: keysBefore,
     // Values a recovery may restore (booleans, no secret).
     touchedBefore: Object.fromEntries(
-      TOUCHED.map((path) => [path, valueAt(before.body, path) ?? false]),
+      touched.map((path) => [path, valueAt(before.body, path) ?? false]),
     ),
     // Checked absent above: a recovery removes only these.
-    defaultIdpsAbsentBefore: DEFAULT_IDPS,
+    defaultIdpsAbsentBefore: defaultIdps,
   });
 
   const issuer = { channelAttempted: false, channelCreated: false };
@@ -297,7 +357,7 @@ export async function recordCampaign({
       forbidden: [meta.apiKey, meta.projectNumber],
       stop,
       result: issuer,
-      journal: (fields) => appendLedger({ event: "progress", action: ACTION, run, ...fields }),
+      journal: (fields) => appendLedger({ event: "progress", action, run, ...fields }),
     });
     for (let pass = 1; pass <= PASSES; pass += 1) {
       stop.check();
@@ -306,8 +366,9 @@ export async function recordCampaign({
         run,
         issuerHost: issuer.issuerHost,
         keys,
-        certificatePem,
+        certificates,
         now: now(),
+        programs: profile.programs,
       });
       const ctx = {
         run,
@@ -319,7 +380,10 @@ export async function recordCampaign({
         adminAuthorization: `Bearer ${meta.adminToken}`,
         adminHeaders: { "x-goog-user-project": SANDBOX_PROJECT },
         target: { kind: "production" },
-        fetch: budget(api, PASS_LIMIT, `pass ${pass}`),
+        fetch: budget(api, profile.passLimit, `pass ${pass}`),
+        accountLimit: profile.accountLimit,
+        runCertificates: signers?.runCertificates,
+        saml: signers ? { keys: signers.keys, now } : undefined,
       };
       passes.push(await runPrograms(programs, ctx));
     }
@@ -367,7 +431,7 @@ export async function recordCampaign({
   });
   await step("read default IdPs", async () => {
     cleanup.defaultIdpsLeft = [];
-    for (const idp of DEFAULT_IDPS) {
+    for (const idp of defaultIdps) {
       const response = await api(`${base}/defaultSupportedIdpConfigs/${idp}`, { headers: auth });
       await response.text();
       if (response.status !== 404) cleanup.defaultIdpsLeft.push(`${idp} (${response.status})`);
@@ -399,14 +463,14 @@ export async function recordCampaign({
   let fixtureError;
   if (complete) {
     try {
-      await writeFixture(buildFixture(passes, meta));
+      await writeFixture(buildFixture(passes, meta, profile));
       fixtureWritten = true;
     } catch (error) {
       fixtureError = error.message;
     }
   }
   const entry = {
-    action: ACTION,
+    action,
     outcome: !clean
       ? "needs-recovery"
       : !complete
@@ -441,11 +505,13 @@ export async function recordCampaign({
  * absent, and the issuer: its host, its version's ID (journalled after the create) and
  * whether a version create was sent at all.
  */
-export function recordingToRecover(ledgerText) {
+export function recordingToRecover(ledgerText, profile = PROFILES["record-oidc"]) {
   const own = ledgerEntries(ledgerText).filter(
     (entry) => entry.project === SANDBOX_PROJECT && (entry.taskId ?? entry.task) === TASK_ID,
   );
-  const started = own.findLast((entry) => entry.event === "started" && entry.action === ACTION);
+  const started = own.findLast(
+    (entry) => entry.event === "started" && entry.action === profile.action,
+  );
   if (!started) return undefined;
   const after = own
     .slice(own.lastIndexOf(started) + 1)
@@ -475,7 +541,16 @@ export function recordingToRecover(ledgerText) {
  * all back. A version create that was sent without a journalled ID and cannot be found leaves
  * the run needing recovery. It writes nothing else of the config.
  */
-export async function recoverCampaign({ api, target, meta, appendLedger, sleep }) {
+export async function recoverCampaign({
+  api,
+  target,
+  meta,
+  appendLedger,
+  sleep,
+  profile = PROFILES["record-oidc"],
+}) {
+  const touched = touchedOf(profile.programs);
+  const defaultIdps = defaultIdpsOf(profile.programs);
   const { run } = target;
   const { auth, get, send } = clients(api, meta.adminToken);
   const base = `${ITK}/admin/v2/projects/${SANDBOX_PROJECT}`;
@@ -546,7 +621,7 @@ export async function recoverCampaign({ api, target, meta, appendLedger, sleep }
   });
   await step("delete default IdPs", async () => {
     cleanup.defaultIdpsLeft = [];
-    for (const idp of target.defaultIdpsAbsentBefore.filter((id) => DEFAULT_IDPS.includes(id))) {
+    for (const idp of target.defaultIdpsAbsentBefore.filter((id) => defaultIdps.includes(id))) {
       const response = await api(`${base}/defaultSupportedIdpConfigs/${idp}`, { headers: auth });
       await response.text();
       if (response.status === 404) continue;
@@ -581,7 +656,7 @@ export async function recoverCampaign({ api, target, meta, appendLedger, sleep }
   await step("restore config", async () => {
     const current = await get(`${base}/config`, "config");
     for (const [path, value] of Object.entries(target.touchedBefore)) {
-      if (!TOUCHED.includes(path) || typeof value !== "boolean") continue;
+      if (!touched.includes(path) || typeof value !== "boolean") continue;
       if ((valueAt(current, path) ?? false) === value) continue;
       const body = {};
       path.split(".").reduce((node, key, index, keys) => {
@@ -612,7 +687,7 @@ export async function recoverCampaign({ api, target, meta, appendLedger, sleep }
     cleanup.configUnchanged === true;
   if (!cleanup.errors.length) delete cleanup.errors;
   const entry = {
-    action: `${ACTION}-recover`,
+    action: `${profile.action}-recover`,
     outcome: clean ? "recovered" : "needs-recovery",
     run,
     ...(versionId ? { versionId } : {}),
@@ -629,7 +704,7 @@ async function sh(command, args) {
 }
 
 /** The gates of every production send of this script; returns what they read. */
-async function gate(needs) {
+async function gate(needs, profile = PROFILES["record-oidc"]) {
   const env = Object.fromEntries(needs.map((name) => [name, process.env[name]]));
   const missing = needs.filter((name) => !env[name]);
   if (missing.length) throw new Error(`${missing.join(", ")} required`);
@@ -643,12 +718,14 @@ async function gate(needs) {
   const commit = await sh("git", ["-C", dirname(SOURCES[0]), "rev-parse", "HEAD"]);
   const approval = packetApproval(await readFile(env.FIREEMU_OWNER_DECISIONS, "utf8"), {
     parent: PARENT,
-    packet: PACKET,
+    packet: profile.packet,
     digest,
     commit,
-    runner: RUNNER,
+    runner: profile.runner,
   });
-  if (!approval) throw new Error(`no owner-ledger approval of ${PACKET} ${digest} at ${commit}`);
+  if (!approval) {
+    throw new Error(`no owner-ledger approval of ${profile.packet} ${digest} at ${commit}`);
+  }
   return { env, digest, commit, approval };
 }
 
@@ -699,25 +776,31 @@ const stopper = () => {
   };
 };
 
-async function recordProduction() {
-  const { env, digest, commit, approval } = await gate([
-    "FIREEMU_SANDBOX_LEDGER",
-    "FIREEMU_OWNER_DECISIONS",
-    "FIREEMU_AUTH_SANDBOX_WEB_CONFIG",
-  ]);
+async function recordProduction(profile) {
+  const { env, digest, commit, approval } = await gate(
+    ["FIREEMU_SANDBOX_LEDGER", "FIREEMU_OWNER_DECISIONS", "FIREEMU_AUTH_SANDBOX_WEB_CONFIG"],
+    profile,
+  );
   const ledger = env.FIREEMU_SANDBOX_LEDGER;
   const web = JSON.parse(await readFile(env.FIREEMU_AUTH_SANDBOX_WEB_CONFIG, "utf8"));
   checkWebConfig(web);
   const run = randomBytes(3).toString("hex");
   const keys = prepareKeys();
   const secretDir = await mkdtemp(join(tmpdir(), "fireemu-record-"));
+  // The keys live in memory for the run only; nothing is left on disk.
   let certificatePem;
+  let signers;
   try {
-    certificatePem = await makeCertificate(secretDir, "saml-a");
+    if (profile.packet === "record-saml") {
+      signers = await prepareSamlSigners(secretDir);
+      delete signers.keyPems;
+    } else {
+      certificatePem = await makeCertificate(secretDir, "saml-a");
+    }
   } finally {
     await rm(secretDir, { recursive: true, force: true });
   }
-  const holder = { taskId: TASK_ID, packetId: PACKET, run, sourceCommit: commit };
+  const holder = { taskId: TASK_ID, packetId: profile.packet, run, sourceCommit: commit };
   return withProjectLocks(
     ledger,
     [SANDBOX_PROJECT],
@@ -726,7 +809,7 @@ async function recordProduction() {
       const busy = sandboxBusy(await readFile(ledger, "utf8").catch(() => ""));
       if (busy) throw new Error(`the sandbox is not free: ${busy}`);
       const adminToken = await sh("gcloud", ["auth", "application-default", "print-access-token"]);
-      const { call, used } = limitedFetch(fetch, { run, limits: LIMITS });
+      const { call, used } = limitedFetch(fetch, { run, limits: profile.limits });
       const stop = stopper();
       try {
         const startedAt = new Date().toISOString();
@@ -735,6 +818,8 @@ async function recordProduction() {
           run,
           keys,
           certificatePem,
+          signers,
+          profile,
           meta: {
             adminToken,
             apiKey: web.apiKey,
@@ -747,8 +832,9 @@ async function recordProduction() {
           appendLedger: appender(ledger, used, state, web),
           writeFixture: (fixture) =>
             writeFixtureFiles(fixture, {
-              privateDir: join(dirname(ledger), `auth-federation-record-${run}`),
+              privateDir: join(dirname(ledger), `auth-federation-${profile.packet}-${run}`),
               forbidden: [web.apiKey, web.projectNumber, adminToken],
+              target: profile.fixture,
             }),
           stop,
           now: () => Math.floor(Date.now() / 1000),
@@ -765,16 +851,15 @@ async function recordProduction() {
   );
 }
 
-async function recoverProduction() {
-  const { env, digest } = await gate([
-    "FIREEMU_SANDBOX_LEDGER",
-    "FIREEMU_OWNER_DECISIONS",
-    "FIREEMU_AUTH_SANDBOX_WEB_CONFIG",
-  ]);
+async function recoverProduction(profile) {
+  const { env, digest } = await gate(
+    ["FIREEMU_SANDBOX_LEDGER", "FIREEMU_OWNER_DECISIONS", "FIREEMU_AUTH_SANDBOX_WEB_CONFIG"],
+    profile,
+  );
   const ledger = env.FIREEMU_SANDBOX_LEDGER;
   const web = JSON.parse(await readFile(env.FIREEMU_AUTH_SANDBOX_WEB_CONFIG, "utf8"));
   checkWebConfig(web);
-  const target = recordingToRecover(await readFile(ledger, "utf8"));
+  const target = recordingToRecover(await readFile(ledger, "utf8"), profile);
   if (!target) throw new Error("the ledger shows no recording of this task to recover");
   if (target.digest !== digest)
     throw new Error(`run ${target.run} ran ${target.digest}, not ${digest}`);
@@ -784,14 +869,20 @@ async function recoverProduction() {
   return withProjectLocks(
     ledger,
     [SANDBOX_PROJECT],
-    { taskId: TASK_ID, packetId: `${PACKET}-recover`, run: target.run, sourceCommit: commit },
+    {
+      taskId: TASK_ID,
+      packetId: `${profile.packet}-recover`,
+      run: target.run,
+      sourceCommit: commit,
+    },
     async (state) => {
       state.sent = true;
       const adminToken = await sh("gcloud", ["auth", "application-default", "print-access-token"]);
-      const { call, used } = limitedFetch(fetch, { run: target.run, limits: LIMITS });
+      const { call, used } = limitedFetch(fetch, { run: target.run, limits: profile.limits });
       const entry = await recoverCampaign({
         api: call,
         target,
+        profile,
         meta: { adminToken },
         appendLedger: appender(ledger, used, state, web),
         sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
@@ -809,6 +900,6 @@ async function recoverProduction() {
 
 const mode = process.argv[1] === fileURLToPath(import.meta.url) ? process.argv[2] : undefined;
 if (mode === "digest") console.log(await scriptDigest());
-else if (mode === "record-production") await recordProduction();
-else if (mode === "recover") await recoverProduction();
+else if (mode === "record-production") await recordProduction(profileOf(process.argv[3]));
+else if (mode === "recover") await recoverProduction(profileOf(process.argv[3]));
 else if (mode !== undefined) throw new Error(`unknown mode ${mode}`);

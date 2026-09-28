@@ -8,7 +8,9 @@ import { SANDBOX_PROJECT } from "./auth-account/harness.mjs";
 import { limitedFetch } from "./auth-federation/hosting.mjs";
 import {
   buildFixture,
+  FIXTURE,
   LIMITS,
+  PROFILES,
   RUNNER,
   recordCampaign,
   recordingToRecover,
@@ -594,4 +596,43 @@ test("recover finds a version by the run's label and leaves other runs' versions
     env.site.state.otherVersions.map((v) => v.name.split("/").at(-1)),
     ["other"],
   );
+});
+
+test("record-saml's envelope: 450 requests, at most 50 accounts, its own corpus and fixture", async () => {
+  const { SAML_PROGRAMS } = await import("./auth-federation/corpus-saml.mjs");
+  const saml = PROFILES["record-saml"];
+  assert.equal(saml.limits.api + saml.limits.issuer, saml.runner.maxRequests);
+  assert.equal(saml.runner.maxRequests, 450);
+  assert.equal(saml.runner.reserveUsd, 2);
+  // Two passes: the accounts they may create stay within the approved 60 MAU.
+  assert.ok(saml.accountLimit * 2 <= 60);
+  assert.ok(saml.passLimit * 2 < saml.limits.api);
+  assert.equal(saml.programs, SAML_PROGRAMS);
+  assert.notEqual(saml.fixture, FIXTURE);
+  assert.equal(PROFILES["record-oidc"].fixture, FIXTURE);
+});
+
+test("a record-saml recording writes its own action, limits and account cap to the ledger", async () => {
+  const env = sandbox();
+  const handle = env.site.handle;
+  const failing = sandbox({
+    hosting: (url, init) =>
+      new URL(url).pathname.endsWith(":populateFiles") ? reply(500, {}) : handle(url, init),
+  });
+  failing.site = env.site;
+  const saml = PROFILES["record-saml"];
+  const { result, ledger } = await campaign(failing, {
+    profile: saml,
+    certificatePem: undefined,
+    signers: { certificates: { "saml-a": "A", "saml-expired": "B" }, keys: {}, runCertificates: [] },
+  });
+  assert.equal(result.outcome, "failed-cleaned", JSON.stringify(result));
+  assert.equal(ledger[0].event, "started");
+  assert.equal(ledger[0].action, "record-saml");
+  assert.deepEqual(ledger[0].requestLimits, saml.limits);
+  assert.equal(ledger[0].reserveUsd, 2);
+  assert.equal(ledger[0].accountLimit, 50);
+  assert.deepEqual(ledger[0].touchedBefore, { "signIn.allowDuplicateEmails": false });
+  assert.deepEqual(ledger[0].defaultIdpsAbsentBefore, ["google.com"]);
+  assert.equal(ledger.at(-1).action, "record-saml");
 });

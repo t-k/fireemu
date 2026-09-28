@@ -2,10 +2,10 @@
 // profile) and writes the recorded rows under `.runs/`; the production recording
 // (`record.mjs`) runs the same programs through `runPrograms` against the sandbox.
 //
-//   node src/auth-federation/run.mjs local
+//   node src/auth-federation/run.mjs local [record-saml]
 
 import { execFile, spawn } from "node:child_process";
-import { createHash, randomBytes } from "node:crypto";
+import { createHash, createPrivateKey, randomBytes } from "node:crypto";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -16,9 +16,10 @@ import { CONFORMANCE_DIR } from "../config.mjs";
 import { resolveFireemuBinary } from "../evidence.mjs";
 import { SANDBOX_PROJECT } from "../auth-account/harness.mjs";
 import { PROGRAMS, resolveCorpus } from "./corpus.mjs";
+import { SAML_PROGRAMS } from "./corpus-saml.mjs";
 import { guardHttp, validateFederationCorpus } from "./guard.mjs";
 import { normalizeHttp } from "./harness.mjs";
-import { readAuthnRequest, signedSamlResponse } from "./saml.mjs";
+import { certificateBase64, readAuthnRequest, signedSamlResponse } from "./saml.mjs";
 import {
   discoveryDocument,
   generateSigningKey,
@@ -34,9 +35,10 @@ const OWNER = "Bearer owner";
 
 /**
  * A self-signed certificate of a fresh key, made with the system `openssl`, in a private
- * temporary directory. Only the certificate (public) leaves it.
+ * temporary directory. Only the certificate (public) leaves it. `expired`: its validity
+ * ended in 2024 (a signing certificate out of date).
  */
-export async function makeCertificate(dir, name) {
+export async function makeCertificate(dir, name, { expired = false } = {}) {
   const key = join(dir, `${name}.key.pem`);
   const cert = join(dir, `${name}.cert.pem`);
   await execFileAsync("openssl", [
@@ -49,12 +51,43 @@ export async function makeCertificate(dir, name) {
     key,
     "-out",
     cert,
-    "-days",
-    "2",
+    ...(expired
+      ? ["-not_before", "20240101000000Z", "-not_after", "20240102000000Z"]
+      : ["-days", "2"]),
     "-subj",
     `/CN=fireemu-${name}`,
   ]);
   return readFile(cert, "utf8");
+}
+
+/**
+ * The run's SAML signers: a current certificate (`saml-a`, key `run`) and an expired one
+ * (`saml-expired`, key `expired`), made in `dir` and read into memory, the files removed.
+ * `keyPems` is for a local session in another process only; `runCertificates` are the
+ * certificates as a SAMLResponse carries them.
+ */
+export async function prepareSamlSigners(dir) {
+  const certificates = {};
+  const keys = {};
+  const keyPems = {};
+  for (const [name, key, expired] of [
+    ["saml-a", "run", false],
+    ["saml-expired", "expired", true],
+  ]) {
+    const certificatePem = await makeCertificate(dir, name, { expired });
+    const keyPath = join(dir, `${name}.key.pem`);
+    keyPems[key] = await readFile(keyPath, "utf8");
+    await rm(keyPath);
+    await rm(join(dir, `${name}.cert.pem`));
+    certificates[name] = certificatePem;
+    keys[key] = { privateKey: createPrivateKey(keyPems[key]), certificatePem };
+  }
+  return {
+    certificates,
+    keys,
+    keyPems,
+    runCertificates: Object.values(certificates).map(certificateBase64),
+  };
 }
 
 /** A claim value of a token spec: `{$now: s}` relative to `now`, `{$sha256: raw}` hashed. */
@@ -100,7 +133,19 @@ export function prepareKeys() {
  * The corpus resolved for a run: placeholders filled with the run, its issuer host (the
  * run's preview channel) and certificate, and every program's ID tokens minted at `now`.
  */
-export function resolveRun({ project, run, issuerHost, keys, certificatePem, now }) {
+/** The corpora a recording can run, by packet. */
+export const CORPORA = { "record-oidc": PROGRAMS, "record-saml": SAML_PROGRAMS };
+
+export function resolveRun({
+  project,
+  run,
+  issuerHost,
+  keys,
+  certificatePem,
+  certificates = { "saml-a": certificatePem },
+  now,
+  programs: corpus = PROGRAMS,
+}) {
   const issuer = `https://${issuerHost}/oidc/${run}`;
   const legacy = (subject) =>
     signIdToken(keys.run, {
@@ -110,11 +155,11 @@ export function resolveRun({ project, run, issuerHost, keys, certificatePem, now
       iat: now,
       exp: now + 3600,
     });
-  const programs = resolveCorpus(PROGRAMS, {
+  const programs = resolveCorpus(corpus, {
     project,
     run,
     issuerHost,
-    certificates: { "saml-a": certificatePem },
+    certificates,
     tokens: { missing: legacy("missing"), off: legacy("off") },
   });
   for (const program of programs) program.minted = mintTokens(program, { issuer, keys, now });
@@ -126,26 +171,49 @@ export function resolveRun({ project, run, issuerHost, keys, certificatePem, now
  * This run's key material and the corpus resolved with it. `issuerHost` is the run's preview
  * channel (the local mode names one that is never deployed).
  */
-async function prepareRun(project, run, issuerHost) {
+async function prepareRun(project, run, issuerHost, corpus = PROGRAMS) {
   const secretDir = await mkdtemp(join(tmpdir(), "fireemu-auth-federation-"));
   const keys = prepareKeys();
   await saveSigningKey(join(secretDir, "oidc.pem"), keys.run);
+  const signers = await prepareSamlSigners(secretDir);
+  // The SAML keys for the local session in another process, beside the OIDC key (mode 600).
+  const samlKeysPath = join(secretDir, "saml-keys.json");
+  await writeFile(
+    samlKeysPath,
+    JSON.stringify({ keyPems: signers.keyPems, certificates: signers.certificates }),
+    { mode: 0o600 },
+  );
   const { issuer, programs } = resolveRun({
     project,
     run,
     issuerHost,
     keys,
-    certificatePem: await makeCertificate(secretDir, "saml-a"),
+    certificates: signers.certificates,
     now: Math.floor(Date.now() / 1000),
+    programs: corpus,
   });
   return {
     run,
     issuerHost,
     issuer,
     secretDir,
+    samlKeysPath,
     runKids: [keys.run.jwk.kid],
+    runCertificates: signers.runCertificates,
     programs,
     jwks: [keys.run.jwk],
+  };
+}
+
+/** The SAML signers a local session reads from `path` (written by `prepareRun`). */
+async function loadSamlSigners(path) {
+  const { keyPems, certificates } = JSON.parse(await readFile(path, "utf8"));
+  return {
+    run: { privateKey: createPrivateKey(keyPems.run), certificatePem: certificates["saml-a"] },
+    expired: {
+      privateKey: createPrivateKey(keyPems.expired),
+      certificatePem: certificates["saml-expired"],
+    },
   };
 }
 
@@ -453,6 +521,11 @@ async function sessionLocal() {
     project: SANDBOX_PROJECT,
     projectNumber: LOCAL_PROJECT_NUMBER,
     runKids: prepared.runKids,
+    runCertificates: prepared.runCertificates,
+    saml: {
+      keys: await loadSamlSigners(prepared.samlKeysPath),
+      now: () => Math.floor(Date.now() / 1000),
+    },
     apiKey: "fake-api-key",
     adminAuthorization: OWNER,
     origin: `http://${process.env.FIREBASE_AUTH_EMULATOR_HOST}`,
@@ -461,13 +534,16 @@ async function sessionLocal() {
   await writeFile(process.env.AUTH_FEDERATION_OUT, JSON.stringify(out));
 }
 
-async function runLocal() {
+async function runLocal(packet = "record-oidc") {
+  const corpus = CORPORA[packet];
+  if (!corpus) throw new Error(`no corpus for ${packet}`);
   await mkdir(RUN_DIR, { recursive: true, mode: 0o700 });
   const run = randomBytes(3).toString("hex");
   const prepared = await prepareRun(
     SANDBOX_PROJECT,
     run,
     `${SANDBOX_PROJECT}--fed-${run}-local.web.app`,
+    corpus,
   );
   try {
     const inPath = join(RUN_DIR, "programs.json");
@@ -525,7 +601,8 @@ async function runLocal() {
     const code = await new Promise((resolve) => child.once("exit", resolve));
     if (code !== 0) throw new Error(`fireemu session exited ${code}`);
     const out = JSON.parse(await readFile(outPath, "utf8"));
-    await writeFile(join(RUN_DIR, "fireemu-results.json"), `${JSON.stringify(out, null, 2)}\n`);
+    const results = packet === "record-oidc" ? "fireemu-results.json" : `fireemu-${packet}-results.json`;
+    await writeFile(join(RUN_DIR, results), `${JSON.stringify(out, null, 2)}\n`);
     console.log(
       JSON.stringify({ binary, requests: out.requests, failures: out.failures }, null, 2),
     );
@@ -535,6 +612,6 @@ async function runLocal() {
 }
 
 const mode = process.argv[1] === fileURLToPath(import.meta.url) ? process.argv[2] : undefined;
-if (mode === "local") await runLocal();
+if (mode === "local") await runLocal(process.argv[3]);
 else if (mode === "session-local") await sessionLocal();
 else if (mode !== undefined) throw new Error(`unknown mode ${mode}`);

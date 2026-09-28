@@ -325,46 +325,33 @@ fn blocking_auth_selection(
     }
 }
 
-fn configure_blocking_auth_bridge(
-    cfg: &RuntimeConfig,
-    runtime: &fireemu_adapter_functions::runtime::FunctionsRuntime,
-) -> Result<
-    (
-        fireemu_core_functions::manifest::BlockingAuthSelections,
-        bool,
-        Option<fireemu_core_functions::manifest::BlockingAuthTokenPolicy>,
-    ),
-    String,
-> {
+/// The bridge's selections, global forwarding switch and forwarding restrictions, as the local
+/// configuration gives them.
+type BlockingAuthBridgeSettings = (
+    fireemu_core_functions::manifest::BlockingAuthSelections,
+    bool,
+    Option<fireemu_core_functions::manifest::BlockingAuthTokenPolicy>,
+);
+
+fn blocking_auth_bridge_settings(cfg: &RuntimeConfig) -> BlockingAuthBridgeSettings {
     let Some(config) = cfg.auth_blocking_functions.as_ref() else {
-        return Ok((
+        return (
             fireemu_core_functions::manifest::BlockingAuthSelections::default(),
             cfg.auth_forward_inbound_credentials,
             None,
-        ));
+        );
     };
     let selections = match &config.triggers {
         None => fireemu_core_functions::manifest::BlockingAuthSelections::default(),
+        // The local configuration names beforeCreate and beforeSignIn only; a trigger map it
+        // gives replaces the whole selection, as an Admin update's does.
         Some(triggers) => fireemu_core_functions::manifest::BlockingAuthSelections {
             before_create: blocking_auth_selection(triggers.before_create.as_ref()),
             before_sign_in: blocking_auth_selection(triggers.before_sign_in.as_ref()),
+            before_send_email: fireemu_core_functions::manifest::BlockingAuthSelection::Disabled,
+            before_send_sms: fireemu_core_functions::manifest::BlockingAuthSelection::Disabled,
         },
     };
-    for (event, selection) in [
-        (
-            fireemu_core_functions::manifest::BlockingAuthEvent::BeforeCreate,
-            &selections.before_create,
-        ),
-        (
-            fireemu_core_functions::manifest::BlockingAuthEvent::BeforeSignIn,
-            &selections.before_sign_in,
-        ),
-    ] {
-        runtime
-            .manifest()
-            .blocking_auth_target(event, selection)
-            .map_err(|error| format!("auth.blockingFunctions: {error}"))?;
-    }
     let forwarding_restrictions = config.forward_inbound_credentials.map(|value| {
         fireemu_core_functions::manifest::BlockingAuthTokenPolicy {
             id_token: value.id_token,
@@ -372,11 +359,11 @@ fn configure_blocking_auth_bridge(
             refresh_token: value.refresh_token,
         }
     });
-    Ok((
+    (
         selections,
         cfg.auth_forward_inbound_credentials,
         forwarding_restrictions,
-    ))
+    )
 }
 
 /// Reapplies every explicitly configured password policy after an import.
@@ -586,8 +573,9 @@ fn assemble_adapters(bound: BoundStartup) -> Result<ServiceAssembly, String> {
             .then(|| auth_notice_sink(log_bus.clone(), clock.clone())),
         blocking: match functions_runtime.as_ref() {
             Some(runtime) => {
-                let (selections, forward, restrictions) =
-                    configure_blocking_auth_bridge(&cfg, runtime)?;
+                let (selections, forward, restrictions) = blocking_auth_bridge_settings(&cfg);
+                functions::check_blocking_auth_selections(runtime.manifest(), &selections)
+                    .map_err(|error| format!("auth.blockingFunctions: {error}"))?;
                 Some(Arc::new(
                     functions::BlockingAuthBridge::try_new_with_selections_and_forwarding_policy(
                         runtime.clone(),
@@ -595,7 +583,8 @@ fn assemble_adapters(bound: BoundStartup) -> Result<ServiceAssembly, String> {
                         forward,
                         restrictions,
                     )
-                    .map_err(|error| format!("auth.blockingFunctions: {error}"))?,
+                    .map_err(|error| format!("auth.blockingFunctions: {error}"))?
+                    .for_profile(cfg.profile),
                 )
                     as Arc<
                         dyn fireemu_adapter_http::identity_toolkit::AuthBlockingHook,
@@ -1739,9 +1728,10 @@ mod tests {
 
     use super::{
         apply_auth_config_overrides, apply_auth_password_policy_overrides, auth_project_config,
-        auth_sign_in_config, auth_signup_quota_config, blocking_auth_selection,
-        close_functions_source_admission, function_log_input, reapply_explicit_auth_config,
-        reapply_explicit_auth_password_policies, reapply_explicit_auth_quota,
+        auth_sign_in_config, auth_signup_quota_config, blocking_auth_bridge_settings,
+        blocking_auth_selection, close_functions_source_admission, function_log_input,
+        reapply_explicit_auth_config, reapply_explicit_auth_password_policies,
+        reapply_explicit_auth_quota,
     };
 
     #[test]
@@ -2174,6 +2164,73 @@ mod tests {
             blocking_auth_selection(triggers.before_sign_in.as_ref()),
             fireemu_core_functions::manifest::BlockingAuthSelection::Disabled
         ));
+    }
+
+    /// The bridge starts from the local configuration: no blocking settings keep discovery and
+    /// the global forwarding switch; a trigger map is the whole selection, so the email and SMS
+    /// events it cannot name are disabled; forwarding restrictions map token by token.
+    #[test]
+    fn blocking_bridge_settings_follow_the_local_configuration() {
+        use fireemu_core_functions::manifest::{
+            BlockingAuthSelection, BlockingAuthSelections, BlockingAuthTokenPolicy,
+        };
+        let settings = |auth: serde_json::Value| {
+            blocking_auth_bridge_settings(
+                &crate::config::RuntimeConfig::from_json(
+                    &json!({"schemaVersion": 1, "auth": auth}),
+                )
+                .expect("valid blocking settings"),
+            )
+        };
+        assert_eq!(
+            settings(json!({})),
+            (BlockingAuthSelections::default(), false, None)
+        );
+        assert_eq!(
+            settings(json!({"forwardInboundCredentials": true})),
+            (BlockingAuthSelections::default(), true, None)
+        );
+        let (selections, forward, restrictions) = settings(json!({
+            "forwardInboundCredentials": true,
+            "blockingFunctions": {
+                "triggers": {"beforeCreate": {"function": "checkRegistration"}},
+                "forwardInboundCredentials": {"idToken": true, "accessToken": false, "refreshToken": true}
+            }
+        }));
+        assert_eq!(
+            selections,
+            BlockingAuthSelections {
+                before_create: BlockingAuthSelection::Explicit {
+                    function: "checkRegistration".to_owned(),
+                    region: None,
+                },
+                before_sign_in: BlockingAuthSelection::Disabled,
+                before_send_email: BlockingAuthSelection::Disabled,
+                before_send_sms: BlockingAuthSelection::Disabled,
+            }
+        );
+        assert!(forward);
+        assert_eq!(
+            restrictions,
+            Some(BlockingAuthTokenPolicy {
+                id_token: true,
+                access_token: false,
+                refresh_token: true,
+            })
+        );
+        let (selections, _, restrictions) = settings(json!({
+            "forwardInboundCredentials": true,
+            "blockingFunctions": {"forwardInboundCredentials": {"accessToken": true}}
+        }));
+        assert_eq!(selections, BlockingAuthSelections::default());
+        assert_eq!(
+            restrictions,
+            Some(BlockingAuthTokenPolicy {
+                id_token: false,
+                access_token: true,
+                refresh_token: false,
+            })
+        );
     }
 
     #[test]

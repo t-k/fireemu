@@ -165,6 +165,8 @@ pub struct BlockingAuthTarget {
     pub secret: String,
     /// Raw credential fields requested by this exact admitted target generation.
     pub token_policy: fireemu_core_functions::manifest::BlockingAuthTokenPolicy,
+    /// The function's own invocation timeout (`timeoutSeconds`).
+    pub timeout_seconds: u32,
     runner: Arc<Runner>,
     revision: u64,
     owner: usize,
@@ -3873,6 +3875,7 @@ impl FunctionsRuntime {
                 Trigger::BlockingAuth { token_policy, .. } => token_policy,
                 _ => unreachable!("the selected function is a Blocking Auth target"),
             },
+            timeout_seconds: spec.timeout_seconds,
             runner: current.runner.clone(),
             revision: current.revision,
             owner,

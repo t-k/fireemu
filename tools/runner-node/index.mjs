@@ -17,6 +17,7 @@ import { execFileSync, spawn } from "node:child_process";
 import { url as inspectorUrl } from "node:inspector";
 import { instrumentCallables } from "./callable-app-check.mjs";
 import { blockingFailure } from "./blocking-error.mjs";
+import { blockingEvent, loadIdentityParsers, portedIdentityParsers } from "./blocking-event.mjs";
 import { blockingResult } from "./blocking-response.mjs";
 import { boundLogMessage, createInvocationLogger } from "./log-context.mjs";
 import { invocationFailure } from "./invocation-error.mjs";
@@ -831,6 +832,15 @@ function callableAppCheck(instrumentation, fn) {
   };
 }
 
+// Identity Platform's blocking events. The email and SMS events are discovered as well; the
+// daemon serves them only where production parity asks for it (the official emulator serves
+// beforeCreate and beforeSignIn only).
+const BLOCKING_AUTH_EVENTS = ["beforeCreate", "beforeSignIn", "beforeSendEmail", "beforeSendSms"];
+
+function isBlockingAuthEvent(eventType) {
+  return BLOCKING_AUTH_EVENTS.some((event) => eventType.endsWith(event));
+}
+
 function blockingAuthTrigger(eventType, options) {
   return {
     type: "blockingAuth",
@@ -874,7 +884,7 @@ function describe(name, fn, instrumentation) {
     if (ep.callableTrigger) return { ...base, trigger: callable() };
     if (ep.blockingTrigger) {
       const eventType = String(ep.blockingTrigger.eventType || "");
-      if (eventType.endsWith("beforeCreate") || eventType.endsWith("beforeSignIn")) {
+      if (isBlockingAuthEvent(eventType)) {
         return {
           ...base,
           trigger: blockingAuthTrigger(eventType, ep.blockingTrigger.options),
@@ -911,7 +921,7 @@ function describe(name, fn, instrumentation) {
     }
     if (ep.blockingTrigger) {
       const eventType = String(ep.blockingTrigger.eventType || "");
-      if (eventType.endsWith("beforeCreate") || eventType.endsWith("beforeSignIn")) {
+      if (isBlockingAuthEvent(eventType)) {
         return {
           ...base,
           trigger: blockingAuthTrigger(eventType, ep.blockingTrigger.options),
@@ -1009,7 +1019,7 @@ function describe(name, fn, instrumentation) {
     }
     if (t.blockingTrigger) {
       const eventType = String(t.blockingTrigger.eventType || "");
-      if (eventType.endsWith("beforeCreate") || eventType.endsWith("beforeSignIn")) {
+      if (isBlockingAuthEvent(eventType)) {
         return {
           ...base,
           trigger: blockingAuthTrigger(eventType, t.blockingTrigger.options),
@@ -1160,6 +1170,8 @@ async function makeHttpServer(functions, manifest) {
     }
   }
   const HttpsErrors = await firebaseHttpsErrorConstructors(require);
+  // The SDK's own parsers build a blocking event from its token (blocking-event.mjs).
+  const identityParsers = loadIdentityParsers(require);
   const app = express();
   const admission = createHttpAdmission({
     secret: process.env.FIREEMU_RUNNER_SECRET || "",
@@ -1280,8 +1292,18 @@ async function makeHttpServer(functions, manifest) {
       if (!lifetime.canStart()) return;
       try {
         if (blocking) {
-          const user = req.body?.data?.user;
-          const context = req.body?.data?.context || {};
+          // A token is parsed by the codebase's own firebase-functions, as Identity Platform's
+          // delivery is, or by the port of its parsers when that SDK does not expose them.
+          const hasToken = req.body?.data?.jwt !== undefined;
+          const parsed = hasToken
+            ? blockingEvent(
+                req.body,
+                identityParsers || portedIdentityParsers,
+                process.env.GCLOUD_PROJECT || "",
+              )
+            : undefined;
+          const user = parsed ? parsed.user : req.body?.data?.user;
+          const context = parsed ? parsed.context : req.body?.data?.context || {};
           const value = await (spec.generation === 1 ? fn.run(user, context) : fn.run({ ...context, data: user }));
           if (lifetime.canStart()) {
             // Materialization can call user getters/toJSON. Keep it inside this

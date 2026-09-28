@@ -1232,10 +1232,6 @@ pub struct AuthStore {
     generated_local_id_reservations: Arc<Mutex<GeneratedLocalIdReservations>>,
     /// Monotonic request tickets that identify one generated-ID reservation owner.
     generated_local_id_reservation_ticket: Arc<AtomicU64>,
-    /// Monotonic count of ordinary generated-ID allocations that skipped an in-flight blocking
-    /// reservation. A blocking candidate captures this before its hook runs; a change at commit
-    /// means a nested ordinary Admin allocation changed the identity allocation boundary.
-    generated_id_interference: Arc<AtomicU64>,
     /// Users that currently own a pending enrollment or sign-in. Credential sweeping only
     /// visits this bounded subset instead of cloning or scanning every account.
     pending_user_ids: BTreeSet<LocalId>,
@@ -1530,6 +1526,7 @@ impl AuthStore {
                     .map(|email| (email, user.email_verified)),
                 extra_claims: developer_claims.map(CustomClaims::entries_map),
                 session_epoch: epoch.as_deref(),
+                tenant: self.tenant_id.as_deref(),
             },
         );
         self.legacy_tokens_issued = true;
@@ -1579,7 +1576,6 @@ impl AuthStore {
             pending_idp: PendingIdpCache::default(),
             generated_local_id_reservations: Arc::new(Mutex::new(BTreeMap::new())),
             generated_local_id_reservation_ticket: Arc::new(AtomicU64::new(0)),
-            generated_id_interference: Arc::new(AtomicU64::new(0)),
             pending_user_ids: BTreeSet::new(),
             created_users: Vec::new(),
             deleted_users: Vec::new(),
@@ -2148,6 +2144,14 @@ impl AuthStore {
     #[must_use]
     pub const fn stored_config_members(&self) -> &crate::config_members::StoredConfigMembers {
         &self.stored_members
+    }
+
+    /// Whether the project's Admin v2 config currently admits tenant operations.
+    #[must_use]
+    pub fn allows_tenants(&self) -> bool {
+        self.stored_members
+            .get(crate::config_members::ALLOW_TENANTS)
+            == Some("true")
     }
 
     /// Replaces the project's written config members.
@@ -2950,18 +2954,11 @@ impl AuthStore {
         self.reset_generation.load(Ordering::Acquire)
     }
 
-    /// Returns the monotonic count of ordinary generated-ID allocations that crossed an
-    /// in-flight blocking candidate reservation.
-    #[must_use]
-    pub fn generated_id_interference_count(&self) -> u64 {
-        self.generated_id_interference.load(Ordering::Acquire)
-    }
-
     /// Reserves the next generated local ID for a speculative blocking request.
     ///
     /// The reservation is shared by snapshots, but the live random stream is unchanged. This
-    /// keeps concurrent blocking candidates distinct while preserving the established identity
-    /// change check when an ordinary nested Admin request consumes the same generated ID.
+    /// keeps concurrent blocking candidates distinct, and an ordinary account created while the
+    /// hook runs skips the reserved id instead of taking it (`BHRNG-1`).
     pub fn reserve_next_generated_local_id(&mut self) -> String {
         self.reserve_next_generated_local_id_with_generation().0
     }
@@ -2997,10 +2994,10 @@ impl AuthStore {
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
             let entries = reservations.entry(candidate.clone()).or_default();
-            if entries
-                .iter()
-                .any(|(reserved_generation, _)| *reserved_generation == generation)
-            {
+            // A reservation from before a reset still holds the id until its request returns:
+            // the emulator profile commits that request into the reset state (closure re-review
+            // S1'', 2026-09-28), as the official emulator's account wipe keeps pendingLocalIds.
+            if !entries.is_empty() {
                 continue;
             }
             if entries.insert((generation, ticket)) {
@@ -3010,17 +3007,37 @@ impl AuthStore {
         }
     }
 
-    /// Uses a previously reserved ID for the next generated account and retires one reservation
-    /// from the current generation. New blocking requests use the ticketed variant below so a
-    /// later guard release cannot affect another request's reservation.
-    pub fn use_reserved_generated_local_id(&mut self, id: &str) {
-        let generation = self.reset_generation();
-        let mut reservations = self
-            .generated_local_id_reservations
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        Self::release_reservation_generation(&mut reservations, id, generation);
+    /// Names an id reserved before a reset for the next generated account, as the emulator
+    /// profile does when it commits a request across an account wipe. It releases nothing: the
+    /// request's own reservation stays in the ledger under its older generation until its guard
+    /// releases it by ticket, and no reservation of the current generation can hold the same id,
+    /// since a reservation skips every id the ledger holds.
+    pub fn use_generated_local_id_reserved_before_reset(&mut self, id: &str) {
+        debug_assert!(
+            {
+                let generation = self.reset_generation();
+                self.generated_local_id_reservations
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .get(&LocalId(id.to_owned()))
+                    .is_some_and(|entries| {
+                        entries
+                            .iter()
+                            .all(|(reserved_generation, _)| *reserved_generation != generation)
+                    })
+            },
+            "only a reservation from before a reset names the id"
+        );
         self.next_id_override = Some(id.to_owned());
+    }
+
+    /// Whether an in-flight request holds `id` as its generated local id, in any reset
+    /// generation.
+    pub fn holds_generated_local_id(&self, id: &str) -> bool {
+        self.generated_local_id_reservations
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .contains_key(&LocalId(id.to_owned()))
     }
 
     /// Uses and retires exactly one request-owned generated ID reservation.
@@ -3162,16 +3179,9 @@ impl AuthStore {
                     .lock()
                     .unwrap_or_else(std::sync::PoisonError::into_inner)
                     .get(&candidate)
-                    .is_some_and(|entries| {
-                        entries
-                            .iter()
-                            .any(|(generation, _)| *generation == self.reset_generation())
-                    });
-                if reserved {
-                    self.generated_id_interference
-                        .fetch_add(1, Ordering::AcqRel);
-                    continue;
-                }
+                    .is_some_and(|entries| !entries.is_empty());
+                // An in-flight blocking request keeps the id it reserved, across a reset too:
+                // this account skips it.
                 if !self.users.contains_key(&candidate) && !reserved {
                     break candidate;
                 }
@@ -3305,28 +3315,30 @@ impl AuthStore {
     }
 
     /// Whether a sign-in of `uid`, an account with enrolled factors, must ask for one: always
-    /// under the official emulator's rules and while the project's MFA is on. Under
+    /// under the official emulator's rules and while the namespace's MFA is on. Under
     /// production's rules with the project's MFA off, production was seen to skip only a phone
-    /// factor (sandbox recording 2026-09-24, `auth-mfa/disabled#sign-in-a-with-factor`), so an
-    /// account with a TOTP factor is still asked (fail closed; AUTH-MFA follow-up directive).
+    /// factor (sandbox recording 2026-09-24, `auth-mfa/disabled#sign-in-a-with-factor`), so a
+    /// project account with a TOTP factor is still asked (fail closed; AUTH-MFA follow-up
+    /// directive). A tenant with its MFA off asks for no factor, TOTP included (sandbox
+    /// recording 2026-09-27, `atb/tenant/mfa#sign-in-m1-mfa-off`).
     #[must_use]
     pub fn second_factor_required_for(&self, uid: &LocalId) -> bool {
-        // A tenant's own MFA config belongs to AUTH-TENANT-BLOCKING (scope decision M2); a
-        // tenant keeps asking for enrolled factors.
         !self.second_factor_rules_are_production()
             || self.mfa_config.state.is_on()
-            || self
-                .users
-                .get(uid)
-                .is_some_and(|user| !user.mfa.totp_factors().is_empty())
+            || (self.tenant_id.is_none()
+                && self
+                    .users
+                    .get(uid)
+                    .is_some_and(|user| !user.mfa.totp_factors().is_empty()))
     }
 
-    /// Whether second factors follow production's project rules (the strict profile).
+    /// Whether second factors follow production's rules (the strict profile). A tenant's follow
+    /// them as the project's do, with the tenant's own MFA config (AUTH-TENANT-BLOCKING sandbox
+    /// recording 2026-09-27, `atb/tenant/mfa` and `inheritance`; AUTH-MFA scope decision M2
+    /// left them to this parent).
     #[must_use]
     pub const fn second_factor_rules_are_production(&self) -> bool {
-        // A tenant's second factors belong to AUTH-TENANT-BLOCKING (scope decision M2): they
-        // keep the rules they had.
-        self.production_mfa && self.tenant_id.is_none()
+        self.production_mfa
     }
 
     /// Switches action codes to production's lifetimes (see `production_oob_lifetimes`).
@@ -4652,6 +4664,15 @@ impl AuthStore {
         }
     }
 
+    /// Records the issuance time of a sign-up that a blocking function refused after it created
+    /// the account: production keeps that time although it answers no token
+    /// (AUTH-TENANT-BLOCKING recording 2026-09-28).
+    pub fn record_refused_sign_up_issuance(&mut self, uid: &LocalId, at: LogicalInstant) {
+        if let Some(user) = self.users.get_mut(uid).map(Arc::make_mut) {
+            user.last_refresh_at = Some(user.last_refresh_at.map_or(at, |old| old.max(at)));
+        }
+    }
+
     /// ID token claims for a refreshed session.
     pub fn id_token_claims_for_session(
         &self,
@@ -5410,7 +5431,6 @@ impl AuthSnapshot {
         restored.generated_local_id_reservations = live.generated_local_id_reservations.clone();
         restored.generated_local_id_reservation_ticket =
             live.generated_local_id_reservation_ticket.clone();
-        restored.generated_id_interference = live.generated_id_interference.clone();
         // A snapshot intentionally has no provider configurations. Preserve the destination's
         // control-plane state instead of allowing a cross-project restore to transfer it.
         restored.oidc_configs = live.oidc_configs.clone();
@@ -5527,8 +5547,70 @@ impl AuthExportSnapshot {
     }
 }
 
+/// The tenant namespaces of one project captured for a session snapshot (`TENRST-2`).
+///
+/// Each tenant store is an [`AuthSnapshot`], so the capture holds no TOTP secret material or
+/// raw identity-provider credential (`INV-AUTH-003`). The tenant's published metadata and the
+/// settings changed through the tenant management API travel with it; startup configuration
+/// overrides stay with the registry, as configuration does.
+#[derive(Debug, Clone)]
+pub struct AuthTenantsSnapshot {
+    tenants: Vec<CapturedTenant>,
+}
+
+#[derive(Debug, Clone)]
+struct CapturedTenant {
+    tenant: String,
+    store: AuthSnapshot,
+    metadata: TenantMetadata,
+    runtime_override: Option<AuthNamespaceConfigPatch>,
+}
+
+impl AuthTenantsSnapshot {
+    /// An estimate of the heap bytes the captured tenant stores retain (`SNAP-MEM-01`).
+    #[must_use]
+    pub fn retained_bytes(&self) -> u64 {
+        self.tenants.iter().fold(0_u64, |total, captured| {
+            total.saturating_add(captured.store.retained_bytes())
+        })
+    }
+
+    /// Whether no captured tenant user holds TOTP secret material.
+    #[must_use]
+    pub fn holds_no_totp_secret(&self) -> bool {
+        self.tenants
+            .iter()
+            .all(|captured| captured.store.holds_no_totp_secret())
+    }
+}
+
+/// The exact tenant state of one project before a snapshot restore, used to undo the restore
+/// when a later service fails. Unlike [`AuthTenantsSnapshot`] it keeps the live store handles
+/// and full store contents, secrets included; it never leaves the process.
+#[derive(Debug, Clone)]
+pub struct AuthTenantsRollback {
+    tenants: Vec<RolledBackTenant>,
+}
+
+#[derive(Debug, Clone)]
+struct RolledBackTenant {
+    key: TenantKey,
+    handle: SharedAuthStore,
+    contents: AuthStore,
+    metadata: TenantMetadata,
+    runtime_override: Option<AuthNamespaceConfigPatch>,
+}
+
 type SharedAuthStore = Arc<Mutex<AuthStore>>;
 type TenantKey = (String, String);
+
+/// A project's published tenants: key, store handle, metadata and management-API override.
+type OwnedTenants = Vec<(
+    TenantKey,
+    SharedAuthStore,
+    TenantMetadata,
+    Option<AuthNamespaceConfigPatch>,
+)>;
 
 enum TenantPublication {
     Published(SharedAuthStore),
@@ -5667,6 +5749,9 @@ pub struct AuthRegistry {
     /// Non-password settings changed through the tenant management API. These are scoped to the
     /// current tenant lifetime and are discarded when that tenant is deleted.
     tenant_runtime_config_overrides: Mutex<BTreeMap<TenantKey, AuthNamespaceConfigPatch>>,
+    /// Tenants deleted in this run: production answers requests naming them `TENANT_DELETED`
+    /// rather than as unknown ids (AUTH-TENANT-BLOCKING recording 2026-09-27, deletion program).
+    deleted_tenants: Mutex<BTreeSet<TenantKey>>,
     operation_gates: Mutex<BTreeMap<TenantKey, Weak<Mutex<()>>>>,
     membership_generation: AtomicU64,
     lifecycle_incarnation: Option<u128>,
@@ -5870,6 +5955,7 @@ impl AuthRegistry {
             password_policy_overrides: Mutex::new(BTreeMap::new()),
             tenant_config_overrides: Mutex::new(BTreeMap::new()),
             tenant_runtime_config_overrides: Mutex::new(BTreeMap::new()),
+            deleted_tenants: Mutex::new(BTreeSet::new()),
             operation_gates: Mutex::new(BTreeMap::new()),
             membership_generation: AtomicU64::new(0),
             lifecycle_incarnation: None,
@@ -7030,6 +7116,300 @@ impl AuthRegistry {
         Some(gate)
     }
 
+    fn project_operation_gate(&self, project: &str) -> Result<Arc<Mutex<()>>, &'static str> {
+        self.operation_gate(project, None)
+            .ok_or("the Auth operation-gate registry is poisoned")
+    }
+
+    /// The published tenants of `project`, read under the membership locks and returned with
+    /// the locks released.
+    fn owned_tenants(&self, project: &str) -> Result<OwnedTenants, &'static str> {
+        let tenants = self
+            .tenants
+            .lock()
+            .map_err(|_| "tenant registry is poisoned")?;
+        let metadata = self
+            .tenant_metadata
+            .lock()
+            .map_err(|_| "tenant metadata registry is poisoned")?;
+        let runtime_overrides = self
+            .tenant_runtime_config_overrides
+            .lock()
+            .map_err(|_| "tenant runtime config override registry is poisoned")?;
+        let mut owned = Vec::new();
+        for (key, store) in tenants
+            .iter()
+            .filter(|((candidate, _), _)| candidate == project)
+        {
+            let published = metadata
+                .get(key)
+                .cloned()
+                .ok_or("tenant store and metadata membership differ")?;
+            owned.push((
+                key.clone(),
+                store.clone(),
+                published,
+                runtime_overrides.get(key).copied(),
+            ));
+        }
+        if metadata.keys().any(|(candidate, tenant)| {
+            candidate == project && !tenants.contains_key(&(candidate.clone(), tenant.clone()))
+        }) {
+            return Err("tenant store and metadata membership differ");
+        }
+        Ok(owned)
+    }
+
+    /// Captures every tenant namespace of `project` for a session snapshot (`TENRST-2`).
+    ///
+    /// The project operation gate excludes tenant creation, deletion and configuration
+    /// changes while the tenants are copied.
+    ///
+    /// # Errors
+    /// A poisoned registry, gate or tenant store, or inconsistent tenant membership.
+    pub fn capture_tenants_snapshot(
+        &self,
+        project: &str,
+    ) -> Result<AuthTenantsSnapshot, &'static str> {
+        let gate = self.project_operation_gate(project)?;
+        let _operation = gate
+            .lock()
+            .map_err(|_| "the Auth operation gate is poisoned")?;
+        let mut tenants = Vec::new();
+        for ((_, tenant), store, metadata, runtime_override) in self.owned_tenants(project)? {
+            let store = store
+                .lock()
+                .map_err(|_| "a tenant Auth store is poisoned")?;
+            tenants.push(CapturedTenant {
+                tenant,
+                store: AuthSnapshot::capture(&store),
+                metadata,
+                runtime_override,
+            });
+        }
+        Ok(AuthTenantsSnapshot { tenants })
+    }
+
+    /// Captures the exact tenant state of `project` so a failed session restore can undo
+    /// [`Self::restore_tenants_snapshot`].
+    ///
+    /// # Errors
+    /// A poisoned registry, gate or tenant store, or inconsistent tenant membership.
+    pub fn capture_tenants_rollback(
+        &self,
+        project: &str,
+    ) -> Result<AuthTenantsRollback, &'static str> {
+        let gate = self.project_operation_gate(project)?;
+        let _operation = gate
+            .lock()
+            .map_err(|_| "the Auth operation gate is poisoned")?;
+        let mut tenants = Vec::new();
+        for (key, handle, metadata, runtime_override) in self.owned_tenants(project)? {
+            let contents = handle
+                .lock()
+                .map_err(|_| "a tenant Auth store is poisoned")?
+                .clone();
+            tenants.push(RolledBackTenant {
+                key,
+                handle,
+                contents,
+                metadata,
+                runtime_override,
+            });
+        }
+        Ok(AuthTenantsRollback { tenants })
+    }
+
+    /// Replaces the tenant namespaces of `project` with a captured set (`TENRST-2`).
+    ///
+    /// A tenant that still exists is restored in place, as the project store is: the restore
+    /// starts a new lifecycle epoch, so credentials issued before it stop working. A captured
+    /// tenant deleted since is published again under a fresh lifecycle epoch. A tenant created
+    /// since the capture is cleared and removed with its credentials. Every store is locked
+    /// before the first change, so a poisoned store leaves the tenants as they were.
+    ///
+    /// # Errors
+    /// The project has no Auth store, a lock is poisoned, or the tenant membership changed
+    /// while the restore was prepared.
+    pub fn restore_tenants_snapshot(
+        &self,
+        project: &str,
+        snapshot: &AuthTenantsSnapshot,
+    ) -> Result<RestoreReport, &'static str> {
+        let gate = self.project_operation_gate(project)?;
+        let _operation = gate
+            .lock()
+            .map_err(|_| "the Auth operation gate is poisoned")?;
+        let parent = self
+            .store_for(project)
+            .ok_or("the project has no Auth store")?;
+        let generation = self.membership_generation.load(Ordering::Acquire);
+        let live = self.owned_tenants(project)?;
+        // Building a namespace reads the startup overrides and the parent store, so every
+        // recreated tenant is built before the membership locks are taken.
+        let mut recreated = Vec::new();
+        for captured in &snapshot.tenants {
+            if !live
+                .iter()
+                .any(|((_, tenant), ..)| tenant == &captured.tenant)
+            {
+                let store = self
+                    .build_tenant_store(project, &captured.tenant, &parent)
+                    .ok_or("cannot build a tenant Auth store")?;
+                recreated.push((captured, store));
+            }
+        }
+        let mut tenants = self
+            .tenants
+            .lock()
+            .map_err(|_| "tenant registry is poisoned")?;
+        let mut metadata = self
+            .tenant_metadata
+            .lock()
+            .map_err(|_| "tenant metadata registry is poisoned")?;
+        let mut runtime_overrides = self
+            .tenant_runtime_config_overrides
+            .lock()
+            .map_err(|_| "tenant runtime config override registry is poisoned")?;
+        let mut gates = self
+            .operation_gates
+            .lock()
+            .map_err(|_| "tenant operation-gate registry is poisoned")?;
+        if self.membership_generation.load(Ordering::Acquire) != generation {
+            return Err("Auth tenant membership changed during the restore");
+        }
+        let mut live_guards = Vec::with_capacity(live.len());
+        for (key, store, ..) in &live {
+            live_guards.push((
+                key,
+                store
+                    .lock()
+                    .map_err(|_| "a tenant Auth store is poisoned")?,
+            ));
+        }
+        let mut recreated_guards = Vec::with_capacity(recreated.len());
+        for (captured, store) in &recreated {
+            recreated_guards.push((
+                *captured,
+                store,
+                store
+                    .lock()
+                    .map_err(|_| "a tenant Auth store is poisoned")?,
+            ));
+        }
+        let mut report = RestoreReport::default();
+        for (key, guard) in &mut live_guards {
+            if let Some(captured) = snapshot.tenants.iter().find(|c| c.tenant == key.1) {
+                report.totp_factors_dropped +=
+                    captured.store.restore_into(guard).totp_factors_dropped;
+            } else {
+                guard.clear();
+                tenants.remove(*key);
+                gates.remove(*key);
+            }
+        }
+        for (captured, store, guard) in &mut recreated_guards {
+            report.totp_factors_dropped += captured.store.restore_into(guard).totp_factors_dropped;
+            tenants.insert(
+                (project.to_owned(), captured.tenant.clone()),
+                (*store).clone(),
+            );
+        }
+        metadata.retain(|(candidate, _), _| candidate != project);
+        runtime_overrides.retain(|(candidate, _), _| candidate != project);
+        for captured in &snapshot.tenants {
+            let key = (project.to_owned(), captured.tenant.clone());
+            metadata.insert(key.clone(), captured.metadata.clone());
+            if let Some(runtime_override) = captured.runtime_override {
+                runtime_overrides.insert(key, runtime_override);
+            }
+        }
+        self.membership_generation.fetch_add(1, Ordering::Release);
+        Ok(report)
+    }
+
+    /// Puts the tenant namespaces of `project` back exactly as [`Self::capture_tenants_rollback`]
+    /// saw them: the same store handles, contents and settings. A tenant published since is
+    /// cleared and removed.
+    ///
+    /// # Errors
+    /// A poisoned registry, gate or tenant store; nothing is changed then.
+    pub fn rollback_tenants(
+        &self,
+        project: &str,
+        rollback: &AuthTenantsRollback,
+    ) -> Result<(), &'static str> {
+        let gate = self.project_operation_gate(project)?;
+        let _operation = gate
+            .lock()
+            .map_err(|_| "the Auth operation gate is poisoned")?;
+        let mut tenants = self
+            .tenants
+            .lock()
+            .map_err(|_| "tenant registry is poisoned")?;
+        let mut metadata = self
+            .tenant_metadata
+            .lock()
+            .map_err(|_| "tenant metadata registry is poisoned")?;
+        let mut runtime_overrides = self
+            .tenant_runtime_config_overrides
+            .lock()
+            .map_err(|_| "tenant runtime config override registry is poisoned")?;
+        let mut gates = self
+            .operation_gates
+            .lock()
+            .map_err(|_| "tenant operation-gate registry is poisoned")?;
+        let published_since = tenants
+            .iter()
+            .filter(|((candidate, _), store)| {
+                candidate == project
+                    && !rollback
+                        .tenants
+                        .iter()
+                        .any(|saved| Arc::ptr_eq(&saved.handle, store))
+            })
+            .map(|(key, store)| (key.clone(), store.clone()))
+            .collect::<Vec<_>>();
+        let mut saved_guards = Vec::with_capacity(rollback.tenants.len());
+        for saved in &rollback.tenants {
+            saved_guards.push((
+                saved,
+                saved
+                    .handle
+                    .lock()
+                    .map_err(|_| "a tenant Auth store is poisoned")?,
+            ));
+        }
+        let mut published_since_guards = Vec::with_capacity(published_since.len());
+        for (key, store) in &published_since {
+            published_since_guards.push((
+                key,
+                store
+                    .lock()
+                    .map_err(|_| "a tenant Auth store is poisoned")?,
+            ));
+        }
+        for (key, guard) in &mut published_since_guards {
+            guard.clear();
+            gates.remove(*key);
+        }
+        for (saved, guard) in &mut saved_guards {
+            **guard = saved.contents.clone();
+        }
+        tenants.retain(|(candidate, _), _| candidate != project);
+        metadata.retain(|(candidate, _), _| candidate != project);
+        runtime_overrides.retain(|(candidate, _), _| candidate != project);
+        for saved in &rollback.tenants {
+            tenants.insert(saved.key.clone(), saved.handle.clone());
+            metadata.insert(saved.key.clone(), saved.metadata.clone());
+            if let Some(runtime_override) = saved.runtime_override {
+                runtime_overrides.insert(saved.key.clone(), runtime_override);
+            }
+        }
+        self.membership_generation.fetch_add(1, Ordering::Release);
+        Ok(())
+    }
+
     /// Captures the project store and every published tenant store as one export view.
     ///
     /// The project operation gate excludes configuration and tenant-publication transitions
@@ -7268,6 +7648,42 @@ impl AuthRegistry {
         patch: TenantMetadataPatch,
         password_policy: Option<PasswordPolicy>,
     ) -> Option<(String, TenantMetadata, PasswordPolicy)> {
+        self.create_tenant_with_password_policy_inner(
+            project,
+            metadata,
+            patch,
+            password_policy,
+            false,
+        )
+    }
+
+    /// Creates a tenant only if its parent config enables tenant operations at the project gate.
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn create_tenant_with_password_policy_guarded(
+        &self,
+        project: &str,
+        metadata: TenantMetadata,
+        patch: TenantMetadataPatch,
+        password_policy: Option<PasswordPolicy>,
+    ) -> Option<(String, TenantMetadata, PasswordPolicy)> {
+        self.create_tenant_with_password_policy_inner(
+            project,
+            metadata,
+            patch,
+            password_policy,
+            true,
+        )
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    fn create_tenant_with_password_policy_inner(
+        &self,
+        project: &str,
+        metadata: TenantMetadata,
+        patch: TenantMetadataPatch,
+        password_policy: Option<PasswordPolicy>,
+        require_enabled: bool,
+    ) -> Option<(String, TenantMetadata, PasswordPolicy)> {
         if project.is_empty() || project.contains(['/', '\\']) {
             return None;
         }
@@ -7279,6 +7695,9 @@ impl AuthRegistry {
         } else {
             projects.registered.get(project)?
         };
+        if require_enabled && !parent.lock().ok()?.allows_tenants() {
+            return None;
+        }
         let mut metadata = metadata;
         let display_name = patch
             .display_name
@@ -7314,6 +7733,15 @@ impl AuthRegistry {
                 next_metadata.clone(),
             ) {
                 TenantPublication::Published(_) => {
+                    // The settings a create writes are the tenant's own, as a PATCH's are: a
+                    // later project update reapplies them instead of replacing them.
+                    let config_override = patch.config_override();
+                    if !config_override.is_empty() {
+                        let mut overrides = self.tenant_runtime_config_overrides.lock().ok()?;
+                        let key = (project.to_owned(), tenant.clone());
+                        let previous = overrides.get(&key).copied().unwrap_or_default();
+                        overrides.insert(key, previous.merge(config_override));
+                    }
                     return Some((tenant, next_metadata, next_policy));
                 }
                 TenantPublication::Existing {
@@ -7385,6 +7813,30 @@ impl AuthRegistry {
         patch: TenantMetadataPatch,
         password_policy: Option<PasswordPolicy>,
     ) -> Option<(TenantMetadata, PasswordPolicy)> {
+        self.patch_tenant_with_password_policy_inner(project, tenant, patch, password_policy, false)
+    }
+
+    /// Patches a tenant only if its parent config enables tenant operations at the project gate.
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn patch_tenant_with_password_policy_guarded(
+        &self,
+        project: &str,
+        tenant: &str,
+        patch: TenantMetadataPatch,
+        password_policy: Option<PasswordPolicy>,
+    ) -> Option<(TenantMetadata, PasswordPolicy)> {
+        self.patch_tenant_with_password_policy_inner(project, tenant, patch, password_policy, true)
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    fn patch_tenant_with_password_policy_inner(
+        &self,
+        project: &str,
+        tenant: &str,
+        patch: TenantMetadataPatch,
+        password_policy: Option<PasswordPolicy>,
+        require_enabled: bool,
+    ) -> Option<(TenantMetadata, PasswordPolicy)> {
         if project.is_empty()
             || project.contains(['/', '\\'])
             || tenant.is_empty()
@@ -7394,6 +7846,9 @@ impl AuthRegistry {
         }
         let gate = self.operation_gate(project, None)?;
         let _operation = gate.lock().ok()?;
+        if require_enabled && !self.project_store(project)?.lock().ok()?.allows_tenants() {
+            return None;
+        }
         let key = (project.to_owned(), tenant.to_owned());
         let tenants = self.tenants.lock().ok()?;
         let store = tenants.get(&key).cloned()?;
@@ -8078,6 +8533,15 @@ impl AuthRegistry {
 
     /// Deletes a tenant namespace and its metadata.
     pub fn delete_tenant(&self, project: &str, tenant: &str) -> bool {
+        self.delete_tenant_inner(project, tenant, false)
+    }
+
+    /// Deletes a tenant only if its parent config enables tenant operations at the project gate.
+    pub fn delete_tenant_guarded(&self, project: &str, tenant: &str) -> bool {
+        self.delete_tenant_inner(project, tenant, true)
+    }
+
+    fn delete_tenant_inner(&self, project: &str, tenant: &str, require_enabled: bool) -> bool {
         // Tenant authentication and tenant configuration updates use the project gate. Hold the
         // same gate before inspecting membership so deletion cannot detach a namespace while an
         // in-flight request is committing against its previously selected store.
@@ -8087,6 +8551,14 @@ impl AuthRegistry {
         let Ok(_operation) = gate.lock() else {
             return false;
         };
+        if require_enabled
+            && !self
+                .project_store(project)
+                .and_then(|store| store.lock().ok().map(|store| store.allows_tenants()))
+                .unwrap_or(false)
+        {
+            return false;
+        }
         let key = (project.to_owned(), tenant.to_owned());
         let removed = self.tenants.lock().ok().and_then(|mut stores| {
             let mut metadata = self.tenant_metadata.lock().ok()?;
@@ -8103,8 +8575,32 @@ impl AuthRegistry {
         }
         if removed == Some(true) {
             self.membership_generation.fetch_add(1, Ordering::Release);
+            if let Ok(mut deleted) = self.deleted_tenants.lock() {
+                deleted.insert(key);
+            }
         }
         removed.unwrap_or(false)
+    }
+
+    /// Whether `tenant` of `project` was deleted in this run (and is not live).
+    #[must_use]
+    pub fn tenant_deleted(&self, project: &str, tenant: &str) -> bool {
+        let key = (project.to_owned(), tenant.to_owned());
+        self.deleted_tenants
+            .lock()
+            .is_ok_and(|deleted| deleted.contains(&key))
+            && self
+                .tenants
+                .lock()
+                .is_ok_and(|tenants| !tenants.contains_key(&key))
+    }
+
+    /// The `(project, tenant)` a refresh token this version issued names, when it names a
+    /// tenant.
+    #[must_use]
+    pub fn refresh_token_tenant(token: &str) -> Option<(String, String)> {
+        let (project, tenant) = refresh_token_namespace(token)?;
+        Some((project.to_owned(), tenant?.to_owned()))
     }
 
     /// The first store (the default first, then the registered ones in name order) that
@@ -9272,6 +9768,79 @@ mod compatibility_routing_tests {
         );
     }
 
+    /// A deleted tenant is remembered as deleted, not unknown, until one with its id is live
+    /// again (AUTH-TENANT-BLOCKING recording 2026-09-27, deletion program).
+    #[test]
+    fn a_deleted_tenant_is_told_from_an_unknown_one() {
+        let registry = AuthRegistry::new("demo-app", store("demo-app", 1));
+        registry.ensure_tenant("demo-app", "gone").unwrap();
+        registry.ensure_tenant("demo-app", "kept").unwrap();
+        assert!(!registry.tenant_deleted("demo-app", "gone"));
+        assert!(registry.delete_tenant("demo-app", "gone"));
+        assert!(registry.tenant_deleted("demo-app", "gone"));
+        assert!(!registry.tenant_deleted("demo-app", "kept"));
+        assert!(!registry.tenant_deleted("demo-app", "never"));
+        assert!(!registry.tenant_deleted("other-app", "gone"));
+        registry.ensure_tenant("demo-app", "gone").unwrap();
+        assert!(!registry.tenant_deleted("demo-app", "gone"));
+    }
+
+    #[test]
+    fn a_refresh_token_names_its_tenant() {
+        assert_eq!(
+            AuthRegistry::refresh_token_tenant("rt1.8.4.demo-appabcd.entropy"),
+            Some(("demo-app".to_owned(), "abcd".to_owned()))
+        );
+        assert_eq!(
+            AuthRegistry::refresh_token_tenant("rt1.8.0.demo-app.entropy"),
+            None
+        );
+        assert_eq!(AuthRegistry::refresh_token_tenant("opaque"), None);
+    }
+
+    /// The settings a create writes are the tenant's own: a later project update reapplies them,
+    /// as it does a PATCH's (AUTH-TENANT-BLOCKING recording 2026-09-27, inheritance program).
+    #[test]
+    fn a_created_tenants_written_settings_survive_later_project_updates() {
+        let registry = AuthRegistry::new("demo-app", store("demo-app", 1));
+        let (tenant, _, _) = registry
+            .create_tenant_with_password_policy(
+                "demo-app",
+                TenantMetadata::default(),
+                TenantMetadataPatch {
+                    allow_duplicate_emails: Some(false),
+                    enable_improved_email_privacy: Some(false),
+                    disabled_user_signup: Some(false),
+                    disabled_user_deletion: Some(true),
+                    ..TenantMetadataPatch::default()
+                },
+                None,
+            )
+            .unwrap();
+        assert!(registry.set_project_config(
+            "demo-app",
+            super::ProjectAuthConfig {
+                allow_duplicate_emails: true,
+                enable_improved_email_privacy: true,
+                disabled_user_signup: true,
+                disabled_user_deletion: false,
+            }
+        ));
+        let config = registry
+            .tenant_store("demo-app", &tenant)
+            .unwrap()
+            .lock()
+            .unwrap()
+            .config();
+        assert!(!config.allow_duplicate_emails);
+        assert!(!config.enable_improved_email_privacy);
+        assert!(!config.disabled_user_signup);
+        assert!(config.disabled_user_deletion);
+        let metadata = registry.tenant_metadata("demo-app", &tenant).unwrap();
+        assert!(!metadata.enable_improved_email_privacy && !metadata.disabled_user_signup);
+        assert!(metadata.disabled_user_deletion);
+    }
+
     #[test]
     #[allow(clippy::too_many_lines)]
     fn tenant_effective_config_preserves_explicit_false_and_project_isolation() {
@@ -10394,6 +10963,23 @@ mod broad_project_number_tests {
             .unwrap();
         store.record_token_issuance(&token, at);
         assert_eq!(store.user(&replacement).unwrap().last_refresh_at, None);
+    }
+
+    #[test]
+    fn a_refused_sign_up_records_its_issuance_time_without_moving_it_back() {
+        let mut store = AuthStore::new("demo-one", SplitMix64::new(1), TotpPolicy::default());
+        let early = LogicalInstant::from_unix_seconds(100);
+        let late = LogicalInstant::from_unix_seconds(200);
+        let uid = store
+            .create_user_with_id(NewUser::email("refused@example.com"), Some("r"), early)
+            .unwrap();
+        store.record_refused_sign_up_issuance(&uid, late);
+        assert_eq!(store.user(&uid).unwrap().last_refresh_at, Some(late));
+        store.record_refused_sign_up_issuance(&uid, early);
+        assert_eq!(store.user(&uid).unwrap().last_refresh_at, Some(late));
+        let missing = LocalId("missing".to_owned());
+        store.record_refused_sign_up_issuance(&missing, late);
+        assert!(store.user(&missing).is_none());
     }
 
     #[test]
@@ -11530,19 +12116,95 @@ mod generated_id_tests {
         assert_ne!(nested_admin.as_str(), reserved);
     }
 
+    fn held(live: &AuthStore, id: &str) -> bool {
+        live.holds_generated_local_id(id)
+    }
+
+    /// A reset keeps the id of a request still in flight: the emulator profile commits that
+    /// request into the reset state, as the official emulator's account wipe keeps its
+    /// pendingLocalIds (closure re-review S1'', 2026-09-28). Released, the id is free again.
     #[test]
-    fn clearing_a_store_releases_reservations() {
+    fn a_reset_keeps_an_in_flight_reservation_until_it_is_released() {
         let mut live = AuthStore::new("demo-app", SplitMix64::new(7), TotpPolicy::default());
         let mut candidate = live.clone();
-        let reserved = candidate.reserve_next_generated_local_id();
+        let (reserved, generation) = candidate.reserve_next_generated_local_id_with_generation();
         live.clear();
 
-        let fresh_reserved = live.clone().reserve_next_generated_local_id();
-        assert_eq!(fresh_reserved, reserved);
+        let (fresh, fresh_generation) = live
+            .clone()
+            .reserve_next_generated_local_id_with_generation();
+        assert_ne!(fresh, reserved);
+        let created = live
+            .create_user(NewUser::email("after-reset@example.test"), NOW)
+            .expect("an account created after the reset succeeds");
+        assert_ne!(created.as_str(), reserved);
+        assert_ne!(created.as_str(), fresh);
+
+        live.release_reserved_generated_local_id_at_generation(&reserved, generation);
+        live.release_reserved_generated_local_id_at_generation(&fresh, fresh_generation);
+        assert!(!held(&live, &reserved), "a released id is free again");
+        assert!(!held(&live, &fresh));
+    }
+
+    /// Committing across a reset names the reserved id for the next account and releases
+    /// nothing: the request's own reservation stays until its guard releases it (closure
+    /// re-review 3, 2026-09-28).
+    #[test]
+    fn using_a_reservation_from_before_a_reset_releases_nothing() {
+        let mut live = AuthStore::new("demo-app", SplitMix64::new(7), TotpPolicy::default());
+        let (reserved, generation) = live
+            .clone()
+            .reserve_next_generated_local_id_with_generation();
+        live.clear();
+
+        let mut committed = live.clone();
+        committed.use_generated_local_id_reserved_before_reset(&reserved);
+        assert!(held(&live, &reserved));
+        let created = committed
+            .create_user(NewUser::email("across-reset@example.test"), NOW)
+            .expect("the request's account is created with its id");
+        assert_eq!(created.as_str(), reserved);
+        assert!(held(&live, &reserved), "only the guard releases it");
+
+        live.release_reserved_generated_local_id_at_generation(&reserved, generation);
+        assert!(!held(&live, &reserved));
+    }
+
+    /// A restore brings back an account whose id an in-flight request holds: the restore wins,
+    /// and the request cannot create its account (400 `DUPLICATE_LOCAL_ID` in the emulator
+    /// profile; the strict profile refuses it first as a reset). The official emulator has no
+    /// restore while a request runs (closure re-review 3, 2026-09-28).
+    #[test]
+    fn a_restored_account_wins_over_an_in_flight_reservation_of_its_id() {
+        let mut live = AuthStore::new("demo-app", SplitMix64::new(7), TotpPolicy::default());
+        let (reserved, generation) = live
+            .clone()
+            .reserve_next_generated_local_id_with_generation();
+        let mut source = AuthStore::new("demo-app", SplitMix64::new(11), TotpPolicy::default());
+        source
+            .create_user_with_id(
+                NewUser::email("restored@example.test"),
+                Some(&reserved),
+                NOW,
+            )
+            .expect("the source holds an account with that id");
+        let report = AuthSnapshot::capture(&source).restore_into(&mut live);
+        assert_eq!(report, super::RestoreReport::default());
+        assert!(live.user_by_id(&reserved).is_some());
+        assert!(held(&live, &reserved));
+
+        let mut committed = live.clone();
+        committed.use_generated_local_id_reserved_before_reset(&reserved);
+        assert_eq!(
+            committed.create_user(NewUser::email("request@example.test"), NOW),
+            Err(super::AuthError::LocalIdExists)
+        );
+        live.release_reserved_generated_local_id_at_generation(&reserved, generation);
+        assert!(!held(&live, &reserved));
     }
 
     #[test]
-    fn restoring_a_snapshot_releases_stale_reservations() {
+    fn a_restore_keeps_an_in_flight_reservation_until_it_is_released() {
         let mut live = AuthStore::new("demo-app", SplitMix64::new(7), TotpPolicy::default());
         let mut candidate = live.clone();
         let reserved = candidate.reserve_next_generated_local_id();
@@ -11550,24 +12212,24 @@ mod generated_id_tests {
         let report = snapshot.restore_into(&mut live);
         assert_eq!(report, super::RestoreReport::default());
         let fresh_reserved = live.clone().reserve_next_generated_local_id();
-        assert_eq!(fresh_reserved, reserved);
+        assert_ne!(fresh_reserved, reserved);
         live.release_reserved_generated_local_id(&reserved);
-        let next_reserved = live.clone().reserve_next_generated_local_id();
-        assert_ne!(next_reserved, fresh_reserved);
+        assert!(!held(&live, &reserved));
+        assert!(held(&live, &fresh_reserved));
     }
 
     #[test]
-    fn releasing_a_pre_reset_reservation_keeps_the_new_same_id_reservation() {
+    fn releasing_a_pre_reset_reservation_keeps_the_newer_reservation() {
         let mut live = AuthStore::new("demo-app", SplitMix64::new(7), TotpPolicy::default());
         let old_reservation = live.clone().reserve_next_generated_local_id();
 
         live.clear();
         let new_reservation = live.clone().reserve_next_generated_local_id();
-        assert_eq!(new_reservation, old_reservation);
+        assert_ne!(new_reservation, old_reservation);
 
         live.release_reserved_generated_local_id(&old_reservation);
-        let next_reservation = live.clone().reserve_next_generated_local_id();
-        assert_ne!(next_reservation, new_reservation);
+        assert!(!held(&live, &old_reservation));
+        assert!(held(&live, &new_reservation));
     }
 
     #[test]
@@ -11581,18 +12243,19 @@ mod generated_id_tests {
         let (new_id, new_generation) = live
             .clone()
             .reserve_next_generated_local_id_with_generation();
-        assert_eq!(new_id, old_id);
+        assert_ne!(new_id, old_id);
         assert_ne!(new_generation, old_generation);
 
-        // This models the old guard being dropped after the newer reservation was created.
+        // This models the old guard being dropped after the newer reservation was created. A
+        // release naming the wrong generation removes nothing.
+        live.release_reserved_generated_local_id_at_generation(&new_id, old_generation);
+        assert!(held(&live, &new_id));
         live.release_reserved_generated_local_id_at_generation(&old_id, old_generation);
-        let (next_id, next_generation) = live
-            .clone()
-            .reserve_next_generated_local_id_with_generation();
-        assert_ne!(next_id, new_id);
+        assert!(!held(&live, &old_id));
+        assert!(held(&live, &new_id));
 
         live.release_reserved_generated_local_id_at_generation(&new_id, new_generation);
-        live.release_reserved_generated_local_id_at_generation(&next_id, next_generation);
+        assert!(!held(&live, &new_id));
     }
 
     #[test]
@@ -11606,10 +12269,10 @@ mod generated_id_tests {
         let (new_id, new_generation) = live
             .clone()
             .reserve_next_generated_local_id_with_generation();
-        assert_eq!(new_id, old_id);
+        assert_ne!(new_id, old_id);
 
-        // The newer guard may be dropped before the older one. Its exact ticket must not be
-        // confused with the older reservation, which remains in the shared ledger.
+        // The newer guard may be dropped before the older one; the older reservation remains
+        // in the shared ledger.
         live.release_reserved_generated_local_id_at_generation(&new_id, new_generation);
         assert!(live
             .generated_local_id_reservations
@@ -11624,11 +12287,7 @@ mod generated_id_tests {
             }));
 
         live.release_reserved_generated_local_id_at_generation(&old_id, old_generation);
-        assert!(!live
-            .generated_local_id_reservations
-            .lock()
-            .unwrap()
-            .contains_key(&LocalId(old_id)));
+        assert!(!held(&live, &old_id));
     }
 
     #[test]

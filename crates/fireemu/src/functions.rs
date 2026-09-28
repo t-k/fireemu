@@ -2894,7 +2894,8 @@ async fn start_codebase(
                 }
             }
         }
-        let manifest = parse_manifest(&manifest_json)?;
+        let mut manifest = parse_manifest(&manifest_json)?;
+        serve_blocking_events_for(cfg.profile, &mut manifest);
         // Before anything is served: every export the runner could not serve is either named in a
         // refusal or printed, one line each.
         let policy = UnservedTriggers::parse(&cfg.functions_unserved_triggers).unwrap_or_default();
@@ -2910,7 +2911,8 @@ async fn start_codebase(
                 .manifest
                 .clone()
                 .ok_or_else(|| "the functions runner did not discover a manifest".to_owned())?;
-            let discovered = parse_manifest(&discovered)?;
+            let mut discovered = parse_manifest(&discovered)?;
+            serve_blocking_events_for(cfg.profile, &mut discovered);
             check_manifest_agrees_on_blocking_auth(&manifest, &discovered)?;
             if callable_trusted_protocol {
                 check_manifest_agrees_on_callables(&manifest, &discovered)?;
@@ -2933,6 +2935,75 @@ async fn start_codebase(
         runner.kill_now();
     }
     configured
+}
+
+/// Leaves in service the blocking functions `profile` serves: the strict profile serves every
+/// Identity Platform event, the emulator profile the official emulator's two.
+fn serve_blocking_events_for(
+    profile: CompatibilityProfile,
+    manifest: &mut fireemu_core_functions::manifest::FunctionManifest,
+) {
+    if !serves_send_blocking_events(profile) {
+        ignore_send_blocking_events(manifest);
+    }
+}
+
+/// Whether `profile` serves Identity Platform's email and SMS blocking events: the strict
+/// profile does, as production does; the emulator profile does not, as the official emulator
+/// does not.
+pub(crate) const fn serves_send_blocking_events(profile: CompatibilityProfile) -> bool {
+    matches!(profile, CompatibilityProfile::Strict)
+}
+
+/// Refuses a selection the manifest cannot serve: an explicit function it does not export, or
+/// one that is ambiguous or handles another event.
+pub(crate) fn check_blocking_auth_selections(
+    manifest: &fireemu_core_functions::manifest::FunctionManifest,
+    selections: &fireemu_core_functions::manifest::BlockingAuthSelections,
+) -> Result<(), String> {
+    for event in fireemu_core_functions::manifest::BlockingAuthEvent::ALL {
+        manifest
+            .blocking_auth_target(event, selections.for_event(event))
+            .map_err(|error| error.to_string())?;
+    }
+    Ok(())
+}
+
+/// Keeps Identity Platform's email and SMS blocking functions out of service, as the official
+/// emulator does (firebase-tools registers `beforeCreate` and `beforeSignIn` only): they stay in
+/// the ignored inventory with the reason the runner gave before the strict profile served them.
+fn ignore_send_blocking_events(manifest: &mut fireemu_core_functions::manifest::FunctionManifest) {
+    use fireemu_core_functions::manifest::{
+        BlockingAuthEvent, IgnoredFunction, IgnoredScope, Trigger,
+    };
+
+    let (send, served) = std::mem::take(&mut manifest.functions)
+        .into_iter()
+        .partition::<Vec<_>, _>(|function| {
+            matches!(
+                function.trigger,
+                Trigger::BlockingAuth {
+                    event: BlockingAuthEvent::BeforeSendEmail | BlockingAuthEvent::BeforeSendSms,
+                    ..
+                }
+            )
+        });
+    manifest.functions = served;
+    for function in send {
+        let Trigger::BlockingAuth { event, .. } = function.trigger else {
+            continue;
+        };
+        manifest.ignored.push(IgnoredFunction {
+            name: function.name,
+            region: function.region,
+            trigger_type: "blocking".to_owned(),
+            scope: IgnoredScope::Unsupported,
+            reason: format!(
+                "blocking identity event {} is not served",
+                event.event_type()
+            ),
+        });
+    }
 }
 
 /// Refuses a configured manifest that removes or changes any discovered Blocking Auth hook.
@@ -3267,6 +3338,12 @@ pub struct BlockingAuthBridge {
     forward_inbound_credentials: bool,
     settings: Arc<RwLock<BlockingAuthSettings>>,
     settings_revision: AtomicU64,
+    /// Whether Identity Platform's email and SMS events are served (the strict profile; the
+    /// official emulator serves `beforeCreate` and `beforeSignIn` only).
+    send_events: bool,
+    /// When each event's trigger last changed ([`BlockingAuthEvent::ALL`] order): when the
+    /// bridge was built, or when a settings update changed that event's selection.
+    trigger_times: RwLock<[fireemu_core_types::time::LogicalInstant; 4]>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -3279,48 +3356,218 @@ struct BlockingAuthSettings {
 }
 
 const BLOCKING_AUTH_DEADLINE: Duration = Duration::from_secs(7);
-const MAX_BLOCKING_AUTH_RESPONSE_BYTES: u64 = 64 * 1024;
 
-fn blocking_auth_user_json(
-    user: &fireemu_core_auth::store::UserRecord,
-    tenant: Option<&str>,
-) -> serde_json::Value {
-    let provider_data = user
-        .federated
-        .iter()
-        .map(|identity| {
-            serde_json::json!({
-                "uid": identity.raw_id,
-                "displayName": identity.display_name,
-                "email": identity.email,
-                "photoURL": identity.photo_url,
-                "providerId": identity.provider_id,
-                "phoneNumber": null,
-            })
-        })
-        .collect::<Vec<_>>();
-    serde_json::json!({
-        "uid": user.local_id.as_str(),
-        "email": user.email,
-        "emailVerified": user.email_verified,
-        "displayName": user.display_name,
-        "photoURL": user.photo_url,
-        "phoneNumber": user.phone_number,
-        "disabled": user.disabled,
-        "customClaims": serde_json::from_str::<serde_json::Value>(&user.custom_claims.canonical_json()).unwrap_or_else(|_| serde_json::json!({})),
-        "tenantId": tenant,
-        "metadata": {
-            "creationTime": fireemu_core_types::time::LogicalInstant::to_rfc3339(user.created_at).unwrap_or_default(),
-            "lastSignInTime": user.last_sign_in_at.and_then(|instant| instant.to_rfc3339().ok()),
-        },
-        "providerData": provider_data,
-    })
+/// How long the official Auth emulator waits for a blocking function (firebase-tools 15.28.2
+/// `fetchBlockingFunction`, `timeoutMs = 60000`).
+const BLOCKING_AUTH_EMULATOR_DEADLINE: Duration = Duration::from_secs(60);
+
+/// The blocking-function deadline of `profile`: Identity Platform's seven seconds in the strict
+/// profile, the official emulator's sixty in the emulator profile, so a function the official
+/// emulator waits for is not refused there (closure review M1, 2026-09-28).
+pub(crate) const fn blocking_auth_deadline(profile: CompatibilityProfile) -> Duration {
+    match profile {
+        CompatibilityProfile::Strict => BLOCKING_AUTH_DEADLINE,
+        CompatibilityProfile::Emulator => BLOCKING_AUTH_EMULATOR_DEADLINE,
+    }
 }
 
-fn blocking_auth_resource_name(project: &str, tenant: Option<&str>) -> String {
-    tenant.map_or_else(
-        || format!("projects/{project}"),
-        |tenant| format!("projects/{project}/tenants/{tenant}"),
+/// Identity Platform's email and SMS events, which only the strict profile serves.
+const fn is_send_event(event: fireemu_core_functions::manifest::BlockingAuthEvent) -> bool {
+    matches!(
+        event,
+        fireemu_core_functions::manifest::BlockingAuthEvent::BeforeSendEmail
+            | fireemu_core_functions::manifest::BlockingAuthEvent::BeforeSendSms
+    )
+}
+const MAX_BLOCKING_AUTH_RESPONSE_BYTES: u64 = 64 * 1024;
+
+/// The request values a blocking token names, which fireemu cannot know from a loopback client:
+/// the official Auth emulator's fixed values (firebase-tools 15.28.2 `generateBlockingFunctionJwt`).
+const BLOCKING_AUTH_USER_AGENT: &str = "NotYetSupportedInFirebaseAuthEmulator";
+const BLOCKING_AUTH_IP_ADDRESS: &str = "127.0.0.1";
+const BLOCKING_AUTH_LOCALE: &str = "en";
+
+fn epoch_millis(at: fireemu_core_types::time::LogicalInstant) -> serde_json::Value {
+    serde_json::json!(i64::try_from(at.as_nanos() / 1_000_000).unwrap_or_default())
+}
+
+/// The token's `user_record`: the account's members, with production's absent members left out.
+fn blocking_auth_user_record(
+    tenant: Option<&str>,
+    request: &fireemu_adapter_http::identity_toolkit::AuthBlockingContext,
+    user: &fireemu_core_auth::store::UserRecord,
+) -> serde_json::Map<String, serde_json::Value> {
+    use serde_json::{json, Map, Value};
+    let mut record = Map::new();
+    record.insert("uid".to_owned(), json!(user.local_id.as_str()));
+    if let Some(email) = &user.email {
+        record.insert("email".to_owned(), json!(email));
+        record.insert("email_verified".to_owned(), json!(user.email_verified));
+    }
+    if let Some(name) = &user.display_name {
+        record.insert("display_name".to_owned(), json!(name));
+    }
+    if let Some(photo) = &user.photo_url {
+        record.insert("photo_url".to_owned(), json!(photo));
+    }
+    if let Some(phone) = &user.phone_number {
+        record.insert("phone_number".to_owned(), json!(phone));
+    }
+    record.insert("disabled".to_owned(), json!(user.disabled));
+    if let Some(claims) = user
+        .custom_claims
+        .attributes_text()
+        .and_then(|text| serde_json::from_str::<Value>(&text).ok())
+    {
+        record.insert("custom_claims".to_owned(), claims);
+    }
+    if let Some(tenant) = tenant {
+        record.insert("tenant_id".to_owned(), json!(tenant));
+    }
+    let optional = |value: &Option<String>| value.as_ref().map_or(Value::Null, |text| json!(text));
+    record.insert(
+        "provider_data".to_owned(),
+        Value::Array(
+            request
+                .provider_data
+                .iter()
+                .map(|provider| {
+                    let mut entry = Map::new();
+                    entry.insert("provider_id".to_owned(), json!(provider.provider_id));
+                    entry.insert("uid".to_owned(), json!(provider.uid));
+                    for (key, value) in [
+                        ("display_name", optional(&provider.display_name)),
+                        ("email", optional(&provider.email)),
+                        ("photo_url", optional(&provider.photo_url)),
+                        ("phone_number", optional(&provider.phone_number)),
+                    ] {
+                        if !value.is_null() {
+                            entry.insert(key.to_owned(), value);
+                        }
+                    }
+                    Value::Object(entry)
+                })
+                .collect(),
+        ),
+    );
+    if !request.enrolled_factors.is_empty() {
+        let factors = request
+            .enrolled_factors
+            .iter()
+            .map(|factor| {
+                let mut entry = Map::new();
+                entry.insert("uid".to_owned(), json!(factor.uid));
+                entry.insert("factor_id".to_owned(), json!(factor.factor_id));
+                for (key, value) in [
+                    ("display_name", optional(&factor.display_name)),
+                    ("enrollment_time", optional(&factor.enrollment_time)),
+                    ("phone_number", optional(&factor.phone_number)),
+                ] {
+                    if !value.is_null() {
+                        entry.insert(key.to_owned(), value);
+                    }
+                }
+                Value::Object(entry)
+            })
+            .collect::<Vec<_>>();
+        record.insert(
+            "multi_factor".to_owned(),
+            json!({"enrolled_factors": factors}),
+        );
+    }
+    let mut metadata = Map::new();
+    metadata.insert("creation_time".to_owned(), epoch_millis(user.created_at));
+    if let Some(at) = user.last_sign_in_at {
+        metadata.insert("last_sign_in_time".to_owned(), epoch_millis(at));
+    }
+    record.insert("metadata".to_owned(), Value::Object(metadata));
+    record
+}
+
+/// The claims of the blocking token Identity Platform delivers (`{"data":{"jwt":…}}`), which
+/// the function's firebase-functions decodes into its event (AUTH-TENANT-BLOCKING comparison
+/// 2026-09-28). The claims follow the official Auth emulator's token, with production's absent
+/// members: a member the account does not have is left out, `email_verified` comes with an
+/// address, `custom_claims` only when claims are set, and `multi_factor` only with a factor.
+#[allow(clippy::too_many_arguments)]
+fn blocking_auth_claims(
+    project: &str,
+    tenant: Option<&str>,
+    event: fireemu_core_functions::manifest::BlockingAuthEvent,
+    request: &fireemu_adapter_http::identity_toolkit::AuthBlockingContext,
+    user: Option<&fireemu_core_auth::store::UserRecord>,
+    event_id: &str,
+    issued_at: i64,
+    audience: &str,
+) -> serde_json::Map<String, serde_json::Value> {
+    use serde_json::{json, Map, Value};
+
+    let mut claims = Map::new();
+    claims.insert(
+        "iss".to_owned(),
+        json!(format!("https://securetoken.google.com/{project}")),
+    );
+    claims.insert("aud".to_owned(), json!(audience));
+    claims.insert("iat".to_owned(), json!(issued_at));
+    // The official emulator's lifetime: the deadline in milliseconds divided by 100.
+    claims.insert("exp".to_owned(), json!(issued_at + 70));
+    claims.insert("event_id".to_owned(), json!(event_id));
+    claims.insert("event_type".to_owned(), json!(event.as_str()));
+    claims.insert("user_agent".to_owned(), json!(BLOCKING_AUTH_USER_AGENT));
+    claims.insert("ip_address".to_owned(), json!(BLOCKING_AUTH_IP_ADDRESS));
+    claims.insert("locale".to_owned(), json!(BLOCKING_AUTH_LOCALE));
+    // A mail event has no user: its token names the address and the kind of mail instead.
+    if let Some(user) = user {
+        claims.insert("sub".to_owned(), json!(user.local_id.as_str()));
+        claims.insert(
+            "user_record".to_owned(),
+            Value::Object(blocking_auth_user_record(tenant, request, user)),
+        );
+    }
+    if let Some(email) = &request.email {
+        claims.insert("email".to_owned(), json!(email));
+    }
+    if let Some(email_type) = &request.email_type {
+        claims.insert("email_type".to_owned(), json!(email_type));
+    }
+    if let Some(method) = &request.sign_in_method {
+        claims.insert("sign_in_method".to_owned(), json!(method));
+    }
+    if let Some(profile) = request
+        .additional_user_info
+        .as_ref()
+        .and_then(|info| info.profile.as_ref())
+    {
+        claims.insert("raw_user_info".to_owned(), json!(profile.to_string()));
+    }
+    if let Some(tenant) = tenant {
+        claims.insert("tenant_id".to_owned(), json!(tenant));
+    }
+    if let Some(credential) = &request.credential {
+        if let Some(attributes) = &credential.claims {
+            claims.insert("sign_in_attributes".to_owned(), attributes.clone());
+        }
+        for (key, value) in [
+            ("oauth_access_token", &credential.access_token),
+            ("oauth_id_token", &credential.id_token),
+            ("oauth_refresh_token", &credential.refresh_token),
+        ] {
+            if let Some(token) = value {
+                claims.insert(key.to_owned(), json!(token));
+            }
+        }
+    }
+    claims
+}
+
+/// An unsigned (`alg: none`) JWT of `claims`, as the official Auth emulator sends it.
+fn unsigned_jwt(claims: &serde_json::Map<String, serde_json::Value>) -> String {
+    let header = serde_json::json!({"alg": "none", "typ": "JWT"}).to_string();
+    let payload = serde_json::Value::Object(claims.clone()).to_string();
+    format!(
+        "{}.{}.",
+        fireemu_core_auth::jwt::base64url_encode(header.as_bytes()),
+        fireemu_core_auth::jwt::base64url_encode(payload.as_bytes())
     )
 }
 
@@ -3432,59 +3679,6 @@ fn blocking_auth_selection_accepts_target(
     }
 }
 
-fn blocking_auth_context_json(
-    project: &str,
-    tenant: Option<&str>,
-    event: fireemu_core_functions::manifest::BlockingAuthEvent,
-    request: &fireemu_adapter_http::identity_toolkit::AuthBlockingContext,
-    event_id: &str,
-    timestamp: &str,
-) -> serde_json::Value {
-    let event_type = match (event, request.sign_in_method.as_deref()) {
-        (fireemu_core_functions::manifest::BlockingAuthEvent::BeforeSignIn, Some(method)) => {
-            format!("{}:{method}", event.event_type())
-        }
-        _ => event.event_type().to_owned(),
-    };
-    let mut context = serde_json::json!({
-        "eventId": event_id,
-        "eventType": event_type,
-        "resource": {
-            "service": "identitytoolkit.googleapis.com",
-            "name": blocking_auth_resource_name(project, tenant),
-        },
-        "timestamp": timestamp,
-        "params": {},
-    });
-    if let Some(info) = &request.additional_user_info {
-        context["additionalUserInfo"] = serde_json::json!({
-            "providerId": info.provider_id,
-            "profile": info.profile,
-            "isNewUser": info.is_new_user,
-        });
-    }
-    if let Some(credential) = &request.credential {
-        let mut value = serde_json::json!({
-            "providerId": credential.provider_id,
-            "signInMethod": credential.sign_in_method,
-        });
-        if let Some(claims) = &credential.claims {
-            value["claims"] = claims.clone();
-        }
-        if let Some(access_token) = &credential.access_token {
-            value["accessToken"] = serde_json::Value::String(access_token.clone());
-        }
-        if let Some(id_token) = &credential.id_token {
-            value["idToken"] = serde_json::Value::String(id_token.clone());
-        }
-        if let Some(refresh_token) = &credential.refresh_token {
-            value["refreshToken"] = serde_json::Value::String(refresh_token.clone());
-        }
-        context["credential"] = value;
-    }
-    context
-}
-
 fn with_blocking_auth_project<T, E>(
     runtime_project: &str,
     request_project: &str,
@@ -3494,6 +3688,32 @@ fn with_blocking_auth_project<T, E>(
         return Ok(None);
     }
     forward()
+}
+
+/// How long a blocking call waits, and whether the function's own timeout is what elapses: a
+/// function whose timeout is within Identity Platform's deadline is stopped by its platform
+/// first (production run 2026-09-02, a seven-second function sleeping eleven); otherwise the
+/// deadline elapses first (AUTH-TENANT-BLOCKING recording 2026-09-28, timeout#*).
+fn blocking_auth_wait(timeout_seconds: u32, deadline: Duration) -> (Duration, bool) {
+    let own = Duration::from_secs(u64::from(timeout_seconds));
+    if timeout_seconds > 0 && own <= deadline {
+        (own, true)
+    } else {
+        (deadline, false)
+    }
+}
+
+/// The answer to a call whose wait elapsed: the function's own timeout is masked as its
+/// platform's 5xx answer is; Identity Platform's deadline answers its own 400.
+fn blocking_auth_elapsed(
+    failure: fireemu_adapter_http::identity_toolkit::BlockingFunctionFailure,
+    own_timeout_first: bool,
+) -> fireemu_adapter_http::identity_toolkit::BlockingFunctionFailure {
+    if failure.is_deadline() && own_timeout_first {
+        fireemu_adapter_http::identity_toolkit::BlockingFunctionFailure::function_timeout()
+    } else {
+        failure
+    }
 }
 
 fn blocking_auth_io_failure(
@@ -3670,6 +3890,7 @@ impl BlockingAuthBridge {
             forward_inbound_credentials,
             forwarding_restrictions,
         )?;
+        let runtime_now = runtime.now();
         Ok(Self {
             runtime,
             deadline: BLOCKING_AUTH_DEADLINE,
@@ -3679,7 +3900,49 @@ impl BlockingAuthBridge {
                 forwarding_restrictions,
             })),
             settings_revision: AtomicU64::new(0),
+            send_events: false,
+            trigger_times: RwLock::new([runtime_now; 4]),
         })
+    }
+
+    /// Serves Identity Platform's email and SMS events too, as production does (the strict
+    /// profile). `beforeSendSms` is listed but never run: no SMS it would gate is recorded.
+    #[must_use]
+    pub const fn with_send_events(mut self, enabled: bool) -> Self {
+        self.send_events = enabled;
+        self
+    }
+
+    /// Serves the events and waits the deadline of `profile`: what the daemon builds (closure
+    /// re-review, 2026-09-28).
+    #[must_use]
+    pub const fn for_profile(self, profile: CompatibilityProfile) -> Self {
+        self.with_send_events(serves_send_blocking_events(profile))
+            .with_deadline_for(profile)
+    }
+
+    /// Waits for a function as `profile` does ([`blocking_auth_deadline`]).
+    #[must_use]
+    pub const fn with_deadline_for(mut self, profile: CompatibilityProfile) -> Self {
+        self.deadline = blocking_auth_deadline(profile);
+        self
+    }
+
+    /// The events this bridge serves, in Identity Platform's configuration order.
+    fn served_events(
+        &self,
+    ) -> impl Iterator<Item = fireemu_core_functions::manifest::BlockingAuthEvent> + '_ {
+        fireemu_core_functions::manifest::BlockingAuthEvent::ALL
+            .into_iter()
+            .filter(|event| self.send_events || !is_send_event(*event))
+    }
+
+    /// The served event a configuration key names.
+    fn served_event_named(
+        &self,
+        name: &str,
+    ) -> Option<fireemu_core_functions::manifest::BlockingAuthEvent> {
+        self.served_events().find(|event| event.as_str() == name)
     }
 
     /// Builds a bridge applying the same selection to both supported Auth events.
@@ -3696,7 +3959,9 @@ impl BlockingAuthBridge {
             runtime,
             fireemu_core_functions::manifest::BlockingAuthSelections {
                 before_create: selection.clone(),
-                before_sign_in: selection,
+                before_sign_in: selection.clone(),
+                before_send_email: selection.clone(),
+                before_send_sms: selection,
             },
             forward_inbound_credentials,
         )
@@ -3713,6 +3978,8 @@ impl BlockingAuthBridge {
                 forwarding_restrictions: None,
             })),
             settings_revision: AtomicU64::new(0),
+            send_events: false,
+            trigger_times: RwLock::new([fireemu_core_types::time::LogicalInstant::UNIX_EPOCH; 4]),
         }
     }
 
@@ -3763,10 +4030,57 @@ impl BlockingAuthBridge {
             .write()
             .map_err(|_| "blocking Auth settings are poisoned".to_owned())?;
         if *current != settings {
+            let now = self.runtime.now();
+            if let Ok(mut times) = self.trigger_times.write() {
+                for (index, event) in fireemu_core_functions::manifest::BlockingAuthEvent::ALL
+                    .into_iter()
+                    .enumerate()
+                {
+                    if current.selections.for_event(event) != settings.selections.for_event(event) {
+                        times[index] = now;
+                    }
+                }
+            }
             *current = settings;
             self.settings_revision.fetch_add(1, Ordering::SeqCst);
         }
         Ok(())
+    }
+
+    /// The served events' effective functions, as Identity Platform's configuration lists its
+    /// triggers: an explicit selection's function, or the discovered one.
+    fn blocking_auth_trigger_list(
+        &self,
+    ) -> Vec<fireemu_adapter_http::identity_toolkit::BlockingAuthTrigger> {
+        let Ok(settings) = self.settings_snapshot() else {
+            return Vec::new();
+        };
+        let times = self
+            .trigger_times
+            .read()
+            .map(|times| *times)
+            .unwrap_or([fireemu_core_types::time::LogicalInstant::UNIX_EPOCH; 4]);
+        fireemu_core_functions::manifest::BlockingAuthEvent::ALL
+            .into_iter()
+            .enumerate()
+            .filter(|(_, event)| self.served_event_named(event.as_str()).is_some())
+            .filter_map(|(index, event)| {
+                let spec = self
+                    .runtime
+                    .manifest()
+                    .blocking_auth_target(event, settings.selections.for_event(event))
+                    .ok()
+                    .flatten()?;
+                Some(
+                    fireemu_adapter_http::identity_toolkit::BlockingAuthTrigger {
+                        event,
+                        function: spec.name.clone(),
+                        region: spec.region.clone(),
+                        update_time: times[index],
+                    },
+                )
+            })
+            .collect()
     }
 
     #[allow(clippy::too_many_lines)]
@@ -3797,7 +4111,7 @@ impl BlockingAuthBridge {
                             "blockingFunctions.{BLOCKING_DISCOVERY_EVENTS_MEMBER} must contain event names"
                         )
                     })?;
-                    if !matches!(event, "beforeCreate" | "beforeSignIn") {
+                    if self.served_event_named(event).is_none() {
                         return Err(format!(
                             "blockingFunctions.{BLOCKING_DISCOVERY_EVENTS_MEMBER} contains unsupported event {event:?}"
                         ));
@@ -3824,7 +4138,7 @@ impl BlockingAuthBridge {
                     .ok_or_else(|| "blockingFunctions.triggers must be an object".to_owned())?;
                 if triggers
                     .keys()
-                    .any(|key| key != "beforeCreate" && key != "beforeSignIn")
+                    .any(|key| self.served_event_named(key).is_none())
                 {
                     return Err(
                         "blockingFunctions.triggers contains an unsupported event".to_owned()
@@ -3896,10 +4210,12 @@ impl BlockingAuthBridge {
                         },
                     )
                 };
-                fireemu_core_functions::manifest::BlockingAuthSelections {
-                    before_create: parse("beforeCreate")?,
-                    before_sign_in: parse("beforeSignIn")?,
+                let mut selections =
+                    fireemu_core_functions::manifest::BlockingAuthSelections::default();
+                for event in self.served_events() {
+                    *selections.for_event_mut(event) = parse(event.as_str())?;
                 }
+                selections
             }
         };
         let forwarding_restrictions = match object.get("forwardInboundCredentials") {
@@ -3939,19 +4255,10 @@ impl BlockingAuthBridge {
             self.forward_inbound_credentials,
             forwarding_restrictions,
         )?;
-        for (event, selection) in [
-            (
-                fireemu_core_functions::manifest::BlockingAuthEvent::BeforeCreate,
-                &selections.before_create,
-            ),
-            (
-                fireemu_core_functions::manifest::BlockingAuthEvent::BeforeSignIn,
-                &selections.before_sign_in,
-            ),
-        ] {
+        for event in self.served_events() {
             self.runtime
                 .manifest()
-                .blocking_auth_target(event, selection)
+                .blocking_auth_target(event, selections.for_event(event))
                 .map_err(|error| format!("blockingFunctions: {error}"))?;
         }
         Ok(BlockingAuthSettings {
@@ -3972,18 +4279,9 @@ impl BlockingAuthBridge {
         let mut object = serde_json::Map::new();
         let mut triggers = serde_json::Map::new();
         let mut discovery = Vec::new();
-        for (event_name, event, selection) in [
-            (
-                "beforeCreate",
-                fireemu_core_functions::manifest::BlockingAuthEvent::BeforeCreate,
-                &settings.selections.before_create,
-            ),
-            (
-                "beforeSignIn",
-                fireemu_core_functions::manifest::BlockingAuthEvent::BeforeSignIn,
-                &settings.selections.before_sign_in,
-            ),
-        ] {
+        for event in self.served_events() {
+            let event_name = event.as_str();
+            let selection = settings.selections.for_event(event);
             match selection {
                 fireemu_core_functions::manifest::BlockingAuthSelection::Discovery => {
                     if preserve_discovery {
@@ -4062,19 +4360,10 @@ impl BlockingAuthBridge {
         // logical document. Keeping it in the input also rejects marker/trigger conflicts rather
         // than allowing a malformed snapshot to overwrite a concrete selection.
         let settings = self.parse_blocking_auth_settings(value)?;
-        for (event, selection) in [
-            (
-                fireemu_core_functions::manifest::BlockingAuthEvent::BeforeCreate,
-                &settings.selections.before_create,
-            ),
-            (
-                fireemu_core_functions::manifest::BlockingAuthEvent::BeforeSignIn,
-                &settings.selections.before_sign_in,
-            ),
-        ] {
+        for event in self.served_events() {
             self.runtime
                 .manifest()
-                .blocking_auth_target(event, selection)
+                .blocking_auth_target(event, settings.selections.for_event(event))
                 .map_err(|error| format!("blockingFunctions: {error}"))?;
         }
         self.install_settings(settings)
@@ -4114,8 +4403,12 @@ impl BlockingAuthBridge {
                         )?;
                         next.selections = parsed.selections;
                     }
-                    "blockingFunctions.triggers.beforeCreate"
-                    | "blockingFunctions.triggers.beforeSignIn" => {
+                    trigger_field
+                        if trigger_field
+                            .strip_prefix("blockingFunctions.triggers.")
+                            .and_then(|event| self.served_event_named(event))
+                            .is_some() =>
+                    {
                         let event = field
                             .strip_prefix("blockingFunctions.triggers.")
                             .ok_or_else(|| "invalid blocking trigger field".to_owned())?;
@@ -4130,11 +4423,11 @@ impl BlockingAuthBridge {
                         let parsed = self.parse_blocking_auth_settings(&serde_json::json!({
                             "triggers": trigger_object
                         }))?;
-                        if event == "beforeCreate" {
-                            next.selections.before_create = parsed.selections.before_create;
-                        } else {
-                            next.selections.before_sign_in = parsed.selections.before_sign_in;
-                        }
+                        let served = self
+                            .served_event_named(event)
+                            .ok_or_else(|| "invalid blocking trigger field".to_owned())?;
+                        *next.selections.for_event_mut(served) =
+                            parsed.selections.for_event(served).clone();
                     }
                     "blockingFunctions.forwardInboundCredentials" => {
                         let forwarding =
@@ -4181,19 +4474,10 @@ impl BlockingAuthBridge {
             self.forward_inbound_credentials,
             next.forwarding_restrictions,
         )?;
-        for (event, selection) in [
-            (
-                fireemu_core_functions::manifest::BlockingAuthEvent::BeforeCreate,
-                &next.selections.before_create,
-            ),
-            (
-                fireemu_core_functions::manifest::BlockingAuthEvent::BeforeSignIn,
-                &next.selections.before_sign_in,
-            ),
-        ] {
+        for event in self.served_events() {
             self.runtime
                 .manifest()
-                .blocking_auth_target(event, selection)
+                .blocking_auth_target(event, next.selections.for_event(event))
                 .map_err(|error| format!("blockingFunctions: {error}"))?;
         }
         self.install_settings(next)
@@ -4221,7 +4505,7 @@ impl BlockingAuthBridge {
         project: &str,
         tenant: Option<&str>,
         event: fireemu_core_functions::manifest::BlockingAuthEvent,
-        user: &fireemu_core_auth::store::UserRecord,
+        user: Option<&fireemu_core_auth::store::UserRecord>,
         context: &fireemu_adapter_http::identity_toolkit::AuthBlockingContext,
     ) -> Result<
         Option<serde_json::Value>,
@@ -4238,7 +4522,7 @@ impl BlockingAuthBridge {
         project: &str,
         tenant: Option<&str>,
         event: fireemu_core_functions::manifest::BlockingAuthEvent,
-        user: &fireemu_core_auth::store::UserRecord,
+        user: Option<&fireemu_core_auth::store::UserRecord>,
         context: &fireemu_adapter_http::identity_toolkit::AuthBlockingContext,
     ) -> Result<
         Option<serde_json::Value>,
@@ -4258,10 +4542,12 @@ impl BlockingAuthBridge {
 
         let selection = settings.selections.for_event(event);
         let selected_function = Self::selected_function(selection);
-        let deadline = Instant::now() + self.deadline;
+        // Bounds admission, a runner recovery and the call after a recovery.
+        let admission_deadline = Instant::now() + self.deadline;
         let first_admission = self
             .runtime
             .try_admit_blocking_auth_for(event, selected_function);
+        let recovered = first_admission.is_err();
         let admitted = if let Ok(admitted) = first_admission {
             admitted
         } else {
@@ -4270,7 +4556,7 @@ impl BlockingAuthBridge {
             handle
                 .block_on(async {
                     tokio::time::timeout_at(
-                        tokio::time::Instant::from_std(deadline),
+                        tokio::time::Instant::from_std(admission_deadline),
                         self.runtime
                             .recover_blocking_auth_runner_for(event, selected_function),
                     )
@@ -4280,7 +4566,7 @@ impl BlockingAuthBridge {
                 .map_err(|_| BlockingFunctionFailure::unhandled())?;
             // A recovered runner is healthy even when the caller's admission deadline has
             // expired. Return the local timeout before reserving a slot or recycling it.
-            blocking_auth_remaining(deadline)?;
+            blocking_auth_remaining(admission_deadline)?;
             self.runtime
                 .try_admit_blocking_auth_for(event, selected_function)
                 .map_err(|_| BlockingFunctionFailure::unhandled())?
@@ -4302,29 +4588,37 @@ impl BlockingAuthBridge {
             target.token_policy,
             settings.forwarding_restrictions,
         );
-        let user_json = blocking_auth_user_json(user, tenant);
-        let event_context = blocking_auth_context_json(
-            project,
-            tenant,
-            event,
-            &context,
-            &format!("fireemu-blocking-{}", self.runtime.trigger_generation()),
-            &fireemu_core_types::time::LogicalInstant::to_rfc3339(self.runtime.now())
-                .unwrap_or_default(),
-        );
-        let body = serde_json::json!({
-            "data": {
-                "user": user_json,
-                "context": event_context,
-            }
-        })
-        .to_string();
         let path = format!(
             "/{}/{}/{}",
             self.runtime.project(),
             target.region,
             target.function
         );
+        let issued_at =
+            i64::try_from(self.runtime.now().as_nanos() / 1_000_000_000).unwrap_or_default();
+        let claims = blocking_auth_claims(
+            project,
+            tenant,
+            event,
+            &context,
+            user,
+            &format!("fireemu-blocking-{}", self.runtime.trigger_generation()),
+            issued_at,
+            &format!("http://{}{path}", target.addr),
+        );
+        // The token the function's firebase-functions decodes into its event, as Identity
+        // Platform and the official Auth emulator deliver it.
+        let body = serde_json::json!({"data": {"jwt": unsigned_jwt(&claims)}}).to_string();
+        // The platform's deadline covers a cold start; a recovered runner is fireemu's cold start,
+        // so its call waits only for what is left of the deadline. An admitted runner keeps the
+        // whole deadline, and a function whose own timeout equals it still times out first.
+        let budget = if recovered {
+            blocking_auth_remaining(admission_deadline)?
+        } else {
+            self.deadline
+        };
+        let (wait, own_timeout_first) = blocking_auth_wait(target.timeout_seconds, budget);
+        let deadline = Instant::now() + wait;
         let exchange = (|| {
             let address = target
                 .addr
@@ -4349,7 +4643,7 @@ impl BlockingAuthBridge {
             Ok(response) => response,
             Err(failure) => {
                 self.runtime.restart_runner_after_blocking_failure(&target);
-                return Err(failure);
+                return Err(blocking_auth_elapsed(failure, own_timeout_first));
             }
         };
         let Ok(value): Result<serde_json::Value, _> = serde_json::from_slice(&response.body) else {
@@ -4376,6 +4670,12 @@ impl fireemu_adapter_http::identity_toolkit::AuthBlockingHook for BlockingAuthBr
     }
 
     fn handles(&self, event: fireemu_core_functions::manifest::BlockingAuthEvent) -> bool {
+        // beforeSendSms is listed, never run (no SMS it would gate is recorded).
+        if event == fireemu_core_functions::manifest::BlockingAuthEvent::BeforeSendSms
+            || self.served_events().all(|served| served != event)
+        {
+            return false;
+        }
         match self.selection_for(event) {
             fireemu_core_functions::manifest::BlockingAuthSelection::Disabled => false,
             fireemu_core_functions::manifest::BlockingAuthSelection::Discovery => {
@@ -4472,7 +4772,7 @@ impl fireemu_adapter_http::identity_toolkit::AuthBlockingHook for BlockingAuthBr
             self.runtime.project(),
             None,
             event,
-            user,
+            Some(user),
             &fireemu_adapter_http::identity_toolkit::AuthBlockingContext::default(),
         )
         .map(|value| value.unwrap_or_else(|| serde_json::json!({})))
@@ -4492,7 +4792,7 @@ impl fireemu_adapter_http::identity_toolkit::AuthBlockingHook for BlockingAuthBr
             project,
             tenant,
             event,
-            user,
+            Some(user),
             &fireemu_adapter_http::identity_toolkit::AuthBlockingContext::default(),
         )
     }
@@ -4508,7 +4808,28 @@ impl fireemu_adapter_http::identity_toolkit::AuthBlockingHook for BlockingAuthBr
         Option<serde_json::Value>,
         fireemu_adapter_http::identity_toolkit::BlockingFunctionFailure,
     > {
-        self.invoke_for_namespace(project, tenant, event, user, context)
+        self.invoke_for_namespace(project, tenant, event, Some(user), context)
+    }
+
+    fn blocking_auth_triggers(
+        &self,
+    ) -> Vec<fireemu_adapter_http::identity_toolkit::BlockingAuthTrigger> {
+        self.blocking_auth_trigger_list()
+    }
+
+    fn invoke_before_send_email(
+        &self,
+        project: &str,
+        context: &fireemu_adapter_http::identity_toolkit::AuthBlockingContext,
+    ) -> Result<
+        Option<serde_json::Value>,
+        fireemu_adapter_http::identity_toolkit::BlockingFunctionFailure,
+    > {
+        let event = fireemu_core_functions::manifest::BlockingAuthEvent::BeforeSendEmail;
+        if !self.handles(event) {
+            return Ok(None);
+        }
+        self.invoke_for_namespace(project, None, event, None, context)
     }
 }
 
@@ -5403,10 +5724,35 @@ mod tests {
         assert!(error.contains("local safety budget of 32"), "{error}");
     }
 
+    fn claims_for(
+        tenant: Option<&str>,
+        event: fireemu_core_functions::manifest::BlockingAuthEvent,
+        request: &fireemu_adapter_http::identity_toolkit::AuthBlockingContext,
+        user: &fireemu_core_auth::store::UserRecord,
+    ) -> serde_json::Value {
+        serde_json::Value::Object(super::blocking_auth_claims(
+            "demo-app",
+            tenant,
+            event,
+            request,
+            Some(user),
+            "event-1",
+            1_788_004_860,
+            "http://127.0.0.1:1/demo-app/us-central1/fn",
+        ))
+    }
+
+    /// The token's user record has production's members (AUTH-TENANT-BLOCKING comparison
+    /// 2026-09-28): an absent member is left out, not null; `email_verified` comes with an
+    /// address, `custom_claims` only when claims are set, `multi_factor` only with a factor.
     #[test]
-    fn blocking_auth_user_uses_the_functions_sdk_record_shape() {
+    fn a_blocking_token_carries_the_account_as_identity_platform_does() {
+        use fireemu_adapter_http::identity_toolkit::{
+            AuthBlockingContext, AuthBlockingFactor, AuthBlockingProvider,
+        };
         use fireemu_core_auth::mfa::TotpPolicy;
         use fireemu_core_auth::store::{AuthStore, NewUser};
+        use fireemu_core_functions::manifest::BlockingAuthEvent;
         use fireemu_core_types::determinism::SplitMix64;
         use fireemu_core_types::time::LogicalInstant;
 
@@ -5415,26 +5761,90 @@ mod tests {
         let uid = store
             .create_user(NewUser::email("person@example.test"), now)
             .unwrap();
-
-        let value = super::blocking_auth_user_json(
-            store.user_by_id(uid.as_str()).unwrap(),
-            Some("customer"),
-        );
-
-        assert_eq!(value["emailVerified"], false);
-        assert!(value.get("email_verified").is_none());
-        assert!(value.get("displayName").is_some());
-        assert!(value.get("photoURL").is_some());
-        assert!(value.get("phoneNumber").is_some());
-        assert_eq!(value["customClaims"], json!({}));
-        assert_eq!(value["tenantId"], "customer");
-        assert!(value.get("providerData").is_some());
-        assert_eq!(value["metadata"]["creationTime"], "2026-08-29T12:01:00Z");
-        assert!(value["metadata"].get("lastSignInTime").is_some());
+        let user = store.user_by_id(uid.as_str()).unwrap().clone();
+        let request = AuthBlockingContext {
+            sign_in_method: Some("password".to_owned()),
+            provider_data: vec![AuthBlockingProvider {
+                provider_id: "password".to_owned(),
+                uid: "person@example.test".to_owned(),
+                display_name: None,
+                email: Some("person@example.test".to_owned()),
+                photo_url: None,
+                phone_number: None,
+            }],
+            ..AuthBlockingContext::default()
+        };
+        let claims = claims_for(None, BlockingAuthEvent::BeforeCreate, &request, &user);
+        assert_eq!(claims["event_type"], "beforeCreate");
+        assert_eq!(claims["sign_in_method"], "password");
+        assert_eq!(claims["sub"], uid.as_str());
+        assert_eq!(claims["iss"], "https://securetoken.google.com/demo-app");
+        assert_eq!(claims["iat"], 1_788_004_860);
+        for key in ["user_agent", "ip_address", "locale"] {
+            assert!(claims[key].is_string(), "{key}");
+        }
+        assert!(claims.get("tenant_id").is_none());
+        let record = &claims["user_record"];
         assert_eq!(
-            super::blocking_auth_resource_name("demo-app", Some("customer")),
-            "projects/demo-app/tenants/customer"
+            record.as_object().unwrap().keys().collect::<Vec<_>>(),
+            [
+                "disabled",
+                "email",
+                "email_verified",
+                "metadata",
+                "provider_data",
+                "uid"
+            ]
         );
+        assert_eq!(record["email_verified"], false);
+        assert_eq!(
+            record["provider_data"],
+            json!([{"provider_id": "password", "uid": "person@example.test", "email": "person@example.test"}])
+        );
+        assert_eq!(
+            record["metadata"],
+            json!({"creation_time": 1_788_004_860_000_i64})
+        );
+
+        // A tenant's token names it at the top and in the record; set claims and a factor are
+        // carried; a phone account has no address and so no `email_verified`.
+        let mut phone = user.clone();
+        phone.email = None;
+        phone.phone_number = Some("+15555550100".to_owned());
+        phone.custom_claims =
+            fireemu_core_auth::claims::CustomClaims::parse_attributes(r#"{"role":"a"}"#).unwrap();
+        let factor = AuthBlockingContext {
+            enrolled_factors: vec![AuthBlockingFactor {
+                uid: "factor-1".to_owned(),
+                display_name: None,
+                enrollment_time: Some("2026-09-28T00:00:00Z".to_owned()),
+                phone_number: Some("+15555550100".to_owned()),
+                factor_id: "phone".to_owned(),
+            }],
+            ..request.clone()
+        };
+        let claims = claims_for(
+            Some("customer"),
+            BlockingAuthEvent::BeforeSignIn,
+            &factor,
+            &phone,
+        );
+        assert_eq!(claims["tenant_id"], "customer");
+        let record = &claims["user_record"];
+        assert_eq!(record["tenant_id"], "customer");
+        assert!(record.get("email").is_none());
+        assert!(record.get("email_verified").is_none());
+        assert_eq!(record["phone_number"], "+15555550100");
+        assert_eq!(record["custom_claims"], json!({"role": "a"}));
+        assert_eq!(
+            record["multi_factor"],
+            json!({"enrolled_factors": [{"uid": "factor-1", "factor_id": "phone",
+                "enrollment_time": "2026-09-28T00:00:00Z", "phone_number": "+15555550100"}]})
+        );
+    }
+
+    #[test]
+    fn a_blocking_hook_is_forwarded_only_for_its_own_project() {
         let forwarded = std::cell::Cell::new(false);
         let value = super::with_blocking_auth_project("demo-app", "demo-worker", || {
             forwarded.set(true);
@@ -5443,7 +5853,6 @@ mod tests {
         .unwrap();
         assert!(value.is_none());
         assert!(!forwarded.get());
-
         let value = super::with_blocking_auth_project("demo-app", "demo-app", || {
             forwarded.set(true);
             Ok::<_, ()>(Some(json!({"accepted": true})))
@@ -5453,107 +5862,66 @@ mod tests {
         assert!(forwarded.get());
     }
 
+    /// An identity-provider sign-in carries its profile, attributes and the forwarded tokens,
+    /// and the token is the unsigned JWT the official Auth emulator sends.
     #[test]
-    fn blocking_auth_context_uses_the_functions_sdk_shape() {
+    fn a_blocking_token_carries_the_provider_sign_in() {
         use fireemu_adapter_http::identity_toolkit::{
             AuthBlockingAdditionalUserInfo, AuthBlockingContext, AuthBlockingCredential,
         };
+        use fireemu_core_auth::mfa::TotpPolicy;
+        use fireemu_core_auth::store::{AuthStore, NewUser};
+        use fireemu_core_functions::manifest::BlockingAuthEvent;
+        use fireemu_core_types::determinism::SplitMix64;
+        use fireemu_core_types::time::LogicalInstant;
 
-        let claims = json!({"roles": ["billing", "support"]});
+        let now = LogicalInstant::from_unix_seconds(1_788_004_860);
+        let mut store = AuthStore::new("demo-app", SplitMix64::new(7), TotpPolicy::default());
+        let uid = store
+            .create_user(NewUser::email("person@example.test"), now)
+            .unwrap();
+        let user = store.user_by_id(uid.as_str()).unwrap().clone();
+        let attributes = json!({"roles": ["billing", "support"]});
         let request = AuthBlockingContext {
             credential: Some(AuthBlockingCredential {
-                claims: Some(claims.clone()),
-                provider_id: "oidc.corp".to_owned(),
-                sign_in_method: "oidc.corp".to_owned(),
-                access_token: None,
-                id_token: None,
-                refresh_token: None,
-            }),
-            additional_user_info: Some(AuthBlockingAdditionalUserInfo {
-                provider_id: "oidc.corp".to_owned(),
-                profile: Some(claims.clone()),
-                is_new_user: false,
-            }),
-            sign_in_method: Some("oidc.corp".to_owned()),
-        };
-
-        let value = super::blocking_auth_context_json(
-            "demo-app",
-            Some("customer"),
-            fireemu_core_functions::manifest::BlockingAuthEvent::BeforeSignIn,
-            &request,
-            "event-1",
-            "2026-08-29T12:01:00Z",
-        );
-
-        assert_eq!(
-            value,
-            json!({
-                "eventId": "event-1",
-                "eventType": "providers/cloud.auth/eventTypes/user.beforeSignIn:oidc.corp",
-                "resource": {
-                    "service": "identitytoolkit.googleapis.com",
-                    "name": "projects/demo-app/tenants/customer"
-                },
-                "timestamp": "2026-08-29T12:01:00Z",
-                "params": {},
-                "additionalUserInfo": {
-                    "providerId": "oidc.corp",
-                    "profile": claims,
-                    "isNewUser": false
-                },
-                "credential": {
-                    "providerId": "oidc.corp",
-                    "signInMethod": "oidc.corp",
-                    "claims": {"roles": ["billing", "support"]}
-                }
-            })
-        );
-        assert!(value["credential"].get("idToken").is_none());
-        assert!(value["credential"].get("accessToken").is_none());
-
-        let raw_request = AuthBlockingContext {
-            credential: Some(AuthBlockingCredential {
-                claims: None,
+                claims: Some(attributes.clone()),
                 provider_id: "oidc.corp".to_owned(),
                 sign_in_method: "oidc.corp".to_owned(),
                 access_token: Some("access-sentinel".to_owned()),
-                id_token: Some("id-sentinel".to_owned()),
+                id_token: None,
                 refresh_token: Some("refresh-sentinel".to_owned()),
             }),
-            ..request.clone()
+            additional_user_info: Some(AuthBlockingAdditionalUserInfo {
+                provider_id: "oidc.corp".to_owned(),
+                profile: Some(attributes.clone()),
+                is_new_user: false,
+            }),
+            sign_in_method: Some("oidc.corp".to_owned()),
+            ..AuthBlockingContext::default()
         };
-        let raw_value = super::blocking_auth_context_json(
-            "demo-app",
+        let claims = claims_for(
             Some("customer"),
-            fireemu_core_functions::manifest::BlockingAuthEvent::BeforeSignIn,
-            &raw_request,
-            "event-raw",
-            "2026-08-29T12:01:00Z",
-        );
-        assert_eq!(
-            raw_value["credential"],
-            json!({
-                "providerId": "oidc.corp",
-                "signInMethod": "oidc.corp",
-                "accessToken": "access-sentinel",
-                "idToken": "id-sentinel",
-                "refreshToken": "refresh-sentinel"
-            })
-        );
-
-        let before_create = super::blocking_auth_context_json(
-            "demo-app",
-            None,
-            fireemu_core_functions::manifest::BlockingAuthEvent::BeforeCreate,
+            BlockingAuthEvent::BeforeSignIn,
             &request,
-            "event-2",
-            "2026-08-29T12:01:00Z",
+            &user,
         );
-        assert_eq!(
-            before_create["eventType"],
-            "providers/cloud.auth/eventTypes/user.beforeCreate"
-        );
+        assert_eq!(claims["sign_in_method"], "oidc.corp");
+        assert_eq!(claims["sign_in_attributes"], attributes);
+        assert_eq!(claims["raw_user_info"], attributes.to_string());
+        assert_eq!(claims["oauth_access_token"], "access-sentinel");
+        assert_eq!(claims["oauth_refresh_token"], "refresh-sentinel");
+        assert!(claims.get("oauth_id_token").is_none());
+
+        let token = super::unsigned_jwt(claims.as_object().unwrap());
+        let parts: Vec<&str> = token.split('.').collect();
+        assert_eq!(parts.len(), 3);
+        assert_eq!(parts[2], "");
+        let decode = |part: &str| -> serde_json::Value {
+            serde_json::from_slice(&fireemu_core_auth::jwt::base64url_decode(part).unwrap())
+                .unwrap()
+        };
+        assert_eq!(decode(parts[0]), json!({"alg": "none", "typ": "JWT"}));
+        assert_eq!(decode(parts[1]), claims);
     }
 
     #[test]
@@ -5696,16 +6064,82 @@ mod tests {
     async fn runtime_with_blocking_auth_policy_order(
         order: &[(&str, bool, bool)],
     ) -> Arc<fireemu_adapter_functions::runtime::FunctionsRuntime> {
-        runtime_with_blocking_auth_policy_order_and_env(order, Vec::new()).await
+        let targets = order
+            .iter()
+            .map(|(name, access_token, refresh_token)| {
+                (
+                    *name,
+                    fireemu_core_functions::manifest::BlockingAuthEvent::BeforeCreate,
+                    *access_token,
+                    *refresh_token,
+                )
+            })
+            .collect::<Vec<_>>();
+        runtime_with_blocking_auth_targets(&targets).await
     }
 
     async fn runtime_with_blocking_auth_policy_order_and_env(
         order: &[(&str, bool, bool)],
         env: Vec<(String, String)>,
     ) -> Arc<fireemu_adapter_functions::runtime::FunctionsRuntime> {
+        let targets = order
+            .iter()
+            .map(|(name, access_token, refresh_token)| {
+                (
+                    *name,
+                    fireemu_core_functions::manifest::BlockingAuthEvent::BeforeCreate,
+                    *access_token,
+                    *refresh_token,
+                )
+            })
+            .collect::<Vec<_>>();
+        runtime_and_clock_with_blocking_auth_targets_env(&targets, env)
+            .await
+            .0
+    }
+
+    async fn runtime_with_blocking_auth_targets(
+        targets: &[(
+            &str,
+            fireemu_core_functions::manifest::BlockingAuthEvent,
+            bool,
+            bool,
+        )],
+    ) -> Arc<fireemu_adapter_functions::runtime::FunctionsRuntime> {
+        runtime_and_clock_with_blocking_auth_targets(targets)
+            .await
+            .0
+    }
+
+    async fn runtime_and_clock_with_blocking_auth_targets(
+        targets: &[(
+            &str,
+            fireemu_core_functions::manifest::BlockingAuthEvent,
+            bool,
+            bool,
+        )],
+    ) -> (
+        Arc<fireemu_adapter_functions::runtime::FunctionsRuntime>,
+        Arc<Mutex<VirtualClock>>,
+    ) {
+        runtime_and_clock_with_blocking_auth_targets_env(targets, Vec::new()).await
+    }
+
+    async fn runtime_and_clock_with_blocking_auth_targets_env(
+        targets: &[(
+            &str,
+            fireemu_core_functions::manifest::BlockingAuthEvent,
+            bool,
+            bool,
+        )],
+        env: Vec<(String, String)>,
+    ) -> (
+        Arc<fireemu_adapter_functions::runtime::FunctionsRuntime>,
+        Arc<Mutex<VirtualClock>>,
+    ) {
         use fireemu_adapter_functions::runner::{Runner, SpawnSpec};
         use fireemu_adapter_functions::runtime::{FunctionsConfig, FunctionsRuntime};
-        use fireemu_core_functions::manifest::{BlockingAuthEvent, Trigger};
+        use fireemu_core_functions::manifest::Trigger;
         use fireemu_core_types::ids::SessionId;
         use fireemu_core_types::time::LogicalInstant;
 
@@ -5720,12 +6154,12 @@ mod tests {
         let runner = Runner::spawn_spec(&spec).await.unwrap();
         let mut manifest = parse_manifest(runner.hello().manifest.as_ref().unwrap()).unwrap();
         let template = manifest.get("echo").unwrap().clone();
-        for (name, access_token, refresh_token) in order {
+        for (name, event, access_token, refresh_token) in targets {
             let mut function = template.clone();
             function.name = (*name).to_owned();
             function.entry_point = (*name).to_owned();
             function.trigger = Trigger::BlockingAuth {
-                event: BlockingAuthEvent::BeforeCreate,
+                event: *event,
                 token_policy: fireemu_core_functions::manifest::BlockingAuthTokenPolicy {
                     access_token: *access_token,
                     refresh_token: *refresh_token,
@@ -5734,7 +6168,10 @@ mod tests {
             };
             manifest.functions.push(function);
         }
-        FunctionsRuntime::new(
+        let clock = Arc::new(Mutex::new(VirtualClock::new(
+            LogicalInstant::from_unix_seconds(1_788_004_860),
+        )));
+        let runtime = FunctionsRuntime::new(
             manifest,
             FunctionsConfig {
                 project: "demo-app".to_owned(),
@@ -5750,12 +6187,521 @@ mod tests {
                 catch_up: fireemu_adapter_functions::runtime::CatchUpPolicy::All,
                 functions_host: None,
             },
-            Arc::new(Mutex::new(VirtualClock::new(
-                LogicalInstant::from_unix_seconds(1_788_004_860),
-            ))),
+            clock.clone(),
             Arc::new(runner),
             Some(spec),
+        );
+        (runtime, clock)
+    }
+
+    /// Identity Platform's email and SMS events are served by the strict profile's bridge only
+    /// (the official Auth emulator registers `beforeCreate` and `beforeSignIn` only), and
+    /// `beforeSendSms` is listed but never run (AUTH-TENANT-BLOCKING recording 2026-09-28).
+    #[tokio::test(flavor = "current_thread")]
+    async fn send_events_are_served_by_the_strict_bridge_only() {
+        use fireemu_adapter_http::identity_toolkit::AuthBlockingHook;
+        use fireemu_core_functions::manifest::BlockingAuthEvent;
+
+        let runtime = runtime_with_blocking_auth_targets(&[
+            (
+                "mailGuard",
+                BlockingAuthEvent::BeforeSendEmail,
+                false,
+                false,
+            ),
+            ("smsGuard", BlockingAuthEvent::BeforeSendSms, false, false),
+        ])
+        .await;
+        let bridge = |send_events: bool| {
+            BlockingAuthBridge::new_with_selections(
+                runtime.clone(),
+                fireemu_core_functions::manifest::BlockingAuthSelections::default(),
+                false,
+            )
+            .with_send_events(send_events)
+        };
+        let (emulator, strict) = (bridge(false), bridge(true));
+        for event in [
+            BlockingAuthEvent::BeforeSendEmail,
+            BlockingAuthEvent::BeforeSendSms,
+        ] {
+            assert!(!emulator.handles(event), "{event:?}");
+        }
+        assert!(strict.handles(BlockingAuthEvent::BeforeSendEmail));
+        assert!(!strict.handles(BlockingAuthEvent::BeforeSendSms));
+
+        let explicit = json!({"triggers": {
+            "beforeSendEmail": {"functionUri": "fireemu://functions/demo-app/us-central1/mailGuard"},
+            "beforeSendSms": {"functionUri": "fireemu://functions/demo-app/us-central1/smsGuard"},
+        }});
+        let error = emulator
+            .replace_blocking_auth_settings(&explicit)
+            .expect_err("the emulator profile names no email event");
+        assert!(error.contains("unsupported event"), "{error}");
+        strict
+            .replace_blocking_auth_settings(&explicit)
+            .expect("the strict profile serves the email event");
+        let projected = strict.blocking_auth_settings_value().unwrap();
+        assert_eq!(
+            projected["triggers"]["beforeSendEmail"]["functionUri"],
+            "fireemu://functions/demo-app/us-central1/mailGuard"
+        );
+        assert_eq!(
+            projected["triggers"]["beforeSendSms"]["functionUri"],
+            "fireemu://functions/demo-app/us-central1/smsGuard"
+        );
+        assert!(projected["triggers"]["beforeCreate"].is_null());
+        assert!(!strict.handles(BlockingAuthEvent::BeforeSendSms));
+
+        strict
+            .replace_blocking_auth_settings_masked(
+                &json!({"triggers": {"beforeSendEmail": null}}),
+                &["blockingFunctions.triggers.beforeSendEmail".to_owned()],
+            )
+            .expect("one email trigger is disabled by its mask");
+        assert!(!strict.handles(BlockingAuthEvent::BeforeSendEmail));
+        assert_eq!(
+            strict.blocking_auth_settings_value().unwrap()["triggers"]["beforeSendSms"]
+                ["functionUri"],
+            "fireemu://functions/demo-app/us-central1/smsGuard"
+        );
+        // A whole trigger map replaces every served event's selection.
+        strict
+            .replace_blocking_auth_settings_masked(
+                &json!({"triggers": {
+                    "beforeSendEmail": {"functionUri": "fireemu://functions/demo-app/us-central1/mailGuard"}
+                }}),
+                &["blockingFunctions.triggers".to_owned()],
+            )
+            .expect("a whole trigger map");
+        assert!(strict.handles(BlockingAuthEvent::BeforeSendEmail));
+        assert!(
+            strict.blocking_auth_settings_value().unwrap()["triggers"]["beforeSendSms"].is_null()
+        );
+        // The same mask names nothing the emulator profile serves.
+        emulator
+            .replace_blocking_auth_settings_masked(
+                &json!({"triggers": {"beforeSendEmail": null}}),
+                &["blockingFunctions.triggers.beforeSendEmail".to_owned()],
+            )
+            .unwrap();
+        assert_eq!(emulator.settings_revision(), 0);
+
+        // Discovery markers round-trip the email events through an export.
+        let fresh = bridge(true);
+        let exported = fresh
+            .blocking_auth_settings_value_with_discovery_markers(true)
+            .unwrap()
+            .unwrap();
+        assert_eq!(exported, json!({}));
+        fresh
+            .replace_blocking_auth_settings(&json!({"triggers": {"beforeCreate": null}}))
+            .unwrap();
+        let exported = fresh
+            .blocking_auth_settings_value_with_discovery_markers(true)
+            .unwrap()
+            .unwrap();
+        assert_eq!(exported["triggers"]["beforeSendEmail"], json!(null));
+        runtime.shutdown().await;
+    }
+
+    /// The strict configuration's triggers are the served events' effective functions, and a
+    /// trigger's time moves only when its own selection changes (AUTH-TENANT-BLOCKING recording
+    /// 2026-09-28, config#config-blocking lists `beforeSendSms` too).
+    #[tokio::test(flavor = "current_thread")]
+    async fn the_trigger_list_names_effective_functions_and_their_change_times() {
+        use fireemu_adapter_http::identity_toolkit::AuthBlockingHook;
+        use fireemu_core_functions::manifest::BlockingAuthEvent;
+        use fireemu_core_types::time::{LogicalDuration, LogicalInstant};
+
+        let (runtime, clock) = runtime_and_clock_with_blocking_auth_targets(&[
+            ("createGuard", BlockingAuthEvent::BeforeCreate, false, false),
+            (
+                "mailGuard",
+                BlockingAuthEvent::BeforeSendEmail,
+                false,
+                false,
+            ),
+            ("smsGuard", BlockingAuthEvent::BeforeSendSms, false, false),
+        ])
+        .await;
+        let built = LogicalInstant::from_unix_seconds(1_788_004_860);
+        let list = |bridge: &BlockingAuthBridge| {
+            bridge
+                .blocking_auth_triggers()
+                .into_iter()
+                .map(|trigger| (trigger.event, trigger.function, trigger.update_time))
+                .collect::<Vec<_>>()
+        };
+        let emulator = BlockingAuthBridge::new_with_selections(
+            runtime.clone(),
+            fireemu_core_functions::manifest::BlockingAuthSelections::default(),
+            false,
+        );
+        assert_eq!(
+            list(&emulator),
+            [(
+                BlockingAuthEvent::BeforeCreate,
+                "createGuard".to_owned(),
+                built
+            )]
+        );
+        let strict = BlockingAuthBridge::new_with_selections(
+            runtime.clone(),
+            fireemu_core_functions::manifest::BlockingAuthSelections::default(),
+            false,
         )
+        .with_send_events(true);
+        assert_eq!(
+            list(&strict),
+            [
+                (
+                    BlockingAuthEvent::BeforeCreate,
+                    "createGuard".to_owned(),
+                    built
+                ),
+                (
+                    BlockingAuthEvent::BeforeSendEmail,
+                    "mailGuard".to_owned(),
+                    built
+                ),
+                (
+                    BlockingAuthEvent::BeforeSendSms,
+                    "smsGuard".to_owned(),
+                    built
+                ),
+            ]
+        );
+        let later = clock
+            .lock()
+            .unwrap()
+            .advance(LogicalDuration::from_seconds(60))
+            .unwrap();
+        strict
+            .replace_blocking_auth_settings_masked(
+                &json!({"triggers": {"beforeSendEmail": null}}),
+                &["blockingFunctions.triggers.beforeSendEmail".to_owned()],
+            )
+            .unwrap();
+        strict
+            .replace_blocking_auth_settings_masked(
+                &json!({"triggers": {"beforeCreate": {
+                    "functionUri": "fireemu://functions/demo-app/us-central1/createGuard"
+                }}}),
+                &["blockingFunctions.triggers.beforeCreate".to_owned()],
+            )
+            .unwrap();
+        assert_eq!(
+            list(&strict),
+            [
+                (
+                    BlockingAuthEvent::BeforeCreate,
+                    "createGuard".to_owned(),
+                    later
+                ),
+                (
+                    BlockingAuthEvent::BeforeSendSms,
+                    "smsGuard".to_owned(),
+                    built
+                ),
+            ]
+        );
+        runtime.shutdown().await;
+    }
+
+    /// Each invocation path delivers its event to the selected function and answers what the
+    /// function answered (the fake runner echoes the request): the user events carry the
+    /// user, the mail event the address, and a bridge without the email event runs nothing.
+    #[tokio::test(flavor = "current_thread")]
+    #[allow(clippy::too_many_lines)] // One scenario per invocation path, checked together.
+    async fn every_invocation_path_delivers_its_token_and_answers_the_function() {
+        use fireemu_adapter_http::identity_toolkit::{AuthBlockingContext, AuthBlockingHook};
+        use fireemu_core_auth::mfa::TotpPolicy;
+        use fireemu_core_auth::store::{AuthStore, NewUser};
+        use fireemu_core_functions::manifest::BlockingAuthEvent;
+        use fireemu_core_types::determinism::SplitMix64;
+        use fireemu_core_types::time::LogicalInstant;
+
+        let runtime = runtime_with_blocking_auth_targets(&[
+            ("createGuard", BlockingAuthEvent::BeforeCreate, false, false),
+            ("signInGuard", BlockingAuthEvent::BeforeSignIn, false, false),
+            (
+                "mailGuard",
+                BlockingAuthEvent::BeforeSendEmail,
+                false,
+                false,
+            ),
+        ])
+        .await;
+        let mut store = AuthStore::new("demo-app", SplitMix64::new(7), TotpPolicy::default());
+        let uid = store
+            .create_user(
+                NewUser::email("person@example.test"),
+                LogicalInstant::from_unix_seconds(1_788_004_860),
+            )
+            .unwrap();
+        let user = store.user_by_id(uid.as_str()).unwrap().clone();
+        let strict = Arc::new(
+            BlockingAuthBridge::new_with_selections(
+                runtime.clone(),
+                fireemu_core_functions::manifest::BlockingAuthSelections::default(),
+                false,
+            )
+            .with_send_events(true),
+        );
+        let emulator = Arc::new(BlockingAuthBridge::new_with_selections(
+            runtime.clone(),
+            fireemu_core_functions::manifest::BlockingAuthSelections::default(),
+            false,
+        ));
+        let token = |answer: &serde_json::Value| -> serde_json::Value {
+            let body: serde_json::Value =
+                serde_json::from_str(answer["body"].as_str().unwrap()).unwrap();
+            let jwt = body["data"]["jwt"].as_str().unwrap();
+            let payload = jwt.split('.').nth(1).unwrap();
+            serde_json::from_slice(&fireemu_core_auth::jwt::base64url_decode(payload).unwrap())
+                .unwrap()
+        };
+        let (answers, none) = tokio::task::spawn_blocking(move || {
+            let mail = AuthBlockingContext {
+                email: Some("person@example.test".to_owned()),
+                email_type: Some("PASSWORD_RESET".to_owned()),
+                ..AuthBlockingContext::default()
+            };
+            let answers = [
+                strict
+                    .invoke_for("demo-app", None, BlockingAuthEvent::BeforeCreate, &user)
+                    .unwrap(),
+                strict
+                    .invoke_for_with_context(
+                        "demo-app",
+                        Some("tenant-a"),
+                        BlockingAuthEvent::BeforeSignIn,
+                        &user,
+                        &AuthBlockingContext::default(),
+                    )
+                    .unwrap(),
+                strict.invoke_before_send_email("demo-app", &mail).unwrap(),
+            ];
+            let none = emulator
+                .invoke_before_send_email("demo-app", &mail)
+                .unwrap();
+            (answers, none)
+        })
+        .await
+        .unwrap();
+        assert_eq!(none, None);
+        let [create, sign_in, mail] = answers.map(Option::unwrap);
+        for (answer, function) in [
+            (&create, "createGuard"),
+            (&sign_in, "signInGuard"),
+            (&mail, "mailGuard"),
+        ] {
+            assert!(
+                answer["path"]
+                    .as_str()
+                    .unwrap()
+                    .ends_with(&format!("/{function}")),
+                "{answer}"
+            );
+        }
+        let create = token(&create);
+        assert_eq!(create["event_type"], "beforeCreate");
+        // Issued at the runtime clock's second (the clock stands at 1_788_004_860).
+        assert_eq!(create["iat"], 1_788_004_860);
+        assert_eq!(create["sub"], uid.as_str());
+        let sign_in = token(&sign_in);
+        assert_eq!(sign_in["event_type"], "beforeSignIn");
+        assert_eq!(sign_in["tenant_id"], "tenant-a");
+        let mail = token(&mail);
+        assert_eq!(mail["event_type"], "beforeSendEmail");
+        assert_eq!(mail["email"], "person@example.test");
+        assert!(mail.get("sub").is_none() && mail.get("tenant_id").is_none());
+        runtime.shutdown().await;
+    }
+
+    /// The emulator profile waits for a function as long as the official Auth emulator does:
+    /// one that answers after eight seconds, past Identity Platform's seven, is served
+    /// (closure review M1, 2026-09-28).
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn the_emulator_profile_serves_a_function_slower_than_seven_seconds() {
+        use fireemu_adapter_http::identity_toolkit::AuthBlockingHook;
+        use fireemu_core_auth::mfa::TotpPolicy;
+        use fireemu_core_auth::store::{AuthStore, NewUser};
+        use fireemu_core_functions::manifest::BlockingAuthEvent;
+        use fireemu_core_types::determinism::SplitMix64;
+        use fireemu_core_types::time::LogicalInstant;
+
+        let (runtime, _) = runtime_and_clock_with_blocking_auth_targets_env(
+            &[(
+                "beforeCreate",
+                BlockingAuthEvent::BeforeCreate,
+                false,
+                false,
+            )],
+            vec![(
+                "FIREEMU_FAKE_BLOCKING_HANG_MS".to_owned(),
+                "8000".to_owned(),
+            )],
+        )
+        .await;
+        let bridge = BlockingAuthBridge::new_with_selections(
+            runtime.clone(),
+            fireemu_core_functions::manifest::BlockingAuthSelections::default(),
+            false,
+        )
+        .with_deadline_for(super::CompatibilityProfile::Emulator);
+        let mut store = AuthStore::new("demo-app", SplitMix64::new(7), TotpPolicy::default());
+        let uid = store
+            .create_user(
+                NewUser::email("slow@example.test"),
+                LogicalInstant::from_unix_seconds(1_788_004_860),
+            )
+            .unwrap();
+        let user = store.user_by_id(uid.as_str()).unwrap().clone();
+        let started = std::time::Instant::now();
+        let answer = tokio::task::spawn_blocking(move || {
+            bridge.invoke_for("demo-app", None, BlockingAuthEvent::BeforeCreate, &user)
+        })
+        .await
+        .unwrap();
+        assert!(started.elapsed() >= Duration::from_secs(8));
+        assert!(answer.is_ok_and(|answer| answer.is_some()));
+        runtime.shutdown().await;
+    }
+
+    /// A mail event's token names the address and the kind of mail and no user
+    /// (AUTH-TENANT-BLOCKING recording 2026-09-28, send#reset-mail-echo: `u` null, `au` email
+    /// and isNewUser).
+    #[test]
+    fn a_mail_event_token_names_the_address_and_no_user() {
+        let context = fireemu_adapter_http::identity_toolkit::AuthBlockingContext {
+            email: Some("a@example.com".to_owned()),
+            email_type: Some("PASSWORD_RESET".to_owned()),
+            ..Default::default()
+        };
+        let claims = super::blocking_auth_claims(
+            "demo-app",
+            None,
+            fireemu_core_functions::manifest::BlockingAuthEvent::BeforeSendEmail,
+            &context,
+            None,
+            "event-1",
+            1_788_004_860,
+            "http://127.0.0.1:1/demo-app/us-central1/fn",
+        );
+        assert_eq!(claims["event_type"], "beforeSendEmail");
+        assert_eq!(claims["email"], "a@example.com");
+        assert_eq!(claims["email_type"], "PASSWORD_RESET");
+        for absent in ["sub", "user_record", "tenant_id", "sign_in_method"] {
+            assert!(!claims.contains_key(absent), "{absent}");
+        }
+    }
+
+    /// The daemon's bridge takes its served events and its deadline from the profile
+    /// (closure re-review, 2026-09-28).
+    #[tokio::test(flavor = "current_thread")]
+    async fn the_daemon_bridge_follows_the_profile() {
+        let runtime = runtime_with_blocking_auth_targets(&[]).await;
+        let bridge = |profile| {
+            BlockingAuthBridge::new_with_selections(
+                runtime.clone(),
+                fireemu_core_functions::manifest::BlockingAuthSelections::default(),
+                false,
+            )
+            .for_profile(profile)
+        };
+        let strict = bridge(super::CompatibilityProfile::Strict);
+        assert!(strict.send_events);
+        assert_eq!(strict.deadline, Duration::from_secs(7));
+        let emulator = bridge(super::CompatibilityProfile::Emulator);
+        assert!(!emulator.send_events);
+        assert_eq!(emulator.deadline, Duration::from_secs(60));
+        runtime.shutdown().await;
+    }
+
+    /// Only the strict profile serves the email and SMS events, and a local selection is
+    /// checked against the manifest before the bridge is built.
+    #[test]
+    fn the_strict_profile_serves_send_events_and_selections_are_checked() {
+        use fireemu_core_functions::manifest::{BlockingAuthSelection, BlockingAuthSelections};
+
+        assert!(super::serves_send_blocking_events(
+            super::CompatibilityProfile::Strict
+        ));
+        assert!(!super::serves_send_blocking_events(
+            super::CompatibilityProfile::Emulator
+        ));
+        let manifest = parse_manifest(&json!({"functions": [
+            {"name": "create", "trigger": {"type": "blockingAuth", "eventType": "providers/cloud.auth/eventTypes/user.beforeCreate"}},
+        ]}))
+        .unwrap();
+        let explicit = |function: &str| BlockingAuthSelections {
+            before_create: BlockingAuthSelection::Explicit {
+                function: function.to_owned(),
+                region: None,
+            },
+            ..BlockingAuthSelections::default()
+        };
+        super::check_blocking_auth_selections(&manifest, &BlockingAuthSelections::default())
+            .unwrap();
+        super::check_blocking_auth_selections(&manifest, &explicit("create")).unwrap();
+        let error =
+            super::check_blocking_auth_selections(&manifest, &explicit("missing")).unwrap_err();
+        assert!(error.contains("missing"), "{error}");
+    }
+
+    /// The emulator profile keeps the email and SMS functions in the ignored inventory, with
+    /// the reason the runner gave before the strict profile served them.
+    #[test]
+    fn the_emulator_profile_ignores_send_blocking_functions() {
+        let mut manifest = parse_manifest(&json!({"functions": [
+            {"name": "create", "trigger": {"type": "blockingAuth", "eventType": "providers/cloud.auth/eventTypes/user.beforeCreate"}},
+            {"name": "mail", "trigger": {"type": "blockingAuth", "eventType": "providers/cloud.auth/eventTypes/user.beforeSendEmail"}},
+            {"name": "sms", "trigger": {"type": "blockingAuth", "eventType": "providers/cloud.auth/eventTypes/user.beforeSendSms"}},
+        ]}))
+        .unwrap();
+        let mut strict = manifest.clone();
+        super::serve_blocking_events_for(super::CompatibilityProfile::Strict, &mut strict);
+        assert_eq!(strict, manifest);
+        super::serve_blocking_events_for(super::CompatibilityProfile::Emulator, &mut manifest);
+        assert_eq!(
+            manifest
+                .functions
+                .iter()
+                .map(|f| f.name.as_str())
+                .collect::<Vec<_>>(),
+            ["create"]
+        );
+        let ignored = manifest
+            .ignored
+            .iter()
+            .map(|f| {
+                (
+                    f.name.as_str(),
+                    f.trigger_type.as_str(),
+                    f.scope,
+                    f.reason.as_str(),
+                )
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            ignored,
+            [
+                (
+                    "mail",
+                    "blocking",
+                    fireemu_core_functions::manifest::IgnoredScope::Unsupported,
+                    "blocking identity event providers/cloud.auth/eventTypes/user.beforeSendEmail is not served",
+                ),
+                (
+                    "sms",
+                    "blocking",
+                    fireemu_core_functions::manifest::IgnoredScope::Unsupported,
+                    "blocking identity event providers/cloud.auth/eventTypes/user.beforeSendSms is not served",
+                ),
+            ]
+        );
     }
 
     #[tokio::test(flavor = "current_thread")]
@@ -5778,6 +6724,7 @@ mod tests {
                     region: Some("us-central1".to_owned()),
                 },
                 before_sign_in: BlockingAuthSelection::Disabled,
+                ..Default::default()
             },
             true,
         );
@@ -5841,6 +6788,7 @@ mod tests {
                     region: Some("us-central1".to_owned()),
                 },
                 before_sign_in: BlockingAuthSelection::Disabled,
+                ..Default::default()
             },
             true,
         );
@@ -5877,6 +6825,7 @@ mod tests {
                     region: Some("us-central1".to_owned()),
                 },
                 before_sign_in: BlockingAuthSelection::Disabled,
+                ..Default::default()
             },
             true,
         );
@@ -5902,6 +6851,7 @@ mod tests {
             BlockingAuthSelections {
                 before_create: BlockingAuthSelection::Discovery,
                 before_sign_in: BlockingAuthSelection::Disabled,
+                ..Default::default()
             },
             true,
         );
@@ -5927,6 +6877,7 @@ mod tests {
             BlockingAuthSelections {
                 before_create: BlockingAuthSelection::Disabled,
                 before_sign_in: BlockingAuthSelection::Disabled,
+                ..Default::default()
             },
             true,
         );
@@ -6061,6 +7012,7 @@ mod tests {
                     region: Some("us-central1".to_owned()),
                 },
                 before_sign_in: BlockingAuthSelection::Disabled,
+                ..Default::default()
             },
             false,
         );
@@ -6117,6 +7069,7 @@ mod tests {
             BlockingAuthSelections {
                 before_create: BlockingAuthSelection::Discovery,
                 before_sign_in: BlockingAuthSelection::Disabled,
+                ..Default::default()
             },
             false,
         );
@@ -6159,13 +7112,49 @@ mod tests {
     }
 
     #[test]
+    fn a_blocking_call_waits_for_the_timeout_that_elapses_first() {
+        use fireemu_adapter_http::identity_toolkit::BlockingFunctionFailure;
+
+        let deadline = Duration::from_secs(7);
+        assert_eq!(super::blocking_auth_wait(60, deadline), (deadline, false));
+        assert_eq!(super::blocking_auth_wait(8, deadline), (deadline, false));
+        assert_eq!(
+            super::blocking_auth_wait(7, deadline),
+            (Duration::from_secs(7), true)
+        );
+        assert_eq!(
+            super::blocking_auth_wait(3, deadline),
+            (Duration::from_secs(3), true)
+        );
+        // An unset timeout is not a zero wait.
+        assert_eq!(super::blocking_auth_wait(0, deadline), (deadline, false));
+
+        // Identity Platform's deadline answers its 400; the function's own timeout the masked
+        // 503; any other failure is unchanged.
+        let elapsed = |own| super::blocking_auth_elapsed(BlockingFunctionFailure::timeout(), own);
+        assert_eq!(elapsed(false).identity_status(), 400);
+        assert_eq!(elapsed(true).identity_status(), 503);
+        let unhandled = super::blocking_auth_elapsed(BlockingFunctionFailure::unhandled(), true);
+        assert_eq!(unhandled, BlockingFunctionFailure::unhandled());
+    }
+
+    #[test]
     fn blocking_auth_transport_bounds_and_failure_pairs_are_production_bounded() {
         assert_eq!(BLOCKING_AUTH_DEADLINE, Duration::from_secs(7));
+        assert_eq!(
+            super::blocking_auth_deadline(super::CompatibilityProfile::Strict),
+            Duration::from_secs(7)
+        );
+        assert_eq!(
+            super::blocking_auth_deadline(super::CompatibilityProfile::Emulator),
+            Duration::from_secs(60)
+        );
         assert_eq!(MAX_BLOCKING_AUTH_RESPONSE_BYTES, 64 * 1024);
+        // An elapsed deadline answers production's 400 (recording 2026-09-28, timeout#*).
         assert_eq!(
             blocking_auth_io_failure(&std::io::Error::from(std::io::ErrorKind::TimedOut))
                 .identity_status(),
-            503
+            400
         );
         assert_eq!(
             blocking_auth_io_failure(&std::io::Error::from(std::io::ErrorKind::ConnectionReset))
@@ -6183,9 +7172,10 @@ mod tests {
         let explicit_deadline = json!({
             "error": {"status": "DEADLINE_EXCEEDED", "message": "explicit deadline"}
         });
+        // A function's own 5xx is masked as production's opaque 503.
         assert_eq!(
             blocking_auth_response_failure(504, &explicit_deadline).identity_status(),
-            504
+            503
         );
 
         for (status, value) in [
@@ -6300,7 +7290,7 @@ mod tests {
         .await
         .unwrap()
         .unwrap_err();
-        assert_eq!(failure.identity_status(), 503);
+        assert_eq!(failure.identity_status(), 400);
         assert!(runtime
             .try_admit_blocking_auth(BlockingAuthEvent::BeforeCreate)
             .is_err());
@@ -6390,11 +7380,71 @@ mod tests {
         runtime.shutdown().await;
 
         let failure = result.expect_err("the slow runner cannot meet the request deadline");
-        assert_eq!(failure.identity_status(), 503);
+        // Identity Platform's own deadline answers 400 (AUTH-TENANT-BLOCKING recording
+        // 2026-09-28, timeout#*).
+        assert_eq!(failure.identity_status(), 400);
         assert_eq!(
             failure,
             fireemu_adapter_http::identity_toolkit::BlockingFunctionFailure::timeout()
         );
+    }
+
+    /// A runner recovery is fireemu's cold start, which Identity Platform's deadline covers: the
+    /// call after it waits only for what is left of the deadline, and running out of it is the
+    /// platform's deadline (400), not the function's own timeout.
+    #[tokio::test(flavor = "current_thread")]
+    async fn a_call_after_a_runner_recovery_waits_only_for_the_rest_of_the_deadline() {
+        use fireemu_adapter_http::identity_toolkit::AuthBlockingHook;
+        use fireemu_core_auth::mfa::TotpPolicy;
+        use fireemu_core_auth::store::{AuthStore, NewUser};
+        use fireemu_core_functions::manifest::BlockingAuthEvent;
+        use fireemu_core_types::determinism::SplitMix64;
+        use fireemu_core_types::time::LogicalInstant;
+
+        let (runtime, _) = runtime_and_clock_with_blocking_auth_targets_env(
+            &[(
+                "beforeCreate",
+                BlockingAuthEvent::BeforeCreate,
+                false,
+                false,
+            )],
+            vec![
+                ("FIREEMU_FAKE_HELLO_DELAY_MS".to_owned(), "600".to_owned()),
+                (
+                    "FIREEMU_FAKE_BLOCKING_HANG_MS".to_owned(),
+                    "5000".to_owned(),
+                ),
+            ],
+        )
+        .await;
+        let bridge =
+            BlockingAuthBridge::with_deadline(runtime.clone(), Duration::from_millis(1_000));
+        let now = LogicalInstant::from_unix_seconds(1_788_004_860);
+        let mut store = AuthStore::new("demo-app", SplitMix64::new(7), TotpPolicy::default());
+        let uid = store
+            .create_user(NewUser::email("person@example.test"), now)
+            .unwrap();
+        let user = store.user_by_id(uid.as_str()).unwrap().clone();
+        runtime.runner().kill_now();
+
+        let started = Instant::now();
+        let result = tokio::task::spawn_blocking(move || {
+            bridge.invoke(BlockingAuthEvent::BeforeCreate, &user)
+        })
+        .await
+        .unwrap();
+        let elapsed = started.elapsed();
+        runtime.shutdown().await;
+
+        let failure = result.expect_err("the hanging function cannot meet the deadline");
+        assert_eq!(
+            failure,
+            fireemu_adapter_http::identity_toolkit::BlockingFunctionFailure::timeout()
+        );
+        assert_eq!(failure.identity_status(), 400);
+        // The recovery took about 600 ms of the one-second deadline; a fresh deadline after it
+        // would answer after about 1.6 s.
+        assert!(elapsed < Duration::from_millis(1_450), "{elapsed:?}");
     }
 
     #[test]

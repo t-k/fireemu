@@ -26,9 +26,10 @@
     {
       "id": "unhandled-function-error",
       "status": "parity",
+      "production": "Observed 2026-09-02 as an opaque 503 whose message did not name the injected failure. The exact message Error code: 47 (reason backendError) is taken from the AUTH-TENANT-BLOCKING sandbox recording of 2026-09-28, rows atb/blocking/refusal#create-unhandled and #sign-in-unhandled, and was set here in 86bc3ecbd.",
       "value": {
         "status": 503,
-        "messageContains": ["BLOCKING_FUNCTION_ERROR_RESPONSE"],
+        "message": "Error code: 47",
         "messageExcludes": ["Injected production oracle failure"],
         "committed": false
       }

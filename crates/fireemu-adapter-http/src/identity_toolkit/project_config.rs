@@ -5,9 +5,11 @@
 //!   (sandbox reads 2026-09-23 and 2026-09-25): every member production reports, read-only ones
 //!   included, and no member whose value is unset; a `false` switch is left out, as production
 //!   leaves it out;
-//! - the emulator profile answers the official Auth emulator's document
-//!   (`signIn.allowDuplicateEmails`, `blockingFunctions`, `emailPrivacyConfig`) and adds only the
-//!   members that were written.
+//! - the emulator profile starts with the official Auth emulator's three members
+//!   (`signIn.allowDuplicateEmails`, `blockingFunctions`, `emailPrivacyConfig`), adds the
+//!   project's MFA state exposed by AUTH-MFA, and adds the other members that were written.
+//!   The MFA addition is a fireemu extension after the AUTH-CONFIG-SDK K3 baseline; the strict
+//!   profile keeps production's config shape.
 //!
 //! The written members fireemu keeps without interpreting them all live in
 //! [`fireemu_core_auth::config_members`]; this module supplies their initial values.
@@ -19,6 +21,7 @@ use super::JsonResponse;
 
 /// Config members stored as written ([`fireemu_core_auth::config_members`]).
 pub(super) const STORED_MEMBERS: &[&str] = &[
+    "multiTenant",
     "notification",
     "mobileLinksConfig",
     "smsRegionConfig",
@@ -117,6 +120,7 @@ fn initial_notification(project: &str) -> Value {
 /// members a new project does not report (`recaptchaConfig`, `autodeleteAnonymousUsers`).
 pub(super) fn initial_member(member: &str, project: &str) -> Option<Value> {
     match member {
+        "multiTenant" => Some(json!({})),
         "notification" => Some(initial_notification(project)),
         "mobileLinksConfig" => Some(json!({"domain": "HOSTING_DOMAIN"})),
         "smsRegionConfig" => Some(json!({"allowlistOnly": {}})),
@@ -185,7 +189,7 @@ fn localized_notification(mut notification: Value) -> Value {
 /// The project's Firebase scrypt parameters as production reports them. fireemu hashes
 /// passwords its own way; the key is derived from the project id so that it is stable, and
 /// comparisons treat it as key material (K12).
-fn hash_config(project: &str) -> Value {
+pub(super) fn hash_config(project: &str) -> Value {
     let b64 = fireemu_core_types::hash::base64_standard;
     let key = Sha512::digest(format!("fireemu scrypt signer key {project}").as_bytes());
     json!({
@@ -399,7 +403,11 @@ pub(super) fn strict_document(sources: &ConfigSources<'_>) -> Value {
     }
     for member in STORED_MEMBERS {
         if let Some(value) = member_value(sources.members, member, project) {
-            document[*member] = value;
+            document[*member] = if *member == "multiTenant" {
+                without_false(value)
+            } else {
+                value
+            };
         }
     }
     document
@@ -454,6 +462,163 @@ pub(super) fn emulator_document(sources: &ConfigSources<'_>) -> Value {
         }
     }
     document
+}
+
+/// The private members an export carries: what the Admin config reports for a written password
+/// policy (its `lastUpdateTime`, its false strength options) and a written sign-up quota. The
+/// multi-tenancy switch is not among them: an import derives it again from `multiTenant`.
+pub(super) const EXPORTED_PRIVATE_MEMBERS: &[&str] =
+    &[POLICY_UPDATE_TIME, POLICY_WRITTEN_OPTIONS, SIGN_UP_QUOTA];
+
+/// The name an export gives a stored member: a private one without its leading underscore (the
+/// settings sidecar names members by letters only).
+pub(super) fn exported_name(member: &str) -> &str {
+    member.strip_prefix('_').unwrap_or(member)
+}
+
+/// The stored member an exported `name` stands for: one of `private` when it names one without
+/// its underscore, else `name` itself.
+pub(super) fn stored_name<'a>(name: &'a str, private: &[&'a str]) -> &'a str {
+    private
+        .iter()
+        .copied()
+        .find(|member| member.strip_prefix('_') == Some(name))
+        .unwrap_or(name)
+}
+
+/// The password strength options a policy may name.
+const STRENGTH_OPTIONS: &[&str] = &[
+    "minPasswordLength",
+    "maxPasswordLength",
+    "containsLowercaseCharacter",
+    "containsUppercaseCharacter",
+    "containsNumericCharacter",
+    "containsNonAlphanumericCharacter",
+];
+
+/// Whether `value` is one a write could have stored as the private member `member` (an import
+/// installs nothing else).
+pub(super) fn valid_private_member(member: &str, value: &Value) -> bool {
+    match member {
+        POLICY_UPDATE_TIME => value.as_str().is_some_and(valid_update_time),
+        POLICY_WRITTEN_OPTIONS => value.as_array().is_some_and(|names| {
+            names.len() <= STRENGTH_OPTIONS.len()
+                && names.iter().all(|name| {
+                    name.as_str()
+                        .is_some_and(|name| STRENGTH_OPTIONS.contains(&name))
+                })
+        }),
+        SIGN_UP_QUOTA => {
+            value.is_object()
+                && normalized_sign_up_quota(&json!({"quota": {"signUpQuotaConfig": value}}))
+                    .as_ref()
+                    == Some(value)
+        }
+        _ => false,
+    }
+}
+
+/// A UTC timestamp as a write stores it: `YYYY-MM-DDTHH:MM:SS`, up to nine fraction digits, `Z`.
+fn valid_update_time(text: &str) -> bool {
+    let bytes = text.as_bytes();
+    let digits = |range: std::ops::Range<usize>| bytes[range].iter().all(u8::is_ascii_digit);
+    if bytes.len() < 20 || bytes.len() > 30 || bytes[bytes.len() - 1] != b'Z' {
+        return false;
+    }
+    let fraction = &bytes[19..bytes.len() - 1];
+    digits(0..4)
+        && bytes[4] == b'-'
+        && digits(5..7)
+        && bytes[7] == b'-'
+        && digits(8..10)
+        && bytes[10] == b'T'
+        && digits(11..13)
+        && bytes[13] == b':'
+        && digits(14..16)
+        && bytes[16] == b':'
+        && digits(17..19)
+        && (fraction.is_empty()
+            || (fraction.len() >= 2
+                && fraction[0] == b'.'
+                && fraction[1..].iter().all(u8::is_ascii_digit)))
+}
+
+/// The written config members of a project, as `(member, JSON text)` in member order, for an
+/// export: the public ones, then the private ones the Admin config reports from
+/// ([`EXPORTED_PRIVATE_MEMBERS`], named without their underscore). An import restores them
+/// ([`restored_config_members`]).
+#[must_use]
+pub fn exportable_config_members(
+    members: &fireemu_core_auth::config_members::StoredConfigMembers,
+) -> Vec<(String, String)> {
+    STORED_MEMBERS
+        .iter()
+        .chain(EXPORTED_PRIVATE_MEMBERS)
+        .filter_map(|member| {
+            members
+                .get(member)
+                .map(|text| (exported_name(member).to_owned(), text.to_owned()))
+        })
+        .collect()
+}
+
+/// The stored members an import installs over `current` for a project's exported config
+/// members. The written public members, the exported private ones, and the multi-tenancy
+/// switch derived from `multiTenant`, become exactly the export's; other private members of
+/// `current` are kept. Each exported public member is parsed and validated as a config write of
+/// that member is, and stored as that write stores it; a private one must be a value a write
+/// could have stored ([`valid_private_member`]). The checks are the emulator profile's: a value
+/// either profile could have stored is restored. `Err` names the first member refused.
+pub fn restored_config_members(
+    project: &str,
+    current: &fireemu_core_auth::config_members::StoredConfigMembers,
+    members: &[(String, String)],
+) -> Result<fireemu_core_auth::config_members::StoredConfigMembers, String> {
+    let mut body = Map::new();
+    let mut private = Map::new();
+    let mut fields = Vec::with_capacity(members.len());
+    for (name, text) in members {
+        let member = &stored_name(name, EXPORTED_PRIVATE_MEMBERS).to_owned();
+        let is_private = name != member;
+        if !is_private && !STORED_MEMBERS.contains(&member.as_str()) {
+            return Err(format!("config member {member:?} is not a written member"));
+        }
+        if body.contains_key(member) || private.contains_key(member) {
+            return Err(format!("config member {member:?} is repeated"));
+        }
+        let value: Value = serde_json::from_str(text)
+            .map_err(|_| format!("config member {member:?} is not JSON"))?;
+        if value.is_null() {
+            return Err(format!("config member {member:?} is null"));
+        }
+        if is_private {
+            if !valid_private_member(member, &value) {
+                return Err(format!("config member {member:?} is not a valid value"));
+            }
+            private.insert(member.clone(), value);
+            continue;
+        }
+        body.insert(member.clone(), value);
+        fields.push(member.clone());
+    }
+    let refused = |member: &str| format!("config member {member:?} is not a valid value");
+    let first = |fields: &[String]| fields.first().cloned().unwrap_or_default();
+    let body = super::config_proto::parse_config_body(&Value::Object(body))
+        .map_err(|_| refused(&first(&fields)))?;
+    validate_values(&body, &fields, false).map_err(|_| refused(&first(&fields)))?;
+    let mut cleared = current.clone();
+    for member in STORED_MEMBERS.iter().chain(EXPORTED_PRIVATE_MEMBERS) {
+        cleared.set(member, None);
+    }
+    cleared.set(fireemu_core_auth::config_members::ALLOW_TENANTS, None);
+    let mut next = apply_stored_members(&cleared, &body, &fields, project)
+        .map_err(|()| refused(&first(&fields)))?
+        .unwrap_or(cleared);
+    super::with_derived_members(&mut next, &body, &fields, false, None);
+    for (member, value) in private {
+        next.set(&member, Some(value.to_string()));
+    }
+    Ok(next)
 }
 
 /// Whether `field` is a mask path of a stored member.
@@ -871,8 +1036,142 @@ pub(super) fn client_recaptcha_config(
 
 #[cfg(test)]
 mod tests {
-    use super::{initial_member, without_false};
+    use super::{
+        exportable_config_members, initial_member, restored_config_members, without_false,
+    };
+    use fireemu_core_auth::config_members::{StoredConfigMembers, ALLOW_TENANTS};
     use serde_json::json;
+
+    fn member(name: &str, value: &serde_json::Value) -> (String, String) {
+        (name.to_owned(), value.to_string())
+    }
+
+    /// Issue strict-multi-tenancy-switch-lost-on-export-import.
+    #[test]
+    fn an_import_restores_the_written_members_and_derives_the_tenant_switch() {
+        let mut current = StoredConfigMembers::default();
+        current.set("notification", Some(r#"{"defaultLocale":"ja"}"#.to_owned()));
+        current.set(
+            "_passwordPolicyLastUpdateTime",
+            Some(r#""2026-09-27T00:00:00Z""#.to_owned()),
+        );
+        let restored = restored_config_members(
+            "p",
+            &current,
+            &[
+                member("multiTenant", &json!({"allowTenants": true})),
+                member("autodeleteAnonymousUsers", &json!(true)),
+            ],
+        )
+        .expect("valid members restore");
+        assert_eq!(restored.get(ALLOW_TENANTS), Some("true"));
+        assert_eq!(restored.get("autodeleteAnonymousUsers"), Some("true"));
+        // The export's members replace the written ones, the exported private ones included.
+        assert_eq!(restored.get("notification"), None);
+        assert_eq!(restored.get("_passwordPolicyLastUpdateTime"), None);
+        // Exporting what was restored gives the same public members back, never a private one.
+        assert_eq!(
+            exportable_config_members(&restored)
+                .iter()
+                .map(|(name, _)| name.as_str())
+                .collect::<Vec<_>>(),
+            ["multiTenant", "autodeleteAnonymousUsers"]
+        );
+        // The exported private members come back as written, and export again.
+        let private = [
+            member(
+                "passwordPolicyLastUpdateTime",
+                &json!("2026-09-27T17:26:19.375098250Z"),
+            ),
+            member(
+                "passwordPolicyWrittenOptions",
+                &json!(["containsNumericCharacter"]),
+            ),
+            member(
+                "signUpQuotaConfig",
+                &json!({"quota": "10", "startTime": "2026-09-25T00:00:00Z", "quotaDuration": "3600s"}),
+            ),
+        ];
+        let restored = restored_config_members("p", &current, &private).unwrap();
+        for (name, text) in &private {
+            assert_eq!(
+                restored.get(&format!("_{name}")),
+                Some(text.as_str()),
+                "{name}"
+            );
+        }
+        assert_eq!(exportable_config_members(&restored), private);
+        // A switch written off is restored off and clears a running one.
+        let mut on = StoredConfigMembers::default();
+        on.set(ALLOW_TENANTS, Some("true".to_owned()));
+        let off = restored_config_members(
+            "p",
+            &on,
+            &[member("multiTenant", &json!({"allowTenants": false}))],
+        )
+        .unwrap();
+        assert_eq!(off.get(ALLOW_TENANTS), None);
+        assert!(
+            restored_config_members("p", &on, &[member("notification", &json!({}))])
+                .unwrap()
+                .get(ALLOW_TENANTS)
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn an_import_refuses_a_member_a_config_write_would_refuse() {
+        let none = StoredConfigMembers::default();
+        for members in [
+            vec![("_allowTenants".to_owned(), "true".to_owned())],
+            vec![("signIn".to_owned(), "{}".to_owned())],
+            vec![("multiTenant".to_owned(), "not json".to_owned())],
+            vec![("multiTenant".to_owned(), "null".to_owned())],
+            vec![member(
+                "mobileLinksConfig",
+                &json!({"domain": "NOT_A_DOMAIN_KIND"}),
+            )],
+            vec![
+                member("multiTenant", &json!({"allowTenants": true})),
+                member("multiTenant", &json!({"allowTenants": true})),
+            ],
+            vec![member("passwordPolicyLastUpdateTime", &json!("yesterday"))],
+            vec![member(
+                "passwordPolicyLastUpdateTime",
+                &json!("2026-09-27T00:00:00"),
+            )],
+            vec![member(
+                "passwordPolicyLastUpdateTime",
+                &json!("2026-09-27T00:00:00.Z"),
+            )],
+            vec![member("passwordPolicyLastUpdateTime", &json!(1))],
+            vec![member(
+                "passwordPolicyWrittenOptions",
+                &json!(["notAnOption"]),
+            )],
+            vec![member(
+                "passwordPolicyWrittenOptions",
+                &json!("containsNumericCharacter"),
+            )],
+            vec![member("signUpQuotaConfig", &json!({"quota": "0"}))],
+            vec![member("signUpQuotaConfig", &json!("10"))],
+            vec![
+                member("passwordPolicyWrittenOptions", &json!([])),
+                member("passwordPolicyWrittenOptions", &json!([])),
+            ],
+            // Only the exported private members are taken, and only by their exported names.
+            vec![member(
+                "_passwordPolicyLastUpdateTime",
+                &json!("2026-09-27T00:00:00Z"),
+            )],
+            vec![member("allowTenants", &json!(true))],
+        ] {
+            assert!(
+                restored_config_members("p", &none, &members).is_err(),
+                "{members:?}"
+            );
+        }
+    }
 
     #[test]
     fn false_switches_are_left_out_at_any_depth() {

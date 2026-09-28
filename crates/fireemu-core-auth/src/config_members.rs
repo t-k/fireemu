@@ -9,6 +9,9 @@
 
 use std::collections::BTreeMap;
 
+/// Private project switch kept in the same store transaction as the public multiTenant member.
+pub const ALLOW_TENANTS: &str = "_allowTenants";
+
 /// Written project configuration members, by their Admin v2 member name.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct StoredConfigMembers {

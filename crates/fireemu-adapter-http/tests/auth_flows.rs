@@ -4,8 +4,8 @@
 use std::sync::{Arc, Mutex, RwLock};
 
 use fireemu_adapter_http::identity_toolkit::{
-    handle, handle_with, AuthBlockingContext, AuthBlockingHook, AuthState, BlockingFunctionFailure,
-    RequestHeaders,
+    handle, handle_with, AuthBlockingContext, AuthBlockingHook, AuthState, BlockingFunctionCode,
+    BlockingFunctionFailure, RequestHeaders,
 };
 use fireemu_core_auth::jwt::{base64url_encode, decode_unsigned};
 use fireemu_core_auth::mfa::TotpPolicy;
@@ -228,11 +228,16 @@ fn assert_mfa_finalize_refused(
 }
 
 fn assert_phone_mfa_failures_roll_back(state: &mut AuthState, body: &Value) {
-    for hook in [
-        Arc::new(RejectBeforeSignInHook { timeout: false }) as Arc<dyn AuthBlockingHook>,
-        Arc::new(RejectBeforeSignInHook { timeout: true }),
+    // An unhandled failure is production's masked 503; an elapsed deadline its 400
+    // (AUTH-TENANT-BLOCKING recording 2026-09-28).
+    for (hook, status) in [
+        (
+            Arc::new(RejectBeforeSignInHook { timeout: false }) as Arc<dyn AuthBlockingHook>,
+            503,
+        ),
+        (Arc::new(RejectBeforeSignInHook { timeout: true }), 400),
     ] {
-        assert_mfa_finalize_refused(state, body, hook, 503);
+        assert_mfa_finalize_refused(state, body, hook, status);
     }
     for response in [
         json!({"userRecord": {"updateMask": "sessionClaims", "sessionClaims": {"firebase": "reserved"}}}),
@@ -3413,7 +3418,8 @@ fn tenant_manager_crud_lists_and_removes_explicit_tenants() {
     let deleted = handle_with(&s, "DELETE", &item, &owner(), &json!({}));
     assert_eq!(deleted.status, 200, "{}", deleted.body);
     let listed = handle_with(&s, "GET", &collection, &owner(), &json!({}));
-    assert_eq!(listed.body["tenants"].as_array().unwrap().len(), 0);
+    // Production answers an empty list as `{}` (AUTH-TENANT-BLOCKING recording 2026-09-27).
+    assert!(listed.body.get("tenants").is_none(), "{}", listed.body);
     let implicit = handle_with(&s, "GET", &item, &owner(), &json!({}));
     assert_eq!(implicit.status, 404, "{}", implicit.body);
     assert_eq!(implicit.body["error"]["message"], "TENANT_NOT_FOUND");
@@ -4132,8 +4138,10 @@ fn admin_v2_config_empty_mask_does_not_revert_a_concurrent_update() {
     assert_eq!(result.body["signIn"]["allowDuplicateEmails"], true);
 }
 
+/// Whichever of a project update and a tenant creation wins, the project's setting never
+/// reaches the tenant: tenants inherit nothing (AUTH-TENANT-BLOCKING recording 2026-09-27).
 #[test]
-fn admin_v2_config_racing_tenant_publication_keeps_inherited_config_current() {
+fn admin_v2_config_racing_tenant_publication_never_reaches_the_tenant() {
     let mut base = state();
     let registry = Arc::new(fireemu_core_auth::store::AuthRegistry::new(
         "demo-app",
@@ -4174,16 +4182,29 @@ fn admin_v2_config_racing_tenant_publication_keeps_inherited_config_current() {
         });
         start.wait();
     });
-    assert!(registry.tenants("demo-app").iter().any(|tenant| {
+    let tenants = registry.tenants("demo-app");
+    assert_eq!(tenants.len(), 1);
+    assert!(tenants.iter().all(|tenant| {
         registry
             .tenant_store("demo-app", tenant)
             .and_then(|store| store.lock().ok().map(|store| store.config()))
-            .is_some_and(|config| config.enable_improved_email_privacy)
+            .is_some_and(|config| !config.enable_improved_email_privacy)
     }));
+    assert!(
+        state
+            .store
+            .lock()
+            .unwrap()
+            .config()
+            .enable_improved_email_privacy
+    );
 }
 
+/// A tenant created after project changes takes none of them: production tenants inherit no
+/// project setting (AUTH-TENANT-BLOCKING recording 2026-09-27, inheritance#get-after,
+/// sign-up-in-late-tenant). fireemu used to copy the project's privacy and client permissions.
 #[test]
-fn admin_v2_tenant_create_does_not_reset_omitted_inherited_config() {
+fn admin_v2_tenant_create_takes_none_of_the_project_config() {
     use fireemu_core_auth::store::AuthRegistry;
 
     let mut base = state();
@@ -4209,17 +4230,15 @@ fn admin_v2_tenant_create_does_not_reset_omitted_inherited_config() {
         "POST",
         "/identitytoolkit.googleapis.com/v2/projects/demo-app/tenants",
         &owner(),
-        &json!({"displayName": "inherited config tenant"}),
+        &json!({"displayName": "late-tenant"}),
     );
     assert_eq!(created.status, 200, "{}", created.body);
-    assert_eq!(
-        created.body["emailPrivacyConfig"]["enableImprovedEmailPrivacy"],
-        true
+    assert!(
+        created.body.get("emailPrivacyConfig").is_none(),
+        "{}",
+        created.body
     );
-    assert_eq!(
-        created.body["client"]["permissions"]["disabledUserSignup"],
-        true
-    );
+    assert!(created.body.get("client").is_none(), "{}", created.body);
     let tenant = created.body["name"]
         .as_str()
         .unwrap()
@@ -4230,48 +4249,30 @@ fn admin_v2_tenant_create_does_not_reset_omitted_inherited_config() {
         .tenant_store("demo-app", tenant)
         .and_then(|store| store.lock().ok().map(|store| store.config()))
         .is_some_and(|config| {
-            config.enable_improved_email_privacy && config.disabled_user_signup
+            !config.enable_improved_email_privacy && !config.disabled_user_signup
         }));
     assert!(registry
         .tenant_metadata("demo-app", tenant)
         .is_some_and(|metadata| {
-            metadata.enable_improved_email_privacy && metadata.disabled_user_signup
+            !metadata.enable_improved_email_privacy && !metadata.disabled_user_signup
         }));
-    let read = handle_with(
-        &state,
-        "GET",
-        &format!("/identitytoolkit.googleapis.com/v2/projects/demo-app/tenants/{tenant}"),
-        &owner(),
-        &json!({}),
-    );
-    assert_eq!(read.status, 200, "{}", read.body);
-    assert_eq!(
-        read.body["emailPrivacyConfig"]["enableImprovedEmailPrivacy"],
-        true
-    );
-    assert_eq!(
-        read.body["client"]["permissions"]["disabledUserSignup"],
-        true
-    );
-
-    let explicit_false = handle_with(
+    // A tenant's own written values show, a written message kept even when off.
+    let explicit = handle_with(
         &state,
         "POST",
         "/identitytoolkit.googleapis.com/v2/projects/demo-app/tenants",
         &owner(),
         &json!({
-            "client": {"permissions": {"disabledUserSignup": false}},
+            "displayName": "own-values",
+            "client": {"permissions": {"disabledUserSignup": true}},
             "emailPrivacyConfig": {"enableImprovedEmailPrivacy": false}
         }),
     );
-    assert_eq!(explicit_false.status, 200, "{}", explicit_false.body);
+    assert_eq!(explicit.status, 200, "{}", explicit.body);
+    assert_eq!(explicit.body["emailPrivacyConfig"], json!({}));
     assert_eq!(
-        explicit_false.body["emailPrivacyConfig"]["enableImprovedEmailPrivacy"],
-        false
-    );
-    assert_eq!(
-        explicit_false.body["client"]["permissions"]["disabledUserSignup"],
-        false
+        explicit.body["client"],
+        json!({"permissions": {"disabledUserSignup": true}})
     );
 }
 
@@ -4687,17 +4688,28 @@ fn blocking_auth_receives_every_non_idp_sign_in_method() {
         "password"
     );
 
-    contexts.lock().unwrap().clear();
-    let mut custom = state();
-    assert_eq!(
-        recorded_method(
-            &mut custom,
-            &contexts,
-            &format!("{V1}/accounts:signInWithCustomToken"),
-            &json!({"token": custom_token("blocking-custom")}),
+    // Identity Platform runs no blocking function for a custom-token sign-in or an anonymous
+    // sign-up (AUTH-TENANT-BLOCKING recording 2026-09-28, custom-token#custom-* and
+    // events#sign-up-anonymous).
+    for (path, body) in [
+        (
+            format!("{V1}/accounts:signInWithCustomToken"),
+            json!({"token": custom_token("blocking-custom"), "returnSecureToken": true}),
         ),
-        "custom"
-    );
+        (
+            format!("{V1}/accounts:signUp"),
+            json!({"returnSecureToken": true}),
+        ),
+    ] {
+        contexts.lock().unwrap().clear();
+        let mut state = state();
+        state.blocking = Some(Arc::new(FilteringIdpBlockingHook {
+            contexts: Arc::clone(&contexts),
+        }));
+        let (status, response) = post(&state, &path, &body);
+        assert_eq!(status, 200, "{path}: {response}");
+        assert!(contexts.lock().unwrap().is_empty(), "{path}");
+    }
 
     contexts.lock().unwrap().clear();
     let mut email_link = state();
@@ -4735,18 +4747,6 @@ fn blocking_auth_receives_every_non_idp_sign_in_method() {
             &json!({"sessionInfo": sent["sessionInfo"], "code": codes["verificationCodes"][0]["code"]}),
         ),
         "phone"
-    );
-
-    contexts.lock().unwrap().clear();
-    let mut anonymous = state();
-    assert_eq!(
-        recorded_method(
-            &mut anonymous,
-            &contexts,
-            &format!("{V1}/accounts:signUp"),
-            &json!({}),
-        ),
-        "anonymous"
     );
 }
 
@@ -5072,7 +5072,8 @@ fn rejected_mfa_hooks_drop_raw_credentials_but_keep_retry_provenance() {
             Arc::new(RejectBeforeSignInHook { timeout: false }) as Arc<dyn AuthBlockingHook>,
             503,
         ),
-        (Arc::new(RejectBeforeSignInHook { timeout: true }), 503),
+        // Identity Platform's elapsed deadline is its 400 (recording 2026-09-28, timeout#*).
+        (Arc::new(RejectBeforeSignInHook { timeout: true }), 400),
         (
             Arc::new(FixedBeforeSignInHook {
                 response: json!({
@@ -5173,7 +5174,14 @@ fn federated_totp_finalize_preserves_attributes_and_blocking_context() {
     assert_eq!(token["firebase"]["sign_in_provider"], "oidc.corp");
     assert_eq!(token["firebase"]["sign_in_attributes"], oidc);
     assert_eq!(token["selectedRole"], "auditor");
-    let recorded = contexts.lock().unwrap();
+    assert_idp_totp_before_sign_in(&contexts.lock().unwrap(), &oidc);
+}
+
+/// The one beforeSignIn event of an identity-provider first factor finalized with TOTP.
+fn assert_idp_totp_before_sign_in(
+    recorded: &[(BlockingAuthEvent, AuthBlockingContext)],
+    oidc: &Value,
+) {
     assert_eq!(recorded.len(), 1);
     assert_eq!(recorded[0].0, BlockingAuthEvent::BeforeSignIn);
     assert_eq!(
@@ -5182,8 +5190,67 @@ fn federated_totp_finalize_preserves_attributes_and_blocking_context() {
             .credential
             .as_ref()
             .and_then(|credential| credential.claims.as_ref()),
-        Some(&oidc)
+        Some(oidc)
     );
+    // The identity provider of the first factor is the event's additional user info, with its
+    // profile, for an account that is not new (closure re-review S1', 2026-09-28).
+    let info = recorded[0]
+        .1
+        .additional_user_info
+        .as_ref()
+        .expect("an identity-provider first factor names its provider");
+    assert_eq!(info.provider_id, "oidc.corp");
+    assert_eq!(info.profile.as_ref(), Some(oidc));
+    assert!(!info.is_new_user);
+    // The account's enrolled factor and its provider reach the event (B9).
+    let factors = &recorded[0].1.enrolled_factors;
+    assert_eq!(factors.len(), 1);
+    assert_eq!(factors[0].factor_id, "totp");
+    assert_eq!(factors[0].phone_number, None);
+    assert!(factors[0].enrollment_time.is_some());
+    assert!(recorded[0]
+        .1
+        .provider_data
+        .iter()
+        .any(|provider| provider.provider_id == "oidc.corp"));
+}
+
+/// The event of a sign-in names the account's providers as an account lookup lists them, the
+/// phone number first and the password provider for an address with a password
+/// (AUTH-TENANT-BLOCKING recording 2026-09-28, B9; closure re-review S1').
+#[test]
+fn a_blocking_event_names_the_account_providers_as_a_lookup_lists_them() {
+    let contexts = Arc::new(Mutex::new(Vec::new()));
+    let mut s = state();
+    let user = sign_up(&s, "providers@example.com");
+    let (status, updated) = admin(
+        &s,
+        &format!("{V1}/projects/demo-app/accounts:update"),
+        &json!({"localId": user["localId"], "phoneNumber": "+15550001234"}),
+    );
+    assert_eq!(status, 200, "{updated}");
+    s.blocking = Some(Arc::new(RawCredentialBlockingHook {
+        contexts: Arc::clone(&contexts),
+        forward_inbound_credentials: false,
+        token_policy: None,
+    }));
+    let (status, signed) = post(
+        &s,
+        &format!("{V1}/accounts:signInWithPassword"),
+        &json!({"email": "providers@example.com", "password": "hunter22"}),
+    );
+    assert_eq!(status, 200, "{signed}");
+    let recorded = contexts.lock().unwrap();
+    assert_eq!(recorded.len(), 1);
+    let providers = &recorded[0].1.provider_data;
+    let ids: Vec<&str> = providers.iter().map(|p| p.provider_id.as_str()).collect();
+    assert_eq!(ids, ["phone", "password"]);
+    assert_eq!(providers[0].phone_number.as_deref(), Some("+15550001234"));
+    assert_eq!(providers[0].uid, "+15550001234");
+    assert_eq!(providers[1].email.as_deref(), Some("providers@example.com"));
+    assert_eq!(providers[1].uid, "providers@example.com");
+    assert_eq!(providers[1].phone_number, None);
+    assert!(recorded[0].1.enrolled_factors.is_empty());
 }
 
 #[test]
@@ -8945,4 +9012,298 @@ fn routed_project_config_installs_its_store_for_each_kind_of_update() {
         assert_eq!(updated.status, 200, "{mask}: {}", updated.body);
         assert!(registry.routed_store_for(project).is_some(), "{mask}");
     }
+}
+
+/// A sign-in that ran a blocking function answers an unnamed account's `displayName` as `""`,
+/// as the sign-in without one does (AUTH-TENANT-BLOCKING recording 2026-09-28,
+/// events#sign-in-password).
+#[test]
+fn a_blocked_sign_in_answers_an_unnamed_account_as_production() {
+    let mut s = state();
+    sign_up(&s, "unnamed@example.com");
+    let sign_in = |s: &AuthState| {
+        post(
+            s,
+            &format!("{V1}/accounts:signInWithPassword"),
+            &json!({"email": "unnamed@example.com", "password": "hunter22", "returnSecureToken": true}),
+        )
+    };
+    let (status, plain) = sign_in(&s);
+    assert_eq!(status, 200, "{plain}");
+    s.blocking = Some(Arc::new(FixedBeforeSignInHook {
+        response: json!({"userRecord": {"updateMask": "sessionClaims", "sessionClaims": {"s": 1}}}),
+    }));
+    let (status, blocked) = sign_in(&s);
+    assert_eq!(status, 200, "{blocked}");
+    assert_eq!(blocked["displayName"], plain["displayName"], "{blocked}");
+    assert_eq!(blocked["displayName"], "");
+}
+
+/// A sign-up that ran a blocking function leaves an unnamed account's `displayName` out, as the
+/// sign-up without one does (AUTH-TENANT-BLOCKING recording 2026-09-28,
+/// events#sign-up-password and tenant#tenant-sign-up).
+#[test]
+fn a_blocked_sign_up_leaves_an_unnamed_account_out_as_production() {
+    let mut s = state();
+    let sign_up = |s: &AuthState, email: &str| {
+        post(
+            s,
+            &format!("{V1}/accounts:signUp"),
+            &json!({"email": email, "password": "hunter22", "returnSecureToken": true}),
+        )
+    };
+    let (status, plain) = sign_up(&s, "plain@example.com");
+    assert_eq!(status, 200, "{plain}");
+    assert!(plain.get("displayName").is_none(), "{plain}");
+    s.blocking = Some(Arc::new(FixedBeforeSignInHook {
+        response: json!({"userRecord": {"updateMask": "sessionClaims", "sessionClaims": {"s": 1}}}),
+    }));
+    let (status, blocked) = sign_up(&s, "blocked@example.com");
+    assert_eq!(status, 200, "{blocked}");
+    assert!(blocked.get("displayName").is_none(), "{blocked}");
+}
+
+/// Sets a claim at beforeCreate, then refuses or disables the sign-in at beforeSignIn.
+struct CreateThenRefuseSignInHook {
+    disable: bool,
+}
+
+impl AuthBlockingHook for CreateThenRefuseSignInHook {
+    fn invoke(
+        &self,
+        event: BlockingAuthEvent,
+        _user: &fireemu_core_auth::store::UserRecord,
+    ) -> Result<Value, BlockingFunctionFailure> {
+        match event {
+            BlockingAuthEvent::BeforeCreate => Ok(json!({"userRecord": {
+                "updateMask": "customClaims", "customClaims": {"created": true}}})),
+            BlockingAuthEvent::BeforeSignIn if self.disable => {
+                Ok(json!({"userRecord": {"updateMask": "disabled", "disabled": true}}))
+            }
+            BlockingAuthEvent::BeforeSignIn => Err(BlockingFunctionFailure::from_function(
+                BlockingFunctionCode::PermissionDenied,
+                "refused",
+            )
+            .unwrap()),
+            BlockingAuthEvent::BeforeSendEmail | BlockingAuthEvent::BeforeSendSms => {
+                unreachable!("a mail event has no user")
+            }
+        }
+    }
+}
+
+/// A sign-up refused at beforeSignIn keeps the account it created, with what beforeCreate set,
+/// its sign-in time and its token issuance time; so does one whose account beforeSignIn
+/// disables; a second sign-up is `EMAIL_EXISTS` (AUTH-TENANT-BLOCKING recording 2026-09-28,
+/// rollback#lookup-refused-at-sign-in, #sign-up-again and #lookup-sign-in-disabled; the
+/// official Auth emulator also creates the account before it runs beforeSignIn).
+#[test]
+fn a_sign_up_refused_at_before_sign_in_keeps_its_account_as_production() {
+    for (disable, message) in [
+        (false, "BLOCKING_FUNCTION_ERROR_RESPONSE"),
+        (true, "USER_DISABLED"),
+    ] {
+        let mut s = state();
+        s.blocking = Some(Arc::new(CreateThenRefuseSignInHook { disable }));
+        let email = "refused-at-sign-in@example.com";
+        let sign_up = |s: &AuthState| {
+            post(
+                s,
+                &format!("{V1}/accounts:signUp"),
+                &json!({"email": email, "password": "hunter22", "returnSecureToken": true}),
+            )
+        };
+        let (status, refused) = sign_up(&s);
+        assert_eq!(status, 400, "{refused}");
+        assert!(
+            refused["error"]["message"]
+                .as_str()
+                .unwrap()
+                .starts_with(message),
+            "{refused}"
+        );
+        assert!(refused.get("idToken").is_none() && refused.get("refreshToken").is_none());
+        let (status, lookup) = admin(
+            &s,
+            &format!("{V1}/projects/demo-app/accounts:lookup"),
+            &json!({"email": [email]}),
+        );
+        assert_eq!(status, 200, "{lookup}");
+        let user = &lookup["users"][0];
+        assert_eq!(user["customAttributes"], r#"{"created":true}"#, "{lookup}");
+        assert!(user["lastLoginAt"].is_string(), "{lookup}");
+        assert!(user["lastRefreshAt"].is_string(), "{lookup}");
+        assert_eq!(
+            user["disabled"].as_bool().unwrap_or(false),
+            disable,
+            "{lookup}"
+        );
+        let (status, again) = sign_up(&s);
+        assert_eq!(status, 400, "{again}");
+        assert_eq!(again["error"]["message"], "EMAIL_EXISTS");
+    }
+}
+
+/// Answers `response` at beforeCreate and nothing at beforeSignIn.
+struct FixedBeforeCreateHook {
+    response: Value,
+}
+
+impl AuthBlockingHook for FixedBeforeCreateHook {
+    fn invoke(
+        &self,
+        event: BlockingAuthEvent,
+        _user: &fireemu_core_auth::store::UserRecord,
+    ) -> Result<Value, BlockingFunctionFailure> {
+        Ok(if event == BlockingAuthEvent::BeforeCreate {
+            self.response.clone()
+        } else {
+            json!({})
+        })
+    }
+}
+
+/// An account that beforeCreate disables is kept with its token issuance time
+/// (AUTH-TENANT-BLOCKING recording 2026-09-28, rollback#lookup-create-disabled).
+#[test]
+fn a_sign_up_disabled_at_before_create_keeps_its_issuance_time_as_production() {
+    let mut s = state();
+    s.blocking = Some(Arc::new(FixedBeforeCreateHook {
+        response: json!({"userRecord": {"updateMask": "disabled", "disabled": true}}),
+    }));
+    let (status, refused) = post(
+        &s,
+        &format!("{V1}/accounts:signUp"),
+        &json!({"email": "disabled-at-create@example.com", "password": "hunter22", "returnSecureToken": true}),
+    );
+    assert_eq!(status, 400, "{refused}");
+    assert_eq!(refused["error"]["message"], "USER_DISABLED");
+    let (_, lookup) = admin(
+        &s,
+        &format!("{V1}/projects/demo-app/accounts:lookup"),
+        &json!({"email": ["disabled-at-create@example.com"]}),
+    );
+    assert_eq!(lookup["users"][0]["disabled"], true, "{lookup}");
+    assert!(lookup["users"][0]["lastRefreshAt"].is_string(), "{lookup}");
+}
+
+/// A blocking function's custom claims read back as the runner's text of them, key order
+/// included, when that text parses to the same claims (AUTH-TENANT-BLOCKING recording
+/// 2026-09-28, rollback#lookup-refused-at-sign-in); otherwise, and for empty claims, as before.
+#[test]
+fn blocking_custom_claims_read_back_in_the_functions_key_order() {
+    let lookup = |claims: Value, text: Value| {
+        let mut s = state();
+        s.blocking = Some(Arc::new(FixedBeforeCreateHook {
+            response: json!({
+                "userRecord": {"updateMask": "customClaims", "customClaims": claims},
+                "fireemuCustomClaimsText": text,
+            }),
+        }));
+        let (status, created) = post(
+            &s,
+            &format!("{V1}/accounts:signUp"),
+            &json!({"email": "ordered@example.com", "password": "hunter22", "returnSecureToken": true}),
+        );
+        assert_eq!(status, 200, "{created}");
+        let (_, lookup) = admin(
+            &s,
+            &format!("{V1}/projects/demo-app/accounts:lookup"),
+            &json!({"localId": [created["localId"]]}),
+        );
+        lookup["users"][0].get("customAttributes").cloned()
+    };
+    let ordered = r#"{"b":1,"a":{"d":[2,"x"],"c":null}}"#;
+    let claims = json!({"b": 1, "a": {"d": [2, "x"], "c": null}});
+    assert_eq!(lookup(claims.clone(), json!(ordered)), Some(json!(ordered)));
+    let canonical = json!(r#"{"a":{"c":null,"d":[2,"x"]},"b":1}"#);
+    // A text of other claims, of reserved claims, or not text at all is not used.
+    for text in [
+        json!(r#"{"b":2,"a":{"d":[2,"x"],"c":null}}"#),
+        json!(r#"{"b":1}"#),
+        json!(r#"{"sub":"x"}"#),
+        json!(7),
+        json!("{"),
+    ] {
+        assert_eq!(
+            lookup(claims.clone(), text.clone()),
+            Some(canonical.clone()),
+            "{text}"
+        );
+    }
+    assert_eq!(lookup(json!({}), json!("{}")), None);
+}
+
+/// A blocking response's `photoURL`, the name the Functions SDK sends a function's photoURL
+/// under, is not applied; `photoUrl` is (AUTH-TENANT-BLOCKING recording 2026-09-28,
+/// ordering#lookup-profile; the official Auth emulator reads `photoUrl` only too).
+#[test]
+fn a_blocking_response_applies_photo_url_but_not_the_sdk_photo_url_name() {
+    for (field, applied) in [("photoURL", false), ("photoUrl", true)] {
+        let mut s = state();
+        s.blocking = Some(Arc::new(FixedBeforeCreateHook {
+            response: json!({"userRecord": {
+                "updateMask": format!("displayName,{field}"),
+                "displayName": "Named",
+                field: "https://example.com/p.png",
+            }}),
+        }));
+        let (status, created) = post(
+            &s,
+            &format!("{V1}/accounts:signUp"),
+            &json!({"email": "photo@example.com", "password": "hunter22", "returnSecureToken": true}),
+        );
+        assert_eq!(status, 200, "{created}");
+        let (_, lookup) = admin(
+            &s,
+            &format!("{V1}/projects/demo-app/accounts:lookup"),
+            &json!({"localId": [created["localId"]]}),
+        );
+        let user = &lookup["users"][0];
+        assert_eq!(user["displayName"], "Named", "{field}: {lookup}");
+        assert_eq!(user.get("photoUrl").is_some(), applied, "{field}: {lookup}");
+    }
+}
+
+/// An account without a password lists the password provider once it has signed in with an
+/// email link, whatever created it, as production's record does (closure re-review S1',
+/// 2026-09-28: a survivor in `account_providers`).
+#[test]
+fn an_email_link_sign_in_lists_the_password_provider_for_an_account_without_one() {
+    let s = state();
+    let (status, created) = admin(
+        &s,
+        &format!("{V1}/projects/demo-app/accounts"),
+        &json!({"email": "link-later@example.com"}),
+    );
+    assert_eq!(status, 200, "{created}");
+    let lookup = |s: &AuthState| {
+        admin(
+            s,
+            &format!("{V1}/projects/demo-app/accounts:lookup"),
+            &json!({"localId": [created["localId"]]}),
+        )
+        .1
+    };
+    assert!(lookup(&s)["users"][0].get("providerUserInfo").is_none());
+    let (status, sent) = post(
+        &s,
+        &format!("{V1}/accounts:sendOobCode"),
+        &json!({"requestType": "EMAIL_SIGNIN", "email": "link-later@example.com"}),
+    );
+    assert_eq!(status, 200, "{sent}");
+    let code = issued_code(&s, "EMAIL_SIGNIN");
+    let (status, signed) = post(
+        &s,
+        &format!("{V1}/accounts:signInWithEmailLink"),
+        &json!({"email": "link-later@example.com", "oobCode": code}),
+    );
+    assert_eq!(status, 200, "{signed}");
+    assert_eq!(signed["localId"], created["localId"]);
+    let providers = lookup(&s)["users"][0]["providerUserInfo"].clone();
+    assert_eq!(
+        providers,
+        json!([{"providerId": "password", "rawId": "link-later@example.com", "federatedId": "link-later@example.com", "email": "link-later@example.com"}]),
+        "{providers}"
+    );
 }

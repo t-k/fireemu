@@ -193,6 +193,9 @@ impl AuthBlockingHook for OverlappingClaimHook {
                     "sessionClaims": {"role": "session", "sessionOnly": true}
                 }
             }),
+            BlockingAuthEvent::BeforeSendEmail | BlockingAuthEvent::BeforeSendSms => {
+                unreachable!("a mail event has no user")
+            }
         })
     }
 }
@@ -226,6 +229,8 @@ struct RevisionChangeAfterPostCallbackHook {
     revision: AtomicUsize,
     revision_calls: AtomicUsize,
     post_callback_checked: AtomicBool,
+    /// Set when the function ran (the emulator profile reads no revision to signal it).
+    invoked: AtomicBool,
 }
 
 struct BeforeCreateOnlyRejectingHook;
@@ -363,7 +368,9 @@ impl AuthBlockingHook for RevisionBumpBeforeDispatchHook {
         _event: BlockingAuthEvent,
         _user: &fireemu_core_auth::store::UserRecord,
     ) -> Result<Value, BlockingFunctionFailure> {
-        unreachable!("revision drift must be rejected before hook dispatch")
+        // The strict profile refuses the drift before it calls the function; the emulator
+        // profile calls it with the configuration it finds.
+        Ok(json!({}))
     }
 }
 
@@ -382,6 +389,7 @@ impl AuthBlockingHook for RevisionChangeAfterPostCallbackHook {
         _event: BlockingAuthEvent,
         _user: &fireemu_core_auth::store::UserRecord,
     ) -> Result<Value, BlockingFunctionFailure> {
+        self.invoked.store(true, Ordering::SeqCst);
         Ok(json!({}))
     }
 }
@@ -484,6 +492,9 @@ impl AuthBlockingHook for MalformedBeforeSignInHook {
                 }
             }),
             BlockingAuthEvent::BeforeSignIn => json!({"userRecord": []}),
+            BlockingAuthEvent::BeforeSendEmail | BlockingAuthEvent::BeforeSendSms => {
+                unreachable!("a mail event has no user")
+            }
         })
     }
 }
@@ -499,6 +510,9 @@ impl AuthBlockingHook for ClearingClaimsHook {
             BlockingAuthEvent::BeforeSignIn => json!({
                 "userRecord": {"updateMask": "customClaims", "customClaims": {}}
             }),
+            BlockingAuthEvent::BeforeSendEmail | BlockingAuthEvent::BeforeSendSms => {
+                unreachable!("a mail event has no user")
+            }
         })
     }
 }
@@ -528,6 +542,9 @@ impl AuthBlockingHook for UpdatingBlockingHook {
                     }
                 }))
             }
+            BlockingAuthEvent::BeforeSendEmail | BlockingAuthEvent::BeforeSendSms => {
+                unreachable!("a mail event has no user")
+            }
         }
     }
 }
@@ -551,6 +568,9 @@ impl AuthBlockingHook for BeforeSignInTimeoutHook {
         match event {
             BlockingAuthEvent::BeforeCreate => Ok(json!({})),
             BlockingAuthEvent::BeforeSignIn => Err(BlockingFunctionFailure::timeout()),
+            BlockingAuthEvent::BeforeSendEmail | BlockingAuthEvent::BeforeSendSms => {
+                unreachable!("a mail event has no user")
+            }
         }
     }
 }
@@ -685,7 +705,7 @@ fn blocking_auth_rejection_rolls_back_user_creation() {
     assert_eq!(status, 400, "{body}");
     assert_eq!(
         body["error"]["message"],
-        "BLOCKING_FUNCTION_ERROR_RESPONSE : HTTP Cloud Function returned an error. Code: 403, Status: \"PERMISSION_DENIED\", Message: \"denied by test\""
+        "BLOCKING_FUNCTION_ERROR_RESPONSE : HTTP Cloud Function returned an error: {\"error\":{\"message\":\"denied by test\",\"status\":\"PERMISSION_DENIED\"}}"
     );
     assert_eq!(
         *events.lock().unwrap(),
@@ -777,6 +797,123 @@ fn concurrent_signups_assign_distinct_uids_before_create_commits() {
     );
 }
 
+/// Creates an unrelated account through the Admin API while the first `BeforeCreate` runs, as
+/// another client of the same project may at any moment.
+struct InterveningAdminCreateHook {
+    state: std::sync::OnceLock<std::sync::Weak<AuthState>>,
+    done: AtomicBool,
+}
+
+impl AuthBlockingHook for InterveningAdminCreateHook {
+    fn handles(&self, event: BlockingAuthEvent) -> bool {
+        event == BlockingAuthEvent::BeforeCreate
+    }
+
+    fn invoke(
+        &self,
+        _event: BlockingAuthEvent,
+        _user: &fireemu_core_auth::store::UserRecord,
+    ) -> Result<Value, BlockingFunctionFailure> {
+        if !self.done.swap(true, Ordering::SeqCst) {
+            let state = self.state.get().and_then(std::sync::Weak::upgrade).unwrap();
+            let (status, body) = admin(
+                &state,
+                "POST",
+                &format!("{V1}/projects/demo-app/accounts"),
+                &json!({"email": "intervening@example.com", "password": "hunter22"}),
+            );
+            assert_eq!(status, 200, "{body}");
+        }
+        Ok(json!({}))
+    }
+}
+
+fn state_with_intervening_admin_create() -> Arc<AuthState> {
+    let hook = Arc::new(InterveningAdminCreateHook {
+        state: std::sync::OnceLock::new(),
+        done: AtomicBool::new(false),
+    });
+    let mut auth = state();
+    auth.blocking = Some(hook.clone());
+    let auth = Arc::new(auth);
+    hook.state.set(Arc::downgrade(&auth)).unwrap();
+    auth
+}
+
+/// `BHRNG-1`: an account created by another request while `BeforeCreate` runs does not make an
+/// email-link sign-in that creates its account fail. Production draws account ids
+/// independently; fireemu refused it with `identity changed while the hook was running` because
+/// the other account skipped the id the sign-in had reserved.
+#[test]
+fn an_account_created_while_before_create_runs_does_not_fail_an_email_link_sign_in() {
+    let auth = state_with_intervening_admin_create();
+    let (status, sent) = post(
+        &auth,
+        &format!("{V1}/accounts:sendOobCode"),
+        &json!({"requestType": "EMAIL_SIGNIN", "email": "link-outer@example.com", "continueUrl": "http://localhost/"}),
+    );
+    assert_eq!(status, 200, "{sent}");
+    let (status, codes) = admin(
+        &auth,
+        "GET",
+        "/emulator/v1/projects/demo-app/oobCodes",
+        &Value::Null,
+    );
+    assert_eq!(status, 200, "{codes}");
+    let code = codes["oobCodes"][0]["oobCode"].clone();
+    let (status, body) = post(
+        &auth,
+        &format!("{V1}/accounts:signInWithEmailLink"),
+        &json!({"email": "link-outer@example.com", "oobCode": code, "returnSecureToken": true}),
+    );
+    assert_eq!(status, 200, "{body}");
+    let store = auth.store.lock().unwrap();
+    let outer = store.user_by_email("link-outer@example.com").unwrap();
+    assert_eq!(
+        outer.local_id.to_string(),
+        body["localId"].as_str().unwrap()
+    );
+    assert!(store.user_by_email("intervening@example.com").is_some());
+}
+
+/// In the emulator profile a blocking configuration that keeps changing while an email link is
+/// sent and used refuses neither request, as the official Auth emulator does not (closure
+/// review M1, 2026-09-28).
+#[test]
+fn the_emulator_profile_serves_an_email_link_while_the_blocking_configuration_changes() {
+    let mut auth = state();
+    auth.blocking = Some(Arc::new(RevisionBumpBeforeDispatchHook {
+        revision: AtomicUsize::new(0),
+        revision_calls: AtomicUsize::new(0),
+    }));
+    let (status, sent) = post(
+        &auth,
+        &format!("{V1}/accounts:sendOobCode"),
+        &json!({"requestType": "EMAIL_SIGNIN", "email": "drift-link@example.com", "continueUrl": "http://localhost/"}),
+    );
+    assert_eq!(status, 200, "{sent}");
+    let (status, codes) = admin(
+        &auth,
+        "GET",
+        "/emulator/v1/projects/demo-app/oobCodes",
+        &Value::Null,
+    );
+    assert_eq!(status, 200, "{codes}");
+    let code = codes["oobCodes"][0]["oobCode"].clone();
+    let (status, body) = post(
+        &auth,
+        &format!("{V1}/accounts:signInWithEmailLink"),
+        &json!({"email": "drift-link@example.com", "oobCode": code, "returnSecureToken": true}),
+    );
+    assert_eq!(status, 200, "{body}");
+    assert!(auth
+        .store
+        .lock()
+        .unwrap()
+        .user_by_email("drift-link@example.com")
+        .is_some());
+}
+
 #[test]
 fn unhandled_blocking_auth_failure_is_unavailable_and_rolls_back_creation() {
     let mut s = state();
@@ -788,10 +925,10 @@ fn unhandled_blocking_auth_failure_is_unavailable_and_rolls_back_creation() {
         &json!({"email": "unavailable@example.com", "password": "hunter22"}),
     );
 
+    // Production masks an unhandled failure (recording 2026-09-28, refusal#create-unhandled).
     assert_eq!(status, 503, "{body}");
-    assert!(body["error"]["message"]
-        .as_str()
-        .is_some_and(|message| message.starts_with("BLOCKING_FUNCTION_ERROR_RESPONSE")));
+    assert_eq!(body["error"]["message"], "Error code: 47");
+    assert_eq!(body["error"]["errors"][0]["reason"], "backendError");
     assert!(s
         .store
         .lock()
@@ -824,8 +961,12 @@ fn blocking_before_sign_in_timeout_issues_no_token_and_preserves_the_user() {
         &json!({"email": "timeout@example.com", "password": "hunter22"}),
     );
 
-    assert_eq!(status, 503, "{body}");
-    assert_eq!(body["error"]["message"], "Error code: 47");
+    // Identity Platform's elapsed deadline (recording 2026-09-28, timeout#sign-in-slow).
+    assert_eq!(status, 400, "{body}");
+    assert_eq!(
+        body["error"]["message"],
+        "BLOCKING_FUNCTION_ERROR_RESPONSE : Cloud function deadline exceeded."
+    );
     assert!(body.get("idToken").is_none(), "{body}");
     assert!(body.get("refreshToken").is_none(), "{body}");
     assert_eq!(
@@ -851,7 +992,9 @@ fn production_blocking_failure_fixture_matches_identity_toolkit() {
         )
         .unwrap(),
         BlockingFunctionFailure::unhandled(),
-        BlockingFunctionFailure::timeout(),
+        // The 2026-09-02 run's function had a seven-second timeout of its own: its platform
+        // stopped it first, and production masked that answer.
+        BlockingFunctionFailure::function_timeout(),
     ];
     let steps = fixture["steps"].as_array().unwrap();
     assert_eq!(steps.len(), failures.len());
@@ -3713,15 +3856,17 @@ impl AuthBlockingHook for TenantMutatingHook {
 
 struct CreatingAdminHook {
     state: std::sync::Weak<AuthState>,
+    seen: Mutex<Option<String>>,
 }
 
 impl AuthBlockingHook for CreatingAdminHook {
     fn invoke(
         &self,
         event: BlockingAuthEvent,
-        _user: &fireemu_core_auth::store::UserRecord,
+        user: &fireemu_core_auth::store::UserRecord,
     ) -> Result<Value, BlockingFunctionFailure> {
         if event == BlockingAuthEvent::BeforeCreate {
+            *self.seen.lock().unwrap() = Some(user.local_id.to_string());
             let state = self
                 .state
                 .upgrade()
@@ -3735,6 +3880,87 @@ impl AuthBlockingHook for CreatingAdminHook {
             );
             if response.status != 200 {
                 return Err(BlockingFunctionFailure::unhandled());
+            }
+        }
+        Ok(json!({}))
+    }
+}
+
+/// Clears the accounts while beforeCreate runs and gives the created account's uid to another
+/// account right after.
+struct ClearingThenTakingHook {
+    state: std::sync::Weak<AuthState>,
+    /// Clear the accounts before anything else.
+    clear: bool,
+    /// Then create an account with the event's uid through the Admin API.
+    take: bool,
+    /// Then create an unrelated account with a generated uid through the Admin API.
+    bystander: bool,
+    /// The uid of each beforeCreate event.
+    seen: Mutex<Vec<String>>,
+}
+
+impl ClearingThenTakingHook {
+    fn new(state: std::sync::Weak<AuthState>, clear: bool, take: bool) -> Self {
+        Self {
+            state,
+            clear,
+            take,
+            bystander: false,
+            seen: Mutex::new(Vec::new()),
+        }
+    }
+}
+
+impl AuthBlockingHook for ClearingThenTakingHook {
+    fn invoke(
+        &self,
+        event: BlockingAuthEvent,
+        user: &fireemu_core_auth::store::UserRecord,
+    ) -> Result<Value, BlockingFunctionFailure> {
+        if event == BlockingAuthEvent::BeforeCreate {
+            self.seen
+                .lock()
+                .unwrap()
+                .push(user.local_id.as_str().to_owned());
+            let state = self
+                .state
+                .upgrade()
+                .ok_or_else(BlockingFunctionFailure::unhandled)?;
+            if self.clear {
+                let cleared = handle(
+                    &state,
+                    "DELETE",
+                    "/emulator/v1/projects/demo-app/accounts",
+                    &Value::Null,
+                );
+                if cleared.status != 200 {
+                    return Err(BlockingFunctionFailure::unhandled());
+                }
+            }
+            if self.take {
+                let taken = handle_with(
+                    &state,
+                    "POST",
+                    &format!("{ADMIN}/accounts"),
+                    &owner(),
+                    &json!({"localId": user.local_id.as_str(), "email": "taker@example.com"}),
+                );
+                if taken.status != 200 {
+                    return Err(BlockingFunctionFailure::unhandled());
+                }
+            }
+            if self.bystander {
+                let created = handle_with(
+                    &state,
+                    "POST",
+                    &format!("{ADMIN}/accounts"),
+                    &owner(),
+                    &json!({"email": "bystander@example.com"}),
+                );
+                if created.status != 200 {
+                    return Err(BlockingFunctionFailure::unhandled());
+                }
             }
         }
         Ok(json!({}))
@@ -4035,210 +4261,419 @@ fn unbound_blocking_auth_runs_for_default_but_not_routed_projects() {
         .is_some());
 }
 
+/// A blocking configuration that changes between planning and dispatch is a retryable 409 in the
+/// strict profile, fireemu's own guard; the emulator profile completes the request with the
+/// configuration it then finds, as the official Auth emulator (which reads the configuration
+/// when it calls a function) does (closure review M1, 2026-09-28).
 #[test]
 fn blocking_auth_revision_drift_between_plan_and_dispatch_is_rejected() {
-    let auth = Arc::new({
-        let mut auth = state();
-        auth.blocking = Some(Arc::new(RevisionBumpBeforeDispatchHook {
-            revision: AtomicUsize::new(0),
-            revision_calls: AtomicUsize::new(0),
-        }));
-        auth
-    });
-    let (sender, receiver) = std::sync::mpsc::sync_channel(1);
-    let request_auth = auth.clone();
-    std::thread::spawn(move || {
-        sender
-            .send(post(
-                &request_auth,
-                &format!("{V1}/accounts:signUp"),
-                &json!({"email": "revision-drift@example.com", "password": "hunter22"}),
-            ))
-            .unwrap();
-    });
-    let (status, body) = receiver
-        .recv_timeout(std::time::Duration::from_secs(1))
-        .expect("candidate revision drift must not deadlock reservation cleanup");
-    assert_eq!(status, 409, "{body}");
-    assert_eq!(
-        body["error"]["message"],
-        "BLOCKING_FUNCTION_CONFIGURATION_CHANGED"
-    );
-    assert_eq!(auth.store.lock().unwrap().user_count(), 0);
-    let mut store = auth.store.lock().unwrap().clone();
-    let fresh_id = store.reserve_next_generated_local_id();
-    let mut clean = AuthStore::new("demo-app", SplitMix64::new(5), TotpPolicy::default());
-    assert_eq!(fresh_id, clean.reserve_next_generated_local_id());
+    for strict in [true, false] {
+        let auth = Arc::new({
+            let mut auth = if strict { strict_state() } else { state() };
+            auth.blocking = Some(Arc::new(RevisionBumpBeforeDispatchHook {
+                revision: AtomicUsize::new(0),
+                revision_calls: AtomicUsize::new(0),
+            }));
+            auth
+        });
+        let (sender, receiver) = std::sync::mpsc::sync_channel(1);
+        let request_auth = auth.clone();
+        std::thread::spawn(move || {
+            sender
+                .send(post(
+                    &request_auth,
+                    &format!("{V1}/accounts:signUp"),
+                    &json!({"email": "revision-drift@example.com", "password": "hunter22"}),
+                ))
+                .unwrap();
+        });
+        let (status, body) = receiver
+            .recv_timeout(std::time::Duration::from_secs(1))
+            .expect("candidate revision drift must not deadlock reservation cleanup");
+        if !strict {
+            assert_eq!(status, 200, "{body}");
+            assert_eq!(auth.store.lock().unwrap().user_count(), 1);
+            continue;
+        }
+        assert_eq!(status, 409, "{body}");
+        assert_eq!(
+            body["error"]["message"],
+            "BLOCKING_FUNCTION_CONFIGURATION_CHANGED"
+        );
+        assert_eq!(auth.store.lock().unwrap().user_count(), 0);
+        let mut store = auth.store.lock().unwrap().clone();
+        let fresh_id = store.reserve_next_generated_local_id();
+        let mut clean = AuthStore::new("demo-app", SplitMix64::new(5), TotpPolicy::default());
+        assert_eq!(fresh_id, clean.reserve_next_generated_local_id());
+    }
 }
 
+/// The same after the function answered and before the commit (closure review M1).
 #[test]
 fn blocking_auth_revision_drift_after_callback_before_commit_is_rejected() {
-    let hook = Arc::new(RevisionChangeAfterPostCallbackHook {
-        revision: AtomicUsize::new(0),
-        revision_calls: AtomicUsize::new(0),
-        post_callback_checked: AtomicBool::new(false),
-    });
-    let auth = Arc::new({
-        let mut auth = state();
+    for strict in [true, false] {
+        let hook = Arc::new(RevisionChangeAfterPostCallbackHook {
+            revision: AtomicUsize::new(0),
+            revision_calls: AtomicUsize::new(0),
+            post_callback_checked: AtomicBool::new(false),
+            invoked: AtomicBool::new(false),
+        });
+        let auth = Arc::new({
+            let mut auth = if strict { strict_state() } else { state() };
+            auth.blocking = Some(hook.clone());
+            auth
+        });
+        let commit_gate = auth.operation_gate.lock().unwrap();
+        let request_auth = auth.clone();
+        let (sender, receiver) = std::sync::mpsc::sync_channel(1);
+        std::thread::spawn(move || {
+            sender
+                .send(post(
+                    &request_auth,
+                    &format!("{V1}/accounts:signUp"),
+                    &json!({"email": "commit-revision-drift@example.com", "password": "hunter22"}),
+                ))
+                .unwrap();
+        });
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(1);
+        let reached = || {
+            if strict {
+                hook.post_callback_checked.load(Ordering::SeqCst)
+            } else {
+                hook.invoked.load(Ordering::SeqCst)
+            }
+        };
+        while !reached() {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "blocking request did not reach its post-callback revision check"
+            );
+            std::thread::yield_now();
+        }
+        hook.revision.store(1, Ordering::SeqCst);
+        drop(commit_gate);
+        let (status, body) = receiver
+            .recv_timeout(std::time::Duration::from_secs(1))
+            .expect("commit revision drift must not leave the request waiting");
+        if !strict {
+            assert_eq!(status, 200, "{body}");
+            assert_eq!(auth.store.lock().unwrap().user_count(), 1);
+            continue;
+        }
+        assert_eq!(status, 409, "{body}");
+        assert_eq!(
+            body["error"]["message"],
+            "BLOCKING_FUNCTION_CONFIGURATION_CHANGED"
+        );
+        assert_eq!(auth.store.lock().unwrap().user_count(), 0);
+        let mut store = auth.store.lock().unwrap().clone();
+        let fresh_id = store.reserve_next_generated_local_id();
+        let mut clean = AuthStore::new("demo-app", SplitMix64::new(5), TotpPolicy::default());
+        assert_eq!(fresh_id, clean.reserve_next_generated_local_id());
+    }
+}
+
+/// Accounts cleared while a blocking function runs: the strict profile refuses the paused
+/// candidate with 409 `AUTH_STATE_RESET`, fireemu's own guard; the emulator profile commits it into
+/// the cleared state, as the official Auth emulator (whose account wipe leaves an in-flight
+/// sign-up alone) does (closure re-review M1', 2026-09-28). Either way a fresh sign-up works.
+#[test]
+fn a_clear_during_a_blocking_hook_is_refused_in_strict_and_committed_in_the_emulator() {
+    for strict in [true, false] {
+        use std::sync::mpsc::sync_channel;
+        use std::time::Duration;
+
+        let hook = Arc::new(DelayedBlockingHook {
+            entered: AtomicUsize::new(0),
+            active: AtomicUsize::new(0),
+            limit: 1,
+            release: AtomicBool::new(false),
+        });
+        let mut auth = if strict { strict_state() } else { state() };
         auth.blocking = Some(hook.clone());
-        auth
-    });
-    let commit_gate = auth.operation_gate.lock().unwrap();
-    let request_auth = auth.clone();
-    let (sender, receiver) = std::sync::mpsc::sync_channel(1);
-    std::thread::spawn(move || {
-        sender
-            .send(post(
-                &request_auth,
-                &format!("{V1}/accounts:signUp"),
-                &json!({"email": "commit-revision-drift@example.com", "password": "hunter22"}),
-            ))
-            .unwrap();
-    });
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(1);
-    while !hook.post_callback_checked.load(Ordering::SeqCst) {
-        assert!(
-            std::time::Instant::now() < deadline,
-            "blocking request did not reach its post-callback revision check"
+        let state = Arc::new(auth);
+        let (sender, receiver) = sync_channel(1);
+        let request_state = state.clone();
+        std::thread::spawn(move || {
+            sender
+                .send(post(
+                    &request_state,
+                    &format!("{V1}/accounts:signUp"),
+                    &json!({"email": "stale@example.com", "password": "hunter22"}),
+                ))
+                .unwrap();
+        });
+        let deadline = std::time::Instant::now() + Duration::from_secs(1);
+        while hook.entered.load(Ordering::SeqCst) == 0 {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "blocking hook did not pause the candidate"
+            );
+            std::thread::yield_now();
+        }
+
+        let cleared = handle(
+            &state,
+            "DELETE",
+            "/emulator/v1/projects/demo-app/accounts",
+            &Value::Null,
         );
-        std::thread::yield_now();
-    }
-    hook.revision.store(1, Ordering::SeqCst);
-    drop(commit_gate);
-    let (status, body) = receiver
-        .recv_timeout(std::time::Duration::from_secs(1))
-        .expect("commit revision drift must not leave the request waiting");
-    assert_eq!(status, 409, "{body}");
-    assert_eq!(
-        body["error"]["message"],
-        "BLOCKING_FUNCTION_CONFIGURATION_CHANGED"
-    );
-    assert_eq!(auth.store.lock().unwrap().user_count(), 0);
-    let mut store = auth.store.lock().unwrap().clone();
-    let fresh_id = store.reserve_next_generated_local_id();
-    let mut clean = AuthStore::new("demo-app", SplitMix64::new(5), TotpPolicy::default());
-    assert_eq!(fresh_id, clean.reserve_next_generated_local_id());
-}
+        assert_eq!(cleared.status, 200, "{}", cleared.body);
+        hook.release.store(true, Ordering::SeqCst);
+        let (status, body) = receiver
+            .recv_timeout(Duration::from_secs(1))
+            .expect("paused candidate must finish after clear");
+        if strict {
+            assert_eq!(status, 409, "{body}");
+            assert_eq!(body["error"]["message"], "AUTH_STATE_RESET");
+            assert_eq!(state.store.lock().unwrap().user_count(), 0);
+        } else {
+            assert_eq!(status, 200, "{body}");
+            assert!(state
+                .store
+                .lock()
+                .unwrap()
+                .user_by_email("stale@example.com")
+                .is_some_and(|user| user.local_id.as_str() == body["localId"].as_str().unwrap()));
+        }
+        let before = state.store.lock().unwrap().user_count();
 
-#[test]
-fn emulator_clear_rejects_a_paused_blocking_candidate_and_allows_a_fresh_id() {
-    use std::sync::mpsc::sync_channel;
-    use std::time::Duration;
-
-    let hook = Arc::new(DelayedBlockingHook {
-        entered: AtomicUsize::new(0),
-        active: AtomicUsize::new(0),
-        limit: 1,
-        release: AtomicBool::new(false),
-    });
-    let mut auth = state();
-    auth.blocking = Some(hook.clone());
-    let state = Arc::new(auth);
-    let (sender, receiver) = sync_channel(1);
-    let request_state = state.clone();
-    std::thread::spawn(move || {
-        sender
-            .send(post(
-                &request_state,
-                &format!("{V1}/accounts:signUp"),
-                &json!({"email": "stale@example.com", "password": "hunter22"}),
-            ))
-            .unwrap();
-    });
-    let deadline = std::time::Instant::now() + Duration::from_secs(1);
-    while hook.entered.load(Ordering::SeqCst) == 0 {
-        assert!(
-            std::time::Instant::now() < deadline,
-            "blocking hook did not pause the candidate"
+        let (status, body) = post(
+            &state,
+            &format!("{V1}/accounts:signUp"),
+            &json!({"email": "fresh@example.com", "password": "hunter22"}),
         );
-        std::thread::yield_now();
+        assert_eq!(status, 200, "{body}");
+        assert_eq!(state.store.lock().unwrap().user_count(), before + 1);
     }
-
-    let cleared = handle(
-        &state,
-        "DELETE",
-        "/emulator/v1/projects/demo-app/accounts",
-        &Value::Null,
-    );
-    assert_eq!(cleared.status, 200, "{}", cleared.body);
-    hook.release.store(true, Ordering::SeqCst);
-    let (status, body) = receiver
-        .recv_timeout(Duration::from_secs(1))
-        .expect("paused candidate must finish after clear");
-    assert_eq!(status, 409, "{body}");
-    assert_eq!(body["error"]["message"], "AUTH_STATE_RESET");
-    assert_eq!(state.store.lock().unwrap().user_count(), 0);
-
-    let (status, body) = post(
-        &state,
-        &format!("{V1}/accounts:signUp"),
-        &json!({"email": "fresh@example.com", "password": "hunter22"}),
-    );
-    assert_eq!(status, 200, "{body}");
-    assert_eq!(state.store.lock().unwrap().user_count(), 1);
 }
 
+/// A request whose uid another account took while its function ran answers 400
+/// `DUPLICATE_LOCAL_ID`, as the official emulator's signUp does, whether or not the accounts were
+/// cleared in between; only the strict profile's own guard answers a clear first, with 409
+/// `AUTH_STATE_RESET`. The account that took the uid stays (closure re-reviews S1' and S1'',
+/// 2026-09-28).
 #[test]
-fn blocking_auth_disabled_to_enabled_transition_returns_a_retryable_conflict() {
-    let hook = Arc::new(ToggleHandlesHook {
-        calls: AtomicUsize::new(0),
-        enabled_after_initial: true,
-    });
-    let mut auth = state();
-    auth.blocking = Some(hook);
-    let (status, body) = post(
-        &auth,
-        &format!("{V1}/accounts:signUp"),
-        &json!({"email": "toggle-on@example.com", "password": "hunter22"}),
-    );
-    assert_eq!(status, 409, "{body}");
-    assert_eq!(
-        body["error"]["message"],
-        "BLOCKING_FUNCTION_CONFIGURATION_CHANGED"
-    );
-    assert_eq!(auth.store.lock().unwrap().user_count(), 0);
+fn a_request_whose_uid_another_account_took_is_a_duplicate() {
+    for (strict, clear) in [(true, false), (false, false), (true, true), (false, true)] {
+        let state = Arc::new_cyclic(|weak| {
+            let mut state = if strict { strict_state() } else { state() };
+            state.blocking = Some(Arc::new(ClearingThenTakingHook::new(
+                weak.clone(),
+                clear,
+                true,
+            )));
+            state
+        });
+        let (status, body) = post(
+            &state,
+            &format!("{V1}/accounts:signUp"),
+            &json!({"email": "wiped@example.com", "password": "hunter22"}),
+        );
+        let expected = if strict && clear {
+            (409, "AUTH_STATE_RESET")
+        } else {
+            (400, "DUPLICATE_LOCAL_ID")
+        };
+        assert_eq!(
+            (
+                status,
+                body["error"]["message"].as_str().unwrap_or_default()
+            ),
+            expected,
+            "strict {strict}, clear {clear}: {body}"
+        );
+        let store = state.store.lock().unwrap();
+        assert!(store.user_by_email("taker@example.com").is_some());
+        assert!(store.user_by_email("wiped@example.com").is_none());
+    }
 }
 
+/// Accounts cleared while beforeCreate runs for an identity-provider sign-in, and another account
+/// created after the clear: the emulator profile creates the account with the uid the function
+/// saw, not the next generated one (closure re-review S1'', 2026-09-28).
 #[test]
-fn blocking_auth_enabled_to_disabled_transition_returns_a_retryable_conflict() {
-    let hook = Arc::new(ToggleHandlesHook {
-        calls: AtomicUsize::new(0),
-        enabled_after_initial: false,
-    });
-    let mut auth = state();
-    auth.blocking = Some(hook);
-    let (status, body) = post(
-        &auth,
-        &format!("{V1}/accounts:signUp"),
-        &json!({"email": "toggle-off@example.com", "password": "hunter22"}),
-    );
-    assert_eq!(status, 409, "{body}");
-    assert_eq!(
-        body["error"]["message"],
-        "BLOCKING_FUNCTION_CONFIGURATION_CHANGED"
-    );
-    assert_eq!(auth.store.lock().unwrap().user_count(), 0);
-}
-
-#[test]
-fn blocking_auth_never_replays_a_response_onto_a_different_generated_user() {
+fn the_emulator_profile_creates_a_cleared_idp_account_with_the_uid_its_function_saw() {
+    let hook = std::sync::OnceLock::new();
     let state = Arc::new_cyclic(|weak| {
         let mut state = state();
-        state.blocking = Some(Arc::new(CreatingAdminHook {
+        let clearing = Arc::new(ClearingThenTakingHook {
+            bystander: true,
+            ..ClearingThenTakingHook::new(weak.clone(), true, false)
+        });
+        hook.set(Arc::clone(&clearing)).ok().unwrap();
+        state.blocking = Some(clearing);
+        state
+    });
+    let assertion = json!({"sub": "g-cleared", "email": "cleared-idp@example.com"}).to_string();
+    let encoded: String = assertion
+        .bytes()
+        .map(|b| {
+            if b.is_ascii_alphanumeric() {
+                (b as char).to_string()
+            } else {
+                format!("%{b:02X}")
+            }
+        })
+        .collect();
+    let (status, signed) = post(
+        &state,
+        &format!("{V1}/accounts:signInWithIdp"),
+        &json!({
+            "postBody": format!("id_token={encoded}&providerId=google.com"),
+            "requestUri": "http://localhost",
+            "returnSecureToken": true,
+        }),
+    );
+    assert_eq!(status, 200, "{signed}");
+    let seen = hook.get().unwrap().seen.lock().unwrap().clone();
+    assert_eq!(seen.len(), 1);
+    assert_eq!(signed["localId"], seen[0]);
+    let store = state.store.lock().unwrap();
+    assert_eq!(store.user_count(), 2);
+    assert!(store
+        .user_by_email("bystander@example.com")
+        .is_some_and(|user| user.local_id.as_str() != seen[0]));
+    assert!(store
+        .user_by_email("cleared-idp@example.com")
+        .is_some_and(|user| user.local_id.as_str() == seen[0]));
+}
+
+/// Accounts cleared while beforeCreate runs, and another account created after the clear, in the
+/// strict profile: the request is refused with fireemu's own 409 `AUTH_STATE_RESET`, the other
+/// account skips the request's uid while it runs, and the uid is free once it returns (closure
+/// re-review 3, 2026-09-28).
+#[test]
+fn the_strict_profile_holds_a_cleared_request_uid_until_the_request_returns() {
+    let hook = std::sync::OnceLock::new();
+    let state = Arc::new_cyclic(|weak| {
+        let mut state = strict_state();
+        let clearing = Arc::new(ClearingThenTakingHook {
+            bystander: true,
+            ..ClearingThenTakingHook::new(weak.clone(), true, false)
+        });
+        hook.set(Arc::clone(&clearing)).ok().unwrap();
+        state.blocking = Some(clearing);
+        state
+    });
+    let (status, body) = post(
+        &state,
+        &format!("{V1}/accounts:signUp"),
+        &json!({"email": "strict-cleared@example.com", "password": "hunter22"}),
+    );
+    assert_eq!(
+        (status, body["error"]["message"].as_str()),
+        (409, Some("AUTH_STATE_RESET")),
+        "{body}"
+    );
+    let seen = hook.get().unwrap().seen.lock().unwrap().clone();
+    assert_eq!(seen.len(), 1);
+    let store = state.store.lock().unwrap();
+    assert_eq!(store.user_count(), 1);
+    assert!(store
+        .user_by_email("bystander@example.com")
+        .is_some_and(|user| user.local_id.as_str() != seen[0]));
+    assert!(store.user_by_email("strict-cleared@example.com").is_none());
+    assert!(!store.holds_generated_local_id(&seen[0]));
+}
+
+/// A function switched on after admission: a retryable 409 in the strict profile; the
+/// emulator profile completes the sign-up (closure review M1).
+#[test]
+fn blocking_auth_disabled_to_enabled_transition_returns_a_retryable_conflict() {
+    for strict in [true, false] {
+        let hook = Arc::new(ToggleHandlesHook {
+            calls: AtomicUsize::new(0),
+            enabled_after_initial: true,
+        });
+        let mut auth = if strict { strict_state() } else { state() };
+        auth.blocking = Some(hook);
+        let (status, body) = post(
+            &auth,
+            &format!("{V1}/accounts:signUp"),
+            &json!({"email": "toggle-on@example.com", "password": "hunter22"}),
+        );
+        if !strict {
+            assert_eq!(status, 200, "{body}");
+            assert_eq!(auth.store.lock().unwrap().user_count(), 1);
+            continue;
+        }
+        assert_eq!(status, 409, "{body}");
+        assert_eq!(
+            body["error"]["message"],
+            "BLOCKING_FUNCTION_CONFIGURATION_CHANGED"
+        );
+        assert_eq!(auth.store.lock().unwrap().user_count(), 0);
+    }
+}
+
+/// A function switched off after admission: a retryable 409 in the strict profile; the
+/// emulator profile completes the sign-up (closure review M1).
+#[test]
+fn blocking_auth_enabled_to_disabled_transition_returns_a_retryable_conflict() {
+    for strict in [true, false] {
+        let hook = Arc::new(ToggleHandlesHook {
+            calls: AtomicUsize::new(0),
+            enabled_after_initial: false,
+        });
+        let mut auth = if strict { strict_state() } else { state() };
+        auth.blocking = Some(hook);
+        let (status, body) = post(
+            &auth,
+            &format!("{V1}/accounts:signUp"),
+            &json!({"email": "toggle-off@example.com", "password": "hunter22"}),
+        );
+        if !strict {
+            assert_eq!(status, 200, "{body}");
+            assert_eq!(auth.store.lock().unwrap().user_count(), 1);
+            continue;
+        }
+        assert_eq!(status, 409, "{body}");
+        assert_eq!(
+            body["error"]["message"],
+            "BLOCKING_FUNCTION_CONFIGURATION_CHANGED"
+        );
+        assert_eq!(auth.store.lock().unwrap().user_count(), 0);
+    }
+}
+
+/// An account the hook creates through the Admin API skips the id the sign-up reserved, so the
+/// hook's answer is applied to the account it was about and the sign-up succeeds (`BHRNG-1`;
+/// fireemu used to refuse the sign-up whenever another account was created meanwhile).
+#[test]
+fn blocking_auth_never_replays_a_response_onto_a_different_generated_user() {
+    let hook = std::sync::OnceLock::new();
+    let state = Arc::new_cyclic(|weak| {
+        let mut state = state();
+        let creating = Arc::new(CreatingAdminHook {
             state: weak.clone(),
-        }));
+            seen: Mutex::new(None),
+        });
+        hook.set(creating.clone()).ok();
+        state.blocking = Some(creating);
         state
     });
 
-    let (status, refused) = post(
+    let (status, body) = post(
         &state,
         &format!("{V1}/accounts:signUp"),
         &json!({"email": "original@example.com", "password": "hunter22"}),
     );
-    assert_eq!(status, 400, "{refused}");
+    assert_eq!(status, 200, "{body}");
+    let seen = hook.get().unwrap().seen.lock().unwrap().clone().unwrap();
+    assert_eq!(body["localId"], seen.as_str());
     let store = state.store.lock().unwrap();
     assert!(store.user_by_email("admin-created@example.com").is_some());
-    assert!(store.user_by_email("original@example.com").is_none());
+    let original = store.user_by_email("original@example.com").unwrap();
+    assert_eq!(original.local_id.as_str(), seen);
+    assert_ne!(
+        store
+            .user_by_email("admin-created@example.com")
+            .unwrap()
+            .local_id
+            .as_str(),
+        seen
+    );
 }
 
 const UNREGISTERED_CALLER: &str = "Method doesn't allow unregistered callers (callers without established identity). Please use API Key or other form of API consumer identity to call this API.";
@@ -8541,22 +8976,18 @@ fn assert_custom_token_claims(body: &Value, tenant: &str, uid: &str) {
     let claims = fireemu_core_auth::jwt::decode_unsigned(body["idToken"].as_str().unwrap())
         .unwrap()
         .payload;
+    // A custom-token sign-in runs no blocking function (AUTH-TENANT-BLOCKING recording
+    // 2026-09-28): only the token's own claims are in the ID token.
     assert_eq!(
         claims.get("role").and_then(CoreJsonValue::as_str),
-        Some("session")
+        Some("token")
     );
     assert_eq!(
         claims.get("tokenOnly").and_then(CoreJsonValue::as_bool),
         Some(true)
     );
-    assert_eq!(
-        claims.get("persistedOnly").and_then(CoreJsonValue::as_bool),
-        Some(true)
-    );
-    assert_eq!(
-        claims.get("sessionOnly").and_then(CoreJsonValue::as_bool),
-        Some(true)
-    );
+    assert!(claims.get("persistedOnly").is_none());
+    assert!(claims.get("sessionOnly").is_none());
     assert_eq!(
         claims
             .get("firebase")
@@ -8613,18 +9044,14 @@ fn assert_refreshed_claims(body: &Value, tenant: &str, uid: &str) {
     let claims = fireemu_core_auth::jwt::decode_unsigned(body["id_token"].as_str().unwrap())
         .unwrap()
         .payload;
+    // A custom-token sign-in runs no blocking function (AUTH-TENANT-BLOCKING recording
+    // 2026-09-28): only the token's own claims are in the ID token.
     assert_eq!(
         claims.get("role").and_then(CoreJsonValue::as_str),
-        Some("session")
+        Some("token")
     );
-    assert_eq!(
-        claims.get("persistedOnly").and_then(CoreJsonValue::as_bool),
-        Some(true)
-    );
-    assert_eq!(
-        claims.get("sessionOnly").and_then(CoreJsonValue::as_bool),
-        Some(true)
-    );
+    assert!(claims.get("persistedOnly").is_none());
+    assert!(claims.get("sessionOnly").is_none());
     assert_eq!(
         claims
             .get("firebase")
@@ -8703,11 +9130,10 @@ fn assert_custom_session_cookie_handoff(state: &AuthState, tenant: &str, token: 
         &json!({"localId": [uid]}),
     );
     assert_eq!(status, 200);
-    let persisted: Value =
-        serde_json::from_str(stored["users"][0]["customAttributes"].as_str().unwrap()).unwrap();
-    assert_eq!(
-        persisted,
-        json!({"role": "persistent", "persistedOnly": true})
+    // No blocking function ran on the custom-token sign-in, so no claim was saved.
+    assert!(
+        stored["users"][0].get("customAttributes").is_none(),
+        "{stored}"
     );
     for other in [
         format!("{V1}/projects/worker-alpha:createSessionCookie"),
@@ -8743,10 +9169,9 @@ fn assert_tenant_stores_after_sign_in(
         .unwrap()
         .custom_claims
         .clone();
-    assert!(stored_a.entries().contains_key("role"));
-    assert!(stored_a.entries().contains_key("persistedOnly"));
-    assert!(!stored_a.entries().contains_key("tokenOnly"));
-    assert!(!stored_a.entries().contains_key("sessionOnly"));
+    // No blocking function ran, so nothing was saved on the account; a custom token's claims
+    // are only in its ID tokens.
+    assert!(stored_a.entries().is_empty());
     for tenant in ["customer-a", "customer-b"] {
         assert_eq!(
             registry
@@ -9309,7 +9734,7 @@ fn custom_tokens_sign_in_creating_the_user_and_carry_developer_claims() {
 
 #[test]
 #[allow(clippy::too_many_lines)]
-fn custom_token_claims_compose_with_tenant_session_claims_and_refresh_stays_in_namespace() {
+fn custom_token_claims_bypass_blocking_hooks_and_refresh_stays_in_namespace() {
     use fireemu_core_auth::store::AuthRegistry;
 
     let mut s = state();
@@ -9327,6 +9752,7 @@ fn custom_token_claims_compose_with_tenant_session_claims_and_refresh_stays_in_n
         .register("worker-alpha", &[], &["worker-key".to_owned()])
         .unwrap();
     s.tenancy = Some(Arc::new(RwLock::new(tenancy)));
+    // A blocking function is configured; a custom-token sign-in does not run it.
     s.blocking = Some(Arc::new(OverlappingClaimHook));
 
     let a = sign_in_custom_token(&s, "customer-a", "custom-a");
@@ -9432,24 +9858,20 @@ fn custom_token_claims_compose_with_tenant_session_claims_and_refresh_stays_in_n
 }
 
 #[test]
-fn a_before_create_only_hook_rejects_a_new_custom_token_identity() {
+fn a_before_create_only_hook_rejects_a_new_password_account() {
+    // A custom-token sign-in runs no blocking function (AUTH-TENANT-BLOCKING recording
+    // 2026-09-28), so a password sign-up carries the new account here.
     let mut state = state();
     state.blocking = Some(Arc::new(BeforeCreateOnlyRejectingHook));
-    let token = custom_token("blocked-custom", &json!({}), 1_788_008_460);
 
     let (status, body) = post(
         &state,
-        &format!("{V1}/accounts:signInWithCustomToken"),
-        &json!({"token": token, "returnSecureToken": true}),
+        &format!("{V1}/accounts:signUp"),
+        &json!({"email": "blocked@example.com", "password": "hunter22", "returnSecureToken": true}),
     );
 
     assert_eq!(status, 400, "{body}");
-    assert!(state
-        .store
-        .lock()
-        .unwrap()
-        .user_by_id("blocked-custom")
-        .is_none());
+    assert_eq!(state.store.lock().unwrap().user_count(), 0);
 }
 
 #[test]
@@ -9457,13 +9879,10 @@ fn a_before_create_only_hook_is_not_called_for_before_sign_in_after_success() {
     let events = Arc::new(Mutex::new(Vec::new()));
     let mut state = state();
     state.blocking = Some(Arc::new(BeforeCreateOnlySuccessfulHook(events.clone())));
-    let token = custom_token("one-hook", &json!({}), 1_788_008_460);
+    let account =
+        json!({"email": "one-hook@example.com", "password": "hunter22", "returnSecureToken": true});
 
-    let (status, body) = post(
-        &state,
-        &format!("{V1}/accounts:signInWithCustomToken"),
-        &json!({"token": token, "returnSecureToken": true}),
-    );
+    let (status, body) = post(&state, &format!("{V1}/accounts:signUp"), &account);
 
     assert_eq!(status, 200, "{body}");
     assert_eq!(*events.lock().unwrap(), [BlockingAuthEvent::BeforeCreate]);
@@ -9471,8 +9890,8 @@ fn a_before_create_only_hook_is_not_called_for_before_sign_in_after_success() {
     events.lock().unwrap().clear();
     let (status, body) = post(
         &state,
-        &format!("{V1}/accounts:signInWithCustomToken"),
-        &json!({"token": token, "returnSecureToken": true}),
+        &format!("{V1}/accounts:signInWithPassword"),
+        &account,
     );
     assert_eq!(status, 200, "{body}");
     assert!(events.lock().unwrap().is_empty());
@@ -10693,11 +11112,14 @@ fn tenant_password_policy_null_without_mask_is_absent_and_list_projects_policy()
 
     let before = admin(&s, "GET", path, &Value::Null);
     assert_eq!(before.0, 200, "{}", before.1);
+    // An update answers the tenant without the scrypt parameters a read adds.
+    let mut unchanged = before.1.clone();
+    unchanged.as_object_mut().unwrap().remove("hashConfig");
 
     // A message-level ProtoJSON null without an update mask is absent and preserves the policy.
     let absent = admin(&s, "PATCH", path, &json!({"passwordPolicyConfig": null}));
     assert_eq!(absent.0, 200, "{}", absent.1);
-    assert_eq!(absent.1, before.1);
+    assert_eq!(absent.1, unchanged);
 
     // A selected null explicitly clears the message to the default policy.
     let cleared = admin(
@@ -10707,9 +11129,12 @@ fn tenant_password_policy_null_without_mask_is_absent_and_list_projects_policy()
         &json!({"passwordPolicyConfig": null}),
     );
     assert_eq!(cleared.0, 200, "{}", cleared.1);
-    assert_eq!(
-        cleared.1["passwordPolicyConfig"]["passwordPolicyEnforcementState"],
-        "OFF"
+    // A tenant without a configured policy has no passwordPolicyConfig member, as a new
+    // tenant has none (AUTH-TENANT-BLOCKING recording 2026-09-27, manage#create-minimal).
+    assert!(
+        cleared.1.get("passwordPolicyConfig").is_none(),
+        "{}",
+        cleared.1
     );
 
     let restored = admin(
@@ -11086,6 +11511,16 @@ fn patch_sign_in(s: &AuthState, mask: &str, body: &Value) -> (u16, Value) {
 fn with_registry(mut s: AuthState) -> AuthState {
     s.registry = Some(Arc::new(AuthRegistry::new("demo-app", s.store.clone())));
     s
+}
+
+fn enable_tenants(s: &AuthState) {
+    let (status, body) = admin(
+        s,
+        "PATCH",
+        &format!("{PROJECT_CONFIG}?updateMask=multiTenant.allowTenants"),
+        &json!({"multiTenant": {"allowTenants": true}}),
+    );
+    assert_eq!(status, 200, "{body}");
 }
 
 /// The registry path of a config write keeps the profile's policy rule, stores written and
@@ -13101,9 +13536,10 @@ fn tenant_config_rejects_malformed_unmasked_fields_without_mutation() {
     for (label, body) in [
         (
             "client-permissions",
+            // A message where a switch belongs; production reads "true" as a switch.
             json!({
                 "displayName": "must-not-apply",
-                "client": {"permissions": {"disabledUserSignup": "true"}}
+                "client": {"permissions": {"disabledUserSignup": {"nested": true}}}
             }),
         ),
         (
@@ -13272,6 +13708,10 @@ fn tenant_config_patch_treats_protojson_null_messages_as_absent_or_clear() {
     assert_eq!(initial.0, 200, "{}", initial.1);
     let before = admin(&s, "GET", path, &Value::Null);
     assert_eq!(before.0, 200, "{}", before.1);
+    // An update answers the tenant without the read-only scrypt parameters a read adds
+    // (AUTH-TENANT-BLOCKING recording 2026-09-27, manage#patch-name).
+    let mut unchanged = before.1.clone();
+    unchanged.as_object_mut().unwrap().remove("hashConfig");
 
     let omitted = admin(
         &s,
@@ -13285,7 +13725,7 @@ fn tenant_config_patch_treats_protojson_null_messages_as_absent_or_clear() {
         }),
     );
     assert_eq!(omitted.0, 200, "{}", omitted.1);
-    assert_eq!(omitted.1, before.1);
+    assert_eq!(omitted.1, unchanged);
 
     let nested_nulls = admin(
         &s,
@@ -13301,7 +13741,7 @@ fn tenant_config_patch_treats_protojson_null_messages_as_absent_or_clear() {
         }),
     );
     assert_eq!(nested_nulls.0, 200, "{}", nested_nulls.1);
-    assert_eq!(nested_nulls.1, before.1);
+    assert_eq!(nested_nulls.1, unchanged);
 
     let cleared = admin(
         &s,
@@ -13315,17 +13755,23 @@ fn tenant_config_patch_treats_protojson_null_messages_as_absent_or_clear() {
     );
     assert_eq!(cleared.0, 200, "{}", cleared.1);
     assert!(cleared.1["displayName"].is_null());
-    assert_eq!(
-        cleared.1["client"]["permissions"]["disabledUserSignup"],
-        false
+    // Production leaves out a false switch.
+    assert!(
+        cleared.1["client"]["permissions"]["disabledUserSignup"].is_null(),
+        "{}",
+        cleared.1
     );
-    assert_eq!(
-        cleared.1["client"]["permissions"]["disabledUserDeletion"],
-        false
+    // Production leaves out a false switch.
+    assert!(
+        cleared.1["client"]["permissions"]["disabledUserDeletion"].is_null(),
+        "{}",
+        cleared.1
     );
-    assert_eq!(
-        cleared.1["emailPrivacyConfig"]["enableImprovedEmailPrivacy"],
-        false
+    // Production leaves out a false switch.
+    assert!(
+        cleared.1["emailPrivacyConfig"]["enableImprovedEmailPrivacy"].is_null(),
+        "{}",
+        cleared.1
     );
 }
 
@@ -13337,25 +13783,39 @@ fn tenant_create_rejects_malformed_settings_before_publishing_and_reads_back_sup
     let registry = Arc::new(AuthRegistry::new("demo-app", s.store.clone()));
     s.registry = Some(registry.clone());
     let collection = format!("{V2}/projects/demo-app/tenants");
+    // Bodies that cannot be read as a Tenant are refused before anything is published. (An
+    // unknown member is ignored under the emulator profile, as the official Auth emulator
+    // ignores it; strict refuses it as production does.)
     let malformed = [
         json!({"client": true}),
-        json!({"client": null}),
         json!({"client": {"permissions": "invalid"}}),
-        json!({"client": {"permissions": null}}),
-        json!({"client": {"permissions": {"disabledUserSignup": null}}}),
-        json!({"client": {"permissions": {"unknown": true}}}),
         json!({"emailPrivacyConfig": []}),
-        json!({"emailPrivacyConfig": null}),
-        json!({"emailPrivacyConfig": {"enableImprovedEmailPrivacy": null}}),
-        json!({"emailPrivacyConfig": {"unknown": true}}),
-        json!({"allowPasswordSignup": "true"}),
-        json!({"unknownField": true}),
-        json!({"passwordPolicyConfig": null}),
+        json!({"allowPasswordSignup": {"nested": true}}),
     ];
     for body in malformed {
         let refused = handle_with(&s, "POST", &collection, &owner(), &body);
         assert_eq!(refused.status, 400, "{}", refused.body);
         assert!(registry.tenants("demo-app").is_empty(), "{body}");
+    }
+    // A ProtoJSON null is an absent member and a switch written as text is read as one, as
+    // production reads them (AUTH-TENANT-BLOCKING recording 2026-09-27, manage#create-bad-type).
+    for body in [
+        json!({"client": null}),
+        json!({"client": {"permissions": null}}),
+        json!({"client": {"permissions": {"disabledUserSignup": null}}}),
+        json!({"emailPrivacyConfig": null}),
+        json!({"emailPrivacyConfig": {"enableImprovedEmailPrivacy": null}}),
+        json!({"allowPasswordSignup": "true"}),
+        json!({"passwordPolicyConfig": null}),
+        json!({"client": {"permissions": {"unknown": true}}}),
+        json!({"emailPrivacyConfig": {"unknown": true}}),
+        json!({"unknownField": true}),
+    ] {
+        let taken = handle_with(&s, "POST", &collection, &owner(), &body);
+        assert_eq!(taken.status, 200, "{body}: {}", taken.body);
+        let name = taken.body["name"].as_str().unwrap().to_owned();
+        let id = name.rsplit('/').next().unwrap();
+        assert!(registry.delete_tenant("demo-app", id), "{body}");
     }
 
     let created = handle_with(
@@ -15375,6 +15835,7 @@ fn sorted_admin_query_remains_scoped_to_the_selected_tenant() {
     let registry = Arc::new(AuthRegistry::new("demo-app", s.store.clone()));
     registry.ensure_tenant("demo-app", "customer").unwrap();
     s.registry = Some(registry);
+    enable_tenants(&s);
     let tenant = format!("{ADMIN}/tenants/customer");
     for (uid, name) in [("a", "Z"), ("b", "A")] {
         let (status, body) = admin(
@@ -15411,6 +15872,7 @@ fn strict_admin_query_body_tenant_is_scoped_and_never_silently_ignored() {
     let registry = Arc::new(AuthRegistry::new("demo-app", s.store.clone()));
     registry.ensure_tenant("demo-app", "customer").unwrap();
     s.registry = Some(registry);
+    enable_tenants(&s);
     let tenant = format!("{ADMIN}/tenants/customer");
     assert_eq!(
         admin(
@@ -15659,6 +16121,7 @@ fn account_expression_is_namespace_scoped_and_keeps_management_authorization() {
     let registry = Arc::new(AuthRegistry::new("demo-app", s.store.clone()));
     registry.ensure_tenant("demo-app", "customer").unwrap();
     s.registry = Some(registry);
+    enable_tenants(&s);
     assert_eq!(
         admin(
             &s,
@@ -18192,6 +18655,319 @@ fn a_refused_project_config_update_changes_neither_mfa_nor_the_config() {
             assert!(!store.password_policy().configured, "{member}");
         }
     }
+}
+
+/// A mixed Admin config PATCH publishes MFA and stored members together, and a refused MFA
+/// value leaves both unchanged in either project store path.
+#[test]
+fn a_mixed_mfa_and_stored_member_patch_is_atomic() {
+    for s in [strict_state(), with_registry(strict_state())] {
+        let url = format!("{PROJECT_CONFIG}?updateMask=mfa,notification.defaultLocale");
+        let enabled = json!({"state": "ENABLED", "enabledProviders": ["PHONE_SMS"]});
+        let (status, answer) = admin(
+            &s,
+            "PATCH",
+            &url,
+            &json!({"mfa": enabled, "notification": {"defaultLocale": "ja"}}),
+        );
+        assert_eq!(status, 200, "{answer}");
+        assert_eq!(answer["mfa"], enabled);
+        assert_eq!(answer["notification"]["defaultLocale"], "ja");
+        let (status, refused) = admin(
+            &s,
+            "PATCH",
+            &url,
+            &json!({"mfa": {"state": "NOT_A_STATE"}, "notification": {"defaultLocale": "fr"}}),
+        );
+        assert_eq!(status, 400, "{refused}");
+        let (status, read) = admin(&s, "GET", PROJECT_CONFIG, &Value::Null);
+        assert_eq!(status, 200, "{read}");
+        assert_eq!(read["mfa"], enabled);
+        assert_eq!(read["notification"]["defaultLocale"], "ja");
+    }
+}
+
+/// Strict tenant management follows the project's `allowTenants` switch. Disabling it keeps
+/// existing tenant data intact until the project enables tenant management again.
+#[test]
+fn strict_tenant_management_requires_allow_tenants() {
+    let s = with_registry(strict_state());
+    let tenants = format!("{V2}/projects/demo-app/tenants");
+    let create = || admin(&s, "POST", &tenants, &json!({"displayName": "atb-switch"}));
+    let list = || admin(&s, "GET", &tenants, &Value::Null);
+    let patch = |allowed: bool| {
+        admin(
+            &s,
+            "PATCH",
+            &format!("{PROJECT_CONFIG}?updateMask=multiTenant.allowTenants"),
+            &json!({"multiTenant": {"allowTenants": allowed}}),
+        )
+    };
+    assert_eq!(
+        admin(&s, "GET", PROJECT_CONFIG, &Value::Null).1["multiTenant"],
+        json!({})
+    );
+    let (status, refused) = create();
+    assert_eq!(
+        (status, refused["error"]["message"].as_str()),
+        (400, Some("INVALID_PROJECT_ID"))
+    );
+    let (status, enabled) = patch(true);
+    assert_eq!(status, 200, "{enabled}");
+    assert_eq!(enabled["multiTenant"], json!({"allowTenants": true}));
+    let (status, created) = create();
+    assert_eq!(status, 200, "{created}");
+    let (status, disabled) = patch(false);
+    assert_eq!(status, 200, "{disabled}");
+    assert_eq!(disabled["multiTenant"], json!({}));
+    let (status, refused) = list();
+    assert_eq!(
+        (status, refused["error"]["message"].as_str()),
+        (400, Some("INVALID_PROJECT_ID"))
+    );
+    assert_eq!(patch(true).0, 200);
+    let (status, listed) = list();
+    assert_eq!(status, 200, "{listed}");
+    assert_eq!(listed["tenants"][0]["name"], created["name"]);
+    let (status, cleared) = admin(
+        &s,
+        "PATCH",
+        &format!("{PROJECT_CONFIG}?updateMask=multiTenant.allowTenants"),
+        &json!({}),
+    );
+    assert_eq!(status, 200, "{cleared}");
+    assert_eq!(cleared["multiTenant"], json!({}));
+    assert_eq!(list().0, 400);
+}
+
+/// A tenant read keeps the project gate until its response is complete, so a disabling config
+/// PATCH cannot finish while that read is waiting for the tenant store.
+#[test]
+fn strict_tenant_reads_serialize_with_disabling_config_patch() {
+    use std::sync::mpsc::{channel, RecvTimeoutError};
+    use std::time::{Duration, Instant};
+
+    let s = Arc::new(with_registry(strict_state()));
+    enable_tenants(&s);
+    let tenants = format!("{V2}/projects/demo-app/tenants");
+    let (status, created) = admin(
+        &s,
+        "POST",
+        &tenants,
+        &json!({"displayName": "atb-read-gate"}),
+    );
+    assert_eq!(status, 200, "{created}");
+    let tenant = created["name"]
+        .as_str()
+        .unwrap()
+        .rsplit('/')
+        .next()
+        .unwrap();
+    let registry = s.registry.as_ref().unwrap();
+    let tenant_store = registry.tenant_store("demo-app", tenant).unwrap();
+    let gate = registry.operation_gate("demo-app", None).unwrap();
+
+    for path in [&tenants, &format!("{tenants}/{tenant}")] {
+        let held_store = tenant_store.lock().unwrap();
+        std::thread::scope(|scope| {
+            let (started_tx, started_rx) = channel();
+            let (patch_tx, patch_rx) = channel();
+            let state = &s;
+            let reader = scope.spawn(move || {
+                started_tx.send(()).unwrap();
+                admin(state, "GET", path, &Value::Null)
+            });
+            started_rx.recv().unwrap();
+            let deadline = Instant::now() + Duration::from_secs(2);
+            let entered_gate = loop {
+                match gate.try_lock() {
+                    Ok(guard) => drop(guard),
+                    Err(std::sync::TryLockError::WouldBlock) => break true,
+                    Err(std::sync::TryLockError::Poisoned(_)) => panic!("project gate poisoned"),
+                }
+                if Instant::now() >= deadline {
+                    break false;
+                }
+                std::thread::yield_now();
+            };
+            if !entered_gate {
+                drop(held_store);
+                reader.join().unwrap();
+                panic!("tenant read {path} did not enter the project gate");
+            }
+            let patcher = scope.spawn(move || {
+                let result = admin(
+                    state,
+                    "PATCH",
+                    &format!("{PROJECT_CONFIG}?updateMask=multiTenant.allowTenants"),
+                    &json!({"multiTenant": {"allowTenants": false}}),
+                );
+                patch_tx.send(result).unwrap();
+            });
+            assert_eq!(
+                patch_rx.recv_timeout(Duration::from_millis(50)),
+                Err(RecvTimeoutError::Timeout),
+                "config PATCH completed before the tenant read"
+            );
+            drop(held_store);
+            let (read_status, read) = reader.join().unwrap();
+            assert_eq!(read_status, 200, "{read}");
+            patcher.join().unwrap();
+            let (patch_status, config_response) = patch_rx.recv().unwrap();
+            assert_eq!(patch_status, 200, "{config_response}");
+        });
+        // With multi-tenancy off, a read of the list or of any tenant id is INVALID_PROJECT_ID
+        // (AUTH-TENANT-BLOCKING recording 2026-09-27, switch-off#list-off, get-unknown-off).
+        let (status, refused) = admin(&s, "GET", path, &Value::Null);
+        assert_eq!(status, 400, "{refused}");
+        assert_eq!(
+            refused["error"]["message"], "INVALID_PROJECT_ID",
+            "{refused}"
+        );
+        enable_tenants(&s);
+    }
+}
+
+/// A tenant read waits only for its own project's gate, while an unregistered routed read can
+/// reuse the routed gate without locking it twice.
+#[test]
+fn tenant_reads_use_their_own_project_gate() {
+    use std::sync::mpsc::channel;
+    use std::time::Duration;
+
+    let s = Arc::new(with_registry(strict_state()));
+    let registry = s.registry.as_ref().unwrap();
+    assert!(registry.register(
+        "worker-alpha",
+        AuthStore::new("worker-alpha", SplitMix64::new(6), TotpPolicy::default()),
+    ));
+    let (status, response) = admin(
+        &s,
+        "PATCH",
+        "/identitytoolkit.googleapis.com/admin/v2/projects/worker-alpha/config?updateMask=multiTenant.allowTenants",
+        &json!({"multiTenant": {"allowTenants": true}}),
+    );
+    assert_eq!(status, 200, "{response}");
+    let collection = format!("{V2}/projects/worker-alpha/tenants");
+    let (status, created) = admin(
+        &s,
+        "POST",
+        &collection,
+        &json!({"displayName": "atb-other-project"}),
+    );
+    assert_eq!(status, 200, "{created}");
+    let item = format!("{V2}/{}", created["name"].as_str().unwrap());
+    let demo_gate = registry.operation_gate("demo-app", None).unwrap();
+    let held_demo = demo_gate.lock().unwrap();
+    std::thread::scope(|scope| {
+        let (result_tx, result_rx) = channel();
+        let state = &s;
+        let collection = &collection;
+        let item = &item;
+        let reader = scope.spawn(move || {
+            result_tx
+                .send((
+                    admin(state, "GET", collection, &Value::Null),
+                    admin(state, "GET", item, &Value::Null),
+                ))
+                .unwrap();
+        });
+        let result = result_rx.recv_timeout(Duration::from_secs(2));
+        drop(held_demo);
+        reader.join().unwrap();
+        let (list, get) = result.expect("worker-alpha reads waited for demo-app's gate");
+        assert_eq!(list.0, 200, "{}", list.1);
+        assert_eq!(get.0, 200, "{}", get.1);
+    });
+
+    let mut routed = with_registry(state());
+    routed.allow_routed_projects = true;
+    let (status, listed) = admin(
+        &routed,
+        "GET",
+        &format!("{V2}/projects/unregistered/tenants"),
+        &Value::Null,
+    );
+    assert_eq!(status, 200, "{listed}");
+    // An empty list is `{}` (AUTH-TENANT-BLOCKING recording 2026-09-27).
+    assert_eq!(listed, json!({}));
+}
+
+/// Turning tenant management off hides an existing tenant from client Auth without deleting its
+/// users; turning it on again restores access to that namespace.
+#[test]
+fn strict_tenant_authentication_requires_allow_tenants() {
+    let s = with_registry(strict_state());
+    let config = format!("{PROJECT_CONFIG}?updateMask=multiTenant.allowTenants");
+    let set = |allowed| {
+        admin(
+            &s,
+            "PATCH",
+            &config,
+            &json!({"multiTenant": {"allowTenants": allowed}}),
+        )
+    };
+    assert_eq!(set(true).0, 200);
+    let (status, created) = admin(
+        &s,
+        "POST",
+        &format!("{V2}/projects/demo-app/tenants"),
+        &json!({"displayName": "atb-client", "allowPasswordSignup": true}),
+    );
+    assert_eq!(status, 200, "{created}");
+    let tenant = created["name"]
+        .as_str()
+        .unwrap()
+        .rsplit('/')
+        .next()
+        .unwrap();
+    let signup = |email: &str| {
+        post(
+            &s,
+            &format!("{V1}/accounts:signUp"),
+            &json!({"tenantId": tenant, "email": email, "password": "password123", "returnSecureToken": true}),
+        )
+    };
+    let (status, first) = signup("kept@example.com");
+    assert_eq!(status, 200, "{first}");
+    assert_eq!(set(false).0, 200);
+    let (status, refused) = signup("blocked@example.com");
+    assert_eq!(
+        (status, refused["error"]["message"].as_str()),
+        (404, Some("TENANT_NOT_FOUND"))
+    );
+    let (status, refused) = post(
+        &s,
+        &format!("{V1}/accounts:signInWithPassword"),
+        &json!({"tenantId": tenant, "email": "kept@example.com", "password": "password123", "returnSecureToken": true}),
+    );
+    assert_eq!(
+        (status, refused["error"]["message"].as_str()),
+        (404, Some("TENANT_NOT_FOUND"))
+    );
+    let (status, refused) = admin(
+        &s,
+        "POST",
+        &format!("{V1}/projects/demo-app/tenants/{tenant}/accounts:lookup"),
+        &json!({"localId": [first["localId"]]}),
+    );
+    assert_eq!(
+        (status, refused["error"]["message"].as_str()),
+        (404, Some("TENANT_NOT_FOUND"))
+    );
+    assert_eq!(set(true).0, 200);
+    let (status, signed_in) = post(
+        &s,
+        &format!("{V1}/accounts:signInWithPassword"),
+        &json!({"tenantId": tenant, "email": "kept@example.com", "password": "password123", "returnSecureToken": true}),
+    );
+    assert_eq!(status, 200, "{signed_in}");
+    let (status, refused) = post(
+        &s,
+        &format!("{V1}/accounts:signInWithPassword"),
+        &json!({"tenantId": tenant, "email": "blocked@example.com", "password": "password123", "returnSecureToken": true}),
+    );
+    assert_eq!(status, 400, "{refused}");
 }
 
 /// Strict: an email change applied from the emulator's action page follows the same rules as
@@ -20817,4 +21593,55 @@ fn the_emulator_config_route_answers_the_official_emulator_document() {
             assert_eq!(status, 200, "{signed_up}");
         }
     }
+}
+
+/// A verified custom token's tenant claim under strict, as production answers it
+/// (AUTH-TENANT-BLOCKING sandbox recording 2026-09-27, custom-token program).
+#[test]
+fn strict_custom_token_tenant_claims_answer_as_production() {
+    use fireemu_adapter_http::identity_toolkit::CUSTOM_TOKEN_AUDIENCE;
+    const MISMATCH: &str =
+        "TENANT_ID_MISMATCH : Specified tenant ID does not match the custom token.";
+    let s = with_registry(strict_state_with_signer());
+    enable_tenants(&s);
+    for tenant in ["tenant-a", "tenant-b"] {
+        s.registry
+            .as_ref()
+            .unwrap()
+            .ensure_tenant("demo-app", tenant)
+            .unwrap();
+    }
+    let now = 1_788_004_860;
+    let token = |tenant: Option<&str>| {
+        let mut payload = json!({"aud": CUSTOM_TOKEN_AUDIENCE, "iss": TEST_SIGNER,
+            "sub": TEST_SIGNER, "uid": "ct", "iat": now, "exp": now + 3600});
+        if let Some(tenant) = tenant {
+            payload["tenant_id"] = json!(tenant);
+        }
+        signed_payload(test_signer_key(), &payload)
+    };
+    let exchange = |token: String, tenant: Option<&str>| {
+        let mut body = json!({"token": token, "returnSecureToken": true});
+        if let Some(tenant) = tenant {
+            body["tenantId"] = json!(tenant);
+        }
+        post(&s, &format!("{V1}/accounts:signInWithCustomToken"), &body)
+    };
+    for (claim, named) in [
+        (Some("tenant-a"), Some("tenant-b")),
+        (Some("tenant-a"), None),
+        (Some("atb-nosuch-tenant"), None),
+    ] {
+        let (status, body) = exchange(token(claim), named);
+        assert_eq!(status, 400, "{claim:?} {named:?}: {body}");
+        assert_eq!(body["error"]["message"], MISMATCH, "{claim:?} {named:?}");
+    }
+    let (status, body) = exchange(token(None), Some("tenant-a"));
+    assert_eq!(status, 500, "{body}");
+    assert_eq!(body["error"]["message"], "Internal error encountered.");
+    assert_eq!(body["error"]["status"], "INTERNAL");
+    let (status, body) = exchange(token(Some("tenant-a")), Some("tenant-a"));
+    assert_eq!(status, 200, "{body}");
+    let (status, body) = exchange(token(None), None);
+    assert_eq!(status, 200, "{body}");
 }

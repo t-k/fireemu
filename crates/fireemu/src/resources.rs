@@ -121,35 +121,46 @@ impl ResourceHook for Auth {
         scope: &Scope,
         budget: RootBudget,
     ) -> Result<ServiceResources, TransitionFailure> {
-        let store = match scope {
-            Scope::Project(project) => self.0.store_for(project).ok_or_else(|| {
-                TransitionFailure::new(
-                    "auth",
-                    format!("project {project:?} has no reachable Auth store"),
-                )
-            })?,
-            Scope::AllExcept(_) => self.0.default_store(),
+        let (store, project) = match scope {
+            Scope::Project(project) => (
+                self.0.store_for(project).ok_or_else(|| {
+                    TransitionFailure::new(
+                        "auth",
+                        format!("project {project:?} has no reachable Auth store"),
+                    )
+                })?,
+                project.as_str(),
+            ),
+            Scope::AllExcept(_) => (self.0.default_store(), self.0.default_project()),
         };
-        let store = store
-            .lock()
-            .map_err(|_| TransitionFailure::new("auth", "the Auth store is poisoned"))?;
+        let poisoned = || TransitionFailure::new("auth", "the Auth store is poisoned");
         let count = |value: usize| u64::try_from(value).unwrap_or(u64::MAX);
+        let (mut users, mut user_bytes, mut transient_bytes) = {
+            let store = store.lock().map_err(|_| poisoned())?;
+            (
+                count(store.user_count()),
+                store.retained_user_bytes(),
+                store.transient_bytes(),
+            )
+        };
+        // Tenant namespaces are the session's users too (`TENRST-3`).
+        let tenants = self.0.tenants(project);
+        for tenant in &tenants {
+            let Some(store) = self.0.tenant_store(project, tenant) else {
+                continue;
+            };
+            let store = store.lock().map_err(|_| poisoned())?;
+            users = users.saturating_add(count(store.user_count()));
+            user_bytes = user_bytes.saturating_add(store.retained_user_bytes());
+            transient_bytes = transient_bytes.saturating_add(store.transient_bytes());
+        }
         Ok(ServiceResources {
             service: "auth".to_owned(),
             gauges: vec![
-                Gauge::logical("users.count", Unit::Count, count(store.user_count()), None),
-                Gauge::logical(
-                    "users.bytes",
-                    Unit::Bytes,
-                    store.retained_user_bytes(),
-                    None,
-                ),
-                Gauge::logical(
-                    "transient.bytes",
-                    Unit::Bytes,
-                    store.transient_bytes(),
-                    None,
-                ),
+                Gauge::logical("users.count", Unit::Count, users, None),
+                Gauge::logical("users.bytes", Unit::Bytes, user_bytes, None),
+                Gauge::logical("transient.bytes", Unit::Bytes, transient_bytes, None),
+                Gauge::logical("tenants.count", Unit::Count, count(tenants.len()), None),
             ],
             refusals: Vec::new(),
             roots: budget.bound(Vec::new()),
@@ -361,6 +372,51 @@ mod tests {
         assert_eq!(Process::rss_from_ps("  32768\n"), Ok(32_768 * 1024));
         assert!(Process::rss_from_ps("").is_err());
         assert!(Process::rss_from_ps("rss\n32768\n").is_err());
+    }
+
+    /// `TENRST-3`: the Auth report counts the users of the scope's tenant namespaces and the
+    /// tenants themselves, so a suite that leaves tenant users behind can see them.
+    #[test]
+    fn the_auth_report_counts_tenant_users_and_tenants() {
+        use fireemu_core_auth::mfa::TotpPolicy;
+        use fireemu_core_auth::store::{AuthRegistry, AuthStore, NewUser};
+        use fireemu_core_types::determinism::SplitMix64;
+        use fireemu_core_types::time::LogicalInstant;
+        use std::sync::{Arc, Mutex};
+
+        const AT: LogicalInstant = LogicalInstant::from_unix_seconds(1_788_004_860);
+        let default = Arc::new(Mutex::new(AuthStore::new(
+            "demo-app",
+            SplitMix64::new(1),
+            TotpPolicy::default(),
+        )));
+        let registry = Arc::new(AuthRegistry::new("demo-app", default.clone()));
+        default
+            .lock()
+            .unwrap()
+            .create_user(NewUser::email("project@example.test"), AT)
+            .unwrap();
+        for (tenant, email) in [("one", "a@example.test"), ("two", "b@example.test")] {
+            registry
+                .ensure_tenant("demo-app", tenant)
+                .unwrap()
+                .lock()
+                .unwrap()
+                .create_user(NewUser::email(email), AT)
+                .unwrap();
+        }
+        let report = super::Auth(registry)
+            .collect(&Scope::AllExcept(BTreeSet::new()), RootBudget::DEFAULT)
+            .unwrap();
+        let gauge = |id: &str| {
+            report
+                .gauges
+                .iter()
+                .find(|gauge| gauge.id == id)
+                .map(|gauge| gauge.current)
+        };
+        assert_eq!(gauge("users.count"), Some(3));
+        assert_eq!(gauge("tenants.count"), Some(2));
     }
 
     #[test]

@@ -440,6 +440,9 @@ pub struct LegacyToken<'a> {
     /// The issuing store's session epoch, only while fireemu session isolation is active (the
     /// same local-only marker ID tokens carry under `firebase`).
     pub session_epoch: Option<&'a str>,
+    /// The tenant of a tenant's account: a top-level `tenant` claim (AUTH-TENANT-BLOCKING
+    /// sandbox recording 2026-09-27, settings#password-off-update-password).
+    pub tenant: Option<&'a str>,
 }
 
 /// The claims of a legacy token issued at `iat` for `project`: no `sub`, `auth_time` or
@@ -471,6 +474,9 @@ pub fn legacy_token_payload(project: &str, iat: i64, token: &LegacyToken<'_>) ->
     }
     if let Some(extra) = token.extra_claims.filter(|extra| !extra.is_empty()) {
         claims.insert("extra_claims".to_owned(), ClaimValue::Map(extra.clone()));
+    }
+    if let Some(tenant) = token.tenant {
+        claims.insert("tenant".to_owned(), ClaimValue::String(tenant.to_owned()));
     }
     if let Some(epoch) = token.session_epoch {
         claims.insert(

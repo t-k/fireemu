@@ -796,8 +796,9 @@ fn link_request(token: &str, id_token: &Value, return_credential: bool) -> Value
 #[test]
 fn strict_refuses_links_as_production_does() {
     // record-oidc 39209e: an account that has the provider keeps its identity, and an identity
-    // whose email another account holds is refused first.
-    let s = strict_state();
+    // whose email another account holds is refused first. Both refusals carry a continuation.
+    let mut s = strict_state();
+    s.idp_continuations = IdpContinuationPolicy::LocalBounded;
     let mut first_claims = claims();
     first_claims["sub"] = json!("sub-first");
     let first = sign_in(&s, &request(&token(&first_claims)));
@@ -825,6 +826,11 @@ fn strict_refuses_links_as_production_does() {
         );
         assert_eq!(answer.status, 200, "{case}: {}", answer.body);
         assert_eq!(answer.body["errorMessage"], message, "{case}");
+        assert!(
+            answer.body["pendingToken"].is_string(),
+            "{case}: {}",
+            answer.body
+        );
         for absent in ["idToken", "refreshToken", "localId"] {
             assert!(
                 answer.body.get(absent).is_none(),

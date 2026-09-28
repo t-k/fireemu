@@ -3758,7 +3758,11 @@ impl AuthStore {
             })
             .unwrap_or_default();
         if let Some(user) = self.users.get_mut(uid).map(Arc::make_mut) {
-            user.password = None;
+            // The password's change time stays, as after an Admin password removal
+            // (AUTH-FEDERATION record-oidc 39209e).
+            if let Some(updated_at) = user.password.take().and_then(|p| p.updated_at) {
+                user.removed_password_updated_at = Some(updated_at);
+            }
             user.phone_number = None;
             user.federated.clear();
             user.provider = Provider::Federated(provider_id.to_owned());

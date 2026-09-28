@@ -3371,7 +3371,12 @@ fn handle_with_policy(
                     == Some(true)
                 || matches!(
                     response.body.get("errorMessage").and_then(Value::as_str),
-                    Some("EMAIL_EXISTS" | "FEDERATED_USER_ID_ALREADY_LINKED")
+                    Some(
+                        "EMAIL_EXISTS"
+                            | "FEDERATED_USER_ID_ALREADY_LINKED"
+                            // Strict OIDC's link refusal carries one too (record-oidc 39209e).
+                            | "PROVIDER_ALREADY_LINKED"
+                    )
                 ));
         if continuation_response {
             if let Ok(mut live) = store_arc.lock() {

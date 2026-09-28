@@ -7,9 +7,10 @@
 //! `INVALID_IDP_RESPONSE : Failed to verify the signature in SAMLResponse`, saml-smoke run
 //! efe0ef, 2026-09-27; "If verification fails, the response will be rejected"), and a
 //! missing `NameID` ("Identity Platform expects the <saml:Subject> and <saml:NameID>
-//! elements"). Audience, destination, recipient, time windows, `InResponseTo` and issuer are
-//! not enforced: production's handling of them is unobserved (the list U1-U18 of
-//! `docs.local/instructions/2026-09-28-auth-federation-saml-unobserved.md`).
+//! elements"). The response's status, destination, assertion issuer, audience, time windows
+//! and `InResponseTo` are checked with production's messages (record-saml 7789f0,
+//! 2026-09-28); the `Recipient` and the certificate's validity period are not (production
+//! accepted both).
 
 use std::collections::BTreeMap;
 
@@ -17,12 +18,19 @@ use fireemu_core_auth::store::AuthStore;
 use fireemu_core_types::time::LogicalInstant;
 use serde_json::{json, Value};
 
-use super::{error, form_encode, normalized_idp_params, str_field, uri_is_absolute, JsonResponse};
+use super::{
+    error, form_encode, normalized_idp_params, str_field, uri_is_absolute, IdpSignerTrust,
+    JsonResponse,
+};
 use crate::saml::{verify_saml_response, SamlError, VerifiedSaml};
 
 /// Production's refusal of a response whose signature does not verify (saml-smoke).
 pub(super) const SIGNATURE_REFUSAL: &str =
     "INVALID_IDP_RESPONSE : Failed to verify the signature in SAMLResponse";
+
+/// How long a strict `createAuthUri`'s `AuthnRequest` ID is remembered for its session, in
+/// seconds (an emulator bound: past it, a response is not checked against the request).
+const REQUEST_LIFETIME: i64 = 3_600;
 
 /// The largest `SAMLResponse` read, as sent (base64 of at most 256 KiB of XML).
 const MAX_ENCODED: usize = crate::saml::MAX_RESPONSE_BYTES / 3 * 4 + 4;
@@ -75,10 +83,15 @@ pub(super) fn names_saml_provider(body: &Value) -> bool {
 /// certificate verifies a signature covering the assertion; production's configuration
 /// messages for a provider that is missing, named in another case or disabled;
 /// `INVALID_IDP_RESPONSE` for a missing or unreadable response, one without a `NameID`, or a
-/// form this verifier does not implement (codes unobserved).
+/// form this verifier does not implement (codes unobserved); and production's messages for
+/// the conditions of [`check_conditions`], unless the sign-in resumes a continuation (its
+/// response was checked when first presented).
 pub(super) fn strict_saml(
     store: &AuthStore,
     body: &Value,
+    signers: &IdpSignerTrust,
+    at: LogicalInstant,
+    resumed: bool,
 ) -> Result<Option<(StrictSaml, Value)>, JsonResponse> {
     let refused = || error(400, "INVALID_IDP_RESPONSE");
     let Some(request_uri) = str_field(body, "requestUri").filter(|uri| uri_is_absolute(uri)) else {
@@ -115,6 +128,25 @@ pub(super) fn strict_saml(
         .clone()
         .filter(|name| !name.chars().any(char::is_control))
         .ok_or_else(refused)?;
+    if !resumed {
+        if let Some(config) = store.saml_config(provider_id) {
+            let now = at.as_nanos().div_euclid(1_000_000_000);
+            let request_id = str_field(body, "sessionId")
+                .filter(|id| !id.is_empty())
+                .and_then(|id| {
+                    signers.saml_request(&session_key(store, id), i64::try_from(now).ok()?)
+                });
+            let expected = Expected {
+                callback_uri: &config.callback_uri,
+                idp_entity_id: &config.idp_entity_id,
+                sp_entity_id: &config.sp_entity_id,
+                request_id: request_id.as_deref(),
+            };
+            if let Err(message) = check_conditions(&verified, &expected, at) {
+                return Err(error(400, &message));
+            }
+        }
+    }
     let rewritten = credential_body(body, provider_id, &name_id, &verified);
     Ok(Some((
         StrictSaml {
@@ -124,6 +156,124 @@ pub(super) fn strict_saml(
         },
         rewritten,
     )))
+}
+
+/// What a response must name: the provider's configuration and, for a session this daemon
+/// issued, its `AuthnRequest` ID.
+struct Expected<'a> {
+    callback_uri: &'a str,
+    idp_entity_id: &'a str,
+    sp_entity_id: &'a str,
+    request_id: Option<&'a str>,
+}
+
+/// Production's checks of a verified response (record-saml 7789f0), each only when the
+/// element is present (a response without it is unobserved): a status other than success,
+/// a `Destination` other than the callback URL, an assertion `Issuer` other than the identity
+/// provider's entity ID, audience restrictions without the SP entity ID, `Conditions` not yet valid or
+/// expired, an expired bearer confirmation, and, for a session whose request this daemon
+/// issued, `InResponseTo` missing from or other than the request in the response or the
+/// confirmation. A time that does not parse is not checked (unobserved).
+///
+/// # Errors
+/// Production's `INVALID_IDP_RESPONSE : …` message of the first failing check.
+fn check_conditions(
+    verified: &VerifiedSaml,
+    expected: &Expected<'_>,
+    at: LogicalInstant,
+) -> Result<(), String> {
+    const SUCCESS: &str = "urn:oasis:names:tc:SAML:2.0:status:Success";
+    if let Some(status) = verified
+        .status
+        .as_deref()
+        .filter(|status| *status != SUCCESS)
+    {
+        return Err(format!(
+            "INVALID_IDP_RESPONSE : SAMLResponse status code not SUCCESS, instead it is: {status}"
+        ));
+    }
+    if let Some(destination) = verified
+        .destination
+        .as_deref()
+        .filter(|destination| *destination != expected.callback_uri)
+    {
+        return Err(format!(
+            "INVALID_IDP_RESPONSE : SAMLResponse destination {destination} does not match RP callback URL {}.",
+            expected.callback_uri
+        ));
+    }
+    if let Some(issuer) = verified
+        .issuer
+        .as_deref()
+        .filter(|issuer| *issuer != expected.idp_entity_id)
+    {
+        return Err(format!(
+            "INVALID_IDP_RESPONSE : Assertion has Issuer {issuer} which is different from expected Issuer {}.",
+            expected.idp_entity_id
+        ));
+    }
+    if !verified.audiences.is_empty()
+        && !verified
+            .audiences
+            .iter()
+            .any(|audience| audience == expected.sp_entity_id)
+    {
+        return Err(format!(
+            "INVALID_IDP_RESPONSE : All <AudienceRestriction>s should contain the SAML RP entity ID: '{}'.",
+            expected.sp_entity_id
+        ));
+    }
+    let now = issue_instant(at).unwrap_or_default();
+    if let Some(not_before) = parsed_time(verified.not_before.as_deref()) {
+        if at < not_before {
+            return Err(format!(
+                "INVALID_IDP_RESPONSE : Current instant, {now}, is before NotBefore attribute, {}",
+                issue_instant(not_before).unwrap_or_default()
+            ));
+        }
+    }
+    for not_on_or_after in [
+        verified.not_on_or_after.as_deref(),
+        verified.confirmation_not_on_or_after.as_deref(),
+    ] {
+        if let Some(not_on_or_after) = parsed_time(not_on_or_after) {
+            if at >= not_on_or_after {
+                return Err(format!(
+                    "INVALID_IDP_RESPONSE : Current instant, {now}, is on or after NotOnOrAfter attribute, {}",
+                    issue_instant(not_on_or_after).unwrap_or_default()
+                ));
+            }
+        }
+    }
+    if let Some(request_id) = expected.request_id {
+        let answered = [
+            verified.in_response_to.as_deref(),
+            verified.confirmation_in_response_to.as_deref(),
+        ];
+        if answered.iter().any(Option::is_none) {
+            return Err("INVALID_IDP_RESPONSE : InResponseTo attribute must be present in both Response and SubjectConfirmationData.".to_owned());
+        }
+        if answered.iter().any(|id| *id != Some(request_id)) {
+            return Err("INVALID_IDP_RESPONSE : InResponseTo in both Response and SubjectConfirmationData must match the request ID.".to_owned());
+        }
+    }
+    Ok(())
+}
+
+fn parsed_time(value: Option<&str>) -> Option<LogicalInstant> {
+    LogicalInstant::parse_rfc3339(value?).ok()
+}
+
+/// The key a session's `AuthnRequest` ID is remembered by: the namespace (and its reset
+/// generation) and the session ID `createAuthUri` answered.
+fn session_key(store: &AuthStore, session_id: &str) -> String {
+    json!([
+        store.project_id(),
+        store.tenant_id(),
+        store.reset_generation(),
+        session_id,
+    ])
+    .to_string()
 }
 
 /// The response verified with the provider's certificates, or why not (`None`: the provider
@@ -209,6 +359,7 @@ pub(super) fn strict_saml_auth_uri(
     provider_id: &str,
     body: &Value,
     at: LogicalInstant,
+    signers: Option<&IdpSignerTrust>,
 ) -> Option<JsonResponse> {
     let config = store.saml_config(provider_id)?.clone();
     let Some(continue_uri) = str_field(body, "continueUri").filter(|uri| !uri.is_empty()) else {
@@ -237,6 +388,15 @@ pub(super) fn strict_saml_auth_uri(
     let encoded = fireemu_core_types::hash::base64_standard(&deflate_stored(request.as_bytes()));
     let relay_state = store.next_opaque_value();
     let session_id = store.next_opaque_value();
+    if let Some(signers) = signers {
+        let now = i64::try_from(at.as_nanos().div_euclid(1_000_000_000)).unwrap_or(i64::MAX);
+        signers.record_saml_request(
+            session_key(store, &session_id),
+            format!("_{}", &id[..32]),
+            now.saturating_add(REQUEST_LIFETIME),
+            now,
+        );
+    }
     Some(JsonResponse {
         status: 200,
         body: json!({

@@ -2,9 +2,9 @@
 //! configured certificates (AUTH-FEDERATION, owner decision O5 stage B); the emulator profile
 //! keeps the official emulator's JSON fixture. Refusals rest on production evidence or the
 //! public documentation only: a signature that does not verify (production's message, the
-//! saml-smoke run of 2026-09-27) and a missing `NameID`. Conditions whose production handling is
-//! unobserved (audience, destination, time windows, `InResponseTo`) are not enforced, and the
-//! tests fix that.
+//! saml-smoke run of 2026-09-27), a missing `NameID`, and the conditions production refused
+//! with its messages (record-saml 7789f0: status, destination, issuer, audience, time windows,
+//! `InResponseTo`). The `Recipient` and an expired certificate are accepted, as production did.
 use fireemu_adapter_http::identity_toolkit::{
     handle, AuthState, IdpAssertionPolicy, IdpContinuationPolicy, IdpSignerTrust, JsonResponse,
 };
@@ -21,6 +21,8 @@ const V1: &str = "/identitytoolkit.googleapis.com/v1";
 const PROVIDER: &str = "saml.strict";
 const SIGNATURE_REFUSAL: &str =
     "INVALID_IDP_RESPONSE : Failed to verify the signature in SAMLResponse";
+/// 2027-01-15T08:00:30Z: within the signed vectors' validity (07:59 to 08:05).
+const VECTOR_NOW: i64 = 1_800_000_030;
 const CALLBACK: &str = "https://demo-app.firebaseapp.com/__/auth/handler";
 // Production's configuration refusals (record-oidc 39209e, the same for every provider type).
 const NOT_FOUND: &str = "OPERATION_NOT_ALLOWED : The identity provider configuration is not found.";
@@ -43,10 +45,9 @@ fn provider(enabled: bool, certificate: &str) -> InboundSamlProviderConfig {
         sso_url: "https://idp.example.test/saml/fixture/sso".into(),
         idp_certificates: vec![fixture(certificate)],
         sign_request: false,
-        // Neither the audience nor the callback of the vectors: production's checks of them
-        // are unobserved, so strict does not refuse on them.
-        sp_entity_id: "another-sp".into(),
-        callback_uri: "https://another.example.test/__/auth/handler".into(),
+        // The audience and destination the signed vectors name.
+        sp_entity_id: "fireemu-fixture-sp".into(),
+        callback_uri: "https://demo-project.firebaseapp.com/__/auth/handler".into(),
     }
 }
 
@@ -58,7 +59,7 @@ fn state(strict: bool) -> AuthState {
             TotpPolicy::default(),
         ))),
         clock: Arc::new(Mutex::new(VirtualClock::new(
-            LogicalInstant::from_unix_seconds(1_788_004_860),
+            LogicalInstant::from_unix_seconds(VECTOR_NOW),
         ))),
         wall_clock: None,
         totp_extension_enabled: false,
@@ -626,7 +627,7 @@ fn strict_answers_create_auth_uri_for_a_saml_provider_as_production_does() {
     );
     assert_eq!(
         rest,
-        " IssueInstant=\"2026-08-29T12:01:00.000Z\" ProtocolBinding=\"urn:oasis:names:tc:SAML:2.0:bindings:HTTP-POST\" Version=\"2.0\"><saml2:Issuer xmlns:saml2=\"urn:oasis:names:tc:SAML:2.0:assertion\">another-sp</saml2:Issuer></saml2p:AuthnRequest>"
+        " IssueInstant=\"2027-01-15T08:00:30.000Z\" ProtocolBinding=\"urn:oasis:names:tc:SAML:2.0:bindings:HTTP-POST\" Version=\"2.0\"><saml2:Issuer xmlns:saml2=\"urn:oasis:names:tc:SAML:2.0:assertion\">fireemu-fixture-sp</saml2:Issuer></saml2p:AuthnRequest>"
     );
     let again = create_auth_uri(
         &s,
@@ -729,4 +730,448 @@ fn strict_answers_a_saml_sign_in_in_productions_shape() {
         "{}",
         lookup.body
     );
+}
+
+// ---- SAML conditions (record-saml 7789f0): responses signed at the test ----------------------
+
+const DYNAMIC: &str = "saml.dynamic";
+const IDP: &str = "https://idp.example.test/saml/dynamic";
+const SP: &str = "https://demo-app.firebaseapp.com/saml/dynamic";
+const NOW: i64 = 1_788_004_860;
+
+/// A DER element: tag, definite length, content.
+fn der(tag: u8, content: &[u8]) -> Vec<u8> {
+    let mut out = vec![tag];
+    let len = content.len();
+    if len < 0x80 {
+        out.push(u8::try_from(len).unwrap());
+    } else {
+        let bytes: Vec<u8> = len
+            .to_be_bytes()
+            .into_iter()
+            .skip_while(|b| *b == 0)
+            .collect();
+        out.push(0x80 | u8::try_from(bytes.len()).unwrap());
+        out.extend(bytes);
+    }
+    out.extend_from_slice(content);
+    out
+}
+
+/// The test identity provider's key, and a certificate carrying its public key (the verifier reads only the
+/// subjectPublicKeyInfo, so the rest is minimal and unsigned).
+fn idp_key() -> (rsa::RsaPrivateKey, String) {
+    use rsa::pkcs8::{DecodePrivateKey, EncodePublicKey};
+    let signer = fireemu_adapter_http::signing::RsaSigner::from_seed(7101).unwrap();
+    let key =
+        rsa::RsaPrivateKey::from_pkcs8_der(signer.to_pkcs8_der().unwrap().as_bytes()).unwrap();
+    let spki = key.to_public_key().to_public_key_der().unwrap();
+    let tbs = [
+        der(0xa0, &der(0x02, &[2])),
+        der(0x02, &[1]),
+        der(0x30, &[]),
+        der(0x30, &[]),
+        der(0x30, &[]),
+        der(0x30, &[]),
+        spki.as_bytes().to_vec(),
+    ]
+    .concat();
+    let certificate = der(
+        0x30,
+        &[der(0x30, &tbs), der(0x30, &[]), der(0x03, &[0])].concat(),
+    );
+    let pem = format!(
+        "-----BEGIN CERTIFICATE-----\n{}\n-----END CERTIFICATE-----\n",
+        base64_standard(&certificate)
+    );
+    (key, pem)
+}
+
+/// What a response says; each field departs from a valid answer to the request only when set.
+#[derive(Clone)]
+struct Conditions {
+    in_response_to: Option<String>,
+    /// Whether the `SubjectConfirmationData` names the request too.
+    confirmation_answers: bool,
+    destination: String,
+    recipient: String,
+    issuer: String,
+    audience: String,
+    not_before: i64,
+    not_on_or_after: i64,
+    confirmation_not_on_or_after: i64,
+    status: String,
+}
+
+impl Conditions {
+    fn answering(request: Option<&str>) -> Self {
+        Self {
+            in_response_to: request.map(str::to_owned),
+            confirmation_answers: true,
+            destination: CALLBACK.into(),
+            recipient: CALLBACK.into(),
+            issuer: IDP.into(),
+            audience: SP.into(),
+            not_before: NOW - 60,
+            not_on_or_after: NOW + 300,
+            confirmation_not_on_or_after: NOW + 300,
+            status: "urn:oasis:names:tc:SAML:2.0:status:Success".into(),
+        }
+    }
+}
+
+fn iso(seconds: i64) -> String {
+    LogicalInstant::from_unix_seconds(seconds)
+        .to_rfc3339()
+        .unwrap()
+}
+
+/// A response with an assertion signed (enveloped, exclusive canonicalization, RSA-SHA256).
+fn signed_response(key: &rsa::RsaPrivateKey, c: &Conditions) -> String {
+    use rsa::signature::{SignatureEncoding, Signer};
+    use sha2::{Digest, Sha256};
+    let reply_to = |name: &str| {
+        c.in_response_to
+            .as_deref()
+            .map_or_else(String::new, |id| format!(" {name}=\"{id}\""))
+    };
+    let unsigned = format!(
+        "<samlp:Response xmlns:samlp=\"urn:oasis:names:tc:SAML:2.0:protocol\" xmlns:saml=\"urn:oasis:names:tc:SAML:2.0:assertion\" Destination=\"{dest}\" ID=\"_r1\"{irt} IssueInstant=\"{now}\" Version=\"2.0\"><saml:Issuer>{IDP}</saml:Issuer><samlp:Status><samlp:StatusCode Value=\"{status}\"></samlp:StatusCode></samlp:Status><saml:Assertion ID=\"_a1\" IssueInstant=\"{now}\" Version=\"2.0\"><saml:Issuer>{issuer}</saml:Issuer><saml:Subject><saml:NameID>dynamic@example.com</saml:NameID><saml:SubjectConfirmation Method=\"urn:oasis:names:tc:SAML:2.0:cm:bearer\"><saml:SubjectConfirmationData{cirt} NotOnOrAfter=\"{cnoa}\" Recipient=\"{recipient}\"></saml:SubjectConfirmationData></saml:SubjectConfirmation></saml:Subject><saml:Conditions NotBefore=\"{nb}\" NotOnOrAfter=\"{noa}\"><saml:AudienceRestriction><saml:Audience>{aud}</saml:Audience></saml:AudienceRestriction></saml:Conditions></saml:Assertion></samlp:Response>",
+        dest = c.destination,
+        irt = reply_to("InResponseTo"),
+        cirt = if c.confirmation_answers { reply_to("InResponseTo") } else { String::new() },
+        now = iso(NOW),
+        status = c.status,
+        issuer = c.issuer,
+        cnoa = iso(c.confirmation_not_on_or_after),
+        recipient = c.recipient,
+        nb = iso(c.not_before),
+        noa = iso(c.not_on_or_after),
+        aud = c.audience,
+    );
+    let doc = roxmltree::Document::parse(&unsigned).unwrap();
+    let assertion = doc
+        .descendants()
+        .find(|n| n.has_tag_name(("urn:oasis:names:tc:SAML:2.0:assertion", "Assertion")))
+        .unwrap();
+    let canonical =
+        fireemu_adapter_http::saml::canonicalize(&unsigned, assertion, None, &[], false).unwrap();
+    let digest = base64_standard(&Sha256::digest(canonical.as_bytes()));
+    let signed_info_body = format!(
+        "<ds:CanonicalizationMethod Algorithm=\"http://www.w3.org/2001/10/xml-exc-c14n#\"></ds:CanonicalizationMethod><ds:SignatureMethod Algorithm=\"http://www.w3.org/2001/04/xmldsig-more#rsa-sha256\"></ds:SignatureMethod><ds:Reference URI=\"#_a1\"><ds:Transforms><ds:Transform Algorithm=\"http://www.w3.org/2000/09/xmldsig#enveloped-signature\"></ds:Transform><ds:Transform Algorithm=\"http://www.w3.org/2001/10/xml-exc-c14n#\"></ds:Transform></ds:Transforms><ds:DigestMethod Algorithm=\"http://www.w3.org/2001/04/xmlenc#sha256\"></ds:DigestMethod><ds:DigestValue>{digest}</ds:DigestValue></ds:Reference>"
+    );
+    let canonical_signed_info = format!(
+        "<ds:SignedInfo xmlns:ds=\"http://www.w3.org/2000/09/xmldsig#\">{signed_info_body}</ds:SignedInfo>"
+    );
+    let signature = rsa::pkcs1v15::SigningKey::<Sha256>::new(key.clone())
+        .sign(canonical_signed_info.as_bytes())
+        .to_vec();
+    let element = format!(
+        "<ds:Signature xmlns:ds=\"http://www.w3.org/2000/09/xmldsig#\"><ds:SignedInfo>{signed_info_body}</ds:SignedInfo><ds:SignatureValue>{}</ds:SignatureValue></ds:Signature>",
+        base64_standard(&signature)
+    );
+    let marker = format!("<saml:Issuer>{}</saml:Issuer><saml:Subject>", c.issuer);
+    unsigned.replacen(
+        &marker,
+        &format!(
+            "<saml:Issuer>{}</saml:Issuer>{element}<saml:Subject>",
+            c.issuer
+        ),
+        1,
+    )
+}
+
+/// A strict state with the dynamic provider (the test identity provider's certificate and names).
+fn dynamic_state() -> (AuthState, rsa::RsaPrivateKey) {
+    let (key, pem) = idp_key();
+    let s = state(true);
+    *s.clock.lock().unwrap() = VirtualClock::new(LogicalInstant::from_unix_seconds(NOW));
+    assert!(s
+        .store
+        .lock()
+        .unwrap()
+        .create_saml_config(InboundSamlProviderConfig {
+            id: DYNAMIC.into(),
+            display_name: None,
+            enabled: true,
+            idp_entity_id: IDP.into(),
+            sso_url: "https://idp.example.test/saml/dynamic/sso".into(),
+            idp_certificates: vec![pem],
+            sign_request: false,
+            sp_entity_id: SP.into(),
+            callback_uri: CALLBACK.into(),
+        }));
+    (s, key)
+}
+
+/// A `createAuthUri` of the dynamic provider: its session ID and its `AuthnRequest` ID.
+fn session(s: &AuthState) -> (String, String) {
+    let answer = create_auth_uri(s, &json!({"providerId": DYNAMIC, "continueUri": CALLBACK}));
+    assert_eq!(answer.status, 200, "{}", answer.body);
+    let uri = answer.body["authUri"].as_str().unwrap();
+    let request = uri
+        .split("SAMLRequest=")
+        .nth(1)
+        .unwrap()
+        .split('&')
+        .next()
+        .unwrap();
+    let deflated = fireemu_core_auth::jwt::base64url_decode(
+        percent_decoded(request)
+            .replace('+', "-")
+            .replace('/', "_")
+            .trim_end_matches('='),
+    )
+    .unwrap();
+    let xml = String::from_utf8(inflate_stored(&deflated)).unwrap();
+    let id = xml
+        .split(" ID=\"")
+        .nth(1)
+        .unwrap()
+        .split('"')
+        .next()
+        .unwrap()
+        .to_owned();
+    (answer.body["sessionId"].as_str().unwrap().to_owned(), id)
+}
+
+fn dynamic_request(xml: &str, session_id: Option<&str>) -> Value {
+    let mut body = request_for(DYNAMIC, &base64_standard(xml.as_bytes()));
+    if let Some(session_id) = session_id {
+        body["sessionId"] = json!(session_id);
+    }
+    body
+}
+
+#[test]
+fn strict_refuses_the_saml_conditions_production_refuses() {
+    let (s, key) = dynamic_state();
+    let (session_id, request_id) = session(&s);
+    let valid = Conditions::answering(Some(&request_id));
+    let ok = sign_in(
+        &s,
+        &dynamic_request(&signed_response(&key, &valid), Some(&session_id)),
+    );
+    assert_eq!(ok.status, 200, "{}", ok.body);
+    let now = "2026-08-29T12:01:00.000Z";
+    let cases: Vec<(&str, Conditions, String)> = vec![
+        (
+            "audience",
+            Conditions { audience: "https://other.example.test/sp".into(), ..valid.clone() },
+            format!("INVALID_IDP_RESPONSE : All <AudienceRestriction>s should contain the SAML RP entity ID: '{SP}'."),
+        ),
+        (
+            "destination",
+            Conditions { destination: "https://demo-app.firebaseapp.com/__/auth/other".into(), ..valid.clone() },
+            format!("INVALID_IDP_RESPONSE : SAMLResponse destination https://demo-app.firebaseapp.com/__/auth/other does not match RP callback URL {CALLBACK}."),
+        ),
+        (
+            "not yet valid",
+            Conditions { not_before: NOW + 600, ..valid.clone() },
+            format!("INVALID_IDP_RESPONSE : Current instant, {now}, is before NotBefore attribute, 2026-08-29T12:11:00.000Z"),
+        ),
+        (
+            "conditions expired",
+            Conditions { not_before: NOW - 1200, not_on_or_after: NOW - 600, ..valid.clone() },
+            format!("INVALID_IDP_RESPONSE : Current instant, {now}, is on or after NotOnOrAfter attribute, 2026-08-29T11:51:00.000Z"),
+        ),
+        (
+            "confirmation expired",
+            Conditions { confirmation_not_on_or_after: NOW - 600, ..valid.clone() },
+            format!("INVALID_IDP_RESPONSE : Current instant, {now}, is on or after NotOnOrAfter attribute, 2026-08-29T11:51:00.000Z"),
+        ),
+        (
+            "another request",
+            Conditions { in_response_to: Some("_fireemu-other-request".into()), ..valid.clone() },
+            "INVALID_IDP_RESPONSE : InResponseTo in both Response and SubjectConfirmationData must match the request ID.".into(),
+        ),
+        (
+            "no request",
+            Conditions { in_response_to: None, ..valid.clone() },
+            "INVALID_IDP_RESPONSE : InResponseTo attribute must be present in both Response and SubjectConfirmationData.".into(),
+        ),
+        (
+            "another issuer",
+            Conditions { issuer: "https://idp.example.test/saml/other".into(), ..valid.clone() },
+            format!("INVALID_IDP_RESPONSE : Assertion has Issuer https://idp.example.test/saml/other which is different from expected Issuer {IDP}."),
+        ),
+        (
+            "status",
+            Conditions { status: "urn:oasis:names:tc:SAML:2.0:status:Requester".into(), ..valid.clone() },
+            "INVALID_IDP_RESPONSE : SAMLResponse status code not SUCCESS, instead it is: urn:oasis:names:tc:SAML:2.0:status:Requester".into(),
+        ),
+    ];
+    for (case, conditions, message) in cases {
+        let users = s.store.lock().unwrap().user_count();
+        let answer = sign_in(
+            &s,
+            &dynamic_request(&signed_response(&key, &conditions), Some(&session_id)),
+        );
+        assert_eq!(answer.status, 400, "{case}: {}", answer.body);
+        assert_eq!(answer.body["error"]["message"], message, "{case}");
+        assert_eq!(s.store.lock().unwrap().user_count(), users, "{case}");
+    }
+    // Production does not check the Recipient.
+    let recipient = Conditions {
+        recipient: "https://demo-app.firebaseapp.com/__/auth/other".into(),
+        ..valid
+    };
+    let answer = sign_in(
+        &s,
+        &dynamic_request(&signed_response(&key, &recipient), Some(&session_id)),
+    );
+    assert_eq!(answer.status, 200, "{}", answer.body);
+}
+
+#[test]
+fn the_request_id_is_checked_only_for_a_session_this_daemon_issued() {
+    // A sign-in naming no session, or one fireemu never issued, is unobserved: not refused.
+    let (s, key) = dynamic_state();
+    let unsolicited = Conditions::answering(Some("_whatever"));
+    for session_id in [None, Some("fireemu-unknown-session")] {
+        let answer = sign_in(
+            &s,
+            &dynamic_request(&signed_response(&key, &unsolicited), session_id),
+        );
+        assert_eq!(answer.status, 200, "{session_id:?}: {}", answer.body);
+    }
+}
+
+#[test]
+fn the_time_windows_include_not_before_and_exclude_not_on_or_after() {
+    // Production's messages name the bounds: refused "before NotBefore" and "on or after
+    // NotOnOrAfter".
+    let (s, key) = dynamic_state();
+    let (session_id, request_id) = session(&s);
+    let valid = Conditions::answering(Some(&request_id));
+    let at_start = Conditions {
+        not_before: NOW,
+        ..valid.clone()
+    };
+    let answer = sign_in(
+        &s,
+        &dynamic_request(&signed_response(&key, &at_start), Some(&session_id)),
+    );
+    assert_eq!(answer.status, 200, "{}", answer.body);
+    for (case, conditions) in [
+        (
+            "conditions",
+            Conditions {
+                not_on_or_after: NOW,
+                ..valid.clone()
+            },
+        ),
+        (
+            "confirmation",
+            Conditions {
+                confirmation_not_on_or_after: NOW,
+                ..valid.clone()
+            },
+        ),
+    ] {
+        let answer = sign_in(
+            &s,
+            &dynamic_request(&signed_response(&key, &conditions), Some(&session_id)),
+        );
+        assert_eq!(answer.status, 400, "{case}: {}", answer.body);
+        assert_eq!(
+            answer.body["error"]["message"],
+            "INVALID_IDP_RESPONSE : Current instant, 2026-08-29T12:01:00.000Z, is on or after NotOnOrAfter attribute, 2026-08-29T12:01:00.000Z",
+            "{case}"
+        );
+    }
+}
+
+#[test]
+fn a_response_answers_the_request_of_its_own_session() {
+    let (s, key) = dynamic_state();
+    let (first, first_request) = session(&s);
+    let (second, second_request) = session(&s);
+    assert_ne!(first_request, second_request);
+    let answer = sign_in(
+        &s,
+        &dynamic_request(
+            &signed_response(&key, &Conditions::answering(Some(&first_request))),
+            Some(&second),
+        ),
+    );
+    assert_eq!(answer.status, 400, "{}", answer.body);
+    assert_eq!(
+        answer.body["error"]["message"],
+        "INVALID_IDP_RESPONSE : InResponseTo in both Response and SubjectConfirmationData must match the request ID."
+    );
+    // Naming the request in the response alone is refused as absent ("in both").
+    let partial = Conditions {
+        confirmation_answers: false,
+        ..Conditions::answering(Some(&first_request))
+    };
+    let answer = sign_in(
+        &s,
+        &dynamic_request(&signed_response(&key, &partial), Some(&first)),
+    );
+    assert_eq!(answer.status, 400, "{}", answer.body);
+    assert_eq!(
+        answer.body["error"]["message"],
+        "INVALID_IDP_RESPONSE : InResponseTo attribute must be present in both Response and SubjectConfirmationData."
+    );
+}
+
+#[test]
+fn a_remembered_request_is_forgotten_after_an_hour() {
+    // An emulator bound: past it, a response is not checked against the request.
+    let (s, key) = dynamic_state();
+    let (session_id, _) = session(&s);
+    let later = NOW + 3_600;
+    *s.clock.lock().unwrap() = VirtualClock::new(LogicalInstant::from_unix_seconds(later));
+    let conditions = Conditions {
+        in_response_to: Some("_another".into()),
+        not_before: later - 60,
+        not_on_or_after: later + 300,
+        confirmation_not_on_or_after: later + 300,
+        ..Conditions::answering(None)
+    };
+    let answer = sign_in(
+        &s,
+        &dynamic_request(&signed_response(&key, &conditions), Some(&session_id)),
+    );
+    assert_eq!(answer.status, 200, "{}", answer.body);
+}
+
+#[test]
+fn the_emulator_profile_does_not_check_the_conditions() {
+    // The official emulator reads a JSON fixture and checks none of them: a response failing
+    // every check gets the same answer as a valid one.
+    let (_, key) = dynamic_state();
+    let s = state(false);
+    let failing = Conditions {
+        in_response_to: Some("_another".into()),
+        destination: "https://other.example.test/".into(),
+        issuer: "https://other.example.test/idp".into(),
+        audience: "https://other.example.test/sp".into(),
+        not_before: NOW + 600,
+        not_on_or_after: NOW - 600,
+        confirmation_not_on_or_after: NOW - 600,
+        status: "urn:oasis:names:tc:SAML:2.0:status:Requester".into(),
+        ..Conditions::answering(None)
+    };
+    let valid = sign_in(
+        &s,
+        &request_for(
+            PROVIDER,
+            &base64_standard(signed_response(&key, &Conditions::answering(None)).as_bytes()),
+        ),
+    );
+    let refused = sign_in(
+        &s,
+        &request_for(
+            PROVIDER,
+            &base64_standard(signed_response(&key, &failing).as_bytes()),
+        ),
+    );
+    assert_eq!(
+        valid.status, refused.status,
+        "{} {}",
+        valid.body, refused.body
+    );
+    assert_eq!(valid.body["error"], refused.body["error"]);
 }

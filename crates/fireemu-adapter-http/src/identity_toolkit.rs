@@ -3147,8 +3147,8 @@ fn handle_with_policy(
     let mut strict_saml_trust = None;
     let mut saml_body = None;
     let strict_idp_trust = match strict_signers {
-        Some(_) if strict_saml::names_saml_provider(body) => {
-            match strict_saml::strict_saml(&store, body) {
+        Some(signers) if strict_saml::names_saml_provider(body) => {
+            match strict_saml::strict_saml(&store, body, signers, at, resumed_body.is_some()) {
                 Ok(Some((trust, verified_body))) => {
                     strict_saml_trust = Some(trust);
                     saml_body = Some(verified_body);
@@ -12677,8 +12677,10 @@ fn create_auth_uri(
         }
         if strict {
             let provider_id = provider.as_str().unwrap_or_default();
-            if let Some(answer) = strict_oidc_auth_uri(store, provider_id, body, signers)
-                .or_else(|| strict_saml::strict_saml_auth_uri(store, provider_id, body, at))
+            if let Some(answer) =
+                strict_oidc_auth_uri(store, provider_id, body, signers).or_else(|| {
+                    strict_saml::strict_saml_auth_uri(store, provider_id, body, at, signers)
+                })
             {
                 return answer;
             }

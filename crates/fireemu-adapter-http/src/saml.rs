@@ -73,6 +73,8 @@ pub struct VerifiedSaml {
     pub destination: Option<String>,
     /// `Response/@InResponseTo`.
     pub in_response_to: Option<String>,
+    /// `Response/Status/StatusCode/@Value`.
+    pub status: Option<String>,
     /// The assertion's `Issuer`.
     pub issuer: Option<String>,
     /// `Subject/NameID` and its `Format`.
@@ -527,6 +529,11 @@ fn read_assertion(
         assertion_signed,
         destination: owned(response.attribute("Destination")),
         in_response_to: owned(response.attribute("InResponseTo")),
+        status: owned(
+            child(response, PROTOCOL, "Status")
+                .and_then(|status| child(status, PROTOCOL, "StatusCode"))
+                .and_then(|code| code.attribute("Value")),
+        ),
         issuer: text(child(assertion, ASSERTION, "Issuer")),
         name_id: text(name_id).filter(|id| !id.is_empty()),
         name_id_format: owned(name_id.and_then(|n| n.attribute("Format"))),

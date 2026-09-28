@@ -10,14 +10,16 @@ use serde_json::Value;
 /// Private members a JWK must not carry: a signer set holds public keys only.
 const PRIVATE_MEMBERS: &[&str] = &["d", "p", "q", "dp", "dq", "qi", "oth", "k"];
 
-/// Issuers and their RS256 public keys, by `kid`, and the nonce-bearing credentials strict
-/// sign-ins used (production refuses one used again).
+/// Issuers and their RS256 public keys, by `kid`, the nonce-bearing credentials strict
+/// sign-ins used (production refuses one used again), and the SAML `AuthnRequest` IDs strict
+/// `createAuthUri` issued, by session (production refuses a response to another request).
 #[derive(Debug, Clone, Default)]
 pub struct IdpSignerTrust {
     issuers: BTreeMap<String, BTreeMap<String, Value>>,
     /// Each issuer's `authorization_endpoint`, as its discovery document gives it.
     authorization_endpoints: BTreeMap<String, String>,
     used: Arc<Mutex<UsedCredentials>>,
+    saml_requests: Arc<Mutex<Expiring<String>>>,
 }
 
 impl IdpSignerTrust {
@@ -79,6 +81,7 @@ impl IdpSignerTrust {
             issuers,
             authorization_endpoints,
             used: Arc::default(),
+            saml_requests: Arc::default(),
         })
     }
 
@@ -113,64 +116,99 @@ impl IdpSignerTrust {
             used.record(key, expires, now);
         }
     }
+
+    /// Records the `AuthnRequest` ID a strict `createAuthUri` issued for the session `key`,
+    /// remembered until `expires`.
+    pub(crate) fn record_saml_request(
+        &self,
+        key: String,
+        request_id: String,
+        expires: i64,
+        now: i64,
+    ) {
+        if let Ok(mut requests) = self.saml_requests.lock() {
+            requests.insert(key, request_id, expires, now);
+        }
+    }
+
+    /// The `AuthnRequest` ID issued for the session `key`, if it is still remembered.
+    pub(crate) fn saml_request(&self, key: &str, now: i64) -> Option<String> {
+        self.saml_requests
+            .lock()
+            .ok()
+            .and_then(|mut requests| requests.get(key, now).cloned())
+    }
 }
 
-/// The most credentials remembered in a daemon session. Past it, the one expiring first is
-/// forgotten (an emulator bound, not production's).
+/// The most entries (used credentials, issued SAML requests) remembered in a daemon session.
+/// Past it, the one expiring first is forgotten (an emulator bound, not production's).
 const USED_CREDENTIALS_CAPACITY: usize = 10_000;
 
 /// Used credentials by key, each until its token's expiry (a later use is refused as expired
 /// anyway), within a fixed capacity.
+pub(crate) type UsedCredentials = Expiring<()>;
+
+/// Entries by key, each until an expiry, within a fixed capacity.
 #[derive(Debug)]
-pub(crate) struct UsedCredentials {
-    expiries: BTreeMap<String, i64>,
+pub(crate) struct Expiring<V> {
+    entries: BTreeMap<String, (V, i64)>,
     capacity: usize,
 }
 
-impl Default for UsedCredentials {
+impl<V> Default for Expiring<V> {
     fn default() -> Self {
         Self::with_capacity(USED_CREDENTIALS_CAPACITY)
     }
 }
 
-impl UsedCredentials {
+impl<V> Expiring<V> {
     fn with_capacity(capacity: usize) -> Self {
         Self {
-            expiries: BTreeMap::new(),
+            entries: BTreeMap::new(),
             capacity,
         }
     }
 
     fn sweep(&mut self, now: i64) {
-        self.expiries.retain(|_, expires| *expires > now);
+        self.entries.retain(|_, (_, expires)| *expires > now);
+    }
+
+    fn get(&mut self, key: &str, now: i64) -> Option<&V> {
+        self.sweep(now);
+        self.entries.get(key).map(|(value, _)| value)
     }
 
     fn contains(&mut self, key: &str, now: i64) -> bool {
-        self.sweep(now);
-        self.expiries.contains_key(key)
+        self.get(key, now).is_some()
     }
 
-    fn record(&mut self, key: String, expires: i64, now: i64) {
+    fn insert(&mut self, key: String, value: V, expires: i64, now: i64) {
         self.sweep(now);
         if expires <= now {
             return;
         }
-        if !self.expiries.contains_key(&key) && self.expiries.len() >= self.capacity {
+        if !self.entries.contains_key(&key) && self.entries.len() >= self.capacity {
             let first = self
-                .expiries
+                .entries
                 .iter()
-                .min_by_key(|(_, expires)| **expires)
+                .min_by_key(|(_, (_, expires))| *expires)
                 .map(|(key, _)| key.clone());
             if let Some(first) = first {
-                self.expiries.remove(&first);
+                self.entries.remove(&first);
             }
         }
-        self.expiries.insert(key, expires);
+        self.entries.insert(key, (value, expires));
     }
 
     #[cfg(test)]
     fn len(&self) -> usize {
-        self.expiries.len()
+        self.entries.len()
+    }
+}
+
+impl Expiring<()> {
+    fn record(&mut self, key: String, expires: i64, now: i64) {
+        self.insert(key, (), expires, now);
     }
 }
 
@@ -203,7 +241,17 @@ fn valid_issuer(issuer: &str) -> bool {
 
 #[cfg(test)]
 mod used_credentials_tests {
-    use super::UsedCredentials;
+    use super::{Expiring, UsedCredentials};
+
+    #[test]
+    fn an_issued_request_is_read_back_until_it_expires() {
+        let mut requests = Expiring::with_capacity(2);
+        requests.insert("s1".into(), "_r1".to_owned(), 100, 0);
+        requests.insert("s1".into(), "_r2".to_owned(), 100, 0);
+        assert_eq!(requests.get("s1", 99).map(String::as_str), Some("_r2"));
+        assert_eq!(requests.get("s1", 100), None);
+        assert_eq!(requests.get("s2", 0), None);
+    }
 
     #[test]
     fn a_credential_is_remembered_until_its_token_expires() {

@@ -245,7 +245,11 @@ _METHODS: tuple[tuple[str, str, str, str, str, tuple[str, ...]], ...] = (
         "The accepted on-disk format, partition enumeration and refusal of corrupt or "
         "duplicated output references are a contract the local importer already holds.",
         _EXTENSION,
-        (f"{_IMPORT_EXPORT}:353", f"{_IMPORT_EXPORT}:1136", f"{_IMPORT_EXPORT}:1168"),
+        (
+            _at(_IMPORT_EXPORT, "/// A section of a product `--only` did not select"),
+            _at(_IMPORT_EXPORT, "let metadata_file = section"),
+            _at(_IMPORT_EXPORT, "let mut output_paths = BTreeSet::new();"),
+        ),
     ),
     _row(
         "databases.collectionGroups.indexes.create",
@@ -610,7 +614,7 @@ _LOCAL_SURFACES: tuple[tuple[str, str, str, str, str, tuple[str, ...]], ...] = (
         _IMPLEMENTED,
         (
             _at(_IMPORT_EXPORT, "pub fn export("),
-            f"{_IMPORT_EXPORT}:353",
+            _at(_IMPORT_EXPORT, "/// A section of a product `--only` did not select"),
             f"{_METADATA}:142",
         ),
     ),
@@ -623,7 +627,7 @@ _LOCAL_SURFACES: tuple[tuple[str, str, str, str, str, tuple[str, ...]], ...] = (
         "Cross-database reference values must survive a round trip and a malformed "
         "database identity must be refused before any document is published.",
         _IMPLEMENTED,
-        (f"{_METADATA}:133", f"{_METADATA}:195", f"{_IMPORT_EXPORT}:1378"),
+        (f"{_METADATA}:133", f"{_METADATA}:195", _at(_IMPORT_EXPORT, "fn collect_document(")),
     ),
     _row(
         "runtime.lazyDatabaseCreation",

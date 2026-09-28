@@ -396,7 +396,7 @@
       "id": "cli.exportImport",
       "local": {
         "citations": [
-          "crates/fireemu/src/import_export.rs:2895",
+          "crates/fireemu/src/import_export.rs:2897",
           "crates/fireemu/src/import_export.rs:353",
           "crates/fireemu-core-export/src/metadata.rs:142"
         ],
@@ -412,7 +412,7 @@
         "citations": [
           "crates/fireemu-core-export/src/metadata.rs:133",
           "crates/fireemu-core-export/src/metadata.rs:195",
-          "crates/fireemu/src/import_export.rs:1378"
+          "crates/fireemu/src/import_export.rs:1374"
         ],
         "status": "implemented"
       },
@@ -679,7 +679,7 @@
       "dataPlaneConsequence": "The written export format is a contract: fireemu's own export and import must read and write what the official tooling produces, which is already covered by local format evidence.",
       "local": {
         "citations": [
-          "crates/fireemu/src/import_export.rs:2895",
+          "crates/fireemu/src/import_export.rs:2897",
           "crates/fireemu-core-export/src/firestore.rs:518",
           "crates/fireemu-core-export/src/metadata.rs:142"
         ],
@@ -709,7 +709,7 @@
         "citations": [
           "crates/fireemu/src/import_export.rs:353",
           "crates/fireemu/src/import_export.rs:1136",
-          "crates/fireemu/src/import_export.rs:1168"
+          "crates/fireemu/src/import_export.rs:1170"
         ],
         "status": "local-extension-only"
       },

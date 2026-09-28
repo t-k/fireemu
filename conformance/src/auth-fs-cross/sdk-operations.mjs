@@ -26,9 +26,11 @@ export function createOperations({
   // after the report of its own change, so every client (Node and browser alike) has reported
   // it before the parent's next step. The report stays among the events.
   let authReports = 0;
+  let lastReported;
   const authWaiters = [];
   const reportAuth = (event) => {
     authReports += 1;
+    lastReported = event.uid;
     emit(event);
     for (const waiter of authWaiters.splice(0)) waiter(event.uid);
   };
@@ -43,18 +45,21 @@ export function createOperations({
       ...tokenTimes(token, decodeBase64Url),
     });
   });
-  /** Resolves `true` at the first report of `uid` after report number `after`, or `false`. */
+  /**
+   * Resolves `true` once `uid` is reported after report number `after` (a report may already
+   * have come while the SDK call ran, as Node reports it), or `false` after the wait.
+   */
   function authReported(uid, after) {
+    if (authReports > after && lastReported === uid) return Promise.resolve(true);
     return new Promise((resolve) => {
       const timer = setTimeout(() => resolve(false), waitMs);
       const check = (reported) => {
-        if (authReports > after && reported === uid) {
+        if (reported === uid) {
           clearTimeout(timer);
           resolve(true);
         } else authWaiters.push(check);
       };
-      if (authReports > after) check(uid);
-      else authWaiters.push(check);
+      authWaiters.push(check);
     });
   }
 

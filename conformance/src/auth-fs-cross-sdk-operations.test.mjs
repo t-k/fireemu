@@ -147,6 +147,65 @@ test("a sign-in, sign-out or refresh answers only after its token change is repo
   );
 });
 
+test("a sign-in waits for its own uid's report, not another's or an older one", async () => {
+  // Another uid is reported during the call (the old user going away), the new one after it.
+  const sdk = fakeSdk({
+    signInWithEmailAndPassword: async () => {
+      await sdk.state.tokenListener(null);
+      setImmediate(() => sdk.state.tokenListener({ uid: "u1", getIdToken: async () => TOKEN }));
+      return { user: { uid: "u1" } };
+    },
+  });
+  await sdk.run({ id: "a", op: "signIn", email: "e@example.com", password: "p" });
+  assert.deepEqual(
+    sdk.events.map((e) => (e.event === "auth" ? ["auth", e.uid] : ["result", e.id])),
+    [
+      ["auth", null],
+      ["auth", "u1"],
+      ["result", "a"],
+    ],
+  );
+  // The same uid reported before the call does not count; its report during the call does
+  // (the Node order), and one after the call is waited for (the browser order).
+  sdk.events.length = 0;
+  const node = fakeSdk({
+    signInWithEmailAndPassword: async () => {
+      await node.state.tokenListener({ uid: "u1", getIdToken: async () => TOKEN });
+      return { user: { uid: "u1" } };
+    },
+  });
+  await node.state.tokenListener({ uid: "u1", getIdToken: async () => TOKEN });
+  await node.run({ id: "b", op: "signIn", email: "e@example.com", password: "p" });
+  assert.deepEqual(
+    node.events.map((e) => (e.event === "auth" ? ["auth", e.uid] : ["result", e.id])),
+    [
+      ["auth", "u1"],
+      ["auth", "u1"],
+      ["result", "b"],
+    ],
+  );
+  assert.equal(node.events.at(-1).authReported, true);
+  // Both after the call (the browser order): the other uid's report does not end the wait.
+  const browser = fakeSdk({
+    signInWithEmailAndPassword: async () => {
+      setImmediate(async () => {
+        await browser.state.tokenListener(null);
+        await browser.state.tokenListener({ uid: "u1", getIdToken: async () => TOKEN });
+      });
+      return { user: { uid: "u1" } };
+    },
+  });
+  await browser.run({ id: "c", op: "signIn", email: "e@example.com", password: "p" });
+  assert.deepEqual(
+    browser.events.map((e) => (e.event === "auth" ? ["auth", e.uid] : ["result", e.id])),
+    [
+      ["auth", null],
+      ["auth", "u1"],
+      ["result", "c"],
+    ],
+  );
+});
+
 test("a sign-in whose token change never comes answers after the wait, saying so", async () => {
   const sdk = fakeSdk({
     waitMs: 20,

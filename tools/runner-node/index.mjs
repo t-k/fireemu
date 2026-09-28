@@ -16,6 +16,7 @@ import { createServer } from "node:http";
 import { url as inspectorUrl } from "node:inspector";
 import { instrumentCallables } from "./callable-app-check.mjs";
 import { blockingFailure } from "./blocking-error.mjs";
+import { blockingEvent, loadIdentityParsers } from "./blocking-event.mjs";
 import { blockingResult } from "./blocking-response.mjs";
 import { boundLogMessage, createInvocationLogger } from "./log-context.mjs";
 import { invocationFailure } from "./invocation-error.mjs";
@@ -979,6 +980,8 @@ async function makeHttpServer(functions, manifest) {
     }
   }
   const HttpsErrors = await firebaseHttpsErrorConstructors(require);
+  // The SDK's own parsers build a blocking event from its token (blocking-event.mjs).
+  const identityParsers = loadIdentityParsers(require);
   const app = express();
   const admission = createHttpAdmission({
     secret: process.env.FIREEMU_RUNNER_SECRET || "",
@@ -1095,8 +1098,17 @@ async function makeHttpServer(functions, manifest) {
       if (!lifetime.canStart()) return;
       try {
         if (blocking) {
-          const user = req.body?.data?.user;
-          const context = req.body?.data?.context || {};
+          // A token is parsed by the codebase's own firebase-functions, as Identity Platform's
+          // delivery is; without its parsers the token is refused, never parsed differently.
+          const hasToken = req.body?.data?.jwt !== undefined;
+          if (hasToken && !identityParsers) {
+            throw new Error("firebase-functions has no blocking token parsers");
+          }
+          const parsed = hasToken
+            ? blockingEvent(req.body, identityParsers, process.env.GCLOUD_PROJECT || "")
+            : undefined;
+          const user = parsed ? parsed.user : req.body?.data?.user;
+          const context = parsed ? parsed.context : req.body?.data?.context || {};
           const value = await (spec.generation === 1 ? fn.run(user, context) : fn.run({ ...context, data: user }));
           if (lifetime.canStart()) {
             // Materialization can call user getters/toJSON. Keep it inside this

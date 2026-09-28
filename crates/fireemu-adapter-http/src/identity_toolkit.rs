@@ -368,6 +368,39 @@ impl core::fmt::Debug for AuthBlockingAdditionalUserInfo {
     }
 }
 
+/// A provider of the account, as a blocking token lists it (`user_record.provider_data`): the
+/// providers an account lookup reports, in the same order.
+#[derive(Clone, PartialEq, Eq)]
+pub struct AuthBlockingProvider {
+    /// `password`, `phone` or a federated provider ID.
+    pub provider_id: String,
+    /// The provider's identifier for the account (`rawId`).
+    pub uid: String,
+    /// The display name the provider reports.
+    pub display_name: Option<String>,
+    /// The address the provider reports.
+    pub email: Option<String>,
+    /// The photo URL the provider reports.
+    pub photo_url: Option<String>,
+    /// The phone number, for the phone provider.
+    pub phone_number: Option<String>,
+}
+
+/// An enrolled second factor, as a blocking token lists it (`user_record.multi_factor`).
+#[derive(Clone, PartialEq, Eq)]
+pub struct AuthBlockingFactor {
+    /// The factor's enrollment ID.
+    pub uid: String,
+    /// The factor's display name.
+    pub display_name: Option<String>,
+    /// When it was enrolled (RFC 3339).
+    pub enrollment_time: Option<String>,
+    /// The phone number of a phone factor.
+    pub phone_number: Option<String>,
+    /// `phone` or `totp`.
+    pub factor_id: String,
+}
+
 /// Per-request context supplied to a Blocking Auth handler.
 #[derive(Clone, Default, PartialEq)]
 pub struct AuthBlockingContext {
@@ -375,8 +408,13 @@ pub struct AuthBlockingContext {
     pub credential: Option<AuthBlockingCredential>,
     /// Additional provider profile information for the sign-in.
     pub additional_user_info: Option<AuthBlockingAdditionalUserInfo>,
-    /// Sign-in method used to suffix the before-sign-in event type.
+    /// Sign-in method: the suffix of the event type and the provider of the additional user
+    /// information.
     pub sign_in_method: Option<String>,
+    /// The account's providers, as an account lookup reports them.
+    pub provider_data: Vec<AuthBlockingProvider>,
+    /// The account's enrolled second factors.
+    pub enrolled_factors: Vec<AuthBlockingFactor>,
 }
 
 impl core::fmt::Debug for AuthBlockingContext {
@@ -385,6 +423,9 @@ impl core::fmt::Debug for AuthBlockingContext {
             .field("credential", &self.credential)
             .field("additional_user_info", &self.additional_user_info)
             .field("sign_in_method", &self.sign_in_method)
+            // Addresses and phone numbers are account data: only their number is shown.
+            .field("provider_data", &self.provider_data.len())
+            .field("enrolled_factors", &self.enrolled_factors.len())
             .finish()
     }
 }
@@ -2045,6 +2086,7 @@ fn blocking_context(
                 }
             }),
             sign_in_method: sign_in_method.map(str::to_owned),
+            ..AuthBlockingContext::default()
         };
     }
     let provider_id = response.body.get("providerId").and_then(Value::as_str);
@@ -2069,7 +2111,66 @@ fn blocking_context(
             is_new_user: event == fireemu_core_functions::manifest::BlockingAuthEvent::BeforeCreate,
         }),
         sign_in_method: sign_in_method.map(str::to_owned),
+        ..AuthBlockingContext::default()
     }
+}
+
+/// The account's providers and enrolled factors for a blocking token: the providers an account
+/// lookup lists ([`account_providers`]) and every enrolled factor in enrollment order.
+fn blocking_account(
+    store: &AuthStore,
+    uid: &LocalId,
+) -> (Vec<AuthBlockingProvider>, Vec<AuthBlockingFactor>) {
+    let text = |value: &Value, key: &str| value.get(key).and_then(Value::as_str).map(str::to_owned);
+    let providers = account_providers(store, uid)
+        .iter()
+        .map(|provider| AuthBlockingProvider {
+            provider_id: text(provider, "providerId").unwrap_or_default(),
+            uid: text(provider, "rawId").unwrap_or_default(),
+            display_name: text(provider, "displayName"),
+            email: text(provider, "email"),
+            photo_url: text(provider, "photoUrl"),
+            phone_number: text(provider, "phoneNumber"),
+        })
+        .collect();
+    let Some(user) = store.user(uid) else {
+        return (providers, Vec::new());
+    };
+    let time = |at: LogicalInstant| LogicalInstant::to_rfc3339(at).ok();
+    let mut factors: Vec<(LogicalInstant, AuthBlockingFactor)> = user
+        .mfa
+        .totp_factors()
+        .iter()
+        .map(|factor| {
+            (
+                factor.enrolled_at,
+                AuthBlockingFactor {
+                    uid: factor.mfa_enrollment_id.clone(),
+                    display_name: factor.display_name.clone(),
+                    enrollment_time: time(factor.enrolled_at),
+                    phone_number: None,
+                    factor_id: "totp".to_owned(),
+                },
+            )
+        })
+        .collect();
+    factors.extend(user.mfa.phone_factors().iter().map(|factor| {
+        (
+            factor.enrolled_at,
+            AuthBlockingFactor {
+                uid: factor.mfa_enrollment_id.clone(),
+                display_name: factor.display_name.clone(),
+                enrollment_time: time(factor.enrolled_at),
+                phone_number: Some(factor.phone_number.clone()),
+                factor_id: "phone".to_owned(),
+            },
+        )
+    }));
+    factors.sort_by_key(|(at, _)| *at);
+    (
+        providers,
+        factors.into_iter().map(|(_, factor)| factor).collect(),
+    )
 }
 
 fn blocking_sign_in_method<'a>(
@@ -2269,7 +2370,7 @@ fn dispatch_with_blocking_hook(
                     let user = candidate
                         .user(&uid)
                         .unwrap_or_else(|| unreachable!("the successful response named its user"));
-                    let context = blocking_context(
+                    let mut context = blocking_context(
                         &response,
                         fireemu_core_functions::manifest::BlockingAuthEvent::BeforeCreate,
                         None,
@@ -2277,6 +2378,8 @@ fn dispatch_with_blocking_hook(
                         inbound_credentials.as_ref(),
                         before_create_policy,
                     );
+                    (context.provider_data, context.enrolled_factors) =
+                        blocking_account(&candidate, &uid);
                     match blocking.invoke_for_with_context(
                         &project,
                         tenant.as_deref(),
@@ -2313,7 +2416,7 @@ fn dispatch_with_blocking_hook(
                     let user = candidate
                         .user(&uid)
                         .unwrap_or_else(|| unreachable!("the successful response named its user"));
-                    let context = blocking_context(
+                    let mut context = blocking_context(
                         &response,
                         fireemu_core_functions::manifest::BlockingAuthEvent::BeforeSignIn,
                         pending_continuation.as_ref().map(|(_, _, context)| context),
@@ -2321,6 +2424,8 @@ fn dispatch_with_blocking_hook(
                         inbound_credentials.as_ref(),
                         before_sign_in_policy,
                     );
+                    (context.provider_data, context.enrolled_factors) =
+                        blocking_account(&candidate, &uid);
                     match blocking.invoke_for_with_context(
                         &project,
                         tenant.as_deref(),
@@ -8393,13 +8498,13 @@ fn obfuscate_phone_number(phone: &str) -> String {
     out.into_iter().collect()
 }
 
-fn user_json(store: &AuthStore, uid: &LocalId) -> Value {
+/// The account's `providerUserInfo` as a lookup reports it: production lists phone first, then
+/// federated identities in link order, then password (sandbox recording 2026-09-23:
+/// auth-account/provider, admin/create, admin/import).
+fn account_providers(store: &AuthStore, uid: &LocalId) -> Vec<Value> {
     let Some(u) = store.user(uid) else {
-        return Value::Null;
+        return Vec::new();
     };
-    let mfa = mfa_info(store, uid, false);
-    // Production lists phone first, then federated identities in link order, then password
-    // (sandbox recording 2026-09-23: auth-account/provider, admin/create, admin/import).
     let mut providers: Vec<Value> = Vec::new();
     if let Some(phone) = &u.phone_number {
         providers.push(json!({"providerId": "phone", "rawId": phone, "phoneNumber": phone}));
@@ -8417,6 +8522,15 @@ fn user_json(store: &AuthStore, uid: &LocalId) -> Value {
             providers.push(json!({"providerId": "password", "rawId": email, "federatedId": email, "email": email, "displayName": u.display_name, "photoUrl": u.photo_url}));
         }
     }
+    providers
+}
+
+fn user_json(store: &AuthStore, uid: &LocalId) -> Value {
+    let Some(u) = store.user(uid) else {
+        return Value::Null;
+    };
+    let mfa = mfa_info(store, uid, false);
+    let providers = account_providers(store, uid);
     // Production omits most default-valued fields (proto3 JSON): no empty `mfaInfo` or
     // `providerUserInfo`, `emailVerified` only with an address. `disabled` and `validSince`
     // are present for an account the Admin API created (the sandbox recording of 2026-09-23),

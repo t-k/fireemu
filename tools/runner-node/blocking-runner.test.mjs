@@ -82,7 +82,7 @@ http.__endpoint={platform:'gcfv2',httpsTrigger:{}};
 module.exports={v1,v2,http};
 `;
 
-async function fixture(source) {
+async function fixture(source, { identity } = {}) {
   async function put(path, value) {
     const target = join(source, path);
     await mkdir(resolve(target, ".."), { recursive: true });
@@ -99,6 +99,7 @@ async function fixture(source) {
   await put("node_modules/firebase-functions/index.cjs", "module.exports={};");
   await put("node_modules/firebase-functions/https.cjs", httpsSource);
   await put("node_modules/firebase-functions/options.cjs", "exports.getGlobalOptions=()=>({});");
+  if (identity) await put("node_modules/firebase-functions/lib/common/providers/identity.js", identity);
 }
 
 function hello(child) {
@@ -126,7 +127,7 @@ function hello(child) {
   });
 }
 
-function call(port, name, mode, suppliedSecret = secret) {
+function call(port, name, mode, suppliedSecret = secret, body = { data: { user: { mode }, context: {} } }) {
   return new Promise((resolve, reject) => {
     const req = request({ hostname: "127.0.0.1", port, method: "POST",
       path: `/demo-blocking-boundary/us-central1/${name}`,
@@ -142,7 +143,7 @@ function call(port, name, mode, suppliedSecret = secret) {
     });
     req.setTimeout(1500, () => req.destroy(Error("fixture HTTP timeout")));
     req.on("error", reject);
-    req.end(JSON.stringify({ data: { user: { mode }, context: {} } }));
+    req.end(JSON.stringify(body));
   });
 }
 
@@ -216,6 +217,63 @@ test("actual runner blocking dispatch preserves a validated response and survive
     }
   } finally {
     if (child) await stop(child);
+    await rm(source, { recursive: true, force: true });
+  }
+});
+
+const token = (payload) =>
+  [{ alg: "none", typ: "JWT" }, payload]
+    .map((part) => Buffer.from(JSON.stringify(part)).toString("base64url"))
+    .join(".") + ".";
+
+// Parser doubles standing in for the SDK's: the user record's `mode` and the event's project.
+const identitySource = `
+exports.parseAuthUserRecord = (record) => ({ mode: record.mode, uid: record.uid });
+exports.parseAuthEventContext = (decoded, projectId) => ({ eventType: decoded.event_type, project: projectId });
+`;
+
+async function runnerFor(identity) {
+  const source = await mkdtemp(join(tmpdir(), "fireemu-blocking-token-"));
+  await fixture(source, { identity });
+  const child = spawn(process.execPath, [runner, "--source", source], {
+    env: { PATH: process.env.PATH, GCLOUD_PROJECT: "demo-blocking-boundary", FIREEMU_RUNNER_SECRET: secret },
+    stdio: ["pipe", "pipe", "pipe"],
+  });
+  child.stderr.on("data", () => {});
+  return { source, child, port: (await hello(child)).httpPort };
+}
+
+test("a blocking token reaches the handler as the SDK's parsers build it", { timeout: 20000 }, async () => {
+  const { source, child, port } = await runnerFor(identitySource);
+  try {
+    const body = { data: { jwt: token({ sub: "u1", event_type: "beforeSignIn", user_record: { uid: "u1", mode: "normal" } }) } };
+    for (const name of ["v1", "v2"]) {
+      const reply = await call(port, name, undefined, secret, body);
+      assert.equal(reply.status, 200, name);
+      assert.deepEqual(reply.body, { userRecord: { displayName: "Guest", disabled: false, updateMask: "displayName,disabled" } }, name);
+    }
+    // A token that is not a JWT is refused as any unusable request is.
+    const bad = await call(port, "v2", undefined, secret, { data: { jwt: "not-a-token" } });
+    assert.equal(bad.status, 503);
+    assert.equal(bad.body.error.status, "UNAVAILABLE");
+  } finally {
+    await stop(child);
+    await rm(source, { recursive: true, force: true });
+  }
+});
+
+test("without the SDK's parsers a blocking token is refused, never parsed differently", { timeout: 20000 }, async () => {
+  const { source, child, port } = await runnerFor(undefined);
+  try {
+    const body = { data: { jwt: token({ sub: "u1", event_type: "beforeSignIn", user_record: { uid: "u1", mode: "normal" } }) } };
+    const reply = await call(port, "v2", undefined, secret, body);
+    assert.equal(reply.status, 503);
+    assert.equal(reply.body.error.status, "UNAVAILABLE");
+    // The older body keeps working.
+    const legacy = await call(port, "v2", "normal");
+    assert.equal(legacy.status, 200);
+  } finally {
+    await stop(child);
     await rm(source, { recursive: true, force: true });
   }
 });

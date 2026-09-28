@@ -2708,46 +2708,182 @@ struct BlockingAuthSettings {
 const BLOCKING_AUTH_DEADLINE: Duration = Duration::from_secs(7);
 const MAX_BLOCKING_AUTH_RESPONSE_BYTES: u64 = 64 * 1024;
 
-fn blocking_auth_user_json(
-    user: &fireemu_core_auth::store::UserRecord,
-    tenant: Option<&str>,
-) -> serde_json::Value {
-    let provider_data = user
-        .federated
-        .iter()
-        .map(|identity| {
-            serde_json::json!({
-                "uid": identity.raw_id,
-                "displayName": identity.display_name,
-                "email": identity.email,
-                "photoURL": identity.photo_url,
-                "providerId": identity.provider_id,
-                "phoneNumber": null,
-            })
-        })
-        .collect::<Vec<_>>();
-    serde_json::json!({
-        "uid": user.local_id.as_str(),
-        "email": user.email,
-        "emailVerified": user.email_verified,
-        "displayName": user.display_name,
-        "photoURL": user.photo_url,
-        "phoneNumber": user.phone_number,
-        "disabled": user.disabled,
-        "customClaims": serde_json::from_str::<serde_json::Value>(&user.custom_claims.canonical_json()).unwrap_or_else(|_| serde_json::json!({})),
-        "tenantId": tenant,
-        "metadata": {
-            "creationTime": fireemu_core_types::time::LogicalInstant::to_rfc3339(user.created_at).unwrap_or_default(),
-            "lastSignInTime": user.last_sign_in_at.and_then(|instant| instant.to_rfc3339().ok()),
-        },
-        "providerData": provider_data,
-    })
+/// The request values a blocking token names, which fireemu cannot know from a loopback client:
+/// the official Auth emulator's fixed values (firebase-tools 15.28.2 `generateBlockingFunctionJwt`).
+const BLOCKING_AUTH_USER_AGENT: &str = "NotYetSupportedInFirebaseAuthEmulator";
+const BLOCKING_AUTH_IP_ADDRESS: &str = "127.0.0.1";
+const BLOCKING_AUTH_LOCALE: &str = "en";
+
+fn epoch_millis(at: fireemu_core_types::time::LogicalInstant) -> serde_json::Value {
+    serde_json::json!(i64::try_from(at.as_nanos() / 1_000_000).unwrap_or_default())
 }
 
-fn blocking_auth_resource_name(project: &str, tenant: Option<&str>) -> String {
-    tenant.map_or_else(
-        || format!("projects/{project}"),
-        |tenant| format!("projects/{project}/tenants/{tenant}"),
+/// The token's `user_record`: the account's members, with production's absent members left out.
+fn blocking_auth_user_record(
+    tenant: Option<&str>,
+    request: &fireemu_adapter_http::identity_toolkit::AuthBlockingContext,
+    user: &fireemu_core_auth::store::UserRecord,
+) -> serde_json::Map<String, serde_json::Value> {
+    use serde_json::{json, Map, Value};
+    let mut record = Map::new();
+    record.insert("uid".to_owned(), json!(user.local_id.as_str()));
+    if let Some(email) = &user.email {
+        record.insert("email".to_owned(), json!(email));
+        record.insert("email_verified".to_owned(), json!(user.email_verified));
+    }
+    if let Some(name) = &user.display_name {
+        record.insert("display_name".to_owned(), json!(name));
+    }
+    if let Some(photo) = &user.photo_url {
+        record.insert("photo_url".to_owned(), json!(photo));
+    }
+    if let Some(phone) = &user.phone_number {
+        record.insert("phone_number".to_owned(), json!(phone));
+    }
+    record.insert("disabled".to_owned(), json!(user.disabled));
+    if let Some(claims) = user
+        .custom_claims
+        .attributes_text()
+        .and_then(|text| serde_json::from_str::<Value>(&text).ok())
+    {
+        record.insert("custom_claims".to_owned(), claims);
+    }
+    if let Some(tenant) = tenant {
+        record.insert("tenant_id".to_owned(), json!(tenant));
+    }
+    let optional = |value: &Option<String>| value.as_ref().map_or(Value::Null, |text| json!(text));
+    record.insert(
+        "provider_data".to_owned(),
+        Value::Array(
+            request
+                .provider_data
+                .iter()
+                .map(|provider| {
+                    let mut entry = Map::new();
+                    entry.insert("provider_id".to_owned(), json!(provider.provider_id));
+                    entry.insert("uid".to_owned(), json!(provider.uid));
+                    for (key, value) in [
+                        ("display_name", optional(&provider.display_name)),
+                        ("email", optional(&provider.email)),
+                        ("photo_url", optional(&provider.photo_url)),
+                        ("phone_number", optional(&provider.phone_number)),
+                    ] {
+                        if !value.is_null() {
+                            entry.insert(key.to_owned(), value);
+                        }
+                    }
+                    Value::Object(entry)
+                })
+                .collect(),
+        ),
+    );
+    if !request.enrolled_factors.is_empty() {
+        let factors = request
+            .enrolled_factors
+            .iter()
+            .map(|factor| {
+                let mut entry = Map::new();
+                entry.insert("uid".to_owned(), json!(factor.uid));
+                entry.insert("factor_id".to_owned(), json!(factor.factor_id));
+                for (key, value) in [
+                    ("display_name", optional(&factor.display_name)),
+                    ("enrollment_time", optional(&factor.enrollment_time)),
+                    ("phone_number", optional(&factor.phone_number)),
+                ] {
+                    if !value.is_null() {
+                        entry.insert(key.to_owned(), value);
+                    }
+                }
+                Value::Object(entry)
+            })
+            .collect::<Vec<_>>();
+        record.insert(
+            "multi_factor".to_owned(),
+            json!({"enrolled_factors": factors}),
+        );
+    }
+    let mut metadata = Map::new();
+    metadata.insert("creation_time".to_owned(), epoch_millis(user.created_at));
+    if let Some(at) = user.last_sign_in_at {
+        metadata.insert("last_sign_in_time".to_owned(), epoch_millis(at));
+    }
+    record.insert("metadata".to_owned(), Value::Object(metadata));
+    record
+}
+
+/// The claims of the blocking token Identity Platform delivers (`{"data":{"jwt":…}}`), which
+/// the function's firebase-functions decodes into its event (AUTH-TENANT-BLOCKING comparison
+/// 2026-09-28). The claims follow the official Auth emulator's token, with production's absent
+/// members: a member the account does not have is left out, `email_verified` comes with an
+/// address, `custom_claims` only when claims are set, and `multi_factor` only with a factor.
+#[allow(clippy::too_many_arguments)]
+fn blocking_auth_claims(
+    project: &str,
+    tenant: Option<&str>,
+    event: fireemu_core_functions::manifest::BlockingAuthEvent,
+    request: &fireemu_adapter_http::identity_toolkit::AuthBlockingContext,
+    user: &fireemu_core_auth::store::UserRecord,
+    event_id: &str,
+    issued_at: i64,
+    audience: &str,
+) -> serde_json::Map<String, serde_json::Value> {
+    use serde_json::{json, Map, Value};
+    let record = blocking_auth_user_record(tenant, request, user);
+
+    let mut claims = Map::new();
+    claims.insert(
+        "iss".to_owned(),
+        json!(format!("https://securetoken.google.com/{project}")),
+    );
+    claims.insert("aud".to_owned(), json!(audience));
+    claims.insert("iat".to_owned(), json!(issued_at));
+    // The official emulator's lifetime: the deadline in milliseconds divided by 100.
+    claims.insert("exp".to_owned(), json!(issued_at + 70));
+    claims.insert("event_id".to_owned(), json!(event_id));
+    claims.insert("event_type".to_owned(), json!(event.as_str()));
+    claims.insert("user_agent".to_owned(), json!(BLOCKING_AUTH_USER_AGENT));
+    claims.insert("ip_address".to_owned(), json!(BLOCKING_AUTH_IP_ADDRESS));
+    claims.insert("locale".to_owned(), json!(BLOCKING_AUTH_LOCALE));
+    claims.insert("sub".to_owned(), json!(user.local_id.as_str()));
+    claims.insert("user_record".to_owned(), Value::Object(record));
+    if let Some(method) = &request.sign_in_method {
+        claims.insert("sign_in_method".to_owned(), json!(method));
+    }
+    if let Some(profile) = request
+        .additional_user_info
+        .as_ref()
+        .and_then(|info| info.profile.as_ref())
+    {
+        claims.insert("raw_user_info".to_owned(), json!(profile.to_string()));
+    }
+    if let Some(tenant) = tenant {
+        claims.insert("tenant_id".to_owned(), json!(tenant));
+    }
+    if let Some(credential) = &request.credential {
+        if let Some(attributes) = &credential.claims {
+            claims.insert("sign_in_attributes".to_owned(), attributes.clone());
+        }
+        for (key, value) in [
+            ("oauth_access_token", &credential.access_token),
+            ("oauth_id_token", &credential.id_token),
+            ("oauth_refresh_token", &credential.refresh_token),
+        ] {
+            if let Some(token) = value {
+                claims.insert(key.to_owned(), json!(token));
+            }
+        }
+    }
+    claims
+}
+
+/// An unsigned (`alg: none`) JWT of `claims`, as the official Auth emulator sends it.
+fn unsigned_jwt(claims: &serde_json::Map<String, serde_json::Value>) -> String {
+    let header = serde_json::json!({"alg": "none", "typ": "JWT"}).to_string();
+    let payload = serde_json::Value::Object(claims.clone()).to_string();
+    format!(
+        "{}.{}.",
+        fireemu_core_auth::jwt::base64url_encode(header.as_bytes()),
+        fireemu_core_auth::jwt::base64url_encode(payload.as_bytes())
     )
 }
 
@@ -2857,59 +2993,6 @@ fn blocking_auth_selection_accepts_target(
                     .is_none_or(|expected| expected == actual_region)
         }
     }
-}
-
-fn blocking_auth_context_json(
-    project: &str,
-    tenant: Option<&str>,
-    event: fireemu_core_functions::manifest::BlockingAuthEvent,
-    request: &fireemu_adapter_http::identity_toolkit::AuthBlockingContext,
-    event_id: &str,
-    timestamp: &str,
-) -> serde_json::Value {
-    let event_type = match (event, request.sign_in_method.as_deref()) {
-        (fireemu_core_functions::manifest::BlockingAuthEvent::BeforeSignIn, Some(method)) => {
-            format!("{}:{method}", event.event_type())
-        }
-        _ => event.event_type().to_owned(),
-    };
-    let mut context = serde_json::json!({
-        "eventId": event_id,
-        "eventType": event_type,
-        "resource": {
-            "service": "identitytoolkit.googleapis.com",
-            "name": blocking_auth_resource_name(project, tenant),
-        },
-        "timestamp": timestamp,
-        "params": {},
-    });
-    if let Some(info) = &request.additional_user_info {
-        context["additionalUserInfo"] = serde_json::json!({
-            "providerId": info.provider_id,
-            "profile": info.profile,
-            "isNewUser": info.is_new_user,
-        });
-    }
-    if let Some(credential) = &request.credential {
-        let mut value = serde_json::json!({
-            "providerId": credential.provider_id,
-            "signInMethod": credential.sign_in_method,
-        });
-        if let Some(claims) = &credential.claims {
-            value["claims"] = claims.clone();
-        }
-        if let Some(access_token) = &credential.access_token {
-            value["accessToken"] = serde_json::Value::String(access_token.clone());
-        }
-        if let Some(id_token) = &credential.id_token {
-            value["idToken"] = serde_json::Value::String(id_token.clone());
-        }
-        if let Some(refresh_token) = &credential.refresh_token {
-            value["refreshToken"] = serde_json::Value::String(refresh_token.clone());
-        }
-        context["credential"] = value;
-    }
-    context
 }
 
 fn with_blocking_auth_project<T, E>(
@@ -3706,29 +3789,27 @@ impl BlockingAuthBridge {
             target.token_policy,
             settings.forwarding_restrictions,
         );
-        let user_json = blocking_auth_user_json(user, tenant);
-        let event_context = blocking_auth_context_json(
-            project,
-            tenant,
-            event,
-            &context,
-            &format!("fireemu-blocking-{}", self.runtime.trigger_generation()),
-            &fireemu_core_types::time::LogicalInstant::to_rfc3339(self.runtime.now())
-                .unwrap_or_default(),
-        );
-        let body = serde_json::json!({
-            "data": {
-                "user": user_json,
-                "context": event_context,
-            }
-        })
-        .to_string();
         let path = format!(
             "/{}/{}/{}",
             self.runtime.project(),
             target.region,
             target.function
         );
+        let issued_at =
+            i64::try_from(self.runtime.now().as_nanos() / 1_000_000_000).unwrap_or_default();
+        let claims = blocking_auth_claims(
+            project,
+            tenant,
+            event,
+            &context,
+            user,
+            &format!("fireemu-blocking-{}", self.runtime.trigger_generation()),
+            issued_at,
+            &format!("http://{}{path}", target.addr),
+        );
+        // The token the function's firebase-functions decodes into its event, as Identity
+        // Platform and the official Auth emulator deliver it.
+        let body = serde_json::json!({"data": {"jwt": unsigned_jwt(&claims)}}).to_string();
         let deadline = Instant::now() + self.deadline;
         let exchange = (|| {
             let address = target
@@ -4263,10 +4344,35 @@ mod tests {
         assert!(error.contains("local safety budget of 32"), "{error}");
     }
 
+    fn claims_for(
+        tenant: Option<&str>,
+        event: fireemu_core_functions::manifest::BlockingAuthEvent,
+        request: &fireemu_adapter_http::identity_toolkit::AuthBlockingContext,
+        user: &fireemu_core_auth::store::UserRecord,
+    ) -> serde_json::Value {
+        serde_json::Value::Object(super::blocking_auth_claims(
+            "demo-app",
+            tenant,
+            event,
+            request,
+            user,
+            "event-1",
+            1_788_004_860,
+            "http://127.0.0.1:1/demo-app/us-central1/fn",
+        ))
+    }
+
+    /// The token's user record has production's members (AUTH-TENANT-BLOCKING comparison
+    /// 2026-09-28): an absent member is left out, not null; `email_verified` comes with an
+    /// address, `custom_claims` only when claims are set, `multi_factor` only with a factor.
     #[test]
-    fn blocking_auth_user_uses_the_functions_sdk_record_shape() {
+    fn a_blocking_token_carries_the_account_as_identity_platform_does() {
+        use fireemu_adapter_http::identity_toolkit::{
+            AuthBlockingContext, AuthBlockingFactor, AuthBlockingProvider,
+        };
         use fireemu_core_auth::mfa::TotpPolicy;
         use fireemu_core_auth::store::{AuthStore, NewUser};
+        use fireemu_core_functions::manifest::BlockingAuthEvent;
         use fireemu_core_types::determinism::SplitMix64;
         use fireemu_core_types::time::LogicalInstant;
 
@@ -4275,26 +4381,90 @@ mod tests {
         let uid = store
             .create_user(NewUser::email("person@example.test"), now)
             .unwrap();
-
-        let value = super::blocking_auth_user_json(
-            store.user_by_id(uid.as_str()).unwrap(),
-            Some("customer"),
-        );
-
-        assert_eq!(value["emailVerified"], false);
-        assert!(value.get("email_verified").is_none());
-        assert!(value.get("displayName").is_some());
-        assert!(value.get("photoURL").is_some());
-        assert!(value.get("phoneNumber").is_some());
-        assert_eq!(value["customClaims"], json!({}));
-        assert_eq!(value["tenantId"], "customer");
-        assert!(value.get("providerData").is_some());
-        assert_eq!(value["metadata"]["creationTime"], "2026-08-29T12:01:00Z");
-        assert!(value["metadata"].get("lastSignInTime").is_some());
+        let user = store.user_by_id(uid.as_str()).unwrap().clone();
+        let request = AuthBlockingContext {
+            sign_in_method: Some("password".to_owned()),
+            provider_data: vec![AuthBlockingProvider {
+                provider_id: "password".to_owned(),
+                uid: "person@example.test".to_owned(),
+                display_name: None,
+                email: Some("person@example.test".to_owned()),
+                photo_url: None,
+                phone_number: None,
+            }],
+            ..AuthBlockingContext::default()
+        };
+        let claims = claims_for(None, BlockingAuthEvent::BeforeCreate, &request, &user);
+        assert_eq!(claims["event_type"], "beforeCreate");
+        assert_eq!(claims["sign_in_method"], "password");
+        assert_eq!(claims["sub"], uid.as_str());
+        assert_eq!(claims["iss"], "https://securetoken.google.com/demo-app");
+        assert_eq!(claims["iat"], 1_788_004_860);
+        for key in ["user_agent", "ip_address", "locale"] {
+            assert!(claims[key].is_string(), "{key}");
+        }
+        assert!(claims.get("tenant_id").is_none());
+        let record = &claims["user_record"];
         assert_eq!(
-            super::blocking_auth_resource_name("demo-app", Some("customer")),
-            "projects/demo-app/tenants/customer"
+            record.as_object().unwrap().keys().collect::<Vec<_>>(),
+            [
+                "disabled",
+                "email",
+                "email_verified",
+                "metadata",
+                "provider_data",
+                "uid"
+            ]
         );
+        assert_eq!(record["email_verified"], false);
+        assert_eq!(
+            record["provider_data"],
+            json!([{"provider_id": "password", "uid": "person@example.test", "email": "person@example.test"}])
+        );
+        assert_eq!(
+            record["metadata"],
+            json!({"creation_time": 1_788_004_860_000_i64})
+        );
+
+        // A tenant's token names it at the top and in the record; set claims and a factor are
+        // carried; a phone account has no address and so no `email_verified`.
+        let mut phone = user.clone();
+        phone.email = None;
+        phone.phone_number = Some("+15555550100".to_owned());
+        phone.custom_claims =
+            fireemu_core_auth::claims::CustomClaims::parse_attributes(r#"{"role":"a"}"#).unwrap();
+        let factor = AuthBlockingContext {
+            enrolled_factors: vec![AuthBlockingFactor {
+                uid: "factor-1".to_owned(),
+                display_name: None,
+                enrollment_time: Some("2026-09-28T00:00:00Z".to_owned()),
+                phone_number: Some("+15555550100".to_owned()),
+                factor_id: "phone".to_owned(),
+            }],
+            ..request.clone()
+        };
+        let claims = claims_for(
+            Some("customer"),
+            BlockingAuthEvent::BeforeSignIn,
+            &factor,
+            &phone,
+        );
+        assert_eq!(claims["tenant_id"], "customer");
+        let record = &claims["user_record"];
+        assert_eq!(record["tenant_id"], "customer");
+        assert!(record.get("email").is_none());
+        assert!(record.get("email_verified").is_none());
+        assert_eq!(record["phone_number"], "+15555550100");
+        assert_eq!(record["custom_claims"], json!({"role": "a"}));
+        assert_eq!(
+            record["multi_factor"],
+            json!({"enrolled_factors": [{"uid": "factor-1", "factor_id": "phone",
+                "enrollment_time": "2026-09-28T00:00:00Z", "phone_number": "+15555550100"}]})
+        );
+    }
+
+    #[test]
+    fn a_blocking_hook_is_forwarded_only_for_its_own_project() {
         let forwarded = std::cell::Cell::new(false);
         let value = super::with_blocking_auth_project("demo-app", "demo-worker", || {
             forwarded.set(true);
@@ -4303,7 +4473,6 @@ mod tests {
         .unwrap();
         assert!(value.is_none());
         assert!(!forwarded.get());
-
         let value = super::with_blocking_auth_project("demo-app", "demo-app", || {
             forwarded.set(true);
             Ok::<_, ()>(Some(json!({"accepted": true})))
@@ -4313,107 +4482,66 @@ mod tests {
         assert!(forwarded.get());
     }
 
+    /// An identity-provider sign-in carries its profile, attributes and the forwarded tokens,
+    /// and the token is the unsigned JWT the official Auth emulator sends.
     #[test]
-    fn blocking_auth_context_uses_the_functions_sdk_shape() {
+    fn a_blocking_token_carries_the_provider_sign_in() {
         use fireemu_adapter_http::identity_toolkit::{
             AuthBlockingAdditionalUserInfo, AuthBlockingContext, AuthBlockingCredential,
         };
+        use fireemu_core_auth::mfa::TotpPolicy;
+        use fireemu_core_auth::store::{AuthStore, NewUser};
+        use fireemu_core_functions::manifest::BlockingAuthEvent;
+        use fireemu_core_types::determinism::SplitMix64;
+        use fireemu_core_types::time::LogicalInstant;
 
-        let claims = json!({"roles": ["billing", "support"]});
+        let now = LogicalInstant::from_unix_seconds(1_788_004_860);
+        let mut store = AuthStore::new("demo-app", SplitMix64::new(7), TotpPolicy::default());
+        let uid = store
+            .create_user(NewUser::email("person@example.test"), now)
+            .unwrap();
+        let user = store.user_by_id(uid.as_str()).unwrap().clone();
+        let attributes = json!({"roles": ["billing", "support"]});
         let request = AuthBlockingContext {
             credential: Some(AuthBlockingCredential {
-                claims: Some(claims.clone()),
-                provider_id: "oidc.corp".to_owned(),
-                sign_in_method: "oidc.corp".to_owned(),
-                access_token: None,
-                id_token: None,
-                refresh_token: None,
-            }),
-            additional_user_info: Some(AuthBlockingAdditionalUserInfo {
-                provider_id: "oidc.corp".to_owned(),
-                profile: Some(claims.clone()),
-                is_new_user: false,
-            }),
-            sign_in_method: Some("oidc.corp".to_owned()),
-        };
-
-        let value = super::blocking_auth_context_json(
-            "demo-app",
-            Some("customer"),
-            fireemu_core_functions::manifest::BlockingAuthEvent::BeforeSignIn,
-            &request,
-            "event-1",
-            "2026-08-29T12:01:00Z",
-        );
-
-        assert_eq!(
-            value,
-            json!({
-                "eventId": "event-1",
-                "eventType": "providers/cloud.auth/eventTypes/user.beforeSignIn:oidc.corp",
-                "resource": {
-                    "service": "identitytoolkit.googleapis.com",
-                    "name": "projects/demo-app/tenants/customer"
-                },
-                "timestamp": "2026-08-29T12:01:00Z",
-                "params": {},
-                "additionalUserInfo": {
-                    "providerId": "oidc.corp",
-                    "profile": claims,
-                    "isNewUser": false
-                },
-                "credential": {
-                    "providerId": "oidc.corp",
-                    "signInMethod": "oidc.corp",
-                    "claims": {"roles": ["billing", "support"]}
-                }
-            })
-        );
-        assert!(value["credential"].get("idToken").is_none());
-        assert!(value["credential"].get("accessToken").is_none());
-
-        let raw_request = AuthBlockingContext {
-            credential: Some(AuthBlockingCredential {
-                claims: None,
+                claims: Some(attributes.clone()),
                 provider_id: "oidc.corp".to_owned(),
                 sign_in_method: "oidc.corp".to_owned(),
                 access_token: Some("access-sentinel".to_owned()),
-                id_token: Some("id-sentinel".to_owned()),
+                id_token: None,
                 refresh_token: Some("refresh-sentinel".to_owned()),
             }),
-            ..request.clone()
+            additional_user_info: Some(AuthBlockingAdditionalUserInfo {
+                provider_id: "oidc.corp".to_owned(),
+                profile: Some(attributes.clone()),
+                is_new_user: false,
+            }),
+            sign_in_method: Some("oidc.corp".to_owned()),
+            ..AuthBlockingContext::default()
         };
-        let raw_value = super::blocking_auth_context_json(
-            "demo-app",
+        let claims = claims_for(
             Some("customer"),
-            fireemu_core_functions::manifest::BlockingAuthEvent::BeforeSignIn,
-            &raw_request,
-            "event-raw",
-            "2026-08-29T12:01:00Z",
-        );
-        assert_eq!(
-            raw_value["credential"],
-            json!({
-                "providerId": "oidc.corp",
-                "signInMethod": "oidc.corp",
-                "accessToken": "access-sentinel",
-                "idToken": "id-sentinel",
-                "refreshToken": "refresh-sentinel"
-            })
-        );
-
-        let before_create = super::blocking_auth_context_json(
-            "demo-app",
-            None,
-            fireemu_core_functions::manifest::BlockingAuthEvent::BeforeCreate,
+            BlockingAuthEvent::BeforeSignIn,
             &request,
-            "event-2",
-            "2026-08-29T12:01:00Z",
+            &user,
         );
-        assert_eq!(
-            before_create["eventType"],
-            "providers/cloud.auth/eventTypes/user.beforeCreate"
-        );
+        assert_eq!(claims["sign_in_method"], "oidc.corp");
+        assert_eq!(claims["sign_in_attributes"], attributes);
+        assert_eq!(claims["raw_user_info"], attributes.to_string());
+        assert_eq!(claims["oauth_access_token"], "access-sentinel");
+        assert_eq!(claims["oauth_refresh_token"], "refresh-sentinel");
+        assert!(claims.get("oauth_id_token").is_none());
+
+        let token = super::unsigned_jwt(claims.as_object().unwrap());
+        let parts: Vec<&str> = token.split('.').collect();
+        assert_eq!(parts.len(), 3);
+        assert_eq!(parts[2], "");
+        let decode = |part: &str| -> serde_json::Value {
+            serde_json::from_slice(&fireemu_core_auth::jwt::base64url_decode(part).unwrap())
+                .unwrap()
+        };
+        assert_eq!(decode(parts[0]), json!({"alg": "none", "typ": "JWT"}));
+        assert_eq!(decode(parts[1]), claims);
     }
 
     #[test]

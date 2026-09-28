@@ -2784,6 +2784,20 @@ struct BlockingAuthSettings {
 
 const BLOCKING_AUTH_DEADLINE: Duration = Duration::from_secs(7);
 
+/// How long the official Auth emulator waits for a blocking function (firebase-tools 15.28.2
+/// `fetchBlockingFunction`, `timeoutMs = 60000`).
+const BLOCKING_AUTH_EMULATOR_DEADLINE: Duration = Duration::from_secs(60);
+
+/// The blocking-function deadline of `profile`: Identity Platform's seven seconds in the strict
+/// profile, the official emulator's sixty in the emulator profile, so a function the official
+/// emulator waits for is not refused there (closure review M1, 2026-09-28).
+pub(crate) const fn blocking_auth_deadline(profile: CompatibilityProfile) -> Duration {
+    match profile {
+        CompatibilityProfile::Strict => BLOCKING_AUTH_DEADLINE,
+        CompatibilityProfile::Emulator => BLOCKING_AUTH_EMULATOR_DEADLINE,
+    }
+}
+
 /// Identity Platform's email and SMS events, which only the strict profile serves.
 const fn is_send_event(event: fireemu_core_functions::manifest::BlockingAuthEvent) -> bool {
     matches!(
@@ -3323,6 +3337,13 @@ impl BlockingAuthBridge {
     #[must_use]
     pub const fn with_send_events(mut self, enabled: bool) -> Self {
         self.send_events = enabled;
+        self
+    }
+
+    /// Waits for a function as `profile` does ([`blocking_auth_deadline`]).
+    #[must_use]
+    pub const fn with_deadline_for(mut self, profile: CompatibilityProfile) -> Self {
+        self.deadline = blocking_auth_deadline(profile);
         self
     }
 
@@ -4922,6 +4943,21 @@ mod tests {
         Arc<fireemu_adapter_functions::runtime::FunctionsRuntime>,
         Arc<Mutex<VirtualClock>>,
     ) {
+        runtime_and_clock_with_blocking_auth_targets_env(targets, Vec::new()).await
+    }
+
+    async fn runtime_and_clock_with_blocking_auth_targets_env(
+        targets: &[(
+            &str,
+            fireemu_core_functions::manifest::BlockingAuthEvent,
+            bool,
+            bool,
+        )],
+        env: Vec<(String, String)>,
+    ) -> (
+        Arc<fireemu_adapter_functions::runtime::FunctionsRuntime>,
+        Arc<Mutex<VirtualClock>>,
+    ) {
         use fireemu_adapter_functions::runner::{Runner, SpawnSpec};
         use fireemu_adapter_functions::runtime::{FunctionsConfig, FunctionsRuntime};
         use fireemu_core_functions::manifest::Trigger;
@@ -4933,7 +4969,7 @@ mod tests {
         let spec = SpawnSpec {
             command: vec!["python3".to_owned(), script.display().to_string()],
             cwd: None,
-            env: Vec::new(),
+            env,
             hello_timeout: Duration::from_secs(60),
         };
         let runner = Runner::spawn_spec(&spec).await.unwrap();
@@ -5299,6 +5335,56 @@ mod tests {
         assert_eq!(mail["event_type"], "beforeSendEmail");
         assert_eq!(mail["email"], "person@example.test");
         assert!(mail.get("sub").is_none() && mail.get("tenant_id").is_none());
+        runtime.shutdown().await;
+    }
+
+    /// The emulator profile waits for a function as long as the official Auth emulator does:
+    /// one that answers after eight seconds, past Identity Platform's seven, is served
+    /// (closure review M1, 2026-09-28).
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn the_emulator_profile_serves_a_function_slower_than_seven_seconds() {
+        use fireemu_adapter_http::identity_toolkit::AuthBlockingHook;
+        use fireemu_core_auth::mfa::TotpPolicy;
+        use fireemu_core_auth::store::{AuthStore, NewUser};
+        use fireemu_core_functions::manifest::BlockingAuthEvent;
+        use fireemu_core_types::determinism::SplitMix64;
+        use fireemu_core_types::time::LogicalInstant;
+
+        let (runtime, _) = runtime_and_clock_with_blocking_auth_targets_env(
+            &[(
+                "beforeCreate",
+                BlockingAuthEvent::BeforeCreate,
+                false,
+                false,
+            )],
+            vec![(
+                "FIREEMU_FAKE_BLOCKING_HANG_MS".to_owned(),
+                "8000".to_owned(),
+            )],
+        )
+        .await;
+        let bridge = BlockingAuthBridge::new_with_selections(
+            runtime.clone(),
+            fireemu_core_functions::manifest::BlockingAuthSelections::default(),
+            false,
+        )
+        .with_deadline_for(super::CompatibilityProfile::Emulator);
+        let mut store = AuthStore::new("demo-app", SplitMix64::new(7), TotpPolicy::default());
+        let uid = store
+            .create_user(
+                NewUser::email("slow@example.test"),
+                LogicalInstant::from_unix_seconds(1_788_004_860),
+            )
+            .unwrap();
+        let user = store.user_by_id(uid.as_str()).unwrap().clone();
+        let started = std::time::Instant::now();
+        let answer = tokio::task::spawn_blocking(move || {
+            bridge.invoke_for("demo-app", None, BlockingAuthEvent::BeforeCreate, &user)
+        })
+        .await
+        .unwrap();
+        assert!(started.elapsed() >= Duration::from_secs(8));
+        assert!(answer.is_ok_and(|answer| answer.is_some()));
         runtime.shutdown().await;
     }
 
@@ -5851,6 +5937,14 @@ mod tests {
     #[test]
     fn blocking_auth_transport_bounds_and_failure_pairs_are_production_bounded() {
         assert_eq!(BLOCKING_AUTH_DEADLINE, Duration::from_secs(7));
+        assert_eq!(
+            super::blocking_auth_deadline(super::CompatibilityProfile::Strict),
+            Duration::from_secs(7)
+        );
+        assert_eq!(
+            super::blocking_auth_deadline(super::CompatibilityProfile::Emulator),
+            Duration::from_secs(60)
+        );
         assert_eq!(MAX_BLOCKING_AUTH_RESPONSE_BYTES, 64 * 1024);
         // An elapsed deadline answers production's 400 (recording 2026-09-28, timeout#*).
         assert_eq!(

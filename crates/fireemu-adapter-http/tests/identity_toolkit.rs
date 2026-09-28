@@ -229,6 +229,8 @@ struct RevisionChangeAfterPostCallbackHook {
     revision: AtomicUsize,
     revision_calls: AtomicUsize,
     post_callback_checked: AtomicBool,
+    /// Set when the function ran (the emulator profile reads no revision to signal it).
+    invoked: AtomicBool,
 }
 
 struct BeforeCreateOnlyRejectingHook;
@@ -366,7 +368,9 @@ impl AuthBlockingHook for RevisionBumpBeforeDispatchHook {
         _event: BlockingAuthEvent,
         _user: &fireemu_core_auth::store::UserRecord,
     ) -> Result<Value, BlockingFunctionFailure> {
-        unreachable!("revision drift must be rejected before hook dispatch")
+        // The strict profile refuses the drift before it calls the function; the emulator
+        // profile calls it with the configuration it finds.
+        Ok(json!({}))
     }
 }
 
@@ -385,6 +389,7 @@ impl AuthBlockingHook for RevisionChangeAfterPostCallbackHook {
         _event: BlockingAuthEvent,
         _user: &fireemu_core_auth::store::UserRecord,
     ) -> Result<Value, BlockingFunctionFailure> {
+        self.invoked.store(true, Ordering::SeqCst);
         Ok(json!({}))
     }
 }
@@ -869,6 +874,44 @@ fn an_account_created_while_before_create_runs_does_not_fail_an_email_link_sign_
         body["localId"].as_str().unwrap()
     );
     assert!(store.user_by_email("intervening@example.com").is_some());
+}
+
+/// In the emulator profile a blocking configuration that keeps changing while an email link is
+/// sent and used refuses neither request, as the official Auth emulator does not (closure
+/// review M1, 2026-09-28).
+#[test]
+fn the_emulator_profile_serves_an_email_link_while_the_blocking_configuration_changes() {
+    let mut auth = state();
+    auth.blocking = Some(Arc::new(RevisionBumpBeforeDispatchHook {
+        revision: AtomicUsize::new(0),
+        revision_calls: AtomicUsize::new(0),
+    }));
+    let (status, sent) = post(
+        &auth,
+        &format!("{V1}/accounts:sendOobCode"),
+        &json!({"requestType": "EMAIL_SIGNIN", "email": "drift-link@example.com", "continueUrl": "http://localhost/"}),
+    );
+    assert_eq!(status, 200, "{sent}");
+    let (status, codes) = admin(
+        &auth,
+        "GET",
+        "/emulator/v1/projects/demo-app/oobCodes",
+        &Value::Null,
+    );
+    assert_eq!(status, 200, "{codes}");
+    let code = codes["oobCodes"][0]["oobCode"].clone();
+    let (status, body) = post(
+        &auth,
+        &format!("{V1}/accounts:signInWithEmailLink"),
+        &json!({"email": "drift-link@example.com", "oobCode": code, "returnSecureToken": true}),
+    );
+    assert_eq!(status, 200, "{body}");
+    assert!(auth
+        .store
+        .lock()
+        .unwrap()
+        .user_by_email("drift-link@example.com")
+        .is_some());
 }
 
 #[test]
@@ -4137,89 +4180,116 @@ fn unbound_blocking_auth_runs_for_default_but_not_routed_projects() {
         .is_some());
 }
 
+/// A blocking configuration that changes between planning and dispatch is a retryable 409 in the
+/// strict profile, fireemu's own guard; the emulator profile completes the request with the
+/// configuration it then finds, as the official Auth emulator (which reads the configuration
+/// when it calls a function) does (closure review M1, 2026-09-28).
 #[test]
 fn blocking_auth_revision_drift_between_plan_and_dispatch_is_rejected() {
-    let auth = Arc::new({
-        let mut auth = state();
-        auth.blocking = Some(Arc::new(RevisionBumpBeforeDispatchHook {
-            revision: AtomicUsize::new(0),
-            revision_calls: AtomicUsize::new(0),
-        }));
-        auth
-    });
-    let (sender, receiver) = std::sync::mpsc::sync_channel(1);
-    let request_auth = auth.clone();
-    std::thread::spawn(move || {
-        sender
-            .send(post(
-                &request_auth,
-                &format!("{V1}/accounts:signUp"),
-                &json!({"email": "revision-drift@example.com", "password": "hunter22"}),
-            ))
-            .unwrap();
-    });
-    let (status, body) = receiver
-        .recv_timeout(std::time::Duration::from_secs(1))
-        .expect("candidate revision drift must not deadlock reservation cleanup");
-    assert_eq!(status, 409, "{body}");
-    assert_eq!(
-        body["error"]["message"],
-        "BLOCKING_FUNCTION_CONFIGURATION_CHANGED"
-    );
-    assert_eq!(auth.store.lock().unwrap().user_count(), 0);
-    let mut store = auth.store.lock().unwrap().clone();
-    let fresh_id = store.reserve_next_generated_local_id();
-    let mut clean = AuthStore::new("demo-app", SplitMix64::new(5), TotpPolicy::default());
-    assert_eq!(fresh_id, clean.reserve_next_generated_local_id());
+    for strict in [true, false] {
+        let auth = Arc::new({
+            let mut auth = if strict { strict_state() } else { state() };
+            auth.blocking = Some(Arc::new(RevisionBumpBeforeDispatchHook {
+                revision: AtomicUsize::new(0),
+                revision_calls: AtomicUsize::new(0),
+            }));
+            auth
+        });
+        let (sender, receiver) = std::sync::mpsc::sync_channel(1);
+        let request_auth = auth.clone();
+        std::thread::spawn(move || {
+            sender
+                .send(post(
+                    &request_auth,
+                    &format!("{V1}/accounts:signUp"),
+                    &json!({"email": "revision-drift@example.com", "password": "hunter22"}),
+                ))
+                .unwrap();
+        });
+        let (status, body) = receiver
+            .recv_timeout(std::time::Duration::from_secs(1))
+            .expect("candidate revision drift must not deadlock reservation cleanup");
+        if !strict {
+            assert_eq!(status, 200, "{body}");
+            assert_eq!(auth.store.lock().unwrap().user_count(), 1);
+            continue;
+        }
+        assert_eq!(status, 409, "{body}");
+        assert_eq!(
+            body["error"]["message"],
+            "BLOCKING_FUNCTION_CONFIGURATION_CHANGED"
+        );
+        assert_eq!(auth.store.lock().unwrap().user_count(), 0);
+        let mut store = auth.store.lock().unwrap().clone();
+        let fresh_id = store.reserve_next_generated_local_id();
+        let mut clean = AuthStore::new("demo-app", SplitMix64::new(5), TotpPolicy::default());
+        assert_eq!(fresh_id, clean.reserve_next_generated_local_id());
+    }
 }
 
+/// The same after the function answered and before the commit (closure review M1).
 #[test]
 fn blocking_auth_revision_drift_after_callback_before_commit_is_rejected() {
-    let hook = Arc::new(RevisionChangeAfterPostCallbackHook {
-        revision: AtomicUsize::new(0),
-        revision_calls: AtomicUsize::new(0),
-        post_callback_checked: AtomicBool::new(false),
-    });
-    let auth = Arc::new({
-        let mut auth = state();
-        auth.blocking = Some(hook.clone());
-        auth
-    });
-    let commit_gate = auth.operation_gate.lock().unwrap();
-    let request_auth = auth.clone();
-    let (sender, receiver) = std::sync::mpsc::sync_channel(1);
-    std::thread::spawn(move || {
-        sender
-            .send(post(
-                &request_auth,
-                &format!("{V1}/accounts:signUp"),
-                &json!({"email": "commit-revision-drift@example.com", "password": "hunter22"}),
-            ))
-            .unwrap();
-    });
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(1);
-    while !hook.post_callback_checked.load(Ordering::SeqCst) {
-        assert!(
-            std::time::Instant::now() < deadline,
-            "blocking request did not reach its post-callback revision check"
+    for strict in [true, false] {
+        let hook = Arc::new(RevisionChangeAfterPostCallbackHook {
+            revision: AtomicUsize::new(0),
+            revision_calls: AtomicUsize::new(0),
+            post_callback_checked: AtomicBool::new(false),
+            invoked: AtomicBool::new(false),
+        });
+        let auth = Arc::new({
+            let mut auth = if strict { strict_state() } else { state() };
+            auth.blocking = Some(hook.clone());
+            auth
+        });
+        let commit_gate = auth.operation_gate.lock().unwrap();
+        let request_auth = auth.clone();
+        let (sender, receiver) = std::sync::mpsc::sync_channel(1);
+        std::thread::spawn(move || {
+            sender
+                .send(post(
+                    &request_auth,
+                    &format!("{V1}/accounts:signUp"),
+                    &json!({"email": "commit-revision-drift@example.com", "password": "hunter22"}),
+                ))
+                .unwrap();
+        });
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(1);
+        let reached = || {
+            if strict {
+                hook.post_callback_checked.load(Ordering::SeqCst)
+            } else {
+                hook.invoked.load(Ordering::SeqCst)
+            }
+        };
+        while !reached() {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "blocking request did not reach its post-callback revision check"
+            );
+            std::thread::yield_now();
+        }
+        hook.revision.store(1, Ordering::SeqCst);
+        drop(commit_gate);
+        let (status, body) = receiver
+            .recv_timeout(std::time::Duration::from_secs(1))
+            .expect("commit revision drift must not leave the request waiting");
+        if !strict {
+            assert_eq!(status, 200, "{body}");
+            assert_eq!(auth.store.lock().unwrap().user_count(), 1);
+            continue;
+        }
+        assert_eq!(status, 409, "{body}");
+        assert_eq!(
+            body["error"]["message"],
+            "BLOCKING_FUNCTION_CONFIGURATION_CHANGED"
         );
-        std::thread::yield_now();
+        assert_eq!(auth.store.lock().unwrap().user_count(), 0);
+        let mut store = auth.store.lock().unwrap().clone();
+        let fresh_id = store.reserve_next_generated_local_id();
+        let mut clean = AuthStore::new("demo-app", SplitMix64::new(5), TotpPolicy::default());
+        assert_eq!(fresh_id, clean.reserve_next_generated_local_id());
     }
-    hook.revision.store(1, Ordering::SeqCst);
-    drop(commit_gate);
-    let (status, body) = receiver
-        .recv_timeout(std::time::Duration::from_secs(1))
-        .expect("commit revision drift must not leave the request waiting");
-    assert_eq!(status, 409, "{body}");
-    assert_eq!(
-        body["error"]["message"],
-        "BLOCKING_FUNCTION_CONFIGURATION_CHANGED"
-    );
-    assert_eq!(auth.store.lock().unwrap().user_count(), 0);
-    let mut store = auth.store.lock().unwrap().clone();
-    let fresh_id = store.reserve_next_generated_local_id();
-    let mut clean = AuthStore::new("demo-app", SplitMix64::new(5), TotpPolicy::default());
-    assert_eq!(fresh_id, clean.reserve_next_generated_local_id());
 }
 
 #[test]
@@ -4280,46 +4350,64 @@ fn emulator_clear_rejects_a_paused_blocking_candidate_and_allows_a_fresh_id() {
     assert_eq!(state.store.lock().unwrap().user_count(), 1);
 }
 
+/// A function switched on after admission: a retryable 409 in the strict profile; the
+/// emulator profile completes the sign-up (closure review M1).
 #[test]
 fn blocking_auth_disabled_to_enabled_transition_returns_a_retryable_conflict() {
-    let hook = Arc::new(ToggleHandlesHook {
-        calls: AtomicUsize::new(0),
-        enabled_after_initial: true,
-    });
-    let mut auth = state();
-    auth.blocking = Some(hook);
-    let (status, body) = post(
-        &auth,
-        &format!("{V1}/accounts:signUp"),
-        &json!({"email": "toggle-on@example.com", "password": "hunter22"}),
-    );
-    assert_eq!(status, 409, "{body}");
-    assert_eq!(
-        body["error"]["message"],
-        "BLOCKING_FUNCTION_CONFIGURATION_CHANGED"
-    );
-    assert_eq!(auth.store.lock().unwrap().user_count(), 0);
+    for strict in [true, false] {
+        let hook = Arc::new(ToggleHandlesHook {
+            calls: AtomicUsize::new(0),
+            enabled_after_initial: true,
+        });
+        let mut auth = if strict { strict_state() } else { state() };
+        auth.blocking = Some(hook);
+        let (status, body) = post(
+            &auth,
+            &format!("{V1}/accounts:signUp"),
+            &json!({"email": "toggle-on@example.com", "password": "hunter22"}),
+        );
+        if !strict {
+            assert_eq!(status, 200, "{body}");
+            assert_eq!(auth.store.lock().unwrap().user_count(), 1);
+            continue;
+        }
+        assert_eq!(status, 409, "{body}");
+        assert_eq!(
+            body["error"]["message"],
+            "BLOCKING_FUNCTION_CONFIGURATION_CHANGED"
+        );
+        assert_eq!(auth.store.lock().unwrap().user_count(), 0);
+    }
 }
 
+/// A function switched off after admission: a retryable 409 in the strict profile; the
+/// emulator profile completes the sign-up (closure review M1).
 #[test]
 fn blocking_auth_enabled_to_disabled_transition_returns_a_retryable_conflict() {
-    let hook = Arc::new(ToggleHandlesHook {
-        calls: AtomicUsize::new(0),
-        enabled_after_initial: false,
-    });
-    let mut auth = state();
-    auth.blocking = Some(hook);
-    let (status, body) = post(
-        &auth,
-        &format!("{V1}/accounts:signUp"),
-        &json!({"email": "toggle-off@example.com", "password": "hunter22"}),
-    );
-    assert_eq!(status, 409, "{body}");
-    assert_eq!(
-        body["error"]["message"],
-        "BLOCKING_FUNCTION_CONFIGURATION_CHANGED"
-    );
-    assert_eq!(auth.store.lock().unwrap().user_count(), 0);
+    for strict in [true, false] {
+        let hook = Arc::new(ToggleHandlesHook {
+            calls: AtomicUsize::new(0),
+            enabled_after_initial: false,
+        });
+        let mut auth = if strict { strict_state() } else { state() };
+        auth.blocking = Some(hook);
+        let (status, body) = post(
+            &auth,
+            &format!("{V1}/accounts:signUp"),
+            &json!({"email": "toggle-off@example.com", "password": "hunter22"}),
+        );
+        if !strict {
+            assert_eq!(status, 200, "{body}");
+            assert_eq!(auth.store.lock().unwrap().user_count(), 1);
+            continue;
+        }
+        assert_eq!(status, 409, "{body}");
+        assert_eq!(
+            body["error"]["message"],
+            "BLOCKING_FUNCTION_CONFIGURATION_CHANGED"
+        );
+        assert_eq!(auth.store.lock().unwrap().user_count(), 0);
+    }
 }
 
 /// An account the hook creates through the Admin API skips the id the sign-up reserved, so the

@@ -1269,7 +1269,7 @@
         },
         {
           "id": "AUTH-CLAIM-BLOCKING-FUNCTIONS",
-          "statement": "beforeCreate and beforeSignIn Blocking Functions run synchronously before an Auth commit for Auth stores in the Functions runtime's project; tenantId and the tenant resource are forwarded for tenant stores, registered projects without that runtime are isolated, explicit SDK error classes retain their canonical status, unhandled and seven-second transport failures return production-compatible 503 responses, every failure rolls the speculative operation back except that a sign-up refused by beforeSignIn keeps the account it created (production and the official emulator create the account first), and accepted userRecord and sessionClaims mutations are visible in committed users and newly issued tokens. In the strict profile a beforeEmailSent function also runs before a password reset or email sign-in mail, and the project configuration names the functions as production does.",
+          "statement": "beforeCreate and beforeSignIn Blocking Functions run synchronously before an Auth commit for Auth stores in the Functions runtime's project; tenantId and the tenant resource are forwarded for tenant stores, and registered projects without that runtime are isolated. A function's explicit SDK error below 500 other than 429 answers 400 with the function's own error body in the message; a 429 or 5xx answer, an unhandled failure and a function's own timeout within the deadline answer production's opaque 503 Error code: 47; an elapsed deadline answers 400 Cloud function deadline exceeded. The deadline is production's seven seconds in the strict profile and the official emulator's sixty seconds in the emulator profile. Every failure rolls the speculative operation back, except that a sign-up refused by beforeSignIn keeps the account it created (production and the official emulator create the account first), and accepted userRecord and sessionClaims mutations are visible in committed users and newly issued tokens. In the strict profile a beforeEmailSent function also runs before a password reset or email sign-in mail, and the project configuration names the functions as production does.",
           "capabilities": [
             {
               "id": "FN-EVT-1",
@@ -1293,7 +1293,7 @@
           ],
           "fireemuOnly": [
             {
-              "behaviour": "the strict profile refuses a mail request with 409 AUTH_STATE_CHANGED when the live store would send a different mail from the speculative one beforeEmailSent was shown, and an Admin link request with 409 BLOCKING_FUNCTION_CONFIGURATION_CHANGED when a mail function or the blocking configuration changed after the request was admitted. Both arise only when the state changes between the speculative run and the commit, a race production has no counterpart for; they keep a reset code or sign-in link from being sent without the function seeing it. The emulator profile runs no email event and never answers them",
+              "behaviour": "the strict profile answers a retryable 409 BLOCKING_FUNCTION_CONFIGURATION_CHANGED when the blocking configuration (a function deployed, removed or reselected) changes between a request's admission and its commit, 409 AUTH_STATE_CHANGED when a mail request's commit would send a different mail from the one beforeEmailSent was shown, and 409 BLOCKING_FUNCTION_CONFIGURATION_CHANGED when an Admin link request's mail function changed after admission. They arise only when state changes while the request runs, a race production has no counterpart for, and keep a request from committing under a configuration its functions did not see. The emulator profile answers none of them: like the official emulator it serves the request with the configuration it finds",
               "precision": "documented-divergence"
             }
           ],
@@ -1570,7 +1570,7 @@
         },
         {
           "id": "FN-CLAIM-BLOCKING-AUTH",
-          "statement": "v2 beforeUserCreated / beforeUserSignedIn and v1 auth.user().beforeCreate / beforeSignIn exports are discovered as served synchronous triggers and invoked by Auth through the guarded runner endpoint, which validates bounded canonical SDK failures and enforces the production seven-second deadline.",
+          "statement": "v2 beforeUserCreated / beforeUserSignedIn and v1 auth.user().beforeCreate / beforeSignIn exports are discovered as served synchronous triggers and invoked by Auth through the guarded runner endpoint, which validates bounded canonical SDK failures and waits production's seven-second deadline in the strict profile and the official emulator's sixty seconds in the emulator profile.",
           "capabilities": [
             {
               "id": "FN-EVT-1",

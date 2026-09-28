@@ -2338,12 +2338,16 @@ fn discard_pending_inbound_credentials(
     store.clear_pending_sign_in_credentials(pending);
 }
 
+/// Discards a refused pending sign-in's inbound credentials. `guard_revision` (the strict
+/// profile) refuses instead when the blocking configuration changed since the request was
+/// planned; the emulator profile, like the official Auth emulator, has no such conflict.
 fn discard_pending_inbound_credentials_if_revision_current(
     store: &Arc<Mutex<AuthStore>>,
     pending: Option<&PendingSignInId>,
     settings_gate: &Arc<Mutex<()>>,
     blocking: &dyn AuthBlockingHook,
     expected_blocking_revision: u64,
+    guard_revision: bool,
 ) -> Result<(), JsonResponse> {
     let Some(pending) = pending else {
         return Ok(());
@@ -2351,7 +2355,7 @@ fn discard_pending_inbound_credentials_if_revision_current(
     let Ok(_settings_operation) = settings_gate.lock() else {
         return Err(error(500, "INTERNAL"));
     };
-    if blocking.blocking_auth_revision() != expected_blocking_revision {
+    if guard_revision && blocking.blocking_auth_revision() != expected_blocking_revision {
         return Err(error(409, "BLOCKING_FUNCTION_CONFIGURATION_CHANGED"));
     }
     discard_pending_inbound_credentials(store, Some(pending));
@@ -2459,6 +2463,12 @@ fn dispatch_with_blocking_hook(
     at: LogicalInstant,
     quota_reservation: &mut Option<SignupReservation>,
 ) -> JsonResponse {
+    // A configuration that changes while the request runs is a retryable conflict in the strict
+    // profile, fireemu's own guard; the emulator profile goes on with the configuration it finds,
+    // as the official Auth emulator does (closure review M1, 2026-09-28).
+    let revision_guarded = !state.stateless_refresh_tokens;
+    let revision_changed =
+        || revision_guarded && blocking.blocking_auth_revision() != expected_blocking_revision;
     let pending_continuation = (handler == routes::Handler::MfaSignInFinalize)
         .then(|| str_field(body, "mfaPendingCredential"))
         .flatten()
@@ -2470,7 +2480,7 @@ fn dispatch_with_blocking_hook(
                 store.pending_sign_in_context(&pending)?.clone(),
             ))
         });
-    if blocking.blocking_auth_revision() != expected_blocking_revision {
+    if revision_changed() {
         return error(409, "BLOCKING_FUNCTION_CONFIGURATION_CHANGED");
     }
     let mut candidate = store.clone();
@@ -2500,7 +2510,7 @@ fn dispatch_with_blocking_hook(
         at,
         &blocking_dispatch_options(state),
     );
-    if blocking.blocking_auth_revision() != expected_blocking_revision {
+    if revision_changed() {
         return error(409, "BLOCKING_FUNCTION_CONFIGURATION_CHANGED");
     }
     let is_authentication = matches!(
@@ -2662,6 +2672,7 @@ fn dispatch_with_blocking_hook(
                                     settings_gate,
                                     blocking,
                                     expected_blocking_revision,
+                                    revision_guarded,
                                 )
                             {
                                 return response;
@@ -2684,6 +2695,7 @@ fn dispatch_with_blocking_hook(
                                 settings_gate,
                                 blocking,
                                 expected_blocking_revision,
+                                revision_guarded,
                             )
                         {
                             return response;
@@ -2698,11 +2710,11 @@ fn dispatch_with_blocking_hook(
             }
         }
     }
-    if blocking.blocking_auth_revision() != expected_blocking_revision {
+    if revision_changed() {
         return error(409, "BLOCKING_FUNCTION_CONFIGURATION_CHANGED");
     }
     let mut commit = |metadata: Option<&fireemu_core_auth::store::TenantMetadata>| {
-        if blocking.blocking_auth_revision() != expected_blocking_revision {
+        if revision_changed() {
             return error(409, "BLOCKING_FUNCTION_CONFIGURATION_CHANGED");
         }
         if tenant.is_some() {
@@ -3956,15 +3968,18 @@ fn handle_with_policy_inner(
     }
     let signer = store.signer_arc();
     if !blocking_auth
+        && !state.stateless_refresh_tokens
         && state.blocking.as_deref().is_some_and(|blocking| {
             blocking.blocking_auth_revision() != blocking_revision
                 || (handler_runs_blocking_auth(state, blocking, route.handler)
                     && blocking_hook_applies_to_project(state, blocking, &store_project))
         })
     {
-        // A hook enabled after admission must not be silently skipped. Returning a conflict
-        // gives the caller a coherent retry point without dispatching while retaining a gate
-        // that the hook commit path would need to reacquire.
+        // Strict: a hook enabled after admission must not be silently skipped. Returning a
+        // conflict gives the caller a coherent retry point without dispatching while retaining a
+        // gate that the hook commit path would need to reacquire. The emulator profile serves the
+        // request as admitted, as if it had arrived before the change, as the official Auth
+        // emulator would (closure review M1).
         return error(409, "BLOCKING_FUNCTION_CONFIGURATION_CHANGED");
     }
     let response = if blocking_auth {
@@ -3975,9 +3990,12 @@ fn handle_with_policy_inner(
         // mutable Functions manifest may change between planning and dispatch; reject that
         // transition instead of entering the hook path while retaining a guard that the commit
         // path would acquire again (or silently using a stale allow/deny decision).
+        // The emulator profile goes on: a hook that no longer applies is not called.
         let still_applies = handler_runs_blocking_auth(state, blocking, route.handler)
             && blocking_hook_applies_to_project(state, blocking, &store_project);
-        if !still_applies || blocking.blocking_auth_revision() != blocking_revision {
+        if !state.stateless_refresh_tokens
+            && (!still_applies || blocking.blocking_auth_revision() != blocking_revision)
+        {
             return error(409, "BLOCKING_FUNCTION_CONFIGURATION_CHANGED");
         }
         dispatch_with_blocking_hook(
@@ -14172,19 +14190,20 @@ mod tests {
                 ),
             )
             .unwrap();
-        let store = Arc::new(Mutex::new(store));
+        let store_arc = Arc::new(Mutex::new(store));
         let settings_gate = Arc::new(Mutex::new(()));
         let result = discard_pending_inbound_credentials_if_revision_current(
-            &store,
+            &store_arc,
             Some(&pending),
             &settings_gate,
             &FixedBlockingRevision(1),
             0,
+            true,
         );
         let response = result.unwrap_err();
         assert_eq!(response.status, 409);
 
-        let store = store.lock().unwrap();
+        let store = store_arc.lock().unwrap();
         let credentials = store
             .pending_sign_in_context(&pending)
             .and_then(PendingSignInContext::inbound_credentials)
@@ -14192,6 +14211,24 @@ mod tests {
         assert_eq!(credentials.access_token(), Some("access-token"));
         assert_eq!(credentials.id_token(), Some("id-token"));
         assert_eq!(credentials.refresh_token(), Some("refresh-token"));
+        drop(store);
+
+        // The emulator profile does not guard the revision: the refusal discards them.
+        let result = discard_pending_inbound_credentials_if_revision_current(
+            &store_arc,
+            Some(&pending),
+            &settings_gate,
+            &FixedBlockingRevision(1),
+            0,
+            false,
+        );
+        assert!(result.is_ok());
+        assert!(store_arc
+            .lock()
+            .unwrap()
+            .pending_sign_in_context(&pending)
+            .and_then(PendingSignInContext::inbound_credentials)
+            .is_none());
     }
 
     #[test]

@@ -584,7 +584,8 @@ fn assemble_adapters(bound: BoundStartup) -> Result<ServiceAssembly, String> {
                         restrictions,
                     )
                     .map_err(|error| format!("auth.blockingFunctions: {error}"))?
-                    .with_send_events(functions::serves_send_blocking_events(cfg.profile)),
+                    .with_send_events(functions::serves_send_blocking_events(cfg.profile))
+                    .with_deadline_for(cfg.profile),
                 )
                     as Arc<
                         dyn fireemu_adapter_http::identity_toolkit::AuthBlockingHook,

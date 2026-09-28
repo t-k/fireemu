@@ -711,6 +711,18 @@ fn the_emulator_profile_never_answers_the_mail_conflicts() {
         .is_some());
 
     for bump_revision in [false, true] {
+        // The client route too (closure review M1): no revision conflict in this profile.
+        s.blocking = Some(Arc::new(LateHook {
+            handles_calls: AtomicUsize::new(0),
+            revision_calls: AtomicUsize::new(0),
+            bump_revision,
+        }));
+        let (status, body) = client(
+            &s,
+            &format!("{V1}/accounts:sendOobCode"),
+            &json!({"requestType": "PASSWORD_RESET", "email": "kept@example.com"}),
+        );
+        assert_eq!(status, 200, "client, revision {bump_revision}: {body}");
         s.blocking = Some(Arc::new(LateHook {
             handles_calls: AtomicUsize::new(0),
             revision_calls: AtomicUsize::new(0),

@@ -1041,6 +1041,9 @@ const TRANSACTION_CONCURRENT_MODIFICATION: &str =
 /// transaction holds on what it read (`concurrencyMode: PESSIMISTIC`).
 pub const TOO_MUCH_CONTENTION: &str = "Too much contention on these documents. Please try again.";
 const MAX_FINISHED_TRANSACTION_LINEAGE: usize = 8_192;
+// Strict uses a provisional allowance after the nominal 60-second idle quota: two production native recordings accepted the 65-second recipes, while two REST recordings refused the 70-second recipe. These samples do not establish an exact server boundary.
+// The pinned official emulator retains its nominal idle budget without this allowance.
+const TRANSACTION_IDLE_ALLOWANCE_SECONDS: i64 = 10;
 
 fn transaction_ttl() -> LogicalDuration {
     seconds_limit(limits::TRANSACTION_TOTAL_TIME, 270)
@@ -1050,11 +1053,20 @@ fn transaction_idle_ttl() -> LogicalDuration {
     seconds_limit(limits::TRANSACTION_IDLE_TIME, 60)
 }
 
-fn transaction_deadline(transaction: &Transaction) -> LogicalInstant {
+fn transaction_deadline(transaction: &Transaction, scope: LimitScope) -> LogicalInstant {
     let total = transaction_lineage_deadline(transaction);
     let idle = transaction
         .last_activity
         .checked_add(transaction_idle_ttl())
+        .and_then(|deadline| {
+            if scope == LimitScope::Production {
+                deadline.checked_add(LogicalDuration::from_seconds(
+                    TRANSACTION_IDLE_ALLOWANCE_SECONDS,
+                ))
+            } else {
+                Some(deadline)
+            }
+        })
         .unwrap_or(LogicalInstant::MAX);
     total.min(idle)
 }
@@ -2158,8 +2170,10 @@ impl FirestoreState {
             activity: 0,
             waiting_to_commit: false,
         };
-        self.active_transaction_deadlines
-            .insert((transaction_deadline(&transaction), id.clone()));
+        self.active_transaction_deadlines.insert((
+            transaction_deadline(&transaction, self.limit_scope),
+            id.clone(),
+        ));
         *self
             .active_transaction_versions
             .entry(read_version)
@@ -2181,7 +2195,7 @@ impl FirestoreState {
                 continue;
             };
             if transaction.state != TransactionState::Active
-                || transaction_deadline(transaction) != deadline
+                || transaction_deadline(transaction, self.limit_scope) != deadline
             {
                 continue;
             }
@@ -2234,7 +2248,7 @@ impl FirestoreState {
             .transactions
             .get(id)
             .filter(|transaction| transaction.state == TransactionState::Active)
-            .map(transaction_deadline);
+            .map(|transaction| transaction_deadline(transaction, self.limit_scope));
         let Some(deadline) = deadline else {
             if let Some(transaction) = self.transactions.get_mut(id) {
                 transaction.state = state;
@@ -2302,8 +2316,10 @@ impl FirestoreState {
     pub fn abandon_transaction(&mut self, id: &TransactionId) {
         if let Some(transaction) = self.transactions.remove(id) {
             if transaction.state == TransactionState::Active {
-                self.active_transaction_deadlines
-                    .remove(&(transaction_deadline(&transaction), id.clone()));
+                self.active_transaction_deadlines.remove(&(
+                    transaction_deadline(&transaction, self.limit_scope),
+                    id.clone(),
+                ));
                 self.active_transaction_count = self.active_transaction_count.saturating_sub(1);
                 decrement_version_count(
                     &mut self.active_transaction_versions,
@@ -2376,7 +2392,7 @@ impl FirestoreState {
         let t = self.transaction(id)?;
         // Expiry is inclusive at the deadline (`now >= deadline`). Commit validation uses
         // this same boundary, so the transaction is gone at the exact deadline.
-        let previous_deadline = transaction_deadline(t);
+        let previous_deadline = transaction_deadline(t, self.limit_scope);
         let expired = now >= previous_deadline;
         if expired {
             self.finish_transaction(id, TransactionState::Finished);
@@ -2389,8 +2405,10 @@ impl FirestoreState {
             transaction.last_activity = now;
             transaction.wall_last_activity = std::time::Instant::now();
             transaction.activity = transaction.activity.wrapping_add(1);
-            self.active_transaction_deadlines
-                .insert((transaction_deadline(transaction), id.clone()));
+            self.active_transaction_deadlines.insert((
+                transaction_deadline(transaction, self.limit_scope),
+                id.clone(),
+            ));
         }
         Ok(())
     }
@@ -2537,7 +2555,7 @@ impl FirestoreState {
             .values()
             .filter(|transaction| {
                 transaction.state == TransactionState::Active
-                    && transaction_deadline(transaction) > now
+                    && transaction_deadline(transaction, self.limit_scope) > now
             })
             .map(|transaction| transaction.read_version)
             .min()
@@ -3481,7 +3499,7 @@ impl FirestoreState {
         now: LogicalInstant,
     ) -> Result<(), FirestoreError> {
         let transaction = self.transaction(id)?;
-        if now >= transaction_deadline(transaction) {
+        if now >= transaction_deadline(transaction, self.limit_scope) {
             self.finish_transaction(id, TransactionState::Finished);
             self.compact(now);
             return Err(FirestoreError::Aborted(TRANSACTION_NO_LONGER_VALID.into()));

@@ -170,7 +170,7 @@ pub const CATALOG: LimitCatalog = LimitCatalog {
             enforcement_stage: EnforcementStage::Commit,
             implemented: ImplementationStatus::Implemented,
             official_text: "Maximum time a transaction can run: 270 seconds",
-            notes: "Enforced on the virtual clock: a transaction older than the budget is finished and every later use of it is INVALID_ARGUMENT (fireemu_core_firestore::store::FirestoreState::touch_transaction).",
+            notes: "The local virtual-clock total deadline remains 270 seconds from the transaction start in both profiles, independently of idle activity or the strict idle allowance. A due active attempt is finished; later transactional reads and commits are ABORTED (fireemu_core_firestore::store::FirestoreState::touch_transaction). The local inclusive deadline convention is not a measured production equality boundary.",
         },
         LimitDefinition {
             id: "FS-LIMIT-TRANSACTION-IDLE-TIME",
@@ -182,7 +182,7 @@ pub const CATALOG: LimitCatalog = LimitCatalog {
             enforcement_stage: EnforcementStage::Commit,
             implemented: ImplementationStatus::Implemented,
             official_text: "Maximum idle time for a transaction: 60 seconds",
-            notes: "The idle deadline is refreshed on every transaction activity; enforced on the virtual clock (fireemu_core_firestore::store::FirestoreState::touch_transaction).",
+            notes: "60 seconds is the nominal documented quota. The strict profile adds a provisional 10-second implementation allowance on the virtual clock: two native gRPC production recordings accepted the 65-second recipes with measured idle intervals approximately 65.4–67.9 seconds, while two REST recordings refused the 70-second recipe after measured waits of approximately 70.00 seconds. These separated samples neither prove an exact shared or transport-specific server boundary nor establish a conservative upper bound. The pinned official Firestore emulator 1.22.0 implements a 60-second idle policy for ordinary IDLE transactions, so the emulator profile receives no allowance. Activity refreshes the idle deadline; pruning, reads, commits and retention use the same profile-aware deadline (fireemu_core_firestore::store::FirestoreState::touch_transaction). The independent total deadline remains 270 seconds.",
         },
         LimitDefinition {
             id: "FS-LIMIT-FIELD-TRANSFORMS-PER-DOCUMENT",

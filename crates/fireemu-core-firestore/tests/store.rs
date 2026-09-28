@@ -5,9 +5,9 @@ use std::collections::BTreeMap;
 use fireemu_core_firestore::field_path::FieldPath;
 use fireemu_core_firestore::path::DocumentPath;
 use fireemu_core_firestore::store::{
-    CommitVersion, FieldTransform, FirestoreError, FirestoreState, Precondition, TransformKind,
-    Write, WriteOp, MAX_TRANSACTION_CONFLICT_LEDGER_BYTES, MAX_TRANSACTION_QUERY_RECORDS,
-    TOO_MUCH_CONTENTION,
+    CommitVersion, FieldTransform, FirestoreError, FirestoreState, LimitScope, Precondition,
+    TransformKind, Write, WriteOp, MAX_TRANSACTION_CONFLICT_LEDGER_BYTES,
+    MAX_TRANSACTION_QUERY_RECORDS, TOO_MUCH_CONTENTION,
 };
 use fireemu_core_firestore::value::Value;
 use fireemu_core_types::ids::{DatabaseId, ProjectId};
@@ -460,7 +460,7 @@ fn event_admission_refusal_does_not_extend_a_transaction_lease() {
         Err(FirestoreError::EventAdmission(_))
     ));
     assert!(matches!(
-        state.touch_transaction(&transaction, t(60)),
+        state.touch_transaction(&transaction, t(90)),
         Err(FirestoreError::Aborted(_))
     ));
     assert!(state.get(&path("events/refused-transaction")).is_none());
@@ -902,9 +902,9 @@ fn an_expired_transaction_releases_its_locks() {
         Err(FirestoreError::Aborted(_))
     ));
     // Past the idle deadline the transaction is gone and the write goes through.
-    s.commit(&[set("held/doc", &[])], None, t(61)).unwrap();
+    s.commit(&[set("held/doc", &[])], None, t(90)).unwrap();
     assert!(matches!(
-        s.commit(&[set("held/doc", &[])], Some(&txn), t(62)),
+        s.commit(&[set("held/doc", &[])], Some(&txn), t(91)),
         Err(FirestoreError::Aborted(_))
     ));
 }
@@ -945,7 +945,8 @@ fn sandbox_recorded_rollback_after_rollback_is_idempotent() {
 }
 
 #[test]
-fn sandbox_recorded_rollback_after_idle_does_not_revive_expired_lineage() {
+fn locally_expired_transaction_rollback_does_not_revive_finished_lineage() {
+    // This later-expiry sample is a local lifecycle contract, not a recorded native production threshold. The recorded 65-second Get-first recipe remains usable.
     let mut state = FirestoreState::new();
     let transaction = state.begin_transaction(false, t(0)).unwrap();
     state
@@ -2084,12 +2085,220 @@ fn read_only_query_descriptors_still_have_count_and_byte_limits() {
     }
 }
 
+// These are controlled-clock counterparts of the recorded native 65-second recipes. They do not establish an exact production timeout or equate maintenance with wall time.
+#[test]
+fn recorded_native_idle_candidate_commit_survives_maintenance() {
+    for maintenance in [false, true] {
+        let mut state = FirestoreState::new();
+        let transaction = state.begin_transaction(false, t(0)).unwrap();
+        state
+            .get_in_transaction(&transaction, &path("idle/doc"))
+            .unwrap();
+        if maintenance {
+            for second in 0..=65 {
+                state.compact(t(second));
+            }
+        }
+        assert_eq!(state.transaction_bookkeeping_stats().active, 1);
+        assert_eq!(state.transaction_bookkeeping_stats().deadlines, 1);
+        state
+            .commit(
+                &[set("idle/doc", &[("value", Value::Integer(1))])],
+                Some(&transaction),
+                t(65),
+            )
+            .unwrap();
+        assert_eq!(
+            state.get(&path("idle/doc")).unwrap().fields.get("value"),
+            Some(&Value::Integer(1))
+        );
+    }
+}
+
+#[test]
+fn recorded_native_idle_candidate_rollback_first_preserves_retry() {
+    for maintenance in [false, true] {
+        let mut state = FirestoreState::new();
+        let transaction = state.begin_transaction(false, t(0)).unwrap();
+        state
+            .get_in_transaction(&transaction, &path("idle/doc"))
+            .unwrap();
+        if maintenance {
+            for second in 0..=65 {
+                state.compact(t(second));
+            }
+        }
+        assert_eq!(state.transaction_bookkeeping_stats().active, 1);
+        assert_eq!(state.transaction_bookkeeping_stats().deadlines, 1);
+        state.rollback(&transaction).unwrap();
+        state
+            .commit(
+                &[set("idle/doc", &[("value", Value::Integer(2))])],
+                None,
+                t(65),
+            )
+            .unwrap();
+        let retry = state.retry_transaction(&transaction, t(66)).unwrap();
+        assert_ne!(retry, transaction);
+        assert_eq!(
+            state
+                .get_in_transaction(&retry, &path("idle/doc"))
+                .unwrap()
+                .unwrap()
+                .fields
+                .get("value"),
+            Some(&Value::Integer(2))
+        );
+        assert!(matches!(
+            state.retry_transaction(&transaction, t(67)),
+            Err(FirestoreError::InvalidArgument(_))
+        ));
+    }
+}
+
+#[test]
+fn recorded_native_idle_candidate_get_first_refreshes_activity() {
+    for maintenance in [false, true] {
+        let mut state = FirestoreState::new();
+        state
+            .commit(
+                &[set("idle/doc", &[("value", Value::Integer(1))])],
+                None,
+                t(0),
+            )
+            .unwrap();
+        let transaction = state.begin_transaction(false, t(0)).unwrap();
+        state
+            .get_in_transaction(&transaction, &path("idle/doc"))
+            .unwrap();
+        if maintenance {
+            for second in 0..=65 {
+                state.compact(t(second));
+            }
+        }
+        assert_eq!(state.transaction_bookkeeping_stats().active, 1);
+        assert_eq!(state.transaction_bookkeeping_stats().deadlines, 1);
+        state.touch_transaction(&transaction, t(65)).unwrap();
+        assert_eq!(
+            state
+                .get_in_transaction(&transaction, &path("idle/doc"))
+                .unwrap()
+                .unwrap()
+                .fields
+                .get("value"),
+            Some(&Value::Integer(1))
+        );
+        state.compact(t(120));
+        state.touch_transaction(&transaction, t(120)).unwrap();
+    }
+}
+
+#[test]
+fn recorded_native_idle_candidate_get_then_rollback_preserves_retry() {
+    for maintenance in [false, true] {
+        let mut state = FirestoreState::new();
+        let transaction = state.begin_transaction(false, t(0)).unwrap();
+        state
+            .get_in_transaction(&transaction, &path("idle/doc"))
+            .unwrap();
+        if maintenance {
+            for second in 0..=65 {
+                state.compact(t(second));
+            }
+        }
+        assert_eq!(state.transaction_bookkeeping_stats().active, 1);
+        assert_eq!(state.transaction_bookkeeping_stats().deadlines, 1);
+        state.touch_transaction(&transaction, t(65)).unwrap();
+        assert!(state
+            .get_in_transaction(&transaction, &path("idle/doc"))
+            .unwrap()
+            .is_none());
+        state.rollback(&transaction).unwrap();
+        state
+            .commit(
+                &[set("idle/doc", &[("value", Value::Integer(2))])],
+                None,
+                t(65),
+            )
+            .unwrap();
+        let retry = state.retry_transaction(&transaction, t(66)).unwrap();
+        assert_eq!(
+            state
+                .get_in_transaction(&retry, &path("idle/doc"))
+                .unwrap()
+                .unwrap()
+                .fields
+                .get("value"),
+            Some(&Value::Integer(2))
+        );
+    }
+}
+
+#[test]
+fn idle_candidate_allowance_is_strict_only() {
+    for (scope, accepted) in [
+        (LimitScope::Production, true),
+        (LimitScope::OfficialEmulator, false),
+    ] {
+        for maintenance in [false, true] {
+            for commit_first in [false, true] {
+                let mut state = FirestoreState::with_limit_scope(scope);
+                let transaction = state.begin_transaction(false, t(0)).unwrap();
+                if maintenance {
+                    for second in 0..=65 {
+                        state.compact(t(second));
+                    }
+                }
+                let result = if commit_first {
+                    state.commit(&[], Some(&transaction), t(65)).map(|_| ())
+                } else {
+                    state.touch_transaction(&transaction, t(65))
+                };
+                if accepted {
+                    result.unwrap();
+                } else {
+                    assert!(matches!(result, Err(FirestoreError::Aborted(_))));
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn provisional_strict_idle_deadline_is_a_local_policy_not_a_production_measurement() {
+    // These instants check the delegated provisional local policy, independently of the recorded native/REST samples. They do not prove Firestore's exact boundary.
+    for (seconds, accepted) in [(69, true), (70, false), (71, false)] {
+        for maintenance in [false, true] {
+            for commit_first in [false, true] {
+                let mut state = FirestoreState::new();
+                let transaction = state.begin_transaction(false, t(0)).unwrap();
+                if maintenance {
+                    state.compact(t(seconds));
+                    let expected = usize::from(accepted);
+                    assert_eq!(state.transaction_bookkeeping_stats().active, expected);
+                    assert_eq!(state.transaction_bookkeeping_stats().deadlines, expected);
+                }
+                let result = if commit_first {
+                    state
+                        .commit(&[], Some(&transaction), t(seconds))
+                        .map(|_| ())
+                } else {
+                    state.touch_transaction(&transaction, t(seconds))
+                };
+                if accepted {
+                    result.unwrap();
+                } else {
+                    assert!(matches!(result, Err(FirestoreError::Aborted(_))));
+                }
+            }
+        }
+    }
+}
+
 #[test]
 fn transactions_expire_on_idle_and_total_time() {
-    // Expiry is inclusive at the deadline (`now >= deadline`): a transaction is alive strictly
-    // inside its 60 s idle window and 270 s total budget, and gone once a deadline is reached.
-    // This is the transaction-validity boundary, so the attempt becomes retryably ABORTED at
-    // exactly the instant its own commit would be refused.
+    // Strict adds a provisional allowance to the nominal idle quota. A safely later local sample checks irreversible expiry; it does not measure an exact production boundary.
+    // The independent 270 s total budget remains unchanged.
     let mut s = FirestoreState::new();
     let txn = s.begin_transaction(false, t(0)).unwrap();
     assert!(s.touch_transaction(&txn, t(59)).is_ok());
@@ -2097,14 +2306,13 @@ fn transactions_expire_on_idle_and_total_time() {
         s.touch_transaction(&txn, t(118)).is_ok(),
         "idle window restarts"
     );
-    // 60 s after the last activity (t(118)) the idle budget is spent. An expired transaction
-    // is ABORTED (the code the SDKs retry), the same as a finished one.
+    // 90 s after the last activity the local idle budget is spent. An expired transaction is ABORTED (the code the SDKs retry), the same as a finished one.
     assert!(matches!(
-        s.touch_transaction(&txn, t(178)),
+        s.touch_transaction(&txn, t(208)),
         Err(FirestoreError::Aborted(_))
     ));
     assert!(
-        s.touch_transaction(&txn, t(180)).is_err(),
+        s.touch_transaction(&txn, t(210)).is_err(),
         "expired stays expired"
     );
 
@@ -2576,8 +2784,13 @@ fn verify_observes_staged_writes_and_preserves_atomic_validation() {
 /// `ABORTED` and the expiry wording, its write unpublished and its lock released.
 #[test]
 fn a_transaction_commits_at_269_s_total_and_is_refused_at_271_s_total() {
-    for (elapsed, commits) in [(269, true), (271, false)] {
-        let mut s = FirestoreState::new();
+    for (scope, elapsed, commits) in [
+        (LimitScope::Production, 269, true),
+        (LimitScope::Production, 271, false),
+        (LimitScope::OfficialEmulator, 269, true),
+        (LimitScope::OfficialEmulator, 271, false),
+    ] {
+        let mut s = FirestoreState::with_limit_scope(scope);
         s.commit(&[set("total/doc", &[("v", Value::Integer(0))])], None, t(0))
             .unwrap();
         let txn = s.begin_transaction(false, t(0)).unwrap();
@@ -2585,8 +2798,7 @@ fn a_transaction_commits_at_269_s_total_and_is_refused_at_271_s_total() {
             .get_in_transaction(&txn, &path("total/doc"))
             .unwrap()
             .is_some());
-        // Activity every 59 s keeps the 60 s idle window open up to t(236); both commit
-        // instants are then inside the idle window, so only the total budget decides.
+        // Activity every 59 s keeps either profile's idle window open up to t(236); both commit instants are then inside the idle window, so only the total budget decides.
         for step in 1..=4 {
             s.touch_transaction(&txn, t(step * 59)).unwrap();
         }

@@ -3764,10 +3764,11 @@ fn an_idle_rest_transaction_expires_and_releases_its_document_lock() {
     );
     assert_eq!(status, 200, "{held}");
 
+    // A later local sample checks idle expiry and lock release without claiming an exact production threshold.
     let _ = clock
         .lock()
         .unwrap()
-        .advance(fireemu_core_types::time::LogicalDuration::from_seconds(61));
+        .advance(fireemu_core_types::time::LogicalDuration::from_seconds(90));
     let (status, expired) = call(
         &s,
         "POST",

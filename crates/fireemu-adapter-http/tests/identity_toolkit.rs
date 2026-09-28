@@ -16643,6 +16643,10 @@ fn batch_create_upserts_and_checks_duplicates_like_production() {
     );
     assert_eq!((status, body.get("error").is_none()), (200, true), "{body}");
     assert_eq!(lookup("i10")["email"], "i6b@example.com");
+    // Nor does production refuse an address that differs from another account's only in case.
+    let (status, body) = import(json!({"users": [{"localId": "i11", "email": "I6B@example.com"}]}));
+    assert_eq!((status, body.get("error").is_none()), (200, true), "{body}");
+    assert!(!lookup("i11").is_null());
 }
 
 fn batch_import(s: &AuthState, body: &Value) -> (u16, Value) {
@@ -16792,6 +16796,45 @@ fn emulator_batch_create_refuses_shared_addresses_like_the_official_emulator() {
     assert_eq!(status, 400, "{body}");
     assert_eq!(body["error"]["message"], "DUPLICATE_EMAIL : e8@example.com");
     assert!(looked_up(&s, "e8").is_null());
+}
+
+/// The official emulator looks an imported address up as the request spells it, against keys
+/// it stores in lowercase (firebase-tools 15.28.2, `operations.js` `batchCreate` and `state.js`
+/// `getUserByEmail`): an address that differs from another account's only in case is imported,
+/// with or without sanityCheck, while the lowercase spelling is still refused.
+#[test]
+fn emulator_batch_create_looks_addresses_up_as_spelled() {
+    let s = state();
+    let (status, body) = batch_import(
+        &s,
+        &json!({"users": [{"localId": "c1", "email": "case@example.com"}]}),
+    );
+    assert_eq!((status, body.get("error").is_none()), (200, true), "{body}");
+    for (uid, sanity_check) in [("c2", false), ("c3", true)] {
+        let (status, body) = batch_import(
+            &s,
+            &json!({"sanityCheck": sanity_check, "users": [{"localId": uid, "email": "Case@Example.com"}]}),
+        );
+        assert_eq!(
+            (status, body.get("error").is_none()),
+            (200, true),
+            "{uid} {body}"
+        );
+        assert!(!looked_up(&s, uid).is_null(), "{uid}");
+    }
+    let (status, body) = batch_import(
+        &s,
+        &json!({"users": [{"localId": "c4", "email": "case@example.com"}]}),
+    );
+    assert_eq!(status, 200, "{body}");
+    assert_eq!(
+        row_errors(&body),
+        [
+            json!({"index": 0, "message": "((Auth Emulator does not support importing duplicate email: case@example.com))"})
+        ],
+        "{body}"
+    );
+    assert!(looked_up(&s, "c4").is_null());
 }
 
 /// Without sanityCheck an address repeated inside the request is refused row by row under the

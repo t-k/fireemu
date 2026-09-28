@@ -10036,7 +10036,9 @@ fn emulator_batch_request_refusal(
 /// The official emulator's per-row batchCreate refusals that production does not make: an
 /// address owned by another account (checked first, and only while one account per address is
 /// enforced; fireemu keeps importing a shared address under allowDuplicateEmails), then an
-/// existing localId without allowOverwrite.
+/// existing localId without allowOverwrite. The official emulator looks the address up as the
+/// request spells it against keys it stores in lowercase (`state.js` `getUserByEmail`), so only
+/// an address already in lowercase can collide.
 fn emulator_batch_row_refusal(
     store: &AuthStore,
     user: &fireemu_core_auth::store::ImportedUser,
@@ -10044,7 +10046,11 @@ fn emulator_batch_row_refusal(
     allow_overwrite: bool,
     sanity_check: bool,
 ) -> Option<String> {
-    if let Some(email) = user.email.as_deref() {
+    if let Some(email) = user
+        .email
+        .as_deref()
+        .filter(|e| canonicalize_email(e) == *e)
+    {
         let owned_by_other = store
             .users_by_email(email)
             .iter()

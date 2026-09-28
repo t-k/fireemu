@@ -3,16 +3,19 @@
 //! key is ever fetched from an issuer.
 
 use std::collections::BTreeMap;
+use std::sync::{Arc, Mutex};
 
 use serde_json::Value;
 
 /// Private members a JWK must not carry: a signer set holds public keys only.
 const PRIVATE_MEMBERS: &[&str] = &["d", "p", "q", "dp", "dq", "qi", "oth", "k"];
 
-/// Issuers and their RS256 public keys, by `kid`.
+/// Issuers and their RS256 public keys, by `kid`, and the nonce-bearing credentials strict
+/// sign-ins used (production refuses one used again).
 #[derive(Debug, Clone, Default)]
 pub struct IdpSignerTrust {
     issuers: BTreeMap<String, BTreeMap<String, Value>>,
+    used: Arc<Mutex<UsedCredentials>>,
 }
 
 impl IdpSignerTrust {
@@ -55,7 +58,10 @@ impl IdpSignerTrust {
             }
             issuers.insert(issuer.clone(), by_kid);
         }
-        Ok(Self { issuers })
+        Ok(Self {
+            issuers,
+            used: Arc::default(),
+        })
     }
 
     /// The public JWK of `issuer` named `kid`.
@@ -68,6 +74,79 @@ impl IdpSignerTrust {
     #[must_use]
     pub fn knows(&self, issuer: &str) -> bool {
         self.issuers.contains_key(issuer)
+    }
+
+    /// Whether a sign-in already used the credential `key` (still unexpired at `now`).
+    pub(crate) fn credential_used(&self, key: &str, now: i64) -> bool {
+        self.used
+            .lock()
+            .map_or(true, |mut used| used.contains(key, now))
+    }
+
+    /// Records that a sign-in used the credential `key`, valid until `expires`.
+    pub(crate) fn record_credential(&self, key: String, expires: i64, now: i64) {
+        if let Ok(mut used) = self.used.lock() {
+            used.record(key, expires, now);
+        }
+    }
+}
+
+/// The most credentials remembered in a daemon session. Past it, the one expiring first is
+/// forgotten (an emulator bound, not production's).
+const USED_CREDENTIALS_CAPACITY: usize = 10_000;
+
+/// Used credentials by key, each until its token's expiry (a later use is refused as expired
+/// anyway), within a fixed capacity.
+#[derive(Debug)]
+pub(crate) struct UsedCredentials {
+    expiries: BTreeMap<String, i64>,
+    capacity: usize,
+}
+
+impl Default for UsedCredentials {
+    fn default() -> Self {
+        Self::with_capacity(USED_CREDENTIALS_CAPACITY)
+    }
+}
+
+impl UsedCredentials {
+    fn with_capacity(capacity: usize) -> Self {
+        Self {
+            expiries: BTreeMap::new(),
+            capacity,
+        }
+    }
+
+    fn sweep(&mut self, now: i64) {
+        self.expiries.retain(|_, expires| *expires > now);
+    }
+
+    fn contains(&mut self, key: &str, now: i64) -> bool {
+        self.sweep(now);
+        self.expiries.contains_key(key)
+    }
+
+    fn record(&mut self, key: String, expires: i64, now: i64) {
+        self.sweep(now);
+        if expires <= now {
+            return;
+        }
+        if !self.expiries.contains_key(&key) && self.expiries.len() >= self.capacity {
+            let first = self
+                .expiries
+                .iter()
+                .min_by_key(|(_, expires)| **expires)
+                .map(|(key, _)| key.clone());
+            if let Some(first) = first {
+                self.expiries.remove(&first);
+            }
+        }
+        self.expiries.insert(key, expires);
+    }
+
+    #[cfg(test)]
+    fn len(&self) -> usize {
+        self.expiries.len()
     }
 }
 
@@ -96,6 +175,47 @@ fn valid_issuer(issuer: &str) -> bool {
         let host = rest.split('/').next().unwrap_or_default();
         !host.is_empty() && !rest.contains(['?', '#']) && !rest.contains(char::is_whitespace)
     })
+}
+
+#[cfg(test)]
+mod used_credentials_tests {
+    use super::UsedCredentials;
+
+    #[test]
+    fn a_credential_is_remembered_until_its_token_expires() {
+        let mut used = UsedCredentials::with_capacity(4);
+        used.record("a".into(), 100, 10);
+        assert!(used.contains("a", 99));
+        assert!(!used.contains("a", 100));
+        assert_eq!(used.len(), 0, "an expired credential is dropped");
+        // One already expired is not recorded.
+        used.record("b".into(), 50, 50);
+        assert_eq!(used.len(), 0);
+        assert!(!used.contains("b", 49));
+    }
+
+    #[test]
+    fn the_capacity_bounds_what_is_remembered() {
+        let mut used = UsedCredentials::with_capacity(3);
+        used.record("late".into(), 300, 0);
+        used.record("first".into(), 100, 0);
+        used.record("middle".into(), 200, 0);
+        used.record("late".into(), 400, 0);
+        assert_eq!(used.len(), 3, "recording a key again does not grow it");
+        used.record("new".into(), 500, 0);
+        assert_eq!(used.len(), 3);
+        assert!(
+            !used.contains("first", 1),
+            "the one expiring first is forgotten"
+        );
+        for key in ["middle", "late", "new"] {
+            assert!(used.contains(key, 1), "{key}");
+        }
+        assert_eq!(
+            UsedCredentials::default().capacity,
+            super::USED_CREDENTIALS_CAPACITY
+        );
+    }
 }
 
 #[cfg(test)]

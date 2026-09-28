@@ -3134,14 +3134,28 @@ fn handle_with_policy(
             None => None,
         };
     let idp_trust = oidc_trust.or(strict_idp_trust.as_ref());
+    // A strict sign-in's nonce-bearing credential, remembered once the sign-in succeeds.
+    let mut used_credential = None;
     if route.handler == routes::Handler::SignInWithIdp {
         if let Some(trust) = idp_trust {
             let params = normalized_idp_params(
                 str_field(body, "requestUri").unwrap_or_default(),
                 str_field(body, "postBody"),
             );
-            if !trust.accepts(&store, &params, at) {
-                return error(400, "INVALID_IDP_RESPONSE");
+            let now = i64::try_from(at.as_nanos().div_euclid(1_000_000_000)).unwrap_or(i64::MAX);
+            let used = |token: &crate::oidc::VerifiedIdToken| {
+                strict_signers.is_some_and(|signers| {
+                    used_credential_key(&store, trust, token)
+                        .is_some_and(|key| signers.credential_used(&key, now))
+                })
+            };
+            match trust.check(&store, &params, at, &used) {
+                Ok(token) => {
+                    used_credential = strict_signers
+                        .zip(used_credential_key(&store, trust, &token))
+                        .map(|(signers, key)| (signers, key, token.expires, now));
+                }
+                Err(message) => return error(400, &message),
             }
         }
     }
@@ -3195,7 +3209,9 @@ fn handle_with_policy(
         } else {
             response
         };
-        return finish_token_response(response, signer.as_deref(), &store_arc, at);
+        let response = finish_token_response(response, signer.as_deref(), &store_arc, at);
+        record_used_credential(used_credential, &response);
+        return response;
     }
     let signer = store.signer_arc();
     if !blocking_auth
@@ -3312,6 +3328,7 @@ fn handle_with_policy(
         response
     };
     let mut response = finish_token_response(response, signer.as_deref(), &store_arc, at);
+    record_used_credential(used_credential, &response);
     if let Some(reservation) = quota_reservation.take() {
         // Blocking dispatch commits a successful new-account reservation at its typed
         // per-request creation boundary. Any reservation left here belongs to a failed or
@@ -11874,33 +11891,56 @@ fn idp_continuation_authority(
 /// errors answered before O4 and without mutation.
 ///
 /// # Errors
-/// `INVALID_IDP_RESPONSE` (production's code for this route is unobserved) for any provider
-/// other than an existing `oidc.*` configuration whose issuer has startup keys, and for a token
-/// whose `kid` names none of them. [`crate::oidc::LocalOidcTrust::accepts`] checks the rest.
+/// Production's refusals (record-oidc 39209e): a provider without a configuration (a name in
+/// another case, which the credential parser would lowercase, included) or disabled, an issuer
+/// without startup keys (production cannot reach it), no ID token, one that does not parse, and
+/// one whose `kid` names none of the issuer's keys. A provider with a configuration strict cannot
+/// verify (a built-in provider, SAML) is `INVALID_IDP_RESPONSE` (unobserved).
+/// [`crate::oidc::LocalOidcTrust::check`] checks the rest.
 fn strict_idp_trust(
     signers: &IdpSignerTrust,
     store: &AuthStore,
     body: &Value,
 ) -> Result<Option<crate::oidc::LocalOidcTrust>, JsonResponse> {
-    let refused = || error(400, "INVALID_IDP_RESPONSE");
+    let refused = |message: &str| error(400, message);
     let Some(request_uri) = str_field(body, "requestUri").filter(|uri| uri_is_absolute(uri)) else {
         return Ok(None);
     };
-    let params = normalized_idp_params(request_uri, str_field(body, "postBody"));
+    let post_body = str_field(body, "postBody");
+    let params = normalized_idp_params(request_uri, post_body);
     let Some(provider_id) = params.get("providerId").filter(|id| !id.is_empty()) else {
         return Ok(None);
     };
     // The credential parser lowercases the provider; the verified one must be the recorded one.
-    // `LocalOidcTrust::accepts` refuses a provider other than `oidc.*`.
     if *provider_id != provider_id.to_lowercase() {
-        return Err(refused());
+        return Err(refused(crate::oidc::NOT_FOUND_REFUSAL));
     }
-    let config = store.oidc_config(provider_id).ok_or_else(refused)?;
-    let kid = params
-        .get("id_token")
-        .and_then(|token| jws_kid(token))
-        .ok_or_else(refused)?;
-    let jwk = signers.key(&config.issuer, &kid).ok_or_else(refused)?;
+    let Some(config) = store.oidc_config(provider_id) else {
+        if store.default_idp_config(provider_id).is_some()
+            || store.saml_config(provider_id).is_some()
+        {
+            return Err(refused("INVALID_IDP_RESPONSE"));
+        }
+        return Err(refused(crate::oidc::NOT_FOUND_REFUSAL));
+    };
+    if !config.enabled {
+        return Err(refused(crate::oidc::DISABLED_REFUSAL));
+    }
+    if !signers.knows(&config.issuer) {
+        return Err(refused(
+            "INVALID_IDP_RESPONSE : Error connecting to the given credential's issuer.",
+        ));
+    }
+    let Some(token) = params.get("id_token") else {
+        return Err(refused(&format!(
+            "INVALID_CREDENTIAL_OR_PROVIDER_ID : Invalid IdP response/credential: {request_uri}?{}",
+            post_body.unwrap_or_default()
+        )));
+    };
+    let kid = jws_kid(token)?;
+    let jwk = signers
+        .key(&config.issuer, &kid)
+        .ok_or_else(|| refused(crate::oidc::SIGNATURE_REFUSAL))?;
     Ok(Some(crate::oidc::LocalOidcTrust {
         project_id: store.project_id().to_owned(),
         tenant_id: store.tenant_id().map(str::to_owned),
@@ -11912,15 +11952,61 @@ fn strict_idp_trust(
 }
 
 /// The `kid` of a compact JWS header, read before any verification only to select a key.
-fn jws_kid(token: &str) -> Option<String> {
+///
+/// # Errors
+/// Production's refusals: a token whose header does not parse, and one without a `kid`
+/// (no key could verify it).
+fn jws_kid(token: &str) -> Result<String, JsonResponse> {
+    let unparsable = || error(400, crate::oidc::UNPARSABLE_REFUSAL);
     // The verifier's bound, applied before decoding anything (verification refuses it too).
-    if token.len() > 65_536 {
-        return None;
+    if token.len() > 65_536 || token.split('.').count() != 3 {
+        return Err(unparsable());
     }
-    let header = token.split('.').next()?;
-    let header: Value =
-        serde_json::from_slice(&fireemu_core_auth::jwt::base64url_decode(header).ok()?).ok()?;
-    header.get("kid")?.as_str().map(str::to_owned)
+    let header = token.split('.').next().unwrap_or_default();
+    let header: Value = fireemu_core_auth::jwt::base64url_decode(header)
+        .ok()
+        .and_then(|bytes| serde_json::from_slice(&bytes).ok())
+        .ok_or_else(unparsable)?;
+    header
+        .get("kid")
+        .and_then(Value::as_str)
+        .map(str::to_owned)
+        .ok_or_else(|| error(400, crate::oidc::SIGNATURE_REFUSAL))
+}
+
+/// Remembers a strict sign-in's nonce-bearing credential once the sign-in succeeded.
+fn record_used_credential(
+    used: Option<(&IdpSignerTrust, String, i64, i64)>,
+    response: &JsonResponse,
+) {
+    if response.status == 200 {
+        if let Some((signers, key, expires, now)) = used {
+            signers.record_credential(key, expires, now);
+        }
+    }
+}
+
+/// The key under which a strict sign-in's nonce-bearing credential is remembered: the auth
+/// namespace and its reset generation (a reset forgets it), the issuer and client, the subject
+/// and the nonce. Production's exact key is unobserved; this one refuses least.
+fn used_credential_key(
+    store: &AuthStore,
+    trust: &crate::oidc::LocalOidcTrust,
+    token: &crate::oidc::VerifiedIdToken,
+) -> Option<String> {
+    let nonce = token.nonce.as_ref()?;
+    Some(
+        json!([
+            store.project_id(),
+            store.tenant_id(),
+            store.reset_generation(),
+            trust.issuer,
+            trust.client_id,
+            token.subject,
+            nonce,
+        ])
+        .to_string(),
+    )
 }
 
 /// Resolve pendingToken *before* signup admission and assertion verification. A caller

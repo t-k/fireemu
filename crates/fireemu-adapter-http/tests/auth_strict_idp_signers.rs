@@ -22,6 +22,22 @@ const NOW: i64 = 1_788_004_860;
 const ISSUER: &str = "https://issuer.example.test/oidc/run";
 const PROVIDER: &str = "oidc.strict";
 const CLIENT: &str = "strict-client";
+// Production's refusals (AUTH-FEDERATION record-oidc, run 39209e, 2026-09-28).
+const SIGNATURE: &str = "INVALID_IDP_RESPONSE : Unable to verify the ID Token signature.";
+const UNPARSABLE: &str = "INVALID_IDP_RESPONSE : Unable to parse the ID Token.";
+const NOT_FOUND: &str = "OPERATION_NOT_ALLOWED : The identity provider configuration is not found.";
+const DISABLED: &str = "OPERATION_NOT_ALLOWED : The identity provider configuration is disabled.";
+const UNREACHABLE: &str =
+    "INVALID_IDP_RESPONSE : Error connecting to the given credential's issuer.";
+const NONCE_MISSING: &str = "MISSING_OR_INVALID_NONCE : Nonce is missing in the request.";
+const DUPLICATE: &str =
+    "MISSING_OR_INVALID_NONCE : Duplicate credential received. Please try again with a new credential.";
+/// Refusals whose production message is unobserved.
+const UNOBSERVED: &str = "INVALID_IDP_RESPONSE";
+
+fn stale(iat: i64) -> String {
+    format!("INVALID_IDP_RESPONSE : ID Token issued at {iat} is stale to sign-in.")
+}
 
 // Public deterministic test fixtures only; these seeds are not deployment signing keys.
 fn signer() -> &'static Arc<RsaSigner> {
@@ -124,13 +140,10 @@ fn sign_in(s: &AuthState, body: &Value) -> JsonResponse {
     handle(s, "POST", &format!("{V1}/accounts:signInWithIdp"), body)
 }
 
-fn assert_refused(s: &AuthState, body: &Value, case: &str) {
+fn assert_refused(s: &AuthState, body: &Value, message: &str, case: &str) {
     let response = sign_in(s, body);
     assert_eq!(response.status, 400, "{case}: {}", response.body);
-    assert_eq!(
-        response.body["error"]["message"], "INVALID_IDP_RESPONSE",
-        "{case}"
-    );
+    assert_eq!(response.body["error"]["message"], message, "{case}");
     assert!(response.body.get("idToken").is_none(), "{case}");
     assert!(response.body.get("pendingToken").is_none(), "{case}");
     let store = s.store.lock().unwrap();
@@ -176,19 +189,24 @@ fn strict_signs_in_with_a_token_the_configured_issuer_key_verifies() {
 #[test]
 fn strict_refuses_the_unsigned_fixture_idp() {
     let s = strict_state();
-    for (index, body) in fixture_requests(PROVIDER).iter().enumerate() {
-        assert_refused(&s, body, &format!("fixture form {index}"));
-    }
+    let [unsigned, json_credential] = fixture_requests(PROVIDER).try_into().unwrap();
+    assert_refused(&s, &unsigned, SIGNATURE, "an unsigned JWT");
+    assert_refused(&s, &json_credential, UNPARSABLE, "a JSON credential");
 }
 
 #[test]
 fn strict_without_signers_refuses_every_idp_sign_in() {
     let mut s = strict_state();
     s.idp_assertions = IdpAssertionPolicy::SignedOidc(Arc::new(IdpSignerTrust::default()));
-    assert_refused(&s, &request(&token(&claims())), "signed without signers");
-    for body in fixture_requests(PROVIDER) {
-        assert_refused(&s, &body, "fixture without signers");
-    }
+    assert_refused(
+        &s,
+        &request(&token(&claims())),
+        UNREACHABLE,
+        "signed without signers",
+    );
+    let [unsigned, json_credential] = fixture_requests(PROVIDER).try_into().unwrap();
+    assert_refused(&s, &unsigned, UNREACHABLE, "unsigned without signers");
+    assert_refused(&s, &json_credential, UNREACHABLE, "JSON without signers");
     // The Emulator UI proxy's entry point is gated the same way.
     let response = handle_with(
         &s,
@@ -224,13 +242,29 @@ fn strict_refuses_tokens_the_configured_keys_do_not_verify() {
     };
     bad_signature.replace_range(start..=start, replacement);
     let cases = [
-        ("other key", request(&token_by(other_signer(), &claims()))),
-        ("bad signature", request(&bad_signature)),
-        ("wrong iss", request(&token(&wrong_iss))),
-        ("wrong aud", request(&token(&wrong_aud))),
-        ("expired", request(&token(&expired))),
-        ("issued in the future", request(&token(&future))),
-        ("empty sub", request(&token(&empty_sub))),
+        (
+            "other key",
+            request(&token_by(other_signer(), &claims())),
+            SIGNATURE.to_owned(),
+        ),
+        ("bad signature", request(&bad_signature), SIGNATURE.to_owned()),
+        (
+            "wrong iss",
+            request(&token(&wrong_iss)),
+            format!("INVALID_IDP_RESPONSE : The issuer in ID Token https://other.example.test/oidc/run does not match the expected one in config: {ISSUER}."),
+        ),
+        (
+            "wrong aud",
+            request(&token(&wrong_aud)),
+            format!("INVALID_IDP_RESPONSE : The audience in ID Token [other-client] does not match the expected audience {CLIENT}."),
+        ),
+        ("expired", request(&token(&expired)), stale(NOW)),
+        ("issued in the future", request(&token(&future)), stale(NOW + 1)),
+        (
+            "empty sub",
+            request(&token(&empty_sub)),
+            format!("INVALID_IDP_RESPONSE : ID Token does not contain user's identity in 'sub' claim: {}", json!({"aud": CLIENT, "exp": NOW + 60, "iat": NOW, "iss": ISSUER, "sub": ""})),
+        ),
         (
             "access token alongside",
             json!({
@@ -241,6 +275,7 @@ fn strict_refuses_tokens_the_configured_keys_do_not_verify() {
                 ),
                 "returnSecureToken": true,
             }),
+            UNOBSERVED.to_owned(),
         ),
         (
             "access token only",
@@ -249,14 +284,25 @@ fn strict_refuses_tokens_the_configured_keys_do_not_verify() {
                 "postBody": format!("providerId={PROVIDER}&access_token=at"),
                 "returnSecureToken": true,
             }),
+            format!("INVALID_CREDENTIAL_OR_PROVIDER_ID : Invalid IdP response/credential: http://localhost?providerId={PROVIDER}&access_token=at"),
+        ),
+        (
+            "no token",
+            json!({
+                "requestUri": "http://localhost",
+                "postBody": format!("providerId={PROVIDER}"),
+                "returnSecureToken": true,
+            }),
+            format!("INVALID_CREDENTIAL_OR_PROVIDER_ID : Invalid IdP response/credential: http://localhost?providerId={PROVIDER}"),
         ),
         (
             "mixed-case provider",
             request_for("oidc.Strict", &token(&claims())),
+            NOT_FOUND.to_owned(),
         ),
     ];
-    for (case, body) in cases {
-        assert_refused(&s, &body, case);
+    for (case, body, message) in cases {
+        assert_refused(&s, &body, &message, case);
     }
     // Even with a configuration stored under the mixed-case ID: the credential parser
     // lowercases the provider, so the verified provider would not be the one recorded.
@@ -266,6 +312,7 @@ fn strict_refuses_tokens_the_configured_keys_do_not_verify() {
     assert_refused(
         &s,
         &request_for("oidc.Strict", &token(&claims())),
+        NOT_FOUND,
         "mixed-case provider with a configuration",
     );
 }
@@ -277,10 +324,10 @@ fn strict_selects_the_key_by_kid_and_refuses_a_key_under_the_wrong_kid() {
     relabelled["keys"][0]["kid"] = signer().jwks()["keys"][0]["kid"].clone();
     let mut s = strict_state();
     s.idp_assertions = IdpAssertionPolicy::SignedOidc(signers(ISSUER, relabelled));
-    assert_refused(&s, &request(&token(&claims())), "relabelled key");
+    assert_refused(&s, &request(&token(&claims())), SIGNATURE, "relabelled key");
     // A kid the issuer does not list.
     s.idp_assertions = IdpAssertionPolicy::SignedOidc(signers(ISSUER, other_signer().jwks()));
-    assert_refused(&s, &request(&token(&claims())), "unknown kid");
+    assert_refused(&s, &request(&token(&claims())), SIGNATURE, "unknown kid");
     // Both keys listed: the kid picks the verifying one.
     let mut both = signer().jwks();
     both["keys"]
@@ -299,7 +346,7 @@ fn strict_refuses_a_provider_that_is_unconfigured_disabled_or_of_another_issuer(
         .lock()
         .unwrap()
         .replace_oidc_config(provider(false, ISSUER));
-    assert_refused(&s, &request(&token(&claims())), "disabled");
+    assert_refused(&s, &request(&token(&claims())), DISABLED, "disabled");
     // The provider points at an issuer without configured keys.
     s.store
         .lock()
@@ -307,10 +354,16 @@ fn strict_refuses_a_provider_that_is_unconfigured_disabled_or_of_another_issuer(
         .replace_oidc_config(provider(true, "https://unlisted.example.test"));
     let mut claims = claims();
     claims["iss"] = json!("https://unlisted.example.test");
-    assert_refused(&s, &request(&token(&claims)), "unlisted issuer");
+    assert_refused(
+        &s,
+        &request(&token(&claims)),
+        UNREACHABLE,
+        "unlisted issuer",
+    );
     assert_refused(
         &s,
         &request_for("oidc.unconfigured", &token(&self::claims())),
+        NOT_FOUND,
         "unconfigured",
     );
 }
@@ -320,9 +373,14 @@ fn strict_refuses_providers_it_cannot_verify_without_a_network_fetch() {
     let s = strict_state();
     for provider in ["google.com", "facebook.com", "saml.strict"] {
         for body in fixture_requests(provider) {
-            assert_refused(&s, &body, provider);
+            assert_refused(&s, &body, NOT_FOUND, provider);
         }
-        assert_refused(&s, &request_for(provider, &token(&claims())), provider);
+        assert_refused(
+            &s,
+            &request_for(provider, &token(&claims())),
+            NOT_FOUND,
+            provider,
+        );
     }
 }
 
@@ -379,7 +437,7 @@ fn strict_verifies_on_the_selected_tenant_with_that_tenants_provider() {
     body["tenantId"] = json!("customer-a");
     let response = sign_in(&s, &body);
     assert_eq!(response.status, 400, "{}", response.body);
-    assert_eq!(response.body["error"]["message"], "INVALID_IDP_RESPONSE");
+    assert_eq!(response.body["error"]["message"], UNREACHABLE);
     assert_eq!(tenant.lock().unwrap().user_count(), 0);
     // With the tenant's provider on the configured issuer, the tenant accepts it.
     tenant
@@ -430,7 +488,7 @@ fn strict_continuations_are_reverified_and_do_not_cross_with_the_fixture() {
         .unwrap()
         .replace_oidc_config(provider(false, ISSUER));
     let refused = sign_in(&strict, &continuation(&pending));
-    assert_eq!(refused.body["error"]["message"], "INVALID_IDP_RESPONSE");
+    assert_eq!(refused.body["error"]["message"], DISABLED);
     strict
         .store
         .lock()
@@ -443,7 +501,7 @@ fn strict_continuations_are_reverified_and_do_not_cross_with_the_fixture() {
         .advance_to(LogicalInstant::from_unix_seconds(NOW + 60))
         .unwrap();
     let refused = sign_in(&strict, &continuation(&pending));
-    assert_eq!(refused.body["error"]["message"], "INVALID_IDP_RESPONSE");
+    assert_eq!(refused.body["error"]["message"], stale(NOW));
 }
 
 /// A blocking hook that disables the provider while it runs, as a concurrent Admin PATCH
@@ -489,4 +547,131 @@ fn strict_reverifies_when_a_blocking_hook_commits() {
     assert_eq!(response.body["error"]["message"], "INVALID_IDP_RESPONSE");
     assert!(response.body.get("idToken").is_none());
     assert_eq!(s.store.lock().unwrap().user_count(), 0);
+}
+
+#[test]
+fn strict_accepts_what_production_accepts() {
+    // Several audiences without `azp`, and an `nbf` in the future (record-oidc 39209e).
+    let s = strict_state();
+    let mut several = claims();
+    several["aud"] = json!([CLIENT, "other-client"]);
+    several["sub"] = json!("several");
+    let mut not_yet = claims();
+    not_yet["nbf"] = json!(NOW + 3600);
+    not_yet["sub"] = json!("not-yet");
+    for (case, claims) in [("several audiences", several), ("future nbf", not_yet)] {
+        let response = sign_in(&s, &request(&token(&claims)));
+        assert_eq!(response.status, 200, "{case}: {}", response.body);
+    }
+}
+
+fn with_nonce(token: &str, nonce: Option<&str>) -> Value {
+    let mut body = request(token);
+    if let Some(nonce) = nonce {
+        body["postBody"] = json!(format!(
+            "{}&nonce={nonce}",
+            body["postBody"].as_str().unwrap()
+        ));
+    }
+    body
+}
+
+fn hashed(nonce: &str) -> String {
+    fireemu_core_types::hash::hex_lower(&fireemu_core_types::hash::sha256(nonce.as_bytes()))
+}
+
+#[test]
+fn strict_checks_the_nonce_as_production_does() {
+    let s = strict_state();
+    let mut claimed = claims();
+    claimed["nonce"] = json!(hashed("nonce-a"));
+    let nonce_token = token(&claimed);
+    // The token carries a nonce the request does not.
+    assert_refused(
+        &s,
+        &with_nonce(&nonce_token, None),
+        NONCE_MISSING,
+        "no request nonce",
+    );
+    // The request carries a nonce the token does not: accepted.
+    let response = sign_in(&s, &with_nonce(&token(&claims()), Some("nonce-a")));
+    assert_eq!(response.status, 200, "{}", response.body);
+    // A matching nonce signs in once; the same credential again is a duplicate, before the
+    // nonce is even compared.
+    let s = strict_state();
+    let first = sign_in(&s, &with_nonce(&nonce_token, Some("nonce-a")));
+    assert_eq!(first.status, 200, "{}", first.body);
+    assert_refused_after(&s, &with_nonce(&nonce_token, Some("nonce-a")), DUPLICATE);
+    assert_refused_after(&s, &with_nonce(&nonce_token, Some("nonce-b")), DUPLICATE);
+    // A new token with the same nonce for the same subject is the same credential.
+    let mut reissued = claimed.clone();
+    reissued["iat"] = json!(NOW - 1);
+    assert_refused_after(
+        &s,
+        &with_nonce(&token(&reissued), Some("nonce-a")),
+        DUPLICATE,
+    );
+    // Another subject's token with the same nonce is another credential.
+    let mut other = claimed.clone();
+    other["sub"] = json!("other-subject");
+    let response = sign_in(&s, &with_nonce(&token(&other), Some("nonce-a")));
+    assert_eq!(response.status, 200, "{}", response.body);
+    // A nonce that does not match (production's message for it is unobserved).
+    let mut fresh = claims();
+    fresh["nonce"] = json!(hashed("nonce-c"));
+    fresh["sub"] = json!("fresh-subject");
+    assert_refused_after(&s, &with_nonce(&token(&fresh), Some("nonce-d")), UNOBSERVED);
+    // Without a nonce, the same token signs in again (production's replay rows).
+    let again = sign_in(&s, &request(&token(&claims())));
+    assert_eq!(again.status, 200, "{}", again.body);
+    let again = sign_in(&s, &request(&token(&claims())));
+    assert_eq!(again.status, 200, "{}", again.body);
+}
+
+/// A refusal that changes nothing, in a store that already holds accounts.
+fn assert_refused_after(s: &AuthState, body: &Value, message: &str) {
+    let users = s.store.lock().unwrap().user_count();
+    let response = sign_in(s, body);
+    assert_eq!(response.status, 400, "{}", response.body);
+    assert_eq!(response.body["error"]["message"], message);
+    assert_eq!(s.store.lock().unwrap().user_count(), users);
+}
+
+#[test]
+fn a_refused_or_reset_sign_in_uses_no_nonce() {
+    let s = strict_state();
+    let mut claimed = claims();
+    claimed["nonce"] = json!(hashed("nonce-a"));
+    let nonce_token = token(&claimed);
+    // A refusal after the nonce check (the provider disabled) records nothing.
+    s.store
+        .lock()
+        .unwrap()
+        .replace_oidc_config(provider(false, ISSUER));
+    assert_refused(
+        &s,
+        &with_nonce(&nonce_token, Some("nonce-a")),
+        DISABLED,
+        "disabled",
+    );
+    s.store
+        .lock()
+        .unwrap()
+        .replace_oidc_config(provider(true, ISSUER));
+    let first = sign_in(&s, &with_nonce(&nonce_token, Some("nonce-a")));
+    assert_eq!(first.status, 200, "{}", first.body);
+    // Resetting the emulator's accounts forgets the credentials used.
+    let reset = handle(
+        &s,
+        "DELETE",
+        "/emulator/v1/projects/demo-app/accounts",
+        &Value::Null,
+    );
+    assert_eq!(reset.status, 200, "{}", reset.body);
+    s.store
+        .lock()
+        .unwrap()
+        .replace_oidc_config(provider(true, ISSUER));
+    let again = sign_in(&s, &with_nonce(&nonce_token, Some("nonce-a")));
+    assert_eq!(again.status, 200, "{}", again.body);
 }

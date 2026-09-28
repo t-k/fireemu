@@ -231,7 +231,8 @@ impl BlockingFunctionCode {
 pub struct BlockingFunctionFailure {
     code: BlockingFunctionCode,
     message: Box<str>,
-    opaque: bool,
+    /// The seven-second deadline elapsed: production answers that with its own message.
+    deadline: bool,
 }
 
 impl BlockingFunctionFailure {
@@ -263,7 +264,7 @@ impl BlockingFunctionFailure {
         Ok(Self {
             code,
             message,
-            opaque: false,
+            deadline: false,
         })
     }
 
@@ -273,7 +274,7 @@ impl BlockingFunctionFailure {
         Self {
             code: BlockingFunctionCode::Unavailable,
             message: "An unexpected error occurred.".into(),
-            opaque: false,
+            deadline: false,
         }
     }
 
@@ -281,33 +282,79 @@ impl BlockingFunctionFailure {
     #[must_use]
     pub fn timeout() -> Self {
         Self {
-            code: BlockingFunctionCode::Unavailable,
-            message: "Error code: 47".into(),
-            opaque: true,
+            code: BlockingFunctionCode::DeadlineExceeded,
+            message: "Cloud function deadline exceeded.".into(),
+            deadline: true,
         }
     }
 
-    /// The client-facing Identity Toolkit HTTP status.
+    /// The function's own timeout elapsed first (a function whose timeout is at most the
+    /// seven-second deadline): its platform answers a 5xx, which production masks (production
+    /// run 2026-09-02, a seven-second function sleeping eleven: 503).
+    #[must_use]
+    pub fn function_timeout() -> Self {
+        Self {
+            code: BlockingFunctionCode::DeadlineExceeded,
+            message: "Function timeout exceeded.".into(),
+            deadline: false,
+        }
+    }
+
+    /// Whether Identity Platform's own deadline elapsed ([`Self::timeout`]).
+    #[must_use]
+    pub const fn is_deadline(&self) -> bool {
+        self.deadline
+    }
+
+    /// Whether production hides the function's answer behind its opaque 503: a 429 or 5xx
+    /// function answer (AUTH-TENANT-BLOCKING recording 2026-09-28, refusal#create-unavailable,
+    /// create-resource-exhausted, create-unhandled, sign-in-internal, sign-in-unhandled).
+    const fn masked(&self) -> bool {
+        let status = self.code.function_status();
+        !self.deadline && (status == 429 || status >= 500)
+    }
+
+    /// The client-facing Identity Toolkit HTTP status: 503 for a masked answer, 400 otherwise
+    /// (an elapsed deadline included).
     #[must_use]
     pub const fn identity_status(&self) -> u16 {
-        let status = self.code.function_status();
-        if status < 500 {
-            400
+        if self.masked() {
+            503
         } else {
-            status
+            400
         }
     }
 
+    /// The client-facing message, as production words it (both profiles; recording
+    /// 2026-09-28): a refusal embeds the function's own error body.
     fn client_message(&self) -> String {
-        if self.opaque {
-            return self.message.to_string();
+        if self.deadline {
+            return format!("BLOCKING_FUNCTION_ERROR_RESPONSE : {}", self.message);
         }
-        let quoted = serde_json::to_string(&self.message).unwrap_or_else(|_| "\"\"".to_owned());
-        format!(
-            "BLOCKING_FUNCTION_ERROR_RESPONSE : HTTP Cloud Function returned an error. Code: {}, Status: \"{}\", Message: {quoted}",
-            self.code.function_status(),
-            self.code.canonical_name()
-        )
+        if self.masked() {
+            return "Error code: 47".to_owned();
+        }
+        let body =
+            json!({"error": {"message": &*self.message, "status": self.code.canonical_name()}});
+        format!("BLOCKING_FUNCTION_ERROR_RESPONSE : HTTP Cloud Function returned an error: {body}")
+    }
+
+    /// The Identity Toolkit answer: a masked failure's reason is `backendError`.
+    #[must_use]
+    pub fn response(&self) -> JsonResponse {
+        let status = self.identity_status();
+        let message = self.client_message();
+        if !self.masked() {
+            return error(status, &message);
+        }
+        JsonResponse {
+            status,
+            body: json!({"error": {
+                "code": status,
+                "message": message,
+                "errors": [{"message": message, "domain": "global", "reason": "backendError"}],
+            }}),
+        }
     }
 }
 
@@ -368,6 +415,39 @@ impl core::fmt::Debug for AuthBlockingAdditionalUserInfo {
     }
 }
 
+/// A provider of the account, as a blocking token lists it (`user_record.provider_data`): the
+/// providers an account lookup reports, in the same order.
+#[derive(Clone, PartialEq, Eq)]
+pub struct AuthBlockingProvider {
+    /// `password`, `phone` or a federated provider ID.
+    pub provider_id: String,
+    /// The provider's identifier for the account (`rawId`).
+    pub uid: String,
+    /// The display name the provider reports.
+    pub display_name: Option<String>,
+    /// The address the provider reports.
+    pub email: Option<String>,
+    /// The photo URL the provider reports.
+    pub photo_url: Option<String>,
+    /// The phone number, for the phone provider.
+    pub phone_number: Option<String>,
+}
+
+/// An enrolled second factor, as a blocking token lists it (`user_record.multi_factor`).
+#[derive(Clone, PartialEq, Eq)]
+pub struct AuthBlockingFactor {
+    /// The factor's enrollment ID.
+    pub uid: String,
+    /// The factor's display name.
+    pub display_name: Option<String>,
+    /// When it was enrolled (RFC 3339).
+    pub enrollment_time: Option<String>,
+    /// The phone number of a phone factor.
+    pub phone_number: Option<String>,
+    /// `phone` or `totp`.
+    pub factor_id: String,
+}
+
 /// Per-request context supplied to a Blocking Auth handler.
 #[derive(Clone, Default, PartialEq)]
 pub struct AuthBlockingContext {
@@ -375,8 +455,17 @@ pub struct AuthBlockingContext {
     pub credential: Option<AuthBlockingCredential>,
     /// Additional provider profile information for the sign-in.
     pub additional_user_info: Option<AuthBlockingAdditionalUserInfo>,
-    /// Sign-in method used to suffix the before-sign-in event type.
+    /// Sign-in method: the suffix of the event type and the provider of the additional user
+    /// information.
     pub sign_in_method: Option<String>,
+    /// The account's providers, as an account lookup reports them.
+    pub provider_data: Vec<AuthBlockingProvider>,
+    /// The account's enrolled second factors.
+    pub enrolled_factors: Vec<AuthBlockingFactor>,
+    /// The address a `beforeSendEmail` mail goes to.
+    pub email: Option<String>,
+    /// The kind of that mail (`PASSWORD_RESET`, `EMAIL_SIGN_IN`).
+    pub email_type: Option<String>,
 }
 
 impl core::fmt::Debug for AuthBlockingContext {
@@ -385,8 +474,26 @@ impl core::fmt::Debug for AuthBlockingContext {
             .field("credential", &self.credential)
             .field("additional_user_info", &self.additional_user_info)
             .field("sign_in_method", &self.sign_in_method)
+            // Addresses and phone numbers are account data: only their number is shown.
+            .field("provider_data", &self.provider_data.len())
+            .field("enrolled_factors", &self.enrolled_factors.len())
+            .field("email", &self.email.is_some())
+            .field("email_type", &self.email_type)
             .finish()
     }
+}
+
+/// One trigger as Identity Platform's configuration lists it: the event's effective function.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BlockingAuthTrigger {
+    /// The event.
+    pub event: fireemu_core_functions::manifest::BlockingAuthEvent,
+    /// The function's name.
+    pub function: String,
+    /// The function's region.
+    pub region: String,
+    /// When the trigger last changed.
+    pub update_time: LogicalInstant,
 }
 
 /// Synchronous bridge invoked before an Auth create or sign-in commit.
@@ -457,6 +564,22 @@ pub trait AuthBlockingHook: Send + Sync {
         _context: &AuthBlockingContext,
     ) -> Result<Option<Value>, BlockingFunctionFailure> {
         self.invoke_for(project, tenant, event, user)
+    }
+
+    /// The events' effective functions, for the strict profile's configuration answer. Hooks
+    /// without a Functions runtime list none.
+    fn blocking_auth_triggers(&self) -> Vec<BlockingAuthTrigger> {
+        Vec::new()
+    }
+
+    /// Runs `beforeSendEmail` for the mail the context names (its `email` and `email_type`),
+    /// which has no user record. A hook that does not serve the event answers `Ok(None)`.
+    fn invoke_before_send_email(
+        &self,
+        _project: &str,
+        _context: &AuthBlockingContext,
+    ) -> Result<Option<Value>, BlockingFunctionFailure> {
+        Ok(None)
     }
 
     /// Returns the logical project-level blocking settings, when this hook is backed by a
@@ -542,7 +665,9 @@ fn handler_may_invoke_blocking_auth(
     blocking: &dyn AuthBlockingHook,
     handler: routes::Handler,
 ) -> bool {
-    use fireemu_core_functions::manifest::BlockingAuthEvent::{BeforeCreate, BeforeSignIn};
+    use fireemu_core_functions::manifest::BlockingAuthEvent::{
+        BeforeCreate, BeforeSendEmail, BeforeSignIn,
+    };
     let may_create = matches!(
         handler,
         routes::Handler::SignUp
@@ -561,8 +686,29 @@ fn handler_may_invoke_blocking_auth(
             | routes::Handler::SignInWithIdp
             | routes::Handler::MfaSignInFinalize
     );
+    let may_send_email = matches!(
+        handler,
+        routes::Handler::SendOobCode | routes::Handler::AdminSendOobCode
+    );
     (may_create && blocking.handles(BeforeCreate))
         || (may_sign_in && blocking.handles(BeforeSignIn))
+        || (may_send_email && blocking.handles(BeforeSendEmail))
+}
+
+/// Whether a request of `handler` takes the blocking path in this profile: a mail request runs
+/// `beforeSendEmail` in the strict profile only, as the official Auth emulator has no email
+/// event (the admission estimate, [`request_may_invoke_blocking_auth`], may count it anyway).
+fn handler_runs_blocking_auth(
+    state: &AuthState,
+    blocking: &dyn AuthBlockingHook,
+    handler: routes::Handler,
+) -> bool {
+    let mail = matches!(
+        handler,
+        routes::Handler::SendOobCode | routes::Handler::AdminSendOobCode
+    );
+    handler_may_invoke_blocking_auth(blocking, handler)
+        && (!mail || !state.stateless_refresh_tokens)
 }
 
 /// Returns whether a blocking hook is allowed to observe the selected Auth project.
@@ -608,7 +754,7 @@ pub(crate) fn request_may_invoke_blocking_auth(
 
 pub(crate) fn blocking_auth_overload_response() -> JsonResponse {
     let failure = BlockingFunctionFailure::unhandled();
-    error(failure.identity_status(), &failure.client_message())
+    failure.response()
 }
 
 /// Profile-specific expiry behavior for unsigned fake custom tokens.
@@ -1868,6 +2014,27 @@ fn claim_value_to_json(value: &ClaimValue) -> Option<Value> {
     serde_json::from_str(&encoded).ok()
 }
 
+/// The member the runner adds to a blocking response with the `customClaims` text as the
+/// function's `JSON.stringify` gave it (`tools/runner-node/blocking-response.mjs`).
+const BLOCKING_CUSTOM_CLAIMS_TEXT: &str = "fireemuCustomClaimsText";
+
+/// The claims, remembered as set from the runner's text when that text parses to exactly these
+/// claims: production reads the claims back as the function's text, key order included
+/// (AUTH-TENANT-BLOCKING recording 2026-09-28, rollback#lookup-refused-at-sign-in). Empty claims
+/// keep reading back as none, as before (production's answer for them is not observed).
+fn with_blocking_claims_text(claims: CustomClaims, response: &Value) -> CustomClaims {
+    let Some(text) = response
+        .get(BLOCKING_CUSTOM_CLAIMS_TEXT)
+        .and_then(Value::as_str)
+    else {
+        return claims;
+    };
+    match CustomClaims::parse_attributes(text) {
+        Ok(parsed) if parsed == claims && !claims.entries().is_empty() => claims.with_source(text),
+        _ => claims,
+    }
+}
+
 fn apply_blocking_response(
     store: &mut AuthStore,
     uid: &LocalId,
@@ -1925,7 +2092,7 @@ fn apply_blocking_response(
     validate_combined_blocking_claims(custom_claims.as_ref(), session_claims.as_ref())?;
     if let Some(claims) = custom_claims {
         store
-            .set_custom_claims(uid, claims.claims)
+            .set_custom_claims(uid, with_blocking_claims_text(claims.claims, response))
             .map_err(|error| {
                 format!("BLOCKING_FUNCTION_ERROR_RESPONSE : ((Invalid customClaims: {error}.))")
             })?;
@@ -2045,6 +2212,7 @@ fn blocking_context(
                 }
             }),
             sign_in_method: sign_in_method.map(str::to_owned),
+            ..AuthBlockingContext::default()
         };
     }
     let provider_id = response.body.get("providerId").and_then(Value::as_str);
@@ -2069,7 +2237,66 @@ fn blocking_context(
             is_new_user: event == fireemu_core_functions::manifest::BlockingAuthEvent::BeforeCreate,
         }),
         sign_in_method: sign_in_method.map(str::to_owned),
+        ..AuthBlockingContext::default()
     }
+}
+
+/// The account's providers and enrolled factors for a blocking token: the providers an account
+/// lookup lists ([`account_providers`]) and every enrolled factor in enrollment order.
+fn blocking_account(
+    store: &AuthStore,
+    uid: &LocalId,
+) -> (Vec<AuthBlockingProvider>, Vec<AuthBlockingFactor>) {
+    let text = |value: &Value, key: &str| value.get(key).and_then(Value::as_str).map(str::to_owned);
+    let providers = account_providers(store, uid)
+        .iter()
+        .map(|provider| AuthBlockingProvider {
+            provider_id: text(provider, "providerId").unwrap_or_default(),
+            uid: text(provider, "rawId").unwrap_or_default(),
+            display_name: text(provider, "displayName"),
+            email: text(provider, "email"),
+            photo_url: text(provider, "photoUrl"),
+            phone_number: text(provider, "phoneNumber"),
+        })
+        .collect();
+    let Some(user) = store.user(uid) else {
+        return (providers, Vec::new());
+    };
+    let time = |at: LogicalInstant| LogicalInstant::to_rfc3339(at).ok();
+    let mut factors: Vec<(LogicalInstant, AuthBlockingFactor)> = user
+        .mfa
+        .totp_factors()
+        .iter()
+        .map(|factor| {
+            (
+                factor.enrolled_at,
+                AuthBlockingFactor {
+                    uid: factor.mfa_enrollment_id.clone(),
+                    display_name: factor.display_name.clone(),
+                    enrollment_time: time(factor.enrolled_at),
+                    phone_number: None,
+                    factor_id: "totp".to_owned(),
+                },
+            )
+        })
+        .collect();
+    factors.extend(user.mfa.phone_factors().iter().map(|factor| {
+        (
+            factor.enrolled_at,
+            AuthBlockingFactor {
+                uid: factor.mfa_enrollment_id.clone(),
+                display_name: factor.display_name.clone(),
+                enrollment_time: time(factor.enrolled_at),
+                phone_number: Some(factor.phone_number.clone()),
+                factor_id: "phone".to_owned(),
+            },
+        )
+    }));
+    factors.sort_by_key(|(at, _)| *at);
+    (
+        providers,
+        factors.into_iter().map(|(_, factor)| factor).collect(),
+    )
 }
 
 fn blocking_sign_in_method<'a>(
@@ -2146,6 +2373,72 @@ impl Drop for GeneratedLocalIdReservation {
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         store.release_reserved_generated_local_id_at_ticket(&self.id, self.generation, self.ticket);
     }
+}
+
+/// The mail a request is about to send: a password reset or email sign-in code that `after`
+/// has and `before` did not, with its address and the kind of mail. An unknown address that
+/// improved email privacy answers without a code sends nothing, and an email verification is
+/// not a mail Identity Platform runs `beforeSendEmail` for.
+fn mail_about_to_be_sent(before: &AuthStore, after: &AuthStore) -> Option<(String, &'static str)> {
+    after.oob_codes().into_iter().find_map(|code| {
+        let email_type = match code.request_type {
+            OobRequestType::PasswordReset => "PASSWORD_RESET",
+            OobRequestType::EmailSignIn => "EMAIL_SIGN_IN",
+            OobRequestType::VerifyEmail | OobRequestType::VerifyAndChangeEmail => return None,
+        };
+        before
+            .oob_code(&code.code)
+            .is_none()
+            .then(|| (code.email.clone(), email_type))
+    })
+}
+
+/// Runs `beforeSendEmail` before a mail is sent: the one place every email path (the client and
+/// Admin `sendOobCode`, in a project or a tenant) reaches. Production runs it for a password
+/// reset and an email sign-in mail, and a refusal answers the request (AUTH-TENANT-BLOCKING
+/// recording 2026-09-28, send#*). Only the strict profile calls this; the official Auth
+/// emulator has no email event. The function's answer changes nothing
+/// (`recaptchaActionOverride` needs reCAPTCHA, which fireemu does not run: send#reset-mail-blocked
+/// is answered as a sent mail).
+fn before_send_email(
+    blocking: &dyn AuthBlockingHook,
+    (email, email_type): &(String, &'static str),
+    project: &str,
+) -> Result<(), JsonResponse> {
+    // The event names neither a user nor a tenant, in a tenant too (send#link-mail-echo-in-tenant).
+    let context = AuthBlockingContext {
+        email: Some(email.clone()),
+        email_type: Some((*email_type).to_owned()),
+        ..AuthBlockingContext::default()
+    };
+    blocking
+        .invoke_before_send_email(project, &context)
+        .map(|_| ())
+        .map_err(|failure| failure.response())
+}
+
+/// Keeps a new account whose sign-up a blocking function refused (disabled it, or refused
+/// beforeSignIn): the account keeps its sign-in time and, as production records, its token
+/// issuance time (AUTH-TENANT-BLOCKING recording 2026-09-28, rollback#lookup-*), but no session,
+/// and it counts as a sign-up.
+fn keep_refused_new_account(
+    state: &AuthState,
+    live: &mut AuthStore,
+    mut committed: AuthStore,
+    uid: &LocalId,
+    quota_reservation: &mut Option<SignupReservation>,
+    at: LogicalInstant,
+) -> Result<(), JsonResponse> {
+    committed.record_refused_sign_up_issuance(uid, at);
+    committed.revoke_refresh_tokens(uid);
+    if let Some(reservation) = quota_reservation.clone() {
+        committed
+            .commit_signup(reservation, now(state))
+            .map_err(|error| auth_error(&error))?;
+        quota_reservation.take();
+    }
+    *live = committed;
+    Ok(())
 }
 
 // The request parts stay separate here so the ordinary dispatcher remains the one source of
@@ -2258,10 +2551,31 @@ fn dispatch_with_blocking_hook(
         .flatten();
     let project = live_snapshot.project_id().to_owned();
     let tenant = live_snapshot.tenant_id().map(str::to_owned);
+    // Identity Platform runs no blocking function for an anonymous sign-up or a custom-token
+    // sign-in (AUTH-TENANT-BLOCKING recording 2026-09-28, events#sign-up-anonymous and
+    // custom-token#custom-*; the official Auth emulator runs none either).
+    let runs_hooks = !matches!(sign_in_method.as_deref(), Some("anonymous" | "custom"));
+    // The mail the speculative request is about to send; the commit below must send the same
+    // one (security review S1). A mail request reaches this path only where beforeSendEmail
+    // runs (the strict profile, with a function for it: `handler_runs_blocking_auth`), and a
+    // refused or failed request has created no code.
+    let speculative_mail = matches!(
+        handler,
+        routes::Handler::SendOobCode | routes::Handler::AdminSendOobCode
+    )
+    .then(|| mail_about_to_be_sent(&live_snapshot, &candidate));
+    if let Some(Some(mail)) = &speculative_mail {
+        if let Err(refusal) = before_send_email(blocking, mail, &project) {
+            return refusal;
+        }
+    }
     let mut blocking_responses = Vec::new();
+    // beforeSignIn's refusal of a sign-up that created its account; the account is kept.
+    let mut new_account_refusal = None;
     if response.status == 200 {
         if let Some(uid) = uid {
-            if is_new
+            if runs_hooks
+                && is_new
                 && blocking
                     .handles(fireemu_core_functions::manifest::BlockingAuthEvent::BeforeCreate)
             {
@@ -2269,7 +2583,7 @@ fn dispatch_with_blocking_hook(
                     let user = candidate
                         .user(&uid)
                         .unwrap_or_else(|| unreachable!("the successful response named its user"));
-                    let context = blocking_context(
+                    let mut context = blocking_context(
                         &response,
                         fireemu_core_functions::manifest::BlockingAuthEvent::BeforeCreate,
                         None,
@@ -2277,6 +2591,8 @@ fn dispatch_with_blocking_hook(
                         inbound_credentials.as_ref(),
                         before_create_policy,
                     );
+                    (context.provider_data, context.enrolled_factors) =
+                        blocking_account(&candidate, &uid);
                     match blocking.invoke_for_with_context(
                         &project,
                         tenant.as_deref(),
@@ -2285,9 +2601,7 @@ fn dispatch_with_blocking_hook(
                         &context,
                     ) {
                         Ok(value) => value,
-                        Err(failure) => {
-                            return error(failure.identity_status(), &failure.client_message())
-                        }
+                        Err(failure) => return failure.response(),
                     }
                 };
                 if let Some(value) = value {
@@ -2305,7 +2619,8 @@ fn dispatch_with_blocking_hook(
                     ));
                 }
             }
-            if signed_in
+            if runs_hooks
+                && signed_in
                 && blocking
                     .handles(fireemu_core_functions::manifest::BlockingAuthEvent::BeforeSignIn)
             {
@@ -2313,7 +2628,7 @@ fn dispatch_with_blocking_hook(
                     let user = candidate
                         .user(&uid)
                         .unwrap_or_else(|| unreachable!("the successful response named its user"));
-                    let context = blocking_context(
+                    let mut context = blocking_context(
                         &response,
                         fireemu_core_functions::manifest::BlockingAuthEvent::BeforeSignIn,
                         pending_continuation.as_ref().map(|(_, _, context)| context),
@@ -2321,6 +2636,8 @@ fn dispatch_with_blocking_hook(
                         inbound_credentials.as_ref(),
                         before_sign_in_policy,
                     );
+                    (context.provider_data, context.enrolled_factors) =
+                        blocking_account(&candidate, &uid);
                     match blocking.invoke_for_with_context(
                         &project,
                         tenant.as_deref(),
@@ -2329,6 +2646,14 @@ fn dispatch_with_blocking_hook(
                         &context,
                     ) {
                         Ok(value) => value,
+                        // Identity Platform creates the account before it runs beforeSignIn, so
+                        // a refused sign-up keeps it (AUTH-TENANT-BLOCKING recording
+                        // 2026-09-28, rollback#lookup-refused-at-sign-in; the official Auth
+                        // emulator does the same). A new account has no pending sign-in.
+                        Err(failure) if is_new => {
+                            new_account_refusal = Some(failure.response());
+                            None
+                        }
                         Err(failure) => {
                             if let Err(response) =
                                 discard_pending_inbound_credentials_if_revision_current(
@@ -2341,7 +2666,7 @@ fn dispatch_with_blocking_hook(
                             {
                                 return response;
                             }
-                            return error(failure.identity_status(), &failure.client_message());
+                            return failure.response();
                         }
                     }
                 };
@@ -2444,6 +2769,14 @@ fn dispatch_with_blocking_hook(
         if committed_response.status != 200 {
             return committed_response;
         }
+        // A mail the function did not see is never sent: the live store may answer
+        // differently from the speculative copy (an address registered meanwhile, a setting
+        // changed), and then the request is refused rather than sent unchecked.
+        if let Some(expected) = &speculative_mail {
+            if mail_about_to_be_sent(&live, &committed) != *expected {
+                return error(409, "AUTH_STATE_CHANGED");
+            }
+        }
         let uid = committed_response
             .body
             .get("localId")
@@ -2522,6 +2855,21 @@ fn dispatch_with_blocking_hook(
                     Err(reason) => return error(400, &reason),
                 }
             }
+            // A sign-up refused at beforeSignIn keeps the account it created, as a disabled
+            // one does below (the refusal is only ever recorded for a new account).
+            if let Some(refusal) = new_account_refusal.as_ref() {
+                if let Err(response) = keep_refused_new_account(
+                    state,
+                    &mut live,
+                    committed,
+                    &uid,
+                    quota_reservation,
+                    at,
+                ) {
+                    return response;
+                }
+                return refusal.clone();
+            }
             // A hook response that disables the account refuses the very request that
             // ran it with USER_DISABLED and no tokens (production, recorded 2026-09-11
             // and 2026-09-12). What persists depends on the request, as recorded: a
@@ -2536,8 +2884,16 @@ fn dispatch_with_blocking_hook(
             // rule.
             if issued_session.is_some() && committed.user(&uid).is_some_and(|u| u.disabled) {
                 if live.user(&uid).is_none() {
-                    committed.revoke_refresh_tokens(&uid);
-                    *live = committed;
+                    if let Err(response) = keep_refused_new_account(
+                        state,
+                        &mut live,
+                        committed,
+                        &uid,
+                        quota_reservation,
+                        at,
+                    ) {
+                        return response;
+                    }
                 } else if handler == routes::Handler::MfaSignInFinalize {
                     // Applied to a working copy so that a response that passed on the
                     // committed copy but fails against the live record (claims size)
@@ -2601,8 +2957,16 @@ fn dispatch_with_blocking_hook(
                     }
                 }
                 if let Some(user) = committed.user(&uid) {
-                    if committed_response.body.get("displayName").is_some() {
-                        committed_response.body["displayName"] = json!(user.display_name);
+                    // An account without a name keeps the answer the request gives without a
+                    // blocking function: "" from a sign-in, no member from a sign-up
+                    // (AUTH-TENANT-BLOCKING recording 2026-09-28, events#sign-in-password and
+                    // events#sign-up-password).
+                    if let Some(answered) = committed_response.body.get("displayName") {
+                        committed_response.body["displayName"] = match &user.display_name {
+                            Some(name) => json!(name),
+                            None if answered.is_string() => json!(""),
+                            None => Value::Null,
+                        };
                     }
                     if committed_response.body.get("photoUrl").is_some() {
                         committed_response.body["photoUrl"] = json!(user.photo_url);
@@ -3177,7 +3541,7 @@ fn handle_with_policy_inner(
         matches!(
             resolution,
             routes::Resolution::Matched { route, .. }
-                if handler_may_invoke_blocking_auth(blocking, route.handler)
+                if handler_runs_blocking_auth(state, blocking, route.handler)
         ) && blocking_hook_applies_to_project(state, blocking, &store_project)
     });
     let blocking_revision = state
@@ -3538,7 +3902,24 @@ fn handle_with_policy_inner(
     } else {
         None
     };
-    if route.class != routes::RouteClass::EndUser {
+    // A mail hook enabled after admission is not skipped on the Admin route either: the check
+    // the end-user routes make below comes after this route's own branch (security review S2).
+    if route.handler == routes::Handler::AdminSendOobCode
+        && !blocking_auth
+        && !state.stateless_refresh_tokens
+        && state.blocking.as_deref().is_some_and(|blocking| {
+            blocking.blocking_auth_revision() != blocking_revision
+                || (handler_runs_blocking_auth(state, blocking, route.handler)
+                    && blocking_hook_applies_to_project(state, blocking, &store_project))
+        })
+    {
+        return error(409, "BLOCKING_FUNCTION_CONFIGURATION_CHANGED");
+    }
+    // The Admin link generator runs beforeSendEmail through the blocking path, as the client
+    // route does (send#admin-reset-link-echo).
+    if route.class != routes::RouteClass::EndUser
+        && !(blocking_auth && route.handler == routes::Handler::AdminSendOobCode)
+    {
         let signer = store.signer_arc();
         let response = dispatch(
             route.handler,
@@ -3577,7 +3958,7 @@ fn handle_with_policy_inner(
     if !blocking_auth
         && state.blocking.as_deref().is_some_and(|blocking| {
             blocking.blocking_auth_revision() != blocking_revision
-                || (handler_may_invoke_blocking_auth(blocking, route.handler)
+                || (handler_runs_blocking_auth(state, blocking, route.handler)
                     && blocking_hook_applies_to_project(state, blocking, &store_project))
         })
     {
@@ -3594,7 +3975,7 @@ fn handle_with_policy_inner(
         // mutable Functions manifest may change between planning and dispatch; reject that
         // transition instead of entering the hook path while retaining a guard that the commit
         // path would acquire again (or silently using a stale allow/deny decision).
-        let still_applies = handler_may_invoke_blocking_auth(blocking, route.handler)
+        let still_applies = handler_runs_blocking_auth(state, blocking, route.handler)
             && blocking_hook_applies_to_project(state, blocking, &store_project);
         if !still_applies || blocking.blocking_auth_revision() != blocking_revision {
             return error(409, "BLOCKING_FUNCTION_CONFIGURATION_CHANGED");
@@ -4531,6 +4912,8 @@ fn valid_project_config_field(field: &str) -> bool {
             | "blockingFunctions.triggers"
             | "blockingFunctions.triggers.beforeCreate"
             | "blockingFunctions.triggers.beforeSignIn"
+            | "blockingFunctions.triggers.beforeSendEmail"
+            | "blockingFunctions.triggers.beforeSendSms"
             | "blockingFunctions.forwardInboundCredentials"
             | "blockingFunctions.forwardInboundCredentials.idToken"
             | "blockingFunctions.forwardInboundCredentials.accessToken"
@@ -4716,6 +5099,97 @@ fn project_provider_denial(
     tenant_policy_denial_with_metadata(handler, Some(&metadata), body, false)
 }
 
+/// The strict profile's `blockingFunctions`, as production answers it (AUTH-TENANT-BLOCKING
+/// recording 2026-09-28, config#config-blocking): every event with a function, deployed or
+/// selected, under its Cloud Functions URL and the time its trigger last changed; a disabled
+/// event is left out; `forwardInboundCredentials` names its enabled tokens only, and is given
+/// with the triggers (production's `{}` after a deployment) or once configured.
+fn production_blocking_functions(hook: &dyn AuthBlockingHook, project: &str) -> Value {
+    let mut triggers = serde_json::Map::new();
+    for trigger in hook.blocking_auth_triggers() {
+        let mut value = serde_json::Map::new();
+        value.insert(
+            "functionUri".to_owned(),
+            json!(production_function_uri(
+                project,
+                &trigger.region,
+                &trigger.function
+            )),
+        );
+        if let Ok(time) = trigger.update_time.to_rfc3339() {
+            value.insert("updateTime".to_owned(), json!(time));
+        }
+        triggers.insert(trigger.event.as_str().to_owned(), Value::Object(value));
+    }
+    let configured = hook
+        .blocking_auth_settings()
+        .and_then(|settings| settings.get("forwardInboundCredentials").cloned());
+    let mut document = serde_json::Map::new();
+    if configured.is_some() || !triggers.is_empty() {
+        let enabled = configured
+            .as_ref()
+            .and_then(Value::as_object)
+            .map(|forwarding| {
+                forwarding
+                    .iter()
+                    .filter(|(_, value)| value.as_bool() == Some(true))
+                    .map(|(key, value)| (key.clone(), value.clone()))
+                    .collect::<serde_json::Map<_, _>>()
+            })
+            .unwrap_or_default();
+        if !triggers.is_empty() {
+            document.insert("triggers".to_owned(), Value::Object(triggers));
+        }
+        document.insert(
+            "forwardInboundCredentials".to_owned(),
+            Value::Object(enabled),
+        );
+    }
+    Value::Object(document)
+}
+
+/// A 1st-generation Cloud Functions URL, the form production's configuration names a
+/// blocking function by (its 2nd-generation functions too).
+fn production_function_uri(project: &str, region: &str, function: &str) -> String {
+    format!("https://{region}-{project}.cloudfunctions.net/{function}")
+}
+
+/// The local function a production-form trigger URL names, as the bridge's own
+/// `fireemu://functions/{project}/{region}/{function}` form; any other text is kept for the
+/// bridge to judge.
+fn local_function_uri(project: &str, uri: &str) -> Option<String> {
+    let rest = uri.strip_prefix("https://")?;
+    let (host, function) = rest.split_once('/')?;
+    let region = host.strip_suffix(&format!("-{project}.cloudfunctions.net"))?;
+    let valid = |part: &str| {
+        !part.is_empty()
+            && part
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-' || byte == b'_')
+    };
+    (valid(region) && valid(function))
+        .then(|| format!("fireemu://functions/{project}/{region}/{function}"))
+}
+
+/// A strict update's triggers in the bridge's form: a production URL becomes the local one and
+/// the output-only `updateTime` a GET answered is dropped, so a configuration read back can be
+/// written as it is.
+fn localize_blocking_triggers(candidate: &mut Value, project: &str) {
+    let Some(triggers) = candidate.get_mut("triggers").and_then(Value::as_object_mut) else {
+        return;
+    };
+    for trigger in triggers.values_mut().filter_map(Value::as_object_mut) {
+        trigger.remove("updateTime");
+        if let Some(local) = trigger
+            .get("functionUri")
+            .and_then(Value::as_str)
+            .and_then(|uri| local_function_uri(project, uri))
+        {
+            trigger.insert("functionUri".to_owned(), json!(local));
+        }
+    }
+}
+
 fn valid_blocking_config_field(field: &str) -> bool {
     matches!(
         field,
@@ -4723,6 +5197,8 @@ fn valid_blocking_config_field(field: &str) -> bool {
             | "blockingFunctions.triggers"
             | "blockingFunctions.triggers.beforeCreate"
             | "blockingFunctions.triggers.beforeSignIn"
+            | "blockingFunctions.triggers.beforeSendEmail"
+            | "blockingFunctions.triggers.beforeSendSms"
             | "blockingFunctions.forwardInboundCredentials"
             | "blockingFunctions.forwardInboundCredentials.idToken"
             | "blockingFunctions.forwardInboundCredentials.accessToken"
@@ -4786,7 +5262,9 @@ fn project_blocking_settings_update(
                 .cloned()
                 .unwrap_or_else(|| json!({})),
             "blockingFunctions.triggers.beforeCreate"
-            | "blockingFunctions.triggers.beforeSignIn" => {
+            | "blockingFunctions.triggers.beforeSignIn"
+            | "blockingFunctions.triggers.beforeSendEmail"
+            | "blockingFunctions.triggers.beforeSendSms" => {
                 let event = field
                     .strip_prefix("blockingFunctions.triggers.")
                     .expect("validated blocking trigger field");
@@ -4844,6 +5322,9 @@ fn project_blocking_settings_update(
             .as_object_mut()
             .ok_or_else(|| error(400, "INVALID_ARGUMENT"))?;
         group_object.insert(key.to_owned(), value);
+    }
+    if !state.stateless_refresh_tokens {
+        localize_blocking_triggers(&mut candidate, project);
     }
     blocking
         .validate_blocking_auth_settings(&candidate)
@@ -5336,14 +5817,23 @@ fn validate_project_config_payload(body: &Value, one_version: bool) -> Result<()
             let triggers = triggers
                 .as_object()
                 .ok_or_else(|| error(400, "INVALID_ARGUMENT"))?;
-            if triggers
-                .keys()
-                .any(|key| key != "beforeCreate" && key != "beforeSignIn")
-            {
+            // The strict profile names production's email and SMS events too, and takes back the
+            // output-only `updateTime` its configuration answers.
+            let events: &[&str] = if one_version {
+                &[
+                    "beforeCreate",
+                    "beforeSignIn",
+                    "beforeSendEmail",
+                    "beforeSendSms",
+                ]
+            } else {
+                &["beforeCreate", "beforeSignIn"]
+            };
+            if triggers.keys().any(|key| !events.contains(&key.as_str())) {
                 return Err(error(400, "INVALID_ARGUMENT"));
             }
-            for key in ["beforeCreate", "beforeSignIn"] {
-                let Some(value) = triggers.get(key) else {
+            for key in events {
+                let Some(value) = triggers.get(*key) else {
                     continue;
                 };
                 if value.is_null() {
@@ -5352,7 +5842,12 @@ fn validate_project_config_payload(body: &Value, one_version: bool) -> Result<()
                 let trigger = value
                     .as_object()
                     .ok_or_else(|| error(400, "INVALID_ARGUMENT"))?;
-                if trigger.keys().any(|field| field != "functionUri")
+                if trigger
+                    .keys()
+                    .any(|field| field != "functionUri" && !(one_version && field == "updateTime"))
+                    || trigger
+                        .get("updateTime")
+                        .is_some_and(|time| !time.is_string())
                     || trigger
                         .get("functionUri")
                         .and_then(Value::as_str)
@@ -5449,7 +5944,13 @@ fn project_config_document(
             .blocking
             .as_ref()
             .filter(|hook| hook.blocking_auth_project() == Some(project))
-            .and_then(|hook| hook.blocking_auth_settings()),
+            .and_then(|hook| {
+                if state.stateless_refresh_tokens {
+                    hook.blocking_auth_settings()
+                } else {
+                    Some(production_blocking_functions(hook.as_ref(), project))
+                }
+            }),
         members: store.stored_config_members(),
     };
     let mut document = if state.stateless_refresh_tokens {
@@ -6707,10 +7208,8 @@ fn tenant_metadata_members(parsed: &Value) -> Value {
             members.insert(key.to_owned(), value.clone());
         }
     }
-    if let Some(Value::Object(client)) = members.get_mut("client") {
-        client.retain(|key, _| key == "permissions");
-    }
-    // A client message without permissions (a ProtoJSON null) is an absent one.
+    // The parsed client holds only `permissions` (its other members are output-only and the
+    // parse drops them); a client message without permissions (a ProtoJSON null) is absent.
     if members
         .get("client")
         .is_some_and(|client| client.get("permissions").is_none())
@@ -8395,13 +8894,13 @@ fn obfuscate_phone_number(phone: &str) -> String {
     out.into_iter().collect()
 }
 
-fn user_json(store: &AuthStore, uid: &LocalId) -> Value {
+/// The account's `providerUserInfo` as a lookup reports it: production lists phone first, then
+/// federated identities in link order, then password (sandbox recording 2026-09-23:
+/// auth-account/provider, admin/create, admin/import).
+fn account_providers(store: &AuthStore, uid: &LocalId) -> Vec<Value> {
     let Some(u) = store.user(uid) else {
-        return Value::Null;
+        return Vec::new();
     };
-    let mfa = mfa_info(store, uid, false);
-    // Production lists phone first, then federated identities in link order, then password
-    // (sandbox recording 2026-09-23: auth-account/provider, admin/create, admin/import).
     let mut providers: Vec<Value> = Vec::new();
     if let Some(phone) = &u.phone_number {
         providers.push(json!({"providerId": "phone", "rawId": phone, "phoneNumber": phone}));
@@ -8419,6 +8918,15 @@ fn user_json(store: &AuthStore, uid: &LocalId) -> Value {
             providers.push(json!({"providerId": "password", "rawId": email, "federatedId": email, "email": email, "displayName": u.display_name, "photoUrl": u.photo_url}));
         }
     }
+    providers
+}
+
+fn user_json(store: &AuthStore, uid: &LocalId) -> Value {
+    let Some(u) = store.user(uid) else {
+        return Value::Null;
+    };
+    let mfa = mfa_info(store, uid, false);
+    let providers = account_providers(store, uid);
     // Production omits most default-valued fields (proto3 JSON): no empty `mfaInfo` or
     // `providerUserInfo`, `emailVerified` only with an address. `disabled` and `validSince`
     // are present for an account the Admin API created (the sandbox recording of 2026-09-23),
@@ -13414,6 +13922,40 @@ mod tests {
     use fireemu_core_auth::mfa::TotpPolicy;
     use fireemu_core_types::determinism::SplitMix64;
 
+    /// A management error without a `status` gets the v2 status of its HTTP code; one with a
+    /// status keeps it, and the v1 `errors` list is dropped.
+    #[test]
+    fn v2_errors_name_the_status_of_their_code() {
+        for (code, status) in [
+            (400, "INVALID_ARGUMENT"),
+            (401, "UNAUTHENTICATED"),
+            (403, "PERMISSION_DENIED"),
+            (404, "NOT_FOUND"),
+            (409, "ALREADY_EXISTS"),
+            (429, "RESOURCE_EXHAUSTED"),
+            (501, "NOT_IMPLEMENTED"),
+            (503, "UNAVAILABLE"),
+            (500, "INTERNAL"),
+            (418, "INTERNAL"),
+        ] {
+            let answer = v2_error(JsonResponse {
+                status: code,
+                body: json!({"error": {"code": code, "message": "X", "errors": [{"reason": "x"}]}}),
+            });
+            assert_eq!(answer.status, code);
+            assert_eq!(
+                answer.body,
+                json!({"error": {"code": code, "message": "X", "status": status}}),
+                "{code}"
+            );
+        }
+        let kept = v2_error(JsonResponse {
+            status: 400,
+            body: json!({"error": {"code": 400, "message": "X", "status": "FAILED_PRECONDITION"}}),
+        });
+        assert_eq!(kept.body["error"]["status"], "FAILED_PRECONDITION");
+    }
+
     #[test]
     fn an_absolute_uri_host_is_its_lower_cased_authority_host() {
         for (uri, host) in [
@@ -13578,14 +14120,20 @@ mod tests {
             assert_eq!(code.canonical_name(), name);
             assert_eq!(code.function_status(), function_status);
             let failure = BlockingFunctionFailure::from_function(code, "safe").unwrap();
+            // Production hides a 429 or 5xx function answer behind an opaque 503
+            // (AUTH-TENANT-BLOCKING recording 2026-09-28, refusal#create-*, sign-in-*).
+            let masked = function_status == 429 || function_status >= 500;
+            assert_eq!(failure.identity_status(), if masked { 503 } else { 400 });
+            let response = failure.response();
+            assert_eq!(response.status, failure.identity_status());
             assert_eq!(
-                failure.identity_status(),
-                if function_status < 500 {
-                    400
-                } else {
-                    function_status
-                }
+                response.body["error"]["errors"][0]["reason"],
+                if masked { "backendError" } else { "invalid" },
+                "{name}"
             );
+            if masked {
+                assert_eq!(failure.client_message(), "Error code: 47");
+            }
         }
         assert_eq!(
             BlockingFunctionCode::from_canonical_name("unavailable"),
@@ -13727,25 +14275,47 @@ mod tests {
         )
         .unwrap();
         assert_eq!(failure.identity_status(), 400);
+        // Production embeds the function's own error body (refusal#create-permission-denied).
         assert_eq!(
             failure.client_message(),
-            "BLOCKING_FUNCTION_ERROR_RESPONSE : HTTP Cloud Function returned an error. Code: 403, Status: \"PERMISSION_DENIED\", Message: \"quoted \\\"slash\\\\ 日本語\""
+            "BLOCKING_FUNCTION_ERROR_RESPONSE : HTTP Cloud Function returned an error: {\"error\":{\"message\":\"quoted \\\"slash\\\\ 日本語\",\"status\":\"PERMISSION_DENIED\"}}"
         );
     }
 
     #[test]
-    fn elapsed_blocking_deadline_uses_the_production_opaque_unavailable_error() {
+    fn elapsed_blocking_deadline_answers_as_production() {
+        // AUTH-TENANT-BLOCKING recording 2026-09-28, timeout#sign-up-slow-create and
+        // sign-in-slow: a 400 with its own message, not the masked 503.
         let failure = BlockingFunctionFailure::timeout();
-        assert_eq!(failure.identity_status(), 503);
-        assert_eq!(failure.client_message(), "Error code: 47");
+        assert_eq!(failure.identity_status(), 400);
+        assert_eq!(
+            failure.client_message(),
+            "BLOCKING_FUNCTION_ERROR_RESPONSE : Cloud function deadline exceeded."
+        );
+        assert_eq!(
+            failure.response().body["error"]["errors"][0]["reason"],
+            "invalid"
+        );
 
         let explicit = BlockingFunctionFailure::from_function(
             BlockingFunctionCode::DeadlineExceeded,
             "explicit deadline",
         )
         .unwrap();
-        assert_eq!(explicit.identity_status(), 504);
-        assert!(explicit.client_message().contains("DEADLINE_EXCEEDED"));
+        // A function's own 504 is a 5xx answer, masked as any other.
+        assert_eq!(explicit.identity_status(), 503);
+        assert_eq!(explicit.client_message(), "Error code: 47");
+        assert!(failure.is_deadline() && !explicit.is_deadline());
+
+        // A function whose own timeout elapsed first answers the masked 503.
+        let own = BlockingFunctionFailure::function_timeout();
+        assert!(!own.is_deadline());
+        assert_eq!(own.identity_status(), 503);
+        assert_eq!(own.client_message(), "Error code: 47");
+        assert_eq!(
+            own.response().body["error"]["errors"][0]["reason"],
+            "backendError"
+        );
     }
 
     #[test]

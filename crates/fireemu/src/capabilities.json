@@ -377,7 +377,7 @@
       "protobuf CloudEvents payloads (JSON is what firebase-functions consumes)"
     ],
     "notes": [
-      "Blocking Functions use a bounded synchronous loopback bridge with the production seven-second response deadline; explicit Functions SDK error classes retain their canonical status in the Identity Toolkit error envelope, an unhandled handler or transport failure is unavailable, and an elapsed deadline returns production's opaque 503 Error code: 47 without publishing speculative user state",
+      "Blocking Functions use a bounded synchronous loopback bridge with the production seven-second response deadline; an explicit Functions SDK error below 500 other than 429 answers 400 with the function's own error body in the message, a 429 or 5xx answer, an unhandled handler or transport failure, and a function's own timeout of at most seven seconds answer production's opaque 503 Error code: 47, and Identity Platform's elapsed seven-second deadline answers 400 Cloud function deadline exceeded, without publishing speculative user state",
       "firebase-tools 15.28.2 configures only beforeCreate and beforeSignIn in the Auth emulator; Firebase Functions SDK beforeEmail / beforeSms and beforeEmailSent / beforeSmsSent hooks are production-only and are not a Local Emulator Suite parity gap",
       "Eventarc and Cloud Tasks support listeners start with a configured Functions runtime on the official default ports 9299 and 9499; selecting either support service without a Functions codebase is an accepted no-op, matching firebase-tools 15.28.2",
       "no fireemu-only alert-injection route exists: firebase-tools has none either, and its Emulator UI fires an alert by POSTing to /google/publishEvents like any other client",

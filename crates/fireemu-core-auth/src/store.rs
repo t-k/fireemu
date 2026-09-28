@@ -4648,6 +4648,15 @@ impl AuthStore {
         }
     }
 
+    /// Records the issuance time of a sign-up that a blocking function refused after it created
+    /// the account: production keeps that time although it answers no token
+    /// (AUTH-TENANT-BLOCKING recording 2026-09-28).
+    pub fn record_refused_sign_up_issuance(&mut self, uid: &LocalId, at: LogicalInstant) {
+        if let Some(user) = self.users.get_mut(uid).map(Arc::make_mut) {
+            user.last_refresh_at = Some(user.last_refresh_at.map_or(at, |old| old.max(at)));
+        }
+    }
+
     /// ID token claims for a refreshed session.
     pub fn id_token_claims_for_session(
         &self,
@@ -10953,6 +10962,23 @@ mod broad_project_number_tests {
             .unwrap();
         store.record_token_issuance(&token, at);
         assert_eq!(store.user(&replacement).unwrap().last_refresh_at, None);
+    }
+
+    #[test]
+    fn a_refused_sign_up_records_its_issuance_time_without_moving_it_back() {
+        let mut store = AuthStore::new("demo-one", SplitMix64::new(1), TotpPolicy::default());
+        let early = LogicalInstant::from_unix_seconds(100);
+        let late = LogicalInstant::from_unix_seconds(200);
+        let uid = store
+            .create_user_with_id(NewUser::email("refused@example.com"), Some("r"), early)
+            .unwrap();
+        store.record_refused_sign_up_issuance(&uid, late);
+        assert_eq!(store.user(&uid).unwrap().last_refresh_at, Some(late));
+        store.record_refused_sign_up_issuance(&uid, early);
+        assert_eq!(store.user(&uid).unwrap().last_refresh_at, Some(late));
+        let missing = LocalId("missing".to_owned());
+        store.record_refused_sign_up_issuance(&missing, late);
+        assert!(store.user(&missing).is_none());
     }
 
     #[test]

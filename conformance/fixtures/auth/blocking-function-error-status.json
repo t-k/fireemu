@@ -28,7 +28,7 @@
       "status": "parity",
       "value": {
         "status": 503,
-        "messageContains": ["BLOCKING_FUNCTION_ERROR_RESPONSE"],
+        "message": "Error code: 47",
         "messageExcludes": ["Injected production oracle failure"],
         "committed": false
       }

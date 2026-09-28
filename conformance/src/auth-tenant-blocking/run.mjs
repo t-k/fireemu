@@ -471,6 +471,18 @@ async function writeFixture({ programs, recordings, meta, secrets }) {
   return diffRecordings(first.results, second.results);
 }
 
+/** The task IDs this runner writes, for either suite. */
+const RUNNER_TASK_IDS = new Set(
+  ["AUTH-TENANT-SANDBOX", "AUTH-BLOCKING-SANDBOX"].flatMap((id) => [id, `${id}-IAM`]),
+);
+
+/**
+ * Another lane's rows whose event this runner does not know (AUTH-FEDERATION's `progress`,
+ * 2026-09-28). They neither open nor close that lane's hold; they still count as its recent
+ * lines.
+ */
+const foreignUnknownEventRows = new WeakSet();
+
 function ledgerEntries(ledgerText) {
   const legacyTaskless = new Set([
     "fireemu-35fe6|2026-09-23T14:41:46+00:00|auth05-one-shot-cleanup-completed",
@@ -503,6 +515,18 @@ function ledgerEntries(ledgerText) {
         throw new Error("malformed sandbox ledger row");
       if (typeof row.project !== "string" || !row.project || !validLedgerTimestamp(row.ts))
         throw new Error("sandbox ledger row needs a project and timestamp");
+      if (
+        typeof row.event === "string" &&
+        row.event &&
+        !knownEvents.has(row.event) &&
+        (row.outcome === undefined || (typeof row.outcome === "string" && row.outcome))
+      ) {
+        // An unknown event of this runner's own tasks, or of a row without a task, is refused.
+        if (typeof row.taskId !== "string" || !row.taskId || RUNNER_TASK_IDS.has(row.taskId))
+          throw new Error("sandbox ledger row has no recognized state");
+        foreignUnknownEventRows.add(row);
+        return row;
+      }
       if (
         (row.event === undefined && row.outcome === undefined) ||
         (row.event !== undefined &&
@@ -600,7 +624,7 @@ export function otherLaneOnSandbox(ledgerText, now = Date.now(), ignoredTaskIds 
   );
   const open = new Map();
   for (const entry of lines) {
-    if (!entry.taskId) continue;
+    if (!entry.taskId || foreignUnknownEventRows.has(entry)) continue;
     if (entry.event === "started") open.set(entry.taskId, entry);
     else if (isCleanTerminal(entry)) open.delete(entry.taskId);
     else if (entry.outcome !== undefined) open.set(entry.taskId, entry);

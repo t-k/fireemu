@@ -328,6 +328,48 @@ test("the reviewed project lock binds its file, nonce and processes, and no shar
   }
 });
 
+test("local admission skips another lane's unknown event and refuses its own", async () => {
+  const ts = new Date(Date.now() - 2 * 3_600_000).toISOString();
+  const foreign = { ts, project: "fireemu-oracle-idp", taskId: "AUTH-FEDERATION-SANDBOX" };
+  for (const suite of ["tenant", "blocking"]) {
+    const result = await admitLocal(
+      [
+        { ...foreign, event: "started" },
+        { ...foreign, event: "progress", requests: { api: 9 } },
+        { ...foreign, outcome: "recorded" },
+      ],
+      suite,
+    );
+    assert.equal(result.status, 0, `${suite}: ${result.stderr}`);
+  }
+  for (const taskId of [
+    "AUTH-TENANT-SANDBOX",
+    "AUTH-BLOCKING-SANDBOX",
+    "AUTH-TENANT-SANDBOX-IAM",
+    "AUTH-BLOCKING-SANDBOX-IAM",
+    undefined,
+    "",
+  ]) {
+    for (const suite of ["tenant", "blocking"]) {
+      const result = await admitLocal(
+        [{ ts, project: "fireemu-oracle-idp", taskId, event: "progress" }],
+        suite,
+      );
+      assert.notEqual(result.status, 0, `${suite}: ${taskId}`);
+      assert.match(result.stderr, /no recognized state/, `${suite}: ${taskId}`);
+    }
+  }
+  // An unknown event does not excuse a malformed outcome or event.
+  for (const fields of [
+    { event: "progress", outcome: "" },
+    { event: "progress", outcome: 7 },
+    { event: "" },
+  ]) {
+    const result = await admitLocal([{ ...foreign, ...fields }]);
+    assert.notEqual(result.status, 0, JSON.stringify(fields));
+  }
+});
+
 test("local admission accepts the historical taskless terminal", async () => {
   const result = await admitLocal([
     {
@@ -434,6 +476,30 @@ test("a note after another lane's start does not close its hold", () => {
   assert.match(otherLaneOnSandbox(ledger, now), /has not finished/);
   const closed = `${ledger}${row(31 * 60_000, { event: "finished", outcome: "recorded" })}\n`;
   assert.equal(otherLaneOnSandbox(closed, now), undefined);
+});
+
+test("another lane's unknown event neither opens nor closes its hold (ledger 2026-09-28)", () => {
+  const now = Date.now();
+  const row = (age, fields) =>
+    JSON.stringify({
+      ts: new Date(now - age).toISOString(),
+      project: "fireemu-oracle-idp",
+      taskId: "AUTH-FEDERATION-SANDBOX",
+      ...fields,
+    });
+  const progress = (age) => row(age, { event: "progress", action: "record-oidc", step: "sent" });
+  // The rows AUTH-FEDERATION's record-oidc wrote: a progress line keeps the start open.
+  const started = `${row(3 * 3_600_000, { event: "started" })}\n${progress(2 * 3_600_000)}\n`;
+  assert.match(otherLaneOnSandbox(started, now), /has not finished/);
+  assert.equal(recentAbort(started, now), undefined);
+  // It does not close the hold either when it carries an outcome.
+  const withOutcome = `${started}${row(2 * 3_600_000, { event: "progress", outcome: "recorded" })}\n`;
+  assert.match(otherLaneOnSandbox(withOutcome, now), /has not finished/);
+  const closed = `${started}${row(3_000_000, { outcome: "recorded" })}\n`;
+  assert.equal(otherLaneOnSandbox(closed, now), undefined);
+  // Alone, it opens nothing, but it is still a recent line of that lane.
+  assert.equal(otherLaneOnSandbox(`${progress(31 * 60_000)}\n`, now), undefined);
+  assert.match(otherLaneOnSandbox(`${closed}${progress(10 * 60_000)}\n`, now), /wrote a line/);
 });
 
 test("a failed restore cannot close another lane's old hold", () => {

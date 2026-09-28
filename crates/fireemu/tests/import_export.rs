@@ -2534,6 +2534,42 @@ fn a_failed_export_on_exit_warns_and_preserves_the_command_exit_code() {
 /// Issue strict-multi-tenancy-switch-lost-on-export-import: the project's written config
 /// members, the multi-tenancy switch among them, survive an export and an import, so a tenant
 /// restored by the import is reachable under the strict profile.
+/// A project whose only written setting is a config member still gets the settings sidecar:
+/// no tenant, quota or blocking function is needed for its members to survive.
+#[test]
+fn a_lone_config_member_survives_the_round_trip() {
+    let dir = scratch("lone-config-member-round-trip");
+    let out = dir.join("out");
+    let base = "http://$FIREBASE_AUTH_EMULATOR_HOST/identitytoolkit.googleapis.com";
+    let admin = "-H 'Authorization: Bearer owner' -H 'Content-Type: application/json'";
+    let write = format!(
+        r#"curl -s -X PATCH "{base}/admin/v2/projects/demo-export/config?updateMask=autodeleteAnonymousUsers" {admin} -d '{{"autodeleteAnonymousUsers":true}}'"#
+    );
+    let output = exec()
+        .args(["--only", "auth", "--export-on-exit"])
+        .arg(&out)
+        .args(["--", "sh", "-c"])
+        .arg(&write)
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{}", text(&output));
+    assert!(
+        out.join("auth_export/fireemu-auth-settings.json").exists(),
+        "the sidecar carries the member"
+    );
+    let read = format!(r#"curl -s "{base}/admin/v2/projects/demo-export/config" {admin}"#);
+    let again = exec()
+        .args(["--only", "auth", "--import"])
+        .arg(&out)
+        .args(["--", "sh", "-c"])
+        .arg(&read)
+        .output()
+        .unwrap();
+    let log = text(&again);
+    assert!(again.status.success(), "{log}");
+    assert!(log.contains(r#""autodeleteAnonymousUsers":true"#), "{log}");
+}
+
 /// Sets the first member named `key` found in `value` (depth first) to `to`.
 fn set_first_key(value: &mut serde_json::Value, key: &str, to: &serde_json::Value) -> bool {
     match value {

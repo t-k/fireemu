@@ -2182,14 +2182,25 @@ mod tests {
             );
             assert!(AuthSettings::parse(&text).is_err(), "{bad}");
         }
-        let many = (0..33)
-            .map(|i| format!(r#""member{}": {{}}"#, "x".repeat(i + 1)))
-            .collect::<Vec<_>>()
-            .join(",");
-        let text = format!(
-            r#"{{"version": 2, "projectId": "demo", "project": {{"configMembers": {{{many}}}}}, "namespaces": []}}"#
+        // At most MAX_CONFIG_MEMBERS members: the limit parses, one more is refused.
+        let with = |count: usize| {
+            let many = (0..count)
+                .map(|i| format!(r#""member{}": {{}}"#, "x".repeat(i + 1)))
+                .collect::<Vec<_>>()
+                .join(",");
+            format!(
+                r#"{{"version": 2, "projectId": "demo", "project": {{"configMembers": {{{many}}}}}, "namespaces": []}}"#
+            )
+        };
+        assert_eq!(
+            AuthSettings::parse(&with(super::MAX_CONFIG_MEMBERS))
+                .expect("the limit parses")
+                .project
+                .config_members
+                .len(),
+            super::MAX_CONFIG_MEMBERS
         );
-        assert!(AuthSettings::parse(&text).is_err());
+        assert!(AuthSettings::parse(&with(super::MAX_CONFIG_MEMBERS + 1)).is_err());
     }
 
     #[test]

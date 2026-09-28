@@ -1269,7 +1269,7 @@
         },
         {
           "id": "AUTH-CLAIM-BLOCKING-FUNCTIONS",
-          "statement": "beforeCreate and beforeSignIn Blocking Functions run synchronously before an Auth commit for Auth stores in the Functions runtime's project; tenantId and the tenant resource are forwarded for tenant stores, registered projects without that runtime are isolated, explicit SDK error classes retain their canonical status, unhandled and seven-second transport failures return production-compatible 503 responses, every failure rolls the speculative operation back, and accepted userRecord and sessionClaims mutations are visible in committed users and newly issued tokens.",
+          "statement": "beforeCreate and beforeSignIn Blocking Functions run synchronously before an Auth commit for Auth stores in the Functions runtime's project; tenantId and the tenant resource are forwarded for tenant stores, registered projects without that runtime are isolated, explicit SDK error classes retain their canonical status, unhandled and seven-second transport failures return production-compatible 503 responses, every failure rolls the speculative operation back except that a sign-up refused by beforeSignIn keeps the account it created (production and the official emulator create the account first), and accepted userRecord and sessionClaims mutations are visible in committed users and newly issued tokens. In the strict profile a beforeEmailSent function also runs before a password reset or email sign-in mail, and the project configuration names the functions as production does.",
           "capabilities": [
             {
               "id": "FN-EVT-1",
@@ -1279,6 +1279,8 @@
           "evidence": {
             "tests": [],
             "integration": [
+              "crates/fireemu-adapter-http/tests/auth_blocking_config.rs",
+              "crates/fireemu-adapter-http/tests/auth_blocking_send_email.rs",
               "crates/fireemu-adapter-http/tests/identity_toolkit.rs",
               "crates/fireemu/tests/functions_discovery.rs"
             ],
@@ -1287,9 +1289,14 @@
             ]
           },
           "officialLimitations": [
-            "firebase-tools 15.28.2 configures only beforeCreate and beforeSignIn in the Auth emulator; SDK email and SMS send hooks are production-only and are outside Local Emulator Suite parity"
+            "firebase-tools 15.28.2 configures only beforeCreate and beforeSignIn in the Auth emulator; the emulator profile keeps SDK email and SMS send hooks out of service, as the official emulator does"
           ],
-          "fireemuOnly": [],
+          "fireemuOnly": [
+            {
+              "behaviour": "the strict profile refuses a mail request with 409 AUTH_STATE_CHANGED when the live store would send a different mail from the speculative one beforeEmailSent was shown, and an Admin link request with 409 BLOCKING_FUNCTION_CONFIGURATION_CHANGED when a mail function or the blocking configuration changed after the request was admitted. Both arise only when the state changes between the speculative run and the commit, a race production has no counterpart for; they keep a reset code or sign-in link from being sent without the function seeing it. The emulator profile runs no email event and never answers them",
+              "precision": "documented-divergence"
+            }
+          ],
           "productionOnly": [],
           "preview": []
         },

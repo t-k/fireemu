@@ -314,7 +314,9 @@ export function createDeployer({
   const configUrl = `https://identitytoolkit.googleapis.com/admin/v2/projects/${project}/config`;
   const repository = `https://artifactregistry.googleapis.com/v1/projects/${project}/locations/${REGION}/repositories/gcf-artifacts`;
   const sourcesBucket = `gcf-v2-sources-${number}-${REGION}`;
-  const uploadsBucket = `gcf-v2-uploads-${number}-${REGION}`;
+  // Production's names, read on the sandbox (2026-09-28): the sources bucket is hyphen-separated
+  // and the uploads bucket dot-separated (issue blocking-fixture-removal-misses-upload-objects).
+  const uploadsBucket = `gcf-v2-uploads-${number}.${REGION}.cloudfunctions.appspot.com`;
 
   async function missingApis() {
     const missing = [];
@@ -528,10 +530,16 @@ export function createDeployer({
   async function deployedObjects() {
     if (adopted && (await listFunctions()).some((fn) => !NAMES.includes(fn)))
       throw new Error("another function exists; upload objects are left for a hand check");
-    const sources = ((await objects(sourcesBucket)) ?? [])
+    // After a deployment both buckets exist: one that cannot be found is not read as empty.
+    const found = async (bucket, kind) => {
+      const items = await objects(bucket);
+      if (items === undefined) throw new Error(`the ${kind} bucket was not found`);
+      return items;
+    };
+    const sources = (await found(sourcesBucket, "sources"))
       .map((item) => item.name)
       .filter(isFixtureArtifact);
-    const listed = (await objects(uploadsBucket)) ?? [];
+    const listed = await found(uploadsBucket, "uploads");
     const ours = (item) =>
       adopted
         ? adoptedSince !== undefined && Date.parse(item.timeCreated) >= adoptedSince.getTime()

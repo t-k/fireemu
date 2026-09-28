@@ -186,6 +186,8 @@ class Collector:
             current = self.monotonic()
             if self.observation_deadline - current < target - current + 13:
                 raise TimeoutError('P10-A idle candidate cannot fit the observation phase')
+            if current >= target:
+                break
             self.sleep(min(1, target - current))
             if self.monotonic() <= current:
                 raise ValueError('P10-A wait clock did not advance')

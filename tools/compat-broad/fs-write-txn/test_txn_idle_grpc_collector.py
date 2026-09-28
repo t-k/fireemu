@@ -3,6 +3,7 @@
 import base64
 import copy
 import datetime as dt
+import time
 
 import pytest
 
@@ -190,6 +191,34 @@ def test_early_returning_sleep_cannot_claim_idle_wait_completed():
     collector.sleep = lambda _seconds: None
     assert collector.run()['complete'] is False
     assert not any(row['site'] == 'live/commit' for row in collector.rows)
+
+
+@pytest.mark.parametrize('seconds', [55, 65])
+@pytest.mark.parametrize('overshoot', [0, 0.25])
+def test_admission_completing_idle_wait_saves_without_sleep_or_dispatch(seconds, overshoot):
+    collector, wire, budget, journal, clock = fixture()
+    collector.rows = [{'site': 'previous/read', 'rpc': 'GetDocument', 'result': {'code': 0}, 'timing': timing(99, 100)}]
+    target = clock.now() + seconds
+    sleeps, checks = [], []
+
+    def check():
+        checks.append(clock.now())
+        clock.sleep(target - clock.now() + overshoot)
+
+    def strict_sleep(duration):
+        sleeps.append(duration)
+        if duration <= 0:
+            time.sleep(duration)
+        clock.sleep(duration)
+
+    collector.before_send = check
+    collector.sleep = strict_sleep
+    collector._wait('candidate/probe', seconds)
+    assert clock.now() == target + overshoot
+    assert len(checks) == 1 and sleeps == []
+    assert collector.waits == [{'site': 'candidate/probe', 'seconds': seconds, 'previousSite': 'previous/read', 'previousTiming': timing(99, 100)}]
+    assert journal[-1]['waits'] == collector.waits
+    assert wire.calls == [] and budget.total == 0
 
 
 def test_invalidated_token_requires_owned_expected_state_readback():

@@ -37,8 +37,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::sync::{Arc, Mutex};
 
 use fireemu_core_auth::jwt::{
-    verify_firestore_rules_token, verify_rules_token, verify_rules_token_for_project, JwtError,
-    TokenAcceptance,
+    verify_firestore_rules_token, verify_firestore_rules_token_of_removed_tenant,
+    verify_rules_token, verify_rules_token_for_project, JwtError, TokenAcceptance,
 };
 use fireemu_core_auth::store::AuthStore;
 use fireemu_core_firestore::field_path::FieldPath;
@@ -332,11 +332,19 @@ pub fn allow_all(_: &FirestoreState, _: &[Write], _: LogicalInstant) -> Result<(
 /// whose `aud` names another project (another session's) is refused before any rule
 /// runs, so `request.auth != null` never holds across sessions.
 pub fn check_audience(principal: &Principal, project: &str) -> Result<(), Status> {
+    audience_refusal(principal, project, false)
+}
+
+/// Why a user token is not for `project`: production answers another project's ID token with
+/// its permission denial, even on an open document (AUTH-FS-CROSS stage 1, 2026-09-27); the
+/// emulator profile keeps the audience text it has always answered with.
+fn audience_refusal(principal: &Principal, project: &str, production: bool) -> Result<(), Status> {
     let Principal::User(ctx) = principal else {
         return Ok(());
     };
     match ctx.token.get("aud") {
         Some(fireemu_core_rules::value::RulesValue::String(aud)) if aud == project => Ok(()),
+        _ if production => Err(Status::permission_denied(PERMISSION_DENIED_MESSAGE)),
         Some(fireemu_core_rules::value::RulesValue::String(aud)) => Err(Status::unauthenticated(
             format!("ID token audience {aud:?} does not match project {project:?}"),
         )),
@@ -366,6 +374,12 @@ pub enum TokenSemantics {
     Firestore,
 }
 
+/// How long production kept an end user's `Listen` stream open (AUTH-FS-CROSS stage 2).
+pub const LISTEN_STREAM_LIFETIME_SECONDS: i64 = 3600;
+
+/// The wall time a real-time session follows (see [`RulesEnforcer::with_wall_clock`]).
+pub type WallSource = Arc<dyn Fn() -> LogicalInstant + Send + Sync>;
+
 /// Rules enforcement state shared by every surface.
 pub struct RulesEnforcer {
     rules: Arc<RulesetSlot>,
@@ -387,6 +401,13 @@ pub struct RulesEnforcer {
     end_user_transactions: bool,
     /// Which ID-token checks apply (see [`TokenSemantics`]).
     token_semantics: TokenSemantics,
+    /// The wall time an unpinned strict session follows; `None` keeps the clock where it is
+    /// told to be.
+    wall_clock: Option<WallSource>,
+    /// Whether an end user's `Listen` stream ends on its own an hour after it opened, as
+    /// production ends it (the `strict` profile); the official emulator keeps it (the `emulator`
+    /// profile).
+    listen_stream_lifetime: bool,
 }
 
 impl RulesEnforcer {
@@ -407,7 +428,49 @@ impl RulesEnforcer {
             refuse_without_ruleset: false,
             end_user_transactions: true,
             token_semantics: TokenSemantics::default(),
+            wall_clock: None,
+            listen_stream_lifetime: false,
         }
+    }
+
+    /// Moves the session clock forward to `source`'s wall time before every read of it, as the
+    /// Auth adapter does for its own requests: token expiry and `request.time` are then judged
+    /// at the time of the request, not at the time of the last Auth request. A clock already
+    /// ahead of the wall (advanced on purpose) is never moved back.
+    #[must_use]
+    pub fn with_wall_clock(mut self, source: WallSource) -> Self {
+        self.wall_clock = Some(source);
+        self
+    }
+
+    /// Makes an end user's `Listen` stream end on its own an hour after it opened (the `strict`
+    /// profile). See [`Self::listen_stream_deadline`].
+    #[must_use]
+    pub const fn with_listen_stream_lifetime(mut self, ends: bool) -> Self {
+        self.listen_stream_lifetime = ends;
+        self
+    }
+
+    /// When a `Listen` stream held by `principal` and opening now ends on its own: an hour on,
+    /// in a session built [`Self::with_listen_stream_lifetime`]. Production closed every held
+    /// end-user stream 3,600 s after it opened (AUTH-FS-CROSS stage 2, packet v7, twelve
+    /// streams), whatever its token's exp; `None` for the owner and an anonymous caller (not
+    /// observed), and for the `emulator` profile.
+    #[must_use]
+    pub fn listen_stream_deadline(&self, principal: &Principal) -> Option<LogicalInstant> {
+        if !self.listen_stream_lifetime || !matches!(principal, Principal::User(_)) {
+            return None;
+        }
+        self.now()
+            .ok()?
+            .checked_add(fireemu_core_types::time::LogicalDuration::from_seconds(
+                LISTEN_STREAM_LIFETIME_SECONDS,
+            ))
+    }
+
+    /// The session time tokens are judged at (the wall's, in an unpinned `strict` session).
+    pub fn session_now(&self) -> Result<LogicalInstant, Status> {
+        self.now()
     }
 
     /// Sets which ID-token checks apply: the Firestore surfaces use
@@ -511,10 +574,16 @@ impl RulesEnforcer {
     }
 
     fn now(&self) -> Result<LogicalInstant, Status> {
-        self.clock
+        let mut clock = self
+            .clock
             .lock()
-            .map(|c| c.now())
-            .map_err(|_| Status::internal("clock lock poisoned"))
+            .map_err(|_| Status::internal("clock lock poisoned"))?;
+        if let Some(wall_clock) = &self.wall_clock {
+            // `advance_to` refuses an instant behind the clock, so a clock advanced on purpose
+            // past the wall stays where it is.
+            let _ = clock.advance_to(wall_clock());
+        }
+        Ok(clock.now())
     }
 
     /// Replaces the loaded ruleset, as `PUT /emulator/v1/projects/{p}:securityRules` and the
@@ -607,7 +676,10 @@ impl RulesEnforcer {
             return Err(Status::unauthenticated(INVALID_CREDENTIALS_MESSAGE));
         }
         let now = self.now()?;
-        // The token's audience names its project: verify against that project's store.
+        // The token's audience names its project: verify against that project's store. A token
+        // whose tenant no longer exists is checked against its project (`removed_tenant`).
+        let mut removed_tenant = false;
+        let mut removed_epochs = None;
         let store_arc = match &self.registry {
             Some(registry) => {
                 let default = self
@@ -633,7 +705,11 @@ impl RulesEnforcer {
                 drop(default);
                 target
                     .and_then(|(project, tenant)| match tenant {
-                        Some(tenant) => registry.tenant_store(&project, &tenant),
+                        Some(tenant) => registry.tenant_store(&project, &tenant).or_else(|| {
+                            removed_tenant = true;
+                            removed_epochs = registry.removed_tenant_epochs(&project, &tenant);
+                            registry.store_for(&project)
+                        }),
                         None => registry.store_for(&project),
                     })
                     .unwrap_or_else(|| self.auth.clone())
@@ -644,6 +720,17 @@ impl RulesEnforcer {
             .lock()
             .map_err(|_| Status::internal("auth store lock poisoned"))?;
         let verified = match (self.token_semantics, expected_project) {
+            // Firestore does not look a token's tenant up (AUTH-FS-CROSS stage 1).
+            (TokenSemantics::Firestore, _) if removed_tenant => {
+                verify_firestore_rules_token_of_removed_tenant(
+                    token,
+                    &store,
+                    now,
+                    self.acceptance,
+                    expected_project,
+                    removed_epochs.as_ref(),
+                )
+            }
             (TokenSemantics::Firestore, _) => {
                 verify_firestore_rules_token(token, &store, now, self.acceptance, expected_project)
             }
@@ -668,6 +755,15 @@ impl RulesEnforcer {
             }
         })?;
         Ok(Principal::User(ctx))
+    }
+
+    /// Whether a user token is for `project`, refused in this enforcer's profile's shape.
+    pub fn check_audience(&self, principal: &Principal, project: &str) -> Result<(), Status> {
+        audience_refusal(
+            principal,
+            project,
+            self.acceptance == TokenAcceptance::Verified,
+        )
     }
 
     /// Owner-only surfaces (collection enumeration) while rules are loaded.
@@ -737,7 +833,7 @@ impl RulesEnforcer {
         snapshot: Option<&Document>,
         access: &dyn DocumentAccess,
     ) -> Result<(), Status> {
-        check_audience(principal, path.project().as_str())?;
+        self.check_audience(principal, path.project().as_str())?;
         self.evaluate(principal, Method::Get, path, snapshot, None, access)
     }
 
@@ -751,7 +847,7 @@ impl RulesEnforcer {
         access: &dyn DocumentAccess,
     ) -> Result<(), Status> {
         if let Some((first, _)) = items.first() {
-            check_audience(principal, first.project().as_str())?;
+            self.check_audience(principal, first.project().as_str())?;
         }
         if matches!(principal, Principal::Owner) {
             return Ok(());
@@ -819,7 +915,7 @@ impl RulesEnforcer {
         query: &Query,
         access: &dyn DocumentAccess,
     ) -> Result<(), Status> {
-        check_audience(principal, parent.project.as_str())?;
+        self.check_audience(principal, parent.project.as_str())?;
         if matches!(principal, Principal::Owner) {
             return Ok(());
         }
@@ -902,7 +998,7 @@ impl RulesEnforcer {
         writes: &[Write],
         now: LogicalInstant,
     ) -> Result<(), Status> {
-        check_audience(principal, parent.project.as_str())?;
+        self.check_audience(principal, parent.project.as_str())?;
         if matches!(principal, Principal::Owner) {
             return Ok(());
         }

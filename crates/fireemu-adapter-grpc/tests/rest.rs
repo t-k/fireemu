@@ -5940,3 +5940,54 @@ fn strict_bulk_delete_stops_at_the_refused_chunk_after_deleting_earlier_chunks()
     let (status, _) = call(&s, "GET", &format!("{DOCS}/{collection}/d"), Value::Null);
     assert_eq!(status, 200, "the refused chunk keeps its document");
 }
+
+/// Production refuses another project's ID token with its permission denial, also where no
+/// document names the project (a transaction on its database; AUTH-FS-CROSS stage 1).
+#[test]
+fn another_projects_token_is_refused_on_its_database_in_productions_shape() {
+    const OPEN: &str = "rules_version = '2';\nservice cloud.firestore { match /databases/{d}/documents { match /{document=**} { allow read: if true; } } }";
+    let (mut s, clock) = state_with_clock(Some(OPEN), TokenAcceptance::Verified);
+    let auth = Arc::new(Mutex::new(AuthStore::new(
+        "demo-app",
+        SplitMix64::new(3),
+        TotpPolicy::default(),
+    )));
+    let token = {
+        let mut store = auth.lock().unwrap();
+        let now = LogicalInstant::from_unix_seconds(1_788_004_860);
+        let uid = store
+            .create_user(
+                fireemu_core_auth::store::NewUser::email("a@example.com"),
+                now,
+            )
+            .unwrap();
+        fireemu_core_auth::jwt::encode_unsigned(&store.id_token_claims(&uid, None, now).unwrap())
+    };
+    let loaded = Arc::new(RulesetSlot::new(LoadedRules::from_source(OPEN).unwrap()));
+    s.rules = Some(Arc::new(
+        RulesEnforcer::new(loaded, auth, clock)
+            .with_token_semantics(TokenSemantics::Firestore)
+            .with_token_acceptance(TokenAcceptance::Verified),
+    ));
+    let (status, err) = call_as(
+        &s,
+        "POST",
+        "/v1/projects/demo-b/databases/(default)/documents:beginTransaction",
+        json!({"options": {"readOnly": {}}}),
+        Some(&format!("Bearer {token}")),
+    );
+    assert_eq!(status, 403, "{err}");
+    assert_eq!(
+        err,
+        json!({"error": {"code": 403, "message": "Missing or insufficient permissions.", "status": "PERMISSION_DENIED"}})
+    );
+    // Its own project opens the transaction.
+    let (status, _) = call_as(
+        &s,
+        "POST",
+        &format!("{DOCS}:beginTransaction"),
+        json!({"options": {"readOnly": {}}}),
+        Some(&format!("Bearer {token}")),
+    );
+    assert_eq!(status, 200);
+}

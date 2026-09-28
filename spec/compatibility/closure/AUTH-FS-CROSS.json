@@ -1,0 +1,712 @@
+{
+  "schemaVersion": 1,
+  "parent": "AUTH-FS-CROSS",
+  "parentStatus": "IMPLEMENTING",
+  "inventoryStatus": "FROZEN",
+  "freezeState": "FROZEN",
+  "oracleTrack": "disposable-sandbox",
+  "oracle": {
+    "project": "fireemu-oracle-idp",
+    "database": "(default)",
+    "edition": "STANDARD",
+    "location": "us-central1"
+  },
+  "closureReview": {
+    "decision": "APPROVED",
+    "decidedOn": "2026-09-29",
+    "decider": "project coordinator (delegated by the owner)",
+    "reviewer": "independent clean-context closure review, round 2 APPROVE with no Must or Should (round 1 REQUEST_CHANGES, Must 0, Should 6), with a safety review of the request-widening commits",
+    "reviewedCommit": "c63ba6ff4",
+    "packetSha256": "1ec9e8c8eba5dad5c8d56cbe7dfcb59b96ceb7edabf992a5b7f3fd23ef4fac55",
+    "finalArtifactSha256": "890a38d8b8827ca3980522151b69c9bbad4230a674ccf73a7123470910094021",
+    "report": "docs.local/reviews/2026-09-29-auth-fs-cross-closure-rereview.md (private)",
+    "note": "The parent stays IMPLEMENTING: it waits only for the post-integration condition, the emulator-profile release corpus with 0 findings on main after this lane's round-2 merge. The closure-review condition is kept PENDING_REVIEW until then, since this closure's test ties COMPAT_VERIFIED to every condition being VERIFIED together with an approved review."
+  },
+  "scopeDecisions": [
+    {
+      "id": "C1",
+      "decision": "Conditions observable with unary requests belong to FS-RULES, where they are VERIFIED, and are not conditions here: principals on get, batchGet, runQuery and writes (FS-RULES/principals, query-proofs, document-access), credential refusals of expired, empty, malformed, tampered and unsigned bearers (refusal-shape, token-expiry), unexpired tokens of revoked, disabled and deleted accounts (token-states), claim changes seen only after a refresh (auth-token-fields), and multi-write atomicity after an Auth change (atomic-writes, token-states). A bearer issued by another project's Auth was never recorded there and stays here (foreign-project-token).",
+      "decidedBy": "coordinator (delegated by the owner, ledger 2026-09-25)",
+      "decidedOn": "2026-09-27",
+      "movedTo": "FS-RULES"
+    },
+    {
+      "id": "C2",
+      "decision": "Production refuses an end user's read-write transaction (BeginTransaction and newTransaction.readWrite) and allows read-only ones, in two recordings (FS-RULES/document-access); this is a production dependency boundary. Principal binding of the read-only transaction and the Web SDK's optimistic transaction are observed here; generic transaction semantics (snapshots, conflict, retry, expiry, rollback) belong to FS-TRANSACTION.",
+      "decidedBy": "coordinator (delegated by the owner, ledger 2026-09-25)",
+      "decidedOn": "2026-09-27",
+      "movedTo": "FS-TRANSACTION"
+    },
+    {
+      "id": "C3",
+      "decision": "Applying FS-RULES R2 (owner, 2026-09-24): catalog cases 106 (sign-out) and 109/109C (revocation) move here from FS-LISTEN-SDK; 106N and 108/108C, which involve no Auth state change, stay there.",
+      "decidedBy": "owner (t-k), FS-RULES R2",
+      "decidedOn": "2026-09-24",
+      "movedFrom": "FS-LISTEN-SDK"
+    },
+    {
+      "id": "C4",
+      "decision": "The oracle is fireemu-oracle-idp/(default), whose Firestore and Rules this lane owns during its runs. Runs are serialized with AUTH-TENANT-BLOCKING and AUTH-FEDERATION under the shared lock; each run reads the project's configuration at start and restores and reads back that baseline. Tenants are created and deleted as fixture setup, not as tenant administration semantics (AUTH-TENANT-BLOCKING).",
+      "decidedBy": "coordinator (delegated by the owner, ledger 2026-09-25)",
+      "decidedOn": "2026-09-27"
+    },
+    {
+      "id": "C5",
+      "decision": "State changes during a listen are probed by commits made after the change; a quiet window alone is never evidence that nothing happens.",
+      "decidedBy": "coordinator (delegated by the owner, ledger 2026-09-25)",
+      "decidedOn": "2026-09-27"
+    },
+    {
+      "id": "C6",
+      "decision": "Token minting and refresh belong to AUTH-CREDENTIAL, the Rules language to FS-RULES, listens without an Auth state change to FS-LISTEN-SDK, tenant administration to AUTH-TENANT-BLOCKING and server-side transaction semantics to FS-TRANSACTION.",
+      "decidedBy": "coordinator (delegated by the owner, ledger 2026-09-25)",
+      "decidedOn": "2026-09-27"
+    },
+    {
+      "id": "C7",
+      "decision": "As in FS-RULES R9, rows are compared under the strict profile; the emulator profile keeps accepting unsigned emulator tokens and adds no refusal the official emulator does not make.",
+      "decidedBy": "owner (t-k), FS-RULES R9",
+      "decidedOn": "2026-09-24"
+    },
+    {
+      "id": "C8",
+      "decision": "Production runs in two stages: stage 1 records the unary conditions (tenant-same-uid, read-only-transaction-binding, foreign-project-token); stage 2 records the listener and SDK conditions after fireemu follows stage 1.",
+      "decidedBy": "coordinator (delegated by the owner, ledger 2026-09-25)",
+      "decidedOn": "2026-09-27"
+    },
+    {
+      "id": "C9",
+      "decision": "An observed difference is decided row by row by the owner, only after two recordings and the final-artifact comparison; no predicted outcome is approved in advance.",
+      "decidedBy": "owner (t-k), standing rule",
+      "decidedOn": "2026-09-24"
+    },
+    {
+      "id": "OX-1",
+      "decision": "Android and Apple SDKs are out of scope; the declared SDK matrix has only the Web SDK.",
+      "decidedBy": "owner (t-k)",
+      "decidedOn": "2026-09-27"
+    },
+    {
+      "id": "OX-2",
+      "decision": "The sandbox changes on fireemu-oracle-idp (the cloud.firestore release and rulesets, multiTenant.allowTenants, tenants and test accounts per recording, and an IAM binding limited to signJwt) are approved as a policy on FS-RULES R1, R7 and R8 terms: each run restores and reads back the baseline read at its start. Their exact content is approved with each packet.",
+      "decidedBy": "owner (t-k)",
+      "decidedOn": "2026-09-27"
+    },
+    {
+      "id": "OX-3",
+      "decision": "Each stage-2 recording holds one listen window of about 65 minutes, past the token's expiry (3600 s plus the ~30 s allowance), under the shared lock; the coordinator assigns the time.",
+      "decidedBy": "owner (t-k)",
+      "decidedOn": "2026-09-27"
+    },
+    {
+      "id": "X3",
+      "decision": "The Node Web SDK 12.18.0 and native REST/gRPC are required for the SDK conditions; a real browser is required only for listen-sign-out-and-switch and pending-write-across-switch.",
+      "decidedBy": "owner (t-k)",
+      "decidedOn": "2026-09-27"
+    },
+    {
+      "id": "X9",
+      "decision": "A token of another project is obtained by creating one @example.com test user on fireemu-oracle-query, taking its ID token and deleting the user at once (as approved in the owner ledger on 2026-09-25 for that project).",
+      "decidedBy": "owner (t-k)",
+      "decidedOn": "2026-09-27"
+    },
+    {
+      "id": "OX-4",
+      "decision": "The emulator profile keeps refusing an ID token of another project by its audience, as an exception to following the official emulator (spec/compatibility/contract.json profiles.emulator.officialEmulatorDivergences[1]); the strict profile answers it as production does (foreign-project-token, stage 1).",
+      "decidedBy": "owner (t-k)",
+      "decidedOn": "2026-09-28"
+    }
+  ],
+  "productionPlan": {
+    "status": "PROPOSAL_ONLY",
+    "authorizesProduction": false,
+    "productionExecuted": true,
+    "recordingsRequired": 2,
+    "stages": {
+      "1": [
+        "tenant-same-uid",
+        "read-only-transaction-binding",
+        "foreign-project-token"
+      ],
+      "2": [
+        "sdk-optimistic-transaction",
+        "listen-sign-out-and-switch",
+        "listen-token-refresh",
+        "listen-revocation-disable-delete",
+        "listen-tenant-deletion",
+        "pending-write-across-switch"
+      ]
+    },
+    "costBasis": "Firestore document reads and writes in the hundreds per recording and a few Identity Platform monthly active users; estimated under US$1 per stage against the US$10 per-task budget. Each packet prices its actual operation mix.",
+    "wallTime": "Stage 2 holds a listen window of about 65 minutes per recording (OX-3)."
+  },
+  "conditions": [
+    {
+      "conditionId": "AUTH-FS-CROSS/tenant-same-uid",
+      "source": "docs/compatibility/ip-fs-production-compatibility.md#feature-group-status",
+      "recipeIds": [
+        "auth-fs-cross/tenant-same-uid"
+      ],
+      "configProjections": [
+        "default"
+      ],
+      "status": "VERIFIED",
+      "note": "The same UID in two tenants of the project is told apart by Rules, and an unexpired ID token of a deleted tenant is presented to Firestore, with a surviving sibling tenant as control.",
+      "stage": 1,
+      "observation": {
+        "method": "Accounts with one localId in two tenants (and the project) read documents whose rules need both the uid and firebase.tenant, through get, batchGet and runQuery; then tenant A is deleted and A's unexpired token is sent on get, runQuery and a create, with tenant B's token as control. Tenants are created and deleted as fixture setup.",
+        "transports": [
+          "rest",
+          "grpc"
+        ],
+        "catalogCases": []
+      },
+      "localEvidence": {
+        "references": [
+          "docs/compatibility/auth-fs-tenant-read-local.md"
+        ],
+        "productionExecuted": false,
+        "limits": "Production honours a deleted tenant's unexpired token (stage 1, 2026-09-27), and fireemu does too since bf99f6132: with Firestore's token checks it is verified against its project and keeps its tenant claim, and in a registered project against its tenant's last session epoch."
+      },
+      "verification": {
+        "recordingsRequired": 2
+      },
+      "evidence": {
+        "productionRecordings": [
+          {
+            "recordedAt": "2026-09-27T17:28:05.738Z",
+            "gitSha": "51f1910b7684938829d839384ccd9a1ee4f3bba3",
+            "recordings": 2,
+            "project": "fireemu-oracle-idp"
+          }
+        ],
+        "fixturePath": "conformance/auth-fs-cross-production.json",
+        "note": "Both recordings agree on every row; the final artifact matches all 89 rows of the stage-1 programs. Commit SHAs of the recordings are as the sandbox ledger wrote them; commits before 2026-09-28 09:40Z were rewritten that day (tree unchanged), and spec/compatibility/history-rewrite-2026-09-28.json on main maps the old SHAs to the new ones.",
+        "finalArtifactSha256": "890a38d8b8827ca3980522151b69c9bbad4230a674ccf73a7123470910094021",
+        "sourceCommit": "857db2612a2f0980335ed43932d43b270c0f3c59",
+        "comparisonPath": "spec/compatibility/closure/evidence/AUTH-FS-CROSS-stage1-comparison.json",
+        "rows": {
+          "MATCH": 89
+        },
+        "conditionRows": {
+          "MATCH": 61
+        }
+      }
+    },
+    {
+      "conditionId": "AUTH-FS-CROSS/read-only-transaction-binding",
+      "source": "docs/compatibility/ip-fs-production-compatibility.md#feature-group-status",
+      "recipeIds": [
+        "auth-fs-cross/read-only-transaction-binding"
+      ],
+      "configProjections": [
+        "default"
+      ],
+      "status": "VERIFIED",
+      "note": "A read-only transaction opened with one principal's token is used with another principal's, another tenant's and no credential. End users cannot open read-write transactions (FS-RULES/document-access), so this is the only server-side transaction an end user holds.",
+      "stage": 1,
+      "observation": {
+        "method": "Principal A opens a read-only transaction (BeginTransaction readOnly, and newTransaction.readOnly on runQuery and batchGet); the transaction ID is then used with B's token, a tenant principal's token and no credential for batchGet and runQuery on documents only A may read: whether the ID is bound to its principal and under which principal Rules evaluate.",
+        "transports": [
+          "rest",
+          "grpc"
+        ],
+        "catalogCases": []
+      },
+      "localEvidence": {
+        "references": [],
+        "productionExecuted": false
+      },
+      "verification": {
+        "recordingsRequired": 2
+      },
+      "evidence": {
+        "productionRecordings": [
+          {
+            "recordedAt": "2026-09-27T17:28:05.738Z",
+            "gitSha": "51f1910b7684938829d839384ccd9a1ee4f3bba3",
+            "recordings": 2,
+            "project": "fireemu-oracle-idp"
+          }
+        ],
+        "fixturePath": "conformance/auth-fs-cross-production.json",
+        "note": "Both recordings agree on every row; the final artifact matches all 89 rows of the stage-1 programs. Commit SHAs of the recordings are as the sandbox ledger wrote them; commits before 2026-09-28 09:40Z were rewritten that day (tree unchanged), and spec/compatibility/history-rewrite-2026-09-28.json on main maps the old SHAs to the new ones.",
+        "finalArtifactSha256": "890a38d8b8827ca3980522151b69c9bbad4230a674ccf73a7123470910094021",
+        "sourceCommit": "857db2612a2f0980335ed43932d43b270c0f3c59",
+        "comparisonPath": "spec/compatibility/closure/evidence/AUTH-FS-CROSS-stage1-comparison.json",
+        "rows": {
+          "MATCH": 89
+        },
+        "conditionRows": {
+          "MATCH": 18
+        }
+      }
+    },
+    {
+      "conditionId": "AUTH-FS-CROSS/foreign-project-token",
+      "source": "docs/compatibility/ip-fs-production-compatibility.md#feature-group-status",
+      "recipeIds": [
+        "auth-fs-cross/foreign-project-token"
+      ],
+      "configProjections": [
+        "default"
+      ],
+      "status": "VERIFIED",
+      "note": "A validly signed ID token issued by another Firebase project's Auth is presented to Firestore on the sandbox, with a same-project control.",
+      "stage": 1,
+      "observation": {
+        "method": "One @example.com test user created on fireemu-oracle-query (X9), its ID token taken and the user deleted and read back at once; the token is sent on get and runQuery of an open and an owner-only document on fireemu-oracle-idp, over REST and gRPC, beside the same requests with an idp token.",
+        "transports": [
+          "rest",
+          "grpc"
+        ],
+        "catalogCases": []
+      },
+      "localEvidence": {
+        "references": [],
+        "productionExecuted": false
+      },
+      "verification": {
+        "recordingsRequired": 2
+      },
+      "evidence": {
+        "productionRecordings": [
+          {
+            "recordedAt": "2026-09-27T17:28:05.738Z",
+            "gitSha": "51f1910b7684938829d839384ccd9a1ee4f3bba3",
+            "recordings": 2,
+            "project": "fireemu-oracle-idp"
+          }
+        ],
+        "fixturePath": "conformance/auth-fs-cross-production.json",
+        "note": "Both recordings agree on every row; the final artifact matches all 89 rows of the stage-1 programs. Commit SHAs of the recordings are as the sandbox ledger wrote them; commits before 2026-09-28 09:40Z were rewritten that day (tree unchanged), and spec/compatibility/history-rewrite-2026-09-28.json on main maps the old SHAs to the new ones.",
+        "finalArtifactSha256": "890a38d8b8827ca3980522151b69c9bbad4230a674ccf73a7123470910094021",
+        "sourceCommit": "857db2612a2f0980335ed43932d43b270c0f3c59",
+        "comparisonPath": "spec/compatibility/closure/evidence/AUTH-FS-CROSS-stage1-comparison.json",
+        "rows": {
+          "MATCH": 89
+        },
+        "conditionRows": {
+          "MATCH": 10
+        }
+      }
+    },
+    {
+      "conditionId": "AUTH-FS-CROSS/sdk-optimistic-transaction",
+      "source": "docs/compatibility/ip-fs-production-compatibility.md#feature-group-status",
+      "recipeIds": [
+        "auth-fs-cross/sdk-optimistic-transaction"
+      ],
+      "configProjections": [
+        "default"
+      ],
+      "status": "VERIFIED",
+      "note": "A Web SDK runTransaction (batchGet reads, then one Commit with preconditions and verify writes) across a sign-out or a principal switch between its reads and its commit.",
+      "stage": 2,
+      "observation": {
+        "method": "Node Web SDK runTransaction on Rules-protected documents with a sign-out, and separately an A-to-B switch, after the reads and before the commit; record the principal and outcome of the Commit, the number of update-function calls and the server post-state, with an unchanged-principal control.",
+        "transports": [
+          "node-sdk"
+        ],
+        "catalogCases": []
+      },
+      "localEvidence": {
+        "references": [],
+        "productionExecuted": true
+      },
+      "verification": {
+        "recordingsRequired": 2
+      },
+      "evidence": {
+        "productionRecordings": [
+          {
+            "recordedAt": "2026-09-28T10:46:46.463Z",
+            "gitSha": "ec06eede96b1bf908b47ac792ba0ff6067874f2e",
+            "recordings": 2,
+            "project": "fireemu-oracle-idp",
+            "packetSha256": "5a4d6cca7ae329a461379a1ef38e8722e149b5f10e14e20a7a6744f6c0142d4e"
+          }
+        ],
+        "fixturePath": "conformance/auth-fs-cross-stage2-production.json",
+        "finalArtifactSha256": "890a38d8b8827ca3980522151b69c9bbad4230a674ccf73a7123470910094021",
+        "sourceCommit": "857db2612a2f0980335ed43932d43b270c0f3c59",
+        "harness": {
+          "commit": "4be4e58d47a377060f6edcf485e6cc0c9db01637",
+          "digest": "ba7ba895011de42dc2826ba51008da0cb566e721534f2216beb47c986295b1ac",
+          "programDigest": "9b9a699a96f25a21cee7954f184c64ceaee55441ec05dea1106140bcf9b0fb4a"
+        },
+        "comparisonPath": "spec/compatibility/closure/evidence/AUTH-FS-CROSS-stage2-comparison.json",
+        "rows": {
+          "MATCH": 7
+        },
+        "note": "Packet v7's two recordings agree on every row. The comparison ran the harness that recorded them (the fixture's commit) against the final artifact, built at 857db2612 (whose last runtime change is 0eca89b23); the later harness commit 3a7777242 changes only how a run stops (resume streams closed on a stop or fatal), how approvals and revocations are read, the deleted tenant's allowed set and run-directory tests, not the window's requests or rows. Packet v6's two recordings (2026-09-28 04:21Z and 05:59Z) found the differences fixed since and are not evidence. Commit SHAs of the recordings are as the sandbox ledger wrote them; commits before 2026-09-28 09:40Z were rewritten that day (tree unchanged), and spec/compatibility/history-rewrite-2026-09-28.json on main maps the old SHAs to the new ones."
+      }
+    },
+    {
+      "conditionId": "AUTH-FS-CROSS/listen-sign-out-and-switch",
+      "source": "docs/compatibility/ip-fs-production-compatibility.md#feature-group-status",
+      "recipeIds": [
+        "auth-fs-cross/listen-sign-out-and-switch"
+      ],
+      "configProjections": [
+        "default"
+      ],
+      "status": "VERIFIED",
+      "note": "Active document and query listeners under Rules through sign-out (catalog case 106, moved here from FS-LISTEN-SDK by R2) and through a switch from principal A to B.",
+      "stage": 2,
+      "observation": {
+        "method": "Pinned Web SDK document and query listeners on Rules-protected data; sign out, and separately switch A to B, then commit changes the new principal may and may not read; record server snapshots, errors and listener ends against a static-principal witness.",
+        "transports": [
+          "node-sdk",
+          "browser-webchannel"
+        ],
+        "catalogCases": [
+          "FS-LISTEN-SDK-106"
+        ]
+      },
+      "localEvidence": {
+        "references": [
+          "tools/sdk-smoke/sdk-listen-coverage.json"
+        ],
+        "productionExecuted": true,
+        "limits": "The local scenario AUTH-FS-CROSS.auth-switch-rules-listen is unobserved in production."
+      },
+      "verification": {
+        "recordingsRequired": 2
+      },
+      "evidence": {
+        "productionRecordings": [
+          {
+            "recordedAt": "2026-09-28T10:46:46.463Z",
+            "gitSha": "ec06eede96b1bf908b47ac792ba0ff6067874f2e",
+            "recordings": 2,
+            "project": "fireemu-oracle-idp",
+            "packetSha256": "5a4d6cca7ae329a461379a1ef38e8722e149b5f10e14e20a7a6744f6c0142d4e"
+          }
+        ],
+        "fixturePath": "conformance/auth-fs-cross-stage2-production.json",
+        "finalArtifactSha256": "890a38d8b8827ca3980522151b69c9bbad4230a674ccf73a7123470910094021",
+        "sourceCommit": "857db2612a2f0980335ed43932d43b270c0f3c59",
+        "harness": {
+          "commit": "4be4e58d47a377060f6edcf485e6cc0c9db01637",
+          "digest": "ba7ba895011de42dc2826ba51008da0cb566e721534f2216beb47c986295b1ac",
+          "programDigest": "9b9a699a96f25a21cee7954f184c64ceaee55441ec05dea1106140bcf9b0fb4a"
+        },
+        "comparisonPath": "spec/compatibility/closure/evidence/AUTH-FS-CROSS-stage2-comparison.json",
+        "rows": {
+          "MATCH": 20
+        },
+        "note": "Packet v7's two recordings agree on every row. The comparison ran the harness that recorded them (the fixture's commit) against the final artifact, built at 857db2612 (whose last runtime change is 0eca89b23); the later harness commit 3a7777242 changes only how a run stops (resume streams closed on a stop or fatal), how approvals and revocations are read, the deleted tenant's allowed set and run-directory tests, not the window's requests or rows. Packet v6's two recordings (2026-09-28 04:21Z and 05:59Z) found the differences fixed since and are not evidence. Commit SHAs of the recordings are as the sandbox ledger wrote them; commits before 2026-09-28 09:40Z were rewritten that day (tree unchanged), and spec/compatibility/history-rewrite-2026-09-28.json on main maps the old SHAs to the new ones."
+      }
+    },
+    {
+      "conditionId": "AUTH-FS-CROSS/listen-token-refresh",
+      "source": "docs/compatibility/ip-fs-production-compatibility.md#feature-group-status",
+      "recipeIds": [
+        "auth-fs-cross/listen-token-refresh"
+      ],
+      "configProjections": [
+        "default"
+      ],
+      "status": "VERIFIED",
+      "note": "Active document and query listeners across a claim change with a forced token refresh, and a native listen stream held past its token's expiry allowance.",
+      "stage": 2,
+      "observation": {
+        "method": "Node Web SDK listeners on documents whose rules need claim c: add c then getIdToken(true), remove c then getIdToken(true), each probed by a commit; a native gRPC Listen opened with a token and held past exp + 30 s (FS-RULES/token-expiry) without refresh, probed by commits before and after.",
+        "transports": [
+          "node-sdk",
+          "grpc"
+        ],
+        "catalogCases": []
+      },
+      "localEvidence": {
+        "references": [],
+        "productionExecuted": true,
+        "limits": "Production closed every held native gRPC stream 3,600.17-3,600.19 s after it opened (packet v7, 2026-09-28, twelve streams, INTERNAL from an HTTP/2 RST_STREAM), and the strict profile closes an end user's native gRPC Listen stream an hour after it opened. Unobserved and left as they were: a WebChannel Listen held for an hour (no browser client was held that long; the strict profile keeps it open), a stream opened with an older token (whether production closes it at the token's exp or at its hour; the strict profile adds no close at exp, and the first commit past the token's allowance still ends it), and owner and anonymous streams. One earlier close (packet v6, recording 2, stream grpc-ten-t2, before its exp-60 s probe, time not recorded) is an unexplained single observation, not reproduced in the twelve v7 streams."
+      },
+      "verification": {
+        "recordingsRequired": 2
+      },
+      "evidence": {
+        "productionRecordings": [
+          {
+            "recordedAt": "2026-09-28T10:46:46.463Z",
+            "gitSha": "ec06eede96b1bf908b47ac792ba0ff6067874f2e",
+            "recordings": 2,
+            "project": "fireemu-oracle-idp",
+            "packetSha256": "5a4d6cca7ae329a461379a1ef38e8722e149b5f10e14e20a7a6744f6c0142d4e"
+          }
+        ],
+        "fixturePath": "conformance/auth-fs-cross-stage2-production.json",
+        "finalArtifactSha256": "890a38d8b8827ca3980522151b69c9bbad4230a674ccf73a7123470910094021",
+        "sourceCommit": "857db2612a2f0980335ed43932d43b270c0f3c59",
+        "harness": {
+          "commit": "4be4e58d47a377060f6edcf485e6cc0c9db01637",
+          "digest": "ba7ba895011de42dc2826ba51008da0cb566e721534f2216beb47c986295b1ac",
+          "programDigest": "9b9a699a96f25a21cee7954f184c64ceaee55441ec05dea1106140bcf9b0fb4a"
+        },
+        "comparisonPath": "spec/compatibility/closure/evidence/AUTH-FS-CROSS-stage2-comparison.json",
+        "rows": {
+          "MATCH": 9,
+          "MATCH_NONDETERMINISTIC": 1
+        },
+        "note": "Packet v7's two recordings agree on every row. The comparison ran the harness that recorded them (the fixture's commit) against the final artifact, built at 857db2612 (whose last runtime change is 0eca89b23); the later harness commit 3a7777242 changes only how a run stops (resume streams closed on a stop or fatal), how approvals and revocations are read, the deleted tenant's allowed set and run-directory tests, not the window's requests or rows. Packet v6's two recordings (2026-09-28 04:21Z and 05:59Z) found the differences fixed since and are not evidence. Commit SHAs of the recordings are as the sandbox ledger wrote them; commits before 2026-09-28 09:40Z were rewritten that day (tree unchanged), and spec/compatibility/history-rewrite-2026-09-28.json on main maps the old SHAs to the new ones."
+      }
+    },
+    {
+      "conditionId": "AUTH-FS-CROSS/listen-revocation-disable-delete",
+      "source": "docs/compatibility/ip-fs-production-compatibility.md#feature-group-status",
+      "recipeIds": [
+        "auth-fs-cross/listen-revocation-disable-delete"
+      ],
+      "configProjections": [
+        "default"
+      ],
+      "status": "VERIFIED",
+      "note": "Active document and query listeners after the principal's refresh tokens are revoked (catalog cases 109 and 109C, moved here from FS-LISTEN-SDK by R2), the account is disabled, or the account is deleted.",
+      "stage": 2,
+      "observation": {
+        "method": "Node Web SDK and native gRPC listeners probed by commits right after the change and around the token's expiry, within one window long enough to pass exp + 30 s (OX-3); a quiet window never counts as evidence of absence. FS-RULES/token-states observed that unary requests keep accepting such tokens until expiry.",
+        "transports": [
+          "node-sdk",
+          "grpc"
+        ],
+        "catalogCases": [
+          "FS-LISTEN-SDK-109",
+          "FS-LISTEN-SDK-109C"
+        ]
+      },
+      "localEvidence": {
+        "references": [],
+        "productionExecuted": true
+      },
+      "verification": {
+        "recordingsRequired": 2
+      },
+      "evidence": {
+        "productionRecordings": [
+          {
+            "recordedAt": "2026-09-28T10:46:46.463Z",
+            "gitSha": "ec06eede96b1bf908b47ac792ba0ff6067874f2e",
+            "recordings": 2,
+            "project": "fireemu-oracle-idp",
+            "packetSha256": "5a4d6cca7ae329a461379a1ef38e8722e149b5f10e14e20a7a6744f6c0142d4e"
+          }
+        ],
+        "fixturePath": "conformance/auth-fs-cross-stage2-production.json",
+        "finalArtifactSha256": "890a38d8b8827ca3980522151b69c9bbad4230a674ccf73a7123470910094021",
+        "sourceCommit": "857db2612a2f0980335ed43932d43b270c0f3c59",
+        "harness": {
+          "commit": "4be4e58d47a377060f6edcf485e6cc0c9db01637",
+          "digest": "ba7ba895011de42dc2826ba51008da0cb566e721534f2216beb47c986295b1ac",
+          "programDigest": "9b9a699a96f25a21cee7954f184c64ceaee55441ec05dea1106140bcf9b0fb4a"
+        },
+        "comparisonPath": "spec/compatibility/closure/evidence/AUTH-FS-CROSS-stage2-comparison.json",
+        "rows": {
+          "MATCH": 6,
+          "MATCH_NONDETERMINISTIC": 1
+        },
+        "note": "Packet v7's two recordings agree on every row. The comparison ran the harness that recorded them (the fixture's commit) against the final artifact, built at 857db2612 (whose last runtime change is 0eca89b23); the later harness commit 3a7777242 changes only how a run stops (resume streams closed on a stop or fatal), how approvals and revocations are read, the deleted tenant's allowed set and run-directory tests, not the window's requests or rows. Packet v6's two recordings (2026-09-28 04:21Z and 05:59Z) found the differences fixed since and are not evidence. Commit SHAs of the recordings are as the sandbox ledger wrote them; commits before 2026-09-28 09:40Z were rewritten that day (tree unchanged), and spec/compatibility/history-rewrite-2026-09-28.json on main maps the old SHAs to the new ones."
+      }
+    },
+    {
+      "conditionId": "AUTH-FS-CROSS/listen-tenant-deletion",
+      "source": "docs/compatibility/ip-fs-production-compatibility.md#feature-group-status",
+      "recipeIds": [
+        "auth-fs-cross/listen-tenant-deletion"
+      ],
+      "configProjections": [
+        "default"
+      ],
+      "status": "VERIFIED",
+      "note": "Active document and query listeners of a tenant principal when the tenant is deleted, with a same-UID principal of a surviving tenant as control.",
+      "stage": 2,
+      "observation": {
+        "method": "Native gRPC and Node Web SDK listeners opened before the deletion, probed by commits after it; record REMOVE, errors, stream ends and snapshots on both tenants.",
+        "transports": [
+          "grpc",
+          "node-sdk"
+        ],
+        "catalogCases": []
+      },
+      "localEvidence": {
+        "references": [
+          "docs/compatibility/auth-fs-tenant-read-local.md"
+        ],
+        "productionExecuted": true,
+        "limits": "Since bf99f6132 a listener on the daemon's Firestore enforcer keeps a deleted tenant's unexpired token, as unary requests do in production (stage 1); the older local test that ends the target remains for Identity Toolkit's token checks only. Production's listener was observed in packet v7's two recordings: after the tenant's deletion the native stream of the deleted tenant's principal kept delivering (n:2, n:3 and n:4) until it closed with the other held streams at its hour, and the SDK client's listeners received nothing at exp + 35 s while the client kept retrying. In a registered (non-default) project of a daemon session the deleted tenant's token is checked against the session epoch its tenant had, until the project is reset."
+      },
+      "verification": {
+        "recordingsRequired": 2
+      },
+      "evidence": {
+        "productionRecordings": [
+          {
+            "recordedAt": "2026-09-28T10:46:46.463Z",
+            "gitSha": "ec06eede96b1bf908b47ac792ba0ff6067874f2e",
+            "recordings": 2,
+            "project": "fireemu-oracle-idp",
+            "packetSha256": "5a4d6cca7ae329a461379a1ef38e8722e149b5f10e14e20a7a6744f6c0142d4e"
+          }
+        ],
+        "fixturePath": "conformance/auth-fs-cross-stage2-production.json",
+        "finalArtifactSha256": "890a38d8b8827ca3980522151b69c9bbad4230a674ccf73a7123470910094021",
+        "sourceCommit": "857db2612a2f0980335ed43932d43b270c0f3c59",
+        "harness": {
+          "commit": "4be4e58d47a377060f6edcf485e6cc0c9db01637",
+          "digest": "ba7ba895011de42dc2826ba51008da0cb566e721534f2216beb47c986295b1ac",
+          "programDigest": "9b9a699a96f25a21cee7954f184c64ceaee55441ec05dea1106140bcf9b0fb4a"
+        },
+        "comparisonPath": "spec/compatibility/closure/evidence/AUTH-FS-CROSS-stage2-comparison.json",
+        "rows": {
+          "MATCH": 6,
+          "MATCH_NONDETERMINISTIC": 1
+        },
+        "note": "Packet v7's two recordings agree on every row. The comparison ran the harness that recorded them (the fixture's commit) against the final artifact, built at 857db2612 (whose last runtime change is 0eca89b23); the later harness commit 3a7777242 changes only how a run stops (resume streams closed on a stop or fatal), how approvals and revocations are read, the deleted tenant's allowed set and run-directory tests, not the window's requests or rows. Packet v6's two recordings (2026-09-28 04:21Z and 05:59Z) found the differences fixed since and are not evidence. Commit SHAs of the recordings are as the sandbox ledger wrote them; commits before 2026-09-28 09:40Z were rewritten that day (tree unchanged), and spec/compatibility/history-rewrite-2026-09-28.json on main maps the old SHAs to the new ones."
+      }
+    },
+    {
+      "conditionId": "AUTH-FS-CROSS/pending-write-across-switch",
+      "source": "docs/compatibility/ip-fs-production-compatibility.md#feature-group-status",
+      "recipeIds": [
+        "auth-fs-cross/pending-write-across-switch"
+      ],
+      "configProjections": [
+        "default"
+      ],
+      "status": "VERIFIED",
+      "note": "A Web SDK write left pending by one principal when the user switches to another or signs out: what the backend receives and does.",
+      "stage": 2,
+      "observation": {
+        "method": "With the network disabled, A writes; switch to B (and separately sign out), enable the network, then switch back to A; record whether and with which token the write is sent, its outcome and the server state at each step. Display differences inside the SDK are out of scope (FS-LISTEN-SDK OL-2).",
+        "transports": [
+          "node-sdk",
+          "browser-webchannel"
+        ],
+        "catalogCases": []
+      },
+      "localEvidence": {
+        "references": [],
+        "productionExecuted": true
+      },
+      "verification": {
+        "recordingsRequired": 2
+      },
+      "evidence": {
+        "productionRecordings": [
+          {
+            "recordedAt": "2026-09-28T10:46:46.463Z",
+            "gitSha": "ec06eede96b1bf908b47ac792ba0ff6067874f2e",
+            "recordings": 2,
+            "project": "fireemu-oracle-idp",
+            "packetSha256": "5a4d6cca7ae329a461379a1ef38e8722e149b5f10e14e20a7a6744f6c0142d4e"
+          }
+        ],
+        "fixturePath": "conformance/auth-fs-cross-stage2-production.json",
+        "finalArtifactSha256": "890a38d8b8827ca3980522151b69c9bbad4230a674ccf73a7123470910094021",
+        "sourceCommit": "857db2612a2f0980335ed43932d43b270c0f3c59",
+        "harness": {
+          "commit": "4be4e58d47a377060f6edcf485e6cc0c9db01637",
+          "digest": "ba7ba895011de42dc2826ba51008da0cb566e721534f2216beb47c986295b1ac",
+          "programDigest": "9b9a699a96f25a21cee7954f184c64ceaee55441ec05dea1106140bcf9b0fb4a"
+        },
+        "comparisonPath": "spec/compatibility/closure/evidence/AUTH-FS-CROSS-stage2-comparison.json",
+        "rows": {
+          "MATCH": 21
+        },
+        "note": "Packet v7's two recordings agree on every row. The comparison ran the harness that recorded them (the fixture's commit) against the final artifact, built at 857db2612 (whose last runtime change is 0eca89b23); the later harness commit 3a7777242 changes only how a run stops (resume streams closed on a stop or fatal), how approvals and revocations are read, the deleted tenant's allowed set and run-directory tests, not the window's requests or rows. Packet v6's two recordings (2026-09-28 04:21Z and 05:59Z) found the differences fixed since and are not evidence. Commit SHAs of the recordings are as the sandbox ledger wrote them; commits before 2026-09-28 09:40Z were rewritten that day (tree unchanged), and spec/compatibility/history-rewrite-2026-09-28.json on main maps the old SHAs to the new ones."
+      }
+    },
+    {
+      "conditionId": "AUTH-FS-CROSS/final-artifact-regression",
+      "source": "docs/compatibility/ip-fs-production-compatibility.md#feature-group-status",
+      "recipeIds": [
+        "auth-fs-cross/final-artifact-regression"
+      ],
+      "configProjections": [
+        "default"
+      ],
+      "status": "VERIFIED",
+      "note": "The final artifact's AUTH-FS-CROSS comparison, with the FS-RULES comparison re-run on the same artifact because the unary conditions moved there.",
+      "stage": null,
+      "observation": {
+        "method": "Replay every AUTH-FS-CROSS recipe and the FS-RULES corpus on one final source-bound artifact.",
+        "transports": [],
+        "catalogCases": []
+      },
+      "localEvidence": {
+        "references": [],
+        "productionExecuted": false
+      },
+      "verification": {
+        "recordingsRequired": 0
+      },
+      "evidence": {
+        "finalArtifactSha256": "890a38d8b8827ca3980522151b69c9bbad4230a674ccf73a7123470910094021",
+        "sourceCommit": "857db2612a2f0980335ed43932d43b270c0f3c59",
+        "comparisons": {
+          "stage1": {
+            "comparisonPath": "spec/compatibility/closure/evidence/AUTH-FS-CROSS-stage1-comparison.json",
+            "summary": {
+              "MATCH": 89
+            }
+          },
+          "stage2": {
+            "comparisonPath": "spec/compatibility/closure/evidence/AUTH-FS-CROSS-stage2-comparison.json",
+            "summary": {
+              "MATCH": 56,
+              "MATCH_NONDETERMINISTIC": 1
+            },
+            "harness": {
+              "commit": "4be4e58d47a377060f6edcf485e6cc0c9db01637",
+              "digest": "ba7ba895011de42dc2826ba51008da0cb566e721534f2216beb47c986295b1ac"
+            }
+          }
+        },
+        "regressions": {
+          "fs-rules": {
+            "artifactSha256": "890a38d8b8827ca3980522151b69c9bbad4230a674ccf73a7123470910094021",
+            "summary": {
+              "MATCH": 1144,
+              "DEPENDENCY_REFUSED": 5
+            },
+            "comparisonPath": "spec/compatibility/closure/evidence/AUTH-FS-CROSS-fs-rules-regression.json"
+          }
+        },
+        "emulatorProfile": {
+          "kind": "differential",
+          "note": "The release corpus under the emulator profile (the gate commit 97a2f94cd applied without committing) gave the same 12 findings with and without the fixes of this lane (at 782d847df, the lane's fixes before the closure review's, and at a9e6b719b, the commit before them; the later b3f91ee85 and 0eca89b23 change only a deleted tenant's token in a registered project and a WebChannel Listen held past an hour, which were not re-run through the corpus; the round-2 run on main covers them); none is in a Listen scenario, and firestore/listen-sequence-with-resume and firestore/listener-replacement-handoff pass. The 12 come from this branch predating main's Auth fixes.",
+          "outputs": "docs.local/runs/auth-fs-cross-emulator-corpus/ (both runs and their identical 12-finding lists; private)"
+        },
+        "pendingIntegration": "0 findings of the emulator-profile release corpus on main after the round-2 merge of this lane."
+      }
+    },
+    {
+      "conditionId": "AUTH-FS-CROSS/closure-review",
+      "source": "docs/compatibility/ip-fs-production-compatibility.md#feature-group-status",
+      "recipeIds": [
+        "auth-fs-cross/closure-review"
+      ],
+      "configProjections": [
+        "default"
+      ],
+      "status": "PENDING_REVIEW",
+      "note": "Independent clean-context closure review and a separate safety review of every change that widens what a request may do. The review approved on 2026-09-29 (closureReview); the condition waits for the post-integration condition before promotion.",
+      "stage": null,
+      "observation": {
+        "method": "Independent review of scope, conditions, receipts, divergences, cleanup and owner decisions.",
+        "transports": [],
+        "catalogCases": []
+      },
+      "localEvidence": {
+        "references": [],
+        "productionExecuted": false
+      },
+      "verification": {
+        "recordingsRequired": 0
+      }
+    }
+  ],
+  "frozenOn": "2026-09-27",
+  "frozenBy": "coordinator (delegated), after owner decisions OX-1 to OX-3, X3 and X9"
+}

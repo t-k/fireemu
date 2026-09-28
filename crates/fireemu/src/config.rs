@@ -312,6 +312,15 @@ impl CompatibilityProfile {
     pub const fn end_user_transactions(self) -> bool {
         matches!(self, Self::Emulator)
     }
+
+    /// Whether an end user's `Listen` stream ends on its own an hour after it opened. Production
+    /// closed every held stream with `INTERNAL` 3,600 s after it opened, without waiting for a
+    /// commit (AUTH-FS-CROSS stage 2, packet v7, 2026-09-28); the official emulator never ends
+    /// one.
+    #[must_use]
+    pub const fn listen_stream_lifetime(self) -> bool {
+        matches!(self, Self::Strict)
+    }
 }
 
 /// The Emulator Hub's official default port (`firebase-tools` `Constants.getDefaultPort`).
@@ -979,6 +988,9 @@ pub struct RuntimeConfig {
     /// Whether an end user may open a read-write transaction
     /// (profile-derived; there is no key of its own).
     pub end_user_transactions: bool,
+    /// Whether an end user's `Listen` stream ends an hour after it opened
+    /// (profile-derived; there is no key of its own).
+    pub listen_stream_lifetime: bool,
     /// How long a document whose time-to-live field has expired stays readable before the
     /// expiry sweep deletes it (`firestore.ttlSweepIntervalSeconds`). Production deletes
     /// typically within 24 hours and within 72 hours at worst, so the default is 24 hours
@@ -1322,6 +1334,7 @@ impl Default for RuntimeConfig {
             implicit_database_creation: profile.implicit_database_creation(),
             refuse_without_ruleset: profile.refuse_without_ruleset(),
             end_user_transactions: profile.end_user_transactions(),
+            listen_stream_lifetime: profile.listen_stream_lifetime(),
             ttl_sweep_interval: fireemu_core_firestore::ttl::DEFAULT_SWEEP_INTERVAL,
             deleted_database_id_cooldown: None,
             database_create_time: None,
@@ -2760,6 +2773,7 @@ impl RuntimeConfig {
         if !self.auth_improved_email_privacy_explicit {
             self.auth_improved_email_privacy = profile == CompatibilityProfile::Strict;
         }
+        self.listen_stream_lifetime = profile.listen_stream_lifetime();
     }
 
     fn parse_daemon(d: &serde_json::Map<String, Value>, cfg: &mut Self) -> Result<(), ConfigError> {
@@ -3802,6 +3816,7 @@ mod tests {
         assert!(emulator.implicit_database_creation);
         assert!(!emulator.refuse_without_ruleset);
         assert!(emulator.end_user_transactions);
+        assert!(!emulator.listen_stream_lifetime);
 
         // strict: every one of those becomes production's refusal.
         let strict = with_profile(json!({"profile": "strict"})).unwrap();
@@ -3811,6 +3826,7 @@ mod tests {
         assert!(!strict.implicit_database_creation);
         assert!(strict.refuse_without_ruleset);
         assert!(!strict.end_user_transactions);
+        assert!(strict.listen_stream_lifetime);
     }
 
     #[test]

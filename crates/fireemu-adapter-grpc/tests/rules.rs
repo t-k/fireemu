@@ -2816,7 +2816,8 @@ async fn id_tokens_are_bound_to_the_requested_project() {
     let mut h = start().await;
     let (_, token) = h.user("a@example.com");
     // The token's audience is demo-app: another project's data is off limits even where
-    // its rules would let any signed-in user in.
+    // its rules would let any signed-in user in. Production refuses another project's ID token
+    // with its permission denial, even on an open document (AUTH-FS-CROSS stage 1, 2026-09-27).
     let err = h
         .client
         .get_document(with_bearer(
@@ -2828,8 +2829,12 @@ async fn id_tokens_are_bound_to_the_requested_project() {
         ))
         .await
         .unwrap_err();
-    assert_eq!(err.code(), tonic::Code::Unauthenticated, "{err}");
-    assert!(err.message().contains("audience"), "{err}");
+    assert_eq!(err.code(), tonic::Code::PermissionDenied, "{err}");
+    assert_eq!(
+        err.message(),
+        "Missing or insufficient permissions.",
+        "{err}"
+    );
     h.handle.abort();
 }
 
@@ -2848,7 +2853,12 @@ async fn transactions_are_bound_to_the_token_audience_too() {
         ))
         .await
         .unwrap_err();
-    assert_eq!(err.code(), tonic::Code::Unauthenticated, "{err}");
+    assert_eq!(err.code(), tonic::Code::PermissionDenied, "{err}");
+    assert_eq!(
+        err.message(),
+        "Missing or insufficient permissions.",
+        "{err}"
+    );
     let err = h
         .client
         .batch_get_documents(with_bearer(
@@ -2866,7 +2876,12 @@ async fn transactions_are_bound_to_the_token_audience_too() {
         ))
         .await
         .unwrap_err();
-    assert_eq!(err.code(), tonic::Code::Unauthenticated, "{err}");
+    assert_eq!(err.code(), tonic::Code::PermissionDenied, "{err}");
+    assert_eq!(
+        err.message(),
+        "Missing or insufficient permissions.",
+        "{err}"
+    );
     // The token's own project is fine.
     assert!(h
         .client
@@ -4229,5 +4244,164 @@ service cloud.firestore {
         .unwrap_err();
     assert_eq!(err.code(), tonic::Code::Unauthenticated, "{err}");
     assert!(err.message().starts_with("invalid ID token"), "{err}");
+    h.handle.abort();
+}
+
+#[tokio::test]
+async fn the_emulator_profile_keeps_its_audience_text_for_a_verified_token_of_another_project() {
+    let mut h = start_with(TokenAcceptance::EmulatorMock).await;
+    let (_, token) = h.user("e@example.com");
+    let err = h
+        .client
+        .get_document(with_bearer(
+            pb::GetDocumentRequest {
+                name: "projects/demo-b/databases/(default)/documents/users/x".to_owned(),
+                ..Default::default()
+            },
+            &token,
+        ))
+        .await
+        .unwrap_err();
+    assert_eq!(err.code(), tonic::Code::Unauthenticated, "{err}");
+    assert!(err.message().contains("audience"), "{err}");
+    h.handle.abort();
+}
+
+#[test]
+fn the_free_audience_check_refuses_another_project_and_admits_its_own() {
+    let principal = fireemu_adapter_grpc::rules::Principal::User(
+        fireemu_core_rules::value::AuthContext::from_id_token_json(
+            r#"{"sub":"u","aud":"demo-app"}"#,
+        )
+        .unwrap(),
+    );
+    assert!(fireemu_adapter_grpc::rules::check_audience(&principal, "demo-app").is_ok());
+    assert!(fireemu_adapter_grpc::rules::check_audience(&principal, "demo-b").is_err());
+}
+
+/// A wall source the test moves: seconds from `START`.
+fn wall_at(offset: &Arc<std::sync::atomic::AtomicI64>) -> fireemu_adapter_grpc::rules::WallSource {
+    let offset = offset.clone();
+    Arc::new(move || {
+        LogicalInstant::from_nanos(
+            START.as_nanos()
+                + i128::from(offset.load(std::sync::atomic::Ordering::SeqCst)) * 1_000_000_000,
+        )
+    })
+}
+
+/// In an unpinned strict run nothing but Auth moved the session clock, so Firestore judged a
+/// token's expiry at the time of the last Auth request (AUTH-FS-CROSS stage-2 local run,
+/// 2026-09-28). With a wall source the enforcer moves the clock to wall time first: a token
+/// issued at the start is honoured until 30 s past its expiry and refused after, with no Auth
+/// request in between.
+#[tokio::test]
+async fn with_a_wall_source_firestore_judges_expiry_at_wall_time() {
+    let offset = Arc::new(std::sync::atomic::AtomicI64::new(0));
+    let source = wall_at(&offset);
+    let mut h = start_with_enforcer(TokenAcceptance::Verified, IndexSet::default(), move |e| {
+        e.with_wall_clock(source)
+    })
+    .await;
+    h.rules
+        .replace_source(
+            "rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    match /open/{id} { allow read: if request.auth != null; }
+  }
+}",
+        )
+        .unwrap();
+    let (_, token) = h.user("alice@example.com");
+    for (seconds, honoured) in [(0, true), (3_629, true), (3_631, false)] {
+        offset.store(seconds, std::sync::atomic::Ordering::SeqCst);
+        let err = h
+            .client
+            .get_document(with_bearer(get("open/d"), &token))
+            .await
+            .unwrap_err();
+        let expected = if honoured {
+            tonic::Code::NotFound
+        } else {
+            tonic::Code::Unauthenticated
+        };
+        assert_eq!(err.code(), expected, "{seconds}: {err}");
+    }
+    // The session clock itself moved: the backend reads the same instant.
+    assert_eq!(
+        h.backend.now(),
+        LogicalInstant::from_unix_seconds(1_788_004_860 + 3_631)
+    );
+    h.handle.abort();
+}
+
+/// Without a wall source (a pinned clock, or the emulator profile) the clock moves only when
+/// told to: the same token is honoured however late the request comes.
+#[tokio::test]
+async fn without_a_wall_source_the_clock_moves_only_when_told() {
+    let mut h = start().await;
+    h.rules
+        .replace_source(
+            "rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    match /open/{id} { allow read: if request.auth != null; }
+  }
+}",
+        )
+        .unwrap();
+    let (_, token) = h.user("alice@example.com");
+    let err = h
+        .client
+        .get_document(with_bearer(get("open/d"), &token))
+        .await
+        .unwrap_err();
+    assert_eq!(err.code(), tonic::Code::NotFound, "{err}");
+    assert_eq!(h.backend.now(), START);
+    h.handle.abort();
+}
+
+/// `request.time` is read from the same clock, and a wall source behind the session clock (a
+/// clock advanced on purpose) never moves it back.
+#[tokio::test]
+async fn request_time_follows_the_wall_source_forward_only() {
+    let offset = Arc::new(std::sync::atomic::AtomicI64::new(200));
+    let source = wall_at(&offset);
+    let mut h = start_with_enforcer(TokenAcceptance::Verified, IndexSet::default(), move |e| {
+        e.with_wall_clock(source)
+    })
+    .await;
+    // Readable only from START + 100 s on.
+    h.rules
+        .replace_source(&format!(
+            "rules_version = '2';
+service cloud.firestore {{
+  match /databases/{{database}}/documents {{
+    match /timed/{{id}} {{ allow read: if request.time >= timestamp.value({}); }}
+  }}
+}}",
+            (1_788_004_860_i64 + 100) * 1_000
+        ))
+        .unwrap();
+    let (_, token) = h.user("alice@example.com");
+    let err = h
+        .client
+        .get_document(with_bearer(get("timed/d"), &token))
+        .await
+        .unwrap_err();
+    assert_eq!(err.code(), tonic::Code::NotFound, "{err}");
+    // The wall source falls behind: the clock stays where it was, the rule still allows.
+    offset.store(-500, std::sync::atomic::Ordering::SeqCst);
+    let err = h
+        .client
+        .get_document(with_bearer(get("timed/d"), &token))
+        .await
+        .unwrap_err();
+    assert_eq!(err.code(), tonic::Code::NotFound, "{err}");
+    assert_eq!(
+        h.backend.now(),
+        LogicalInstant::from_unix_seconds(1_788_004_860 + 200)
+    );
     h.handle.abort();
 }

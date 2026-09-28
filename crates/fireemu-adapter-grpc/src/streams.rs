@@ -6,10 +6,12 @@
 //! database snapshot; the diff against its last known `(path, version)` set becomes
 //! `DocumentChange` / `DocumentDelete` / `DocumentRemove` messages, followed by one global
 //! `NO_CHANGE` boundary carrying the snapshot read time and a resume token derived from
-//! the snapshot version. A target added with a resume token (or a read time) replays only
-//! what changed since that version: the target's state at the token is recomputed from the
-//! retained history and diffed against the current snapshot, followed by an
-//! `ExistenceFilter` with the current count (production's post-resume check).
+//! the snapshot version; a target made current in that snapshot gets its token with
+//! `CURRENT` instead of a `NO_CHANGE` of its own. A target added with a resume token (or a
+//! read time) replays only what changed since that version: a global boundary with the resume
+//! point's token comes first, then the target's state at the token is recomputed from the
+//! retained history and diffed against the current snapshot, with no existence filter
+//! (production's framing, AUTH-FS-CROSS stage 2).
 //!
 //! A token is only honoured while the store can still reproduce its version exactly
 //! (`FirestoreState::is_retained`: not compacted away by the one-hour retention window, not
@@ -24,10 +26,12 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
+use std::time::Duration;
 
 use fireemu_core_firestore::path::DocumentPath;
 use fireemu_core_firestore::query::Query;
 use fireemu_core_firestore::store::{CommitVersion, Document, Write};
+use fireemu_core_types::time::LogicalInstant;
 use fireemu_proto_firestore::google::firestore::v1 as pb;
 use tokio::sync::mpsc;
 use tokio_stream::StreamExt;
@@ -437,7 +441,18 @@ pub async fn listen_stream(
     inbound: impl tokio_stream::Stream<Item = Result<pb::ListenRequest, Status>> + Unpin + Send,
     tx: mpsc::Sender<Result<pb::ListenResponse, Status>>,
 ) {
-    listen_stream_observed(ctx, inbound, tx, None).await;
+    listen_stream_observed(ctx, inbound, tx, None, ListenTransport::Grpc).await;
+}
+
+/// Which transport carries a `Listen` stream. Production's one-hour close was observed on native
+/// gRPC streams only (AUTH-FS-CROSS stage 2), so only they take it; a `WebChannel` keeps its
+/// stream as before.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ListenTransport {
+    /// A native gRPC `Listen`.
+    Grpc,
+    /// A `Listen` over `WebChannel`.
+    WebChannel,
 }
 
 /// Runs `Listen` with an optional transport observer. The observer sees a completed response
@@ -449,20 +464,42 @@ pub(crate) async fn listen_stream_observed(
     mut inbound: impl tokio_stream::Stream<Item = Result<pb::ListenRequest, Status>> + Unpin + Send,
     tx: mpsc::Sender<Result<pb::ListenResponse, Status>>,
     observer: Option<Arc<dyn ListenObserver>>,
+    transport: ListenTransport,
 ) {
     let mut parent: Option<Parent> = None;
     let mut targets: BTreeMap<i32, TargetState> = BTreeMap::new();
     let mut database_hash_cache = None;
     let mut last_snapshot_version = None;
     let mut events = ctx.local.subscribe();
+    let stream_deadline = ctx
+        .rules
+        .as_ref()
+        .filter(|_| transport == ListenTransport::Grpc)
+        .and_then(|rules| rules.listen_stream_deadline(&ctx.principal));
     loop {
         let mut out: Vec<pb::ListenResponse> = Vec::new();
         let mut request = None;
+        let until_deadline = until_stream_deadline(&ctx, stream_deadline);
+        if until_deadline == Some(Duration::ZERO) {
+            let _ = tx.send(Err(lifetime_reached())).await;
+            return;
+        }
+        // At most a second at a time: a pinned clock moved past the deadline is noticed without
+        // waiting for a commit, as the wall is.
+        let deadline = async {
+            match until_deadline {
+                Some(wait) => tokio::time::sleep(wait.min(DEADLINE_CHECK)).await,
+                None => std::future::pending().await,
+            }
+        };
         let outcome: Result<bool, Status> = tokio::select! {
             () = tx.closed() => Ok(false),
+            // Woken at the deadline or to look again: the loop's head decides.
+            () = deadline => Ok(true),
             msg = inbound.next() => match msg {
                 None => Ok(false),
                 Some(Err(e)) => Err(e),
+                Some(Ok(_)) if deadline_reached(&ctx, stream_deadline) => Err(lifetime_reached()),
                 Some(Ok(req)) => {
                     let result = handle_listen_request(
                         &ctx,
@@ -477,7 +514,11 @@ pub(crate) async fn listen_stream_observed(
                     result
                 },
             },
-            ev = events.recv() => match ev {
+            // A commit met after the deadline (a pinned clock moved past it) ends the stream
+            // as the deadline does.
+            ev = events.recv() => if deadline_reached(&ctx, stream_deadline) {
+                Err(lifetime_reached())
+            } else { match ev {
                 Ok(first) => {
                     // Coalesce: every commit already queued behind this one is covered by
                     // the single refresh below.
@@ -533,7 +574,7 @@ pub(crate) async fn listen_stream_observed(
                     ).map(|()| true)
                 }
                 Err(tokio::sync::broadcast::error::RecvError::Closed) => Ok(false),
-            },
+            }},
         };
         if let Some(observer) = observer.as_ref() {
             observer.exchange(request.as_ref(), &out);
@@ -796,6 +837,44 @@ fn decode_target(
     }
 }
 
+/// The longest a held stream waits before it looks at its deadline again.
+const DEADLINE_CHECK: Duration = Duration::from_secs(1);
+
+/// How long until the stream's deadline on the session clock: zero once it has passed, `None`
+/// when the stream has none. A clock that cannot be read counts as passed.
+fn until_stream_deadline(
+    ctx: &StreamContext,
+    deadline: Option<LogicalInstant>,
+) -> Option<Duration> {
+    let deadline = deadline?;
+    let Some(now) = ctx
+        .rules
+        .as_ref()
+        .and_then(|rules| rules.session_now().ok())
+    else {
+        return Some(Duration::ZERO);
+    };
+    // The difference is signed: a deadline already passed is no wait at all.
+    Some(
+        deadline
+            .checked_duration_since(now)
+            .filter(|left| left.is_positive())
+            .map_or(Duration::ZERO, |left| {
+                Duration::from_nanos(u64::try_from(left.as_nanos()).unwrap_or(u64::MAX))
+            }),
+    )
+}
+
+fn deadline_reached(ctx: &StreamContext, deadline: Option<LogicalInstant>) -> bool {
+    until_stream_deadline(ctx, deadline) == Some(Duration::ZERO)
+}
+
+/// How a held stream ends at its deadline. Production's front end resets the HTTP/2 stream
+/// (`RST_STREAM`, `INTERNAL_ERROR`), which gRPC clients report as `INTERNAL` with their own text.
+fn lifetime_reached() -> Status {
+    Status::internal("the stream reached its one-hour lifetime")
+}
+
 /// Refreshes every target against one snapshot, then emits the global boundary. Targets
 /// whose rules now deny are removed with a cause; `once` targets are removed after their
 /// first consistent snapshot.
@@ -857,6 +936,7 @@ fn refresh_all(
             let token = resume_token(version, &binding);
             let delta_paths = complete_delta_paths(&input, version);
             let mut removed = Vec::new();
+            let mut made_current = BTreeSet::new();
             for (id, state) in targets.iter_mut() {
                 let refreshed = authorize_target(ctx, &principal, db, state).and_then(|()| {
                     if state.current && state.resume.is_none() {
@@ -866,13 +946,14 @@ fn refresh_all(
                             }
                         }
                     }
-                    refresh_target_full(db, *id, state, read_time)
+                    refresh_target_full(db, *id, state, read_time, &binding)
                 });
                 match refreshed {
                     Ok(()) => {
                         out.append(&mut state.pending);
                         if !state.current {
                             state.current = true;
+                            made_current.insert(*id);
                             let bound = TokenBinding {
                                 target: state.target_hash,
                                 ..binding
@@ -892,9 +973,10 @@ fn refresh_all(
                     }
                 }
             }
-            Ok((read_time, token, removed, version, binding))
+            Ok((read_time, token, removed, version, binding, made_current))
         });
-    let (read_time, token, removed, version, binding) = match snapshot.and_then(|r| r) {
+    let (read_time, token, removed, version, binding, made_current) = match snapshot.and_then(|r| r)
+    {
         Ok(s) => s,
         Err(e) => {
             for id in targets.keys() {
@@ -911,7 +993,9 @@ fn refresh_all(
     if targets.is_empty() {
         return Ok(());
     }
-    for (id, state) in &*targets {
+    // A target that became current in this snapshot got its token with CURRENT: no NO_CHANGE
+    // follows it, as production and the official emulator frame it (AUTH-FS-CROSS stage 2).
+    for (id, state) in targets.iter().filter(|(id, _)| !made_current.contains(*id)) {
         let bound = TokenBinding {
             target: state.target_hash,
             ..binding
@@ -982,13 +1066,27 @@ fn authorize_target(
 }
 
 /// Recomputes one target and appends the diff against its last known state.
+///
+/// A resumed target starts with a global boundary, as production answers a resume
+/// (AUTH-FS-CROSS stage 2, packet v7): its token is `boundary`'s for the resume point, so a
+/// stream that drops before the diff resumes from there again, and its read time is the
+/// snapshot's, so the client's snapshot version never goes back. The client raises its
+/// snapshot from its cache there, not current, until `CURRENT`.
 fn refresh_target_full(
     db: &fireemu_core_firestore::store::FirestoreState,
     id: i32,
     state: &mut TargetState,
     read_time: prost_types::Timestamp,
+    boundary: &TokenBinding,
 ) -> Result<(), Status> {
-    let resumed = resolve_resume(db, id, state)?;
+    if let Some(from) = resolve_resume(db, id, state)? {
+        state.pending.push(target_change(
+            pb::target_change::TargetChangeType::NoChange,
+            vec![],
+            Some(resume_token(from, boundary)),
+            Some(read_time),
+        ));
+    }
     let current: Vec<Document> = match &state.kind {
         TargetKind::Documents(paths) => paths
             .iter()
@@ -1012,19 +1110,6 @@ fn refresh_target_full(
         out_removal(db, path, id, read_time, &mut state.pending);
     }
     state.known = next_known;
-    if resumed {
-        // Production follows a resume with the current count so the client can verify its
-        // cache; the diff above already made it exact.
-        state.pending.push(pb::ListenResponse {
-            response_type: Some(pb::listen_response::ResponseType::Filter(
-                pb::ExistenceFilter {
-                    target_id: id,
-                    count: i32::try_from(current.len()).unwrap_or(i32::MAX),
-                    unchanged_names: None,
-                },
-            )),
-        });
-    }
     Ok(())
 }
 
@@ -1126,7 +1211,7 @@ fn out_removal(
 
 /// Resume: the target's state at the token becomes the known state, so the diff carries
 /// exactly what changed since; a token this daemon cannot honour resets the target.
-/// Returns whether the target resumed.
+/// Returns the version the target resumed from.
 ///
 /// "Cannot honour" includes a version the store compacted away: history older than the
 /// retention window is gone, and replaying a target against a version the store can no
@@ -1136,9 +1221,9 @@ fn resolve_resume(
     db: &fireemu_core_firestore::store::FirestoreState,
     id: i32,
     state: &mut TargetState,
-) -> Result<bool, Status> {
+) -> Result<Option<CommitVersion>, Status> {
     let Some(resume) = state.resume.take() else {
-        return Ok(false);
+        return Ok(None);
     };
     let version = match resume {
         Resume::Version(v) => Some(v),
@@ -1148,7 +1233,7 @@ fn resolve_resume(
     .filter(|v| db.is_retained(*v));
     if let Some(v) = version {
         state.known = known_at(db, &state.kind, v)?;
-        return Ok(true);
+        return Ok(Some(v));
     }
     state.pending.push(target_change(
         pb::target_change::TargetChangeType::Reset,
@@ -1156,7 +1241,7 @@ fn resolve_resume(
         None,
         None,
     ));
-    Ok(false)
+    Ok(None)
 }
 
 /// What a resume token is bound to besides its version.

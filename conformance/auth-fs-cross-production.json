@@ -1,0 +1,1199 @@
+{
+  "version": 1,
+  "recordedAgainst": {
+    "target": "production Firestore REST v1 and gRPC, Identity Platform sandbox, end-user ID tokens, and one ID token of another Firebase project",
+    "project": "demo-fs-rules",
+    "note": "Two recordings per program. Principal uids, tenants, the run id, the project, its number, the other project and run-window times are placeholders. `second` holds the other recording of rows that differed."
+  },
+  "programs": {
+    "auth-fs-cross/foreign-project/token": {
+      "corpusDigest": "0df056bda7b9078a1fbc78ae174a89f1073bde1076791b7e7a9f495215da5ea8",
+      "harnessDigest": "1c527d0c14ece64e0207e118da92fdd749e96dc800ffa49cda54d667a9e4db7b",
+      "recordedAt": "2026-09-27T17:28:05.738Z",
+      "gitSha": "51f1910b7684938829d839384ccd9a1ee4f3bba3",
+      "steps": {
+        "foreign-open-rest": {
+          "status": 403,
+          "body": {
+            "error": {
+              "code": 403,
+              "message": "Missing or insufficient permissions.",
+              "status": "PERMISSION_DENIED"
+            }
+          }
+        },
+        "foreign-open-grpc": {
+          "grpc": 7,
+          "details": "Missing or insufficient permissions."
+        },
+        "foreign-signed-in-rest": {
+          "status": 403,
+          "body": {
+            "error": {
+              "code": 403,
+              "message": "Missing or insufficient permissions.",
+              "status": "PERMISSION_DENIED"
+            }
+          }
+        },
+        "foreign-signed-in-grpc": {
+          "grpc": 7,
+          "details": "Missing or insufficient permissions."
+        },
+        "foreign-owned-rest": {
+          "status": 403,
+          "body": {
+            "error": {
+              "code": 403,
+              "message": "Missing or insufficient permissions.",
+              "status": "PERMISSION_DENIED"
+            }
+          }
+        },
+        "foreign-owned-grpc": {
+          "grpc": 7,
+          "details": "Missing or insufficient permissions."
+        },
+        "foreign-query-open-rest": {
+          "status": 403,
+          "body": [
+            {
+              "error": {
+                "code": 403,
+                "message": "Missing or insufficient permissions.",
+                "status": "PERMISSION_DENIED"
+              }
+            }
+          ]
+        },
+        "foreign-query-open-grpc": {
+          "grpc": 7,
+          "details": "Missing or insufficient permissions."
+        },
+        "same-project-signed-in-rest": {
+          "status": 200,
+          "body": {
+            "name": "projects/demo-fs-rules/databases/(default)/documents/afc-signed-in/d",
+            "fields": {
+              "n": {
+                "integerValue": "1"
+              }
+            },
+            "createTime": "<run-time>",
+            "updateTime": "<run-time>"
+          }
+        },
+        "same-project-signed-in-grpc": {
+          "grpc": 0,
+          "details": "",
+          "messages": [
+            {
+              "fields": {
+                "n": {
+                  "integerValue": "1"
+                }
+              },
+              "name": "projects/demo-fs-rules/databases/(default)/documents/afc-signed-in/d",
+              "createTime": "<run-time>",
+              "updateTime": "<run-time>"
+            }
+          ]
+        }
+      }
+    },
+    "auth-fs-cross/read-only-transaction/binding": {
+      "corpusDigest": "8ccadce5f5f1078f21c498d55f9a47ab5326442c715e6b37fbd132ed9b42b350",
+      "harnessDigest": "1c527d0c14ece64e0207e118da92fdd749e96dc800ffa49cda54d667a9e4db7b",
+      "recordedAt": "2026-09-27T17:28:05.738Z",
+      "gitSha": "51f1910b7684938829d839384ccd9a1ee4f3bba3",
+      "steps": {
+        "begin-read-only": {
+          "status": 200,
+          "body": {
+            "transaction": "<transaction>"
+          }
+        },
+        "batch-get-owned-as-owner": {
+          "status": 200,
+          "body": [
+            {
+              "found": {
+                "name": "projects/demo-fs-rules/databases/(default)/documents/afc-owned/a",
+                "fields": {
+                  "owner": {
+                    "stringValue": "<uid:owner>"
+                  }
+                },
+                "createTime": "<run-time>",
+                "updateTime": "<run-time>"
+              },
+              "readTime": "<run-time>"
+            }
+          ]
+        },
+        "query-owned-as-owner": {
+          "status": 200,
+          "body": [
+            {
+              "document": {
+                "name": "projects/demo-fs-rules/databases/(default)/documents/afc-owned/a",
+                "fields": {
+                  "owner": {
+                    "stringValue": "<uid:owner>"
+                  }
+                },
+                "createTime": "<run-time>",
+                "updateTime": "<run-time>"
+              },
+              "readTime": "<run-time>"
+            }
+          ]
+        },
+        "batch-get-open-as-owner": {
+          "status": 200,
+          "body": [
+            {
+              "found": {
+                "name": "projects/demo-fs-rules/databases/(default)/documents/afc-open/d",
+                "fields": {
+                  "n": {
+                    "integerValue": "1"
+                  }
+                },
+                "createTime": "<run-time>",
+                "updateTime": "<run-time>"
+              },
+              "readTime": "<run-time>"
+            }
+          ]
+        },
+        "batch-get-owned-as-other": {
+          "status": 403,
+          "body": [
+            {
+              "error": {
+                "code": 403,
+                "message": "Missing or insufficient permissions.",
+                "status": "PERMISSION_DENIED"
+              }
+            }
+          ]
+        },
+        "query-owned-as-other": {
+          "status": 403,
+          "body": [
+            {
+              "error": {
+                "code": 403,
+                "message": "Missing or insufficient permissions.",
+                "status": "PERMISSION_DENIED"
+              }
+            }
+          ]
+        },
+        "batch-get-open-as-other": {
+          "status": 200,
+          "body": [
+            {
+              "found": {
+                "name": "projects/demo-fs-rules/databases/(default)/documents/afc-open/d",
+                "fields": {
+                  "n": {
+                    "integerValue": "1"
+                  }
+                },
+                "createTime": "<run-time>",
+                "updateTime": "<run-time>"
+              },
+              "readTime": "<run-time>"
+            }
+          ]
+        },
+        "batch-get-owned-as-same-t2": {
+          "status": 403,
+          "body": [
+            {
+              "error": {
+                "code": 403,
+                "message": "Missing or insufficient permissions.",
+                "status": "PERMISSION_DENIED"
+              }
+            }
+          ]
+        },
+        "query-owned-as-same-t2": {
+          "status": 403,
+          "body": [
+            {
+              "error": {
+                "code": 403,
+                "message": "Missing or insufficient permissions.",
+                "status": "PERMISSION_DENIED"
+              }
+            }
+          ]
+        },
+        "batch-get-open-as-same-t2": {
+          "status": 200,
+          "body": [
+            {
+              "found": {
+                "name": "projects/demo-fs-rules/databases/(default)/documents/afc-open/d",
+                "fields": {
+                  "n": {
+                    "integerValue": "1"
+                  }
+                },
+                "createTime": "<run-time>",
+                "updateTime": "<run-time>"
+              },
+              "readTime": "<run-time>"
+            }
+          ]
+        },
+        "batch-get-owned-as-none": {
+          "status": 403,
+          "body": [
+            {
+              "error": {
+                "code": 403,
+                "message": "Missing or insufficient permissions.",
+                "status": "PERMISSION_DENIED"
+              }
+            }
+          ]
+        },
+        "query-owned-as-none": {
+          "status": 403,
+          "body": [
+            {
+              "error": {
+                "code": 403,
+                "message": "Missing or insufficient permissions.",
+                "status": "PERMISSION_DENIED"
+              }
+            }
+          ]
+        },
+        "batch-get-open-as-none": {
+          "status": 200,
+          "body": [
+            {
+              "found": {
+                "name": "projects/demo-fs-rules/databases/(default)/documents/afc-open/d",
+                "fields": {
+                  "n": {
+                    "integerValue": "1"
+                  }
+                },
+                "createTime": "<run-time>",
+                "updateTime": "<run-time>"
+              },
+              "readTime": "<run-time>"
+            }
+          ]
+        },
+        "batch-get-owned-as-owner-grpc": {
+          "grpc": 0,
+          "details": "",
+          "messages": [
+            {
+              "readTime": "<run-time>",
+              "found": {
+                "fields": {
+                  "owner": {
+                    "stringValue": "<uid:owner>"
+                  }
+                },
+                "name": "projects/demo-fs-rules/databases/(default)/documents/afc-owned/a",
+                "createTime": "<run-time>",
+                "updateTime": "<run-time>"
+              }
+            }
+          ]
+        },
+        "batch-get-owned-as-other-grpc": {
+          "grpc": 7,
+          "details": "Missing or insufficient permissions."
+        },
+        "query-opens-read-only": {
+          "status": 200,
+          "body": [
+            {
+              "transaction": "<transaction>"
+            },
+            {
+              "document": {
+                "name": "projects/demo-fs-rules/databases/(default)/documents/afc-owned/a",
+                "fields": {
+                  "owner": {
+                    "stringValue": "<uid:owner>"
+                  }
+                },
+                "createTime": "<run-time>",
+                "updateTime": "<run-time>"
+              },
+              "readTime": "<run-time>"
+            }
+          ]
+        },
+        "batch-get-owned-in-query-transaction-as-owner": {
+          "status": 200,
+          "body": [
+            {
+              "found": {
+                "name": "projects/demo-fs-rules/databases/(default)/documents/afc-owned/a",
+                "fields": {
+                  "owner": {
+                    "stringValue": "<uid:owner>"
+                  }
+                },
+                "createTime": "<run-time>",
+                "updateTime": "<run-time>"
+              },
+              "readTime": "<run-time>"
+            }
+          ]
+        },
+        "batch-get-owned-in-query-transaction-as-other": {
+          "status": 403,
+          "body": [
+            {
+              "error": {
+                "code": 403,
+                "message": "Missing or insufficient permissions.",
+                "status": "PERMISSION_DENIED"
+              }
+            }
+          ]
+        }
+      }
+    },
+    "auth-fs-cross/tenant-same-uid/deleted-tenant": {
+      "corpusDigest": "371ba878c17b0472c1134666f8443bb0b4d78d10ab88a50694b48847deeec121",
+      "harnessDigest": "1c527d0c14ece64e0207e118da92fdd749e96dc800ffa49cda54d667a9e4db7b",
+      "recordedAt": "2026-09-27T17:28:05.738Z",
+      "gitSha": "51f1910b7684938829d839384ccd9a1ee4f3bba3",
+      "steps": {
+        "t1-own-doc-before": {
+          "status": 200,
+          "body": {
+            "name": "projects/demo-fs-rules/databases/(default)/documents/afc-same/t1",
+            "fields": {
+              "tenant": {
+                "stringValue": "<tenant:t1>"
+              },
+              "owner": {
+                "stringValue": "<uid:same-project>"
+              }
+            },
+            "createTime": "<run-time>",
+            "updateTime": "<run-time>"
+          }
+        },
+        "t1-own-doc-3s-rest": {
+          "status": 200,
+          "body": {
+            "name": "projects/demo-fs-rules/databases/(default)/documents/afc-same/t1",
+            "fields": {
+              "owner": {
+                "stringValue": "<uid:same-project>"
+              },
+              "tenant": {
+                "stringValue": "<tenant:t1>"
+              }
+            },
+            "createTime": "<run-time>",
+            "updateTime": "<run-time>"
+          }
+        },
+        "t1-own-doc-3s-grpc": {
+          "grpc": 0,
+          "details": "",
+          "messages": [
+            {
+              "fields": {
+                "owner": {
+                  "stringValue": "<uid:same-project>"
+                },
+                "tenant": {
+                  "stringValue": "<tenant:t1>"
+                }
+              },
+              "name": "projects/demo-fs-rules/databases/(default)/documents/afc-same/t1",
+              "createTime": "<run-time>",
+              "updateTime": "<run-time>"
+            }
+          ]
+        },
+        "t1-signed-in-doc-3s-rest": {
+          "status": 200,
+          "body": {
+            "name": "projects/demo-fs-rules/databases/(default)/documents/afc-signed-in/d",
+            "fields": {
+              "n": {
+                "integerValue": "1"
+              }
+            },
+            "createTime": "<run-time>",
+            "updateTime": "<run-time>"
+          }
+        },
+        "t1-signed-in-doc-3s-grpc": {
+          "grpc": 0,
+          "details": "",
+          "messages": [
+            {
+              "fields": {
+                "n": {
+                  "integerValue": "1"
+                }
+              },
+              "name": "projects/demo-fs-rules/databases/(default)/documents/afc-signed-in/d",
+              "createTime": "<run-time>",
+              "updateTime": "<run-time>"
+            }
+          ]
+        },
+        "t1-open-doc-3s-rest": {
+          "status": 200,
+          "body": {
+            "name": "projects/demo-fs-rules/databases/(default)/documents/afc-open/d",
+            "fields": {
+              "n": {
+                "integerValue": "1"
+              }
+            },
+            "createTime": "<run-time>",
+            "updateTime": "<run-time>"
+          }
+        },
+        "t1-open-doc-3s-grpc": {
+          "grpc": 0,
+          "details": "",
+          "messages": [
+            {
+              "fields": {
+                "n": {
+                  "integerValue": "1"
+                }
+              },
+              "name": "projects/demo-fs-rules/databases/(default)/documents/afc-open/d",
+              "createTime": "<run-time>",
+              "updateTime": "<run-time>"
+            }
+          ]
+        },
+        "t1-signed-in-query-3s-rest": {
+          "status": 200,
+          "body": [
+            {
+              "document": {
+                "name": "projects/demo-fs-rules/databases/(default)/documents/afc-signed-in/d",
+                "fields": {
+                  "n": {
+                    "integerValue": "1"
+                  }
+                },
+                "createTime": "<run-time>",
+                "updateTime": "<run-time>"
+              },
+              "readTime": "<run-time>"
+            }
+          ]
+        },
+        "t1-signed-in-query-3s-grpc": {
+          "grpc": 0,
+          "details": "",
+          "messages": [
+            {
+              "document": {
+                "fields": {
+                  "n": {
+                    "integerValue": "1"
+                  }
+                },
+                "name": "projects/demo-fs-rules/databases/(default)/documents/afc-signed-in/d",
+                "createTime": "<run-time>",
+                "updateTime": "<run-time>"
+              },
+              "readTime": "<run-time>"
+            }
+          ]
+        },
+        "t1-create-3s-rest": {
+          "status": 200,
+          "body": {
+            "writeResults": [
+              {
+                "updateTime": "<run-time>"
+              }
+            ],
+            "commitTime": "<run-time>"
+          }
+        },
+        "t1-create-3s-grpc": {
+          "grpc": 0,
+          "details": "",
+          "messages": [
+            {
+              "writeResults": [
+                {
+                  "updateTime": "<run-time>"
+                }
+              ],
+              "commitTime": "<run-time>"
+            }
+          ]
+        },
+        "t2-own-doc-3s-rest": {
+          "status": 200,
+          "body": {
+            "name": "projects/demo-fs-rules/databases/(default)/documents/afc-same/t2",
+            "fields": {
+              "tenant": {
+                "stringValue": "<tenant:t2>"
+              },
+              "owner": {
+                "stringValue": "<uid:same-project>"
+              }
+            },
+            "createTime": "<run-time>",
+            "updateTime": "<run-time>"
+          }
+        },
+        "t2-own-doc-3s-grpc": {
+          "grpc": 0,
+          "details": "",
+          "messages": [
+            {
+              "fields": {
+                "tenant": {
+                  "stringValue": "<tenant:t2>"
+                },
+                "owner": {
+                  "stringValue": "<uid:same-project>"
+                }
+              },
+              "name": "projects/demo-fs-rules/databases/(default)/documents/afc-same/t2",
+              "createTime": "<run-time>",
+              "updateTime": "<run-time>"
+            }
+          ]
+        },
+        "t1-own-doc-65s-rest": {
+          "status": 200,
+          "body": {
+            "name": "projects/demo-fs-rules/databases/(default)/documents/afc-same/t1",
+            "fields": {
+              "owner": {
+                "stringValue": "<uid:same-project>"
+              },
+              "tenant": {
+                "stringValue": "<tenant:t1>"
+              }
+            },
+            "createTime": "<run-time>",
+            "updateTime": "<run-time>"
+          }
+        },
+        "t1-own-doc-65s-grpc": {
+          "grpc": 0,
+          "details": "",
+          "messages": [
+            {
+              "fields": {
+                "tenant": {
+                  "stringValue": "<tenant:t1>"
+                },
+                "owner": {
+                  "stringValue": "<uid:same-project>"
+                }
+              },
+              "name": "projects/demo-fs-rules/databases/(default)/documents/afc-same/t1",
+              "createTime": "<run-time>",
+              "updateTime": "<run-time>"
+            }
+          ]
+        },
+        "t1-signed-in-doc-65s-rest": {
+          "status": 200,
+          "body": {
+            "name": "projects/demo-fs-rules/databases/(default)/documents/afc-signed-in/d",
+            "fields": {
+              "n": {
+                "integerValue": "1"
+              }
+            },
+            "createTime": "<run-time>",
+            "updateTime": "<run-time>"
+          }
+        },
+        "t1-signed-in-doc-65s-grpc": {
+          "grpc": 0,
+          "details": "",
+          "messages": [
+            {
+              "fields": {
+                "n": {
+                  "integerValue": "1"
+                }
+              },
+              "name": "projects/demo-fs-rules/databases/(default)/documents/afc-signed-in/d",
+              "createTime": "<run-time>",
+              "updateTime": "<run-time>"
+            }
+          ]
+        },
+        "t1-open-doc-65s-rest": {
+          "status": 200,
+          "body": {
+            "name": "projects/demo-fs-rules/databases/(default)/documents/afc-open/d",
+            "fields": {
+              "n": {
+                "integerValue": "1"
+              }
+            },
+            "createTime": "<run-time>",
+            "updateTime": "<run-time>"
+          }
+        },
+        "t1-open-doc-65s-grpc": {
+          "grpc": 0,
+          "details": "",
+          "messages": [
+            {
+              "fields": {
+                "n": {
+                  "integerValue": "1"
+                }
+              },
+              "name": "projects/demo-fs-rules/databases/(default)/documents/afc-open/d",
+              "createTime": "<run-time>",
+              "updateTime": "<run-time>"
+            }
+          ]
+        },
+        "t1-signed-in-query-65s-rest": {
+          "status": 200,
+          "body": [
+            {
+              "document": {
+                "name": "projects/demo-fs-rules/databases/(default)/documents/afc-signed-in/d",
+                "fields": {
+                  "n": {
+                    "integerValue": "1"
+                  }
+                },
+                "createTime": "<run-time>",
+                "updateTime": "<run-time>"
+              },
+              "readTime": "<run-time>"
+            }
+          ]
+        },
+        "t1-signed-in-query-65s-grpc": {
+          "grpc": 0,
+          "details": "",
+          "messages": [
+            {
+              "document": {
+                "fields": {
+                  "n": {
+                    "integerValue": "1"
+                  }
+                },
+                "name": "projects/demo-fs-rules/databases/(default)/documents/afc-signed-in/d",
+                "createTime": "<run-time>",
+                "updateTime": "<run-time>"
+              },
+              "readTime": "<run-time>"
+            }
+          ]
+        },
+        "t1-create-65s-rest": {
+          "status": 200,
+          "body": {
+            "writeResults": [
+              {
+                "updateTime": "<run-time>"
+              }
+            ],
+            "commitTime": "<run-time>"
+          }
+        },
+        "t1-create-65s-grpc": {
+          "grpc": 0,
+          "details": "",
+          "messages": [
+            {
+              "writeResults": [
+                {
+                  "updateTime": "<run-time>"
+                }
+              ],
+              "commitTime": "<run-time>"
+            }
+          ]
+        },
+        "t2-own-doc-65s-rest": {
+          "status": 200,
+          "body": {
+            "name": "projects/demo-fs-rules/databases/(default)/documents/afc-same/t2",
+            "fields": {
+              "tenant": {
+                "stringValue": "<tenant:t2>"
+              },
+              "owner": {
+                "stringValue": "<uid:same-project>"
+              }
+            },
+            "createTime": "<run-time>",
+            "updateTime": "<run-time>"
+          }
+        },
+        "t2-own-doc-65s-grpc": {
+          "grpc": 0,
+          "details": "",
+          "messages": [
+            {
+              "fields": {
+                "owner": {
+                  "stringValue": "<uid:same-project>"
+                },
+                "tenant": {
+                  "stringValue": "<tenant:t2>"
+                }
+              },
+              "name": "projects/demo-fs-rules/databases/(default)/documents/afc-same/t2",
+              "createTime": "<run-time>",
+              "updateTime": "<run-time>"
+            }
+          ]
+        }
+      }
+    },
+    "auth-fs-cross/tenant-same-uid/separation": {
+      "corpusDigest": "89131a9861dd46d8309512a035136862040515993bb55aa3e28fec2db9335fad",
+      "harnessDigest": "1c527d0c14ece64e0207e118da92fdd749e96dc800ffa49cda54d667a9e4db7b",
+      "recordedAt": "2026-09-27T17:28:05.738Z",
+      "gitSha": "51f1910b7684938829d839384ccd9a1ee4f3bba3",
+      "steps": {
+        "get-p-as-same-project-rest": {
+          "status": 200,
+          "body": {
+            "name": "projects/demo-fs-rules/databases/(default)/documents/afc-same/p",
+            "fields": {
+              "owner": {
+                "stringValue": "<uid:same-project>"
+              },
+              "tenant": {
+                "nullValue": null
+              }
+            },
+            "createTime": "<run-time>",
+            "updateTime": "<run-time>"
+          }
+        },
+        "get-p-as-same-project-grpc": {
+          "grpc": 0,
+          "details": "",
+          "messages": [
+            {
+              "fields": {
+                "tenant": {
+                  "nullValue": null
+                },
+                "owner": {
+                  "stringValue": "<uid:same-project>"
+                }
+              },
+              "name": "projects/demo-fs-rules/databases/(default)/documents/afc-same/p",
+              "createTime": "<run-time>",
+              "updateTime": "<run-time>"
+            }
+          ]
+        },
+        "get-t1-as-same-project-rest": {
+          "status": 403,
+          "body": {
+            "error": {
+              "code": 403,
+              "message": "Missing or insufficient permissions.",
+              "status": "PERMISSION_DENIED"
+            }
+          }
+        },
+        "get-t1-as-same-project-grpc": {
+          "grpc": 7,
+          "details": "Missing or insufficient permissions."
+        },
+        "get-t2-as-same-project-rest": {
+          "status": 403,
+          "body": {
+            "error": {
+              "code": 403,
+              "message": "Missing or insufficient permissions.",
+              "status": "PERMISSION_DENIED"
+            }
+          }
+        },
+        "get-t2-as-same-project-grpc": {
+          "grpc": 7,
+          "details": "Missing or insufficient permissions."
+        },
+        "get-p-as-same-t1-rest": {
+          "status": 403,
+          "body": {
+            "error": {
+              "code": 403,
+              "message": "Missing or insufficient permissions.",
+              "status": "PERMISSION_DENIED"
+            }
+          }
+        },
+        "get-p-as-same-t1-grpc": {
+          "grpc": 7,
+          "details": "Missing or insufficient permissions."
+        },
+        "get-t1-as-same-t1-rest": {
+          "status": 200,
+          "body": {
+            "name": "projects/demo-fs-rules/databases/(default)/documents/afc-same/t1",
+            "fields": {
+              "owner": {
+                "stringValue": "<uid:same-project>"
+              },
+              "tenant": {
+                "stringValue": "<tenant:t1>"
+              }
+            },
+            "createTime": "<run-time>",
+            "updateTime": "<run-time>"
+          }
+        },
+        "get-t1-as-same-t1-grpc": {
+          "grpc": 0,
+          "details": "",
+          "messages": [
+            {
+              "fields": {
+                "tenant": {
+                  "stringValue": "<tenant:t1>"
+                },
+                "owner": {
+                  "stringValue": "<uid:same-project>"
+                }
+              },
+              "name": "projects/demo-fs-rules/databases/(default)/documents/afc-same/t1",
+              "createTime": "<run-time>",
+              "updateTime": "<run-time>"
+            }
+          ]
+        },
+        "get-t2-as-same-t1-rest": {
+          "status": 403,
+          "body": {
+            "error": {
+              "code": 403,
+              "message": "Missing or insufficient permissions.",
+              "status": "PERMISSION_DENIED"
+            }
+          }
+        },
+        "get-t2-as-same-t1-grpc": {
+          "grpc": 7,
+          "details": "Missing or insufficient permissions."
+        },
+        "get-p-as-same-t2-rest": {
+          "status": 403,
+          "body": {
+            "error": {
+              "code": 403,
+              "message": "Missing or insufficient permissions.",
+              "status": "PERMISSION_DENIED"
+            }
+          }
+        },
+        "get-p-as-same-t2-grpc": {
+          "grpc": 7,
+          "details": "Missing or insufficient permissions."
+        },
+        "get-t1-as-same-t2-rest": {
+          "status": 403,
+          "body": {
+            "error": {
+              "code": 403,
+              "message": "Missing or insufficient permissions.",
+              "status": "PERMISSION_DENIED"
+            }
+          }
+        },
+        "get-t1-as-same-t2-grpc": {
+          "grpc": 7,
+          "details": "Missing or insufficient permissions."
+        },
+        "get-t2-as-same-t2-rest": {
+          "status": 200,
+          "body": {
+            "name": "projects/demo-fs-rules/databases/(default)/documents/afc-same/t2",
+            "fields": {
+              "owner": {
+                "stringValue": "<uid:same-project>"
+              },
+              "tenant": {
+                "stringValue": "<tenant:t2>"
+              }
+            },
+            "createTime": "<run-time>",
+            "updateTime": "<run-time>"
+          }
+        },
+        "get-t2-as-same-t2-grpc": {
+          "grpc": 0,
+          "details": "",
+          "messages": [
+            {
+              "fields": {
+                "tenant": {
+                  "stringValue": "<tenant:t2>"
+                },
+                "owner": {
+                  "stringValue": "<uid:same-project>"
+                }
+              },
+              "name": "projects/demo-fs-rules/databases/(default)/documents/afc-same/t2",
+              "createTime": "<run-time>",
+              "updateTime": "<run-time>"
+            }
+          ]
+        },
+        "batch-get-all-as-same-project-rest": {
+          "status": 403,
+          "body": [
+            {
+              "error": {
+                "code": 403,
+                "message": "Missing or insufficient permissions.",
+                "status": "PERMISSION_DENIED"
+              }
+            }
+          ]
+        },
+        "batch-get-all-as-same-project-grpc": {
+          "grpc": 7,
+          "details": "Missing or insufficient permissions."
+        },
+        "batch-get-all-as-same-t1-rest": {
+          "status": 403,
+          "body": [
+            {
+              "error": {
+                "code": 403,
+                "message": "Missing or insufficient permissions.",
+                "status": "PERMISSION_DENIED"
+              }
+            }
+          ]
+        },
+        "batch-get-all-as-same-t1-grpc": {
+          "grpc": 7,
+          "details": "Missing or insufficient permissions."
+        },
+        "batch-get-all-as-same-t2-rest": {
+          "status": 403,
+          "body": [
+            {
+              "error": {
+                "code": 403,
+                "message": "Missing or insufficient permissions.",
+                "status": "PERMISSION_DENIED"
+              }
+            }
+          ]
+        },
+        "batch-get-all-as-same-t2-grpc": {
+          "grpc": 7,
+          "details": "Missing or insufficient permissions."
+        },
+        "query-owner-and-tenant-as-same-project-rest": {
+          "status": 200,
+          "body": [
+            {
+              "document": {
+                "name": "projects/demo-fs-rules/databases/(default)/documents/afc-same/p",
+                "fields": {
+                  "owner": {
+                    "stringValue": "<uid:same-project>"
+                  },
+                  "tenant": {
+                    "nullValue": null
+                  }
+                },
+                "createTime": "<run-time>",
+                "updateTime": "<run-time>"
+              },
+              "readTime": "<run-time>"
+            }
+          ]
+        },
+        "query-owner-and-tenant-as-same-project-grpc": {
+          "grpc": 0,
+          "details": "",
+          "messages": [
+            {
+              "document": {
+                "fields": {
+                  "owner": {
+                    "stringValue": "<uid:same-project>"
+                  },
+                  "tenant": {
+                    "nullValue": null
+                  }
+                },
+                "name": "projects/demo-fs-rules/databases/(default)/documents/afc-same/p",
+                "createTime": "<run-time>",
+                "updateTime": "<run-time>"
+              },
+              "readTime": "<run-time>"
+            }
+          ]
+        },
+        "query-owner-and-tenant-as-same-t1-rest": {
+          "status": 200,
+          "body": [
+            {
+              "document": {
+                "name": "projects/demo-fs-rules/databases/(default)/documents/afc-same/t1",
+                "fields": {
+                  "owner": {
+                    "stringValue": "<uid:same-project>"
+                  },
+                  "tenant": {
+                    "stringValue": "<tenant:t1>"
+                  }
+                },
+                "createTime": "<run-time>",
+                "updateTime": "<run-time>"
+              },
+              "readTime": "<run-time>"
+            }
+          ]
+        },
+        "query-owner-and-tenant-as-same-t1-grpc": {
+          "grpc": 0,
+          "details": "",
+          "messages": [
+            {
+              "document": {
+                "fields": {
+                  "owner": {
+                    "stringValue": "<uid:same-project>"
+                  },
+                  "tenant": {
+                    "stringValue": "<tenant:t1>"
+                  }
+                },
+                "name": "projects/demo-fs-rules/databases/(default)/documents/afc-same/t1",
+                "createTime": "<run-time>",
+                "updateTime": "<run-time>"
+              },
+              "readTime": "<run-time>"
+            }
+          ]
+        },
+        "query-owner-and-tenant-as-same-t2-rest": {
+          "status": 200,
+          "body": [
+            {
+              "document": {
+                "name": "projects/demo-fs-rules/databases/(default)/documents/afc-same/t2",
+                "fields": {
+                  "owner": {
+                    "stringValue": "<uid:same-project>"
+                  },
+                  "tenant": {
+                    "stringValue": "<tenant:t2>"
+                  }
+                },
+                "createTime": "<run-time>",
+                "updateTime": "<run-time>"
+              },
+              "readTime": "<run-time>"
+            }
+          ]
+        },
+        "query-owner-and-tenant-as-same-t2-grpc": {
+          "grpc": 0,
+          "details": "",
+          "messages": [
+            {
+              "document": {
+                "fields": {
+                  "owner": {
+                    "stringValue": "<uid:same-project>"
+                  },
+                  "tenant": {
+                    "stringValue": "<tenant:t2>"
+                  }
+                },
+                "name": "projects/demo-fs-rules/databases/(default)/documents/afc-same/t2",
+                "createTime": "<run-time>",
+                "updateTime": "<run-time>"
+              },
+              "readTime": "<run-time>"
+            }
+          ]
+        },
+        "query-owner-only-as-same-project-rest": {
+          "status": 403,
+          "body": [
+            {
+              "error": {
+                "code": 403,
+                "message": "Missing or insufficient permissions.",
+                "status": "PERMISSION_DENIED"
+              }
+            }
+          ]
+        },
+        "query-owner-only-as-same-project-grpc": {
+          "grpc": 7,
+          "details": "Missing or insufficient permissions."
+        },
+        "query-owner-only-as-same-t1-rest": {
+          "status": 403,
+          "body": [
+            {
+              "error": {
+                "code": 403,
+                "message": "Missing or insufficient permissions.",
+                "status": "PERMISSION_DENIED"
+              }
+            }
+          ]
+        },
+        "query-owner-only-as-same-t1-grpc": {
+          "grpc": 7,
+          "details": "Missing or insufficient permissions."
+        },
+        "query-owner-only-as-same-t2-rest": {
+          "status": 403,
+          "body": [
+            {
+              "error": {
+                "code": 403,
+                "message": "Missing or insufficient permissions.",
+                "status": "PERMISSION_DENIED"
+              }
+            }
+          ]
+        },
+        "query-owner-only-as-same-t2-grpc": {
+          "grpc": 7,
+          "details": "Missing or insufficient permissions."
+        }
+      }
+    }
+  }
+}

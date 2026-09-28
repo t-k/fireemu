@@ -1,0 +1,366 @@
+{
+  "kind": "auth-fs-cross-comparison-v1",
+  "artifactSha256": "890a38d8b8827ca3980522151b69c9bbad4230a674ccf73a7123470910094021",
+  "fixtureSha256": "9c9c8ef104a35d06cf27908e05ecdda5c80b67125a94748798b9a6abca3e485b",
+  "summary": {
+    "MATCH": 89
+  },
+  "rows": [
+    {
+      "row": "auth-fs-cross/tenant-same-uid/separation#get-p-as-same-project-rest",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-fs-cross/tenant-same-uid/separation#get-p-as-same-project-grpc",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-fs-cross/tenant-same-uid/separation#get-t1-as-same-project-rest",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-fs-cross/tenant-same-uid/separation#get-t1-as-same-project-grpc",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-fs-cross/tenant-same-uid/separation#get-t2-as-same-project-rest",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-fs-cross/tenant-same-uid/separation#get-t2-as-same-project-grpc",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-fs-cross/tenant-same-uid/separation#get-p-as-same-t1-rest",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-fs-cross/tenant-same-uid/separation#get-p-as-same-t1-grpc",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-fs-cross/tenant-same-uid/separation#get-t1-as-same-t1-rest",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-fs-cross/tenant-same-uid/separation#get-t1-as-same-t1-grpc",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-fs-cross/tenant-same-uid/separation#get-t2-as-same-t1-rest",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-fs-cross/tenant-same-uid/separation#get-t2-as-same-t1-grpc",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-fs-cross/tenant-same-uid/separation#get-p-as-same-t2-rest",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-fs-cross/tenant-same-uid/separation#get-p-as-same-t2-grpc",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-fs-cross/tenant-same-uid/separation#get-t1-as-same-t2-rest",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-fs-cross/tenant-same-uid/separation#get-t1-as-same-t2-grpc",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-fs-cross/tenant-same-uid/separation#get-t2-as-same-t2-rest",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-fs-cross/tenant-same-uid/separation#get-t2-as-same-t2-grpc",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-fs-cross/tenant-same-uid/separation#batch-get-all-as-same-project-rest",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-fs-cross/tenant-same-uid/separation#batch-get-all-as-same-project-grpc",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-fs-cross/tenant-same-uid/separation#batch-get-all-as-same-t1-rest",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-fs-cross/tenant-same-uid/separation#batch-get-all-as-same-t1-grpc",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-fs-cross/tenant-same-uid/separation#batch-get-all-as-same-t2-rest",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-fs-cross/tenant-same-uid/separation#batch-get-all-as-same-t2-grpc",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-fs-cross/tenant-same-uid/separation#query-owner-and-tenant-as-same-project-rest",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-fs-cross/tenant-same-uid/separation#query-owner-and-tenant-as-same-project-grpc",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-fs-cross/tenant-same-uid/separation#query-owner-and-tenant-as-same-t1-rest",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-fs-cross/tenant-same-uid/separation#query-owner-and-tenant-as-same-t1-grpc",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-fs-cross/tenant-same-uid/separation#query-owner-and-tenant-as-same-t2-rest",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-fs-cross/tenant-same-uid/separation#query-owner-and-tenant-as-same-t2-grpc",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-fs-cross/tenant-same-uid/separation#query-owner-only-as-same-project-rest",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-fs-cross/tenant-same-uid/separation#query-owner-only-as-same-project-grpc",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-fs-cross/tenant-same-uid/separation#query-owner-only-as-same-t1-rest",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-fs-cross/tenant-same-uid/separation#query-owner-only-as-same-t1-grpc",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-fs-cross/tenant-same-uid/separation#query-owner-only-as-same-t2-rest",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-fs-cross/tenant-same-uid/separation#query-owner-only-as-same-t2-grpc",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-fs-cross/read-only-transaction/binding#begin-read-only",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-fs-cross/read-only-transaction/binding#batch-get-owned-as-owner",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-fs-cross/read-only-transaction/binding#query-owned-as-owner",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-fs-cross/read-only-transaction/binding#batch-get-open-as-owner",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-fs-cross/read-only-transaction/binding#batch-get-owned-as-other",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-fs-cross/read-only-transaction/binding#query-owned-as-other",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-fs-cross/read-only-transaction/binding#batch-get-open-as-other",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-fs-cross/read-only-transaction/binding#batch-get-owned-as-same-t2",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-fs-cross/read-only-transaction/binding#query-owned-as-same-t2",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-fs-cross/read-only-transaction/binding#batch-get-open-as-same-t2",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-fs-cross/read-only-transaction/binding#batch-get-owned-as-none",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-fs-cross/read-only-transaction/binding#query-owned-as-none",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-fs-cross/read-only-transaction/binding#batch-get-open-as-none",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-fs-cross/read-only-transaction/binding#batch-get-owned-as-owner-grpc",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-fs-cross/read-only-transaction/binding#batch-get-owned-as-other-grpc",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-fs-cross/read-only-transaction/binding#query-opens-read-only",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-fs-cross/read-only-transaction/binding#batch-get-owned-in-query-transaction-as-owner",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-fs-cross/read-only-transaction/binding#batch-get-owned-in-query-transaction-as-other",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-fs-cross/foreign-project/token#foreign-open-rest",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-fs-cross/foreign-project/token#foreign-open-grpc",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-fs-cross/foreign-project/token#foreign-signed-in-rest",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-fs-cross/foreign-project/token#foreign-signed-in-grpc",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-fs-cross/foreign-project/token#foreign-owned-rest",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-fs-cross/foreign-project/token#foreign-owned-grpc",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-fs-cross/foreign-project/token#foreign-query-open-rest",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-fs-cross/foreign-project/token#foreign-query-open-grpc",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-fs-cross/foreign-project/token#same-project-signed-in-rest",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-fs-cross/foreign-project/token#same-project-signed-in-grpc",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-fs-cross/tenant-same-uid/deleted-tenant#t1-own-doc-before",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-fs-cross/tenant-same-uid/deleted-tenant#t1-own-doc-3s-rest",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-fs-cross/tenant-same-uid/deleted-tenant#t1-own-doc-3s-grpc",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-fs-cross/tenant-same-uid/deleted-tenant#t1-signed-in-doc-3s-rest",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-fs-cross/tenant-same-uid/deleted-tenant#t1-signed-in-doc-3s-grpc",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-fs-cross/tenant-same-uid/deleted-tenant#t1-open-doc-3s-rest",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-fs-cross/tenant-same-uid/deleted-tenant#t1-open-doc-3s-grpc",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-fs-cross/tenant-same-uid/deleted-tenant#t1-signed-in-query-3s-rest",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-fs-cross/tenant-same-uid/deleted-tenant#t1-signed-in-query-3s-grpc",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-fs-cross/tenant-same-uid/deleted-tenant#t1-create-3s-rest",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-fs-cross/tenant-same-uid/deleted-tenant#t1-create-3s-grpc",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-fs-cross/tenant-same-uid/deleted-tenant#t2-own-doc-3s-rest",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-fs-cross/tenant-same-uid/deleted-tenant#t2-own-doc-3s-grpc",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-fs-cross/tenant-same-uid/deleted-tenant#t1-own-doc-65s-rest",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-fs-cross/tenant-same-uid/deleted-tenant#t1-own-doc-65s-grpc",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-fs-cross/tenant-same-uid/deleted-tenant#t1-signed-in-doc-65s-rest",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-fs-cross/tenant-same-uid/deleted-tenant#t1-signed-in-doc-65s-grpc",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-fs-cross/tenant-same-uid/deleted-tenant#t1-open-doc-65s-rest",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-fs-cross/tenant-same-uid/deleted-tenant#t1-open-doc-65s-grpc",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-fs-cross/tenant-same-uid/deleted-tenant#t1-signed-in-query-65s-rest",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-fs-cross/tenant-same-uid/deleted-tenant#t1-signed-in-query-65s-grpc",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-fs-cross/tenant-same-uid/deleted-tenant#t1-create-65s-rest",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-fs-cross/tenant-same-uid/deleted-tenant#t1-create-65s-grpc",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-fs-cross/tenant-same-uid/deleted-tenant#t2-own-doc-65s-rest",
+      "status": "MATCH"
+    },
+    {
+      "row": "auth-fs-cross/tenant-same-uid/deleted-tenant#t2-own-doc-65s-grpc",
+      "status": "MATCH"
+    }
+  ]
+}

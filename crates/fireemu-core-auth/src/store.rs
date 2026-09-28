@@ -1533,9 +1533,10 @@ impl AuthStore {
         Ok(payload)
     }
 
-    /// The private control-session incarnation expected in locally issued ID tokens.
+    /// The private control-session incarnation expected in locally issued ID tokens (the session
+    /// epoch claim this store's ID tokens carry), if it has one.
     #[must_use]
-    pub(crate) fn lifecycle_epoch_claim(&self) -> Option<String> {
+    pub fn lifecycle_epoch_claim(&self) -> Option<String> {
         self.lifecycle_epoch.map(AuthLifecycleEpoch::wire_value)
     }
 
@@ -5753,12 +5754,26 @@ pub struct AuthRegistry {
     /// rather than as unknown ids (AUTH-TENANT-BLOCKING recording 2026-09-27, deletion program).
     deleted_tenants: Mutex<BTreeSet<TenantKey>>,
     operation_gates: Mutex<BTreeMap<TenantKey, Weak<Mutex<()>>>>,
+    /// The session epochs of deleted tenants (see [`RemovedTenantEpochs`]).
+    removed_tenant_epochs: Mutex<BTreeMap<TenantKey, RemovedTenantEpochs>>,
     membership_generation: AtomicU64,
     lifecycle_incarnation: Option<u128>,
     next_lifecycle_serial: AtomicU64,
     next_tenant_id: AtomicU64,
     #[cfg(test)]
     refresh_token_scans: AtomicU64,
+}
+
+/// The session epochs a tenant and its project had when the tenant was deleted. Firestore
+/// honours a deleted tenant's unexpired ID token (AUTH-FS-CROSS stage 1), so the token is still
+/// checked against its own tenant's epoch; the project's epoch tells whether the session it
+/// belonged to still exists (a reset of the project moves it on).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RemovedTenantEpochs {
+    /// The deleted tenant's session epoch claim.
+    pub tenant: Option<String>,
+    /// The project's session epoch claim at the deletion.
+    pub project: Option<String>,
 }
 
 /// A project-scoped Auth reset prepared without mutating registry or credential state.
@@ -5957,6 +5972,7 @@ impl AuthRegistry {
             tenant_runtime_config_overrides: Mutex::new(BTreeMap::new()),
             deleted_tenants: Mutex::new(BTreeSet::new()),
             operation_gates: Mutex::new(BTreeMap::new()),
+            removed_tenant_epochs: Mutex::new(BTreeMap::new()),
             membership_generation: AtomicU64::new(0),
             lifecycle_incarnation: None,
             next_lifecycle_serial: AtomicU64::new(1),
@@ -8560,16 +8576,34 @@ impl AuthRegistry {
             return false;
         }
         let key = (project.to_owned(), tenant.to_owned());
-        let removed = self.tenants.lock().ok().and_then(|mut stores| {
+        let removed_store = self.tenants.lock().ok().and_then(|mut stores| {
             let mut metadata = self.tenant_metadata.lock().ok()?;
             let mut runtime_overrides = self.tenant_runtime_config_overrides.lock().ok()?;
-            let removed = stores.remove(&key).is_some();
+            let removed = stores.remove(&key);
             metadata.remove(&key);
-            if removed {
+            if removed.is_some() {
                 runtime_overrides.remove(&key);
             }
             Some(removed)
         });
+        let removed = removed_store.as_ref().map(Option::is_some);
+        if let Some(Some(store)) = removed_store {
+            // Remember the epochs its tokens were issued under (store locks after the registry
+            // maps, as everywhere on this path).
+            let tenant_epoch = store.lock().ok().and_then(|s| s.lifecycle_epoch_claim());
+            let project_epoch = self
+                .store_for(project)
+                .and_then(|parent| parent.lock().ok().and_then(|p| p.lifecycle_epoch_claim()));
+            if let Ok(mut epochs) = self.removed_tenant_epochs.lock() {
+                epochs.insert(
+                    key.clone(),
+                    RemovedTenantEpochs {
+                        tenant: tenant_epoch,
+                        project: project_epoch,
+                    },
+                );
+            }
+        }
         if let Ok(mut gates) = self.operation_gates.lock() {
             gates.remove(&key);
         }
@@ -8601,6 +8635,20 @@ impl AuthRegistry {
     pub fn refresh_token_tenant(token: &str) -> Option<(String, String)> {
         let (project, tenant) = refresh_token_namespace(token)?;
         Some((project.to_owned(), tenant?.to_owned()))
+    }
+
+    /// The session epochs `tenant` of `project` had when it was deleted, if it was.
+    #[must_use]
+    pub fn removed_tenant_epochs(
+        &self,
+        project: &str,
+        tenant: &str,
+    ) -> Option<RemovedTenantEpochs> {
+        self.removed_tenant_epochs
+            .lock()
+            .ok()?
+            .get(&(project.to_owned(), tenant.to_owned()))
+            .cloned()
     }
 
     /// The first store (the default first, then the registered ones in name order) that

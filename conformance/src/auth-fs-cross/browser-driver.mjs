@@ -82,6 +82,9 @@ async function main() {
     },
     hosts: allowedHosts(config),
     cap: config.wireCap ?? 100,
+    // Connections the browser opens beyond the page's own server, counted from CDP.
+    connectionCap: config.connectionCap ?? 20,
+    onConnection: ({ n, host }) => emit({ event: "connection", n, host }),
     onRecord: ({ n, host, path, bearer }) =>
       emit({
         event: "wire",
@@ -117,6 +120,22 @@ async function main() {
   };
   process.stdin.on("close", () => close(0));
   process.on("SIGTERM", () => close(0));
+
+  // Each distinct network connection a response came over counts once; a refusal ends the client.
+  const cdp = await context.newCDPSession(page);
+  await cdp.send("Network.enable");
+  const connectionIds = new Set();
+  cdp.on("Network.responseReceived", ({ response }) => {
+    if (response.url.startsWith(`${origin}/`) || response.url.startsWith(GSTATIC)) return;
+    const id = response.connectionId;
+    if (!id || connectionIds.has(id)) return;
+    connectionIds.add(id);
+    try {
+      ledger.connection(new URL(response.url).host);
+    } catch {
+      // The ledger reported the refusal and ends the client.
+    }
+  });
 
   const served = new Set();
   await page.route("**/*", async (route) => {

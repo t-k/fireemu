@@ -378,7 +378,11 @@ export function createInterpreter(program, deps) {
   const executors = {
     stream: openStream,
     async client(step) {
-      const sdk = spawnClient(step.transport, { ...sdkConfig, wireCap: step.wireCap });
+      const sdk = spawnClient(step.transport, {
+        ...sdkConfig,
+        wireCap: step.wireCap,
+        connectionCap: step.connectionCap,
+      });
       clients.set(step.client, {
         sdk,
         transport: step.transport,
@@ -484,6 +488,14 @@ export function createInterpreter(program, deps) {
           c.sdk.events.filter((e) => e.event === "wire").length,
         ]),
       ),
+    /** The connections each client opened. */
+    connectionCounts: () =>
+      Object.fromEntries(
+        [...clients].map(([name, c]) => [
+          name,
+          c.sdk.events.filter((e) => e.event === "connection").length,
+        ]),
+      ),
     streams,
     clients,
     /** Closes every stream and client; always called, also after a failure. */
@@ -559,6 +571,7 @@ export async function runStage2Window(program, ctx, options = {}) {
     rows,
     timeline: interpreter?.timeline() ?? [],
     wire: interpreter?.wireCounts() ?? {},
+    connections: interpreter?.connectionCounts() ?? {},
     cleanupErrors,
     ...session.evidence(),
     ...session.counts(),

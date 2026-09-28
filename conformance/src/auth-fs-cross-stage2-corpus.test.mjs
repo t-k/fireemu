@@ -25,7 +25,13 @@ const indexOf = (program, match) => program.steps.findIndex(match);
 
 test("the stage-2 program passes its guard and covers every closure transport", () => {
   assert.deepEqual(Object.keys(closure).toSorted(), [...STAGE2_CONDITIONS].toSorted());
-  assert.deepEqual(validate(STAGE2_PROGRAM), { commits: 43, reads: 15, rows: 56, maxWire: 2_200 });
+  assert.deepEqual(validate(STAGE2_PROGRAM), {
+    commits: 43,
+    reads: 15,
+    rows: 56,
+    maxWire: 2_200,
+    maxConnections: 380,
+  });
 });
 
 test("every held principal's change comes after the short conditions and before its probes", () => {
@@ -110,7 +116,7 @@ const REFUSED = [
       p.steps.splice(
         p.steps.length - 1,
         0,
-        { do: "client", client: "late", transport: "node-sdk", wireCap: 100 },
+        { do: "client", client: "late", transport: "node-sdk", wireCap: 100, connectionCap: 10 },
         { do: "sdk", client: "late", op: "signIn", as: "del" },
       ),
     /principal del is used after its deletion/,
@@ -121,7 +127,7 @@ const REFUSED = [
       p.steps.splice(
         p.steps.length - 1,
         0,
-        { do: "client", client: "late", transport: "node-sdk", wireCap: 100 },
+        { do: "client", client: "late", transport: "node-sdk", wireCap: 100, connectionCap: 10 },
         { do: "sdk", client: "late", op: "signIn", as: "ten-t1" },
       ),
     /tenant t1 is used after its deletion/,
@@ -164,6 +170,16 @@ const REFUSED = [
     "an expiry probe too far out",
     (p) => (p.steps.find((s) => s.do === "expiry-probes").plus = -3_600),
     /out of range/,
+  ],
+  [
+    "a client without a connection cap",
+    (p) => delete p.steps.find((s) => s.do === "client").connectionCap,
+    /connection cap undefined out of range/,
+  ],
+  [
+    "a connection cap past the limit",
+    (p) => (p.steps.find((s) => s.do === "client").connectionCap = 101),
+    /connection cap 101 out of range/,
   ],
   [
     "an owner's read naming an unknown client",
@@ -240,6 +256,7 @@ const REFUSED = [
         client: "sdk-rev",
         transport: "node-sdk",
         wireCap: 100,
+        connectionCap: 10,
       }),
     /duplicate client sdk-rev/,
   ],

@@ -31,7 +31,7 @@ import { closureTransports, validateStage2 } from "./stage2-corpus.mjs";
 import { scanFixture } from "../auth-account/fixture-scan.mjs";
 import { buildFixture, classifyStage2, comparable } from "./stage2-compare.mjs";
 import { runStage2Window } from "./stage2-orchestrator.mjs";
-import { browserKeyProbe } from "./stage2-record.mjs";
+import { browserKeyProbe, guardHarnessConnections } from "./stage2-record.mjs";
 
 const RUN_DIR = join(CONFORMANCE_DIR, ".runs", "auth-fs-cross-stage2");
 const FIXTURE = join(CONFORMANCE_DIR, "auth-fs-cross-stage2-production.json");
@@ -127,6 +127,7 @@ async function sessionLocal() {
   const log = (line) => {
     if (verbose) console.error(`${new Date().toISOString()} ${line}`);
   };
+  const connections = guardHarnessConnections();
   let out;
   try {
     // As in production: the browser's first request with the key is a read, before any write.
@@ -149,7 +150,10 @@ async function sessionLocal() {
     );
     throw error;
   }
-  await writeFile(process.env.AFC2_OUT, JSON.stringify(out));
+  await writeFile(
+    process.env.AFC2_OUT,
+    JSON.stringify({ ...out, harnessConnections: connections.connections() }),
+  );
 }
 
 export async function runLocal(program, { profile = "strict" } = {}) {

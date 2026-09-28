@@ -5,6 +5,7 @@
 
 import { createHash } from "node:crypto";
 import http2 from "node:http2";
+import net from "node:net";
 
 const sha256 = (text) => createHash("sha256").update(text).digest("hex");
 
@@ -30,9 +31,17 @@ export const bearerHash = (value) => {
  * never the bearer). An SDK retries a refused request immediately, so a ledger that stayed open
  * would let it open connections without end.
  */
-export function createWireLedger({ hosts, cap, onRecord = () => {}, onRefuse = () => {} }) {
+export function createWireLedger({
+  hosts,
+  cap,
+  connectionCap = Infinity,
+  onRecord = () => {},
+  onConnection = () => {},
+  onRefuse = () => {},
+}) {
   const allowed = new Set(hosts);
   const records = [];
+  let connections = 0;
   let closed = false;
   const refuse = (host, path, reason) => {
     if (!closed) {
@@ -44,9 +53,21 @@ export function createWireLedger({ hosts, cap, onRecord = () => {}, onRefuse = (
   return {
     records,
     closed: () => closed,
+    connections: () => connections,
     /** Refuses a new connection once the ledger is closed. */
     connect(host) {
       if (closed) refuse(host, "", "the client is closed after a refused request");
+    },
+    /**
+     * Counts one socket connection, whatever opens it, and refuses the one past `connectionCap`
+     * (which closes the ledger): a retry loop that opens connections without sending requests is
+     * stopped too.
+     */
+    connection(host) {
+      if (closed) refuse(host, "", "the client is closed after a refused request");
+      if (connections >= connectionCap) refuse(host, "", `connection cap ${connectionCap} reached`);
+      connections += 1;
+      onConnection({ n: connections, host });
     },
     admit(host, path, authorization) {
       if (closed) refuse(host, path, "the client is closed after a refused request");
@@ -91,5 +112,36 @@ export function installWireGuard(ledger, { fetchImpl = globalThis.fetch } = {}) 
   return () => {
     globalThis.fetch = originalFetch;
     http2.connect = originalConnect;
+  };
+}
+
+/** The host a `net.Socket#connect` call is for. */
+function socketHost(args) {
+  // `net.connect` hands `connect` its arguments already normalized, as one array.
+  const first = Array.isArray(args[0]) ? args[0][0] : args[0];
+  if (first && typeof first === "object" && !Array.isArray(first))
+    return String(first.host ?? first.path ?? "localhost");
+  if (typeof args[1] === "string") return args[1];
+  return typeof first === "string" ? first : "localhost";
+}
+
+/**
+ * Counts every socket connection of the process through `ledger.connection` (HTTP/2, fetch and
+ * anything else open sockets through `net.Socket#connect`). A refused connection is destroyed
+ * before it connects. Returns a function that restores the original.
+ */
+export function installSocketGuard(ledger) {
+  const original = net.Socket.prototype.connect;
+  net.Socket.prototype.connect = function connect(...args) {
+    try {
+      ledger.connection(socketHost(args));
+    } catch (error) {
+      process.nextTick(() => this.destroy(error));
+      return this;
+    }
+    return original.apply(this, args);
+  };
+  return () => {
+    net.Socket.prototype.connect = original;
   };
 }

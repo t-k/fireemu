@@ -3,7 +3,12 @@
 
 import { createHash } from "node:crypto";
 
-import { createWireLedger, installWireGuard, PRODUCTION_HOSTS } from "./sdk-wire.mjs";
+import {
+  createWireLedger,
+  installSocketGuard,
+  installWireGuard,
+  PRODUCTION_HOSTS,
+} from "./sdk-wire.mjs";
 
 const started = Date.now();
 export const emit = (event) =>
@@ -14,25 +19,27 @@ export const local = config.mode === "local";
 /** Which uid each ID token (by hash) belonged to, as the SDK obtained them. */
 export const tokenOwner = new Map();
 
-installWireGuard(
-  createWireLedger({
-    hosts: local ? ["127.0.0.1", "localhost"] : PRODUCTION_HOSTS,
-    cap: config.wireCap ?? 400,
-    onRecord: ({ n, host, path, bearer }) =>
-      emit({
-        event: "wire",
-        n,
-        host,
-        path,
-        principal: bearer === null ? null : (tokenOwner.get(bearer) ?? "unknown"),
-      }),
-    // A refused request marks the rows of this client as the harness's limit, not behavior, and
-    // ends the client: its SDK would otherwise retry at once, without end.
-    onRefuse: ({ host, path, reason }) => {
-      process.stdout.write(
-        `${JSON.stringify({ event: "wire-refused", host, path, reason })}\n`,
-        () => process.exit(3),
-      );
-    },
-  }),
-);
+const ledger = createWireLedger({
+  hosts: local ? ["127.0.0.1", "localhost"] : PRODUCTION_HOSTS,
+  cap: config.wireCap ?? 400,
+  // Every socket the process opens counts, whether or not a request follows on it.
+  connectionCap: config.connectionCap ?? 20,
+  onConnection: ({ n, host }) => emit({ event: "connection", n, host }),
+  onRecord: ({ n, host, path, bearer }) =>
+    emit({
+      event: "wire",
+      n,
+      host,
+      path,
+      principal: bearer === null ? null : (tokenOwner.get(bearer) ?? "unknown"),
+    }),
+  // A refused request marks the rows of this client as the harness's limit, not behavior, and
+  // ends the client: its SDK would otherwise retry at once, without end.
+  onRefuse: ({ host, path, reason }) => {
+    process.stdout.write(`${JSON.stringify({ event: "wire-refused", host, path, reason })}\n`, () =>
+      process.exit(3),
+    );
+  },
+});
+installWireGuard(ledger);
+installSocketGuard(ledger);

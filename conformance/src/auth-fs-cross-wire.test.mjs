@@ -113,3 +113,55 @@ test("the first refusal is reported once and closes the ledger to every later re
   assert.throws(() => other.admit("a.example", "/y"), /client is closed/);
   assert.equal(refused.length, 2);
 });
+
+test("the connection past the cap is destroyed before it connects, and closes the client", async () => {
+  const { installSocketGuard } = await import("./auth-fs-cross/sdk-wire.mjs");
+  const net = await import("node:net");
+  const server = net.createServer((socket) => socket.end());
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const { port } = server.address();
+  const refused = [];
+  const seen = [];
+  const ledger = createWireLedger({
+    hosts: [],
+    cap: 0,
+    connectionCap: 2,
+    onConnection: (c) => seen.push(c),
+    onRefuse: (r) => refused.push(r),
+  });
+  let accepted = 0;
+  server.on("connection", () => {
+    accepted += 1;
+  });
+  const restore = installSocketGuard(ledger);
+  const attempt = () =>
+    new Promise((resolve) => {
+      const socket = net.connect(port, "127.0.0.1");
+      socket.on("connect", () => {
+        socket.destroy();
+        resolve("connected");
+      });
+      socket.on("error", (error) => resolve(error.message));
+    });
+  try {
+    assert.equal(await attempt(), "connected");
+    assert.equal(await attempt(), "connected");
+    assert.match(await attempt(), /connection cap 2 reached/);
+    assert.match(await attempt(), /client is closed/);
+  } finally {
+    restore();
+  }
+  // The server may see a connection a moment after the client did: wait for it, then count.
+  const until = Date.now() + 2_000;
+  while (accepted < 2 && Date.now() < until)
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  await new Promise((resolve) => setTimeout(resolve, 50));
+  server.close();
+  assert.equal(accepted, 2);
+  assert.deepEqual(
+    seen.map((c) => c.n),
+    [1, 2],
+  );
+  assert.deepEqual(refused, [{ host: "127.0.0.1", path: "", reason: "connection cap 2 reached" }]);
+  assert.equal(ledger.connections(), 2);
+});

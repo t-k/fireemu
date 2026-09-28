@@ -17,6 +17,7 @@ import { CONFORMANCE_DIR } from "../config.mjs";
 import { createContext } from "../fs-rules/harness.mjs";
 import { STAGE2_PRINCIPALS, STAGE2_PROGRAM } from "./programs-stage2.mjs";
 import { DRIVERS, spawnSdk } from "./sdk-client.mjs";
+import { createWireLedger, installSocketGuard } from "./sdk-wire.mjs";
 import { confirmedNoAuthRecording, recentAbort, sharedRoot } from "./run.mjs";
 import { admissionProblems } from "./sandbox.mjs";
 import { closureTransports, validateStage2 } from "./stage2-corpus.mjs";
@@ -42,6 +43,28 @@ const sha256 = (text) => createHash("sha256").update(text).digest("hex");
  */
 export const HARNESS_CEILING = 1_000;
 export const CLEANUP_CEILING = 1_100;
+/**
+ * The connections the harness process may open (HTTP and gRPC, setup to cleanup): no more than
+ * the requests it may make, so a reconnect loop of its own is stopped too.
+ */
+export const HARNESS_CONNECTION_CAP = 2_100;
+
+/**
+ * Counts every socket the harness process opens and refuses the one past `cap`; a refused
+ * connection fails the harness call that wanted it (the run stops, and its cleanup cannot finish:
+ * the run then needs recovery). Returns the ledger, whose `connections()` the recording reports.
+ */
+export function guardHarnessConnections(cap = HARNESS_CONNECTION_CAP, log = console.error) {
+  const ledger = createWireLedger({
+    hosts: [],
+    cap: 0,
+    connectionCap: cap,
+    onRefuse: ({ host, reason }) => log(`harness connection to ${host} refused: ${reason}`),
+  });
+  installSocketGuard(ledger);
+  return ledger;
+}
+
 /** The requests the browser key probe's client may make. */
 const KEY_PROBE_CAP = 5;
 /** Baseline reads at the start (with the API keys read) and the end, the key probe, the compile probe. */
@@ -308,6 +331,7 @@ export async function recordProduction(env = process.env) {
     mode: "production",
     web: { apiKey: web.apiKey, projectId: web.projectId, authDomain: web.authDomain },
   };
+  const connections = guardHarnessConnections();
   return runStage2Production({
     ledger: env.FIREEMU_SANDBOX_LEDGER,
     lockDir: locks,
@@ -326,19 +350,25 @@ export async function recordProduction(env = process.env) {
     clockOffset: assertClockSynchronized,
     browserKeyProbe: () => browserKeyProbe(sdkConfig),
     compileProbe,
-    recordWindow: (target) =>
-      runStage2Window(STAGE2_PROGRAM, createContext({ run: String(Date.now()), target }), {
-        principals: STAGE2_PRINCIPALS,
-        sdkConfig,
-        sessionOptions: {
-          maxHarnessRequests: HARNESS_CEILING,
-          maxCleanupRequests: CLEANUP_CEILING,
-          destinationProblem,
-          shouldStop: () => stopRequested,
-          log: (line) => console.log(line),
+    recordWindow: async (target) => ({
+      ...(await runStage2Window(
+        STAGE2_PROGRAM,
+        createContext({ run: String(Date.now()), target }),
+        {
+          principals: STAGE2_PRINCIPALS,
+          sdkConfig,
+          sessionOptions: {
+            maxHarnessRequests: HARNESS_CEILING,
+            maxCleanupRequests: CLEANUP_CEILING,
+            destinationProblem,
+            shouldStop: () => stopRequested,
+            log: (line) => console.log(line),
+          },
+          log: (line) => console.log(`${new Date().toISOString()} ${line}`),
         },
-        log: (line) => console.log(`${new Date().toISOString()} ${line}`),
-      }),
+      )),
+      harnessConnections: connections.connections(),
+    }),
     recentAbort: (text) => recentAbort(text),
     stopRequested: () => stopRequested,
     now: () => new Date(),

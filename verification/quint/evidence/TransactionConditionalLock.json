@@ -83,7 +83,7 @@
     "verification/quint/src/publication.rs": "e4b57348c74d51585609b9f114ad56366309f90fa6e2297639546f42922e53a8",
     "verification/quint/src/server.rs": "b0d10768918bf0449419d9e6384a574e14db01f651264e6037856c3367e05c0a",
     "verification/quint/src/transaction_conditional_lock.rs": "21e0f289770e9e208626c6dd549333de23e84f07cbea26ff572b24dd6de88209",
-    "verification/quint/tests/transaction_conditional_lock_connect.rs": "5fb8e4d257acf0f6ed68361a59df7f058f9576a3856ab0d53ac035d46d05fc68"
+    "verification/quint/tests/transaction_conditional_lock_connect.rs": "d9ec8da41d9e3075a3ce7168e4302f826f82ccbdccfe6865c0d0ace85c7b085c"
   },
   "invariants": [
     "TypeOK",
